@@ -16,7 +16,7 @@ generation-time footer rewrite cleans to a char or two, trivially contained,
 verdict repaint, tail NOT extended). So a full-screen repaint's bottom-2KB
 always carries text the tail has never seen -> containment fails ->
 novel_content -> bytes_flowing -> derive_status 'streaming' on an IDLE pane ->
-verified_inject refuses Shaw's card-answer as busy. The trigger (Shaw attaching
+verified_inject refuses the operator's card-answer as busy. The trigger (the operator attaching
 to watch the seat he just answered) is CORRELATED with submit, so attempt #1 is
 exactly the one refused.
 
@@ -75,7 +75,7 @@ def test_resize_full_screen_repaint_is_not_novel():
                                 _end_of_turn_tail(), profile=_CLAUDE)
     assert verdict == "repaint", (
         f"resize repaint classed {verdict!r}: an idle pane reads streaming the "
-        f"moment a client attaches/resizes — Shaw watching the seat he just "
+        f"moment a client attaches/resizes — the operator watching the seat they just "
         f"answered blocks his own card-answer inject (qnr_d49f5401)")
 
 
