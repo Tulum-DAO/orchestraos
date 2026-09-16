@@ -165,6 +165,7 @@ def child_env(st: Settings, base: dict | None = None) -> dict:
     env.update({
         "ORCHESTRA_CONFIG": str(st.config_path),
         "ORCHESTRA_DIR": data,
+        "ORCH_DIR": data,   # older name read by scripts/watch_gateway.py + scripts/agent-status.py
         "ORCHESTRA_ROOT": root,
         "ORCHESTRA_SCRIPTS_DIR": str(st.repo_root / "scripts"),
         "PYTHONPATH": os.pathsep.join(py_path),

@@ -100,3 +100,14 @@ def test_child_env_points_every_process_at_config_and_data_dir(tmp_path):
     assert env["PATH"].startswith("/usr/bin") or ".venv" in env["PATH"]
     # secrets never come from the toml
     assert "ORCHESTRA_TELEGRAM_BOT_TOKEN" not in env
+
+
+def test_child_env_exports_orch_dir_for_the_gateway_and_agent_status(tmp_path):
+    """watch_gateway.py and agent-status.py read the DATA dir from ORCH_DIR (older name),
+    not ORCHESTRA_DIR. Without this export, `orchestra up` with [data] dir != checkout
+    served an empty/foreign registry to the dashboard (B1: the spawned seat never showed)."""
+    st = S.Settings(repo_root=tmp_path / "repo", config_path=tmp_path / "orchestra.toml",
+                    config_exists=True, raw={}, data_dir=tmp_path / "data")
+    env = S.child_env(st, base={"PATH": "/usr/bin"})
+    assert env["ORCH_DIR"] == str(tmp_path / "data")
+    assert env["ORCH_DIR"] == env["ORCHESTRA_DIR"]

@@ -41,6 +41,7 @@ notify = cfg.get("notify", {})
 
 pairs = {
     "ORCHESTRA_DIR": data.get("dir", root),
+    "ORCH_DIR": data.get("dir", root),  # older name read by watch_gateway.py / agent-status.py
     "ORCHESTRA_GATEWAY_HOST": gateway.get("host", ""),
     "ORCHESTRA_GATEWAY_PORT": str(gateway.get("port", "")),
     "ORCHESTRA_DASHBOARD_HOST": dashboard.get("host", ""),
