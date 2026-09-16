@@ -105,7 +105,7 @@ hard rotation for a seat). E-brake: `touch ~/runtime/FLEET_BEAT_DISABLED`.
 - data: `[data] dir` → `registry.json`, `state/` (sqlite, sessions, gateway token), `logs/`, `queue/`
 - code: the checkout; `ORCHESTRA_ROOT` / `PYTHONPATH` are exported to every child by the supervisor
 
-## Reference install (Shaw's setup: VPS + Mac over Tailscale, ntfy, Telegram, voice)
+## Reference install (the operator's own setup: VPS + Mac over Tailscale, ntfy, Telegram, voice)
 
 Not needed for the minimum path. See `orchestra.example.toml` `[machines]`,
 `[notify]` and `services/arturo/run.sh` for the knobs; a step-by-step is tracked as
