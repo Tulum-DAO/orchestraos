@@ -5,6 +5,7 @@ first-window invariant), SOFT agents get reversible author-triggers, the kill-sw
 sentinel makes the beat a no-op, and state (locks/ledger/history) round-trips.
 """
 import json
+import os
 
 import pytest
 
@@ -524,3 +525,15 @@ def test_soft_authoring_seat_author_inject_sends(tmp_path, monkeypatch):
                            orchestra_dir=str(tmp_path))
     assert sent == ["soft-1"]                           # sends normally (no mute)
     assert r["beats"][0]["armed_status"] == _beat.SOFT_AUTHORING
+
+
+# --- code-vs-data split: code paths resolve from the CHECKOUT, never the data dir ------
+def test_code_path_resolves_under_the_checkout_not_the_data_dir(monkeypatch, tmp_path):
+    """`orchestra up` exports ORCHESTRA_DIR = [data] dir. cron_beat used it to load
+    scripts/lineage-daemon.py and scripts/tg-notify.sh, so with data != checkout the beat
+    crashed every tick (rotation ships default ON; B1 must survive it)."""
+    monkeypatch.setattr(cron_beat, "ORCHESTRA_DIR", str(tmp_path))
+    p = cron_beat.code_path("scripts", "lineage-daemon.py")
+    assert p.startswith(cron_beat._ROOT)
+    assert not p.startswith(str(tmp_path))
+    assert os.path.exists(p)

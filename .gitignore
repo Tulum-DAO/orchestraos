@@ -10,3 +10,4 @@ services/arturo/cartesia_deploy/.cartesia/
 /tmp-shots/
 /state/
 /logs/
+.venv/

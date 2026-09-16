@@ -1,0 +1,253 @@
+"""`orchestra init` — idempotent first-run setup. Every step reports did/skipped."""
+from __future__ import annotations
+
+import json
+import os
+import secrets
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Optional
+
+from .settings import DEFAULT_DATA_DIR, read_toml
+
+DATA_SUBDIRS = ("state", "logs", "queue", "state/event-stream", "state/uploads",
+                "state/arturo", "logs/arturo", "state/agent-handoffs")
+
+
+@dataclass
+class Step:
+    step: str
+    did: bool
+    detail: str
+
+
+def default_run(argv, cwd=None, env=None) -> int:
+    return subprocess.run(list(argv), cwd=cwd, env=env, check=False).returncode
+
+
+def _rewrite_data_dir(example_text: str, data_dir: Path) -> str:
+    """Set [data] dir in a copy of the example; comments and everything else stay."""
+    out, in_data = [], False
+    for line in example_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("["):
+            in_data = stripped == "[data]"
+        if in_data and stripped.startswith("dir") and "=" in stripped:
+            line = f'dir = "{data_dir}"'
+        out.append(line)
+    return "\n".join(out) + "\n"
+
+
+TASKS_DB_SCHEMA = """
+CREATE TABLE IF NOT EXISTS messages (
+  id              TEXT PRIMARY KEY,
+  conversation_id TEXT,
+  task_id         TEXT,
+  parent_id       TEXT,
+  type            TEXT NOT NULL,
+  from_agent      TEXT NOT NULL,
+  to_agent        TEXT NOT NULL,
+  subject         TEXT,
+  body            TEXT,
+  priority        TEXT NOT NULL DEFAULT 'medium',
+  source          TEXT DEFAULT 'system',
+  status          TEXT NOT NULL DEFAULT 'pending',
+  retry_count     INTEGER NOT NULL DEFAULT 0,
+  max_retries     INTEGER NOT NULL DEFAULT 5,
+  metadata        TEXT,
+  depends_on      TEXT,
+  gather_mode     TEXT DEFAULT 'gather_all',
+  tenant_id       TEXT DEFAULT '{operator}',
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  attempted_at    TEXT,
+  delivered_at    TEXT,
+  acknowledged_at TEXT,
+  archived_at     TEXT,
+  error           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_messages_inbox ON messages(to_agent, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_agent, created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_task ON messages(task_id);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_messages_type ON messages(type, status);
+CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
+
+CREATE TABLE IF NOT EXISTS conversations (
+  id              TEXT PRIMARY KEY,
+  subject         TEXT,
+  participants    TEXT,
+  task_id         TEXT,
+  mode            TEXT DEFAULT 'fire_and_forget',
+  max_iterations  INTEGER DEFAULT 1,
+  iteration_count INTEGER DEFAULT 0,
+  completion_condition TEXT,
+  status          TEXT DEFAULT 'open',
+  tenant_id       TEXT DEFAULT '{operator}',
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
+
+def _has_messages_table(db: Path) -> bool:
+    import sqlite3
+    try:
+        conn = sqlite3.connect(db)
+        try:
+            return conn.execute(
+                "select 1 from sqlite_master where type='table' and name='messages'").fetchone() is not None
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError:
+        return False
+
+
+def _seed_tasks_db(db: Path, operator: str) -> None:
+    import sqlite3
+    db.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.executescript(TASKS_DB_SCHEMA.format(operator=operator.replace("'", "''")))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable = default_run,
+             skip_npm: bool = False, skip_venv: bool = False, skip_build: bool = False,
+             config_path: Optional[Path] = None) -> list:
+    repo_root = Path(repo_root)
+    config_path = Path(config_path or os.environ.get("ORCHESTRA_CONFIG") or repo_root / "orchestra.toml")
+    report: list[Step] = []
+
+    # 1. resolve the data dir: flag > existing config > default
+    if data_dir is None and config_path.exists():
+        try:
+            data_dir = Path(os.path.expanduser(str((read_toml(config_path).get("data") or {}).get("dir", "")))) or None
+        except Exception:  # noqa: BLE001
+            data_dir = None
+        if data_dir is not None and str(data_dir) in ("", "."):
+            data_dir = None
+    data_dir = Path(os.path.expanduser(str(data_dir or DEFAULT_DATA_DIR))).resolve()
+
+    # 2. config file (never overwritten)
+    if config_path.exists():
+        report.append(Step("config", False, f"kept existing {config_path}"))
+    else:
+        example = repo_root / "orchestra.example.toml"
+        text = _rewrite_data_dir(example.read_text(), data_dir) if example.exists() \
+            else f'[data]\ndir = "{data_dir}"\n'
+        config_path.write_text(text)
+        report.append(Step("config", True, f"wrote {config_path} from orchestra.example.toml (data.dir={data_dir})"))
+
+    # 3. data dir + subdirs
+    made = []
+    for sub in ("",) + DATA_SUBDIRS:
+        p = data_dir / sub if sub else data_dir
+        if not p.exists():
+            p.mkdir(parents=True, exist_ok=True)
+            made.append(sub or ".")
+    report.append(Step("data-dir", bool(made), f"{data_dir} ({'created ' + ', '.join(made) if made else 'present'})"))
+
+    # 4. seed stores
+    for rel, payload in (("registry.json", {"agents": {}}), ("state/agent-sessions.json", {})):
+        p = data_dir / rel
+        if p.exists():
+            report.append(Step(f"seed:{rel}", False, "present"))
+        else:
+            p.write_text(json.dumps(payload, indent=2) + "\n")
+            report.append(Step(f"seed:{rel}", True, f"wrote {p}"))
+
+    # 5. gateway bearer token
+    tok = data_dir / "state" / "watch-gateway-token"
+    if tok.exists() and tok.read_text().strip():
+        report.append(Step("gateway-token", False, "present"))
+    else:
+        tok.write_text(secrets.token_urlsafe(32))
+        os.chmod(tok, 0o600)
+        report.append(Step("gateway-token", True, f"wrote {tok} (chmod 600)"))
+
+    # 5b. tasks.db schema — msg_store.py, scripts/message-router.py and the rotation beat
+    # open <data>/state/tasks.db expecting messages + conversations; only the api created
+    # them (first boot), so beats starting at t=0 under `orchestra up` crashed with
+    # "no such table: messages". Same columns as api/src/lib/db.ts (CREATE IF NOT EXISTS
+    # there keeps the two in lockstep); the api adds its own tables on top.
+    db = data_dir / "state" / "tasks.db"
+    if db.exists() and _has_messages_table(db):
+        report.append(Step("seed:state/tasks.db", False, "present (messages table exists)"))
+    else:
+        operator = "operator"
+        try:
+            operator = str((read_toml(config_path).get("operator") or {}).get("id") or "operator")
+        except Exception:  # noqa: BLE001 — config unreadable => default tenant
+            pass
+        _seed_tasks_db(db, operator)
+        report.append(Step("seed:state/tasks.db", True, f"wrote {db} (messages + conversations)"))
+
+    # 6. python venv + requirements
+    venv = repo_root / ".venv"
+    req = repo_root / "requirements.txt"
+    if skip_venv:
+        report.append(Step("venv", False, "skipped (--no-venv)"))
+        report.append(Step("pip", False, "skipped (--no-venv)"))
+    else:
+        if (venv / "bin" / "python").exists():
+            report.append(Step("venv", False, f"present {venv}"))
+        else:
+            rc = run([sys.executable or "python3", "-m", "venv", str(venv)], cwd=repo_root)
+            report.append(Step("venv", rc == 0, f"created {venv}" if rc == 0 else f"python -m venv failed rc={rc}"))
+        stamp = venv / ".requirements.sha"
+        if not req.exists():
+            report.append(Step("pip", False, "no requirements.txt"))
+        else:
+            import hashlib
+            digest = hashlib.sha256(req.read_bytes()).hexdigest()
+            if stamp.exists() and stamp.read_text().strip() == digest:
+                report.append(Step("pip", False, "requirements unchanged"))
+            else:
+                pip = venv / "bin" / "python"
+                rc = run([str(pip), "-m", "pip", "install", "-q", "-r", str(req)], cwd=repo_root)
+                if rc == 0:
+                    stamp.write_text(digest)
+                report.append(Step("pip", rc == 0, "installed requirements.txt" if rc == 0 else f"pip failed rc={rc}"))
+
+    # 7. npm installs (root = dashboard-proxy deps, api, dashboard)
+    for label, sub in (("root", ""), ("api", "api"), ("dashboard", "dashboard")):
+        d = repo_root / sub if sub else repo_root
+        if not (d / "package.json").exists():
+            report.append(Step(f"npm:{label}", False, "no package.json"))
+            continue
+        if skip_npm:
+            report.append(Step(f"npm:{label}", False, "skipped (--no-npm)"))
+            continue
+        if (d / "node_modules").exists():
+            report.append(Step(f"npm:{label}", False, "node_modules present"))
+            continue
+        rc = run(["npm", "install", "--no-audit", "--no-fund"], cwd=d)
+        report.append(Step(f"npm:{label}", rc == 0, "npm install" if rc == 0 else f"npm install failed rc={rc}"))
+
+    # 8. builds (api tsc -> dist/server.js, dashboard vite -> dist/index.html)
+    for label, sub, artifact in (("api", "api", "dist/server.js"), ("dashboard", "dashboard", "dist/index.html")):
+        d = repo_root / sub
+        if not (d / "package.json").exists():
+            report.append(Step(f"build:{label}", False, "no package.json"))
+            continue
+        if skip_build or skip_npm:
+            report.append(Step(f"build:{label}", False, "skipped"))
+            continue
+        if (d / artifact).exists():
+            report.append(Step(f"build:{label}", False, f"{artifact} present (delete it to rebuild)"))
+            continue
+        rc = run(["npm", "run", "build"], cwd=d)
+        report.append(Step(f"build:{label}", rc == 0, "built" if rc == 0 else f"npm run build failed rc={rc}"))
+
+    return report
+
+
+def render_report(report: list) -> str:
+    w = max(len(r.step) for r in report) if report else 10
+    lines = [f"{r.step.ljust(w)}  {'did' if r.did else 'skipped':7}  {r.detail}" for r in report]
+    return "\n".join(lines)

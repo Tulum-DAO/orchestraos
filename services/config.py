@@ -76,6 +76,13 @@ class OrchestraConfig:
     rotation_quota_headroom_pct: float
     rotation_readiness_timeout_seconds: int
     rotation_reap_after_generations: int
+    api_host: str = "127.0.0.1"
+    api_port: int = 8888
+    arturo_enabled: bool = True
+    arturo_port: int = 5071
+    router_enabled: bool = True
+    router_interval_seconds: int = 60
+    rotation_runtime_dir: str = "~/runtime"
 
 
 @lru_cache(maxsize=1)
@@ -160,4 +167,11 @@ def load() -> OrchestraConfig:
         rotation_reap_after_generations=int(
             rotation.get("reap_after_generations", 2)
         ),
+        api_host=str(raw.get("api", {}).get("host", "127.0.0.1")),
+        api_port=int(raw.get("api", {}).get("port", 8888)),
+        arturo_enabled=bool(raw.get("arturo", {}).get("enabled", True)),
+        arturo_port=int(raw.get("arturo", {}).get("port", 5071)),
+        router_enabled=bool(raw.get("router", {}).get("enabled", True)),
+        router_interval_seconds=int(raw.get("router", {}).get("interval_seconds", 60)),
+        rotation_runtime_dir=str(rotation.get("runtime_dir", "~/runtime")),
     )

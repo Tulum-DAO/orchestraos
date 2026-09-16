@@ -34,10 +34,14 @@ data = cfg.get("data", {})
 gateway = cfg.get("gateway", {})
 dashboard = cfg.get("dashboard", {})
 machines = cfg.get("machines", {})
+api = cfg.get("api", {})
+arturo = cfg.get("arturo", {})
+rotation = cfg.get("rotation", {})
 notify = cfg.get("notify", {})
 
 pairs = {
     "ORCHESTRA_DIR": data.get("dir", root),
+    "ORCH_DIR": data.get("dir", root),  # older name read by watch_gateway.py / agent-status.py
     "ORCHESTRA_GATEWAY_HOST": gateway.get("host", ""),
     "ORCHESTRA_GATEWAY_PORT": str(gateway.get("port", "")),
     "ORCHESTRA_DASHBOARD_HOST": dashboard.get("host", ""),
@@ -48,6 +52,16 @@ pairs = {
     "ORCHESTRA_REMOTE_AUTH_HOST": machines.get("remote_auth_host", ""),
     "ORCHESTRA_VPS_HOSTNAME": machines.get("vps_hostname", ""),
     "ORCHESTRA_NOTIFY_CHANNEL": notify.get("channel", "none"),
+    "ORCHESTRA_ROOT": root,
+    "ORCHESTRA_SCRIPTS_DIR": root + "/scripts",
+    "ORCHESTRA_API_HOST": api.get("host", ""),
+    "ORCHESTRA_API_PORT": str(api.get("port", "")),
+    "ORCHESTRA_ARTURO_PORT": str(arturo.get("port", "")),
+    "WATCH_GATEWAY_HOST": gateway.get("host", ""),
+    "WATCH_GATEWAY_PORT": str(gateway.get("port", "")),
+    "WATCH_GATEWAY_URL": ("http://%s:%s" % (gateway.get("host"), gateway.get("port"))) if gateway.get("port") else "",
+    "WATCH_GATEWAY_TOKEN_FILE": (data.get("dir", root) + "/state/watch-gateway-token"),
+    "ORCH_RUNTIME_DIR": rotation.get("runtime_dir", ""),
 }
 if notify.get("channel") == "telegram":
     tg = notify.get("telegram", {})
