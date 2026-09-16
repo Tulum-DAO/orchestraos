@@ -38,6 +38,10 @@ export interface OrchestraConfig {
   rotationQuotaHeadroomPct: number;
   rotationReadinessTimeoutSeconds: number;
   rotationReapAfterGenerations: number;
+  apiHost: string;
+  apiPort: number;
+  arturoEnabled: boolean;
+  arturoPort: number;
 }
 
 function repoRoot(): string {
@@ -159,6 +163,10 @@ export function loadConfig(): OrchestraConfig {
     rotationQuotaHeadroomPct: rotation.quota_headroom_pct ?? 0.15,
     rotationReadinessTimeoutSeconds: rotation.readiness_timeout_seconds ?? 120,
     rotationReapAfterGenerations: rotation.reap_after_generations ?? 2,
+    apiHost: (raw.api && raw.api.host) || '127.0.0.1',
+    apiPort: Number((raw.api && raw.api.port) || 8888),
+    arturoEnabled: (raw.arturo && raw.arturo.enabled) ?? true,
+    arturoPort: Number((raw.arturo && raw.arturo.port) || 5071),
   };
   return cached;
 }
