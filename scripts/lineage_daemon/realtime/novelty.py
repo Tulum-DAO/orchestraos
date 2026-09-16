@@ -80,6 +80,25 @@ _REEMIT_STRUCT = re.compile(
 )
 
 
+# Full-screen in-place redraw signature (attach/resize SIGWINCH repaint, incident
+# qnr_d49f5401 / gm commission msg_3f856349): cursor-HOME present plus erase-line
+# / erase-display ops at SCREEN scale. Real per-token generation positions the
+# cursor (ESC[row;colH / cursor-up) and erases a line or two — the live capture
+# b1-generation-perchar.ansi has 0x ESC[H, 2x ESC[K; the live resize capture
+# b1-resize-repaint.ansi has 4x ESC[H, 108x ESC[K. A redraw of this shape is a
+# repaint even when the tail has never seen its text (the composer/status-bar
+# UI lines ride ONLY repaint bursts, so containment can never learn them), and
+# its content is LEARNED into the tail so partial re-emissions contain later.
+_CURSOR_HOME = re.compile(rb"\x1b\[(?:0?;0?|1;1)?[Hf]")   # ESC[H ESC[;H ESC[1;1H
+_ERASE_OP = re.compile(rb"\x1b\[[0-9;]*[JK]")
+FULL_REDRAW_ERASES = 24   # one terminal-height of erase-line ops (screen scale)
+
+
+def _is_full_screen_redraw(raw_bytes):
+    return bool(_CURSOR_HOME.search(raw_bytes)) and \
+        len(_ERASE_OP.findall(raw_bytes)) >= FULL_REDRAW_ERASES
+
+
 def _to_text(raw):
     if isinstance(raw, (bytes, bytearray)):
         return bytes(raw)
@@ -159,6 +178,13 @@ def classify_burst(raw, tail, *, profile):
             # generation is forward-append, so an in-place paint on an empty tail
             # is a redraw/first-render. Seed the tail, never upgrade (kills the
             # daemon-startup false-active on the first fleet redraw).
+            return "repaint", _extend(tail, clean)
+        # a structurally full-screen redraw (cursor-home + screen-scale erases:
+        # attach/resize repaint) is a repaint even when containment fails —
+        # learn its content so later partial repaints contain. Cost bound: a
+        # resize landing mid-generation is at most ONE repaint-classed tick;
+        # the next per-char burst (no cursor-home) reclasses novel_content.
+        if _is_full_screen_redraw(raw_bytes):
             return "repaint", _extend(tail, clean)
         # in-place repaint: novel ONLY if it paints text not already in the tail
         # (a growing per-token line), else a redraw / counter tick.
