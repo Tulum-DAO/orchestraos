@@ -87,6 +87,9 @@ def test_clm_seam_suppresses_identical_history_retry(monkeypatch, tmp_path):
         {"role": "user", "content": "is it possible to use the transcript players methodology for highlighting words"},
     ]}
     q = "/v1/chat/completions?custom_session_id=CIDAFM1"
+    # Hermetic bearer: the proxy reads CUSTOM_LLM_BEARER from <ORCHESTRA_DIR>/.env.secrets;
+    # a clean checkout has none (this test used to pass only on a host with a live file).
+    monkeypatch.setattr(mod, "BEARER_TOKEN", "test-bearer")
     hdrs = {"Authorization": f"Bearer {mod.BEARER_TOKEN}"}
     r1 = c.post(q, json=body, headers=hdrs, environ_base={"REMOTE_ADDR": "127.0.0.1"})
     assert r1.status_code == 200
