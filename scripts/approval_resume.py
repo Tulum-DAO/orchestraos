@@ -710,6 +710,13 @@ def watchdog(store=None, *, live_fn=None):
             fire_resume(row, store)
         except Exception as e:
             print(f"[approval_resume] watchdog row {row['id']} failed: {e}", file=sys.stderr)
+            # A crash before any stamp re-entered the row every beat, and the pane path's
+            # "first try only" durable send fired again each time (duplicate rows, by effect
+            # 2026-09-16). Throttle-stamp only: a crash is not a real delivery attempt.
+            try:
+                store.stamp_retry(row["id"])
+            except Exception as e2:  # noqa: BLE001
+                print(f"[approval_resume] watchdog row {row['id']} stamp failed: {e2}", file=sys.stderr)
             continue
     if coalesce_batch:
         try:

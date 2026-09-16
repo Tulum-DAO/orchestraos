@@ -46,6 +46,12 @@ def build_process_table(st: Settings) -> list:
                   interval=st.cron_beat_interval, enabled=beat_on, note="blue-green rotation beat"),
         ProcEntry("router", "beat", [py, str(root / "scripts" / "message-router.py"), "--cron"], cwd,
                   interval=st.router_interval, enabled=st.router_enabled, note="msg_store delivery backstop"),
+        # An ANSWERED card reaches its seat through this beat (verified inject into the seat's
+        # live pane + durable msg_store row + watchdog); the reference install ran it from a
+        # per-minute crontab and the supervisor had no equivalent (B1 finding 6). EXPIRE_PENDING=0:
+        # cards never expire on their own (operator ruling).
+        ProcEntry("approval_resume", "beat", [py, str(root / "scripts" / "approval_resume.py")], cwd,
+                  env={"EXPIRE_PENDING": "0"}, interval=60, note="deliver answered approvals to their seat"),
     ]
 
 

@@ -8,7 +8,7 @@ import { getUnifiedAgentStatus, spawnAgent, killAgent, getMacStatus, getMacSessi
 import { logInteraction } from '../services/learning.js';
 import { getDetectorStates, detectorCacheAgeMs, classifyNoSession, type DetectorStatus } from '../services/agent-status.js';
 import { isCutoverActive, getCanonicalAgents, canonicalTmuxSession } from '../services/identity-store-reader.js';
-import { applyIdentityPrecedence, resolveMachineAndLiveness } from './agents-identity.js';
+import { applyIdentityPrecedence, resolveMachineAndLiveness, discoverUnregistered } from './agents-identity.js';
 import { loadConfig } from '../lib/config.js';
 
 function macSshTarget(): string {
@@ -175,30 +175,12 @@ router.get('/', async (_req: Request, res: Response) => {
     const allTmuxSessions = localSessions;
     const unregistered: AgentEntry[] = [];
 
-    // VPS unregistered sessions
-    for (const session of allTmuxSessions) {
-      if (!registeredSessions.has(session) && !session.startsWith('session-')) {
-        unregistered.push({
-          id: `unregistered:${session}`,
-          tier: 'T2',
-          name: session,
-          machine: 'vps',
-          tmux_session: session,
-          always_on: false,
-          status: 'running',
-          current_task: null,
-          last_updated: null,
-          tmux_alive: true,
-          alive: true,
-          inbox_count: 0,
-          machine_status: 'online',
-          unregistered: true,
-        });
-      }
-    }
+    // Registry-scoped by default (gm ruling msg_9f04c5f0): tmux is host-global.
+    const showUnregistered = loadConfig().showUnregisteredSessions;
+    unregistered.push(...discoverUnregistered(allTmuxSessions as Set<string>, registeredSessions, showUnregistered));
 
-    // Discover unregistered sessions from ALL machines via heartbeats
-    try {
+    // Discover unregistered sessions from ALL machines via heartbeats (same gate)
+    if (showUnregistered) try {
       const { getMachineSessionsFromHeartbeat, getMachineStatus: getHBMachineStatus } = await import('./machines.js');
       const machinesToScan = ['mac', 'kai-studio', 'kai-macbook'];
       for (const machineId of machinesToScan) {

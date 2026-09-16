@@ -29,9 +29,11 @@ class Runner:
 
     def __init__(self):
         self.calls = []
+        self.calls_with_env = []
 
     def __call__(self, argv, cwd=None, env=None):
         self.calls.append((tuple(argv), str(cwd)))
+        self.calls_with_env.append((tuple(argv), str(cwd), dict(env or {})))
         argv = list(argv)
         cwd = Path(cwd)
         if argv[-2:] == ["-m", "venv"] or "venv" in argv:
@@ -145,3 +147,26 @@ def test_init_seeds_tasks_db_schema_for_msg_store_and_router(tmp_path):
     # idempotent: a second init keeps the db and reports it present
     report2 = I.run_init(root, data_dir=data, run=Runner())
     assert {r.step: r for r in report2}["seed:state/tasks.db"].did is False
+
+
+def test_init_seeds_the_approval_and_questionnaire_schema(tmp_path):
+    """scripts/approval_resume.py (a supervisor beat) and questionnaire_resume read
+    approval_requests / questionnaires from <data>/state/tasks.db; only the first
+    `approval.py request` created them, so the beat crashed every tick on a fresh install
+    until someone asked for a card (B1 finding 6 follow-up, seen by effect 2026-09-16)."""
+    root = _repo(tmp_path)
+    (root / "scripts").mkdir(exist_ok=True)
+    (root / "scripts" / "approval_schema.py").write_text("")       # presence gates the seed
+    (root / "scripts" / "questionnaire_schema.py").write_text("")
+    data = tmp_path / "data"
+    runner = Runner()
+    report = I.run_init(root, data_dir=data, run=runner)
+    done = {r.step: r for r in report}
+    assert done["seed:approval-schema"].did is True
+    seed_calls = [(argv, cwd, env) for (argv, cwd, env) in runner.calls_with_env
+                  if "ApprovalStore" in " ".join(argv)]
+    assert len(seed_calls) == 1
+    argv, cwd, env = seed_calls[0]
+    assert "QuestionnaireStore" in " ".join(argv) and ".migrate()" in " ".join(argv)
+    assert env["ORCHESTRA_DIR"] == str(data)
+    assert str(root / "scripts") in env["PYTHONPATH"]

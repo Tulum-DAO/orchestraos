@@ -42,6 +42,8 @@ export interface OrchestraConfig {
   apiPort: number;
   arturoEnabled: boolean;
   arturoPort: number;
+  /** [dashboard] show_unregistered_sessions — list foreign tmux sessions as chips (default false). */
+  showUnregisteredSessions: boolean;
 }
 
 function repoRoot(): string {
@@ -154,6 +156,7 @@ export function loadConfig(): OrchestraConfig {
     vpsTailscaleIp: (raw.machines && raw.machines.vps_tailscale_ip) || '',
     remoteAuthHost: (raw.machines && raw.machines.remote_auth_host) || '',
     operatorId: (raw.operator && raw.operator.id) || 'operator',
+    showUnregisteredSessions: Boolean(raw.dashboard && raw.dashboard.show_unregistered_sessions),
     runtimesEnabled: requireKey(raw, ['runtimes', 'enabled'], 'runtimes') as string[],
     rotationBeatEnabled: rotation.beat_enabled ?? true,
     rotationBusBeatIntervalSeconds: rotation.bus_beat_interval_seconds ?? 60,

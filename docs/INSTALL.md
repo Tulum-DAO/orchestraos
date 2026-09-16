@@ -57,9 +57,13 @@ One supervisor process runs, restarts (with backoff) and logs each child under
 | boundary_delivery | turn-boundary delivery, armed | every 60 s (`boundary_delivery_armed`) |
 | cron_beat | autonomous blue-green rotation beat — ON by default | every `cron_beat_interval_seconds` (900) |
 | router | `message-router.py --cron` delivery backstop | `[router] interval_seconds` (60) |
+| approval_resume | `approval_resume.py` — delivers an answered card to its seat (pane inject + msg_store row) | every 60 s |
 
 No crontab is installed. `orchestra up --dry-run` prints this table without
 starting anything. `orchestra down` stops it; `orchestra status` shows pids.
+
+Smoke check: `curl -s http://127.0.0.1:8888/api/health` → `{"status":"ok", "db":{"open":true}, ...}`
+(`orchestra doctor` runs the same probe as `api:health` while the supervisor is up).
 
 Open the dashboard: `http://127.0.0.1:8891` (ssh -L 8891:127.0.0.1:8891 if remote,
 or set `[dashboard] host` / `[public] host`).
@@ -71,13 +75,31 @@ Register a seat in the data-dir registry, then spawn it in tmux:
 ```bash
 source scripts/orchestra-env.sh          # exports ORCHESTRA_DIR etc. from orchestra.toml
 REGISTRY_PATH=$ORCHESTRA_DIR/registry.json python3 scripts/registry-update.py hello \
+    --field name=hello --field tmux_session=hello \
     --field tier=T2 --field runtime=claude --field machine=vps --field cwd=$PWD
 AGENT_RUNTIME=claude ./spawn-agent.sh hello --task "Say hello, then park."
 tmux attach -t hello                     # detach with Ctrl-B D
 ```
 
-(`runtime=gemini` / `codex` for the other CLIs. `./spawn-agent.sh --list` shows
-registered seats, `--running` the live ones.)
+- `machine=vps` is a label. On a single-machine install (`[machines]` left blank in
+  `orchestra.toml`) the spawner never dispatches elsewhere, so any label works; the
+  label only matters once you fill in `[machines]` for a two-host setup.
+- `tmux_session` defaults to the seat id if you leave it out (the spawner records it).
+- The spawner pre-seeds Claude Code's workspace-trust bit for `cwd`
+  (`scripts/ensure_cwd_trusted.py`), so the seat does not stop at "Is this a project
+  you trust?". If you see that prompt anyway, answer it once in `tmux attach`.
+- `runtime=gemini` / `codex` for the other CLIs. `./spawn-agent.sh --list` shows
+  registered seats, `--running` the live ones.
+
+Verify through the dashboard proxy (the same list the UI shows):
+
+```bash
+curl -s http://127.0.0.1:8891/api/agents | python3 -m json.tool | grep -E '"id"|"alive"|"state"'
+```
+
+The `hello` row appears immediately; `alive`/`state` follow within ~15 s from the
+status detector. Only registered seats are listed — tmux is host-global, see "Sharing a
+host" below.
 
 ## 4. Answer one approval card from the dashboard
 
@@ -86,11 +108,30 @@ From a shell (or let the seat run it):
 ```bash
 source scripts/orchestra-env.sh
 python3 scripts/approval.py request "Ship the hello change?" --from hello --worker-kind pane --options approve,deny
+# -> prints the card id, e.g. apr_1a2b3c4d_567
 ```
 
-The card appears under Approvals in the dashboard; answer it there. The answer is
-recorded in `<data>/state/tasks.db` and the gateway resumes the seat with the
-decision.
+The card appears under Approvals in the dashboard (`GET /api/approvals` through the
+proxy lists it under `pending`); answer it there, or from a shell:
+
+```bash
+curl -s -X POST http://127.0.0.1:8891/api/approvals/<card id>/approve
+```
+
+What happens next, and how to see it:
+
+1. The answer is recorded in `<data>/state/tasks.db` (`python3 scripts/approval.py get <card id>`
+   shows `status: answered`).
+2. Within a minute the `approval_resume` beat (see the `orchestra up` table) delivers it:
+   because the card came `--from hello --worker-kind pane`, the decision is typed into the
+   `hello` tmux pane as a message and a durable row is written for the seat
+   (`python3 msg_store.py inbox --agent hello`). `approval.py get` then shows
+   `status: resumed`; `tmux capture-pane -p -t hello | tail -20` shows the delivered
+   decision; `<data>/logs/approval_resume.log` has the delivery line.
+3. `GET /api/approvals` keeps the card out of `pending` from the moment it is answered.
+
+A card requested from an ambient shell behaves exactly like one a seat requested for
+itself: the seat named in `--from` is the one that receives the answer.
 
 ## 5. Check the rotation beat is armed (default ON)
 
@@ -99,12 +140,15 @@ decision.
 `<runtime_dir>/self_retire_armed` allowlist — one lineage root per line — enables
 hard rotation for a seat). E-brake: `touch ~/runtime/FLEET_BEAT_DISABLED`.
 
-## One instance per host
+## Sharing a host with other tmux sessions
 
-tmux is host-global: the dashboard's agent list, `agent-status.py --all` and the
-rotation beat enumerate **every tmux session on the machine**, registered or not. Run
-one OrchestraOS instance per host (or VM / container); a second instance beside a live
-fleet will see, and the beat may message, the other instance's seats.
+tmux is host-global. The dashboard's agent list, `agent-status.py --all` and the
+rotation beat are **registry-scoped**: they only see sessions that resolve to a seat in
+`<data>/registry.json` (its id or its `tmux_session`). `orchestra doctor` warns
+(`tmux:foreign-sessions`) about the sessions it is ignoring. Set `[dashboard]
+show_unregistered_sessions = true` to list them anyway; `agent-status.py --all
+--all-sessions` is the host-wide escape hatch. One instance per host is still the
+simplest setup.
 
 ## Where things live
 

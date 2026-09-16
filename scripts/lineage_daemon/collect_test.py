@@ -258,3 +258,29 @@ def test_skip_reason_runtime_checked_before_status():
     # deterministic ordering keeps the log stable).
     assert beat_skip_reason(
         _agent(runtime="service", lineage_status="retired")) == "unsupported-runtime"
+
+
+# --- collect_fleet is REGISTRY-SCOPED: tmux is host-global (gm ruling msg_9f04c5f0) ---
+
+def test_collect_fleet_drops_sessions_that_resolve_to_no_registry_row():
+    """A second instance beside a live fleet enumerated every tmux session on the
+    machine and planned a soft-handoff for a foreign seat. Only sessions that are a
+    registry agent id, or a registry row's tmux_session, are fleet."""
+    status_list = [
+        {"session": "gm", "state": "idle", "context_pct": "29%", "state_age_s": 46, "model": ""},
+        {"session": "someone-elses-shell", "state": "working", "context_pct": "80%",
+         "state_age_s": 5, "model": ""},
+        {"session": "ob-gen44", "state": "idle", "context_pct": "10%", "state_age_s": 5, "model": ""},
+    ]
+    registry = {"agents": {
+        "gm": {"tier": "T0"},
+        "ob": {"tier": "T1", "tmux_session": "ob-gen44"},
+    }}
+    fleet = collect_fleet(status_list, registry)
+    assert [a["agent_id"] for a in fleet] == ["gm", "ob-gen44"]
+
+
+def test_collect_fleet_with_an_empty_registry_is_empty():
+    status_list = [{"session": "x", "state": "idle", "context_pct": "1%", "state_age_s": 1, "model": ""}]
+    assert collect_fleet(status_list, {"agents": {}}) == []
+    assert collect_fleet(status_list, {}) == []

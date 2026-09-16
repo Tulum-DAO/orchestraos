@@ -256,3 +256,45 @@ def test_doctor_flags_a_missing_better_sqlite3_native_binding(tmp_path):
     assert checks["api:better-sqlite3"].status == D.MISSING
     assert "npm rebuild better-sqlite3" in checks["api:better-sqlite3"].remedy
     assert D.exit_code(list(checks.values())) == 1
+
+
+def test_doctor_probes_api_health_when_the_supervisor_owns_the_api_port(tmp_path):
+    """GET /api/health (process up, DB open, bindings loaded) is the by-effect proof that
+    the api child is serving, not merely bound. Only probed while our supervisor owns the port."""
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root)
+    sup = {"pid": 1, "children": {"api": {"pid": 4242, "status": "running", "port": 8888}}}
+    probes = _probes(ports_in_use={8888: 4242}, supervisor=sup)
+    probes.http_get = lambda url: '{"status":"ok","db":{"open":true},"bindings":true}' if url.endswith("/api/health") else "{}"
+    checks = {c.name: c for c in D.run_doctor(st, probes)}
+    assert checks["api:health"].status == D.OK
+
+    def broken(url):
+        raise RuntimeError("connection refused")
+    probes.http_get = broken
+    checks = {c.name: c for c in D.run_doctor(st, probes)}
+    assert checks["api:health"].status == D.MISSING
+
+
+def test_doctor_health_check_absent_when_api_not_running(tmp_path):
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root)
+    checks = {c.name: c for c in D.run_doctor(st, _probes())}
+    assert "api:health" not in checks
+
+
+def test_doctor_warns_about_tmux_sessions_that_are_not_registered_seats(tmp_path):
+    """tmux is host-global; the beat and the dashboard ignore foreign sessions (registry-scoped
+    since msg_9f04c5f0), and doctor says which ones it sees so an operator is not surprised."""
+    root = _repo(tmp_path, registry={"agents": {"gm": {"tier": "T0"}, "ob": {"tmux_session": "ob-gen44"}}})
+    st = S.load_settings(repo_root=root)
+    probes = _probes()
+    probes.tmux_sessions = lambda: ["gm", "ob-gen44", "someone-elses-shell", "another"]
+    checks = {c.name: c for c in D.run_doctor(st, probes)}
+    c = checks["tmux:foreign-sessions"]
+    assert c.status == D.WARN and c.required is False
+    assert "someone-elses-shell" in c.detail and "another" in c.detail and "gm" not in c.detail
+
+    probes.tmux_sessions = lambda: ["gm", "ob-gen44"]
+    checks = {c.name: c for c in D.run_doctor(st, probes)}
+    assert checks["tmux:foreign-sessions"].status == D.OK
