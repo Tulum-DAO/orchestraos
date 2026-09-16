@@ -370,6 +370,17 @@ def test_cli_request_bad_menu_json_errors(store, monkeypatch):
 # (kind='menu' AND status='pending') so the two are idempotent, and scope to the
 # session by op_key prefix without letting LIKE metacharacters act as wildcards.
 
+@pytest.fixture(autouse=True)
+def _no_inherited_tmux_identity(monkeypatch):
+    """Hermetic against the pane that launches pytest: the interposer authorship guard
+    (57909e6055) resolves the caller from an inherited TMUX_PANE -> live registry row and
+    refuses a mismatched --from with rc 4, so the five CLI tests below went red whenever
+    pytest ran inside a registered seat's tmux pane (never in CI). Zero-signal = fail-open,
+    the guard's own convention (test_ddr_authorship_guard.py). gm msg_0c9200de item 1."""
+    monkeypatch.delenv("TMUX", raising=False)
+    monkeypatch.delenv("TMUX_PANE", raising=False)
+
+
 def _mk_menu(store, session, hexs, kind="menu"):
     # origin='menu_bridge' models a genuine bridge mirror row (post
     # DEC-1788138920 C1 every bridge_one row is stamped; legacy rows are
