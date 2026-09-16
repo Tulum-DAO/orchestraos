@@ -30,7 +30,7 @@ def test_process_table_default_shape(tmp_path):
     assert by["dashboard"].port == 8891 and by["dashboard"].argv[-1].endswith("dashboard-proxy.js")
     assert by["arturo"].port == 5071 and by["arturo"].argv[-1].endswith("services/arturo/run.sh")
     beats = {e.name: e.interval for e in table if e.kind == "beat"}
-    assert beats == {"bus_beat": 60, "boundary_delivery": 60, "cron_beat": 900, "router": 60}
+    assert beats == {"bus_beat": 60, "boundary_delivery": 60, "cron_beat": 900, "router": 60, "approval_resume": 60}
     assert by["boundary_delivery"].env["BOUNDARY_DELIVER_ARMED"] == "1"
     assert all(e.enabled for e in table)
     for e in table:
@@ -206,3 +206,16 @@ def test_read_status_reports_dead_supervisor(tmp_path):
     (tmp_path / "state" / "supervisor.pid").write_text("999999999")
     st = SV.read_status(tmp_path, pid_alive=lambda pid: False)
     assert st["running"] is False and st["pid"] == 999999999
+
+
+def test_process_table_runs_the_approval_resume_beat(tmp_path):
+    """B1 finding 6 (outsider report, gm msg_d69910cc): an answered card never reached the
+    seat under `orchestra up`. In the reference install the answer is delivered by a
+    per-minute crontab entry (scripts/approval_resume.py: verified-inject into the seat's
+    pane + durable msg_store row + watchdog); the supervisor ran no such beat."""
+    st = _settings(tmp_path)
+    by = {e.name: e for e in PT.build_process_table(st)}
+    e = by["approval_resume"]
+    assert e.kind == "beat" and e.enabled is True and e.interval == 60
+    assert e.argv[-1].endswith("scripts/approval_resume.py")
+    assert e.env.get("EXPIRE_PENDING") == "0"

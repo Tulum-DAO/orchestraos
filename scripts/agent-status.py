@@ -1475,6 +1475,30 @@ def get_agent_status(session: str) -> dict:
     return out
 
 
+def scope_sessions_to_registry(sessions: list, registry: dict) -> list:
+    """Keep only sessions that are a registry agent id or a registry row's tmux_session.
+    tmux is host-global (gm ruling msg_9f04c5f0): --all must not observe foreign seats."""
+    agents = (registry or {}).get("agents", {}) or {}
+    aliases = {e.get("tmux_session") for e in agents.values() if isinstance(e, dict) and e.get("tmux_session")}
+    return [s for s in sessions if s in agents or s in aliases]
+
+
+def parse_all_mode(args: list):
+    """--all => 'registry' (default scope); --all --all-sessions => 'host' (explicit escape
+    hatch, every session on the machine); no --all => None."""
+    if '--all' not in args:
+        return None
+    return 'host' if '--all-sessions' in args else 'registry'
+
+
+def load_registry_for_scope() -> dict:
+    try:
+        with open(os.path.join(ORCH_DIR, 'registry.json')) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {"agents": {}}
+
+
 def list_claude_sessions() -> list[str]:
     """List all tmux sessions that have a claude process."""
     try:
@@ -1517,14 +1541,24 @@ def format_oneline(status: dict) -> str:
 def main():
     args = sys.argv[1:]
     oneline = '--oneline' in args
-    show_all = '--all' in args
-    args = [a for a in args if a not in ('--oneline', '--all')]
+    all_mode = parse_all_mode(args)
+    args = [a for a in args if a not in ('--oneline', '--all', '--all-sessions')]
 
-    if show_all:
+    if all_mode:
         sessions = list_claude_sessions()
+        if all_mode == 'registry':
+            sessions = scope_sessions_to_registry(sessions, load_registry_for_scope())
         if not sessions:
-            print('No active Claude Code sessions found.')
-            sys.exit(1)
+            # Machine consumers (lineage-daemon.gather_status, focus_registry.importer) run
+            # `--all` with check_output + json.loads: an empty fleet is a VALID answer (`[]`,
+            # exit 0), not a failure — a non-zero exit crashed cron_beat at its first tick on a
+            # clean install. The human hint goes to stderr.
+            print('No active Claude Code sessions found.' if all_mode == 'host'
+                  else 'No registered seats with a live session (use --all-sessions for every tmux session on this host).',
+                  file=sys.stderr)
+            if not oneline:
+                print('[]')
+            sys.exit(0)
     elif args:
         sessions = [args[0]]
     else:

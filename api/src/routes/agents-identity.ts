@@ -13,6 +13,37 @@
 export const SPAWNING_GRACE_MS = 10 * 60 * 1000;
 
 /**
+ * Foreign tmux sessions as `unregistered:<name>` chips — ONLY when the operator opted in
+ * ([dashboard] show_unregistered_sessions = true). tmux is host-global (gm ruling
+ * msg_9f04c5f0): a second instance beside a live fleet listed, and could message, the
+ * other instance's seats. Pure; the route passes the live session set.
+ */
+export function discoverUnregistered(localSessions: Set<string>, registered: Set<string>, enabled: boolean): any[] {
+  if (!enabled) return [];
+  const out: any[] = [];
+  for (const session of localSessions) {
+    if (registered.has(session) || session.startsWith('session-')) continue;
+    out.push({
+      id: `unregistered:${session}`,
+      tier: 'T2',
+      name: session,
+      machine: 'vps',
+      tmux_session: session,
+      always_on: false,
+      status: 'running',
+      current_task: null,
+      last_updated: null,
+      tmux_alive: true,
+      alive: true,
+      inbox_count: 0,
+      machine_status: 'online',
+      unregistered: true,
+    });
+  }
+  return out;
+}
+
+/**
  * Liveness-pre-union fix (gm msg_7d936165, R3 class): observed local liveness
  * is EVIDENCE and beats the machine label. A DB-union seat with a NULL/missing
  * machine must not read alive:false while its tmux session is live on this box.

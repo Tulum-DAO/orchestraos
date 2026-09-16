@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { queryDb } from './lib/db.js';
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
@@ -53,6 +54,15 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
 app.get('/health', (_, res) => res.json({ status: 'ok', service: 'orchestraOS-api' }));
+// /api/health — process up, DB open (a real SELECT through the native binding), for
+// `orchestra doctor` and INSTALL's smoke check. 503 when the DB does not answer.
+app.get('/api/health', (_, res) => {
+  let dbOpen = false; let dbError: string | null = null;
+  try { queryDb('SELECT 1 AS one'); dbOpen = true; } catch (e: any) { dbError = e?.message ?? String(e); }
+  const body = { status: dbOpen ? 'ok' : 'degraded', service: 'orchestraOS-api', pid: process.pid,
+    uptime_s: Math.round(process.uptime()), db: { open: dbOpen, error: dbError }, bindings: dbOpen };
+  res.status(dbOpen ? 200 : 503).json(body);
+});
 
 // E4 — same-second agent-status SSE fan-out (read-only view of telemetryd's
 // authoritative realtime/status.json; single-source-of-truth per DEC-1787826639).
