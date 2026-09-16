@@ -32,3 +32,22 @@ assert os.path.dirname(os.path.abspath(approval_schema.__file__)) == _WORKTREE_S
     f"approval_schema resolved to {approval_schema.__file__}, "
     f"expected worktree copy under {_WORKTREE_SCRIPTS}"
 )
+
+
+# --- process-wide environ isolation (gm msg_596aaadb, 2026-09-16) ------------------------
+# Snapshot os.environ before EVERY test and restore it after. ~20 test files write
+# ORCHESTRA_DIR / HOME / *_PATH with a raw os.environ[...] = ... (not monkeypatch) and a few
+# never restore; in a single-process full run those leaks redirected later tests' CLI
+# subprocesses and module loads to a scratch tree (approval_get_qnr, arturo requires_bearer,
+# boundary_delivery REAL resolver: green alone, red in the full run). Module-level
+# setdefault()s in scripts/conftest.py run at import, before this fixture, and are kept.
+import os as _os
+import pytest as _pytest
+
+
+@_pytest.fixture(autouse=True)
+def _restore_environ_between_tests():
+    saved = dict(_os.environ)
+    yield
+    _os.environ.clear()
+    _os.environ.update(saved)
