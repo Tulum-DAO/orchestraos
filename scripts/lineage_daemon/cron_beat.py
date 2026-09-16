@@ -35,7 +35,15 @@ from scripts.lineage_daemon import beat as _beat
 from scripts.lineage_daemon.collect import collect_fleet
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-ORCHESTRA_DIR = os.environ.get("ORCHESTRA_DIR", _ROOT)
+ORCHESTRA_DIR = os.environ.get("ORCHESTRA_DIR", _ROOT)   # DATA dir ([data] dir under `orchestra up`)
+
+
+def code_path(*parts):
+    """A path INSIDE THE CHECKOUT (scripts, helpers). Never derived from ORCHESTRA_DIR: under
+    `orchestra up` that is the data dir, and loading lineage-daemon.py / tg-notify.sh from it
+    crashed the beat every tick on any install whose data dir is not the checkout."""
+    return os.path.join(_ROOT, *parts)
+
 STATE_PATH = os.path.join(ORCHESTRA_DIR, "state", "fleet-beat-state.json")
 LOCK_PATH = os.path.join(ORCHESTRA_DIR, "state", "fleet-beat.lock")
 LOG_PATH = os.path.join(ORCHESTRA_DIR, "logs", "fleet-beat.log")
@@ -74,7 +82,7 @@ def _first_skip_notify(beats, *, now, dry=False):
         if dry:
             return True                          # dry-run: report intent, no send/sentinel
         import subprocess
-        subprocess.run([os.path.join(ORCHESTRA_DIR, "scripts", "tg-notify.sh"),
+        subprocess.run([code_path("scripts", "tg-notify.sh"),
                         "--from", "fleet-beat", msg],
                        capture_output=True, timeout=20)
         # drop the once-sentinel AFTER the send attempt (fire-once even if tg flaked —
@@ -127,7 +135,7 @@ def gather_live_fleet():
     entry module is hyphenated (lineage-daemon.py). No fleet action taken here."""
     import importlib.util
     spec = importlib.util.spec_from_file_location(
-        "lineage_daemon_entry", os.path.join(ORCHESTRA_DIR, "scripts", "lineage-daemon.py"))
+        "lineage_daemon_entry", code_path("scripts", "lineage-daemon.py"))
     ld = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(ld)
     registry = ld.load_registry()
