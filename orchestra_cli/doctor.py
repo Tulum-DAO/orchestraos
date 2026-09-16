@@ -236,6 +236,19 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
         nm = (d / "node_modules").exists()
         checks.append(Check(f"{label}:node_modules", OK if nm else MISSING, str(d / "node_modules"),
                             f"Run `orchestra init` or `cd {d} && npm install`"))
+    # better-sqlite3 is a native addon: an `npm ci` that skipped the prebuild leaves
+    # node_modules present but no better_sqlite3.node, and the api crash-loops under the
+    # supervisor ("Could not locate the bindings file", misread by its recovery path as a
+    # corrupt tasks.db). Load it the way dist/server.js will.
+    api_nm = root / "api" / "node_modules"
+    if (root / "api" / "package.json").exists() and api_nm.exists():
+        mod = api_nm / "better-sqlite3"
+        try:
+            probes.run_cmd(["node", "-e", f"require({json.dumps(str(mod))})"])
+            checks.append(Check("api:better-sqlite3", OK, "native binding loads"))
+        except Exception as e:  # noqa: BLE001 — any failure to load = MISSING
+            checks.append(Check("api:better-sqlite3", MISSING, f"native binding does not load: {str(e)[:80]}",
+                                f"cd {root / 'api'} && npm rebuild better-sqlite3  (or delete api/node_modules and run npm install)"))
     for label, sub, artifact in (("api", "api", "dist/server.js"), ("dashboard", "dashboard", "dist/index.html")):
         d = root / sub
         if not (d / "package.json").exists():

@@ -15,10 +15,14 @@ import Database, { type Database as DB } from 'better-sqlite3';
 import { existsSync, mkdirSync, statSync, writeFileSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { openClassifyRecover as recoverDb, type RecoveryOpts } from './db-recovery.js';
 import { loadConfig } from './config.js';
 
 const ORCHESTRA = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
+// Code lives in the checkout (this file: <root>/api/dist/lib/db.js), data in ORCHESTRA —
+// under `orchestra up` they differ, and scripts/tg-notify.sh is code.
+const CODE_ROOT = process.env.ORCHESTRA_ROOT || join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const DB_PATH = join(ORCHESTRA, 'state', 'tasks.db');
 const BACKUPS_DIR = join(ORCHESTRA, 'state', 'backups');
 const ALERTS_DIR = join(ORCHESTRA, 'state', 'ALERTS');
@@ -421,7 +425,7 @@ function alertDbRecreate(archived: ArchivedFile[], reason: string): void {
     // Channel 2 — best-effort Telegram via the shared verified sender. Uses the
     // resolved ORCHESTRA path so a scratch/shadow env points at its own stub.
     try {
-      const r = spawnSync('bash', [join(ORCHESTRA, 'scripts', 'tg-notify.sh'), '--from', 'db.ts', msg], {
+      const r = spawnSync('bash', [join(CODE_ROOT, 'scripts', 'tg-notify.sh'), '--from', 'db.ts', msg], {
         timeout: 25000,
         stdio: 'ignore',
       });
@@ -455,7 +459,7 @@ function alertDbFinding(severity: 'INFO' | 'WARN', summary: string, findings: st
     console.error(`[db][${severity}] ${msg} (durable alert: ${alertFile})`);
     if (severity === 'WARN') {
       try {
-        spawnSync('bash', [join(ORCHESTRA, 'scripts', 'tg-notify.sh'), '--from', 'db.ts', `⚠️ ${msg}`], { timeout: 25000, stdio: 'ignore' });
+        spawnSync('bash', [join(CODE_ROOT, 'scripts', 'tg-notify.sh'), '--from', 'db.ts', `⚠️ ${msg}`], { timeout: 25000, stdio: 'ignore' });
       } catch { /* durable artifact stands */ }
     }
   } catch (e: any) {

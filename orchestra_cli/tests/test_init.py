@@ -122,3 +122,26 @@ def test_render_report_lists_did_and_skipped(tmp_path):
     report = I.run_init(root, data_dir=tmp_path / "d", run=Runner())
     text = I.render_report(report)
     assert "did" in text and "config" in text
+
+
+def test_init_seeds_tasks_db_schema_for_msg_store_and_router(tmp_path):
+    """msg_store.py, scripts/message-router.py and the rotation beat all open
+    <data>/state/tasks.db expecting the messages + conversations tables; only the api
+    created them (on its first boot). Under `orchestra up` the beats start at t=0 and
+    crashed with 'no such table: messages' until the api came up. init seeds the schema
+    (same columns as api/src/lib/db.ts) so every consumer works from the first tick."""
+    import sqlite3
+    root = _repo(tmp_path)
+    data = tmp_path / "data"
+    report = I.run_init(root, data_dir=data, run=Runner())
+    done = {r.step: r for r in report}
+    assert done["seed:state/tasks.db"].did is True
+    conn = sqlite3.connect(data / "state" / "tasks.db")
+    tables = {r[0] for r in conn.execute("select name from sqlite_master where type='table'")}
+    assert {"messages", "conversations"} <= tables
+    cols = {r[1] for r in conn.execute("pragma table_info(messages)")}
+    assert {"id", "from_agent", "to_agent", "type", "status", "depends_on", "gather_mode",
+            "tenant_id", "created_at"} <= cols
+    # idempotent: a second init keeps the db and reports it present
+    report2 = I.run_init(root, data_dir=data, run=Runner())
+    assert {r.step: r for r in report2}["seed:state/tasks.db"].did is False
