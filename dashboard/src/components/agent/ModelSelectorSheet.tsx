@@ -1,0 +1,172 @@
+/**
+ * ModelSelectorSheet.tsx — Agent Page v1 B2, the provider/model bottom sheet.
+ *
+ * Replaces the ModelSelector.tsx placeholder (integrator wiring, not done
+ * here per FILE-OWNERSHIP RULE — see /tmp/gm-build-b2.md for the exact
+ * one-line swap).
+ *
+ * Row of provider logos from GET /api/runtimes/available; a provider that is
+ * !installed or !authed (including 'unverified' — W1: unverified is never
+ * treated as usable) renders greyed with its auth_reason. Tapping an
+ * available provider expands its models filtered to availability. Selecting
+ * a model writes through useModelSelection (persisted).
+ *
+ * Re-queries on every open (no stale sheet across a login/logout).
+ */
+import { useEffect, useState } from 'react';
+import { X } from 'lucide-react';
+import { useModelSelection } from '../../stores/modelSelection';
+import {
+  buildProviderRows,
+  modelsForProvider,
+  type ProviderAvailability,
+  type ProviderRow,
+} from '../../lib/modelSelectorFilter';
+
+interface RuntimesAvailableResponse {
+  providers: ProviderAvailability[];
+  probed_at: number;
+  ttl_s: number;
+}
+
+interface ModelSelectorSheetProps {
+  open: boolean;
+  onClose: () => void;
+}
+
+export function ModelSelectorSheet({ open, onClose }: ModelSelectorSheetProps) {
+  const [rows, setRows] = useState<ProviderRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [expandedProviderId, setExpandedProviderId] = useState<string | null>(null);
+  const select = useModelSelection((s) => s.select);
+  const currentProviderId = useModelSelection((s) => s.providerId);
+  const currentModelId = useModelSelection((s) => s.modelId);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    fetch('/api/runtimes/available')
+      .then((res) => {
+        if (!res.ok) throw new Error(`GET /api/runtimes/available -> ${res.status}`);
+        return res.json() as Promise<RuntimesAvailableResponse>;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        setRows(buildProviderRows(data.providers));
+        setExpandedProviderId((prev) => prev ?? currentProviderId ?? null);
+      })
+      .catch((e: Error) => {
+        if (!cancelled) setError(e.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Re-query every time the sheet opens; currentProviderId is read once per
+    // open to pre-expand, not to re-trigger the fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40" onClick={onClose}>
+      <div
+        className="w-full max-w-lg rounded-t-2xl bg-background border-t border-border p-4 pb-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-medium text-foreground">Choose a model</h2>
+          <button onClick={onClose} aria-label="Close" className="p-1 rounded hover:bg-muted">
+            <X size={18} />
+          </button>
+        </div>
+
+        {loading && <div className="text-xs text-foreground/50 py-4">Checking providers…</div>}
+        {error && (
+          <div className="text-xs text-red-500 py-2" role="alert">
+            Could not load providers: {error}
+          </div>
+        )}
+
+        {!loading && !error && (
+          <>
+            {/* Row of provider logos */}
+            <div className="flex gap-3 mb-4 overflow-x-auto">
+              {rows.map((row) => (
+                <button
+                  key={row.provider.id}
+                  disabled={!row.selectable}
+                  onClick={() => setExpandedProviderId(row.provider.id)}
+                  title={row.selectable ? row.provider.label : `${row.provider.label}: ${row.greyReason}`}
+                  className={`flex flex-col items-center gap-1 px-3 py-2 rounded-lg border transition-colors ${
+                    row.selectable
+                      ? expandedProviderId === row.provider.id
+                        ? 'border-foreground/60 bg-muted'
+                        : 'border-border hover:bg-muted'
+                      : 'border-border opacity-40 cursor-not-allowed'
+                  }`}
+                >
+                  <span
+                    className="w-6 h-6 text-foreground"
+                    // logo_svg is a static, build-time-authored simple mark from
+                    // config/providers.json (never user input) — inline SVG is
+                    // the only way to recolor it via currentColor.
+                    dangerouslySetInnerHTML={{ __html: row.provider.logo_svg }}
+                  />
+                  <span className="text-[10px] text-foreground/70">{row.provider.label}</span>
+                  {!row.selectable && (
+                    <span className="text-[9px] text-foreground/40 max-w-[6rem] truncate">{row.greyReason}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+
+            {/* Models for the expanded provider */}
+            <div className="flex flex-col gap-1 max-h-64 overflow-y-auto">
+              {(() => {
+                const expandedRow = rows.find((r) => r.provider.id === expandedProviderId);
+                if (!expandedRow) return null;
+                const models = modelsForProvider(expandedRow);
+                if (models.length === 0) {
+                  return <div className="text-xs text-foreground/40 py-2">No models available for this provider.</div>;
+                }
+                return models.map((model) => (
+                  <button
+                    key={model.id}
+                    onClick={() => {
+                      select({
+                        providerId: expandedRow.provider.id,
+                        modelId: model.id,
+                        modelLabel: model.label,
+                        capabilities: model.capabilities,
+                      });
+                      onClose();
+                    }}
+                    className={`text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                      currentProviderId === expandedRow.provider.id && currentModelId === model.id
+                        ? 'bg-muted text-foreground'
+                        : 'text-foreground/80 hover:bg-muted'
+                    }`}
+                  >
+                    {model.label}
+                    {model.capabilities.video && (
+                      <span className="ml-2 text-[10px] text-foreground/40">video</span>
+                    )}
+                  </button>
+                ));
+              })()}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default ModelSelectorSheet;

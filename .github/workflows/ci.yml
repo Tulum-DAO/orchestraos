@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install detect-secrets
+      - run: detect-secrets-hook --baseline .secrets.baseline $(git ls-files)
+
+  # Run per top-level package rather than one pytest invocation over the
+  # whole tree: a handful of tests leak global/module state across the full
+  # single-process run (order-dependent, fails only at full-suite scale) —
+  # see the good-first-issue for the isolation root cause. Splitting by
+  # package keeps the suite green on day one without masking it.
+  python-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: root
+            args: "test_router_prefixes.py test_msg_threading.py --ignore=scripts"
+          - name: services-arturo
+            args: "services/arturo"
+          - name: scripts-top
+            args: "scripts --ignore=scripts/lineage_daemon --ignore=scripts/identity_store --ignore=scripts/focus_registry"
+          - name: scripts-lineage-daemon
+            args: "scripts/lineage_daemon"
+          - name: scripts-identity-store
+            args: "scripts/identity_store"
+          - name: scripts-focus-registry
+            args: "scripts/focus_registry"
+          - name: contract
+            args: "contract"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt || true
+      - run: python3 -m pytest -q ${{ matrix.args }}
+
+  api-typecheck:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+      - run: npx tsc --noEmit
+
+  dashboard-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+      - run: npm run build

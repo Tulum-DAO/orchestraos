@@ -1,0 +1,85 @@
+{
+  "agent_id": "fixture-codex",
+  "session_id": "01a01801-b232-7760-b6f0-c6ea1d6e9152",
+  "grammar_version": 2,
+  "items": [
+    {
+      "kind": "text",
+      "role": "user",
+      "text": "You are codex-dev-1, a parity tester. Read your instructions.",
+      "is_system": true,
+      "uuid": "step-2-msg"
+    },
+    {
+      "kind": "text",
+      "role": "user",
+      "text": "Please check the status.",
+      "uuid": "step-3-msg"
+    },
+    {
+      "kind": "thinking",
+      "role": "assistant",
+      "text": "I should run git status to check the repo state.",
+      "uuid": "step-4-think"
+    },
+    {
+      "kind": "tool_use",
+      "role": "assistant",
+      "tool": "exec_command",
+      "input": {
+        "CommandLine": "git status"
+      },
+      "summary": "git status",
+      "id": "call_123",
+      "uuid": "step-5-call"
+    },
+    {
+      "kind": "tool_result",
+      "role": "user",
+      "text": "On branch main\nnothing to commit, working tree clean",
+      "tool_use_id": "call_123",
+      "is_error": false,
+      "uuid": "step-6-result"
+    },
+    {
+      "kind": "text",
+      "role": "assistant",
+      "text": "The tree is clean.",
+      "uuid": "step-7-msg"
+    }
+  ],
+  "render_items": [
+    {
+      "kind": "user",
+      "text": "You are codex-dev-1, a parity tester. Read your instructions.",
+      "is_system": true,
+      "key": "step-2-msg:0"
+    },
+    {
+      "kind": "user",
+      "text": "Please check the status.",
+      "key": "step-3-msg:1"
+    },
+    {
+      "kind": "thinking",
+      "text": "I should run git status to check the repo state.",
+      "key": "step-4-think:2"
+    },
+    {
+      "kind": "tool",
+      "tool": "exec_command",
+      "summary": "git status",
+      "input": {
+        "CommandLine": "git status"
+      },
+      "result": "On branch main\nnothing to commit, working tree clean",
+      "is_error": false,
+      "key": "step-5-call:3"
+    },
+    {
+      "kind": "assistant",
+      "text": "The tree is clean.",
+      "key": "step-7-msg:5"
+    }
+  ]
+}

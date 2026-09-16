@@ -1,0 +1,76 @@
+{
+  "$schema_note": "Agent Page v1 B2 — the SELF-HEALING provider/model catalog registry. This file adds UI + probe METADATA only. Runtime truth (which ids are valid runtimes) stays scripts/runtime_signatures.py VALID_RUNTIMES = (claude, gemini, codex, service). 'service' is deliberately omitted here — it is an internal seat kind, never a user-facing model provider. The route (api/src/routes/runtimes-available.ts) must iterate this array generically (dispatch by auth_probe.kind, never by provider id) so it carries zero provider literals in its core logic.",
+  "providers": [
+    {
+      "id": "claude",
+      "label": "Claude",
+      "logo_svg": "<svg viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M12 2 L21 20 H17.2 L15.3 15.6 H8.7 L6.8 20 H3 Z M12 7.6 L9.8 12.6 H14.2 Z\" fill=\"currentColor\"/></svg>",
+      "cli": "claude",
+      "aliases": [],
+      "detect": { "cmd": "which claude" },
+      "auth_probe": {
+        "kind": "cli-json",
+        "cmd": "claude auth status",
+        "success_key": "loggedIn",
+        "fallback": {
+          "kind": "file-json-key",
+          "path": "~/.claude.json",
+          "key": "oauthAccount"
+        }
+      },
+      "model_catalog": {
+        "source": "static",
+        "static": [
+          { "id": "claude-fable-5-1", "label": "Fable 5.1", "capabilities": { "text": true, "image": true, "audio": false, "video": false, "context_window": null }, "capabilities_unverified": ["video", "context_window"] },
+          { "id": "claude-fable-5", "label": "Fable 5", "capabilities": { "text": true, "image": true, "audio": false, "video": false, "context_window": null }, "capabilities_unverified": ["video", "context_window"] },
+          { "id": "claude-opus-5", "label": "Opus 5", "capabilities": { "text": true, "image": true, "audio": false, "video": false, "context_window": 200000 }, "capabilities_unverified": ["video"] },
+          { "id": "claude-opus-4-8", "label": "Opus 4.8", "capabilities": { "text": true, "image": true, "audio": false, "video": false, "context_window": 200000 }, "capabilities_unverified": ["video"] },
+          { "id": "claude-opus-4-6", "label": "Opus 4.6", "capabilities": { "text": true, "image": true, "audio": false, "video": false, "context_window": 200000 }, "capabilities_unverified": ["video"] },
+          { "id": "claude-sonnet-5", "label": "Sonnet 5", "capabilities": { "text": true, "image": true, "audio": false, "video": false, "context_window": 200000 }, "capabilities_unverified": ["video"] },
+          { "id": "claude-haiku-4-5-20251001", "label": "Haiku 4.5", "capabilities": { "text": true, "image": true, "audio": false, "video": false, "context_window": 200000 }, "capabilities_unverified": ["video"] }
+        ]
+      }
+    },
+    {
+      "id": "gemini",
+      "label": "Gemini",
+      "logo_svg": "<svg viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M12 2 C12 8 16 12 22 12 C16 12 12 16 12 22 C12 16 8 12 2 12 C8 12 12 8 12 2 Z\" fill=\"currentColor\"/></svg>",
+      "cli": "agy",
+      "aliases": ["agy"],
+      "detect": { "cmd": "which agy" },
+      "auth_probe": {
+        "kind": "file-json-expiry",
+        "path": "~/.gemini/antigravity-cli/antigravity-oauth-token",
+        "expiry_key": "token.expiry"
+      },
+      "model_catalog": {
+        "source": "static",
+        "static": [
+          { "id": "gemini-3.7-flash", "label": "Gemini 3.7 Flash", "capabilities": { "text": true, "image": true, "audio": true, "video": true, "context_window": 1000000 }, "capabilities_unverified": [] },
+          { "id": "gemini-3.6-flash", "label": "Gemini 3.6 Flash", "capabilities": { "text": true, "image": true, "audio": true, "video": true, "context_window": 1000000 }, "capabilities_unverified": [] }
+        ]
+      }
+    },
+    {
+      "id": "codex",
+      "label": "Codex",
+      "logo_svg": "<svg viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"2\" stroke=\"currentColor\" stroke-width=\"2\"/><path d=\"M7 9 L11 12 L7 15 M13 15 H17\" stroke=\"currentColor\" stroke-width=\"2\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>",
+      "cli": "codex",
+      "aliases": [],
+      "detect": { "cmd": "which codex" },
+      "auth_probe": {
+        "kind": "file-json-key",
+        "path": "~/.codex/auth.json",
+        "key": "tokens"
+      },
+      "model_catalog": {
+        "source": "static",
+        "static": [
+          { "id": "gpt-5.6-terra", "label": "GPT-5.6 Terra", "capabilities": { "text": true, "image": false, "audio": false, "video": false, "context_window": null }, "capabilities_unverified": ["image", "audio", "video", "context_window"] },
+          { "id": "gpt-5.6-luna", "label": "GPT-5.6 Luna", "capabilities": { "text": true, "image": false, "audio": false, "video": false, "context_window": null }, "capabilities_unverified": ["image", "audio", "video", "context_window"] },
+          { "id": "gpt-6-astra", "label": "GPT-6 Astra", "capabilities": { "text": true, "image": false, "audio": false, "video": false, "context_window": null }, "capabilities_unverified": ["image", "audio", "video", "context_window"] }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "$fixture": "A0 court RED (gemini) — flagged lineage MUST NOT stream verbatim model voice; PROTOBUF serialization",
+  "provider": "gemini",
+  "serialization": "gemini antigravity sqlite-WAL, step_payload = PROTOBUF-wire blob (D1)",
+  "SAFETY": "Contaminated body is SYNTHETIC (fabricated sentinel), NOT real flagged bytes. The gemini-specific risk (D1/COURT WRINKLE): model voice arrives protobuf-serialized, so a claude-jsonl-tuned byte scrub cannot see it. This RED proves the fix: normalize (protobuf-decode) to canonical text FIRST, THEN flag/scrub.",
+  "input": {
+    "lineage_flagged": true,
+    "flag_source": "durable per-lineage flag (lineage_root, provider-blind)",
+    "step_payload_decoded_text": "SYNTHETIC-COURT-SENTINEL-DO-NOT-INGEST court court court [fabricated repetition pattern]",
+    "step_payload_note": "in a real db this is a protobuf blob in steps.step_payload; the adapter MUST protobuf-decode to this text BEFORE the scrub/flag check runs"
+  },
+  "expected": {
+    "stream_mode": "block",
+    "live_model_voice_tokens": false,
+    "render": "structural_summary_through_stage2_sanitizer",
+    "verbatim_body_leak": false,
+    "normalize_before_scrub": true
+  },
+  "asserts": [
+    "protobuf-decode -> canonical text MUST precede any scrub/flag check (scrub never runs on provider-raw protobuf bytes)",
+    "flagged => block mode; ZERO verbatim bytes of the decoded text in output",
+    "class-defense (model-voice-never-verbatim for flagged) is provider-independent; applies identically to protobuf-sourced voice",
+    "fail-CLOSED on unreadable flag/schema"
+  ]
+}

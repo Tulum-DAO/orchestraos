@@ -1,0 +1,8 @@
+[app]
+name = "arturo-daniel"
+
+[build]
+cmd = "pip install -r requirements.txt"
+
+[run]
+cmd = "python main.py"

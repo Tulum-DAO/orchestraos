@@ -1,0 +1,24 @@
+{
+  "$fixture": "A0 court RED (claude) — flagged lineage MUST NOT stream verbatim model voice",
+  "provider": "claude",
+  "serialization": "claude jsonl (assistant text block)",
+  "SAFETY": "The contaminated body below is SYNTHETIC (a fabricated stand-in sentinel), NOT copied from any real flagged lineage. This keeps the graduated set at ZERO bytes of any known-flagged transcript (the A0 court RED) while still exercising the flag->block boundary. The boundary is FLAG-driven, so the body content is irrelevant to the mechanism.",
+  "input": {
+    "lineage_flagged": true,
+    "flag_source": "durable per-lineage flag in store (checked at stream-open; rechecked on flag-change mid-session)",
+    "assistant_text_block": "SYNTHETIC-COURT-SENTINEL-DO-NOT-INGEST court court court [fabricated repetition pattern standing in for the multi-token contagion signature]"
+  },
+  "expected": {
+    "stream_mode": "block",
+    "live_model_voice_tokens": false,
+    "render": "structural_summary_through_stage2_sanitizer",
+    "verbatim_body_leak": false,
+    "tool_world_output_may_stream": true
+  },
+  "asserts": [
+    "flagged lineage => NO live model-voice tokens (block mode, never raw stream)",
+    "rendered output contains ZERO verbatim bytes of input.assistant_text_block",
+    "fail-CLOSED: if the flag is unreadable/absent-schema => block mode",
+    "mid-stream flag flip (clean->flagged) => drop to block at the next block boundary"
+  ]
+}

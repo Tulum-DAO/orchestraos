@@ -1,0 +1,22 @@
+{
+  "$fixture": "A0 court RED (codex) — flagged lineage MUST NOT stream verbatim model voice",
+  "provider": "codex",
+  "serialization": "codex jsonl (response_item message content)",
+  "SAFETY": "Contaminated body is SYNTHETIC (fabricated sentinel), NOT real flagged bytes. Zero-flagged-bytes A0 RED preserved; flag->block boundary still exercised in the codex serialization.",
+  "input": {
+    "lineage_flagged": true,
+    "flag_source": "durable per-lineage flag (keyed on lineage_root, provider-blind)",
+    "response_item_text": "SYNTHETIC-COURT-SENTINEL-DO-NOT-INGEST court court court [fabricated repetition pattern]"
+  },
+  "expected": {
+    "stream_mode": "block",
+    "live_model_voice_tokens": false,
+    "render": "structural_summary_through_stage2_sanitizer",
+    "verbatim_body_leak": false
+  },
+  "asserts": [
+    "codex model-voice normalized to canonical grammar BEFORE scrub/flag check (never scrub provider-raw bytes)",
+    "flagged => block mode; ZERO verbatim bytes of input.response_item_text in output",
+    "fail-CLOSED on unreadable flag"
+  ]
+}

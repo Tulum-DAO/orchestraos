@@ -1,0 +1,213 @@
+[2D[4B[H[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[H[38;5;231m●[3G[39mStanding[12Gby[15Gfor[19Gthe[23Grotation.[33GEverything's[46Gready[52Gfor[56Gorchestra-builder[74Gto[77Gseed[82Gthe[86Gsuccessor:
+
+
+
+[3G-[5G[1mHandoff[13G(committed[24G+[26Gcurrent):[36G[22m[38;5;153mdocs/HANDOFF_crm-integration-dev-next.md[79G[39mon[82Gbranch[89G[38;5;153mfeat/crm-integration-v061[109G[39m@[111G[38;5;153m12aef49[119G[39m—[121Grich[126Gschema[133G(JSON[139Gcanonical[149Gblock[155G+[157Gprose),[165Gwith[170Gnext[175Gactions[183G(action[0][194G=[196Gthe[200Gmoney-critical
+
+[5Gseeder[12G[38;5;153mfirst_seen[23G[39mfreeze[30G+[32Gits[36Gtest,[42Gwith[47Ga[49Gcheckable[59Gfirst-effect),[74Gguards,[82Gopen[87Gloops,[94Gtop-3[100Ghazards,[109Gand[113G5[115Gcanary[122Gquestions.
+
+[3G-[5G[1mVerified[14Gstate[20Gto[23Gcarry[29Gforward:[38G[22m[38;5;153mmain[43G=[45Gbad2085[39m;[54Gv0.6[59GPULL[64G+[66Gv0.7[71GPUSH[76Gshipped;[85Gv0.9/v1.0[95Gnot[99Gstarted;[108Gv0.6.1[115Gcongruence-cleared[134Gbut[138Gunbuilt.
+
+[3G-[5G[1mThe[9Gone[13Gthing[19Gthe[23Gsuccessor[33Gshould[40Gknow[45Gis[48Ghighest-value:[63G[22macceptance[74Gcard[79G[38;5;153mqnr_132ea298[92G[39mis[95Gstill[101Gpending[109G—[111Gconnecting[122GAcme Co's[132GClose[138Gkey[142Gis[145Gwhat[150Gproduces[159Gthe[163Glive[168Gcost-per-closed[184Gnumber[191Gand[195Gactivates[205Gv0.7.[211GIt's[216Ga
+
+[5Gthe operator[10Gaction,[18Gnot[22Ga[24Gbuild.
+
+
+
+[3GI[5Gwon't[11Gstart[17Gany[21Gnew[25Gwork[30Gor[33Gburn[38Gcontext[46G—[48Gholding[56Gclean[62Gfor[66Gthe[70Gswap.[76GWhen[81Gorchestra-builder[99Gis[102Gready,[109Gthe[113Gsuccessor[123Gcan[127Gseed[132Gstraight[141Gfrom[146Gthe[150Ghandoff[158Gdoc[162Gand[166Gre-verify[176Gby[179Geffect.[187GReady[193Gwhen[198Gyou[202Gare.
+
+
+
+●[3GRan[7G[1m11[10G[22mstop[15Ghooks[21G[38;5;246m(ctrl+o[29Gto[32Gexpand)[39m
+
+[3G[38;5;246m⎿[5G [39mStop[11Ghook[16Gerror:[23G[QUEUE-DIGEST][38G2[40Gpending[48Gmessage(s)[59Gfor[63Gcrm-integration-dev[85Golder[91Gthan[96G30s[100G—[102Gbatch-process[116Gnow[120G(read[126Geach[131Gvia[135Gstore,[142Gack[146Gafter[152Gprocessing,[164Gstale-banner[177Gdiscipline[188Gapplies):
+
+[5Gmsg_30dce2dc_1480475[26G|[28Gcrm-integration-dev[50G|[52GPLACEHOLDER
+
+[5Gmsg_8c83480a_1480734[26G|[28Ggm[31G|[33Gre:[37GRESUMED[45Gstate[51G--[54Gqnr_132ea298[67GCONFIRMED[77Glive-pending[90G(no
+
+
+
+[38;5;114m●[3G[39m[1mBash[22m(cd[11G/home/testuser/repos/acmecorp
+
+[7Gpython3[15G~/scripts/agent-orchestra/msg_store.py[54Gack[58G--message-id[71Gmsg_30dce2dc_1480475[92G2>&1[97G|[99Gtail[104G-1…)
+
+[38;5;246m [3G⎿[5G [39m{
+
+[8G"acknowledged":[24Gtrue,
+
+[8G"id":[14G"msg_30dce2dc_1480475"
+
+[6G[2m…[8G+12[12Glines[18G(ctrl+o[26Gto[29Gexpand)[22m
+
+
+
+[38;5;231m●[3G[39mgm's[8Gdecision:[18G[1mNUDGE-AND-HOLD[33G[22m—[35Ggm[38Gis[41Gsurfacing[51Gacceptance[62Gto[65Gthe operator[70Glive[75Gright[81Gnow;[86GI[88Ghold[93Gwith[98Gfull[103Gcontext,[112Gready[118Gto[121Grun[125Gthe[129Glight[135Gacceptance[146Gflow[151Gthe[155Ginstant[163Ghe[166Ganswers[174G(and[179Gthe[183Gnumber[190Gdoubles[198Gas[201GJordan-call[211Gproof
+
+[3Gfor[7GAcme Co,[16Ga[18GPLAN[23Gclient).[32GLet[36Gme[39Gconfirm[47GI'm[51Gholding.
+
+
+
+[38;5;114m●[3G[39m[1mBash[22m(cd[11G/home/testuser/repos/acmecorp
+
+[7Gpython3[15G~/scripts/agent-orchestra/msg_store.py[54Gack[58G--message-id[71Gmsg_8c83480a_1480734[92G2>&1[97G|[99Gtail[104G-1…)
+
+[38;5;246m [3G⎿[5G [39m{
+
+[8G"acknowledged":[24Gtrue,
+
+[8G"id":[14G"msg_8c83480a_1480734"
+
+[6G[2m…[8G+5[11Glines[17G(ctrl+o[25Gto[28Gexpand)[22m
+
+
+
+[38;5;231m●[3G[39mConfirmed[13Gholding[21Gto[24Ggm.[28GAcceptance[39Gflow[44Gis[47Gstaged[54Gand[58Gready.
+
+
+
+[3G[1mPosture:[12G[22mholding[20Gat[23G~83%[28Gwith[33Gfull[38Gcontext[46G—[48Gnot[52Gbuilding,[62Gnot[66Grotating,[76Gconserving[87Gwhat's[94Gleft.[100GStanding[109Gready[115Gto[118Gfire[123Gthe[127Gacceptance[138Gsequence[147Gthe[151Ginstant[159Gthe operator[164Ganswers[172G[38;5;153mqnr_132ea298[39m:
+
+
+
+[3G1.[6GApply[12Gthe[16Gtwo[20Gadditive[29Gmigrations[40Gto[43Gprod[48GCloud[54GSQL[58G→[60Gping[65G[38;5;153mdata-merge[79G[39mfor[83Gthe[87Gpost-apply[98Gverify.
+
+[3G2.[6GSeed[11GHR[14Ginto[19G[38;5;153mtenant_owned_records[41G[39m(dry-run[50Gfirst,[57Gcounts[64Gmust[69Ghit[73G14,203).
+
+[3G3.[6GSet[10G[38;5;153msettings.close[25G[39mfrom[30Gthe operator's[37Ganswer[44G(won-labels,[57Glead_source[69Glabels,[77Gmeta[82Gcampaigns).
+
+[3G4.[6GConnect[14Gthe[18GAcme Co[26Gkey[30G→[32Gpull[37G→[39Gmatchback[49G→[51Greport[58Gthe[62G[1mlive[67Gcost-per-closed-client[90Gnumber[97G[22m(which[104Gdoubles[112Gas[115GJordan-call[125Gproof[131Gfor[135GAcme Co).
+
+[3G5.[6GOptionally,[18Gthe[22Gv0.7[27Ginaugural[37Gdeliberate[48Gpush.
+
+
+
+[3GI[5Gflagged[13Ggm[16Gthat[21Gif[24Gthe[28Gflow[33Gruns[38Gtight[44Gagainst[52Gmy[55Gremaining[65Gcontext[73Gmid-way,[82GI'll[87Gcheckpoint[98Gand[102Gflag[107Grather[114Gthan[119Grisk[124Ga[126Ghalf-applied[139Gprod[144Gstate.
+
+
+
+[3GWaiting[11Gon[14Geither[21Gthe operator's[28Gcard[33Ganswer[40G(fire[46Gacceptance)[58Gor[61Ggm's[66Grotate[73Gsignal[80G(successor[91Gtakes[97Gv0.6.1/v0.9).[111GHolding[119Gclean.
+
+
+
+[38;5;246m✻[3GBaked[9Gfor[13G1m[16G2s[19G·[21Gdone[26G11:59[32GAM[39m
+
+
+
+[38;5;244m──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[39m
+
+❯ 
+
+[38;5;244m──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[39m
+
+[3G[33m⬆[5G/gsd:update[38;5;246m │[19G[2mOpus[24G4.8[28G(1M[32Gcontext)[22m │[43G[2macmecorp[22m [38;5;208m████████░░[62G84%[207G[38;5;211m/rc[211Gfailed[39m
+
+[3G[38;5;211m⏵⏵[6Gbypass[13Gpermissions[25Gon[38;5;246m (shift+tab[39Gto[42Gcycle)[49G·[51G←[53G1[55Gagent[39m
+
+[2C[4A[2D[4B[H[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[H[38;5;231m●[3G[39mStanding[12Gby[15Gfor[19Gthe[23Grotation.[33GEverything's[46Gready[52Gfor[56Gorchestra-builder[74Gto[77Gseed[82Gthe[86Gsuccessor:
+
+
+
+[3G-[5G[1mHandoff[13G(committed[24G+[26Gcurrent):[36G[22m[38;5;153mdocs/HANDOFF_crm-integration-dev-next.md[79G[39mon[82Gbranch[89G[38;5;153mfeat/crm-integration-v061[109G[39m@[111G[38;5;153m12aef49[119G[39m—[121Grich[126Gschema[133G(JSON[139Gcanonical[149Gblock[155G+[157Gprose),[165Gwith[170Gnext[175Gactions[183G(action[0][194G=[196Gthe[200Gmoney-critical
+
+[5Gseeder[12G[38;5;153mfirst_seen[23G[39mfreeze[30G+[32Gits[36Gtest,[42Gwith[47Ga[49Gcheckable[59Gfirst-effect),[74Gguards,[82Gopen[87Gloops,[94Gtop-3[100Ghazards,[109Gand[113G5[115Gcanary[122Gquestions.
+
+[3G-[5G[1mVerified[14Gstate[20Gto[23Gcarry[29Gforward:[38G[22m[38;5;153mmain[43G=[45Gbad2085[39m;[54Gv0.6[59GPULL[64G+[66Gv0.7[71GPUSH[76Gshipped;[85Gv0.9/v1.0[95Gnot[99Gstarted;[108Gv0.6.1[115Gcongruence-cleared[134Gbut[138Gunbuilt.
+
+[3G-[5G[1mThe[9Gone[13Gthing[19Gthe[23Gsuccessor[33Gshould[40Gknow[45Gis[48Ghighest-value:[63G[22macceptance[74Gcard[79G[38;5;153mqnr_132ea298[92G[39mis[95Gstill[101Gpending[109G—[111Gconnecting[122GAcme Co's[132GClose[138Gkey[142Gis[145Gwhat[150Gproduces[159Gthe[163Glive[168Gcost-per-closed[184Gnumber[191Gand[195Gactivates[205Gv0.7.[211GIt's[216Ga
+
+[5Gthe operator[10Gaction,[18Gnot[22Ga[24Gbuild.
+
+
+
+[3GI[5Gwon't[11Gstart[17Gany[21Gnew[25Gwork[30Gor[33Gburn[38Gcontext[46G—[48Gholding[56Gclean[62Gfor[66Gthe[70Gswap.[76GWhen[81Gorchestra-builder[99Gis[102Gready,[109Gthe[113Gsuccessor[123Gcan[127Gseed[132Gstraight[141Gfrom[146Gthe[150Ghandoff[158Gdoc[162Gand[166Gre-verify[176Gby[179Geffect.[187GReady[193Gwhen[198Gyou[202Gare.
+
+
+
+●[3GRan[7G[1m11[10G[22mstop[15Ghooks[21G[38;5;246m(ctrl+o[29Gto[32Gexpand)[39m
+
+[3G[38;5;246m⎿[5G [39mStop[11Ghook[16Gerror:[23G[QUEUE-DIGEST][38G2[40Gpending[48Gmessage(s)[59Gfor[63Gcrm-integration-dev[85Golder[91Gthan[96G30s[100G—[102Gbatch-process[116Gnow[120G(read[126Geach[131Gvia[135Gstore,[142Gack[146Gafter[152Gprocessing,[164Gstale-banner[177Gdiscipline[188Gapplies):
+
+[5Gmsg_30dce2dc_1480475[26G|[28Gcrm-integration-dev[50G|[52GPLACEHOLDER
+
+[5Gmsg_8c83480a_1480734[26G|[28Ggm[31G|[33Gre:[37GRESUMED[45Gstate[51G--[54Gqnr_132ea298[67GCONFIRMED[77Glive-pending[90G(no
+
+
+
+[38;5;114m●[3G[39m[1mBash[22m(cd[11G/home/testuser/repos/acmecorp
+
+[7Gpython3[15G~/scripts/agent-orchestra/msg_store.py[54Gack[58G--message-id[71Gmsg_30dce2dc_1480475[92G2>&1[97G|[99Gtail[104G-1…)
+
+[38;5;246m [3G⎿[5G [39m{
+
+[8G"acknowledged":[24Gtrue,
+
+[8G"id":[14G"msg_30dce2dc_1480475"
+
+[6G[2m…[8G+12[12Glines[18G(ctrl+o[26Gto[29Gexpand)[22m
+
+
+
+[38;5;231m●[3G[39mgm's[8Gdecision:[18G[1mNUDGE-AND-HOLD[33G[22m—[35Ggm[38Gis[41Gsurfacing[51Gacceptance[62Gto[65Gthe operator[70Glive[75Gright[81Gnow;[86GI[88Ghold[93Gwith[98Gfull[103Gcontext,[112Gready[118Gto[121Grun[125Gthe[129Glight[135Gacceptance[146Gflow[151Gthe[155Ginstant[163Ghe[166Ganswers[174G(and[179Gthe[183Gnumber[190Gdoubles[198Gas[201GJordan-call[211Gproof[217Gfor
+
+[3GAcme Co,[12Ga[14GPLAN[19Gclient).[28GLet[32Gme[35Gconfirm[43GI'm[47Gholding.
+
+
+
+[38;5;114m●[3G[39m[1mBash[22m(cd[11G/home/testuser/repos/acmecorp
+
+[7Gpython3[15G~/scripts/agent-orchestra/msg_store.py[54Gack[58G--message-id[71Gmsg_8c83480a_1480734[92G2>&1[97G|[99Gtail[104G-1…)
+
+[38;5;246m [3G⎿[5G [39m{
+
+[8G"acknowledged":[24Gtrue,
+
+[8G"id":[14G"msg_8c83480a_1480734"
+
+[6G[2m…[8G+5[11Glines[17G(ctrl+o[25Gto[28Gexpand)[22m
+
+
+
+[38;5;231m●[3G[39mConfirmed[13Gholding[21Gto[24Ggm.[28GAcceptance[39Gflow[44Gis[47Gstaged[54Gand[58Gready.
+
+
+
+[3G[1mPosture:[12G[22mholding[20Gat[23G~83%[28Gwith[33Gfull[38Gcontext[46G—[48Gnot[52Gbuilding,[62Gnot[66Grotating,[76Gconserving[87Gwhat's[94Gleft.[100GStanding[109Gready[115Gto[118Gfire[123Gthe[127Gacceptance[138Gsequence[147Gthe[151Ginstant[159Gthe operator[164Ganswers[172G[38;5;153mqnr_132ea298[39m:
+
+
+
+[3G1.[6GApply[12Gthe[16Gtwo[20Gadditive[29Gmigrations[40Gto[43Gprod[48GCloud[54GSQL[58G→[60Gping[65G[38;5;153mdata-merge[79G[39mfor[83Gthe[87Gpost-apply[98Gverify.
+
+[3G2.[6GSeed[11GHR[14Ginto[19G[38;5;153mtenant_owned_records[41G[39m(dry-run[50Gfirst,[57Gcounts[64Gmust[69Ghit[73G14,203).
+
+[3G3.[6GSet[10G[38;5;153msettings.close[25G[39mfrom[30Gthe operator's[37Ganswer[44G(won-labels,[57Glead_source[69Glabels,[77Gmeta[82Gcampaigns).
+
+[3G4.[6GConnect[14Gthe[18GAcme Co[26Gkey[30G→[32Gpull[37G→[39Gmatchback[49G→[51Greport[58Gthe[62G[1mlive[67Gcost-per-closed-client[90Gnumber[97G[22m(which[104Gdoubles[112Gas[115GJordan-call[125Gproof[131Gfor[135GAcme Co).
+
+[3G5.[6GOptionally,[18Gthe[22Gv0.7[27Ginaugural[37Gdeliberate[48Gpush.
+
+
+
+[3GI[5Gflagged[13Ggm[16Gthat[21Gif[24Gthe[28Gflow[33Gruns[38Gtight[44Gagainst[52Gmy[55Gremaining[65Gcontext[73Gmid-way,[82GI'll[87Gcheckpoint[98Gand[102Gflag[107Grather[114Gthan[119Grisk[124Ga[126Ghalf-applied[139Gprod[144Gstate.
+
+
+
+[3GWaiting[11Gon[14Geither[21Gthe operator's[28Gcard[33Ganswer[40G(fire[46Gacceptance)[58Gor[61Ggm's[66Grotate[73Gsignal[80G(successor[91Gtakes[97Gv0.6.1/v0.9).[111GHolding[119Gclean.
+
+
+
+[38;5;246m✻[3GBaked[9Gfor[13G1m[16G2s[19G·[21Gdone[26G11:59[32GAM[39m
+
+
+
+[38;5;244m───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[39m
+
+❯ 
+
+[38;5;244m───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[39m
+
+[3G[33m⬆[5G/gsd:update[38;5;246m │[19G[2mOpus[24G4.8[28G(1M[32Gcontext)[22m │[43G[2macmecorp[22m [38;5;208m████████░░[62G84%[208G[38;5;211m/rc[212Gfailed[39m
+
+[3G[38;5;211m⏵⏵[6Gbypass[13Gpermissions[25Gon[38;5;246m (shift+tab[39Gto[42Gcycle)[49G·[51G←[53G1[55Gagent[39m
+
+[2C[4A

@@ -1,0 +1,3 @@
+cartesia-line>=0.2.17
+cartesia>=4.0.1
+httpx

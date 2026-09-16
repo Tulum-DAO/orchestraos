@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "noEmit": true,
+    "strict": true,
+    "target": "es2022",
+    "module": "es2022",
+    "types": []
+  },
+  "files": ["gen/transcript.gen.ts"]
+}

@@ -1,0 +1,25 @@
+{
+  "$fixture": "A0 status-discriminator golden (claude) — RED tests for Build B1 status deriver + adapter_claude",
+  "provider": "claude",
+  "prompt_char": "\u276f",
+  "chrome_signatures": {
+    "prompt_composer": "\u276f + NBSP then typed text; ghost text is SGR-dim",
+    "idle_status_bar_re": "claude-[a-z0-9-]+\\[1m\\].*\\u2588+\\u2591* \\d+%",
+    "context_pct_source": "status-bar block-bar (\\u2588\\u2591 NN%)",
+    "done_summary_re": "\u273b .+ for \\d+m",
+    "working_re": "esc to interrupt",
+    "permission_re": "do you want to (proceed|allow|run|make|create|fetch)"
+  },
+  "false_positive_guards": {
+    "star_glyph_is_decorative": "\u273b/\u2733\u2736\u273b\u273d render in the idle DONE-summary line; NEVER use star presence as the working marker (5/5 idle claude panes false-fired). Working marker = 'esc to interrupt' motion text OR byte-flow."
+  },
+  "discriminator": { "idle_baseline_core_pct": 0.0, "eps_cpu_core_pct": 0.5, "eps_io_bytes": 4096, "window_s": 2.0 },
+  "golden_cases": [
+    { "name": "idle_prompt", "input": { "bytes_flowing": false, "cpu_core": 0.03, "io_delta": 48, "live_pids": 5, "chrome": { "working": false, "permission": false, "idle_footer": true, "star_glyph": true } }, "expected_status": "idle", "note": "star_glyph present but decorative; cpu~0 + no bytes => idle" },
+    { "name": "streaming", "input": { "bytes_flowing": true, "chars_per_s": 4383, "cpu_core": 0.0, "io_delta": 217, "live_pids": 5, "chrome": { "working": true } }, "expected_status": "streaming", "note": "bytes-axis verdict; cpu may be ~0" },
+    { "name": "computing_offscreen", "input": { "bytes_flowing": false, "cpu_core": 12.5, "io_delta": 60000, "live_pids": 6, "chrome": { "working": true } }, "expected_status": "computing" },
+    { "name": "stalled_hung_tool", "input": { "bytes_flowing": false, "cpu_core": 0.0, "io_delta": 0, "live_pids": 6, "chrome": { "working": true } }, "expected_status": "stalled", "note": "working text but zero cpu/bytes/io + live child => true stall" },
+    { "name": "waiting_permission", "input": { "bytes_flowing": false, "cpu_core": 0.0, "io_delta": 0, "live_pids": 5, "chrome": { "permission": true } }, "expected_status": "waiting_permission" },
+    { "name": "offline_crash", "input": { "pane_gone": true, "live_pids": 0 }, "expected_status": "offline_crashed" }
+  ]
+}

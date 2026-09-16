@@ -1,0 +1,39 @@
+{
+  "agent_id": "fixture-codex",
+  "session_id": "01a01801-b232-7760-b6f0-c6ea1d6e9152",
+  "grammar_version": 2,
+  "items": [
+    {
+      "kind": "tool_use",
+      "role": "assistant",
+      "tool": "shell",
+      "input": {
+        "command": "printf fixture"
+      },
+      "summary": "printf fixture",
+      "id": "call-array",
+      "uuid": "step-3-call"
+    },
+    {
+      "kind": "tool_result",
+      "role": "user",
+      "text": "fixture output",
+      "tool_use_id": "call-array",
+      "is_error": false,
+      "uuid": "step-4-result"
+    }
+  ],
+  "render_items": [
+    {
+      "kind": "tool",
+      "tool": "shell",
+      "summary": "printf fixture",
+      "input": {
+        "command": "printf fixture"
+      },
+      "result": "fixture output",
+      "is_error": false,
+      "key": "step-3-call:0"
+    }
+  ]
+}
