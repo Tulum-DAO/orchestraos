@@ -439,6 +439,16 @@ spawn_agent() {
         fi
         tmux_name="$agent_id"
     fi
+    # A row registered by hand (INSTALL.md §3) may carry no tmux_session; the auto-register
+    # fallback above only runs for UNKNOWN agents, so spawn used to fail with "invalid session:"
+    # (B1 finding 2). Default to the agent id and record it.
+    if [[ -z "$tmux_name" || "$tmux_name" == "None" || "$tmux_name" == "null" ]]; then
+        tmux_name="$agent_id"
+        warn "Agent $agent_id has no tmux_session in the registry — using '$agent_id' and recording it"
+        REGISTRY_PATH="$REGISTRY" python3 "$SCRIPT_DIR/scripts/registry-update.py" \
+            "$agent_id" --field "tmux_session=$agent_id" >/dev/null 2>&1 \
+            || warn "  could not record tmux_session for $agent_id (continuing)"
+    fi
     tier=$(get_agent_field "$agent_id" "tier")
     cwd=$(get_agent_field "$agent_id" "cwd")
     prompt_file=$(get_agent_field "$agent_id" "system_prompt")
@@ -480,6 +490,14 @@ spawn_agent() {
     local this_machine="mac"
     if [[ "$(hostname)" == *"${ORCHESTRA_VPS_HOSTNAME:-__unset__}"* ]] || [[ "$(whoami)" == "root" ]]; then
         this_machine="vps"
+    fi
+    # Single-machine install: [machines] in orchestra.toml is blank (no vps_hostname, no
+    # tailscale ips), so there is nowhere else to dispatch to — this host IS the agent's
+    # machine, whatever label the row carries (B1 finding 1: the doc's own machine=vps example
+    # refused to spawn for a non-root user).
+    if [[ -z "${ORCHESTRA_VPS_HOSTNAME:-}" && -z "${ORCHESTRA_MAC_TAILSCALE_IP:-}" \
+          && -z "${ORCHESTRA_VPS_TAILSCALE_IP:-}" ]]; then
+        this_machine="$machine"
     fi
 
     if [[ "$machine" != "$this_machine" ]]; then

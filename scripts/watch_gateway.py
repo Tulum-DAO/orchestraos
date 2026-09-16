@@ -824,6 +824,8 @@ async def handle_approval_detail(request):
 # ---------------------------------------------------------------------------
 
 ORCH_DIR = Path(os.environ.get("ORCH_DIR", os.path.expanduser("~/scripts/agent-orchestra")))
+# Code lives next to this file; ORCH_DIR is the DATA dir under `orchestra up` (they differ).
+CODE_SCRIPTS_DIR = Path(__file__).resolve().parent
 _agents_cache = {"at": 0.0, "data": None, "refreshing": False, "reg_mtime": None, "event_mtime": None}
 AGENTS_CACHE_S = 15.0   # ANSI-parse of the whole fleet takes ~6s; serve stale + refresh in bg
 
@@ -835,7 +837,7 @@ def _load_agent_status_mod():
     tty. tmux session_activity is NOT a valid liveness signal (UI redraws)."""
     import importlib.util
     spec = importlib.util.spec_from_file_location(
-        "agent_status", str(ORCH_DIR / "scripts" / "agent-status.py"))
+        "agent_status", str(CODE_SCRIPTS_DIR / "agent-status.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

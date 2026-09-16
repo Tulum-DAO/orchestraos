@@ -18,6 +18,10 @@ port = 8890
 # Host/port the web dashboard is served on (dashboard-proxy.js). required.
 host = "127.0.0.1"
 port = 8891
+# tmux is host-global. The agent list, `agent-status.py --all` and the rotation beat only
+# see sessions that resolve to a registry row; set this true to ALSO show every other
+# tmux session on the machine as an `unregistered:<name>` chip (single-operator hosts).
+show_unregistered_sessions = false
 
 [api]
 # Host/port the express API (api/dist/server.js) listens on. The dashboard proxy

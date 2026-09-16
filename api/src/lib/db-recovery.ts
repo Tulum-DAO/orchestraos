@@ -23,9 +23,18 @@ export interface RecoveryOpts {
   applyPragmas: (d: DB) => void;
   onFinding: (severity: 'INFO' | 'WARN', summary: string, findings: string[]) => void;
   onFatal: (archived: string[], reason: string) => void; // fire CRITICAL alarm
+  open?: (dbPath: string) => DB; // test seam; default `new Database(dbPath)`
 }
 
 export class DbFatalError extends Error {}
+/** The environment cannot open ANY database (native addon missing/unloadable): not a DB
+ *  fault — nothing is archived, nothing is touched, no data-loss alarm. */
+export class DbEnvironmentError extends Error {}
+
+const ENV_ERROR_RE = /bindings file|better_sqlite3\.node|Cannot find module|MODULE_NOT_FOUND|NODE_MODULE_VERSION|invalid ELF header|not a valid Win32 application/i;
+export function isEnvironmentError(e: any): boolean {
+  return e?.code === 'MODULE_NOT_FOUND' || e?.code === 'ERR_DLOPEN_FAILED' || ENV_ERROR_RE.test(String(e?.message ?? e));
+}
 
 function runIntegrity(d: DB) {
   let rows: string[];
@@ -58,9 +67,17 @@ export function openClassifyRecover(opts: RecoveryOpts): DB {
   // A non-sqlite/garbage file throws on first pragma; map that to FATAL-halt.
   let d: DB;
   try {
-    d = new Database(opts.dbPath);
+    d = (opts.open ?? ((p: string) => new Database(p)))(opts.dbPath);
     opts.applyPragmas(d);
   } catch (e: any) {
+    if (isEnvironmentError(e)) {
+      // The native addon is missing/unloadable: EVERY file would fail this way. Archiving
+      // the file as "corrupt" here destroyed nothing but lied about data loss (2026-09-16).
+      throw new DbEnvironmentError(
+        `[db] cannot open any database: ${e?.message?.split('\n')[0]} — environment fault, ${opts.dbPath} untouched. ` +
+        `Remedy: cd api && npm rebuild better-sqlite3 (or delete api/node_modules and npm install); \`orchestra doctor\` checks this.`,
+      );
+    }
     return archiveByCopy(opts, `open/pragma threw: ${e?.message}`);
   }
 

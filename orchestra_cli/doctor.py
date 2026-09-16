@@ -44,6 +44,8 @@ class DoctorProbes:
     now_ms: Callable[[], int]
     python_version: tuple
     git_hooks_path: Callable[[Path], str]
+    http_get: Callable[[str], str] = None                    # raises on any failure; body text on 200
+    tmux_sessions: Callable[[], list] = None                 # every tmux session name on this host
 
 
 # --- real probes -----------------------------------------------------------
@@ -98,11 +100,27 @@ def default_probes(st: Settings) -> DoctorProbes:
         return subprocess.run(argv, capture_output=True, text=True, timeout=20, check=True,
                               stdin=subprocess.DEVNULL).stdout
 
+    def _http_get(url: str) -> str:
+        import urllib.request
+        with urllib.request.urlopen(url, timeout=5) as r:  # noqa: S310 — loopback only
+            if r.status != 200:
+                raise RuntimeError(f"HTTP {r.status}")
+            return r.read().decode("utf-8", "replace")
+
+    def _tmux_sessions() -> list:
+        try:
+            out = subprocess.run(["tmux", "list-sessions", "-F", "#{session_name}"], capture_output=True,
+                                 text=True, timeout=5, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError):
+            return []
+        return [l.strip() for l in out.stdout.splitlines() if l.strip()] if out.returncode == 0 else []
+
     return DoctorProbes(
         which=shutil.which, run_cmd=_run, port_owner=_port_owner_real,
         supervisor_state=_supervisor_state_real, import_ok=_import_ok,
         read_file=lambda p: Path(p).read_text(), now_ms=lambda: int(time.time() * 1000),
         python_version=tuple(sys.version_info[:3]), git_hooks_path=_git_hooks_path_real,
+        http_get=_http_get, tmux_sessions=_tmux_sessions,
     )
 
 
@@ -216,6 +234,40 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
             who = f"pid {owner}" if owner else "an unknown process"
             checks.append(Check(f"port:{name}", MISSING, f":{port} in use by {who}",
                                 f"Stop that process or change [{name}] port in {st.config_path.name}"))
+
+    # -- api health (only while OUR supervisor owns the api port): process up + DB open through
+    # the native binding, via GET /api/health. A bound port is not a serving api.
+    api_owner = probes.port_owner(st.api_port)
+    if api_owner is not None and api_owner in own and probes.http_get is not None:
+        url = f"http://{st.api_host}:{st.api_port}/api/health"
+        try:
+            body = json.loads(probes.http_get(url))
+            db_open = bool((body.get("db") or {}).get("open"))
+            checks.append(Check("api:health", OK if db_open else MISSING,
+                                f"{url} -> {body.get('status')} (db open={db_open})",
+                                "" if db_open else "api is up but tasks.db does not answer: see <data>/logs/api.log"))
+        except Exception as e:  # noqa: BLE001 — any failure = not serving
+            checks.append(Check("api:health", MISSING, f"{url} failed: {str(e)[:80]}",
+                                "api child is bound but not serving; see <data>/logs/api.log"))
+
+    # -- tmux is host-global: say which sessions are NOT registered seats (ignored by the beat
+    # and the dashboard since they became registry-scoped)
+    if probes.tmux_sessions is not None:
+        try:
+            agents = json.loads(reg.read_text()).get("agents", {}) or {}
+        except (FileNotFoundError, ValueError):
+            agents = {}
+        aliases = {e.get("tmux_session") for e in agents.values() if isinstance(e, dict) and e.get("tmux_session")}
+        foreign = sorted(s for s in (probes.tmux_sessions() or []) if s not in agents and s not in aliases)
+        if foreign:
+            shown = ", ".join(foreign[:8]) + (f", +{len(foreign) - 8} more" if len(foreign) > 8 else "")
+            checks.append(Check("tmux:foreign-sessions", WARN,
+                                f"{len(foreign)} tmux session(s) on this host are not registered seats and are ignored: {shown}",
+                                "Register them (registry-update.py) or run one OrchestraOS instance per host",
+                                required=False))
+        else:
+            checks.append(Check("tmux:foreign-sessions", OK, "every tmux session on this host is a registered seat",
+                                "", required=False))
 
     # -- python deps (in the venv if one exists)
     checks.append(Check("python:aiohttp", OK if probes.import_ok("aiohttp") else MISSING,
