@@ -12,8 +12,11 @@
 #         ARTURO_GM_INJECT=0 services/arturo/run.sh   # inject OFF (kill switch)
 set -euo pipefail
 
-ORCH="$HOME/scripts/agent-orchestra"
+# Repo root (this file lives at <root>/services/arturo/run.sh); overridable.
+ORCH="${ORCHESTRA_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 cd "$ORCH"
+# shellcheck source=../../scripts/orchestra-env.sh
+source "$ORCH/scripts/orchestra-env.sh"
 
 # SINGLE-WRITER GUARANTEE: never two processes journaling the same call. Kill any existing
 # arturo-proxy python instance (match the exact script path so we never hit this script or an

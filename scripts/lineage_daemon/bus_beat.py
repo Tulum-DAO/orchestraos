@@ -32,12 +32,18 @@ if __package__ in (None, ""):
 
 from scripts.lineage_daemon import bus
 
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _orchestra_dir():
+    """DATA dir: $ORCHESTRA_DIR (orchestra.toml [data] dir) else the checkout."""
+    return os.environ.get("ORCHESTRA_DIR", _ROOT)
+
+
 STREAM_DIR = os.environ.get(
-    "ORCH_EVENT_STREAM_DIR",
-    os.path.expanduser("~/scripts/agent-orchestra/state/event-stream"))
+    "ORCH_EVENT_STREAM_DIR", os.path.join(_orchestra_dir(), "state", "event-stream"))
 CURSOR_PATH = os.environ.get(
-    "ORCH_BUS_CURSOR",
-    os.path.expanduser("~/scripts/agent-orchestra/state/bus-cursor.json"))
+    "ORCH_BUS_CURSOR", os.path.join(_orchestra_dir(), "state", "bus-cursor.json"))
 
 # Kill-switch sentinel (the operator arm-condition): if this file exists, the drain is an
 # INSTANT pure no-op — no stream read, no promote, cursor UNTOUCHED. gm/the operator e-stop.
@@ -67,8 +73,7 @@ def drain_disabled(orchestra_dir=None) -> bool:
 def drain_disabled_advisory(orchestra_dir=None) -> bool:
     """True iff the in-tree (synced, advisory) drain sentinel is present — NOT a brake,
     just a logged warning that a stale synced file exists (authoritative = ~/runtime)."""
-    od = orchestra_dir or os.environ.get(
-        "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
+    od = orchestra_dir or _orchestra_dir()
     return os.path.exists(os.path.join(od, DRAIN_DISABLED_FILE))
 
 
@@ -125,8 +130,7 @@ def default_resolve(orchestra_dir=None):
     successor). Returns None when unresolved -> the event stays in the stream for a
     later drain (never promoted to a wrong address). This is the ONE live-integration
     seam to validate at arm time."""
-    od = orchestra_dir or os.environ.get(
-        "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
+    od = orchestra_dir or _orchestra_dir()
     try:
         with open(os.path.join(od, "state", "agent-sessions.json")) as fh:
             meta = json.load(fh)
@@ -164,10 +168,8 @@ def default_resolve(orchestra_dir=None):
 # --- gm wake-on-delivery riding this beat (DEC-1786828407) ---------------------
 
 WAKE_COOLDOWN_PATH = os.environ.get(
-    "ORCH_WAKE_COOLDOWN",
-    os.path.expanduser("~/scripts/agent-orchestra/state/wake-cooldown.json"))
-WAKE_LOG_PATH = os.path.expanduser(
-    "~/scripts/agent-orchestra/logs/wake-transport.jsonl")
+    "ORCH_WAKE_COOLDOWN", os.path.join(_orchestra_dir(), "state", "wake-cooldown.json"))
+WAKE_LOG_PATH = os.path.join(_orchestra_dir(), "logs", "wake-transport.jsonl")
 
 
 def wake_mode(argv):
@@ -214,17 +216,15 @@ def run_wake_beat(mode):
 
 
 def _gm_inbox():
-    od = os.environ.get("ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
-    sys.path.insert(0, od)
+    sys.path.insert(0, _ROOT)          # msg_store.py lives in the checkout, not the data dir
     from msg_store import MessageStore
     return MessageStore().inbox("gm")
 
 
 def _agent_status_mod():
     import importlib.util
-    od = os.environ.get("ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
     spec = importlib.util.spec_from_file_location(
-        "agent_status_bb", os.path.join(od, "scripts", "agent-status.py"))
+        "agent_status_bb", os.path.join(_ROOT, "scripts", "agent-status.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -290,9 +290,8 @@ def _wake_failed_artifact(record):
         pass
     try:
         import subprocess
-        od = os.environ.get("ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
         subprocess.run(
-            ["python3", os.path.join(od, "msg_store.py"), "send",
+            ["python3", os.path.join(_ROOT, "msg_store.py"), "send",
              "--from", "wake-transport", "--to", "gm", "--type", "escalation",
              "--subject", f"wake_failed nonce {record.get('nonce')}",
              "--body", json.dumps(record)], timeout=20)

@@ -4,7 +4,8 @@ const path = require("path");
 const { URL } = require("url");
 const { execFileSync } = require("child_process");
 const { WebSocketServer } = require("ws");
-const pty = require("node-pty");
+let pty = null;
+try { pty = require("node-pty"); } catch (e) { console.warn("dashboard-proxy: node-pty not installed — web terminal disabled (npm install node-pty to enable)"); }
 
 const DASHBOARD_DIR = path.join(__dirname, "dashboard", "dist");
 const PORT = parseInt(process.env.ORCHESTRA_DASHBOARD_PORT || "8891", 10);
@@ -19,7 +20,9 @@ function injectVps(s,t){try{execFileSync("tmux",["send-keys","-t",s,t,"Enter"],{
 
 function serveStatic(req,res){const up=req.url.split("?")[0];const fp=path.join(DASHBOARD_DIR,up==="/"?"index.html":up);if(!fp.startsWith(DASHBOARD_DIR)){res.writeHead(403);res.end("Forbidden");return;}if(fs.existsSync(fp)&&fs.statSync(fp).isFile()){const e=path.extname(fp);const h={"Content-Type":MIME[e]||"application/octet-stream"};h["Cache-Control"]=e===".html"?"no-cache, no-store, must-revalidate":"public, max-age=31536000, immutable";const ae=(req.headers["accept-encoding"]||"");if(ae.includes("gzip")&&fs.existsSync(fp+".gz")){h["Content-Encoding"]="gzip";res.writeHead(200,h);res.end(fs.readFileSync(fp+".gz"));}else{res.writeHead(200,h);res.end(fs.readFileSync(fp));}return;}if(up.startsWith("/assets/")){res.writeHead(404);res.end("Not found");return;}try{res.writeHead(200,{"Content-Type":"text/html","Cache-Control":"no-cache"});res.end(fs.readFileSync(path.join(DASHBOARD_DIR,"index.html")));}catch{res.writeHead(404);res.end("Not found");}}
 
-const VPS_API = "http://127.0.0.1:8888";
+const API_HOST = process.env.ORCHESTRA_API_HOST || "127.0.0.1";
+const API_PORT = parseInt(process.env.ORCHESTRA_API_PORT || "8888", 10);
+const VPS_API = "http://" + API_HOST + ":" + API_PORT;
 function proxyTo(base,req,res,timeoutMs){const u=base+req.url;const o=new URL(u);const opts={hostname:o.hostname,port:o.port,path:o.pathname+(o.search||""),method:req.method,headers:{...req.headers,host:o.host},timeout:timeoutMs||30000};const p=http.request(opts,(r)=>{res.writeHead(r.statusCode,r.headers);r.pipe(res);});p.on("error",(e)=>{res.writeHead(502,{"Content-Type":"application/json"});res.end(JSON.stringify({error:"upstream unreachable",detail:e.message}));});p.on("timeout",()=>{p.destroy();});req.pipe(p);}
 function proxyToLocal(req,res){proxyTo(VPS_API,req,res);}
 
@@ -67,7 +70,7 @@ function setAggressiveResize(sess, mach) {
 // through (return without handling) for everything else, incl. /ws/terminal.
 server.prependListener("upgrade", (req, socket, head) => {
   if (!req.url.startsWith("/api/")) return; // fall through to /ws/terminal etc.
-  const p = http.request({ hostname: "127.0.0.1", port: 8888, path: req.url, method: "GET", headers: req.headers });
+  const p = http.request({ hostname: API_HOST, port: API_PORT, path: req.url, method: "GET", headers: req.headers });
   p.on("upgrade", (r, s, h) => { socket.write("HTTP/1.1 101 Switching Protocols\r\n" + Object.entries(r.headers).map(([k, v]) => k + ": " + v).join("\r\n") + "\r\n\r\n"); if (h.length) socket.write(h); s.pipe(socket); socket.pipe(s); });
   p.on("error", () => socket.destroy());
   p.end();
@@ -86,6 +89,7 @@ wss.on("connection", (ws, req) => {
   sendHistory(ws, session, machine);
   setAggressiveResize(session, machine);
 
+  if (!pty) { ws.send("\r\n\x1b[33m[Web terminal unavailable: node-pty is not installed on this host]\x1b[0m\r\n"); ws.close(); return; }
   let shell, args;
   if (machine === "mac") {
     shell = "ssh"; args = ["-o","ConnectTimeout=5","-o","StrictHostKeyChecking=no","-o","IdentitiesOnly=yes","-i",process.env.HOME+"/.ssh/id_ed25519","-t",MAC_SSH_TARGET,"tmux attach -t "+session];
@@ -144,4 +148,4 @@ wss.on("connection", (ws, req) => {
   });
 });
 
-server.listen(PORT, "127.0.0.1", () => console.log("Dashboard proxy on :" + PORT + " (ws+pty)"));
+server.listen(PORT, process.env.ORCHESTRA_DASHBOARD_HOST || "127.0.0.1", () => console.log("Dashboard proxy on :" + PORT + " (ws+pty)"));

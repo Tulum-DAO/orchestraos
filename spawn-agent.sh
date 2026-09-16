@@ -15,7 +15,7 @@ set -euo pipefail
 # Timezone: fleet runs on the operator's Eastern time (VPS system clock is UTC).
 # Every spawned agent inherits ET so `date`/naive datetime read local, not UTC.
 # Stored timestamps stay explicit-UTC (+00:00) — this only changes display/reasoning.
-export TZ="America/New_York"
+export TZ="${ORCHESTRA_TZ:-${TZ:-UTC}}"
 
 # Ensure homebrew tools are available (needed when called via SSH)
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
@@ -26,9 +26,13 @@ source "$SCRIPT_DIR/scripts/orchestra-env.sh"
 # REGISTRY defaults to the checkout's registry.json; env-overridable so the
 # §4.2 dispatch path can be exercised against a scratch/fake registry without
 # a real spawn (the R3 real-artifact gate). Production sets no REGISTRY env.
-REGISTRY="${REGISTRY:-$SCRIPT_DIR/registry.json}"
-OMNI_DIR="$HOME/scripts/omni-context"
-STATE_DIR="$SCRIPT_DIR/state"
+# ORCHESTRA_DIR (orchestra.toml [data] dir, exported by orchestra-env.sh / `orchestra up`)
+# is where registry.json + state/ + logs/ live; the checkout is the default.
+ORCHESTRA_DIR="${ORCHESTRA_DIR:-$SCRIPT_DIR}"
+REGISTRY="${REGISTRY:-$ORCHESTRA_DIR/registry.json}"
+OMNI_DIR="${OMNI_CONTEXT_DIR:-$HOME/scripts/omni-context}"
+STATE_DIR="$ORCHESTRA_DIR/state"
+mkdir -p "$STATE_DIR" "$ORCHESTRA_DIR/logs"
 
 # Colors
 RED='\033[0;31m'
@@ -413,9 +417,9 @@ spawn_agent() {
         # U16 adopt seam instead: registers lineage+gen+canonical+source_record,
         # verifies by re-read, and PROJECTS so the get_agent_field reads below
         # see the row immediately. Fail-closed: no complete identity, no seat.
-        if [[ -e "$SCRIPT_DIR/state/identity-store-cutover.flag" \
+        if [[ -e "$STATE_DIR/identity-store-cutover.flag" \
               || "${IDENTITY_STORE_CUTOVER:-}" == "1" ]]; then
-            if ! ORCHESTRA_DIR="$SCRIPT_DIR" python3 \
+            if ! ORCHESTRA_DIR="$ORCHESTRA_DIR" python3 \
                     "$SCRIPT_DIR/scripts/identity_store/spawn_adopt.py" \
                     "$agent_id" --runtime "${AGENT_RUNTIME:-}" \
                     --model "${AGENT_MODEL:-}" --tier "T2" \
@@ -655,7 +659,7 @@ spawn_agent() {
     # legitimate NEW-agent route whose absence grew the raw-tmux-spawn class.
     # Inactive cutover => {"handled": false} and the legacy behavior is
     # byte-identical. Exit 3 from the gate refuses the spawn entirely.
-    if ! ORCHESTRA_DIR="$SCRIPT_DIR" python3 \
+    if ! ORCHESTRA_DIR="$ORCHESTRA_DIR" python3 \
             "$SCRIPT_DIR/scripts/identity_store/spawn_adopt.py" "$agent_id" \
             --runtime "$runtime" --model "${model:-}" --tier "${tier:-T2}" \
             --cwd "$cwd" --machine "${machine:-vps}" \
@@ -814,8 +818,8 @@ with open('$STATE_DIR/$agent_id.json', 'w') as f:
     # spawn used to leave generations.session_id NULL / no resume_command until a human or
     # the */15 reconciler attributed it. Bounded (8 x 3s), detached so the spawn returns now,
     # DB-first + re-project; inert when the cutover is off. Fail-soft: never blocks the seat.
-    ( ORCHESTRA_DIR="$SCRIPT_DIR" nohup python3 "$SCRIPT_DIR/scripts/identity_store/spawn_attribute_sid.py" \
-          "$agent_id" --runtime "$runtime" >> "$SCRIPT_DIR/logs/spawn-attribute-sid.log" 2>&1 </dev/null & ) \
+    ( ORCHESTRA_DIR="$ORCHESTRA_DIR" nohup python3 "$SCRIPT_DIR/scripts/identity_store/spawn_attribute_sid.py" \
+          "$agent_id" --runtime "$runtime" >> "$ORCHESTRA_DIR/logs/spawn-attribute-sid.log" 2>&1 </dev/null & ) \
         || warn "  sid attribution not started for $agent_id (reconciler will attribute)"
     log "${GREEN}Agent $agent_id spawned successfully${NC}"
     log "  Attach: tmux attach -t $tmux_name"
