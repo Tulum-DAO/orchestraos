@@ -1,0 +1,22 @@
+{
+  "evi_version": "4-mini",
+  "name": "arturo-4mini",
+  "version_description": "CLM=arturo-proxy via the PUBLIC Funnel path /arturo (:443 -> 127.0.0.1:5071; the :5071 port is tailnet-only, Funnel never served it); voice Frank; verbatim greeting; timeouts 1800/1800; on_resume_chat disabled",
+  "language_model": {
+    "model_provider": "CUSTOM_LANGUAGE_MODEL",
+    "model_resource": "https://YOUR-PUBLIC-HOST/arturo/v1/chat/completions"
+  },
+  "voice": { "provider": "CUSTOM_VOICE", "id": "4bc24565-524c-469d-8b5d-3cffd384043a" },
+  "event_messages": {
+    "on_new_chat": { "enabled": true, "text": "Hey the operator, Arturo here, what do you need?" },
+    "on_resume_chat": { "enabled": false },
+    "on_inactivity_timeout": { "enabled": false },
+    "on_max_duration_timeout": { "enabled": false }
+  },
+  "timeouts": {
+    "inactivity":   { "enabled": true, "duration_secs": 1800 },
+    "max_duration": { "enabled": true, "duration_secs": 1800 }
+  },
+  "builtin_tools": [],
+  "tools": []
+}

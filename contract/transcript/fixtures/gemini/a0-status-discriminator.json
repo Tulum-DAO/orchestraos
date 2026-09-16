@@ -1,0 +1,29 @@
+{
+  "$fixture": "A0 status-discriminator golden (gemini/agy) — RED tests for Build B1 status deriver + adapter_gemini",
+  "provider": "gemini",
+  "prompt_char": ">",
+  "chrome_signatures": {
+    "prompt_composer": "> (bare U+003E), empty when idle",
+    "idle_footer_re": "\\? for shortcuts|Gemini [\\d.]+ (Flash|Pro)",
+    "working_re_UNMEASURED_LIVE": "esc to cancel|Generating",
+    "permission_re_UNMEASURED_LIVE": "Apply this change\\?|Allow execution\\?|Waiting for user"
+  },
+  "store_side_semantics": {
+    "note": "gemini is the ONLY provider whose status/permission signal ALSO lives in the durable store (D1): steps.status enum {3,6,7} + steps.permissions blob populated on step_type=132. A hooks-absent DELTA-2 recovery source independent of pty chrome.",
+    "cursor": "MAX(idx) on steps",
+    "body_serialization": "protobuf-wire in step_payload (NOT jsonl) => normalize (protobuf-decode) BEFORE any court scrub/flag check"
+  },
+  "discriminator": { "idle_baseline_core_pct": 1.4, "idle_band_core_pct": [0.97, 1.95], "eps_cpu_core_pct_above_baseline": 0.6, "computing_threshold_absolute_core_pct": 2.0, "eps_io_bytes": 4096, "window_s": 2.0, "smoothing": "median-of-3 (single-window CPU jitters 0.97<->1.95 within the idle band)" },
+  "false_positive_guards": {
+    "nonzero_idle_baseline": "gemini idle is 0.97-1.95% core (a render loop), NOT ~0 like claude. A claude-tuned eps_cpu (~0.5%) reads idle gemini as computing. Subtract the per-provider idle_baseline before thresholding.",
+    "overlaps_codex_compute": "gemini-idle (<=1.95%) OVERLAPS codex-compute (>=1.46%); the IO-delta axis + per-provider baseline break the tie."
+  },
+  "golden_cases": [
+    { "name": "idle_render_loop_low", "input": { "bytes_flowing": false, "cpu_core": 0.98, "io_delta": 1600, "live_pids": 2, "chrome": { "idle_footer": true } }, "expected_status": "idle" },
+    { "name": "idle_render_loop_high", "input": { "bytes_flowing": false, "cpu_core": 1.95, "io_delta": 1600, "live_pids": 2, "chrome": { "idle_footer": true } }, "expected_status": "idle", "note": "top of idle band; MUST NOT read computing" },
+    { "name": "computing", "input": { "bytes_flowing": false, "cpu_core": 8.0, "io_delta": 30000, "live_pids": 3, "chrome": {} }, "expected_status": "computing", "note": "clearly above idle_baseline+eps" },
+    { "name": "streaming", "input": { "bytes_flowing": true, "chars_per_s": 1500, "cpu_core": 2.5, "live_pids": 2 }, "expected_status": "streaming" },
+    { "name": "waiting_permission_store", "input": { "bytes_flowing": false, "cpu_core": 1.4, "io_delta": 1600, "live_pids": 2, "store": { "step_type": 132, "permissions_blob_populated": true } }, "expected_status": "waiting_permission", "note": "recovered from the durable store, not pty/hooks" },
+    { "name": "offline_crash", "input": { "pane_gone": true, "live_pids": 0 }, "expected_status": "offline_crashed" }
+  ]
+}

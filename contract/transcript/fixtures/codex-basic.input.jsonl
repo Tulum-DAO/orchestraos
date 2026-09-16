@@ -1,0 +1,8 @@
+{"type": "session_meta", "payload": {"id": "01a01801-b232-7760-b6f0-c6ea1d6e9152", "timestamp": "2026-08-27T10:00:00Z", "cwd": "/home/testuser/agent-orchestra", "base_instructions": "You are codex-dev-1, a parity tester."}}
+{"type": "response_item", "payload": {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "You are codex-dev-1, a parity tester. Read your instructions."}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Please check the status."}]}}
+{"type": "response_item", "payload": {"type": "reasoning", "content": "I should run git status to check the repo state."}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"CommandLine\": \"git status\"}", "call_id": "call_123"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_123", "output": "On branch main\nnothing to commit, working tree clean"}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "The tree is clean."}]}}
+{"type": "event_msg", "payload": {"type": "token_count", "info": {"total_tokens": 1500}}}

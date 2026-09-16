@@ -1,0 +1,17 @@
+{
+  "name": "OrchestraOS",
+  "short_name": "Orchestra",
+  "description": "Agent fleet command center",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

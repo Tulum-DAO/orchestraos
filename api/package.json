@@ -1,0 +1,31 @@
+{
+  "name": "orchestraos-api",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "test": "tsx --test src/routes/unified-approvals.menu.test.ts src/routes/approvals.menu.test.ts",
+    "stream-test": "tsx --test tests/transcript-stream.test.ts tests/transcript-stream-client.test.ts"
+  },
+  "dependencies": {
+    "@types/multer": "^2.1.0",
+    "@types/ws": "^8.18.1",
+    "better-sqlite3": "^12.9.0",
+    "chokidar": "^4.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.0",
+    "express": "^5.0.0",
+    "multer": "^2.1.1",
+    "toml": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/cors": "^2.8.0",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

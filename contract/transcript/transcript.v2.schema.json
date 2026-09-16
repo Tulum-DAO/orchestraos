@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "orchestraos://contract/transcript/v2",
+  "title": "TranscriptEnvelope",
+  "description": "THE versioned chat contract for GET /api/agents/:id/transcript — the single source of truth consumed by the live web dashboard, iOS/watch (OrchestraUltra), and the FABLE-5 shadcn web. Chat contract ONLY (the decision-surface grammar — approvals/menus/questionnaires — is a SEPARATE contract, the operator Q5). grammar_version 2 = additive envelope: items[] keeps the v1 flat shapes (plus additive summary/input_full/is_system on tool_use/text), and render_items[] adds server-paired render-ready nodes. Clients that don't support the stamped grammar_version major MUST degrade gracefully (render raw text), never mis-parse. Codegen: contract/transcript/codegen.mjs emits TS + Swift from THIS file — edit here, then regenerate; never edit generated files.",
+  "type": "object",
+  "required": ["agent_id", "session_id", "grammar_version", "items", "render_items"],
+  "properties": {
+    "agent_id": { "type": "string" },
+    "session_id": { "type": ["string", "null"] },
+    "grammar_version": {
+      "type": "integer",
+      "const": 2,
+      "description": "Bumped on any breaking item-shape change. Clients assert the major they support."
+    },
+    "items": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ChatItem" },
+      "description": "v1-compatible flat item stream (tool_result separate from tool_use). Kept for existing clients; new clients should read render_items."
+    },
+    "render_items": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/RenderItem" },
+      "description": "Server-paired render-ready nodes: tool_result attached under its tool_use, empties dropped, spawn brief flagged. Clients render with a trivial node->view switch — NO client-side pairing or summarizing."
+    },
+    "error": { "type": "string" }
+  },
+  "$defs": {
+    "ChatItem": {
+      "oneOf": [
+        { "$ref": "#/$defs/TextItem" },
+        { "$ref": "#/$defs/ThinkingItem" },
+        { "$ref": "#/$defs/ToolUseItem" },
+        { "$ref": "#/$defs/ToolResultItem" },
+        { "$ref": "#/$defs/QueuedBatchItem" }
+      ],
+      "discriminator": { "propertyName": "kind" }
+    },
+    "TextItem": {
+      "type": "object",
+      "required": ["kind", "role", "text"],
+      "properties": {
+        "kind": { "const": "text" },
+        "role": { "enum": ["user", "assistant"] },
+        "text": { "type": "string" },
+        "is_system": {
+          "type": "boolean",
+          "description": "ADDITIVE v2: true on the first user text when it is the spawn/system brief (server rule: first user text AND (length > 800 OR starts with 'You are'))."
+        },
+        "queued": {
+          "type": "boolean",
+          "description": "ADDITIVE v2 (queued-native-render, DEC-1789392107605493): true when this user turn is a still-pending phone/watch message merged from the msg_store hold queue (B1) — render a 'queued' chip; it resolves to the real turn on delivery. Older clients ignore this flag and render a normal user bubble."
+        },
+        "ts": { "type": "string", "description": "ISO-8601 timestamp (both runtimes emit ISO strings)." },
+        "uuid": { "type": "string" }
+      }
+    },
+    "ThinkingItem": {
+      "type": "object",
+      "required": ["kind", "role", "text"],
+      "properties": {
+        "kind": { "const": "thinking" },
+        "role": { "const": "assistant" },
+        "text": { "type": "string" },
+        "ts": { "type": "string" },
+        "uuid": { "type": "string" }
+      }
+    },
+    "ToolUseItem": {
+      "type": "object",
+      "required": ["kind", "role", "tool", "input", "summary"],
+      "properties": {
+        "kind": { "const": "tool_use" },
+        "role": { "const": "assistant" },
+        "tool": { "type": "string" },
+        "input": {
+          "type": "object",
+          "description": "Structured tool args for rich rendering. SIZE-CAPPED: each string value is truncated to 2000 chars with a trailing '…[truncated]'. When any value was truncated, input_full carries the full text."
+        },
+        "summary": {
+          "type": "string",
+          "description": "ADDITIVE v2: THE canonical server-computed one-line summary (max 120 chars, first line). Replaces web toolSummary() and the iOS summarize() — clients render it verbatim, never re-derive."
+        },
+        "input_full": {
+          "type": "string",
+          "description": "ADDITIVE v2: full multi-line text of the tool args (the code/diff a user sees on expand). Present ONLY when input was truncated. Format: per key in arg order, single-line values as 'key: value', multi-line values as '── key ──\\n<value>', joined by newlines."
+        },
+        "id": { "type": "string" },
+        "ts": { "type": "string" },
+        "uuid": { "type": "string" }
+      }
+    },
+    "ToolResultItem": {
+      "type": "object",
+      "required": ["kind", "role", "text"],
+      "properties": {
+        "kind": { "const": "tool_result" },
+        "role": { "const": "user" },
+        "text": { "type": "string" },
+        "tool_use_id": { "type": "string" },
+        "is_error": { "type": "boolean" },
+        "ts": { "type": "string" },
+        "uuid": { "type": "string" }
+      }
+    },
+    "BatchEntry": {
+      "type": "object",
+      "description": "One processed queued message inside a queued_batch (B2). Rendered as: agent · how-long-ago(sent_ts) · body.",
+      "required": ["agent", "sent_ts", "body"],
+      "properties": {
+        "agent": { "type": "string", "description": "from_agent — who SENT the queued message (the entry's displayed name)." },
+        "sent_ts": { "type": "string", "description": "ISO-8601 created_at of the queued message; the client computes the relative 'Nm ago'. P2 adds the viewer's local wall-clock." },
+        "body": { "type": "string", "description": "The queued message body." }
+      }
+    },
+    "QueuedBatchItem": {
+      "type": "object",
+      "description": "ADDITIVE v2 (queued-native-render, DEC-1789392107605493): one processed batch of agent-bound queued mail (B2). Collapsed-by-default, expands to the entries list (newest→oldest). Older clients: unknown kind is skipped gracefully (buildRows default:continue), so the batch simply doesn't render — no blank, no crash.",
+      "required": ["kind", "count", "entries", "key"],
+      "properties": {
+        "kind": { "const": "queued_batch" },
+        "count": { "type": "integer", "description": "Number of entries (== entries.length)." },
+        "entries": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/BatchEntry" },
+          "description": "Processed queued messages, ordered NEWEST → OLDEST."
+        },
+        "ts": { "type": "string", "description": "ISO-8601 batch processed time — the interleave position of the div in the conversation." },
+        "key": { "type": "string", "description": "STABLE id 'batch:<batch_id>' for list diffing and the parent-owned expand binding." }
+      }
+    },
+    "RenderItem": {
+      "oneOf": [
+        { "$ref": "#/$defs/RenderUser" },
+        { "$ref": "#/$defs/RenderAssistant" },
+        { "$ref": "#/$defs/RenderThinking" },
+        { "$ref": "#/$defs/RenderTool" },
+        { "$ref": "#/$defs/RenderQueuedBatch" }
+      ],
+      "discriminator": { "propertyName": "kind" }
+    },
+    "RenderUser": {
+      "type": "object",
+      "required": ["kind", "text", "key"],
+      "properties": {
+        "kind": { "const": "user" },
+        "text": { "type": "string" },
+        "is_system": { "type": "boolean" },
+        "queued": { "type": "boolean", "description": "ADDITIVE v2 (queued-native-render): mirrors TextItem.queued — a still-pending phone/watch turn (render a 'queued' chip)." },
+        "ts": { "type": "string" },
+        "key": { "type": "string", "description": "STABLE identity for list diffing: '<uuid>:<index>' when uuid exists, else 'n<index>'." }
+      }
+    },
+    "RenderAssistant": {
+      "type": "object",
+      "required": ["kind", "text", "key"],
+      "properties": {
+        "kind": { "const": "assistant" },
+        "text": { "type": "string" },
+        "ts": { "type": "string" },
+        "key": { "type": "string" }
+      }
+    },
+    "RenderThinking": {
+      "type": "object",
+      "required": ["kind", "text", "key"],
+      "properties": {
+        "kind": { "const": "thinking" },
+        "text": { "type": "string" },
+        "ts": { "type": "string" },
+        "key": { "type": "string" }
+      }
+    },
+    "RenderTool": {
+      "type": "object",
+      "required": ["kind", "tool", "summary", "input", "key"],
+      "properties": {
+        "kind": { "const": "tool" },
+        "tool": { "type": "string" },
+        "summary": { "type": "string" },
+        "input": { "type": "object", "description": "Size-capped structured args (same capping as ToolUseItem.input)." },
+        "input_full": { "type": "string" },
+        "result": { "type": "string", "description": "Paired tool_result text. Absent when the call has no result yet (in-flight or orphaned)." },
+        "is_error": { "type": "boolean" },
+        "ts": { "type": "string" },
+        "key": { "type": "string" }
+      }
+    },
+    "RenderQueuedBatch": {
+      "type": "object",
+      "description": "Server-paired render node for a processed queued batch (B2). Same data as QueuedBatchItem; clients render with a trivial node->view switch (expandable, entries newest→oldest).",
+      "required": ["kind", "count", "entries", "key"],
+      "properties": {
+        "kind": { "const": "queued_batch" },
+        "count": { "type": "integer" },
+        "entries": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/BatchEntry" }
+        },
+        "ts": { "type": "string" },
+        "key": { "type": "string" }
+      }
+    }
+  }
+}

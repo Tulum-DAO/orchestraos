@@ -1,0 +1,12 @@
+node_modules/
+dist/
+dist-*/
+.pytest_cache/
+__pycache__/
+*.pyc
+.DS_Store
+orchestra.toml
+services/arturo/cartesia_deploy/.cartesia/
+/tmp-shots/
+/state/
+/logs/

@@ -1,0 +1,159 @@
+{
+  "agent_id": "fixture-agent",
+  "session_id": "fixture-session",
+  "grammar_version": 2,
+  "items": [
+    {
+      "kind": "text",
+      "role": "user",
+      "text": "You are fixture-agent, a T2 agent. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol.",
+      "is_system": true,
+      "ts": "2026-08-27T10:00:00.000Z",
+      "uuid": "u1"
+    },
+    {
+      "kind": "thinking",
+      "role": "assistant",
+      "text": "I should list the directory first.",
+      "ts": "2026-08-27T10:00:01.000Z",
+      "uuid": "u2"
+    },
+    {
+      "kind": "text",
+      "role": "assistant",
+      "text": "Starting the fixture task.",
+      "ts": "2026-08-27T10:00:02.000Z",
+      "uuid": "u3"
+    },
+    {
+      "kind": "tool_use",
+      "role": "assistant",
+      "tool": "Bash",
+      "input": {
+        "command": "ls -la /tmp\necho done",
+        "description": "List tmp"
+      },
+      "summary": "ls -la /tmp",
+      "id": "T1",
+      "ts": "2026-08-27T10:00:03.000Z",
+      "uuid": "u4"
+    },
+    {
+      "kind": "tool_result",
+      "role": "user",
+      "text": "total 0\n",
+      "tool_use_id": "T1",
+      "is_error": false,
+      "ts": "2026-08-27T10:00:04.000Z",
+      "uuid": "u5"
+    },
+    {
+      "kind": "tool_use",
+      "role": "assistant",
+      "tool": "Edit",
+      "input": {
+        "file_path": "/tmp/demo.ts",
+        "old_string": "old",
+        "new_string": "const x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1…[truncated]"
+      },
+      "summary": "/tmp/demo.ts",
+      "input_full": "file_path: /tmp/demo.ts\nold_string: old\n── new_string ──\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;",
+      "id": "T2",
+      "ts": "2026-08-27T10:00:05.000Z",
+      "uuid": "u6"
+    },
+    {
+      "kind": "tool_result",
+      "role": "user",
+      "text": "String not found",
+      "tool_use_id": "T2",
+      "is_error": true,
+      "ts": "2026-08-27T10:00:06.000Z",
+      "uuid": "u7"
+    },
+    {
+      "kind": "text",
+      "role": "user",
+      "text": "ship it",
+      "ts": "2026-08-27T10:00:08.000Z",
+      "uuid": "u8"
+    },
+    {
+      "kind": "tool_use",
+      "role": "assistant",
+      "tool": "Read",
+      "input": {
+        "file_path": "/home/testuser/notes.md"
+      },
+      "summary": "~/notes.md",
+      "id": "T3",
+      "ts": "2026-08-27T10:00:09.000Z",
+      "uuid": "u9"
+    }
+  ],
+  "render_items": [
+    {
+      "kind": "user",
+      "text": "You are fixture-agent, a T2 agent. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol.",
+      "is_system": true,
+      "ts": "2026-08-27T10:00:00.000Z",
+      "key": "u1:0"
+    },
+    {
+      "kind": "thinking",
+      "text": "I should list the directory first.",
+      "ts": "2026-08-27T10:00:01.000Z",
+      "key": "u2:1"
+    },
+    {
+      "kind": "assistant",
+      "text": "Starting the fixture task.",
+      "ts": "2026-08-27T10:00:02.000Z",
+      "key": "u3:2"
+    },
+    {
+      "kind": "tool",
+      "tool": "Bash",
+      "summary": "ls -la /tmp",
+      "input": {
+        "command": "ls -la /tmp\necho done",
+        "description": "List tmp"
+      },
+      "result": "total 0\n",
+      "is_error": false,
+      "ts": "2026-08-27T10:00:03.000Z",
+      "key": "u4:3"
+    },
+    {
+      "kind": "tool",
+      "tool": "Edit",
+      "summary": "/tmp/demo.ts",
+      "input": {
+        "file_path": "/tmp/demo.ts",
+        "old_string": "old",
+        "new_string": "const x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1…[truncated]"
+      },
+      "input_full": "file_path: /tmp/demo.ts\nold_string: old\n── new_string ──\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;",
+      "result": "String not found",
+      "is_error": true,
+      "ts": "2026-08-27T10:00:05.000Z",
+      "key": "u6:5"
+    },
+    {
+      "kind": "user",
+      "text": "ship it",
+      "ts": "2026-08-27T10:00:08.000Z",
+      "key": "u8:7"
+    },
+    {
+      "kind": "tool",
+      "tool": "Read",
+      "summary": "~/notes.md",
+      "input": {
+        "file_path": "/home/testuser/notes.md"
+      },
+      "ts": "2026-08-27T10:00:09.000Z",
+      "key": "u9:8"
+    }
+  ]
+}

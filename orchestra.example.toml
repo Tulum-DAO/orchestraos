@@ -1,0 +1,96 @@
+# OrchestraOS config — copy to orchestra.toml and fill in for your install.
+# Every key here has a comment saying what breaks if it's left unset.
+# The loader (services/config.py, api/src/lib/config.ts) fails LOUD — it raises/
+# throws at startup rather than falling back to a guessed default — for any key
+# marked "required".
+
+[data]
+# Absolute path to the directory OrchestraOS reads/writes its state, queue,
+# logs, and sqlite files under. required.
+dir = "/var/lib/orchestraos"
+
+[gateway]
+# Host/port the local API gateway binds and listens on. required.
+host = "127.0.0.1"
+port = 8890
+
+[dashboard]
+# Host/port the web dashboard is served on. required.
+host = "127.0.0.1"
+port = 8891
+
+[public]
+# The externally-reachable URL for this install (Tailscale hostname, a
+# reverse-proxy domain, or a tunnel URL). Used only for links shown in the UI
+# and in outgoing notifications — nothing in the harness itself depends on it
+# being reachable. Leave blank to disable public links.
+host = ""
+
+[notify]
+# Which channel Arturo/approval notifications go out on: "none", "telegram",
+# "whatsapp". required (defaults to "none" — the harness runs with zero
+# notification channels configured).
+channel = "none"
+
+[notify.telegram]
+# Only read when notify.channel = "telegram". BYO bot: create one with
+# @BotFather, put the token in an env var (ORCHESTRA_TELEGRAM_BOT_TOKEN), never
+# in this file. chat_id is the numeric id notifications are sent to.
+bot_token_env = "ORCHESTRA_TELEGRAM_BOT_TOKEN"
+chat_id = ""
+
+[notify.whatsapp]
+# Only read when notify.channel = "whatsapp". Same pattern — token via env.
+token_env = "ORCHESTRA_WHATSAPP_TOKEN"
+phone_id = ""
+
+[operator]
+# The default tenant/operator id used wherever a row needs an owner and none
+# was given (SQL DEFAULTs, unauthenticated request fallbacks, single-user
+# installs). Change this if you'd rather see your own name/handle throughout
+# the dashboard instead of the generic default.
+id = "operator"
+
+[machines]
+# The dashboard's Mac+VPS status view (api/src/routes/system.ts) is still
+# shaped for a two-machine (laptop + VPS) reference topology, not a generic
+# N-machine registry yet — see docs/EXTRACTION.md. These two are only read on
+# that path; leave blank on a
+# single-machine install (B1) and the fields come back empty, not fabricated.
+mac_tailscale_ip = ""
+mac_ssh_user = ""
+vps_tailscale_ip = ""
+# SSH target for the "resume auth on the other machine" helper (api/src/routes/auth.ts).
+# user@host over Tailscale, or blank to disable that helper on a single-machine install.
+remote_auth_host = ""
+# Substring of `hostname` that identifies "this machine is the VPS/primary host"
+# in spawn-agent.sh's machine-dispatch check. Leave blank on a single-machine
+# install (whoami=="root" alone still resolves it there).
+vps_hostname = ""
+
+[runtimes]
+# Which CLI binaries the runtime catalog probes for on this machine. Add/remove
+# entries to match what you have installed and authenticated; see
+# config/providers.json for the full per-provider probe definitions this list
+# selects from.
+enabled = ["claude", "gemini", "codex"]
+
+[rotation]
+# The autonomous blue-green rotation beat (services/rotation/) ships ON by
+# default — it is core, not opt-in (2026-09-16 ruling). These thresholds are
+# today's live production values; tune them for your fleet size before you
+# trust it on seats you care about.
+beat_enabled = true
+# bus_beat.py / boundary_delivery.py cadence (today's crontab: every 60s).
+bus_beat_interval_seconds = 60
+# cron_beat.py cadence — the arm/prewarm/readiness/swap decision pass (today's
+# crontab: every 900s / 15 min).
+cron_beat_interval_seconds = 900
+# boundary_delivery.py requires this explicit arm flag even when the beat is
+# enabled — it moves state between seats, so it stays opt-in-by-flag on top of
+# beat_enabled rather than firing the moment the scheduler starts.
+boundary_delivery_armed = true
+ctx_ceiling_pct = 0.80
+quota_headroom_pct = 0.15
+readiness_timeout_seconds = 120
+reap_after_generations = 2

@@ -1,0 +1,83 @@
+{
+  "agent_id": "fixture-agy",
+  "session_id": "fixture-brain",
+  "grammar_version": 2,
+  "items": [
+    {
+      "kind": "text",
+      "role": "user",
+      "text": "Check the queue",
+      "ts": "2026-08-27T11:00:00Z",
+      "uuid": "step-0"
+    },
+    {
+      "kind": "thinking",
+      "role": "assistant",
+      "text": "Let me check.",
+      "ts": "2026-08-27T11:00:02Z",
+      "uuid": "step-2-think"
+    },
+    {
+      "kind": "tool_use",
+      "role": "assistant",
+      "tool": "run_command",
+      "input": {
+        "CommandLine": "ls queue",
+        "toolSummary": "List queue"
+      },
+      "summary": "ls queue",
+      "id": "call_2_0",
+      "ts": "2026-08-27T11:00:02Z",
+      "uuid": "step-2-call-0"
+    },
+    {
+      "kind": "tool_result",
+      "role": "user",
+      "text": "queue empty",
+      "tool_use_id": "call_2_0",
+      "is_error": false,
+      "ts": "2026-08-27T11:00:03Z",
+      "uuid": "step-3-result"
+    },
+    {
+      "kind": "text",
+      "role": "assistant",
+      "text": "Queue is empty.",
+      "ts": "2026-08-27T11:00:04Z",
+      "uuid": "step-4-text"
+    }
+  ],
+  "render_items": [
+    {
+      "kind": "user",
+      "text": "Check the queue",
+      "ts": "2026-08-27T11:00:00Z",
+      "key": "step-0:0"
+    },
+    {
+      "kind": "thinking",
+      "text": "Let me check.",
+      "ts": "2026-08-27T11:00:02Z",
+      "key": "step-2-think:1"
+    },
+    {
+      "kind": "tool",
+      "tool": "run_command",
+      "summary": "ls queue",
+      "input": {
+        "CommandLine": "ls queue",
+        "toolSummary": "List queue"
+      },
+      "result": "queue empty",
+      "is_error": false,
+      "ts": "2026-08-27T11:00:02Z",
+      "key": "step-2-call-0:2"
+    },
+    {
+      "kind": "assistant",
+      "text": "Queue is empty.",
+      "ts": "2026-08-27T11:00:04Z",
+      "key": "step-4-text:4"
+    }
+  ]
+}

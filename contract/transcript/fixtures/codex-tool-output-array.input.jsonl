@@ -1,0 +1,4 @@
+// SANITIZED-REAL-SHAPE: Codex 0.148 custom_tool_call_output may carry content blocks.
+{"timestamp":"2026-08-28T10:01:00Z","type":"session_meta","payload":{"id":"01a01801-b232-7760-b6f0-c6ea1d6e9152"}}
+{"timestamp":"2026-08-28T10:01:01Z","type":"response_item","payload":{"type":"custom_tool_call","id":"item-call-array","call_id":"call-array","name":"shell","input":"{\"command\":\"printf fixture\"}"}}
+{"timestamp":"2026-08-28T10:01:02Z","type":"response_item","payload":{"type":"custom_tool_call_output","id":"item-result-array","call_id":"call-array","output":[{"type":"output_text","text":"fixture "},{"type":"output_text","text":"output"}]}}
