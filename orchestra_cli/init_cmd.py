@@ -40,6 +40,82 @@ def _rewrite_data_dir(example_text: str, data_dir: Path) -> str:
     return "\n".join(out) + "\n"
 
 
+TASKS_DB_SCHEMA = """
+CREATE TABLE IF NOT EXISTS messages (
+  id              TEXT PRIMARY KEY,
+  conversation_id TEXT,
+  task_id         TEXT,
+  parent_id       TEXT,
+  type            TEXT NOT NULL,
+  from_agent      TEXT NOT NULL,
+  to_agent        TEXT NOT NULL,
+  subject         TEXT,
+  body            TEXT,
+  priority        TEXT NOT NULL DEFAULT 'medium',
+  source          TEXT DEFAULT 'system',
+  status          TEXT NOT NULL DEFAULT 'pending',
+  retry_count     INTEGER NOT NULL DEFAULT 0,
+  max_retries     INTEGER NOT NULL DEFAULT 5,
+  metadata        TEXT,
+  depends_on      TEXT,
+  gather_mode     TEXT DEFAULT 'gather_all',
+  tenant_id       TEXT DEFAULT '{operator}',
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  attempted_at    TEXT,
+  delivered_at    TEXT,
+  acknowledged_at TEXT,
+  archived_at     TEXT,
+  error           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_messages_inbox ON messages(to_agent, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_agent, created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_task ON messages(task_id);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_messages_type ON messages(type, status);
+CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
+
+CREATE TABLE IF NOT EXISTS conversations (
+  id              TEXT PRIMARY KEY,
+  subject         TEXT,
+  participants    TEXT,
+  task_id         TEXT,
+  mode            TEXT DEFAULT 'fire_and_forget',
+  max_iterations  INTEGER DEFAULT 1,
+  iteration_count INTEGER DEFAULT 0,
+  completion_condition TEXT,
+  status          TEXT DEFAULT 'open',
+  tenant_id       TEXT DEFAULT '{operator}',
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
+
+def _has_messages_table(db: Path) -> bool:
+    import sqlite3
+    try:
+        conn = sqlite3.connect(db)
+        try:
+            return conn.execute(
+                "select 1 from sqlite_master where type='table' and name='messages'").fetchone() is not None
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError:
+        return False
+
+
+def _seed_tasks_db(db: Path, operator: str) -> None:
+    import sqlite3
+    db.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.executescript(TASKS_DB_SCHEMA.format(operator=operator.replace("'", "''")))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable = default_run,
              skip_npm: bool = False, skip_venv: bool = False, skip_build: bool = False,
              config_path: Optional[Path] = None) -> list:
@@ -93,6 +169,23 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
         tok.write_text(secrets.token_urlsafe(32))
         os.chmod(tok, 0o600)
         report.append(Step("gateway-token", True, f"wrote {tok} (chmod 600)"))
+
+    # 5b. tasks.db schema — msg_store.py, scripts/message-router.py and the rotation beat
+    # open <data>/state/tasks.db expecting messages + conversations; only the api created
+    # them (first boot), so beats starting at t=0 under `orchestra up` crashed with
+    # "no such table: messages". Same columns as api/src/lib/db.ts (CREATE IF NOT EXISTS
+    # there keeps the two in lockstep); the api adds its own tables on top.
+    db = data_dir / "state" / "tasks.db"
+    if db.exists() and _has_messages_table(db):
+        report.append(Step("seed:state/tasks.db", False, "present (messages table exists)"))
+    else:
+        operator = "operator"
+        try:
+            operator = str((read_toml(config_path).get("operator") or {}).get("id") or "operator")
+        except Exception:  # noqa: BLE001 — config unreadable => default tenant
+            pass
+        _seed_tasks_db(db, operator)
+        report.append(Step("seed:state/tasks.db", True, f"wrote {db} (messages + conversations)"))
 
     # 6. python venv + requirements
     venv = repo_root / ".venv"

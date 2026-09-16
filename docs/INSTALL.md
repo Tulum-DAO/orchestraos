@@ -99,6 +99,13 @@ decision.
 `<runtime_dir>/self_retire_armed` allowlist — one lineage root per line — enables
 hard rotation for a seat). E-brake: `touch ~/runtime/FLEET_BEAT_DISABLED`.
 
+## One instance per host
+
+tmux is host-global: the dashboard's agent list, `agent-status.py --all` and the
+rotation beat enumerate **every tmux session on the machine**, registered or not. Run
+one OrchestraOS instance per host (or VM / container); a second instance beside a live
+fleet will see, and the beat may message, the other instance's seats.
+
 ## Where things live
 
 - config: `orchestra.toml` (or `$ORCHESTRA_CONFIG`) — every key documented in `orchestra.example.toml`; secrets only via env

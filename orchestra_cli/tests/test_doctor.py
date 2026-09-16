@@ -233,3 +233,26 @@ def test_render_table_and_json(tmp_path):
     assert "OK" in text and "runtime:claude" in text
     payload = json.loads(D.render_json(checks))
     assert payload["ok"] is True and any(c["name"] == "tmux" for c in payload["checks"])
+
+
+def test_doctor_flags_a_missing_better_sqlite3_native_binding(tmp_path):
+    """api/dist/server.js opens tasks.db through better-sqlite3, a native addon. An
+    `npm ci` that skipped the prebuild leaves node_modules present but no
+    better_sqlite3.node; the api then crash-loops under the supervisor with 'Could not
+    locate the bindings file' and its recovery path misreads that as a corrupt DB.
+    doctor must catch it before `up`."""
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root)
+
+    probes = _probes()
+
+    def run_cmd(argv):
+        if argv[0] == "node" and "better-sqlite3" in " ".join(argv):
+            raise RuntimeError("Could not locate the bindings file")
+        return '{"loggedIn": true}'
+
+    probes.run_cmd = run_cmd
+    checks = {c.name: c for c in D.run_doctor(st, probes)}
+    assert checks["api:better-sqlite3"].status == D.MISSING
+    assert "npm rebuild better-sqlite3" in checks["api:better-sqlite3"].remedy
+    assert D.exit_code(list(checks.values())) == 1
