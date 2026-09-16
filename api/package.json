@@ -18,7 +18,8 @@
     "dotenv": "^16.4.0",
     "express": "^5.0.0",
     "multer": "^2.1.1",
-    "toml": "^5.0.0"
+    "toml": "^5.0.0",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",

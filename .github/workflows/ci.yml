@@ -28,6 +28,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - name: orchestra-cli
+            args: "orchestra_cli/tests"
           - name: root
             args: "test_router_prefixes.py test_msg_threading.py --ignore=scripts"
           - name: services-arturo

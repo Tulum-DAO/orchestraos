@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Thin shim: run the orchestra CLI from this checkout (venv python if present).
+set -euo pipefail
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+PY="$ROOT/.venv/bin/python"; [ -x "$PY" ] || PY="$(command -v python3)"
+export ORCHESTRA_ROOT="$ROOT"
+exec "$PY" -m orchestra_cli "$@"
