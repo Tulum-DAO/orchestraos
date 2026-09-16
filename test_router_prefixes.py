@@ -105,7 +105,9 @@ class TestStalenessAlwaysPresent:
 
         msg = store.get(mid)
         out = mr.format_injection(msg, store)
-        assert "sent 15m ago" in out, f"Expected 'sent 15m ago' in: {out!r}"
+        # The banner has been "[SENT 15m AGO — world may have moved since; ...]" since the
+        # §9.6 stale-delivery banner (cfaee7d3f1, 2026-08-17); assert the marker case-insensitively.
+        assert "sent 15m ago" in out.lower(), f"Expected 'sent 15m ago' (any case) in: {out!r}"
 
 
 class TestFinalMarker:

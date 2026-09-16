@@ -41,8 +41,9 @@ ARMED_TIERS = frozenset({"T2"})
 _HOME = os.path.expanduser("~")
 # Non-synced runtime e-brake + arming knob (fleet convention: ~/runtime is OUTSIDE
 # Syncthing so a stale Mac copy can't resurrect/re-arm them).
-_DEFAULT_DISABLED_PATH = os.path.join(_HOME, "runtime", "SELF_RETIRE_DISABLED")
-_DEFAULT_ARMED_PATH = os.path.join(_HOME, "runtime", "self_retire_armed")
+_RUNTIME_DIR = os.environ.get("ORCH_RUNTIME_DIR", os.path.join(_HOME, "runtime"))
+_DEFAULT_DISABLED_PATH = os.path.join(_RUNTIME_DIR, "SELF_RETIRE_DISABLED")
+_DEFAULT_ARMED_PATH = os.path.join(_RUNTIME_DIR, "self_retire_armed")
 
 # repo root = scripts/lineage_daemon/self_retire_gate.py -> three dirs up. In a
 # worktree this resolves to that worktree's own registry / handoffs.

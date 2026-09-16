@@ -1,0 +1,11 @@
+# Python deps for the OrchestraOS services. `orchestra init` installs these into
+# <repo>/.venv. Stdlib-only pieces (orchestra_cli, msg_store, the beats) need none.
+aiohttp>=3.9            # scripts/watch_gateway.py (the approvals/inject gateway)
+flask>=3.0              # services/arturo/arturo-proxy.py (voice brain, optional)
+openai>=1.30            # services/arturo (Gemini via the OpenAI-compatible endpoint)
+requests>=2.31          # notify + arturo helpers
+websocket-client>=1.7   # services/arturo streaming bridges
+numpy>=1.26             # services/arturo audio helpers
+tomli>=2.0; python_version < "3.11"
+pytest>=8.0
+pytest-asyncio>=0.23

@@ -46,8 +46,11 @@ app = Flask(__name__)
 log = logging.getLogger("custom-llm")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-ORCHESTRA_DIR = Path.home() / "scripts" / "agent-orchestra"
-OMNI_DIR = Path.home() / "scripts" / "omni-context"
+# DATA dir (state/, logs/, registry.json) — from orchestra.toml via the supervisor /
+# orchestra-env.sh; defaults to the checkout so a bare run still works.
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", str(_REPO_ROOT)))
+OMNI_DIR = Path(os.environ.get("OMNI_CONTEXT_DIR", str(Path.home() / "scripts" / "omni-context")))
 SECRETS_FILE = ORCHESTRA_DIR / ".env.secrets"
 MAC_IP = os.environ.get("ORCHESTRA_MAC_TAILSCALE_IP", "")
 MAC_USER = os.environ.get("ORCHESTRA_MAC_SSH_USER", "")
@@ -55,7 +58,7 @@ MAC_SSH_KEY = str(Path.home() / ".ssh" / "id_ed25519")
 VOICE_API = "http://127.0.0.1:5051"
 
 # ARTURO INSTANCE — namespaced write roots (never clobber the live :5052 proxy's files).
-ARTURO_PORT = 5071
+ARTURO_PORT = int(os.environ.get("ORCHESTRA_ARTURO_PORT", "5071"))
 ARTURO_STATE = ORCHESTRA_DIR / "state" / "arturo"
 ARTURO_LOGS = ORCHESTRA_DIR / "logs" / "arturo"
 

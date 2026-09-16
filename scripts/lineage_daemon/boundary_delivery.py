@@ -170,7 +170,8 @@ def run_boundary_delivery(session, *, store, f11_ok, resolve_head, inject,
 # NOT wired into the live bus_beat crontab by mere presence — a separate crontab
 # line installs it, and only after gm's arm.
 # ---------------------------------------------------------------------------
-BOUNDARY_DISABLED_SENTINEL = os.path.expanduser("~/runtime/BOUNDARY_DELIVER_DISABLED")
+BOUNDARY_DISABLED_SENTINEL = os.path.join(
+    os.environ.get("ORCH_RUNTIME_DIR", os.path.expanduser("~/runtime")), "BOUNDARY_DELIVER_DISABLED")
 _TURN_ENDED = "turn_ended"
 
 
@@ -251,9 +252,8 @@ def _recent_turn_ended_sessions(now=None, window_s=180):
     from scripts.lineage_daemon import bus
     from scripts.lineage_daemon.bus_beat import hot_days
     now = now if now is not None else _time.time()
-    stream_dir = os.environ.get(
-        "ORCH_EVENT_STREAM_DIR",
-        os.path.expanduser("~/scripts/agent-orchestra/state/event-stream"))
+    from scripts.lineage_daemon.bus_beat import STREAM_DIR as _default_stream
+    stream_dir = os.environ.get("ORCH_EVENT_STREAM_DIR", _default_stream)
     resolve = _fallback_resolve()
     read = bus.read_events(stream_dir, now=now, days=hot_days(now, 1))
     out, seen = [], set()

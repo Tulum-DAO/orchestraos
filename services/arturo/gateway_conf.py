@@ -5,7 +5,7 @@
 import os
 from pathlib import Path
 
-AGENT_MESSAGE_URL = "http://127.0.0.1:9091/agent-message"
+AGENT_MESSAGE_URL = os.environ.get("WATCH_GATEWAY_URL", "http://127.0.0.1:9091").rstrip("/") + "/agent-message"
 
 
 def _token_file() -> Path:

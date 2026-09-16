@@ -1,0 +1,9 @@
+{
+  "name": "orchestraos",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Root deps for dashboard-proxy.js (the static dashboard + /api proxy + terminal websocket).",
+  "scripts": { "proxy": "node dashboard-proxy.js" },
+  "dependencies": { "ws": "^8.18.0" },
+  "optionalDependencies": { "node-pty": "^1.0.0" }
+}

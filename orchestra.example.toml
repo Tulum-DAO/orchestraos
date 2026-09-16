@@ -15,9 +15,27 @@ host = "127.0.0.1"
 port = 8890
 
 [dashboard]
-# Host/port the web dashboard is served on. required.
+# Host/port the web dashboard is served on (dashboard-proxy.js). required.
 host = "127.0.0.1"
 port = 8891
+
+[api]
+# Host/port the express API (api/dist/server.js) listens on. The dashboard proxy
+# forwards /api/* here. Optional — defaults shown.
+host = "127.0.0.1"
+port = 8888
+
+[arturo]
+# The voice brain (services/arturo). Optional for the minimum install: set
+# enabled = false and `orchestra up` skips it (no voice keys needed).
+enabled = true
+port = 5071
+
+[router]
+# message-router.py delivery backstop, run by `orchestra up` on this interval
+# (the reference install ran it from a per-minute crontab).
+enabled = true
+interval_seconds = 60
 
 [public]
 # The externally-reachable URL for this install (Tailscale hostname, a
@@ -94,3 +112,7 @@ ctx_ceiling_pct = 0.80
 quota_headroom_pct = 0.15
 readiness_timeout_seconds = 120
 reap_after_generations = 2
+# The NON-synced sentinel dir the beats read their e-brakes/allowlists from
+# (FLEET_BEAT_DISABLED, BUS_DRAIN_DISABLED, self_retire_armed). Exported as
+# ORCH_RUNTIME_DIR by `orchestra up`.
+runtime_dir = "~/runtime"
