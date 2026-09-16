@@ -124,7 +124,7 @@ app.use('/api/telemetry', telemetryRouter); // Build B: read-only telemetry quer
 app.use('/api/runtimes', runtimesAvailableRouter);
 app.use('/api/facts', factsRouter);
 
-const ORCHESTRA_DIR_PATH = process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
+const ORCHESTRA_DIR_PATH = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
 // Stored-XSS fix (attach spec §B.2.4, agent-state-truth): uploads are USER
 // CONTENT served same-origin — html/htm/svg/xml would execute as this origin.
 // Force active-content types to download; never let the browser sniff.
@@ -141,7 +141,8 @@ app.use('/uploads', (req, res, next) => {
 initActivityStream();
 initStatusStream();
 
-const PORT = process.env.PORT || 8888;
+// PORT (supervisor) > ORCHESTRA_API_PORT (orchestra-env.sh) > [api] port in orchestra.toml.
+const PORT = process.env.PORT || process.env.ORCHESTRA_API_PORT || loadConfig().apiPort;
 const server = createServer(app);
 
 // WebSocket terminal server on /ws/terminal
