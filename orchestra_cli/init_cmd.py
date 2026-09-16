@@ -91,17 +91,23 @@ CREATE TABLE IF NOT EXISTS conversations (
 """
 
 
-def _has_messages_table(db: Path) -> bool:
+def _has_table(db: Path, name: str) -> bool:
     import sqlite3
+    if not db.exists():
+        return False
     try:
         conn = sqlite3.connect(db)
         try:
             return conn.execute(
-                "select 1 from sqlite_master where type='table' and name='messages'").fetchone() is not None
+                "select 1 from sqlite_master where type='table' and name=?", (name,)).fetchone() is not None
         finally:
             conn.close()
     except sqlite3.DatabaseError:
         return False
+
+
+def _has_messages_table(db: Path) -> bool:
+    return _has_table(db, "messages")
 
 
 def _seed_tasks_db(db: Path, operator: str) -> None:
@@ -186,6 +192,25 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
             pass
         _seed_tasks_db(db, operator)
         report.append(Step("seed:state/tasks.db", True, f"wrote {db} (messages + conversations)"))
+
+    # 5c. approval + questionnaire schema — scripts/approval_resume.py (a supervisor beat) and
+    # questionnaire_resume read approval_requests / questionnaires; only the first
+    # `approval.py request` created them, so the beat crashed every tick until a card existed.
+    schema_mod = repo_root / "scripts" / "approval_schema.py"
+    if not schema_mod.exists():
+        report.append(Step("seed:approval-schema", False, "skipped (no scripts/approval_schema.py)"))
+    elif _has_table(db, "approval_requests") and _has_table(db, "questionnaires"):
+        report.append(Step("seed:approval-schema", False, "present"))
+    else:
+        seed_env = dict(os.environ, ORCHESTRA_DIR=str(data_dir),
+                        PYTHONPATH=os.pathsep.join([str(repo_root / "scripts"), str(repo_root),
+                                                    os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep))
+        rc = run([sys.executable or "python3", "-c",
+                  "from approval_schema import ApprovalStore; ApprovalStore().migrate(); "
+                  "from questionnaire_schema import QuestionnaireStore; QuestionnaireStore().migrate()"],
+                 cwd=repo_root, env=seed_env)
+        report.append(Step("seed:approval-schema", rc == 0,
+                           "approval_requests + questionnaires tables ensured" if rc == 0 else f"schema seed failed rc={rc}"))
 
     # 6. python venv + requirements
     venv = repo_root / ".venv"

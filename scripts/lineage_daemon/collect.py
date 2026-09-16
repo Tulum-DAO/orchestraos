@@ -221,7 +221,29 @@ def beat_skip_reason(agent: dict) -> Optional[str]:
     return None
 
 
+def registry_row_for_session(session: str, registry: dict):
+    """The registry row a tmux session resolves to: its own agent id, else the row whose
+    tmux_session names it (a -genN pane), else None (a FOREIGN session: not fleet)."""
+    agents = (registry or {}).get("agents", {}) or {}
+    if session in agents:
+        return agents[session]
+    for entry in agents.values():
+        if isinstance(entry, dict) and entry.get("tmux_session") == session:
+            return entry
+    return None
+
+
 def collect_fleet(status_list: list, registry: dict) -> list:
-    """Map every status dict to a decide() input, attaching its tier (pure)."""
-    agents = registry.get("agents", {})
-    return [build_agent(s, agents.get(s["session"])) for s in status_list]
+    """Map every REGISTERED status dict to a decide() input, attaching its tier (pure).
+
+    Registry-scoped (gm ruling msg_9f04c5f0): tmux is host-global, and a second instance
+    beside a live fleet enumerated every session on the machine and planned a soft-handoff
+    for a foreign seat. A session that resolves to no registry row is not this fleet.
+    """
+    out = []
+    for s in status_list:
+        row = registry_row_for_session(s["session"], registry)
+        if row is None:
+            continue
+        out.append(build_agent(s, row))
+    return out

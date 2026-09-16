@@ -16,7 +16,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import Database from 'better-sqlite3';
 
-import { openClassifyRecover, DbFatalError, type RecoveryOpts } from '../src/lib/db-recovery.js';
+import { openClassifyRecover, DbFatalError, DbEnvironmentError, type RecoveryOpts } from '../src/lib/db-recovery.js';
 
 let stampSeq = 0;
 function mkOpts(orch: string): { opts: RecoveryOpts; alarms: Array<[string, string]> } {
@@ -104,4 +104,23 @@ test('index corruption => REINDEXed in place, rows retained, WARN alarm (no wipe
   // A clean DB produces no alarm; REINDEX-path assertions live in the classifier
   // unit suite (db-integrity.test.ts) where index findings are injectable.
   assert.ok(alarms.every(([s]) => s !== 'CRITICAL'), 'no fatal on a sound DB');
+});
+
+test('ENVIRONMENT error (native binding missing) => DbEnvironmentError, NO archive, original untouched, no CRITICAL', () => {
+  // Seen 2026-09-16 under `orchestra up`: better_sqlite3.node absent => "Could not locate the
+  // bindings file" thrown by the constructor; the old path archived the (fresh, empty) file as
+  // corrupt and halted with a data-loss CRITICAL. That is an environment fault, not a DB fault.
+  const orch = sandbox();
+  const { opts, alarms } = mkOpts(orch);
+  seedHealthy(opts.dbPath, 3);
+  const before = statSync(opts.dbPath).size;
+  const broken: RecoveryOpts = {
+    ...opts,
+    open: () => { throw new Error('Could not locate the bindings file. Tried:\n → /x/better_sqlite3.node'); },
+  };
+  assert.throws(() => openClassifyRecover(broken), DbEnvironmentError, 'environment error class, not fatal-integrity');
+  assert.ok(existsSync(opts.dbPath), 'original preserved');
+  assert.equal(statSync(opts.dbPath).size, before, 'original untouched');
+  assert.equal(existsSync(opts.backupsDir), false, 'nothing archived');
+  assert.equal(alarms.length, 0, 'no CRITICAL data-loss alarm for an environment fault');
 });
