@@ -283,7 +283,10 @@ router.get('/', async (_req: Request, res: Response) => {
       // no-session reclassification below must not fire off an empty snapshot.
       if (detector.size > 0) {
         for (const agent of allAgents) {
-          if (agent.machine !== 'vps') continue;
+          // The machine label is a label, not evidence (liveness-pre-union rule): a session
+          // that is live on THIS host gets the detector's verdict whatever its row says —
+          // on a single-machine install rows may carry machine=mac (B1 finding 4 follow-up).
+          if (agent.machine !== 'vps' && !localSessions.has(agent.tmux_session)) continue;
           const d = detector.get(agent.tmux_session);
           if (d) { mergeDetector(agent, d); continue; }
           if (agent.unregistered) continue;
