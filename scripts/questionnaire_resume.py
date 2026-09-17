@@ -5,6 +5,8 @@ idempotent: a watchdog re-fire is a repeat message, never a repeat state change.
 """
 import os, sys, json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root for msg_store
+_CHECKOUT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # code, not data (B1 run-2 finding B)
+APPROVAL_CLI = os.path.join(_CHECKOUT, "scripts", "approval.py")
 
 
 def _msg_store():
@@ -44,7 +46,7 @@ def digest(row):
                                    "option_n": ans.get("option_n"),
                                    "answer_text": ans.get("answer_text")})
     lines += ["", "```json", json.dumps(machine, ensure_ascii=False), "```",
-              f"Ack: python3 ~/scripts/agent-orchestra/scripts/approval.py qack "
+              f"Ack: python3 {APPROVAL_CLI} qack "
               f"{row['id']} --from {row['from_agent']}"]
     return "\n".join(lines)
 
@@ -234,7 +236,7 @@ def _armed():
 def _send_tg(text):
     """Telegram via the house helper (never raw curl — tg-notify.sh verifies ok)."""
     import subprocess
-    subprocess.run([os.path.expanduser("~/scripts/agent-orchestra/scripts/tg-notify.sh"),
+    subprocess.run([os.path.join(_CHECKOUT, "scripts", "tg-notify.sh"),
                     text], check=True, timeout=30)
 
 
