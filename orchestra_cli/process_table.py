@@ -60,6 +60,10 @@ def build_process_table(st: Settings) -> list:
         # approvals surface; the operator's answer is driven back into the pane.
         ProcEntry("menu_bridge", "beat", [py, str(root / "scripts" / "menu_bridge.py"), "--cron"], cwd,
                   interval=60, enabled=st.menu_bridge_enabled, note="in-agent menus -> decision cards ([menus] bridge_enabled)"),
+        # Telegram channel plugin: inbound long-poll -> gm inbox, cards -> phone with buttons.
+        # Off unless [plugins.telegram] enabled = true AND TELEGRAM_BOT_TOKEN is in the env.
+        ProcEntry("telegram", "service", [py, str(root / "plugins" / "telegram" / "router.py")], cwd,
+                  enabled=st.telegram_enabled, note="phone chat channel for gm ([plugins.telegram] enabled; token from TELEGRAM_BOT_TOKEN)"),
     ]
 
 

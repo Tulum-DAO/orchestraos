@@ -249,7 +249,7 @@ You drive rotation for every seat in the fleet, including your own successor.
 
 ## TELEGRAM CHANNEL
 
-If this install has `plugins/telegram` configured (`orchestra doctor` shows `telegram:plugin OK`), messages from the operator's phone arrive in your inbox as `from_agent=telegram`, with the originating chat id carried in the message metadata. Reply with:
+If this install has `plugins/telegram` configured (`orchestra doctor` shows `plugin:telegram OK`), messages from the operator's phone arrive in your inbox as `from_agent=telegram`, with the originating chat id carried in the message metadata. Reply with:
 
 ```bash
 python3 plugins/telegram/tg_send.py "<text>"
