@@ -38,7 +38,11 @@ tabular).
 - `dashboard/src/components/agent/Feed.tsx` (Track 4) — factor the card-type
   renderer out so both Arturo's feed and these tab pages consume the same
   component, if Track 4 hasn't already made it reusable.
-- iOS repo — the equivalent tab screens.
+- iOS repo — `Sources/iOS/RootView.swift`, a **custom** tab bar (`enum Tab: Int,
+  CaseIterable`, 5 items; a native `TabView` can't raise a center button, per the
+  code comment there) — a restyle must keep the custom center-raised tab bar, not
+  swap in a native one. Tab screens: `ApprovalsView.swift`, `ArturoView.swift`
+  (Arturo home, Track 4's surface), `HistoryView.swift`, and the remaining two.
 - `orchestra_cli/init_cmd.py` (`seed_demo_registry`, ~line 129-161, and the
   `--demo` card seeding at ~line 253) — this is the fixture harness the acceptance
   test uses (`orchestra init --demo` seeds one of each card kind); confirm it still
@@ -75,7 +79,9 @@ Read docs/tracks/07-tab-restyle.md in this repo for the full design, and
 docs/tracks/04-arturo-home-onboarding.md for the visual language and
 design/references/ this track matches (Track 4 should land first or in
 parallel — coordinate with oss-arturo-dev on the shared card-renderer
-component before duplicating it).
+component before duplicating it). On iOS, Sources/iOS/RootView.swift is a
+custom tab bar (not native TabView) — keep the center-raised button, don't
+replace it with a system TabView.
 Files to touch: dashboard/src/pages/Approvals.tsx, Agents.tsx, Projects.tsx,
 and the pipeline/task page (confirm the real filename in App.tsx first).
 Start with `orchestra init --demo` to seed one of every card kind, screenshot
