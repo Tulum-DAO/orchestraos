@@ -325,6 +325,26 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
         rc = run(["npm", "run", "build"], cwd=d)
         report.append(Step(f"build:{label}", rc == 0, "built" if rc == 0 else f"npm run build failed rc={rc}"))
 
+    # 9. Claude Code hooks -> the user's settings.json (merge, never clobber; idempotent).
+    # Without them a seat only acts on mail when someone presses Enter: the idle-inbox
+    # drain (Stop), the pane-state truth the router's idle oracle reads, the rotation
+    # self-trigger and the lineage bus feeder all ride these hooks. Skipped with
+    # ORCHESTRA_SKIP_HOOKS=1 (containers that run no Claude seats).
+    if os.environ.get("ORCHESTRA_SKIP_HOOKS"):
+        report.append(Step("hooks", False, "skipped (ORCHESTRA_SKIP_HOOKS)"))
+    else:
+        try:
+            sys.path.insert(0, str(repo_root / "hooks"))
+            import install as _hooks  # noqa: WPS433
+            settings_path = Path(os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude"))) / "settings.json"
+            rep = _hooks.install(settings_path=settings_path, repo_root=repo_root, data_dir=data_dir)
+            if rep.get("error"):
+                report.append(Step("hooks", False, rep["error"]))
+            else:
+                report.append(Step("hooks", True, f"{rep['installed']} hook rows -> {settings_path} (replaced {rep['removed']} previous)"))
+        except Exception as e:  # noqa: BLE001
+            report.append(Step("hooks", False, f"hook install failed: {e}"))
+
     return report
 
 
