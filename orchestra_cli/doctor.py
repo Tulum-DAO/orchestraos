@@ -211,6 +211,22 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
             detail = f"{r['cli']} installed, auth: {r['auth_reason'] or r['authed']}"
             remedy = f"Log in: run `{r['cli']}` once and complete its auth/login flow, then re-run doctor"
         checks.append(Check(f"runtime:{r['id']}", status, detail, remedy, required=(status == MISSING)))
+    # Claude Code hooks installed into the user's settings (item: seats act on mail with no keypress)
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(root / "hooks"))
+        import install as _hooks  # noqa: WPS433
+        settings_path = Path(os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude"))) / "settings.json"
+        hs = _hooks.status(settings_path=settings_path, repo_root=root)
+        if hs.get("error"):
+            checks.append(Check("hooks:claude", WARN, hs["error"], "fix ~/.claude/settings.json, then `orchestra init`"))
+        elif hs["missing"]:
+            checks.append(Check("hooks:claude", WARN, f"{len(hs['missing'])} of {len(hs['installed']) + len(hs['missing'])} hook rows missing from {settings_path}",
+                                "run `orchestra init` (idempotent) to install the shipped hooks"))
+        else:
+            checks.append(Check("hooks:claude", OK, f"{len(hs['installed'])} hook rows in {settings_path}"))
+    except Exception as e:  # noqa: BLE001
+        checks.append(Check("hooks:claude", WARN, f"hook status unavailable: {e}"))
     checks.append(Check("runtime:any", OK if any_authed else MISSING,
                         ", ".join(r["id"] for r in results if r["authed"] is True) or "no enabled runtime is installed AND authed",
                         "At least one of [runtimes] enabled must be installed and logged in (claude OR gemini OR codex)"))
