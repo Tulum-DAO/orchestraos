@@ -338,12 +338,15 @@ def test_strict_region_failure_names_only_noncorroborated_qids():
     r = grade_canary(_GOOD_ANSWERS, rows, transcript_text=ttext, mode="strict")
     assert r["passed"] is False
     assert r["missed"] == ["q4"]              # the culprit, not all qids
-    # collective failures still report all grounded questions (never silent):
+    # collective failures: missed [] but NEVER silent — the aggregate names the reason
+    # and every culprit (gm ruling msg_cd1985d8, 2026-09-17):
     sprinkle = ("This relates to ab12cd34ef and apr_77ffe201 and qnr_55aa0011 "
                 "and 431 as discussed.")
     r2 = grade_canary({f"q{i}": sprinkle for i in range(1, 5)}, _canary_rows(),
                       transcript_text=ttext)
-    assert r2["passed"] is False and set(r2["missed"]) == {"q1", "q2", "q3", "q4"}
+    assert r2["passed"] is False and r2["missed"] == []
+    assert r2["aggregate"]["reason"].startswith("distinct_q 0 < 3")
+    assert set(r2["aggregate"]["culprits"]) == {"q1", "q2", "q3", "q4"}
 
 
 def test_canary_evidence_labeled_advisory_only(gate, tmp_path):
@@ -387,17 +390,26 @@ def test_author_canary_refusal_names_the_outside_transcript_rule(gate):
     assert "msg_store row or commit sha" in msg and "TEXT-BEARING" in msg
 
 
-def test_distinct_evidence_veto_names_the_culprit_questions_and_a_reason(tr_text):
+def test_distinct_evidence_veto_reports_missed_empty_with_reason_and_culprits(tr_text):
     """Gate rerun on 5b4f522: each answer PASSed alone, the sid was repeated in every
-    answer, and the veto reported missed q1..q3 with no reason. The culprits are exactly
-    the answers with no exclusive anchor; the aggregate must say why."""
+    answer, and the veto reported missed q1..q3 with no reason. gm ruling msg_cd1985d8:
+    an aggregate-only failure reports missed [] plus an explicit reason; the culprits
+    (answers with no exclusive anchor) ride in the aggregate."""
     ans = dict(_GOOD_ANSWERS)
-    # q4 now cites only q1's id: neither q1 nor q4 has an exclusive anchor any more
     ans["q4"] = "This was about ab12cd34ef and the 431 symptom with walkgate serialization again."
     r = grade_canary(ans, _canary_rows(), transcript_text=tr_text)
-    assert r["passed"] is False
+    assert r["passed"] is False and r["missed"] == []
     assert r["aggregate"]["distinct_q"] == 2
-    assert sorted(r["missed"]) == ["q1", "q4"]           # not q1..q4
-    assert "distinct-evidence" in r["aggregate"]["reason"] and "q1, q4" in r["aggregate"]["reason"]
-    # per-question verdicts are untouched: q1 and q4 still PASS individually
+    assert sorted(r["aggregate"]["culprits"]) == ["q1", "q4"]
+    assert r["aggregate"]["reason"].startswith("distinct_q 2 < 3")
     assert r["per_question"]["q1"]["verdict"] == "PASS"
+
+
+def test_one_question_canary_is_never_vetoed_on_distinct_evidence(tr_text):
+    """`orchestra rotate --synthesize` writes ONE question: distinct_min == 1 is always
+    reachable; union/idclass/region rules still apply (2 grounded id-class anchors needed)."""
+    rows = _canary_rows(n=1)
+    r = grade_canary({"q1": _GOOD_ANSWERS["q1"]}, rows, transcript_text=tr_text)
+    assert r["passed"] is True and r["aggregate"]["distinct_min"] == 1
+    r = grade_canary({"q1": _WAFFLE}, rows, transcript_text=tr_text)
+    assert r["passed"] is False
