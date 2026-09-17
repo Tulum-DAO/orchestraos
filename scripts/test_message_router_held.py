@@ -8,6 +8,7 @@ else keeps the envelope. Metadata may be a dict OR the JSON string sqlite stores
 """
 import importlib.util
 import json
+import pytest
 import os
 
 _here = os.path.dirname(__file__)
@@ -433,7 +434,25 @@ def test_age_floor_blocks_dead_letter_even_past_cap(monkeypatch):
     assert dead == [], "age floor must veto dead-letter regardless of the cap"
     assert mr.DEAD_LETTER_MIN_AGE_S >= 3600
 
-def test_target_class_maps_known_non_agents():
+
+
+@pytest.fixture
+def _registered_agent(monkeypatch, tmp_path):
+    """Hermetic registry: 'orchestra-builder' is a declared agent on this checkout's HOST, not on a
+    bare CI runner. The router loads addressability.py BY PATH per call (fresh module), which
+    reads ORCHESTRA_DIR at import — so point ORCHESTRA_DIR at a tmp data dir carrying the row and
+    the classifier's step 5 (declared identity, offline) yields 'agent' with no live pane/store."""
+    (tmp_path / "state").mkdir()
+    (tmp_path / "registry.json").write_text(json.dumps(
+        {"agents": {"orchestra-builder": {"name": "orchestra-builder", "tier": "T1", "runtime": "claude"},
+                    "arturo-proxy": {"name": "arturo-proxy", "kind": "service"},
+                    "lineage-daemon": {"name": "lineage-daemon", "kind": "daemon"},
+                    "agy": {"name": "agy", "kind": "vote-slot"}}}))
+    monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path))
+    yield
+
+
+def test_target_class_maps_known_non_agents(_registered_agent):
     assert mr.target_class("agy") == "vote-slot"
     assert mr.target_class("lineage-daemon") == "daemon"
     assert mr.target_class("arturo-proxy") == "service"
@@ -542,7 +561,7 @@ def test_target_class_comes_from_the_shared_classifier_not_a_local_map():
     assert "addressability" in src
 
 
-def test_target_class_classifies_real_identities():
+def test_target_class_classifies_real_identities(_registered_agent):
     assert mr.target_class("lineage-daemon") == "daemon"
     assert mr.target_class("agy") == "vote-slot"
     assert mr.target_class("arturo-proxy") == "service"

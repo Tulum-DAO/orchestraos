@@ -199,7 +199,8 @@ def test_flag_on_routes_present_loopback_only(monkeypatch):
     r = c.post("/ptt/stream/audio", data=b"\x00\x01" * 50, headers={"X-Conversation-Id": "cX"},
                environ_base={"REMOTE_ADDR": "127.0.0.1"},
                content_type="application/octet-stream")
-    assert r.status_code == 200 or r.get_json().get("error") == "socket"  # fake EL absent in test env is fine
+    # fake EL absent in the test env is fine; a bare CI runner has NO brain/vendor at all -> 503 vendor_unavailable
+    assert r.status_code == 200 or r.get_json().get("error") in ("socket", "vendor_unavailable")
     mod._STREAM_RELAY.shutdown()
 
 

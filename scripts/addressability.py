@@ -40,7 +40,11 @@ import os
 import subprocess
 from pathlib import Path
 
-ORCHESTRA_DIR = Path(__file__).resolve().parent.parent
+# DATA dir (orchestra.toml [data] dir, exported as ORCHESTRA_DIR by `orchestra up` and every
+# beat); the checkout is only the fallback for a bare run.
+ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR") or os.environ.get("ORCH_DIR")
+                     or Path(__file__).resolve().parent.parent)
+CODE_ROOT = Path(__file__).resolve().parent.parent      # the checkout (scripts live here)
 REGISTRY_FILE = ORCHESTRA_DIR / "registry.json"
 SESSIONS_FILE = ORCHESTRA_DIR / "state" / "agent-sessions.json"
 
@@ -121,7 +125,7 @@ def pane_has_claude(session: str) -> bool:
     detection dialect (the same law that deletes _TARGET_CLASS)."""
     import importlib.util
     spec = importlib.util.spec_from_file_location(
-        "_agent_status", ORCHESTRA_DIR / "scripts" / "agent-status.py")
+        "_agent_status", CODE_ROOT / "scripts" / "agent-status.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return bool(mod.check_claude_process(session).get("running"))
