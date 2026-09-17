@@ -118,6 +118,14 @@ enabled = true
 # the approvals surface (dashboard/phone); the answer is driven back into the pane.
 bridge_enabled = true
 
+[plugins.telegram]
+# Your phone as the gm seat's chat channel (plugins/telegram/README.md). The bot token is a
+# SECRET and never lives in this file: export TELEGRAM_BOT_TOKEN=... (or put that line in
+# <data dir>/.env.telegram). allowed_chat_ids = [] means the first chat that messages the
+# bot becomes the operator and is remembered; list ids to lock it down.
+enabled = false
+allowed_chat_ids = []
+
 [rotation]
 # The autonomous blue-green rotation beat (services/rotation/) ships ON by
 # default — it is core, not opt-in (2026-09-16 ruling). These thresholds are

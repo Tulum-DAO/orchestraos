@@ -24,7 +24,9 @@ def test_process_table_default_shape(tmp_path):
     st = _settings(tmp_path)
     table = PT.build_process_table(st)
     by = {e.name: e for e in table}
-    assert [e.name for e in table if e.kind == "service"] == ["gateway", "api", "dashboard", "arturo", "telemetryd"]
+    assert [e.name for e in table if e.kind == "service"] == ["gateway", "api", "dashboard", "arturo", "telemetryd", "telegram"]
+    # Tier 0 item 6: the Telegram channel plugin is in the table but OFF by default
+    assert by["telegram"].enabled is False and by["telegram"].argv[-1].endswith("plugins/telegram/router.py")
     # Tier 0 item 4: the telemetry daemon (working/idle truth for the agents page) and the
     # in-agent menu bridge (AskUserQuestion widget -> decision card) run under the supervisor
     assert by["telemetryd"].argv[-2:] == ["-m", "lineage_daemon.telemetryd"] and by["telemetryd"].port is None
@@ -36,7 +38,7 @@ def test_process_table_default_shape(tmp_path):
     beats = {e.name: e.interval for e in table if e.kind == "beat"}
     assert beats == {"bus_beat": 60, "boundary_delivery": 60, "cron_beat": 900, "router": 60, "approval_resume": 60, "menu_bridge": 60}
     assert by["boundary_delivery"].env["BOUNDARY_DELIVER_ARMED"] == "1"
-    assert all(e.enabled for e in table)
+    assert all(e.enabled for e in table if e.name != "telegram")   # telegram is opt-in
     for e in table:
         assert e.cwd == str(st.repo_root)
 
@@ -226,3 +228,10 @@ def test_process_table_runs_the_approval_resume_beat(tmp_path):
     assert e.kind == "beat" and e.enabled is True and e.interval == 60
     assert e.argv[-1].endswith("scripts/approval_resume.py")
     assert e.env.get("EXPIRE_PENDING") == "0"
+
+
+def test_process_table_enables_telegram_from_config(tmp_path):
+    st = _settings(tmp_path)
+    st.telegram_enabled = True
+    by = {e.name: e for e in PT.build_process_table(st)}
+    assert by["telegram"].enabled is True
