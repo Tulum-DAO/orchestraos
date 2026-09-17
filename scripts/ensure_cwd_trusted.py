@@ -28,8 +28,12 @@ def main() -> int:
     if len(sys.argv) < 2 or not sys.argv[1].strip():
         return 0
     target = os.path.abspath(os.path.expanduser(sys.argv[1]))
-    cfg = os.path.expanduser("~/.claude.json")
+    # Honor CLAUDE_CONFIG_DIR: claude reads <config dir>/.claude.json when it is set.
+    cfg_dir_env = os.environ.get("CLAUDE_CONFIG_DIR")
+    cfg = os.path.join(cfg_dir_env, ".claude.json") if cfg_dir_env else os.path.expanduser("~/.claude.json")
     try:
+        if cfg_dir_env:
+            os.makedirs(cfg_dir_env, exist_ok=True)
         fd = os.open(cfg, os.O_RDWR | os.O_CREAT, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
@@ -76,7 +80,7 @@ def ensure_bypass_accepted() -> int:
     unattended `claude --dangerously-skip-permissions` in tmux stops at that dialog, whose
     default is "No, exit", and the injected task lands in the shell (B3 container, 2026-09-17).
     Merge-only, atomic, fail-soft; no write when already set."""
-    cfg_dir = os.path.join(os.path.expanduser("~"), ".claude")
+    cfg_dir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
     cfg = os.path.join(cfg_dir, "settings.json")
     try:
         os.makedirs(cfg_dir, exist_ok=True)

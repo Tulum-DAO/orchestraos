@@ -37,3 +37,18 @@ def test_keeps_existing_settings_and_is_idempotent(tmp_path):
     before = (home / ".claude" / "settings.json").stat().st_mtime_ns
     _run(home, str(tmp_path / "work"))
     assert (home / ".claude" / "settings.json").stat().st_mtime_ns == before, "no rewrite when already set"
+
+
+def test_honors_claude_config_dir(tmp_path, monkeypatch):
+    """`orchestra spawn` under CLAUDE_CONFIG_DIR must seed THAT dir's .claude.json + settings.json."""
+    import json, os, subprocess, sys
+    cfg = tmp_path / "cfg"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ensure_cwd_trusted.py")
+    r = subprocess.run([sys.executable, script, str(tmp_path)], capture_output=True, text=True, env=dict(os.environ))
+    assert r.returncode == 0, r.stderr
+    d = json.loads((cfg / ".claude.json").read_text())
+    assert d["projects"][str(tmp_path)]["hasTrustDialogAccepted"] is True
+    assert json.loads((cfg / "settings.json").read_text())["skipDangerousModePermissionPrompt"] is True
+    assert not (tmp_path / "home" / ".claude.json").exists()

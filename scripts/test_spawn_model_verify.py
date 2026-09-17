@@ -48,3 +48,11 @@ def test_read_model_line_finds_label_line_in_a_pane_dump():
     pane = "line one\\n ▐▛███▛█   Claude Code v2.1.260\\n▝▜██████▀  Fable 5.1 with medium effort · Claude Max\\n❯ "
     r = _bash(f'line=$(read_model_line "$(printf "{pane}")"); classify_model_line "$line"')
     assert r.stdout == "family", (r.stdout, r.stderr)
+
+
+def test_launch_prefix_carries_install_env_into_the_pane(tmp_path):
+    """Tier 0 item 2: the pane must see ORCHESTRA_DIR / ORCHESTRA_ROOT (and CLAUDE_CONFIG_DIR when
+    set) — tmux new-session inherits the SERVER env, so spawn-agent.sh prefixes the launch."""
+    src = open(os.path.join(os.path.dirname(HERE), "spawn-agent.sh")).read()
+    assert "ORCHESTRA_DIR=%q ORCH_DIR=%q ORCHESTRA_ROOT=%q" in src
+    assert "CLAUDE_CONFIG_DIR=%q" in src

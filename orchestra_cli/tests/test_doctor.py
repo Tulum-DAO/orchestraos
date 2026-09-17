@@ -78,7 +78,7 @@ def _by_name(checks):
 
 def test_all_green_when_everything_present(tmp_path):
     root = _repo(tmp_path)
-    st = S.load_settings(repo_root=root)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
     checks = D.run_doctor(st, _probes())
     names = _by_name(checks)
     assert D.exit_code(checks) == 0
@@ -95,7 +95,7 @@ def test_all_green_when_everything_present(tmp_path):
 
 def test_missing_config_lists_keys_and_fails(tmp_path):
     root = _repo(tmp_path, config=False)
-    st = S.load_settings(repo_root=root)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
     checks = D.run_doctor(st, _probes())
     c = _by_name(checks)["config"]
     assert c.status == "MISSING" and "orchestra init" in c.remedy
@@ -105,7 +105,7 @@ def test_missing_config_lists_keys_and_fails(tmp_path):
 def test_partial_config_names_missing_keys(tmp_path):
     root = _repo(tmp_path, config=False)
     (root / "orchestra.toml").write_text('[gateway]\nhost = "127.0.0.1"\n[notify]\nchannel = "none"\n')
-    st = S.load_settings(repo_root=root)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
     c = _by_name(D.run_doctor(st, _probes()))["config"]
     assert c.status == "MISSING"
     assert "data.dir" in c.detail and "runtimes.enabled" in c.detail
@@ -113,7 +113,7 @@ def test_partial_config_names_missing_keys(tmp_path):
 
 def test_no_authed_runtime_is_missing_with_remedy(tmp_path):
     root = _repo(tmp_path)
-    st = S.load_settings(repo_root=root)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
     checks = D.run_doctor(st, _probes(which=("tmux", "node", "npm"), cmd_out=""))
     names = _by_name(checks)
     assert names["runtime:claude"].status == "MISSING"
@@ -124,7 +124,7 @@ def test_no_authed_runtime_is_missing_with_remedy(tmp_path):
 
 def test_one_authed_runtime_is_enough_others_are_warn(tmp_path):
     root = _repo(tmp_path)
-    st = S.load_settings(repo_root=root)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
     checks = D.run_doctor(st, _probes(which=("tmux", "node", "npm", "claude")))
     names = _by_name(checks)
     assert names["runtime:claude"].status == "OK"
@@ -135,7 +135,7 @@ def test_one_authed_runtime_is_enough_others_are_warn(tmp_path):
 
 def test_installed_but_not_authed_shows_auth_remedy(tmp_path):
     root = _repo(tmp_path)
-    st = S.load_settings(repo_root=root)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
     checks = D.run_doctor(st, _probes(cmd_out='{"loggedIn": false}'))
     c = _by_name(checks)["runtime:claude"]
     assert c.status == "MISSING" and "loggedIn=false" in c.detail
@@ -144,7 +144,7 @@ def test_installed_but_not_authed_shows_auth_remedy(tmp_path):
 
 def test_port_in_use_by_stranger_is_missing_but_own_child_is_ok(tmp_path):
     root = _repo(tmp_path)
-    st = S.load_settings(repo_root=root)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
     sup = {"pid": 10, "children": {"gateway": {"pid": 4242, "port": 8890}}}
     checks = D.run_doctor(st, _probes(ports_in_use={8890: 4242, 8891: 999}, supervisor=sup))
     names = _by_name(checks)
@@ -155,7 +155,7 @@ def test_port_in_use_by_stranger_is_missing_but_own_child_is_ok(tmp_path):
 
 def test_tmux_and_node_missing(tmp_path):
     root = _repo(tmp_path)
-    st = S.load_settings(repo_root=root)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
     names = _by_name(D.run_doctor(st, _probes(which=("claude",))))
     assert names["tmux"].status == "MISSING" and "apt" in names["tmux"].remedy
     assert names["node"].status == "MISSING"
@@ -164,7 +164,7 @@ def test_tmux_and_node_missing(tmp_path):
 
 def test_unbuilt_api_and_dashboard_are_missing(tmp_path):
     root = _repo(tmp_path, built=False)
-    st = S.load_settings(repo_root=root)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
     names = _by_name(D.run_doctor(st, _probes()))
     assert names["api:build"].status == "MISSING" and "orchestra init" in names["api:build"].remedy
     assert names["dashboard:build"].status == "MISSING"
@@ -173,7 +173,7 @@ def test_unbuilt_api_and_dashboard_are_missing(tmp_path):
 
 def test_python_dep_missing_is_missing_when_required(tmp_path):
     root = _repo(tmp_path)
-    st = S.load_settings(repo_root=root)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
     names = _by_name(D.run_doctor(st, _probes(py_modules=())))
     assert names["python:aiohttp"].status == "MISSING" and "requirements.txt" in names["python:aiohttp"].remedy
     assert names["python:flask"].status == "WARN"   # arturo is optional for the minimum path
@@ -188,7 +188,7 @@ def test_rotation_beat_report(tmp_path):
         "gm": {"tier": "T0", "runtime": "claude"},
     }}
     root = _repo(tmp_path, registry=registry)
-    st = S.load_settings(repo_root=root)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
     armed = {str(st.runtime_dir / "self_retire_armed"): "pm-a\n# comment\n"}
     names = _by_name(D.run_doctor(st, _probes(runtime_files=armed)))
     beat = names["rotation:beat"]
@@ -201,7 +201,7 @@ def test_rotation_beat_report(tmp_path):
 
 def test_rotation_kill_switch_present_is_warn(tmp_path):
     root = _repo(tmp_path)
-    st = S.load_settings(repo_root=root)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
     files = {str(st.runtime_dir / "FLEET_BEAT_DISABLED"): ""}
     names = _by_name(D.run_doctor(st, _probes(runtime_files=files)))
     assert names["rotation:beat"].status == "WARN" and "FLEET_BEAT_DISABLED" in names["rotation:beat"].detail
@@ -210,14 +210,14 @@ def test_rotation_kill_switch_present_is_warn(tmp_path):
 def test_rotation_beat_disabled_in_config_is_warn(tmp_path):
     root = _repo(tmp_path)
     (root / "orchestra.toml").write_text((root / "orchestra.toml").read_text() + "[rotation]\nbeat_enabled = false\n")
-    st = S.load_settings(repo_root=root)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
     names = _by_name(D.run_doctor(st, _probes()))
     assert names["rotation:beat"].status == "WARN"
 
 
 def test_git_hooks_status_is_warn_only(tmp_path):
     root = _repo(tmp_path)
-    st = S.load_settings(repo_root=root)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
     probes = _probes()
     probes.git_hooks_path = lambda root: ""
     names = _by_name(D.run_doctor(st, probes))
@@ -227,7 +227,7 @@ def test_git_hooks_status_is_warn_only(tmp_path):
 
 def test_render_table_and_json(tmp_path):
     root = _repo(tmp_path)
-    st = S.load_settings(repo_root=root)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
     checks = D.run_doctor(st, _probes())
     text = D.render_table(checks)
     assert "OK" in text and "runtime:claude" in text
@@ -242,7 +242,7 @@ def test_doctor_flags_a_missing_better_sqlite3_native_binding(tmp_path):
     locate the bindings file' and its recovery path misreads that as a corrupt DB.
     doctor must catch it before `up`."""
     root = _repo(tmp_path)
-    st = S.load_settings(repo_root=root)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
 
     probes = _probes()
 
@@ -262,7 +262,7 @@ def test_doctor_probes_api_health_when_the_supervisor_owns_the_api_port(tmp_path
     """GET /api/health (process up, DB open, bindings loaded) is the by-effect proof that
     the api child is serving, not merely bound. Only probed while our supervisor owns the port."""
     root = _repo(tmp_path)
-    st = S.load_settings(repo_root=root)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
     sup = {"pid": 1, "children": {"api": {"pid": 4242, "status": "running", "port": 8888}}}
     probes = _probes(ports_in_use={8888: 4242}, supervisor=sup)
     probes.http_get = lambda url: '{"status":"ok","db":{"open":true},"bindings":true}' if url.endswith("/api/health") else "{}"
@@ -278,7 +278,7 @@ def test_doctor_probes_api_health_when_the_supervisor_owns_the_api_port(tmp_path
 
 def test_doctor_health_check_absent_when_api_not_running(tmp_path):
     root = _repo(tmp_path)
-    st = S.load_settings(repo_root=root)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
     checks = {c.name: c for c in D.run_doctor(st, _probes())}
     assert "api:health" not in checks
 
@@ -287,7 +287,7 @@ def test_doctor_warns_about_tmux_sessions_that_are_not_registered_seats(tmp_path
     """tmux is host-global; the beat and the dashboard ignore foreign sessions (registry-scoped
     since msg_9f04c5f0), and doctor says which ones it sees so an operator is not surprised."""
     root = _repo(tmp_path, registry={"agents": {"gm": {"tier": "T0"}, "ob": {"tmux_session": "ob-gen44"}}})
-    st = S.load_settings(repo_root=root)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
     probes = _probes()
     probes.tmux_sessions = lambda: ["gm", "ob-gen44", "someone-elses-shell", "another"]
     checks = {c.name: c for c in D.run_doctor(st, probes)}

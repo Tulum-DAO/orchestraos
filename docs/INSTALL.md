@@ -70,26 +70,34 @@ or set `[dashboard] host` / `[public] host`).
 
 ## 3. Spawn one seat
 
-Register a seat in the data-dir registry, then spawn it in tmux:
+The one-command way: `orchestra spawn` registers the seat in the data-dir registry (if it is
+new) and launches it in tmux with the install env carried into the pane.
 
 ```bash
-source scripts/orchestra-env.sh          # exports ORCHESTRA_DIR etc. from orchestra.toml
-REGISTRY_PATH=$ORCHESTRA_DIR/registry.json python3 scripts/registry-update.py hello \
-    --field name=hello --field tmux_session=hello \
-    --field tier=T2 --field runtime=claude --field machine=vps --field cwd=$PWD
-AGENT_RUNTIME=claude ./spawn-agent.sh hello --task "Say hello, then park."
-tmux attach -t hello                     # detach with Ctrl-B D
+orchestra spawn gm --gm                  # the General Manager: prompts/gm.md, tier T1, always-on
+orchestra spawn hello --task "Say hello, then park."   # a worker seat (prompts/hello.md if present)
+tmux attach -t gm                        # talk to it; detach with Ctrl-B D
 ```
 
-- `machine=vps` is a label. On a single-machine install (`[machines]` left blank in
-  `orchestra.toml`) the spawner never dispatches elsewhere, so any label works; the
-  label only matters once you fill in `[machines]` for a two-host setup.
-- `tmux_session` defaults to the seat id if you leave it out (the spawner records it).
-- The spawner pre-seeds Claude Code's workspace-trust bit for `cwd`
-  (`scripts/ensure_cwd_trusted.py`), so the seat does not stop at "Is this a project
-  you trust?". If you see that prompt anyway, answer it once in `tmux attach`.
-- `runtime=gemini` / `codex` for the other CLIs. `./spawn-agent.sh --list` shows
-  registered seats, `--running` the live ones.
+Options: `--runtime claude|gemini|codex` (default: first of `[runtimes] enabled`), `--model`,
+`--tier`, `--prompt path/relative/to/checkout`. An existing registry row is kept as-is.
+
+Mail a seat and watch it act with no keypress (the shipped hooks + the router beat under
+`orchestra up`; see docs/HOOKS.md):
+
+```bash
+python3 msg_store.py send --from you --to gm --subject hi --body-file note.txt
+```
+
+The lower-level pieces are still there: `scripts/registry-update.py` writes the row,
+`./spawn-agent.sh <seat> --task ...` launches an already-registered seat, `--list` / `--running`
+show registered and live seats.
+
+- `machine` is a label. On a single-machine install (`[machines]` left blank in
+  `orchestra.toml`) the spawner never dispatches elsewhere.
+- The spawner pre-seeds Claude Code's workspace-trust bit and the bypass-permissions
+  acceptance for `cwd` (`scripts/ensure_cwd_trusted.py`; honors `CLAUDE_CONFIG_DIR`), so the
+  seat does not stop at a first-run dialog. If you see one anyway, answer it once in `tmux attach`.
 
 Verify through the dashboard proxy (the same list the UI shows):
 
@@ -133,7 +141,31 @@ What happens next, and how to see it:
 A card requested from an ambient shell behaves exactly like one a seat requested for
 itself: the seat named in `--from` is the one that receives the answer.
 
-## 5. Check the rotation beat is armed (default ON)
+## 5. Rotate a seat (manual, lossless)
+
+A seat near its context ceiling banks a handoff (its prompt knows the format:
+`<data>/docs/HANDOFF_<seat>-next.md` with a `## canary_questions` block anchored in its own
+state). Then:
+
+```bash
+orchestra rotate gm --dry-run            # preconditions only
+orchestra rotate gm                      # spawn successor -> it authors a readback -> strict grade -> promote
+orchestra rotate hello --synthesize      # a seat that never banked: minimal baton (sid, ports, last mail ids)
+orchestra rotate gm --resume             # a held attempt whose successor pane is still up
+```
+
+What "lossless" means here: the successor answers the canary questions from the handoff and
+the repo alone; a generic readback HOLDs (predecessor keeps the seat, nothing is renamed). On
+PASS the readback is committed in the data-dir repo (`orchestra init` made it one), the
+registry flips to the new generation, the old pane is kept as `<seat>-gen<N>` for one
+generation, and the successor gets its promotion prompt. Verify by effect:
+
+```bash
+python3 -c "import json;print(json.load(open('$ORCHESTRA_DIR/registry.json'))['agents']['gm'])"
+tmux ls | grep gm
+```
+
+## 6. Check the rotation beat is armed (default ON)
 
 `orchestra doctor` rows `rotation:beat` (armed, cadence, e-brake) and
 `rotation:seats` (which T2 claude seats are eligible; the
