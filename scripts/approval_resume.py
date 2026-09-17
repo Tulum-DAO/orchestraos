@@ -525,6 +525,11 @@ def _fire_resume_inner(row, store):
     refused = _f3_refuse_if_not_answered(row, store, "fire_resume")
     if refused is not None:
         return refused
+    if row.get("feature") == "demo":
+        # B5 fixture card: no seat behind it. Ack right here so EVERY caller (gateway,
+        # api answer path, watchdog) never resolves a pane, never injects, never sends a row.
+        store.ack(row["id"])
+        return {"id": row["id"], "injected": False, "reason": "demo-acked", "session": None}
     # R8 per-writer identity enforcement (SPEC §3/:179): shadow until the
     # 'approval_resume' writer is ARMED via its own the operator card; legacy rows
     # (no §1.1 identity fields) are exempt in both modes. Lazy import: an
@@ -688,6 +693,14 @@ def watchdog(store=None, *, live_fn=None):
     esc_cut = (now - timedelta(minutes=ESCALATE_REPEAT_MINUTES)).isoformat()
     coalesce_batch = []
     for row in store.answered_unacked():
+        if row.get("feature") == "demo":
+            # B5 fixture card: nothing to deliver to (no seat behind it). Ack on answer so it
+            # never injects, never escalates, never notifies.
+            try:
+                store.ack(row["id"])
+            except Exception as e:  # noqa: BLE001
+                print(f"[approval_resume] demo row {row['id']} ack failed: {e}", file=sys.stderr)
+            continue
         if row.get("last_attempt_at") and row["last_attempt_at"] > beat_cut:
             continue                              # tried within a beat — wait
         if row["resumed_at"] and row["resumed_at"] > ack_cut:

@@ -20,6 +20,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     i.add_argument("--no-venv", action="store_true", help="skip python venv + pip")
     i.add_argument("--no-npm", action="store_true", help="skip npm install (and builds)")
     i.add_argument("--no-build", action="store_true", help="skip api/dashboard builds")
+    i.add_argument("--demo", action="store_true",
+                   help="seed three fixture seats and one card of each kind (approval, menu, questionnaire, human task)")
 
     d = sub.add_parser("doctor", help="check CLIs+auth, ports, tmux, config keys, builds, rotation beat")
     d.add_argument("--json", action="store_true")
@@ -42,7 +44,7 @@ def cmd_init(ns) -> int:
     from .init_cmd import render_report, run_init
     root = S.repo_root_from_env()
     report = run_init(root, data_dir=Path(ns.data_dir) if ns.data_dir else None,
-                      skip_npm=ns.no_npm, skip_venv=ns.no_venv, skip_build=ns.no_build)
+                      skip_npm=ns.no_npm, skip_venv=ns.no_venv, skip_build=ns.no_build, demo=ns.demo)
     print(render_report(report))
     failed = [r for r in report if not r.did and ("failed" in r.detail)]
     st = _settings()
