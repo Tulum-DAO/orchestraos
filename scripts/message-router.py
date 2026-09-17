@@ -355,71 +355,15 @@ def agent_for_session(session: str, meta: dict) -> str | None:
 
 # --- Idle detection -----------------------------------------------------------
 
-SGR_RE = re.compile(r"\x1b\[([0-9;]*)m")
-
-
 def input_line_state(ansi_line: str, sig: dict | None = None) -> str:
     """Classify the prompt input line: 'empty', 'ghost', or 'typed'.
 
-    Walks the line tracking SGR dim ([2m) and reverse ([7m, the cursor block)
-    state. Visible chars after the prompt char that are neither dim nor reverse
-    == human typed text (never inject). Empirical signatures on Claude Code 2.1.87:
-      ghost:  every word wrapped in ESC[2m spans, cursor char in ESC[7m
-      typed:  default-colored text, cursor ESC[7m at end
-
-    `sig` is the per-runtime prompt signature (defaults to the Claude signature,
-    so the Claude call path is byte-identical). For a runtime WITHOUT SGR-dim
-    ghost suggestions (Gemini), any non-space visible char after the prompt is
-    'typed' (there is no ghost class to distinguish)."""
-    sig = sig or PROMPT_SIGNATURES[DEFAULT_RUNTIME]
-    prompt_char = sig["prompt_char"]
-    idx = ansi_line.find(prompt_char)
-    if idx == -1:
-        return "typed"  # unrecognized; fail safe (treat as busy)
-    rest = ansi_line[idx + len(prompt_char):]
-
-    if not sig.get("has_ghost_suggestions", True):
-        # No dim ghost-suggestion class (Gemini): strip SGR codes, and any
-        # remaining non-space char after the prompt is human-typed. The cursor
-        # block ([7m…[27m) wraps a space on an empty prompt, so ignore spaces.
-        stripped = re.sub(r"\x1b\[[0-9;]*m", "", rest)
-        return "typed" if stripped.strip() else "empty"
-
-    dim = reverse = False
-    saw_ghost = saw_typed = False
-    pos = 0
-    while pos < len(rest):
-        m = SGR_RE.match(rest, pos)
-        if m:
-            codes = m.group(1).split(";") if m.group(1) else ["0"]
-            for c in codes:
-                if c in ("", "0"):
-                    dim = reverse = False
-                elif c == "2":
-                    dim = True
-                elif c == "7":
-                    reverse = True
-                elif c == "22":
-                    dim = False
-                elif c == "27":
-                    reverse = False
-            pos = m.end()
-            continue
-        ch = rest[pos]
-        if not ch.isspace():
-            if dim:
-                saw_ghost = True
-            elif reverse:
-                pass  # cursor block
-            else:
-                saw_typed = True
-        pos += 1
-
-    if saw_typed:
-        return "typed"
-    if saw_ghost:
-        return "ghost"
-    return "empty"
+    Delegates to scripts/composer_state.classify_input_line — the ONE SGR-aware composer
+    reader every consumer (agent-status, park-idle, watch_gateway, bg_beat, this router)
+    shares, so ghost-text vs typed-text can never drift between them. Behaviour-identical to
+    the inline walk this replaced (composer_state ports that walk verbatim)."""
+    from scripts.composer_state import classify_input_line
+    return classify_input_line(ansi_line, sig)[0]
 
 
 def _detector_is_generating(session: str) -> bool:
