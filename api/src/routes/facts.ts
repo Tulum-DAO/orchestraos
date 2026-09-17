@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { loadConfig } from '../lib/config.js';
+import { loadFactsDb as loadStore, writeFactsDb as writeStore, createFactRow } from '../lib/facts-store.js';
 
 const router = Router();
 
@@ -65,17 +66,9 @@ function computeStaleness(
   return { is_stale: ageDays > budgetDays, age_days: ageDays };
 }
 
-// Load facts_db.json
+// Load facts_db.json (shared with the pure store lib; see lib/facts-store.ts)
 function loadFactsDb(): any {
-  if (!existsSync(FACTS_DB_PATH)) {
-    return { facts: [], last_updated: null };
-  }
-  try {
-    return JSON.parse(readFileSync(FACTS_DB_PATH, 'utf-8'));
-  } catch (err) {
-    console.error(`Failed to parse facts_db.json: ${err}`);
-    return { facts: [], last_updated: null };
-  }
+  return loadStore(FACTS_DB_PATH);
 }
 
 // Load context_layer.json
@@ -91,15 +84,11 @@ function loadContextLayer(): any {
   }
 }
 
-// Write facts_db.json atomically (temp file + rename)
+// Write facts_db.json atomically (temp file + rename) — lib handles mkdir + rename.
 function writeFactsDb(data: any) {
   ensureLogsDir();
-  const tmpPath = FACTS_DB_PATH + '.tmp';
-  data.last_updated = new Date().toISOString();
   try {
-    writeFileSync(tmpPath, JSON.stringify(data, null, 2));
-    const fs = require('fs');
-    fs.renameSync(tmpPath, FACTS_DB_PATH);
+    writeStore(FACTS_DB_PATH, data);
   } catch (err) {
     throw new Error(`Failed to write facts_db.json: ${err}`);
   }
@@ -192,6 +181,32 @@ router.get('/', (_req: Request, res: Response) => {
     res.status(503).json({
       error: 'facts_store_unavailable',
       reason: `Failed to read facts store: ${(err as Error).message}`,
+    });
+  }
+});
+
+// POST /api/facts — create a fact. This is the gate's "write a fact": the row lands in
+// facts/facts_db.json, which services/arturo/facts_recall.py reads on Arturo's next turn.
+router.post('/', (req: Request, res: Response) => {
+  try {
+    const { text, category } = req.body || {};
+    const factsDb = loadFactsDb();
+    let row;
+    try {
+      row = createFactRow(factsDb, text, { category, source: 'dashboard' });
+    } catch (err: any) {
+      res.status(400).json({ error: (err as Error).message });
+      return;
+    }
+    factsDb.facts.push(row);
+    writeFactsDb(factsDb);
+    auditWrite('create', row.id, { text: row.fact, category: row.category || null });
+    res.status(201).json({ id: row.id, text: row.fact, source: row.source, verified_at: row.verified_at });
+  } catch (err: any) {
+    console.error('POST /api/facts error:', err);
+    res.status(503).json({
+      error: 'facts_store_unavailable',
+      reason: `Failed to write facts store: ${(err as Error).message}`,
     });
   }
 });
