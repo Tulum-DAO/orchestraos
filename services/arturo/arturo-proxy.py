@@ -26,7 +26,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from flask import Flask, request, Response, jsonify
-from openai import OpenAI
 
 # --- Intent Router + Conversation Log ---
 try:
@@ -838,15 +837,34 @@ def load_secrets():
 secrets = load_secrets()
 GEMINI_API_KEY = secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
 BEARER_TOKEN = secrets.get("CUSTOM_LLM_BEARER", "")
+_INTERNAL_NONCE = __import__('secrets').token_hex(16)   # see check_auth()
 LLM_MODEL = secrets.get("LLM_MODEL", "gemini-2.5-flash")
 
-if not GEMINI_API_KEY:
-    log.error("No GEMINI_API_KEY found")
+# --- Brain selection (track T2): api (BYO key) | runtime (the CLI you're logged in to) | none.
+# The service BOOTS in all three cases; a keyless install runs text-only on the CLI brain, and
+# with nothing authed /health says so and every turn answers with the fix (no restart loop).
+from services.arturo import brain as _brain
+BRAIN_MODE = (os.environ.get("ORCHESTRA_ARTURO_BRAIN") or secrets.get("ARTURO_BRAIN") or "auto").strip().lower()
+RUNTIME_MODEL = (os.environ.get("ORCHESTRA_ARTURO_RUNTIME_MODEL") or secrets.get("ARTURO_RUNTIME_MODEL") or "").strip()
+_RUNTIMES_ENABLED = [r for r in (os.environ.get("ORCHESTRA_RUNTIMES_ENABLED") or "").split(",") if r]
+brain = _brain.select_brain(
+    BRAIN_MODE, GEMINI_API_KEY,
+    probes=[] if (BRAIN_MODE == "api" or (BRAIN_MODE == "auto" and GEMINI_API_KEY))
+    else _brain.probe_runtimes(_REPO_ROOT, _RUNTIMES_ENABLED or None),
+    api_model=LLM_MODEL, runtime_model=RUNTIME_MODEL)
+if brain.kind == "runtime":
+    LLM_MODEL = brain.model
+elif brain.kind == "none":
+    LLM_MODEL = "none"
+    log.error(f"brain: NONE — {brain.reason}")
+log.info(f"brain: {brain.describe()} (arturo.brain={BRAIN_MODE})")
 
-client = OpenAI(
-    api_key=GEMINI_API_KEY,
-    base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-)
+# Voice needs a vendor key; without one the service runs TEXT-ONLY (the text turn + tools still
+# work through the brain, the /ptt + /v1/chat/completions voice callbacks answer 503 vendor-less).
+_VOICE_KEYS = ("ELEVENLABS_API_KEY", "CARTESIA_API_KEY", "HUME_API_KEY", "GEMINI_API_KEY")
+VOICE_VENDORS_PRESENT = [k for k in _VOICE_KEYS if secrets.get(k) or os.environ.get(k)]
+ARTURO_MODE = "voice" if VOICE_VENDORS_PRESENT else "text-only"
+log.info(f"mode: {ARTURO_MODE} (voice keys present: {[k.split('_')[0].lower() for k in VOICE_VENDORS_PRESENT]})")
 
 
 # --- Auth ---
@@ -858,6 +876,10 @@ def check_auth():
     # RCE-equivalent), so an unauthenticated caller must be rejected. ElevenLabs sends
     # the configured `Authorization: Bearer <CUSTOM_LLM_BEARER>` on every request, so
     # fail-closed is fully compatible. Constant-time compare (mirrors jarvis_poc M1).
+    # In-process hop (the loopback /text route replays through chat_completions via the Flask
+    # test client): a per-process random nonce only this process knows, never a config secret.
+    if hmac.compare_digest(request.headers.get("X-Arturo-Internal", ""), _INTERNAL_NONCE):
+        return True
     if not BEARER_TOKEN:
         # No secret configured → refuse rather than silently allow-all on a public port.
         return False
@@ -1620,6 +1642,76 @@ def _spawn_tool_worker(fn_name, fn_args, user_turns=None):
     return worker, holder
 
 
+# --- Commission (T2 acceptance): "commission an agent to X" = a REAL seat + a durable row ------
+# The VPS path goes through the repo's spawn-agent.sh (runtime-declared, registered, the same
+# adopt gate every seat uses) and files the task as a msg_store row from `arturo` to the seat,
+# so the commission survives a restart and shows in the Inbox. The Mac path keeps the legacy
+# raw-tmux spawn (spawn-agent.sh is a VPS-side script).
+
+_DEFAULT_MODEL_FOR_RUNTIME = {"claude": "claude-sonnet-5", "gemini": "gemini-3.1-pro", "codex": "gpt-5.6-terra"}
+
+
+class _CommissionPlan:
+    def __init__(self, argv, env, session, task):
+        self.argv, self.env, self.session, self.task = argv, env, session, task
+
+
+def commission_plan(session, task, runtime=None, repo_root=None, model=None):
+    root = Path(repo_root or _REPO_ROOT)
+    rt = runtime or (getattr(brain, "runtime", None) if brain.kind == "runtime" else None) or "claude"
+    env = {"AGENT_RUNTIME": rt, "AGENT_MODEL": model or RUNTIME_MODEL or _DEFAULT_MODEL_FOR_RUNTIME.get(rt, rt),
+           "ORCHESTRA_DIR": str(ORCHESTRA_DIR), "PARENT_AGENT_ID": "arturo"}
+    argv = ["bash", str(root / "spawn-agent.sh"), session]
+    if task:
+        argv += ["--task", task]
+    return _CommissionPlan(argv, env, session, task)
+
+
+def _run_commission(plan, timeout=120):
+    env = dict(os.environ)
+    env.update(plan.env)
+    try:
+        r = subprocess.run(plan.argv, capture_output=True, text=True, timeout=timeout, env=env,
+                           cwd=str(_REPO_ROOT))
+        out = (r.stdout + "\n" + r.stderr).strip()
+        return r.returncode == 0, out
+    except subprocess.TimeoutExpired:
+        return False, f"spawn-agent.sh timed out after {timeout}s"
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)
+
+
+def _message_store():
+    _sys.path.insert(0, str(_REPO_ROOT))
+    from msg_store import MessageStore
+    return MessageStore()
+
+
+def _file_commission_row(session, task):
+    """The durable half of a commission. Returns the msg id or '' (never raises)."""
+    try:
+        store = _message_store()
+        subject = (task or f"commissioned {session}").strip().splitlines()[0][:80]
+        return store.send(from_agent="arturo", to_agent=session, type="task", subject=subject,
+                          body=task or subject, priority="medium", source="arturo", tenant_id="operator")
+    except Exception as e:  # noqa: BLE001
+        log.warning(f"commission row for {session} not filed: {e}")
+        return ""
+
+
+def _notify_spawned(session, machine):
+    if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
+        return
+    import requests as req_lib
+    try:
+        req_lib.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                     json={"chat_id": TELEGRAM_CHAT_ID,
+                           "text": f"Agent spawned ({machine}): {session}\n\ntmux attach -t {session}",
+                           "parse_mode": "HTML"}, timeout=5)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def execute_tool(name, args, user_turns=None):
     """Execute a tool call with Mac→VPS fallback.
 
@@ -1751,6 +1843,27 @@ def execute_tool(name, args, user_turns=None):
         task = args.get("task", "")
         background = args.get("background", False)
         target_machine = args.get("machine", "vps")  # default VPS, "mac" if explicitly requested
+
+        if target_machine != "mac":
+            # VPS: a real seat through spawn-agent.sh + a msg_store commission row (T2).
+            plan = commission_plan(session, task)
+            log.info(f"COMMISSION: {' '.join(plan.argv[:3])} runtime={plan.env['AGENT_RUNTIME']}")
+            ok, out = _run_commission(plan, 120)
+            log.info(f"RESULT: ok={ok}, out={out[-300:]}")
+            if not ok:
+                if "duplicate session" in out.lower() or "already running" in out.lower():
+                    return f"Session '{session}' already exists on vps. Use inject_message to send it a task."
+                return f"FAILED to spawn '{session}' on vps: {out[-400:]}"
+            verify_ok, _ = run_local(f"tmux has-session -t {session} 2>/dev/null", timeout=3)
+            if not verify_ok:
+                return f"FAILED: spawn-agent.sh ran but session '{session}' does not exist on vps: {out[-300:]}"
+            msg_id = _file_commission_row(session, task)
+            record_spawned_session(session)
+            _notify_spawned(session, "vps")
+            result = f"CONFIRMED: Agent '{session}' is running on vps (runtime {plan.env['AGENT_RUNTIME']}). Visible on the dashboard."
+            if msg_id:
+                result += f" Commission filed as {msg_id}."
+            return result
 
         mac_cmd, vps_cmd = _tmux_cmd(session, "spawn")
         log.info(f"CMD: vps={vps_cmd}, target={target_machine}")
@@ -2798,7 +2911,7 @@ def _ptt_brain(stt_text, conversation_id):
     context = build_context(calling_channel="ptt")
     history = _PTT_HISTORY.get(conversation_id)
     messages = _ptt.build_messages(context, history, stt_text)
-    resp = client.chat.completions.create(model=LLM_MODEL, messages=messages, timeout=PTT_BRAIN_TIMEOUT_S)
+    resp = brain.complete(model=LLM_MODEL, messages=messages, timeout=PTT_BRAIN_TIMEOUT_S)
     reply = (resp.choices[0].message.content or "").strip()
     _PTT_HISTORY.append(conversation_id, "user", stt_text)
     _PTT_HISTORY.append(conversation_id, "assistant", reply)
@@ -3299,7 +3412,7 @@ def chat_completions():
         log.info(f"generate() START: channel={calling_channel}, history={len(final_messages)} msgs")
         try:
             # First call — with tools, force tool_choice auto
-            response = client.chat.completions.create(
+            response = brain.complete(
                 model=LLM_MODEL,
                 messages=final_messages,
                 max_tokens=1024,
@@ -3320,7 +3433,7 @@ def chat_completions():
             if not choice.message.tool_calls and not (choice.message.content or "").strip():
                 log.warning("Empty response with no tools — retrying with tool_choice=required")
                 try:
-                    response = client.chat.completions.create(
+                    response = brain.complete(
                         model=LLM_MODEL,
                         messages=final_messages,
                         max_tokens=1024,
@@ -3367,7 +3480,7 @@ def chat_completions():
                         ]}, {"role": "tool", "tool_call_id": tool_calls[0].id,
                               "content": "You already have the PROJECT STATUS in your context — answer the operator's question directly and naturally from it, concise (2-3 sentences). SILENT: do NOT mention this redirect, your tools, your 'deep brain', or any reason for how you're answering — no apology, no 'let me rephrase', no 'I'm not meant to'. Just give the answer as if you always knew it."}]
                         try:
-                            retry_resp = client.chat.completions.create(
+                            retry_resp = brain.complete(
                                 model=LLM_MODEL, messages=retry_msgs,
                                 max_tokens=1024, temperature=0.7, stream=True,
                             )
@@ -3529,7 +3642,7 @@ def chat_completions():
                     loop_messages = loop_messages + [assistant_msg] + tool_results
 
                     # Ask model: do you need more tools, or are you ready to answer?
-                    followup_resp = client.chat.completions.create(
+                    followup_resp = brain.complete(
                         model=LLM_MODEL,
                         messages=loop_messages,
                         max_tokens=1024,
@@ -3591,7 +3704,7 @@ def chat_completions():
                 else:
                     # Hit MAX_TOOL_ROUNDS — force a final answer without tools
                     log.warning(f"Hit max tool rounds ({MAX_TOOL_ROUNDS}). Forcing final answer.")
-                    stream_resp = client.chat.completions.create(
+                    stream_resp = brain.complete(
                         model=LLM_MODEL, messages=loop_messages,
                         max_tokens=1024, temperature=0.7, stream=True,
                     )
@@ -3973,6 +4086,55 @@ if _STREAM_RELAY is not None:
         return jsonify({"ok": True, **st}), 200
 
 
+# --- Text turn (track T2/T4): the web/iOS Arturo home's text path -------------------------
+# LOOPBACK-ONLY, same trust boundary as /ptt: the gateway (Bearer) forwards here. One turn =
+# the full tool-enabled chat_completions path (so "commission an agent to X" spawns a seat)
+# with channel="text", threaded through the same bounded per-conversation history PTT uses.
+
+_TEXT_HISTORY = _ptt.PttHistory()
+_TEXT_TURN_TIMEOUT_S = float(os.environ.get("ARTURO_TEXT_TURN_TIMEOUT_S", "180"))
+
+
+def text_turn(text, conversation_id):
+    """Returns (http_status, {ok, reply_text, conversation_id, brain, tools_called})."""
+    text = (text or "").strip()
+    if not text:
+        return 400, {"ok": False, "error": "empty"}
+    if len(text) > 8000:
+        return 413, {"ok": False, "error": "too_large"}
+    conversation_id = (conversation_id or "").strip()[:200] or f"text_{int(time.time())}"
+    context = build_context(calling_channel="text")
+    history = _TEXT_HISTORY.get(conversation_id)
+    messages = _ptt.build_messages(context, history, text)
+    token = _TOOLS_THIS_TURN.set([])
+    try:
+        with app.test_client() as c:
+            r = c.post("/v1/chat/completions", json={"messages": messages, "stream": False,
+                                                     "metadata": {"channel": "text", "conversation_id": conversation_id}},
+                       headers={"X-Arturo-Internal": _INTERNAL_NONCE})
+            body = r.get_json(silent=True) or {}
+        tools_called = [t.get("tool", "?") for t in (_TOOLS_THIS_TURN.get() or [])]
+    finally:
+        _TOOLS_THIS_TURN.reset(token)
+    if r.status_code != 200:
+        return 502, {"ok": False, "error": f"brain_http_{r.status_code}", "detail": body}
+    reply = ((body.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+    _TEXT_HISTORY.append(conversation_id, "user", text)
+    _TEXT_HISTORY.append(conversation_id, "assistant", reply)
+    return 200, {"ok": True, "reply_text": reply, "conversation_id": conversation_id,
+                 "brain": brain.describe(), "tools_called": tools_called}
+
+
+@app.route("/text", methods=["POST"])
+def text_endpoint():
+    remote = request.remote_addr or ""
+    if remote not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+        return jsonify({"ok": False, "error": "loopback only"}), 403
+    data = request.get_json(silent=True) or {}
+    code, result = text_turn(data.get("text"), data.get("conversation_id"))
+    return jsonify(result), code
+
+
 # --- Health ---
 
 @app.route("/health", methods=["GET"])
@@ -3981,6 +4143,11 @@ def health():
         "status": "ok",
         "service": "custom-llm-proxy",
         "model": LLM_MODEL,
+        # T2/T3: which brain answers turns, and whether voice is even possible on this install.
+        "brain": brain.describe(),
+        "brain_mode": BRAIN_MODE,
+        "mode": ARTURO_MODE,                       # "voice" | "text-only"
+        "voice": bool(VOICE_VENDORS_PRESENT),
         "tools": [t["function"]["name"] for t in TOOLS],
         # comm-probe-safe daemon liveness (gm msg_1f417cdd): threads registered at start
         "daemons": sorted(getattr(_STREAM_RELAY, "daemons", None) or []),
