@@ -120,37 +120,44 @@ model_is_1m() {
     [[ "$status_line" == *'[1m]'* ]]
 }
 
+# shellcheck source=scripts/spawn_model_verify.sh
+source "$SCRIPT_DIR/scripts/spawn_model_verify.sh"
+
 # Post-spawn model verify (by effect): capture the TUI status line and confirm the
 # running model is a [1m] variant. If bare and we know the intended model, switch
 # it in-session via /model. Best-effort + non-fatal — a spawned agent is never
 # killed over this; the worst case degrades to today's inherited-default behavior.
 verify_spawn_model() {
-    local session="$1" intended="$2" line=""
+    # NEVER fatal (B1 run-2 finding A): every read is `|| true`-guarded so `set -euo pipefail`
+    # cannot abort the spawn between launch and --task injection; the verdict is always printed.
+    local session="$1" intended="$2" line="" pane="" verdict="none"
     for _ in $(seq 1 8); do
-        line=$(tmux capture-pane -t "$session" -p 2>/dev/null | grep -m1 -E 'claude-(fable|opus|sonnet|haiku)' | tail -1)
+        pane=$(tmux capture-pane -t "$session" -p 2>/dev/null || true)
+        line=$(read_model_line "$pane")
         [[ -n "$line" ]] && break
         sleep 1
     done
-    if [[ -z "$line" ]]; then
-        warn "  [1m]-verify: could not read model from '$session' status line (non-fatal)"
-        return 0
-    fi
-    if model_is_1m "$line"; then
-        log "  [1m]-verify OK (by effect): '$session' running a [1m] model"
-        return 0
-    fi
+    verdict=$(classify_model_line "$line")
+    case "$verdict" in
+        1m)     log "  [1m]-verify OK (by effect): '$session' running a [1m] model"; return 0 ;;
+        family) warn "  [1m]-verify: '$session' banner shows '$(printf '%s' "$line" | grep -oE "$SPAWN_MODEL_LABEL_RE" | head -1)' — [1m] cannot be confirmed from this banner; continuing (non-fatal)"; return 0 ;;
+        none)   warn "  [1m]-verify: could not read a model from '$session' (non-fatal); continuing"; return 0 ;;
+    esac
+    # bare: an explicit non-[1m] model id is visible — the one case the correction is valid for.
     warn "  [1m]-verify: '$session' came up on a BARE (non-[1m]) model — correcting"
     local target="$intended"
     [[ -z "$target" ]] && target="claude-opus-4-8[1m]"   # settings default variant
     target=$(normalize_model_1m "$target")
-    tmux send-keys -t "$session" "/model $target" Enter
+    tmux send-keys -t "$session" "/model $target" Enter || true
     sleep 2
-    line=$(tmux capture-pane -t "$session" -p 2>/dev/null | grep -m1 -E 'claude-(fable|opus|sonnet|haiku)' | tail -1)
+    pane=$(tmux capture-pane -t "$session" -p 2>/dev/null || true)
+    line=$(read_model_line "$pane")
     if model_is_1m "$line"; then
         log "  [1m]-verify: corrected '$session' to $target"
     else
-        warn "  [1m]-verify: '$session' still not [1m] after /model $target — flag for gm"
+        warn "  [1m]-verify: '$session' still not [1m] after /model $target — flag for the operator (non-fatal)"
     fi
+    return 0
 }
 
 # Wait until the Claude TUI input prompt is visible (max 30s).
@@ -785,7 +792,7 @@ spawn_agent() {
     # + log. Reuses the verify-model-by-effect discipline the rotation hook
     # mandates. Skipped for non-claude runtimes (no [1m] SKU concept).
     if [[ "$runtime" == "claude" ]]; then
-        verify_spawn_model "$tmux_name" "$model"
+        verify_spawn_model "$tmux_name" "$model" || warn "  [1m]-verify returned non-zero (ignored)"
     fi
 
     # Inject the prompt by telling Claude to read the init file (race-safe, verified).

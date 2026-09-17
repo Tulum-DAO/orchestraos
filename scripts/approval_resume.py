@@ -19,6 +19,11 @@ from approval_config import (WATCHDOG_RETRY_BEAT_SECONDS, ESCALATE_STUCK_MINUTES
                              ESCALATE_REPEAT_MINUTES)
 from approval_schema import ApprovalStore
 
+# The ack instruction delivered to a seat must name THIS checkout's CLI, not an operator
+# layout (B1 run-2 finding B: a from-docs seat was told to run a path that does not exist).
+_CHECKOUT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+APPROVAL_CLI = os.path.join(_CHECKOUT, "scripts", "approval.py")
+
 def _msg_store():
     from msg_store import MessageStore
     return MessageStore()
@@ -88,7 +93,7 @@ def _pane_resume_body(row):
     return (f"[APPROVAL RESOLVED {row['id']}] Your request '{row['question']}' "
             f"was answered: {row['answer']} ({row['answer'].upper()})"
             + (f" — note: {row['answer_text']}" if row.get('answer_text') else "")
-            + f". Act on it, then run: python3 ~/scripts/agent-orchestra/scripts/approval.py ack {row['id']} --from {row['from_agent']}")
+            + f". Act on it, then run: python3 {APPROVAL_CLI} ack {row['id']} --from {row['from_agent']}")
 
 def _human_task_resume_body(row):
     """§Q1 house-style digest for a resolved human_task (matches
@@ -99,7 +104,7 @@ def _human_task_resume_body(row):
     subj = row.get("block_task") or row.get("question") or "(task)"
     return (f"[HUMAN-TASK {row['id']}] {verb}: {subj}"
             + (f" — note: {row['answer_text']}" if row.get('answer_text') else "")
-            + f". Act, then run: python3 ~/scripts/agent-orchestra/scripts/approval.py ack {row['id']} --from {row['from_agent']}")
+            + f". Act, then run: python3 {APPROVAL_CLI} ack {row['id']} --from {row['from_agent']}")
 
 
 def _fire_human_task_resume(row, store, msg_send=None, resolve=None, inject=None):
@@ -299,7 +304,7 @@ def _menu_digest_body(row):
     q = menu.get("question") or row.get("question") or "(decision)"
     return (f"[DECISION ANSWERED {row['id']}] '{q}' -> {label}"
             + (f" — note: {row['answer_text']}" if row.get('answer_text') else "")
-            + f". Act on it, then run: python3 ~/scripts/agent-orchestra/scripts/approval.py ack {row['id']} --from {row['from_agent']}")
+            + f". Act on it, then run: python3 {APPROVAL_CLI} ack {row['id']} --from {row['from_agent']}")
 
 
 def _menu_batch_digest_body(row, answers):
@@ -329,8 +334,7 @@ def _menu_batch_digest_body(row, answers):
     q = menu.get("question") or row.get("question") or "(multi-part decision)"
     return (f"[MULTI-PART DECISION ANSWERED {row['id']}] '{q}' -> "
             + " ".join(seg)
-            + f". Act on it, then run: python3 ~/scripts/agent-orchestra/scripts/"
-              f"approval.py ack {row['id']} --from {row['from_agent']}")
+            + f". Act on it, then run: python3 {APPROVAL_CLI} ack {row['id']} --from {row['from_agent']}")
 
 
 def fire_menu_batch_resume(row, answers, store=None, msg_send=None,
