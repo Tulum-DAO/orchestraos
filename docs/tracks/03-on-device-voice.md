@@ -2,6 +2,17 @@
 
 Size: M · Labels: `track`, `ios`, `arturo`
 
+> **Corrections (oss-arturo-dev review, 2026-09-17):** the vendor route is
+> `GET/PUT :5071/ptt/vendor` behind the gateway's `/arturo/ptt/vendor` — there is
+> no `/voice/vendor` path (`arturo-proxy.py` `@app.route("/ptt/vendor")`,
+> `watch_gateway.py` `handle_arturo_ptt_vendor`). The "existing gateway text path"
+> the local engine wraps is `POST /arturo/text {text, conversation_id}` (Bearer),
+> which lands on Track 2's brain; its reply is `{ok, reply_text, ...}`. And the
+> zero-key signal already exists: `GET /arturo/health` returns
+> `mode: "text-only"` / `voice: false` when no vendor key is present — the client
+> can choose `local` from that before `/ptt/vendor` learns the value.
+
+
 ## Problem
 
 Voice on the iOS app needs a vendor key today: `services/arturo/voice_vendor.py`
@@ -34,8 +45,8 @@ method surface, don't invent a new one):
   no vendor upload.
 
 Engine selection is server-driven, not a client toggle: the gateway's existing
-`/voice/vendor` shape (`GET` returns `_voice_vendor.state()`,
-`arturo-proxy.py` ~line 3920) gains a `local` value that the client should offer as
+`/ptt/vendor` shape (`GET` returns `_voice_vendor.state()`,
+`arturo-proxy.py`, `@app.route("/ptt/vendor")`; gateway `/arturo/ptt/vendor`) gains a `local` value that the client should offer as
 one of its choices, and `voice_vendor.get_vendor()` should resolve to `local` when
 none of `elevenlabs`/`hume`'s credentials are present (the `auto`-style fallback,
 mirroring Track 2's `arturo.brain = auto`). The VoiceSurface pill/panel and partial-
@@ -48,8 +59,8 @@ STT/TTS backend swaps.
   `get_vendor()` (or wherever the "refuse to select without creds" check lives) so
   `local` is always eligible and is the fallback when neither other vendor has
   creds.
-- `services/arturo/arturo-proxy.py` (~line 3914-3928, the `/voice/vendor` GET/POST
-  handlers) — confirm `local` round-trips through `state()`/`set_vendor()`
+- `services/arturo/arturo-proxy.py` (the `/ptt/vendor` GET/PUT handlers, registered
+  under `if _STREAM_RELAY is not None:`) — confirm `local` round-trips through `state()`/`set_vendor()`
   unchanged; no new route needed.
 - iOS repo — new `LocalVoiceEngine: VoiceEngine` (STT via `SFSpeechRecognizer`,
   reusing the existing caption-overlay permission/availability code; TTS via
@@ -66,10 +77,10 @@ STT/TTS backend swaps.
    `services/arturo/test_voice_vendor.py` and `test_ptt_vendor_routes.py` — both
    green, plus a new case: no `ELEVENLABS_API_KEY`/`HUME_API_KEY` in env →
    `get_vendor()` returns `local`.
-3. `curl <arturo>/voice/vendor` with no vendor keys set — expect `{"vendor":
+3. `curl 127.0.0.1:5071/ptt/vendor` (loopback) with no vendor keys set — expect `{"vendor":
    "local", ...}`.
 4. On the iOS side, implement `LocalVoiceEngine`, gate it behind the same
-   `/voice/vendor` response, and run the app on a device (simulator has no real
+   `/arturo/ptt/vendor` response (or `/arturo/health` `voice:false`), and run the app on a device (simulator has no real
    microphone/speech recognition — do not "ship" a simulator-only verification,
    see the fleet's own on-device-only rule for this exact class of feature).
 5. Hold the orb with no vendor keys configured anywhere → speak a short phrase →
@@ -93,7 +104,7 @@ I'm working Track 3 (on-device voice tier) for the OrchestraOS hackathon.
 Read docs/tracks/03-on-device-voice.md in this repo for the full design.
 Files to touch: services/arturo/voice_vendor.py (add "local" to REQUIRED
 and the fallback logic), services/arturo/arturo-proxy.py (confirm the
-existing /voice/vendor routes carry the new value unchanged), and the iOS
+existing /ptt/vendor routes carry the new value unchanged), and the iOS
 repo's VoiceEngine implementations (new LocalVoiceEngine using
 SFSpeechRecognizer + AVSpeechSynthesizer).
 Start on the server side: add "local" to voice_vendor.py's REQUIRED map,

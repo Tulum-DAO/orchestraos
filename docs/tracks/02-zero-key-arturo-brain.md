@@ -2,6 +2,43 @@
 
 Size: M · Labels: `track`, `arturo`
 
+> **Status: shipped on branch `arturo/oss` (oss-arturo-dev, 2026-09-17).** The design
+> below is kept for the hackathon; the corrections in *What actually landed* are the
+> truth where the two differ. Walkthrough: `docs/ARTURO.md`.
+
+## What actually landed (read this first)
+
+- `services/arturo/brain.py`: `Brain.complete(messages, tools=, tool_choice=, stream=, timeout=)`
+  returning the **OpenAI response shape** the proxy already reads — not a
+  `reply(context, history, user_text) -> str` method. That kept all six call sites
+  in `arturo-proxy.py` (`_ptt_brain()` + the five in the chat tool loop) one-line
+  swaps and left the tool loop / filler guards / journaling untouched. Streaming
+  works for all three brains (`stream=True` yields delta chunks).
+- Three implementations, not two: `ApiBrain`, `RuntimeBrain`, and `NullBrain` (no
+  key + no authed CLI → the service **still boots**, `/health` says
+  `brain.kind = none`, every turn answers with the fix). Before this the process
+  died at import and `orchestra up` restart-looped it.
+- `RuntimeBrain` tool calling: the tool schema is appended to the system prompt as
+  a JSON-envelope protocol (`{"tool_calls":[{"name","arguments"}]}`), parsed back
+  into `tool_calls`. The exact CLI invocations (flags that matter, measured
+  timings) are in `docs/ARTURO.md` → *What the runtime brain actually runs*.
+- Config: `[arturo] brain = auto|api|runtime` **and** `runtime_model`; exported as
+  `ORCHESTRA_ARTURO_BRAIN` / `ORCHESTRA_ARTURO_RUNTIME_MODEL` /
+  `ORCHESTRA_RUNTIMES_ENABLED` by `orchestra up` and `scripts/orchestra-env.sh`.
+- `orchestra doctor` row `arturo:brain` (OK runtime/api, WARN none + remedy).
+- The **text turn** the acceptance test needs did not exist on the web — added:
+  `POST :5071/text` (loopback) → gateway `POST /arturo/text` (Bearer) → API
+  `POST /api/arturo/text`; plus `/arturo/health` passthroughs.
+- Commission: the `spawn_agent` tool now runs the repo's `spawn-agent.sh`
+  (`AGENT_RUNTIME` = the brain's runtime) and files a `msg_store` row
+  **`from=arturo to=<seat>` type=task** — the seat's inbox, not gm's
+  (`msg_store.py inbox --agent <seat>`). Routing commissions through a `gm`
+  lineage when no gm exists is Track 5's job.
+- `services/arturo/dispatcher.py` needed no change.
+- Measured in a fresh container, no keys, one authed claude: text turn 2.9–3.4 s;
+  "commission an agent to …" → tmux seat + registry row + msg_store row in ~18 s.
+
+
 ## Problem
 
 Arturo's conversational turn is one OpenAI-shaped client call against
@@ -99,8 +136,8 @@ text-generation step underneath changes.
 "auto"`. `orchestra doctor` reports exactly one authed runtime and `arturo:brain`
 as `runtime`. A text message sent to Arturo's home returns a reply in under 5
 seconds. Sending "commission an agent to say hello" creates a new seat (visible in
-the Agents list) and a row in the `gm` inbox (`msg_store.py inbox --agent gm` shows
-it).
+the Agents list) and a `msg_store` row from `arturo` to that seat
+(`msg_store.py inbox --agent <seat>` shows it).
 
 ## Start prompt
 
