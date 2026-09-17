@@ -7,6 +7,28 @@ on:
     branches: [main]
 
 jobs:
+  # Developer Certificate of Origin: every commit in the PR carries a Signed-off-by
+  # trailer (CONTRIBUTING.md). Runs on pull requests only — pushes to main are merges.
+  dco:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: every commit is signed off
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          missing=0
+          for c in $(git rev-list "$BASE".."$HEAD"); do
+            if ! git log -1 --format=%B "$c" | grep -qE '^Signed-off-by: .+ <.+@.+>$'; then
+              echo "::error::commit $c has no Signed-off-by trailer (git commit -s)"; missing=1
+            fi
+          done
+          exit $missing
+
   secret-scan:
     runs-on: ubuntu-latest
     steps:
