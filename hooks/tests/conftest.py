@@ -22,4 +22,7 @@ def _sandbox(tmp_path, monkeypatch):
     yield
     env = dict(os.environ, TMUX_TMPDIR=str(sock_dir))
     env.pop("TMUX", None)
-    subprocess.run(["tmux", "kill-server"], env=env, capture_output=True)
+    # kill-server is forbidden on shared hosts (a wrapper refuses it); kill each session instead
+    ls = subprocess.run(["tmux", "ls", "-F", "#S"], env=env, capture_output=True, text=True)
+    for name in ls.stdout.split():
+        subprocess.run(["tmux", "kill-session", "-t", name], env=env, capture_output=True)
