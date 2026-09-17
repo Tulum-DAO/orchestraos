@@ -123,3 +123,14 @@ def test_child_env_scopes_the_realtime_snapshot_dir_to_the_data_dir(tmp_path):
     st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
     env = S.child_env(st, base={})
     assert env["ORCHESTRA_REALTIME_DIR"] == str(tmp_path / "data" / "realtime")
+
+
+def test_load_settings_honors_ORCHESTRA_DIR_over_config_data_dir(tmp_path, monkeypatch):
+    """rab msg_2ea45964: init/doctor/up must agree on the data dir when the env names one."""
+    root = tmp_path / "repo"; root.mkdir()
+    (root / "orchestra.toml").write_text(f'[data]\ndir = "{tmp_path / "from-config"}"\n')
+    monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path / "from-env"))
+    st = S.load_settings(root)
+    assert st.data_dir == tmp_path / "from-env"
+    monkeypatch.delenv("ORCHESTRA_DIR")
+    assert S.load_settings(root).data_dir == tmp_path / "from-config"

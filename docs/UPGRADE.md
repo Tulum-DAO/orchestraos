@@ -62,8 +62,9 @@ the paths other running components trust not to change shape underneath them.
 
 ```bash
 git pull
-orchestra init          # idempotent: re-runs npm/venv/build steps only, never
-                         # touches orchestra.toml or the data dir
+orchestra init --yes    # idempotent: re-runs npm/venv/build steps only, never
+                         # touches orchestra.toml or the data dir; --yes re-writes the
+                         # same hook rows without the prompt
 orchestra doctor         # confirm every row is still OK
 ```
 

@@ -1,7 +1,9 @@
 # Hooks: how a seat acts on mail with no keypress
 
 OrchestraOS seats are Claude Code sessions in tmux. Claude Code fires **hooks** at lifecycle
-events (session start, every tool call, every stop). `orchestra init` installs the shipped
+events (session start, every tool call, every stop). `orchestra init` prints the rows and asks
+before writing (`--yes` / `ORCHESTRA_YES=1` to skip the prompt; non-interactive without
+`--yes` skips the step) — the settings file is shared by every Claude session on the host. It installs the shipped
 hooks into your `~/.claude/settings.json` (merge, never clobber, idempotent). `orchestra
 doctor` reports `hooks:claude`.
 
@@ -21,6 +23,7 @@ Each installed row is tagged `#orchestraos-hook` and carries `ORCHESTRA_DIR=<dat
 ```bash
 python3 hooks/install.py --data-dir ~/orchestra          # same thing orchestra init does
 python3 hooks/install.py --status                          # installed vs missing
+orchestra init --yes                                       # unattended: write the rows without the y/N prompt
 ORCHESTRA_SKIP_HOOKS=1 orchestra init                      # containers that run no Claude seats
 ```
 
