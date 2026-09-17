@@ -298,3 +298,40 @@ def test_doctor_warns_about_tmux_sessions_that_are_not_registered_seats(tmp_path
     probes.tmux_sessions = lambda: ["gm", "ob-gen44"]
     checks = {c.name: c for c in D.run_doctor(st, probes)}
     assert checks["tmux:foreign-sessions"].status == D.OK
+
+
+# --- arturo:brain (track T2) ------------------------------------------------------------
+
+def test_arturo_brain_row_runtime_when_no_key_and_one_authed_cli(tmp_path, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root)
+    checks = D.run_doctor(st, _probes(which=("tmux", "node", "npm", "claude")))
+    c = _by_name(checks)["arturo:brain"]
+    assert c.status == "OK" and "runtime" in c.detail and "claude" in c.detail
+
+
+def test_arturo_brain_row_api_when_key_present(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root)
+    checks = D.run_doctor(st, _probes(which=("tmux", "node", "npm", "claude")))
+    c = _by_name(checks)["arturo:brain"]
+    assert c.status == "OK" and c.detail.startswith("api")
+
+
+def test_arturo_brain_row_none_is_warn_with_remedy(tmp_path, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root)
+    checks = D.run_doctor(st, _probes(which=("tmux", "node", "npm"), cmd_out=""))
+    c = _by_name(checks)["arturo:brain"]
+    assert c.status == "WARN" and "none" in c.detail and c.remedy
+
+
+def test_arturo_brain_row_absent_when_arturo_disabled(tmp_path):
+    root = _repo(tmp_path)
+    (root / "orchestra.toml").write_text((root / "orchestra.toml").read_text() + '\n[arturo]\nenabled = false\n')
+    st = S.load_settings(repo_root=root)
+    checks = D.run_doctor(st, _probes(which=("tmux", "node", "npm", "claude")))
+    assert "arturo:brain" not in _by_name(checks)
