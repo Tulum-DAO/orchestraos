@@ -256,7 +256,7 @@ def _newest_jsonl_sid(project_dir: str):
 
 def _boundary_re(term: str):
     """Hyphen-safe exact-token matcher. Plain \\b treats '-' as a boundary, so
-    \\bintent-audience-refresh\\b WRONGLY matches intent-audience-refresh-2. The
+    \\bnightly-refresh\\b WRONGLY matches nightly-refresh-2. The
     lookarounds forbid an adjacent word-char OR hyphen, so a -<suffix> sibling
     no longer matches while the exact self does."""
     return re.compile(r"(?<![\w-])" + re.escape(term) + r"(?![\w-])", re.IGNORECASE)

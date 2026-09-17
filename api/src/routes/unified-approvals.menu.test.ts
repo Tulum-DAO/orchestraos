@@ -28,7 +28,7 @@ function menuRow(overrides: Partial<CanonicalRow> = {}): CanonicalRow {
   return {
     id: 'apr_993fc651_2533713',
     from_agent: 'pm-skyline',
-    question: 'Skyline CTV demo — which audience do I build & export today?',
+    question: 'Release demo — which build do I ship today?',
     op_key: 'skyline-ctv-demo-vertical-20260914',
     options: ['Oil change (OKC)', "Alzheimer's topic", 'Other / Write-in...'],
     status: 'pending',
@@ -40,7 +40,7 @@ function menuRow(overrides: Partial<CanonicalRow> = {}): CanonicalRow {
     feature: null,
     provider: null,
     menu: {
-      question: 'Skyline CTV demo — which audience do I build & export today?',
+      question: 'Release demo — which build do I ship today?',
       options: [
         { n: '1', label: 'Oil change (OKC)', input_kind: 'direct' },
         { n: '2', label: "Alzheimer's topic", input_kind: 'direct' },

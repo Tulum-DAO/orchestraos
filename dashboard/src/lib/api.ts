@@ -44,8 +44,6 @@ export const createTask = (project: string, phaseIdx: number, task: { name: stri
 export const deleteTask = (project: string, phaseIdx: number, taskIdx: number): Promise<unknown> =>
   fetch(`/api/roadmaps/${project}/phases/${phaseIdx}/tasks/${taskIdx}`, { method: 'DELETE' }).then(r => r.json());
 
-export const fetchClients = () => get('/clients');
-export const fetchClientEcosystem = (id: string) => get(`/clients/${id}/ecosystem`);
 
 export const fetchProjects = () => get('/projects');
 export const fetchProject = (slug: string) => get(`/projects/${slug}`);
@@ -98,8 +96,6 @@ export const denyAction = (id: string) => post(`/approvals/${id}/deny`);
 export const fetchAnalytics = () => get('/analytics');
 export const fetchAnalyticsDashboard = () => get('/analytics/dashboard');
 export const fetchWorkflows = () => get('/workflows');
-export const fetchExperiments = () => get('/experiments');
-export const createExperiment = (data: any) => post('/experiments', data);
 export const fetchSkills = () => get('/skills');
 export const assignSkill = (skillId: string, agentId: string) => post('/skills/assign', { skill_id: skillId, agent_id: agentId });
 export const unassignSkill = (skillId: string, agentId: string) => post('/skills/unassign', { skill_id: skillId, agent_id: agentId });
@@ -204,8 +200,6 @@ export const getUserProfile = (userId: string = 'operator') =>
 export const updateUserProfile = (userId: string = 'operator', updates: any) =>
   patch<any>(`/adaptive/${userId}/profile`, updates);
 
-export const fetchCampaigns = () => get('/campaigns');
-export const fetchClientCampaigns = (clientSlug: string) => get(`/campaigns/${clientSlug}`);
 
 export function connectActivitySSE(onEvent: (e: any) => void): EventSource {
   const source = new EventSource(`${BASE}/activity`);
