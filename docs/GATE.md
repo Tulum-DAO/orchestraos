@@ -158,6 +158,14 @@ orchestra rotate hello --synthesize
 seat banks its own baton with canary questions; `hello` has nothing to hand over yet).
 The successor then only has to prove it can read its own seat.
 
+**Give `hello` two or three real turns first** (the step 2 question plus, say, "read
+docs/GATE.md and summarize step 6" and "write a file notes.txt in your data dir with
+the word ROTPROOF"). The strict grader grounds the successor's answers in the
+predecessor's transcript and needs a few thousand characters; a seat that only said
+hello HOLDs with `missed q1..q3` — the tool prints that exact warning before it
+starts. Proven on public main: a fresh `orchestra spawn` seat with three turns rotated
+and promoted to gen 2 in about a minute.
+
 Expected: a new generation of `hello` boots, reads the handoff the old one
 wrote, answers a short set of canary questions anchored in the predecessor's
 own state, and — on a passing grade — is promoted: the registry's canonical
