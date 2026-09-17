@@ -31,13 +31,18 @@ is a single command:
 orchestra upgrade
 ```
 
-Target behavior: `git fetch`, show what changed since your current checkout
-(equivalent to `git log --oneline HEAD..origin/main`), flag any change under
-`scripts/lineage_daemon/`, `msg_store.py`, or `scripts/approval*.py`
-specifically (the contract-bearing paths), pull, re-run the idempotent parts of
-`orchestra init` (npm/venv/build steps only — never touching `orchestra.toml`
-or the data dir), and finish with `orchestra doctor` so you see immediately if
-anything broke. It does **not** restart your running supervisor or any spawned
+Target behavior, per orchestra-builder (who owns this command's build): `git
+pull --ff-only`, then `orchestra init` — idempotent, so config is kept, the
+Claude Code hook layer is re-installed against the new checkout path, and the
+data-git step stays present — then `orchestra doctor`. Spawned seats are
+untouched by design: their tmux sessions keep running the code they were
+spawned with, and pick up the new checkout only at their next spawn or
+rotation. Showing what changed before pulling (`git log --oneline
+HEAD..origin/main`, flagging `scripts/lineage_daemon/`, `msg_store.py`, or
+`scripts/approval*.py` specifically — the contract-bearing paths) is this doc's
+recommendation for the by-hand path below; confirm whether the shipped
+`orchestra upgrade` does the same before assuming it. It does **not** restart your
+running supervisor or any spawned
 seat on its own — a code change only takes effect for a component once that
 component restarts, and restarting a live seat's tmux session is your call,
 not the upgrade command's.
