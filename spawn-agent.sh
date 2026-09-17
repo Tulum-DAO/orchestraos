@@ -598,6 +598,17 @@ spawn_agent() {
         init_prompt+=" Read $infra_ctx for infrastructure context (how to text the operator, serve URLs, communicate with the GM)."
     fi
 
+    # Per-seat memory (docs/MEMORY.md): the directory is keyed by the LINEAGE id (the
+    # seat name with any -gN / -genN generation suffix stripped) so every generation of
+    # a seat reads and extends the same files — that is what makes gate step 7
+    # ("one fact written, restart, agent recalls it") pass.
+    local memory_root
+    memory_root="$(printf '%s' "$agent_id" | sed -E 's/-(g|gen)[0-9]+$//')"
+    local memory_dir="$ORCHESTRA_DIR/memory/${memory_root}"
+    mkdir -p "$memory_dir"
+    [[ -f "$memory_dir/MEMORY.md" ]] || printf '# %s memory index\n' "$memory_root" > "$memory_dir/MEMORY.md"
+    init_prompt+=" Your memory directory is $memory_dir — read $memory_dir/MEMORY.md now, before anything else; it indexes one-fact files that survive restarts and rotations. The convention (index + one-fact files + baton) is the Memory section of $SCRIPT_DIR/prompts/_agent-protocol.md — follow it."
+
     # Inject tier-appropriate memory payload via token enforcer
     local memory_payload=""
     if [[ -f "$OMNI_DIR/token_enforcer.py" ]]; then
