@@ -39,6 +39,25 @@ class FactsApi {
     return response.json();
   }
 
+  async createFact(text: string, category?: string): Promise<{ id: number; text: string; source: string; verified_at: string }> {
+    const response = await fetch(this.baseUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(category ? { text, category } : { text }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(
+        errorData.reason || errorData.error || `HTTP ${response.status}: Failed to create fact`
+      );
+    }
+
+    return response.json();
+  }
+
   async editFact(id: number, text: string): Promise<{ id: number; text: string; verified_at: string }> {
     const response = await fetch(`${this.baseUrl}/${id}`, {
       method: 'PATCH',
