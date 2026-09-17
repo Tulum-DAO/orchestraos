@@ -385,3 +385,19 @@ def test_author_canary_refusal_names_the_outside_transcript_rule(gate):
         author_canary("x-g2", [{"q": "what changed?", "source_pointer": "jsonl:turn-1 (user block, see transcript.md)"}])
     msg = str(ei.value)
     assert "msg_store row or commit sha" in msg and "TEXT-BEARING" in msg
+
+
+def test_distinct_evidence_veto_names_the_culprit_questions_and_a_reason(tr_text):
+    """Gate rerun on 5b4f522: each answer PASSed alone, the sid was repeated in every
+    answer, and the veto reported missed q1..q3 with no reason. The culprits are exactly
+    the answers with no exclusive anchor; the aggregate must say why."""
+    ans = dict(_GOOD_ANSWERS)
+    # q4 now cites only q1's id: neither q1 nor q4 has an exclusive anchor any more
+    ans["q4"] = "This was about ab12cd34ef and the 431 symptom with walkgate serialization again."
+    r = grade_canary(ans, _canary_rows(), transcript_text=tr_text)
+    assert r["passed"] is False
+    assert r["aggregate"]["distinct_q"] == 2
+    assert sorted(r["missed"]) == ["q1", "q4"]           # not q1..q4
+    assert "distinct-evidence" in r["aggregate"]["reason"] and "q1, q4" in r["aggregate"]["reason"]
+    # per-question verdicts are untouched: q1 and q4 still PASS individually
+    assert r["per_question"]["q1"]["verdict"] == "PASS"

@@ -264,3 +264,22 @@ existing ones) for the gateway and the dashboard proxy, and one `orchestra statu
 that hits all three.
 
 **Acceptance.** `orchestra status --probe` prints one OK line per running service.
+
+## G9 · `spawn-agent.sh` should seed the identity store (hand-registered seats cannot rotate)
+`labels: good-first-issue, size:S, rotation`
+
+`orchestra spawn <seat>` registers the seat **and** seeds its lineage (generation 1) in the
+identity store, so `orchestra rotate <seat>` works. The lower-level path still documented in
+INSTALL — `scripts/registry-update.py <seat> ...` then `./spawn-agent.sh <seat> --task ...` —
+registers the seat but seeds no lineage, and rotation refuses it with
+`no authoritative generation ... seed the seat via the identity store (adopt_identity/register)`.
+Found by the docs-only gate run on 2026-09-17 (GATE.md now teaches `orchestra spawn` only).
+
+Fix: make `spawn-agent.sh` (or `registry-update.py`) call the same identity seeding
+`orchestra_cli/seats.py` does when the seat has no lineage yet — idempotent, never inventing a
+generation number for a seat that already has one. Ruled to stay as-is until after the
+hackathon so the fleet's own spawn path is untouched that week.
+
+**Acceptance.** `registry-update.py hello ...` + `./spawn-agent.sh hello --task ...` then
+`orchestra rotate hello --synthesize` proceeds to grading (no identity refusal); a seat that
+already has a lineage is unchanged after a respawn.
