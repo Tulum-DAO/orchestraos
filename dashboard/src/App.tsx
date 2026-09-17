@@ -30,6 +30,7 @@ import ChatHistory from './pages/ChatHistory';
 import PortalCampaigns from './pages/PortalCampaigns';
 import Assistant from './pages/Assistant';
 import AgentPage from './pages/AgentPage';
+import ArturoHome from './pages/ArturoHome';
 import { ASSISTANT_V2_ENABLED } from './lib/assistant/config';
 
 const queryClient = new QueryClient({
@@ -50,7 +51,7 @@ function NotFound() {
         <code className="text-neutral-300">{window.location.pathname}</code> is not a route in
         this dashboard. Before this message existed, it rendered a blank page.
       </p>
-      <a href="/" className="text-sm text-blue-400 hover:underline">Back to Overview</a>
+      <a href="/" className="text-sm text-blue-400 hover:underline">Back to Arturo</a>
     </div>
   );
 }
@@ -60,9 +61,12 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Routes>
+          {/* Arturo home is the MAIN page — its own phone shell, no dashboard chrome (T4) */}
+          <Route index element={<ArturoHome />} />
+
           {/* Internal dashboard */}
           <Route element={<DashboardLayout />}>
-            <Route index element={<Overview />} />
+            <Route path="overview" element={<Overview />} />
             <Route path="command-center" element={<CommandCenter />} />
             <Route path="agents" element={<Agents />} />
             <Route path="tasks" element={<Tasks />} />

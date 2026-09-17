@@ -4,7 +4,7 @@
 # ★ The gm design-gate condition (msg_dc8d4197 / msg_05158a29): a PTT turn must NOT trigger the EL
 # voice-CALL lifecycle — NO CallJournal, NO _log_voice_turn / capture_mid_call_turns, NO end-of-call
 # finalize/gm-inject. test_ptt_turn_emits_no_call_lifecycle proves it by spying those seams and
-# asserting zero calls while running the REAL brain path (build_context + client stubbed, not the
+# asserting zero calls while running the REAL brain path (build_context + brain stubbed, not the
 # journaling).
 
 import base64
@@ -32,11 +32,11 @@ class _Resp:
 
 def _stub_vendors(mod, monkeypatch, *, stt="hello arturo", reply="hi shaw", tts=b"MP3DATA"):
     """Stub the three vendor seams so no network is touched; brain uses the REAL _ptt_brain but with
-    build_context + client stubbed."""
+    build_context + brain stubbed."""
     monkeypatch.setattr(mod, "_ptt_stt", lambda audio, fname: stt)
     monkeypatch.setattr(mod, "_ptt_tts", lambda text: tts)
     monkeypatch.setattr(mod, "build_context", lambda calling_channel="ptt": "SYS-CONTEXT")
-    monkeypatch.setattr(mod.client.chat.completions, "create", lambda **kw: _Resp(reply))
+    monkeypatch.setattr(mod.brain, "complete", lambda **kw: _Resp(reply))
     # fresh per-test history/cache so tests don't bleed
     monkeypatch.setattr(mod, "_PTT_HISTORY", mod._ptt.PttHistory())
     monkeypatch.setattr(mod, "_PTT_TURN_CACHE", mod._ptt.TurnCache())
@@ -160,7 +160,7 @@ def test_ptt_turn_concurrent_same_turn_id_runs_brain_once(monkeypatch):
 
 def test_ptt_turn_emits_no_call_lifecycle(monkeypatch):
     # ★ gm condition: a PTT turn is a stateless HTTP turn, NOT an EL call — it must touch NONE of the
-    # call-lifecycle seams. Run the REAL _ptt_brain (build_context + client stubbed) and spy them.
+    # call-lifecycle seams. Run the REAL _ptt_brain (build_context + brain stubbed) and spy them.
     import services.arturo.ended_once as _eo_mod
     import services.arturo.endcall as _ec_mod
     mod = _load_proxy()
@@ -186,7 +186,7 @@ def test_ptt_turn_threads_history_across_turns(monkeypatch):
     def capture_msgs(**kw):
         seen["messages"] = kw.get("messages")
         return _Resp("ok")
-    monkeypatch.setattr(mod.client.chat.completions, "create", capture_msgs)
+    monkeypatch.setattr(mod.brain, "complete", capture_msgs)
     mod.ptt_turn(GOOD_AUDIO, "u.m4a", "conv-h", "t1", content_type="audio/m4a")
     mod.ptt_turn(GOOD_AUDIO, "u.m4a", "conv-h", "t2", content_type="audio/m4a")
     # 2nd turn's messages include the 1st turn's user+assistant as prior history

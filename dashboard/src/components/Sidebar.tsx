@@ -36,8 +36,9 @@ interface NavItem {
 }
 
 const coreNav: NavItem[] = [
+  { to: '/', icon: Sparkle, label: 'Arturo' },
   { to: '/command-center', icon: Radar, label: 'Command Center' },
-  { to: '/', icon: LayoutDashboard, label: 'Overview' },
+  { to: '/overview', icon: LayoutDashboard, label: 'Overview' },
   { to: '/inbox', icon: Inbox, label: 'Inbox' },
   { to: '/agents', icon: Bot, label: 'Agents' },
   { to: '/tasks', icon: ListTodo, label: 'Tasks' },

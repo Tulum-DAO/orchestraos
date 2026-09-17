@@ -34,6 +34,17 @@ port = 8888
 # enabled = false and `orchestra up` skips it (no voice keys needed).
 enabled = true
 port = 5071
+# Which brain answers Arturo's turns (track T2):
+#   "auto"    = the api brain if GEMINI_API_KEY is set, else the first agent CLI you are
+#               logged in to ([runtimes] enabled order), else none (service still boots,
+#               /health says brain=none, every reply says how to fix it)
+#   "api"     = Gemini via GEMINI_API_KEY only (env var or <data.dir>/.env.secrets)
+#   "runtime" = the authed CLI only (claude -p / agy --print / codex exec), zero keys
+brain = "auto"
+# Optional model flag passed to the runtime brain's CLI ("" = that CLI's default).
+runtime_model = ""
+# Voice (STT/TTS) needs ELEVENLABS_API_KEY / CARTESIA_API_KEY / HUME_API_KEY in the env or
+# .env.secrets; with none present Arturo runs TEXT-ONLY (/health mode = "text-only").
 
 [router]
 # message-router.py delivery backstop, run by `orchestra up` on this interval

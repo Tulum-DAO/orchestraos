@@ -55,7 +55,7 @@ def test_config_values_are_read(tmp_path):
         '[gateway]\nhost = "0.0.0.0"\nport = 9001\n'
         '[api]\nhost = "127.0.0.1"\nport = 9002\n'
         '[dashboard]\nhost = "127.0.0.1"\nport = 9003\n'
-        '[arturo]\nenabled = false\nport = 9004\n'
+        '[arturo]\nenabled = false\nport = 9004\nbrain = "runtime"\nruntime_model = "claude-haiku-4-5-20251001"\n'
         '[notify]\nchannel = "none"\n'
         '[runtimes]\nenabled = ["claude"]\n'
         '[rotation]\nbeat_enabled = false\nbus_beat_interval_seconds = 30\n'
@@ -69,6 +69,7 @@ def test_config_values_are_read(tmp_path):
     assert st.api_port == 9002
     assert st.dashboard_port == 9003
     assert st.arturo_enabled is False and st.arturo_port == 9004
+    assert st.arturo_brain == "runtime" and st.arturo_runtime_model == "claude-haiku-4-5-20251001"
     assert st.runtimes_enabled == ["claude"]
     assert st.beat_enabled is False
     assert st.bus_beat_interval == 30 and st.cron_beat_interval == 300
@@ -95,6 +96,8 @@ def test_child_env_points_every_process_at_config_and_data_dir(tmp_path):
     assert env["PORT"] == "8888" and env["ORCHESTRA_API_PORT"] == "8888"
     assert env["ORCHESTRA_DASHBOARD_PORT"] == "8891"
     assert env["ORCHESTRA_ARTURO_PORT"] == "5071"
+    assert env["ORCHESTRA_ARTURO_BRAIN"] == "auto"          # T2: default brain selection
+    assert env["ORCHESTRA_RUNTIMES_ENABLED"] == "claude,gemini,codex"
     assert env["BOUNDARY_DELIVER_ARMED"] == "1"
     assert env["ORCH_EVENT_STREAM_DIR"] == str(tmp_path / "data" / "state" / "event-stream")
     assert env["PATH"].startswith("/usr/bin") or ".venv" in env["PATH"]
