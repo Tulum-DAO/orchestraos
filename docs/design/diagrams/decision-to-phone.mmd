@@ -1,0 +1,13 @@
+flowchart LR
+  W[Worker seat hits a decision] --> AP[approval.py request<br/>--from seat]
+  AP --> DB[(approvals)]
+  DB --> G[Gateway]
+  G --> P[Phone card]
+  G --> Wa[Watch card]
+  G --> D[Dashboard]
+  G --> T[Telegram]
+  P -- tap answer --> G
+  Wa -- tap answer --> G
+  T -- reply --> G
+  G -- resume --> M[(msg_store)]
+  M -- inbox --> W2[Worker resumes<br/>with your answer]

@@ -1,0 +1,19 @@
+sequenceDiagram
+  participant B as Beat (cron)
+  participant Blue as Blue gen N
+  participant DB as registry DB
+  participant Green as Green gen N+1
+  participant Op as You
+  B->>Blue: observe ctx %, idle/busy, attached, cards
+  Note over B: decide_bg: noop · prewarm · swap · defer
+  B->>Green: prewarm (boot, ingest baton)
+  Blue->>DB: write handoff + canary questions
+  Green->>DB: readback (answers anchored in Blue's state)
+  B->>DB: grade readback
+  alt PASS and quota ok
+    B->>DB: swap canonical -> Green
+    B->>Blue: retire with resume command
+    B->>B: verify by effect, reap gen N-1
+  else HOLD
+    B->>Op: card: rotation needs a human look
+  end
