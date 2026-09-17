@@ -26,7 +26,7 @@
   <!-- 2. Morning Sun of Zamá (ONLY sun orb) -->
   <circle cx="256" cy="130" r="50" fill="url(#sunGrad_final_light_color)"/>
 
-  <!-- 3. Upper Temple Sanctuary (El Templo Superior) -->
+  <!-- 3. Upper Temple Shrine (El Templo Superior) -->
   <polygon points="186,146 326,146 332,158 180,158" fill="#0B4F52"/>
   <rect x="184" y="158" width="144" height="6" fill="#0B4F52"/>
   <rect x="190" y="164" width="132" height="46" fill="#0B4F52"/>
