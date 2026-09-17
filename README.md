@@ -58,7 +58,9 @@ completes before picking a track.
 
 ## How to contribute
 
-Fork, branch, open a pull request against `main`. CI runs the tests per package and a secrets scan, and both must pass. Sign off your commits (DCO). Read `CONTRIBUTING.md` for the review rules and `ARCHITECTURE.md` for the map before you touch the rotation lane or the approvals contract, which other components depend on.
+Repo: https://github.com/Tulum-DAO/orchestraos (private until the Saturday
+hackathon opens; public from then on). Fork, branch, open a pull request
+against `main`. CI runs the tests per package and a secrets scan, and both must pass. Sign off your commits (DCO). Read `CONTRIBUTING.md` for the review rules and `ARCHITECTURE.md` for the map before you touch the rotation lane or the approvals contract, which other components depend on.
 
 Maintainers answer pull requests within the hour during the hackathon weekend.
 

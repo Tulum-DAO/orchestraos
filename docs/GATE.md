@@ -13,7 +13,7 @@ dir, a running supervisor, a spawned seat).
 ## 1. Install, doctor green, dashboard open
 
 ```bash
-git clone <repo-url> orchestraos && cd orchestraos
+git clone https://github.com/Tulum-DAO/orchestraos.git orchestraos && cd orchestraos
 make install
 orchestra init
 orchestra doctor
