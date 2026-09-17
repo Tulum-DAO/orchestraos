@@ -283,3 +283,25 @@ hackathon so the fleet's own spawn path is untouched that week.
 **Acceptance.** `registry-update.py hello ...` + `./spawn-agent.sh hello --task ...` then
 `orchestra rotate hello --synthesize` proceeds to grading (no identity refusal); a seat that
 already has a lineage is unchanged after a respawn.
+
+## G10 · `state/agents/<seat>-gN.json` carries the wrong generation after a rotation
+`labels: good-first-issue, size:XS, rotation`
+
+After `orchestra rotate hello --synthesize` promoted gen 2, the successor itself noticed
+`state/agents/hello-g2.json` still said generation 1 while `registry.json` and the identity
+store said 2 (sandbox run, 2026-09-17). The flat per-seat state file is a projection; find
+where the promotion writes it and carry the generation through.
+
+**Acceptance.** After a promotion, `state/agents/<seat>-g<N>.json`, `registry.json` and the
+identity store agree on the generation; a test rotates a seat in a tmp data dir and asserts it.
+
+## G11 · Generic seats have no `prompts/<seat>.md`; the boot prompt says they should
+`labels: good-first-issue, size:XS, docs`
+
+`orchestra spawn hello` works with no `prompts/hello.md` (the seat's instructions come from
+the generated `/tmp/agent-init-<seat>.md`), but the baton and boot text still name
+`prompts/<seat>.md` as "its role prompt", and a fresh successor spends a turn discovering the
+file does not exist. Either ship a generic `prompts/_seat-default.md` that `orchestra spawn`
+copies to `prompts/<seat>.md` when none exists, or stop naming the file when it is absent.
+
+**Acceptance.** A generic seat's baton and init text never point at a file that is not on disk.
