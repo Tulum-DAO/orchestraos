@@ -62,9 +62,16 @@ interface Questionnaire {
   assigned_to: string;
 }
 
+/** Seat-to-seat mail row from GET /api/messages/recent (both directions of an exchange). */
+interface MailRow {
+  id: string; from_agent: string; to_agent: string; type: string | null; subject: string | null;
+  priority: string | null; status: string | null; created_at: string | null; acknowledged_at: string | null;
+}
+
 type InboxItem =
   | { kind: 'approval'; data: UnifiedApproval; ts: number }
   | { kind: 'questionnaire'; data: Questionnaire; ts: number };
+
 
 // ── Constants ────────────────────────────────────────────────
 
@@ -118,6 +125,14 @@ export default function Inbox() {
     queryFn: () => fetchJson<{ items: UnifiedApproval[]; total: number }>('/approvals/unified'),
     refetchInterval: 5000,
   });
+
+  // Seat-to-seat mail (Tier 0 item 3: "two seats exchange a message; both visible in Inbox")
+  const { data: mailData } = useQuery({
+    queryKey: ['messages-recent'],
+    queryFn: () => fetchJson<{ messages: MailRow[] }>('/messages/recent?limit=40'),
+    refetchInterval: 5000,
+  });
+  const mail = mailData?.messages ?? [];
 
   // Fetch questionnaires
   const { data: qData, isLoading: qLoading } = useQuery({
@@ -428,6 +443,35 @@ export default function Inbox() {
             </div>
           );
         })}
+      </div>
+
+      {/* Seat mail — every message between seats, newest first, with its delivery/ack state */}
+      <div className="space-y-2">
+        <div className="flex items-center gap-2 text-sm font-semibold text-neutral-300">
+          <MessageSquare size={14} /> Seat mail
+          <span className="ml-auto text-xs font-normal text-neutral-500">{mail.length} recent · msg_store</span>
+        </div>
+        {mail.length === 0 ? (
+          <p className="text-xs text-neutral-500">No seat-to-seat messages yet. Send one: <code>python3 msg_store.py send --from a --to b --subject hi --body-file note.txt</code></p>
+        ) : (
+          <div className="divide-y divide-neutral-800 rounded-lg border border-neutral-800 bg-neutral-900/60">
+            {mail.map((m) => (
+              <div key={m.id} className="flex items-center gap-3 px-3 py-2 text-xs" data-testid="mail-row">
+                <span className="font-mono text-neutral-400 w-44 truncate" title={m.id}>{m.id}</span>
+                <span className="text-neutral-200 truncate">
+                  <span className="text-sky-400">{m.from_agent}</span> → <span className="text-emerald-400">{m.to_agent}</span>
+                </span>
+                <span className="text-neutral-400 truncate flex-1">{m.subject ?? ''}</span>
+                <span className={clsx('px-1.5 py-0.5 rounded font-medium',
+                  m.status === 'acknowledged' ? 'bg-emerald-900/50 text-emerald-300'
+                  : m.status === 'pending' ? 'bg-amber-900/50 text-amber-300' : 'bg-neutral-800 text-neutral-300')}>
+                  {m.status ?? '?'}
+                </span>
+                <span className="text-neutral-500 w-24 text-right" title={m.created_at ?? ''}>{m.created_at ? relativeTime(m.created_at) : ''}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Deny modal */}
