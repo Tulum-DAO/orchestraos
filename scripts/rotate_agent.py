@@ -530,6 +530,10 @@ def build_readback_prompt(canary: dict, *, seat_name: str,
         "- Answer in YOUR OWN WORDS, citing >=2 mission-specific anchors per "
         "question from the predecessor's ACTUAL state (commit SHAs, msg ids, task "
         "ids, file paths) — not restated instructions.",
+        "- Each answer must contain at least one id/number/path that NONE of your "
+        "other answers contain (the grader counts exclusive anchors per question; "
+        "repeating the same session id in every answer earns credit for only one "
+        "of them).",
         "- Format each answer across MULTIPLE LINES (one bullet per anchor/point) "
         "— NOT a single long paragraph. The whole readback must have at least 10 "
         "non-blank lines or a separate non-content gate rejects it as a stub.",
