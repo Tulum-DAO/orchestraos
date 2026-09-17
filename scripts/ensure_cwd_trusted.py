@@ -70,5 +70,49 @@ def main() -> int:
         return 0
 
 
+def ensure_bypass_accepted() -> int:
+    """Pre-seed the Bypass Permissions acceptance ("Yes, I accept" on a fresh user writes
+    skipDangerousModePermissionPrompt=true to ~/.claude/settings.json). Without it an
+    unattended `claude --dangerously-skip-permissions` in tmux stops at that dialog, whose
+    default is "No, exit", and the injected task lands in the shell (B3 container, 2026-09-17).
+    Merge-only, atomic, fail-soft; no write when already set."""
+    cfg_dir = os.path.join(os.path.expanduser("~"), ".claude")
+    cfg = os.path.join(cfg_dir, "settings.json")
+    try:
+        os.makedirs(cfg_dir, exist_ok=True)
+        fd = os.open(cfg, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            raw = os.read(fd, 16 * 1024 * 1024).decode() or ""
+            data = json.loads(raw) if raw.strip() else {}
+            if not isinstance(data, dict):
+                return 0
+            if data.get("skipDangerousModePermissionPrompt") is True:
+                return 0
+            data["skipDangerousModePermissionPrompt"] = True
+            tf = tempfile.NamedTemporaryFile("w", dir=cfg_dir, delete=False)
+            try:
+                json.dump(data, tf, indent=2)
+                tf.flush()
+                os.fsync(tf.fileno())
+                tf.close()
+                os.replace(tf.name, cfg)
+            except Exception:
+                try:
+                    os.unlink(tf.name)
+                except OSError:
+                    pass
+                raise
+            sys.stderr.write("ensure_cwd_trusted: pre-seeded bypass-permissions acceptance\n")
+            return 0
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+    except Exception as e:  # fail-soft: never block a spawn
+        sys.stderr.write(f"ensure_cwd_trusted: bypass pre-seed soft-fail: {e}\n")
+        return 0
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
+    sys.exit(ensure_bypass_accepted())

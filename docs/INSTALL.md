@@ -140,6 +140,40 @@ itself: the seat named in `--from` is the one that receives the answer.
 `<runtime_dir>/self_retire_armed` allowlist — one lineage root per line — enables
 hard rotation for a seat). E-brake: `touch ~/runtime/FLEET_BEAT_DISABLED`.
 
+## Dev container / Docker (no VPS)
+
+The repo ships a `Dockerfile` and `.devcontainer/devcontainer.json` that reproduce the
+clean-machine recipe the B1 walkthroughs were proven on (ubuntu 24.04, non-root user
+with sudo, §0 prerequisites, node 22, the Claude CLI preinstalled). `orchestra init`
+runs at image build time, so `doctor` is instant on first open.
+
+```bash
+docker build -t orchestraos .
+docker run -it --rm -p 8891:8891 -p 8888:8888 -p 8890:8890 orchestraos
+# inside:  claude            # log in ONCE — your login, never baked into the image
+#          orchestra doctor  # all required rows OK
+#          orchestra up      # then open http://127.0.0.1:8891 on the laptop
+```
+
+- The login is yours: the image contains no credentials. To keep it across containers,
+  mount your CLI config: `-v ~/.claude:/home/orchestra/.claude`. The dev container does
+  that mount for you and keeps the data dir in a named volume (`orchestraos-data`).
+- VS Code / GitHub Codespaces: "Reopen in Container". The workspace is bind-mounted over
+  the image's copy, so `postCreateCommand` re-runs `orchestra init` once (~1 min) to
+  rebuild `.venv` and `node_modules` for the mounted tree.
+- Other CLIs: `docker build --build-arg AGENT_CLIS="@anthropic-ai/claude-code @openai/codex"`.
+- The container is one instance on one host: tmux inside it is its own, so the
+  registry-scoping rules below apply per container.
+
+### Machine image (VPS snapshot) — 20-minute job once the provider is chosen
+
+Same recipe, no Docker: on a fresh Ubuntu 24.04 VPS as a non-root sudo user, run the
+`RUN` steps of the `Dockerfile` in order (§0 prerequisites, node 22, `npm i -g
+@anthropic-ai/claude-code`, clone, `make install`, `orchestra init`), leave the agent CLI
+logged OUT, then snapshot. A team booting the snapshot logs in, edits `[runtimes]
+enabled`, and runs `orchestra doctor && orchestra up --detach`. Pre-provision one snapshot
+per team (P5).
+
 ## Sharing a host with other tmux sessions
 
 tmux is host-global. The dashboard's agent list, `agent-status.py --all` and the
