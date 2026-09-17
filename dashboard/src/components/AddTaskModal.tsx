@@ -115,7 +115,7 @@ export function AddTaskModal({ open, onClose, onCreated }: { open: boolean; onCl
             <textarea
               value={description}
               onChange={e => setDescription(e.target.value)}
-              placeholder="Describe the task naturally... e.g. 'Build 5 audience lists for Impossible Solutions'"
+              placeholder="Describe the task naturally... e.g. 'Write the release notes for v0.2 and open a PR'"
               className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2.5 text-sm text-neutral-100 placeholder:text-neutral-600 focus:outline-none focus:border-violet-500 resize-none"
               rows={3}
               autoFocus
