@@ -43,6 +43,10 @@ Claude session on the machine reads. init prints exactly the rows it will add an
 SKIPS the hooks and says so (unattended installs: `orchestra init --yes`;
 `ORCHESTRA_SKIP_HOOKS=1` for a container that runs no Claude seats).
 
+Want gm on your phone? `plugins/telegram/README.md` — a BotFather token in
+`TELEGRAM_BOT_TOKEN`, `[plugins.telegram] enabled = true`, and `orchestra up` runs the
+channel: texts land in gm's inbox, decision cards arrive with buttons.
+
 If you don't want the voice brain, set `[arturo] enabled = false` — the flask/openai
 rows in doctor become INFO and `orchestra up` skips it.
 

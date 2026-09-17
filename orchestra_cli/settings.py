@@ -49,6 +49,7 @@ class Settings:
     arturo_enabled: bool = True
     telemetry_enabled: bool = True
     menu_bridge_enabled: bool = True
+    telegram_enabled: bool = False
     arturo_port: int = 5071
     arturo_brain: str = "auto"          # auto | api | runtime (track T2)
     arturo_runtime_model: str = ""      # optional model flag for the runtime brain
@@ -154,6 +155,7 @@ def load_settings(repo_root: Path | None = None, config_path: Path | None = None
         arturo_enabled=bool(_get(raw, "arturo", "enabled", True)),
         telemetry_enabled=bool(_get(raw, "telemetry", "enabled", True)),
         menu_bridge_enabled=bool(_get(raw, "menus", "bridge_enabled", True)),
+        telegram_enabled=bool(((raw.get("plugins") or {}).get("telegram") or {}).get("enabled", False)),
         arturo_port=int(_get(raw, "arturo", "port", 5071)),
         arturo_brain=str(_get(raw, "arturo", "brain", "auto")),
         arturo_runtime_model=str(_get(raw, "arturo", "runtime_model", "")),

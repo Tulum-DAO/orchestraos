@@ -335,3 +335,20 @@ def test_arturo_brain_row_absent_when_arturo_disabled(tmp_path):
     st = S.load_settings(repo_root=root)
     checks = D.run_doctor(st, _probes(which=("tmux", "node", "npm", "claude")))
     assert "arturo:brain" not in _by_name(checks)
+
+
+def test_plugin_telegram_row_is_info_when_disabled_and_missing_without_token(tmp_path, monkeypatch):
+    """Tier 0 item 6: a disabled channel plugin is a clean INFO row, never a failure; enabled
+    without its secret is MISSING with the BotFather remedy; enabled + token is OK."""
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    root = _repo(tmp_path)
+    monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path / "data"))   # the fixture's data dir (no chat-id file)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    names = _by_name(D.run_doctor(st, _probes()))
+    assert names["plugin:telegram"].status == "INFO" and D.exit_code(D.run_doctor(st, _probes())) == 0
+    st.raw.setdefault("plugins", {})["telegram"] = {"enabled": True}
+    names = _by_name(D.run_doctor(st, _probes()))
+    assert names["plugin:telegram"].status == "MISSING" and "TELEGRAM_BOT_TOKEN" in names["plugin:telegram"].remedy
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "1:abc")
+    names = _by_name(D.run_doctor(st, _probes()))
+    assert names["plugin:telegram"].status == "OK"
