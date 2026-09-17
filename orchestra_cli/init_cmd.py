@@ -124,9 +124,41 @@ def _seed_tasks_db(db: Path, operator: str) -> None:
         conn.close()
 
 
+DEMO_SEATS = {
+    # Generic fixture seats (B5): visible in the dashboard on first open, never spawned.
+    "demo-planner":  {"name": "demo-planner",  "tier": "T1", "runtime": "claude", "machine": "vps",
+                      "description": "Fixture: plans work and files decisions"},
+    "demo-builder":  {"name": "demo-builder",  "tier": "T2", "runtime": "claude", "machine": "vps",
+                      "description": "Fixture: builds and asks for approvals"},
+    "demo-reviewer": {"name": "demo-reviewer", "tier": "T2", "runtime": "claude", "machine": "vps",
+                      "description": "Fixture: reviews and raises human tasks"},
+}
+
+
+def seed_demo_registry(registry_path: Path) -> list:
+    """Merge the three fixture seats into the data-dir registry; returns the ids added."""
+    reg = {"agents": {}}
+    if registry_path.exists():
+        try:
+            reg = json.loads(registry_path.read_text()) or {"agents": {}}
+        except ValueError:
+            reg = {"agents": {}}
+    agents = reg.setdefault("agents", {})
+    added = []
+    for aid, fields in DEMO_SEATS.items():
+        if aid in agents:
+            continue
+        agents[aid] = dict(fields, tmux_session=aid, status="offline", always_on=False, demo=True,
+                           cwd=str(registry_path.parent))
+        added.append(aid)
+    if added:
+        registry_path.write_text(json.dumps(reg, indent=2) + "\n")
+    return added
+
+
 def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable = default_run,
              skip_npm: bool = False, skip_venv: bool = False, skip_build: bool = False,
-             config_path: Optional[Path] = None) -> list:
+             config_path: Optional[Path] = None, demo: bool = False) -> list:
     repo_root = Path(repo_root)
     config_path = Path(config_path or os.environ.get("ORCHESTRA_CONFIG") or repo_root / "orchestra.toml")
     report: list[Step] = []
@@ -217,6 +249,24 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
                  cwd=repo_root, env=seed_env)
         report.append(Step("seed:approval-schema", rc == 0,
                            "approval_requests + questionnaires tables ensured" if rc == 0 else f"schema seed failed rc={rc}"))
+
+    # 5d. --demo: fixture seats + one card of each kind so the dashboard is not empty.
+    if demo:
+        added = seed_demo_registry(data_dir / "registry.json")
+        report.append(Step("demo:registry", bool(added),
+                           ("added " + ", ".join(added)) if added else "fixture seats present"))
+        seeder = repo_root / "scripts" / "demo_seed_cards.py"
+        if not seeder.exists():
+            report.append(Step("demo:cards", False, "skipped (no scripts/demo_seed_cards.py)"))
+        else:
+            demo_env = dict(os.environ, ORCHESTRA_DIR=str(data_dir),
+                            APPROVAL_DDL_ARMED=",".join(RULED_APPROVAL_MIGRATIONS),
+                            PYTHONPATH=os.pathsep.join([str(repo_root / "scripts"), str(repo_root),
+                                                        os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep))
+            rc = run([sys.executable or "python3", str(seeder)], cwd=repo_root, env=demo_env)
+            report.append(Step("demo:cards", rc == 0,
+                               "approval + menu + questionnaire + human task seeded (idempotent)" if rc == 0
+                               else f"demo_seed_cards.py failed rc={rc}"))
 
     # 6. python venv + requirements
     venv = repo_root / ".venv"
