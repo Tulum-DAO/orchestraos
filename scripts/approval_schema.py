@@ -170,6 +170,8 @@ class ApprovalStore:
                 cols = mig.get("columns", [])
                 if not armed(mid):
                     pending = [name for name, _ in cols if name not in live]
+                    if not pending:
+                        continue          # already applied (e.g. armed at init): nothing to say
                     print(f"[approval_schema] DDL PENDING (unarmed): {mid} "
                           f"cols={pending} — arm via APPROVAL_DDL_ARMED={mid} "
                           f"or sentinel ~/runtime/APPROVAL_DDL_ARMED_{mid}",
