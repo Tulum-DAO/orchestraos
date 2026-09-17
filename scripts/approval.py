@@ -479,7 +479,15 @@ def main(argv=None):
     if args.cmd == "questionnaire":
         if not _authorship_guard(args.from_agent):
             return 4
-        import watch_gateway as _wg
+        # watch_gateway prints import-time banners to STDOUT (and drags the whole gateway +
+        # Arturo stack in); keep stdout JSON-only for CLI consumers (same fix as the "answer"
+        # and "pending" branches).
+        _saved_stdout = sys.stdout
+        try:
+            sys.stdout = sys.stderr
+            import watch_gateway as _wg
+        finally:
+            sys.stdout = _saved_stdout
         raw = args.questions_json
         if raw.startswith("@"):
             with open(os.path.expanduser(raw[1:])) as f:
