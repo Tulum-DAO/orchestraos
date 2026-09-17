@@ -920,11 +920,12 @@ def armed_roots(agents, wal_dir, force_roots=None):
 
 
 def _runtime_gated(agent) -> bool:
+    # provider-agnostic core: the runtime predicate (and its reason strings) live in collect.py
     try:
-        from scripts.lineage_daemon.collect import beat_skip_reason
+        from scripts.lineage_daemon.collect import runtime_gated
     except ImportError:  # sandbox import roots
-        from lineage_daemon.collect import beat_skip_reason  # type: ignore
-    return beat_skip_reason(agent) in ("non-claude-runtime", "unsupported-runtime")
+        from lineage_daemon.collect import runtime_gated  # type: ignore
+    return runtime_gated(agent)
 
 
 # ---- anti-orphan failure counter (persisted across beats/processes) ----------
