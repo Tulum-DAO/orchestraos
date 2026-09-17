@@ -475,6 +475,11 @@ def record_readback(successor_id: str, readback: str, answers: list,
             pass
     canary_gt = _canary_ground_truth(successor_id, ground_truth)
     ground_truth["canary"] = canary_gt
+    # A canary authored from a synthesized baton (`orchestra rotate --synthesize`) carries
+    # synthesized=true: the grader lowers ONLY the distinct-evidence floor to 1 (mode stays
+    # strict — the gate invariant is untouched). Recorded in the artifact below.
+    if load_canary(successor_id).get("synthesized"):
+        ground_truth["synthesized"] = True
     # citation-grounding mode (DEC-1787728346): "supervised" tolerates <=1 WEAK
     # answer; "strict" (zero WEAK + region corroboration) is the ARMING
     # PRECONDITION — unattended auto-retire may only consume strict grades.
@@ -504,6 +509,7 @@ def record_readback(successor_id: str, readback: str, answers: list,
         # supervised|strict (DEC-1787728346): consumers arming auto-retire MUST
         # reject non-strict artifacts; recorded so the constraint is checkable.
         "mode": str(ground_truth.get("mode") or "supervised"),
+        "synthesized": bool(ground_truth.get("synthesized")),
         # SINGLE DERIVATION (Piece 1, DEC-1787687601): `pass` (bool) is what the
         # completion path reads (completion_fn / comprehension_passed); `result`
         # ("PASS"|"FAIL") mirrors it for the mechanical Key-1 / lineage_gate grader

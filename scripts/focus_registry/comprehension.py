@@ -144,7 +144,7 @@ def _classify_grounded(answer: str, question: str, freq: dict) -> dict:
 
 
 def _grade_grounded(rows: list, given: dict, transcript_text: str,
-                    mode: str) -> dict:
+                    mode: str, synthesized: bool = False) -> dict:
     """Aggregate citation-grounding over the large-region/unresolved-pointer
     questions. Conservative by construction: any EMPTY / HALLUCINATED / MISS
     fails; WEAK tolerated only within the mode's budget; the grounded-anchor
@@ -184,7 +184,14 @@ def _grade_grounded(rows: list, given: dict, transcript_text: str,
         "union": len(union),
         "union_min": min(UNION_MIN, 2 * n),
         "distinct_q": distinct_q,
-        "distinct_min": min(DISTINCT_EVIDENCE_MIN, n),
+        # synthesized baton (`orchestra rotate --synthesize`, gm ruling msg_2520355c):
+        # identity-shaped questions about ONE fresh seat cannot each own an exclusive
+        # anchor (the sid/seat name is legitimately in every answer), so the
+        # distinct-evidence floor is 1 there; per-question grounding, union_min,
+        # union-level idclass and strict region corroboration are unchanged. Real
+        # batons never set it.
+        "distinct_min": 1 if synthesized else min(DISTINCT_EVIDENCE_MIN, n),
+        "synthesized": bool(synthesized),
         "idclass": any(_IDCLASS.match(t) for t in union),
         "weak": len(weak), "weak_tolerated": tolerated,
         "region_corroborated_all": region_ok,
@@ -232,7 +239,7 @@ def _grade_grounded(rows: list, given: dict, transcript_text: str,
 
 
 def grade_canary(given: dict, canary: list, transcript_text: str = None,
-                 mode: str = "supervised") -> dict:
+                 mode: str = "supervised", synthesized: bool = False) -> dict:
     """Grade own-words answers against ground truth.
 
     SHORT expected answer (<= REGION_TOKEN_THRESHOLD distinctive tokens, not
@@ -293,7 +300,7 @@ def grade_canary(given: dict, canary: list, transcript_text: str = None,
                               "the predecessor transcript for citation "
                               "grounding and none was provided — fail-hold, "
                               "never a vacuous pass"}
-        g = _grade_grounded(grounded_rows, given, transcript_text, mode)
+        g = _grade_grounded(grounded_rows, given, transcript_text, mode, synthesized=synthesized)
         result = {"passed": result["passed"] and g["passed"],
                   "missed": missed + g["missed"],
                   "per_question": g["per_question"],
@@ -373,7 +380,8 @@ def check_comprehension(evidence: dict, ground_truth: dict) -> dict:
     canary = grade_canary(evidence.get("canary_answers", {}) or {},
                           ground_truth.get("canary", []) or [],
                           transcript_text=ttext,
-                          mode=str(ground_truth.get("mode") or "supervised"))
+                          mode=str(ground_truth.get("mode") or "supervised"),
+                          synthesized=bool(ground_truth.get("synthesized")))
     readback = grade_readback(evidence.get("readback", {}) or {}, ground_truth)
     return {
         "comprehended": canary["passed"] and readback["passed"],
