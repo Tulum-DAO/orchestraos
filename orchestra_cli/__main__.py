@@ -17,6 +17,8 @@ def parse_args(argv=None) -> argparse.Namespace:
 
     i = sub.add_parser("init", help="create data dir, orchestra.toml, venv, npm installs, builds (idempotent)")
     i.add_argument("--data-dir", help="where state/logs/registry live (default: [data] dir in orchestra.toml, else ~/.orchestra)")
+    i.add_argument("-y", "--yes", action="store_true",
+                   help="write the Claude Code hook rows into $CLAUDE_CONFIG_DIR/settings.json without asking (also ORCHESTRA_YES=1)")
     i.add_argument("--no-venv", action="store_true", help="skip python venv + pip")
     i.add_argument("--no-npm", action="store_true", help="skip npm install (and builds)")
     i.add_argument("--no-build", action="store_true", help="skip api/dashboard builds")
@@ -61,7 +63,8 @@ def cmd_init(ns) -> int:
     from .init_cmd import render_report, run_init
     root = S.repo_root_from_env()
     report = run_init(root, data_dir=Path(ns.data_dir) if ns.data_dir else None,
-                      skip_npm=ns.no_npm, skip_venv=ns.no_venv, skip_build=ns.no_build, demo=ns.demo)
+                      skip_npm=ns.no_npm, skip_venv=ns.no_venv, skip_build=ns.no_build, demo=ns.demo,
+                      yes=ns.yes)
     print(render_report(report))
     failed = [r for r in report if not r.did and ("failed" in r.detail)]
     st = _settings()

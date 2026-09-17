@@ -14,7 +14,7 @@
     "source=${localEnv:HOME}/.claude,target=/home/orchestra/.claude,type=bind,consistency=cached",
     "source=orchestraos-data,target=/home/orchestra/.orchestra,type=volume"
   ],
-  "postCreateCommand": "orchestra init && (orchestra doctor || true)",
+  "postCreateCommand": "orchestra init --yes && (orchestra doctor || true)",
   "postAttachCommand": "echo 'Log in to your agent CLI once (claude / codex login / agy), then: orchestra doctor && orchestra up'",
   "customizations": {
     "vscode": {

@@ -49,11 +49,12 @@ WORKDIR /home/${USERNAME}/orchestraos
 COPY --chown=${USERNAME}:${USERNAME} . .
 
 # `make install` puts bin/orchestra on PATH; `orchestra init` builds everything and writes
-# orchestra.toml + the data dir (~/.orchestra) for THIS user. Idempotent — re-running it
+# orchestra.toml + the data dir (~/.orchestra) for THIS user (--yes: the image's Claude
+# settings are its own, so the hook rows are written without a prompt). Idempotent — re-running it
 # later (postCreateCommand, or by hand) only reports "present".
 ENV PATH="/home/${USERNAME}/.local/bin:${PATH}"
 RUN make install \
- && orchestra init \
+ && orchestra init --yes \
  && orchestra up --dry-run
 
 # gateway / api / dashboard

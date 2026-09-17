@@ -15,7 +15,7 @@ dir, a running supervisor, a spawned seat).
 ```bash
 git clone https://github.com/Tulum-DAO/orchestraos.git orchestraos && cd orchestraos
 make install
-orchestra init
+orchestra init --yes     # unattended; drop --yes to review the Claude hook rows first
 orchestra doctor
 ```
 

@@ -61,7 +61,9 @@ def _is_ours(cmd: str) -> bool:
     return isinstance(cmd, str) and MARKER in cmd
 
 
-def install(*, settings_path: Path, repo_root: Path, data_dir: Path) -> dict:
+def install(*, settings_path: Path, repo_root: Path, data_dir: Path, dry_run: bool = False) -> dict:
+    """dry_run=True computes the merge and reports it (rows, removed, kept user hooks) WITHOUT
+    writing — `orchestra init` shows this plan to the operator before touching their file."""
     settings_path = Path(os.path.expanduser(str(settings_path)))
     repo_root = Path(repo_root).resolve()
     data_dir = Path(os.path.expanduser(str(data_dir))).resolve()
@@ -106,11 +108,35 @@ def install(*, settings_path: Path, repo_root: Path, data_dir: Path) -> dict:
             rules.append(target)
         target["hooks"].append({"type": "command", "command": _command(repo_root, data_dir, rel, runner)})
         installed += 1
+    rows = [h["command"] for rules in hooks.values() for r in rules for h in r.get("hooks", []) if _is_ours(h.get("command", ""))]
+    user_rows = sum(1 for rules in hooks.values() for r in rules for h in r.get("hooks", []) if not _is_ours(h.get("command", "")))
+    rep = {"installed": installed, "removed": removed, "settings": str(settings_path), "data_dir": str(data_dir),
+           "rows": rows, "user_rows_kept": user_rows, "existed": settings_path.exists()}
+    if dry_run:
+        return rep
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = settings_path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(settings, indent=2) + "\n")
     os.replace(tmp, settings_path)
-    return {"installed": installed, "removed": removed, "settings": str(settings_path), "data_dir": str(data_dir)}
+    return rep
+
+
+def plan(*, settings_path: Path, repo_root: Path, data_dir: Path) -> dict:
+    """What install() would write, without writing it."""
+    return install(settings_path=settings_path, repo_root=repo_root, data_dir=data_dir, dry_run=True)
+
+
+def render_plan(rep: dict) -> str:
+    if rep.get("error"):
+        return rep["error"]
+    verb = "update" if rep["existed"] else "create"
+    lines = [f"orchestra init will {verb} your Claude Code settings file:",
+             f"  {rep['settings']}",
+             f"  {len(rep['rows'])} hook rows tagged {MARKER} (replacing {rep['removed']} previous OrchestraOS rows;"
+             f" {rep['user_rows_kept']} of your own hook rows kept; model/permissions untouched)",
+             "  each row runs (fail-open, exit 0 if the script is gone):"]
+    lines += [f"    {c}" for c in rep["rows"]]
+    return "\n".join(lines)
 
 
 def status(*, settings_path: Path, repo_root: Path) -> dict:
