@@ -409,43 +409,15 @@ def composer_has_typed_text(pane_ansi: str) -> bool:
     relic; reference_ghost_vs_typed_composer). A real typed line puts the cursor
     block on the TRAILING space past the text, so the default-styled text still
     reads True."""
-    lines = [l for l in pane_ansi.split("\n") if ("\u276f" in l) or (">" in l and not ">>" in l)]
-    if not lines:
-        return True  # no visible prompt → not a clean idle TUI → treat as busy
-    last = lines[-1]
-    p_char = "\u276f" if "\u276f" in last else ">"
-    idx = last.find(p_char)
-    rest = last[idx + len(p_char):]
-    # strip SGR; a visible char is typed only if NOT dim ([2m) and NOT the
-    # reverse-video cursor block ([7m).
-    dim = False
-    reverse = False
-    pos = 0
-    sgr = re.compile(r"\x1b\[([0-9;]*)m")
-    saw_typed = False
-    while pos < len(rest):
-        m = sgr.match(rest, pos)
-        if m:
-            codes = m.group(1).split(";") if m.group(1) else ["0"]
-            for c in codes:
-                if c in ("", "0"):
-                    dim = False
-                    reverse = False
-                elif c == "2":
-                    dim = True
-                elif c == "22":
-                    dim = False
-                elif c == "7":
-                    reverse = True
-                elif c == "27":
-                    reverse = False
-            pos = m.end()
-            continue
-        ch = rest[pos]
-        if not ch.isspace() and not dim and not reverse:
-            saw_typed = True
-        pos += 1
-    return saw_typed
+    # Delegates to composer_state (the ONE SGR-aware reader, gm ghost-suggestion
+    # commission): typed => True; empty/ghost/placeholder/working => False; an
+    # unreadable pane (no prompt line) => True (fail-safe: not a clean idle TUI ->
+    # busy). The placeholder ghost (dim + reverse cursor) reads False, as before.
+    from scripts.composer_state import composer_text
+    _t = composer_text(pane_ansi, runtime=None)  # runtime inferred from the glyph
+    if _t is None:
+        return True  # no visible prompt -> not a clean idle TUI -> treat as busy
+    return bool(_t)
 
 
 def classify(name, entry, in_registry, always_on, is_attached,

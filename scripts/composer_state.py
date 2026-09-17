@@ -53,6 +53,9 @@ from scripts.runtime_signatures import (  # noqa: E402
 DEFAULT_RUNTIME = "claude"
 
 SGR_RE = re.compile(r"\x1b\[([0-9;]*)m")
+# Any CSI escape (SGR `m` OR cursor/erase noise like \x1b[K, \x1b[1G, \x1b[H). Only the `m`
+# ones toggle dim/reverse; the rest must be CONSUMED, not read as typed characters.
+CSI_RE = re.compile(r"\x1b\[[0-9;?]*([A-Za-z])")
 
 # Known EMPTY-composer placeholders each runtime renders (dim). These are the belt to the
 # SGR-dim walk's suspenders: on a STRIPPED capture (no -e) the dim styling is gone and the
@@ -112,20 +115,23 @@ def classify_input_line(ansi_line, sig=None):
     typed_chars = []
     pos = 0
     while pos < len(rest):
-        m = SGR_RE.match(rest, pos)
+        m = CSI_RE.match(rest, pos)
         if m:
-            codes = m.group(1).split(";") if m.group(1) else ["0"]
-            for c in codes:
-                if c in ("", "0"):
-                    dim = reverse = False
-                elif c == "2":
-                    dim = True
-                elif c == "7":
-                    reverse = True
-                elif c == "22":
-                    dim = False
-                elif c == "27":
-                    reverse = False
+            if m.group(1) == "m":  # an SGR sequence toggles dim/reverse
+                sgr = SGR_RE.match(rest, pos)
+                codes = sgr.group(1).split(";") if sgr.group(1) else ["0"]
+                for c in codes:
+                    if c in ("", "0"):
+                        dim = reverse = False
+                    elif c == "2":
+                        dim = True
+                    elif c == "7":
+                        reverse = True
+                    elif c == "22":
+                        dim = False
+                    elif c == "27":
+                        reverse = False
+            # non-SGR CSI (cursor/erase) => just consume it, no typed/ghost effect
             pos = m.end()
             continue
         ch = rest[pos]
