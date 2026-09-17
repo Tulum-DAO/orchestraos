@@ -3,14 +3,16 @@
  * Lists, serves, and tracks questionnaires in the dashboard.
  */
 
+import { fileURLToPath } from 'url';
 import { Router, type Request, type Response } from 'express';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { execFileSync } from 'child_process';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { loadConfig } from '../lib/config.js';
 
 const router = Router();
 const ORCHESTRA = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
+const CODE_ROOT = process.env.ORCHESTRA_ROOT || join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 function readJson(path: string): any {
   try {
@@ -150,7 +152,7 @@ router.post('/:id/submit', (req: Request, res: Response) => {
   const title = qIndex >= 0 ? questionnaires[qIndex].title : qId;
   if (createdBy) {
     try {
-      const msgStore = join(ORCHESTRA, 'msg_store.py');
+      const msgStore = join(CODE_ROOT, 'msg_store.py');   // code lives in the checkout, not the data dir
       execFileSync('python3', [
         msgStore, 'send',
         '--from', submitted_by || loadConfig().operatorId,

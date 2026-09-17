@@ -186,3 +186,30 @@ def test_init_schema_seed_arms_the_ruled_gated_migrations(tmp_path):
     argv, cwd, env = [c for c in runner.calls_with_env if "ApprovalStore" in " ".join(c[0])][0]
     armed = set(env["APPROVAL_DDL_ARMED"].split(","))
     assert armed == {"m20260825_answer_attribution", "m20260825_human_task"}
+
+
+def test_init_demo_seeds_three_fixture_seats_and_runs_the_card_seeder(tmp_path):
+    """B5: `orchestra init --demo` seeds three generic fixture seats into the data-dir
+    registry and runs scripts/demo_seed_cards.py (approval, menu, questionnaire, human
+    task) so the dashboard is not empty on first open. Idempotent."""
+    root = _repo(tmp_path)
+    (root / "scripts").mkdir(exist_ok=True)
+    (root / "scripts" / "approval_schema.py").write_text("")
+    (root / "scripts" / "questionnaire_schema.py").write_text("")
+    (root / "scripts" / "demo_seed_cards.py").write_text("")
+    data = tmp_path / "data"
+    runner = Runner()
+    report = I.run_init(root, data_dir=data, run=runner, demo=True)
+    done = {r.step: r for r in report}
+    assert done["demo:registry"].did is True and done["demo:cards"].did is True
+    reg = json.loads((data / "registry.json").read_text())["agents"]
+    assert set(reg) == {"demo-planner", "demo-builder", "demo-reviewer"}
+    assert all(v["tmux_session"] == k and v["demo"] is True for k, v in reg.items())
+    seed = [c for c in runner.calls_with_env if c[0][-1].endswith("scripts/demo_seed_cards.py")]
+    assert len(seed) == 1 and seed[0][2]["ORCHESTRA_DIR"] == str(data)
+    # second --demo run: seats already present, seeder still invoked (it dedups itself)
+    report2 = I.run_init(root, data_dir=data, run=runner, demo=True)
+    assert {r.step: r for r in report2}["demo:registry"].did is False
+    # without --demo nothing demo-related happens
+    report3 = I.run_init(root, data_dir=tmp_path / "data2", run=Runner())
+    assert not any(r.step.startswith("demo:") for r in report3)

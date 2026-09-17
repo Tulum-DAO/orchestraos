@@ -181,6 +181,13 @@ def watchdog(store=None, resolve=None, inject=None):
     stuck_cut = (now - timedelta(minutes=ESCALATE_STUCK_MINUTES)).isoformat()
     esc_cut = (now - timedelta(minutes=ESCALATE_REPEAT_MINUTES)).isoformat()
     for row in store.submitted_unacked():
+        if row.get("feature") == "demo":
+            # B5 fixture questionnaire: ack on submit, never deliver (no seat behind it).
+            try:
+                store.ack(row["id"])
+            except Exception as e:  # noqa: BLE001
+                print(f"[questionnaire_resume] demo row {row['id']} ack failed: {e}", file=sys.stderr)
+            continue
         try:
             if row.get("last_attempt_at") and row["last_attempt_at"] > beat_cut:
                 continue                          # tried within a beat — wait
