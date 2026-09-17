@@ -43,7 +43,12 @@ The harness runs on whatever agent CLI you already have a subscription for
 Gemini CLI's free tier is the zero-key path's backbone: it is enough for a
 solo developer's full workday of moderate use with no subscription and no
 credit card. `orchestra doctor` reports which runtimes you have authed; the
-harness does not care which one, or how many.
+harness does not care which one, or how many. One nuance if you're relying on
+the free tier specifically for the assistant brain: the runtime brain picks
+the *first authed CLI* in `orchestra.toml`'s `[runtimes] enabled` order
+(default `claude, gemini, codex`) — put `gemini` first in that list, or set
+the brain explicitly, if you want the free tier to actually be what answers
+(see `docs/ARTURO.md`).
 
 Sources: [Claude pricing](https://claude.com/pricing),
 [ChatGPT Plus / Codex bundling](https://userjot.com/blog/openai-codex-pricing),
