@@ -28,9 +28,11 @@ from pathlib import Path
 
 # Setup paths
 ORCHESTRA_DIR = Path(os.environ.get(
-    "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra")))
-sys.path.insert(0, str(ORCHESTRA_DIR))
-sys.path.insert(0, str(ORCHESTRA_DIR / "scripts"))
+    "ORCHESTRA_DIR", os.path.expanduser("~/orchestra")))
+# CODE lives in the checkout (this file's parent's parent); ORCHESTRA_DIR is the DATA dir.
+CODE_ROOT = Path(os.environ.get("ORCHESTRA_ROOT") or Path(__file__).resolve().parent.parent)
+sys.path.insert(0, str(CODE_ROOT))
+sys.path.insert(0, str(CODE_ROOT / "scripts"))
 
 from registry_lock import registry_lock
 import promote_successor as promoter
@@ -172,7 +174,7 @@ def _spawn_successor(succ_alias: str, model: str, runtime: str) -> None:
     spawn_adopt.py, which REFUSES without a runtime (gm msg_0a37acf3) — so a gemini/codex
     lineage previously mis-registered as claude (or was refused). Forward the runtime the
     lineage declares (resolved at the call site) so the successor is adopted on its OWN runtime."""
-    spawn_cmd = [str(ORCHESTRA_DIR / "spawn-agent.sh"), succ_alias]
+    spawn_cmd = [str(CODE_ROOT / "spawn-agent.sh"), succ_alias]
     run_cmd(spawn_cmd, env={**os.environ, "AGENT_MODEL": model, "AGENT_RUNTIME": runtime})
 
 
@@ -195,8 +197,37 @@ def get_agent_session(agent_id: str) -> dict:
     return data.get(agent_id, {})
 
 
+def _claude_projects_dir() -> Path:
+    """Claude transcripts live under <config dir>/projects; honor CLAUDE_CONFIG_DIR."""
+    cfg = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(cfg) / "projects" if cfg else Path(os.path.expanduser("~/.claude/projects"))
+
+
+def _sid_from_pane_events(session_name: str) -> str | None:
+    try:
+        r = subprocess.run(["tmux", "list-panes", "-t", session_name, "-F", "#{pane_id}"],
+                           capture_output=True, text=True, timeout=5)
+        if r.returncode != 0:
+            return None
+        panes_dir = ORCHESTRA_DIR / "state" / "agent-events" / "panes"
+        for pane in r.stdout.split():
+            p = panes_dir / f"{pane.lstrip('%')}.json"
+            if p.exists():
+                sid = (json.loads(p.read_text(encoding="utf-8")) or {}).get("session_id")
+                if sid:
+                    return str(sid)
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
 def extract_active_sid(session_name: str, runtime: str) -> str | None:
     """Attempt to extract active session UUID for the given agent using declared identity."""
+    # 0. From the pane-event files the shipped hooks write (<data>/state/agent-events/panes/
+    # <pane>.json carries session_id) — the push truth, runtime-agnostic once hooks exist.
+    sid = _sid_from_pane_events(session_name)
+    if sid:
+        return sid
     # 1. From agent-sessions.json
     sess_meta = get_agent_session(session_name)
     if sess_meta.get("session_id"):
@@ -231,7 +262,7 @@ def extract_active_sid(session_name: str, runtime: str) -> str | None:
                 except Exception:
                     pass
     elif runtime == "claude":
-        claude_dir = Path(os.path.expanduser("~/.claude/projects"))
+        claude_dir = _claude_projects_dir()
         if claude_dir.exists():
             for p in sorted(claude_dir.glob("**/*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True):
                 try:
@@ -268,7 +299,7 @@ def ensure_handoff_artifact(seat_name: str, pred_info: dict, custom_task: str | 
     goal = custom_task or f"Maintain and execute active responsibilities for {seat_name} seat."
     first_effect = {
         "kind": "command",
-        "target": f"python3 ~/scripts/agent-orchestra/msg_store.py inbox --agent {seat_name}",
+        "target": f"python3 msg_store.py inbox --agent {seat_name}",
         "check": "exit 0"
     }
 
@@ -450,7 +481,7 @@ def ensure_canary_artifact(successor_alias: str, seat_name: str) -> Path:
             {
                 "id": "q2",
                 "question": "What is the first effect to execute upon seat promotion?",
-                "expected_answer": "python3 ~/scripts/agent-orchestra/msg_store.py inbox"
+                "expected_answer": "python3 ~/orchestra/msg_store.py inbox"
             }
         ]
     }
@@ -577,12 +608,21 @@ def commit_rotation_artifacts(successor_alias: str, *, run_fn=None, sleep_fn=Non
                               lock_wait_s: float = 5.0) -> dict:
     """Commit the rotation artifacts and report the TRUTH by effect (gm msg_86bcc168 item 2).
 
+    A data dir that is not a git repository (the normal public install: <data> is plain) skips
+    the commit with ok=True and sha=None — the artifacts stay on disk as the audit trail.
+
     Returns {"ok", "sha", "reason", "retried"}. ok is True only when every artifact present
     on disk is tracked (git ls-files --error-unmatch rc 0) AND clean (empty porcelain) after
     the commit — the same predicate promoter's T4 applies ('EXISTS on disk but is
     UNCOMMITTED'). A commit refused by a shared-tree index.lock race waits lock_wait_s and
     retries ONCE. 'nothing to commit' is fine only if the artifacts are already tracked +
     clean. Never raises; never logs success it has not verified."""
+    if not (ORCHESTRA_DIR / ".git").exists() and subprocess.run(
+            ["git", "-C", str(ORCHESTRA_DIR), "rev-parse", "--is-inside-work-tree"],
+            capture_output=True, text=True).returncode != 0:
+        log(f"Rotation artifacts kept on disk under {ORCHESTRA_DIR / 'state' / 'agent-handoffs'} "
+            f"(data dir is not a git repository; nothing to commit).")
+        return {"ok": True, "sha": None, "reason": "data dir is not a git repository", "retried": False}
     run_fn = run_fn or run_cmd
     sleep_fn = sleep_fn or time.sleep
     targets = _rotation_artifact_paths(successor_alias)
@@ -767,7 +807,11 @@ def _readback_is_complete(successor_alias: str, canary: dict | None = None) -> b
     if "TODO(successor)" in text or "TODO: author" in text:
         return False
     non_blank = [ln for ln in text.splitlines() if ln.strip()]
-    if len(non_blank) < 10:
+    # Stub floor: 10 non-blank lines OR 600+ chars of content. A successor that answers each
+    # question as one long paragraph line (7 lines, 1500 chars) is complete, not a stub —
+    # the promoter's own T4 floor already lets a strict PASS outrank the line count, so the
+    # pre-gate must not be the strictest link.
+    if len(non_blank) < 10 and sum(len(ln.strip()) for ln in non_blank) < 600:
         return False
     canary = canary if canary is not None else _load_canary_for(successor_alias)
     qs = (canary or {}).get("questions", []) or []
@@ -816,7 +860,7 @@ def _successor_sid_verified(succ_sid: str | None, succ_alias: str) -> bool:
         # Locate the transcript by sid via os.path.expanduser (honored at runtime AND
         # under test), with sid_invariants as a fallback resolver.
         path = None
-        claude_dir = Path(os.path.expanduser("~/.claude/projects"))
+        claude_dir = _claude_projects_dir()
         if claude_dir.exists():
             for p in claude_dir.glob(f"**/{succ_sid}.jsonl"):
                 path = p
@@ -969,7 +1013,23 @@ def execute_rotation(
     # so it grades as-is. If the drive path never completes within the window, HOLD as
     # incomplete and do NOT grade — and do NOT archive (preserve the genuine in-progress
     # artifact so a slow/retrying successor can finish it).
-    if not skip_spawn and not _wait_for_complete_readback(succ_alias, timeout_s=180.0):
+    # --skip-spawn WAKE: the retry path assumed a readback already sat on disk and graded the
+    # fresh SCAFFOLD because the successor pane had never been asked anything. If no COMPLETE
+    # readback exists, a --skip-spawn run drives the successor exactly like the spawn path
+    # (readback prompt injected into the already-open pane), waits the bounded window, and
+    # HOLDs on timeout; a complete readback on disk is still graded as-is (no second inject).
+    needs_wake = skip_spawn and not _readback_is_complete(succ_alias)
+    if needs_wake:
+        log(f"--skip-spawn: no complete readback for {succ_alias} on disk — waking the "
+            f"successor pane '{succ_alias}' with the readback prompt and waiting for a "
+            f"successor-authored readback before grading.")
+        try:
+            scaffold_text = scaffold_path.read_text(encoding="utf-8")
+        except OSError:
+            scaffold_text = ""
+        drive_successor_readback(succ_alias, seat_name, session=succ_alias,
+                                 scaffold_text=scaffold_text)
+    if (not skip_spawn or needs_wake) and not _wait_for_complete_readback(succ_alias, timeout_s=180.0):
         log(f"HOLD_READBACK_INCOMPLETE: successor {succ_alias} readback not complete "
             f"(missing final q-section / still scaffold / <10 lines) within the wait "
             f"window; NOT grading. Predecessor {seat_name} retains the seat.")
@@ -980,8 +1040,14 @@ def execute_rotation(
             "successor": succ_alias,
             "promoted": False,
         }
+    if needs_wake and succ_sid == "unverifiable-sid":
+        succ_sid = extract_active_sid(succ_alias, runtime) or "unverifiable-sid"
+        log(f"Re-resolved successor session ID after wake: {succ_sid}")
+    pred_sid = pred.get("session_id") or extract_active_sid(seat_name, runtime)
+    if pred_sid and not pred.get("session_id"):
+        log(f"Predecessor session ID resolved by effect (registry row had none): {pred_sid}")
     grade_result = grade_successor_readback(
-        succ_alias, seat_name, predecessor_sid=pred.get("session_id"))
+        succ_alias, seat_name, predecessor_sid=pred_sid)
 
     # Commit artifacts for T4 compliance — TRUTHFULLY (gm msg_86bcc168 item 2): the old
     # step logged 'Committed rotation artifacts' unconditionally (check=False) and on rab
