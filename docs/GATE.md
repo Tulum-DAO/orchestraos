@@ -175,7 +175,12 @@ pointer for `hello` now points at the new generation, the old one is retired.
 seed the seat via the identity store` means the seat was not spawned with
 `orchestra spawn` (step 2) — the older `registry-update.py` + `spawn-agent.sh`
 recipe registers a seat without a lineage. Spawn it again with `orchestra spawn`
-(a new name is simplest) and retry. `HOLD_GRADE` means the successor's readback
+(a new name is simplest) and retry. `HOLD_GRADE` with every question individually `PASS` but
+`aggregate.distinct_q` below `distinct_min` (the grade JSON now carries an
+`aggregate.reason` naming the culprit questions) means the successor repeated the same
+id in every answer: each answer must cite at least one id/number/path that no other
+answer cites — the successor's instructions say so; ask it to redo the readback and
+rerun with `--resume`. Plain `HOLD_GRADE` means the successor's readback
 did not clear the strict grader; with `--synthesize` on a seat this young the
 usual cause is a predecessor transcript too thin to anchor against — ask `hello`
 to do a little real work first, then retry. The handoff document and the successor's readback
