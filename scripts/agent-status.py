@@ -276,16 +276,15 @@ def _typed_chars(raw: str) -> str:
 
 
 def composer_typed_text(raw_line: str) -> str:
-    """Typed (non-ghost) composer content of a raw ANSI '❯' or '>' line, '' if none."""
-    idx = raw_line.find('❯')
-    plen = len('❯')
-    if idx == -1:
-        idx = raw_line.find('>')
-        plen = len('>')
-    if idx == -1:
-        return ''
-    text = _typed_chars(raw_line[idx + plen:]).strip()
-    return '' if PLACEHOLDER_RE.match(text) else text
+    """Typed (non-ghost) composer content of a raw ANSI '❯' or '>' line, '' if none.
+    Delegates to composer_state (the ONE SGR-aware reader, gm ghost-suggestion commission):
+    pick the runtime signature from the glyph (❯→claude, else gemini), classify, and return
+    the typed text only. A ghost/placeholder/empty line yields ''."""
+    from scripts.composer_state import classify_input_line
+    from scripts.runtime_signatures import PROMPT_SIGNATURES
+    sig = PROMPT_SIGNATURES["claude"] if "❯" in raw_line else PROMPT_SIGNATURES["gemini"]
+    state, text = classify_input_line(raw_line, sig)
+    return text if state == "typed" else ""
 
 
 def _find_chrome(stripped: list[str], raw_lines: list[str] | None = None) -> dict | None:

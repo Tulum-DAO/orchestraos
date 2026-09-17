@@ -81,6 +81,17 @@ def test_codex_typed():
     assert state == "typed"
     assert text == "run the migration"
 
+def test_csi_cursor_erase_noise_around_ghost_is_not_typed():
+    """Non-SGR CSI (cursor-move/erase like \\x1b[K, \\x1b[1G) must be CONSUMED, not read as
+    typed chars. A dim ghost wrapped in that noise stays 'ghost' (regression for wake)."""
+    line = "❯\xa0\x1b[K\x1b[2mTry \"fix lint errors\"\x1b[0m\x1b[1G"
+    assert classify_input_line(line, CLAUDE) == ("ghost", "")
+
+def test_csi_noise_does_not_swallow_real_typed_text():
+    line = "❯ \x1b[Kship it\x1b[1G"
+    state, text = classify_input_line(line, CLAUDE)
+    assert state == "typed" and text == "ship it"
+
 
 # --- read_composer: full contract via injected capture ---------------------------------
 
