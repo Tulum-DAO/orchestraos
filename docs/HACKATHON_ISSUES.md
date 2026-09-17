@@ -147,7 +147,7 @@ clean install for claude; gemini and codex documented or done.
 
 # Good first issues
 
-## G1 · Operator-naming: rename remaining `shaw_*` / `*Shaw*` identifiers
+## G1 · Operator-naming: rename the remaining operator-named identifiers
 `labels: good-first-issue, size:S, scrub`
 
 All string literals, prose and the tenant default are already generic. What remains are
