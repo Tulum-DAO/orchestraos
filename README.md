@@ -19,13 +19,23 @@ An open harness for running a fleet of coding agents as a team: agents that mess
 
 **Reference install** (the operator's own setup): a VPS plus a Mac over Tailscale, tmux seats, the rotation beat, push notifications, Telegram, and voice. See `docs/REFERENCE_INSTALL.md`. Do this second.
 
+## More docs
+
+- `docs/BEGINNERS_GUIDE.md` — never used a terminal? Start here.
+- `docs/PROMPTS.md` — copy-paste prompts for install, first agent, Telegram, messaging, cards, rotation, memory, and upgrading.
+- `docs/COSTS.md` — what a VPS and a CLI plan actually cost, and the zero-key path.
+- `docs/tracks/README.md` — the eleven hackathon tracks, one doc each.
+- `docs/ARCHITECTURE.md` — the map. Read before touching rotation or approvals.
+
 ## Configuration
 
 Copy `orchestra.example.toml` to `orchestra.toml` and fill in the data directory, hosts, ports, your operator id, and the runtimes you have. Secrets are never in the file: bot tokens and API keys are read from the environment only. `orchestra doctor` tells you what is missing.
 
 ## Hackathon tracks
 
-Each track is an issue with the design attached and an acceptance test. The big ones:
+Eleven tracks, each with its own doc: Problem, Design, files to touch, numbered
+steps, an acceptance test, and a start prompt you can paste straight into your own
+agent. See `docs/tracks/README.md` for the full index. The big ones:
 
 1. Device pairing, so the phone app logs in by scanning a code instead of a token baked into the build.
 2. Zero-key assistant brain on your own CLI runtime.
@@ -33,10 +43,16 @@ Each track is an issue with the design attached and an acceptance test. The big 
 4. Arturo home and conversation-first onboarding, from the reference mockups in `design/`.
 5. First run without a general manager seat.
 6. Chat bridges as plugins.
-7. Installer and doctor.
-8. Autonomous rotation proven on all three runtimes on a clean install.
+7. Tab restyle to the reference set.
+8. Push without ntfy.
+9. Installer and doctor hardening.
+10. Docs and tutorials.
+11. Autonomous rotation proven on all three runtimes on a clean install.
 
-`good-first-issue` is real and small. Start there if you want to land something in an hour.
+`good-first-issue` is real and small (see `docs/HACKATHON_ISSUES.md`). Start there
+if you want to land something in an hour. New to the command line entirely? Start
+with `docs/BEGINNERS_GUIDE.md` instead — it walks the seven-step gate everyone
+completes before picking a track.
 
 ## How to contribute
 
