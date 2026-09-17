@@ -31,7 +31,7 @@ Your cwd is: {CWD}
 ## ON COMPLETION
 Always reply to the originating message. If you finished and there's no message to reply to, send a completion report:
 ```bash
-python3 ~/scripts/agent-orchestra/msg_store.py send \
+python3 $ORCHESTRA_ROOT/msg_store.py send \
   --from YOUR_ID --to YOUR_PARENT \
   --type task_complete --subject "Done: Brief description" \
   --body "What was accomplished, files changed, deliverables"
@@ -40,11 +40,11 @@ python3 ~/scripts/agent-orchestra/msg_store.py send \
 ## IF BLOCKED
 Escalate to your PM — don't sit silently:
 ```bash
-python3 ~/scripts/agent-orchestra/msg_store.py send \
+python3 $ORCHESTRA_ROOT/msg_store.py send \
   --from YOUR_ID --to YOUR_PARENT \
   --type escalate --subject "Blocked: Brief description" \
   --body "What I tried, what I need"
 ```
 
 ## FOLLOW THE AGENT PROTOCOL
-Read and follow `~/scripts/agent-orchestra/prompts/_agent-protocol.md`
+Read and follow `$ORCHESTRA_ROOT/prompts/_agent-protocol.md`
