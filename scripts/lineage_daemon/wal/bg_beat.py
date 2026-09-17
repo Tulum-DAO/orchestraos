@@ -228,8 +228,8 @@ def build_obs(agent, blue, wal_dir=None, now=None, ctx_ttl_s=None, detector_dir=
     blue_pending_cards = _probe(pending_cards_fn,
                                 _default_pending_cards_fn if _live else None, _root,
                                 default=0)
-    blue_composer_text = _probe(screen_fn and (lambda r: _composer_of(screen_fn(r))),
-                                (lambda r: _composer_of(_default_screen_fn(r))) if _live else None,
+    blue_composer_text = _probe(screen_fn and (lambda r: _composer_of(screen_fn(r), runtime)),
+                                (lambda r: _composer_of(_default_screen_fn(r), runtime)) if _live else None,
                                 _root, default=None)
     # v2 DATA-DRIVEN calibration (the operator #1, gm RULING msg_02d19242): a seat is calibrated
     # when it presents a ctx that is PRESENT, FRESH (not a retained/stale read), and in
@@ -314,9 +314,11 @@ def _observed_idle_age(meta_store, state, now):
         return 0
 
 
-def _composer_of(lines):
-    from .composer_read import composer_text
-    return composer_text(lines)
+def _composer_of(lines, runtime=None):
+    # composer_state is the ONE SGR-aware reader (gm ghost-suggestion commission). The
+    # capture MUST be `-e` (see _default_screen_fn) or a dim ghost reads as typed text.
+    from scripts.composer_state import composer_text
+    return composer_text(lines, runtime)
 
 
 _AGENT_STATUS_MOD = None
@@ -371,8 +373,9 @@ def _default_pending_cards_fn(root):
 
 def _default_screen_fn(root):
     import subprocess as _sp
-    r = _sp.run(["tmux", "capture-pane", "-p", "-t", root], capture_output=True, text=True,
-                timeout=10)
+    # -e PRESERVES SGR so composer_state can see a DIM ghost (else it reads as typed).
+    r = _sp.run(["tmux", "capture-pane", "-e", "-p", "-t", root], capture_output=True,
+                text=True, timeout=10)
     if r.returncode != 0:
         raise RuntimeError(r.stderr.strip() or "tmux capture-pane failed")
     return r.stdout.splitlines()
@@ -581,13 +584,14 @@ def _default_green_wake_fn(orchestra_dir, wal_dir, root, ingest_text=None, *,
         "ingest your hydrate digest (your predecessor's handoff + delivered context), "
         "then hold — do not start new work until told.")
 
-    from .composer_read import composer_text
+    from scripts.composer_state import composer_text  # the ONE SGR-aware reader
     if send_fn is None:
         def send_fn(args):
             subprocess.run(["tmux", "send-keys", *args], capture_output=True)
     if capture_fn is None:
         def capture_fn(target):
-            out = subprocess.run(["tmux", "capture-pane", "-t", target, "-p"],
+            # -e PRESERVES SGR so a dim ghost is not misread as the wake still sitting typed.
+            out = subprocess.run(["tmux", "capture-pane", "-t", target, "-e", "-p"],
                                  capture_output=True, text=True)
             return (out.stdout or "").splitlines()
 

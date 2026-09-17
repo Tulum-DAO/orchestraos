@@ -54,6 +54,20 @@ DEFAULT_RUNTIME = "claude"
 
 SGR_RE = re.compile(r"\x1b\[([0-9;]*)m")
 
+# Known EMPTY-composer placeholders each runtime renders (dim). These are the belt to the
+# SGR-dim walk's suspenders: on a STRIPPED capture (no -e) the dim styling is gone and the
+# walk would read a placeholder as typed, so a positive placeholder match reclassifies it
+# 'ghost'. With -e the walk already catches them; this only helps a degraded/stripped read.
+_PLACEHOLDER_RES = (
+    re.compile(r'^Try ".{0,60}"$'),            # claude
+    re.compile(r"^Ask Codex to do anything$"),  # codex
+    re.compile(r"^Type your message", re.I),    # gemini / antigravity
+)
+
+
+def _is_placeholder(text):
+    return any(r.match(text) for r in _PLACEHOLDER_RES)
+
 # Per-runtime "the turn is in flight" markers (composer not accepting input). Presence of
 # any of these on the screen => 'submitted' (working), which outranks the composer line
 # read (a working pane may still render the last prompt). Verified by effect on the live
@@ -128,7 +142,12 @@ def classify_input_line(ansi_line, sig=None):
         pos += 1
 
     if saw_typed:
-        return ("typed", "".join(typed_chars).strip())
+        typed = "".join(typed_chars).strip()
+        # Belt for a stripped (no-SGR) capture: a known placeholder read as 'typed' because
+        # its dim styling was stripped is really an empty composer -> 'ghost'.
+        if _is_placeholder(typed):
+            return ("ghost", "")
+        return ("typed", typed)
     if saw_ghost:
         return ("ghost", "")
     return ("empty", "")
@@ -213,6 +232,40 @@ def read_composer(pane, *, runtime=None, capture_fn=None):
         return {"state": "unknown", "text": "", "runtime": rt,
                 "evidence": {"why": "capture failed or empty", "line": None}}
     return classify_screen(raw, runtime=rt)
+
+
+_GLYPH_RUNTIME = {"❯": "claude", "›": "codex", ">": "gemini"}
+
+
+def _infer_runtime(raw):
+    """Pick a runtime SIGNATURE from the bottom-most prompt glyph when the caller did not
+    declare one — ❯→claude, ›→codex, >→gemini. This selects which SGR signature to apply
+    (not a typed-vs-ghost guess); '>' maps to the gemini (no-ghost) signature, the
+    conservative default (treats any visible char as typed = never drops human input)."""
+    for line in reversed((raw or "").split("\n")):
+        s = _strip_sgr(line).replace("\xa0", " ").strip()
+        for glyph, rt in _GLYPH_RUNTIME.items():
+            if s.startswith(glyph) and not s.startswith(">>"):
+                return rt
+    return None
+
+
+def composer_text(lines, runtime=None):
+    """Compat contract (supersedes the old wal/composer_read.composer_text): the human-TYPED
+    composer content, '' when empty/ghost/placeholder/working, None when no prompt line is
+    readable. Accepts a list of lines OR a raw string; PREFERS a `-e` (SGR-preserving)
+    capture — a stripped capture still works via the placeholder belt but cannot see a
+    content-ghost. `runtime` is used when known; otherwise inferred from the prompt glyph."""
+    raw = lines if isinstance(lines, str) else "\n".join(lines or [])
+    rt = (runtime or "").strip().lower() or _infer_runtime(raw)
+    if not rt:
+        return None
+    r = classify_screen(raw, runtime=rt)
+    if r["state"] == "typed":
+        return r["text"]
+    if r["state"] == "unknown":
+        return None
+    return ""  # empty | ghost | submitted -> no unsubmitted human text
 
 
 def settle_and_read(pane, *, send_fn=None, capture_fn=None, runtime=None):

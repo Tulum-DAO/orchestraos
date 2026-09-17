@@ -6,7 +6,7 @@ Bottom-most prompt line wins; placeholder => ''; typed => the text; no prompt li
 import sys
 
 sys.path.insert(0, "scripts")
-from lineage_daemon.wal.composer_read import composer_text  # noqa: E402
+from scripts.composer_state import composer_text  # noqa: E402  (composer_read absorbed)
 
 CODEX_IDLE = [
     "  The task is to identify and apply the correct abbreviated value format",
