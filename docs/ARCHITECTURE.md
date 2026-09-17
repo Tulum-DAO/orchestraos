@@ -55,7 +55,7 @@ The assistant. A proxy that holds the conversation, recalls facts, and can commi
 The beat runs every fifteen minutes. For an armed seat it: prewarms a green successor, waits for readiness (the successor ingested the baton and its composer is live), gates on vendor quota, swaps canonical to the green, retires the blue with a resume command, verifies by effect, and reaps archive panes older than one generation. Every step holds rather than guesses when it cannot measure: unknown context, a stale screen, a depleted credit balance. On by default.
 
 ### Memory (`facts` API, per-seat memory dirs)
-Shared facts with freshness and source, served by the API and shown in the Facts pane. Each seat keeps a memory directory of one-fact files indexed by `MEMORY.md`, which its successor reads at boot. The worldview and semantic-recall layers that sit above this are not in the public tree.
+Shared facts with freshness and source, served by the API and shown in the Facts pane. Each seat keeps a memory directory (`$ORCHESTRA_DIR/memory/<lineage-id>/`) of one-fact files indexed by `MEMORY.md`, which its successor reads at boot; the facts store (`$ORCHESTRA_DIR/facts/facts_db.json`, `POST /api/facts`) is what `services/arturo/facts_recall.py` reads on every voice turn. Walkthrough: `docs/MEMORY.md`. The worldview and semantic-recall layers that sit above this are not in the public tree.
 
 ### Dashboard and API (`dashboard/`, `api/`)
 React dashboard served by `dashboard-proxy.js`, which also forwards API and WebSocket traffic to the Express API. The `/agent` route is Arturo's page.

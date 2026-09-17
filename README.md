@@ -28,6 +28,7 @@ An open harness for running a fleet of coding agents as a team: agents that mess
 - `docs/COSTS.md` — what a VPS and a CLI plan actually cost, and the zero-key path.
 - `docs/tracks/README.md` — the eleven hackathon tracks, one doc each.
 - `docs/ARCHITECTURE.md` — the map. Read before touching rotation or approvals.
+- `docs/MEMORY.md` — per-seat memory (index + one-fact files + baton) and the facts store Arturo recalls from; the copy-paste prompt for gate step 7.
 
 ## Configuration
 
