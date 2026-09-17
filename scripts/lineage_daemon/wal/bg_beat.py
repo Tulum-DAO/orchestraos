@@ -908,9 +908,23 @@ def armed_roots(agents, wal_dir, force_roots=None):
     out = []
     for a in agents:
         root = a.get("agent_id")
+        # Experimental runtimes (gemini/codex) are never armed for async blue-green unless the
+        # install opted in ([rotation] experimental_runtimes) — operator ruling 2026-09-17.
+        # The supervised hand-drive allowlist (force_roots) still wins: an operator driving one
+        # seat by hand is the opt-in for that beat.
+        if root and root not in force and _runtime_gated(a):
+            continue
         if root and (root in force or is_armed(wal_dir, root)):
             out.append(root)
     return out
+
+
+def _runtime_gated(agent) -> bool:
+    try:
+        from scripts.lineage_daemon.collect import beat_skip_reason
+    except ImportError:  # sandbox import roots
+        from lineage_daemon.collect import beat_skip_reason  # type: ignore
+    return beat_skip_reason(agent) in ("non-claude-runtime", "unsupported-runtime")
 
 
 # ---- anti-orphan failure counter (persisted across beats/processes) ----------

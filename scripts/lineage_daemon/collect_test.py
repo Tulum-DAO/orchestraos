@@ -224,12 +224,22 @@ def test_skip_reason_none_for_live_claude_seat():
     assert beat_skip_reason(_agent()) is None
 
 
-def test_skip_reason_none_for_live_codex_seat():
-    assert beat_skip_reason(_agent(runtime="codex")) is None
+def test_skip_reason_non_claude_runtime_by_default(monkeypatch):
+    """Operator ruling 2026-09-17: blue-green default = Claude on; Gemini/Codex experimental,
+    never armed unless [rotation] experimental_runtimes opts in."""
+    monkeypatch.delenv("ORCHESTRA_ROTATION_EXPERIMENTAL_RUNTIMES", raising=False)
+    assert beat_skip_reason(_agent(runtime="codex")) == "non-claude-runtime"
+    assert beat_skip_reason(_agent(runtime="gemini")) == "non-claude-runtime"
+    assert beat_skip_reason(_agent(runtime="agy")) == "non-claude-runtime"
+    assert beat_skip_reason(_agent()) is None
 
 
-def test_skip_reason_none_for_live_gemini_seat():
+def test_skip_reason_none_for_experimental_runtime_when_opted_in(monkeypatch):
+    monkeypatch.setenv("ORCHESTRA_ROTATION_EXPERIMENTAL_RUNTIMES", "gemini")
     assert beat_skip_reason(_agent(runtime="gemini")) is None
+    assert beat_skip_reason(_agent(runtime="codex")) == "non-claude-runtime"
+    monkeypatch.setenv("ORCHESTRA_ROTATION_EXPERIMENTAL_RUNTIMES", "gemini, codex")
+    assert beat_skip_reason(_agent(runtime="codex")) is None
 
 
 def test_skip_reason_unsupported_runtime_service():
