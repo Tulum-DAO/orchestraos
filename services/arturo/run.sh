@@ -19,15 +19,23 @@ cd "$ORCH"
 source "$ORCH/scripts/orchestra-env.sh"
 
 # SINGLE-WRITER GUARANTEE: never two processes journaling the same call. Kill any existing
-# arturo-proxy python instance (match the exact script path so we never hit this script or an
-# unrelated python). Idempotent — safe to run repeatedly.
-mapfile -t OLD < <(pgrep -f "python3 services/arturo/arturo-proxy.py" || true)
+# arturo-proxy python instance launched FROM THIS CHECKOUT (the cmdline is a relative path,
+# identical in every checkout, so match on the process cwd — a second checkout or worktree on
+# the same box, e.g. a reference install beside a dev tree, is a different install with its
+# own port and must never be killed from here). Idempotent — safe to run repeatedly.
+_own_proxies() {
+  local pid
+  for pid in $(pgrep -f "python3 services/arturo/arturo-proxy.py" || true); do
+    [ "$(readlink "/proc/$pid/cwd" 2>/dev/null)" = "$ORCH" ] && echo "$pid"
+  done
+}
+mapfile -t OLD < <(_own_proxies)
 if [ "${#OLD[@]}" -gt 0 ]; then
-  echo "run.sh: killing ${#OLD[@]} existing arturo-proxy process(es): ${OLD[*]}"
+  echo "run.sh: killing ${#OLD[@]} existing arturo-proxy process(es) from $ORCH: ${OLD[*]}"
   kill "${OLD[@]}" 2>/dev/null || true
   sleep 2
   # hard-kill any survivor so we can never end up with two writers
-  mapfile -t STILL < <(pgrep -f "python3 services/arturo/arturo-proxy.py" || true)
+  mapfile -t STILL < <(_own_proxies)
   if [ "${#STILL[@]}" -gt 0 ]; then
     echo "run.sh: force-killing survivors: ${STILL[*]}"
     kill -9 "${STILL[@]}" 2>/dev/null || true
@@ -46,8 +54,6 @@ export ARTURO_SEMANTIC_RECALL="${ARTURO_SEMANTIC_RECALL:-1}"
 # 2026-09-14): default ON (1). Bounded read-only retrieval from state/brain/facts.db (~23.5k
 # daily-refreshed facts) appended as a FACTS block alongside semantic recall. Override to 0 to disable.
 export ARTURO_FACTS_RECALL="${ARTURO_FACTS_RECALL:-1}"
-# Durable L2 worldview recall flag (P1.e @ba21031734, gm by-effect PASS msg_36403326_61969331): default ON (1).
-export ARTURO_WORLDVIEW_L2="${ARTURO_WORLDVIEW_L2:-1}"
 # Durable voice layer dispatcher flag (the operator approved apr_868cbd37_95502061): default ON (1)
 export ARTURO_DISPATCHER="${ARTURO_DISPATCHER:-1}"
 # Durable ended-once guard flag: default ON (1)

@@ -376,3 +376,17 @@ def test_init_ORCHESTRA_YES_env_counts_as_yes(tmp_path, monkeypatch):
     report = I.run_init(root, data_dir=tmp_path / "data", run=Runner(), skip_npm=True, skip_venv=True,
                         interactive=False)
     assert {r.step: r for r in report}["hooks"].did
+
+
+def test_init_creates_facts_and_memory_dirs(tmp_path):
+    """Gate step 7 (fact written -> restart -> Arturo recalls it) needs the facts
+    store dir to exist for POST /api/facts, and the per-agent memory convention
+    (docs/MEMORY.md) needs its root — both are data, created by init."""
+    root = _repo(tmp_path)
+    data = tmp_path / "data"
+    I.run_init(root, data_dir=data, run=Runner())
+    assert (data / "facts").is_dir()
+    assert (data / "memory").is_dir()
+    ignored = (data / ".gitignore").read_text()
+    # memory is per-agent durable knowledge — committed with the handoffs, not ignored
+    assert "!/memory/**" in ignored

@@ -3,6 +3,7 @@
 This protocol applies to every specialist agent. Follow it exactly.
 
 ## ON STARTUP
+0. Read your memory index: `$ORCHESTRA_DIR/memory/<lineage-id>/MEMORY.md` (your spawn prompt names the exact directory). Open only the one-fact files whose index line is relevant to the task in front of you. See **Memory** below.
 1. Read predecessor handoff: `docs/HANDOFF_<agent>-next.md` or `~/scripts/omni-context/projects/{project}/handoff.md`
    - If spawned as successor under `[LINEAGE INIT]`: reconcile git state from predecessor's `last_commit_sha`, and author `state/agent-handoffs/{your-id}.readback.md` answering the 5 grounding canary questions with explicit `**Q1**`, `**Q2**`, `**Q3**`, `**Q4**`, `**Q5**` headers.
 2. Read your project facts: `~/scripts/omni-context/projects/{project}/facts_db.json`
@@ -78,6 +79,33 @@ When context reaches **70%** (or upon receiving `lineage_soft_handoff`):
 3. If further work is completed before 80%, commit micro-updates to the handoff doc with each atomic commit.
 4. If all tasks in `tasks.db` are finished and no work is pending, mark seat as `PARKED` / `STAND_DOWN`.
 5. At **80%** context, the Lineage Daemon automatically rotates you to your successor. Finish current commit and stand down cleanly.
+
+## Memory (index + one-fact files + baton)
+
+Every seat keeps a memory directory that survives restarts and rotations. The full walkthrough with a copy-paste prompt is `docs/MEMORY.md`; this is the contract.
+
+**Where:** `$ORCHESTRA_DIR/memory/<lineage-id>/` — `<lineage-id>` is your seat name with any `-gN` / `-genN` generation suffix stripped (`hello-g4` → `hello`), so every generation of a seat reads and extends the same files. `spawn-agent.sh` creates the directory and an empty `MEMORY.md` on first spawn and tells you the path.
+
+**Three parts:**
+1. `MEMORY.md` — the index. One line per memory, no content: `- [Title](file.md) — hook`. It is loaded at boot, so keep it short and skimmable.
+2. One-fact files — `<type>_<slug>.md`, one fact per file, with frontmatter:
+   ```markdown
+   ---
+   name: <short-kebab-slug>
+   description: <one line — what this is, used to decide relevance>
+   type: user | feedback | project | reference
+   ---
+   <the fact. For feedback/project add **Why:** and **How to apply:** lines. Link related memories with [[name]].>
+   ```
+   `user` = who the operator is; `feedback` = corrections and confirmed approaches; `project` = ongoing work, goals, constraints (convert relative dates to absolute); `reference` = pointers (URLs, tickets, dashboards).
+3. The baton — `docs/HANDOFF_<lineage-id>-next.md` (the lineage handoff above). Memory is *durable knowledge*; the baton is *where I stopped and what is next*. Never put one in the other.
+
+**Rules:**
+- Before writing, check the index for a file that already covers it — update that file; delete a memory that turns out to be wrong.
+- Do not save what the repo already records (code structure, git history, CLAUDE.md) or what matters only to this conversation.
+- Write the fact when you learn it, not at handoff time — the handoff may never come (OOM, crash, hard rotation).
+- After writing a file, add its one-line pointer to `MEMORY.md` in the same step.
+- Shared facts the voice brain should know (client details, project state) go to the **facts store** instead: `POST /api/facts {"text": "..."}` or the dashboard Facts pane. `services/arturo/facts_recall.py` reads that store on Arturo's next turn.
 
 ## Brief Updates
 

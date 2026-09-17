@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { AlertCircle, Check, Loader2 } from 'lucide-react';
+import { AlertCircle, Check, Loader2, Plus } from 'lucide-react';
 import { factsApi } from '../../lib/factsApi';
 
 interface Fact {
@@ -22,6 +22,8 @@ export function FactsPane() {
   const [editText, setEditText] = useState('');
   const [savingId, setSavingId] = useState<number | null>(null);
   const [markingFreshId, setMarkingFreshId] = useState<number | null>(null);
+  const [newText, setNewText] = useState('');
+  const [creating, setCreating] = useState(false);
 
   // Load facts on mount
   useEffect(() => {
@@ -39,6 +41,27 @@ export function FactsPane() {
       console.error('Error loading facts:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // The gate's "write a fact": POST /api/facts -> facts/facts_db.json, which Arturo's
+  // facts recall reads on its next turn.
+  const handleCreate = async () => {
+    if (!newText.trim()) {
+      setError('Fact text cannot be empty');
+      return;
+    }
+    try {
+      setCreating(true);
+      setError(null);
+      await factsApi.createFact(newText.trim());
+      setNewText('');
+      await loadFacts();
+    } catch (err: any) {
+      setError(err.message || 'Failed to add fact');
+      console.error('Error creating fact:', err);
+    } finally {
+      setCreating(false);
     }
   };
 
@@ -151,8 +174,29 @@ export function FactsPane() {
         </div>
       )}
 
+      <div className="flex gap-2">
+        <input
+          value={newText}
+          onChange={(e) => setNewText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !creating) handleCreate();
+          }}
+          className="flex-1 px-2 py-1 bg-gray-800 border border-gray-600 rounded text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
+          placeholder="Add a fact Arturo should know…"
+          aria-label="New fact"
+        />
+        <button
+          onClick={handleCreate}
+          disabled={creating || !newText.trim()}
+          className="px-3 py-1 text-xs rounded bg-blue-700 hover:bg-blue-600 text-white disabled:opacity-50 flex items-center gap-1"
+        >
+          {creating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+          Add
+        </button>
+      </div>
+
       {facts.length === 0 ? (
-        <p className="text-center text-gray-500 py-8">No facts yet</p>
+        <p className="text-center text-gray-500 py-8">No facts yet — add one above and Arturo will use it next turn</p>
       ) : (
         facts.map((fact) => {
           const freshness = getFreshnessDisplay(fact);
