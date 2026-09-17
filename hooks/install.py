@@ -39,9 +39,13 @@ HOOKS = [
 
 
 def _command(repo_root: Path, data_dir: Path, rel: str, runner: str) -> str:
+    """Fail OPEN at runtime: if the script is gone (checkout moved/deleted) the hook exits 0 and
+    Claude proceeds; a present script runs normally and its verdict reaches Claude unchanged.
+    (A missing script under a bare interpreter call blocked every tool on a host, 2026-09-17.)"""
     script = str(Path(repo_root) / rel)
     run = f'"{NODE}" "{script}"' if runner == "node" else f'"{PY}" "{script}"'
-    return f'ORCHESTRA_DIR="{data_dir}" ORCHESTRA_ROOT="{repo_root}" {run} {MARKER}'
+    return (f'[ -f "{script}" ] && ORCHESTRA_DIR="{data_dir}" ORCHESTRA_ROOT="{repo_root}" {run} '
+            f'|| exit 0 {MARKER}')
 
 
 def _load(settings_path: Path):
