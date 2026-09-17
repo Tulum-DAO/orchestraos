@@ -58,6 +58,7 @@ class Settings:
     beat_enabled: bool = True
     bus_beat_interval: int = 60
     cron_beat_interval: int = 900
+    rotation_experimental_runtimes: list = field(default_factory=list)
     boundary_delivery_armed: bool = True
     router_enabled: bool = True
     router_interval: int = 60
@@ -164,6 +165,7 @@ def load_settings(repo_root: Path | None = None, config_path: Path | None = None
         beat_enabled=bool(rot.get("beat_enabled", True)),
         bus_beat_interval=int(rot.get("bus_beat_interval_seconds", 60)),
         cron_beat_interval=int(rot.get("cron_beat_interval_seconds", 900)),
+        rotation_experimental_runtimes=[str(x).strip().lower() for x in (rot.get("experimental_runtimes") or [])],
         boundary_delivery_armed=bool(rot.get("boundary_delivery_armed", True)),
         router_enabled=bool(_get(raw, "router", "enabled", True)),
         router_interval=int(_get(raw, "router", "interval_seconds", 60)),
@@ -196,6 +198,8 @@ def child_env(st: Settings, base: dict | None = None) -> dict:
         # telemetryd's hot snapshot (status.json) + the api's reader: under the DATA dir, so
         # two installs on one host never overwrite each other's ~/.orchestra/realtime
         "ORCHESTRA_REALTIME_DIR": str(st.data_dir / "realtime"),
+        # blue-green: Claude on by default; Gemini/Codex only when the operator opts in
+        "ORCHESTRA_ROTATION_EXPERIMENTAL_RUNTIMES": ",".join(st.rotation_experimental_runtimes),
         "PYTHONPATH": os.pathsep.join(py_path),
         "ORCHESTRA_GATEWAY_HOST": st.gateway_host,
         "ORCHESTRA_GATEWAY_PORT": str(st.gateway_port),

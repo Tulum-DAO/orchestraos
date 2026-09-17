@@ -196,6 +196,23 @@ def _resolve_runtime(reg: dict, model: str) -> str:
 # rotated out (retired) or is parked (quiescent) must never be nudged/rotated.
 _INERT_STATUSES = frozenset({"retired", "quiescent"})
 _SUPPORTED_RUNTIMES = frozenset({"claude", "gemini", "codex"})
+# Blue-green default (operator ruling 2026-09-17): ON for Claude seats; Gemini and Codex are
+# EXPERIMENTAL and never armed unless the install opts in with
+# [rotation] experimental_runtimes = ["gemini", "codex"] (orchestra.toml) — exported by the
+# supervisor as ORCHESTRA_ROTATION_EXPERIMENTAL_RUNTIMES (comma-separated). Empty = Claude only.
+_EXPERIMENTAL_RUNTIMES = frozenset({"gemini", "codex"})
+
+
+def enabled_experimental_runtimes() -> frozenset:
+    raw = os.environ.get("ORCHESTRA_ROTATION_EXPERIMENTAL_RUNTIMES", "")
+    out = set()
+    for tok in raw.replace(";", ",").split(","):
+        tok = tok.strip().lower()
+        if tok == "agy":
+            tok = "gemini"
+        if tok in _EXPERIMENTAL_RUNTIMES:
+            out.add(tok)
+    return frozenset(out)
 
 
 def beat_skip_reason(agent: dict) -> Optional[str]:
@@ -214,6 +231,8 @@ def beat_skip_reason(agent: dict) -> Optional[str]:
         rt = "gemini"
     if rt not in _SUPPORTED_RUNTIMES:
         return "unsupported-runtime"
+    if rt in _EXPERIMENTAL_RUNTIMES and rt not in enabled_experimental_runtimes():
+        return "non-claude-runtime"
     if (agent.get("lineage_status") or "") in _INERT_STATUSES:
         return "retired-or-quiescent"
     if agent.get("succeeded_by"):

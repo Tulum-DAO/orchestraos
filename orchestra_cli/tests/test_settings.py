@@ -142,3 +142,14 @@ def test_settings_read_plugins_telegram_enabled(tmp_path):
     st = S.load_settings(root)
     assert st.telegram_enabled is True
     assert S.load_settings(root).raw["plugins"]["telegram"]["allowed_chat_ids"] == [1, 2]
+
+
+def test_rotation_experimental_runtimes_default_empty_and_exported(tmp_path):
+    root = tmp_path / "repo"; root.mkdir()
+    (root / "orchestra.toml").write_text('[data]\ndir = "x"\n')
+    st = S.load_settings(root)
+    assert st.rotation_experimental_runtimes == []
+    assert S.child_env(st, {})["ORCHESTRA_ROTATION_EXPERIMENTAL_RUNTIMES"] == ""
+    (root / "orchestra.toml").write_text('[data]\ndir = "x"\n[rotation]\nexperimental_runtimes = ["gemini", "Codex"]\n')
+    st = S.load_settings(root)
+    assert S.child_env(st, {})["ORCHESTRA_ROTATION_EXPERIMENTAL_RUNTIMES"] == "gemini,codex"
