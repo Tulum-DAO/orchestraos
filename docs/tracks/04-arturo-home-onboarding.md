@@ -2,6 +2,42 @@
 
 Size: L · Labels: `track`, `ui`, `arturo` · web + iOS
 
+> **Status: web half shipped on branch `arturo/oss` (oss-arturo-dev, 2026-09-17);
+> iOS half open.** Corrections to the design below, from what landed:
+>
+> - The home is a **new page** `dashboard/src/pages/ArturoHome.tsx` mounted at `/`
+>   *outside* `DashboardLayout` (own shell) — not a restyle of `AgentPage.tsx`,
+>   which still exists at `/agent/:id` as the per-agent view with the card feed.
+>   The old Overview moved to `/overview`.
+> - The reference set lives at `.workspace/agent-page-v2/{references,mockup}` in the
+>   operator's tree (the mockup HTML was the build target); `design/references/`
+>   in this repo is still to be populated (screenshots + notes) — see Step 1.
+> - The ambient pill is `dashboard/src/components/arturo/ArturoPill.tsx`, mounted
+>   in `DashboardLayout` (it replaced the legacy `JarvisPanel`, whose
+>   `/system/jarvis/message` route does not exist in this repo). The context
+>   record type `ArturoContext {route, entityKind, entityId, hint}` and
+>   `contextFromLocation()` live in `dashboard/src/lib/arturo.ts`; the record is
+>   sent as the first line of the turn (`[Context: route=… entity=…]`).
+> - Text turns go through `POST /api/arturo/text` → gateway `/arturo/text` →
+>   `:5071/text` (Track 2); the header/chip read the live brain from
+>   `GET /api/arturo/health`. There is no `orchestra spawn` dependency — the
+>   first-agent step sends a commission and the brain's `spawn_agent` tool runs
+>   `spawn-agent.sh` + files a `msg_store` row.
+> - Onboarding order on the web today: name → runtime detect → voice-or-text card
+>   → first agent → spawn. **Pairing (Track 1) is skipped** until it lands; the
+>   iOS thread should insert it after the name step.
+> - The glow accent is the Claude-warm `#d97757` from the mockup, not yet keyed to
+>   `config/providers.json` per provider (open item).
+> - Brain sheet = the existing `BrainModal` (Facts / Commitments; Second Brain
+>   placeholder); model sheet = the existing `ModelSelectorSheet` on
+>   `/api/runtimes/available`.
+>
+> Proven: fresh container (no keys, one authed claude) + headless Chrome 390×844
+> drove the whole thread to a spawned seat; captures matched the notes' common
+> denominators (one header, one composer, no inject buttons). Walkthrough in
+> `docs/ARTURO.md`.
+
+
 ## Problem
 
 Arturo's page exists (`dashboard/src/pages/AgentPage.tsx` at `/agent/:id`, defaulting
