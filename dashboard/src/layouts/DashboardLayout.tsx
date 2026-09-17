@@ -4,7 +4,7 @@ import { Menu, X } from 'lucide-react';
 import { Sidebar } from '../components/Sidebar';
 import { VoiceCallBubble } from '../components/VoiceCallModal';
 import NotificationBell from '../components/NotificationBell';
-import JarvisPanel from '../components/JarvisPanel';
+import { ArturoPill } from '../components/arturo/ArturoPill';
 import CoachingToast from '../components/CoachingToast';
 import { useOrchestraStore } from '../stores/useOrchestraStore';
 import { initAutoDiscovery } from '../lib/telemetry';
@@ -78,8 +78,8 @@ export function DashboardLayout() {
         />
       )}
 
-      {/* Jarvis floating panel — persistent across all pages */}
-      <JarvisPanel />
+      {/* Arturo pill — always available on every non-home page (T4); replaces the legacy JarvisPanel */}
+      <ArturoPill />
     </div>
   );
 }

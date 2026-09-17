@@ -48,6 +48,8 @@ class Settings:
     dashboard_port: int = 8891
     arturo_enabled: bool = True
     arturo_port: int = 5071
+    arturo_brain: str = "auto"          # auto | api | runtime (track T2)
+    arturo_runtime_model: str = ""      # optional model flag for the runtime brain
     notify_channel: str = "none"
     runtimes_enabled: list = field(default_factory=lambda: ["claude", "gemini", "codex"])
     beat_enabled: bool = True
@@ -134,6 +136,8 @@ def load_settings(repo_root: Path | None = None, config_path: Path | None = None
         dashboard_port=int(_get(raw, "dashboard", "port", 8891)),
         arturo_enabled=bool(_get(raw, "arturo", "enabled", True)),
         arturo_port=int(_get(raw, "arturo", "port", 5071)),
+        arturo_brain=str(_get(raw, "arturo", "brain", "auto")),
+        arturo_runtime_model=str(_get(raw, "arturo", "runtime_model", "")),
         notify_channel=str(_get(raw, "notify", "channel", "none")),
         runtimes_enabled=list(_get(raw, "runtimes", "enabled", ["claude", "gemini", "codex"])),
         beat_enabled=bool(rot.get("beat_enabled", True)),
@@ -181,6 +185,9 @@ def child_env(st: Settings, base: dict | None = None) -> dict:
         "ORCHESTRA_DASHBOARD_HOST": st.dashboard_host,
         "ORCHESTRA_DASHBOARD_PORT": str(st.dashboard_port),
         "ORCHESTRA_ARTURO_PORT": str(st.arturo_port),
+        "ORCHESTRA_ARTURO_BRAIN": st.arturo_brain,
+        "ORCHESTRA_ARTURO_RUNTIME_MODEL": st.arturo_runtime_model,
+        "ORCHESTRA_RUNTIMES_ENABLED": ",".join(st.runtimes_enabled),
         "ORCHESTRA_NOTIFY_CHANNEL": st.notify_channel,
         "ORCH_RUNTIME_DIR": str(st.runtime_dir),
         "ORCH_EVENT_STREAM_DIR": str(st.data_dir / "state" / "event-stream"),

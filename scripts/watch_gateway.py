@@ -3438,6 +3438,48 @@ async def handle_arturo_ptt_vendor(request):
         return _json({"ok": False, "error": "arturo unreachable"}, status=502)
 
 
+ARTURO_TEXT_BASE = os.environ.get("ARTURO_TEXT_BASE", "http://127.0.0.1:5071")
+
+
+async def handle_arturo_text(request):
+    """POST /arturo/text {text, conversation_id} — the Arturo home's TEXT turn (tracks T2/T4).
+    Bearer here, loopback upstream (:5071/text), which runs the full tool-enabled turn on
+    whichever brain the install has (api key / authed CLI / none) and answers
+    {ok, reply_text, conversation_id, brain, tools_called}."""
+    import aiohttp
+    import asyncio
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    body = await request.read()
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(f"{ARTURO_TEXT_BASE}/text", data=body,
+                              headers={"Content-Type": "application/json"},
+                              timeout=aiohttp.ClientTimeout(total=190)) as r:
+                out = await r.json(content_type=None)
+                return _json(out, status=r.status)
+    except asyncio.TimeoutError:
+        return _json({"ok": False, "error": "timeout"}, status=504)
+    except Exception as e:  # noqa: BLE001
+        log.error(f"arturo/text forward: upstream unreachable: {e}")
+        return _json({"ok": False, "error": "arturo unreachable"}, status=502)
+
+
+async def handle_arturo_health(request):
+    """GET /arturo/health — :5071/health passthrough (brain kind/model, voice vs text-only) so
+    the home's header chip and the onboarding thread can read the install's state."""
+    import aiohttp
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"{ARTURO_TEXT_BASE}/health", timeout=aiohttp.ClientTimeout(total=5)) as r:
+                out = await r.json(content_type=None)
+                return _json(dict(out, ok=True), status=r.status)
+    except Exception as e:  # noqa: BLE001
+        return _json({"ok": False, "error": "arturo unreachable", "detail": str(e)[:200]}, status=502)
+
+
 ARTURO_PTT_VOICE_BASE = os.environ.get("ARTURO_PTT_VOICE_BASE", "http://127.0.0.1:5071")
 
 
@@ -4566,6 +4608,8 @@ def build_app():
     app.router.add_get("/transcript", handle_transcript)
     app.router.add_post("/upload", handle_upload)
     app.router.add_post("/arturo/ptt", handle_arturo_ptt)
+    app.router.add_post("/arturo/text", handle_arturo_text)
+    app.router.add_get("/arturo/health", handle_arturo_health)
     app.router.add_post("/arturo/ptt/stream/audio", handle_arturo_ptt_stream_audio)
     app.router.add_get("/arturo/ptt/stream/events", handle_arturo_ptt_stream_events)
     app.router.add_post("/arturo/ptt/stream/end", handle_arturo_ptt_stream_end)
