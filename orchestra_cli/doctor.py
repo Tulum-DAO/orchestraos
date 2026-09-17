@@ -227,6 +227,26 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
             checks.append(Check("hooks:claude", OK, f"{len(hs['installed'])} hook rows in {settings_path}"))
     except Exception as e:  # noqa: BLE001
         checks.append(Check("hooks:claude", WARN, f"hook status unavailable: {e}"))
+    # Which brain Arturo will boot with (track T2): api (GEMINI_API_KEY) | runtime (first authed
+    # CLI above) | none. Same selection table services/arturo/brain.py runs at startup.
+    if st.arturo_enabled:
+        try:
+            import sys as _sys2
+            if str(root) not in _sys2.path:
+                _sys2.path.insert(0, str(root))
+            from services.arturo import brain as _brain
+            key = os.environ.get("GEMINI_API_KEY", "")
+            b = _brain.select_brain(st.arturo_brain, key, results, runtime_model=st.arturo_runtime_model,
+                                    api_factory=lambda k, m: _brain.NullBrain(f"api:{m}"))
+            if b.kind == "runtime":
+                checks.append(Check("arturo:brain", OK, f"runtime ({b.runtime} via `{b.cli}`, model {b.model}) — brain={st.arturo_brain}"))
+            elif key and st.arturo_brain in ("auto", "api"):
+                checks.append(Check("arturo:brain", OK, f"api (GEMINI_API_KEY set) — brain={st.arturo_brain}"))
+            else:
+                checks.append(Check("arturo:brain", WARN, f"none — brain={st.arturo_brain}: {getattr(b, 'reason', '')[:90]}",
+                                    "Log in to one CLI (claude / codex / agy) or export GEMINI_API_KEY; Arturo still boots, text-only, and answers with this fix"))
+        except Exception as e:  # noqa: BLE001
+            checks.append(Check("arturo:brain", WARN, f"selection unavailable: {e}"))
     checks.append(Check("runtime:any", OK if any_authed else MISSING,
                         ", ".join(r["id"] for r in results if r["authed"] is True) or "no enabled runtime is installed AND authed",
                         "At least one of [runtimes] enabled must be installed and logged in (claude OR gemini OR codex)"))
