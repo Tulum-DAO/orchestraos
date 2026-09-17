@@ -13,6 +13,7 @@ unset TMUX
 export TMUX_TMPDIR="$ORCHESTRA_SANDBOX/tmux"
 export CLAUDE_CONFIG_DIR="$ORCHESTRA_SANDBOX/cfg"
 export ORCHESTRA_CONFIG="$ORCHESTRA_SANDBOX/orchestra.toml"
+export ORCHESTRA_REALTIME_DIR="$ORCHESTRA_SANDBOX/data/realtime"   # telemetryd snapshot, never ~/.orchestra/realtime
 export ORCHESTRA_ROOT="${ORCHESTRA_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 orchestra_sandbox_down() {   # kill-server is refused on shared hosts; kill each sandbox session
   for s in $(tmux ls -F '#S' 2>/dev/null); do tmux kill-session -t "$s"; done

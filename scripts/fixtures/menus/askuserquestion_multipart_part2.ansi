@@ -1,0 +1,53 @@
+/home/user/.nvm/versions/node/v22.22.0/bin/claude --dangerously-skip-permissions
+[1m[32muser@host[0m:[1m[34m~/orchestra[0m$ /home/user/.nvm/versions/node/v22.22.0/bin/claude --dangerously-skip-permissions
+[38;5;174m ▐[48;5;16m▛███▜[49m▌[39m   [1mClaude[0m [1mCode[0m [38;5;246mv2.1.87[39m
+[38;5;174m▝▜[48;5;16m█████[49m▛▘[39m  [38;5;246mclaude-opus-4-8[1m][39m [38;5;246mwith[39m [38;5;246mmedium[39m [38;5;246meffort[39m [38;5;246m·[39m [38;5;246mClaude[39m [38;5;246mMax[39m
+[38;5;174m [39m [38;5;174m▘▘[39m [38;5;174m▝▝[39m    [38;5;246m~/orchestra[39m
+
+[38;5;239m[48;5;237m❯ [38;5;231mRead /tmp/agent-init-e2e-menu-scratch.md and follow all instructions in it.[39m
+[49m
+  [38;5;246mRead [1m1[0m[38;5;246m file (ctrl+o to expand)[39m
+
+[38;5;231m●[39m I need to fetch the AskUserQuestion tool schema since it's a deferred tool.
+
+[38;5;246m─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☐ [E2E TEST] Surfaces [38;5;16m[48;5;153m ☐ [E2E TEST] Priority [39m[49m ✔ Submit  →
+
+[1m[38;5;231mWhich surfaces should this E2E test cover?[0m
+
+[38;5;153m❯[39m [38;5;246m1.[39m [ ] [38;5;153miOS app[39m
+  [38;5;246mRender and answer on the OrchestraOS iOS app approvals surface.[39m
+  [38;5;246m2.[39m [ ] Watch
+  [38;5;246mRender and answer on the watchOS approval card.[39m
+  [38;5;246m3.[39m [ ] In-agent chat
+  [38;5;246mRender[39m [38;5;246mand[39m [38;5;246manswer[39m [38;5;246min[39m [38;5;246mthe[39m [38;5;246min-agent[39m [38;5;246mchat[39m [38;5;246mtranscript[39m [38;5;246msurface.
+[39m  [38;5;246m4.[39m [ ] [38;5;246mType[39m [38;5;246msomething[39m
+     [1mNext[0m
+[38;5;246m─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m  5. Chat about this
+
+[38;5;246mEnter[39m [38;5;246mto[39m [38;5;246mselect[39m [38;5;246m·[39m [38;5;246mTab/Arrow[39m [38;5;246mkeys[39m [38;5;246mto[39m [38;5;246mnavigate[39m [38;5;246m·[39m [38;5;246mEsc[39m [38;5;246mto[39m [38;5;246mcancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

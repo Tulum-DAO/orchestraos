@@ -504,3 +504,30 @@ def test_write_status_snapshot_io_error_is_contained(tmp_path, monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
     out = d.tick(now=0.0)                                # must NOT raise
     assert isinstance(out, dict)
+
+
+def test_slow_tick_picks_up_seats_spawned_after_boot(tmp_path):
+    """A fresh install's first `orchestra spawn` happens AFTER telemetryd started: the
+    registry-driven seats_refresh must add the seat on the next slow tick (and a
+    refresh returning None keeps the current set)."""
+    wal = tmp_path / "wal"; wal.mkdir()
+    seats = [_seat("gm", 100, ring=FakeRing())]
+    sampler = FakeSampler({100: IDLE_PROC, 200: IDLE_PROC})
+    calls = {"n": 0}
+
+    def refresh():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None                                  # registry unchanged
+        return seats + [_seat("planner", 200, ring=FakeRing())]   # a new seat appeared
+
+    d = TelemetryDaemon(
+        seats=seats, mux=FakeMux(), sweep=FakeSweep(), sampler=sampler, flag_store=FakeFlags(),
+        snapshot_base=str(tmp_path), wal_dir=str(wal), lock_path=str(tmp_path / "t.lock"),
+        clock=lambda: 0.0, seats_refresh=refresh)
+    d.tick(now=0.0)                                      # first slow tick: refresh says unchanged
+    assert [s.session for s in d.seats] == ["gm"]
+    d.tick(now=SLOW_POLL_S + 1.0)                        # next slow tick: the new seat appears
+    assert [s.session for s in d.seats] == ["gm", "planner"]
+    snap = read_status_snapshot(str(tmp_path))
+    assert snap is not None and "planner" in snap["seats"]

@@ -1,0 +1,32 @@
+Which deployment strategy should we adopt for the next quarter?
+
+❯ 1. Immediately roll out the full production
+     deployment across every tenant environment
+     simultaneously, accepting elevated risk in
+     exchange for the fastest possible time-to-value
+     and a single migration window for all clients
+        Big-bang: all tenants at once, highest risk,
+        fastest value, one migration window.
+  2. Stage the rollout through a canary cohort of three
+     low-traffic tenants first, observe error budgets
+     and latency percentiles for a full week, and only
+     then promote the release to the remaining
+     environments in two waves
+        Canary-first: 3 low-traffic tenants, one week of
+        observation, then two promotion waves.
+  3. Defer the deployment entirely until the next
+     scheduled maintenance window, bundling it with the
+     pending database migration so clients experience
+     exactly one disruption, at the cost of shipping
+     value several weeks later
+        Defer + bundle with the DB migration for a single
+        client disruption; value ships weeks later.
+  4. Type something.
+  5. Chat about this
+Enter to select · ↑/↓ to navigate · Esc to cancel
+
+
+
+
+
+

@@ -1,0 +1,53 @@
+  - Grep — searches file contents
+  - Agent — launches specialized agents
+  - Skill — invokes skills
+  - ToolSearch — finds deferred tools
+
+  If you'd like to make multiple edits to sandbox.txt, I could either:
+  1. Use the Edit tool twice (sequentially, one edit per call)
+  2. Use the Write tool to rewrite the entire file with both changes applied
+
+  Which approach would you prefer?
+
+❯ 3Use the Read tool to read sandbox.txt
+
+  Read 1 file (ctrl+o to expand)
+
+● The file hasn't changed since I read it earlier. Here's the current content of sandbox.txt:
+
+  line one
+  line two
+  line three
+
+❯ Use the AskUserQuestion tool to ask me this exact question: "Do you want to run the full suite or just the changed files?" with two options: "Full suite" and "Changed files only". Do not do anything else.
+
+● User declined to answer questions
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Test scope
+
+Do you want to run the full suite or just the changed files?
+
+❯ 1. Full suite
+  2. Changed files only
+  3. Type something.
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

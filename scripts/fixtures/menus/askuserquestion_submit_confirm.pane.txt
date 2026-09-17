@@ -1,0 +1,53 @@
+/home/user/.nvm/versions/node/v22.22.0/bin/claude --dangerously-skip-permissions
+user@host:~/orchestra$ /home/user/.nvm/versions/node/v22.22.0/bin/claude --dangerously-skip-permissions
+ ▐▛███▜▌   Claude Code v2.1.87
+▝▜█████▛▘  claude-opus-4-8[1m] with medium effort · Claude Max
+  ▘▘ ▝▝    ~/orchestra
+
+❯ Read /tmp/agent-init-e2e-menu-scratch.md and follow all instructions in it.
+
+  Read 1 file (ctrl+o to expand)
+
+● Invoking the E2E test surface now, then stopping to let it be answered remotely.
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+←  ☐ [E2E TEST] Surfaces  ☐ [E2E TEST] Priority  ✔ Submit  →
+
+Review your answers
+
+⚠ You have not answered all questions
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
