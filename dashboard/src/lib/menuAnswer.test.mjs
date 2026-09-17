@@ -50,8 +50,8 @@ const OPTIONS = [
 {
   let s = initialMenuAnswerState;
   s = selectOption(s, '3'); // the free_text write-in option
-  s = setText(s, 'A third audience: retirees');
-  assert.deepStrictEqual(buildMenuAnswerPayload(s), { option_n: '3', answer_text: 'A third audience: retirees' });
+  s = setText(s, 'A third option: retirees');
+  assert.deepStrictEqual(buildMenuAnswerPayload(s), { option_n: '3', answer_text: 'A third option: retirees' });
   console.log('PASS: A2 option + free text both ride in the same submit');
 }
 

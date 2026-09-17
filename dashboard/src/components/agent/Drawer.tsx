@@ -8,12 +8,8 @@ interface DrawerProps {
 const routes = [
   { path: '/inbox', label: 'Inbox' },
   { path: '/tasks', label: 'Tasks' },
-  { path: '/strategy', label: 'Strategy' },
-  { path: '/people', label: 'People' },
   { path: '/projects', label: 'Projects' },
   { path: '/roadmaps', label: 'Roadmaps' },
-  { path: '/learning', label: 'Learning' },
-  { path: '/clients', label: 'Clients' },
 ];
 
 export function Drawer({ isOpen, onClose }: DrawerProps) {
