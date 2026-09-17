@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 400" width="100%" height="100%">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..700&amp;family=Instrument+Sans:wght@500;600;700&amp;display=swap');
+      .brand-title { font-family: 'Fraunces', Georgia, serif; font-size: 78px; font-weight: 600; letter-spacing: -0.02em; fill: #F3EFE4; }
+      .brand-sub { font-family: 'Instrument Sans', system-ui, sans-serif; font-size: 20px; font-weight: 600; letter-spacing: 0.28em; text-transform: uppercase; fill: #F1E2C6; }
+    </style>
+  </defs>
+  <rect width="1200" height="400" fill="#12201F" rx="12"/>
+  <g transform="translate(70, 60) scale(0.546875)">
+    
+  <defs>
+    <linearGradient id="sunGrad_final_dark_color" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#F1E2C6" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#F1E2C6" stop-opacity="0.3"/>
+    </linearGradient>
+    <linearGradient id="reefGrad_final_dark_color" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#5FB8B3"/>
+      <stop offset="100%" stop-color="#0B4F52"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 1. Outer Chukum Limestone Portal Ring -->
+  <circle cx="256" cy="256" r="216" fill="none" stroke="#BFE3E0" stroke-width="24"/>
+
+  <!-- 2. Morning Sun of Zamá (ONLY sun orb) -->
+  <circle cx="256" cy="130" r="50" fill="url(#sunGrad_final_dark_color)"/>
+
+  <!-- 3. Upper Temple Sanctuary (El Templo Superior) -->
+  <polygon points="186,146 326,146 332,158 180,158" fill="#F3EFE4"/>
+  <rect x="184" y="158" width="144" height="6" fill="#F3EFE4"/>
+  <rect x="190" y="164" width="132" height="46" fill="#F3EFE4"/>
+
+  <!-- 3 Doorways (Tri-Agent Seats) -->
+  <rect x="204" y="174" width="22" height="36" rx="2" fill="#0B4F52"/>
+  <rect x="245" y="174" width="22" height="36" rx="2" fill="#0B4F52"/>
+  <rect x="286" y="174" width="22" height="36" rx="2" fill="#0B4F52"/>
+
+  <!-- 4. Flanking Lower Shrines -->
+  <polygon points="148,188 188,188 188,210 144,210" fill="#F3EFE4"/>
+  <rect x="156" y="196" width="16" height="14" rx="1.5" fill="#0B4F52"/>
+  <polygon points="324,188 364,188 368,210 324,210" fill="#F3EFE4"/>
+  <rect x="340" y="196" width="16" height="14" rx="1.5" fill="#0B4F52"/>
+
+  <!-- 5. Tiered Pyramid Platforms -->
+  <polygon points="136,210 376,210 384,238 128,238" fill="#F3EFE4"/>
+  <polygon points="120,238 392,238 402,266 110,266" fill="#F3EFE4"/>
+  <polygon points="102,266 410,266 420,296 92,296" fill="#F3EFE4"/>
+
+  <!-- 6. Grand Central Staircase & Balustrades -->
+  <polygon points="228,210 284,210 294,296 218,296" fill="#5FB8B3" opacity="0.95"/>
+  <line x1="226" y1="230" x2="286" y2="230" stroke="#0B4F52" stroke-width="2.5" opacity="0.6"/>
+  <line x1="223" y1="250" x2="289" y2="250" stroke="#0B4F52" stroke-width="2.5" opacity="0.6"/>
+  <line x1="220" y1="272" x2="292" y2="272" stroke="#0B4F52" stroke-width="2.5" opacity="0.6"/>
+  <polygon points="226,210 232,210 224,296 218,296" fill="#F3EFE4"/>
+  <polygon points="280,210 286,210 294,296 288,296" fill="#F3EFE4"/>
+
+  <!-- 7. Coastal Limestone Cliff Ground (Flush to Inner Ring) -->
+  <path d="M 56.0,296 L 456.0,296 A 204 204 0 0 1 56.0,296 Z" fill="#F3EFE4"/>
+
+  <!-- 8. Turquoise Caribbean Reef Aquifer (Flush to Inner Ring) -->
+  <path d="M 68.3,336 L 443.7,336 A 204 204 0 0 1 68.3,336 Z" fill="url(#reefGrad_final_dark_color)"/>
+
+  </g>
+  <text x="400" y="210" class="brand-title">OrchestraOS</text>
+  <text x="405" y="260" class="brand-sub">SOVEREIGN AGENT HARNESS</text>
+</svg>
