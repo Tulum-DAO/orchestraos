@@ -40,6 +40,8 @@ def _rewrite_data_dir(example_text: str, data_dir: Path) -> str:
     return "\n".join(out) + "\n"
 
 
+RULED_APPROVAL_MIGRATIONS = ("m20260825_answer_attribution", "m20260825_human_task")
+
 TASKS_DB_SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (
   id              TEXT PRIMARY KEY,
@@ -202,7 +204,11 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
     elif _has_table(db, "approval_requests") and _has_table(db, "questionnaires"):
         report.append(Step("seed:approval-schema", False, "present"))
     else:
+        # Landed contracts that approval_schema keeps behind the operator DDL gate; on a fresh
+        # data dir they are armed explicitly (never 'all' — a future batch stays gated until
+        # ruled). Unarmed, approval_resume logged 'no such column: snoozed_until' every beat.
         seed_env = dict(os.environ, ORCHESTRA_DIR=str(data_dir),
+                        APPROVAL_DDL_ARMED=",".join(RULED_APPROVAL_MIGRATIONS),
                         PYTHONPATH=os.pathsep.join([str(repo_root / "scripts"), str(repo_root),
                                                     os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep))
         rc = run([sys.executable or "python3", "-c",
