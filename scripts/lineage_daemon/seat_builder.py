@@ -179,7 +179,10 @@ def _live_resolvers(orchestra_dir):  # pragma: no cover — touches the live est
     from .pane_sink_tailer import PaneSinkTailer
     from .tmux_adapter import Tmux
 
-    scripts = str(orchestra_dir / "scripts")
+    # CODE lives in the checkout (this file: <root>/scripts/lineage_daemon/seat_builder.py);
+    # orchestra_dir is the DATA dir and carries no scripts on a real install.
+    code_root = Path(os.environ.get("ORCHESTRA_ROOT") or Path(__file__).resolve().parents[2])
+    scripts = str(code_root / "scripts")
     if scripts not in sys.path:
         sys.path.insert(0, scripts)
     import sid_invariants
@@ -187,7 +190,7 @@ def _live_resolvers(orchestra_dir):  # pragma: no cover — touches the live est
     import codex_context
 
     spec = importlib.util.spec_from_file_location(
-        "agent_status_live", str(orchestra_dir / "scripts" / "agent-status.py"))
+        "agent_status_live", str(code_root / "scripts" / "agent-status.py"))
     agent_status = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(agent_status)
 
@@ -260,6 +263,13 @@ def _live_resolvers(orchestra_dir):  # pragma: no cover — touches the live est
         tmux=_tmux, resolve_generation=resolve_generation)
 
 
+def _mtime_or_none(path):
+    try:
+        return os.stat(path).st_mtime_ns
+    except OSError:
+        return None
+
+
 def build_live_daemon(orchestra_dir=None, *, resolvers=None):
     """Assemble a TelemetryDaemon against the live fleet. `orchestra_dir` is
     normalized to a Path FIRST (the Gate-2 fix: load_stores does `orch / "state"`).
@@ -271,7 +281,7 @@ def build_live_daemon(orchestra_dir=None, *, resolvers=None):
     from .wal.multiplexer import MultiplexedTailer
 
     orchestra_dir = Path(orchestra_dir or os.environ.get(
-        "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra")))
+        "ORCHESTRA_DIR", os.path.expanduser("~/orchestra")))
     r = resolvers or _live_resolvers(orchestra_dir)
 
     _sessions, agents = r.load_stores(orchestra_dir)      # Path, not str (the fix)
@@ -279,6 +289,23 @@ def build_live_daemon(orchestra_dir=None, *, resolvers=None):
     seats, mux_seats = build_seats(agents, live, pane_pid=r.pane_pid,
                                    source_path=r.source_path, hooks_for=r.hooks_for,
                                    ring_for=r.ring_for, resolve_generation=r.resolve_generation)
+
+    # Seat-set refresh (registry mtime driven): a seat spawned after boot appears on the
+    # next slow tick. Only the SEAT list is rebuilt; the durable mux registrations are
+    # left as built (a rotation re-registers through the lineage lane, not here).
+    registry_path = orchestra_dir / "registry.json"
+    state = {"mtime": _mtime_or_none(registry_path)}
+
+    def seats_refresh():
+        m = _mtime_or_none(registry_path)
+        if m == state["mtime"]:
+            return None
+        state["mtime"] = m
+        _s, agents2 = r.load_stores(orchestra_dir)
+        fresh, _mux = build_seats(agents2, r.live_sessions(), pane_pid=r.pane_pid,
+                                  source_path=r.source_path, hooks_for=r.hooks_for,
+                                  ring_for=r.ring_for, resolve_generation=r.resolve_generation)
+        return fresh
 
     wal_dir = str(orchestra_dir / "state" / "wal")
     mux = MultiplexedTailer(wal_dir=wal_dir, lock_dir=wal_dir)
@@ -302,4 +329,5 @@ def build_live_daemon(orchestra_dir=None, *, resolvers=None):
         # E2: transcript turn-completion vetoes a stale-by-emission working hook
         # (Claude fires no Stop on interrupt/kill) -> idle, while a real mid-tool
         # hang (pending tool_use) stays stalled.
-        turn_resolver=build_turn_resolver())
+        turn_resolver=build_turn_resolver(),
+        seats_refresh=seats_refresh)

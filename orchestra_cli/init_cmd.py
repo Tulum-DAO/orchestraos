@@ -209,7 +209,10 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
     report.append(Step("data-dir", bool(made), f"{data_dir} ({'created ' + ', '.join(made) if made else 'present'})"))
 
     # 4. seed stores
-    for rel, payload in (("registry.json", {"agents": {}}), ("state/agent-sessions.json", {})):
+    for rel, payload in (("registry.json", {"agents": {}}), ("state/agent-sessions.json", {}),
+                         # menu bridge: in-agent menus -> decision cards, ON by default (the beat
+                         # itself is toggled by [menus] bridge_enabled)
+                         ("state/surface-pickup-config.json", {"enabled": True, "skip_sessions": [], "skip_prefixes": [], "store_but_mark": False})):
         p = data_dir / rel
         if p.exists():
             report.append(Step(f"seed:{rel}", False, "present"))

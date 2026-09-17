@@ -108,6 +108,16 @@ vps_hostname = ""
 # selects from.
 enabled = ["claude", "gemini", "codex"]
 
+[telemetry]
+# telemetryd: the working/idle/streaming truth behind the agents page and the router's
+# idle oracle. One process; disable only on a host that runs no seats.
+enabled = true
+
+[menus]
+# menu_bridge beat: an agent's in-pane AskUserQuestion widget becomes a decision card on
+# the approvals surface (dashboard/phone); the answer is driven back into the pane.
+bridge_enabled = true
+
 [rotation]
 # The autonomous blue-green rotation beat (services/rotation/) ships ON by
 # default — it is core, not opt-in (2026-09-16 ruling). These thresholds are

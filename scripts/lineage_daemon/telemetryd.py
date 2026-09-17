@@ -65,7 +65,7 @@ class TelemetryDaemon:
                  wal_dir=None, lock_path=None,
                  fast_poll_s=FAST_POLL_S, slow_poll_s=SLOW_POLL_S,
                  bytes_recency_s=None, clock=time.time, sleep=time.sleep,
-                 live_resolver=None, turn_resolver=None):
+                 live_resolver=None, turn_resolver=None, seats_refresh=None):
         if slow_poll_s < MIN_SLOW_POLL_S:
             raise ValueError(f"slow poll {slow_poll_s}s below CPU floor {MIN_SLOW_POLL_S}s")
         if bytes_recency_s is None:
@@ -75,6 +75,11 @@ class TelemetryDaemon:
         if bytes_recency_s < slow_poll_s:
             raise ValueError("bytes_recency_s must be >= slow_poll_s")
         self.seats = list(seats)
+        # Optional (seat set is otherwise frozen at build time): a callable returning a fresh
+        # seat list, consulted at the top of every SLOW tick. A seat spawned AFTER the daemon
+        # started (a fresh install's first `orchestra spawn`) is picked up on the next slow
+        # tick instead of never; a retired seat drops out the same way.
+        self._seats_refresh = seats_refresh
         self.mux = mux
         self.sweep = sweep
         self.sampler = sampler
@@ -300,6 +305,13 @@ class TelemetryDaemon:
     def _slow(self, now):
         """Authoritative full classification for EVERY seat + the durable lane.
         PER-SEAT CONTAINED; the durable mux.tick is itself per-seat-contained."""
+        if self._seats_refresh is not None:
+            try:
+                fresh = self._seats_refresh()
+                if fresh is not None:
+                    self.seats = list(fresh)
+            except Exception as e:  # noqa: BLE001 — a refresh failure keeps the last seat set
+                _LOG.warning("telemetry seats refresh failed (%s); keeping %d seats", type(e).__name__, len(self.seats))
         try:
             self.sweep.sweep()
         except Exception as e:
