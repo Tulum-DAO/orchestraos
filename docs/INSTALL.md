@@ -103,7 +103,8 @@ Mail a seat and watch it act with no keypress (the shipped hooks + the router be
 python3 msg_store.py send --from you --to gm --subject hi --body-file note.txt
 ```
 
-The lower-level pieces are still there: `scripts/registry-update.py` writes the row,
+The lower-level pieces are still there (but a seat made this way has no lineage and
+cannot be rotated — use `orchestra spawn` for anything you will rotate): `scripts/registry-update.py` writes the row,
 `./spawn-agent.sh <seat> --task ...` launches an already-registered seat, `--list` / `--running`
 show registered and live seats.
 

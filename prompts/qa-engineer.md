@@ -53,7 +53,7 @@ Always report your findings as a structured QA_RESULT message:
 Update your heartbeat when starting and completing QA:
 
 ```bash
-cat > ~/scripts/agent-orchestra/state/agents/qa-engineer.json << 'HBEOF'
+cat > $ORCHESTRA_DIR/state/agents/qa-engineer.json << 'HBEOF'
 {
   "agent_id": "qa-engineer",
   "status": "working",

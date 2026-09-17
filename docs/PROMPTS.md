@@ -22,16 +22,16 @@ the exit code.
 
 ## First agent
 
-Why: "spawn a seat" is three separate commands (register, launch, verify) —
-an agent chaining them for you catches a typo in the registry field before it
-becomes a silent tmux failure.
+Why: `orchestra spawn` registers the seat, seeds its lineage (what a later
+rotation needs) and launches it in one step — an agent running it for you also
+verifies the tmux session and the API row.
 
 ```
-Register and spawn one seat named "hello" per docs/INSTALL.md §3: use
-scripts/registry-update.py to register it (tier T2, runtime = whatever I have
-authed, cwd = this repo), then AGENT_RUNTIME=<runtime> ./spawn-agent.sh hello
---task "Say hello, then park." Show me the tmux session is running and that
-GET /api/agents (through the dashboard proxy) lists it.
+Spawn one seat named "hello" per docs/GATE.md §2: `orchestra spawn hello --task
+"Say hello, then park."` (runtime = whatever I have authed). Do NOT use
+scripts/registry-update.py + spawn-agent.sh — that older recipe registers a seat
+with no lineage and step 6's rotation refuses it. Show me the tmux session is
+running and that GET /api/agents (through the dashboard proxy) lists it.
 ```
 
 ## Connect Telegram

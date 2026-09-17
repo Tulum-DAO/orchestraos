@@ -114,6 +114,11 @@ python3 scripts/rotate_agent.py <seat_name> --dry-run
 python3 scripts/rotate_agent.py <seat_name> [--runtime RUNTIME] [--model MODEL] [--task TASK] [--force]
 ```
 
+`orchestra rotate <seat> [--dry-run|--synthesize|--resume]` wraps the same script. Either
+form refuses a seat with no lineage in the identity store ("no authoritative generation") —
+that is a seat registered by hand (`registry-update.py` + `spawn-agent.sh`) instead of
+`orchestra spawn`; respawn it with `orchestra spawn` to make it rotatable.
+
 - `--runtime` / `--model` override what the successor boots on (default: inherit the seat's).
 - `--force` bypasses soft holds (use sparingly; the readiness/quota gates still apply).
 - The successor must pass the **comprehension readback** (it answers canary questions

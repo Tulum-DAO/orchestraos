@@ -29,7 +29,9 @@ orchestra up --detach && orchestra status
 Expected: `orchestra status` shows every supervised process (`gateway`, `api`,
 `dashboard`, `router`, the beats) with a live pid. Open
 `http://127.0.0.1:8891` (or `ssh -L 8891:127.0.0.1:8891` if remote) — the
-dashboard loads with an empty Agents list.
+dashboard loads with an empty Agents list. Inside a Docker container the services
+bind `127.0.0.1` by design, so check with `curl -s 127.0.0.1:8891/api/agents` from
+inside the container (or set `[dashboard] host = "0.0.0.0"` before publishing a port).
 
 **If it fails, look here:** `orchestra doctor`'s failing row names the exact
 fix (a missing CLI, a bad port, an unauthed runtime) — read its remedy line
@@ -40,13 +42,15 @@ stdout only says which child failed.
 ## 2. Always-on agent spawned, answers questions in terminal
 
 ```bash
-source scripts/orchestra-env.sh
-REGISTRY_PATH=$ORCHESTRA_DIR/registry.json python3 scripts/registry-update.py hello \
-    --field name=hello --field tmux_session=hello \
-    --field tier=T2 --field runtime=claude --field machine=vps --field cwd=$PWD
-AGENT_RUNTIME=claude ./spawn-agent.sh hello --task "Say hello, then park."
+orchestra spawn hello --task "Say hello, then park."
 tmux attach -t hello
 ```
+
+`orchestra spawn` registers the seat in the registry **and** seeds its lineage in the
+identity store (generation 1), which step 6's rotation requires. Do not use the older
+two-command recipe (`scripts/registry-update.py` + `./spawn-agent.sh`) here: it
+registers the seat but seeds no lineage, and `orchestra rotate` will refuse it with
+"no authoritative generation ... seed the seat via the identity store".
 
 Expected: the tmux pane shows the CLI's normal interactive UI, having already
 said hello per the task. Type a question directly into the pane (e.g. "what
@@ -61,8 +65,8 @@ Expected: `hello` appears with `"alive": true` within about 15 seconds of
 spawning (the status detector polls).
 
 **If it fails, look here:** `./spawn-agent.sh --list` shows registered seats,
-`--running` the live ones — if `hello` isn't in either, the registry write
-failed (check the `registry-update.py` command's exit code). If `tmux attach`
+`--running` the live ones — if `hello` isn't in either, `orchestra spawn`'s own
+output names the failing step. If `tmux attach`
 shows a workspace-trust prompt instead of the CLI, answer it once by hand — the
 spawner tries to pre-seed it (`scripts/ensure_cwd_trusted.py`) but a fresh CLI
 version can add a new prompt shape.
@@ -74,32 +78,42 @@ token. Export it — **never** paste it into a committed file or a chat message
 the agent can read back:
 
 ```bash
-export TELEGRAM_BOT_TOKEN=<your token>
+export TELEGRAM_BOT_TOKEN=<your token>     # or: echo 'TELEGRAM_BOT_TOKEN=<token>' >> $ORCHESTRA_DIR/.env.telegram
 ```
 
-Set `[notify] channel = "telegram"` in `orchestra.toml`, restart the
-supervisor (`orchestra down && orchestra up --detach`), then send yourself a
-test:
+Enable the plugin in `orchestra.toml` and restart the supervisor:
+
+```toml
+[plugins.telegram]
+enabled = true
+allowed_chat_ids = []     # [] = the first chat that messages the bot becomes the operator
+```
 
 ```bash
-python3 scripts/tg-notify.sh "test from the gate"
+orchestra doctor | grep plugin:telegram    # OK  token set; open; ...
+orchestra down && orchestra up --detach    # starts the `telegram` service (plugins/telegram/router.py)
 ```
 
-Expected: the message arrives on your phone within a few seconds.
+On your phone, open the bot and send `/start` — it replies with your chat id and
+remembers it. Then text it a question, e.g. `what seats are running?`. The gm seat
+(`orchestra spawn gm --gm` if you haven't) gets it in its inbox as
+`from_agent=telegram` and answers with `python3 plugins/telegram/tg_send.py "<text>"`.
+Full setup and the what-happens table: `plugins/telegram/README.md`.
 
-**If it fails, look here:** `orchestra doctor` should show a `notify:telegram`
-(or equivalent) row once this track lands — until then, check
-`<data>/logs/*.log` for the send attempt's HTTP response; a 401 means the
-token is wrong, a timeout means the bot was never started with `/start` from
-your phone first.
+Expected: your text shows up in gm's pane within a minute (`tmux attach -t gm`),
+and gm's answer arrives on your phone.
+
+**If it fails, look here:** `orchestra doctor`'s `plugin:telegram` row names the
+problem (`MISSING` = no token in the environment `orchestra up` runs in; `INFO
+disabled` = the toml flag). `orchestra status` must list the `telegram` service
+with a pid; its log is `$ORCHESTRA_DIR/logs/telegram.log` (every inbound row id
+and every card push is printed there). `tg_send: no chat id` means nobody has
+sent the bot `/start` yet.
 
 ## 4. Two seats exchange a message, both visible in Inbox
 
 ```bash
-REGISTRY_PATH=$ORCHESTRA_DIR/registry.json python3 scripts/registry-update.py hello-2 \
-    --field name=hello-2 --field tmux_session=hello-2 \
-    --field tier=T2 --field runtime=claude --field machine=vps --field cwd=$PWD
-AGENT_RUNTIME=claude ./spawn-agent.sh hello-2 --task "Say hello, then park."
+orchestra spawn hello-2 --task "Say hello, then park."
 python3 msg_store.py send --from hello --to hello-2 --type task --subject test --body-file <(echo "hi from hello")
 python3 msg_store.py inbox --agent hello-2
 ```
@@ -137,21 +151,26 @@ wasn't idle when it tried.
 ## 6. Manual rotation of the always-on agent completed, nothing lost
 
 ```bash
-orchestra rotate hello   # if this command exists on your checkout — check `orchestra --help` first
-# otherwise:
-python3 scripts/rotate_agent.py hello
+orchestra rotate hello --synthesize
 ```
 
-`orchestra rotate` lands in PR: orchestra-builder (branch `tier0/spawn-rotate`
-as of this writing) — until it merges, `scripts/rotate_agent.py` runs the same
-sequence and is what's actually on `main` today.
+`--synthesize` writes a minimal handoff for a seat that has not banked one (a real
+seat banks its own baton with canary questions; `hello` has nothing to hand over yet).
+The successor then only has to prove it can read its own seat.
 
 Expected: a new generation of `hello` boots, reads the handoff the old one
 wrote, answers a short set of canary questions anchored in the predecessor's
 own state, and — on a passing grade — is promoted: the registry's canonical
 pointer for `hello` now points at the new generation, the old one is retired.
 
-**If it fails, look here:** the handoff document and the successor's readback
+**If it fails, look here:** `rotation REFUSED ... no authoritative generation ...
+seed the seat via the identity store` means the seat was not spawned with
+`orchestra spawn` (step 2) — the older `registry-update.py` + `spawn-agent.sh`
+recipe registers a seat without a lineage. Spawn it again with `orchestra spawn`
+(a new name is simplest) and retry. `HOLD_GRADE` means the successor's readback
+did not clear the strict grader; with `--synthesize` on a seat this young the
+usual cause is a predecessor transcript too thin to anchor against — ask `hello`
+to do a little real work first, then retry. The handoff document and the successor's readback
 are both real files (see `docs/ARCHITECTURE.md`'s Vocabulary section for
 where) — read them; a failed promotion almost always shows up as a readback
 answer that doesn't match an anchor in the predecessor's transcript, which

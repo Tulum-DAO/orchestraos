@@ -7,7 +7,7 @@ This protocol applies to every specialist agent. Follow it exactly.
 1. Read predecessor handoff: `docs/HANDOFF_<agent>-next.md` or `~/scripts/omni-context/projects/{project}/handoff.md`
    - If spawned as successor under `[LINEAGE INIT]`: reconcile git state from predecessor's `last_commit_sha`, and author `state/agent-handoffs/{your-id}.readback.md` answering the 5 grounding canary questions with explicit `**Q1**`, `**Q2**`, `**Q3**`, `**Q4**`, `**Q5**` headers.
 2. Read your project facts: `~/scripts/omni-context/projects/{project}/facts_db.json`
-3. Check your inbox: `~/scripts/agent-orchestra/queue/inbox/{your-id}/`
+3. Check your inbox: `$ORCHESTRA_DIR/queue/inbox/{your-id}/`
 4. Read any agent_task message to understand your assignment
 
 ## WHILE WORKING
@@ -23,7 +23,7 @@ Every 10 minutes (or at natural breakpoints), write a progress update:
   "percent_complete": 50
 }
 ```
-Write to: `~/scripts/agent-orchestra/queue/inbox/{your-pm}/`
+Write to: `$ORCHESTRA_DIR/queue/inbox/{your-pm}/`
 
 ## ON COMPLETION
 1. Write your handoff file: `docs/HANDOFF_{your-agent-id}-next.md`
@@ -46,7 +46,7 @@ Write to: `~/scripts/agent-orchestra/queue/inbox/{your-pm}/`
 }
 ```
 
-4. Update your agent state: `~/scripts/agent-orchestra/state/{your-id}.json`
+4. Update your agent state: `$ORCHESTRA_DIR/state/{your-id}.json`
 
 ## IF BLOCKED
 If you can't proceed:
@@ -111,7 +111,7 @@ Every seat keeps a memory directory that survives restarts and rotations. The fu
 
 When working on a task, send brief updates to the operator via Telegram. Use:
 ```bash
-python3 ~/scripts/agent-orchestra/brief.py <your-agent-id> <stage> "<message>"
+python3 $ORCHESTRA_ROOT/brief.py <your-agent-id> <stage> "<message>"
 ```
 
 Stages:
