@@ -231,7 +231,7 @@ def test_init_installs_claude_hooks_into_config_dir(tmp_path, monkeypatch):
     shutil.copytree(real / "hooks", root / "hooks", ignore=shutil.ignore_patterns("tests", "__pycache__"))
     (root / "scripts" / "lineage_daemon").mkdir(parents=True, exist_ok=True)
     (root / "scripts" / "lineage_daemon" / "bus_feeder.py").write_text("")
-    report = I.run_init(root, data_dir=tmp_path / "data", run=Runner(), skip_npm=True, skip_venv=True)
+    report = I.run_init(root, data_dir=tmp_path / "data", run=Runner(), skip_npm=True, skip_venv=True, yes=True)
     done = {r.step: r for r in report}
     assert done["hooks"].did, done["hooks"].detail
     s = json.loads((cfg / "settings.json").read_text())
@@ -258,3 +258,121 @@ def test_sandbox_fixture_isolates_tmux_and_config_dir():
     """The autouse sandbox: no test can reach the developer's tmux server or Claude config."""
     assert "TMUX" not in os.environ
     assert os.environ["TMUX_TMPDIR"].startswith("/tmp") and "claude-config" in os.environ["CLAUDE_CONFIG_DIR"]
+
+
+# ---- shared-config footprint (rab msg_2ea45964, gm-accepted Tier 0 item, 2026-09-17) ----
+# `orchestra init` on a host that already runs OrchestraOS ignored ORCHESTRA_DIR and wrote the
+# operator's real ~/.orchestra + ~/.claude/settings.json without asking. Rulings: (1) env
+# ORCHESTRA_DIR / CLAUDE_CONFIG_DIR win over config data.dir; (2) print the hook plan and ask,
+# or accept --yes; (3) never touch the default ~/.orchestra when ORCHESTRA_DIR points elsewhere.
+
+def _hooks_repo(tmp_path: Path):
+    import shutil
+    root = _repo(tmp_path)
+    real = Path(I.__file__).resolve().parent.parent
+    shutil.copytree(real / "hooks", root / "hooks", ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    (root / "scripts" / "lineage_daemon").mkdir(parents=True, exist_ok=True)
+    (root / "scripts" / "lineage_daemon" / "bus_feeder.py").write_text("")
+    return root
+
+
+def test_init_honors_ORCHESTRA_DIR_over_the_default_and_never_touches_home_orchestra(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    data = tmp_path / "elsewhere"
+    monkeypatch.setenv("ORCHESTRA_DIR", str(data))
+    root = _repo(tmp_path)
+    report = I.run_init(root, data_dir=None, run=Runner(), skip_npm=True, skip_venv=True)
+    assert (data / "state").is_dir()
+    assert not (tmp_path / "home" / ".orchestra").exists()
+    assert f'dir = "{data}"' in (root / "orchestra.toml").read_text()
+    assert str(data) in {r.step: r for r in report}["data-dir"].detail
+
+
+def test_init_honors_ORCHESTRA_DIR_over_an_existing_config_and_says_so(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    from_config = tmp_path / "from-config"
+    (root / "orchestra.toml").write_text(f'[data]\ndir = "{from_config}"\n')
+    data = tmp_path / "from-env"
+    monkeypatch.setenv("ORCHESTRA_DIR", str(data))
+    report = I.run_init(root, data_dir=None, run=Runner(), skip_npm=True, skip_venv=True)
+    done = {r.step: r for r in report}
+    assert (data / "state").is_dir()
+    assert not from_config.exists()
+    # config is never rewritten, but the operator is told the env override applied
+    assert f'dir = "{from_config}"' in (root / "orchestra.toml").read_text()
+    assert "ORCHESTRA_DIR" in done["config"].detail and str(data) in done["config"].detail
+
+
+def test_init_explicit_flag_still_beats_ORCHESTRA_DIR(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path / "env"))
+    root = _repo(tmp_path)
+    I.run_init(root, data_dir=tmp_path / "flag", run=Runner(), skip_npm=True, skip_venv=True)
+    assert (tmp_path / "flag" / "state").is_dir() and not (tmp_path / "env").exists()
+
+
+def test_init_hooks_are_skipped_non_interactively_without_yes(tmp_path, monkeypatch):
+    root = _hooks_repo(tmp_path)
+    cfg = tmp_path / "claude-cfg"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    monkeypatch.delenv("ORCHESTRA_YES", raising=False)
+    (cfg).mkdir()
+    (cfg / "settings.json").write_text('{"model": "keep-me", "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "mine"}]}]}}')
+    before = (cfg / "settings.json").read_text()
+    report = I.run_init(root, data_dir=tmp_path / "data", run=Runner(), skip_npm=True, skip_venv=True,
+                        confirm=None, interactive=False)
+    done = {r.step: r for r in report}
+    assert not done["hooks"].did
+    assert "--yes" in done["hooks"].detail and str(cfg / "settings.json") in done["hooks"].detail
+    assert (cfg / "settings.json").read_text() == before
+
+
+def test_init_hooks_prompt_shows_the_plan_and_a_no_writes_nothing(tmp_path, monkeypatch):
+    root = _hooks_repo(tmp_path)
+    cfg = tmp_path / "claude-cfg"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    seen = []
+
+    def decline(prompt: str) -> bool:
+        seen.append(prompt)
+        return False
+
+    report = I.run_init(root, data_dir=tmp_path / "data", run=Runner(), skip_npm=True, skip_venv=True,
+                        confirm=decline)
+    done = {r.step: r for r in report}
+    assert not done["hooks"].did and "declined" in done["hooks"].detail
+    assert not (cfg / "settings.json").exists()
+    assert len(seen) == 1
+    plan = seen[0]
+    assert str(cfg / "settings.json") in plan and "12 hook rows" in plan
+    assert f'ORCHESTRA_DIR="{tmp_path / "data"}"' in plan          # the exact command text it will write
+    assert "agent-queue-drain.py" in plan
+
+
+def test_init_hooks_prompt_yes_installs(tmp_path, monkeypatch):
+    root = _hooks_repo(tmp_path)
+    cfg = tmp_path / "claude-cfg"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    report = I.run_init(root, data_dir=tmp_path / "data", run=Runner(), skip_npm=True, skip_venv=True,
+                        confirm=lambda _p: True)
+    assert {r.step: r for r in report}["hooks"].did
+    assert (cfg / "settings.json").exists()
+
+
+def test_init_yes_flag_installs_hooks_without_asking(tmp_path, monkeypatch):
+    root = _hooks_repo(tmp_path)
+    cfg = tmp_path / "claude-cfg"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    asked = []
+    report = I.run_init(root, data_dir=tmp_path / "data", run=Runner(), skip_npm=True, skip_venv=True,
+                        yes=True, confirm=lambda p: asked.append(p) or True, interactive=False)
+    assert {r.step: r for r in report}["hooks"].did and asked == []
+
+
+def test_init_ORCHESTRA_YES_env_counts_as_yes(tmp_path, monkeypatch):
+    root = _hooks_repo(tmp_path)
+    cfg = tmp_path / "claude-cfg"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    monkeypatch.setenv("ORCHESTRA_YES", "1")
+    report = I.run_init(root, data_dir=tmp_path / "data", run=Runner(), skip_npm=True, skip_venv=True,
+                        interactive=False)
+    assert {r.step: r for r in report}["hooks"].did

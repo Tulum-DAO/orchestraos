@@ -24,14 +24,24 @@ Install and log in to ONE agent CLI (the runtime catalog probes these):
 ```bash
 git clone https://github.com/Tulum-DAO/orchestraos.git orchestraos && cd orchestraos
 make install                 # symlinks bin/orchestra into ~/.local/bin (or use ./bin/orchestra)
-orchestra init               # data dir (~/.orchestra), orchestra.toml, .venv + pip, npm install, builds
+orchestra init               # data dir (~/.orchestra), orchestra.toml, .venv + pip, npm install, builds;
+                             # shows the Claude hook rows it will add to ~/.claude/settings.json and asks (or --yes)
 $EDITOR orchestra.toml       # set [runtimes] enabled to the CLI you logged in to, e.g. ["claude"]
 orchestra doctor             # every row OK (WARN/INFO rows are advisory); exit code 0
 ```
 
 `orchestra init` is idempotent: it never overwrites `orchestra.toml`, skips what
-exists, and prints did/skipped per step. `--data-dir PATH` moves state elsewhere;
-`--no-npm` / `--no-venv` / `--no-build` skip the slow steps.
+exists, and prints did/skipped per step. `--data-dir PATH` moves state elsewhere
+(so does `ORCHESTRA_DIR=PATH` in the environment: flag > `ORCHESTRA_DIR` > `[data] dir`
+in orchestra.toml > `~/.orchestra`, and the default `~/.orchestra` is never touched when
+the env names another dir); `--no-npm` / `--no-venv` / `--no-build` skip the slow steps.
+
+The last step writes hook rows into your Claude Code settings
+(`$CLAUDE_CONFIG_DIR/settings.json`, default `~/.claude/settings.json`) — a file every
+Claude session on the machine reads. init prints exactly the rows it will add and asks
+`y/N`; `--yes` (or `ORCHESTRA_YES=1`) answers yes, and a non-interactive run without it
+SKIPS the hooks and says so (unattended installs: `orchestra init --yes`;
+`ORCHESTRA_SKIP_HOOKS=1` for a container that runs no Claude seats).
 
 If you don't want the voice brain, set `[arturo] enabled = false` — the flask/openai
 rows in doctor become INFO and `orchestra up` skips it.

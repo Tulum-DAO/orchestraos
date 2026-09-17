@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-from .settings import DEFAULT_DATA_DIR, read_toml
+from .settings import DEFAULT_DATA_DIR, read_toml, resolve_data_dir
 
 DATA_SUBDIRS = ("state", "logs", "queue", "state/event-stream", "state/uploads",
                 "state/arturo", "logs/arturo", "state/agent-handoffs")
@@ -174,24 +174,34 @@ def _git_init_data_dir(data_dir: Path, run: Callable) -> bool:
 
 def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable = default_run,
              skip_npm: bool = False, skip_venv: bool = False, skip_build: bool = False,
-             config_path: Optional[Path] = None, demo: bool = False) -> list:
+             config_path: Optional[Path] = None, demo: bool = False,
+             yes: bool = False, confirm: Optional[Callable[[str], bool]] = None,
+             interactive: Optional[bool] = None) -> list:
+    """yes / $ORCHESTRA_YES=1: write the Claude settings hooks without asking. confirm(plan) -> bool:
+    the prompt (tests inject one; the CLI reads a y/N from the terminal). interactive=None:
+    detect a TTY; False: never prompt (a non-interactive run without --yes SKIPS the hooks)."""
     repo_root = Path(repo_root)
     config_path = Path(config_path or os.environ.get("ORCHESTRA_CONFIG") or repo_root / "orchestra.toml")
     report: list[Step] = []
+    yes = yes or os.environ.get("ORCHESTRA_YES", "").strip() not in ("", "0")
 
-    # 1. resolve the data dir: flag > existing config > default
-    if data_dir is None and config_path.exists():
+    # 1. resolve the data dir: flag > $ORCHESTRA_DIR > existing config > default (settings.resolve_data_dir)
+    raw: dict = {}
+    if config_path.exists():
         try:
-            data_dir = Path(os.path.expanduser(str((read_toml(config_path).get("data") or {}).get("dir", "")))) or None
+            raw = read_toml(config_path)
         except Exception:  # noqa: BLE001
-            data_dir = None
-        if data_dir is not None and str(data_dir) in ("", "."):
-            data_dir = None
-    data_dir = Path(os.path.expanduser(str(data_dir or DEFAULT_DATA_DIR))).resolve()
+            raw = {}
+    data_dir = resolve_data_dir(raw, data_dir).resolve()
 
     # 2. config file (never overwritten)
     if config_path.exists():
-        report.append(Step("config", False, f"kept existing {config_path}"))
+        cfg_dir = str(((raw.get("data") or {}).get("dir", "")) or "").strip()
+        env_dir = os.environ.get("ORCHESTRA_DIR", "").strip()
+        if env_dir and cfg_dir and Path(os.path.expanduser(cfg_dir)).resolve() != data_dir:
+            report.append(Step("config", False, f"kept existing {config_path}; ORCHESTRA_DIR={data_dir} overrides its data.dir={cfg_dir} for this run"))
+        else:
+            report.append(Step("config", False, f"kept existing {config_path}"))
     else:
         example = repo_root / "orchestra.example.toml"
         text = _rewrite_data_dir(example.read_text(), data_dir) if example.exists() \
@@ -366,15 +376,46 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
             sys.path.insert(0, str(repo_root / "hooks"))
             import install as _hooks  # noqa: WPS433
             settings_path = Path(os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude"))) / "settings.json"
-            rep = _hooks.install(settings_path=settings_path, repo_root=repo_root, data_dir=data_dir)
-            if rep.get("error"):
-                report.append(Step("hooks", False, rep["error"]))
+            plan = _hooks.plan(settings_path=settings_path, repo_root=repo_root, data_dir=data_dir)
+            if plan.get("error"):
+                report.append(Step("hooks", False, plan["error"]))
             else:
-                report.append(Step("hooks", True, f"{rep['installed']} hook rows -> {settings_path} (replaced {rep['removed']} previous)"))
+                # The operator's Claude settings are shared with every other Claude session on the
+                # host: show exactly what will be written and ask (or --yes). 2026-09-17: an init
+                # run from a proof worktree installed 12 rows into the operator's live file unasked.
+                text = _hooks.render_plan(plan)
+                if yes:
+                    go = True
+                elif confirm is not None:
+                    go = bool(confirm(text))
+                elif (sys.stdin.isatty() if interactive is None else interactive):
+                    go = _tty_confirm(text)
+                else:
+                    go = None
+                if go is None:
+                    report.append(Step("hooks", False, f"skipped: not a terminal and no --yes; {len(plan['rows'])} hook rows NOT written to {settings_path} "
+                                                     f"(re-run `orchestra init --yes`, or ORCHESTRA_SKIP_HOOKS=1 to silence)"))
+                elif not go:
+                    report.append(Step("hooks", False, f"declined: {len(plan['rows'])} hook rows NOT written to {settings_path}"))
+                else:
+                    rep = _hooks.install(settings_path=settings_path, repo_root=repo_root, data_dir=data_dir)
+                    if rep.get("error"):
+                        report.append(Step("hooks", False, rep["error"]))
+                    else:
+                        report.append(Step("hooks", True, f"{rep['installed']} hook rows -> {settings_path} (replaced {rep['removed']} previous)"))
         except Exception as e:  # noqa: BLE001
             report.append(Step("hooks", False, f"hook install failed: {e}"))
 
     return report
+
+
+def _tty_confirm(text: str) -> bool:
+    print(text)
+    try:
+        ans = input("Write these hook rows? [y/N] ").strip().lower()
+    except EOFError:
+        return False
+    return ans in ("y", "yes")
 
 
 def render_report(report: list) -> str:
