@@ -1,0 +1,20 @@
+flowchart LR
+  H[You<br/>phone · watch · web · Telegram] -- cards, answers --> G[Gateway<br/>watch_gateway.py]
+  H -- text / voice --> A[Arturo<br/>services/arturo]
+  H -- terminal --> S1
+  A -- commission --> M[(msg_store)]
+  G -- resume --> M
+  M -- inbox --> S1[Seat gm<br/>always-on manager]
+  M -- inbox --> S2[Seat worker<br/>tmux + agent CLI]
+  S1 -- spawn / brief --> S2
+  S2 -- approval.py --> AP[(approvals)]
+  AP -- push --> G
+  R[Rotation beat<br/>scripts/lineage_daemon] -- arm · swap · verify --> S1
+  R --> S2
+  ID[(registry DB<br/>lineages · generations · canonical)] --- R
+  ID --- S1
+  ID --- S2
+  F[(facts store<br/>recall after restart)] --- A
+  F --- S1
+  HK[Hooks<br/>PreToolUse · Stop] -.-> S1
+  HK -.-> S2
