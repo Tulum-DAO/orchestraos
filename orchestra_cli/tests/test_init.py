@@ -258,3 +258,17 @@ def test_sandbox_fixture_isolates_tmux_and_config_dir():
     """The autouse sandbox: no test can reach the developer's tmux server or Claude config."""
     assert "TMUX" not in os.environ
     assert os.environ["TMUX_TMPDIR"].startswith("/tmp") and "claude-config" in os.environ["CLAUDE_CONFIG_DIR"]
+
+
+def test_init_creates_facts_and_memory_dirs(tmp_path):
+    """Gate step 7 (fact written -> restart -> Arturo recalls it) needs the facts
+    store dir to exist for POST /api/facts, and the per-agent memory convention
+    (docs/MEMORY.md) needs its root — both are data, created by init."""
+    root = _repo(tmp_path)
+    data = tmp_path / "data"
+    I.run_init(root, data_dir=data, run=Runner())
+    assert (data / "facts").is_dir()
+    assert (data / "memory").is_dir()
+    ignored = (data / ".gitignore").read_text()
+    # memory is per-agent durable knowledge — committed with the handoffs, not ignored
+    assert "!/memory/**" in ignored

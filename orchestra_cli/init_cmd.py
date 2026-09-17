@@ -13,7 +13,9 @@ from typing import Callable, Optional
 from .settings import DEFAULT_DATA_DIR, read_toml
 
 DATA_SUBDIRS = ("state", "logs", "queue", "state/event-stream", "state/uploads",
-                "state/arturo", "logs/arturo", "state/agent-handoffs")
+                "state/arturo", "logs/arturo", "state/agent-handoffs",
+                "facts",      # dashboard/API facts store (POST /api/facts) — Arturo recall reads it
+                "memory")     # per-agent memory convention root (docs/MEMORY.md)
 
 
 @dataclass
@@ -160,9 +162,10 @@ def _git_init_data_dir(data_dir: Path, run: Callable) -> bool:
     ignore = data_dir / ".gitignore"
     if not ignore.exists():
         # git needs every parent dir un-ignored for a nested path to be trackable
-        ignore.write_text("# orchestra data dir: only handoffs/readbacks and docs are versioned\n"
+        ignore.write_text("# orchestra data dir: only handoffs/readbacks, docs and agent memory are versioned\n"
                           "/*\n!/.gitignore\n!/state/\n/state/*\n!/state/agent-handoffs/\n"
-                          "!/state/agent-handoffs/**\n!/docs/\n!/docs/**\n")
+                          "!/state/agent-handoffs/**\n!/docs/\n!/docs/**\n"
+                          "!/memory/\n!/memory/**\n")
     if run(["git", "init", "-q", str(data_dir)]) != 0:
         return False
     run(["git", "-C", str(data_dir), "config", "user.name", "orchestra"])
