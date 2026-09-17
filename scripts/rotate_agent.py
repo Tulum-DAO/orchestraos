@@ -338,6 +338,7 @@ Autonomous mechanical rotation requested on-demand. All working trees, state fil
     return handoff_path
 
 
+SYNTHESIZED_BATON_MARK = "(synthesized by `orchestra rotate --synthesize`)"
 _CANARY_LINE_KEYS = ("id", "question", "expected_answer", "source_pointer")
 
 
@@ -449,9 +450,10 @@ def ensure_canary_artifact(successor_alias: str, seat_name: str) -> Path:
 
     for bp in _baton_paths_for_seat(seat_name):
         try:
-            qs = parse_baton_canary_questions(bp.read_text(encoding="utf-8")) if bp.exists() else []
+            baton_text = bp.read_text(encoding="utf-8") if bp.exists() else ""
+            qs = parse_baton_canary_questions(baton_text) if baton_text else []
         except (OSError, UnicodeDecodeError):
-            qs = []
+            baton_text, qs = "", []
         if qs:
             qs = normalize_baton_canary(qs)
             canary_path.write_text(json.dumps({
@@ -460,6 +462,9 @@ def ensure_canary_artifact(successor_alias: str, seat_name: str) -> Path:
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "source": "baton",
                 "source_path": str(bp),
+                # `orchestra rotate --synthesize` marks its baton; the grader then uses a
+                # distinct-evidence floor of 1 (everything else strict, gm msg_2520355c)
+                "synthesized": SYNTHESIZED_BATON_MARK in baton_text,
                 "questions": qs,
             }, indent=2), encoding="utf-8")
             log(f"Authored canary artifact at {canary_path} from baton {bp} ({len(qs)} q)")
