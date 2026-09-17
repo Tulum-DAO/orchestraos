@@ -30,7 +30,7 @@ from flask import Flask, request, Response, jsonify
 # --- Intent Router + Conversation Log ---
 try:
     import sys as _sys
-    _sys.path.insert(0, str(Path.home() / "scripts" / "agent-orchestra" / "lib"))
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "lib"))
     from intent_router import route_message as _intent_route
     from conversation_log import log_conversation as _conv_log
     print("[JARVIS] Intent router + conversation log loaded")
@@ -71,10 +71,12 @@ ARTURO_LOGS = ORCHESTRA_DIR / "logs" / "arturo"
 # written to the SHARED state/voice-calls/vc_<id>.json (the gateway + app poller read it).
 import threading as _threading
 import sys as _sys
-# Run as a bare script (cwd=agent-orchestra) so the `services` package isn't importable by
-# default — add the repo root so `services.arturo.*` resolves both as-script and as-module.
-if str(ORCHESTRA_DIR) not in _sys.path:
-    _sys.path.insert(0, str(ORCHESTRA_DIR))
+# Run as a bare script so the `services` package isn't importable by default — add the CODE
+# root (this checkout) so `services.arturo.*` resolves both as-script and as-module. Never
+# the data dir: with the code/data split (`orchestra init` puts data outside the checkout)
+# the two differ, and the data dir has no `services` package.
+if str(_REPO_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_REPO_ROOT))
 from services.arturo.call_journal import CallJournal as _CallJournal
 
 # B1-thin: shared tasks.db connect (WAL + 30s busy_timeout). __file__-relative so it
@@ -134,12 +136,14 @@ if os.environ.get("ARTURO_STREAM_RELAY") == "1":
 
 
 def _warm_facts_cache():
-    # gm msg_5d10b3f0 item 3: warm the facts/worldview query at boot (mirrors the
-    # voices-cache-warm pattern) so turn 1 after a cold boot doesn't lose the FACTS
-    # block to the 250ms budget wall. Best-effort, read-only, never fatal.
+    # Warm the facts query at boot (mirrors the voices-cache-warm pattern) so turn 1
+    # after a cold boot doesn't lose the FACTS block to the 250ms budget wall, then stay
+    # resident: re-warm every 30 min and during a 15-min-idle stretch (a long-idle
+    # proxy re-cools its page cache). Best-effort, read-only, never fatal.
     try:
         from services.arturo import facts_recall as _fr_warm
         _fr_warm.warm_cache()
+        _fr_warm.keep_warm(interval_s=1800, idle_s=900, tick_s=60)
     except Exception:
         pass
 # env-gated (run.sh sets it) so test imports of this module never touch the live db
@@ -1156,7 +1160,9 @@ def _knowledge_lookup(query, category=None):
     # The knowledge tool is Arturo's #1 tool for people/projects, so it MUST also
     # query the brain. Additive: the curated priorities/people/projects answer is
     # KEPT and the top relevant REAL brain facts are appended. Reuses the bounded,
-    # scored, noise-filtered facts_recall.query_facts path (fast, read-only).
+    # scored, noise-filtered facts_recall.query_sources path (fast, read-only) — the
+    # SAME merged sources as the passive FACTS block, so a fact written on the
+    # dashboard surfaces on every path Arturo answers from.
     # Gated on ARTURO_FACTS_RECALL (same flag as the passive facts seam).
     if category in (None, "people", "projects") and os.environ.get("ARTURO_FACTS_RECALL") == "1":
         try:
@@ -1166,7 +1172,7 @@ def _knowledge_lookup(query, category=None):
                 from services.arturo import facts_recall as _fr
             _kws = _fr.extract_keywords(query)
             if _kws:
-                _bf = _fr.query_facts(_fr.default_db_path(), _kws, k=4)
+                _bf = _fr.query_sources(_kws, k=4)
                 if _bf:
                     _lines = []
                     for _f in _bf:
