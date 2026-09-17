@@ -17,7 +17,7 @@ clobber a human mid-composition. This one never does). Design goals, in order:
      (fail safe: a queued message beats a clobbered prompt).
 
 Run from cron every minute:
-  * * * * * cd ~/scripts/agent-orchestra && python3 scripts/message-router.py --cron >> logs/message-router.log 2>&1
+  * * * * * cd <checkout> && ORCHESTRA_DIR=<data dir> python3 scripts/message-router.py --cron >> <data dir>/logs/message-router.log 2>&1  (orchestra up runs this beat for you)
 """
 
 import json
@@ -30,7 +30,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra")))
+ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR") or os.environ.get("ORCH_DIR") or os.path.expanduser("~/orchestra"))
+# CODE lives in the checkout (this file's parent's parent), never in the data dir.
+CODE_ROOT = Path(os.environ.get("ORCHESTRA_ROOT") or Path(__file__).resolve().parent.parent)
 sys.path.insert(0, str(ORCHESTRA_DIR))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from msg_store import MessageStore  # noqa: E402
@@ -68,7 +70,7 @@ ALERT_FILE = Path("/tmp/message-router-alerts.json")
 # now; load_holds() migrates in-flight counters from the legacy path exactly once
 # (gm bind: the move must not lose counters — a row 3 escalations deep must not
 # restart at zero and become immortal).
-HOLD_FILE = Path(__file__).resolve().parent.parent / "state" / "message-router-holds.json"
+HOLD_FILE = ORCHESTRA_DIR / "state" / "message-router-holds.json"   # data dir, not the checkout
 HOLD_FILE_LEGACY = Path("/tmp/message-router-holds.json")
 HOLD_LOG_THROTTLE_S = 600     # log each (session|reason) hold at most once / 10min
 HOLD_SLA_S = 900              # a row held past this escalates (guard-a, backstop)
@@ -1229,7 +1231,7 @@ def format_injection(msg, store) -> str:
     return (
         f"[MSG from {msg['from_agent']} | {msg['priority']}]{prefix_str} "
         f"{(msg.get('subject') or 'message')[:80]} — Read {msg_file} and act on it. "
-        f"To reply: python3 ~/scripts/agent-orchestra/msg_store.py send "
+        f"To reply: python3 {CODE_ROOT / 'msg_store.py'} send "
         f"--from YOUR_AGENT_ID --to {msg['from_agent']} --type reply "
         f"--subject 're: {(msg.get('subject') or '')[:40]}' --body 'your reply'"
     )

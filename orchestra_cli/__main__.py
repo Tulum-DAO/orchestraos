@@ -30,6 +30,23 @@ def parse_args(argv=None) -> argparse.Namespace:
     u.add_argument("--dry-run", action="store_true", help="print the process table and exit")
     u.add_argument("-d", "--detach", action="store_true", help="run the supervisor in the background")
 
+    sp = sub.add_parser("spawn", help="register + launch a seat in tmux (`--gm` = the General Manager)")
+    sp.add_argument("seat")
+    sp.add_argument("--gm", action="store_true", help="spawn as the General Manager (prompts/gm.md, tier T1, always-on)")
+    sp.add_argument("--task", help="first instruction injected into the seat")
+    sp.add_argument("--runtime", choices=["claude", "gemini", "codex"], help="default: first of [runtimes] enabled")
+    sp.add_argument("--model", help="model id for the runtime (default per runtime)")
+    sp.add_argument("--tier", help="T1 (always-on, coordinator) or T2 (worker); default T2, T1 with --gm")
+    sp.add_argument("--prompt", help="role prompt path relative to the checkout (default prompts/<seat>.md)")
+
+    ro = sub.add_parser("rotate", help="rotate a seat: spawn a successor, it answers the baton's canary, strict grade, promote")
+    ro.add_argument("seat")
+    ro.add_argument("--dry-run", action="store_true", help="verify preconditions only")
+    ro.add_argument("--synthesize", action="store_true", help="write a minimal baton when the seat has not banked one")
+    ro.add_argument("--resume", action="store_true", help="the successor pane is already up (a held attempt): grade its readback and promote, no new spawn")
+    ro.add_argument("--runtime", choices=["claude", "gemini", "codex"])
+    ro.add_argument("--model")
+
     sub.add_parser("down", help="stop the running supervisor and its children")
     s = sub.add_parser("status", help="show the supervisor's process table")
     s.add_argument("--json", action="store_true")
@@ -127,7 +144,9 @@ def cmd_status(ns) -> int:
 
 def main(argv=None) -> int:
     ns = parse_args(argv)
-    return {"init": cmd_init, "doctor": cmd_doctor, "up": cmd_up, "down": cmd_down, "status": cmd_status}[ns.command](ns)
+    from .seats import cmd_rotate, cmd_spawn
+    return {"init": cmd_init, "doctor": cmd_doctor, "up": cmd_up, "down": cmd_down, "status": cmd_status,
+            "spawn": cmd_spawn, "rotate": cmd_rotate}[ns.command](ns)
 
 
 if __name__ == "__main__":

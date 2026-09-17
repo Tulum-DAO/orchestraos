@@ -35,8 +35,12 @@ class Runner:
         self.calls.append((tuple(argv), str(cwd)))
         self.calls_with_env.append((tuple(argv), str(cwd), dict(env or {})))
         argv = list(argv)
-        cwd = Path(cwd)
-        if argv[-2:] == ["-m", "venv"] or "venv" in argv:
+        cwd = Path(cwd) if cwd else Path(".")
+        if argv[:2] == ["git", "init"]:
+            (Path(argv[-1]) / ".git").mkdir(parents=True, exist_ok=True)   # simulate the data-dir repo
+        elif argv[:1] == ["git"]:
+            pass
+        elif argv[-2:] == ["-m", "venv"] or "venv" in argv:
             venv = Path(argv[-1])
             (venv / "bin").mkdir(parents=True, exist_ok=True)
             (venv / "bin" / "python").write_text("")
@@ -100,7 +104,7 @@ def test_init_skips_npm_and_venv_when_asked(tmp_path):
     done = {r.step: r for r in report}
     assert done["venv"].did is False and "skipped" in done["venv"].detail
     assert done["npm:api"].did is False
-    assert runner.calls == []
+    assert [c for c in runner.calls if c[0][0] != "git"] == []   # only the data-dir git init ran
 
 
 def test_init_reads_data_dir_from_existing_config(tmp_path):
@@ -233,3 +237,18 @@ def test_init_installs_claude_hooks_into_config_dir(tmp_path, monkeypatch):
     s = json.loads((cfg / "settings.json").read_text())
     cmds = [h["command"] for rules in s["hooks"].values() for r in rules for h in r["hooks"]]
     assert any("agent-queue-drain.py" in c and f'ORCHESTRA_DIR="{tmp_path / "data"}"' in c for c in cmds)
+
+
+def test_init_makes_the_data_dir_a_git_repo_for_rotation_artifacts(tmp_path):
+    """The promotion gate proves the successor's readback by commit in the data dir."""
+    root = _repo(tmp_path)
+    data = tmp_path / "data"
+    report = I.run_init(root, data_dir=data, run=I.default_run, skip_npm=True, skip_venv=True)
+    done = {r.step: r for r in report}
+    assert done["data-git"].did, done["data-git"].detail
+    assert (data / ".git").is_dir()
+    ignored = (data / ".gitignore").read_text()
+    assert "!/state/agent-handoffs/**" in ignored and "!/docs/**" in ignored
+    # idempotent
+    report = I.run_init(root, data_dir=data, run=I.default_run, skip_npm=True, skip_venv=True)
+    assert {r.step: r for r in report}["data-git"].detail == "present"
