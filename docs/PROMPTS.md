@@ -103,8 +103,10 @@ new generation actually reads it rather than starting blank.
 ```
 Have the "hello" seat write one fact to its memory directory (a short
 one-fact file plus an update to its MEMORY.md index — see
-docs/ARCHITECTURE.md's Memory section for the shape). Restart or rotate the
-seat, then have the new generation recall that exact fact without me telling
+docs/ARCHITECTURE.md's Memory section and docs/MEMORY.md, once it lands, for
+the shape; this is NOT the handoff document -- that carries position, not
+facts). Restart or rotate the seat, then have the new generation recall that
+exact fact without me telling
 it again, and show me where it read it from.
 ```
 

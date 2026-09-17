@@ -31,11 +31,22 @@ features:
   back — the same path `docs/ARCHITECTURE.md`'s "Approvals" section names, told as
   a trace with real file/function references, so a reader can go verify each hop
   themselves.
-- **"How memory survives a rotation."** Follows one fact from being written, through
-  a seat's handoff document, to a successor's readback — the same path
-  `docs/ARCHITECTURE.md`'s "Baton / handoff" and "Readback" vocabulary describes,
-  told end to end with the actual files involved (a seat's `MEMORY.md`, the handoff
-  doc, `docs/HANDOFF_<agent>-next.md`, the grader).
+- **"How memory survives a rotation."** Follows one fact from a one-fact file +
+  its `MEMORY.md` index line in the seat's memory directory
+  (`$ORCHESTRA_DIR/memory/<lineage-id>/` — the seat name with a trailing `-gN`/
+  `-genN` generation suffix stripped, so `hello-g4` and `hello-gen12` both map to
+  `memory/hello/`), through a rotation, to the successor reading that index at
+  boot — `spawn-agent.sh` creates the memory dir, seeds `MEMORY.md`, and puts the
+  path in the boot prompt with a read-first instruction, which is what actually
+  makes the successor read it. **The handoff document is a different, adjacent
+  mechanism — it does not carry the durable fact.** It carries the baton
+  (position: where the predecessor stopped, what's next, the canary questions);
+  the readback is the successor proving it read *both* the handoff and its own
+  memory directory. Getting this distinction backwards is a real trap — see
+  `docs/MEMORY.md`'s walkthrough (lands via semantic-recall-wiring-dev's PR
+  https://github.com/Tulum-DAO/orchestraos/pull/1) for the exact paths and an
+  end-to-end proof recipe before writing this doc, so the tutorial doesn't repeat
+  the mistake of routing the fact through the handoff.
 
 ## Files you will touch
 
@@ -46,6 +57,8 @@ features:
 - `docs/ARCHITECTURE.md` — add a "Where to start reading" cross-link to these three
   (it already has a "Where to start reading" section pointing at source files;
   extend it, don't replace it).
+- `docs/MEMORY.md` (semantic-recall-wiring-dev's PR #1) — the memory-rotation
+  tutorial's primary source; cite it rather than re-deriving the mechanism.
 
 ## Steps
 
@@ -58,8 +71,11 @@ features:
    watch it move through `msg_store`, the gateway, and (if Track 8 has landed) a
    push, and write down what you actually observed, with file/function references.
 4. Write "how memory survives a rotation" the same way: trigger or read through one
-   real rotation (or, if none is available to trigger live, walk an existing
-   handoff doc + its successor's readback and cite them).
+   real rotation, tracing the fact through the memory directory + `MEMORY.md`
+   index (not the handoff doc — that's the position/baton mechanism, a separate
+   trail worth mentioning but not the one that carries the fact). Cite
+   `docs/MEMORY.md` and the real `spawn-agent.sh` code that seeds the memory dir
+   and points the successor at it in its boot prompt.
 5. Have a newcomer (or a fresh agent with no prior context on this repo) follow the
    15-minute tutorial literally, with no maintainer help — note every place they
    get stuck and fix the doc, not the newcomer.

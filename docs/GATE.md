@@ -171,14 +171,22 @@ Restart or rotate `hello` (step 6), then inside the new generation:
 What's my favorite color?
 ```
 
-Expected: it answers correctly and can say where it read the fact from (its
-memory directory, indexed by `MEMORY.md` — see `docs/ARCHITECTURE.md`'s
-Memory section).
+Expected: it answers correctly and can say where it read the fact from — its
+memory directory at `$ORCHESTRA_DIR/memory/<lineage-id>/` (the seat name with
+its `-gN`/`-genN` generation suffix stripped), indexed by `MEMORY.md`.
+`spawn-agent.sh` seeds that directory and `MEMORY.md` at spawn time and puts
+the path in the new generation's boot prompt with a read-first instruction —
+that boot-prompt line, not the handoff document, is what makes the successor
+actually read it. See `docs/ARCHITECTURE.md`'s Memory section and
+`docs/MEMORY.md` (full walkthrough, once it lands) for the exact shape.
 
 **If it fails, look here:** if the new generation doesn't know, the fact
 either wasn't written to disk (check the memory directory directly) or the
 successor never read `MEMORY.md` at boot — both are things to fix before
-trusting rotation with anything that matters.
+trusting rotation with anything that matters. Don't look in the handoff
+document (`docs/HANDOFF_<agent>-next.md`) for the fact — that file carries
+the predecessor's position (where it stopped, what's next), never durable
+memory; a fact that only exists there will not survive.
 
 ## Done
 
