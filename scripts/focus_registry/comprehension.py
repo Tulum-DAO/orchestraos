@@ -209,17 +209,23 @@ def _grade_grounded(rows: list, given: dict, transcript_text: str,
             missed = [qid for qid, _ in sets
                       if per_q[qid].get("region_corroborated") is False]
         elif distinct_q < aggregate["distinct_min"]:
-            # Distinct-evidence veto: the culprits are exactly the questions whose
-            # grounded anchors are all cited by some other answer (gate rerun on
-            # 5b4f522: three individually-PASSing answers, the sid repeated in each,
-            # were reported as missed q1..q3 with no reason).
-            missed = [qid for qid, _ in sets if not exclusive[qid]]
+            # Aggregate-only veto (every per-question verdict PASS): missed stays []
+            # and the aggregate carries the reason + the exact culprits — the
+            # questions whose grounded anchors are all cited by some other answer
+            # (gate rerun on 5b4f522: three PASSing answers, the sid repeated in each,
+            # were reported as missed q1..q3 with no reason; gm ruling msg_cd1985d8).
+            culprits = [qid for qid, _ in sets if not exclusive[qid]]
+            aggregate["culprits"] = culprits
             aggregate["reason"] = (
-                f"distinct-evidence: {distinct_q} of {n} answers cite an anchor no other "
-                f"answer cites (need {aggregate['distinct_min']}); the same id repeated "
-                "across answers earns credit for only one of them — answers "
-                + ", ".join(missed) + " need an id/number/path exclusive to them")
-        if not missed:
+                f"distinct_q {distinct_q} < {aggregate['distinct_min']}: questions share "
+                "anchors — the same id repeated across answers earns credit for only one "
+                "of them; " + ", ".join(culprits) + " cite nothing exclusive to them")
+            missed = []
+        elif len(union) < aggregate["union_min"] or not aggregate["idclass"]:
+            aggregate["reason"] = (f"union {len(union)} < {aggregate['union_min']}" if len(union) < aggregate["union_min"]
+                                   else "no id-class anchor (sha / msg id / hex) grounded in any answer")
+            missed = []
+        if not missed and "reason" not in aggregate:
             missed = [qid for qid, _ in sets]
     return {"passed": ok, "missed": missed, "per_question": per_q,
             "aggregate": aggregate}
