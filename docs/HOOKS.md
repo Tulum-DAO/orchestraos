@@ -35,6 +35,13 @@ every tool call and blocks the host), never overwrites a settings file it cannot
 under pytest refuses to touch the real `~/.claude/settings.json` (`CLAUDE_CONFIG_DIR` is set to
 a temp dir by the test fixtures).
 
+## Testing on a host that runs a live fleet
+
+Never spawn or rotate test seats on the shared tmux server or against the real Claude config
+dir. `source scripts/test_sandbox_env.sh <name>` gives an isolated tmux server, config dir and
+data dir; the pytest suites apply the same sandbox automatically and kill the server on
+teardown. Installed hook commands fail OPEN at runtime: if a script is missing the hook exits 0.
+
 ## Gemini CLI and Codex: not yet
 
 Gemini CLI and Codex seats have no hook layer here. Their idle detection falls back to the
