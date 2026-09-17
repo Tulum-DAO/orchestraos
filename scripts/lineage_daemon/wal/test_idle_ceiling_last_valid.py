@@ -62,6 +62,31 @@ def test_idle_seat_in_lull_band_accepts_retained(tmp_path):
     assert d["action"] == "swap" and d["reason"] == "ctx:lull-swap", d
 
 
+def test_idle_seat_stale_read_predates_idle_not_calibrated(tmp_path):
+    """RETENTION WINDOW (gm ruling msg_de091167): the idle-ceiling trust ("its ctx cannot
+    have moved") only holds when the read was captured INSIDE the current idle stretch —
+    state_age_s >= ctx_age_s. A seat idle only 1.0 s carrying a read 41395 s old just went
+    idle AFTER a busy stretch that postdates the read, so the ctx COULD have moved. Must
+    NOT calibrate; decide_bg DEFERS with a distinct auditable reason, no fire."""
+    obs = _obs_with_retained(tmp_path, "idle", 1.0, retained=0.947519, age=41395.0)
+    assert obs["ctx_source"] == "stale"
+    assert obs["ceiling_calibrated"] is False, "read predates the idle stretch -> fail-closed"
+    d = decide_bg(obs)
+    assert d["action"] == "noop", d
+    assert d["reason"] == "uncalibrated:stale-predates-idle", d
+    assert d["alarm"] is False, "a conservative retention defer is auditable, not an alarm"
+
+
+def test_idle_seat_read_within_idle_stretch_calibrated(tmp_path):
+    """The valid counterpart (idle 108001 s, read 39597 s old): the seat has been idle far
+    longer than the read is old, so the read was captured inside the current idle stretch
+    -> calibrated -> fires. The retention window must not over-reject."""
+    obs = _obs_with_retained(tmp_path, "idle", 108001.0, retained=0.947519, age=39597.0)
+    assert obs["ceiling_calibrated"] is True
+    d = decide_bg(obs)
+    assert d["action"] == "swap" and d["reason"] == "ctx:swap", d
+
+
 def test_busy_seat_stale_retained_stays_failclosed(tmp_path):
     """A BUSY seat's ctx IS moving; a stale retained value must NOT calibrate (TTL
     rejection stays for busy) -> uncalibrated:solo-alarm, never a swap on a blind read."""

@@ -236,13 +236,20 @@ def build_obs(agent, blue, wal_dir=None, now=None, ctx_ttl_s=None, detector_dir=
     # range 0..1 — NO runtime-name check. Every provider that its adapter can read a fresh
     # normalized ctx for is calibrated; absent/stale/out-of-range fails closed for EVERY
     # runtime (incl the default). Death still dominates calibration regardless (decide_bg).
-    # GOAL-FINDING #2 idle-ceiling: an IDLE seat's ctx cannot have moved since its last
-    # render, so a RETAINED last-valid value (ctx_unknown, ctx_source=='stale') is VALID
-    # for it regardless of age — accept it when state=='idle'. A BUSY seat's ctx IS moving,
-    # so a stale read stays fail-closed (TTL rejection for busy only). A wholly-unknown ctx
-    # (ctx_pct None, no retained value) is never calibrated even when idle.
+    # GOAL-FINDING #2 idle-ceiling + RETENTION WINDOW (gm ruling msg_de091167): an IDLE
+    # seat's ctx cannot have moved since its last render — BUT only if the read was captured
+    # INSIDE the current idle stretch. A RETAINED last-valid value (ctx_unknown,
+    # ctx_source=='stale') calibrates the ceiling only when state=='idle' AND the seat has
+    # been idle at least as long as the read is old (lull_state_age_s >= ctx_age_s). A read
+    # that PREDATES a busy stretch (state_age_s < ctx_age_s: the seat went busy-then-idle
+    # after the read) is fail-closed — its ctx could have moved during that busy stretch.
+    # A BUSY seat's ctx IS moving, so a stale read stays fail-closed (TTL rejection for busy
+    # only). A wholly-unknown ctx (ctx_pct None, no retained value) is never calibrated.
+    _stale_on_idle_within_retention = (
+        lull_state == "idle" and ctx_age_s is not None
+        and (lull_state_age_s or 0) >= ctx_age_s)
     calibrated = (ctx_pct is not None) and (0.0 <= ctx_pct <= 1.0) and (
-        (not ctx_unknown) or lull_state == "idle")
+        (not ctx_unknown) or _stale_on_idle_within_retention)
     green = {"generation": blue["generation"] + 1, "model": blue.get("model")}
     if wal_dir:
         # M3: the green wrote its sid to <wal_dir>/<alias>.sid at SessionStart; the
