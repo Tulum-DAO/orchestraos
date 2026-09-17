@@ -27,7 +27,7 @@ import sys
 # a broken import can NEVER escape the fail-open boundary.
 STREAM_DIR = os.environ.get(
     "ORCH_EVENT_STREAM_DIR",
-    os.path.expanduser("~/scripts/agent-orchestra/state/event-stream"))
+    os.path.join(os.environ.get("ORCHESTRA_DIR") or os.environ.get("ORCH_DIR") or os.path.expanduser("~/orchestra"), "state", "event-stream"))
 
 
 def _feed(stdin_text: str) -> dict:

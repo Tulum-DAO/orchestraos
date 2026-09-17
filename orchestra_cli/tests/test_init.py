@@ -213,3 +213,23 @@ def test_init_demo_seeds_three_fixture_seats_and_runs_the_card_seeder(tmp_path):
     # without --demo nothing demo-related happens
     report3 = I.run_init(root, data_dir=tmp_path / "data2", run=Runner())
     assert not any(r.step.startswith("demo:") for r in report3)
+
+
+def test_init_installs_claude_hooks_into_config_dir(tmp_path, monkeypatch):
+    """Tier 0 item 1: init writes the shipped hooks into $CLAUDE_CONFIG_DIR/settings.json."""
+    root = _repo(tmp_path)
+    cfg = tmp_path / "claude-cfg"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    monkeypatch.delenv("ORCHESTRA_SKIP_HOOKS", raising=False)
+    # the test repo stub has no hooks/ dir: point the installer at the real one via ORCHESTRA_ROOT-like copy
+    import shutil
+    real = Path(I.__file__).resolve().parent.parent
+    shutil.copytree(real / "hooks", root / "hooks", ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    (root / "scripts" / "lineage_daemon").mkdir(parents=True, exist_ok=True)
+    (root / "scripts" / "lineage_daemon" / "bus_feeder.py").write_text("")
+    report = I.run_init(root, data_dir=tmp_path / "data", run=Runner(), skip_npm=True, skip_venv=True)
+    done = {r.step: r for r in report}
+    assert done["hooks"].did, done["hooks"].detail
+    s = json.loads((cfg / "settings.json").read_text())
+    cmds = [h["command"] for rules in s["hooks"].values() for r in rules for h in r["hooks"]]
+    assert any("agent-queue-drain.py" in c and f'ORCHESTRA_DIR="{tmp_path / "data"}"' in c for c in cmds)

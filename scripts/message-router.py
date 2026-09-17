@@ -462,9 +462,7 @@ def _hook_working_ttl_s() -> float:
 
 
 def _hook_events_dir() -> str:
-    return os.environ.get(
-        "ORCH_EVENTS_DIR",
-        os.path.expanduser("~/scripts/agent-orchestra/state/agent-events/panes"))
+    return os.environ.get("ORCH_EVENTS_DIR", str(ORCHESTRA_DIR / "state" / "agent-events" / "panes"))
 
 
 def hook_state(session: str):
