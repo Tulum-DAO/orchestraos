@@ -156,6 +156,22 @@ def seed_demo_registry(registry_path: Path) -> list:
     return added
 
 
+def _git_init_data_dir(data_dir: Path, run: Callable) -> bool:
+    ignore = data_dir / ".gitignore"
+    if not ignore.exists():
+        # git needs every parent dir un-ignored for a nested path to be trackable
+        ignore.write_text("# orchestra data dir: only handoffs/readbacks and docs are versioned\n"
+                          "/*\n!/.gitignore\n!/state/\n/state/*\n!/state/agent-handoffs/\n"
+                          "!/state/agent-handoffs/**\n!/docs/\n!/docs/**\n")
+    if run(["git", "init", "-q", str(data_dir)]) != 0:
+        return False
+    run(["git", "-C", str(data_dir), "config", "user.name", "orchestra"])
+    run(["git", "-C", str(data_dir), "config", "user.email", "orchestra@localhost"])
+    run(["git", "-C", str(data_dir), "add", ".gitignore"])
+    run(["git", "-C", str(data_dir), "commit", "-q", "-m", "orchestra init: data dir"])
+    return True
+
+
 def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable = default_run,
              skip_npm: bool = False, skip_venv: bool = False, skip_build: bool = False,
              config_path: Optional[Path] = None, demo: bool = False) -> list:
@@ -200,6 +216,16 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
         else:
             p.write_text(json.dumps(payload, indent=2) + "\n")
             report.append(Step(f"seed:{rel}", True, f"wrote {p}"))
+
+    # 4b. the data dir is a small local git repo: rotation writes the successor's readback
+    # there and the promotion gate (T4) proves it by commit — "unverifiable is never a pass".
+    # Only state/agent-handoffs/ and docs/ are meant to be committed; everything else is ignored.
+    if (data_dir / ".git").exists():
+        report.append(Step("data-git", False, "present"))
+    else:
+        ok = _git_init_data_dir(data_dir, run)
+        report.append(Step("data-git", ok, f"git init {data_dir} (audit trail for handoffs + readbacks)" if ok
+                           else "git init failed (rotation promotion will refuse until the data dir is a repo)"))
 
     # 5. gateway bearer token
     tok = data_dir / "state" / "watch-gateway-token"

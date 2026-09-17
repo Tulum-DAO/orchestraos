@@ -29,9 +29,10 @@ a transcript on disk.
 import os
 import sys
 
-ORCHESTRA_DIR = os.environ.get(
-    "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
-_GRADER = os.path.join(ORCHESTRA_DIR, "scripts", "rotation_gate_manual.py")
+ORCHESTRA_DIR = os.environ.get("ORCHESTRA_DIR") or os.path.expanduser("~/orchestra")   # DATA dir
+# CODE lives in the checkout (this file: <root>/scripts/lineage_daemon/auto_grade.py).
+CODE_ROOT = os.environ.get("ORCHESTRA_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_GRADER = os.path.join(CODE_ROOT, "scripts", "rotation_gate_manual.py")
 
 # exit code -> disposition (fail-safe default REFUSED for anything unexpected).
 _DISPOSITION = {0: "PASS", 1: "FAIL", 2: "REFUSED"}

@@ -749,6 +749,15 @@ spawn_agent() {
     # capture_green_sid / green_boot_probe / quarantine hooks fire (INERT if not a green).
     local _bg_prefix; _bg_prefix="$(_bg_green_env_prefix)"
     [[ -n "$_bg_prefix" ]] && launch_cmd="$_bg_prefix $launch_cmd"
+    # Install env into the pane (Tier 0 item 2): `tmux new-session` inherits the tmux SERVER
+    # env, not ours, so a seat spawned by `orchestra spawn` would otherwise run msg_store.py /
+    # approval.py against the default data dir and load hooks from the default config dir.
+    # Carry the data dir, checkout, config and (when set) the Claude config dir explicitly.
+    local _orch_prefix
+    _orch_prefix="$(printf 'ORCHESTRA_DIR=%q ORCH_DIR=%q ORCHESTRA_ROOT=%q' "$ORCHESTRA_DIR" "$ORCHESTRA_DIR" "$SCRIPT_DIR")"
+    [[ -n "${ORCHESTRA_CONFIG:-}" ]] && _orch_prefix="$_orch_prefix $(printf 'ORCHESTRA_CONFIG=%q' "$ORCHESTRA_CONFIG")"
+    [[ -n "${CLAUDE_CONFIG_DIR:-}" ]] && _orch_prefix="$_orch_prefix $(printf 'CLAUDE_CONFIG_DIR=%q' "$CLAUDE_CONFIG_DIR")"
+    launch_cmd="$_orch_prefix $launch_cmd"
     if [[ -n "$resume_sid" && "$runtime" != "claude" ]]; then
         err "$agent_id: --resume is claude-only (runtime=$runtime has no resume adapter here)"
         tmux kill-session -t "$tmux_name" 2>/dev/null || true
