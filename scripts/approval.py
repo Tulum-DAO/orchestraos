@@ -179,7 +179,7 @@ def main(argv=None):
     pr.add_argument("--summary", default=None, help="markdown 'simple explanation' (expandable detail)")
     pr.add_argument("--risk", dest="risk_level", default=None, choices=["low", "medium", "high"])
     pr.add_argument("--reversibility", default=None, choices=["easy", "hard", "irreversible"])
-    pr.add_argument("--feature", default=None, help="product area/feature, e.g. 'Proposals', 'Custom Audience'")
+    pr.add_argument("--feature", default=None, help="product area/feature, e.g. 'Proposals', 'Billing'")
     pr.add_argument("--menu-json", default=None,
                     help="JSON pane-menu capture {question, options[{n,label,detail?,input_kind}], "
                          "selected_n, source_session, captured_at} -> kind='menu' row "

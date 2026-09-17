@@ -4,23 +4,17 @@ import {
   Bot,
   ListTodo,
   Activity,
-  Map,
   ShieldCheck,
   Clock,
   BarChart3,
   Radar,
-  FlaskConical,
   Sparkles,
   Lightbulb,
   ClipboardList,
   Mic,
-  Building2,
   FolderKanban,
   LogOut,
   Inbox,
-  Brain,
-  Contact,
-  Megaphone,
   MessagesSquare,
   Sparkle,
 } from 'lucide-react';
@@ -46,25 +40,19 @@ const coreNav: NavItem[] = [
 ];
 
 const operationsNav: NavItem[] = [
-  { to: '/strategy', icon: Map, label: 'Strategy' },
   { to: '/approvals', icon: ShieldCheck, label: 'Approvals' },
   { to: '/workflows', icon: Clock, label: 'Workflows' },
   { to: '/analytics', icon: BarChart3, label: 'Analytics' },
 ];
 
 const intelligenceNav: NavItem[] = [
-  { to: '/learning', icon: Brain, label: 'Learning' },
-  { to: '/experiments', icon: FlaskConical, label: 'Experiments' },
   { to: '/skills', icon: Sparkles, label: 'Skills' },
   { to: '/insights', icon: Lightbulb, label: 'Insights' },
   { to: '/questionnaires', icon: ClipboardList, label: 'Questionnaires' },
 ];
 
-const clientsNav: NavItem[] = [
-  { to: '/clients', icon: Building2, label: 'Clients' },
-  { to: '/people', icon: Contact, label: 'People' },
+const projectsNav: NavItem[] = [
   { to: '/projects', icon: FolderKanban, label: 'Projects' },
-  { to: '/campaigns', icon: Megaphone, label: 'Campaigns' },
 ];
 
 const commsNav: NavItem[] = [
@@ -134,12 +122,8 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
         <NavItems items={operationsNav} />
         <SectionHeader label="Intelligence" />
         <NavItems items={intelligenceNav} />
-        {isAdmin && (
-          <>
-            <SectionHeader label="Clients" />
-            <NavItems items={clientsNav} />
-          </>
-        )}
+        <SectionHeader label="Projects" />
+        <NavItems items={projectsNav} />
         <SectionHeader label="Comms" />
         <NavItems items={commsNav} />
       </nav>
