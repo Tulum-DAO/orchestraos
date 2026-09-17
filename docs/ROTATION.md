@@ -129,6 +129,11 @@ that is a seat registered by hand (`registry-update.py` + `spawn-agent.sh`) inst
 
 ## Runtime support and known gaps
 
+**Default: on for Claude. Gemini and Codex are experimental and are not armed unless you set
+`[rotation] experimental_runtimes = ["gemini", "codex"]` in `orchestra.toml`** (operator
+ruling 2026-09-17). Until then the beat logs those seats as `skip:non-claude-runtime` and
+never nudges, arms or rotates them; death-driven and manual rotation still work for them.
+
 | Runtime | Rotation | Notes |
 |---------|----------|-------|
 | **Claude Code** | **Supported** | Honest live context read; the end-to-end proof runs here. |
