@@ -70,13 +70,8 @@ def test_clm_seam_suppresses_identical_history_retry(monkeypatch, tmp_path):
         def create(self, **kw):
             return _Resp()
 
-    class _Chat:
-        completions = _Completions()
-
-    class _Client:
-        chat = _Chat()
-
-    monkeypatch.setattr(mod, "client", _Client())
+    # the brain seam (services/arturo/brain.py) replaced the bare openai client
+    monkeypatch.setattr(mod.brain, "complete", lambda **kw: _Completions().create(**kw))
     # defeat F2's 15s TTL so this models the 57s retry, not the immediate double-POST
     monkeypatch.setattr(mod._REQ_GUARD, "is_duplicate", lambda *a, **k: False)
 
