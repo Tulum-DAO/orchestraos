@@ -215,6 +215,12 @@ def enabled_experimental_runtimes() -> frozenset:
     return frozenset(out)
 
 
+def runtime_gated(agent: dict) -> bool:
+    """True when the beat must not arm/evaluate this seat because of its runtime (experimental
+    runtime not opted in, or a runtime with no adapter). The ONE place the reason strings live."""
+    return beat_skip_reason(agent) in ("non-claude-runtime", "unsupported-runtime")
+
+
 def beat_skip_reason(agent: dict) -> Optional[str]:
     """The ONE 'which seats does the beat evaluate at all' predicate (pure).
 
