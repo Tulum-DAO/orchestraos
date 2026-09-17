@@ -21,35 +21,39 @@ schema, or the approvals tables in an incompatible way, running against state
 written by the old code. `docs/ARCHITECTURE.md`'s Invariants section names
 the contracts other things depend on — check changes there specifically.
 
-## `orchestra upgrade` (target)
+## `orchestra upgrade`
 
-**Lands in PR: orchestra-builder.** Not on `main` as of this writing — check
-`orchestra --help` before relying on it. Once it ships, the intended sequence
-is a single command:
+One command:
 
 ```bash
-orchestra upgrade
+orchestra upgrade              # fetch, show what's coming, pull --ff-only, init --yes, doctor
+orchestra upgrade --dry-run    # only the "what's coming" part
 ```
 
-Target behavior, per orchestra-builder (who owns this command's build): `git
-pull --ff-only`, then `orchestra init` — idempotent, so config is kept, the
-Claude Code hook layer is re-installed against the new checkout path, and the
-data-git step stays present — then `orchestra doctor`. Spawned seats are
-untouched by design: their tmux sessions keep running the code they were
-spawned with, and pick up the new checkout only at their next spawn or
-rotation. Showing what changed before pulling (`git log --oneline
-HEAD..origin/main`, flagging `scripts/lineage_daemon/`, `msg_store.py`, or
-`scripts/approval*.py` specifically — the contract-bearing paths) is this doc's
-recommendation for the by-hand path below; confirm whether the shipped
-`orchestra upgrade` does the same before assuming it. It does **not** restart your
-running supervisor or any spawned
-seat on its own — a code change only takes effect for a component once that
-component restarts, and restarting a live seat's tmux session is your call,
-not the upgrade command's.
+What it does, in order:
 
-## Doing it by hand today
+1. `git fetch origin`, then prints the incoming commits (`git log HEAD..@{u}`) and flags
+   any **contract-bearing paths** in the diff — `scripts/lineage_daemon/`, `msg_store.py`,
+   `scripts/approval*.py` — the ones running components trust not to change shape.
+   `--dry-run` stops here.
+2. Refuses if the checkout has uncommitted changes to tracked files (exit 2) — a
+   fast-forward would fail anyway, and you should know why.
+3. `git pull --ff-only` (exit 1 with the git message if the branch diverged).
+4. `orchestra init --yes`: idempotent — `orchestra.toml` and the data dir are kept, the
+   Claude Code hook rows are re-written against the new checkout path, venv/npm/builds
+   refresh (`--no-venv` / `--no-npm` / `--no-build` are passed through).
+5. `orchestra doctor`; its exit code is the command's.
 
-Until `orchestra upgrade` lands, the same sequence run manually:
+It never restarts anything. Spawned seats keep the code they were spawned with until
+their next spawn or rotation; the supervisor's services and beats pick the new code up on:
+
+```bash
+orchestra down && orchestra up --detach
+```
+
+## Doing it by hand
+
+The same sequence, step by step:
 
 ```bash
 git fetch origin
