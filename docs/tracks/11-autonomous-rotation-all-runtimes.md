@@ -34,10 +34,8 @@ structured — Gemini has no reader registered at all); a tmux-on-one-host
 assumption throughout the beat; and capture-based readiness probes (reading a
 pane's rendered text, which differs per CLI's TUI).
 
-For the fuller detail behind each runtime gap, see `docs/ROTATION.md` once it
-lands (rotation-autonomy-builder's branch `rotation/retention-window`, not yet on
-`main` as of this doc) — treat it as the source of truth over this section if the
-two disagree after that merge.
+For the fuller detail behind each runtime gap, see `docs/ROTATION.md` (landed on
+`main`) — treat it as the source of truth over this section if the two disagree.
 
 ## Design
 
@@ -63,8 +61,8 @@ get an explicit no-op, not a silently-skipped check.
 
 **Ownership:** rotation-autonomy-builder's standing commission from gm already IS
 the Claude leg of this track (one real rotation on a clean install, gated on the
-quota-oracle fix clearing `green_quota`'s ModuleNotFound and their
-`rotation/retention-window` branch merging). Track 11's Claude acceptance is that
+quota-oracle fix clearing `green_quota`'s ModuleNotFound — their
+`docs/ROTATION.md` work has already merged). Track 11's Claude acceptance is that
 deliverable — coordinate rather than duplicate it; a contributor picking up this
 track should start on Gemini or Codex, or pair with rotation-autonomy-builder on
 Claude, not redo it solo.
@@ -137,11 +135,11 @@ stated, not implied by silence.
 I'm working Track 11 (autonomous rotation on every runtime) for the
 OrchestraOS hackathon. The Claude leg is already rotation-autonomy-builder's
 standing commission (one real clean-install rotation, gated on a quota-oracle
-fix + their rotation/retention-window branch) -- coordinate with them rather
+fix clearing green_quota's ModuleNotFound) -- coordinate with them rather
 than duplicating it; pick up Gemini or Codex, or pair with them on Claude.
 Read docs/tracks/11-autonomous-rotation-all-runtimes.md for the full design,
-and docs/ROTATION.md (once it lands from rotation/retention-window) for the
-authoritative per-runtime gap detail.
+and docs/ROTATION.md (landed on main) for the authoritative per-runtime gap
+detail.
 Files to touch: scripts/lineage_daemon/wal/ctx_adapters.py (the REAL context
 read the beat calls -- not adapters/*.py, which is an unwired stub layer),
 scripts/lineage_daemon/wal/green_liveness.py and green_quota.py (generalize
