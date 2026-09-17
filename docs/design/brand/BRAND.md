@@ -33,7 +33,7 @@ The official sovereign brand mark of **Tulum DAO**, **OrchestraOS**, and **The T
 
 ## 2. Core Architectural Components
 
-1. **Upper Temple Sanctuary (*El Templo Superior*):**
+1. **Upper Temple Shrine (*El Templo Superior*):**
    - Flat lintel roof with classic Maya projecting double cornice molding.
    - **Tri-Model Portico (3 Doorways):** Divided by two monolithic columns representing sovereign agent runtimes (**Claude, Gemini, Codex**).
 2. **Flanking Lower Shrines (*Los Santuarios Laterales*):**
