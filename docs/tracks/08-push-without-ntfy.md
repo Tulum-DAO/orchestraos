@@ -40,7 +40,9 @@ device with no push token registered just doesn't get a push — no error).
   ntfy path byte-for-byte identical when selected.
 - `scripts/watch_gateway.py` — new `POST /pair/devices/<id>/push-token` route
   (depends on Track 1's `paired_devices` table existing); add the `push_token`
-  column.
+  column. The `<id>` here is the `device_id` Track 1's `/pair/claim` now returns
+  and the app keeps in Keychain — without that field in the claim response the
+  app has no way to learn which row is its own.
 - `scripts/notify_apns.py` (new) — APNs HTTP/2 provider-API client (token-based
   auth via the `.p8` key, not the older certificate-based auth); keep it small and
   dependency-light, matching the rest of `scripts/`'s style (plain `requests`/http

@@ -24,8 +24,12 @@ credential, time-boxed):
 - `POST /pair/claim {code, device_name}` — validates the code against the TTL
   store, mints a new per-device bearer token, records `{device_id, device_name,
   created_at, last_seen}` in a `paired_devices` table (new, in the gateway's sqlite
-  state), and returns `{bearer, gateway_base_url}`. The app's first screen (camera
-  scan or manual 6-digit entry) calls this and stores the result in Keychain.
+  state), and returns `{bearer, device_id, gateway_base_url}`. The app's first
+  screen (camera scan or manual 6-digit entry) calls this and stores `bearer` +
+  `device_id` in Keychain alongside `gateway_base_url`. `device_id` in the response
+  is not optional: Track 8's push-token registration is
+  `POST /pair/devices/<device_id>/push-token`, addressed by the app's own id, and
+  `/pair/claim` is the only place the app ever learns it.
 
 Every existing gateway route keeps its bearer check (`_authorized`,
 `scripts/watch_gateway.py` line ~68 — `gateway_token()` at line ~60 reads the
@@ -65,8 +69,8 @@ empty" — that's the condition that routes to the pairing screen instead of
   add a Keychain source that takes priority over the existing
   `Bundle.main.object(forInfoDictionaryKey:)` read of `GatewayBaseURL`/
   `GatewayToken`); new first-run screen: camera scan (QR → the claim payload) or
-  manual code entry, calls `/pair/claim`, writes `bearer` + `gateway_base_url` to
-  Keychain. Settings screen lists paired devices (`GET /pair/devices`) with a
+  manual code entry, calls `/pair/claim`, writes `bearer` + `device_id` +
+  `gateway_base_url` to Keychain. Settings screen lists paired devices (`GET /pair/devices`) with a
   revoke button per row.
 - `docs/GATEWAY_API.md` (in the iOS repo) — document the two new routes.
 
@@ -79,8 +83,8 @@ empty" — that's the condition that routes to the pairing screen instead of
    and `curl -X POST localhost:<port>/pair/start` — expect
    `{"code": "123456", "expires_at": "..."}`.
 3. `curl -X POST localhost:<port>/pair/claim -d '{"code":"123456","device_name":"test"}'`
-   — expect `{"bearer": "...", "gateway_base_url": "..."}`. A second claim with the
-   same code must 400 (single-use).
+   — expect `{"bearer": "...", "device_id": "...", "gateway_base_url": "..."}`. A
+   second claim with the same code must 400 (single-use).
 4. `curl -H "Authorization: Bearer <new bearer>" localhost:<port>/api/approvals` —
    expect the same 200 the static token gets today.
 5. `curl -X DELETE -H "Authorization: Bearer <static token>" localhost:<port>/pair/devices/<device_id>`,
