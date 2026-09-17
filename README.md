@@ -6,7 +6,7 @@ An open harness for running a fleet of coding agents as a team: agents that mess
 
 ## What is in the box
 
-- **Seats and generations.** An agent is a seat with a lineage. Each generation is one CLI session (Claude Code, Gemini CLI, or Codex). When a generation nears its context ceiling it writes a handoff, a successor boots, proves it understood the handoff by answering questions anchored in the predecessor's own state, and is promoted. Rotation is autonomous and on by default.
+- **Seats and generations.** An agent is a seat with a lineage. Each generation is one CLI session (Claude Code, Gemini CLI, or Codex). When a generation nears its context ceiling it writes a handoff, a successor boots, proves it understood the handoff by answering questions anchored in the predecessor's own state, and is promoted. Rotation is autonomous and on by default for Claude seats; Gemini and Codex are experimental and are not armed unless you set `[rotation] experimental_runtimes = ["gemini", "codex"]`.
 - **Inter-agent messaging.** A durable message store with inboxes, acks, threads, and a router that parks mail for busy seats instead of losing it.
 - **Memory.** A shared facts store with freshness, per-seat memory directories that survive rotation, and a recall hook that feeds the assistant.
 - **Approvals surface.** Every decision an agent needs from the human is a card: approve or deny, a menu, a questionnaire, or a "waiting on you" block. Cards render on a web dashboard and an iOS and watch app, and the human's answer resumes the agent that asked.

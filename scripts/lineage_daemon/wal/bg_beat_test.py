@@ -439,3 +439,15 @@ def test_armed_roots_force_roots_unit(tmp_path):
     (tmp_path / "BG_DISABLED").unlink()
     got = bg_beat.armed_roots(agents, str(tmp_path), force_roots={"armed"})
     assert got == ["armed"]
+
+
+def test_armed_roots_never_arms_experimental_runtimes_unless_opted_in(tmp_path, monkeypatch):
+    """Operator ruling 2026-09-17: gemini/codex stay out of the async blue-green lane unless
+    [rotation] experimental_runtimes opts in; the supervised force_roots hand-drive still wins."""
+    monkeypatch.delenv("ORCHESTRA_ROTATION_EXPERIMENTAL_RUNTIMES", raising=False)
+    _arm_flag(tmp_path, "gem"); _arm_flag(tmp_path, "cla")
+    gem = dict(_agent("gem"), runtime="gemini"); cla = dict(_agent("cla"), runtime="claude")
+    assert bg_beat.armed_roots([gem, cla], str(tmp_path)) == ["cla"]
+    assert bg_beat.armed_roots([gem, cla], str(tmp_path), force_roots={"gem"}) == ["gem", "cla"]
+    monkeypatch.setenv("ORCHESTRA_ROTATION_EXPERIMENTAL_RUNTIMES", "gemini")
+    assert bg_beat.armed_roots([gem, cla], str(tmp_path)) == ["gem", "cla"]

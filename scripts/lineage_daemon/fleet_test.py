@@ -140,8 +140,26 @@ def test_unsupported_runtime_skipped_before_arming(tmp_path):
     assert out["beats"][0]["armed_status"] == fleet.SKIP_NON_CLAUDE_RUNTIME
 
 
-def test_codex_runtime_evaluated_in_fleet(tmp_path):
-    """Multi-runtime lineage adapter: codex seats are evaluated in fleet beats."""
+def test_experimental_runtimes_skipped_by_default_even_when_not_actionable(tmp_path, monkeypatch):
+    """Operator ruling 2026-09-17: gemini/codex are never armed unless opted in, and the skip
+    is logged on every beat (ctx known or not), before actionability."""
+    monkeypatch.delenv("ORCHESTRA_ROTATION_EXPERIMENTAL_RUNTIMES", raising=False)
+    fake = FakeExecutors()
+    reg = {"agents": {"g": {"generation": 1, "tier": "T2", "lineage_root": "g"},
+                      "c": {"generation": 1, "tier": "T2", "lineage_root": "c"}}}
+    out = fleet.plan_fleet(
+        [_seat("g", 10, "T2", runtime="gemini"), _seat("c", 10, "T2", runtime="claude")], reg, now=0,
+        armed_tiers={"T2"}, executors_impl=fake, safety_fn=SAFE, approval_fn=APPROVE,
+        confirm_fn=lambda c, s: {"outcome": "confirmed"})
+    by = {b["agent_id"]: b for b in out["beats"]}
+    assert by["g"]["armed_status"] == fleet.SKIP_NON_CLAUDE_RUNTIME and by["g"]["armed"] is False
+    assert by["c"].get("armed_status") != fleet.SKIP_NON_CLAUDE_RUNTIME and by["c"]["armed"] is True
+    assert out["summary"]["skipped_non_claude_runtime"] == 1
+
+
+def test_codex_runtime_evaluated_in_fleet(tmp_path, monkeypatch):
+    """Multi-runtime lineage adapter: codex seats are evaluated in fleet beats once opted in."""
+    monkeypatch.setenv("ORCHESTRA_ROTATION_EXPERIMENTAL_RUNTIMES", "gemini,codex")
     fake = FakeExecutors()
     reg = {"agents": {"codex-dev-1": {"generation": 1, "tier": "T2",
                                       "lineage_root": "codex-dev-1"}}}
@@ -152,8 +170,9 @@ def test_codex_runtime_evaluated_in_fleet(tmp_path):
     assert out["beats"][0]["armed_status"] != fleet.SKIP_NON_CLAUDE_RUNTIME
 
 
-def test_gemini_runtime_evaluated_in_fleet(tmp_path):
-    """Multi-runtime lineage adapter: gemini seats are evaluated in fleet beats."""
+def test_gemini_runtime_evaluated_in_fleet(tmp_path, monkeypatch):
+    """Multi-runtime lineage adapter: gemini seats are evaluated in fleet beats once opted in."""
+    monkeypatch.setenv("ORCHESTRA_ROTATION_EXPERIMENTAL_RUNTIMES", "gemini")
     fake = FakeExecutors()
     reg = {"agents": {"gemini-worker": {"generation": 1, "tier": "T2",
                                         "lineage_root": "gemini-worker"}}}

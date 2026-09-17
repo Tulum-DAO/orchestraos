@@ -132,6 +132,10 @@ allowed_chat_ids = []
 # today's live production values; tune them for your fleet size before you
 # trust it on seats you care about.
 beat_enabled = true
+# Default: on for Claude seats. Gemini and Codex are EXPERIMENTAL (no honest context read /
+# credits gate, see docs/ROTATION.md) and are never armed unless you opt in here:
+#   experimental_runtimes = ["gemini", "codex"]
+experimental_runtimes = []
 # bus_beat.py / boundary_delivery.py cadence (today's crontab: every 60s).
 bus_beat_interval_seconds = 60
 # cron_beat.py cadence — the arm/prewarm/readiness/swap decision pass (today's

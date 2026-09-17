@@ -335,6 +335,13 @@ def plan_fleet(agents, registry, *, armed_tiers=frozenset(), now,
         tier = _tier_class(agent, registry)
         summary["total"] += 1
         armed_this = tier in armed_tiers
+        # Runtime gate FIRST (operator ruling 2026-09-17: blue-green default ON for Claude;
+        # Gemini/Codex experimental, never armed unless [rotation] experimental_runtimes
+        # opts in). Applied before actionability so an experimental seat is logged as
+        # skip:non-claude-runtime on EVERY beat, ctx known or not, and is never "ARMED".
+        runtime_skip = beat_skip_reason(agent) in ("non-claude-runtime", "unsupported-runtime")
+        if runtime_skip:
+            armed_this = False
         d = _beat.decide(agent)
         action = d["action"]
         if action == "noop":
@@ -353,6 +360,10 @@ def plan_fleet(agents, registry, *, armed_tiers=frozenset(), now,
                  "lineage_root": (registry or {}).get("agents", {}).get(aid, {})
                      .get("lineage_root") or aid,
                  "log": _log_line(aid, tier, dry, armed_this)}
+        if runtime_skip:
+            entry["armed_status"] = SKIP_NON_CLAUDE_RUNTIME
+            summary["skipped_non_claude_runtime"] += 1
+            actionable = False
         plans.append((agent, entry, actionable))
 
     # GUARD 1 — rank armed+actionable hard_rotate by ctx desc; top `max_rotations`
