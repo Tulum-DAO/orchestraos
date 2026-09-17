@@ -134,3 +134,11 @@ def test_load_settings_honors_ORCHESTRA_DIR_over_config_data_dir(tmp_path, monke
     assert st.data_dir == tmp_path / "from-env"
     monkeypatch.delenv("ORCHESTRA_DIR")
     assert S.load_settings(root).data_dir == tmp_path / "from-config"
+
+
+def test_settings_read_plugins_telegram_enabled(tmp_path):
+    root = tmp_path / "repo"; root.mkdir()
+    (root / "orchestra.toml").write_text('[data]\ndir = "x"\n[plugins.telegram]\nenabled = true\nallowed_chat_ids = [1, 2]\n')
+    st = S.load_settings(root)
+    assert st.telegram_enabled is True
+    assert S.load_settings(root).raw["plugins"]["telegram"]["allowed_chat_ids"] == [1, 2]

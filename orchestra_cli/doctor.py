@@ -227,6 +227,22 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
             checks.append(Check("hooks:claude", OK, f"{len(hs['installed'])} hook rows in {settings_path}"))
     except Exception as e:  # noqa: BLE001
         checks.append(Check("hooks:claude", WARN, f"hook status unavailable: {e}"))
+    # Channel plugins (plugins/): each reports its own row; disabled = INFO, never a failure.
+    try:
+        import sys as _sys
+        if str(root) not in _sys.path:
+            _sys.path.insert(0, str(root))
+        import plugins as _plugins  # noqa: WPS433
+        for name in _plugins.KNOWN:
+            mod = _plugins.load(name)
+            if mod is None:
+                checks.append(Check(f"plugin:{name}", INFO, "not installed", None))
+                continue
+            ps = mod.status(st.raw)
+            level = {"OK": OK, "INFO": INFO, "MISSING": MISSING, "WARN": WARN}.get(ps.get("level"), WARN)
+            checks.append(Check(f"plugin:{name}", level, ps.get("detail", ""), ps.get("fix")))
+    except Exception as e:  # noqa: BLE001
+        checks.append(Check("plugin:telegram", WARN, f"plugin status unavailable: {e}"))
     # Which brain Arturo will boot with (track T2): api (GEMINI_API_KEY) | runtime (first authed
     # CLI above) | none. Same selection table services/arturo/brain.py runs at startup.
     if st.arturo_enabled:
