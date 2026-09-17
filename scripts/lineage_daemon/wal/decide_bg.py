@@ -96,6 +96,15 @@ def decide_bg(obs: dict) -> dict:
 
     # fail-closed on the ctx trigger for an uncalibrated runtime ceiling.
     if not calibrated:
+        # RETENTION WINDOW (gm ruling msg_de091167): an IDLE seat carrying a RETAINED
+        # (stale) last-valid read that failed the idle-ceiling retention window
+        # (state_age_s < ctx_age_s — the read predates the current idle stretch) is a
+        # DISTINCT, auditable conservative DEFER, not the blind-runtime solo-alarm. It only
+        # REDUCES fires. The busy-stale and wholly-uncalibrated cases keep solo-alarm.
+        if ctx_unknown and obs.get("ctx_pct") is not None and state == "idle":
+            return {"root": root, "action": "noop",
+                    "reason": "uncalibrated:stale-predates-idle",
+                    "never_gated": False, "alarm": False}
         return {"root": root, "action": "noop",
                 "reason": "uncalibrated:solo-alarm", "never_gated": False,
                 "alarm": True}
