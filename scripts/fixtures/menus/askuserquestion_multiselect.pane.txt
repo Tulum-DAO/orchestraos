@@ -1,0 +1,53 @@
+
+[38;5;114m●[39m [1mSkill[0m(superpowers:brainstorming)
+[38;5;246m  ⎿  [39mSuccessfully loaded skill
+
+[38;5;231m●[39m Let me create my brainstorming tasks and explore where this agent-search keyboard surface actually lives.
+
+[38;5;231m●[39m Now let me find the actual surface. "Hide the keyboard" + "search for an agent" points to the OrchestraOS iOS/watch app or the dashboard. Let me locate it.
+
+[38;5;114m●[39m [1mExplore[0m(Find agent-search keyboard surface)
+[38;5;246m  ⎿  [39mDone (24 tool uses · 58.3k tokens · 57s)
+[38;5;246m  (ctrl+o to expand)[39m
+
+[38;5;231m●[39m Found it. Single surface: [1miOS SwiftUI[0m, [38;5;153mwatch-approval-app/Sources/iOS/Shells.swift[39m — [38;5;153mAgentsView[39m search field (lines 57-74). No [38;5;153m@FocusState[39m, so no dismiss path when you type but don't pick an agent. Notably, the app's own message composer
+  ([38;5;153mConversationView.swift[39m) already solves this well. Let me read both to ground the design.
+
+  [38;5;246mRead [1m1[0m[38;5;246m file (ctrl+o to expand)[39m
+
+[38;5;231m●[39m Let me see the composer's existing dismiss pattern (the app's own convention I'd want to match).
+
+  [38;5;246mRead [1m1[0m[38;5;246m file (ctrl+o to expand)[39m
+
+[38;5;231m●[39m I now have the full picture, including a key constraint: the app already has a [1mstanding the operator ruling (2026-08-09, in [38;5;153mConversationView.swift:130[39m)[0m — [3m"scrolling NEVER dismisses [the keyboard]; only a drag that crosses below the top of the [0m
+  [3mmessage bar does."[0m So any scroll-to-dismiss approach is off the table by your own prior ruling.
+
+  Let me mark exploration done and ask the one decision that forks the design.
+
+  [1m[38;5;246m4[0m[38;5;246m tasks ([1m1[0m[38;5;246m done, [1m1[0m[38;5;246m in progress, [1m2[0m[38;5;246m open)[39m
+  [38;5;114m✔ [9m[38;5;246mExplore agent-search keyboard surface[0m
+  [38;5;174m◼ [1m[39mAsk clarifying questions on keyboard-dismiss UX[0m
+  ◻ Propose 2-3 dismiss approaches with tradeoffs
+[38;5;246m─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+← [38;5;16m[48;5;153m ☒ Dismiss affordance [39m[49m ✔ Submit  →
+
+[1m[38;5;231mFor the Agents search field (iOS Shells.swift), which way should the user dismiss the keyboard when they type but don't select an agent? (Scroll-to-dismiss is excluded per your 2026-08-09 ruling.)[0m
+
+[38;5;153m❯[39m [38;5;246m1.[39m [ ] [38;5;153mReturn key = Search/Done[39m
+  [38;5;246mAdd @FocusState + submitLabel(.search)[39m [38;5;246m+ onSubmit{focus=false}. Pressing the keyboard's return key drops the keyboard, keeps the typed query and filtered results. Most native, zero new on-screen chrome. My recommendation as the baseline.[39m
+  [38;5;246m2.[39m [ ] Tap empty space
+  [38;5;246mTap[39m [38;5;246mon[39m [38;5;246mthe[39m [38;5;246mlist[39m [38;5;246mbackground/empty[39m [38;5;246marea[39m [38;5;246mdismisses[39m [38;5;246mthe[39m [38;5;246mkeyboard,[39m [38;5;246musing[39m [38;5;246ma[39m [38;5;246mgesture[39m [38;5;246mscoped[39m [38;5;246mso[39m [38;5;246mit[39m [38;5;246mdoes[39m [38;5;246mNOT[39m [38;5;246msteal[39m [38;5;246mtaps[39m [38;5;246mfrom[39m [38;5;246magent[39m [38;5;246mrows[39m [38;5;246m(matches[39m [38;5;246mthe[39m [38;5;246mcomposer's[39m [38;5;246monTapGesture[39m [38;5;246mconvention).[39m
+  [38;5;246m3.[39m [ ] Cancel button
+  [38;5;246mAn[39m [38;5;246miOS-Mail-style[39m [38;5;246m'Cancel'[39m [38;5;246mtext[39m [38;5;246mbutton[39m [38;5;246mappears[39m [38;5;246mto[39m [38;5;246mthe[39m [38;5;246mright[39m [38;5;246mof[39m [38;5;246mthe[39m [38;5;246mfield[39m [38;5;246monly[39m [38;5;246mwhile[39m [38;5;246mfocused;[39m [38;5;246mtapping[39m [38;5;246mit[39m [38;5;246mresigns[39m [38;5;246mfocus.[39m [38;5;246mChoose[39m [38;5;246mnext[39m [38;5;246mwhether[39m [38;5;246mCancel[39m [38;5;246malso[39m [38;5;246mclears[39m [38;5;246mthe[39m [38;5;246mquery.[39m
+  [38;5;246m4.[39m [38;5;114m[✔][39m Drag-down gesture
+  [38;5;246mMatch[39m [38;5;246mthe[39m [38;5;246mcomposer[39m [38;5;246mexactly:[39m [38;5;246ma[39m [38;5;246mdownward[39m [38;5;246mdrag[39m [38;5;246mcrossing[39m [38;5;246mbelow[39m [38;5;246mthe[39m [38;5;246msearch[39m [38;5;246mbar[39m [38;5;246mdismisses.[39m [38;5;246mConsistent[39m [38;5;246mwith[39m [38;5;246mexisting[39m [38;5;246mapp[39m [38;5;246mconvention[39m [38;5;246mbut[39m [38;5;246mleast[39m [38;5;246mdiscoverable[39m [38;5;246mon[39m [38;5;246mthis[39m [38;5;246mscreen.[39m
+  [38;5;246m5.[39m [ ] [38;5;246mType[39m [38;5;246msomething[39m
+     [1mSubmit[0m
+[38;5;246m─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m  6. Chat about this
+
+[38;5;246mEnter[39m [38;5;246mto[39m [38;5;246mselect[39m [38;5;246m·[39m [38;5;246m↑/↓[39m [38;5;246mto[39m [38;5;246mnavigate[39m [38;5;246m·[39m [38;5;246mEsc[39m [38;5;246mto[39m [38;5;246mcancel[39m
+
+
+
+

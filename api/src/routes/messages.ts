@@ -1,13 +1,45 @@
 import { Router, type Request, type Response } from 'express';
 import { execFileSync } from 'child_process';
 import { readFileSync, existsSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import Database from 'better-sqlite3';
 import { loadConfig } from '../lib/config.js';
 
 const router = Router();
-const ORCHESTRA = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
-const MSG_STORE = join(ORCHESTRA, 'msg_store.py');
-const BUS = existsSync(MSG_STORE) ? MSG_STORE : join(ORCHESTRA, 'message_bus.py');
+const ORCHESTRA = process.env.ORCHESTRA_DIR || loadConfig().dataDir;   // DATA dir
+
+/** msg_store.py is CODE: ORCHESTRA_ROOT > the checkout this module lives in
+ *  (<root>/api/dist/routes/messages.js). Never the data dir (a fresh install has no code there). */
+export function resolveMsgStorePath(env: Record<string, string | undefined>, moduleUrl: string): string {
+  if (env.ORCHESTRA_ROOT) return join(env.ORCHESTRA_ROOT, 'msg_store.py');
+  const here = dirname(fileURLToPath(moduleUrl));
+  return join(here, '..', '..', '..', 'msg_store.py');
+}
+const BUS = resolveMsgStorePath(process.env, import.meta.url);
+
+export interface RecentMessage {
+  id: string; conversation_id: string | null; from_agent: string; to_agent: string; type: string | null;
+  subject: string | null; priority: string | null; status: string | null; created_at: string | null;
+  delivered_at: string | null; acknowledged_at: string | null;
+}
+
+/** Latest seat-to-seat rows across every seat, newest first, straight from <data>/state/tasks.db.
+ *  Both directions of an exchange show up (A->B and B->A). Missing db/table => []. */
+export function recentMessages(dataDir: string, limit = 50): RecentMessage[] {
+  const dbPath = join(dataDir, 'state', 'tasks.db');
+  if (!existsSync(dbPath)) return [];
+  try {
+    const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    try {
+      const rows = db.prepare(
+        `select id, conversation_id, from_agent, to_agent, type, subject, priority, status, created_at,
+                delivered_at, acknowledged_at
+           from messages where archived_at is null order by created_at desc limit ?`).all(limit) as RecentMessage[];
+      return rows;
+    } finally { db.close(); }
+  } catch { return []; }
+}
 
 function runBus(args: (string | string[])[]): any {
   const flatArgs = args.flat() as string[];
@@ -57,6 +89,12 @@ router.get('/inbox/:agentId', (req: Request, res: Response) => {
   const args = ['inbox', '--agent', agentId];
   if (all) args.push('--all');
   res.json(runBus(args));
+});
+
+// GET /api/messages/recent?limit=50 — latest seat-to-seat mail across all seats (web Inbox "Mail")
+router.get('/recent', (req: Request, res: Response) => {
+  const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit || '50'), 10) || 50));
+  res.json({ messages: recentMessages(ORCHESTRA, limit) });
 });
 
 // GET /api/messages/thread/:conversationId — get full conversation thread

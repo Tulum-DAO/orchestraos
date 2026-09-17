@@ -114,3 +114,12 @@ def test_child_env_exports_orch_dir_for_the_gateway_and_agent_status(tmp_path):
     env = S.child_env(st, base={"PATH": "/usr/bin"})
     assert env["ORCH_DIR"] == str(tmp_path / "data")
     assert env["ORCH_DIR"] == env["ORCHESTRA_DIR"]
+
+
+def test_child_env_scopes_the_realtime_snapshot_dir_to_the_data_dir(tmp_path):
+    """telemetryd + the api read/write status.json under <data>/realtime, never a shared home dir."""
+    root = tmp_path / "repo"; root.mkdir()
+    (root / "orchestra.toml").write_text(f'[data]\ndir = "{tmp_path / "data"}"\n')
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    env = S.child_env(st, base={})
+    assert env["ORCHESTRA_REALTIME_DIR"] == str(tmp_path / "data" / "realtime")

@@ -1,0 +1,11 @@
+✻ Brewed for 2m 42s
+
+● How is Claude doing this session? (optional)
+  1: Bad    2: Fine   3: Good   0: Dismiss
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ proceed to P3b-3b offline-first map render
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⬆ /gsd:update │ claude-opus-4-8[1m] │ orchestra ████░░░░░░ 43%                   ✗ Auto-update failed · Try claude doctor or npm i -g @anthropic-ai/claude-code
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
+

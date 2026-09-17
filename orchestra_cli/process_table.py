@@ -35,6 +35,10 @@ def build_process_table(st: Settings) -> list:
         ProcEntry("arturo", "service", ["bash", str(root / "services" / "arturo" / "run.sh")], cwd,
                   port=st.arturo_port, enabled=st.arturo_enabled,
                   note="voice brain (optional; [arturo] enabled)"),
+        # Working/idle/streaming truth for every seat: ONE daemon reads the seats' pipe-pane
+        # rings + /proc and writes the status snapshot the agents page and the router read.
+        ProcEntry("telemetryd", "service", [py, "-m", "lineage_daemon.telemetryd"], cwd,
+                  enabled=st.telemetry_enabled, note="telemetry daemon (agents page working/idle, [telemetry] enabled)"),
         ProcEntry("bus_beat", "beat", [py, str(root / "scripts" / "lineage_daemon" / "bus_beat.py")], cwd,
                   interval=st.bus_beat_interval, enabled=beat_on, note="event-bus drain"),
         ProcEntry("boundary_delivery", "beat",
@@ -52,6 +56,10 @@ def build_process_table(st: Settings) -> list:
         # cards never expire on their own (operator ruling).
         ProcEntry("approval_resume", "beat", [py, str(root / "scripts" / "approval_resume.py")], cwd,
                   env={"EXPIRE_PENDING": "0"}, interval=60, note="deliver answered approvals to their seat"),
+        # An in-agent menu (Claude's AskUserQuestion widget) becomes a decision card on the
+        # approvals surface; the operator's answer is driven back into the pane.
+        ProcEntry("menu_bridge", "beat", [py, str(root / "scripts" / "menu_bridge.py"), "--cron"], cwd,
+                  interval=60, enabled=st.menu_bridge_enabled, note="in-agent menus -> decision cards ([menus] bridge_enabled)"),
     ]
 
 

@@ -47,6 +47,8 @@ class Settings:
     dashboard_host: str = "127.0.0.1"
     dashboard_port: int = 8891
     arturo_enabled: bool = True
+    telemetry_enabled: bool = True
+    menu_bridge_enabled: bool = True
     arturo_port: int = 5071
     arturo_brain: str = "auto"          # auto | api | runtime (track T2)
     arturo_runtime_model: str = ""      # optional model flag for the runtime brain
@@ -135,6 +137,8 @@ def load_settings(repo_root: Path | None = None, config_path: Path | None = None
         dashboard_host=str(_get(raw, "dashboard", "host", "127.0.0.1")),
         dashboard_port=int(_get(raw, "dashboard", "port", 8891)),
         arturo_enabled=bool(_get(raw, "arturo", "enabled", True)),
+        telemetry_enabled=bool(_get(raw, "telemetry", "enabled", True)),
+        menu_bridge_enabled=bool(_get(raw, "menus", "bridge_enabled", True)),
         arturo_port=int(_get(raw, "arturo", "port", 5071)),
         arturo_brain=str(_get(raw, "arturo", "brain", "auto")),
         arturo_runtime_model=str(_get(raw, "arturo", "runtime_model", "")),
@@ -172,6 +176,9 @@ def child_env(st: Settings, base: dict | None = None) -> dict:
         "ORCH_DIR": data,   # older name read by scripts/watch_gateway.py + scripts/agent-status.py
         "ORCHESTRA_ROOT": root,
         "ORCHESTRA_SCRIPTS_DIR": str(st.repo_root / "scripts"),
+        # telemetryd's hot snapshot (status.json) + the api's reader: under the DATA dir, so
+        # two installs on one host never overwrite each other's ~/.orchestra/realtime
+        "ORCHESTRA_REALTIME_DIR": str(st.data_dir / "realtime"),
         "PYTHONPATH": os.pathsep.join(py_path),
         "ORCHESTRA_GATEWAY_HOST": st.gateway_host,
         "ORCHESTRA_GATEWAY_PORT": str(st.gateway_port),

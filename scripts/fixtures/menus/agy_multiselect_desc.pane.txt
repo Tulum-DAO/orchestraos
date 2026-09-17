@@ -1,0 +1,8 @@
+Question 1/1: Which caching layer(s) should we adopt?
+
+> 1. [ ] Redis: Persistent, feature-rich data structure store
+  2. [ ] Memcached: Simple, high-performance distributed memory object caching system
+  3. [ ] In-Memory (Local): Fast, localized caching within the application process
+  4. Write-in...
+
+  ↑/↓ Navigate · space Toggle · enter Submit · esc Skip

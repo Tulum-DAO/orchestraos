@@ -1,0 +1,53 @@
+/home/user/.nvm/versions/node/v22.22.0/bin/claude --dangerously-skip-permissions
+user@host:~/orchestra$ /home/user/.nvm/versions/node/v22.22.0/bin/claude --dangerously-skip-permissions
+ ▐▛███▜▌   Claude Code v2.1.87
+▝▜█████▛▘  claude-opus-4-8[1m] with medium effort · Claude Max
+  ▘▘ ▝▝    ~/orchestra
+
+❯ Read /tmp/agent-init-e2e-menu-scratch.md and follow all instructions in it.
+
+  Read 1 file (ctrl+o to expand)
+
+● I need to fetch the AskUserQuestion tool schema since it's a deferred tool.
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☐ [E2E TEST] Surfaces  ☐ [E2E TEST] Priority  ✔ Submit  →
+
+Which surfaces should this E2E test cover?
+
+❯ 1. [ ] iOS app
+  Render and answer on the OrchestraOS iOS app approvals surface.
+  2. [ ] Watch
+  Render and answer on the watchOS approval card.
+  3. [ ] In-agent chat
+  Render and answer in the in-agent chat transcript surface.
+  4. [ ] Type something
+     Next
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
