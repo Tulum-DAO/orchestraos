@@ -1,25 +1,25 @@
-"""Arturo in-call FACTS recall — bounded read-side wiring to state/brain/facts.db.
+"""Arturo in-call FACTS recall — bounded, read-only, facts-only.
 
-WHY (semantic-memory-audit 2026-09-14): Arturo's semantic-recall preamble queries a
-docs-only vector store that was indexed ONCE on 2026-09-07 and never refreshed. Meanwhile
-state/brain/facts.db holds ~23.5k structured facts (goals/insights/decisions/facts)
-refreshed DAILY by an active cron (scripts/brain/ingest_run.py 04:15 + 08:30) — the single
-largest, freshest knowledge source on the box — and Arturo had ZERO wiring to it. This
-module adds an ADDITIVE, read-only, bounded retrieval that surfaces the most relevant fresh
-facts for the caller's question, rendered as a small FACTS block appended alongside the
-existing semantic RECALL block. It never replaces or reranks semantic recall — the two are
-independent, separately-gated blocks.
+Sources (merged, one ranking scale — see query_sources):
+  1. $ORCHESTRA_DIR/facts/facts_db.json — the dashboard/API facts store. This is the
+     source a clean install has: write a fact in the dashboard Facts pane (or
+     `POST /api/facts`), restart, and Arturo carries it in the FACTS block next turn.
+  2. $ORCHESTRA_DIR/state/brain/facts.db — an optional sqlite store an ingest job may
+     populate (goals/insights/decisions/facts). Absent on a fresh install; used when present.
+
+No private imports: this module depends only on the standard library. There is no
+belief-derivation layer here — it is facts-only by design.
 
 Posture (mirrors semantic_recall.py's safety contract):
-  - INERT unless ARTURO_FACTS_RECALL=1 (checked before any work). Flag off = no-op, no DB open.
-  - READ-ONLY: opens facts.db read-only (mode=ro); never writes, never touches the cron.
-  - BOUNDED for the live voice path: keyword-scored over a recency-ordered candidate window
-    (CANDIDATE_LIMIT rows via idx_facts_ts), returns top-K. Measured ~40-100ms on the live
-    23.5k-row db; runs behind a HARD BUDGET WALL in a worker thread + SINGLE-FLIGHT, so it
-    can never stall or overlap a live turn — on timeout the turn proceeds with no FACTS block.
+  - INERT unless ARTURO_FACTS_RECALL=1 (checked before any work). Flag off = no-op, no reads.
+  - READ-ONLY: sqlite opens mode=ro; the JSON store is only ever read.
+  - BOUNDED for the live voice path: keyword-scored over bounded candidate windows,
+    top-K, behind a HARD BUDGET WALL in a worker thread + SINGLE-FLIGHT, so it can never
+    stall or overlap a live turn — on timeout the turn proceeds with no FACTS block.
   - Every failure/skip path degrades to '' (empty) — never raises into the turn.
   - Prompt-echo / tool-output ingestion artifacts are filtered so only real facts surface.
 """
+import json
 import logging
 import os
 import re
@@ -32,9 +32,6 @@ from pathlib import Path
 log = logging.getLogger("arturo-facts-recall")
 
 FLAG = "ARTURO_FACTS_RECALL"
-L2_FLAG = "ARTURO_WORLDVIEW_L2"   # P1.d (DEC-1789388743247449): FLAG-INERT until the
-                                  # gm-gated P1.e flip — default off = legacy facts path
-                                  # byte-identical, zero reads of beliefs/statements.
 BUDGET_ENV = "ARTURO_FACTS_RECALL_BUDGET_MS"
 DEFAULT_BUDGET_MS = 250
 K = 5                         # facts rendered
@@ -45,7 +42,14 @@ MIN_KEYWORD_LEN = 3
 SNIPPET_CHARS = 160
 MAX_CHARS = 250 * 4          # ~250-token hard clamp, same budget shape as semantic recall
 
-ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", Path.home() / "scripts/agent-orchestra"))
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def orchestra_dir():
+    """Data dir, resolved at CALL time (not import time) so the supervisor's
+    ORCHESTRA_DIR export — and a test's monkeypatch — always win. Falls back to the
+    checkout itself, which is where `orchestra init` puts data by default."""
+    return Path(os.environ.get("ORCHESTRA_DIR", str(_REPO_ROOT)))
 
 # Ingestion artifacts / prompt echoes that pollute kind='fact'. These are NOT knowledge —
 # they are the distiller's own instruction prompts and tool banners captured verbatim.
@@ -95,7 +99,7 @@ def enabled():
 
 
 def default_db_path():
-    return str(ORCHESTRA_DIR / "state" / "brain" / "facts.db")
+    return str(orchestra_dir() / "state" / "brain" / "facts.db")
 
 
 def latest_user_text(messages):
@@ -226,128 +230,117 @@ def query_facts(dbpath, keywords, k=K, candidate_limit=CANDIDATE_LIMIT):
     finally:
         con.close()
 
-    # merge, de-dupe by fact_id (fall back to identity when a row lacks one)
-    merged = {}
-    for r in list(rows) + list(rows2):
-        fid = r["fact_id"] if "fact_id" in r.keys() else None
-        key = fid if fid is not None else (r["ts"], r["text"])
-        merged.setdefault(key, r)
-    cands = list(merged.values())
-    now = datetime.now(timezone.utc)
+    return _score(_row_dicts(list(rows) + list(rows2)), keywords, k)
 
-    scored = []
+
+def _row_dicts(rows):
+    """sqlite Row objects -> plain dicts with the fields the scorer reads."""
+    out = []
+    for r in rows:
+        cols = r.keys()
+        out.append({"fact_id": r["fact_id"] if "fact_id" in cols else None,
+                    "ts": r["ts"], "kind": r["kind"], "text": r["text"] or "",
+                    "expiry_class": r["expiry_class"] if "expiry_class" in cols else "standard",
+                    "confidence": r["confidence"] if "confidence" in cols else 1.0})
+    return out
+
+
+def _score(cands, keywords, k):
+    """Keyword-density + kind + recency x tier scoring over plain-dict candidates
+    (shared by every source so the sqlite store and the dashboard JSON store rank
+    on one scale). De-dupes by fact_id (or ts+text), drops noise and zero-hit rows."""
+    merged = {}
     for r in cands:
-        txt = r["text"] or ""
+        key = r.get("fact_id") if r.get("fact_id") is not None else (r.get("ts"), r.get("text"))
+        merged.setdefault(key, r)
+    now = datetime.now(timezone.utc)
+    scored = []
+    for r in merged.values():
+        txt = r.get("text") or ""
         if _is_noise(txt):
             continue
         low = txt.lower()
         hits = sum(1 for kw in keywords if kw in low)
         if hits == 0:
             continue
-        cols = r.keys()
-        base = r["confidence"] if "confidence" in cols else 1.0
-        tier = r["expiry_class"] if "expiry_class" in cols else "standard"
-        # recency x tier: newer + more-stable facts score higher automatically
+        base = r.get("confidence")
+        tier = r.get("expiry_class") or "standard"
         eff_conf = effective_confidence(base if base is not None else 1.0,
-                                        _age_days(r["ts"], now), tier)
-        score = hits * 10 + _KIND_WEIGHT.get(r["kind"], 0) + eff_conf
-        scored.append((score, {"fact_id": (r["fact_id"] if "fact_id" in cols else None),
-                               "ts": r["ts"], "kind": r["kind"], "text": txt,
+                                        _age_days(r.get("ts"), now), tier)
+        score = hits * 10 + _KIND_WEIGHT.get(r.get("kind"), 0) + eff_conf
+        scored.append((score, {"fact_id": r.get("fact_id"), "ts": r.get("ts"),
+                               "kind": r.get("kind") or "fact", "text": txt,
                                "expiry_class": tier}))
-    # tie-break by source_ts desc (spec §C) via the eff_conf term already, then ts
     scored.sort(key=lambda x: (x[0], x[1]["ts"] or ""), reverse=True)
     return [f for _, f in scored[:k]]
 
 
-def l2_enabled():
-    return os.environ.get(L2_FLAG, "") == "1"
+# --- dashboard JSON store (the source a clean install actually has) -----------------
+
+def default_json_path():
+    """The dashboard/API facts store: $ORCHESTRA_DIR/facts/facts_db.json
+    (api/src/routes/facts.ts writes it; POST /api/facts appends rows)."""
+    return str(orchestra_dir() / "facts" / "facts_db.json")
 
 
-def query_worldview(dbpath, keywords, k=K, fluid_limit=100):
-    """P1.d L2 read path (runs INSIDE the same budget wall/single-flight as query_facts).
-    (1) MATERIALIZED beliefs (durable/standard) keyword-matched over subject+current_value,
-        ranked by corroboration-count confidence then recency; each cites ONE L1 statement
-        (source_type + date via derived_from) — the worldview stays traceable.
-    (2) FLUID synthesis: newest `fluid_limit` ephemeral, active, non-noise statements
-        matching the keywords, deterministically aggregated newest-wins per E1 subject-key
-        (no LLM, directive #3); the stale side of a contradiction never renders as current.
-    """
-    if not keywords:
+def query_facts_json(path, keywords, k=K):
+    """Return up to k scored facts from the dashboard JSON store. Read-only; a
+    missing or corrupt file is an empty result, never an error. Rows carry
+    `fact` or `text` (legacy field name), `timestamp`/`verified_at`, optional
+    `category`/`confidence`/`expiry_class`."""
+    if not keywords or not os.path.exists(path):
         return []
-    import json as _json
     try:
-        from scripts.brain.worldview_migrate import subject_predicate as _sp
-    except Exception:                                  # pragma: no cover
-        _sp = lambda t: None
-    like = " OR ".join(["(subject LIKE ? OR current_value LIKE ?)"] * len(keywords))
-    params = [x for kw in keywords for x in (f"%{kw}%", f"%{kw}%")]
-    con = _connect_ro(dbpath)
-    try:
-        beliefs = con.execute(
-            f"SELECT subject, claim, current_value, confidence, tier, derived_from,"
-            f" last_updated FROM beliefs WHERE superseded_by IS NULL AND ({like})"
-            f" ORDER BY confidence DESC, last_updated DESC LIMIT ?",
-            params + [k * 2]).fetchall()
-        out = []
-        for subj, claim, value, conf, tier, derived, updated in beliefs[:k]:
-            cite = ""
-            try:
-                sids = _json.loads(derived or "[]")
-                if sids:
-                    row = con.execute("SELECT source_type, ts FROM statements WHERE"
-                                      " statement_id=?", (sids[-1],)).fetchone()
-                    if row:
-                        cite = f"per {row[0]} {str(row[1])[:10]}"
-            except Exception:
-                pass
-            # stmt-cluster beliefs store subject = value[:80] (worldview_migrate
-            # _derive_beliefs), so "{subj}: {value}" would print the prefix twice.
-            text = value if (value or "").startswith(subj or "") else f"{subj}: {value}"
-            out.append({"kind": "belief", "tier": tier, "text": text,
-                        "ts": updated, "cite": cite, "conf": conf})
-        # fluid: recent ephemeral statements, newest-wins per subject-key
-        s_like = " OR ".join(["content LIKE ?"] * len(keywords))
-        s_params = [f"%{kw}%" for kw in keywords]
-        rows = con.execute(
-            f"SELECT statement_id, source_type, ts, content, metadata FROM statements"
-            f" WHERE ({s_like}) AND metadata LIKE '%ephemeral%'"
-            f" AND metadata NOT LIKE '%\"noise\": true%'"
-            f" ORDER BY ts DESC LIMIT ?", s_params + [fluid_limit]).fetchall()
-        newest = {}
-        for sid, stype, ts, content, meta in rows:      # ts DESC: first seen wins per key
-            sp = _sp(content)
-            key = sp[0] if sp else " ".join((content or "").lower().split())[:80]
-            if key not in newest:
-                newest[key] = {"kind": "fluid", "tier": "ephemeral", "text": content,
-                               "ts": ts, "cite": f"per {stype} {str(ts)[:10]}", "conf": 1.0}
-        out.extend(list(newest.values())[: max(0, k - len(out)) + 2])
-        return out[: k + 2]
-    finally:
-        con.close()
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception as e:                             # noqa: BLE001 — corrupt store = inert
+        log.error(f"facts-recall: json store unreadable (non-fatal): {e}")
+        return []
+    cands = []
+    for i, row in enumerate((data or {}).get("facts") or []):
+        if not isinstance(row, dict):
+            continue
+        txt = row.get("fact") or row.get("text") or ""
+        if not txt:
+            continue
+        if str(row.get("state") or "active") == "superseded":
+            continue
+        cands.append({"fact_id": f"json:{row.get('id', i)}",
+                      "ts": row.get("timestamp") or row.get("verified_at") or "",
+                      "kind": row.get("category") or row.get("kind") or "fact",
+                      "text": txt,
+                      "expiry_class": row.get("expiry_class") or "standard",
+                      "confidence": row.get("confidence")})
+    return _score(cands, keywords, k)
 
 
-_WV_HEADER = "WORLDVIEW (current beliefs, traceable to sources — cite when asked how you know):"
+def query_sources(keywords, k=K, dbpath=None, jsonpath=None):
+    """ONE entrypoint over every facts source on the box — the sqlite ingest store
+    when it exists (private nightly cron) and the dashboard JSON store — merged and
+    re-ranked on the shared scale. Both the passive FACTS block and the knowledge
+    tool read through here so a fact written on the dashboard surfaces on every
+    path Arturo answers from."""
+    dbpath = dbpath or default_db_path()
+    jsonpath = jsonpath or default_json_path()
+    cands = []
+    if os.path.exists(dbpath):
+        try:
+            cands.extend(query_facts(dbpath, keywords, k=k))
+        except Exception as e:                         # noqa: BLE001
+            log.error(f"facts-recall: sqlite store error (non-fatal): {e}")
+    cands.extend(query_facts_json(jsonpath, keywords, k=k))
+    for c in cands:                                    # re-rank: give the scorer confidence back
+        c.setdefault("confidence", 1.0)
+    return _score(cands, keywords, k)
 
 
-def _wv_snippet(text):
-    """Word-boundary truncation for spoken belief lines: never cut mid-token;
-    ellipsis only when something was actually dropped. (L2-only — the legacy
-    flag-off _render below stays byte-identical.)"""
-    raw = " ".join((text or "").split())
-    if len(raw) <= SNIPPET_CHARS:
-        return raw
-    cut = raw[:SNIPPET_CHARS]
-    sp = cut.rfind(" ")
-    return (cut[:sp] if sp > 0 else cut).rstrip() + "…"
-
-
-def _render_worldview(entries):
-    lines = [_WV_HEADER]
-    used = len(_WV_HEADER)
-    for e in entries:
-        snip = _wv_snippet(e.get("text"))
-        cite = f" ({e['cite']})" if e.get("cite") else ""
-        line = f"- [{e.get('tier', '?')}] {snip}{cite}"
+def _render(facts):
+    lines = ["FACTS (fresh structured knowledge; cite naturally, do not read verbatim):"]
+    used = len(lines[0])
+    for f in facts:
+        d = (f.get("ts") or "")[:10]
+        snip = " ".join((f.get("text") or "").split())[:SNIPPET_CHARS]
+        line = f"- [{f.get('kind', 'fact')} {d}] {snip}"
         if used + 1 + len(line) > MAX_CHARS:
             break
         lines.append(line)
@@ -355,40 +348,54 @@ def _render_worldview(entries):
     return "" if len(lines) == 1 else "\n".join(lines)
 
 
-def _render(facts):
-    lines = [_HEADER]
-    used = len(_HEADER)
-    for f in facts:
-        snip = " ".join((f.get("text") or "").split())[:SNIPPET_CHARS]
-        date = (f.get("ts") or "")[:10]
-        line = f"- [{f.get('kind', 'fact')} {date}] {snip}"
-        if used + 1 + len(line) > MAX_CHARS:
-            break
-        lines.append(line)
-        used += 1 + len(line)
-    if len(lines) == 1:
-        return ""
-    return "\n".join(lines)
+# Periodic re-warm state: boot-warm only covers turn-1-after-boot; a long-idle proxy
+# re-cools its page cache and turn 1 loses the block to the budget wall. monotonic clock.
+_warm_state = {"last_warm": 0.0, "last_activity": 0.0}
+
+
+def _should_rewarm(now, last_warm, last_activity, interval_s, idle_s):
+    """True when the cache is due a warm: every interval_s regardless, and during
+    an idle stretch (no query for idle_s) once the last warm is also idle_s old."""
+    if (now - last_warm) >= interval_s:
+        return True
+    return (now - last_activity) >= idle_s and (now - last_warm) >= idle_s
+
+
+def keep_warm(interval_s=1800, idle_s=900, tick_s=60, stop=None):
+    """Run inside the facts-cache-warm daemon thread. Never raises, never exits on
+    a warm error; `stop` (threading.Event) ends it for tests."""
+    while not (stop is not None and stop.is_set()):
+        try:
+            now = time.monotonic()
+            if _should_rewarm(now, _warm_state["last_warm"],
+                              _warm_state["last_activity"], interval_s, idle_s):
+                warm_cache()
+        except Exception as e:                         # noqa: BLE001 — daemon must survive
+            try:
+                _warm_state["last_warm"] = time.monotonic()   # don't hot-loop a failing warm
+                log.error(f"facts-recall re-warm error (non-fatal): {e}")
+            except Exception:
+                pass
+        if stop is not None:
+            stop.wait(tick_s)
+        else:
+            time.sleep(tick_s)
 
 
 def warm_cache(dbpath=None):
-    """Boot-warm (gm msg_5d10b3f0 item 3): run ONE read-only query so turn 1
-    after a cold boot doesn't lose the block to the budget wall (cold page
-    cache measured 2.19s on 2026-09-16). A non-matching LIKE still scans the
-    tables, which is exactly the warm we need. Best-effort: returns elapsed ms,
-    0.0 on missing db or any error, never raises."""
+    """Boot-warm: run ONE read-only query so turn 1 after a cold boot doesn't lose
+    the block to the budget wall. A non-matching keyword still scans every source,
+    which is exactly the warm we need. Best-effort: returns elapsed ms, 0.0 when no
+    source exists or on any error, never raises."""
     t0 = time.perf_counter()
+    _warm_state["last_warm"] = time.monotonic()
     try:
         dbpath = dbpath or default_db_path()
-        if not os.path.exists(dbpath):
+        if not os.path.exists(dbpath) and not os.path.exists(default_json_path()):
             return 0.0
-        kws = ["__bootwarm__"]
-        if l2_enabled():
-            query_worldview(dbpath, kws, k=K)
-        else:
-            query_facts(dbpath, kws, k=K)
+        query_sources(["__bootwarm__"], k=K, dbpath=dbpath)
         ms = (time.perf_counter() - t0) * 1000.0
-        log.info(f"worldview: cache warm in {ms:.0f}ms")
+        log.info(f"facts-recall: cache warm in {ms:.0f}ms")
         return ms
     except Exception as e:                             # noqa: BLE001 — never fatal at boot
         log.error(f"facts-recall warm error (non-fatal): {e}")
@@ -400,6 +407,7 @@ def facts_preamble(user_text, dbpath=None, budget_ms=None):
     failure/skip path degrades to no-block, never an error into the turn)."""
     if not enabled():
         return ""
+    _warm_state["last_activity"] = time.monotonic()
     text = (user_text or "").strip()
     if len(text) < MIN_QUERY_CHARS:
         return ""
@@ -407,7 +415,7 @@ def facts_preamble(user_text, dbpath=None, budget_ms=None):
     if not keywords:
         return ""
     dbpath = dbpath or default_db_path()
-    if not os.path.exists(dbpath):
+    if not os.path.exists(dbpath) and not os.path.exists(default_json_path()):
         return ""
     if budget_ms is None:
         try:
@@ -420,17 +428,11 @@ def facts_preamble(user_text, dbpath=None, budget_ms=None):
         return ""
     result = {}
 
-    use_l2 = l2_enabled()                    # P1.d: gm-gated flip; off = legacy byte-identical
-
     def _work():
         try:
-            if use_l2:
-                _t0 = time.perf_counter()
-                result["r"] = query_worldview(dbpath, keywords, k=K)
-                result["ms"] = (time.perf_counter() - _t0) * 1000.0
-                result["l2"] = True
-            else:
-                result["r"] = query_facts(dbpath, keywords, k=K)
+            _t0 = time.perf_counter()
+            result["r"] = query_sources(keywords, k=K, dbpath=dbpath)
+            result["ms"] = (time.perf_counter() - _t0) * 1000.0
         except Exception as e:               # noqa: BLE001 — degrade, never raise into the turn
             result["e"] = e
         finally:
@@ -445,15 +447,11 @@ def facts_preamble(user_text, dbpath=None, budget_ms=None):
     if "r" not in result:
         log.info(f"facts-recall: budget {budget_ms}ms exceeded — turn proceeds without facts")
         return ""
-    if result.get("l2"):
-        # gm-gated breadcrumb (msg_5d10b3f0 item 2): one INFO line per L2 request so a
-        # real call is provable from arturo-proxy.log. Flag-off path logs nothing.
-        log.info(f"worldview: path=L2 beliefs={len(result['r'])} ms={result.get('ms', 0):.0f}")
+    # one INFO breadcrumb per turn so a real call is provable from the proxy log
+    log.info(f"facts-recall: facts={len(result['r'])} ms={result.get('ms', 0):.0f}")
     if not result["r"]:
         return ""
     try:
-        if result.get("l2"):
-            return _render_worldview(result["r"])
         return _render(result["r"])
     except Exception as e:                    # noqa: BLE001
         log.error(f"facts-recall render error (non-fatal): {e}")
