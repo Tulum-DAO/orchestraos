@@ -50,6 +50,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     ro.add_argument("--model")
 
     sub.add_parser("down", help="stop the running supervisor and its children")
+    ug = sub.add_parser("upgrade", help="git pull --ff-only + orchestra init --yes + orchestra doctor; seats untouched")
+    ug.add_argument("--dry-run", action="store_true", help="show the incoming commits and contract-bearing paths, pull nothing")
+    ug.add_argument("--no-venv", action="store_true", help="passed to init: skip python venv + pip")
+    ug.add_argument("--no-npm", action="store_true", help="passed to init: skip npm install (and builds)")
+    ug.add_argument("--no-build", action="store_true", help="passed to init: skip api/dashboard builds")
     s = sub.add_parser("status", help="show the supervisor's process table")
     s.add_argument("--json", action="store_true")
     return p.parse_args(argv)
@@ -70,6 +75,14 @@ def cmd_init(ns) -> int:
     st = _settings()
     print(f"\ndata dir: {st.data_dir}\nconfig:   {st.config_path}\nnext:     orchestra doctor && orchestra up")
     return 1 if failed else 0
+
+
+def cmd_upgrade(ns) -> int:
+    from .upgrade_cmd import run_upgrade
+    rep = run_upgrade(S.repo_root_from_env(), dry_run=ns.dry_run,
+                      init_kwargs={"skip_venv": ns.no_venv, "skip_npm": ns.no_npm, "skip_build": ns.no_build})
+    print(rep.render())
+    return rep.exit_code
 
 
 def cmd_doctor(ns) -> int:
@@ -149,7 +162,7 @@ def main(argv=None) -> int:
     ns = parse_args(argv)
     from .seats import cmd_rotate, cmd_spawn
     return {"init": cmd_init, "doctor": cmd_doctor, "up": cmd_up, "down": cmd_down, "status": cmd_status,
-            "spawn": cmd_spawn, "rotate": cmd_rotate}[ns.command](ns)
+            "spawn": cmd_spawn, "rotate": cmd_rotate, "upgrade": cmd_upgrade}[ns.command](ns)
 
 
 if __name__ == "__main__":
