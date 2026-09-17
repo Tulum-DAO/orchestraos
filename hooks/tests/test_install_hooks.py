@@ -99,3 +99,37 @@ def test_install_refuses_when_a_hook_script_is_missing(tmp_path):
 def test_install_refuses_the_real_settings_file_under_pytest(tmp_path):
     rep = H.install(settings_path=Path("~/.claude/settings.json"), repo_root=REPO, data_dir=tmp_path / "data")
     assert rep.get("error") and "inside a test" in rep["error"]
+
+
+def test_installed_command_fails_open_when_the_script_disappears_later(tmp_path):
+    """Runtime fail-open: a checkout that moves or a deleted script must never block a tool call.
+    The install-time guard covers only install time; the installed command itself must exit 0
+    when its script is gone (2026-09-17: a missing script blocked every tool on the host)."""
+    import shutil, subprocess
+    fake_root = tmp_path / "repo"
+    shutil.copytree(REPO / "hooks", fake_root / "hooks", ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    (fake_root / "scripts" / "lineage_daemon").mkdir(parents=True)
+    (fake_root / "scripts" / "lineage_daemon" / "bus_feeder.py").write_text("import sys; sys.exit(0)\n")
+    settings = tmp_path / "settings.json"
+    H.install(settings_path=settings, repo_root=fake_root, data_dir=tmp_path / "data")
+    cmds = [h["command"] for rules in json.loads(settings.read_text())["hooks"].values() for r in rules for h in r["hooks"]]
+    shutil.rmtree(fake_root)            # the checkout is gone
+    for cmd in cmds:
+        r = subprocess.run(["bash", "-c", cmd], input="{}", capture_output=True, text=True, timeout=20)
+        assert r.returncode == 0, (cmd, r.returncode, r.stderr[-200:])
+
+
+def test_installed_command_still_runs_the_script_when_present(tmp_path):
+    """Fail-open must not mean fail-silent: with the script present its output (e.g. the drain's
+    block decision) reaches Claude unchanged."""
+    import subprocess
+    fake_root = tmp_path / "repo"; (fake_root / "hooks").mkdir(parents=True)
+    for _ev, _m, rel, _r in H.HOOKS:
+        p = fake_root / rel; p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text('print("{\\"decision\\": \\"block\\", \\"reason\\": \\"probe\\"}")\n' if rel.endswith(".py") else "console.log('js-ok')\n")
+    settings = tmp_path / "settings.json"
+    H.install(settings_path=settings, repo_root=fake_root, data_dir=tmp_path / "data")
+    cmds = [h["command"] for rules in json.loads(settings.read_text())["hooks"].values() for r in rules for h in r["hooks"]]
+    drain = next(c for c in cmds if "agent-queue-drain" in c)
+    r = subprocess.run(["bash", "-c", drain], input="{}", capture_output=True, text=True, timeout=20)
+    assert r.returncode == 0 and '"block"' in r.stdout

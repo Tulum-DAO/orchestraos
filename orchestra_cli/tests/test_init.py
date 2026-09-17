@@ -252,3 +252,9 @@ def test_init_makes_the_data_dir_a_git_repo_for_rotation_artifacts(tmp_path):
     # idempotent
     report = I.run_init(root, data_dir=data, run=I.default_run, skip_npm=True, skip_venv=True)
     assert {r.step: r for r in report}["data-git"].detail == "present"
+
+
+def test_sandbox_fixture_isolates_tmux_and_config_dir():
+    """The autouse sandbox: no test can reach the developer's tmux server or Claude config."""
+    assert "TMUX" not in os.environ
+    assert os.environ["TMUX_TMPDIR"].startswith("/tmp") and "claude-config" in os.environ["CLAUDE_CONFIG_DIR"]
