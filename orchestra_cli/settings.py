@@ -113,6 +113,21 @@ def _get(raw: dict, section: str, key: str, default):
     return default if val in ("", None) else val
 
 
+def resolve_data_dir(raw: dict | None, explicit: "Path | str | None" = None) -> Path:
+    """Precedence: explicit flag > $ORCHESTRA_DIR > [data] dir in orchestra.toml > ~/.orchestra.
+    The env step is what lets a second install (a proof worktree, a container, a test) run on a
+    host that already has an OrchestraOS config without touching the operator's data dir."""
+    env = os.environ.get("ORCHESTRA_DIR", "").strip()
+    if explicit not in (None, "", "."):
+        chosen = str(explicit)
+    elif env:
+        chosen = env
+    else:
+        cfg = str(_get(raw or {}, "data", "dir", "") or "").strip()
+        chosen = cfg if cfg not in ("", ".") else DEFAULT_DATA_DIR
+    return Path(os.path.expanduser(chosen))
+
+
 def load_settings(repo_root: Path | None = None, config_path: Path | None = None) -> Settings:
     repo_root = Path(repo_root or repo_root_from_env()).resolve()
     config_path = Path(config_path or config_path_for(repo_root))
@@ -129,7 +144,7 @@ def load_settings(repo_root: Path | None = None, config_path: Path | None = None
         config_path=config_path,
         config_exists=exists,
         raw=raw,
-        data_dir=Path(os.path.expanduser(str(_get(raw, "data", "dir", DEFAULT_DATA_DIR)))),
+        data_dir=resolve_data_dir(raw),
         gateway_host=str(_get(raw, "gateway", "host", "127.0.0.1")),
         gateway_port=int(_get(raw, "gateway", "port", 8890)),
         api_host=str(_get(raw, "api", "host", "127.0.0.1")),
