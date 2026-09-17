@@ -1480,16 +1480,11 @@ def verified_inject(session, text, force=False):
     # Dim-styled ghost suggestions are NOT typed input and do not block (the
     # detector's composer_typed_text does the style walk when available).
     if not force:
-        typed = None
-        helper = getattr(_agent_status(), "composer_typed_text", None)
-        if callable(helper):
-            comp_raw = [ln for ln in pre_raw.splitlines()
-                        if _is_prompt_line(_strip_ansi(ln))]
-            typed = helper(comp_raw[-1]) if comp_raw else ""
-        if typed is None:   # fallback (detector without helper): any text blocks
-            pre_composers = [ln for ln in pre.splitlines() if _is_prompt_line(ln)]
-            typed = (pre_composers[-1].strip().lstrip("❯>›\u203a").strip()
-                     if pre_composers else "")
+        # composer_state is the ONE SGR-aware reader (gm ghost-suggestion commission):
+        # it reads the bottom prompt line of the -e capture and returns the TYPED text
+        # only ('' for a dim ghost / placeholder / empty / working). pre_raw is -e.
+        from scripts.composer_state import composer_text
+        typed = composer_text(pre_raw, runtime=None) or ""  # runtime inferred from glyph
         if typed:
             return False, {"reason": "busy", "state": state,
                            "activity": "Composer has unsubmitted text",
@@ -1591,13 +1586,10 @@ def _bottom_composer_typed(session):
     """Default-styled (TYPED) text of the bottom-most composer line on the
     VISIBLE screen. '' if the composer is empty/ghost-only; None if the detector
     style helper is unavailable (=> caller treats as unverifiable -> fail-closed)."""
-    helper = getattr(_agent_status(), "composer_typed_text", None)
-    if not callable(helper):
-        return None
+    # composer_state is the ONE SGR-aware reader (gm ghost-suggestion commission).
+    from scripts.composer_state import composer_text
     pre_raw = _capture_pane(session, lines=0, ansi=True) or ""
-    comp = [ln for ln in pre_raw.splitlines()
-            if _is_prompt_line(_strip_ansi(ln))]
-    return helper(comp[-1]) if comp else ""
+    return composer_text(pre_raw, runtime=None)  # typed text | "" empty/ghost | None unreadable
 
 
 def _accepted_matches(typed, suggestion_text) -> bool:
