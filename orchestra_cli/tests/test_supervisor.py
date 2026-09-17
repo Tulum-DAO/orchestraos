@@ -24,13 +24,17 @@ def test_process_table_default_shape(tmp_path):
     st = _settings(tmp_path)
     table = PT.build_process_table(st)
     by = {e.name: e for e in table}
-    assert [e.name for e in table if e.kind == "service"] == ["gateway", "api", "dashboard", "arturo"]
+    assert [e.name for e in table if e.kind == "service"] == ["gateway", "api", "dashboard", "arturo", "telemetryd"]
+    # Tier 0 item 4: the telemetry daemon (working/idle truth for the agents page) and the
+    # in-agent menu bridge (AskUserQuestion widget -> decision card) run under the supervisor
+    assert by["telemetryd"].argv[-2:] == ["-m", "lineage_daemon.telemetryd"] and by["telemetryd"].port is None
+    assert by["menu_bridge"].argv[-2:] == [by["menu_bridge"].argv[-2], "--cron"] and by["menu_bridge"].argv[-2].endswith("scripts/menu_bridge.py")
     assert by["gateway"].port == 8890 and "watch_gateway.py" in " ".join(by["gateway"].argv)
     assert by["api"].port == 8888 and by["api"].argv[-1].endswith("api/dist/server.js")
     assert by["dashboard"].port == 8891 and by["dashboard"].argv[-1].endswith("dashboard-proxy.js")
     assert by["arturo"].port == 5071 and by["arturo"].argv[-1].endswith("services/arturo/run.sh")
     beats = {e.name: e.interval for e in table if e.kind == "beat"}
-    assert beats == {"bus_beat": 60, "boundary_delivery": 60, "cron_beat": 900, "router": 60, "approval_resume": 60}
+    assert beats == {"bus_beat": 60, "boundary_delivery": 60, "cron_beat": 900, "router": 60, "approval_resume": 60, "menu_bridge": 60}
     assert by["boundary_delivery"].env["BOUNDARY_DELIVER_ARMED"] == "1"
     assert all(e.enabled for e in table)
     for e in table:
@@ -47,6 +51,9 @@ def test_process_table_honors_config_toggles(tmp_path):
     assert by["bus_beat"].enabled is False and by["bus_beat"].interval == 30
     assert by["boundary_delivery"].enabled is False
     assert by["router"].enabled is False
+    st2 = _settings(tmp_path, '[telemetry]\nenabled = false\n[menus]\nbridge_enabled = false\n')
+    by2 = {e.name: e for e in PT.build_process_table(st2)}
+    assert by2["telemetryd"].enabled is False and by2["menu_bridge"].enabled is False
 
 
 def test_render_dry_run_lists_every_entry_and_interval(tmp_path):
