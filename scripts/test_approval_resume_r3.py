@@ -156,3 +156,22 @@ def test_node_path_unchanged_no_pane_inject(monkeypatch):
         assert store.get(rid)["resume_attempts"] == 1
     finally:
         os.unlink(path)
+
+
+def test_pane_resume_ack_instruction_names_this_checkout_not_an_operator_path():
+    """B1 run-2 finding B: the delivered ack command pointed at ~/scripts/agent-orchestra/,
+    the operator's private layout; a from-docs seat had to hunt for the real path."""
+    store, path = _tmp_store()
+    try:
+        row = _answered_pane_row(store)
+        seen = {}
+        ar._fire_pane_resume(row, store,
+                             msg_send=lambda r, body: seen.setdefault("body", body),
+                             resolve=lambda aid: ("gm", "direct-live"),
+                             inject=lambda s, t: (True, {}))
+        body = seen["body"]
+        assert "~/scripts/agent-orchestra" not in body
+        checkout = os.path.dirname(os.path.dirname(os.path.abspath(ar.__file__)))
+        assert f"python3 {checkout}/scripts/approval.py ack {row['id']}" in body
+    finally:
+        os.unlink(path)
