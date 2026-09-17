@@ -10,19 +10,26 @@ Dockerfile and `.devcontainer/devcontainer.json` reproduce a clean-machine insta
 and `orchestra init --demo` seeds fixture seats + one card of each kind
 (`init_cmd.py` `seed_demo_registry` ~line 129, demo card seeding ~line 253). An
 outsider (`oss-install-tester`) proved a clean container reaches `orchestra doctor`
-green in under 4 minutes, unattended, three runs in a row. What's left is
-hardening, not the installer itself — the problem this doc solves is that three
-concrete gaps remain, documented in `docs/HACKATHON_ISSUES.md`'s T9/G3/G6 sections.
+green in under 4 minutes, unattended, three runs in a row. Also since shipped:
+`orchestra init` installs the Claude Code hook layer into
+`$CLAUDE_CONFIG_DIR/settings.json` (merge/idempotent/fail-open, doctor row
+`hooks:claude`, `ORCHESTRA_SKIP_HOOKS=1` for containers with no Claude seats), and
+makes the data dir a small git repo (the `data-git` step) so rotation can prove a
+successor's readback by commit. What's left is hardening, not the installer
+itself — the problem this doc solves is that three concrete gaps remain,
+documented in `docs/HACKATHON_ISSUES.md`'s T9/G3/G6 sections.
 
 ## Design
 
 Three independent pieces of hardening, each small enough to land separately:
 
-1. **Doctor rows for plugins and push** (overlaps `good-first-issue` G6 — check who
-   has picked it up before duplicating). `orchestra doctor` today knows CLIs,
-   ports, config keys, builds, the rotation beat, and foreign tmux sessions
-   (`orchestra_cli/doctor.py`); it needs rows for the notify channel (Track 6's
-   plugin state) and ntfy/push reachability (Track 8).
+1. **Doctor rows for push, and any plugin Tier 0 item 6 doesn't cover** (overlaps
+   `good-first-issue` G6 — check who has picked it up before duplicating).
+   `orchestra doctor` today knows CLIs, ports, config keys, builds, the rotation
+   beat, foreign tmux sessions, and (since Tier 0 item 6, orchestra-builder) a
+   `plugin:telegram` row — this track does not re-add that one; it adds
+   `notify:ntfy` (reachability when `NTFY_BASE` is set) for Track 8's push work
+   and `plugin:whatsapp` once Track 6 ships that plugin.
 2. **`make image` / machine-image step.** `docs/INSTALL.md`'s "Machine image (VPS
    snapshot)" section documents the manual recipe (run the Dockerfile's `RUN` steps
    in order on a fresh VPS, leave the CLI logged out, snapshot). This piece turns
@@ -38,11 +45,17 @@ Three independent pieces of hardening, each small enough to land separately:
    substitution step un-blocks re-adding it along with its test
    (`scripts/lineage_daemon/unit_file_test.py`, currently also excluded).
 
+**If you're testing any of this on a machine that also runs a live fleet** (not a
+throwaway container): use `scripts/test_sandbox_env.sh` (isolated tmux server +
+config dir) rather than spawning test seats against the real one — `tmux
+kill-server` is refused on a host with a live fleet, on purpose, so cleanup
+without the sandbox script will strand sessions you can't tear down.
+
 ## Files you will touch
 
-- `orchestra_cli/doctor.py` — new rows: `notify:channel` (+ credentials present),
-  `notify:ntfy` (reachability when `NTFY_BASE` is set), `plugin:<name>` for each
-  enabled plugin (Track 6).
+- `orchestra_cli/doctor.py` — new rows: `notify:ntfy` (reachability when
+  `NTFY_BASE` is set, Track 8), `plugin:whatsapp` once Track 6 ships that plugin.
+  `plugin:telegram` already exists (Tier 0 item 6) — do not duplicate it.
 - `Makefile` — new `image` target (or documented equivalent script under
   `scripts/`).
 - `deploy/systemd/orchestra.service.template` (new; the directory does not exist in

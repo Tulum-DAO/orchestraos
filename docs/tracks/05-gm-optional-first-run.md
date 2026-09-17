@@ -25,31 +25,42 @@ Two changes, both additive:
   dead-lettered and not silently dropped. `charter_exempt()`'s refusal path
   narrows to only the cases that are genuinely errors (self-addressed, malformed
   target), not "doesn't exist yet."
-- **Spawn drains on first effect.** `orchestra spawn gm` (new CLI path — check
-  whether it has landed in main; `orchestra_cli/__main__.py`'s subcommand list is
-  the source of truth) registers the seat, then, as part of its own first-boot
-  sequence, queries `msg_store.py` for every `parked_no_target` row addressed to
-  `gm` and delivers them in send order (oldest first) the same way the router
-  delivers any other parked row. Arturo can also trigger this spawn itself when a
-  second seat appears and no `gm` exists yet — same drain call, just a different
-  caller.
+- **Registration is the drain.** `orchestra spawn gm --gm` (landed on `main`;
+  `orchestra_cli/seats.py`'s `register_seat()` + `cmd_spawn()` is where the `--gm`
+  flag selects `prompts/gm.md`, tier T1, always-on) registers the seat's charter.
+  No bespoke drain call is needed: once `gm` has a registry row, a
+  `parked_no_target` row addressed to it is an ordinary pending row again, and the
+  existing delivery paths already move it — the Claude Code hook layer's Stop-hook
+  digest drains an idle seat's own pending mail on its own first turn, and
+  `scripts/message-router.py`'s 60-second beat delivers any row it still finds
+  parked. Arturo triggering `orchestra spawn gm --gm` itself when a second seat
+  appears and no `gm` exists yet needs no special-cased follow-up call either — the
+  same two paths pick the rows up the moment the registry row exists.
 - **Router treats "missing target" as park, never dead-letter.**
   `scripts/message-router.py`'s dead-letter path (search `dead-letter` in that
-  file, ~line 1443-1512) currently escalates unreachable targets after enough
-  retries; a target with zero registry rows must be excluded from that escalation
-  path entirely — it is a park state, not a delivery failure, until a `gm` is
-  spawned or the sender is told (once) that no manager exists yet.
+  file, ~line 1443-1512, still accurate) currently escalates unreachable targets
+  after enough retries; a target with zero registry rows must be excluded from
+  that escalation path entirely — it is a park state, not a delivery failure,
+  until a `gm` is spawned or the sender is told (once) that no manager exists yet.
+  The router's idle-oracle reads the Claude Code hook layer's pane-event files
+  from the data dir (`<data>/state/agent-events/panes/<N>.json`, not the
+  checkout — `ORCH_EVENTS_DIR` in `scripts/message-router.py`), so a
+  `parked_no_target` row and an ordinary busy-seat park are read the same way once
+  the target exists.
 
 ## Files you will touch
 
 - `msg_store.py` — `charter_exempt()` (~line 169) and the `send()` path (~line
   449): add the `parked_no_target` state; narrow the refusal condition.
 - `scripts/message-router.py` — the dead-letter escalation logic (~line 1443
-  onward): exclude rows whose target has no registry row from escalation; keep them
-  parked.
-- `orchestra_cli/__main__.py` / wherever `orchestra spawn gm` lands — add the
-  drain-on-first-effect call; if `spawn` hasn't merged yet, this hooks into
-  whatever the successor of `spawn-agent.sh`'s registration step is.
+  onward, `<checkout>/msg_store.py` per `CODE_ROOT` is what the reply template
+  points at): exclude rows whose target has no registry row from escalation; keep
+  them parked. The router's hold file lives under `<data>/state`, not the
+  checkout — match that if you touch its file-location code.
+- `orchestra_cli/seats.py` — `register_seat()` / `cmd_spawn()` (the real
+  `orchestra spawn gm --gm` implementation, landed) — this is where charter
+  registration happens; no drain call to add here per the design above, but
+  confirm registration itself is what unblocks delivery (Step 2).
 - `services/arturo/dispatcher.py` — confirm the commission tool call still writes
   the `msg_store` row unconditionally, regardless of whether `gm` currently exists
   (it should — the parking happens inside `msg_store.py`, not in the caller).
@@ -66,10 +77,11 @@ Two changes, both additive:
    expect a row visible in Inbox with that status, no error.
 3. Send two more commissions the same way — confirm all three are visible as
    parked, in order.
-4. Register and spawn `gm` (`orchestra spawn gm` once it exists, or the manual
-   registry-update + spawn-agent.sh path from `docs/INSTALL.md` §3 in the
-   meantime) — confirm the drain delivers all three rows in send order
-   (`msg_store.py inbox --agent gm` shows them, oldest first).
+4. `orchestra spawn gm --gm` — confirm the three parked rows deliver in send order
+   (`msg_store.py inbox --agent gm` shows them, oldest first) via the ordinary
+   Stop-hook-digest / router-beat paths, with no special drain code involved.
+   `orchestra rotate <seat>` (also landed, `docs/INSTALL.md` §5) is the same-shape
+   command if you need to rotate `gm` afterward.
 5. Confirm the router's dead-letter path never fires for a target with zero
    registry rows: send a commission, wait past whatever retry window would
    normally escalate a busy-seat park, confirm no dead-letter notice.
@@ -87,13 +99,17 @@ order, on its first effect.
 I'm working Track 5 (manager-seat-optional first run) for the OrchestraOS
 hackathon.
 Read docs/tracks/05-gm-optional-first-run.md in this repo for the full
-design. Files to touch: msg_store.py (charter_exempt + send path: new
+design. `orchestra spawn gm --gm` and `orchestra rotate <seat>` are
+already on main (orchestra_cli/seats.py) -- no need to gate on them
+landing. Files to touch: msg_store.py (charter_exempt + send path: new
 parked_no_target state), scripts/message-router.py (exclude no-registry
-targets from dead-letter escalation), and wherever `orchestra spawn gm`
-lands (drain parked_no_target rows on first effect).
+targets from dead-letter escalation; note the idle-oracle now reads pane
+events from the data dir, not the checkout).
 Start by reproducing today's actual failure mode per Step 1 of the doc —
 don't assume it errors; confirm what really happens on a fresh data dir
-before writing the fix.
+before writing the fix. Then confirm registration alone (no bespoke
+drain call) is enough to unblock delivery via the existing hook-digest
+and router-beat paths.
 ```
 
 ## Out of scope
