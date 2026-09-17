@@ -305,3 +305,29 @@ file does not exist. Either ship a generic `prompts/_seat-default.md` that `orch
 copies to `prompts/<seat>.md` when none exists, or stop naming the file when it is absent.
 
 **Acceptance.** A generic seat's baton and init text never point at a file that is not on disk.
+
+## G12 · `rotate_agent.py` false-negative "promotion inject NOT verified" warning
+`labels: good-first-issue, size:XS, rotation`
+
+After a promotion `rotate_agent.py` prints `promotion inject to '<seat>' NOT verified
+committed — the prompt may be sitting in the composer; press Enter in the pane` even when
+the inject landed (a pane capture shows the prompt submitted and the seat working). Seen on
+two consecutive gate runs on 2026-09-17; cosmetic — nothing is wrong with the rotation. The
+verify step probably reads the pane before the CLI redraws (see the composer-probe note in
+docs/ROTATION.md). Re-capture after a short delay, or check the seat's hook/state file for a
+new turn, before warning.
+
+**Acceptance.** A promotion whose inject visibly landed prints no warning; a real unsubmitted
+composer still does.
+
+## G13 · `/api/agents` keeps stale successor alias rows after a promotion
+`labels: good-first-issue, size:XS, dashboard`
+
+After `orchestra rotate hello` promotes `hello-g2` to `hello`, `/api/agents` still lists the
+retired alias rows (`hello-g2`, later `hello-g3`) with `alive: false` next to the canonical
+`hello` and the parked predecessor `hello-gen2`. Harmless, but the Agents page shows ghosts.
+Either drop alias rows from the registry projection once promoted, or hide `alive: false`
+alias rows whose canonical seat is live.
+
+**Acceptance.** After a rotation the Agents list shows the canonical seat and its parked
+predecessor only; a test rotates in a tmp data dir and asserts the projection.
