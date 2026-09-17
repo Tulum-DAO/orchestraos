@@ -114,14 +114,15 @@ def test_read_composer_no_prompt_line_is_unknown():
     assert r["state"] == "unknown"
 
 
-# --- RED demonstration: the OLD reader misclassifies the content ghost -------------------
+# --- the -e requirement: a STRIPPED capture cannot see a content ghost -------------------
 
-def test_old_composer_read_misclassifies_content_ghost_as_typed():
-    """Proves WHY this module exists: composer_read.composer_text strips SGR and cannot see
-    the dim ghost, so it returns the ghost words as if a human typed them. composer_state
-    (SGR-aware) gets it right. If the old reader is ever fixed to agree, update this test."""
-    from scripts.lineage_daemon.wal.composer_read import composer_text
-    old = composer_text([CLAUDE_GHOST_CONTENT])
-    assert old and "example.com" in old, "old reader returns the ghost as typed text (the bug)"
-    new = read_composer("seat", runtime="claude", capture_fn=_cap(CLAUDE_GHOST_CONTENT))
-    assert new["state"] == "ghost" and new["text"] == "", "composer_state classifies it ghost"
+def test_stripped_capture_cannot_see_content_ghost_but_e_capture_can():
+    """Proves WHY every reader must capture with -e. On a STRIPPED capture (SGR removed) the
+    dim styling is gone, so a CONTENT ghost is indistinguishable from typed text and reads as
+    typed — the exact defect. The SAME line captured WITH -e classifies as ghost."""
+    import re as _re
+    stripped = _re.sub(r"\x1b\[[0-9;]*m", "", CLAUDE_GHOST_CONTENT)  # what capture-pane -p gives
+    from scripts.composer_state import composer_text
+    assert composer_text([stripped], runtime="claude"), "stripped: ghost misread as typed (the bug)"
+    with_e = read_composer("seat", runtime="claude", capture_fn=_cap(CLAUDE_GHOST_CONTENT))
+    assert with_e["state"] == "ghost" and with_e["text"] == "", "-e capture classifies it ghost"
