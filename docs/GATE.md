@@ -158,13 +158,12 @@ orchestra rotate hello --synthesize
 seat banks its own baton with canary questions; `hello` has nothing to hand over yet).
 The successor then only has to prove it can read its own seat.
 
-**Give `hello` two or three real turns first** (the step 2 question plus, say, "read
-docs/GATE.md and summarize step 6" and "write a file notes.txt in your data dir with
-the word ROTPROOF"). The strict grader grounds the successor's answers in the
-predecessor's transcript and needs a few thousand characters; a seat that only said
-hello HOLDs with `missed q1..q3` — the tool prints that exact warning before it
-starts. Proven on public main: a fresh `orchestra spawn` seat with three turns rotated
-and promoted to gen 2 in about a minute.
+**Give `hello` at least one real turn first** (the step 2 question is enough; a
+second such as "write a file notes.txt in your data dir with the word ROTPROOF" gives
+step 7 something to recall). The grader grounds the successor's answer in the
+predecessor's transcript; the tool warns before it starts if that transcript is too
+thin. Proven on public main, twice, with exactly those thin turns: a fresh
+`orchestra spawn` seat rotated and promoted to gen 2 in about a minute each time.
 
 Expected: a new generation of `hello` boots, reads the handoff the old one
 wrote, answers a short set of canary questions anchored in the predecessor's
@@ -175,12 +174,13 @@ pointer for `hello` now points at the new generation, the old one is retired.
 seed the seat via the identity store` means the seat was not spawned with
 `orchestra spawn` (step 2) — the older `registry-update.py` + `spawn-agent.sh`
 recipe registers a seat without a lineage. Spawn it again with `orchestra spawn`
-(a new name is simplest) and retry. `HOLD_GRADE` with every question individually `PASS` but
-`aggregate.distinct_q` below `distinct_min` (the grade JSON now carries an
-`aggregate.reason` naming the culprit questions) means the successor repeated the same
-id in every answer: each answer must cite at least one id/number/path that no other
-answer cites — the successor's instructions say so; ask it to redo the readback and
-rerun with `--resume`. Plain `HOLD_GRADE` means the successor's readback
+(a new name is simplest) and retry. `HOLD_GRADE` with `canary.missed: []` means every answer passed on its own and the
+veto is aggregate-level: `aggregate.reason` in the grade JSON says which rule
+(`distinct_q N < M: questions share anchors` — the same id repeated in every answer
+earns credit for only one of them — or a union / id-class shortfall) and
+`aggregate.culprits` names the answers to redo; ask the successor to fix those and rerun
+with `orchestra rotate <seat> --resume`. A `--synthesize` baton asks ONE combined
+question precisely so this cannot happen on a fresh seat. Plain `HOLD_GRADE` means the successor's readback
 did not clear the strict grader; with `--synthesize` on a seat this young the
 usual cause is a predecessor transcript too thin to anchor against — ask `hello`
 to do a little real work first, then retry. The handoff document and the successor's readback
