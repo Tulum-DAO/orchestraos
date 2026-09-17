@@ -22,7 +22,7 @@ Install and log in to ONE agent CLI (the runtime catalog probes these):
 ## 1. Clone, init, doctor
 
 ```bash
-git clone <repo-url> orchestraos && cd orchestraos
+git clone https://github.com/Tulum-DAO/orchestraos.git orchestraos && cd orchestraos
 make install                 # symlinks bin/orchestra into ~/.local/bin (or use ./bin/orchestra)
 orchestra init               # data dir (~/.orchestra), orchestra.toml, .venv + pip, npm install, builds
 $EDITOR orchestra.toml       # set [runtimes] enabled to the CLI you logged in to, e.g. ["claude"]
