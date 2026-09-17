@@ -413,3 +413,39 @@ def test_one_question_canary_is_never_vetoed_on_distinct_evidence(tr_text):
     assert r["passed"] is True and r["aggregate"]["distinct_min"] == 1
     r = grade_canary({"q1": _WAFFLE}, rows, transcript_text=tr_text)
     assert r["passed"] is False
+
+
+def test_synthesized_flag_lowers_only_the_distinct_floor(tr_text):
+    """gm ruling msg_2520355c (gate7c, 3x HOLD): identity-shaped questions about one fresh
+    seat share the sid/seat name, so a synthesized baton grades with distinct_min = 1.
+    Shape of the tester's grades: q1 (sid) and q2 (ports) PASS with exclusive anchors, q3
+    PASSes but cites only anchors the others already cite -> distinct_q 2 < 3 strict."""
+    ans = dict(_GOOD_ANSWERS)
+    # q1 and q3 cite the same anchors (like a sid repeated in two answers); q2 keeps its own
+    ans["q1"] = ("The pending row kept part-zero options only, so submits hit HTTP 431 until "
+                 "the writeback landed at ab12cd34ef; qnr_55aa0011 kept the checker.")
+    ans["q3"] = ("Again ab12cd34ef and the 431 symptom, with qnr_55aa0011 keeping the "
+                 "two-minute checker under walkgate serialization.")
+    pad = " filler" * 400
+    rows = [{"id": f"q{i}", "answer": "\n".join(_TEXTS) + pad, "from_pointer": True,
+             "question": q["question"]} for i, q in enumerate(_canary_rows(n=3), 1)]
+    strict = grade_canary({k: ans[k] for k in ("q1", "q2", "q3")}, rows, transcript_text=tr_text, mode="strict")
+    assert strict["passed"] is False and strict["aggregate"]["distinct_min"] == 3
+    synth = grade_canary({k: ans[k] for k in ("q1", "q2", "q3")}, rows, transcript_text=tr_text,
+                         mode="strict", synthesized=True)
+    assert synth["passed"] is True
+    assert synth["aggregate"]["distinct_min"] == 1 and synth["aggregate"]["synthesized"] is True
+    # everything else is still strict: a WEAK answer (no strong token, e.g. a pane id) still fails
+    ans["q3"] = "It ran in pane %0 under the walkgate serialization discussed."
+    synth = grade_canary({k: ans[k] for k in ("q1", "q2", "q3")}, rows, transcript_text=tr_text,
+                         mode="strict", synthesized=True)
+    assert synth["passed"] is False and "q3" in synth["missed"]
+
+
+def test_real_batons_never_get_the_synthesized_floor(tr_text):
+    from focus_registry.comprehension import check_comprehension
+    sprinkle = "This relates to ab12cd34ef and apr_77ffe201 and qnr_55aa0011 and 431 as discussed."
+    ev = {"readback": {"goal": sprinkle, "guards": [sprinkle], "open_loops": [sprinkle], "hazards": [sprinkle]},
+          "canary_answers": {f"q{i}": sprinkle for i in range(1, 5)}}
+    r = check_comprehension(ev, {"canary": _canary_rows(), "transcript_text": tr_text, "mode": "strict"})
+    assert r["canary"]["aggregate"]["distinct_min"] == 3 and r["canary"]["aggregate"]["synthesized"] is False
