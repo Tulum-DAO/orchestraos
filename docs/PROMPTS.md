@@ -2,7 +2,9 @@
 
 Copy-paste prompts for the seven-step gate and the tracks. Paste one into your own
 agent CLI (Claude Code, Gemini CLI, or Codex) with this repo as its working
-directory. Each entry says why in two lines before the prompt.
+directory. Each entry says why in two lines before the prompt. `docs/GATE.md` has
+the same seven steps as commands you run yourself, with expected output and a
+troubleshooting line per step.
 
 ## Install
 

@@ -22,7 +22,9 @@ An open harness for running a fleet of coding agents as a team: agents that mess
 ## More docs
 
 - `docs/BEGINNERS_GUIDE.md` — never used a terminal? Start here.
-- `docs/PROMPTS.md` — copy-paste prompts for install, first agent, Telegram, messaging, cards, rotation, memory, and upgrading.
+- `docs/GATE.md` — the seven-step gate everyone completes first: command, expected output, and what to check if it fails, for each step.
+- `docs/PROMPTS.md` — copy-paste prompts for the same seven steps, plus the tracks.
+- `docs/UPGRADE.md` — pulling latest `main` without losing a running seat.
 - `docs/COSTS.md` — what a VPS and a CLI plan actually cost, and the zero-key path.
 - `docs/tracks/README.md` — the eleven hackathon tracks, one doc each.
 - `docs/ARCHITECTURE.md` — the map. Read before touching rotation or approvals.

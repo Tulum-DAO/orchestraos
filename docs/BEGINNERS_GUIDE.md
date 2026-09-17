@@ -90,7 +90,9 @@ rotations — an agent replacing itself without forgetting anything.
 Everyone doing anything at the hackathon — picking a track, adding a feature —
 completes these seven steps first. They are cumulative: each one builds on the
 last, and together they touch most of the files any track's doc will send you
-to, so you will recognize them when you get there.
+to, so you will recognize them when you get there. `docs/GATE.md` has the full
+version of each step below — the exact command, what it should print, and
+where to look if it doesn't.
 
 1. **Install, doctor green, dashboard open.** `docs/INSTALL.md` §§0-2:
    `orchestra init`, `orchestra doctor` (every row OK), `orchestra up`, open the
