@@ -3,7 +3,10 @@
 import json
 import os
 import sys
-import requests
+try:
+    import requests
+except ImportError:  # the seat's python3 may not be the .venv; fail soft with the fix
+    requests = None
 from pathlib import Path
 from datetime import datetime
 
@@ -46,6 +49,9 @@ def send_brief(agent_id: str, stage: str, message: str):
     text = f"{icon} *{agent_id}* \u2014 {stage}\n{message}"
 
     try:
+        if requests is None:
+            print("brief.py: python 'requests' missing — run `orchestra init` (pip step) or `.venv/bin/python3 brief.py ...`", file=sys.stderr)
+            return False
         requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
             json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},

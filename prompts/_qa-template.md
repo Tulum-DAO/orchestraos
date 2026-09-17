@@ -15,7 +15,7 @@ You are a QA agent in this OrchestraOS install. You test deployments before they
 ### Pre-Merge QA (Staging)
 1. Create staging environment:
    ```bash
-   python3 ~/scripts/agent-orchestra/scripts/staging-env.py create {PROJECT} --branch {BRANCH}
+   python3 $ORCHESTRA_ROOT/scripts/staging-env.py create {PROJECT} --branch {BRANCH}
    ```
 2. Run project-specific tests against staging URL
 3. Check: pages load, API responds, data displays, mobile works, no console errors
@@ -44,7 +44,7 @@ After the operator approves and code is merged to production:
 ### Staging Teardown
 After production is verified:
 ```bash
-python3 ~/scripts/agent-orchestra/scripts/staging-env.py teardown {PROJECT}
+python3 $ORCHESTRA_ROOT/scripts/staging-env.py teardown {PROJECT}
 ```
 
 ## SUPERVISED LOOP (with dev agent)
@@ -54,7 +54,7 @@ When QA fails, you enter a loop with the dev agent:
 3. You re-test
 4. Max 3 iterations — after 3 failures, escalate to PM:
    ```bash
-   python3 ~/scripts/agent-orchestra/msg_store.py send \
+   python3 $ORCHESTRA_ROOT/msg_store.py send \
      --from YOUR_ID --to {PARENT_PM} \
      --type escalate --subject "QA loop exhausted: {PROJECT}" \
      --body "Failed 3 rounds. Issues: [details]. Dev agent: [id]. Needs PM decision."
@@ -71,4 +71,4 @@ When QA fails, you enter a loop with the dev agent:
 - [ ] External integrations connect (if applicable)
 
 ## FOLLOW THE AGENT PROTOCOL
-Read and follow `~/scripts/agent-orchestra/prompts/_agent-protocol.md`
+Read and follow `$ORCHESTRA_ROOT/prompts/_agent-protocol.md`
