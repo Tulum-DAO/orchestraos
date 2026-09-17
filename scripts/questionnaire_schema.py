@@ -199,7 +199,12 @@ class QuestionnaireStore:
         each question's current draft answer + answered_count. THE resume payload."""
         c = self._conn()
         try:
-            q = c.execute("SELECT * FROM questionnaires WHERE id=?", [qid]).fetchone()
+            try:
+                q = c.execute("SELECT * FROM questionnaires WHERE id=?", [qid]).fetchone()
+            except sqlite3.OperationalError as e:
+                if "no such table" in str(e):
+                    return None            # fresh store: nothing was ever created here
+                raise
             if not q:
                 return None
             d = dict(q)
