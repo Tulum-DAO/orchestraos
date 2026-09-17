@@ -25,7 +25,10 @@ path (never embedded in the file), the app's bundle id and team id (already in t
 iOS app's config per the extraction notes — `Config/Base.xcconfig`), and device
 tokens sourced from Track 1's pairing (`paired_devices` gains a `push_token`
 column, set when the app registers for remote notifications and reports its token
-back to the gateway via a new `POST /pair/devices/<id>/push-token` route). When a
+back to the gateway via a new `POST /pair/devices/<id>/push-token` route — the app
+already has a `/register-device` gateway call in `GatewayClient` per
+`docs/GATEWAY_API.md`'s endpoint list; build the token round-trip on that existing
+call shape rather than inventing a new client-side pattern). When a
 card is created, the same code path that calls `_default_ntfy_publish` today calls
 whichever backend `[notify] push_backend` selects, looked up per paired device (a
 device with no push token registered just doesn't get a push — no error).

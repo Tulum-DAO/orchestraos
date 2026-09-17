@@ -27,33 +27,47 @@ credential, time-boxed):
   state), and returns `{bearer, gateway_base_url}`. The app's first screen (camera
   scan or manual 6-digit entry) calls this and stores the result in Keychain.
 
-Every existing gateway route keeps its bearer check (`require_auth`,
-`scripts/watch_gateway.py` line ~68) but the check widens from "matches the one
-static token" to "matches the static token OR a live row in `paired_devices` whose
-`revoked_at` is null" — constant-time comparison against each candidate, same as
-today's single-token check. A `DELETE /pair/devices/<device_id>` route (bearer-gated,
-any paired device can revoke any other — single-operator app, no per-device ACL yet)
-sets `revoked_at` and the device's next request gets 401.
+Every existing gateway route keeps its bearer check (`_authorized`,
+`scripts/watch_gateway.py` line ~68 — `gateway_token()` at line ~60 reads the
+static token) but the check widens from "matches the one static token" to "matches
+the static token OR a live row in `paired_devices` whose `revoked_at` is null" —
+constant-time comparison against each candidate, same as today's single-token
+check. A `DELETE /pair/devices/<device_id>` route (bearer-gated, any paired device
+can revoke any other — single-operator app, no per-device ACL yet) sets
+`revoked_at` and the device's next request gets 401.
 
 The watch keeps the existing single-token path until it gets its own pairing flow
 (explicitly out of scope below) — `paired_devices` is additive, not a replacement,
 until the watch migrates.
 
+On the app side, the real integration point is narrower than "replace the
+xcconfig": the app does not read `Config/Local.xcconfig` at runtime at all today —
+`Sources/iOS/GatewayClient.swift:11-22` reads the Info.plist keys `GatewayBaseURL`
+/ `GatewayToken` via `Bundle.main.object(forInfoDictionaryKey:)`, and the xcconfig
+only feeds those plist keys at *build* time. So the pairing screen's job is to make
+`GatewayConfig`'s token/base-URL lookup prefer a Keychain value (written by
+`/pair/claim`) over the Info.plist read, and "no baked token" becomes "Keychain
+empty" — that's the condition that routes to the pairing screen instead of
+`Config/Local.xcconfig` being absent.
+
 ## Files you will touch
 
 - `scripts/watch_gateway.py` — add `/pair/start`, `/pair/claim`,
-  `/pair/devices` (list), `/pair/devices/<id>` (DELETE); extend `require_auth`
+  `/pair/devices` (list), `/pair/devices/<id>` (DELETE); extend `_authorized`
   (~line 68) to check `paired_devices`; new sqlite table + migration alongside the
   gateway's existing state tables (search `CREATE TABLE` in this file for the
   pattern).
 - `orchestra_cli/__main__.py` — new `pair` subcommand (`orchestra pair`), calls
   `/pair/start`, prints the code and a QR (use a small terminal-QR library or ASCII
   fallback — no new heavy dependency).
-- `orchestraos-ios` repo (separate checkout, see EXTRACTION note below) — new first-
-  run screen: camera scan (QR → the claim payload) or manual code entry, calls
-  `/pair/claim`, writes `bearer` + `gateway_base_url` to Keychain, replaces the
-  `Config/Local.xcconfig`-only bootstrap. Settings screen lists paired devices
-  (`GET /pair/devices`) with a revoke button per row.
+- `orchestraos-ios` repo (separate checkout, see EXTRACTION note below) —
+  `Sources/iOS/GatewayClient.swift:11-22` (`GatewayConfig`'s token/base-URL lookup:
+  add a Keychain source that takes priority over the existing
+  `Bundle.main.object(forInfoDictionaryKey:)` read of `GatewayBaseURL`/
+  `GatewayToken`); new first-run screen: camera scan (QR → the claim payload) or
+  manual code entry, calls `/pair/claim`, writes `bearer` + `gateway_base_url` to
+  Keychain. Settings screen lists paired devices (`GET /pair/devices`) with a
+  revoke button per row.
 - `docs/GATEWAY_API.md` (in the iOS repo) — document the two new routes.
 
 ## Steps
@@ -95,8 +109,10 @@ Files to touch: scripts/watch_gateway.py (new /pair/start, /pair/claim,
 screen + Settings device list.
 Start with scripts/watch_gateway.py: add the table and the two routes,
 prove them with curl per the doc's Steps 1-5, then move to the CLI
-command and the iOS screen. Existing bearer auth must keep working
-unchanged for the watch app.
+command and the iOS screen (Sources/iOS/GatewayClient.swift:11-22 is the
+real integration point — it reads Info.plist, not the xcconfig, at
+runtime; add a Keychain source ahead of it). Existing bearer auth must
+keep working unchanged for the watch app.
 ```
 
 ## Out of scope
