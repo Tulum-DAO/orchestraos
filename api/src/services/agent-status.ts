@@ -12,8 +12,9 @@
  * snapshot immediately and refresh in the background (mirrors
  * watch_gateway.py's /agents cache).
  */
+import { fileURLToPath } from 'url';
 import { execFile } from 'child_process';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { readdirSync, statSync } from 'fs';
 
 export interface DetectorStatus {
@@ -31,7 +32,22 @@ export interface DetectorStatus {
 }
 
 const ORCH = process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
-const DETECTOR = join(ORCH, 'scripts', 'agent-status.py');
+
+/**
+ * The detector is CODE, not data. Under `orchestra up` ORCHESTRA_DIR is the data dir, so
+ * joining it produced <data>/scripts/agent-status.py, every execFile ENOENTed silently and
+ * the dashboard showed every seat alive:false / status:unknown / detector_age_ms:-1 forever
+ * on any machine where data dir != checkout (B1 outsider finding 4). Resolution order:
+ * ORCHESTRA_SCRIPTS_DIR (exported by the supervisor + orchestra-env.sh) > ORCHESTRA_ROOT >
+ * the checkout this module lives in (<root>/api/dist/services/agent-status.js).
+ */
+export function resolveDetectorPath(env: Record<string, string | undefined>, moduleUrl: string): string {
+  if (env.ORCHESTRA_SCRIPTS_DIR) return join(env.ORCHESTRA_SCRIPTS_DIR, 'agent-status.py');
+  if (env.ORCHESTRA_ROOT) return join(env.ORCHESTRA_ROOT, 'scripts', 'agent-status.py');
+  const here = dirname(fileURLToPath(moduleUrl));
+  return join(here, '..', '..', '..', 'scripts', 'agent-status.py');
+}
+const DETECTOR = resolveDetectorPath(process.env, import.meta.url);
 const CACHE_TTL_MS = 15_000;    // matches the iOS gateway cache
 const SCAN_TIMEOUT_MS = 120_000;
 
