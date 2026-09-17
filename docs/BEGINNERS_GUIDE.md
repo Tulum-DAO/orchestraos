@@ -83,7 +83,10 @@ Remember that my favorite color is blue. Write it to your memory files.
 Later (even after restarting it), ask "what's my favorite color?" — it should
 answer correctly by reading back what it wrote, not by guessing. This is the
 same mechanism the full harness uses to survive `docs/ARCHITECTURE.md`'s
-rotations — an agent replacing itself without forgetting anything.
+rotations — an agent replacing itself without forgetting anything. The exact
+files and paths this writes to are in `docs/MEMORY.md`, once it lands (it's
+not the same file as the handoff document a retiring generation writes — that
+one carries where it stopped, not what it remembers).
 
 ## The seven-step gate
 
