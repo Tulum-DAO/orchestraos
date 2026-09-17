@@ -24,7 +24,7 @@ is rotation_beat; locks/ledger are threaded + returned for the daemon to persist
 import os
 
 from scripts.lineage_daemon import beat as _beat
-from scripts.lineage_daemon.collect import beat_skip_reason
+from scripts.lineage_daemon.collect import beat_skip_reason, runtime_gated
 from scripts.lineage_daemon.ctxstate import context_pct
 from scripts.lineage_daemon import hold_ledger as _hledger
 from scripts.lineage_daemon import complete as _complete
@@ -339,7 +339,7 @@ def plan_fleet(agents, registry, *, armed_tiers=frozenset(), now,
         # Gemini/Codex experimental, never armed unless [rotation] experimental_runtimes
         # opts in). Applied before actionability so an experimental seat is logged as
         # skip:non-claude-runtime on EVERY beat, ctx known or not, and is never "ARMED".
-        runtime_skip = beat_skip_reason(agent) in ("non-claude-runtime", "unsupported-runtime")
+        runtime_skip = runtime_gated(agent)
         if runtime_skip:
             armed_this = False
         d = _beat.decide(agent)
