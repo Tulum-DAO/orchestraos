@@ -14,5 +14,8 @@ export TMUX_TMPDIR="$ORCHESTRA_SANDBOX/tmux"
 export CLAUDE_CONFIG_DIR="$ORCHESTRA_SANDBOX/cfg"
 export ORCHESTRA_CONFIG="$ORCHESTRA_SANDBOX/orchestra.toml"
 export ORCHESTRA_ROOT="${ORCHESTRA_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-orchestra_sandbox_down() { tmux kill-server 2>/dev/null; echo "sandbox tmux server down ($TMUX_TMPDIR)"; }
+orchestra_sandbox_down() {   # kill-server is refused on shared hosts; kill each sandbox session
+  for s in $(tmux ls -F '#S' 2>/dev/null); do tmux kill-session -t "$s"; done
+  echo "sandbox tmux sessions down ($TMUX_TMPDIR)"
+}
 echo "sandbox: $ORCHESTRA_SANDBOX (tmux socket dir $TMUX_TMPDIR, config dir $CLAUDE_CONFIG_DIR)"
