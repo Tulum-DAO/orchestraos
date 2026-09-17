@@ -1,0 +1,14 @@
+# Build context for the dev container image: source only. `orchestra init` recreates
+# the venv, node_modules and builds inside the image.
+.git
+.venv
+**/node_modules
+**/dist
+**/dist-*
+**/__pycache__
+**/.pytest_cache
+orchestra.toml
+state/
+logs/
+tmp-shots/
+.devcontainer

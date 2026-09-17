@@ -1,0 +1,24 @@
+{
+  "name": "OrchestraOS",
+  "build": { "dockerfile": "../Dockerfile", "context": ".." },
+  "remoteUser": "orchestra",
+  "workspaceFolder": "/home/orchestra/orchestraos",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/home/orchestra/orchestraos,type=bind",
+  "forwardPorts": [8891, 8888, 8890],
+  "portsAttributes": {
+    "8891": { "label": "dashboard" },
+    "8888": { "label": "api" },
+    "8890": { "label": "gateway" }
+  },
+  "mounts": [
+    "source=${localEnv:HOME}/.claude,target=/home/orchestra/.claude,type=bind,consistency=cached",
+    "source=orchestraos-data,target=/home/orchestra/.orchestra,type=volume"
+  ],
+  "postCreateCommand": "orchestra init && (orchestra doctor || true)",
+  "postAttachCommand": "echo 'Log in to your agent CLI once (claude / codex login / agy), then: orchestra doctor && orchestra up'",
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python", "dbaeumer.vscode-eslint"]
+    }
+  }
+}
