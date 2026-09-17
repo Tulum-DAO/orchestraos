@@ -170,3 +170,19 @@ def test_init_seeds_the_approval_and_questionnaire_schema(tmp_path):
     assert "QuestionnaireStore" in " ".join(argv) and ".migrate()" in " ".join(argv)
     assert env["ORCHESTRA_DIR"] == str(data)
     assert str(root / "scripts") in env["PYTHONPATH"]
+
+
+def test_init_schema_seed_arms_the_ruled_gated_migrations(tmp_path):
+    """gm ruling msg_3f772533: a fresh data dir must never log an error per minute. The
+    approval schema keeps landed contracts behind an operator DDL gate (APPROVAL_DDL_ARMED);
+    unarmed, approval_resume logs 'no such column: snoozed_until' every beat. init's seed arms
+    them explicitly (never 'all' — a future batch stays gated until ruled)."""
+    root = _repo(tmp_path)
+    (root / "scripts").mkdir(exist_ok=True)
+    (root / "scripts" / "approval_schema.py").write_text("")
+    (root / "scripts" / "questionnaire_schema.py").write_text("")
+    runner = Runner()
+    I.run_init(root, data_dir=tmp_path / "data", run=runner)
+    argv, cwd, env = [c for c in runner.calls_with_env if "ApprovalStore" in " ".join(c[0])][0]
+    armed = set(env["APPROVAL_DDL_ARMED"].split(","))
+    assert armed == {"m20260825_answer_attribution", "m20260825_human_task"}
