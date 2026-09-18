@@ -103,6 +103,13 @@ Telegram (`tg-notify.sh`) and to Arturo (msg_store → gm, type `red_alert`). No
 120s → the watchdog repairs (safe fixes only), then updates the card and the report.
 "Wait" holds 30 minutes. "Show me" replies with the snapshot path + screen tail.
 
+**A correction lives in mail and in the report, never by mutating the row.** A red-alert card is
+`kind='menu'`; the store's in-place edit only accepts pending `human_task` rows and refuses it. That
+refusal is correct and is not to be engineered around: a write path that mutates pending cards can
+make a row silently read differently in front of an audience. `note_card` reports whether an edit
+applied, and `close_card` routes the correction to the manager seat as a message when it did not —
+never by minting a second card.
+
 **Never retire a card to tidy the queue.** When a report heals, the watchdog writes the
 correction ONTO its card ("Update — no longer needs an answer: …") and leaves the row
 pending (`PRESERVE_PENDING_QUEUE`). A pending queue may be the operator's evidence, not a

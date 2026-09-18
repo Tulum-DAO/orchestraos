@@ -11,7 +11,7 @@ codex, tmux session present):
      out-of-usage / API error / login screen / bypass dialog on screen.
   2. a NEW finding files a report (dedup: one open report per seat+class) and posts the card
      (approval.py, options Repair now / Wait / Show me) + Telegram + the Arturo mirror
-     (msg_store row to gm, type red_alert).
+     (msg_store row to the manager seat, type red_alert).
   3. the decision core (`decide`, pure) turns (report, card answer, attached?, armed?) into
      post_card / wait / hold / show / repair / escalate. No answer for 120s -> repair.
   4. repairs are the catalogue's immediate fixes ONLY, each verified by effect
@@ -85,7 +85,7 @@ def live_seats(registry: dict, *, tmux_sessions: set[str]) -> list[tuple[str, st
 def green_status(seat: str, *, wal_dir: str | None = None) -> str:
     """'not_green' | 'unexpected_green' | 'active_green'.
 
-    gm denial 2026-09-18 (orchestra-builder-g49): a GREEN is an ephemeral successor booted by the
+    Operator ruling 2026-09-18: a GREEN is an ephemeral successor booted by the
     blue-green beat. Its pane dying is usually CORRECT — the seam raised (hydrate SeamTimeout under
     load), the green was torn down and the root went back to SOLO; blue never stopped. Respawning it
     from the registry would manufacture an orphan pane. Only the state machine may boot a green.
@@ -254,19 +254,52 @@ def close_card(card_id: str, text: str) -> None:
     correction ONTO the card and leaves the row pending. Set the flag False (or
     RED_ALERT_CLOSE_CARDS=1) to restore ordinary hygiene once he says so."""
     if PRESERVE_PENDING_QUEUE:
-        note_card(card_id, f"\n\n**Update — no longer needs an answer:** {text}")
-        log(f"CARD {card_id} left pending (queue preserved); correction written onto it")
+        note = f"\n\n**Update — no longer needs an answer:** {text}"
+        if note_card(card_id, note):
+            log(f"CARD {card_id} left pending (queue preserved); correction written onto it")
+        else:
+            mail_correction(card_id, text)
+            log(f"CARD {card_id} left pending; card refused the edit, correction mailed to the manager seat instead")
         return
     subprocess.run([sys.executable, os.path.join(HERE, "approval.py"), "answer", "--id", card_id, "--answer", "option",
                     "--option-n", "1", "--answer-text", text, "--surface", "agent_cli", "--answered-by", CARD_FROM],
                    capture_output=True, text=True, timeout=30)
 
 
-def note_card(card_id: str, text: str) -> None:
-    """Append to the card's summary (patch takes a whole summary; read-modify-write)."""
+def note_card(card_id: str, text: str) -> bool:
+    """Append to a card's summary. Returns whether the edit ACTUALLY applied.
+
+    approval.py patch only edits PENDING kind='human_task' rows, and every card this watchdog
+    raises is kind='menu' — so this was a silent no-op on all of them while the log claimed a
+    correction had been written (found 2026-09-18 against a real menu card). A correction that
+    silently fails is worse than no correction, hence the return value and the caller's fallback.
+
+    DO NOT "fix" this by making the store accept in-place edits of pending rows (gm, 2026-09-18,
+    HELD indefinitely): a write path that mutates a pending card is the most dangerous thing that
+    could be added to that store, and its failure mode is not a crash — it is a card that silently
+    reads differently in front of an audience. The mail fallback is the intended behaviour and stays
+    even if the store ever gains that capability.
+    """
     card = read_card(card_id) or {}
-    subprocess.run([sys.executable, os.path.join(HERE, "approval.py"), "patch", "--id", card_id, "--from", CARD_FROM,
-                    "--summary", (card.get("summary") or "") + text], capture_output=True, text=True, timeout=30)
+    r = subprocess.run([sys.executable, os.path.join(HERE, "approval.py"), "patch", "--id", card_id, "--from", CARD_FROM,
+                        "--summary", (card.get("summary") or "") + text], capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        log(f"CARD {card_id}: patch refused (rc={r.returncode}; menu rows are not patchable) — correction NOT on the card")
+        return False
+    return True
+
+
+def mail_correction(card_id: str, text: str) -> None:
+    """The durable home for a correction the card itself will not take: a msg_store row to the manager seat,
+    who owns the surface and can re-raise or relay it. Never a new card (padding the queue is
+    exactly what the preserve-the-queue rule forbids)."""
+    bf = os.path.join(RA.log_dir(), f".correction-{card_id}.txt")
+    with open(bf, "w") as f:
+        f.write(f"Correction for card {card_id} (the row is kind='menu' and refuses an in-place edit; "
+                f"left PENDING per the preserve-the-queue rule):\n\n{text}")
+    subprocess.run([sys.executable, os.path.join(CODE_ROOT, "msg_store.py"), "send", "--from", CARD_FROM, "--to", "gm",
+                    "--type", "red_alert", "--subject", f"correction for {card_id} (card not editable)", "--body-file", bf],
+                   capture_output=True, text=True, timeout=60)
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +411,7 @@ def spawn_diagnosis(r: dict, *, force: bool = False) -> str:
             f"Read {r['_path']} and docs/RED_ALERT.md. Fan the dirty work (log reads, ps/tmux state, registry rows) "
             f"to Haiku subagents; YOU reason. Write `diagnosis` and `permanent_fix` into the report with "
             f"`python3 scripts/red_alert.py update {rid} --diagnosis ... --permanent-fix JSON --by {name}`, then open a "
-            f"dialogue with the operator through Arturo: msg_store send --from {name} --to gm --type red_alert "
+            f"dialogue with the operator through Arturo: msg_store send --from {name} --to the manager seat --type red_alert "
             f"--subject 'RED ALERT {rid}: <one-line cause>' with the fix you propose and the question you need answered.")
     env = dict(os.environ, AGENT_RUNTIME="claude", AGENT_MODEL="claude-opus-5[1m]")
     out = subprocess.run([os.path.join(CODE_ROOT, "spawn-agent.sh"), name, "--task", task], capture_output=True, text=True,

@@ -350,3 +350,30 @@ def test_card_corrections_append_and_never_rewrite_the_ask(store, monkeypatch):
     s = captured["summary"]
     assert s.startswith("**What happened:** the original ask")
     assert s.rstrip().endswith("the seat healed")
+
+
+# --- a correction that silently fails is worse than none (found 2026-09-18) -----------
+# approval.py patch only edits PENDING kind='human_task' rows. Every card this watchdog
+# raises is kind='menu', so note_card was a no-op on ALL of them while reporting success.
+
+def test_note_card_reports_failure_instead_of_pretending(store, monkeypatch):
+    monkeypatch.setattr(W, "read_card", lambda cid: {"summary": "orig", "kind": "menu"})
+    monkeypatch.setattr(W.subprocess, "run", lambda argv, **kw: type("R", (), {"returncode": 4, "stdout": "", "stderr": ""})())
+    assert W.note_card("apr_x", "text") is False
+
+
+def test_note_card_true_when_the_patch_applies(store, monkeypatch):
+    monkeypatch.setattr(W, "read_card", lambda cid: {"summary": "orig", "kind": "human_task"})
+    monkeypatch.setattr(W.subprocess, "run", lambda argv, **kw: type("R", (), {"returncode": 0, "stdout": "apr_x", "stderr": ""})())
+    assert W.note_card("apr_x", "text") is True
+
+
+def test_close_card_falls_back_to_a_durable_record_when_the_card_cannot_be_edited(store, monkeypatch):
+    """The correction must land SOMEWHERE readable: if the card refuses the edit, say so in the
+    log and mail it, never claim a correction that does not exist."""
+    monkeypatch.setattr(W, "PRESERVE_PENDING_QUEUE", True)
+    monkeypatch.setattr(W, "note_card", lambda cid, text: False)
+    mailed = []
+    monkeypatch.setattr(W, "mail_correction", lambda cid, text: mailed.append((cid, text)))
+    W.close_card("apr_x", "the seat healed")
+    assert mailed and mailed[0][0] == "apr_x"
