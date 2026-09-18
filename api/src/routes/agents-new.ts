@@ -17,6 +17,13 @@
 import { Router, type Request, type Response } from 'express';
 import { execFile, execFileSync } from 'node:child_process';
 import { probeAll, makeDefaultDeps, type ProviderResult } from './runtimes-available.js';
+
+/** A catalog row as this route needs it. GET /api/runtimes/available does not expose the
+ *  binary name, so `cli` is optional and falls back to the provider id (they match for
+ *  claude/codex; gemini's binary is `agy`). */
+export type RuntimeRow = ProviderResult & { cli?: string };
+const CLI_FOR_ID: Record<string, string> = { claude: 'claude', gemini: 'agy', codex: 'codex' };
+const cliOf = (r: RuntimeRow): string => r.cli || CLI_FOR_ID[r.id] || r.id;
 // state-reader / tmux-monitor are imported LAZILY in the production deps below: they read
 // orchestra.toml at module load, which would make this file un-importable in a unit test.
 
@@ -34,7 +41,7 @@ const DEFAULT_MODEL_FOR_RUNTIME: Record<string, string> = {
 };
 
 export interface NewAgentDeps {
-  probeRuntimes: () => ProviderResult[];
+  probeRuntimes: () => RuntimeRow[];
   existingNames: () => Set<string> | Promise<Set<string>>;
   spawn: (args: { name: string; task: string; runtime: string }) => Promise<{ ok: boolean; output: string }>;
   sessionExists: (session: string) => boolean;
@@ -52,16 +59,16 @@ export function normalizeAgentName(raw: unknown): { name: string; error?: string
 
 /** First authed runtime (catalog order = the operator's [runtimes] enabled order), or the
  *  requested one when it is authed. `unverified` is never treated as usable (W1). */
-export function pickRuntime(rows: ProviderResult[], requested: string | undefined): { id: string; cli: string } | null {
+export function pickRuntime(rows: RuntimeRow[], requested: string | undefined): { id: string; cli: string } | null {
   const authed = (rows || []).filter((r) => r.installed && r.authed === true);
   const row = requested ? authed.find((r) => r.id === requested) : authed[0];
-  return row ? { id: row.id, cli: row.cli } : null;
+  return row ? { id: row.id, cli: cliOf(row) } : null;
 }
 
 /** What to tell someone who has no logged-in CLI, keyed to what is actually on the box. */
-export function loginHint(rows: ProviderResult[]): { cli: string; hint: string; greeting: string } {
+export function loginHint(rows: RuntimeRow[]): { cli: string; hint: string; greeting: string } {
   const installed = (rows || []).filter((r) => r.installed);
-  const cli = installed[0]?.cli || 'claude';
+  const cli = installed[0] ? cliOf(installed[0]) : 'claude';
   const loginCmd = cli === 'codex' ? 'codex login' : cli;
   if (installed.length === 0) {
     const hint = 'No agent CLI is installed on this machine yet. Install one (e.g. `npm i -g @anthropic-ai/claude-code`), then run it once and log in.';
@@ -161,9 +168,11 @@ function realStartLoginShell({ session, greeting }: { session: string; greeting:
   return new Promise((resolve) => {
     // Idempotent: attach-able session either way. `printf` writes the hint into the pane's
     // scrollback, then an interactive bash takes over — a blank shell, not an agent.
+    // %b, not %s: the greeting arrives with literal \n escapes (it went through
+    // JSON.stringify to reach the shell) and must render as real newlines in the pane.
     const script = `tmux has-session -t ${JSON.stringify(session)} 2>/dev/null || ` +
       `tmux new-session -d -s ${JSON.stringify(session)} ` +
-      `bash -lc ${JSON.stringify(`printf '%s\\n\\n' ${JSON.stringify(greeting)}; exec bash -i`)}`;
+      `bash -lc ${JSON.stringify(`printf '%b\\n\\n' ${JSON.stringify(greeting)}; exec bash -i`)}`;
     execFile('bash', ['-lc', script], { timeout: 15000, cwd: process.env.HOME }, (err, stdout, stderr) => {
       resolve({ ok: !err, output: `${stdout || ''}\n${stderr || ''}`.trim() });
     });

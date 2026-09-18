@@ -127,6 +127,22 @@ export function defaultIsInstalled(provider: ProviderConfig): boolean {
   }
 }
 
+/** A CLI that is LOGGED OUT prints its JSON and exits non-zero (`claude auth status` ->
+ *  {"loggedIn": false}, status 1). That stdout is an ANSWER; reading it as "the probe failed"
+ *  and falling back to a stale ~/.claude.json oauthAccount reported authed:true for a
+ *  logged-out CLI (found by effect, 2026-09-18). Returns null when there is nothing usable. */
+export function salvageCliJsonAnswer(stdout: string, successKey = 'loggedIn'): AuthResult | null {
+  if (!stdout || !stdout.trim()) return null;
+  try {
+    const parsed = JSON.parse(stdout) as Record<string, unknown>;
+    const value = parsed[successKey];
+    if (typeof value === 'boolean') {
+      return value ? { authed: true } : { authed: false, auth_reason: `${successKey}=false` };
+    }
+  } catch { /* not JSON */ }
+  return null;
+}
+
 function runAuthProbe(probe: AuthProbeConfig): AuthResult {
   try {
     if (probe.kind === 'cli-json') {
@@ -136,8 +152,11 @@ function runAuthProbe(probe: AuthProbeConfig): AuthResult {
       try {
         out = execFileSync(bin, args, { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
       } catch (e) {
-        // The CLI probe itself failed to run (not installed / non-zero exit
-        // without JSON) — fall back rather than guessing.
+        const salvaged = salvageCliJsonAnswer(
+          (e as { stdout?: Buffer | string }).stdout?.toString?.() || '', probe.success_key || 'loggedIn');
+        if (salvaged) return salvaged;
+        // The CLI probe itself failed to run (not installed / no usable output) —
+        // fall back rather than guessing.
         if (probe.fallback) return runAuthProbe(probe.fallback);
         return { authed: 'unverified', auth_reason: 'auth-probe-cmd-failed' };
       }

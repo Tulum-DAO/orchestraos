@@ -32,6 +32,8 @@ class ProbeDeps:
 
 def default_deps() -> ProbeDeps:
     def _run(argv):
+        # check=True so a non-zero exit raises — but CalledProcessError carries .stdout,
+        # which run_auth_probe salvages (a logged-out CLI prints its JSON and exits 1).
         return subprocess.run(argv, capture_output=True, text=True, timeout=20,
                               check=True, stdin=subprocess.DEVNULL).stdout
 
@@ -81,7 +83,23 @@ def run_auth_probe(probe: dict, deps: ProbeDeps) -> dict:
                 return {"authed": "unverified", "auth_reason": "no-probe-cmd-configured"}
             try:
                 out = deps.run_cmd(shlex.split(cmd))
-            except Exception:  # noqa: BLE001 — CLI probe failed to run
+            except Exception as e:  # noqa: BLE001 — CLI probe exited non-zero or is absent
+                # A LOGGED-OUT cli answers with its JSON and exits non-zero
+                # (`claude auth status` -> {"loggedIn": false}, rc 1). Reading that as
+                # "probe failed" and falling back to a stale ~/.claude.json oauthAccount
+                # reported authed=True for a logged-out CLI. Use the stdout when it parses.
+                salvaged = getattr(e, "stdout", "") or getattr(e, "output", "") or ""
+                if isinstance(salvaged, bytes):
+                    salvaged = salvaged.decode("utf-8", "replace")
+                if salvaged.strip():
+                    try:
+                        parsed_out = json.loads(salvaged)
+                        key = probe.get("success_key") or "loggedIn"
+                        val = parsed_out.get(key) if isinstance(parsed_out, dict) else None
+                        if isinstance(val, bool):
+                            return {"authed": True} if val else {"authed": False, "auth_reason": f"{key}=false"}
+                    except Exception:  # noqa: BLE001 — not JSON, fall through
+                        pass
                 if probe.get("fallback"):
                     return run_auth_probe(probe["fallback"], deps)
                 return {"authed": "unverified", "auth_reason": "auth-probe-cmd-failed"}
