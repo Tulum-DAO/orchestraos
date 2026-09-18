@@ -3,7 +3,7 @@
 
 Standard: docs/RED_ALERT.md. One report = one JSON file
     state/red-alert/<UTC ts>-<seat>-<slug>.json
-Commissioned by the operator 2026-09-17 after the harness bottom-bar "^Z" button
+Commissioned by the operator 2026-09-17 23:30 Tulum after the harness bottom-bar "^Z" button
 suspended the gm seat (pid STAT T, not killed) — "LOG EVERYTHING IN A RED ALERT CRASH
 REPORT ... a list of errors the system reports, logs, adds to and acts on immediately".
 
@@ -64,7 +64,7 @@ CATALOGUE = {
         "detect": "pane process tree has a STAT containing 'T' (SIGTSTP/^Z), or the screen "
                   "shows 'Claude Code has been suspended'",
         "immediate_fix": {"action": "card_only",
-                          "how": "NO KILLS rule (2026-09-18): the process is still present, so the "
+                          "how": "NO KILLS rule (the operator 00:20 Tulum 2026-09-18): the process is still present, so the "
                                  "watchdog never touches it. Card + Telegram; a human resumes it (respawn-pane -k + "
                                  "`claude --resume <sid>` by hand — SIGCONT/tcsetpgrp did not stick on gm 04:31Z)"},
         "doc": "^Z from the harness bottom bar or a terminal; the CLI is stopped, not dead",
@@ -127,13 +127,49 @@ CATALOGUE = {
     },
 }
 
+# Screen rules match CLI-RENDERED lines only (gm, ra_8a6b4ca9 false positive 2026-09-18 07:13Z:
+# the old regex hit "...given the usage limit" in assistant prose). A "system line" is one the
+# harness prints, not the transcript body: a `⎿` result/notice line, a `⚠`/`✗` line, or anything at
+# or below the LAST composer prompt (❯) — the status region. Prose lines (`●`, indented text) never
+# classify, even when they quote a banner verbatim.
+_SYSTEM_LINE = re.compile(r"^\s*[⎿⚠✗]")
 _SCREEN_RULES = (
-    (re.compile(r"has been suspended|Run `fg`|\[\d\]\s*\+?\s*Stopped", re.I), "process_suspended"),
-    (re.compile(r"usage limit|out of usage|credits? (?:depleted|exhausted)|insufficient credits", re.I), "out_of_usage"),
+    (re.compile(r"You'?re out of usage credits|You'?ve hit your usage limit|usage limit reached|"
+                r"insufficient_quota|credits? (?:depleted|exhausted)|Out of credits", re.I), "out_of_usage"),
+    (re.compile(r"^\s*[⎿⚠✗]?\s*API Error\b", re.I), "api_error"),
     (re.compile(r"Select login method|Please log in|Login required|Not logged in\.|OAuth error|authentication[_ ]error", re.I), "login_screen"),
-    (re.compile(r"Bypass Permissions mode", re.I), "bypass_permissions_dialog"),
-    (re.compile(r"API Error", re.I), "api_error"),
 )
+
+
+def screen_regions(screen: str, tail: int = 40) -> tuple[list[str], list[str]]:
+    """(system_lines, status_region) of the last `tail` lines — the only lines a screen rule may see."""
+    lines = screen.splitlines()[-tail:]
+    last_prompt = max((i for i, l in enumerate(lines) if l.lstrip().startswith("❯")), default=None)
+    # no composer prompt on screen = the CLI is not in chat state (login screen, dialog, crashed
+    # output): the whole tail is status. With a prompt, only the prompt and what follows it.
+    status = lines[last_prompt:] if last_prompt is not None else lines
+    system = [l for l in lines if _SYSTEM_LINE.match(l)]
+    return system, status
+
+
+def classify_screen(screen: str) -> tuple[str, str] | None:
+    """(class, matched line) for CLI banners; None for prose. Whole-screen dialogs need their companion line."""
+    lines = screen.splitlines()[-40:]
+    text = "\n".join(lines)
+    if re.search(r"Claude Code has been suspended", text) and re.search(r"^\[\d+\]\s*\+?\s*Stopped|Run `fg`", text, re.M):
+        return "process_suspended", "Claude Code has been suspended + shell Stopped line"
+    if re.search(r"Bypass Permissions mode", text) and re.search(r"Yes, I accept", text):
+        return "bypass_permissions_dialog", "Bypass Permissions mode + 'Yes, I accept' row"
+    system, status = screen_regions(screen)
+    for line in system + [l for l in status if l not in system]:
+        # a ⎿ line that is tool OUTPUT quoting a banner (grep results, file excerpts) is still prose:
+        # require the banner to START the notice, not sit inside a quoted path/line
+        body = re.sub(r"^\s*[⎿⚠✗]?\s*", "", line)
+        for rx, cls in _SCREEN_RULES:
+            m = rx.search(body)
+            if m and (cls != "out_of_usage" or m.start() == 0 or body[:m.start()].strip() == ""):
+                return cls, line.strip()
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -306,10 +342,9 @@ def classify(ev: dict, seat: str) -> dict | None:
     if dead_flag or (dead_flag is None and procs == [] and seat in ev.get("process_state", {})):
         return hit("pane_dead", "pane dead / no process on tty")
     screen = ev.get("screen", {}).get(seat) or ""
-    tail = "\n".join(screen.splitlines()[-40:])
-    for rx, cls in _SCREEN_RULES:
-        if rx.search(tail):
-            return hit(cls, f"screen matched /{rx.pattern}/")
+    found = classify_screen(screen)
+    if found:
+        return hit(found[0], f"CLI line: {found[1][:120]}")
     return None
 
 
