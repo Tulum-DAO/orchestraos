@@ -105,25 +105,26 @@ scripting against either).
 
 ## What can go wrong, and what it means
 
-Every client (web, iOS, this doc) shows the exact same words for each of
-these — if you see one of these on your screen, this is what it means:
+Every client (web, iOS, this doc) shows the exact same words, verbatim,
+for each of these four states:
 
-- **Can't find `<host>`.** — "Check the spelling — and if that's a tailnet
-  name, make sure this device is on the same tailnet."
-- **Found `<host>`, but nothing is answering on port `<port>`.** — "Is
-  `orchestra up` running on that machine?"
-- **Something is running at `<host>:<port>`, but it isn't an OrchestraOS
-  gateway.** — "Check the port — the gateway is usually 8890, and 8891 is
-  the dashboard."
-- **That is an OrchestraOS gateway, but it didn't accept this token.** — "Run
-  `orchestra pair` on the server and scan the new code." (the web dashboard
-  says "paste the new code" instead of "scan," since it can't use the
-  camera.)
+- **Can't resolve the address.** Can't find `<host>`. Check the spelling —
+  and if that's a tailnet name, make sure this phone is on the same
+  tailnet.
+- **Nothing listening.** Found `<host>`, but nothing is answering on port
+  `<port>`. Is `orchestra up` running on that machine?
+- **Answered, but not a gateway.** Something is running at `<host>:<port>`,
+  but it isn't an OrchestraOS gateway. Check the port — the gateway is
+  usually 8890, and 8891 is the dashboard.
+- **Refused.** That is an OrchestraOS gateway, but it didn't accept this
+  token. Run `orchestra pair` on the server and scan the new code. (The web
+  dashboard says "paste the new code" instead of "scan," since it can't use
+  the camera.)
 
-The first two are both "nothing valid answered" — a DNS/typo problem versus a
-"nothing's listening on that port" problem — the third is "found something,
-but not a gateway," and the fourth is "found a gateway, but the token's no
-good; re-pair."
+The first two are both "nothing valid answered" — a typo/DNS problem versus
+a "nothing's listening on that port" problem, and they need opposite
+fixes — the third is "found something, but not a gateway," and the fourth
+is "found a gateway, but the token's no good; re-pair."
 
 ## What success looks like
 
@@ -131,7 +132,7 @@ Once both calls succeed, every client (web, iOS, this doc) shows the same
 line, word for word except the host and version:
 
 ```
-Connected to your-gateway.example.net - gateway v1 - no cards yet. They appear here when an agent needs a decision.
+Connected to your-gateway.example.net · gateway v1 · no cards yet — they appear here when an agent needs a decision.
 ```
 
 That whole line is the success state on a fresh pairing with zero agents and
