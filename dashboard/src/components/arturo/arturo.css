@@ -65,6 +65,18 @@
 .arturo-drawer a{ display:block; padding:11px 12px; border-radius:12px; color:#fff; font-size:15.5px; text-decoration:none; }
 .arturo-drawer a:hover, .arturo-drawer a.active{ background:rgba(255,255,255,0.07); }
 .arturo-drawer .sect{ font-size:12px; color:var(--grey2); padding:14px 12px 6px; }
+/* G20 — go back to a previous conversation from the drawer (the same server-side list the
+   pill shows, so the home and the pill are one thread space). */
+.arturo-drawer .sect-head{ display:flex; align-items:center; justify-content:space-between; }
+.arturo-drawer .drawer-new{ background:none; border:0; color:#d97757; font-size:12px; cursor:pointer; font-family:inherit; padding:2px 4px; }
+.arturo-drawer .drawer-threads{ display:flex; flex-direction:column; gap:1px; max-height:38vh; overflow-y:auto; }
+.arturo-drawer .drawer-threads .empty{ font-size:12.5px; color:var(--grey2); padding:6px 12px; margin:0; }
+.arturo-drawer .thread-row{ display:flex; align-items:baseline; gap:8px; width:100%; text-align:left; cursor:pointer;
+  background:none; border:0; border-radius:10px; padding:9px 12px; color:rgba(255,255,255,0.82); font-size:14px; font-family:inherit; }
+.arturo-drawer .thread-row:hover{ background:rgba(255,255,255,0.07); }
+.arturo-drawer .thread-row.current{ background:rgba(217,119,87,0.14); color:#fff; }
+.arturo-drawer .thread-row .t-title{ flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.arturo-drawer .thread-row .t-meta{ flex:0 0 auto; font-size:11px; color:var(--grey2); }
 /* sheet (brain) */
 .arturo-sheet-back{ position:fixed; inset:0; background:rgba(0,0,0,0.62); z-index:40; }
 .arturo-sheet{ position:fixed; left:0; right:0; bottom:0; z-index:41; background:#181818; border-radius:26px 26px 0 0; padding:10px 20px calc(28px + env(safe-area-inset-bottom)); box-shadow:0 -10px 40px rgba(0,0,0,0.5); max-height:80vh; overflow-y:auto; }
@@ -98,7 +110,7 @@
 .arturo-pill-head .who{ font-size:14px; font-weight:600; }
 .arturo-pill-head .ctx{ font-size:11.5px; color:rgba(255,255,255,0.45); background:rgba(255,255,255,0.06); border-radius:6px; padding:3px 7px; max-width:45%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .arturo-pill-head .spacer{ flex:1; }
-.arturo-pill-head .linkish{ background:none; border:0; color:rgba(255,255,255,0.55); font-size:12px; cursor:pointer; text-decoration:none; padding:2px 4px; display:flex; align-items:center; }
+.arturo-pill-head .linkish{ background:none; border:0; color:rgba(255,255,255,0.55); font-size:12px; cursor:pointer; text-decoration:none; padding:2px 4px; display:flex; align-items:center; gap:4px; white-space:nowrap; flex:0 0 auto; }
 .arturo-pill-head .linkish:hover{ color:#fff; }
 .arturo-pill-head .linkish.accent{ color:#d97757; }
 .arturo-pill-thread{ flex:1 1 auto; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:10px; padding:2px 2px 8px; }
@@ -114,3 +126,37 @@
 .arturo-pill-count{ margin-left:2px; font-size:11px; color:rgba(255,255,255,0.55); background:rgba(255,255,255,0.10); border-radius:999px; padding:1px 7px; }
 .arturo-pill-panel textarea{ flex:0 0 auto; display:block; width:100%; resize:none; background:none; border:0; outline:0; color:#fff; font-size:16px; padding:6px 4px 10px; min-height:30px; max-height:120px; font-family:inherit; }
 .arturo-pill-panel textarea::placeholder{ color:rgba(255,255,255,0.45); }
+
+/* G20 — previous conversations, and the page-context card ---------------------------------
+   The list is server-backed (/api/arturo/threads): the same threads on the home, the pill
+   and the phone. The card is the operator's switch for "focus on this page": present by
+   default, deleted with the ×, and put back from the row it leaves behind. */
+.arturo-thread-list{
+  flex:0 0 auto; max-height:34vh; overflow-y:auto; display:flex; flex-direction:column; gap:2px;
+  margin:0 -4px 8px; padding:4px; background:rgba(255,255,255,0.04); border-radius:12px;
+}
+.arturo-thread-list .empty{ font-size:12.5px; color:rgba(255,255,255,0.38); text-align:center; padding:14px 8px; margin:0; }
+.arturo-thread-list .thread-row{
+  display:flex; align-items:baseline; gap:8px; width:100%; text-align:left; cursor:pointer;
+  background:none; border:0; border-radius:9px; padding:8px 10px; color:rgba(255,255,255,0.82); font-size:13.5px; font-family:inherit;
+}
+.arturo-thread-list .thread-row:hover{ background:rgba(255,255,255,0.07); }
+.arturo-thread-list .thread-row.current{ background:rgba(217,119,87,0.14); color:#fff; }
+.arturo-thread-list .t-title{ flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.arturo-thread-list .t-meta{ flex:0 0 auto; font-size:11px; color:rgba(255,255,255,0.40); }
+.arturo-context-card{
+  flex:0 0 auto; display:flex; align-items:center; gap:7px;
+  background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.08); border-radius:11px;
+  padding:7px 8px 7px 10px; font-size:12.5px; color:rgba(255,255,255,0.72);
+}
+.arturo-context-card > svg{ color:#d97757; flex:0 0 auto; }   /* the focus glyph only — not the × */
+.arturo-context-card .cc-label{ flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.arturo-context-card .cc-label b{ color:#fff; font-weight:600; }
+.arturo-context-card .cc-x{ flex:0 0 auto; background:none; border:0; cursor:pointer; color:rgba(255,255,255,0.45); display:flex; padding:2px; border-radius:6px; }
+.arturo-context-card .cc-x:hover{ color:#fff; background:rgba(255,255,255,0.08); }
+.arturo-context-off{
+  flex:0 0 auto; background:none; border:1px dashed rgba(255,255,255,0.13); border-radius:11px; cursor:pointer;
+  padding:7px 10px; font-size:12px; color:rgba(255,255,255,0.42); font-family:inherit; text-align:left;
+}
+.arturo-context-off b{ color:#d97757; font-weight:600; }
+.arturo-context-off:hover{ color:rgba(255,255,255,0.7); }

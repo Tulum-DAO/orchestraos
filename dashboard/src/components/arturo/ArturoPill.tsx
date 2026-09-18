@@ -1,33 +1,33 @@
 /**
  * ArturoPill — the always-available "Ask Arturo" pill on every non-home page (track T4, S5/S6).
- * Tap → the composer expands over the dimmed page with a context chip carrying
- * {route, entityKind, entityId, hint} derived from the current URL; the turn goes through the
- * same POST /api/arturo/text path as the home, with the context as its first line.
+ *
+ * Tap → a conversation pane over the dimmed page. Two things the operator asked for on
+ * 2026-09-18, after using the surface:
+ *
+ *  1. "swap between Arturo's previous conversations and pick up right where we left off" —
+ *     so the thread list and every thread's turns come from the SERVER (G20,
+ *     /api/arturo/threads). "New thread" leaves the old one IN the list instead of losing
+ *     it, and localStorage holds only WHICH thread you were in, never the archive. The home
+ *     and the pill read the same list, so it is one thread space, not two.
+ *  2. Arturo focuses on the page you are looking at BY DEFAULT — "but if you so choose to,
+ *     that's a card on the Arturo chat you should be able to delete". The page context is
+ *     therefore a visible card at the top of the thread with an ×; deleting it is how you
+ *     tell Arturo to stop focusing on this page, and it can be put back.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
-import { Mic, ArrowUp, X } from 'lucide-react';
+import { Mic, ArrowUp, X, History, Focus } from 'lucide-react';
 import './arturo.css';
 import { arturoText, newConversationId, contextFromLocation } from '../../lib/arturo';
+import {
+  listThreads, loadThread, contextCardLabel, isContextDismissed, dismissContext,
+  restoreContext, contextForTurn, type ThreadSummary,
+} from '../../lib/arturoThreads';
 
-/** One thread, kept for the life of the install (not the page): the pill is the same
- *  conversation wherever you open it, and its history is visible in the pane — the same
- *  contract as the dashboard's assistant panel, not a one-shot floating reply. */
-interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[]; route?: string; at: number }
-const LS_THREAD = 'orchestra.arturo.pill.thread';
+interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[]; at: number }
 const LS_CONV = 'orchestra.arturo.pill.conversation';
-const MAX_KEPT = 200;
 
-function loadThread(): PillTurn[] {
-  try {
-    const raw = localStorage.getItem(LS_THREAD);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.slice(-MAX_KEPT) : [];
-  } catch { return []; }
-}
-function saveThread(turns: PillTurn[]) {
-  try { localStorage.setItem(LS_THREAD, JSON.stringify(turns.slice(-MAX_KEPT))); } catch { /* private mode */ }
-}
+/** Which thread was I in — the ONLY thing still kept in the browser. */
 function loadConv(): string {
   try {
     const existing = localStorage.getItem(LS_CONV);
@@ -37,47 +37,73 @@ function loadConv(): string {
     return fresh;
   } catch { return newConversationId('pill'); }
 }
-
+function rememberConv(id: string) {
+  try { localStorage.setItem(LS_CONV, id); } catch { /* private mode */ }
+}
 
 export function ArturoPill() {
   const location = useLocation();
   const params = useParams();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState('');
-  // Seed from storage in the initializer, not an effect: the thread is already there when
-  // the panel first paints, and no cascading render is triggered.
-  const [turns, setTurns] = useState<PillTurn[]>(loadThread);
+  const [turns, setTurns] = useState<PillTurn[]>([]);
   const [busy, setBusy] = useState(false);
-  const conv = useRef('');
+  const [showThreads, setShowThreads] = useState(false);
+  const [threads, setThreads] = useState<ThreadSummary[]>([]);
+  const [convId, setConvId] = useState<string>(loadConv);
+  // Re-render when the card is deleted or restored; the value itself lives in storage.
+  const [ctxOn, setCtxOn] = useState(true);
   const ta = useRef<HTMLTextAreaElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const ctx = contextFromLocation(location.pathname, params as Record<string, string | undefined>, location.search);
 
-  // The thread outlives the panel and the page: seeded above, conversation id resolved once.
-  useEffect(() => { if (!conv.current) conv.current = loadConv(); }, []);
-  useEffect(() => { if (open) setTimeout(() => ta.current?.focus(), 30); }, [open]);
+  /** Pull this thread's turns from the server, so reopening the pill resumes it exactly. */
+  const resume = useCallback(async (id: string) => {
+    const t = await loadThread(id);
+    setTurns((t?.turns || []).map((x) => ({ role: x.role === 'user' ? 'user' : 'arturo', text: x.content, at: (x.ts || 0) * 1000 })));
+  }, []);
+
+  useEffect(() => { setCtxOn(!isContextDismissed(convId)); }, [convId]);
+  useEffect(() => { if (open) { void resume(convId); void listThreads().then(setThreads); setTimeout(() => ta.current?.focus(), 30); } }, [open, convId, resume]);
   useEffect(() => { scroller.current?.scrollTo({ top: 1e9, behavior: 'smooth' }); }, [turns, open, busy]);
 
-  const append = (t: PillTurn) => setTurns((prev) => { const next = [...prev, t].slice(-MAX_KEPT); saveThread(next); return next; });
+  const append = (t: PillTurn) => setTurns((prev) => [...prev, t]);
 
   async function send() {
     const text = draft.trim();
     if (!text || busy) return;
     setDraft(''); setBusy(true);
-    append({ role: 'user', text, route: ctx.route, at: Date.now() });
-    const r = await arturoText(text, conv.current, ctx);
+    append({ role: 'user', text, at: Date.now() });
+    // The card is the switch: present → this turn carries the page context; deleted → it does not.
+    const r = await arturoText(text, convId, contextForTurn(convId, ctx));
     setBusy(false);
     append(r.ok
       ? { role: 'arturo', text: r.reply_text || '(no reply)', tools: r.tools_called, at: Date.now() }
       : { role: 'arturo', text: `Could not reach Arturo: ${r.error || 'unknown'}`, at: Date.now() });
+    void listThreads().then(setThreads);      // the thread it just created/updated joins the list
   }
 
-  function clearThread() {
-    setTurns([]); saveThread([]);
-    try { const fresh = newConversationId('pill'); localStorage.setItem(LS_CONV, fresh); conv.current = fresh; } catch { /* private mode */ }
+  /** New thread — the one you leave is now IN the list, not lost. */
+  function startNewThread() {
+    const fresh = newConversationId('pill');
+    rememberConv(fresh);
+    setConvId(fresh);
+    setTurns([]);
+    setShowThreads(false);
+    void listThreads().then(setThreads);
   }
 
-  const label = `${ctx.entityKind}${ctx.entityId ? ' · ' + ctx.entityId : ''}`;
+  async function switchTo(id: string) {
+    rememberConv(id);
+    setConvId(id);
+    setShowThreads(false);
+    await resume(id);
+  }
+
+  function toggleContextCard() {
+    if (ctxOn) dismissContext(convId); else restoreContext(convId);
+    setCtxOn(!ctxOn);
+  }
 
   if (!open) {
     return (
@@ -93,18 +119,44 @@ export function ArturoPill() {
       <div className="arturo-pill-panel" role="dialog" aria-label="Ask Arturo">
         <div className="arturo-pill-head">
           <span className="who">Arturo</span>
-          <span className="ctx">{label}</span>
           <span className="spacer" />
-          {turns.length > 0 && (
-            <button className="linkish" onClick={clearThread} aria-label="Start a new thread">New thread</button>
-          )}
-          <Link to="/" className="linkish accent">Open Arturo</Link>
+          <button className="linkish" onClick={() => setShowThreads((s) => !s)} aria-label="Previous conversations"
+                  aria-expanded={showThreads}><History size={14} /> Threads</button>
+          <button className="linkish" onClick={startNewThread} aria-label="Start a new thread">New</button>
+          <Link to="/" className="linkish accent">Open</Link>
           <button onClick={() => setOpen(false)} aria-label="Close" className="linkish"><X size={14} /></button>
         </div>
 
+        {showThreads && (
+          <div className="arturo-thread-list" role="listbox" aria-label="Previous conversations">
+            {threads.length === 0 && <p className="empty">No earlier conversations yet.</p>}
+            {threads.map((t) => (
+              <button key={t.id} role="option" aria-selected={t.id === convId}
+                      className={t.id === convId ? 'thread-row current' : 'thread-row'}
+                      onClick={() => void switchTo(t.id)}>
+                <span className="t-title">{t.title || 'Untitled'}</span>
+                <span className="t-meta">{Math.ceil((t.turns || 0) / 2)} · {new Date((t.updated || 0) * 1000).toLocaleDateString()}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className="arturo-pill-thread" ref={scroller}>
+          {/* The page-context CARD: default on, deletable, restorable. */}
+          {ctxOn ? (
+            <div className="arturo-context-card">
+              <Focus size={13} />
+              <span className="cc-label">Looking at <b>{contextCardLabel(ctx)}</b></span>
+              <button className="cc-x" onClick={toggleContextCard}
+                      aria-label="Stop focusing on this page"><X size={13} /></button>
+            </div>
+          ) : (
+            <button className="arturo-context-off" onClick={toggleContextCard}>
+              Not using this page for context · <b>use it</b>
+            </button>
+          )}
           {turns.length === 0 && !busy && (
-            <p className="empty">Ask about what you are looking at, or anything else. This thread is kept — it is the same conversation on every page.</p>
+            <p className="empty">Ask about what you are looking at, or anything else. Every conversation is kept — open <b>Threads</b> to go back to one.</p>
           )}
           {turns.map((t, i) => (
             <div key={i} className={t.role === 'user' ? 'row user' : 'row arturo'}>
