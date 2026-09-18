@@ -11,6 +11,8 @@ import { StatusDot } from '../components/StatusDot';
 import { TierBadge } from '../components/TierBadge';
 import { LiveFeed } from '../components/LiveFeed';
 import { FleetRecoveryModal } from '../components/FleetRecoveryModal';
+import NewAgentModal from '../components/NewAgentModal';
+import { useQueryClient } from '@tanstack/react-query';
 
 const TIER_ORDER: Record<string, number> = { T0: 0, T1: 1, T2: 2, T3: 3 };
 
@@ -22,6 +24,8 @@ export default function Overview() {
   const goDarkMutation = useGoDark();
   const returnMutation = useReturn();
   const [showConfirm, setShowConfirm] = useState(false);
+  const [showNewAgent, setShowNewAgent] = useState(false);
+  const queryClient = useQueryClient();
   const [showReport, setShowReport] = useState(false);
   const [transitReport, setTransitReport] = useState<any>(null);
   const { data: context } = useQuery({
@@ -127,7 +131,6 @@ export default function Overview() {
     .slice(0, 12);
 
   const isTransitActive = transitData?.active === true;
-  const macOnline = transitData?.mac_status === 'online';
 
   return (
     <div className="p-6 space-y-6">
@@ -208,21 +211,28 @@ export default function Overview() {
         </div>
       )}
 
-      {/* Header with Going Dark button */}
+      {/* Header with the New Agent button (it replaced Going Dark, which assumed a
+          second machine and a transit flow most installs do not have; the go-dark
+          endpoints and the transit banner above are untouched). */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-neutral-100">Overview</h1>
-        {!isTransitActive && macOnline && (
-          <button
-            onClick={() => setShowConfirm(true)}
-            className="flex items-center gap-2 px-4 py-2 text-sm rounded-lg bg-amber-900/60 border border-amber-700/50 text-amber-300 hover:bg-amber-800/60 transition-colors"
-          >
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-              <path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z" />
-            </svg>
-            Going Dark
-          </button>
-        )}
+        <button
+          onClick={() => setShowNewAgent(true)}
+          className="flex items-center gap-2 px-4 py-2 text-sm rounded-lg bg-blue-900/50 border border-blue-700/50 text-blue-200 hover:bg-blue-800/60 transition-colors"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path strokeLinecap="round" d="M12 5v14M5 12h14" />
+          </svg>
+          New Agent
+        </button>
       </div>
+
+      <NewAgentModal
+        open={showNewAgent}
+        onClose={() => setShowNewAgent(false)}
+        taken={new Set(agents.map((a: { id: string }) => String(a.id)))}
+        onCreated={() => { queryClient.invalidateQueries({ queryKey: ['agents'] }); }}
+      />
 
       {/* Needs You — a dead feed must not render as calm */}
       {attentionFailed && (

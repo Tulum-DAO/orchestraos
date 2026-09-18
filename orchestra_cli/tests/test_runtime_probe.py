@@ -118,3 +118,48 @@ def test_real_catalog_parses_and_uses_only_known_probe_kinds():
         while probe:
             assert probe["kind"] in RP.KNOWN_PROBE_KINDS
             probe = probe.get("fallback")
+
+
+# --- a LOGGED-OUT cli exits non-zero WITH its JSON: that is an answer, not a probe failure.
+# Falling back to ~/.claude.json's stale oauthAccount used to report authed=True for a CLI
+# that `claude auth status` had just called logged out (found by effect in a container).
+
+class _Exit1WithJson(Exception):
+    def __init__(self, stdout):
+        super().__init__("exit 1")
+        self.stdout = stdout
+
+
+def _probe_with_fallback():
+    return {"kind": "cli-json", "cmd": "claude auth status", "success_key": "loggedIn",
+            "fallback": {"kind": "file-json-key", "path": "~/.claude.json", "key": "oauthAccount"}}
+
+
+def _exit_deps(run_cmd, read_file=lambda p: '{"oauthAccount": {"email": "x"}}'):
+    return RP.ProbeDeps(which=lambda b: "/usr/bin/" + b, run_cmd=run_cmd, read_file=read_file,
+                        now_ms=lambda: 0, expand_home=lambda p: p)
+
+
+def test_logged_out_cli_that_exits_nonzero_is_false_not_the_stale_fallback():
+    def run(argv):
+        raise _Exit1WithJson('{"loggedIn": false}')
+    out = RP.run_auth_probe(_probe_with_fallback(), _exit_deps(run))
+    assert out == {"authed": False, "auth_reason": "loggedIn=false"}
+
+
+def test_logged_in_cli_that_exits_nonzero_is_still_true():
+    def run(argv):
+        raise _Exit1WithJson('{"loggedIn": true}')
+    assert RP.run_auth_probe(_probe_with_fallback(), _exit_deps(run)) == {"authed": True}
+
+
+def test_probe_that_produced_no_output_still_uses_the_fallback():
+    def run(argv):
+        raise _Exit1WithJson("")
+    assert RP.run_auth_probe(_probe_with_fallback(), _exit_deps(run)) == {"authed": True}
+
+
+def test_probe_with_garbage_output_falls_back_too():
+    def run(argv):
+        raise _Exit1WithJson("command not found")
+    assert RP.run_auth_probe(_probe_with_fallback(), _exit_deps(run)) == {"authed": True}

@@ -9,9 +9,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import http from 'node:http';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   createRuntimesAvailableRouter,
   probeAll,
+  salvageCliJsonAnswer,
+  defaultProbeAuth,
   type ProbeDeps,
   type ProviderConfig,
   type AuthResult,
@@ -196,5 +201,48 @@ test('the real config/providers.json loads and matches the ProviderConfig shape'
   for (const p of providers) {
     assert.ok(p.id && p.label && p.cli, `provider missing core fields: ${JSON.stringify(p)}`);
     assert.ok(['cli-json', 'file-json-key', 'file-json-expiry'].includes(p.auth_probe.kind));
+  }
+});
+
+// A logged-out CLI exits non-zero WITH its JSON (`claude auth status` -> {"loggedIn":false},
+// status 1). That is an ANSWER, not a probe failure: falling through to the stale
+// ~/.claude.json oauthAccount fallback reported authed:true for a logged-out CLI (found by
+// effect in a container, 2026-09-18). Twin of orchestra_cli/tests/test_runtime_probe.py.
+test('salvageCliJsonAnswer believes a non-zero probe that printed its JSON', () => {
+  assert.deepEqual(salvageCliJsonAnswer('{"loggedIn": false}'), { authed: false, auth_reason: 'loggedIn=false' });
+  assert.deepEqual(salvageCliJsonAnswer('{"loggedIn": true}'), { authed: true });
+  assert.deepEqual(salvageCliJsonAnswer('{"ok": true}', 'ok'), { authed: true });
+});
+
+test('salvageCliJsonAnswer returns null when there is nothing usable (fallback still runs)', () => {
+  assert.equal(salvageCliJsonAnswer(''), null);
+  assert.equal(salvageCliJsonAnswer('   '), null);
+  assert.equal(salvageCliJsonAnswer('command not found'), null);
+  assert.equal(salvageCliJsonAnswer('{"loggedIn": "yes"}'), null);   // not a boolean: not an answer
+});
+
+// WIRING, not just the helper: a real CLI on PATH that prints its JSON and exits 1 (what a
+// logged-out `claude auth status` does) must be believed, with a fallback file present that
+// would otherwise say "authed". Red before the catch-path fix — the helper alone was not.
+test('defaultProbeAuth believes a logged-out CLI that exits non-zero, over the fallback file', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'probe-cli-'));
+  const bin = join(dir, 'fakecli');
+  writeFileSync(bin, '#!/bin/sh\necho \'{"loggedIn": false}\'\nexit 1\n', { mode: 0o755 });
+  const fallbackFile = join(dir, 'auth.json');
+  writeFileSync(fallbackFile, JSON.stringify({ oauthAccount: { email: 'stale@example.com' } }));
+  const prevPath = process.env.PATH;
+  process.env.PATH = `${dir}:${prevPath}`;
+  try {
+    const out = defaultProbeAuth(fakeProvider({
+      cli: 'fakecli',
+      auth_probe: {
+        kind: 'cli-json', cmd: 'fakecli auth status', success_key: 'loggedIn',
+        fallback: { kind: 'file-json-key', path: fallbackFile, key: 'oauthAccount' },
+      },
+    }));
+    assert.deepEqual(out, { authed: false, auth_reason: 'loggedIn=false' });
+  } finally {
+    process.env.PATH = prevPath;
+    rmSync(dir, { recursive: true, force: true });
   }
 });
