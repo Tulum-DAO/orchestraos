@@ -10,8 +10,8 @@
  * hand Arturo "where the user is" without a second contract.
  */
 export interface ArturoBrain { kind: 'api' | 'runtime' | 'none'; runtime?: string; cli?: string; model: string; reason?: string; provider?: string }
-export interface ArturoHealth { ok: boolean; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; error?: string }
-export interface ArturoReply { ok: boolean; reply_text?: string; conversation_id?: string; brain?: ArturoBrain; tools_called?: string[]; error?: string; detail?: unknown }
+export interface ArturoHealth { ok: boolean; status?: number; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; error?: string }
+export interface ArturoReply { ok: boolean; status?: number; reply_text?: string; conversation_id?: string; brain?: ArturoBrain; tools_called?: string[]; error?: string; detail?: unknown }
 export interface ArturoContext { route: string; entityKind?: string; entityId?: string; hint?: string }
 export interface RuntimeRow { id: string; label?: string; cli?: string; installed: boolean; authed: boolean | 'unverified'; auth_reason?: string | null }
 
@@ -31,7 +31,7 @@ export async function arturoText(text: string, conversationId: string, ctx?: Art
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
     const json = await res.json().catch(() => ({}));
-    if (!res.ok) return { ok: false, error: json.error || `HTTP ${res.status}`, detail: json.detail };
+    if (!res.ok) return { ok: false, status: res.status, error: json.error || `HTTP ${res.status}`, detail: json.detail };
     return json as ArturoReply;
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : 'network' };
@@ -42,7 +42,7 @@ export async function arturoHealth(): Promise<ArturoHealth> {
   try {
     const res = await fetch('/api/arturo/health');
     const json = await res.json().catch(() => ({}));
-    return res.ok ? (json as ArturoHealth) : { ok: false, error: json.error || `HTTP ${res.status}` };
+    return res.ok ? (json as ArturoHealth) : { ok: false, status: res.status, error: json.error || `HTTP ${res.status}` };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : 'network' };
   }
@@ -115,3 +115,36 @@ export function contextFromLocation(pathname: string, params: Record<string, str
   return { route: pathname, entityKind: kind, entityId };
 }
 
+
+// --- G15: boot window --------------------------------------------------------------------
+// While `orchestra up` is still bringing the stack up, every hop answers 502/503/504 with its
+// own words (dashboard-proxy "upstream unreachable", API "gateway token unavailable" /
+// "gateway unreachable", gateway "arturo unreachable") or the fetch itself fails. All of that
+// is one STARTING state, not an error the user should read as an HTTP code.
+const STARTING_RE = /^(HTTP 50[234]|arturo unreachable|gateway unreachable|gateway token unavailable|upstream unreachable|network|Failed to fetch|Load failed|timeout)/i;
+
+export function isStarting(r: { ok: boolean; status?: number; error?: string } | null | undefined): boolean {
+  if (!r || r.ok) return false;
+  if (r.status !== undefined && r.status >= 502 && r.status <= 504) return true;
+  return STARTING_RE.test(String(r.error || ''));
+}
+
+export const STARTING_TEXT = 'Still starting — I will retry in a few seconds.';
+
+/** Poll /api/arturo/health with backoff (1,2,3,5,5… s) until it answers ok or maxMs elapses.
+ *  Resolves the last health seen; check `.ok` on the result. */
+export async function waitForArturo(opts: { maxMs?: number; onTick?: (h: ArturoHealth, attempt: number) => void } = {}): Promise<ArturoHealth> {
+  const maxMs = opts.maxMs ?? 90_000;
+  const delays = [1000, 2000, 3000, 5000];
+  const t0 = Date.now();
+  let attempt = 0;
+  let last: ArturoHealth = { ok: false, error: 'network' };
+  for (;;) {
+    last = await arturoHealth();
+    if (last.ok || !isStarting(last)) return last;
+    attempt += 1;
+    opts.onTick?.(last, attempt);
+    if (Date.now() - t0 >= maxMs) return last;
+    await new Promise((r) => setTimeout(r, delays[Math.min(attempt - 1, delays.length - 1)]));
+  }
+}

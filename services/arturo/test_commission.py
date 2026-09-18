@@ -124,3 +124,33 @@ def test_health_reports_brain_and_mode(mod):
     j = mod.app.test_client().get("/health").get_json()
     assert j["brain"]["kind"] in ("api", "runtime", "none") and j["mode"] in ("voice", "text-only")
     assert "brain_mode" in j and isinstance(j["voice"], bool)
+
+
+# ---- prompt names the ACTUAL brain (release-readiness v1: "backed by a Gemini-powered layer"
+# leaked from the system prompt on a zero-key install) ----------------------------------------
+
+def test_context_names_runtime_brain_not_gemini(mod):
+    mod.brain = mod._brain.RuntimeBrain("claude", "claude", model="", runner=lambda s, t: "")
+    ctx = mod.build_context(calling_channel="text")
+    assert "Gemini-powered" not in ctx and "Antigravity" not in ctx and 'session_name="gemini-gm"' not in ctx
+    assert "thinking with Claude" in ctx and "CLI" in ctx
+
+
+def test_context_names_api_brain_when_api(mod):
+    from types import SimpleNamespace
+    mod.brain = SimpleNamespace(kind="api", model="gemini-2.5-flash",
+                                describe=lambda: {"kind": "api", "model": "gemini-2.5-flash", "provider": "gemini"})
+    ctx = mod.build_context(calling_channel="text")
+    assert "gemini-2.5-flash" in ctx and "Gemini-powered General Manager" not in ctx
+
+
+def test_context_deep_brain_uses_configured_session(mod):
+    ctx = mod.build_context(calling_channel="voice")
+    # live pending-decision text can mention any seat name; pin the PROMPT's own tool lines only
+    assert f'inject_message(session_name="{mod.VOICE_BRAIN_SESSION}")' in ctx
+    assert 'session_name="gemini-gm"' not in ctx and "Antigravity" not in ctx
+
+
+def test_context_has_a_text_tone(mod):
+    ctx = mod.build_context(calling_channel="text")
+    assert "TEXT conversation" in ctx and "Spoken dialogue only" not in ctx.split("\n")[0]
