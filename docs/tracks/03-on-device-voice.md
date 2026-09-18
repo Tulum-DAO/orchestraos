@@ -2,7 +2,7 @@
 
 Size: M · Labels: `track`, `ios`, `arturo`
 
-> **Corrections (oss-arturo-dev review, 2026-09-17):** the vendor route is
+> **Corrections (reviewed against the shipped Track 2 build, 2026-09-17):** the vendor route is
 > `GET/PUT :5071/ptt/vendor` behind the gateway's `/arturo/ptt/vendor` — there is
 > no `/voice/vendor` path (`arturo-proxy.py` `@app.route("/ptt/vendor")`,
 > `watch_gateway.py` `handle_arturo_ptt_vendor`). The "existing gateway text path"

@@ -43,7 +43,7 @@ features:
   (position: where the predecessor stopped, what's next, the canary questions);
   the readback is the successor proving it read *both* the handoff and its own
   memory directory. Getting this distinction backwards is a real trap — see
-  `docs/MEMORY.md`'s walkthrough (lands via semantic-recall-wiring-dev's PR
+  `docs/MEMORY.md`'s walkthrough (lands via
   https://github.com/Tulum-DAO/orchestraos/pull/1) for the exact paths and an
   end-to-end proof recipe before writing this doc, so the tutorial doesn't repeat
   the mistake of routing the fact through the handoff.
@@ -57,7 +57,7 @@ features:
 - `docs/ARCHITECTURE.md` — add a "Where to start reading" cross-link to these three
   (it already has a "Where to start reading" section pointing at source files;
   extend it, don't replace it).
-- `docs/MEMORY.md` (semantic-recall-wiring-dev's PR #1) — the memory-rotation
+- `docs/MEMORY.md` (PR #1) — the memory-rotation
   tutorial's primary source; cite it rather than re-deriving the mechanism.
 
 ## Steps

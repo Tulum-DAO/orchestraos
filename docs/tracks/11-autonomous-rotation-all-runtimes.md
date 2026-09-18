@@ -7,7 +7,7 @@ Size: L · Labels: `track`, `core`, `rotation` · default ON
 The rotation driver (`scripts/lineage_daemon/cron_beat.py`) is real and runs one
 fleet beat per cron tick — arm, prewarm, readiness, quota gate, swap, verify — but
 today it's proven on Claude Code only. Two separate adapter layers exist and it is
-easy to conflate them (verified by effect, rotation-autonomy-builder review):
+easy to conflate them (verified by effect against the real code):
 `scripts/lineage_daemon/wal/ctx_adapters.py::read_ctx` is the **real, live**
 context read the beat actually calls (`wal/bg_beat.py:39`) — it dispatches per
 runtime: the Claude detector's `/tmp/claude-ctx-<sid>.json`, codex rollout token
@@ -59,13 +59,11 @@ at all. Generalize the call site to dispatch by runtime rather than special-casi
 inside the beat; a runtime with no equivalent gate (e.g. no quota concept) should
 get an explicit no-op, not a silently-skipped check.
 
-**Ownership:** rotation-autonomy-builder's standing commission from gm already IS
-the Claude leg of this track (one real rotation on a clean install, gated on the
-quota-oracle fix clearing `green_quota`'s ModuleNotFound — their
-`docs/ROTATION.md` work has already merged). Track 11's Claude acceptance is that
-deliverable — coordinate rather than duplicate it; a contributor picking up this
-track should start on Gemini or Codex, or pair with rotation-autonomy-builder on
-Claude, not redo it solo.
+**Status:** the Claude leg is already in progress (one real rotation on a clean
+install, gated on the quota-oracle fix clearing `green_quota`'s ModuleNotFound —
+`docs/ROTATION.md`, the design doc for this work, has already merged). Check
+open PRs/branches touching `scripts/lineage_daemon/` before starting the Claude
+leg yourself, to avoid duplicating it; Gemini and Codex are open.
 
 ## Files you will touch
 
@@ -99,9 +97,9 @@ Claude, not redo it solo.
    scripts/lineage_daemon/wal/bg_beat.py scripts/lineage_daemon/adapters/*.py` —
    confirm today's actual state (which layer the beat really calls) before
    claiming anything is broken or working.
-2. Claude first: this leg is rotation-autonomy-builder's standing commission — pair
-   with them or pick up Gemini/Codex instead of duplicating it. If picking up
-   Claude anyway: on a clean install, spawn one seat, drive it near a context
+2. Claude first: this leg is already in progress (see the note above) — check
+   open work before starting instead of duplicating it, or pick up Gemini/Codex.
+   If picking up Claude anyway: on a clean install, spawn one seat, drive it near a context
    ceiling (or use a fixture transcript), run `orchestra rotate <seat>` for a full
    green→promote→verify cycle. Confirm nothing is lost: the successor answers the
    predecessor's canary, the registry's canonical pointer moves, the old generation
@@ -131,10 +129,11 @@ must be stated, not implied by silence.
 
 ```
 I'm working Track 11 (autonomous rotation on every runtime) for the
-OrchestraOS hackathon. The Claude leg is already rotation-autonomy-builder's
-standing commission (one real clean-install rotation, gated on a quota-oracle
-fix clearing green_quota's ModuleNotFound) -- coordinate with them rather
-than duplicating it; pick up Gemini or Codex, or pair with them on Claude.
+OrchestraOS hackathon. The Claude leg is already in progress (one real
+clean-install rotation, gated on a quota-oracle fix clearing
+green_quota's ModuleNotFound) -- check open work on
+scripts/lineage_daemon/ before starting it yourself, to avoid
+duplicating; pick up Gemini or Codex instead if it's still open.
 Read docs/tracks/11-autonomous-rotation-all-runtimes.md for the full design,
 and docs/ROTATION.md (landed on main) for the authoritative per-runtime gap
 detail.
