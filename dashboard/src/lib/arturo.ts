@@ -48,9 +48,13 @@ export async function arturoHealth(): Promise<ArturoHealth> {
   }
 }
 
-export async function runtimesAvailable(): Promise<RuntimeRow[]> {
+/** fresh=true busts the API's 300s in-process cache (POST /refresh re-probes): the
+ *  onboarding "Check again" tap after a CLI login must see the new auth state at once
+ *  (G14: the cached GET kept saying "installed but not logged in" for up to 5 minutes). */
+export async function runtimesAvailable(fresh = false): Promise<RuntimeRow[]> {
   try {
-    const res = await fetch('/api/runtimes/available');
+    const res = await fetch(fresh ? '/api/runtimes/available/refresh' : '/api/runtimes/available',
+                            fresh ? { method: 'POST' } : undefined);
     if (!res.ok) return [];
     const json = await res.json();
     return (json.providers || []) as RuntimeRow[];
