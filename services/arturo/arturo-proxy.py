@@ -1675,18 +1675,27 @@ def commission_plan(session, task, runtime=None, repo_root=None, model=None):
 
 
 def registration_status(name):
-    """Did this seat actually get an identity? Reads the flat registry, and the identity
-    store too when an install has one (it is the truth; registry.json is its projection).
-    Never raises — an unreadable store is reported, not swallowed."""
-    where, detail = [], []
+    """THREE states, never two: registered / not registered / could not check.
+
+    A swallowed exception must never read as "not registered" — that inverts the
+    purpose of this check (orchestra-builder gate on PR #8). Reads the flat registry,
+    and the identity store when the install has one. Schema verified against a live
+    store and the repo's own fixtures: canonical(root, generation_id, tmux_session,
+    status) + generations(root, generation, resume_command, …).
+    Returns {state: "registered"|"unregistered"|"unknown", where, detail}.
+    """
+    where, missing, unknown = [], [], []
     try:
         reg = json.loads((Path(ORCHESTRA_DIR) / "registry.json").read_text())
         if name in (reg.get("agents") or {}):
             where.append("registry.json")
         else:
-            detail.append("no registry row")
-    except Exception as e:  # noqa: BLE001
-        detail.append(f"registry unreadable ({str(e)[:60]})")
+            missing.append("no registry row")
+    except FileNotFoundError:
+        missing.append("no registry file")
+    except Exception as e:  # noqa: BLE001 — unreadable is NOT the same as absent
+        unknown.append(f"registry unreadable ({str(e)[:60]})")
+
     db = Path(ORCHESTRA_DIR) / "state" / "orchestra-registry.db"
     if db.exists():
         try:
@@ -1694,17 +1703,28 @@ def registration_status(name):
             con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
             try:
                 row = con.execute(
-                    "SELECT 1 FROM canonical_agents WHERE agent_id = ? LIMIT 1", (name,)).fetchone()
+                    "SELECT c.root, g.resume_command FROM canonical c "
+                    "LEFT JOIN generations g ON g.id = c.generation_id "
+                    "WHERE c.root = ? LIMIT 1", (name,)).fetchone()
             finally:
                 con.close()
             if row:
-                where.append("identity store")
+                where.append("identity store" + ("" if row[1] else " (no resume_command yet)"))
             else:
-                detail.append("no canonical identity row")
+                missing.append("no canonical identity row")
         except Exception as e:  # noqa: BLE001
-            detail.append(f"identity store unreadable ({str(e)[:60]})")
-    return {"registered": bool(where) and not detail, "where": " + ".join(where),
-            "detail": "; ".join(detail)}
+            unknown.append(f"identity store unreadable ({str(e)[:60]})")
+
+    if unknown:
+        return {"state": "unknown", "registered": False, "where": " + ".join(where),
+                "detail": "; ".join(unknown + missing)}
+    if where and not missing:
+        return {"state": "registered", "registered": True, "where": " + ".join(where), "detail": ""}
+    if where:
+        # half-registered: flat row but no identity row (or vice versa) — say which.
+        return {"state": "unregistered", "registered": False, "where": " + ".join(where),
+                "detail": "; ".join(missing)}
+    return {"state": "unregistered", "registered": False, "where": "", "detail": "; ".join(missing)}
 
 
 def _run_commission(plan, timeout=120):
@@ -1912,10 +1932,14 @@ def execute_tool(name, args, user_turns=None):
             # park-not-retire). Verify it by effect and SAY which it is — never claim
             # "visible on the dashboard" without having looked.
             reg = registration_status(session)
-            if reg["registered"]:
+            if reg["state"] == "registered":
                 result = (f"CONFIRMED: Agent '{session}' is running on vps (runtime "
                           f"{plan.env['AGENT_RUNTIME']}) and is registered in {reg['where']} — "
                           f"it shows up in the agent list.")
+            elif reg["state"] == "unknown":
+                result = (f"Agent '{session}' is running on vps (runtime {plan.env['AGENT_RUNTIME']}), "
+                          f"but I could not verify its registration ({reg['detail']}) — check "
+                          f"`orchestra doctor` and the agent list before relying on it.")
             else:
                 result = (f"PARTIAL: Agent '{session}' is running on vps (runtime "
                           f"{plan.env['AGENT_RUNTIME']}) but it is NOT registered ({reg['detail']}), "
