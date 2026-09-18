@@ -79,8 +79,8 @@ def test_gen_alias_of_registered_root_with_wrong_gen_still_matches_root(db):
 
 
 def test_ignore_list_suppresses_named_sessions(db):
-    orphans = ops.find_orphans([_pane("shaw-scratch", CLAUDE)], db,
-                               ignore={"shaw-scratch"})
+    orphans = ops.find_orphans([_pane("ops-scratch", CLAUDE)], db,
+                               ignore={"ops-scratch"})
     assert orphans == []
 
 

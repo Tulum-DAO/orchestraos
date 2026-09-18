@@ -302,7 +302,7 @@ def main(argv=None):
     pan.add_argument("--answer-text", dest="answer_text", default=None,
                      help="menu free-text answer")
     # R7d attribution tags (provenance-only). The web bridge (_canonical-approvals)
-    # shells this same verb with `--surface web --answered-by shaw`; a bare agent
+    # shells this same verb with `--surface web --answered-by operator`; a bare agent
     # self-ack defaults to the self-authored 'agent_cli' edge.
     pan.add_argument("--surface", default="agent_cli",
                      help="answering surface: web|phone|watch|gateway|agent_cli")
@@ -606,7 +606,7 @@ def main(argv=None):
         finally:
             sys.stdout = _saved_stdout
         # R7d: forward the provenance tags into the ONE core. The web bridge
-        # passes `--surface web --answered-by shaw` (it holds the authenticated
+        # passes `--surface web --answered-by operator` (it holds the authenticated
         # web session, so asserting 'operator' is trusted). On the DEFAULT agent_cli
         # edge `--answered-by` is self-asserted — the same content-vs-authorship
         # plane as `from_agent` (spec §4.1): an agent may pass any principal, so

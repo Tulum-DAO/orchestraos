@@ -77,16 +77,16 @@ def readout_line(surface_path, now=None):
     cur = d.get("current") or {}
     route = cur.get("route")
     if not route:
-        return "SHAW'S SCREEN: the operator is not looking at the app."
+        return "OPERATOR'S SCREEN: the operator is not looking at the app."
     hint = (cur.get("hint") or "").strip()
     device = cur.get("device") or "?"
     updated = cur.get("updated_at") or 0
     age = int(max(0, now - updated))
     if age > STALE_S:
         human = f"{age // 60}m" if age >= 60 else f"{age}s"
-        return f"SHAW'S SCREEN: last seen {route} {human} ago (app backgrounded)."
+        return f"OPERATOR'S SCREEN: last seen {route} {human} ago (app backgrounded)."
     hint_part = f' — "{hint}"' if hint else ""
-    return f"SHAW'S SCREEN: {route}{hint_part} ({age}s ago, {device})."
+    return f"OPERATOR'S SCREEN: {route}{hint_part} ({age}s ago, {device})."
 
 
 def call_surface(surface_path, now=None):

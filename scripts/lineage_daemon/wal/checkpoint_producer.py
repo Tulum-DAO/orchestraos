@@ -67,7 +67,7 @@ def write_build_checkpoint(orchestra_dir, root, checkpoint):
 
 
 def produce_checkpoint(root, orchestra_dir, store, *, inject_fn=None,
-                       shaw_attached_fn=None, fresh_since_seq=None,
+                       operator_attached_fn=None, fresh_since_seq=None,
                        poll_interval_s=0.5, timeout_s=30.0, resolve_body=None,
                        scrub=None, prompt_n=3, now=None, sleep=None):
     """Ensure a FRESH BUILD-CHECKPOINT exists for ``root`` before the swap. Returns the
@@ -76,7 +76,7 @@ def produce_checkpoint(root, orchestra_dir, store, *, inject_fn=None,
 
     Flow (gm build-conditions 1-3): IDEMPOTENT re-entry — reuse an existing checkpoint
     ONLY if fresh (cond 3: lineage match + authored_at_seq >= fresh_since_seq); a STALE
-    one is re-produced. (cond 2) if the operator is attached to Blue's pane (shaw_attached_fn),
+    one is re-produced. (cond 2) if the operator is attached to Blue's pane (operator_attached_fn),
     SKIP the (a) inject (never pane-nudge a seat the operator is on) and go straight to (b).
     Else (a) ask Blue ONCE (inject_fn) + BOUNDED-WAIT; on a fresh file → stamp lineage +
     seq and return. On timeout/absent/stale/the operator-attached → HARD fallback to (b)
@@ -88,8 +88,8 @@ def produce_checkpoint(root, orchestra_dir, store, *, inject_fn=None,
     if existing is not None and _is_fresh(existing, root, fresh_since_seq):
         return existing  # idempotent: a FRESH checkpoint is honored (crash re-entry / prior)
 
-    shaw_here = bool(shaw_attached_fn and shaw_attached_fn())
-    if inject_fn is not None and not shaw_here:
+    operator_here = bool(operator_attached_fn and operator_attached_fn())
+    if inject_fn is not None and not operator_here:
         inject_fn(root)                      # (a) ask Blue to author it (idempotent single ask)
         deadline = now() + timeout_s
         while now() < deadline:
@@ -116,23 +116,23 @@ def _proc_alive(pid):
 
 
 def produce_checkpoint_supervised(root, orchestra_dir, store, *, blue_pid, blue_session,
-                                  real_inject_fn, alive_fn=None, shaw_attached_fn=None,
+                                  real_inject_fn, alive_fn=None, operator_attached_fn=None,
                                   fresh_since_seq=None, **kwargs):
     """(ii-B) SUPERVISED wrapper over ``produce_checkpoint`` for the hand-drive driver
     (bg_live_beat.py). Adds the TWO gm-required caller conditions ON TOP of
-    produce_checkpoint's own shaw-gate + bounded-wait→(b) fallback:
+    produce_checkpoint's own operator-gate + bounded-wait→(b) fallback:
 
       cond 2 — blue_pid DEAD (``/proc/{pid}`` via ``alive_fn``): SKIP the (a) inject and
                go straight to (b) — a corpse never writes, so don't burn the timeout.
-      cond 1 — the operator attached to Blue's pane (``shaw_attached_fn``): SKIP the (a) inject
+      cond 1 — the operator attached to Blue's pane (``operator_attached_fn``): SKIP the (a) inject
                (never pane-nudge a seat the operator is on) and go straight to (b).
 
     The (a) live-Blue inject (``real_inject_fn``) is threaded into ``produce_checkpoint``
-    ONLY when ``(alive and not shaw)``; otherwise ``inject_fn=None`` so the producer takes
+    ONLY when ``(alive and not operator)``; otherwise ``inject_fn=None`` so the producer takes
     its WAL-derived (b) path. ``blue_session`` is the pane the caller's ``real_inject_fn``
     targets (documented here for the glue).
 
-    TOCTOU CLOSE (arm-precondition c): ``shaw_attached_fn`` is ALSO re-passed into
+    TOCTOU CLOSE (arm-precondition c): ``operator_attached_fn`` is ALSO re-passed into
     ``produce_checkpoint`` so it RE-CHECKS the operator-attachment just before the inject — if the operator
     attaches in the window between this wrapper's check (T0) and the actual inject (T1), the
     producer's own gate skips the inject and falls to (b). Accepts a 2nd tmux list-clients;
@@ -142,8 +142,8 @@ def produce_checkpoint_supervised(root, orchestra_dir, store, *, blue_pid, blue_
     (``produce_checkpoint`` @9ca96dd92e / @99aee1ffb1). INERT: nothing calls this until the
     supervised driver invokes it, and BG_DISABLED still gates the whole beat."""
     alive = (alive_fn or _proc_alive)(blue_pid)
-    shaw = bool(shaw_attached_fn and shaw_attached_fn())
-    inject_fn = real_inject_fn if (alive and not shaw) else None
+    operator = bool(operator_attached_fn and operator_attached_fn())
+    inject_fn = real_inject_fn if (alive and not operator) else None
     return produce_checkpoint(root, orchestra_dir, store, inject_fn=inject_fn,
-                              shaw_attached_fn=shaw_attached_fn,
+                              operator_attached_fn=operator_attached_fn,
                               fresh_since_seq=fresh_since_seq, **kwargs)

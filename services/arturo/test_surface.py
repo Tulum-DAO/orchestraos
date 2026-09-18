@@ -14,7 +14,7 @@ def test_readout_fresh(tmp_path):
     p = _write(tmp_path, {"route": "/agents/jarvis-poc-builder-v3", "hint": "AgentDetail working",
                           "device": "ios", "updated_at": now - 8})
     line = surface.readout_line(p, now=now)
-    assert line == 'SHAW\'S SCREEN: /agents/jarvis-poc-builder-v3 — "AgentDetail working" (8s ago, ios).'
+    assert line == 'OPERATOR\'S SCREEN: /agents/jarvis-poc-builder-v3 — "AgentDetail working" (8s ago, ios).'
 
 
 def test_readout_stale_backgrounded(tmp_path):
@@ -28,7 +28,7 @@ def test_readout_stale_backgrounded(tmp_path):
 
 def test_readout_null_route(tmp_path):
     p = _write(tmp_path, {"route": None})
-    assert surface.readout_line(p) == "SHAW'S SCREEN: the operator is not looking at the app."
+    assert surface.readout_line(p) == "OPERATOR'S SCREEN: the operator is not looking at the app."
 
 
 def test_readout_missing_or_malformed_omits(tmp_path):

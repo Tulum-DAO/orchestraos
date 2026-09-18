@@ -37,7 +37,7 @@ const CTRL_KEYS = [
   { label: '^U', key: 'ctrl-u' },   // was ^Z: it suspended the CLI (RED ALERT ra_2653f9bf)
 ];
 
-// Keys that interrupt the agent get an "Are you sure?" (Shaw, RED ALERT 2026-09-17).
+// Keys that interrupt the agent get an "Are you sure?" (operator, RED ALERT 2026-09-17).
 const CONFIRM_KEYS = new Set(['ctrl-c']);
 
 const KEY_BASE = "text-[11px] px-2 py-1 min-h-[36px] rounded-md font-mono shrink-0 transition-all duration-75";

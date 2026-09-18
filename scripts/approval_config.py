@@ -29,7 +29,7 @@ CURSOR_FILE = ORCHESTRA_DIR / "state" / ".approval-listener-cursor"
 # governs the PENDING side, behind a config toggle so the operator's answer flips ONE
 # setting, not a rebuild. Default = current behavior (pending expires at 24h).
 # Set EXPIRE_PENDING=0 (env) to make pending decisions never expire either.
-# SHAW ANSWERED Q4 on 2026-08-13 23:51Z (apr_10c0c829, option 1): "Nothing expires — pending
+# THE OPERATOR ANSWERED Q4 on 2026-08-13 23:51Z (apr_10c0c829, option 1): "Nothing expires — pending
 # too". That card ended resume_failed so the ruling never reached this default (it stayed
 # "1" while expire_due had no caller, so nothing expired by accident). Default now records
 # the ruling: pending decisions do NOT expire unless EXPIRE_PENDING=1 is set explicitly

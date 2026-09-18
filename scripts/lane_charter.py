@@ -46,7 +46,7 @@ def charter_gate(msg, charter, *, recipient_provisioning: bool = False) -> str |
     allow.
 
     Holds ONLY when ALL of: drive-class type; recipient HAS a charter;
-    recipient is NOT provisioning; sender/source is not shaw; no
+    recipient is NOT provisioning; sender/source is not the operator; no
     charter_override; and contributes_to is missing/unmatched against the
     charter's accepts tags (case-insensitive substring either direction). The
     hold reason NAMES both sides of the mismatch — a first false hold must be

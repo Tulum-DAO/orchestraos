@@ -107,7 +107,7 @@ def test_el_events_relayed_with_cursor(manager):
     _wait(lambda: manager._test_sockets)
     s = manager._test_sockets[0]
     s.push({"type": "user_transcript", "user_transcription_event": {"user_transcript": "hi arturo"}})
-    s.push({"type": "agent_response", "agent_response_event": {"agent_response": "hey shaw"}})
+    s.push({"type": "agent_response", "agent_response_event": {"agent_response": "hey boss"}})
     assert _wait(lambda: manager.events("c1", 0)[0])
     events, cur = manager.events("c1", 0)
     kinds = [e["type"] for e in events]

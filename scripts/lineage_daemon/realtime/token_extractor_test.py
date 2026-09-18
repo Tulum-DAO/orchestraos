@@ -104,7 +104,7 @@ def _varint(n):
 def test_emission_pin_blocks_probably_tool_output_on_flagged_lineage():
     # A builder may NOT read the "tool/world output may stream" allowance as
     # license to stream probably-tool-output on a flagged lineage. Full block.
-    looks_like_tool_output = "$ ls -la\ntotal 24\ndrwxr-xr-x  4 shaw shaw"
+    looks_like_tool_output = "$ ls -la\ntotal 24\ndrwxr-xr-x  4 user user"
     d = stream_pty_delta("claude", looks_like_tool_output,
                          lineage_flagged=True, flag_readable=True)
     assert d["stream_mode"] == "block"
