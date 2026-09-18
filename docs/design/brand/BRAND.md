@@ -6,7 +6,7 @@
 
 ## 1. Executive Identity Summary
 
-The official sovereign brand mark of **Tulum DAO**, **OrchestraOS**, and **The Tuluminator** is derived from **El Castillo de Zamá** (*The Fortress of Dawn*), the coastal Mayan temple perched above the Caribbean Sea in Quintana Roo.
+The official brand mark of **Tulum DAO** (the publisher) and **OrchestraOS** (the product), also used for the **Build-a-thon** (the event), is derived from **El Castillo de Zamá** (*The Fortress of Dawn*), the coastal Mayan temple perched above the Caribbean Sea in Quintana Roo.
 
 ```
                             [ MORNING SUN OF ZAMÁ ]
