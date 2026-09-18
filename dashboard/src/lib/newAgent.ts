@@ -10,7 +10,9 @@
  * installed AND authed === true ('unverified' is never treated as usable).
  */
 export interface RuntimeRow {
-  id: string; label?: string; cli: string;
+  id: string; label?: string;
+  /** GET /api/runtimes/available does not expose the binary name; the server derives it. */
+  cli?: string;
   installed: boolean; authed: boolean | 'unverified'; auth_reason?: string | null;
 }
 export interface NewAgentResult {
@@ -52,7 +54,8 @@ async function postJson<T>(path: string, body: unknown): Promise<T & { status?: 
     const json = await res.json().catch(() => ({}));
     return { ...(json as T), status: res.status };
   } catch (e) {
-    return { ok: false, reason: 'network', detail: e instanceof Error ? e.message : 'network' } as T & { status?: number };
+    const failed = { ok: false, reason: 'network', detail: e instanceof Error ? e.message : 'network' };
+    return failed as unknown as T & { status?: number };
   }
 }
 

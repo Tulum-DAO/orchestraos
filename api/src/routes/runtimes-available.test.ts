@@ -12,6 +12,7 @@ import http from 'node:http';
 import {
   createRuntimesAvailableRouter,
   probeAll,
+  salvageCliJsonAnswer,
   type ProbeDeps,
   type ProviderConfig,
   type AuthResult,
@@ -197,4 +198,21 @@ test('the real config/providers.json loads and matches the ProviderConfig shape'
     assert.ok(p.id && p.label && p.cli, `provider missing core fields: ${JSON.stringify(p)}`);
     assert.ok(['cli-json', 'file-json-key', 'file-json-expiry'].includes(p.auth_probe.kind));
   }
+});
+
+// A logged-out CLI exits non-zero WITH its JSON (`claude auth status` -> {"loggedIn":false},
+// status 1). That is an ANSWER, not a probe failure: falling through to the stale
+// ~/.claude.json oauthAccount fallback reported authed:true for a logged-out CLI (found by
+// effect in a container, 2026-09-18). Twin of orchestra_cli/tests/test_runtime_probe.py.
+test('salvageCliJsonAnswer believes a non-zero probe that printed its JSON', () => {
+  assert.deepEqual(salvageCliJsonAnswer('{"loggedIn": false}'), { authed: false, auth_reason: 'loggedIn=false' });
+  assert.deepEqual(salvageCliJsonAnswer('{"loggedIn": true}'), { authed: true });
+  assert.deepEqual(salvageCliJsonAnswer('{"ok": true}', 'ok'), { authed: true });
+});
+
+test('salvageCliJsonAnswer returns null when there is nothing usable (fallback still runs)', () => {
+  assert.equal(salvageCliJsonAnswer(''), null);
+  assert.equal(salvageCliJsonAnswer('   '), null);
+  assert.equal(salvageCliJsonAnswer('command not found'), null);
+  assert.equal(salvageCliJsonAnswer('{"loggedIn": "yes"}'), null);   // not a boolean: not an answer
 });
