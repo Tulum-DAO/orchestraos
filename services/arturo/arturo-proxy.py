@@ -189,6 +189,7 @@ _TOOLS_THIS_TURN = _contextvars.ContextVar("arturo_tools_this_turn", default=Non
 # answers again -> duplicate response. The later (full) request cancels the earlier (partial)
 # in-flight TEXT response, but ONLY before the partial has committed a side-effecting tool
 # dispatch (cancel cannot un-run execute_tool). Lock is held only for tiny flag ops.
+from services.arturo import thread_store as _thread_store   # G20 durable thread archive
 from services.arturo import vq6 as _vq6
 _VQ6 = _vq6.InflightRegistry()
 from services.arturo import voice_guards as _voice_guards   # VQ-9 re-engagement-filler suppression
@@ -4201,18 +4202,25 @@ if _STREAM_RELAY is not None:
 _TEXT_HISTORY = _ptt.PttHistory()
 _TEXT_TURN_TIMEOUT_S = float(os.environ.get("ARTURO_TEXT_TURN_TIMEOUT_S", "180"))
 
+# G20: the DURABLE side of a conversation. _TEXT_HISTORY is in-memory, bounded and lost on
+# restart -- fine as the brain's working context, useless as an archive, which is why "New
+# thread" used to make the previous thread unreachable. The store is the archive the pill,
+# the home and the phone all read, so they share ONE thread space.
+_THREADS = _thread_store.ThreadStore(ARTURO_STATE / "threads.db")
 
-def text_turn(text, conversation_id):
-    """Returns (http_status, {ok, reply_text, conversation_id, brain, tools_called})."""
-    text = (text or "").strip()
-    if not text:
-        return 400, {"ok": False, "error": "empty"}
-    if len(text) > 8000:
-        return 413, {"ok": False, "error": "too_large"}
-    conversation_id = (conversation_id or "").strip()[:200] or f"text_{int(time.time())}"
-    context = build_context(calling_channel="text")
-    history = _TEXT_HISTORY.get(conversation_id)
-    messages = _ptt.build_messages(context, history, text)
+
+class _BrainHttpError(Exception):
+    """The brain answered non-200; text_turn turns this into a 502 with the body."""
+
+    def __init__(self, status, body):
+        super().__init__(f"brain_http_{status}")
+        self.status = status
+        self.body = body
+
+
+def _brain_reply(messages, conversation_id):
+    """One trip through the tool-enabled chat path. Returns (reply_text, tools_called).
+    Extracted so the turn's THREADING can be tested without a brain."""
     token = _TOOLS_THIS_TURN.set([])
     try:
         with app.test_client() as c:
@@ -4224,12 +4232,67 @@ def text_turn(text, conversation_id):
     finally:
         _TOOLS_THIS_TURN.reset(token)
     if r.status_code != 200:
-        return 502, {"ok": False, "error": f"brain_http_{r.status_code}", "detail": body}
+        raise _BrainHttpError(r.status_code, body)
     reply = ((body.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+    return reply, tools_called
+
+
+def text_turn(text, conversation_id):
+    """Returns (http_status, {ok, reply_text, conversation_id, brain, tools_called})."""
+    text = (text or "").strip()
+    if not text:
+        return 400, {"ok": False, "error": "empty"}
+    if len(text) > 8000:
+        return 413, {"ok": False, "error": "too_large"}
+    conversation_id = (conversation_id or "").strip()[:200] or f"text_{int(time.time())}"
+    context = build_context(calling_channel="text")
+    history = _TEXT_HISTORY.get(conversation_id)
+    if not history:
+        # Reopening an OLD thread (or any thread after a restart): memory is empty but the
+        # conversation is not new. Rehydrate from the archive, or Arturo answers a
+        # continuing question with no idea what was already said.
+        history = _THREADS.history(conversation_id)
+        for turn in history:
+            _TEXT_HISTORY.append(conversation_id, turn.get("role"), turn.get("content"))
+    messages = _ptt.build_messages(context, history, text)
+    try:
+        reply, tools_called = _brain_reply(messages, conversation_id)
+    except _BrainHttpError as e:
+        return 502, {"ok": False, "error": f"brain_http_{e.status}", "detail": e.body}
     _TEXT_HISTORY.append(conversation_id, "user", text)
     _TEXT_HISTORY.append(conversation_id, "assistant", reply)
+    _THREADS.record_turn(conversation_id, text, reply)
     return 200, {"ok": True, "reply_text": reply, "conversation_id": conversation_id,
                  "brain": brain.describe(), "tools_called": tools_called}
+
+
+def _loopback_only():
+    return (request.remote_addr or "") in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+
+
+@app.route("/threads", methods=["GET"])
+def threads_endpoint():
+    """G20: the thread list, newest first. Summaries only -- the pill's switcher and the
+    home's drawer render this without loading any transcript."""
+    if not _loopback_only():
+        return jsonify({"ok": False, "error": "loopback only"}), 403
+    try:
+        limit = int(request.args.get("limit") or 50)
+        offset = int(request.args.get("offset") or 0)
+    except ValueError:
+        return jsonify({"ok": False, "error": "bad_paging"}), 400
+    return jsonify({"ok": True, "threads": _THREADS.list_threads(limit=limit, offset=offset)})
+
+
+@app.route("/threads/<path:conversation_id>", methods=["GET"])
+def thread_detail_endpoint(conversation_id):
+    """One thread with its turns, so selecting it in the list loads the real conversation."""
+    if not _loopback_only():
+        return jsonify({"ok": False, "error": "loopback only"}), 403
+    thread = _THREADS.get_thread(conversation_id)
+    if thread is None:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+    return jsonify({"ok": True, "thread": thread})
 
 
 @app.route("/text", methods=["POST"])
