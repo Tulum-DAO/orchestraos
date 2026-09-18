@@ -9,7 +9,7 @@ The core of this track already shipped: `orchestra init` / `doctor` / `up` / `do
 Dockerfile and `.devcontainer/devcontainer.json` reproduce a clean-machine install,
 and `orchestra init --demo` seeds fixture seats + one card of each kind
 (`init_cmd.py` `seed_demo_registry` ~line 129, demo card seeding ~line 253). An
-outsider (`oss-install-tester`) proved a clean container reaches `orchestra doctor`
+an outside tester proved a clean container reaches `orchestra doctor`
 green in under 4 minutes, unattended, three runs in a row. Also since shipped:
 `orchestra init` installs the Claude Code hook layer into
 `$CLAUDE_CONFIG_DIR/settings.json` (merge/idempotent/fail-open, doctor row
@@ -26,7 +26,7 @@ Three independent pieces of hardening, each small enough to land separately:
 1. **Doctor rows for push, and any plugin Tier 0 item 6 doesn't cover** (overlaps
    `good-first-issue` G6 — check who has picked it up before duplicating).
    `orchestra doctor` today knows CLIs, ports, config keys, builds, the rotation
-   beat, foreign tmux sessions, and (since Tier 0 item 6, orchestra-builder) a
+   beat, foreign tmux sessions, and (since Tier 0 item 6) a
    `plugin:telegram` row — this track does not re-add that one; it adds
    `notify:ntfy` (reachability when `NTFY_BASE` is set) for Track 8's push work
    and `plugin:whatsapp` once Track 6 ships that plugin.

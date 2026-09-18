@@ -15,8 +15,8 @@ state, and WhatsApp has no home at all.
 
 ## Design
 
-**Sequencing note:** Tier 0 item 6 (orchestra-builder, landing this week) ships
-the `plugins/telegram/` layout first — the INBOUND router extracted from the
+**Sequencing note:** the `plugins/telegram/` layout is landing this week —
+the INBOUND router extracted from the
 private `telegram-router.py` (BYO bot token from `TELEGRAM_BOT_TOKEN` env,
 routed to the `gm` seat, a `plugin:telegram` doctor row, and a TELEGRAM CHANNEL
 section already in `prompts/gm.md` keyed on that row). The shape is
@@ -102,7 +102,7 @@ from today's behavior.
 I'm working Track 6 (Telegram/WhatsApp as plugins) for the OrchestraOS
 hackathon.
 Read docs/tracks/06-telegram-whatsapp-plugins.md in this repo for the full
-design. plugins/telegram/ already exists (Tier 0 item 6, orchestra-builder
+design. plugins/telegram/ already exists (Tier 0 item 6
 -- router.py inbound, tg_send.py outbound, plugin:telegram doctor row,
 [plugins.telegram] config) -- check `orchestra doctor` and `git log --
 plugins/` before assuming it doesn't. This track moves
