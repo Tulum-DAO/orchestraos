@@ -2,6 +2,16 @@
 
 Size: S/M · Labels: `track`, `ios`, `gateway`
 
+> **Status: the pairing contract below is superseded by a frozen design
+> (2026-09-18) — `orchestra pair` prints a QR + code, the client exchanges it
+> via `POST /pair/exchange {code}` for `{base_url, token}`, and the connection
+> is verified through `GET /gateway/identity` + `GET /gateway/capabilities`,
+> not the `/pair/start` + `/pair/claim` shape this doc describes below.**
+> `docs/ONBOARDING.md` documents the real, user-facing flow — read that first;
+> this doc's original design discussion (the `paired_devices` table, revocation,
+> the `_authorized` widening) is still relevant background for anyone
+> implementing the route, just not the exact route shapes anymore.
+
 ## Problem
 
 The iOS app bakes the gateway base URL and a bearer token into the build at compile

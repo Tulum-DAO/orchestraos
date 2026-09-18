@@ -4,6 +4,10 @@ One machine, one CLI (claude OR gemini OR codex), no voice, no Telegram.
 Target: gateway up, one seat spawned, one approval card answered from the web
 dashboard, in under 30 minutes on a clean Ubuntu 22.04/24.04 VPS.
 
+Once the gateway from step 2 below is up, connecting your own phone and
+browser to it (no baked-in token) is `docs/ONBOARDING.md` — a separate
+short walkthrough, not part of this doc's steps.
+
 ## 0. Prerequisites
 
 ```bash
