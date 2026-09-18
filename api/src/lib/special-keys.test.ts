@@ -1,6 +1,6 @@
 /**
  * RED ALERT ra_2653f9bf (2026-09-17 23:30 Tulum): the harness bottom-bar ^Z button
- * mapped to `tmux send-keys C-z`, which suspended the gm CLI (STAT T). Shaw: remove
+ * mapped to `tmux send-keys C-z`, which suspended the gm CLI (STAT T). the operator: remove
  * ^Z, replace with ^U (clear input), confirm ^C. The API refuses ctrl-z so NO client
  * (web, iOS, watch, curl) can suspend a seat again, and ctrl-u maps to C-u.
  *

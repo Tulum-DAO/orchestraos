@@ -16,7 +16,7 @@ tick honors the BG_DISABLED kill-switch — while armed the daemon does NOTHING
 
 INERT: importing/constructing writes nothing and attaches nothing; only tick()/
 run() act, and run() is NOT wired to any cron/systemd unit by this build (the
-systemd User=shaw unit is the LAST telemetry-v2 step). run() refuses a sub-floor
+systemd User=<operator> unit is the LAST telemetry-v2 step). run() refuses a sub-floor
 poll interval and is bounded by max_iters for tests.
 """
 import time

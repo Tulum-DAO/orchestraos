@@ -2886,7 +2886,7 @@ def _session_is_protected(session, cfg=None):
 
 def _parse_actor(request):
     """(class, name) from the X-Actor header. Format '<class>:<name>' or
-    '<class>'. class in {automation, interactive, shaw, app}. Absent -> (None,
+    '<class>'. class in {automation, interactive, operator, app}. Absent -> (None,
     None). Only the 'automation' class is ever refused."""
     raw = (request.headers.get("X-Actor", "") or "").strip()
     if not raw:
@@ -2994,7 +2994,7 @@ def _hold_for_boundary(session, text, actor, origin="app"):
     row id.
 
     ATTRIBUTION (owner_pm ruling msg_b972282f): from_agent = the human PRINCIPAL
-    'operator' (matching tenant_id), NOT 'shaw-direct' (a registry session identity
+    'operator' (matching tenant_id), NOT 'operator-direct' (a registry session identity
     that would tangle resolve/lineage). the operator's chat is principal traffic, exempt
     from triage — a plain row + correct from_agent is the whole requirement; the
     boundary-inject attribution line reads as from the operator. A genuine agent driving
@@ -3695,13 +3695,13 @@ async def handle_presence(request):
     """POST /presence {viewing: "<agent>"|null} — the app reports which agent
     the operator is looking at RIGHT NOW (web detail view / iOS foregrounded agent), or
     null when he leaves the view. Writes the flat focus signal
-    state/shaw-presence.json {"viewing","viewed_at"} that park-idle.py already
+    state/operator-presence.json {"viewing","viewed_at"} that park-idle.py already
     consumes (shaw_viewing_agent, 8b view-protection) — the app-emit side that was
     the missing dependency. Also the trigger the client uses to scope its fast
     single-pane poll (/agent-screen) to the ONE viewed agent, so typing/interrupt
     status flips within ~1s WITHOUT a fleet-wide fast loop.
 
-    MERGE, never overwrite: shaw-presence.json also carries telegram-written keys
+    MERGE, never overwrite: operator-presence.json also carries telegram-written keys
     (status/last_telegram_message); we only set/clear viewing+viewed_at."""
     import json as _json_mod, tempfile, os as _os
     from datetime import datetime as _dt, timezone as _tz
@@ -3714,7 +3714,7 @@ async def handle_presence(request):
     viewing = data.get("viewing")
     if viewing is not None:
         viewing = str(viewing)[:200].strip() or None
-    path = ORCH_DIR / "state" / "shaw-presence.json"
+    path = ORCH_DIR / "state" / "operator-presence.json"
     try:
         cur = _json_mod.loads(path.read_text())
         if not isinstance(cur, dict):
@@ -4123,7 +4123,7 @@ async def handle_health(request):
 # ---------------------------------------------------------------------------
 # Active surface (voice-surface-context spec) — which OrchestraOS screen the operator
 # has open. Written by the iOS app (later: web SPA), read by the arturo-proxy
-# for the per-turn "SHAW'S SCREEN" readout + read_screen_context tool.
+# for the per-turn "OPERATOR'S SCREEN" readout + read_screen_context tool.
 # ---------------------------------------------------------------------------
 
 SURFACE_PATH = ORCH_DIR / "state" / "arturo" / "active-surface.json"

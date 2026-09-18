@@ -220,7 +220,7 @@ def test_journal_stamped_with_surface_at_creation(tmp_path, monkeypatch):
     sp.write_text(json.dumps(_surface_doc(device="ios", route="/agents/x")))
     monkeypatch.setattr(mod, "ARTURO_STATE", tmp_path)
     non_system = [{"role": "user", "content": "hey arturo"},
-                  {"role": "assistant", "content": "hey shaw"}]
+                  {"role": "assistant", "content": "hey boss"}]
     cid = mod._resolve_or_create(non_system, page="voice", origin="funnel", conv_id="cv1")
     d = json.loads((tmp_path / f"{cid}.json").read_text())
     assert d["origin"] == "funnel"
@@ -261,7 +261,7 @@ def test_journal_no_stamp_when_watch_freshest(tmp_path, monkeypatch):
     (tmp_path / "active-surface.json").write_text(json.dumps(_surface_doc(device="watch")))
     monkeypatch.setattr(mod, "ARTURO_STATE", tmp_path)
     non_system = [{"role": "user", "content": "hey arturo"},
-                  {"role": "assistant", "content": "hey shaw"}]
+                  {"role": "assistant", "content": "hey boss"}]
     cid = mod._resolve_or_create(non_system, page="voice", origin="funnel", conv_id="cv3")
     d = json.loads((tmp_path / f"{cid}.json").read_text())
     assert "surface" not in d
@@ -272,7 +272,7 @@ def test_journal_surface_absent_file_no_stamp_no_crash(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "VOICE_CALLS_DIR", tmp_path)
     monkeypatch.setattr(mod, "ARTURO_STATE", tmp_path / "nosuch")
     non_system = [{"role": "user", "content": "hey arturo"},
-                  {"role": "assistant", "content": "hey shaw"}]
+                  {"role": "assistant", "content": "hey boss"}]
     cid = mod._resolve_or_create(non_system, page="voice", origin="local", conv_id="cv2")
     d = json.loads((tmp_path / f"{cid}.json").read_text())
     assert "surface" not in d              # missing/malformed surface -> omit, never garbage

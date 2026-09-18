@@ -76,7 +76,7 @@ def deliberation_context(gw_get, focused_session=None, max_detail=1, include_app
           agent (and at most max_detail others);
       (2) THE LEDGER  — pending approval rows (/pending-approvals), so Arturo can deliberate an
           approval even when its pane is GONE or it only exists as a bridged card.
-    Same "DECISIONS AWAITING SHAW" block, tagged by source. Returns a string or None when NEITHER
+    Same "DECISIONS AWAITING THE OPERATOR" block, tagged by source. Returns a string or None when NEITHER
     source has anything. `gw_get(path)` -> parsed JSON | None (injected). Runs on EVERY voice turn,
     so the caller passes a SHORT-timeout gw_get: a slow/unreachable gateway degrades to None/partial,
     never a hang."""
@@ -119,7 +119,7 @@ def deliberation_context(gw_get, focused_session=None, max_detail=1, include_app
 
     if not lines:
         return None
-    return "DECISIONS AWAITING SHAW:\n" + "\n".join(lines)
+    return "DECISIONS AWAITING THE OPERATOR:\n" + "\n".join(lines)
 
 
 def classify_option(menu, option):

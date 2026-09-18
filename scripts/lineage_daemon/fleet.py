@@ -499,7 +499,7 @@ def plan_fleet(agents, registry, *, armed_tiers=frozenset(), now,
 
         is_hard = entry["action"] == "hard_rotate"
         if is_hard:
-            # SHAW RULING 2026-08-15 (msg_8860a706): a HARD rotation NEVER auto-kills.
+            # OPERATOR RULING 2026-08-15 (msg_8860a706): a HARD rotation NEVER auto-kills.
             # This re-arm ships tiers 1+2 ONLY (self-trigger + soft nudge), so the hard
             # branch is DEFERRED here. Tier 3 (a SEPARATE spec+congruence+build AFTER
             # 1+2 are live) will replace this deferral with an APPROVAL-EMIT: the beat

@@ -32,7 +32,7 @@ per-agent (A0 proved ps-fork-per-agent = FAIL). Poll floor MIN_POLL_S = 5s.
 
 INERT: importing/constructing this module writes nothing; only tick()/run()
 capture, and run() is not wired to any cron/systemd unit by this build (the
-systemd User=shaw unit is the LAST step, installed by root after A/B/B1/C).
+systemd User=<operator> unit is the LAST step, installed by root after A/B/B1/C).
 """
 import fcntl
 import os

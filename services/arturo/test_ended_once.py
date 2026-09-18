@@ -94,7 +94,7 @@ def _mk_client_journal(mod, dir_, conv_id, injected=False):
          "conv_id": conv_id, "origin": "funnel", "gm_injected": injected,
          "summary": "test call", "started_at": time.time() - 60,
          "turns": [{"role": "user", "text": "hello there my friend"},
-                   {"role": "arturo", "text": "hey shaw"}]}
+                   {"role": "arturo", "text": "hey boss"}]}
     p.write_text(json.dumps(d))
     return p
 

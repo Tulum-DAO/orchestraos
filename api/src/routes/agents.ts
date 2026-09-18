@@ -430,7 +430,7 @@ router.post('/:id/message', (req: Request, res: Response) => {
     const msg = {
       id: `dash_${Date.now()}`,
       type: 'task_request',
-      from: 'shaw-dashboard',
+      from: 'operator-dashboard',
       to: req.params.id,
       subject: message.slice(0, 100),
       description: message,
@@ -840,7 +840,7 @@ router.post('/:id/task', (req: Request, res: Response) => {
     const msg = {
       id: `task_${Date.now()}`,
       type: 'task_request',
-      from: 'shaw-dashboard',
+      from: 'operator-dashboard',
       to: agentId,
       subject: task.slice(0, 100),
       body: task,

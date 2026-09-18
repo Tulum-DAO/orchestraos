@@ -58,7 +58,7 @@ def test_context_focused_gets_full_detail():
     screens = {"acme-dev": {"pending_menu": _menu()},
                "globex-dev": {"pending_menu": _menu(question="Ship globex?")}}
     out = dl.deliberation_context(_fake_gw(rows, screens), focused_session="acme-dev")
-    assert "DECISIONS AWAITING SHAW" in out
+    assert "DECISIONS AWAITING THE OPERATOR" in out
     # focused agent is detailed + appears first
     assert out.index("acme-dev") < out.index("globex-dev")
     assert "Deploy acme to prod?" in out
@@ -94,7 +94,7 @@ def test_context_reads_pending_approvals_when_no_panes():
                 "question": "Deploy adaptiv to prod?", "feature": "payments-deploy"}]
     out = dl.deliberation_context(_fake_gw_full(pending=pending))
     assert out is not None
-    assert "DECISIONS AWAITING SHAW" in out
+    assert "DECISIONS AWAITING THE OPERATOR" in out
     assert "Deploy adaptiv to prod?" in out
     assert "pm-adaptiv-payments" in out
     # tagged by source so Arturo answers it via the approval path, not a keypress

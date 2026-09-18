@@ -369,7 +369,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
             {t.slice(7)}
           </span>
         ))}
-        {(agent.tags || []).filter((t: string) => t.startsWith('owner:') && t !== 'owner:shaw').map((t: string) => (
+        {(agent.tags || []).filter((t: string) => t.startsWith('owner:') && t !== 'owner:operator').map((t: string) => (
           <span key={t} className="text-[11px] px-1.5 py-0.5 rounded font-medium bg-cyan-500/15 text-cyan-400">
             {t.slice(6)}
           </span>
