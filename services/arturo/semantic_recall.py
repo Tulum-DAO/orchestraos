@@ -40,7 +40,22 @@ MIN_QUERY_CHARS = 8
 TTL_DAYS = 14
 SNIPPET_CHARS = 140
 
-ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", Path.home() / "scripts/agent-orchestra"))
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def orchestra_dir():
+    """DATA dir, resolved at call time (supervisor export / test monkeypatch win)."""
+    return Path(os.environ.get("ORCHESTRA_DIR", str(_REPO_ROOT)))
+
+
+def library_dir():
+    """Where the OPTIONAL semantic_memory package is looked for: <repo>/scripts — beside
+    the code, never under the data dir. The public tree does not ship it; see
+    docs/MEMORY.md ("What is *not* here") for the extension point."""
+    return str(_REPO_ROOT / "scripts")
+
+
+_available = None   # tri-state cache: None = not probed yet
 
 _HEADER = (
     "=== RECALL (semantic memory — past docs relevant to what the operator just said) ===\n"
@@ -63,8 +78,9 @@ def _warn_once(key, msg):
 
 
 def _reset_for_tests():
-    global _loader_started, _inflight
+    global _loader_started, _inflight, _available
     _loader_started = False
+    _available = None
     _model_ready.clear()
     _warned.clear()
     _inflight = threading.BoundedSemaphore(1)
@@ -75,7 +91,23 @@ def enabled():
 
 
 def default_db_path():
-    return str(ORCHESTRA_DIR / "state" / "semantic-memory.db")
+    return str(orchestra_dir() / "state" / "semantic-memory.db")
+
+
+def available():
+    """True when the optional semantic_memory package is importable. Probed once per
+    process (cheap import of the package root only — no model load), never raises."""
+    global _available
+    if _available is None:
+        lib = library_dir()
+        if lib not in sys.path:
+            sys.path.insert(0, lib)
+        try:
+            import semantic_memory  # noqa: F401,PLC0415
+            _available = True
+        except Exception:          # noqa: BLE001 — absent/broken package = unavailable
+            _available = False
+    return _available
 
 
 def latest_user_text(messages):
@@ -89,9 +121,9 @@ def latest_user_text(messages):
 def _import_sm():
     """Import the semantic_memory library from <orchestra>/scripts (SAFE-PREP landing spot).
     Called only on an enabled, non-trivial recall — flag off never reaches this."""
-    scripts = str(ORCHESTRA_DIR / "scripts")
-    if scripts not in sys.path:
-        sys.path.insert(0, scripts)
+    lib = library_dir()
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
     import semantic_memory.query as smq  # noqa: PLC0415
     return smq
 
@@ -118,9 +150,9 @@ def _loader(dbpath):
     """Background model warm-up + once-per-boot TTL prune. Never on the turn path."""
     try:
         os.environ.setdefault("OMP_NUM_THREADS", "1")   # cap onnxruntime intra-op threads
-        scripts = str(ORCHESTRA_DIR / "scripts")
-        if scripts not in sys.path:
-            sys.path.insert(0, scripts)
+        lib = library_dir()
+        if lib not in sys.path:
+            sys.path.insert(0, lib)
         from semantic_memory import embed as sme  # noqa: PLC0415
         sme.embed_query("warmup: arturo semantic recall loader")
         prune_queries_log(dbpath)
@@ -166,6 +198,10 @@ def recall_preamble(user_text, dbpath=None, embed_fn=None, budget_ms=None):
         return ""
     text = (user_text or "").strip()
     if len(text) < MIN_QUERY_CHARS or text in ("...", "."):
+        return ""
+    if not available():
+        _warn_once("nolib", "semantic recall unavailable: the optional semantic_memory package is "
+                   "not installed (facts recall still works) — extension point: docs/MEMORY.md")
         return ""
     dbpath = dbpath or default_db_path()
     if not os.path.exists(dbpath):
