@@ -50,24 +50,53 @@ the *first authed CLI* in `orchestra.toml`'s `[runtimes] enabled` order
 the brain explicitly, if you want the free tier to actually be what answers
 (see `docs/ARTURO.md`).
 
-**Weekly-limit risk, not just daily.** Claude Code and Codex's paid plans cap
-usage over a rolling week, not only a session or a day — a two-day hackathon
-run at hackathon intensity (multiple seats, near-continuous use, rotations
-that spawn fresh sessions) can burn a week's allowance faster than normal
-solo use, and a plan that hits its weekly cap mid-event has no fallback except
-switching runtimes or paying for a higher tier on the spot. Gemini CLI's daily
-(not weekly) free-tier cap resets every 24 hours, which is why it is the
-recommended fallback if you're worried about running out — see "The zero-key
-path" below. Bring a second authed CLI as backup if you're planning to run the
-full weekend on one paid plan; `orchestra doctor` shows every runtime you have
-authed and the harness switches between them without reconfiguring anything
-else.
+**Subscription-limit risk: a 5-hour window AND a weekly cap, not just daily.**
+Claude Code's paid plans meter usage two ways at once: a rolling 5-hour session
+window (hit it and you're locked out of that plan until the window rolls over,
+same day) and a separate weekly cap on top of it. Codex/ChatGPT plans work
+similarly. A two-day hackathon run at hackathon intensity — multiple seats,
+near-continuous use, rotations that spawn fresh sessions — can hit the 5-hour
+window in an afternoon and the weekly cap well before Sunday, and a plan that
+hits either has no fallback except switching runtimes or paying for a higher
+tier on the spot. Gemini CLI's free-tier cap is daily only (resets every 24
+hours, no weekly ceiling), which is why it is the recommended fallback if
+you're worried about running out — see "The zero-key path" below. Bring a
+second authed CLI as backup if you're planning to run the full weekend on one
+paid plan; `orchestra doctor` shows every runtime you have authed and the
+harness switches between them without reconfiguring anything else.
 
 Sources: [Claude pricing](https://claude.com/pricing),
 [ChatGPT Plus / Codex bundling](https://userjot.com/blog/openai-codex-pricing),
 [Gemini CLI free tier](https://x.com/mhdfaran/status/2029567739216736544) — verify
 current limits (daily AND weekly) on each vendor's own pricing page before
 relying on these numbers; weekly caps in particular change without much notice.
+
+## What a weekend costs, per attendee
+
+Rough numbers for planning, not a quote — actual spend depends on which VPS
+tier and CLI plan you pick above.
+
+| Setup | VPS | CLI | Per-attendee weekend total |
+|---|---|---|---|
+| Solo, own VPS, zero-key | Hetzner CX22 (~$4.59/mo, prorated to a weekend is a few cents) | Gemini CLI free tier | **~$0** |
+| Solo, own VPS, paid CLI | Hetzner CX22 | Claude Pro or ChatGPT Plus, already-owned monthly plan | **$0 incremental** (you're already paying monthly; the weekend doesn't add cost, only usage risk — see above) |
+| Shared VPS, group of 4, zero-key | Hetzner CPX31 (~$20/mo) split 4 ways | Gemini CLI free tier each | **~$5/attendee** (VPS share only) |
+| Shared VPS, group of 4, mixed CLI | Hetzner CPX31 split 4 ways | mix of free tier + already-owned plans | **~$5/attendee** + nothing incremental for anyone already subscribed |
+
+The cheapest real path for a first-timer with no CLI subscription: the
+zero-key path below, $0 committed. The dev container (`Dockerfile` /
+`.devcontainer/`) needs no VPS spend at all if you're running the harness on
+your own laptop for the weekend.
+
+## How long the gate actually takes
+
+The seven-step gate (`docs/GATE.md`) end to end, for someone following it
+literally with no prior exposure to this repo: **45-60 minutes**, install
+through step 7 (one fact recalled after a rotation). Budget more your first
+time if you hit an unauthed CLI or a Docker/VPS setup snag — those are the
+two places people actually get stuck, not the harness steps themselves.
+`docs/KICKOFF.md`'s target of "everyone has an agent running by 13:30" assumes
+a start around 12:30-12:45 plus this range.
 
 ## The zero-key path
 
