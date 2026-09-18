@@ -78,7 +78,7 @@ def test_clm_seam_suppresses_identical_history_retry(monkeypatch, tmp_path):
     c = mod.app.test_client()
     body = {"messages": [
         {"role": "user", "content": "hello there arturo my friend"},
-        {"role": "assistant", "content": "hey shaw, what do you need"},
+        {"role": "assistant", "content": "hey boss, what do you need"},
         {"role": "user", "content": "is it possible to use the transcript players methodology for highlighting words"},
     ]}
     q = "/v1/chat/completions?custom_session_id=CIDAFM1"

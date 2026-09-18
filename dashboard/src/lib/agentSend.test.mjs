@@ -76,7 +76,7 @@ function mockFetch(status, jsonBody) {
   const payload = { text: 'my message', attachments: undefined, client_caps: ['send-states'] };
   globalThis.fetch = mockFetch(409, {
     busy: true, reason: 'busy', state: 'idle',
-    activity: 'Composer has unsubmitted text', composer_text: 'shaw was typing', payload,
+    activity: 'Composer has unsubmitted text', composer_text: 'operator was typing', payload,
   });
   const result = await sendToAgent('gm', { text: 'my message' });
   assert.strictEqual(isComposerHold(result), true);

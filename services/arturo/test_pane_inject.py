@@ -61,7 +61,7 @@ GEMINI_IDLE = """\
 
 # The FAILURE shape (Bug 1 stranded case): the injected message sits in the composer, unexecuted.
 # Modeled by placing the real message on the real prompt line of each real idle capture.
-MSG = "please post the P6 gate summary to shaw and confirm the flag state"
+MSG = "please post the P6 gate summary to the operator and confirm the flag state"
 
 
 def _strand(idle_capture, prompt_char):
@@ -101,7 +101,7 @@ def test_paste_strips_trailing_crlf_so_it_cannot_autosubmit():
 
 
 def test_paste_escapes_single_quotes_for_shell():
-    cmd = pi.paste_command("gm", "shaw's call", mac=False)
+    cmd = pi.paste_command("gm", "the operator's call", mac=False)
     # single quote in the body must be shell-escaped, not left to break the quoting
     assert "'\\''" in cmd
 

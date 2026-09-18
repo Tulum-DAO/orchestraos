@@ -111,7 +111,7 @@ def test_produce_no_inject_no_wal_returns_none(tmp_path):
 
 # ── gm build-conditions 2 (the operator-attachment) + 3 (staleness) ──────────────────
 
-def test_produce_falls_back_when_shaw_attached_to_blue(tmp_path):
+def test_produce_falls_back_when_operator_attached_to_blue(tmp_path):
     """Condition 2 (standing fleet rule): the (a) inject must NOT pane-nudge a seat
     the operator is attached to — if the operator is on Blue's pane, skip (a), go straight to (b)."""
     store, resolver = _seed_directive(tmp_path)
@@ -119,7 +119,7 @@ def test_produce_falls_back_when_shaw_attached_to_blue(tmp_path):
     out = cp.produce_checkpoint(
         ROOT, str(tmp_path), store,
         inject_fn=lambda r: injected.append(r),
-        shaw_attached_fn=lambda: True,          # the operator is on Blue's pane
+        operator_attached_fn=lambda: True,          # the operator is on Blue's pane
         resolve_body=resolver, now=_fake_clock(), sleep=lambda s: None)
     assert injected == [], "must NOT inject Blue when the operator is attached to it"
     assert out["source"] == "wal-derived"       # fell back to (b)
@@ -137,7 +137,7 @@ def test_produce_reproduces_a_stale_existing_checkpoint(tmp_path):
     out = cp.produce_checkpoint(
         ROOT, str(tmp_path), store, inject_fn=lambda r: called.append(r),
         fresh_since_seq=store.max_seq(),         # require freshness at/after the baseline
-        shaw_attached_fn=lambda: True,           # force (b) so the test is deterministic
+        operator_attached_fn=lambda: True,           # force (b) so the test is deterministic
         resolve_body=resolver, now=_fake_clock(), sleep=lambda s: None)
     assert out["objective"] != "OLD stale objective", "a stale checkpoint must NOT be reused"
     assert out["source"] == "wal-derived"

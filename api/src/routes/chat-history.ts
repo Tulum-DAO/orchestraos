@@ -1,7 +1,7 @@
 /**
  * chat-history.ts — Chat History API
  *
- * GET  /api/chat-history?view=projects|unified|shaw&limit=50&offset=0
+ * GET  /api/chat-history?view=projects|unified|operator&limit=50&offset=0
  * GET  /api/chat-history/thread/:conversationId
  * POST /api/chat-history/thread/:conversationId/reply
  */
