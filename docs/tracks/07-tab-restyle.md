@@ -78,8 +78,8 @@ I'm working Track 7 (tab restyle) for the OrchestraOS hackathon.
 Read docs/tracks/07-tab-restyle.md in this repo for the full design, and
 docs/tracks/04-arturo-home-onboarding.md for the visual language and
 design/references/ this track matches (Track 4 should land first or in
-parallel — coordinate with oss-arturo-dev on the shared card-renderer
-component before duplicating it). On iOS, Sources/iOS/RootView.swift is a
+parallel — check that branch/PR for the shared card-renderer component
+before duplicating it). On iOS, Sources/iOS/RootView.swift is a
 custom tab bar (not native TabView) — keep the center-raised button, don't
 replace it with a system TabView.
 Files to touch: dashboard/src/pages/Approvals.tsx, Agents.tsx, Projects.tsx,

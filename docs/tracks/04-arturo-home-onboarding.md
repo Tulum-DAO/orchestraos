@@ -2,7 +2,7 @@
 
 Size: L · Labels: `track`, `ui`, `arturo` · web + iOS
 
-> **Status: web half shipped on branch `arturo/oss` (oss-arturo-dev, 2026-09-17);
+> **Status: web half shipped on branch `arturo/oss` (2026-09-17);
 > iOS half open.** Corrections to the design below, from what landed:
 >
 > - The home is a **new page** `dashboard/src/pages/ArturoHome.tsx` mounted at `/`
@@ -119,9 +119,8 @@ message in the conversation and a response to it, no separate forms screen.
    the conversation.
 6. Build the onboarding thread: name prompt → pairing (Track 1's `/pair/start`
    flow) → runtime detect → voice upgrade offer → first-agent spawn (calls
-   `orchestra spawn`, lands in PR: orchestra-builder if not yet merged — confirm
-   current status with `orchestra spawn --help` before writing the doc's Start
-   prompt for whoever picks this up next).
+   `orchestra spawn` — confirm current status with `orchestra spawn --help`
+   before writing the doc's Start prompt for whoever picks this up next).
 7. Fresh install end to end: no accounts, no config beyond `orchestra init` →
    reach a spawned first seat through conversation only.
 
@@ -137,7 +136,8 @@ no inject buttons.
 
 ```
 I'm working Track 4 (Arturo home + onboarding) for the OrchestraOS
-hackathon, owned by seat oss-arturo-dev.
+hackathon. The web half mostly shipped on branch `arturo/oss` -- check
+that branch before diverging or duplicating work; the iOS half is open.
 Read docs/tracks/04-arturo-home-onboarding.md in this repo for the full
 design. This is the largest track — start by populating design/references/
 with the mockup set and a one-paragraph read of the common denominators,

@@ -2,7 +2,7 @@
 
 Size: M · Labels: `track`, `arturo`
 
-> **Status: shipped on branch `arturo/oss` (oss-arturo-dev, 2026-09-17).** The design
+> **Status: shipped on branch `arturo/oss` (2026-09-17).** The design
 > below is kept for the hackathon; the corrections in *What actually landed* are the
 > truth where the two differ. Walkthrough: `docs/ARTURO.md`.
 
@@ -142,9 +142,9 @@ the Agents list) and a `msg_store` row from `arturo` to that seat
 ## Start prompt
 
 ```
-I'm working Track 2 (zero-key Arturo brain) for the OrchestraOS hackathon,
-owned by seat oss-arturo-dev — check in with it before diverging from this
-design.
+I'm working Track 2 (zero-key Arturo brain) for the OrchestraOS hackathon.
+This mostly shipped already on branch `arturo/oss` — check that branch and
+docs/ARTURO.md before diverging from this design or duplicating work.
 Read docs/tracks/02-zero-key-arturo-brain.md in this repo for the full design.
 Files to touch: services/arturo/arturo-proxy.py (extract the two brain call
 sites), services/arturo/brain.py (new: Brain / ApiBrain / RuntimeBrain),
