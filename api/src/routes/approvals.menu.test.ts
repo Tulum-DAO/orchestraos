@@ -20,7 +20,7 @@ function req(headers: Record<string, string> = {}): Request {
 // menu with one free_text write-in slot.
 function menuRow(overrides: Partial<CanonicalRow> = {}): CanonicalRow {
   return {
-    id: 'apr_993fc651_2533713',
+    id: 'apr_demo0001_0000001',
     from_agent: 'pm-demo',
     question: 'Release demo — which build do I ship today?',
     op_key: 'demo-vertical-20260914',

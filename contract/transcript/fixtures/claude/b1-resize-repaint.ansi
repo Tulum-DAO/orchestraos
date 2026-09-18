@@ -22,21 +22,21 @@
 
 [3G[38;5;246m⎿[5G [39mStop[11Ghook[16Gerror:[23G[QUEUE-DIGEST][38G2[40Gpending[48Gmessage(s)[59Gfor[63Gcrm-integration-dev[85Golder[91Gthan[96G30s[100G—[102Gbatch-process[116Gnow[120G(read[126Geach[131Gvia[135Gstore,[142Gack[146Gafter[152Gprocessing,[164Gstale-banner[177Gdiscipline[188Gapplies):
 
-[5Gmsg_30dce2dc_1480475[26G|[28Gcrm-integration-dev[50G|[52GPLACEHOLDER
+[5Gmsg_demo0006_0000006[26G|[28Gcrm-integration-dev[50G|[52GPLACEHOLDER
 
-[5Gmsg_8c83480a_1480734[26G|[28Ggm[31G|[33Gre:[37GRESUMED[45Gstate[51G--[54Gqnr_132ea298[67GCONFIRMED[77Glive-pending[90G(no
+[5Gmsg_demo0007_0000007[26G|[28Ggm[31G|[33Gre:[37GRESUMED[45Gstate[51G--[54Gqnr_132ea298[67GCONFIRMED[77Glive-pending[90G(no
 
 
 
 [38;5;114m●[3G[39m[1mBash[22m(cd[11G/home/testuser/repos/acmecorp
 
-[7Gpython3[15G~/scripts/agent-orchestra/msg_store.py[54Gack[58G--message-id[71Gmsg_30dce2dc_1480475[92G2>&1[97G|[99Gtail[104G-1…)
+[7Gpython3[15G~/scripts/agent-orchestra/msg_store.py[54Gack[58G--message-id[71Gmsg_demo0006_0000006[92G2>&1[97G|[99Gtail[104G-1…)
 
 [38;5;246m [3G⎿[5G [39m{
 
 [8G"acknowledged":[24Gtrue,
 
-[8G"id":[14G"msg_30dce2dc_1480475"
+[8G"id":[14G"msg_demo0006_0000006"
 
 [6G[2m…[8G+12[12Glines[18G(ctrl+o[26Gto[29Gexpand)[22m
 
@@ -50,13 +50,13 @@
 
 [38;5;114m●[3G[39m[1mBash[22m(cd[11G/home/testuser/repos/acmecorp
 
-[7Gpython3[15G~/scripts/agent-orchestra/msg_store.py[54Gack[58G--message-id[71Gmsg_8c83480a_1480734[92G2>&1[97G|[99Gtail[104G-1…)
+[7Gpython3[15G~/scripts/agent-orchestra/msg_store.py[54Gack[58G--message-id[71Gmsg_demo0007_0000007[92G2>&1[97G|[99Gtail[104G-1…)
 
 [38;5;246m [3G⎿[5G [39m{
 
 [8G"acknowledged":[24Gtrue,
 
-[8G"id":[14G"msg_8c83480a_1480734"
+[8G"id":[14G"msg_demo0007_0000007"
 
 [6G[2m…[8G+5[11Glines[17G(ctrl+o[25Gto[28Gexpand)[22m
 
@@ -128,21 +128,21 @@
 
 [3G[38;5;246m⎿[5G [39mStop[11Ghook[16Gerror:[23G[QUEUE-DIGEST][38G2[40Gpending[48Gmessage(s)[59Gfor[63Gcrm-integration-dev[85Golder[91Gthan[96G30s[100G—[102Gbatch-process[116Gnow[120G(read[126Geach[131Gvia[135Gstore,[142Gack[146Gafter[152Gprocessing,[164Gstale-banner[177Gdiscipline[188Gapplies):
 
-[5Gmsg_30dce2dc_1480475[26G|[28Gcrm-integration-dev[50G|[52GPLACEHOLDER
+[5Gmsg_demo0006_0000006[26G|[28Gcrm-integration-dev[50G|[52GPLACEHOLDER
 
-[5Gmsg_8c83480a_1480734[26G|[28Ggm[31G|[33Gre:[37GRESUMED[45Gstate[51G--[54Gqnr_132ea298[67GCONFIRMED[77Glive-pending[90G(no
+[5Gmsg_demo0007_0000007[26G|[28Ggm[31G|[33Gre:[37GRESUMED[45Gstate[51G--[54Gqnr_132ea298[67GCONFIRMED[77Glive-pending[90G(no
 
 
 
 [38;5;114m●[3G[39m[1mBash[22m(cd[11G/home/testuser/repos/acmecorp
 
-[7Gpython3[15G~/scripts/agent-orchestra/msg_store.py[54Gack[58G--message-id[71Gmsg_30dce2dc_1480475[92G2>&1[97G|[99Gtail[104G-1…)
+[7Gpython3[15G~/scripts/agent-orchestra/msg_store.py[54Gack[58G--message-id[71Gmsg_demo0006_0000006[92G2>&1[97G|[99Gtail[104G-1…)
 
 [38;5;246m [3G⎿[5G [39m{
 
 [8G"acknowledged":[24Gtrue,
 
-[8G"id":[14G"msg_30dce2dc_1480475"
+[8G"id":[14G"msg_demo0006_0000006"
 
 [6G[2m…[8G+12[12Glines[18G(ctrl+o[26Gto[29Gexpand)[22m
 
@@ -156,13 +156,13 @@
 
 [38;5;114m●[3G[39m[1mBash[22m(cd[11G/home/testuser/repos/acmecorp
 
-[7Gpython3[15G~/scripts/agent-orchestra/msg_store.py[54Gack[58G--message-id[71Gmsg_8c83480a_1480734[92G2>&1[97G|[99Gtail[104G-1…)
+[7Gpython3[15G~/scripts/agent-orchestra/msg_store.py[54Gack[58G--message-id[71Gmsg_demo0007_0000007[92G2>&1[97G|[99Gtail[104G-1…)
 
 [38;5;246m [3G⎿[5G [39m{
 
 [8G"acknowledged":[24Gtrue,
 
-[8G"id":[14G"msg_8c83480a_1480734"
+[8G"id":[14G"msg_demo0007_0000007"
 
 [6G[2m…[8G+5[11Glines[17G(ctrl+o[25Gto[28Gexpand)[22m
 

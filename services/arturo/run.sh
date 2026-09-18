@@ -48,13 +48,13 @@ export ARTURO_GM_INJECT="${ARTURO_GM_INJECT:-1}"
 # Durable delivery target (the operator 2026-08-25: revert the 08-21 gemini-gm reroute -> canonical gm, single-gm).
 # Survives restart like ARTURO_GM_INJECT; matches the S1 code default. Deep-brain host is separate (Tier-B held).
 export VOICE_BRAIN_SESSION="${VOICE_BRAIN_SESSION:-gm}"
-# Durable semantic memory recall flag (the operator approved apr_c8a16ad9_95501904): default ON (1)
+# Durable semantic memory recall flag (the operator approved apr_demo0004_0000004): default ON (1)
 export ARTURO_SEMANTIC_RECALL="${ARTURO_SEMANTIC_RECALL:-1}"
 # Durable facts.db recall flag (the operator-approved additive read-side wiring, semantic-memory-audit
 # 2026-09-14): default ON (1). Bounded read-only retrieval from state/brain/facts.db (~23.5k
 # daily-refreshed facts) appended as a FACTS block alongside semantic recall. Override to 0 to disable.
 export ARTURO_FACTS_RECALL="${ARTURO_FACTS_RECALL:-1}"
-# Durable voice layer dispatcher flag (the operator approved apr_868cbd37_95502061): default ON (1)
+# Durable voice layer dispatcher flag (the operator approved apr_demo0005_0000005): default ON (1)
 export ARTURO_DISPATCHER="${ARTURO_DISPATCHER:-1}"
 # Durable ended-once guard flag: default ON (1)
 export ARTURO_ENDED_ONCE="${ARTURO_ENDED_ONCE:-1}"

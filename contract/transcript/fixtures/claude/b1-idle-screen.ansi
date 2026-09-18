@@ -7,10 +7,10 @@
 ● Ran [1m11[0m stop hooks [38;5;246m(ctrl+o to expand)[39m
   [38;5;246m⎿  [39mStop hook error: [QUEUE-DIGEST] 1 pending message(s) for cpu-builder older than 30s — batch-process now (read each via store, ack after processing,
   stale-banner discipline applies):
-    msg_fc4bd850_50389522 | gm | re: SCHEDULER FIRST IN-WINDOW BEAT LANDED — chea
+    msg_demo0008_00000008 | gm | re: SCHEDULER FIRST IN-WINDOW BEAT LANDED — chea
 
 [38;5;114m●[39m [1mBash[0m(cd /home/testuser/agent-orchestra
-      python3 msg_store.py get --id msg_fc4bd850_50389522 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); print('SUB…)
+      python3 msg_store.py get --id msg_demo0008_00000008 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); print('SUB…)
 [38;5;246m  ⎿  [39mSUBJECT: re: SCHEDULER FIRST IN-WINDOW BEAT LANDED — chea
      SENT: 2026-09-01T08:13:09.603393+00:00
      FINAL? False
@@ -19,10 +19,10 @@
 [38;5;231m●[39m This is gm's final confirmation — commission closed, "stand down." No question asked. Let me ack the message and stand down.
 
 [38;5;114m●[39m [1mBash[0m(cd /home/testuser/agent-orchestra
-      python3 msg_store.py ack --message-id msg_fc4bd850_50389522 2>&1 | tail -1)
+      python3 msg_store.py ack --message-id msg_demo0008_00000008 2>&1 | tail -1)
 [38;5;246m  ⎿  [39m{
        "acknowledged": true,
-       "id": "msg_fc4bd850_50389522"
+       "id": "msg_demo0008_00000008"
      }
 
 [38;5;231m●[39m Acked. gm's message is a final close-out with no question — and my earlier sanity check already confirmed the run finalized cleanly ([38;5;153mlast_scheduler_run_at[39m advanced to 08:12, report

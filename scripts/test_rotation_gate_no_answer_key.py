@@ -143,7 +143,7 @@ def test_degenerate_grader_input_raises_instead_of_scoring_zero(tmp_path, gate):
 # ---- a POINTER can leak as badly as an ANSWER (found by orchestraos-app-dev-v14
 # while complying, msg_9abbaee2) -------------------------------------------------
 # Its case: c2 asks "what was the msg_store row id that carried it?" and the
-# natural pointer under the new schema is 'jsonl:msg_50bd0ee1_15994544' — which
+# natural pointer under the new schema is 'jsonl:msg_demo0003_0000003' — which
 # hands the successor the answer INSIDE the pointer. Deleting the answer key does
 # not help if the pointer becomes one. Non-disclosing forms (turn index, ISO
 # range) locate the fact without naming it.
@@ -152,7 +152,7 @@ def test_refuses_an_id_pointer_when_the_question_asks_for_that_id(gate):
     with pytest.raises(ValueError) as e:
         RG.author_canary("succ", [{
             "q": "During the E2E, what was the msg_store row id that carried it?",
-            "source_pointer": "jsonl:msg_50bd0ee1_15994544"}])
+            "source_pointer": "jsonl:msg_demo0003_0000003"}])
     assert "pointer" in str(e.value).lower() and "disclos" in str(e.value).lower()
 
 

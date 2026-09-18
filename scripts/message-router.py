@@ -1412,7 +1412,7 @@ DEAD_LETTER_MIN_AGE_S = 3600
 # (the P2-4 shared-walk lesson).
 # gm's own HIGH row: must read as RE-ROUTED, never as work dropped.
 DEAD_LETTER_REASON_OVERRIDE = {
-    "msg_e290c9bd_26897520":
+    "msg_demo0002_0000002":
         "dead-lettered: re-commissioned to orchestra-builder per msg_c74d3ae3",
 }
 
