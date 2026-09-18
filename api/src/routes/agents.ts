@@ -10,6 +10,7 @@ import { getDetectorStates, detectorCacheAgeMs, classifyNoSession, type Detector
 import { isCutoverActive, getCanonicalAgents, canonicalTmuxSession } from '../services/identity-store-reader.js';
 import { applyIdentityPrecedence, resolveMachineAndLiveness, discoverUnregistered } from './agents-identity.js';
 import { loadConfig } from '../lib/config.js';
+import { resolveSpecialKey } from '../lib/special-keys.js';
 
 function macSshTarget(): string {
   const cfg = loadConfig();
@@ -705,33 +706,10 @@ router.post('/:id/key', (req: Request, res: Response) => {
     res.status(404).json({ error: 'Agent not found' }); return;
   }
 
-  // Map friendly key names to tmux key names
-  const keyMap: Record<string, string[]> = {
-    'escape': ['Escape'],
-    'esc': ['Escape'],
-    'enter': ['Enter'],
-    'tab': ['Tab'],
-    'backspace': ['BSpace'],
-    'up': ['Up'],
-    'down': ['Down'],
-    'left': ['Left'],
-    'right': ['Right'],
-    'ctrl-c': ['C-c'],
-    'ctrl-d': ['C-d'],
-    'ctrl-z': ['C-z'],
-    'ctrl-o': ['C-o'],
-    'ctrl-k': ['C-k'],
-    'shift-tab': ['BTab'],
-    'ctrl-l': ['C-l'],
-    'ctrl-r': ['C-r'],
-    'ctrl-a': ['C-a'],
-    'ctrl-e': ['C-e'],
-    'space': ['Space'],
-    '1': ['1'], '2': ['2'], '3': ['3'], '4': ['4'], '5': ['5'],
-    '6': ['6'], '7': ['7'], '8': ['8'], '9': ['9'], '0': ['0'],
-  };
-
-  const tmuxKeys = keyMap[key.toLowerCase()] || [key];
+  // Key policy lives in lib/special-keys.ts (ctrl-z refused: RED ALERT ra_2653f9bf)
+  const resolved = resolveSpecialKey(String(key));
+  if (!resolved.ok) { res.status(400).json({ error: resolved.reason, key }); return; }
+  const tmuxKeys = resolved.tmux;
   const machine = agent?.machine || 'vps';
 
   try {
