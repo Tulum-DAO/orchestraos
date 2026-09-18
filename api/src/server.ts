@@ -161,3 +161,11 @@ setupTerminalWebSocket(wss);
 setupVoiceLiveWebSocket(server);
 
 server.listen(PORT, () => console.log(`OrchestraOS API on :${PORT} (WebSocket terminal enabled)`));
+
+// A 60 s memory heartbeat so a supervisor restart leaves a trend in the API log
+// (heap cap vs event-loop stall was unanswerable without it — docs/RED_ALERT.md api_health_fail).
+setInterval(() => {
+  const m = process.memoryUsage();
+  const mb = (n: number) => Math.round(n / 1048576);
+  console.log(`[mem ${new Date().toISOString()}] rss=${mb(m.rss)}MB heapUsed=${mb(m.heapUsed)}MB heapTotal=${mb(m.heapTotal)}MB ext=${mb(m.external)}MB up=${Math.round(process.uptime())}s`);
+}, 60_000).unref();
