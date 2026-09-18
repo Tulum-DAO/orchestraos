@@ -460,7 +460,7 @@ def test_target_class_maps_known_non_agents(_registered_agent):
 
 def test_gm_high_row_reads_as_rerouted_not_dropped():
     assert "re-commissioned to orchestra-builder" in \
-        mr.DEAD_LETTER_REASON_OVERRIDE["msg_e290c9bd_26897520"]
+        mr.DEAD_LETTER_REASON_OVERRIDE["msg_demo0002_0000002"]
 
 def test_flush_batches_one_notice_per_sender_class():
     batch = {("gm", "service"): ["m1"], ("gm", "daemon"): ["m2", "m3"],

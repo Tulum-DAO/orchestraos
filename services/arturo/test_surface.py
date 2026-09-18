@@ -94,14 +94,14 @@ def test_resolve_bare_list_route_falls_back_to_voice_focus(tmp_path):
     p = _write(tmp_path, {"route": "/approvals", "updated_at": time.time()})
     focus_path = tmp_path / "focus.json"
     focus_path.write_text(json.dumps({
-        "entity": {"kind": "approval", "id": "apr_993fc651_2533713"},
+        "entity": {"kind": "approval", "id": "apr_demo0001_0000001"},
         "asserted_at": time.time(), "source": "voice", "sticky": True,
     }))
     out = surface.resolve_screen(
-        p, gw_get=lambda path: {"id": "apr_993fc651_2533713", "summary": "which audience?"},
+        p, gw_get=lambda path: {"id": "apr_demo0001_0000001", "summary": "which audience?"},
         focus_path=focus_path,
     )
-    assert "apr_993fc651_2533713" in out and "which audience?" in out
+    assert "apr_demo0001_0000001" in out and "which audience?" in out
 
 
 def test_resolve_bare_list_route_without_focus_still_cant_resolve(tmp_path):

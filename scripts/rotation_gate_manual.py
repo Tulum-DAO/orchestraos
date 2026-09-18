@@ -121,7 +121,7 @@ class AmbiguousGraderInput(RuntimeError):
 # A POINTER CAN LEAK AS BADLY AS AN ANSWER (found by orchestraos-app-dev-v14 while
 # complying with the new schema, msg_9abbaee2). Its case: the question asks "what
 # was the msg_store row id that carried it?" and the natural pointer is
-# `jsonl:msg_50bd0ee1_15994544` — the answer, inside the locator. Deleting the
+# `jsonl:msg_demo0003_0000003` — the answer, inside the locator. Deleting the
 # answer key accomplishes nothing if the pointer quietly becomes one, and it would
 # have reintroduced the leak for exactly the questions most worth asking.
 #
