@@ -76,7 +76,7 @@ The official brand mark of **Tulum DAO** (the publisher) and **OrchestraOS** (th
 - `mark-monochrome-black.svg` & `mark-monochrome-white.svg`
 - `lockup-tulumdao-light.svg` & `lockup-tulumdao-dark.svg`
 - `lockup-orchestraos-light.svg` & `lockup-orchestraos-dark.svg`
-- `lockup-tuluminator-light.svg` & `lockup-tuluminator-dark.svg`
+- `lockup-buildathon-light.svg` & `lockup-buildathon-dark.svg`
 - `lockup-decentlabs-light.svg` & `lockup-decentlabs-dark.svg`
 - `social-card-tulumdao.svg` & `social-card-orchestraos.svg` (1280x640)
 - `readme-header.svg` (1600x400)
