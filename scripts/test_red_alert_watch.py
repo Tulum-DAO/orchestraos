@@ -239,7 +239,7 @@ def test_post_card_classless_falls_back_to_issue_when_severity_missing(store, mo
     assert W.post_card(r, {}, "gm") == "apr_x"
 
 
-# --- greens are not seats (denial of a report on orchestra-builder-g49) ------------
+# --- greens are not seats (gm denial of a report on orchestra-builder-g49) ------------
 # A blue-green GREEN dying is often CORRECT (hydrate SeamTimeout under load -> the seam
 # raised, the green was torn down, blue kept working). Respawning one would manufacture an
 # orphan pane the fleet has a watcher for. Only the state machine may boot a green.
@@ -310,3 +310,25 @@ def test_respawn_refuses_any_green_even_if_asked():
     ev = {"process_state": {"x-g9": []}, "registry_rows": {"x-g9": {"session_id": "abc", "runtime": "claude"}}, "pane_dead": {"x-g9": True}}
     ok, detail = W.repair_respawn("x-g9", "x-g9", ev)
     assert ok is False and "green" in detail.lower()
+
+
+# --- the queue is evidence this week: never auto-answer a card (2026-09-18) --------
+# the operator wants the pending queue INTACT — a saturated queue is what he is demonstrating, not
+# a defect in the surface. A healed report gets a CORRECTION on the card, never a close.
+
+def test_close_card_is_disabled_by_the_preserve_queue_flag(store, monkeypatch):
+    calls = []
+    monkeypatch.setattr(W.subprocess, "run", lambda argv, **kw: calls.append(argv) or type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+    monkeypatch.setattr(W, "PRESERVE_PENDING_QUEUE", True)
+    W.close_card("apr_x", "healed")
+    verbs = [argv[2] for argv in calls if len(argv) > 2]      # approval.py <verb>
+    assert "answer" not in verbs, "must not answer a card while the queue is preserved"
+    assert "patch" in verbs, "the correction must still be written onto the card"
+
+
+def test_close_card_answers_only_when_preservation_is_off(store, monkeypatch):
+    calls = []
+    monkeypatch.setattr(W.subprocess, "run", lambda argv, **kw: calls.append(argv) or type("R", (), {"returncode": 0, "stdout": "{}", "stderr": ""})())
+    monkeypatch.setattr(W, "PRESERVE_PENDING_QUEUE", False)
+    W.close_card("apr_x", "healed")
+    assert "answer" in [argv[2] for argv in calls if len(argv) > 2]

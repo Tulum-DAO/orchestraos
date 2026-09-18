@@ -1,6 +1,6 @@
 # RED ALERT — the crash-report standard the system upholds itself to
 
-Commissioned by the operator, 2026-09-17, after the harness bottom-bar **^Z** button
+Commissioned by the operator 2026-09-17 23:30 Tulum, after the harness bottom-bar **^Z** button
 suspended the gm seat (process STAT `T`, alive but not running) and nothing in the fleet
 noticed. the operator's words: *"LOG EVERYTHING IN A RED ALERT CRASH REPORT … a list of errors
 that it reports when a user detects and reports a problem. The list can be logged, added
@@ -103,13 +103,19 @@ Telegram (`tg-notify.sh`) and to Arturo (msg_store → gm, type `red_alert`). No
 120s → the watchdog repairs (safe fixes only), then updates the card and the report.
 "Wait" holds 30 minutes. "Show me" replies with the snapshot path + screen tail.
 
+**Never retire a card to tidy the queue.** When a report heals, the watchdog writes the
+correction ONTO its card ("Update — no longer needs an answer: …") and leaves the row
+pending (`PRESERVE_PENDING_QUEUE`). A pending queue may be the operator's evidence, not a
+defect in the surface — whether a saturated queue should be cleared is the operator's call,
+never the fleet's. A card whose premise dies gets a correction, never a silent close.
+
 ## 6. Rules the standard enforces
 
 - Symptom is verbatim. Evidence is captured, not described. Fixes are verified by effect
   (`classify --seat` returns null) before `status=resolved`.
 - Never `fg`, never SIGCONT-and-hope: a suspended CLI is respawned with `--resume`.
 - Never send text+Enter in one `send-keys`; wakes go through `scripts/nudge_pane.py`.
-- **NO KILLS, EVER (2026-09-18).** The self-heal loop never sends
+- **NO KILLS, EVER (the operator, 00:20 Tulum 2026-09-18).** The self-heal loop never sends
   kill/TERM/KILL/STOP/pkill/kill-session/kill-server to anything and never runs a
   history-rewriting or tree-discarding git command on the live tree. Allowed repairs:
   `claude --resume` in a new or dead pane, `tmux respawn-pane` only when the process is

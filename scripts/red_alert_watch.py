@@ -45,6 +45,9 @@ HOLD_S = 1800           # "Wait" = 30 minutes
 MAX_ATTEMPTS = 2        # third failure never happens: escalate after two
 VERIFY_WAIT_S = 20      # seconds a respawned CLI gets before the by-effect check
 CARD_FROM = "red-alert-builder"
+# the operator wants the pending queue INTACT this week (2026-09-18): the saturated surface is the
+# demo material. Never answer/dispose/retire a card here; correct it in place and leave it pending.
+PRESERVE_PENDING_QUEUE = os.environ.get("RED_ALERT_CLOSE_CARDS", "") != "1"
 CLI_RUNTIMES = ("claude", "gemini", "codex")
 CARD_ONLY = {"login_screen", "gateway_unreachable", "tmux_server_dead", "process_suspended", "green_died"}
 WAL_DIR = os.path.join(ORCH, "state", "wal")
@@ -243,8 +246,17 @@ def read_card(card_id: str) -> dict | None:
 
 
 def close_card(card_id: str, text: str) -> None:
-    """A repaired seat must not leave a pending card on the operator's phone: self-answer it
-    (answered_by = the watchdog, provenance only) so the queue reflects reality."""
+    """Record the resolution on a card whose report healed.
+
+    PRESERVE_PENDING_QUEUE (2026-09-18, on the operator's own instruction): this week the pending
+    queue is EVIDENCE — he is demonstrating a saturated approvals surface, not asking for a
+    clean one. So a healed report never answers, disposes or retires its card; it writes the
+    correction ONTO the card and leaves the row pending. Set the flag False (or
+    RED_ALERT_CLOSE_CARDS=1) to restore ordinary hygiene once he says so."""
+    if PRESERVE_PENDING_QUEUE:
+        note_card(card_id, f"\n\n**Update — no longer needs an answer:** {text}")
+        log(f"CARD {card_id} left pending (queue preserved); correction written onto it")
+        return
     subprocess.run([sys.executable, os.path.join(HERE, "approval.py"), "answer", "--id", card_id, "--answer", "option",
                     "--option-n", "1", "--answer-text", text, "--surface", "agent_cli", "--answered-by", CARD_FROM],
                    capture_output=True, text=True, timeout=30)
@@ -276,7 +288,7 @@ def _healthy(seat: str) -> tuple[bool, dict]:
 
 
 def repair_respawn(seat: str, session: str, ev: dict) -> tuple[bool, str]:
-    """HARD RULE (2026-09-18): respawn ONLY a pane whose process is already
+    """HARD RULE (the operator 00:20 Tulum 2026-09-18): respawn ONLY a pane whose process is already
     gone — no -k, no signal of any kind. A suspended (STAT T) or otherwise present process is
     a card to the operator, never a repair. A GREEN is never respawned at all (2026-09-18)."""
     if _GREEN_RE.match(seat):
