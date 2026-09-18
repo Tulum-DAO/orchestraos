@@ -258,7 +258,7 @@ def test_bypass_dialog_needs_accept_row():
 
 
 # ---------------------------------------------------------------------------
-# clean /exit is not a crash (, orchestra-builder-g49 2026-09-18 17:33Z)
+# clean /exit is not a crash (, a green 2026-09-18 17:33Z)
 # ---------------------------------------------------------------------------
 def _write_transcript(tmp_path, sid, lines):
     p = tmp_path / f"{sid}.jsonl"
@@ -277,7 +277,11 @@ _EXIT_LINES = [
 
 
 def test_dead_pane_after_a_clean_exit_is_not_a_crash(tmp_path, monkeypatch):
-    """a green typed /exit at 17:33:00Z; the watchdog filed pane_dead 4s later and carded the operator."""
+    """A pane whose transcript ends in /exit was shut down GRACEFULLY — no crash.
+
+    Whether the agent typed it or the fleet's reap path did (spawn-agent.sh --kill sends the
+    same keystrokes) is invisible here and does not change the verdict.
+    """
     sid = "4ee157f1-d402-4304-96ff-bdc764a2fcfd"
     path = _write_transcript(tmp_path, sid, _EXIT_LINES)
     monkeypatch.setattr(RA, "_transcript_path", lambda s: path if s == sid else None)
@@ -346,3 +350,21 @@ def test_exit_still_excuses_a_pane_that_died_right_after_it(tmp_path, monkeypatc
     path = _write_transcript(tmp_path, "sidX", _EXIT_LINES)
     monkeypatch.setattr(RA, "_transcript_path", lambda s: path if s == "sidX" else None)
     assert RA.exited_cleanly("sidX") is True
+
+
+def test_a_reaped_green_and_a_self_retirement_are_indistinguishable_here(tmp_path, monkeypatch):
+    """Guard against someone reading more into this signal than it carries
+    (observed 2026-09-18): the fleet's reap types the same /exit keystrokes,
+    so both shapes must return True — the function claims 'graceful shutdown', not 'the agent chose'."""
+    reaped = _write_transcript(tmp_path, "sidR", [
+        {"type": "assistant", "message": {"role": "assistant", "content": "holding"}},
+        {"type": "user", "message": {"role": "user", "content": "<command-name>/exit</command-name>"}},
+    ])
+    monkeypatch.setattr(RA, "_transcript_path", lambda s: reaped if s == "sidR" else None)
+    assert RA.exited_cleanly("sidR") is True
+    farewell = _write_transcript(tmp_path, "sidS", [
+        {"type": "assistant", "message": {"role": "assistant", "content": "handoff written, standing down"}},
+        {"type": "user", "message": {"role": "user", "content": "<command-name>/exit</command-name>"}},
+    ])
+    monkeypatch.setattr(RA, "_transcript_path", lambda s: farewell if s == "sidS" else None)
+    assert RA.exited_cleanly("sidS") is True

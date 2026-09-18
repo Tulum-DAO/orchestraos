@@ -362,13 +362,25 @@ def _transcript_path(sid: str | None) -> str | None:
 
 
 def exited_cleanly(sid: str | None, *, tail: int = 5) -> bool:
-    """True when the seat's LAST act was typing /exit (or /quit).
+    """True when the LAST thing in this seat's transcript is a `/exit` (or `/quit`).
 
-    : orchestra-builder-a green typed /exit at 17:33:00Z; the watchdog saw a dead
-    pane 4s later, filed a `pane_dead` crash and carded the operator. A deliberate exit is a
-    retirement, not a crash — rotation owns it, RED ALERT does not.
-    Only the tail is read: a resumed sid appends, so an /exit from a previous life is
-    buried under later turns and must NOT excuse today's crash.
+    That means the pane was SHUT DOWN GRACEFULLY — which is not a crash, and is all this
+    function may claim. It does NOT mean the agent chose to leave: a transcript records the
+    ACTION, never the ACTOR, and the fleet's own reap path types the same keystrokes
+    (prune_failed_green -> spawn-agent.sh --kill -> `tmux send-keys "/exit" Enter` +
+    kill-session), so a self-retirement and a reaped green are byte-for-byte identical here.
+     was the second kind: the green produced no assistant turn after 17:18:20Z,
+    hydrate blew its 120s bound at ~17:32:50Z under loadavg 29, and the prune reaped the pane
+    at 17:33:00.563Z (observed 2026-09-18; bg history shows
+    'pruned-failed-green'). Either way RED ALERT stands down — a graceful shutdown is
+    rotation's business, not an incident.
+
+    If a caller ever needs to tell the two apart, this signal cannot carry it: look for an
+    assistant farewell turn before the /exit (self-retirement) versus none plus a
+    'pruned-failed-green' bg_state beside it (reaped).
+
+    Only the tail is read, and the last decisive line wins: an assistant turn after an /exit
+    means the seat kept working, so the death that followed is a real crash.
     """
     path = _transcript_path(sid)
     if not path:

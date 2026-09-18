@@ -1,6 +1,6 @@
 # RED ALERT — the crash-report standard the system upholds itself to
 
-Commissioned by the operator (2026-09-17), after the harness bottom-bar **^Z** button
+Commissioned by the operator, 2026-09-17, after the harness bottom-bar **^Z** button
 suspended the gm seat (process STAT `T`, alive but not running) and nothing in the fleet
 noticed. the operator's words: *"LOG EVERYTHING IN A RED ALERT CRASH REPORT … a list of errors
 that it reports when a user detects and reports a problem. The list can be logged, added
@@ -57,15 +57,8 @@ severity, a detect rule, an immediate fix and a doc line). Add a class = add a r
 
 | class | severity | detect | immediate fix (watchdog may do alone) |
 |---|---|---|---|
-| `process_suspended` | crash | pane process STAT contains `T`; screen "Claude Code has been suspended" | `card_only` — the process is still present, so under the NO KILLS rule the watchdog never touches it; a human runs `tmux respawn-pane -k` + `claude --resume <sid>` (SIGCONT/`fg` do not stick under a dash pane shell — gm 2026-09-18 04:31Z) |
+| `process_suspended` | crash | pane process STAT contains `T`; screen "Claude Code has been suspended" | `card_only` — the process is still present, so under the NO KILLS rule the watchdog never touches it; a human runs `tmux respawn-pane -k` + `claude --resume <sid>` (SIGCONT/`fg` do not stick under a dash pane shell — 2026-09-18 04:31Z) |
 | `pane_dead` | crash | `pane_dead=1` or no process on the tty | `respawn_resume`: `tmux respawn-pane` (never `-k`) with the registry `resume_command`, only when no process remains |
-
-> **A clean `/exit` is not a crash.** Before `pane_dead` is filed, the seat's sid transcript tail is
-> checked for a terminal `<command-name>/exit</command-name>` (or `/quit`) — if the seat's last act was
-> typing it, the classifier returns healthy and nothing is filed. A deliberate exit is a retirement and
-> rotation owns it; respawning it would re-launch a seat that meant to leave. Only the last few entries
-> are read, so an `/exit` from a resumed sid's previous life never excuses today's crash.
-> ( — orchestra-builder-g49 typed `/exit` at 17:33:00Z and was carded as a crash 4s later.)
 | `out_of_usage` | error | "usage limit" / "out of usage credits" / "credits depleted" | `switch_provider`: `/model` in-pane to the next `[runtimes] enabled` (Opus → Sonnet → gemini → codex); record it |
 | `api_error` | error | "API Error" in the last screenful | `wait_then_retry` (90s, bare Enter); 3× → `switch_provider` |
 | `login_screen` | crash | "Select login method" / "not logged in" | `card_only` — auth is the operator's |
@@ -75,6 +68,20 @@ severity, a detect rule, an immediate fix and a doc line). Add a class = add a r
 | `green_died` | error | a blue-green GREEN pane died while its root's `bg_state` still expects it | `card_only` — **never respawn a green**; only the state machine boots one. A green whose root is back to SOLO is not reported at all (it died correctly) |
 | `api_health_fail` | error | service-watchdog "HEALTH FAIL: api-server port 8888" (HTTP 000 twice) | `none_needed` — the watchdog restarts it; the report carries the timestamps, host memory, kernel-OOM check and the API stderr () |
 | `gateway_unreachable` | error | user report from phone/watch | `probe_health` on :9091 + funnel, report the failing hop |
+
+> **A gracefully shut-down pane is not a crash.** Before `pane_dead` is filed, the seat's sid
+> transcript tail is checked for a terminal `<command-name>/exit</command-name>` (or `/quit`);
+> if that is the last thing in the transcript, the pane was shut down gracefully and RED ALERT
+> stands down — rotation owns retirements, this detector does not. Only the tail is read and the
+> last decisive line wins, so an `/exit` from a resumed sid's previous life (or one the user
+> cancelled and then kept working past) never excuses a later real crash.
+>
+> The signal says *graceful shutdown*, never *the agent decided to leave*: a transcript records
+> the action, not the actor, and the fleet's own reap path types the same keystrokes
+> (`prune_failed_green` → `spawn-agent.sh --kill` → `send-keys "/exit" Enter` + `kill-session`).
+> The incident that produced this rule was the reaped kind, not a self-retirement. To tell them
+> apart, look for an assistant farewell turn before the `/exit` versus none plus a
+> `pruned-failed-green` entry in the root's `bg_state`.
 
 ## 4. Who acts, and when
 
@@ -102,7 +109,7 @@ Telegram (`tg-notify.sh`) and to Arturo (msg_store → gm, type `red_alert`). No
   (`classify --seat` returns null) before `status=resolved`.
 - Never `fg`, never SIGCONT-and-hope: a suspended CLI is respawned with `--resume`.
 - Never send text+Enter in one `send-keys`; wakes go through `scripts/nudge_pane.py`.
-- **NO KILLS, EVER (the operator, 2026-09-18).** The self-heal loop never sends
+- **NO KILLS, EVER (2026-09-18).** The self-heal loop never sends
   kill/TERM/KILL/STOP/pkill/kill-session/kill-server to anything and never runs a
   history-rewriting or tree-discarding git command on the live tree. Allowed repairs:
   `claude --resume` in a new or dead pane, `tmux respawn-pane` only when the process is
