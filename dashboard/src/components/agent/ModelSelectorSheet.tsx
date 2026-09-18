@@ -113,10 +113,12 @@ export function ModelSelectorSheet({ open, onClose }: ModelSelectorSheetProps) {
                   }`}
                 >
                   <span
-                    className="w-6 h-6 text-foreground"
-                    // logo_svg is a static, build-time-authored simple mark from
-                    // config/providers.json (never user input) — inline SVG is
-                    // the only way to recolor it via currentColor.
+                    className="w-6 h-6 shrink-0 text-foreground [&>svg]:w-full [&>svg]:h-full"
+                    // logo_svg is a static, build-time mark from config/providers.json
+                    // (never user input) — inline SVG so it can inherit currentColor and
+                    // scale to the button. The real product marks carry their own colours
+                    // (Claude's sunburst, Gemini's spark gradient); the OpenAI/Codex mark
+                    // is the white variant, which reads on both themes' sheet backgrounds.
                     dangerouslySetInnerHTML={{ __html: row.provider.logo_svg }}
                   />
                   <span className="text-[10px] text-foreground/70">{row.provider.label}</span>
