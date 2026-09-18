@@ -197,7 +197,7 @@ def test_parse_ps_tree_marks_stopped():
     assert RA.any_stopped([{"pid": 1, "stat": "Sl+", "tty": "", "cmd": "x"}]) is False
 
 
-# --- screen classes match CLI banners only, never transcript prose (gm, ra_8a6b4ca9) ---
+# --- screen classes match CLI banners only, never transcript prose  ---
 
 FIX = os.path.join(HERE, "fixtures", "red-alert")
 
