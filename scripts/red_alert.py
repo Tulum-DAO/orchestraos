@@ -64,7 +64,7 @@ CATALOGUE = {
         "detect": "pane process tree has a STAT containing 'T' (SIGTSTP/^Z), or the screen "
                   "shows 'Claude Code has been suspended'",
         "immediate_fix": {"action": "card_only",
-                          "how": "NO KILLS rule (the operator 00:20 Tulum 2026-09-18): the process is still present, so the "
+                          "how": "NO KILLS rule (2026-09-18): the process is still present, so the "
                                  "watchdog never touches it. Card + Telegram; a human resumes it (respawn-pane -k + "
                                  "`claude --resume <sid>` by hand — SIGCONT/tcsetpgrp did not stick on gm 04:31Z)"},
         "doc": "^Z from the harness bottom bar or a terminal; the CLI is stopped, not dead",
