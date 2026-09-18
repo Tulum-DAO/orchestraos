@@ -173,7 +173,10 @@ def _view(r: dict) -> dict:
 def post_card(r: dict, ev: dict, seat: str) -> str | None:
     cls, rid = r["class"], r["id"]
     fix = RA.CATALOGUE.get(cls, {}).get("immediate_fix", {})
-    q = f"RED ALERT {rid}: {seat} — {cls.replace('_', ' ')}. Repair it?"
+    # A human-filed report (the Report button) has no pattern class — class is None
+    # there, and .replace() on it crashed the report with a 500 before any card.
+    label = (cls or r.get("severity") or "issue").replace("_", " ")
+    q = f"RED ALERT {rid}: {seat} — {label}. Repair it?"
     summary = (f"**What happened:** {r['symptom']}\n\n**What I will do if you don't answer in 2 minutes:** "
                f"{fix.get('action', '-')} — {fix.get('how', '')}\n\nReport: `{r['_path']}`\n"
                f"Snapshot: `{(ev.get('pane_snapshot') or {}).get(seat, '-')}`")
@@ -189,7 +192,7 @@ def post_card(r: dict, ev: dict, seat: str) -> str | None:
               watch={"card_at": time.time(), "hold_until": None})
     # mirrors — best effort, each by effect in its own log
     tg = subprocess.run([os.path.join(HERE, "tg-notify.sh"), "--from", "RED ALERT",
-                         f"🚨 {rid} {seat}: {cls.replace('_', ' ')}\n{r['symptom'][:300]}\nCard {card}: Repair now / Wait / Show me. "
+                         f"🚨 {rid} {seat}: {label}\n{r['symptom'][:300]}\nCard {card}: Repair now / Wait / Show me. "
                          f"No answer in 2 min → {fix.get('action')}."], capture_output=True, text=True, timeout=60)
     body = f"{q}\n\n{summary}\n\ncard={card}"
     bf = os.path.join(RA.log_dir(), f".{rid}-arturo.txt")

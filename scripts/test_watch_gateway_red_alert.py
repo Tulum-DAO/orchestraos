@@ -96,3 +96,11 @@ def test_routes_registered():
     src = open(G.__file__).read()
     assert 'add_post("/red-alert/report", handle_red_alert_report)' in src
     assert 'add_get("/red-alert/reports", handle_red_alert_reports)' in src
+
+
+def test_red_alert_api_has_its_aiohttp_import():
+    """The pass-through used aiohttp without importing it: every real phone call got
+    502 'name aiohttp is not defined' while the fake-runner tests stayed green."""
+    import inspect
+    src = inspect.getsource(G._red_alert_api)
+    assert "import aiohttp" in src

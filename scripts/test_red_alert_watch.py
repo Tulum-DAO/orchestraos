@@ -173,7 +173,7 @@ def test_card_answer_normalisation():
     assert W.norm_answer({"status": "pending"}) is None
 
 
-# --- the fleet-down class (the tmux server was killed) --------
+# --- the fleet-down class (: the tmux server was killed) --------
 
 def test_fleet_down_files_one_card_only_report(store, monkeypatch):
     posted = []
@@ -192,7 +192,7 @@ def test_fleet_down_with_no_online_seats_is_nothing(store):
     assert W.fleet_down({"agents": {}}) is None
 
 
-# --- diagnosis spawn guard (the diagnosis seat found this itself) -------
+# --- diagnosis spawn guard (the diag seat's own finding on ) -------
 
 def test_spawn_diagnosis_refuses_unescalated_or_resolved(store, monkeypatch):
     monkeypatch.setattr(W.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not spawn")))
@@ -203,3 +203,37 @@ def test_spawn_diagnosis_refuses_unescalated_or_resolved(store, monkeypatch):
 def test_switch_provider_never_on_an_attached_pane_even_with_repair_now():
     d = W.decide(rep(cls="out_of_usage", card="apr_1", created_age=500), attached=True, answer="Repair now", now=1000.0, armed=True)
     assert d["action"] == "wait" and d["reason"] == "attached"
+
+
+# --- human-filed reports have NO pattern class (found from the phone, 2026-09-18) -----
+# Both crashes below were invisible to this suite because every fixture had a class.
+
+def test_post_card_survives_a_classless_human_report(store, monkeypatch):
+    """A report filed by a person (the Report button) has class=None; the card title and the
+    Telegram line must fall back to the severity wording instead of raising AttributeError."""
+    sent = {}
+
+    class _R:
+        returncode = 0
+        stdout = "apr_test123"
+        stderr = ""
+
+    def fake_run(argv, **kw):
+        sent.setdefault("argv", []).append(argv)
+        return _R()
+
+    monkeypatch.setattr(W.subprocess, "run", fake_run)
+    monkeypatch.setattr(W.RA, "update", lambda *a, **k: None)
+    r = {"id": "ra_human", "class": None, "severity": "bug", "seats": ["gm"], "symptom": "the sheet says it broke",
+         "_path": "/tmp/x.json", "evidence": {}}
+    card = W.post_card(r, {"pane_snapshot": {}, "screen": {}}, "gm")
+    assert card == "apr_test123"
+    question = sent["argv"][0][-1]
+    assert "bug" in question and "None" not in question
+
+
+def test_post_card_classless_falls_back_to_issue_when_severity_missing(store, monkeypatch):
+    monkeypatch.setattr(W.subprocess, "run", lambda argv, **kw: type("R", (), {"returncode": 0, "stdout": "apr_x", "stderr": ""})())
+    monkeypatch.setattr(W.RA, "update", lambda *a, **k: None)
+    r = {"id": "ra_h2", "class": None, "severity": None, "seats": ["gm"], "symptom": "s", "_path": "/tmp/x.json", "evidence": {}}
+    assert W.post_card(r, {}, "gm") == "apr_x"
