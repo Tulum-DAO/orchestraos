@@ -173,7 +173,7 @@ def test_card_answer_normalisation():
     assert W.norm_answer({"status": "pending"}) is None
 
 
-# --- the fleet-down class (ra_8dc72329: the tmux server was killed) --------
+# --- the fleet-down class (the tmux server was killed) --------
 
 def test_fleet_down_files_one_card_only_report(store, monkeypatch):
     posted = []
@@ -192,7 +192,7 @@ def test_fleet_down_with_no_online_seats_is_nothing(store):
     assert W.fleet_down({"agents": {}}) is None
 
 
-# --- diagnosis spawn guard (the diag seat's own finding on ra_11656d1a) -------
+# --- diagnosis spawn guard (the diagnosis seat found this itself) -------
 
 def test_spawn_diagnosis_refuses_unescalated_or_resolved(store, monkeypatch):
     monkeypatch.setattr(W.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not spawn")))
