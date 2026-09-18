@@ -354,7 +354,7 @@ alias rows whose canonical seat is live.
 **Acceptance.** After a rotation the Agents list shows the canonical seat and its parked
 predecessor only; a test rotates in a tmp data dir and asserts the projection.
 
-## G15 · Arturo home during `orchestra up` boot says "HTTP 502" instead of "still starting"
+## G15 · Arturo home during `orchestra up` boot says "HTTP 502" instead of "still starting" — FIXED
 `labels: good-first-issue, size:XS, ui, arturo`
 
 Open the home page while the supervisor is still bringing Arturo up and the first turn
@@ -365,6 +365,12 @@ retry in a few seconds" state and retry with backoff, instead of surfacing the s
 
 **Acceptance.** Loading the page mid-boot shows the starting state, then the greeting once
 `/api/arturo/health` answers `ok`; no raw HTTP code reaches the user.
+
+Fixed on main (see git log for "G15"): `dashboard/src/lib/arturo.ts` `isStarting()` treats any
+502/503/504 or a failed fetch as the boot window; `waitForArturo()` polls `/api/arturo/health`
+with 1/2/3/5 s backoff (90 s cap); the home shows "Arturo · starting…" + the starting line, and a
+turn sent mid-boot says "Still starting — I will retry in a few seconds." then retries itself
+once health is ok. Proven by effect on a container with the stack down, then `orchestra up`.
 
 ## G14 · "Check again" after a CLI login kept saying "installed but not logged in" — FIXED
 `labels: bug, size:XS, arturo, fixed`
