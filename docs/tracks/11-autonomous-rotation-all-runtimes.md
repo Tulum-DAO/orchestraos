@@ -21,11 +21,11 @@ are still stubbed (`observe_context` always returns
 (`RetirementReceipt`/`RepinReceipt`) are imported on the live path (`executors.py`);
 the stub `observe`/`spawn` methods are not on the beat's decision path. So the
 Claude context read is already real, not mocked — the stub layer is a separate,
-not-yet-wired consolidation effort. The `orchestra rotate` CLI command referenced
-by the hackathon plan is not on `main` yet (only in the unmerged `tier0/spawn-rotate`
-branch — `orchestra rotate --help` fails on main today; the main-today driver is
-`python3 scripts/rotate_agent.py <seat>`, which runs the same arm→prewarm→
-readiness→swap→verify sequence). Known portability gaps: `wal/green_liveness.py`
+not-yet-wired consolidation effort. `orchestra rotate <seat>` (no `--auto` flag —
+`--dry-run`, `--synthesize`, `--resume`, `--runtime`, `--model` instead) has landed
+on `main` and runs the arm→prewarm→readiness→swap→verify sequence directly; the
+lower-level `python3 scripts/rotate_agent.py <seat>` it wraps still works too.
+Known portability gaps: `wal/green_liveness.py`
 is Claude-specific (pane events + transcript assistant-turn detection); Gemini's
 `ctx_adapters` reader can return an out-of-range token ratio, forcing a stale
 fallback — a concrete, live gap, not a hypothetical; `wal/green_quota.py` is
@@ -84,10 +84,9 @@ Claude, not redo it solo.
   gate abstraction generically; today's soft-only posture (see the file's own
   docstring, `SKIP_SOFT_ONLY`) should stay intact per-runtime unless an operator
   ruling says otherwise.
-- `scripts/rotate_agent.py` — the main-today manual-rotation driver (arm→prewarm→
-  readiness→swap→verify); `orchestra_cli/__main__.py`'s `orchestra rotate --auto`
-  is the target CLI once `tier0/spawn-rotate` merges — confirm current merge
-  state before relying on it.
+- `orchestra_cli/__main__.py` / `orchestra rotate <seat>` — the landed CLI
+  (arm→prewarm→readiness→swap→verify); wraps `scripts/rotate_agent.py`, which you
+  can also call directly.
 - Fixture transcripts for each runtime (new, likely under
   `scripts/lineage_daemon/fixtures/` or the adapter tests' existing pattern) — a
   clean-install rotation needs something to swap toward before a real live seat
@@ -95,15 +94,15 @@ Claude, not redo it solo.
 
 ## Steps
 
-1. `orchestra rotate --help` (expect it to fail on main today) and
-   `grep -n "read_ctx\|context_pct=0.5\|mock_sid" scripts/lineage_daemon/wal/bg_beat.py scripts/lineage_daemon/adapters/*.py`
-   — confirm today's actual state (which layer the beat really calls, command
-   availability) before claiming anything is broken or working.
+1. `orchestra rotate --help` (landed — confirm the exact flags on your checkout)
+   and `grep -n "read_ctx\|context_pct=0.5\|mock_sid"
+   scripts/lineage_daemon/wal/bg_beat.py scripts/lineage_daemon/adapters/*.py` —
+   confirm today's actual state (which layer the beat really calls) before
+   claiming anything is broken or working.
 2. Claude first: this leg is rotation-autonomy-builder's standing commission — pair
    with them or pick up Gemini/Codex instead of duplicating it. If picking up
    Claude anyway: on a clean install, spawn one seat, drive it near a context
-   ceiling (or use a fixture transcript), run `python3 scripts/rotate_agent.py
-   <seat>` (or `orchestra rotate --auto <seat>` once merged) for a full
+   ceiling (or use a fixture transcript), run `orchestra rotate <seat>` for a full
    green→promote→verify cycle. Confirm nothing is lost: the successor answers the
    predecessor's canary, the registry's canonical pointer moves, the old generation
    is retired cleanly.
@@ -124,10 +123,9 @@ Claude, not redo it solo.
 
 Claude: a real rotation (not a fixture) completes green → promote → verify on a
 clean install, successor's readback checked against the predecessor's actual
-state — via `scripts/rotate_agent.py` today, or `orchestra rotate --auto <seat>`
-once that command merges. Gemini and Codex are either done the same way or
-explicitly documented with what's missing and why — per-runtime status must be
-stated, not implied by silence.
+state — via `orchestra rotate <seat>`. Gemini and Codex are either done the same
+way or explicitly documented with what's missing and why — per-runtime status
+must be stated, not implied by silence.
 
 ## Start prompt
 

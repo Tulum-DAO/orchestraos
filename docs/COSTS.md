@@ -50,10 +50,24 @@ the *first authed CLI* in `orchestra.toml`'s `[runtimes] enabled` order
 the brain explicitly, if you want the free tier to actually be what answers
 (see `docs/ARTURO.md`).
 
+**Weekly-limit risk, not just daily.** Claude Code and Codex's paid plans cap
+usage over a rolling week, not only a session or a day — a two-day hackathon
+run at hackathon intensity (multiple seats, near-continuous use, rotations
+that spawn fresh sessions) can burn a week's allowance faster than normal
+solo use, and a plan that hits its weekly cap mid-event has no fallback except
+switching runtimes or paying for a higher tier on the spot. Gemini CLI's daily
+(not weekly) free-tier cap resets every 24 hours, which is why it is the
+recommended fallback if you're worried about running out — see "The zero-key
+path" below. Bring a second authed CLI as backup if you're planning to run the
+full weekend on one paid plan; `orchestra doctor` shows every runtime you have
+authed and the harness switches between them without reconfiguring anything
+else.
+
 Sources: [Claude pricing](https://claude.com/pricing),
 [ChatGPT Plus / Codex bundling](https://userjot.com/blog/openai-codex-pricing),
 [Gemini CLI free tier](https://x.com/mhdfaran/status/2029567739216736544) — verify
-current limits on Google's own Gemini CLI page before relying on the number.
+current limits (daily AND weekly) on each vendor's own pricing page before
+relying on these numbers; weekly caps in particular change without much notice.
 
 ## The zero-key path
 

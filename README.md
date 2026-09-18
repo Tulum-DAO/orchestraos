@@ -13,6 +13,8 @@ OrchestraOS, published by Tulum DAO: an open harness for running a fleet of codi
 - **Arturo.** The assistant. The main page, the new-chat page, and a button that is available on every other page and knows what you are looking at. Text today; voice through your own keys.
 - **Runtime catalog.** Probes which CLIs are installed and authenticated and offers their models, so the harness runs on whatever subscription you already have.
 
+**Before you start:** you need one agent CLI already installed and logged in — Claude Code, Gemini CLI, or Codex, your choice. See `docs/INSTALL.md` §0 for the exact commands, `docs/COSTS.md` for what each plan costs (including a no-cost option), and `docs/BEGINNERS_GUIDE.md` if this is your first time in a terminal at all.
+
 ## Two ways to run it
 
 **Minimum path** (one machine, one CLI, no voice, no chat bridges): gateway up, one seat spawned, one card answered from the web dashboard. Target is under thirty minutes on a clean Ubuntu VPS. See `docs/INSTALL.md`.
