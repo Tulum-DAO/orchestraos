@@ -1,5 +1,7 @@
 # OrchestraOS
 
+![OrchestraOS](docs/design/brand/readme-header.svg)
+
 OrchestraOS, published by Tulum DAO: an open harness for running a fleet of coding agents as a team — agents that message each other, remember across restarts, rotate themselves before they run out of context, and put every real decision in front of the human on their phone.
 
 **This is not a finished product.** It runs one operator's fleet today, every day, and that setup is the reference install. We are opening it so people who want this to exist can build it with us. The first hackathon — Build-a-thon — is Saturday and Sunday, 2026-09-19 and 20.
@@ -28,7 +30,7 @@ OrchestraOS, published by Tulum DAO: an open harness for running a fleet of codi
 - `docs/PROMPTS.md` — copy-paste prompts for the same seven steps, plus the tracks.
 - `docs/UPGRADE.md` — pulling latest `main` without losing a running seat.
 - `docs/COSTS.md` — what a VPS and a CLI plan actually cost, and the zero-key path.
-- `docs/tracks/README.md` — the eleven hackathon tracks, one doc each.
+- `docs/tracks/README.md` — the twelve hackathon tracks, one doc each.
 - `docs/ARCHITECTURE.md` — the map. Read before touching rotation or approvals.
 - `docs/MEMORY.md` — per-seat memory (index + one-fact files + baton) and the facts store Arturo recalls from; the copy-paste prompt for gate step 7.
 
@@ -38,7 +40,7 @@ Copy `orchestra.example.toml` to `orchestra.toml` and fill in the data directory
 
 ## Hackathon tracks
 
-Eleven tracks, each with its own doc: Problem, Design, files to touch, numbered
+Twelve tracks, each with its own doc: Problem, Design, files to touch, numbered
 steps, an acceptance test, and a start prompt you can paste straight into your own
 agent. See `docs/tracks/README.md` for the full index. The big ones:
 

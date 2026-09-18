@@ -53,7 +53,7 @@ slide's bullets — say those out loud, don't put them on the screen.
 
 ## 6. The tracks
 
-- Eleven tracks, each a real gap in the harness with a design already written
+- Twelve tracks, each a real gap in the harness with a design already written
   down: device pairing, a zero-key assistant brain, on-device voice, the
   assistant's home screen, running without a manager agent, chat bridges as
   plugins, a visual restyle, push notifications without a third-party server,
