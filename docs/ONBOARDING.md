@@ -1,13 +1,31 @@
 # Onboarding — connect your phone and the web dashboard to your own gateway
 
-For someone who already has a gateway running (`orchestra up`, `docs/GATE.md`
-step 1) and wants to reach it from a phone and from a browser, on their own
-network, with no baked-in token. Two client surfaces, one pairing flow.
+For someone who already has a gateway running and wants to reach it from a
+phone and from a browser, on their own network, with no baked-in token. Two
+client surfaces, one pairing flow.
 
 > **Landing tonight.** `orchestra pair`, `/gateway/identity`, `/gateway/capabilities`,
 > and `/pair/exchange` are new — check `orchestra pair --help` and
 > `git log -- scripts/watch_gateway.py` before relying on the exact shape below;
 > this doc is written against the frozen contract, not a guess.
+
+## Before anything else: log in
+
+Do this before you do anything below — install and log in to one agent CLI
+(Claude Code, Gemini CLI, or Codex). `docs/INSTALL.md` §0 has the exact
+commands. If you have no subscription to any of them, Gemini CLI's free tier
+needs no credit card — that's the zero-cost path onto this whole doc.
+
+Two things people get wrong here, stated up front so you don't have to guess
+mid-flow:
+
+- **The gateway and the dashboard are different ports.** `8890` is the
+  gateway (what you're pairing to); `8891` is the web dashboard (what you
+  open in a browser). Typing the dashboard's port where the gateway's goes
+  is the single most common mistake on this page.
+- **The pairing code is a credential.** Anyone who has it before you use it
+  can pair their own device to your server. Never screenshare a terminal
+  while a live code is on screen.
 
 ## 1. Run your gateway
 
@@ -82,34 +100,35 @@ scripting against either).
 
 ## What can go wrong, and what it means
 
-The client maps exactly four outcomes from that handshake:
+The client maps exactly four outcomes from that handshake, and every client
+(web, iOS, this doc) uses the same four sentences for them:
 
-1. **No answer at all.** The gateway URL is wrong, the gateway isn't running,
-   or something between you and it (firewall, VPN, Tailscale) is blocking the
-   connection. Check the URL first, then `orchestra status` on the gateway
-   side.
-2. **It answered, but not with the identity shape.** Something is listening at
-   that address and port, but it isn't an OrchestraOS gateway — a typo'd port,
-   a different service, a stale reverse proxy. Double-check the host and port
-   against what `orchestra up` printed.
-3. **Identity looks right, but capabilities came back unauthorized.** The
-   gateway exists and is reachable — your token is the problem: expired,
-   revoked, or the pairing never actually completed. Re-run `orchestra pair`
-   and pair again.
-4. **Both came back clean.** You're connected. See "success" below.
+1. **Can't find a gateway at that address.** — nothing answered at all: the
+   URL is wrong, the gateway isn't running, or something between you and it
+   (firewall, VPN, Tailscale) is blocking the connection. Check the URL
+   first, then `orchestra status` on the gateway side.
+2. **That's not an OrchestraOS gateway.** — something answered, but not with
+   the identity shape: a typo'd port (see "8890 vs 8891" above), a different
+   service, a stale reverse proxy.
+3. **Found it, but your pairing isn't valid.** — identity looks right, but
+   capabilities came back unauthorized: your token is expired, revoked, or
+   the pairing never actually completed. Re-run `orchestra pair` and pair
+   again.
+4. **Connected.** — both calls came back clean. See "success" below.
 
 ## What success looks like
 
-Once both calls succeed, the client shows something like:
+Once both calls succeed, every client (web, iOS, this doc) shows the same
+line, word for word except the host and version:
 
 ```
-Connected to your-gateway.example.net — gateway v1 — no cards yet
+connected to your-gateway.example.net · gateway v1 · no cards yet — they appear here when an agent needs a decision
 ```
 
-"No cards yet" is expected and correct on a fresh pairing — it means the
-handshake worked and there's simply nothing pending for you to answer. Fire
-one approval card (`docs/GATE.md` step 5) to see the surface actually render
-something.
+That whole line is the success state on a fresh pairing with zero agents and
+zero cards — it is not a placeholder or an error, even though nothing else on
+the screen has happened yet. Fire one approval card (`docs/GATE.md` step 5) to
+see the surface actually render something.
 
 ## Notes for anyone building against this
 
