@@ -66,10 +66,63 @@ def register_seat(st: S.Settings, seat: str, *, gm: bool, runtime: str | None, m
     return row
 
 
+def _authed_runtimes(st: S.Settings) -> tuple[list, str | None]:
+    """(ids of authed runtimes, reason the answer is UNDETERMINED).
+
+    Returns ([], None) ONLY on a positive determination that every enabled runtime was probed and
+    none is authenticated. Anything else — no providers.json, a probe that raises, a provider whose
+    auth is unknown rather than False — returns a reason, and the caller must then behave exactly as
+    it did before this guard existed. A false refusal would break every spawn for everyone, which is
+    a far worse failure than the confusing message this guard exists to prevent.
+    """
+    from . import doctor as D
+    from . import runtime_probe as RP
+    providers = st.repo_root / "config" / "providers.json"
+    if not providers.exists():
+        return [], f"no probe definitions at {providers}"
+    dp = D.default_probes(st)   # the SAME probe callables doctor uses — one probe, not two
+    deps = RP.ProbeDeps(which=dp.which, run_cmd=dp.run_cmd, read_file=dp.read_file,
+                        now_ms=dp.now_ms, expand_home=os.path.expanduser)
+    results = RP.probe_all(RP.load_providers(providers), st.runtimes_enabled, deps)
+    if not results:
+        return [], "no enabled runtime was probed"
+    authed = [r["id"] for r in results if r.get("authed") is True]
+    if authed:
+        return authed, None
+    # Every result must be a definite "not authed". A runtime that is not INSTALLED is definitely
+    # not authenticated — that is a determination, not a doubt. Only an installed runtime whose auth
+    # the probe could not read (authed is None) leaves the answer undetermined.
+    undetermined = [r["id"] for r in results
+                    if r.get("authed") is not False and r.get("installed") is not False]
+    if undetermined:
+        return [], f"auth undetermined for: {', '.join(undetermined)}"
+    return [], None
+
+
+def _refuse_if_no_runtime_authed(st: S.Settings) -> int | None:
+    """Refuse the spawn when — and only when — nothing is authenticated. See _authed_runtimes."""
+    from . import doctor as D
+    try:
+        authed, undetermined = _authed_runtimes(st)
+    except Exception as e:  # noqa: BLE001 — fail OPEN: any doubt spawns exactly as before
+        print(f"note: could not check runtime login ({str(e)[:80]}); spawning anyway", file=sys.stderr)
+        return None
+    if authed or undetermined:
+        return None
+    print("refusing to spawn: no enabled runtime is installed AND logged in.\n"
+          f"  {D.RUNTIME_ANY_REMEDY}\n"
+          "  Log in first (run `claude`, `codex login`, or `agy` once), then re-run this command.\n"
+          "  `orchestra doctor` shows which runtimes it found.", file=sys.stderr)
+    return 2
+
+
 def cmd_spawn(ns) -> int:
     st = S.load_settings()
     if not st.config_exists:
         print(f"no config at {st.config_path} — run `orchestra init` first", file=sys.stderr); return 2
+    refused = _refuse_if_no_runtime_authed(st)
+    if refused is not None:
+        return refused
     seat = ns.seat
     row = register_seat(st, seat, gm=ns.gm, runtime=ns.runtime, model=ns.model, tier=ns.tier, prompt=ns.prompt)
     prompt_path = st.repo_root / row["system_prompt"]

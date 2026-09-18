@@ -50,6 +50,12 @@ class DoctorProbes:
 
 # --- real probes -----------------------------------------------------------
 
+# The one wording for "you have not logged in to any runtime". `orchestra spawn` reuses this
+# verbatim rather than inventing a second phrasing for the same condition.
+RUNTIME_ANY_REMEDY = ("At least one of [runtimes] enabled must be installed and logged in "
+                      "(claude OR gemini OR codex)")
+
+
 def _port_owner_real(port: int) -> Optional[int]:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -265,7 +271,7 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
             checks.append(Check("arturo:brain", WARN, f"selection unavailable: {e}"))
     checks.append(Check("runtime:any", OK if any_authed else MISSING,
                         ", ".join(r["id"] for r in results if r["authed"] is True) or "no enabled runtime is installed AND authed",
-                        "At least one of [runtimes] enabled must be installed and logged in (claude OR gemini OR codex)"))
+                        RUNTIME_ANY_REMEDY))
 
     # -- ports
     sup = probes.supervisor_state(st.data_dir) or {}

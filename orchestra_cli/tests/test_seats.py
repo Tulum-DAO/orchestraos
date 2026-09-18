@@ -99,3 +99,52 @@ def test_rotate_synthesize_writes_a_minimal_baton(repo, tmp_path, monkeypatch):
     assert M.main(["rotate", "gm", "--synthesize", "--dry-run"]) == 0
     doc = (tmp_path / "data" / "docs" / "HANDOFF_gm-next.md").read_text()
     assert "canary_questions" in doc and "q1" in doc
+
+
+# --- P0-2: spawn refuses when NO runtime is authenticated, and FAILS OPEN on any doubt -------------
+# A stranger who has not logged in to their CLI gets, today, two injection retries and
+# "Injection FAILED twice ... agent may be idle without a task" — the word "login" never appears,
+# while the CLI's own sign-in screen waits unread in the pane. The guard says what doctor already
+# knows. It must refuse ONLY on a positive determination that nothing is authed: probe error,
+# timeout, unknown, unexpected output or missing probe all PROCEED exactly as before, because a
+# false refusal breaks every spawn for everyone.
+
+def test_spawn_refuses_when_no_runtime_is_authenticated(repo, tmp_path, monkeypatch, capsys):
+    ran = []
+    monkeypatch.setattr(SE, "_run", lambda argv, env=None, cwd=None: ran.append(argv) or 0)
+    monkeypatch.setattr(SE, "_tmux_has_session", lambda name: True)
+    monkeypatch.setattr(SE, "_authed_runtimes", lambda st: ([], None))  # positive: probed, none authed
+    rc = M.main(["spawn", "hello", "--task", "Say hello, then park."])
+    assert rc == 2, "spawn must refuse rather than burn two injection retries and exit 1"
+    assert ran == [], "spawn-agent.sh must not run at all"
+    err = capsys.readouterr().err
+    assert "log" in err.lower(), "the refusal must name the login — that is the whole point"
+    # doctor's own remedy, verbatim — one probe, one wording
+    assert "At least one of [runtimes] enabled must be installed and logged in" in err
+
+
+def test_spawn_proceeds_when_a_runtime_is_authenticated(repo, tmp_path, monkeypatch):
+    ran = []
+    monkeypatch.setattr(SE, "_run", lambda argv, env=None, cwd=None: ran.append(argv) or 0)
+    monkeypatch.setattr(SE, "_tmux_has_session", lambda name: True)
+    monkeypatch.setattr(SE, "_authed_runtimes", lambda st: (["claude"], None))
+    assert M.main(["spawn", "hello"]) == 0
+    assert ran and ran[0][0].endswith("spawn-agent.sh")
+
+
+@pytest.mark.parametrize("failure", ["raises", "unknown", "no-probe"])
+def test_spawn_FAILS_OPEN_when_the_probe_cannot_determine_auth(repo, tmp_path, monkeypatch, failure):
+    """The hard property: any doubt proceeds. A false refusal is worse than a bad message."""
+    ran = []
+    monkeypatch.setattr(SE, "_run", lambda argv, env=None, cwd=None: ran.append(argv) or 0)
+    monkeypatch.setattr(SE, "_tmux_has_session", lambda name: True)
+    if failure == "raises":
+        def boom(st):
+            raise RuntimeError("probe blew up")
+        monkeypatch.setattr(SE, "_authed_runtimes", boom)
+    elif failure == "unknown":
+        monkeypatch.setattr(SE, "_authed_runtimes", lambda st: ([], "providers.json missing"))
+    else:
+        monkeypatch.setattr(SE, "_authed_runtimes", lambda st: ([], "probe unavailable"))
+    assert M.main(["spawn", "hello"]) == 0, f"must proceed when auth is undetermined ({failure})"
+    assert ran and ran[0][0].endswith("spawn-agent.sh")
