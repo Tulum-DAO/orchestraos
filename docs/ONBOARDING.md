@@ -61,12 +61,16 @@ who has it before you use it can pair their own device to your server. Run
 
 The dashboard can't scan a QR code, so type the two values instead:
 
-1. Open the dashboard (`http://your-gateway.example.net:8891` or wherever
-   `[dashboard]` is configured).
+1. Open your own dashboard, at the address `orchestra up` printed when you
+   started it.
 2. It shows a connect screen asking for a gateway URL and a code — paste the
    URL you're running the gateway at and the code from step 2.
 3. The dashboard exchanges the code for a token itself and stores it for that
    browser; you don't see or copy the token directly.
+
+Plain `http://` is fine here if the gateway and your browser are on the same
+LAN — the dashboard says so quietly, it isn't a warning you need to click
+through.
 
 ## 4. Connect the iOS app
 
@@ -100,21 +104,25 @@ scripting against either).
 
 ## What can go wrong, and what it means
 
-The client maps exactly four outcomes from that handshake, and every client
-(web, iOS, this doc) uses the same four sentences for them:
+Every client (web, iOS, this doc) shows the exact same words for each of
+these — if you see one of these on your screen, this is what it means:
 
-1. **Can't find a gateway at that address.** — nothing answered at all: the
-   URL is wrong, the gateway isn't running, or something between you and it
-   (firewall, VPN, Tailscale) is blocking the connection. Check the URL
-   first, then `orchestra status` on the gateway side.
-2. **That's not an OrchestraOS gateway.** — something answered, but not with
-   the identity shape: a typo'd port (see "8890 vs 8891" above), a different
-   service, a stale reverse proxy.
-3. **Found it, but your pairing isn't valid.** — identity looks right, but
-   capabilities came back unauthorized: your token is expired, revoked, or
-   the pairing never actually completed. Re-run `orchestra pair` and pair
-   again.
-4. **Connected.** — both calls came back clean. See "success" below.
+- **Can't find `<host>`.** — "Check the spelling — and if that's a tailnet
+  name, make sure this device is on the same tailnet."
+- **Found `<host>`, but nothing is answering on port `<port>`.** — "Is
+  `orchestra up` running on that machine?"
+- **Something is running at `<host>:<port>`, but it isn't an OrchestraOS
+  gateway.** — "Check the port — the gateway is usually 8890, and 8891 is
+  the dashboard."
+- **That is an OrchestraOS gateway, but it didn't accept this token.** — "Run
+  `orchestra pair` on the server and scan the new code." (the web dashboard
+  says "paste the new code" instead of "scan," since it can't use the
+  camera.)
+
+The first two are both "nothing valid answered" — a DNS/typo problem versus a
+"nothing's listening on that port" problem — the third is "found something,
+but not a gateway," and the fourth is "found a gateway, but the token's no
+good; re-pair."
 
 ## What success looks like
 
@@ -122,7 +130,7 @@ Once both calls succeed, every client (web, iOS, this doc) shows the same
 line, word for word except the host and version:
 
 ```
-connected to your-gateway.example.net · gateway v1 · no cards yet — they appear here when an agent needs a decision
+Connected to your-gateway.example.net - gateway v1 - no cards yet. They appear here when an agent needs a decision.
 ```
 
 That whole line is the success state on a fresh pairing with zero agents and
