@@ -27,6 +27,7 @@ OrchestraOS, published by Tulum DAO: an open harness for running a fleet of codi
 
 - `docs/BEGINNERS_GUIDE.md` — never used a terminal? Start here.
 - `docs/GATE.md` — the seven-step gate everyone completes first: command, expected output, and what to check if it fails, for each step.
+- `docs/ONBOARDING.md` — connecting your own phone and browser to your gateway (no baked-in token): pairing, the handshake, what each failure means.
 - `docs/PROMPTS.md` — copy-paste prompts for the same seven steps, plus the tracks.
 - `docs/UPGRADE.md` — pulling latest `main` without losing a running seat.
 - `docs/COSTS.md` — what a VPS and a CLI plan actually cost, and the zero-key path.
