@@ -43,3 +43,13 @@ test:
 
 install:
 	mkdir -p $(PREFIX)/bin && ln -sf $(CURDIR)/bin/orchestra $(PREFIX)/bin/orchestra && echo "installed $(PREFIX)/bin/orchestra"
+	@case ":$$PATH:" in *":$(PREFIX)/bin:"*) ;; *) \
+	  echo ""; \
+	  echo "NOTE: $(PREFIX)/bin is not on your PATH in this shell, so \`orchestra\` will not be found yet."; \
+	  echo "      (Ubuntu adds it at login only if it already existed, and it did not.) Either run:"; \
+	  echo ""; \
+	  echo '        export PATH="$$HOME/.local/bin:$$PATH"     # this shell; add to ~/.bashrc to keep it'; \
+	  echo ""; \
+	  echo "      or use ./bin/orchestra from the checkout instead."; \
+	  echo "";; \
+	esac

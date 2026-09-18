@@ -23,12 +23,17 @@ Install and log in to ONE agent CLI (the runtime catalog probes these):
 
 ```bash
 git clone https://github.com/Tulum-DAO/orchestraos.git orchestraos && cd orchestraos
-make install                 # symlinks bin/orchestra into ~/.local/bin (or use ./bin/orchestra)
-orchestra init               # data dir (~/.orchestra), orchestra.toml, .venv + pip, npm install, builds;
+make install                 # symlinks bin/orchestra into ~/.local/bin
+./bin/orchestra init         # data dir (~/.orchestra), orchestra.toml, .venv + pip, npm install, builds;
                              # shows the Claude hook rows it will add to ~/.claude/settings.json and asks (or --yes)
 $EDITOR orchestra.toml       # set [runtimes] enabled to the CLI you logged in to, e.g. ["claude"]
-orchestra doctor             # every row OK (WARN/INFO rows are advisory); exit code 0
+./bin/orchestra doctor       # every row OK (WARN/INFO rows are advisory); exit code 0
 ```
+
+`./bin/orchestra` is spelled out above because `~/.local/bin` only joins your PATH at **login**, and
+only if it already existed then — on a clean machine it did not, so a bare `orchestra` in the same
+shell as `make install` answers `command not found`. `make install` prints the `export PATH=...` line
+when that applies; run it (and add it to `~/.bashrc`) to use the bare `orchestra` everywhere.
 
 `orchestra init` is idempotent: it never overwrites `orchestra.toml`, skips what
 exists, and prints did/skipped per step. `--data-dir PATH` moves state elsewhere
