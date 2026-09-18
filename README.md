@@ -1,6 +1,6 @@
 # OrchestraOS
 
-An open harness for running a fleet of coding agents as a team: agents that message each other, remember across restarts, rotate themselves before they run out of context, and put every real decision in front of the human on their phone.
+OrchestraOS, published by Tulum DAO: an open harness for running a fleet of coding agents as a team — agents that message each other, remember across restarts, rotate themselves before they run out of context, and put every real decision in front of the human on their phone.
 
 **This is not a finished product.** It runs one operator's fleet today, every day, and that setup is the reference install. We are opening it so people who want this to exist can build it with us. The first hackathon is Saturday and Sunday, 2026-09-19 and 20.
 
