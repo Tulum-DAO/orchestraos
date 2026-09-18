@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Arturo — Agent Page v2 mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Georgia&family=Source+Serif+4:wght@300;400&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --accent:#d97757;
+    --canvas:#121212;
+    --card:#1c1c1c;
+    --card2:#232323;
+    --hair:rgba(255,255,255,0.08);
+    --grey:rgba(255,255,255,0.55);
+    --grey2:rgba(255,255,255,0.38);
+  }
+  *{box-sizing:border-box; -webkit-font-smoothing:antialiased;}
+  html,body{margin:0;padding:0;background:#050505;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif;
+    display:flex; align-items:flex-start; gap:28px; padding:40px;
+  }
+  .serif{ font-family:"Source Serif 4", Georgia, serif; }
+
+  .phone{
+    width:390px; height:844px; position:relative; overflow:hidden;
+    background:var(--canvas); color:#fff; flex:0 0 auto;
+    border-radius:0;
+  }
+  .phone.pureblack{ background:#000; }
+
+  /* ---------- status bar ---------- */
+  .statusbar{
+    height:47px; display:flex; align-items:center; justify-content:space-between;
+    padding:0 24px; font-size:15px; font-weight:600; position:relative; z-index:5;
+  }
+  .statusbar .icons{ display:flex; align-items:center; gap:5px; opacity:.92; }
+
+  /* ---------- header row ---------- */
+  .header{
+    height:52px; display:flex; align-items:center; justify-content:space-between;
+    padding:0 18px; position:relative; z-index:5;
+  }
+  .header.divider{ border-bottom:1px solid var(--hair); }
+  .glyph-btn{ width:28px; height:28px; display:flex; align-items:center; justify-content:center; color:#fff; opacity:.92; }
+  .header-title{
+    display:flex; align-items:center; gap:6px; font-size:16px; font-weight:600; color:#fff;
+  }
+  .header-title .model{ color:var(--grey); font-weight:500; }
+  .header-title .chev{ color:var(--grey2); font-size:12px; margin-left:1px; }
+
+  /* ---------- glow ---------- */
+  .glow{
+    position:absolute; left:50%; bottom:0; width:520px; height:420px;
+    transform:translateX(-50%);
+    background:radial-gradient(ellipse at 50% 100%, rgba(217,119,87,0.30) 0%, rgba(217,119,87,0.10) 40%, rgba(217,119,87,0) 72%);
+    pointer-events:none; z-index:1;
+  }
+
+  /* ---------- empty-state hero ---------- */
+  .hero{
+    position:absolute; left:0; right:0; top:340px; z-index:3;
+    display:flex; flex-direction:column; align-items:center; gap:18px;
+  }
+  .mark{ width:46px; height:46px; color:var(--accent); }
+  .hero .greet{ font-size:32px; font-weight:300; color:#ece7e2; letter-spacing:0.2px; }
+
+  /* ---------- composer ---------- */
+  .composer{
+    position:absolute; left:16px; right:16px; bottom:28px; z-index:4;
+    background:var(--card); border-radius:26px; padding:14px 16px 10px;
+    box-shadow:0 8px 30px rgba(0,0,0,0.4);
+  }
+  .composer .field-row{ padding:2px 4px 12px; font-size:17px; color:var(--grey); min-height:24px; }
+  .composer .field-row.filled{ color:#fff; }
+  .composer .ctrl-row{ display:flex; align-items:center; justify-content:space-between; }
+  .composer .left-cluster{ display:flex; align-items:center; gap:10px; }
+  .composer .right-cluster{ display:flex; align-items:center; gap:10px; }
+  .circle-btn{
+    width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+    background:rgba(255,255,255,0.08); color:#fff; flex:0 0 auto;
+  }
+  .circle-btn.white{ background:#fff; color:#111; }
+  .circle-btn.grey-send{ background:rgba(255,255,255,0.16); color:#fff; }
+  .model-chip{
+    display:flex; align-items:center; gap:5px; background:rgba(255,255,255,0.08);
+    border-radius:999px; padding:8px 14px; font-size:14px;
+  }
+  .model-chip b{ font-weight:600; color:#fff; }
+  .model-chip span.eff{ color:var(--grey); font-weight:400; }
+  .model-chip .chev{ color:var(--grey2); font-size:10px; margin-left:2px; }
+
+  /* keyboard block */
+  .keyboard{
+    position:absolute; left:0; right:0; bottom:0; height:300px; z-index:3;
+    background:#151515; border-top:1px solid var(--hair);
+  }
+  .keyboard::before{
+    content:""; position:absolute; top:14px; left:16px; right:16px; height:230px;
+    background-image:
+      repeating-linear-gradient(0deg, rgba(255,255,255,0.05) 0 44px, transparent 44px 52px),
+      repeating-linear-gradient(90deg, rgba(255,255,255,0.035) 0 26px, transparent 26px 34px);
+    border-radius:6px; opacity:.6;
+  }
+
+  /* ---------- thread ---------- */
+  .thread{ position:relative; z-index:2; padding:70px 18px 210px; display:flex; flex-direction:column; gap:22px; height:100%; overflow:hidden; }
+  .turn-user{ display:flex; justify-content:flex-end; }
+  .bubble-user{
+    background:#262626; color:#fff; border-radius:20px; padding:11px 16px; font-size:16px;
+    max-width:78%; line-height:1.4;
+  }
+  .turn-assistant{ display:flex; flex-direction:column; gap:8px; align-items:flex-start; }
+  .turn-assistant .mark-sm{ width:18px; height:18px; color:var(--accent); margin-bottom:2px; }
+  .turn-assistant .txt{ font-size:16px; line-height:1.48; color:#f1efec; max-width:92%; }
+  code.inline{ background:rgba(255,255,255,0.09); border-radius:5px; padding:1px 5px; font-family:"SF Mono",Menlo,monospace; font-size:14px; }
+
+  /* decision card (native-looking, grouped) */
+  .decision-card{
+    width:100%; max-width:320px; background:var(--card); border-radius:18px; overflow:hidden;
+    border:1px solid var(--hair); margin-top:4px;
+  }
+  .decision-opt{
+    padding:14px 16px; font-size:15.5px; font-weight:500; color:#fff;
+    border-bottom:1px solid var(--hair); display:flex; align-items:center; justify-content:space-between;
+  }
+  .decision-opt .r{ width:18px; height:18px; border-radius:50%; border:1.5px solid var(--grey2); flex:0 0 auto; }
+  .decision-freetext{
+    padding:12px 16px; font-size:14.5px; color:var(--grey2);
+    display:flex; align-items:center; gap:8px;
+  }
+
+  /* ---------- bottom sheet (S4) ---------- */
+  .backdrop{ position:absolute; inset:0; background:rgba(0,0,0,0.62); z-index:10; }
+  .sheet{
+    position:absolute; left:0; right:0; bottom:0; z-index:11;
+    background:#181818; border-radius:26px 26px 0 0; padding:10px 20px 28px;
+    box-shadow:0 -10px 40px rgba(0,0,0,0.5);
+  }
+  .sheet .grabber{ width:36px; height:4px; border-radius:2px; background:rgba(255,255,255,0.22); margin:6px auto 14px; }
+  .sheet .sheet-head{ display:flex; align-items:center; justify-content:center; position:relative; margin-bottom:18px; }
+  .sheet .sheet-head .x{ position:absolute; left:0; font-size:20px; color:#fff; opacity:.85; }
+  .sheet .sheet-head .title{ font-size:18px; font-weight:700; color:#fff; }
+  .provider-row{ display:flex; justify-content:center; gap:34px; margin-bottom:20px; }
+  .provider-mark{ width:40px; height:40px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.06); }
+  .provider-mark.active{ background:rgba(255,255,255,0.14); box-shadow:0 0 0 2px rgba(255,255,255,0.18) inset; }
+  .provider-mark svg{ width:20px; height:20px; }
+
+  .grouped-card{ background:var(--card); border-radius:18px; overflow:hidden; margin-bottom:14px; }
+  .model-row{ padding:14px 16px; border-bottom:1px solid var(--hair); display:flex; align-items:center; justify-content:space-between; }
+  .model-row:last-child{ border-bottom:none; }
+  .model-row .name{ font-size:16.5px; font-weight:600; color:#fff; }
+  .model-row .desc{ font-size:13.5px; color:var(--grey); margin-top:2px; }
+  .model-row .check{ color:#4fa8ff; font-size:17px; }
+
+  .simple-card{ background:var(--card); border-radius:16px; padding:14px 16px; display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; font-size:16px; color:#fff; }
+  .simple-card .val{ color:var(--grey); display:flex; align-items:center; gap:4px; }
+
+  /* ---------- Approvals list (S5/S6 page) ---------- */
+  .page-header{ padding:14px 20px 10px; font-size:28px; font-weight:700; color:#fff; }
+  .page-scroll{ padding:4px 16px 160px; display:flex; flex-direction:column; gap:14px; }
+  .approval-card{ background:var(--card); border-radius:18px; padding:16px 18px; }
+  .approval-title{ font-size:16px; font-weight:600; color:#fff; margin-bottom:4px; }
+  .approval-sub{ font-size:13.5px; color:var(--grey); margin-bottom:10px; }
+  .approval-actions{ display:flex; gap:10px; }
+  .approval-btn{ flex:1; text-align:center; padding:9px 0; border-radius:999px; font-size:14px; font-weight:600; }
+  .approval-btn.approve{ background:rgba(79,168,255,0.16); color:#7cc0ff; }
+  .approval-btn.deny{ background:rgba(255,255,255,0.08); color:var(--grey); }
+
+  /* tab bar */
+  .tabbar{
+    position:absolute; left:0; right:0; bottom:0; height:88px; z-index:6;
+    background:rgba(18,18,18,0.92); border-top:1px solid var(--hair);
+    display:flex; align-items:center; justify-content:space-around; padding-bottom:14px;
+  }
+  .tab-item{ display:flex; flex-direction:column; align-items:center; gap:4px; font-size:10.5px; color:var(--grey2); }
+  .tab-item.active{ color:#fff; }
+  .tab-item svg{ width:22px; height:22px; }
+  .tab-orb{
+    width:52px; height:52px; border-radius:50%; background:linear-gradient(160deg,#e08a63,#c25a3c);
+    display:flex; align-items:center; justify-content:center; margin-top:-30px;
+    box-shadow:0 6px 18px rgba(217,119,87,0.45), 0 0 0 6px #121212;
+  }
+  .tab-orb svg{ width:22px; height:22px; color:#fff; }
+
+  /* floating ask-arturo pill (S5) */
+  .ask-pill{
+    position:absolute; left:50%; transform:translateX(-50%); bottom:100px; z-index:7;
+    display:flex; align-items:center; gap:8px;
+    background:rgba(40,40,42,0.72); backdrop-filter:blur(14px);
+    border:1px solid rgba(255,255,255,0.10);
+    border-radius:999px; padding:11px 20px 11px 18px;
+    box-shadow:0 8px 24px rgba(0,0,0,0.35);
+  }
+  .ask-pill .lbl{ font-size:15px; font-weight:500; color:#fff; }
+  .ask-pill .mic{ width:16px; height:16px; color:var(--accent); }
+
+  /* S6: expanded composer over dimmed page */
+  .context-chip{
+    display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--grey);
+    background:rgba(255,255,255,0.06); border-radius:8px; padding:6px 10px; margin:0 4px 10px;
+  }
+  .context-chip b{ color:#fff; font-weight:600; }
+
+  .frame-label{ text-align:center; font-size:12px; color:#888; margin-top:8px; font-family:monospace; }
+  .col{ display:flex; flex-direction:column; }
+</style>
+</head>
+<body>
+
+<!-- ============ S1 : Arturo home, empty state ============ -->
+<div class="col" id="col-S1">
+<div class="phone pureblack" id="S1">
+  <div class="statusbar">
+    <span>2:42</span>
+    <span class="icons">
+      <svg width="17" height="12" viewBox="0 0 17 12" fill="#fff"><rect x="0" y="7" width="3" height="5" rx="0.5"/><rect x="4.5" y="5" width="3" height="7" rx="0.5"/><rect x="9" y="2.5" width="3" height="9.5" rx="0.5"/><rect x="13.5" y="0" width="3" height="12" rx="0.5"/></svg>
+      <svg width="15" height="11" viewBox="0 0 15 11" fill="none" stroke="#fff" stroke-width="1.4"><path d="M1 4 C4 1 11 1 14 4"/><path d="M3.3 6.5C5.3 4.8 9.7 4.8 11.7 6.5"/><circle cx="7.5" cy="9.3" r="1.1" fill="#fff" stroke="none"/></svg>
+      <svg width="24" height="12" viewBox="0 0 24 12" fill="none"><rect x="0.5" y="0.5" width="20" height="11" rx="2.5" stroke="#fff"/><rect x="2" y="2" width="15" height="8" rx="1.2" fill="#fff"/><rect x="21.3" y="3.5" width="1.8" height="5" rx="0.8" fill="#fff"/></svg>
+    </span>
+  </div>
+  <div class="header">
+    <div class="glyph-btn"><svg width="20" height="16" viewBox="0 0 20 16" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round"><line x1="1" y1="2" x2="19" y2="2"/><line x1="1" y1="8" x2="19" y2="8"/><line x1="1" y1="14" x2="19" y2="14"/></svg></div>
+    <div class="header-title">Arturo <span class="model">· Fable 5.1</span> <span class="chev">⌄</span></div>
+    <div class="glyph-btn">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.6"><path d="M9 18c-3 0-5.5-2.7-5.5-6.5S6 5 9 5s5.5 2.7 5.5 6.5" stroke-linecap="round"/><path d="M15 18c3 0 5.5-2.7 5.5-6.5S18 5 15 5" stroke-linecap="round"/><path d="M9 5c0-1.7 1.3-3 3-3s3 1.3 3 3" stroke-linecap="round"/><path d="M9 18v1.5a1.5 1.5 0 0 0 3 0V18" stroke-linecap="round"/><path d="M12 18v1.5a1.5 1.5 0 0 0 3 0V18" stroke-linecap="round"/><line x1="12" y1="8.5" x2="12" y2="12" stroke-linecap="round"/></svg>
+    </div>
+  </div>
+  <div class="glow"></div>
+  <div class="hero">
+    <svg class="mark" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+      <g transform="translate(24,24)">
+        <line x1="0" y1="-19" x2="0" y2="-7"/>
+        <line x1="0" y1="19" x2="0" y2="7"/>
+        <line x1="-19" y1="0" x2="-7" y2="0"/>
+        <line x1="19" y1="0" x2="7" y2="0"/>
+        <line x1="-13.4" y1="-13.4" x2="-5" y2="-5"/>
+        <line x1="13.4" y1="13.4" x2="5" y2="5"/>
+        <line x1="13.4" y1="-13.4" x2="5" y2="-5"/>
+        <line x1="-13.4" y1="13.4" x2="-5" y2="5"/>
+      </g>
+    </svg>
+    <div class="greet serif">Afternoon, Sam</div>
+  </div>
+  <div class="composer">
+    <div class="field-row">Ask Arturo</div>
+    <div class="ctrl-row">
+      <div class="left-cluster">
+        <div class="circle-btn">+</div>
+        <div class="model-chip"><b>Fable 5.1</b><span class="eff">High</span></div>
+      </div>
+      <div class="right-cluster">
+        <div class="circle-btn"><svg width="14" height="16" viewBox="0 0 14 16" fill="none" stroke="#fff" stroke-width="1.4"><rect x="4" y="0.5" width="6" height="10" rx="3"/><path d="M1 8a6 6 0 0 0 12 0" stroke-linecap="round"/><line x1="7" y1="14" x2="7" y2="16"/></svg></div>
+        <div class="circle-btn white"><svg width="16" height="12" viewBox="0 0 16 12" fill="none" stroke="#111" stroke-width="1.6" stroke-linecap="round"><line x1="1" y1="6" x2="1" y2="6"/><line x1="3.5" y1="3" x2="3.5" y2="9"/><line x1="6" y1="1" x2="6" y2="11"/><line x1="8.5" y1="4" x2="8.5" y2="8"/><line x1="11" y1="2" x2="11" y2="10"/><line x1="13.5" y1="5" x2="13.5" y2="7"/></svg></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="frame-label">S1 — home, empty state</div>
+</div>
+
+<!-- ============ S2 : typed text + keyboard ============ -->
+<div class="col" id="col-S2">
+<div class="phone pureblack" id="S2">
+  <div class="statusbar">
+    <span>2:43</span>
+    <span class="icons">
+      <svg width="17" height="12" viewBox="0 0 17 12" fill="#fff"><rect x="0" y="7" width="3" height="5" rx="0.5"/><rect x="4.5" y="5" width="3" height="7" rx="0.5"/><rect x="9" y="2.5" width="3" height="9.5" rx="0.5"/><rect x="13.5" y="0" width="3" height="12" rx="0.5"/></svg>
+      <svg width="24" height="12" viewBox="0 0 24 12" fill="none"><rect x="0.5" y="0.5" width="20" height="11" rx="2.5" stroke="#fff"/><rect x="2" y="2" width="10" height="8" rx="1.2" fill="#fff"/><rect x="21.3" y="3.5" width="1.8" height="5" rx="0.8" fill="#fff"/></svg>
+    </span>
+  </div>
+  <div class="header">
+    <div class="glyph-btn"><svg width="20" height="16" viewBox="0 0 20 16" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round"><line x1="1" y1="2" x2="19" y2="2"/><line x1="1" y1="8" x2="19" y2="8"/><line x1="1" y1="14" x2="19" y2="14"/></svg></div>
+    <div class="header-title">Arturo <span class="model">· Fable 5.1</span> <span class="chev">⌄</span></div>
+    <div class="glyph-btn">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.6"><path d="M9 18c-3 0-5.5-2.7-5.5-6.5S6 5 9 5s5.5 2.7 5.5 6.5" stroke-linecap="round"/><path d="M15 18c3 0 5.5-2.7 5.5-6.5S18 5 15 5" stroke-linecap="round"/><path d="M9 5c0-1.7 1.3-3 3-3s3 1.3 3 3" stroke-linecap="round"/><path d="M9 18v1.5a1.5 1.5 0 0 0 3 0V18" stroke-linecap="round"/><path d="M12 18v1.5a1.5 1.5 0 0 0 3 0V18" stroke-linecap="round"/><line x1="12" y1="8.5" x2="12" y2="12" stroke-linecap="round"/></svg>
+    </div>
+  </div>
+  <div class="keyboard"></div>
+  <div class="composer" style="bottom:300px;">
+    <div class="field-row filled">commission an agent to write the README for this repo</div>
+    <div class="ctrl-row">
+      <div class="left-cluster">
+        <div class="circle-btn">+</div>
+        <div class="model-chip"><b>Fable 5.1</b><span class="eff">High</span></div>
+      </div>
+      <div class="right-cluster">
+        <div class="circle-btn"><svg width="14" height="16" viewBox="0 0 14 16" fill="none" stroke="#fff" stroke-width="1.4"><rect x="4" y="0.5" width="6" height="10" rx="3"/><path d="M1 8a6 6 0 0 0 12 0" stroke-linecap="round"/><line x1="7" y1="14" x2="7" y2="16"/></svg></div>
+        <div class="circle-btn grey-send"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="12" x2="7" y2="2"/><polyline points="3,6 7,2 11,6"/></svg></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="frame-label">S2 — typed, keyboard up, adaptive send</div>
+</div>
+
+<!-- ============ S3 : onboarding thread ============ -->
+<div class="col" id="col-S3">
+<div class="phone pureblack" id="S3">
+  <div class="statusbar">
+    <span>2:44</span>
+    <span class="icons">
+      <svg width="17" height="12" viewBox="0 0 17 12" fill="#fff"><rect x="0" y="7" width="3" height="5" rx="0.5"/><rect x="4.5" y="5" width="3" height="7" rx="0.5"/><rect x="9" y="2.5" width="3" height="9.5" rx="0.5"/><rect x="13.5" y="0" width="3" height="12" rx="0.5"/></svg>
+      <svg width="24" height="12" viewBox="0 0 24 12" fill="none"><rect x="0.5" y="0.5" width="20" height="11" rx="2.5" stroke="#fff"/><rect x="2" y="2" width="15" height="8" rx="1.2" fill="#fff"/><rect x="21.3" y="3.5" width="1.8" height="5" rx="0.8" fill="#fff"/></svg>
+    </span>
+  </div>
+  <div class="header">
+    <div class="glyph-btn"><svg width="20" height="16" viewBox="0 0 20 16" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round"><line x1="1" y1="2" x2="19" y2="2"/><line x1="1" y1="8" x2="19" y2="8"/><line x1="1" y1="14" x2="19" y2="14"/></svg></div>
+    <div class="header-title">Arturo <span class="model">· Fable 5.1</span> <span class="chev">⌄</span></div>
+    <div class="glyph-btn">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.6"><path d="M9 18c-3 0-5.5-2.7-5.5-6.5S6 5 9 5s5.5 2.7 5.5 6.5" stroke-linecap="round"/><path d="M15 18c3 0 5.5-2.7 5.5-6.5S18 5 15 5" stroke-linecap="round"/><path d="M9 5c0-1.7 1.3-3 3-3s3 1.3 3 3" stroke-linecap="round"/><path d="M9 18v1.5a1.5 1.5 0 0 0 3 0V18" stroke-linecap="round"/><path d="M12 18v1.5a1.5 1.5 0 0 0 3 0V18" stroke-linecap="round"/><line x1="12" y1="8.5" x2="12" y2="12" stroke-linecap="round"/></svg>
+    </div>
+  </div>
+  <div class="thread">
+    <div class="turn-assistant">
+      <svg class="mark-sm" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round">
+        <g transform="translate(24,24)">
+          <line x1="0" y1="-19" x2="0" y2="-7"/><line x1="0" y1="19" x2="0" y2="7"/>
+          <line x1="-19" y1="0" x2="-7" y2="0"/><line x1="19" y1="0" x2="7" y2="0"/>
+          <line x1="-13.4" y1="-13.4" x2="-5" y2="-5"/><line x1="13.4" y1="13.4" x2="5" y2="5"/>
+          <line x1="13.4" y1="-13.4" x2="5" y2="-5"/><line x1="-13.4" y1="13.4" x2="-5" y2="5"/>
+        </g>
+      </svg>
+      <div class="txt">Hi Sam. I'm Arturo. Let's pair this phone with your server — open a terminal there and run <code class="inline">orchestra pair</code>, then point the camera at the code.</div>
+    </div>
+    <div class="turn-user"><div class="bubble-user">done</div></div>
+    <div class="turn-assistant">
+      <svg class="mark-sm" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round">
+        <g transform="translate(24,24)">
+          <line x1="0" y1="-19" x2="0" y2="-7"/><line x1="0" y1="19" x2="0" y2="7"/>
+          <line x1="-19" y1="0" x2="-7" y2="0"/><line x1="19" y1="0" x2="7" y2="0"/>
+          <line x1="-13.4" y1="-13.4" x2="-5" y2="-5"/><line x1="13.4" y1="13.4" x2="5" y2="5"/>
+          <line x1="13.4" y1="-13.4" x2="5" y2="-5"/><line x1="-13.4" y1="13.4" x2="-5" y2="5"/>
+        </g>
+      </svg>
+      <div class="txt">Paired. I can see one runtime authenticated: Claude. Want voice? I can use your phone's built-in speech for free, or you can add a voice vendor later.</div>
+      <div class="decision-card">
+        <div class="decision-opt">Use built-in voice <div class="r"></div></div>
+        <div class="decision-opt" style="border-bottom:none;">Add a voice key <div class="r"></div></div>
+        <div class="decision-freetext">✎ Or type your own answer…</div>
+      </div>
+    </div>
+  </div>
+  <div class="composer">
+    <div class="field-row">Ask Arturo</div>
+    <div class="ctrl-row">
+      <div class="left-cluster">
+        <div class="circle-btn">+</div>
+        <div class="model-chip"><b>Fable 5.1</b><span class="eff">High</span></div>
+      </div>
+      <div class="right-cluster">
+        <div class="circle-btn"><svg width="14" height="16" viewBox="0 0 14 16" fill="none" stroke="#fff" stroke-width="1.4"><rect x="4" y="0.5" width="6" height="10" rx="3"/><path d="M1 8a6 6 0 0 0 12 0" stroke-linecap="round"/><line x1="7" y1="14" x2="7" y2="16"/></svg></div>
+        <div class="circle-btn white"><svg width="16" height="12" viewBox="0 0 16 12" fill="none" stroke="#111" stroke-width="1.6" stroke-linecap="round"><line x1="1" y1="6" x2="1" y2="6"/><line x1="3.5" y1="3" x2="3.5" y2="9"/><line x1="6" y1="1" x2="6" y2="11"/><line x1="8.5" y1="4" x2="8.5" y2="8"/><line x1="11" y1="2" x2="11" y2="10"/><line x1="13.5" y1="5" x2="13.5" y2="7"/></svg></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="frame-label">S3 — onboarding thread + decision card</div>
+</div>
+
+<!-- ============ S4 : select model sheet over S1 ============ -->
+<div class="col" id="col-S4">
+<div class="phone pureblack" id="S4">
+  <div class="statusbar">
+    <span>2:42</span>
+    <span class="icons">
+      <svg width="17" height="12" viewBox="0 0 17 12" fill="#fff"><rect x="0" y="7" width="3" height="5" rx="0.5"/><rect x="4.5" y="5" width="3" height="7" rx="0.5"/><rect x="9" y="2.5" width="3" height="9.5" rx="0.5"/><rect x="13.5" y="0" width="3" height="12" rx="0.5"/></svg>
+      <svg width="24" height="12" viewBox="0 0 24 12" fill="none"><rect x="0.5" y="0.5" width="20" height="11" rx="2.5" stroke="#fff"/><rect x="2" y="2" width="15" height="8" rx="1.2" fill="#fff"/><rect x="21.3" y="3.5" width="1.8" height="5" rx="0.8" fill="#fff"/></svg>
+    </span>
+  </div>
+  <div class="header">
+    <div class="glyph-btn"><svg width="20" height="16" viewBox="0 0 20 16" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round"><line x1="1" y1="2" x2="19" y2="2"/><line x1="1" y1="8" x2="19" y2="8"/><line x1="1" y1="14" x2="19" y2="14"/></svg></div>
+    <div class="header-title">Arturo <span class="model">· Fable 5.1</span> <span class="chev">⌄</span></div>
+    <div class="glyph-btn"></div>
+  </div>
+  <div class="glow"></div>
+  <div class="hero" style="top:260px;">
+    <svg class="mark" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+      <g transform="translate(24,24)">
+        <line x1="0" y1="-19" x2="0" y2="-7"/><line x1="0" y1="19" x2="0" y2="7"/>
+        <line x1="-19" y1="0" x2="-7" y2="0"/><line x1="19" y1="0" x2="7" y2="0"/>
+        <line x1="-13.4" y1="-13.4" x2="-5" y2="-5"/><line x1="13.4" y1="13.4" x2="5" y2="5"/>
+        <line x1="13.4" y1="-13.4" x2="5" y2="-5"/><line x1="-13.4" y1="13.4" x2="-5" y2="5"/>
+      </g>
+    </svg>
+    <div class="greet serif">Afternoon, Sam</div>
+  </div>
+  <div class="backdrop"></div>
+  <div class="sheet">
+    <div class="grabber"></div>
+    <div class="sheet-head"><span class="x">✕</span><span class="title">Select model</span></div>
+    <div class="provider-row">
+      <div class="provider-mark active"><svg viewBox="0 0 24 24" fill="none" stroke="#d97757" stroke-width="2.4" stroke-linecap="round"><g transform="translate(12,12)"><line x1="0" y1="-9" x2="0" y2="-3.5"/><line x1="0" y1="9" x2="0" y2="3.5"/><line x1="-9" y1="0" x2="-3.5" y2="0"/><line x1="9" y1="0" x2="3.5" y2="0"/><line x1="-6.4" y1="-6.4" x2="-2.5" y2="-2.5"/><line x1="6.4" y1="6.4" x2="2.5" y2="2.5"/><line x1="6.4" y1="-6.4" x2="2.5" y2="-2.5"/><line x1="-6.4" y1="6.4" x2="-2.5" y2="2.5"/></g></svg></div>
+      <div class="provider-mark"><svg viewBox="0 0 24 24" fill="#8ab4ff"><path d="M12 2 L14.2 9.8 L22 12 L14.2 14.2 L12 22 L9.8 14.2 L2 12 L9.8 9.8 Z"/></svg></div>
+      <div class="provider-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#bbb" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="4"/><line x1="8" y1="8" x2="16" y2="16"/><line x1="16" y1="8" x2="8" y2="16"/></svg></div>
+    </div>
+    <div class="grouped-card">
+      <div class="model-row"><div><div class="name">Fable 5.1</div><div class="desc">For your toughest challenges</div></div><div class="check">✓</div></div>
+      <div class="model-row"><div><div class="name">Opus 5</div><div class="desc">For complex tasks</div></div></div>
+      <div class="model-row"><div><div class="name">Sonnet 5</div><div class="desc">Most efficient for everyday tasks</div></div></div>
+      <div class="model-row"><div><div class="name">Haiku 4.5</div><div class="desc">Fastest for quick answers</div></div></div>
+    </div>
+    <div class="simple-card">Effort <span class="val">High ›</span></div>
+    <div class="simple-card">More models <span class="val">›</span></div>
+  </div>
+</div>
+<div class="frame-label">S4 — select model sheet</div>
+</div>
+
+<!-- ============ S5 : Approvals list + floating Ask Arturo pill ============ -->
+<div class="col" id="col-S5">
+<div class="phone pureblack" id="S5">
+  <div class="statusbar">
+    <span>2:45</span>
+    <span class="icons">
+      <svg width="17" height="12" viewBox="0 0 17 12" fill="#fff"><rect x="0" y="7" width="3" height="5" rx="0.5"/><rect x="4.5" y="5" width="3" height="7" rx="0.5"/><rect x="9" y="2.5" width="3" height="9.5" rx="0.5"/><rect x="13.5" y="0" width="3" height="12" rx="0.5"/></svg>
+      <svg width="24" height="12" viewBox="0 0 24 12" fill="none"><rect x="0.5" y="0.5" width="20" height="11" rx="2.5" stroke="#fff"/><rect x="2" y="2" width="15" height="8" rx="1.2" fill="#fff"/><rect x="21.3" y="3.5" width="1.8" height="5" rx="0.8" fill="#fff"/></svg>
+    </span>
+  </div>
+  <div class="page-header">Approvals</div>
+  <div class="page-scroll">
+    <div class="approval-card">
+      <div class="approval-title">Deploy pricing-page-v2 to production</div>
+      <div class="approval-sub">netlify · acme-onepager · requested 6m ago</div>
+      <div class="approval-actions"><div class="approval-btn approve">Approve</div><div class="approval-btn deny">Deny</div></div>
+    </div>
+    <div class="approval-card">
+      <div class="approval-title">Rotate agent g65 → g66</div>
+      <div class="approval-sub">agent-orchestra · canary passed 5/5</div>
+      <div class="approval-actions"><div class="approval-btn approve">Approve</div><div class="approval-btn deny">Deny</div></div>
+    </div>
+    <div class="approval-card">
+      <div class="approval-title">Grant voice vendor key access</div>
+      <div class="approval-sub">arturo-voice · scoped to /voice/*</div>
+      <div class="approval-actions"><div class="approval-btn approve">Approve</div><div class="approval-btn deny">Deny</div></div>
+    </div>
+  </div>
+  <div class="ask-pill">
+    <svg class="mic" viewBox="0 0 14 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="4" y="0.5" width="6" height="10" rx="3"/><path d="M1 8a6 6 0 0 0 12 0" stroke-linecap="round"/><line x1="7" y1="14" x2="7" y2="16"/></svg>
+    <span class="lbl">Ask Arturo</span>
+  </div>
+  <div class="tabbar">
+    <div class="tab-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 12l2-2 4 4 8-8 2 2-10 10z"/></svg>Approvals</div>
+    <div class="tab-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.5"/><path d="M4 20c1-4 5-6 8-6s7 2 8 6"/></svg>Agents</div>
+    <div class="tab-orb">
+      <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round">
+        <g transform="translate(24,24)">
+          <line x1="0" y1="-16" x2="0" y2="-6"/><line x1="0" y1="16" x2="0" y2="6"/>
+          <line x1="-16" y1="0" x2="-6" y2="0"/><line x1="16" y1="0" x2="6" y2="0"/>
+          <line x1="-11.3" y1="-11.3" x2="-4.2" y2="-4.2"/><line x1="11.3" y1="11.3" x2="4.2" y2="4.2"/>
+          <line x1="11.3" y1="-11.3" x2="4.2" y2="-4.2"/><line x1="-11.3" y1="11.3" x2="-4.2" y2="4.2"/>
+        </g>
+      </svg>
+    </div>
+    <div class="tab-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/></svg>Projects</div>
+    <div class="tab-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 18V10M12 18V4M20 18v-6"/></svg>Pipeline</div>
+  </div>
+</div>
+<div class="frame-label">S5 — Approvals page, floating pill</div>
+</div>
+
+<!-- ============ S6 : pill expanded into composer over dimmed page ============ -->
+<div class="col" id="col-S6">
+<div class="phone pureblack" id="S6">
+  <div class="statusbar">
+    <span>2:45</span>
+    <span class="icons">
+      <svg width="17" height="12" viewBox="0 0 17 12" fill="#fff"><rect x="0" y="7" width="3" height="5" rx="0.5"/><rect x="4.5" y="5" width="3" height="7" rx="0.5"/><rect x="9" y="2.5" width="3" height="9.5" rx="0.5"/><rect x="13.5" y="0" width="3" height="12" rx="0.5"/></svg>
+      <svg width="24" height="12" viewBox="0 0 24 12" fill="none"><rect x="0.5" y="0.5" width="20" height="11" rx="2.5" stroke="#fff"/><rect x="2" y="2" width="15" height="8" rx="1.2" fill="#fff"/><rect x="21.3" y="3.5" width="1.8" height="5" rx="0.8" fill="#fff"/></svg>
+    </span>
+  </div>
+  <div class="page-header">Approvals</div>
+  <div class="page-scroll">
+    <div class="approval-card">
+      <div class="approval-title">Deploy pricing-page-v2 to production</div>
+      <div class="approval-sub">netlify · acme-onepager · requested 6m ago</div>
+      <div class="approval-actions"><div class="approval-btn approve">Approve</div><div class="approval-btn deny">Deny</div></div>
+    </div>
+    <div class="approval-card">
+      <div class="approval-title">Rotate agent g65 → g66</div>
+      <div class="approval-sub">agent-orchestra · canary passed 5/5</div>
+      <div class="approval-actions"><div class="approval-btn approve">Approve</div><div class="approval-btn deny">Deny</div></div>
+    </div>
+    <div class="approval-card">
+      <div class="approval-title">Grant voice vendor key access</div>
+      <div class="approval-sub">arturo-voice · scoped to /voice/*</div>
+      <div class="approval-actions"><div class="approval-btn approve">Approve</div><div class="approval-btn deny">Deny</div></div>
+    </div>
+  </div>
+  <div class="tabbar" style="opacity:.35;">
+    <div class="tab-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 12l2-2 4 4 8-8 2 2-10 10z"/></svg>Approvals</div>
+    <div class="tab-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.5"/><path d="M4 20c1-4 5-6 8-6s7 2 8 6"/></svg>Agents</div>
+    <div class="tab-orb"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"><g transform="translate(24,24)"><line x1="0" y1="-16" x2="0" y2="-6"/><line x1="0" y1="16" x2="0" y2="6"/><line x1="-16" y1="0" x2="-6" y2="0"/><line x1="16" y1="0" x2="6" y2="0"/><line x1="-11.3" y1="-11.3" x2="-4.2" y2="-4.2"/><line x1="11.3" y1="11.3" x2="4.2" y2="4.2"/><line x1="11.3" y1="-11.3" x2="4.2" y2="-4.2"/><line x1="-11.3" y1="11.3" x2="-4.2" y2="4.2"/></g></svg></div>
+    <div class="tab-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/></svg>Projects</div>
+    <div class="tab-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 18V10M12 18V4M20 18v-6"/></svg>Pipeline</div>
+  </div>
+  <div class="backdrop"></div>
+  <div class="composer" style="bottom:112px; z-index:12;">
+    <div class="context-chip">Context: <b>Approvals · apr_1a2b3c4d</b></div>
+    <div class="field-row">Ask Arturo</div>
+    <div class="ctrl-row">
+      <div class="left-cluster">
+        <div class="circle-btn">+</div>
+        <div class="model-chip"><b>Fable 5.1</b><span class="eff">High</span></div>
+      </div>
+      <div class="right-cluster">
+        <div class="circle-btn"><svg width="14" height="16" viewBox="0 0 14 16" fill="none" stroke="#fff" stroke-width="1.4"><rect x="4" y="0.5" width="6" height="10" rx="3"/><path d="M1 8a6 6 0 0 0 12 0" stroke-linecap="round"/><line x1="7" y1="14" x2="7" y2="16"/></svg></div>
+        <div class="circle-btn white"><svg width="16" height="12" viewBox="0 0 16 12" fill="none" stroke="#111" stroke-width="1.6" stroke-linecap="round"><line x1="1" y1="6" x2="1" y2="6"/><line x1="3.5" y1="3" x2="3.5" y2="9"/><line x1="6" y1="1" x2="6" y2="11"/><line x1="8.5" y1="4" x2="8.5" y2="8"/><line x1="11" y1="2" x2="11" y2="10"/><line x1="13.5" y1="5" x2="13.5" y2="7"/></svg></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="frame-label">S6 — pill expanded, context chip</div>
+</div>
+
+</body>
+</html>
