@@ -7,6 +7,7 @@ import { join } from 'path';
 import { WebSocketServer } from 'ws';
 
 import agentsRouter from './routes/agents.js';
+import redAlertRouter from './routes/red-alert.js';
 import chatTranscriptRouter from './routes/chat-transcript.js';
 import transcriptStreamRouter from './routes/transcript-stream.js';
 import tasksRouter from './routes/tasks.js';
@@ -100,6 +101,7 @@ app.use('/api/agents', chatTranscriptRouter); // /:id/transcript (falls through 
 app.use('/api/agents', transcriptStreamRouter); // /:id/transcript/stream (F1 SSE lane; poll path above is the fallback)
 app.use('/api/agents', agentSendRouter); // /:id/send (B1 send bridge, falls through from agentsRouter)
 app.use('/api/tasks', tasksRouter);
+app.use('/api/red-alert', redAlertRouter); // the report button = ticket gateway (docs/RED_ALERT.md)
 app.use('/api/activity', activityRouter);
 app.use('/api/system', systemRouter);
 app.use('/api/memory', memoryRouter);

@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""RED-first contract for red_alert.py — the RED ALERT crash-report standard.
+
+Commission: prompts/red-alert-builder.md (the operator 2026-09-17 23:30 Tulum, after ^Z on the
+harness bottom bar suspended gm). A crash report is ONE JSON file under
+state/red-alert/<ts>-<slug>.json with the fixed schema in docs/RED_ALERT.md, the CLI is
+scripts/red_alert.py (report / list / show / update / resolve / escalate), and the
+classifier turns evidence (ps STAT, screen text, pane liveness) into a catalogued class
+with an immediate repair the watchdog may perform itself.
+"""
+import json
+import os
+import sys
+
+import pytest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+
+import red_alert as RA  # noqa: E402
+
+
+@pytest.fixture
+def store(tmp_path, monkeypatch):
+    monkeypatch.setenv("RED_ALERT_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("RED_ALERT_LOG_DIR", str(tmp_path / "logs"))
+    return tmp_path
+
+
+def fake_evidence(seats, **kw):
+    return {
+        "pane_snapshot": {s: f"/tmp/{s}-pane.txt" for s in seats},
+        "process_state": {s: [{"pid": 1, "stat": "T", "cmd": "claude --resume abc"}] for s in seats},
+        "log_excerpt": {s: "tail" for s in seats},
+        "sids": {s: "abc" for s in seats},
+        "registry_rows": {s: {"tmux_session": s, "session_id": "abc"} for s in seats},
+    }
+
+
+# --- schema -----------------------------------------------------------------
+
+def test_report_writes_one_json_with_full_schema(store):
+    rep = RA.report(reported_by="user", channel="harness", severity="crash", seats=["gm"],
+                    symptom="^Z suspended gm", capture=fake_evidence)
+    path = rep["_path"]
+    assert path.endswith(".json") and os.path.dirname(path) == os.environ["RED_ALERT_STATE_DIR"]
+    on_disk = json.load(open(path))
+    for key in RA.SCHEMA_KEYS:
+        assert key in on_disk, key
+    assert on_disk["id"].startswith("ra_")
+    assert on_disk["status"] == "open"
+    assert on_disk["seats"] == ["gm"]
+    assert on_disk["evidence"]["process_state"]["gm"][0]["stat"] == "T"
+    assert on_disk["timeline"][0]["event"] == "reported"
+
+
+def test_report_rejects_unknown_severity_and_reporter(store):
+    with pytest.raises(ValueError):
+        RA.report(reported_by="ghost", channel="x", severity="crash", seats=["gm"], symptom="s", capture=fake_evidence)
+    with pytest.raises(ValueError):
+        RA.report(reported_by="user", channel="x", severity="meh", seats=["gm"], symptom="s", capture=fake_evidence)
+
+
+def test_report_filename_is_ts_slug(store):
+    rep = RA.report(reported_by="watchdog", channel="watchdog", severity="error", seats=["gm"],
+                    symptom="Out of usage credits on screen", capture=fake_evidence)
+    base = os.path.basename(rep["_path"])
+    ts, _, slug = base.partition("-")
+    assert len(ts) == 16 and ts.endswith("Z")
+    assert slug.startswith("gm-process-suspended")  # class wins the slug when evidence classifies
+
+
+# --- classifier (the catalogue of errors the system upholds itself to) -------
+
+def test_classify_suspended_process_is_the_ctrl_z_class():
+    ev = fake_evidence(["gm"])
+    c = RA.classify(ev, "gm")
+    assert c["class"] == "process_suspended"
+    assert c["severity"] == "crash"
+    assert c["immediate_fix"]["action"] == "card_only"  # NO KILLS rule: a present process is never touched
+
+
+def test_classify_dead_pane():
+    ev = fake_evidence(["gm"])
+    ev["process_state"]["gm"] = []
+    ev["pane_dead"] = {"gm": True}
+    c = RA.classify(ev, "gm")
+    assert c["class"] == "pane_dead"
+    assert c["immediate_fix"]["action"] == "respawn_resume"
+
+
+@pytest.mark.parametrize("screen,cls", [
+    ("You've hit your usage limit · out of usage credits", "out_of_usage"),
+    ("API Error: 529 overloaded", "api_error"),
+    ("Select login method:\n 1. Claude account", "login_screen"),
+    ("Bypass Permissions mode\n Yes, I accept", "bypass_permissions_dialog"),
+    ("Claude Code has been suspended. Run `fg` to bring Claude Code back.", "process_suspended"),
+])
+def test_classify_screen_text(screen, cls):
+    ev = fake_evidence(["gm"])
+    ev["process_state"]["gm"] = [{"pid": 1, "stat": "Sl+", "cmd": "claude"}]
+    ev["screen"] = {"gm": screen}
+    assert RA.classify(ev, "gm")["class"] == cls
+
+
+def test_remote_control_disconnected_notice_is_not_a_login_screen():
+    ev = fake_evidence(["gm"])
+    ev["process_state"]["gm"] = [{"pid": 1, "stat": "Sl+", "cmd": "claude"}]
+    ev["screen"] = {"gm": "● Remote Control disconnected — signed-in claude.ai account changed — run /remote-control ..., or /login to switch back\n❯ "}
+    assert RA.classify(ev, "gm") is None
+
+
+def test_classify_healthy_returns_none():
+    ev = fake_evidence(["gm"])
+    ev["process_state"]["gm"] = [{"pid": 1, "stat": "Sl+", "cmd": "claude"}]
+    ev["screen"] = {"gm": "❯ "}
+    assert RA.classify(ev, "gm") is None
+
+
+def test_every_catalogue_class_has_immediate_fix_and_doc():
+    doc = open(os.path.join(HERE, "..", "docs", "RED_ALERT.md")).read()
+    for name, entry in RA.CATALOGUE.items():
+        assert f"`{name}`" in doc, f"{name} missing from docs/RED_ALERT.md catalogue table"
+        assert entry["severity"] in RA.SEVERITIES, name
+        assert "immediate_fix" in entry and "action" in entry["immediate_fix"], name
+        assert entry.get("doc"), name
+
+
+# --- lifecycle --------------------------------------------------------------
+
+def test_list_resolve_escalate_roundtrip(store):
+    rep = RA.report(reported_by="agent", channel="msg_store", severity="bug", seats=["x"],
+                    symptom="composer stuck", capture=fake_evidence)
+    rid = rep["id"]
+    assert [r["id"] for r in RA.list_reports()] == [rid]
+    assert RA.list_reports(status="resolved") == []
+    RA.update(rid, diagnosis="paste newline", immediate_fix={"action": "bare_enter"}, status="repairing")
+    r = RA.show(rid)
+    assert r["status"] == "repairing" and r["diagnosis"] == "paste newline"
+    RA.escalate(rid, reason="repair failed twice")
+    r = RA.show(rid)
+    assert r["escalations"][0]["reason"] == "repair failed twice"
+    assert r["status"] == "awaiting-approval"
+    RA.resolve(rid, note="fixed by effect")
+    r = RA.show(rid)
+    assert r["status"] == "resolved" and r["timeline"][-1]["event"] == "resolved"
+    assert [x["id"] for x in RA.list_reports(status="resolved")] == [rid]
+
+
+def test_update_rejects_unknown_key_and_bad_status(store):
+    rep = RA.report(reported_by="agent", channel="msg_store", severity="bug", seats=["x"],
+                    symptom="s", capture=fake_evidence)
+    with pytest.raises(ValueError):
+        RA.update(rep["id"], status="done")
+    with pytest.raises(ValueError):
+        RA.update(rep["id"], bogus=1)
+
+
+def test_cli_report_and_list(store, capsys):
+    rc = RA.main(["report", "--reported-by", "user", "--channel", "telegram", "--severity", "crash",
+                  "--seat", "gm", "--symptom", "gm is frozen", "--no-capture"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "ra_" in out
+    RA.main(["list"])
+    out = capsys.readouterr().out
+    assert "gm is frozen" in out and "open" in out
+
+
+def test_cli_report_kind_derives_severity_and_prints_json(store, capsys):
+    rc = RA.main(["report", "--reported-by", "user", "--channel", "dashboard", "--kind", "suggestion",
+                  "--seat", "gm", "--symptom", "make the bar bigger", "--no-capture"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert out["severity"] == "improvement" and out["id"].startswith("ra_")
+    assert RA.show(out["id"])["kind"] == "suggestion"
+
+
+def test_surface_routes_improvements_away_from_cards(store, monkeypatch):
+    calls = []
+    monkeypatch.setattr(RA, "_sp_run_for_test", None, raising=False)
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: calls.append(a[0][0]) or type("R", (), {"returncode": 0, "stdout": "{\"sent\": true}"})())
+    d = RA.report(reported_by="user", channel="dashboard", severity="improvement", seats=["gm"], symptom="idea", capture=fake_evidence)
+    out = RA.surface(d)
+    assert out["card_id"] is None and out["surfaced"] is True
+    assert not any("approval.py" in c for c in calls)
+
+
+# --- ps parsing (the ^Z signal) ---------------------------------------------
+
+def test_parse_ps_tree_marks_stopped():
+    ps = "  PID STAT TT       CMD\n 1406688 T    pts/60   node claude --resume abc\n 1406700 Sl   pts/60   mcp-server\n"
+    rows = RA.parse_ps(ps)
+    assert rows[0] == {"pid": 1406688, "stat": "T", "tty": "pts/60", "cmd": "node claude --resume abc"}
+    assert RA.any_stopped(rows) is True
+    assert RA.any_stopped([{"pid": 1, "stat": "Sl+", "tty": "", "cmd": "x"}]) is False
