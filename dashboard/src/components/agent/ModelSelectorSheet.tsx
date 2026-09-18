@@ -15,6 +15,7 @@
  */
 import { useEffect, useState } from 'react';
 import { X, Plus } from 'lucide-react';
+import { ProviderConnectModal } from './ProviderConnectModal';
 import { useModelSelection } from '../../stores/modelSelection';
 import {
   buildProviderRows,
@@ -70,6 +71,9 @@ export function ModelSelectorSheet({ open, onClose }: ModelSelectorSheetProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedProviderId, setExpandedProviderId] = useState<string | null>(null);
+  // G21: the tile the operator tapped while it was DISCONNECTED — it opens the connect modal
+  // instead of doing nothing, which is also the only way the reason reaches a phone.
+  const [connectRow, setConnectRow] = useState<ProviderRow | null>(null);
   const select = useModelSelection((s) => s.select);
   const currentProviderId = useModelSelection((s) => s.providerId);
   const currentModelId = useModelSelection((s) => s.modelId);
@@ -135,9 +139,8 @@ export function ModelSelectorSheet({ open, onClose }: ModelSelectorSheetProps) {
               {rows.map((row) => (
                 <button
                   key={row.provider.id}
-                  disabled={!row.selectable}
-                  onClick={() => setExpandedProviderId(row.provider.id)}
-                  title={row.selectable ? row.provider.label : `${row.provider.label}: ${row.greyReason}`}
+                  onClick={() => row.selectable ? setExpandedProviderId(row.provider.id) : setConnectRow(row)}
+                  title={row.selectable ? row.provider.label : `${row.provider.label}: ${row.greyReason} — tap to connect`}
                   className={`flex flex-col items-center justify-center gap-1 h-full min-h-[4.5rem] px-2 py-2 rounded-lg border transition-colors ${
                     row.selectable
                       ? expandedProviderId === row.provider.id
@@ -147,7 +150,8 @@ export function ModelSelectorSheet({ open, onClose }: ModelSelectorSheetProps) {
                       // The reason still reaches the operator two ways that do not distort
                       // the tile: the hover/long-press title, and the "Add a provider"
                       // panel, which lists every missing provider with the probe's reason.
-                      : 'border-red-500/70 opacity-60 cursor-not-allowed'
+                      // Clickable now: tapping it opens the connect modal (TMUX / OAUTH).
+                      : 'border-red-500/70 opacity-60 hover:opacity-90 hover:bg-muted'
                   }`}
                 >
                   <span
@@ -220,6 +224,17 @@ export function ModelSelectorSheet({ open, onClose }: ModelSelectorSheetProps) {
           </>
         )}
       </div>
+
+      <ProviderConnectModal
+        provider={connectRow ? {
+          id: connectRow.provider.id,
+          label: connectRow.provider.label,
+          installed: connectRow.provider.installed,
+          authed: connectRow.provider.authed,
+          auth_reason: connectRow.provider.auth_reason ?? connectRow.greyReason,
+        } : null}
+        onClose={() => setConnectRow(null)}
+      />
     </div>
   );
 }

@@ -12,10 +12,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import http from 'node:http';
-import { createAgentsNewRouter, normalizeAgentName, pickRuntime, type NewAgentDeps } from './agents-new.js';
+import { createAgentsNewRouter, normalizeAgentName, pickRuntime, loginHint, type NewAgentDeps } from './agents-new.js';
 
 function authedRow(id: string, cli: string, authed: boolean | 'unverified' = true) {
-  return { id, label: id, cli, installed: true, authed, auth_reason: null };
+  // logo_svg/models are part of ProviderResult; the login paths ignore them, but loginHint
+  // takes RuntimeRow[] so the fixture has to be a real row rather than a near-miss.
+  return { id, label: id, cli, installed: true, authed, auth_reason: undefined, logo_svg: '', models: [] };
 }
 
 function makeDeps(over: Partial<NewAgentDeps> & { rows?: any[] } = {}): NewAgentDeps & { calls: any } {
@@ -179,4 +181,44 @@ test('POST /login-shell names the first NOT-installed cli when nothing is instal
   const r = await post(deps, '/api/agents/login-shell', {});
   assert.equal(r.json.ok, true);
   assert.match(r.json.hint, /install/i);
+});
+
+// --- G21: /login-shell must target the provider the operator CLICKED ------------------------
+// The disconnected-provider modal (operator, 2026-09-18) opens a login for the tile that was
+// tapped. Before this, loginHint() picked `installed[0]` — so tapping Gemini on a box where
+// Claude was installed opened a CLAUDE login and silently connected the wrong provider.
+
+test('loginHint targets the requested provider, not the first installed one', () => {
+  const rows = [authedRow('claude', 'claude'), { ...authedRow('gemini', 'agy'), authed: false }];
+  const picked = loginHint(rows, 'gemini');
+  assert.equal(picked.cli, 'agy');
+  assert.match(picked.greeting, /agy/);
+});
+
+test('loginHint falls back to the old behaviour when no provider is named', () => {
+  const rows = [authedRow('claude', 'claude')];
+  assert.equal(loginHint(rows).cli, 'claude');
+});
+
+test('loginHint on a provider that is NOT installed says install, and names that CLI', () => {
+  const rows = [authedRow('claude', 'claude'), { ...authedRow('gemini', 'agy'), installed: false, authed: false }];
+  const picked = loginHint(rows, 'gemini');
+  assert.equal(picked.cli, 'agy');
+  assert.match(picked.hint, /not installed/i);
+});
+
+test('POST /login-shell opens a session named for the REQUESTED provider', async () => {
+  const deps = makeDeps({ rows: [authedRow('claude', 'claude'), { ...authedRow('gemini', 'agy'), authed: false }] });
+  const res = await post(deps, '/api/agents/login-shell', { provider: 'gemini' });
+  assert.equal(res.status, 200);
+  assert.equal(res.json.cli, 'agy');
+  assert.equal(res.json.session, 'login-agy');
+  assert.equal(deps.calls.loginShell[0].session, 'login-agy');
+});
+
+test('POST /login-shell with no provider still behaves as it did before', async () => {
+  const deps = makeDeps();
+  const res = await post(deps, '/api/agents/login-shell', {});
+  assert.equal(res.status, 200);
+  assert.equal(res.json.session, 'login-claude');
 });
