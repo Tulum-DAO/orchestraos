@@ -214,3 +214,25 @@ def test_describe_carries_kind_runtime_model():
     assert d["kind"] == "runtime" and d["runtime"] == "codex" and d["model"] == "gpt-5"
     n = B.NullBrain("why").describe()
     assert n["kind"] == "none" and n["reason"] == "why"
+
+
+def test_reselect_if_none_swaps_in_a_runtime_once_a_cli_is_authed(monkeypatch):
+    """G14: brain chosen as none at boot must become live after the user logs in, without a
+    restart; a working brain is never replaced; re-probes are rate-limited."""
+    reselect_if_none, select_brain = B.reselect_if_none, B.select_brain
+    none = select_brain("auto", "", probes=[], api_model="m")
+    assert none.kind == "none"
+    calls = []
+    def probe(_root, _enabled):
+        calls.append(1)
+        return [{"id": "claude", "cli": "claude", "installed": True, "authed": True}]
+    state = {}
+    nb = reselect_if_none(none, "auto", "", "/x", None, "m", probe_fn=probe, _state=state)
+    assert nb.kind == "runtime" and calls == [1]
+    # a working brain is returned untouched and never re-probed
+    assert reselect_if_none(nb, "auto", "", "/x", None, "m", probe_fn=probe, _state=state) is nb and calls == [1]
+    # still none + within the interval -> no probe
+    state2 = {"last": 10**12}
+    import time
+    monkeypatch.setattr(time, "monotonic", lambda: 10**12 + 1)
+    assert reselect_if_none(none, "auto", "", "/x", None, "m", probe_fn=probe, _state=state2) is none and calls == [1]

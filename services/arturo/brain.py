@@ -378,3 +378,26 @@ def probe_runtimes(repo_root: Path, enabled: Optional[list] = None) -> list:
     except Exception as e:  # noqa: BLE001
         log.error(f"runtime probe failed: {e}")
         return []
+
+
+def reselect_if_none(current, mode: str, api_key: str, repo_root, enabled: Optional[list],
+                     api_model: str, runtime_model: str = "", probe_fn: Optional[Callable] = None,
+                     min_interval_s: float = 5.0, _state: dict = {}):
+    """Self-heal for a brain chosen at boot before any CLI was logged in (G14, 2026-09-17:
+    on a clean install /health kept reporting brain=none after the user logged in, so the
+    onboarding "Check again" never advanced). Re-probes at most every `min_interval_s`
+    and returns a NEW brain only when one is now available; otherwise the current one.
+    Never replaces a working brain."""
+    import time as _t
+    if current is None or getattr(current, "kind", None) != "none":
+        return current
+    now = _t.monotonic()
+    if now - _state.get("last", -1e9) < min_interval_s:
+        return current
+    _state["last"] = now
+    probes = (probe_fn or probe_runtimes)(repo_root, enabled)
+    nb = select_brain(mode, api_key, probes=probes, api_model=api_model, runtime_model=runtime_model)
+    if getattr(nb, "kind", "none") != "none":
+        log.info(f"brain: re-selected after boot — {nb.describe()}")
+        return nb
+    return current
