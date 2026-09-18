@@ -26,7 +26,7 @@ a `Restart=on-failure` never wedges on a stale lock).
 
 INERT: importing/constructing writes nothing and attaches nothing; only `tick()`/
 `run()` act, and `run()` is NOT wired to any cron/systemd unit by this build (the
-systemd `User=shaw` unit is the LAST, root-installed step).
+systemd `User=<operator>` unit is the LAST, root-installed step).
 """
 import json
 import logging

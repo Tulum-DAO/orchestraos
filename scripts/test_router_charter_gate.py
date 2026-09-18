@@ -113,7 +113,7 @@ def test_established_recipient_still_gated():
 
 
 def test_shaw_origin_never_held():
-    """NAMED ASSERTION: shaw-bypasses-bumpers. The bumper constrains
+    """NAMED ASSERTION: operator-bypasses-bumpers. The bumper constrains
     dispatchers, never the principal."""
     assert mr.charter_gate(_msg(contributes="off-lane", frm="operator"),
                            _CODEX_CHARTER) is None

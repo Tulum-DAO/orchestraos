@@ -4,7 +4,7 @@ from services.arturo import precall_snapshot as ps
 def test_snapshot_composes_all_local_parts():
     snap = ps.build(
         page="Approvals",
-        gm_tail=lambda: ["shaw: ship it", "gm: shipped"],
+        gm_tail=lambda: ["operator: ship it", "gm: shipped"],
         approvals_count=lambda: 4,
         fleet_line=lambda: "12 working, 3 waiting",
     )

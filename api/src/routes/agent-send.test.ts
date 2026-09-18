@@ -136,14 +136,14 @@ test('409: composer has the operator\'s own unsubmitted text -> payload echoed, 
   const d = deps({
     gatewayInject: async () => ({
       httpStatus: 409, ok: false, reason: 'busy', state: 'idle',
-      activity: 'Composer has unsubmitted text', composer_text: 'shaw was mid-sentence',
+      activity: 'Composer has unsubmitted text', composer_text: 'operator was mid-sentence',
     }),
     msgStoreSend: async () => { wrote = true; return { sent: true, id: 'should-not-happen' }; },
   });
   await handleAgentSend(d, req({ body: { text: 'my new message', client_caps: ['send-states'] } }), res);
   assert.equal(calls.status, 409);
   assert.equal(calls.json.busy, true);
-  assert.equal(calls.json.composer_text, 'shaw was mid-sentence');
+  assert.equal(calls.json.composer_text, 'operator was mid-sentence');
   assert.deepEqual(calls.json.payload, { text: 'my new message', attachments: undefined, client_caps: ['send-states'] });
   assert.equal(wrote, false, 'must never durable-write on top of a composer-hold');
 });

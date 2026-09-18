@@ -175,7 +175,7 @@ with loop 1 bar 9.5 fails the same attempt; exhausted loops raise the operator c
 All string literals, prose and the tenant default are already generic. What remains are
 ~48 identifiers (variables, functions, constants) found via
 `git grep -ciE '\bshaw\b'`. Known locations: `scripts/lineage_daemon/wal/checkpoint_producer.py`
-(local var + `shaw_attached_fn` parameter, and its supervised test double),
+(local var + `operator_attached_fn` parameter, and its supervised test double),
 `api/src/services/state-reader.ts` (`getShawPresence`), `dashboard/src/components/JarvisPanel.tsx`
 and `dashboard/src/pages/ChatHistory.tsx` (`isShaw`), and every reader of the
 `SHAW_TELEGRAM_ID` env var name (`brief.py`, `scripts/approval_config.py`, `scripts/tg-notify.sh`)

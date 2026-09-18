@@ -75,7 +75,7 @@ export ARTURO_STREAM_IDLE_CLOSE="${ARTURO_STREAM_IDLE_CLOSE:-0}"
 # SPEAKING-flip (g16's word, watch 216 echo-gate ON THE WRIST; gm ruling msg_61b5007e:
 # default must match the live contract — a watchdog crash-restart must not revert it).
 export ARTURO_STREAM_SPEAKING="${ARTURO_STREAM_SPEAKING:-1}"
-# Per-vendor daily voice cap (SHAW DECISION 2026-09-08 22:05Z via native menu, ios
+# Per-vendor daily voice cap (OPERATOR DECISION 2026-09-08 22:05Z via native menu, ios
 # msg_e5e964b6): 60 min/day/vendor before Hume credits get added. voice_usage.py reads this
 # at import; 80% fires one card, 100% refuses NEW calls 503 for that vendor.
 export VOICE_DAILY_CAP_MIN="${VOICE_DAILY_CAP_MIN:-60}"

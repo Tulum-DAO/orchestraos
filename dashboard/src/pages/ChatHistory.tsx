@@ -386,7 +386,7 @@ function ConversationCard({ conv }: { conv: Conversation }) {
   );
 }
 
-// ── the operator message card (for shaw view) ─────────────────────────────────
+// ── the operator message card (for operator view) ─────────────────────────────────
 
 function ShawMessageCard({ msg }: { msg: any }) {
   return (

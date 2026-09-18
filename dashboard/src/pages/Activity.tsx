@@ -110,7 +110,7 @@ function relativeTime(ts: string): string {
 // ── Linkify detail text ────────────────────────────────────────────────
 
 // Matches agent name patterns: words ending in -dev, -pm, -ops, -gm, etc.
-const AGENT_NAME_RE = /\b([\w-]+-(?:dev|pm|ops|gm|web|ui|worker|builder|strategist|advisor|designer|researcher|auditor|engineer)|(?:pm|qa|gm|jarvis|kai|shaw)-[\w-]+)\b/g;
+const AGENT_NAME_RE = /\b([\w-]+-(?:dev|pm|ops|gm|web|ui|worker|builder|strategist|advisor|designer|researcher|auditor|engineer)|(?:pm|qa|gm|jarvis|kai|operator)-[\w-]+)\b/g;
 
 function linkifyDetail(detail: string, knownAgents: Set<string>): React.ReactNode[] {
   const parts: React.ReactNode[] = [];

@@ -47,7 +47,7 @@ REGISTRY = ORCHESTRA_DIR / "registry.json"
 AGENT_SESSIONS = ORCHESTRA_DIR / "state" / "agent-sessions.json"
 LIVE_ROSTER = ORCHESTRA_DIR / "state" / "live-roster.json"
 LOG_FILE = ORCHESTRA_DIR / "logs" / "park-idle.log"
-SHAW_PRESENCE = ORCHESTRA_DIR / "state" / "shaw-presence.json"
+OPERATOR_PRESENCE = ORCHESTRA_DIR / "state" / "operator-presence.json"
 
 # --- identity-store cutover seam (INERT until the operator-armed) --------------------
 # Cheap flag-file check FIRST so that when the cutover is not armed (the default
@@ -337,8 +337,8 @@ def own_work_at_risk(cwd, jsonl_path, base_hint=None, timeout=GIT_TIMEOUT_S) -> 
     return False
 
 
-def load_presence(path=SHAW_PRESENCE) -> dict:
-    """Read state/shaw-presence.json (or {} if missing/corrupt — 8b fails OPEN)."""
+def load_presence(path=OPERATOR_PRESENCE) -> dict:
+    """Read state/operator-presence.json (or {} if missing/corrupt — 8b fails OPEN)."""
     try:
         return json.loads(Path(path).read_text())
     except (OSError, json.JSONDecodeError):

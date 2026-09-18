@@ -30,7 +30,7 @@ class _Resp:
     def __init__(self, content): self.choices = [_Msg(content)]
 
 
-def _stub_vendors(mod, monkeypatch, *, stt="hello arturo", reply="hi shaw", tts=b"MP3DATA"):
+def _stub_vendors(mod, monkeypatch, *, stt="hello arturo", reply="hi boss", tts=b"MP3DATA"):
     """Stub the three vendor seams so no network is touched; brain uses the REAL _ptt_brain but with
     build_context + brain stubbed."""
     monkeypatch.setattr(mod, "_ptt_stt", lambda audio, fname: stt)
@@ -50,7 +50,7 @@ def test_ptt_turn_happy_path_returns_reply_stt_audio(monkeypatch):
     _stub_vendors(mod, monkeypatch)
     code, res = mod.ptt_turn(GOOD_AUDIO, "u.m4a", "conv-1", "turn-1", content_type="audio/m4a")
     assert code == 200
-    assert res["reply_text"] == "hi shaw"
+    assert res["reply_text"] == "hi boss"
     assert res["stt_text"] == "hello arturo"
     assert base64.b64decode(res["audio"]) == b"MP3DATA"
 
@@ -174,7 +174,7 @@ def test_ptt_turn_emits_no_call_lifecycle(monkeypatch):
     monkeypatch.setattr(_eo_mod, "claim", lambda *a, **k: hits.__setitem__("ended_once", hits["ended_once"] + 1) or True)
     monkeypatch.setattr(_ec_mod, "_default_post", lambda *a, **k: hits.__setitem__("gm_inject", hits["gm_inject"] + 1) or 200)
     code, res = mod.ptt_turn(GOOD_AUDIO, "u.m4a", "conv-x", "turn-x", content_type="audio/m4a")
-    assert code == 200 and res["reply_text"] == "hi shaw"     # the brain DID reply
+    assert code == 200 and res["reply_text"] == "hi boss"     # the brain DID reply
     assert hits == {"journal": 0, "log_turn": 0, "capture": 0, "finalize": 0, "ended_once": 0, "gm_inject": 0}, \
         f"PTT must not touch the call lifecycle, got {hits}"
 
