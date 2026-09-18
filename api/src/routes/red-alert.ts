@@ -13,11 +13,15 @@
  */
 import { Router, type Request, type Response } from 'express';
 import { execFile } from 'child_process';
-import { join } from 'path';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 
 const HOME = process.env.HOME || '';
+// DATA dir (reports land here) vs CODE root (the script lives here): under `orchestra up` they differ.
+// Clean-clone proof 2026-09-18 (gate7e): resolving the script under ORCHESTRA_DIR gave ENOENT.
 const ORCHESTRA_DIR = process.env.ORCHESTRA_DIR || join(HOME, 'scripts/agent-orchestra');
-const RED_ALERT = join(ORCHESTRA_DIR, 'scripts', 'red_alert.py');
+const CODE_ROOT = process.env.ORCHESTRA_ROOT || join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const RED_ALERT = join(CODE_ROOT, 'scripts', 'red_alert.py');
 
 export const KINDS = ['crash', 'bug', 'improvement', 'suggestion'] as const;
 export type Kind = typeof KINDS[number];
@@ -25,7 +29,7 @@ export type Kind = typeof KINDS[number];
 export type Runner = (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
 
 const defaultRun: Runner = (args) => new Promise((resolve) => {
-  execFile('python3', [RED_ALERT, ...args], { cwd: ORCHESTRA_DIR, timeout: 120_000, maxBuffer: 4 * 1024 * 1024 },
+  execFile('python3', [RED_ALERT, ...args], { cwd: CODE_ROOT, env: { ...process.env, ORCHESTRA_DIR, ORCHESTRA_ROOT: CODE_ROOT }, timeout: 120_000, maxBuffer: 4 * 1024 * 1024 },
     (err, stdout, stderr) => resolve({ code: err ? ((err as any).code ?? 1) : 0, stdout: String(stdout), stderr: String(stderr) }));
 });
 
