@@ -88,4 +88,4 @@ The official brand mark of **Tulum DAO** (the publisher) and **OrchestraOS** (th
 - Social & Header PNGs: `social-card-tulumdao.png`, `social-card-orchestraos.png`, `readme-header.png`
 
 ---
-Source repo: the Tulum-DAO brand kit (canonical mark commit ddea899, kit ae8815a). Files here are the release subset: mark (svg + 1024 png, dark/light/mono), OrchestraOS and Tulum DAO lockups, README header, social card, favicons + apple-touch icon.
+Source repo: the Tulum-DAO brand kit (canonical mark commit ddea899, kit ae8815a, Build-a-thon lockup 5c03c1d). Files here are the release subset: mark (svg + 1024 png, dark/light/mono), the OrchestraOS (product), Tulum DAO (publisher) and Build-a-thon (event) lockups, README header, social card, favicons + apple-touch icon.
