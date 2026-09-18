@@ -88,13 +88,29 @@
 .arturo-pill-back{ position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:36; }
 .arturo-pill-panel{
   position:fixed; left:12px; right:12px; bottom:calc(14px + env(safe-area-inset-bottom)); z-index:37;
-  background:#1c1c1c; border-radius:26px; padding:12px 14px 10px; box-shadow:0 8px 30px rgba(0,0,0,0.5); color:#fff;
+  display:flex; flex-direction:column; max-height:72vh;
+  background:#1c1c1c; border:1px solid rgba(255,255,255,0.08); border-radius:22px; padding:10px 12px;
+  box-shadow:0 8px 34px rgba(0,0,0,0.55); color:#fff;
   font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter Variable",sans-serif;
 }
-@media (min-width:768px){ .arturo-pill-panel{ left:auto; right:24px; width:420px; } }
-.context-chip{ display:flex; align-items:center; gap:6px; font-size:12.5px; color:rgba(255,255,255,0.55); background:rgba(255,255,255,0.06); border-radius:8px; padding:6px 10px; margin:0 4px 10px; }
-.context-chip b{ color:#fff; font-weight:600; }
-.arturo-pill-panel .reply{ font-size:15px; line-height:1.45; color:#f1efec; padding:4px 6px 12px; white-space:pre-wrap; max-height:40vh; overflow-y:auto; }
-.arturo-pill-panel .reply a{ color:#d97757; }
-.arturo-pill-panel textarea{ display:block; width:100%; resize:none; background:none; border:0; outline:0; color:#fff; font-size:16px; padding:2px 4px 10px; min-height:30px; max-height:120px; font-family:inherit; }
-.arturo-pill-panel textarea::placeholder{ color:rgba(255,255,255,0.55); }
+@media (min-width:768px){ .arturo-pill-panel{ left:auto; right:24px; width:420px; max-height:min(62vh,620px); } }
+.arturo-pill-head{ display:flex; align-items:center; gap:8px; padding:2px 4px 8px; border-bottom:1px solid rgba(255,255,255,0.07); margin-bottom:8px; }
+.arturo-pill-head .who{ font-size:14px; font-weight:600; }
+.arturo-pill-head .ctx{ font-size:11.5px; color:rgba(255,255,255,0.45); background:rgba(255,255,255,0.06); border-radius:6px; padding:3px 7px; max-width:45%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.arturo-pill-head .spacer{ flex:1; }
+.arturo-pill-head .linkish{ background:none; border:0; color:rgba(255,255,255,0.55); font-size:12px; cursor:pointer; text-decoration:none; padding:2px 4px; display:flex; align-items:center; }
+.arturo-pill-head .linkish:hover{ color:#fff; }
+.arturo-pill-head .linkish.accent{ color:#d97757; }
+.arturo-pill-thread{ flex:1 1 auto; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:10px; padding:2px 2px 8px; }
+.arturo-pill-thread .empty{ font-size:12.5px; color:rgba(255,255,255,0.38); text-align:center; padding:18px 10px; margin:0; line-height:1.5; }
+.arturo-pill-thread .row{ display:flex; flex-direction:column; gap:3px; }
+.arturo-pill-thread .row.user{ align-items:flex-end; }
+.arturo-pill-thread .row.arturo{ align-items:flex-start; }
+.arturo-pill-thread .bubble{ font-size:14px; line-height:1.45; padding:8px 12px; border-radius:14px; max-width:88%; white-space:pre-wrap; }
+.arturo-pill-thread .row.user .bubble{ background:#2c2c2e; color:#fff; }
+.arturo-pill-thread .row.arturo .bubble{ background:rgba(217,119,87,0.12); color:#f1efec; }
+.arturo-pill-thread .bubble.thinking{ color:rgba(255,255,255,0.45); }
+.arturo-pill-thread .meta{ font-size:11px; color:rgba(255,255,255,0.35); }
+.arturo-pill-count{ margin-left:2px; font-size:11px; color:rgba(255,255,255,0.55); background:rgba(255,255,255,0.10); border-radius:999px; padding:1px 7px; }
+.arturo-pill-panel textarea{ flex:0 0 auto; display:block; width:100%; resize:none; background:none; border:0; outline:0; color:#fff; font-size:16px; padding:6px 4px 10px; min-height:30px; max-height:120px; font-family:inherit; }
+.arturo-pill-panel textarea::placeholder{ color:rgba(255,255,255,0.45); }
