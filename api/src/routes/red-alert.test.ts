@@ -33,6 +33,15 @@ test('report runs red_alert.py report --surface with the user words verbatim', a
   assert.ok(a.includes('--surface') && a.includes('--kind') && a[a.indexOf('--symptom') + 1] === 'the card never showed up');
 });
 
+test('channel ios is honoured; unknown channels fall back to dashboard', async () => {
+  const seen: string[][] = [];
+  const run: Runner = async (args) => { seen.push(args); return { code: 0, stdout: '{"id":"ra_2"}', stderr: '' }; };
+  await handleReport(req({ seat: 'gm', kind: 'crash', words: 'phone says frozen', channel: 'ios' }), fakeRes().res, run);
+  await handleReport(req({ seat: 'gm', kind: 'crash', words: 'phone says frozen', channel: 'evil' }), fakeRes().res, run);
+  assert.equal(seen[0][seen[0].indexOf('--channel') + 1], 'ios');
+  assert.equal(seen[1][seen[1].indexOf('--channel') + 1], 'dashboard');
+});
+
 test('a failed script is a 500 with detail, never a fake ok', async () => {
   const run: Runner = async () => ({ code: 1, stdout: '', stderr: 'boom' });
   const { res, calls } = fakeRes();

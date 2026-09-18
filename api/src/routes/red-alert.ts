@@ -29,21 +29,24 @@ const defaultRun: Runner = (args) => new Promise((resolve) => {
     (err, stdout, stderr) => resolve({ code: err ? ((err as any).code ?? 1) : 0, stdout: String(stdout), stderr: String(stderr) }));
 });
 
-export function validate(body: any): { ok: true; seat: string; kind: Kind; words: string } | { ok: false; error: string } {
+export const CHANNELS = ['dashboard', 'ios', 'watch', 'web'] as const;
+
+export function validate(body: any): { ok: true; seat: string; kind: Kind; words: string; channel: string } | { ok: false; error: string } {
   const seat = String(body?.seat || '').trim();
+  const channel = (CHANNELS as readonly string[]).includes(String(body?.channel || '')) ? String(body.channel) : 'dashboard';
   const kind = String(body?.kind || '').trim() as Kind;
   const words = String(body?.words || '').trim();
   if (!seat || !/^[A-Za-z0-9._-]{1,64}$/.test(seat)) return { ok: false, error: 'seat required (letters, digits, . _ -)' };
   if (!KINDS.includes(kind)) return { ok: false, error: `kind must be one of ${KINDS.join('|')}` };
   if (words.length < 3) return { ok: false, error: 'say what you saw (3+ characters)' };
   if (words.length > 2000) return { ok: false, error: 'keep it under 2000 characters' };
-  return { ok: true, seat, kind, words };
+  return { ok: true, seat, kind, words, channel };
 }
 
 export async function handleReport(req: Request, res: Response, run: Runner = defaultRun): Promise<void> {
   const v = validate(req.body);
   if (!v.ok) { res.status(400).json({ error: v.error }); return; }
-  const r = await run(['report', '--reported-by', 'user', '--channel', 'dashboard', '--kind', v.kind,
+  const r = await run(['report', '--reported-by', 'user', '--channel', v.channel, '--kind', v.kind,
     '--seat', v.seat, '--symptom', v.words, '--surface']);
   const last = r.stdout.trim().split('\n').pop() || '';
   let parsed: any = null;
