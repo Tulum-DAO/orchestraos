@@ -3,7 +3,7 @@
 
 Standard: docs/RED_ALERT.md. One report = one JSON file
     state/red-alert/<UTC ts>-<seat>-<slug>.json
-Commissioned by the operator 2026-09-17 23:30 Tulum after the harness bottom-bar "^Z" button
+Commissioned by the operator, 2026-09-17 after the harness bottom-bar "^Z" button
 suspended the gm seat (pid STAT T, not killed) — "LOG EVERYTHING IN A RED ALERT CRASH
 REPORT ... a list of errors the system reports, logs, adds to and acts on immediately".
 
@@ -64,7 +64,7 @@ CATALOGUE = {
         "detect": "pane process tree has a STAT containing 'T' (SIGTSTP/^Z), or the screen "
                   "shows 'Claude Code has been suspended'",
         "immediate_fix": {"action": "card_only",
-                          "how": "NO KILLS rule (the operator 00:20 Tulum 2026-09-18): the process is still present, so the "
+                          "how": "NO KILLS rule (the operator, 2026-09-18): the process is still present, so the "
                                  "watchdog never touches it. Card + Telegram; a human resumes it (respawn-pane -k + "
                                  "`claude --resume <sid>` by hand — SIGCONT/tcsetpgrp did not stick on gm 04:31Z)"},
         "doc": "^Z from the harness bottom bar or a terminal; the CLI is stopped, not dead",
@@ -116,7 +116,7 @@ CATALOGUE = {
         "immediate_fix": {"action": "card_only",
                           "how": "one fleet-wide report + card + Telegram; resume is gm's roster-resume-all (each seat: "
                                  "new session + `claude --resume <sid>`). NEVER kill a pid whose argv starts with `tmux` — "
-                                 "the server keeps its first client's argv (ra_8dc72329, 2026-09-18 04:53Z)"},
+                                 "the server keeps its first client's argv"},
         "doc": "every pane vanished at once; transcripts intact; nothing else can run until a server exists",
     },
     "gateway_unreachable": {
@@ -127,7 +127,7 @@ CATALOGUE = {
     },
 }
 
-# Screen rules match CLI-RENDERED lines only (gm, ra_8a6b4ca9 false positive 2026-09-18 07:13Z:
+# Screen rules match CLI-RENDERED lines only (a false positive seen 2026-09-18:
 # the old regex hit "...given the usage limit" in assistant prose). A "system line" is one the
 # harness prints, not the transcript body: a `⎿` result/notice line, a `⚠`/`✗` line, or anything at
 # or below the LAST composer prompt (❯) — the status region. Prose lines (`●`, indented text) never

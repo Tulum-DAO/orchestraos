@@ -64,7 +64,7 @@ severity, a detect rule, an immediate fix and a doc line). Add a class = add a r
 | `login_screen` | crash | "Select login method" / "not logged in" | `card_only` — auth is the operator's |
 | `bypass_permissions_dialog` | error | the "Bypass Permissions mode" accept dialog | `accept_dialog` (fleet policy is skip-permissions) |
 | `composer_stuck` | bug | typed text at ❯ unsubmitted > 2 scans | `bare_enter` (nudge_pane semantics) |
-| `tmux_server_dead` | crash | `tmux list-sessions` says no server while online seats are registered | `card_only` — one fleet report + card + Telegram; gm resumes each seat (`claude --resume <sid>`). Never kill a pid whose argv starts with `tmux`: the server keeps its first client's argv (ra_8dc72329) |
+| `tmux_server_dead` | crash | `tmux list-sessions` says no server while online seats are registered | `card_only` — one fleet report + card + Telegram; gm resumes each seat (`claude --resume <sid>`). Never kill a pid whose argv starts with `tmux`: the server keeps its first client's argv |
 | `gateway_unreachable` | error | user report from phone/watch | `probe_health` on :9091 + funnel, report the failing hop |
 
 ## 4. Who acts, and when
@@ -93,7 +93,7 @@ Telegram (`tg-notify.sh`) and to Arturo (msg_store → gm, type `red_alert`). No
   (`classify --seat` returns null) before `status=resolved`.
 - Never `fg`, never SIGCONT-and-hope: a suspended CLI is respawned with `--resume`.
 - Never send text+Enter in one `send-keys`; wakes go through `scripts/nudge_pane.py`.
-- **NO KILLS, EVER (the operator, 00:20 Tulum 2026-09-18).** The self-heal loop never sends
+- **NO KILLS, EVER (the operator, 2026-09-18).** The self-heal loop never sends
   kill/TERM/KILL/STOP/pkill/kill-session/kill-server to anything and never runs a
   history-rewriting or tree-discarding git command on the live tree. Allowed repairs:
   `claude --resume` in a new or dead pane, `tmux respawn-pane` only when the process is
@@ -102,7 +102,7 @@ Telegram (`tg-notify.sh`) and to Arturo (msg_store → gm, type `red_alert`). No
 - Never touch an attached pane except through the card.
 - Before killing ANY pid, compare it with `tmux display -p '#{pid}'` and read its argv: a
   `tmux new-session …` argv with ppid 1 is the tmux SERVER (it keeps its first client's
-  argv). Killing it drops the whole fleet (ra_8dc72329, 2026-09-18 04:53Z).
+  argv). Killing it drops the whole fleet (seen once, 2026-09-18).
 - Liveness checks anchor the pattern (`pgrep -f '^python3 x.py'`): an unanchored fragment
   matches the tmux server / `sh -c` wrappers and the service is never restarted.
 - The permanent fix for a user-reachable crash is removing the way to cause it
@@ -110,7 +110,8 @@ Telegram (`tg-notify.sh`) and to Arturo (msg_store → gm, type `red_alert`). No
 
 ## 7. The first report
 
-`state/red-alert/20260918T043956Z-gm-process-suspended.json` (`ra_2653f9bf`) — the ^Z
-incident: snapshot `logs/red-alert/gm-pane-20260918T043143Z.txt`, recovered by
-orchestra-builder with `respawn-pane -k` + `claude --resume 47b2076c…`, permanent fix #1 =
-remove ^Z from the bottom bar (web `ActionBar.tsx`, API `keyMap`, iOS terminal view).
+The standard was written from a real incident: a terminal key bar exposed **^Z**, the manager
+seat's CLI was suspended (`STAT T`) and nothing noticed. The report captured the pane snapshot,
+the stopped process tree and the identity row; recovery was `tmux respawn-pane -k` +
+`claude --resume <sid>`; the permanent fix removed ^Z from every key bar and made the API
+refuse `ctrl-z`. Incident ids and captures stay in the operator's own `state/red-alert/`.

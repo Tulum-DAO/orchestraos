@@ -706,7 +706,7 @@ router.post('/:id/key', (req: Request, res: Response) => {
     res.status(404).json({ error: 'Agent not found' }); return;
   }
 
-  // Key policy lives in lib/special-keys.ts (ctrl-z refused: RED ALERT ra_2653f9bf)
+  // Key policy lives in lib/special-keys.ts (ctrl-z refused: RED ALERT)
   const resolved = resolveSpecialKey(String(key));
   if (!resolved.ok) { res.status(400).json({ error: resolved.reason, key }); return; }
   const tmuxKeys = resolved.tmux;
