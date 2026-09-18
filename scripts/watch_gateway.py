@@ -3514,6 +3514,28 @@ async def handle_arturo_text(request):
         return _json({"ok": False, "error": "arturo unreachable"}, status=502)
 
 
+async def handle_arturo_threads(request):
+    """GET /arturo/threads[?limit=&offset=] and GET /arturo/threads/{id} — G20 passthrough to
+    :5071. The thread archive lives with the service, so the web pill, the home and the phone
+    read ONE list instead of each keeping a private localStorage conversation."""
+    import aiohttp
+    from urllib.parse import quote
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    cid = request.match_info.get("conversation_id") or ""
+    path = f"/threads/{quote(cid, safe='')}" if cid else "/threads"
+    params = {k: v for k, v in request.query.items() if k in ("limit", "offset")}
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"{ARTURO_TEXT_BASE}{path}", params=params,
+                             timeout=aiohttp.ClientTimeout(total=10)) as r:
+                out = await r.json(content_type=None)
+                return _json(out, status=r.status)
+    except Exception as e:  # noqa: BLE001
+        log.error(f"arturo/threads forward: upstream unreachable: {e}")
+        return _json({"ok": False, "error": "arturo unreachable"}, status=502)
+
+
 async def handle_arturo_health(request):
     """GET /arturo/health — :5071/health passthrough (brain kind/model, voice vs text-only) so
     the home's header chip and the onboarding thread can read the install's state."""
@@ -4661,6 +4683,8 @@ def build_app():
     app.router.add_post("/arturo/ptt", handle_arturo_ptt)
     app.router.add_post("/arturo/text", handle_arturo_text)
     app.router.add_get("/arturo/health", handle_arturo_health)
+    app.router.add_get("/arturo/threads", handle_arturo_threads)
+    app.router.add_get("/arturo/threads/{conversation_id}", handle_arturo_threads)
     app.router.add_post("/arturo/ptt/stream/audio", handle_arturo_ptt_stream_audio)
     app.router.add_get("/arturo/ptt/stream/events", handle_arturo_ptt_stream_events)
     app.router.add_post("/arturo/ptt/stream/end", handle_arturo_ptt_stream_end)
