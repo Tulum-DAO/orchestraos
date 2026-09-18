@@ -351,3 +351,44 @@ Fixed on main (see git log for "G14"): the onboarding tap now POSTs
 `/api/runtimes/available/refresh` (busting the 300s in-process cache) and Arturo's `/health`
 re-selects a brain that was `none` at boot once a CLI is authed. Kept here so attendees who
 hit it on an older clone know it is a one-line `orchestra upgrade` away.
+
+## G16 · Terminal action bar: no key may suspend the agent (^Z → ^U, confirm ^C) — FIXED on web, OPEN on iOS/watch
+`labels: bug, size:S, ui, ios, harness`
+
+On 2026-09-17 the operator tapped the **^Z** button on the terminal action bar and the agent
+CLI was suspended (`SIGTSTP`, process STAT `T`: alive, never scheduled). Nothing in the fleet
+noticed; the seat looked "up" to every pid-based check. Operator's words: *"REMOVE ^Z from the
+button set and replace it with ^U (clear input). Add an 'Are you sure?' modal for ^C."*
+
+Fixed on main for the web harness: `api/src/lib/special-keys.ts` is the one key policy
+(`ctrl-z` → HTTP 400 with the reason; `ctrl-u` → `C-u`), `dashboard/src/components/ActionBar.tsx`
+shows **^U** where **^Z** was and asks "Are you sure?" before **^C**.
+
+**Still open — the native clients.** The iOS/watch terminal view keeps its own key bar. Apply
+the same three rules there (no ^Z, ^U present, ^C confirms), and never send a raw `0x1A`.
+
+**Acceptance.** `POST /api/agents/:id/key {key:"ctrl-z"}` returns 400; no client shows a ^Z
+key; ^C shows a confirmation; `npx tsx --test src/lib/special-keys.test.ts` green.
+
+## G17 · Prepaid repair vault: let the self-heal agent buy its own API credits
+`labels: help-wanted, size:L, self-healing, crypto, discussion`
+
+The RED ALERT self-healing loop (`docs/RED_ALERT.md` in the private tree; watchdog →
+report → card → 2-minute auto-repair → diagnosis seat on the strongest model) has one failure
+it cannot repair: **the provider is out of credits.** Switching provider only helps while a
+sibling has credits. When every runtime is dry, the diagnosis seat itself cannot boot.
+
+Seed for a design + first slice: a **prepaid repair vault** — a wallet (stablecoin, or a
+provider-prepaid balance where the provider offers one) the self-heal agent may draw from
+ONLY to restore functionality, with a hard cap per incident, a daily cap, a signed audit
+line per draw in the RED ALERT report (`repair_attempts[].funding`), and an operator card
+before any draw above the per-incident cap. The vault is funded by the operator, never
+auto-topped from a bank account.
+
+Questions for the room: which providers accept crypto or card-on-file top-ups via API
+today; how to keep the key that can spend out of the agent's own context (a signing sidecar
+with a policy, not a key in `.env`); what the "repair-only" spend policy looks like as code.
+
+**Acceptance (first slice).** `orchestra vault status` shows balance + caps; a simulated
+out-of-usage RED ALERT on a sandbox seat draws once, logs the draw in the report, and
+refuses a second draw over the cap with a card.
