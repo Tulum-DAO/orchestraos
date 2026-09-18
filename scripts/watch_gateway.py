@@ -3289,6 +3289,55 @@ async def handle_upload(request):
         return _json({"ok": False, "error": f"api unreachable: {e}"}, status=502)
 
 
+# --- RED ALERT report button (deliverable 6, docs/RED_ALERT.md; iOS/watch G18) ------------------
+# The phone and watch have ONE base and ONE bearer (this gateway); :8888 is loopback-only for them.
+# This is the thin authenticated front door: forward the report to the API, return its JSON verbatim.
+_RED_ALERT_CHANNELS = ("ios", "watch")
+
+
+async def _red_alert_api(method: str, path: str, body=None):
+    """Loopback hop to the API; returns (status, json). Patched in tests."""
+    async with aiohttp.ClientSession() as s:
+        if method == "POST":
+            async with s.post(f"{API_URL}{path}", json=body, timeout=aiohttp.ClientTimeout(total=150)) as r:
+                return r.status, await r.json(content_type=None)
+        async with s.get(f"{API_URL}{path}", timeout=aiohttp.ClientTimeout(total=30)) as r:
+            return r.status, await r.json(content_type=None)
+
+
+async def handle_red_alert_report(request):
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        return _json({"ok": False, "error": "bad json"}, status=400)
+    if not isinstance(data, dict):
+        return _json({"ok": False, "error": "bad json"}, status=400)
+    channel = data.get("channel") if data.get("channel") in _RED_ALERT_CHANNELS else "ios"
+    body = {"seat": str(data.get("seat") or ""), "kind": str(data.get("kind") or ""),
+            "words": str(data.get("words") or ""), "channel": channel}
+    try:
+        status, payload = await _red_alert_api("POST", "/api/red-alert/report", body)
+    except Exception as e:  # noqa: BLE001
+        return _json({"ok": False, "error": f"api unreachable: {e}"}, status=502)
+    if not isinstance(payload, dict):
+        payload = {"ok": False, "error": "bad api response"}
+    return _json(payload, status=status)
+
+
+async def handle_red_alert_reports(request):
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    st = request.query.get("status", "")
+    path = "/api/red-alert/reports" + (f"?status={st}" if st in ("open", "repairing", "awaiting-approval", "resolved") else "")
+    try:
+        status, payload = await _red_alert_api("GET", path)
+    except Exception as e:  # noqa: BLE001
+        return _json({"ok": False, "error": f"api unreachable: {e}"}, status=502)
+    return _json(payload, status=status)
+
+
 # Watch push-to-talk: a PTT utterance is tiny (<=30 s of 16k mono AAC ~ 60 KB), so cap well below the
 # 100 MB general upload cap. The core STT->brain->TTS turn runs on arturo-proxy (:5071) where the brain
 # lives; this route is the thin AUTHENTICATED front door that forwards on loopback (same trust model as
@@ -4607,6 +4656,8 @@ def build_app():
     app.router.add_get("/agent-screen", handle_agent_screen)
     app.router.add_get("/transcript", handle_transcript)
     app.router.add_post("/upload", handle_upload)
+    app.router.add_post("/red-alert/report", handle_red_alert_report)
+    app.router.add_get("/red-alert/reports", handle_red_alert_reports)
     app.router.add_post("/arturo/ptt", handle_arturo_ptt)
     app.router.add_post("/arturo/text", handle_arturo_text)
     app.router.add_get("/arturo/health", handle_arturo_health)
