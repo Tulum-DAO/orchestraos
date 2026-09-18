@@ -132,6 +132,12 @@ grep 'facts-recall: facts=' $ORCHESTRA_DIR/logs/arturo.log | tail -1   # the sup
 
 Expected: the streamed answer says BLUEBIRD and the log line reads `facts-recall: facts=1 ms=<small>`.
 
-## What is *not* here
+## What is *not* here — and the extension point
 
-The private reference install layers a belief/worldview derivation and a vector semantic-recall index above the facts store. Neither is in this tree; `services/arturo/semantic_recall.py` notices the missing library once at boot and stays quiet. Facts recall does not depend on either.
+The private reference install layers two things above the facts store: a belief/worldview derivation and a vector **semantic recall** over indexed documents. Neither ships in this tree, and facts recall does not depend on either.
+
+`services/arturo/semantic_recall.py` *is* in the tree as the seam for the second one. It treats the `semantic_memory` package as an **optional extension**: on a clean install it probes once at the first voice turn, logs a single line — `semantic recall unavailable: the optional semantic_memory package is not installed (facts recall still works) — extension point: docs/MEMORY.md` — and returns nothing, forever quiet after that. To plug your own in:
+
+- Put a `semantic_memory` package at `<repo>/scripts/semantic_memory/` (beside the code, not under `$ORCHESTRA_DIR`).
+- It must expose `semantic_memory.query.query(db_path, text, scope=None, k=..., ...)` returning rows with `path` + `snippet` (see the seam's `recall_preamble` for the exact call), `semantic_memory.embed.embed_query(text)`, and `semantic_memory.db.connect(path)`; the index lives at `$ORCHESTRA_DIR/state/semantic-memory.db`.
+- `ARTURO_SEMANTIC_RECALL=1` (the `run.sh` default) then adds a `RECALL` block of document pointers beside the `FACTS` block, under the same 250 ms budget-wall and single-flight rules.
