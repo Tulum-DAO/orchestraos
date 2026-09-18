@@ -49,6 +49,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     ro.add_argument("--runtime", choices=["claude", "gemini", "codex"])
     ro.add_argument("--model")
 
+    pr = sub.add_parser("pair", help="show a short-lived, single-use code a phone can scan or type to connect")
+    pr.add_argument("--base-url", dest="base_url", default=None,
+                    help="the address a phone can reach this gateway on, e.g. https://host:8443")
     sub.add_parser("down", help="stop the running supervisor and its children")
     ug = sub.add_parser("upgrade", help="git pull --ff-only + orchestra init --yes + orchestra doctor; seats untouched")
     ug.add_argument("--dry-run", action="store_true", help="show the incoming commits and contract-bearing paths, pull nothing")
@@ -161,8 +164,10 @@ def cmd_status(ns) -> int:
 def main(argv=None) -> int:
     ns = parse_args(argv)
     from .seats import cmd_rotate, cmd_spawn
+    from .pair_cmd import run_pair
     return {"init": cmd_init, "doctor": cmd_doctor, "up": cmd_up, "down": cmd_down, "status": cmd_status,
-            "spawn": cmd_spawn, "rotate": cmd_rotate, "upgrade": cmd_upgrade}[ns.command](ns)
+            "spawn": cmd_spawn, "rotate": cmd_rotate, "upgrade": cmd_upgrade,
+            "pair": run_pair}[ns.command](ns)
 
 
 if __name__ == "__main__":
