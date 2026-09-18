@@ -1557,12 +1557,12 @@ def _run_on_machine(mac_cmd, vps_cmd, timeout=15, prefer_mac=False):
 
 def _tmux_cmd(session, action, mac_prefix="PATH=/opt/homebrew/bin:$PATH "):
     """Generate Mac and VPS versions of a tmux command."""
-    if action == "spawn":
-        return (
-            f"{mac_prefix}tmux new-session -d -s {session} 'claude --dangerously-skip-permissions'",
-            f"tmux new-session -d -s {session} 'claude --dangerously-skip-permissions'",
-        )
-    elif action == "list":
+    # NO "spawn" action, deliberately (gm msg_660ad3bf, release-critical): a bare
+    # `tmux new-session … claude` mints NO identity — no runtime/model/tier, no registry
+    # row, invisible to /api/agents, and a crash retires the seat instead of parking it
+    # (no resume_command). Every seat Arturo creates goes through spawn-agent.sh's adopt
+    # gate via commission_plan(); a machine that path cannot serve is REFUSED out loud.
+    if action == "list":
         return (
             f"{mac_prefix}tmux list-sessions -F '#{{session_name}}: #{{session_activity_string}}' 2>/dev/null",
             "tmux list-sessions -F '#{session_name}: #{session_activity_string}' 2>/dev/null",
@@ -1672,6 +1672,39 @@ def commission_plan(session, task, runtime=None, repo_root=None, model=None):
     if task:
         argv += ["--task", task]
     return _CommissionPlan(argv, env, session, task)
+
+
+def registration_status(name):
+    """Did this seat actually get an identity? Reads the flat registry, and the identity
+    store too when an install has one (it is the truth; registry.json is its projection).
+    Never raises — an unreadable store is reported, not swallowed."""
+    where, detail = [], []
+    try:
+        reg = json.loads((Path(ORCHESTRA_DIR) / "registry.json").read_text())
+        if name in (reg.get("agents") or {}):
+            where.append("registry.json")
+        else:
+            detail.append("no registry row")
+    except Exception as e:  # noqa: BLE001
+        detail.append(f"registry unreadable ({str(e)[:60]})")
+    db = Path(ORCHESTRA_DIR) / "state" / "orchestra-registry.db"
+    if db.exists():
+        try:
+            import sqlite3
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+            try:
+                row = con.execute(
+                    "SELECT 1 FROM canonical_agents WHERE agent_id = ? LIMIT 1", (name,)).fetchone()
+            finally:
+                con.close()
+            if row:
+                where.append("identity store")
+            else:
+                detail.append("no canonical identity row")
+        except Exception as e:  # noqa: BLE001
+            detail.append(f"identity store unreadable ({str(e)[:60]})")
+    return {"registered": bool(where) and not detail, "where": " + ".join(where),
+            "detail": "; ".join(detail)}
 
 
 def _run_commission(plan, timeout=120):
@@ -1851,7 +1884,15 @@ def execute_tool(name, args, user_turns=None):
         background = args.get("background", False)
         target_machine = args.get("machine", "vps")  # default VPS, "mac" if explicitly requested
 
-        if target_machine != "mac":
+        if target_machine == "mac":
+            # The sanctioned spawn path is this machine's spawn-agent.sh (adopt gate). There is
+            # no remote adopt seam here, and a raw remote tmux pane would be an UNREGISTERED
+            # seat — refuse in words instead of silently making one.
+            return (f"FAILED: I can only create REGISTERED seats, and that goes through this "
+                    f"machine's spawn-agent.sh — I have no way to register '{session}' on another "
+                    f"machine. Run `orchestra spawn {session}` there, or let me spawn it here.")
+
+        if True:
             # VPS: a real seat through spawn-agent.sh + a msg_store commission row (T2).
             plan = commission_plan(session, task)
             log.info(f"COMMISSION: {' '.join(plan.argv[:3])} runtime={plan.env['AGENT_RUNTIME']}")
@@ -1867,7 +1908,19 @@ def execute_tool(name, args, user_turns=None):
             msg_id = _file_commission_row(session, task)
             record_spawned_session(session)
             _notify_spawned(session, "vps")
-            result = f"CONFIRMED: Agent '{session}' is running on vps (runtime {plan.env['AGENT_RUNTIME']}). Visible on the dashboard."
+            # Registration is the thing that makes a seat real (dashboard, mail, rotation,
+            # park-not-retire). Verify it by effect and SAY which it is — never claim
+            # "visible on the dashboard" without having looked.
+            reg = registration_status(session)
+            if reg["registered"]:
+                result = (f"CONFIRMED: Agent '{session}' is running on vps (runtime "
+                          f"{plan.env['AGENT_RUNTIME']}) and is registered in {reg['where']} — "
+                          f"it shows up in the agent list.")
+            else:
+                result = (f"PARTIAL: Agent '{session}' is running on vps (runtime "
+                          f"{plan.env['AGENT_RUNTIME']}) but it is NOT registered ({reg['detail']}), "
+                          f"so it will not show in the agent list and a crash could lose it. "
+                          f"Check `orchestra doctor` and the spawn output.")
             if msg_id:
                 result += f" Commission filed as {msg_id}."
             return result

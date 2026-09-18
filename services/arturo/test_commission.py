@@ -64,6 +64,8 @@ def test_spawn_agent_tool_runs_plan_and_files_msg_store_row(mod, monkeypatch, tm
     monkeypatch.setattr(mod, "run_local", lambda cmd, timeout=15: (True, ""))   # tmux has-session
     monkeypatch.setattr(mod, "record_spawned_session", lambda s: None)
     monkeypatch.setattr(mod, "_notify_spawned", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "registration_status",
+                        lambda name: {"registered": True, "where": "registry.json", "detail": ""})
 
     out = mod.execute_tool("spawn_agent", {"session_name": "docs-dev", "machine": "vps",
                                            "task": "write the README"})
@@ -154,3 +156,64 @@ def test_context_deep_brain_uses_configured_session(mod):
 def test_context_has_a_text_tone(mod):
     ctx = mod.build_context(calling_channel="text")
     assert "TEXT conversation" in ctx and "Spoken dialogue only" not in ctx.split("\n")[0]
+
+
+# ---- every seat Arturo creates is a REGISTERED seat (gm msg_660ad3bf, release-critical) ------
+# A bare `tmux new-session … claude` mints no identity: no runtime/model/tier, no registry row,
+# invisible to /api/agents, and a crash retires it instead of parking it. The ONLY sanctioned
+# path is spawn-agent.sh (adopt gate); anything it cannot register must be refused out loud.
+
+def test_no_tool_path_bare_tmux_spawns(mod):
+    """_tmux_cmd must not be able to produce a spawn command any more."""
+    mac, vps = mod._tmux_cmd("x", "spawn")
+    assert mac == "" and vps == ""
+
+
+def test_spawn_agent_on_mac_refuses_instead_of_making_a_pane(mod, monkeypatch):
+    ran = []
+    monkeypatch.setattr(mod, "_run_commission", lambda plan, timeout: ran.append(plan) or (True, "ok"))
+    monkeypatch.setattr(mod, "ssh_mac", lambda *a, **k: ran.append("ssh") or (True, ""))
+    monkeypatch.setattr(mod, "run_local", lambda *a, **k: ran.append("local") or (True, ""))
+    out = mod.execute_tool("spawn_agent", {"session_name": "mac-seat", "machine": "mac", "task": "t"})
+    assert out.startswith("FAILED") or "cannot" in out.lower()
+    assert "registered" in out.lower() or "spawn-agent" in out
+    assert ran == []                     # nothing ran: no pane, no ssh
+
+
+def test_spawn_agent_verifies_registration_and_says_so(mod, monkeypatch):
+    monkeypatch.setattr(mod, "_run_commission", lambda plan, timeout: (True, "[spawn] ready"))
+    monkeypatch.setattr(mod, "run_local", lambda cmd, timeout=15: (True, ""))
+    monkeypatch.setattr(mod, "_message_store", lambda: type("S", (), {"send": staticmethod(lambda **kw: "msg_x")})())
+    monkeypatch.setattr(mod, "record_spawned_session", lambda s: None)
+    monkeypatch.setattr(mod, "_notify_spawned", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "registration_status", lambda name: {"registered": True, "where": "registry.json + identity store", "detail": ""})
+    out = mod.execute_tool("spawn_agent", {"session_name": "ok-seat", "machine": "vps", "task": "t"})
+    assert "CONFIRMED" in out and "registered" in out.lower()
+
+
+def test_spawn_agent_says_it_plainly_when_registration_is_missing(mod, monkeypatch):
+    monkeypatch.setattr(mod, "_run_commission", lambda plan, timeout: (True, "[spawn] ready"))
+    monkeypatch.setattr(mod, "run_local", lambda cmd, timeout=15: (True, ""))
+    monkeypatch.setattr(mod, "_message_store", lambda: type("S", (), {"send": staticmethod(lambda **kw: "msg_x")})())
+    monkeypatch.setattr(mod, "record_spawned_session", lambda s: None)
+    monkeypatch.setattr(mod, "_notify_spawned", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "registration_status", lambda name: {"registered": False, "where": "", "detail": "no registry row"})
+    out = mod.execute_tool("spawn_agent", {"session_name": "ghost", "machine": "vps", "task": "t"})
+    assert "NOT registered" in out or "not registered" in out
+    assert "no registry row" in out
+
+
+def test_registration_status_reads_registry_and_identity_db(mod, tmp_path, monkeypatch):
+    import json as _json
+    monkeypatch.setattr(mod, "ORCHESTRA_DIR", tmp_path)
+    (tmp_path / "registry.json").write_text(_json.dumps({"agents": {"seat-a": {"runtime": "claude"}}}))
+    st = mod.registration_status("seat-a")
+    assert st["registered"] is True and "registry" in st["where"]
+    st2 = mod.registration_status("nobody")
+    assert st2["registered"] is False and st2["detail"]
+
+
+def test_registration_status_survives_a_missing_registry(mod, tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "ORCHESTRA_DIR", tmp_path / "gone")
+    st = mod.registration_status("seat-a")
+    assert st["registered"] is False and st["detail"]
