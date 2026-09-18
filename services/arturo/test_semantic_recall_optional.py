@@ -42,7 +42,7 @@ def test_available_is_false_without_library():
 def test_recall_returns_empty_and_warns_exactly_once(caplog):
     with caplog.at_level(logging.INFO, logger=sr.log.name):
         first = sr.recall_preamble("what is going on with the acme dental pixel rollout")
-        second = sr.recall_preamble("and what about the listmagic server migration")
+        second = sr.recall_preamble("and what about the mail server migration")
     assert first == "" and second == ""
     lines = _unavailable_lines(caplog)
     assert len(lines) == 1, [r.message for r in caplog.records]
