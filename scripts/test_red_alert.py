@@ -195,3 +195,63 @@ def test_parse_ps_tree_marks_stopped():
     assert rows[0] == {"pid": 1406688, "stat": "T", "tty": "pts/60", "cmd": "node claude --resume abc"}
     assert RA.any_stopped(rows) is True
     assert RA.any_stopped([{"pid": 1, "stat": "Sl+", "tty": "", "cmd": "x"}]) is False
+
+
+# --- screen classes match CLI banners only, never transcript prose (gm, ra_8a6b4ca9) ---
+
+FIX = os.path.join(HERE, "fixtures", "red-alert")
+
+
+def _screen_ev(text):
+    ev = fake_evidence(["s"])
+    ev["process_state"]["s"] = [{"pid": 1, "stat": "Sl+", "cmd": "claude"}]
+    ev["pane_dead"] = {"s": False}
+    ev["screen"] = {"s": text}
+    return ev
+
+
+@pytest.mark.parametrize("name", ["false_positive_prose_usage_limit.txt", "false_positive_prose_gm_usage_limit.txt"])
+def test_prose_mentioning_usage_limit_is_not_out_of_usage(name):
+    p = os.path.join(FIX, name)
+    if not os.path.exists(p):
+        pytest.skip("private capture not shipped in this tree")
+    assert RA.classify(_screen_ev(open(p).read()), "s") is None
+
+
+def test_real_out_of_usage_credits_banner_is_out_of_usage():
+    p = os.path.join(FIX, "real_out_of_usage_credits_banner.txt")
+    text = open(p).read() if os.path.exists(p) else (
+        "❯ resume and continue\n  ⎿  You're out of usage credits. Run /usage-credits to keep using Fable 5.1 or /model to switch models.\n"
+        "✻ Cooked for 0s\n❯ \n  ⬆ status │ Fable 5.1 │ 80%")
+    assert RA.classify(_screen_ev(text), "s")["class"] == "out_of_usage"
+
+
+@pytest.mark.parametrize("line", [
+    "  ⎿  You've hit your usage limit · resets 3pm",
+    "  ⎿  API Error: 529 {\"type\":\"overloaded_error\"}",
+    "  ⎿  Not logged in. Run /login",
+])
+def test_system_lines_classify(line):
+    text = "● some assistant prose\n" + line + "\n❯ \n  ⬆ status bar"
+    assert RA.classify(_screen_ev(text), "s") is not None
+
+
+@pytest.mark.parametrize("line", [
+    "● I stopped because of the API Error the user mentioned yesterday",
+    "  the doc says: Select login method is the first screen",
+    "● we skipped the wave given the usage limit; insufficient credits was the reason last week",
+    "  ⎿  grep output: 'You're out of usage credits' appears in docs/RED_ALERT.md:64",
+])
+def test_prose_never_classifies(line):
+    text = "● prose\n" + line + "\n❯ \n  ⬆ status bar"
+    assert RA.classify(_screen_ev(text), "s") is None
+
+
+def test_suspended_needs_the_shell_stop_line_too():
+    assert RA.classify(_screen_ev("● the doc says Claude Code has been suspended once\n❯ "), "s") is None
+    assert RA.classify(_screen_ev("Claude Code has been suspended. Run `fg` to bring Claude Code back.\n[1] + Stopped  claude\n$ "), "s")["class"] == "process_suspended"
+
+
+def test_bypass_dialog_needs_accept_row():
+    assert RA.classify(_screen_ev("● I read about Bypass Permissions mode in the docs\n❯ "), "s") is None
+    assert RA.classify(_screen_ev("  Bypass Permissions mode\n  ❯ 1. No, exit\n    2. Yes, I accept\n"), "s")["class"] == "bypass_permissions_dialog"

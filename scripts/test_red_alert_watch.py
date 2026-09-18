@@ -198,3 +198,8 @@ def test_spawn_diagnosis_refuses_unescalated_or_resolved(store, monkeypatch):
     monkeypatch.setattr(W.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not spawn")))
     assert W.spawn_diagnosis({"id": "ra_x", "status": "open", "escalations": [], "repair_attempts": [], "seats": ["gm"], "_path": "p"}) == ""
     assert W.spawn_diagnosis({"id": "ra_x", "status": "resolved", "escalations": [{"reason": "r"}], "repair_attempts": [], "seats": ["gm"], "_path": "p"}) == ""
+
+
+def test_switch_provider_never_on_an_attached_pane_even_with_repair_now():
+    d = W.decide(rep(cls="out_of_usage", card="apr_1", created_age=500), attached=True, answer="Repair now", now=1000.0, armed=True)
+    assert d["action"] == "wait" and d["reason"] == "attached"

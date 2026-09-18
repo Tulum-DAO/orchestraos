@@ -112,6 +112,8 @@ def decide(report: dict, *, attached: bool, answer: str | None, now: float, arme
         if not hold_until:
             return {"action": "hold", "hold_until": now + HOLD_S}
         return {"action": "repair", "fix": fix, "reason": "hold expired"}
+    if attached and fix == "switch_provider":
+        return {"action": "wait", "reason": "attached"}   # never /model on a pane a human is in (gm, ra_8a6b4ca9)
     if answer == "Repair now":
         return {"action": "repair", "fix": fix, "reason": "answered"}
     if attached:
@@ -243,7 +245,7 @@ def _healthy(seat: str) -> tuple[bool, dict]:
 
 
 def repair_respawn(seat: str, session: str, ev: dict) -> tuple[bool, str]:
-    """HARD RULE (2026-09-18): respawn ONLY a pane whose process is already
+    """HARD RULE (the operator 00:20 Tulum 2026-09-18): respawn ONLY a pane whose process is already
     gone — no -k, no signal of any kind. A suspended (STAT T) or otherwise present process is
     a card to the operator, never a repair."""
     procs = ev["process_state"].get(seat) or []
