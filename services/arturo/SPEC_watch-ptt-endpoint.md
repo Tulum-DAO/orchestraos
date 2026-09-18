@@ -1,16 +1,14 @@
 # SPEC — Watch push-to-talk endpoint (`/arturo/ptt`)
 
-**Status:** DESIGN GATE = APPROVED by gm (msg_dc8d4197). Design-first artifact for the build gate.
-**Owner:** arturo-restore-dev (server) · **Client owner:** ios-watch-dev
-**Contract:** LOCKED with ios-watch-dev (msg_ff49325b). **Do NOT build the live gateway change** until:
-RED-first → multi-model consensus (Astra OUT) → gm BUILD gate (gm verifies by execution) → the operator install word.
-Inject-fix (three-runtime invariant) stays **priority #1**; this endpoint is the Watch-Arturo critical path once that ships.
+Design note for the turn-based PTT endpoint the watch client uses. Kept in the tree because
+`scripts/watch_gateway.py`, `services/arturo/ptt.py` and its tests implement this contract —
+read it before changing any of them.
 
 ## 1. Goal
 Turn-based push-to-talk for Watch-Arturo (the operator chose PTT). The watch records a full utterance, POSTs the
 audio, and gets back reply text (for the on-watch transcript) + TTS audio to play. Plain HTTPS
 request/response, **no persistent socket** — the turn-based alternative to the existing `/live`
-(`handle_gemini_live`, 16k/24k PCM socket) which watchOS cannot hold. ios-watch-dev PROVED the client
+(`handle_gemini_live`, 16k/24k PCM socket) which watchOS cannot hold. the watch client was proven on this
 round-trip on the operator's Ultra (record m4a → playback).
 
 ## 2. Placement (minimal new surface on the authenticated gateway)
@@ -107,5 +105,5 @@ p50 ~3–4 s, p95 < 8 s for upload+STT+brain+TTS on a ≤30 s clip.
 ## 12. Build path / sequencing
 Final spec (this doc) → RED-first (§10) → multi-model consensus (code-reviewer + gemini-dev, **Astra OUT**;
 touches the authed gateway) → gm BUILD gate (verify by execution) → the operator install word. **No live gateway
-change before that.** ios-watch-dev builds the client against a stub of exactly this shape in parallel;
+change before that.** the watch client is built against a stub of exactly this shape in parallel;
 ship = their stub→live swap.

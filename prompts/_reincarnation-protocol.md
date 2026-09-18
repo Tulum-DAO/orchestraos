@@ -43,7 +43,7 @@ When context crosses 70% (or upon `lineage_soft_handoff`), write and git commit 
 3. `{Third action}`
 
 ## 6. Grounding Canary Questions (Questions Only — No Answers!)
-<!-- gm ruling msg_f937b086 (2026-09-16), author-side: every canary anchor MUST be mechanically resolvable — a msg id (jsonl:msg_<id>), a REAL 1-based text-bearing turn number (jsonl:turn-<n>), or an ISO range (jsonl:<ISO>..<ISO>). Prose after the locator is stripped at seed time; a pointer with no locator is dropped as unresolvable-form. A seat whose work product lives OUTSIDE its own transcript (files, dream/facts, recordings) cites the msg_store rows or commit shas that carry that work, never the files. -->
+<!-- a manager ruling (2026-09-16), author-side: every canary anchor MUST be mechanically resolvable — a msg id (jsonl:msg_<id>), a REAL 1-based text-bearing turn number (jsonl:turn-<n>), or an ISO range (jsonl:<ISO>..<ISO>). Prose after the locator is stripped at seed time; a pointer with no locator is dropped as unresolvable-form. A seat whose work product lives OUTSIDE its own transcript (files, dream/facts, recordings) cites the msg_store rows or commit shas that carry that work, never the files. -->
 1. **Q1:** {Question citing raw anchor e.g. jsonl:turn-42 regarding key decision}
 2. **Q2:** {Question citing raw anchor regarding specific file edit or error}
 3. **Q3:** {Question citing raw anchor regarding dependency or configuration}

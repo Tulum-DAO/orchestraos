@@ -2,13 +2,13 @@
 
 *Harvested by cli-chrome-pin-dev, 2026-09-04, read-only `tmux capture-pane -p` from
 live fleet seats (NEVER pipe-pane — AttachSweep is fleet-wide). Real captures, not
-synthetic — RED-first fixtures for the menu-bridge + status re-skin. gm GO msg_3b619fab.*
+synthetic — RED-first fixtures for the menu-bridge + status re-skin. a manager ruling.*
 
-## Parser ownership (per gm boundary ruling + telemetry-wiring-dev msg_171e7e9e)
+## Parser ownership (per gm boundary ruling + a telemetry seat a manager ruling)
 
 - **MINE (menu/chrome DETECTION — `parse_pending_menu` path):** must classify these as
   NOT-a-decision-menu so the menu-bridge never mis-bridges them to the operator's approvals watch.
-- **telemetry-wiring-dev's (STATUS classification — `_find_chrome`/`parse_status`):** the
+- **a telemetry seat's (STATUS classification — `_find_chrome`/`parse_status`):** the
   footer/banner/separator framing. Harvested here as a shared corpus for their re-skin;
   I do not edit their status functions.
 
@@ -45,7 +45,7 @@ RECOGNIZED) — that needs gm's real menu capture, still owed.
 
 ## Still OWED for B2 (the priority)
 
-The real 2.1.260 **agent-decision-menu** capture — gm owns it (msg_3b619fab), holding it
+The real 2.1.260 **agent-decision-menu** capture — the manager seat owns it, holding it
 until the live telemetry bring-up settles. B2 (menu-bridge) goes RED-first the moment it
 lands; no synthetic menu fixture will be manufactured.
 
@@ -53,4 +53,4 @@ lands; no synthetic menu fixture will be manufactured.
 
 - Codex chrome (`› Ask Codex to do anything`) — different runtime, not the claude 2.1.260 surface.
 - The labeled top-separator regression (`_RULE_RE`) — already FIXED @323b20f99 and lives in
-  telemetry-wiring-dev's `_find_chrome`; their fixture, not re-harvested here.
+  a telemetry seat's `_find_chrome`; their fixture, not re-harvested here.
