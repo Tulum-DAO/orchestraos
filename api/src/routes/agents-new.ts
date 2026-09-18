@@ -66,20 +66,31 @@ export function pickRuntime(rows: RuntimeRow[], requested: string | undefined): 
 }
 
 /** What to tell someone who has no logged-in CLI, keyed to what is actually on the box. */
-export function loginHint(rows: RuntimeRow[]): { cli: string; hint: string; greeting: string } {
+export function loginHint(rows: RuntimeRow[], providerId?: string): { cli: string; hint: string; greeting: string } {
   const installed = (rows || []).filter((r) => r.installed);
-  const cli = installed[0] ? cliOf(installed[0]) : 'claude';
+  // G21 — the disconnected-provider modal opens a login for the tile the operator TAPPED.
+  // Without this the shell always targeted `installed[0]`, so tapping Gemini on a box where
+  // Claude was installed opened a CLAUDE login and connected the wrong provider silently.
+  const requested = providerId ? (rows || []).find((r) => r.id === providerId) : undefined;
+  if (requested && !requested.installed) {
+    const rcli = cliOf(requested);
+    const hint = `\`${rcli}\` is not installed on this machine. Install it, then run it once and log in.`;
+    return { cli: rcli, hint, greeting: `${hint}\n\nInstall it here, run it once to log in, then close this window and try again.` };
+  }
+  const cli = requested ? cliOf(requested) : (installed[0] ? cliOf(installed[0]) : 'claude');
   const loginCmd = cli === 'codex' ? 'codex login' : cli;
-  if (installed.length === 0) {
+  if (!requested && installed.length === 0) {
     const hint = 'No agent CLI is installed on this machine yet. Install one (e.g. `npm i -g @anthropic-ai/claude-code`), then run it once and log in.';
-    return { cli, hint, greeting: `${hint}\n\nInstall one here, run it once to log in, then close this window and tap New Agent again.` };
+    return { cli, hint, greeting: `${hint}\n\nInstall one here, run it once to log in, then close this window and try again.` };
   }
   const extra = cli === 'codex' ? '' : ' then type /login';
   const hint = `\`${cli}\` is installed but not logged in. Run \`${loginCmd}\`${extra} to sign in to your provider.`;
   return {
     cli,
     hint,
-    greeting: `You are not signed in to an AI provider yet — log in here, then come back.\n\nRun:  ${loginCmd}${extra ? '   (' + extra.trim() + ')' : ''}\n\nWhen it confirms you are signed in, close this window and tap New Agent again.`,
+    // Neutral last line: this shell is reached from BOTH the New Agent button and the
+    // disconnected-provider modal, so naming one of them is wrong half the time.
+    greeting: `You are not signed in to an AI provider yet — log in here, then come back.\n\nRun:  ${loginCmd}${extra ? '   (' + extra.trim() + ')' : ''}\n\nWhen it confirms you are signed in, close this window and try again.`,
   };
 }
 
@@ -111,9 +122,12 @@ export function createAgentsNewRouter(deps: NewAgentDeps): Router {
     return res.json({ ok: true, id: name, session: name, runtime: runtime.id, task });
   });
 
-  router.post('/login-shell', async (_req: Request, res: Response) => {
+  router.post('/login-shell', async (req: Request, res: Response) => {
     const rows = deps.probeRuntimes();
-    const { cli, hint, greeting } = loginHint(rows);
+    // {provider} is optional: the modal sends the tapped provider, the older New-Agent path
+    // sends nothing and keeps its previous behaviour.
+    const provider = req.body?.provider ? String(req.body.provider).slice(0, 40) : undefined;
+    const { cli, hint, greeting } = loginHint(rows, provider);
     // ONE session per cli, reused: tapping twice must not leave a litter of shells.
     const session = `login-${cli}`;
     const started = await deps.startLoginShell({ session, greeting });
