@@ -1,6 +1,6 @@
 # Release checklist — Saturday flip (v0.1.0-hackathon)
 
-The public release of OrchestraOS happens at the Tuluminator build-a-thon, Saturday
+The public release of OrchestraOS (the product), published by Tulum DAO (the publisher), happens at the Build-a-thon (the event), Saturday
 2026-09-19, 11:00 Tulum. Everything below is one command or one click, in order. Items
 marked **(needs public)** are refused by GitHub while the repo is private on a free org —
 do them right after the flip, before the first attendee clones.
@@ -28,12 +28,13 @@ R=Tulum-DAO/orchestraos
 
 1. **Tag the release** (on the SHA the tester passed):
    ```bash
-   git -C ~/repos/orchestraos fetch origin && git -C ~/repos/orchestraos tag -a v0.1.0-hackathon -m "OrchestraOS v0.1.0 — Tuluminator build-a-thon release" origin/main
+   git -C ~/repos/orchestraos fetch origin && git -C ~/repos/orchestraos tag -a v0.1.0-hackathon -m "OrchestraOS v0.1.0 — Build-a-thon release (Tulum DAO)" origin/main
    git -C ~/repos/orchestraos push origin v0.1.0-hackathon
    ```
-2. **Flip public**:
+2. **Flip public** (and apply the naming ruling: Build-a-thon = the event, OrchestraOS = the product, Tulum DAO = the publisher):
    ```bash
    gh repo edit $R --visibility public --accept-visibility-change-consequences
+   gh repo edit $R --description "OrchestraOS, by Tulum DAO: an open harness for running a fleet of coding agents as a team. Agents that message each other, remember across restarts, rotate before they run out of context, and put every real decision in front of you on your phone."
    gh api repos/$R --jq '{private,visibility}'      # -> {"private":false,"visibility":"public"}
    ```
 3. **Branch protection on `main`** (needs public):

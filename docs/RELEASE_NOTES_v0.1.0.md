@@ -1,6 +1,6 @@
 # OrchestraOS v0.1.0-hackathon
 
-The first public release, cut for the Tuluminator build-a-thon (Tulum, 2026-09-19/20).
+The first public release of OrchestraOS, published by Tulum DAO for the Build-a-thon (Tulum, 2026-09-19/20).
 
 ## What you get
 
