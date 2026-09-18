@@ -464,3 +464,36 @@ Update every consumer in the same PR (grep the dashboard and the iOS repo for th
 **Acceptance.** `git grep -i shaw` over the tree returns only git-author lines; an
 existing data dir upgrades in place (`orchestra upgrade`) with no lost proposals/decisions;
 `/api/system` still answers with the presence field the clients read.
+
+## G20 · Arturo threads are one-way: "New thread" exists, old threads are unreachable
+`labels: arturo, ui, size:M`
+
+The Ask-Arturo pill keeps one conversation and its history, and "New thread" starts a fresh
+one — but the previous thread is then gone from the UI: there is no list, no switcher, no way
+back. The home page has the same shape (one thread, no history of past ones). Whatever you
+asked yesterday is unreachable even though the turns exist server-side.
+
+**What exists today.** The pill persists its turns and its `conversation_id` in
+`localStorage` (`orchestra.arturo.pill.thread` / `.conversation`), and the home keeps its own
+(`orchestra.arturo.conversation`). Every turn already carries that `conversation_id` to
+`POST /api/arturo/text`, and the Arturo service threads context per conversation — so the
+server is already the durable side; only the client forgets.
+
+**Design.** Make the conversation a first-class object instead of a localStorage string:
+- Persist the thread list server-side, keyed by `conversation_id` (title, created/updated,
+  turn count, last snippet). The Arturo service already sees every turn; the list belongs
+  next to it rather than in the browser, so the phone and the web show the same threads.
+- `GET /api/arturo/threads` (list, newest first, paged) and `GET /api/arturo/threads/:id`
+  (its turns) — the pane and the home both read these; localStorage becomes a cache of
+  "which thread was I in", not the archive.
+- UI: a threads affordance in the pill header and on the home (the drawer is the obvious
+  place) listing recent threads with their first line as the title; selecting one loads its
+  turns and makes it current. "New thread" stays, and the thread it leaves behind is now in
+  the list rather than lost.
+- Titles: derive from the first user message; do not ask the operator to name a thread.
+- Home and pill should share one thread space — the same conversation continued in either
+  place, not two parallel archives.
+
+**Acceptance.** Ask something in the pill, start a new thread, then reopen the previous one
+from the list and see its turns; the same thread is visible on the home page and survives a
+browser reload and a service restart (i.e. it is not localStorage-backed).
