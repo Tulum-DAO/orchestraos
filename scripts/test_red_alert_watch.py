@@ -332,3 +332,21 @@ def test_close_card_answers_only_when_preservation_is_off(store, monkeypatch):
     monkeypatch.setattr(W, "PRESERVE_PENDING_QUEUE", False)
     W.close_card("apr_x", "healed")
     assert "answer" in [argv[2] for argv in calls if len(argv) > 2]
+
+
+def test_card_corrections_append_and_never_rewrite_the_ask(store, monkeypatch):
+    """A card in the live queue must still READ as the live ask (2026-09-18): a status note
+    goes at the END, never at the top, or a pending row looks closed on its face."""
+    captured = {}
+
+    def fake_run(argv, **kw):
+        if len(argv) > 2 and argv[2] == "patch":
+            captured["summary"] = argv[argv.index("--summary") + 1]
+        return type("R", (), {"returncode": 0, "stdout": '{"summary": "**What happened:** the original ask"}', "stderr": ""})()
+
+    monkeypatch.setattr(W.subprocess, "run", fake_run)
+    monkeypatch.setattr(W, "PRESERVE_PENDING_QUEUE", True)
+    W.close_card("apr_x", "the seat healed")
+    s = captured["summary"]
+    assert s.startswith("**What happened:** the original ask")
+    assert s.rstrip().endswith("the seat healed")
