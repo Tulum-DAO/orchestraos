@@ -392,3 +392,22 @@ with a policy, not a key in `.env`); what the "repair-only" spend policy looks l
 **Acceptance (first slice).** `orchestra vault status` shows balance + caps; a simulated
 out-of-usage RED ALERT on a sandbox seat draws once, logs the draw in the report, and
 refuses a second draw over the cap with a card.
+
+## G18 · The ticket button: report sheet on every surface (web done, iOS/watch open)
+`labels: good-first-issue, size:S, ui, ios, self-healing`
+
+The RED ALERT system (`docs/RED_ALERT.md`) has a back door (the watchdog) and now a front
+door on the web agent page: the siren button in the top bar opens a report sheet
+(crash / bug / improvement / suggestion + your words); the server attaches the evidence
+(screen capture, process state, logs) via `scripts/red_alert.py report --surface`, files
+`state/red-alert/<ts>-<seat>-<class>.json`, and surfaces it (crash/bug → approval card +
+Telegram + Arturo; improvement/suggestion → Telegram + Arturo). API: `POST
+/api/red-alert/report {seat, kind, words}`, `GET /api/red-alert/reports?status=open`.
+
+**Open.** The iOS/watch agent view needs the same button next to (or above) the auth-key
+control, calling the same endpoint; and a tiny "tickets" list view over `GET
+/api/red-alert/reports`. Operator's framing: *"this will serve as the gateway to the
+ticket system."*
+
+**Acceptance.** Filing from the phone lands a report file with `channel: ios` and the
+evidence attached; a crash/bug puts a card on the approvals surface within seconds.

@@ -1,12 +1,13 @@
-import { Menu, Sun, Moon, Monitor, Brain } from 'lucide-react';
+import { Menu, Sun, Moon, Monitor, Brain, Siren } from 'lucide-react';
 import { useTheme } from '../../theme/ThemeProvider';
 
 interface TopBarProps {
   onMenuOpen: () => void;
   onBrainOpen: () => void;
+  onReportOpen?: () => void;
 }
 
-export function TopBar({ onMenuOpen, onBrainOpen }: TopBarProps) {
+export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen }: TopBarProps) {
   const { theme, setTheme } = useTheme();
 
   const cycleTheme = () => {
@@ -36,13 +37,26 @@ export function TopBar({ onMenuOpen, onBrainOpen }: TopBarProps) {
         {theme === 'system' && <Monitor size={24} />}
       </button>
 
-      <button
-        onClick={onBrainOpen}
-        className="p-2 text-foreground hover:bg-muted rounded-lg transition-colors"
-        aria-label="Open brain"
-      >
-        <Brain size={24} />
-      </button>
+      <div className="flex items-center gap-1">
+        {/* Report button — the front door of the RED ALERT / ticket system (the operator 2026-09-18) */}
+        {onReportOpen && (
+          <button
+            onClick={onReportOpen}
+            className="p-2 text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
+            aria-label="Report a problem"
+            title="Report a crash, bug, improvement or suggestion"
+          >
+            <Siren size={24} />
+          </button>
+        )}
+        <button
+          onClick={onBrainOpen}
+          className="p-2 text-foreground hover:bg-muted rounded-lg transition-colors"
+          aria-label="Open brain"
+        >
+          <Brain size={24} />
+        </button>
+      </div>
     </div>
   );
 }

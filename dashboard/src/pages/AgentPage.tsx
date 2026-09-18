@@ -5,6 +5,7 @@ import { Drawer } from '../components/agent/Drawer';
 import { BrainModal } from '../components/agent/BrainModal';
 import { Feed } from '../components/agent/Feed';
 import { Composer } from '../components/agent/Composer';
+import { ReportSheet } from '../components/agent/ReportSheet';
 import { useAgentSettings } from '../stores/agentSettings';
 
 export default function AgentPage() {
@@ -12,6 +13,7 @@ export default function AgentPage() {
   const agentId = id || 'gm';
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [brainOpen, setBrainOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
   const settings = useAgentSettings();
 
   // Load settings from storage on mount
@@ -25,7 +27,11 @@ export default function AgentPage() {
       <TopBar
         onMenuOpen={() => setDrawerOpen(true)}
         onBrainOpen={() => setBrainOpen(true)}
+        onReportOpen={() => setReportOpen(true)}
       />
+
+      {/* Report sheet — RED ALERT front door (docs/RED_ALERT.md) */}
+      <ReportSheet isOpen={reportOpen} onClose={() => setReportOpen(false)} agentId={agentId} />
 
       {/* Navigation drawer */}
       <Drawer isOpen={drawerOpen} onClose={() => setDrawerOpen(false)} />
