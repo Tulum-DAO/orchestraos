@@ -93,9 +93,10 @@ export default function ArturoHome() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
-  async function runtimeStep() {
+  async function runtimeStep(fresh = false) {
     const id = say('', { pending: true });
-    const [rows, h] = await Promise.all([runtimesAvailable(), arturoHealth()]);
+    // fresh: the user just logged in and tapped "Check again" — re-probe, never the cache
+    const [rows, h] = await Promise.all([runtimesAvailable(fresh), arturoHealth()]);
     setHealth(h);
     const authed = rows.filter((r: RuntimeRow) => r.installed && r.authed === true);
     const installedOnly = rows.filter((r: RuntimeRow) => r.installed && r.authed !== true);
@@ -105,7 +106,7 @@ export default function ArturoHome() {
         ? `I can see ${installedOnly.map((r) => r.label || r.id).join(', ')} installed but not logged in. `
         : 'I do not see any agent CLI on this machine yet. ';
       patch(id, { pending: false, text: `${who}${hint}Open a terminal on the server and log in to one — \`claude\`, \`codex login\` or \`agy\` — then tap Check again. I run on the CLI you already pay for; no API key needed.`,
-        decision: { options: ['Check again'], onPick: () => { setTurns((t) => t.filter((x) => x.id !== id)); void runtimeStep(); } } });
+        decision: { options: ['Check again'], onPick: () => { setTurns((t) => t.filter((x) => x.id !== id)); void runtimeStep(true); } } });
       return;
     }
     const brain = h.brain?.kind === 'api' ? `an API key (${brainLabel(h.brain)})` : `${brainLabel(h.brain)} through your logged-in CLI`;

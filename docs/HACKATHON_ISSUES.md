@@ -331,3 +331,23 @@ alias rows whose canonical seat is live.
 
 **Acceptance.** After a rotation the Agents list shows the canonical seat and its parked
 predecessor only; a test rotates in a tmp data dir and asserts the projection.
+
+## G15 · Arturo home during `orchestra up` boot says "HTTP 502" instead of "still starting"
+`labels: good-first-issue, size:XS, ui, arturo`
+
+Open the home page while the supervisor is still bringing Arturo up and the first turn
+fails with `I could not reach my brain: HTTP 502`. The proxy is simply not listening yet.
+`dashboard/src/lib/arturo.ts` (`arturoHealth` / `arturoText`) should map a 502/503 or a
+connection error during the first ~60s after page load to a friendly "still starting — I'll
+retry in a few seconds" state and retry with backoff, instead of surfacing the status code.
+
+**Acceptance.** Loading the page mid-boot shows the starting state, then the greeting once
+`/api/arturo/health` answers `ok`; no raw HTTP code reaches the user.
+
+## G14 · "Check again" after a CLI login kept saying "installed but not logged in" — FIXED
+`labels: bug, size:XS, arturo, fixed`
+
+Fixed on main (see git log for "G14"): the onboarding tap now POSTs
+`/api/runtimes/available/refresh` (busting the 300s in-process cache) and Arturo's `/health`
+re-selects a brain that was `none` at boot once a CLI is authed. Kept here so attendees who
+hit it on an older clone know it is a one-line `orchestra upgrade` away.
