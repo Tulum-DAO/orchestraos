@@ -1,3 +1,5 @@
+import { authHeaders } from '../stores/gatewayConfig';
+
 const BASE = '/api';
 
 function handleAuthError(res: Response, path: string) {
@@ -7,7 +9,7 @@ function handleAuthError(res: Response, path: string) {
 }
 
 async function get<T = any>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`);
+  const res = await fetch(`${BASE}${path}`, { headers: { ...authHeaders() } });
   if (!res.ok) { handleAuthError(res, path); throw new Error(`API ${path}: ${res.status}`); }
   return res.json();
 }
@@ -15,7 +17,7 @@ async function get<T = any>(path: string): Promise<T> {
 export async function post<T = any>(path: string, body?: any): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: body ? JSON.stringify(body) : undefined
   });
   if (!res.ok) { handleAuthError(res, path); throw new Error(`API ${path}: ${res.status}`); }
@@ -25,7 +27,7 @@ export async function post<T = any>(path: string, body?: any): Promise<T> {
 async function patch<T = any>(path: string, body: any): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(body)
   });
   if (!res.ok) { handleAuthError(res, path); throw new Error(`API ${path}: ${res.status}`); }

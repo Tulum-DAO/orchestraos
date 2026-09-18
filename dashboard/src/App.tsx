@@ -20,6 +20,8 @@ import ChatHistory from './pages/ChatHistory';
 import Assistant from './pages/Assistant';
 import AgentPage from './pages/AgentPage';
 import ArturoHome from './pages/ArturoHome';
+import ConnectScreen from './components/ConnectScreen';
+import { useGatewayConfig } from './stores/gatewayConfig';
 import { ASSISTANT_V2_ENABLED } from './lib/assistant/config';
 
 const queryClient = new QueryClient({
@@ -46,6 +48,12 @@ function NotFound() {
 }
 
 export default function App() {
+  // Web first-run gate: until the dashboard is pointed at a gateway (URL + token), show the
+  // connect screen. Same-origin default means an operator on the gateway host only pastes a
+  // token. Unconfigured = same-origin fallback in api.ts, so this is the only thing that gates.
+  const configured = useGatewayConfig((s) => s.configured);
+  if (!configured) return <ConnectScreen />;
+
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
