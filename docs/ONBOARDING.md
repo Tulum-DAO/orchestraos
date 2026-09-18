@@ -4,11 +4,11 @@ For someone who already has a gateway running and wants to reach it from a
 phone and from a browser, on their own network, with no baked-in token. Two
 client surfaces, one pairing flow.
 
-> **Not on main as of this writing.** `orchestra pair`, `/gateway/identity`,
-> `/gateway/capabilities`, and `/pair/exchange` land Saturday morning by
-> default — check `orchestra pair --help` and
-> `git log -- scripts/watch_gateway.py` before relying on the exact shape
-> below; this doc is written against the frozen contract, not a guess.
+> **Not built yet.** Every step below — `orchestra pair`, the handshake, both
+> client connect flows — describes what you will do once this lands Saturday
+> morning; none of it is on `main` right now, and none of the commands below
+> will work if you try them tonight. Check `orchestra pair --help` first if
+> you're reading this after Saturday morning to confirm it has landed.
 
 ## Before anything else: log in
 
