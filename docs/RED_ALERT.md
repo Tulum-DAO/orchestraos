@@ -1,6 +1,6 @@
 # RED ALERT — the crash-report standard the system upholds itself to
 
-Commissioned by the operator 2026-09-17, after the harness bottom-bar **^Z** button
+Commissioned by the operator (2026-09-17), after the harness bottom-bar **^Z** button
 suspended the gm seat (process STAT `T`, alive but not running) and nothing in the fleet
 noticed. the operator's words: *"LOG EVERYTHING IN A RED ALERT CRASH REPORT … a list of errors
 that it reports when a user detects and reports a problem. The list can be logged, added
@@ -59,12 +59,21 @@ severity, a detect rule, an immediate fix and a doc line). Add a class = add a r
 |---|---|---|---|
 | `process_suspended` | crash | pane process STAT contains `T`; screen "Claude Code has been suspended" | `card_only` — the process is still present, so under the NO KILLS rule the watchdog never touches it; a human runs `tmux respawn-pane -k` + `claude --resume <sid>` (SIGCONT/`fg` do not stick under a dash pane shell — gm 2026-09-18 04:31Z) |
 | `pane_dead` | crash | `pane_dead=1` or no process on the tty | `respawn_resume`: `tmux respawn-pane` (never `-k`) with the registry `resume_command`, only when no process remains |
+
+> **A clean `/exit` is not a crash.** Before `pane_dead` is filed, the seat's sid transcript tail is
+> checked for a terminal `<command-name>/exit</command-name>` (or `/quit`) — if the seat's last act was
+> typing it, the classifier returns healthy and nothing is filed. A deliberate exit is a retirement and
+> rotation owns it; respawning it would re-launch a seat that meant to leave. Only the last few entries
+> are read, so an `/exit` from a resumed sid's previous life never excuses today's crash.
+> ( — orchestra-builder-g49 typed `/exit` at 17:33:00Z and was carded as a crash 4s later.)
 | `out_of_usage` | error | "usage limit" / "out of usage credits" / "credits depleted" | `switch_provider`: `/model` in-pane to the next `[runtimes] enabled` (Opus → Sonnet → gemini → codex); record it |
 | `api_error` | error | "API Error" in the last screenful | `wait_then_retry` (90s, bare Enter); 3× → `switch_provider` |
 | `login_screen` | crash | "Select login method" / "not logged in" | `card_only` — auth is the operator's |
 | `bypass_permissions_dialog` | error | the "Bypass Permissions mode" accept dialog | `accept_dialog` (fleet policy is skip-permissions) |
 | `composer_stuck` | bug | typed text at ❯ unsubmitted > 2 scans | `bare_enter` (nudge_pane semantics) |
-| `tmux_server_dead` | crash | `tmux list-sessions` says no server while online seats are registered | `card_only` — one fleet report + card + Telegram; gm resumes each seat (`claude --resume <sid>`). Never kill a pid whose argv starts with `tmux`: the server keeps its first client's argv |
+| `tmux_server_dead` | crash | `tmux list-sessions` says no server while online seats are registered | `card_only` — one fleet report + card + Telegram; gm resumes each seat (`claude --resume <sid>`). Never kill a pid whose argv starts with `tmux`: the server keeps its first client's argv () |
+| `green_died` | error | a blue-green GREEN pane died while its root's `bg_state` still expects it | `card_only` — **never respawn a green**; only the state machine boots one. A green whose root is back to SOLO is not reported at all (it died correctly) |
+| `api_health_fail` | error | service-watchdog "HEALTH FAIL: api-server port 8888" (HTTP 000 twice) | `none_needed` — the watchdog restarts it; the report carries the timestamps, host memory, kernel-OOM check and the API stderr () |
 | `gateway_unreachable` | error | user report from phone/watch | `probe_health` on :9091 + funnel, report the failing hop |
 
 ## 4. Who acts, and when
@@ -102,7 +111,7 @@ Telegram (`tg-notify.sh`) and to Arturo (msg_store → gm, type `red_alert`). No
 - Never touch an attached pane except through the card.
 - Before killing ANY pid, compare it with `tmux display -p '#{pid}'` and read its argv: a
   `tmux new-session …` argv with ppid 1 is the tmux SERVER (it keeps its first client's
-  argv). Killing it drops the whole fleet (seen once, 2026-09-18).
+  argv). Killing it drops the whole fleet (, 2026-09-18 04:53Z).
 - Liveness checks anchor the pattern (`pgrep -f '^python3 x.py'`): an unanchored fragment
   matches the tmux server / `sh -c` wrappers and the service is never restarted.
 - The permanent fix for a user-reachable crash is removing the way to cause it
@@ -110,8 +119,7 @@ Telegram (`tg-notify.sh`) and to Arturo (msg_store → gm, type `red_alert`). No
 
 ## 7. The first report
 
-The standard was written from a real incident: a terminal key bar exposed **^Z**, the manager
-seat's CLI was suspended (`STAT T`) and nothing noticed. The report captured the pane snapshot,
-the stopped process tree and the identity row; recovery was `tmux respawn-pane -k` +
-`claude --resume <sid>`; the permanent fix removed ^Z from every key bar and made the API
-refuse `ctrl-z`. Incident ids and captures stay in the operator's own `state/red-alert/`.
+`state/red-alert/20260918T043956Z-gm-process-suspended.json` (``) — the ^Z
+incident: snapshot `logs/red-alert/gm-pane-20260918T043143Z.txt`, recovered by
+orchestra-builder with `respawn-pane -k` + `claude --resume 47b2076c…`, permanent fix #1 =
+remove ^Z from the bottom bar (web `ActionBar.tsx`, API `keyMap`, iOS terminal view).

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """RED-first contract for red_alert.py — the RED ALERT crash-report standard.
 
-Commission: prompts/red-alert-builder.md (the operator, 2026-09-17, after ^Z on the
+Commission: prompts/red-alert-builder.md (the operator 2026-09-17 23:30 Tulum, after ^Z on the
 harness bottom bar suspended gm). A crash report is ONE JSON file under
 state/red-alert/<ts>-<slug>.json with the fixed schema in docs/RED_ALERT.md, the CLI is
 scripts/red_alert.py (report / list / show / update / resolve / escalate), and the
@@ -197,7 +197,7 @@ def test_parse_ps_tree_marks_stopped():
     assert RA.any_stopped([{"pid": 1, "stat": "Sl+", "tty": "", "cmd": "x"}]) is False
 
 
-# --- screen classes match CLI banners only, never transcript prose  ---
+# --- screen classes match CLI banners only, never transcript prose () ---
 
 FIX = os.path.join(HERE, "fixtures", "red-alert")
 
@@ -255,3 +255,70 @@ def test_suspended_needs_the_shell_stop_line_too():
 def test_bypass_dialog_needs_accept_row():
     assert RA.classify(_screen_ev("● I read about Bypass Permissions mode in the docs\n❯ "), "s") is None
     assert RA.classify(_screen_ev("  Bypass Permissions mode\n  ❯ 1. No, exit\n    2. Yes, I accept\n"), "s")["class"] == "bypass_permissions_dialog"
+
+
+# ---------------------------------------------------------------------------
+# clean /exit is not a crash (, orchestra-builder-g49 2026-09-18 17:33Z)
+# ---------------------------------------------------------------------------
+def _write_transcript(tmp_path, sid, lines):
+    p = tmp_path / f"{sid}.jsonl"
+    p.write_text("".join(json.dumps(l) + "\n" for l in lines))
+    return str(p)
+
+
+_EXIT_LINES = [
+    {"type": "assistant", "message": {"role": "assistant", "content": "handoff written"}},
+    {"type": "user", "message": {"role": "user", "content":
+        "<command-name>/exit</command-name>\n<command-message>exit</command-message>"},
+     "timestamp": "2026-09-18T17:33:00.563Z"},
+    {"type": "user", "message": {"role": "user", "content": "<local-command-stdout>Goodbye!</local-command-stdout>"},
+     "timestamp": "2026-09-18T17:33:00.563Z"},
+]
+
+
+def test_dead_pane_after_a_clean_exit_is_not_a_crash(tmp_path, monkeypatch):
+    """g49 typed /exit at 17:33:00Z; the watchdog filed pane_dead 4s later and carded the operator."""
+    sid = "4ee157f1-d402-4304-96ff-bdc764a2fcfd"
+    path = _write_transcript(tmp_path, sid, _EXIT_LINES)
+    monkeypatch.setattr(RA, "_transcript_path", lambda s: path if s == sid else None)
+    ev = {"process_state": {"g49": []}, "pane_dead": {"g49": True},
+          "attached": {"g49": False}, "screen": {}, "sids": {"g49": sid}}
+    assert RA.classify(ev, "g49") is None
+
+
+def test_dead_pane_without_a_clean_exit_is_still_pane_dead(tmp_path, monkeypatch):
+    sid = "deadbeef-0000-0000-0000-000000000000"
+    path = _write_transcript(tmp_path, sid, [
+        {"type": "assistant", "message": {"role": "assistant", "content": "still working"}}])
+    monkeypatch.setattr(RA, "_transcript_path", lambda s: path if s == sid else None)
+    ev = {"process_state": {"s": []}, "pane_dead": {"s": True},
+          "attached": {"s": False}, "screen": {}, "sids": {"s": sid}}
+    assert RA.classify(ev, "s")["class"] == "pane_dead"
+
+
+def test_exit_buried_under_later_work_is_still_pane_dead(tmp_path, monkeypatch):
+    """A resumed sid appends: an /exit from a PREVIOUS life must not excuse today's crash."""
+    sid = "resumed00-0000-0000-0000-000000000000"
+    path = _write_transcript(tmp_path, sid, _EXIT_LINES + [
+        {"type": "assistant", "message": {"role": "assistant", "content": f"turn {i}"}} for i in range(8)])
+    monkeypatch.setattr(RA, "_transcript_path", lambda s: path if s == sid else None)
+    ev = {"process_state": {"s": []}, "pane_dead": {"s": True},
+          "attached": {"s": False}, "screen": {}, "sids": {"s": sid}}
+    assert RA.classify(ev, "s")["class"] == "pane_dead"
+
+
+def test_no_sid_or_missing_transcript_stays_pane_dead(monkeypatch):
+    monkeypatch.setattr(RA, "_transcript_path", lambda s: None)
+    ev = {"process_state": {"s": []}, "pane_dead": {"s": True},
+          "attached": {"s": False}, "screen": {}, "sids": {}}
+    assert RA.classify(ev, "s")["class"] == "pane_dead"
+
+
+def test_a_human_shaped_report_has_no_pattern_class(store):
+    """The category ios-watch-dev's phone exposed: nothing in this suite filed a report the
+    way a person does, so every code path that assumed `class` is a string had no caller
+    that could reach it. This fixture is that caller."""
+    d = RA.report(reported_by="user", channel="ios", severity="bug", seats=["gm"],
+                  symptom="the app said it could not reach you", capture=None)
+    assert d["class"] is None and d["evidence"] == {} and d["severity"] == "bug"
+    assert RA.show(d["id"])["class"] is None

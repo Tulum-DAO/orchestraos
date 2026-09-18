@@ -46,7 +46,11 @@ MAX_ATTEMPTS = 2        # third failure never happens: escalate after two
 VERIFY_WAIT_S = 20      # seconds a respawned CLI gets before the by-effect check
 CARD_FROM = "red-alert-builder"
 CLI_RUNTIMES = ("claude", "gemini", "codex")
-CARD_ONLY = {"login_screen", "gateway_unreachable", "tmux_server_dead", "process_suspended"}
+CARD_ONLY = {"login_screen", "gateway_unreachable", "tmux_server_dead", "process_suspended", "green_died"}
+WAL_DIR = os.path.join(ORCH, "state", "wal")
+_GREEN_RE = re.compile(r"^(?P<root>.+)-g(?P<gen>\d+)$")
+# bg states in which a green is legitimately expected to exist
+_BG_ACTIVE = {"PREWARMING", "HYDRATING", "VERIFY", "VERIFYING", "READY", "SWAPPING", "PREWARMED", "ARMED"}
 MODEL_LADDER = ["claude-opus-5[1m]", "claude-sonnet-5[1m]", "gemini", "codex"]
 
 def log(msg: str) -> None:
@@ -73,6 +77,29 @@ def live_seats(registry: dict, *, tmux_sessions: set[str]) -> list[tuple[str, st
         if sess and sess in tmux_sessions:
             out.append((aid, sess))
     return out
+
+
+def green_status(seat: str, *, wal_dir: str | None = None) -> str:
+    """'not_green' | 'unexpected_green' | 'active_green'.
+
+    gm denial 2026-09-18 (orchestra-builder-g49): a GREEN is an ephemeral successor booted by the
+    blue-green beat. Its pane dying is usually CORRECT — the seam raised (hydrate SeamTimeout under
+    load), the green was torn down and the root went back to SOLO; blue never stopped. Respawning it
+    from the registry would manufacture an orphan pane. Only the state machine may boot a green.
+    """
+    m = _GREEN_RE.match(seat)
+    if not m:
+        return "not_green"
+    path = os.path.join(wal_dir or WAL_DIR, f"{m.group('root')}.bg.json")
+    try:
+        with open(path) as f:
+            bg = json.load(f)
+    except (OSError, ValueError):
+        return "unexpected_green"        # no state machine expecting it
+    state = str(bg.get("state") or "").upper()
+    meta = bg.get("meta") or {}
+    named = any(meta.get(k) for k in ("green_pane_id", "green_pane_pid", "green_session_id"))
+    return "active_green" if (state in _BG_ACTIVE and named) else "unexpected_green"
 
 
 def norm_answer(card: dict | None) -> str | None:
@@ -113,7 +140,7 @@ def decide(report: dict, *, attached: bool, answer: str | None, now: float, arme
             return {"action": "hold", "hold_until": now + HOLD_S}
         return {"action": "repair", "fix": fix, "reason": "hold expired"}
     if attached and fix == "switch_provider":
-        return {"action": "wait", "reason": "attached"}   # never /model on a pane a human is in 
+        return {"action": "wait", "reason": "attached"}   # never /model on a pane a human is in ()
     if answer == "Repair now":
         return {"action": "repair", "fix": fix, "reason": "answered"}
     if attached:
@@ -172,10 +199,11 @@ def _view(r: dict) -> dict:
 
 def post_card(r: dict, ev: dict, seat: str) -> str | None:
     cls, rid = r["class"], r["id"]
-    fix = RA.CATALOGUE.get(cls, {}).get("immediate_fix", {})
-    # A human-filed report (the Report button) has no pattern class — class is None
-    # there, and .replace() on it crashed the report with a 500 before any card.
+    # A human-filed report (the phone's Report button) has no pattern class —
+    # class is None there, and .replace() on it crashed the whole report with a
+    # 500 before the card was ever posted. Fall back to the severity wording.
     label = (cls or r.get("severity") or "issue").replace("_", " ")
+    fix = RA.CATALOGUE.get(cls, {}).get("immediate_fix", {})
     q = f"RED ALERT {rid}: {seat} — {label}. Repair it?"
     summary = (f"**What happened:** {r['symptom']}\n\n**What I will do if you don't answer in 2 minutes:** "
                f"{fix.get('action', '-')} — {fix.get('how', '')}\n\nReport: `{r['_path']}`\n"
@@ -248,9 +276,11 @@ def _healthy(seat: str) -> tuple[bool, dict]:
 
 
 def repair_respawn(seat: str, session: str, ev: dict) -> tuple[bool, str]:
-    """HARD RULE (the operator, 2026-09-18): respawn ONLY a pane whose process is already
+    """HARD RULE (2026-09-18): respawn ONLY a pane whose process is already
     gone — no -k, no signal of any kind. A suspended (STAT T) or otherwise present process is
-    a card to the operator, never a repair."""
+    a card to the operator, never a repair. A GREEN is never respawned at all (2026-09-18)."""
+    if _GREEN_RE.match(seat):
+        return False, f"{seat} is a blue-green green; only the state machine may boot one — refusing to respawn"
     procs = ev["process_state"].get(seat) or []
     if procs:
         return False, f"process still present ({len(procs)} pids, e.g. {procs[0].get('stat')}) — refusing to respawn (no kills rule); card only"
@@ -325,7 +355,7 @@ REPAIRS = {
 # ---------------------------------------------------------------------------
 def spawn_diagnosis(r: dict, *, force: bool = False) -> str:
     """Only after RA.escalate (an escalations[] row) unless force — a direct call on a resolved or
-    un-escalated report spawned a seat with nothing to diagnose."""
+    un-escalated report spawned a seat with nothing to diagnose (diag seat finding,  #2)."""
     rid = r["id"]
     if not force and (r.get("status") == "resolved" or not r.get("escalations")):
         log(f"DIAG {rid} refused: status={r.get('status')} escalations={len(r.get('escalations') or [])} (force=False)")
@@ -464,6 +494,15 @@ def tick(*, only: str | None = None, dry: bool = False, registry_path: str | Non
                         close_card(r["card_id"], "seat is healthy again (fixed by hand or cleared itself) — nothing to decide")
                     log(f"RESOLVED {r['id']} {seat} healthy by effect")
             continue
+        if f["class"] == "pane_dead":
+            gs = green_status(seat)
+            if gs == "unexpected_green":
+                log(f"SKIP {seat}: dead green, root not expecting it (bg SOLO/absent) — correct teardown, no report")
+                continue
+            if gs == "active_green":
+                f = {**f, "class": "green_died", "severity": RA.CATALOGUE["green_died"]["severity"],
+                     "immediate_fix": RA.CATALOGUE["green_died"]["immediate_fix"],
+                     "signal": f["signal"] + "; root's bg_state still expects this green"}
         findings += 1
         if dry:
             log(f"DRY {seat} {f['class']} attached={ev['attached'][seat]} ({f['signal']})")

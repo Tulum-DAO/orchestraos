@@ -237,3 +237,76 @@ def test_post_card_classless_falls_back_to_issue_when_severity_missing(store, mo
     monkeypatch.setattr(W.RA, "update", lambda *a, **k: None)
     r = {"id": "ra_h2", "class": None, "severity": None, "seats": ["gm"], "symptom": "s", "_path": "/tmp/x.json", "evidence": {}}
     assert W.post_card(r, {}, "gm") == "apr_x"
+
+
+# --- greens are not seats (denial of a report on orchestra-builder-g49) ------------
+# A blue-green GREEN dying is often CORRECT (hydrate SeamTimeout under load -> the seam
+# raised, the green was torn down, blue kept working). Respawning one would manufacture an
+# orphan pane the fleet has a watcher for. Only the state machine may boot a green.
+
+def _bg(tmp_path, root, state, **meta):
+    import json
+    d = tmp_path / "wal"
+    d.mkdir(exist_ok=True)
+    (d / f"{root}.bg.json").write_text(json.dumps({"state": state, "root": root, "meta": meta}))
+    return str(d)
+
+
+def test_green_status_plain_seat(tmp_path):
+    assert W.green_status("gm", wal_dir=str(tmp_path)) == "not_green"
+    assert W.green_status("orchestra-builder", wal_dir=str(tmp_path)) == "not_green"
+
+
+def test_green_status_unexpected_green_when_root_is_solo(tmp_path):
+    wal = _bg(tmp_path, "orchestra-builder", "SOLO", green_pane_id=None)
+    assert W.green_status("orchestra-builder-g49", wal_dir=wal) == "unexpected_green"
+
+
+def test_green_status_active_green_when_root_is_mid_swap(tmp_path):
+    wal = _bg(tmp_path, "orchestra-builder", "PREWARMING", green_pane_id="%42", green_session_id="abc")
+    assert W.green_status("orchestra-builder-g49", wal_dir=wal) == "active_green"
+
+
+def test_green_status_missing_bg_file_is_unexpected(tmp_path):
+    assert W.green_status("nobody-g7", wal_dir=str(tmp_path)) == "unexpected_green"
+
+
+def test_tick_does_not_file_for_a_dead_unexpected_green(tmp_path, store, monkeypatch):
+    wal = _bg(tmp_path, "orchestra-builder", "SOLO")
+    monkeypatch.setattr(W, "WAL_DIR", wal)
+    filed = []
+    monkeypatch.setattr(W, "file_finding", lambda *a, **k: filed.append(a[0]))
+    monkeypatch.setattr(W, "tmux_sessions", lambda: {"orchestra-builder-g49"})
+    monkeypatch.setattr(W.RA, "capture_evidence", lambda seats, **k: {
+        "process_state": {seats[0]: []}, "pane_dead": {seats[0]: True}, "attached": {seats[0]: False},
+        "screen": {}, "registry_rows": {}, "sids": {}, "pane_snapshot": {}})
+    reg = {"agents": {"orchestra-builder-g49": {"status": "online", "runtime": "claude", "tmux_session": "orchestra-builder-g49"}}}
+    import json as _j
+    p = tmp_path / "reg.json"
+    p.write_text(_j.dumps(reg))
+    W.tick(registry_path=str(p))
+    assert filed == []
+
+
+def test_tick_files_card_only_for_a_dead_active_green(tmp_path, store, monkeypatch):
+    wal = _bg(tmp_path, "orchestra-builder", "VERIFY", green_pane_id="%42")
+    monkeypatch.setattr(W, "WAL_DIR", wal)
+    filed = []
+    monkeypatch.setattr(W, "file_finding", lambda seat, f, ev, **k: filed.append(f) or {"id": "ra_x", "status": "open", "seats": [seat], "class": f["class"], "card_id": None, "created_at": "2026-09-18T00:00:00+00:00", "evidence": {}, "repair_attempts": [], "symptom": "s", "_path": "p"})
+    monkeypatch.setattr(W, "handle", lambda *a, **k: None)
+    monkeypatch.setattr(W, "tmux_sessions", lambda: {"orchestra-builder-g49"})
+    monkeypatch.setattr(W.RA, "capture_evidence", lambda seats, **k: {
+        "process_state": {seats[0]: []}, "pane_dead": {seats[0]: True}, "attached": {seats[0]: False},
+        "screen": {}, "registry_rows": {}, "sids": {}, "pane_snapshot": {}})
+    import json as _j
+    p = tmp_path / "reg.json"
+    p.write_text(_j.dumps({"agents": {"orchestra-builder-g49": {"status": "online", "runtime": "claude", "tmux_session": "orchestra-builder-g49"}}}))
+    W.tick(registry_path=str(p))
+    assert filed and filed[0]["class"] == "green_died"
+    assert filed[0]["immediate_fix"]["action"] == "card_only"
+
+
+def test_respawn_refuses_any_green_even_if_asked():
+    ev = {"process_state": {"x-g9": []}, "registry_rows": {"x-g9": {"session_id": "abc", "runtime": "claude"}}, "pane_dead": {"x-g9": True}}
+    ok, detail = W.repair_respawn("x-g9", "x-g9", ev)
+    assert ok is False and "green" in detail.lower()

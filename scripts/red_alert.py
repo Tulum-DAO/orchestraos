@@ -3,7 +3,7 @@
 
 Standard: docs/RED_ALERT.md. One report = one JSON file
     state/red-alert/<UTC ts>-<seat>-<slug>.json
-Commissioned by the operator, 2026-09-17 after the harness bottom-bar "^Z" button
+Commissioned by the operator (2026-09-17) after the harness bottom-bar "^Z" button
 suspended the gm seat (pid STAT T, not killed) — "LOG EVERYTHING IN A RED ALERT CRASH
 REPORT ... a list of errors the system reports, logs, adds to and acts on immediately".
 
@@ -64,7 +64,7 @@ CATALOGUE = {
         "detect": "pane process tree has a STAT containing 'T' (SIGTSTP/^Z), or the screen "
                   "shows 'Claude Code has been suspended'",
         "immediate_fix": {"action": "card_only",
-                          "how": "NO KILLS rule (the operator, 2026-09-18): the process is still present, so the "
+                          "how": "NO KILLS rule (2026-09-18): the process is still present, so the "
                                  "watchdog never touches it. Card + Telegram; a human resumes it (respawn-pane -k + "
                                  "`claude --resume <sid>` by hand — SIGCONT/tcsetpgrp did not stick on gm 04:31Z)"},
         "doc": "^Z from the harness bottom bar or a terminal; the CLI is stopped, not dead",
@@ -116,8 +116,26 @@ CATALOGUE = {
         "immediate_fix": {"action": "card_only",
                           "how": "one fleet-wide report + card + Telegram; resume is gm's roster-resume-all (each seat: "
                                  "new session + `claude --resume <sid>`). NEVER kill a pid whose argv starts with `tmux` — "
-                                 "the server keeps its first client's argv"},
+                                 "the server keeps its first client's argv (, 2026-09-18 04:53Z)"},
         "doc": "every pane vanished at once; transcripts intact; nothing else can run until a server exists",
+    },
+    "green_died": {
+        "severity": "error",
+        "detect": "a blue-green GREEN pane died while its root's bg_state still expects it "
+                  "(state not SOLO and the green is named in meta)",
+        "immediate_fix": {"action": "card_only",
+                          "how": "NEVER respawn a green — only the blue-green state machine may boot one; a "
+                                 "registry respawn manufactures an orphan pane. Blue keeps working; the next beat "
+                                 "boots a fresh green. Card so a human knows a green is failing repeatedly"},
+        "doc": "an ephemeral successor died (often correctly, e.g. hydrate SeamTimeout under load); not a seat crash",
+    },
+    "api_health_fail": {
+        "severity": "error",
+        "detect": "service-watchdog 'HEALTH FAIL: api-server port 8888 failed twice' (HTTP 000) — the API stopped answering",
+        "immediate_fix": {"action": "none_needed",
+                          "how": "service-watchdog restarts it; file the report with the watchdog-log timestamps, host memory, "
+                                 "kernel OOM check and the preserved API stderr (: stderr was NOT preserved — fix #1)"},
+        "doc": "a service, not a seat: recurring restarts of the OrchestraOS API; every phone/watch chat + upload 502s while it is down",
     },
     "gateway_unreachable": {
         "severity": "error",
@@ -127,7 +145,7 @@ CATALOGUE = {
     },
 }
 
-# Screen rules match CLI-RENDERED lines only (a false positive seen 2026-09-18:
+# Screen rules match CLI-RENDERED lines only (gm,  false positive 2026-09-18 07:13Z:
 # the old regex hit "...given the usage limit" in assistant prose). A "system line" is one the
 # harness prints, not the transcript body: a `⎿` result/notice line, a `⚠`/`✗` line, or anything at
 # or below the LAST composer prompt (❯) — the status region. Prose lines (`●`, indented text) never
@@ -326,6 +344,41 @@ def capture_evidence(seats: list[str], snapshot: str | None = None, lines: int =
     return ev
 
 
+_EXIT_CMD = re.compile(r"<command-name>\s*/(exit|quit)\s*</command-name>")
+
+
+def _transcript_path(sid: str | None) -> str | None:
+    """The live jsonl for a sid, or None. Injected in tests."""
+    if not sid:
+        return None
+    try:
+        from scripts import sid_invariants as SI
+        path = SI.find_transcript(sid)
+    except Exception:
+        path = None
+    return str(path) if path and os.path.exists(str(path)) else None
+
+
+def exited_cleanly(sid: str | None, *, tail: int = 5) -> bool:
+    """True when the seat's LAST act was typing /exit (or /quit).
+
+    : orchestra-builder-g49 typed /exit at 17:33:00Z; the watchdog saw a dead
+    pane 4s later, filed a `pane_dead` crash and carded the operator. A deliberate exit is a
+    retirement, not a crash — rotation owns it, RED ALERT does not.
+    Only the tail is read: a resumed sid appends, so an /exit from a previous life is
+    buried under later turns and must NOT excuse today's crash.
+    """
+    path = _transcript_path(sid)
+    if not path:
+        return False
+    try:
+        with open(path) as fh:
+            lines = fh.readlines()[-tail:]
+    except OSError:
+        return False
+    return any(_EXIT_CMD.search(l) for l in lines)
+
+
 # ---------------------------------------------------------------------------
 # classifier
 # ---------------------------------------------------------------------------
@@ -340,6 +393,8 @@ def classify(ev: dict, seat: str) -> dict | None:
         return hit("process_suspended", "ps STAT contains T")
     dead_flag = ev.get("pane_dead", {}).get(seat)
     if dead_flag or (dead_flag is None and procs == [] and seat in ev.get("process_state", {})):
+        if exited_cleanly(ev.get("sids", {}).get(seat)):
+            return None
         return hit("pane_dead", "pane dead / no process on tty")
     screen = ev.get("screen", {}).get(seat) or ""
     found = classify_screen(screen)
