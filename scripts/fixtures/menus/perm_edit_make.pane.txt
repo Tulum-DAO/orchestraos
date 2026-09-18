@@ -2,7 +2,7 @@ claude --model claude-haiku-4-5-20251001
 user@host:/tmp/perm-probe-1786752585$ claude --model claude-haiku-4-5-20251001
 ╭─── Claude Code v2.1.87 ────────────────────────────────────────────────────────────────────────────────────────────────╮
 │                                                    │ Tips for getting started                                          │
-│              Welcome back Noah Monks!              │ Run /init to create a CLAUDE.md file with instructions for Claude │
+│              Welcome back, operator!                 │ Run /init to create a CLAUDE.md file with instructions for Claude │
 │                                                    │ ───────────────────────────────────────────────────────────────── │
 │                       ▐▛███▜▌                      │ Recent activity                                                   │
 │                      ▝▜█████▛▘                     │ No recent activity                                                │

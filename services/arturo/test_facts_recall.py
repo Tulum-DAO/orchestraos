@@ -122,7 +122,7 @@ def _make_starvation_db(path, n_recent=300):
     rows = []
     # OLD durable fact — the true answer, 3 topic hits, dated far in the past
     rows.append(("durable_old", "2026-01-01T00:00:00.000Z", "fact",
-                 "Acme ownership founders: co-founded by the operator and Noah",
+                 "Acme ownership founders: co-founded by the operator and a partner",
                  "operator", 1.0, "{}", "[]", "{}", "active", "durable",
                  "2026-01-01T00:00:00.000Z"))
     # n_recent NEWER standard facts, each only 1 weak topic hit ("acme")
