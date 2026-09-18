@@ -7,5 +7,5 @@ Each fixture = one dir: `<name>/handoff.md` + `<name>/canary.json` +
 RULE (Amendment 5.3): the Two-Key shadow exit requires fixtures authored by
 NON-PROPOSERS. `author` fields are load-bearing — the suite runner marks any
 proposer-authored fixture as PLACEHOLDER and the exit stays closed while only
-placeholders exist. agy's set is commissioned (gm msg_28ad39b6) and must
+placeholders exist. the second runtime's set is commissioned and must
 DEFEAT the proposer placeholders where they differ.
