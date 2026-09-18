@@ -65,7 +65,7 @@ def test_spawn_agent_tool_runs_plan_and_files_msg_store_row(mod, monkeypatch, tm
     monkeypatch.setattr(mod, "record_spawned_session", lambda s: None)
     monkeypatch.setattr(mod, "_notify_spawned", lambda *a, **k: None)
     monkeypatch.setattr(mod, "registration_status",
-                        lambda name: {"registered": True, "where": "registry.json", "detail": ""})
+                        lambda name: {"state": "registered", "registered": True, "where": "registry.json", "detail": ""})
 
     out = mod.execute_tool("spawn_agent", {"session_name": "docs-dev", "machine": "vps",
                                            "task": "write the README"})
@@ -186,7 +186,7 @@ def test_spawn_agent_verifies_registration_and_says_so(mod, monkeypatch):
     monkeypatch.setattr(mod, "_message_store", lambda: type("S", (), {"send": staticmethod(lambda **kw: "msg_x")})())
     monkeypatch.setattr(mod, "record_spawned_session", lambda s: None)
     monkeypatch.setattr(mod, "_notify_spawned", lambda *a, **k: None)
-    monkeypatch.setattr(mod, "registration_status", lambda name: {"registered": True, "where": "registry.json + identity store", "detail": ""})
+    monkeypatch.setattr(mod, "registration_status", lambda name: {"state": "registered", "registered": True, "where": "registry.json + identity store", "detail": ""})
     out = mod.execute_tool("spawn_agent", {"session_name": "ok-seat", "machine": "vps", "task": "t"})
     assert "CONFIRMED" in out and "registered" in out.lower()
 
@@ -197,23 +197,101 @@ def test_spawn_agent_says_it_plainly_when_registration_is_missing(mod, monkeypat
     monkeypatch.setattr(mod, "_message_store", lambda: type("S", (), {"send": staticmethod(lambda **kw: "msg_x")})())
     monkeypatch.setattr(mod, "record_spawned_session", lambda s: None)
     monkeypatch.setattr(mod, "_notify_spawned", lambda *a, **k: None)
-    monkeypatch.setattr(mod, "registration_status", lambda name: {"registered": False, "where": "", "detail": "no registry row"})
+    monkeypatch.setattr(mod, "registration_status", lambda name: {"state": "unregistered", "registered": False, "where": "", "detail": "no registry row"})
     out = mod.execute_tool("spawn_agent", {"session_name": "ghost", "machine": "vps", "task": "t"})
     assert "NOT registered" in out or "not registered" in out
     assert "no registry row" in out
 
 
-def test_registration_status_reads_registry_and_identity_db(mod, tmp_path, monkeypatch):
+def _identity_db(path, roots):
+    """The REAL identity-store schema (verified against a live store and the repo's own
+    fixtures: scripts/test_gen_resolve.py, identity_store/test_recovery_shadow.py,
+    wal/test_read_canonical_blue_runtime.py all use canonical(root …)). A test that
+    invents a table name cannot catch a wrong query — that is what let PR #8's
+    `canonical_agents` through green CI."""
+    import sqlite3
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(path)
+    con.executescript("""
+        CREATE TABLE lineages (root TEXT PRIMARY KEY, created_at TEXT);
+        CREATE TABLE generations (id INTEGER PRIMARY KEY AUTOINCREMENT, root TEXT, generation INTEGER,
+                                  session_id TEXT, conversation_path TEXT, model TEXT, spawned_at TEXT,
+                                  spawned_by TEXT, promoted_at TEXT, promoted_by TEXT, retired_at TEXT,
+                                  resume_command TEXT);
+        CREATE TABLE canonical (root TEXT PRIMARY KEY, generation_id INTEGER, tmux_session TEXT, status TEXT);
+    """)
+    for root, resume in roots:
+        con.execute("INSERT INTO lineages (root, created_at) VALUES (?, '2026-09-18T00:00:00Z')", (root,))
+        cur = con.execute("INSERT INTO generations (root, generation, resume_command) VALUES (?, 1, ?)", (root, resume))
+        con.execute("INSERT INTO canonical (root, generation_id, tmux_session, status) VALUES (?, ?, ?, 'online')",
+                    (root, cur.lastrowid, root))
+    con.commit(); con.close()
+
+
+def _registry(path, names):
     import json as _json
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_json.dumps({"agents": {n: {"runtime": "claude"} for n in names}}))
+
+
+def test_registration_status_registered_needs_BOTH_registry_and_identity_row(mod, tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "ORCHESTRA_DIR", tmp_path)
-    (tmp_path / "registry.json").write_text(_json.dumps({"agents": {"seat-a": {"runtime": "claude"}}}))
+    _registry(tmp_path / "registry.json", ["seat-a"])
+    _identity_db(tmp_path / "state" / "orchestra-registry.db", [("seat-a", "claude --resume abc")])
     st = mod.registration_status("seat-a")
-    assert st["registered"] is True and "registry" in st["where"]
-    st2 = mod.registration_status("nobody")
-    assert st2["registered"] is False and st2["detail"]
+    assert st["state"] == "registered" and st["registered"] is True
+    assert "registry.json" in st["where"] and "identity store" in st["where"]
+
+
+def test_registration_status_flat_only_is_unregistered_with_the_reason(mod, tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "ORCHESTRA_DIR", tmp_path)
+    _registry(tmp_path / "registry.json", ["seat-a"])
+    _identity_db(tmp_path / "state" / "orchestra-registry.db", [("someone-else", "x")])
+    st = mod.registration_status("seat-a")
+    assert st["state"] == "unregistered" and "no canonical identity row" in st["detail"]
+
+
+def test_registration_status_says_no_resume_command_when_the_generation_has_none(mod, tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "ORCHESTRA_DIR", tmp_path)
+    _registry(tmp_path / "registry.json", ["seat-a"])
+    _identity_db(tmp_path / "state" / "orchestra-registry.db", [("seat-a", None)])
+    st = mod.registration_status("seat-a")
+    assert st["state"] == "registered" and "no resume_command" in st["where"]
+
+
+def test_registration_status_no_identity_store_at_all_is_registry_truth(mod, tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "ORCHESTRA_DIR", tmp_path)
+    _registry(tmp_path / "registry.json", ["seat-a"])
+    assert mod.registration_status("seat-a")["state"] == "registered"
+    assert mod.registration_status("nobody")["state"] == "unregistered"
+
+
+def test_registration_status_db_error_is_UNKNOWN_never_a_false_negative(mod, tmp_path, monkeypatch):
+    """The gate that held PR #8: a swallowed exception must not read as 'not registered'."""
+    monkeypatch.setattr(mod, "ORCHESTRA_DIR", tmp_path)
+    _registry(tmp_path / "registry.json", ["seat-a"])
+    db = tmp_path / "state" / "orchestra-registry.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    db.write_text("this is not a sqlite database")
+    st = mod.registration_status("seat-a")
+    assert st["state"] == "unknown" and st["registered"] is False
+    assert "identity store unreadable" in st["detail"]
 
 
 def test_registration_status_survives_a_missing_registry(mod, tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "ORCHESTRA_DIR", tmp_path / "gone")
     st = mod.registration_status("seat-a")
-    assert st["registered"] is False and st["detail"]
+    assert st["state"] == "unregistered" and st["detail"]
+
+
+def test_spawn_agent_says_could_not_verify_on_an_unknown_registration(mod, monkeypatch):
+    monkeypatch.setattr(mod, "_run_commission", lambda plan, timeout: (True, "[spawn] ready"))
+    monkeypatch.setattr(mod, "run_local", lambda cmd, timeout=15: (True, ""))
+    monkeypatch.setattr(mod, "_message_store", lambda: type("S", (), {"send": staticmethod(lambda **kw: "msg_x")})())
+    monkeypatch.setattr(mod, "record_spawned_session", lambda s: None)
+    monkeypatch.setattr(mod, "_notify_spawned", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "registration_status",
+                        lambda name: {"state": "unknown", "registered": False, "where": "",
+                                      "detail": "identity store unreadable (file is not a database)"})
+    out = mod.execute_tool("spawn_agent", {"session_name": "seat-q", "machine": "vps", "task": "t"})
+    assert "could not verify" in out.lower() and "not registered" not in out.lower()
