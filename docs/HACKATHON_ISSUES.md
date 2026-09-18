@@ -143,6 +143,28 @@ transcripts, then a real one.
 **Acceptance.** `orchestra rotate --auto <seat>` completes green → promote → verify on a
 clean install for claude; gemini and codex documented or done.
 
+## T12 · Gauntlet mode: a critic loop for creative work
+`labels: track, size:M, core, skills, ui`
+
+**Problem.** A builder reports done the moment it thinks it is; creative output (3D
+scenes, video, UI, image sets) ships as programmer art because nothing forces a second
+opinion before the operator sees it.
+
+**Design.** A skill declares `gauntlet: required` in its front-matter. After each
+attempt a separate critic seat (art-director persona, writes no code) takes its OWN
+captures from several viewpoints/zooms, runs the checks (console errors, perf budget,
+reference contract) and scores 0–10 against references (10 indistinguishable, 8.5 AAA
+with nits, 7 good indie, 5 programmer art). Pass = ≥ 8.5 with zero errors; below that
+the builder gets the ranked issue list and goes again. The operator sets the **loop
+count** per skill in the Skills-page settings window, and **each loop is its own dive
+with its own parameters** (viewpoints, references, checks, pass bar, critic model).
+Levels `off/light/standard/brutal` are presets. Loops exhausted → card: accept best /
+more loops / stop. Full design: `docs/tracks/12-gauntlet-mode.md`.
+
+**Acceptance.** Demo creative skill at `standard` (3 loops): weak attempt scores ≤ 6
+with a ranked list, second attempt ≥ 8.5 → completion released at loop 2/3; `brutal`
+with loop 1 bar 9.5 fails the same attempt; exhausted loops raise the operator card.
+
 ---
 
 # Good first issues
