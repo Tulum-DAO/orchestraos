@@ -63,26 +63,26 @@ def test_notify_gm_on_fire_pages_once_for_real_transition_not_twice(tmp_path):
         calls.append((seat, state))
 
     marker = {}
-    p = tmp_path / "pm-skyline.bg.json"
+    p = tmp_path / "pm-acme.bg.json"
     _write_bg_json(p, "DRAINED", [
         {"state": "SWAPPING", "reason": "ctx-fastpath"},
         {"state": "DRAINED", "reason": "swap-complete"},
     ])
     sig = bfw.bg_fire_signal(str(p))
     state, key = sig
-    fired = bfw.notify_gm_on_fire("pm-skyline", state, key,
+    fired = bfw.notify_gm_on_fire("pm-acme", state, key,
                                   notify_fn=fake_notify, marker=marker)
     assert fired is True
-    assert calls == [("pm-skyline", "DRAINED")]
+    assert calls == [("pm-acme", "DRAINED")]
 
     # second identical read of the SAME bg.json: still a real transition by content,
     # but already recorded in the marker -> must not re-page.
     sig2 = bfw.bg_fire_signal(str(p))
     state2, key2 = sig2
-    fired2 = bfw.notify_gm_on_fire("pm-skyline", state2, key2,
+    fired2 = bfw.notify_gm_on_fire("pm-acme", state2, key2,
                                    notify_fn=fake_notify, marker=marker)
     assert fired2 is False
-    assert calls == [("pm-skyline", "DRAINED")]  # no second page
+    assert calls == [("pm-acme", "DRAINED")]  # no second page
 
 
 def test_non_transition_spam_never_pages_even_across_many_appends(tmp_path):

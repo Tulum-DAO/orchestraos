@@ -392,8 +392,8 @@ def test_wired_beat_prior_rev_fn_unlocks_proactive_author():
 
 
 # ===================================================== prove-by-effect (gate #2)
-def test_prove_pmskyline_shaped_markdown_becomes_soft_ready_eligible():
-    """gate clause #2 (the (B) subject): pm-skyline's live handoff is markdown-only
+def test_prove_pmacme_shaped_markdown_becomes_soft_ready_eligible():
+    """gate clause #2 (the (B) subject): pm-acme's live handoff is markdown-only
     and INCOMPLETE (no canary/first_effect) so it can't fire. This proves A2's
     intent: once that seat COMPLETES its authoring in the real markdown shape
     (colon-multiline canary + first_effect + the other sections), a markdown-ONLY
@@ -402,7 +402,7 @@ def test_prove_pmskyline_shaped_markdown_becomes_soft_ready_eligible():
     m = _fresh_provider_tmp()
     ag = _author_gate()
     complete_md = (
-        "## current_goal\nrun the skyline refresh cutover\n\n"
+        "## current_goal\nrun the quarterly refresh cutover\n\n"
         "## phase_state\n- phase 3 of 5\n- next_gate: the operator cutover card\n\n"
         "## next_3_actions\n1. wire the seam\n2. verify\n3. push\n\n"
         "## decisions\n- single-trunk — critical path\n- no kill — idempotent\n\n"

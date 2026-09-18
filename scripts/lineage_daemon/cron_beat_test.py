@@ -180,7 +180,7 @@ def test_load_state_missing_is_fresh(tmp_path):
 # --- soft_only is hard-coded True (2nd the operator go required to change) -------------
 
 def test_soft_only_constant_reflects_arm_state():
-    # ARMED 2026-08-26 (the operator-directed, scoped to pm-skyline via ~/runtime/
+    # ARMED 2026-08-26 (the operator-directed, scoped to pm-acme via ~/runtime/
     # self_retire_armed). SOFT_ONLY=False lets a hard_rotate reach the per-lineage
     # arm gate; a non-armed lineage still defers (SKIP_NOT_ARMED). Flip to True to
     # disarm globally. ARMED_TIERS stays T2-only (T0/T1 observe).

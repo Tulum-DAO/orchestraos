@@ -51,7 +51,7 @@ LOG_PATH = os.path.join(ORCHESTRA_DIR, "logs", "fleet-beat.log")
 ARMED_TIERS = frozenset({"T2"})       # wave-1: T2 only (T0/T1 observe-only)
 SOFT_ONLY = False                      # ARMED (the operator-directed 2026-08-26) — per-lineage
                                        # arm gate scopes hard_rotate to ~/runtime/
-                                       # self_retire_armed (pm-skyline only); every other
+                                       # self_retire_armed (pm-acme only); every other
                                        # lineage still defers (SKIP_NOT_ARMED). Revert to
                                        # True to disarm globally.
 
@@ -375,7 +375,7 @@ def run_beat(agents, registry, state, *, now=None, orchestra_dir=None,
     # the SAME live seams the spawn path uses (the S3 confirm_fn built above, auto_grade,
     # is_graduated_autoretire, default_safety_recheck, promote_successor, plan_retire) —
     # NEVER reimplemented. INERT-UNTIL-ARMED: plan_fleet only calls it for an armed
-    # lineage (soft_only False + self_retire_armed allowlist = pm-skyline only), so a
+    # lineage (soft_only False + self_retire_armed allowlist = pm-acme only), so a
     # beat with no armed+ready held lineage NEVER fires it (rotated=0). `dry` makes the
     # promote/retire wrappers plan-only. Injectable (tests pass a fake).
     if completion_provider is None:
@@ -483,7 +483,7 @@ def main(argv=None) -> int:
         # the operator-directed T2 ARM (2026-08-26). Fail-closed by construction: returns None
         # (=> the confirm HOLDs => NOTHING retires) for any seat whose committed handoff
         # is missing/degenerate or whose transcript is unresolvable. Scoped by the
-        # per-lineage arm gate (self_retire_armed=pm-skyline) so only pm-skyline lineage
+        # per-lineage arm gate (self_retire_armed=pm-acme) so only pm-acme lineage
         # can reach a hard_rotate. To DISARM: revert SOFT_ONLY=True (or remove this wire)
         # + clear ~/runtime/self_retire_armed + restore ~/runtime/SELF_RETIRE_DISABLED.
         from scripts.lineage_daemon.s3_live_seams import build_live_seams_provider
