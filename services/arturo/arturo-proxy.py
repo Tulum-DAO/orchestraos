@@ -843,6 +843,7 @@ GEMINI_API_KEY = secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", 
 BEARER_TOKEN = secrets.get("CUSTOM_LLM_BEARER", "")
 _INTERNAL_NONCE = __import__('secrets').token_hex(16)   # see check_auth()
 LLM_MODEL = secrets.get("LLM_MODEL", "gemini-2.5-flash")
+_API_MODEL = LLM_MODEL   # the api-brain model name, kept even when LLM_MODEL becomes "none"
 
 # --- Brain selection (track T2): api (BYO key) | runtime (the CLI you're logged in to) | none.
 # The service BOOTS in all three cases; a keyless install runs text-only on the CLI brain, and
@@ -4145,6 +4146,16 @@ def text_endpoint():
 
 @app.route("/health", methods=["GET"])
 def health():
+    # G14 self-heal: a brain picked at boot as "none" (no CLI logged in yet) is re-probed
+    # here, so the onboarding "Check again" tap after a login sees a live brain without a
+    # service restart. Never replaces a working brain; rate-limited inside reselect_if_none.
+    global brain, LLM_MODEL
+    if brain.kind == "none" and BRAIN_MODE != "api":
+        nb = _brain.reselect_if_none(brain, BRAIN_MODE, GEMINI_API_KEY, _REPO_ROOT,
+                                     _RUNTIMES_ENABLED or None, _API_MODEL, RUNTIME_MODEL)
+        if nb is not brain:
+            brain = nb
+            LLM_MODEL = nb.model if nb.kind == "runtime" else _API_MODEL
     return jsonify({
         "status": "ok",
         "service": "custom-llm-proxy",
