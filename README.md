@@ -55,6 +55,7 @@ agent. See `docs/tracks/README.md` for the full index. The big ones:
 9. Installer and doctor hardening.
 10. Docs and tutorials.
 11. Autonomous rotation proven on all three runtimes on a clean install.
+12. Gauntlet mode: a critic loop that scores creative work against real references before it reaches you.
 
 `good-first-issue` is real and small (see `docs/HACKATHON_ISSUES.md`). Start there
 if you want to land something in an hour. New to the command line entirely? Start
