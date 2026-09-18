@@ -2,7 +2,7 @@
 """HARD RULE (the operator, 2026-09-18): the self-heal loop NEVER kills anything.
 
 red-alert-builder's `kill 169668` killed the tmux server and took the whole fleet down
-(ra_8dc72329). This test fails if red_alert.py / red_alert_watch.py contain a kill-class call
+(seen once). This test fails if red_alert.py / red_alert_watch.py contain a kill-class call
 (kill/pkill/killall, SIGTERM/SIGKILL/SIGSTOP, tmux kill-session/kill-server, respawn-pane -k)
 or a history-rewriting / tree-discarding git command. Comments and docstrings are stripped
 before scanning so the rule can be DOCUMENTED in the scripts without tripping it.
@@ -55,7 +55,7 @@ def test_respawn_only_when_process_gone(monkeypatch):
     import sys
     sys.path.insert(0, HERE)
     import red_alert_watch as W
-    # this test must NEVER reach tmux (its first version respawned the live gm pane — ra_8dc72329 class)
+    # this test must NEVER reach tmux (its first version respawned the live gm pane — see docs/RED_ALERT.md)
     monkeypatch.setattr(W, "tmux", lambda *a: (_ for _ in ()).throw(AssertionError("tmux must not be called")))
     ev = {"process_state": {"gm": [{"pid": 1, "stat": "T", "cmd": "claude --resume abc"}]},
           "registry_rows": {"gm": {"session_id": "abc"}}, "pane_dead": {"gm": False}}

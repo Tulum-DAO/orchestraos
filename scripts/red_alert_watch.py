@@ -113,7 +113,7 @@ def decide(report: dict, *, attached: bool, answer: str | None, now: float, arme
             return {"action": "hold", "hold_until": now + HOLD_S}
         return {"action": "repair", "fix": fix, "reason": "hold expired"}
     if attached and fix == "switch_provider":
-        return {"action": "wait", "reason": "attached"}   # never /model on a pane a human is in (gm, ra_8a6b4ca9)
+        return {"action": "wait", "reason": "attached"}   # never /model on a pane a human is in 
     if answer == "Repair now":
         return {"action": "repair", "fix": fix, "reason": "answered"}
     if attached:
@@ -322,7 +322,7 @@ REPAIRS = {
 # ---------------------------------------------------------------------------
 def spawn_diagnosis(r: dict, *, force: bool = False) -> str:
     """Only after RA.escalate (an escalations[] row) unless force — a direct call on a resolved or
-    un-escalated report spawned a seat with nothing to diagnose (diag seat finding, ra_11656d1a #2)."""
+    un-escalated report spawned a seat with nothing to diagnose."""
     rid = r["id"]
     if not force and (r.get("status") == "resolved" or not r.get("escalations")):
         log(f"DIAG {rid} refused: status={r.get('status')} escalations={len(r.get('escalations') or [])} (force=False)")

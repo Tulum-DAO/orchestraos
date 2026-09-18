@@ -116,7 +116,7 @@ CATALOGUE = {
         "immediate_fix": {"action": "card_only",
                           "how": "one fleet-wide report + card + Telegram; resume is gm's roster-resume-all (each seat: "
                                  "new session + `claude --resume <sid>`). NEVER kill a pid whose argv starts with `tmux` — "
-                                 "the server keeps its first client's argv (ra_8dc72329, 2026-09-18 04:53Z)"},
+                                 "the server keeps its first client's argv"},
         "doc": "every pane vanished at once; transcripts intact; nothing else can run until a server exists",
     },
     "gateway_unreachable": {
@@ -127,7 +127,7 @@ CATALOGUE = {
     },
 }
 
-# Screen rules match CLI-RENDERED lines only (gm, ra_8a6b4ca9 false positive 2026-09-18 07:13Z:
+# Screen rules match CLI-RENDERED lines only (a false positive seen 2026-09-18:
 # the old regex hit "...given the usage limit" in assistant prose). A "system line" is one the
 # harness prints, not the transcript body: a `⎿` result/notice line, a `⚠`/`✗` line, or anything at
 # or below the LAST composer prompt (❯) — the status region. Prose lines (`●`, indented text) never

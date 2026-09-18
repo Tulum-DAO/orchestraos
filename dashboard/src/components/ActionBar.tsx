@@ -34,7 +34,7 @@ const CTRL_KEYS = [
   { label: '^C', key: 'ctrl-c' },
   { label: '^O', key: 'ctrl-o' },
   { label: '^K', key: 'ctrl-k' },
-  { label: '^U', key: 'ctrl-u' },   // was ^Z: it suspended the CLI (RED ALERT ra_2653f9bf)
+  { label: '^U', key: 'ctrl-u' },   // was ^Z: it suspended the CLI (RED ALERT)
 ];
 
 // Keys that interrupt the agent get an "Are you sure?" (operator, RED ALERT 2026-09-17).

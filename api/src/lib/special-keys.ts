@@ -1,7 +1,7 @@
 /**
  * special-keys — the ONE map from harness key names to tmux send-keys tokens.
  *
- * RED ALERT ra_2653f9bf (docs/RED_ALERT.md): on 2026-09-17 the bottom-bar "^Z" button
+ * RED ALERT (docs/RED_ALERT.md): on 2026-09-17 the bottom-bar "^Z" button
  * sent C-z to the gm pane and suspended the CLI (process STAT T, alive, never running).
  * ctrl-z is FORBIDDEN here so no client can do that again; ctrl-u (clear input) takes
  * its place on the bar. Keep every key policy in this file, not in the route.
@@ -41,7 +41,7 @@ export function resolveSpecialKey(key: string): KeyResolution {
   if (FORBIDDEN_KEYS.includes(k.toLowerCase())) {
     return {
       ok: false,
-      reason: 'ctrl-z would suspend the agent CLI (RED ALERT ra_2653f9bf); refused. Use ctrl-u to clear input.',
+      reason: 'ctrl-z would suspend the agent CLI (RED ALERT); refused. Use ctrl-u to clear input.',
     };
   }
   return { ok: true, tmux: KEY_MAP[k.toLowerCase()] || [k] };
