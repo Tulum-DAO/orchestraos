@@ -19,6 +19,7 @@ import { ModelSelectorSheet } from '../components/agent/ModelSelectorSheet';
 import { arturoHealth, arturoText, runtimesAvailable, brainLabel, greeting, slugify, newConversationId,
   isStarting, waitForArturo, STARTING_TEXT,
   type ArturoHealth, type RuntimeRow } from '../lib/arturo';
+import { listThreads, loadThread, type ThreadSummary } from '../lib/arturoThreads';
 
 type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[]; pending?: boolean;
   decision?: { options: string[]; onPick: (v: string) => void } };
@@ -66,8 +67,31 @@ export default function ArturoHome() {
   const [drawer, setDrawer] = useState(false);
   const [brainOpen, setBrainOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
+  // G20: the home and the pill read ONE server-side thread space, so a conversation started
+  // in either place is reachable from the other. The drawer is where you go back to one.
+  const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const convId = useRef<string>(ls(LS_CONV) || '');
   useEffect(() => { if (!convId.current) { convId.current = newConversationId('web'); lsSet(LS_CONV, convId.current); } }, []);
+  useEffect(() => { if (drawer) void listThreads().then(setThreads); }, [drawer]);
+
+  /** Resume a previous conversation: its turns come from the server, so "pick up right where
+   *  we left off" holds across a reload, another surface, and a service restart. */
+  async function resumeThread(id: string) {
+    const t = await loadThread(id);
+    if (!t) return;
+    convId.current = id; lsSet(LS_CONV, id);
+    setTurns(t.turns.map((x) => ({ id: nextId.current++, role: x.role === 'user' ? 'user' : 'arturo', text: x.content })));
+    setStep('done'); lsSet(LS_ONBOARDED, '1');
+    setDrawer(false);
+  }
+
+  /** New thread — the one you leave stays in the list rather than becoming unreachable. */
+  function startNewThread() {
+    convId.current = newConversationId('web'); lsSet(LS_CONV, convId.current);
+    setTurns([]);
+    setDrawer(false);
+  }
+
   const feedRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const nextId = useRef(1);
@@ -266,6 +290,20 @@ export default function ArturoHome() {
           <nav className="arturo-drawer">
             <div className="brand">OrchestraOS</div>
             {DRAWER.map(([label, to]) => <NavLink key={to} to={to} onClick={() => setDrawer(false)}>{label}</NavLink>)}
+            <div className="sect sect-head">
+              <span>Conversations</span>
+              <button className="drawer-new" onClick={startNewThread}>New</button>
+            </div>
+            <div className="drawer-threads">
+              {threads.length === 0 && <p className="empty">No earlier conversations yet.</p>}
+              {threads.map((t) => (
+                <button key={t.id} className={t.id === convId.current ? 'thread-row current' : 'thread-row'}
+                        onClick={() => void resumeThread(t.id)}>
+                  <span className="t-title">{t.title || 'Untitled'}</span>
+                  <span className="t-meta">{Math.ceil((t.turns || 0) / 2)}</span>
+                </button>
+              ))}
+            </div>
             <div className="sect">{brain ? `brain: ${brain.kind}${brain.runtime ? ' · ' + brain.runtime : ''} · ${health?.mode || ''}` : 'brain: …'}</div>
           </nav>
         </>
