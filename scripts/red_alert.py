@@ -3,7 +3,7 @@
 
 Standard: docs/RED_ALERT.md. One report = one JSON file
     state/red-alert/<UTC ts>-<seat>-<slug>.json
-Commissioned by the operator (2026-09-17) after the harness bottom-bar "^Z" button
+Commissioned by the operator, 2026-09-17 after the harness bottom-bar "^Z" button
 suspended the gm seat (pid STAT T, not killed) — "LOG EVERYTHING IN A RED ALERT CRASH
 REPORT ... a list of errors the system reports, logs, adds to and acts on immediately".
 
@@ -64,7 +64,7 @@ CATALOGUE = {
         "detect": "pane process tree has a STAT containing 'T' (SIGTSTP/^Z), or the screen "
                   "shows 'Claude Code has been suspended'",
         "immediate_fix": {"action": "card_only",
-                          "how": "NO KILLS rule (2026-09-18): the process is still present, so the "
+                          "how": "NO KILLS rule (the operator 00:20 Tulum 2026-09-18): the process is still present, so the "
                                  "watchdog never touches it. Card + Telegram; a human resumes it (respawn-pane -k + "
                                  "`claude --resume <sid>` by hand — SIGCONT/tcsetpgrp did not stick on gm 04:31Z)"},
         "doc": "^Z from the harness bottom bar or a terminal; the CLI is stopped, not dead",
@@ -345,6 +345,8 @@ def capture_evidence(seats: list[str], snapshot: str | None = None, lines: int =
 
 
 _EXIT_CMD = re.compile(r"<command-name>\s*/(exit|quit)\s*</command-name>")
+# an assistant turn AFTER the /exit means the seat kept working (see exited_cleanly)
+_WORKED_AFTER = re.compile(r'"type"\s*:\s*"assistant"|"role"\s*:\s*"assistant"')
 
 
 def _transcript_path(sid: str | None) -> str | None:
@@ -362,7 +364,7 @@ def _transcript_path(sid: str | None) -> str | None:
 def exited_cleanly(sid: str | None, *, tail: int = 5) -> bool:
     """True when the seat's LAST act was typing /exit (or /quit).
 
-    : orchestra-builder-g49 typed /exit at 17:33:00Z; the watchdog saw a dead
+    : orchestra-builder-a green typed /exit at 17:33:00Z; the watchdog saw a dead
     pane 4s later, filed a `pane_dead` crash and carded the operator. A deliberate exit is a
     retirement, not a crash — rotation owns it, RED ALERT does not.
     Only the tail is read: a resumed sid appends, so an /exit from a previous life is
@@ -376,7 +378,15 @@ def exited_cleanly(sid: str | None, *, tail: int = 5) -> bool:
             lines = fh.readlines()[-tail:]
     except OSError:
         return False
-    return any(_EXIT_CMD.search(l) for l in lines)
+    # Walk BACKWARDS; the last decisive line wins. An assistant turn AFTER the /exit means
+    # the seat kept working (a resumed sid, or an /exit the user cancelled), so the death
+    # that followed is a real crash — not the retirement this function excuses.
+    for line in reversed(lines):
+        if _EXIT_CMD.search(line):
+            return True
+        if _WORKED_AFTER.search(line):
+            return False
+    return False
 
 
 # ---------------------------------------------------------------------------

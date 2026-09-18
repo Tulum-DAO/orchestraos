@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """RED-first contract for red_alert.py — the RED ALERT crash-report standard.
 
-Commission: prompts/red-alert-builder.md (the operator, 2026-09-17, after ^Z on the
+Commission: prompts/red-alert-builder.md (the operator 2026-09-17 23:30 Tulum, after ^Z on the
 harness bottom bar suspended gm). A crash report is ONE JSON file under
 state/red-alert/<ts>-<slug>.json with the fixed schema in docs/RED_ALERT.md, the CLI is
 scripts/red_alert.py (report / list / show / update / resolve / escalate), and the
@@ -277,7 +277,7 @@ _EXIT_LINES = [
 
 
 def test_dead_pane_after_a_clean_exit_is_not_a_crash(tmp_path, monkeypatch):
-    """g49 typed /exit at 17:33:00Z; the watchdog filed pane_dead 4s later and carded the operator."""
+    """a green typed /exit at 17:33:00Z; the watchdog filed pane_dead 4s later and carded the operator."""
     sid = "4ee157f1-d402-4304-96ff-bdc764a2fcfd"
     path = _write_transcript(tmp_path, sid, _EXIT_LINES)
     monkeypatch.setattr(RA, "_transcript_path", lambda s: path if s == sid else None)
@@ -322,3 +322,27 @@ def test_a_human_shaped_report_has_no_pattern_class(store):
                   symptom="the app said it could not reach you", capture=None)
     assert d["class"] is None and d["evidence"] == {} and d["severity"] == "bug"
     assert RA.show(d["id"])["class"] is None
+
+
+# --- hardening for exited_cleanly (landed by another seat; this closes its one gap) ---
+# Their tail-of-5 `any()` excused a crash whenever an /exit sat a few lines above later
+# work (a resumed sid, or an /exit the user cancelled). Last decisive line wins instead.
+
+def test_exit_does_not_excuse_a_crash_that_came_after_more_work(tmp_path, monkeypatch):
+    path = _write_transcript(tmp_path, "sidW", _EXIT_LINES + [
+        {"type": "user", "message": {"role": "user", "content": "resumed, continue"}},
+        {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "on it"}]}},
+    ])
+    monkeypatch.setattr(RA, "_transcript_path", lambda s: path if s == "sidW" else None)
+    assert RA.exited_cleanly("sidW") is False
+    ev = fake_evidence(["s"])
+    ev["process_state"]["s"] = []
+    ev["pane_dead"] = {"s": True}
+    ev["sids"] = {"s": "sidW"}
+    assert RA.classify(ev, "s")["class"] == "pane_dead"
+
+
+def test_exit_still_excuses_a_pane_that_died_right_after_it(tmp_path, monkeypatch):
+    path = _write_transcript(tmp_path, "sidX", _EXIT_LINES)
+    monkeypatch.setattr(RA, "_transcript_path", lambda s: path if s == "sidX" else None)
+    assert RA.exited_cleanly("sidX") is True
