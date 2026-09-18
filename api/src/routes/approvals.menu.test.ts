@@ -21,9 +21,9 @@ function req(headers: Record<string, string> = {}): Request {
 function menuRow(overrides: Partial<CanonicalRow> = {}): CanonicalRow {
   return {
     id: 'apr_993fc651_2533713',
-    from_agent: 'pm-skyline',
+    from_agent: 'pm-demo',
     question: 'Release demo — which build do I ship today?',
-    op_key: 'skyline-ctv-demo-vertical-20260914',
+    op_key: 'demo-vertical-20260914',
     options: ['Oil change (OKC)', "Alzheimer's topic", 'Other / Write-in...'],
     status: 'pending',
     created_at: '2026-09-14T20:15:00Z',
