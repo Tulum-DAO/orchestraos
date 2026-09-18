@@ -138,12 +138,16 @@ export function ModelSelectorSheet({ open, onClose }: ModelSelectorSheetProps) {
                   disabled={!row.selectable}
                   onClick={() => setExpandedProviderId(row.provider.id)}
                   title={row.selectable ? row.provider.label : `${row.provider.label}: ${row.greyReason}`}
-                  className={`flex flex-col items-center justify-start gap-1 h-full px-2 py-2 rounded-lg border transition-colors ${
+                  className={`flex flex-col items-center justify-center gap-1 h-full min-h-[4.5rem] px-2 py-2 rounded-lg border transition-colors ${
                     row.selectable
                       ? expandedProviderId === row.provider.id
                         ? 'border-foreground/60 bg-muted'
                         : 'border-border hover:bg-muted'
-                      : 'border-border opacity-40 cursor-not-allowed'
+                      // Unusable providers say so with a RED BORDER, not a line of text.
+                      // The reason still reaches the operator two ways that do not distort
+                      // the tile: the hover/long-press title, and the "Add a provider"
+                      // panel, which lists every missing provider with the probe's reason.
+                      : 'border-red-500/70 opacity-60 cursor-not-allowed'
                   }`}
                 >
                   <span
@@ -156,9 +160,6 @@ export function ModelSelectorSheet({ open, onClose }: ModelSelectorSheetProps) {
                     dangerouslySetInnerHTML={{ __html: row.provider.logo_svg }}
                   />
                   <span className="text-[10px] text-foreground/70">{row.provider.label}</span>
-                  {!row.selectable && (
-                    <span className="text-[9px] text-foreground/40 w-full truncate text-center">{row.greyReason}</span>
-                  )}
                 </button>
               ))}
 
@@ -167,7 +168,7 @@ export function ModelSelectorSheet({ open, onClose }: ModelSelectorSheetProps) {
               <button
                 onClick={() => setExpandedProviderId(ADD_PROVIDER)}
                 title="Add a provider"
-                className={`flex flex-col items-center justify-start gap-1 h-full px-2 py-2 rounded-lg border border-dashed transition-colors ${
+                className={`flex flex-col items-center justify-center gap-1 h-full min-h-[4.5rem] px-2 py-2 rounded-lg border border-dashed transition-colors ${
                   expandedProviderId === ADD_PROVIDER
                     ? 'border-foreground/60 bg-muted text-foreground'
                     : 'border-border text-foreground/60 hover:bg-muted'
