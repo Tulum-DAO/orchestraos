@@ -144,19 +144,15 @@
 .arturo-thread-list .thread-row.current{ background:rgba(217,119,87,0.14); color:#fff; }
 .arturo-thread-list .t-title{ flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .arturo-thread-list .t-meta{ flex:0 0 auto; font-size:11px; color:rgba(255,255,255,0.40); }
-.arturo-context-card{
-  flex:0 0 auto; display:flex; align-items:center; gap:7px;
-  background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.08); border-radius:11px;
-  padding:7px 8px 7px 10px; font-size:12.5px; color:rgba(255,255,255,0.72);
+.arturo-context-chip{
+  display:inline-flex; align-items:center; gap:6px; max-width:min(62vw,230px);
+  background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.09); border-radius:999px;
+  padding:5px 6px 5px 10px; font-size:12px; color:rgba(255,255,255,0.72); font-family:inherit;
 }
-.arturo-context-card > svg{ color:#d97757; flex:0 0 auto; }   /* the focus glyph only — not the × */
-.arturo-context-card .cc-label{ flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.arturo-context-card .cc-label b{ color:#fff; font-weight:600; }
-.arturo-context-card .cc-x{ flex:0 0 auto; background:none; border:0; cursor:pointer; color:rgba(255,255,255,0.45); display:flex; padding:2px; border-radius:6px; }
-.arturo-context-card .cc-x:hover{ color:#fff; background:rgba(255,255,255,0.08); }
-.arturo-context-off{
-  flex:0 0 auto; background:none; border:1px dashed rgba(255,255,255,0.13); border-radius:11px; cursor:pointer;
-  padding:7px 10px; font-size:12px; color:rgba(255,255,255,0.42); font-family:inherit; text-align:left;
-}
-.arturo-context-off b{ color:#d97757; font-weight:600; }
-.arturo-context-off:hover{ color:rgba(255,255,255,0.7); }
+.arturo-context-chip > svg{ color:#d97757; flex:0 0 auto; align-self:center; }   /* the focus glyph only — not the × */
+.arturo-context-chip .cc-label{ flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.arturo-context-chip .cc-label b{ color:#fff; font-weight:600; }
+.arturo-context-chip .cc-x{ flex:0 0 auto; background:none; border:0; cursor:pointer; color:rgba(255,255,255,0.45); display:inline-flex; align-items:center; justify-content:center; line-height:0; padding:3px; border-radius:999px; align-self:center; }
+.arturo-context-chip .cc-x:hover{ color:#fff; background:rgba(255,255,255,0.10); }
+.arturo-context-chip.off{ cursor:pointer; border-style:dashed; color:rgba(255,255,255,0.45); padding:5px 12px; }
+.arturo-context-chip.off:hover{ color:rgba(255,255,255,0.75); }

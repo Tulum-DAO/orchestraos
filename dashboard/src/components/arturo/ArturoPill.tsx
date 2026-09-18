@@ -142,19 +142,6 @@ export function ArturoPill() {
         )}
 
         <div className="arturo-pill-thread" ref={scroller}>
-          {/* The page-context CARD: default on, deletable, restorable. */}
-          {ctxOn ? (
-            <div className="arturo-context-card">
-              <Focus size={13} />
-              <span className="cc-label">Looking at <b>{contextCardLabel(ctx)}</b></span>
-              <button className="cc-x" onClick={toggleContextCard}
-                      aria-label="Stop focusing on this page"><X size={13} /></button>
-            </div>
-          ) : (
-            <button className="arturo-context-off" onClick={toggleContextCard}>
-              Not using this page for context · <b>use it</b>
-            </button>
-          )}
           {turns.length === 0 && !busy && (
             <p className="empty">Ask about what you are looking at, or anything else. Every conversation is kept — open <b>Threads</b> to go back to one.</p>
           )}
@@ -170,7 +157,25 @@ export function ArturoPill() {
         <textarea ref={ta} rows={1} value={draft} placeholder="Ask Arturo" onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} />
         <div className="ctrl-row">
-          <div className="cluster"><span className="model-chip"><b>Arturo</b></span></div>
+          {/* The page-context CARD lives HERE, in place of the old "Arturo" chip: it sits
+              with the composer because it describes what the NEXT message carries, not
+              something that happened earlier in the thread. Default on, × deletes it, and
+              the stub it leaves behind puts it back. */}
+          <div className="cluster">
+            {ctxOn ? (
+              <span className="arturo-context-chip">
+                <Focus size={12} />
+                <span className="cc-label">Looking at <b>{contextCardLabel(ctx)}</b></span>
+                <button className="cc-x" onClick={toggleContextCard}
+                        aria-label="Stop focusing on this page"><X size={12} /></button>
+              </span>
+            ) : (
+              <button className="arturo-context-chip off" onClick={toggleContextCard}
+                      aria-label="Use this page for context">
+                <Focus size={12} /> <span className="cc-label">Use this page</span>
+              </button>
+            )}
+          </div>
           <div className="cluster">
             <button className="circle-btn white" aria-label="Send" onClick={() => void send()} disabled={busy || !draft.trim()}><ArrowUp size={18} /></button>
           </div>
