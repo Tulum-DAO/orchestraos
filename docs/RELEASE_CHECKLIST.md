@@ -72,7 +72,7 @@ R=Tulum-DAO/orchestraos
 7. **Discussions**: already on. Pin a "Start here" discussion pointing at
    `docs/BEGINNERS_GUIDE.md` → `docs/GATE.md` → `docs/tracks/README.md`.
 8. **Social / README**: `docs/design/brand/readme-header.svg` at the top of `README.md`,
-   `social-card-orchestraos.svg` as the repo social preview (Settings → Social preview,
+   `docs/design/brand/social-card-orchestraos-1280x640.png` as the repo social preview (Settings → Social preview,
    upload the PNG export).
 
 ## Verify (5 minutes, from a laptop that is not the operator's)
