@@ -17,6 +17,7 @@ import '../components/arturo/arturo.css';
 import { BrainModal } from '../components/agent/BrainModal';
 import { ModelSelectorSheet } from '../components/agent/ModelSelectorSheet';
 import { arturoHealth, arturoText, runtimesAvailable, brainLabel, greeting, slugify, newConversationId,
+  isStarting, waitForArturo, STARTING_TEXT,
   type ArturoHealth, type RuntimeRow } from '../lib/arturo';
 
 type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[]; pending?: boolean;
@@ -61,6 +62,7 @@ export default function ArturoHome() {
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [health, setHealth] = useState<ArturoHealth | null>(null);
+  const [starting, setStarting] = useState(false);   // G15: proxy not up yet (orchestra up boot window)
   const [drawer, setDrawer] = useState(false);
   const [brainOpen, setBrainOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
@@ -71,7 +73,19 @@ export default function ArturoHome() {
   const nextId = useRef(1);
   const startedStep = useRef<Step | null>(null);   // StrictMode double-invokes effects
 
-  useEffect(() => { arturoHealth().then(setHealth); }, []);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const h = await arturoHealth();
+      if (!alive) return;
+      if (h.ok || !isStarting(h)) { setHealth(h); return; }
+      setStarting(true);
+      const ready = await waitForArturo({ onTick: (last) => { if (alive) setHealth(last); } });
+      if (!alive) return;
+      setHealth(ready); setStarting(!ready.ok && isStarting(ready));
+    })();
+    return () => { alive = false; };
+  }, []);
   useEffect(() => { feedRef.current?.scrollTo({ top: 1e9, behavior: 'smooth' }); }, [turns]);
 
   const say = (text: string, extra: Partial<Turn> = {}) => {
@@ -96,7 +110,13 @@ export default function ArturoHome() {
   async function runtimeStep(fresh = false) {
     const id = say('', { pending: true });
     // fresh: the user just logged in and tapped "Check again" — re-probe, never the cache
-    const [rows, h] = await Promise.all([runtimesAvailable(fresh), arturoHealth()]);
+    let h = await arturoHealth();
+    if (!h.ok && isStarting(h)) {          // G15: booting is not "no CLI"
+      patch(id, { pending: false, text: STARTING_TEXT });
+      h = await waitForArturo();
+      patch(id, { pending: true, text: '' });
+    }
+    const rows = await runtimesAvailable(fresh);
     setHealth(h);
     const authed = rows.filter((r: RuntimeRow) => r.installed && r.authed === true);
     const installedOnly = rows.filter((r: RuntimeRow) => r.installed && r.authed !== true);
@@ -146,10 +166,18 @@ export default function ArturoHome() {
       : text;
     setBusy(true);
     const id = say('', { pending: true });
-    const r = await arturoText(body, convId.current);
+    let r = await arturoText(body, convId.current);
+    if (!r.ok && isStarting(r)) {          // G15: still booting -> say so, wait for health, retry once
+      patch(id, { pending: false, text: STARTING_TEXT });
+      const ready = await waitForArturo();
+      setHealth(ready);
+      if (ready.ok) { patch(id, { pending: true, text: '' }); r = await arturoText(body, convId.current); }
+    }
     setBusy(false);
     if (!r.ok) {
-      patch(id, { pending: false, text: `I could not reach my brain: ${r.error || 'unknown'}. Is \`orchestra up\` running? Check /health on the Arturo service.` });
+      patch(id, { pending: false, text: isStarting(r)
+        ? 'I am still starting up and could not answer yet — give `orchestra up` a moment and send that again.'
+        : `I could not reach my brain: ${r.error || 'unknown'}. Is \`orchestra up\` running? Check /health on the Arturo service.` });
       return;
     }
     patch(id, { pending: false, text: r.reply_text || '(no reply)', tools: r.tools_called });
@@ -165,7 +193,7 @@ export default function ArturoHome() {
   const grow = () => { const el = taRef.current; if (!el) return; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 140) + 'px'; };
 
   const brain = health?.brain;
-  const model = brainLabel(brain);
+  const model = starting ? 'starting…' : brainLabel(brain);
   const eff = brain?.kind === 'runtime' ? 'CLI' : brain?.kind === 'api' ? 'API' : '';
   const empty = turns.length === 0;
 
@@ -190,6 +218,7 @@ export default function ArturoHome() {
           <div className="arturo-hero">
             <ArturoMark />
             <div className="greet serif">{greeting(name)}</div>
+            {starting && <div className="tools" style={{ color: 'rgba(255,255,255,0.45)', fontSize: 13 }}>{STARTING_TEXT}</div>}
           </div>
         ) : turns.map((t) => t.role === 'user' ? (
           <div key={t.id} className="turn-user"><div className="bubble-user">{t.text}</div></div>
