@@ -10,6 +10,14 @@ yourself) are in `docs/PROMPTS.md`. The short summary version lives in
 Do the steps in order — each one depends on state the last one created (a data
 dir, a running supervisor, a spawned seat).
 
+**Before you clone anything: log in to one agent CLI.** You need one of Claude
+Code, Gemini CLI, or Codex already installed and authenticated — `orchestra
+doctor` in step 1 checks this and tells you what's missing, but you can't pass
+it without having done this first. See `docs/INSTALL.md` §0 for the exact
+per-CLI install + login commands, or `docs/BEGINNERS_GUIDE.md` if you've never
+used a terminal before. `docs/COSTS.md` covers what each CLI plan costs and the
+no-cost path (Gemini CLI's free tier).
+
 ## 1. Install, doctor green, dashboard open
 
 ```bash
