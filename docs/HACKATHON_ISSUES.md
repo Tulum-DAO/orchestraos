@@ -439,3 +439,28 @@ ticket system."*
 
 **Acceptance.** Filing from the phone lands a report file with `channel: ios` and the
 evidence attached; a crash/bug puts a card on the approvals surface within seconds.
+
+## G19 · The operator's name survives in schema-bearing identifiers (columns, files, API fields)
+`labels: good-first-issue, size:S, cleanup`
+
+The scrub in PR #6 removed the original operator's name from prompts, comments, test
+fixtures and in-tree identifiers (`git grep -iw <name>` = 0). Four compound identifiers were
+left because they are contracts, not prose — renaming them touches a schema or a stored
+file name:
+
+- learning DB: columns `shaw_decision`, `shaw_timestamp` and the status value
+  `pending_shaw` (`api/src/routes/learning.ts`, `unified-approvals.ts`, the SQL that creates
+  and reads `proposals`).
+- `api/src/routes/auth.ts`: the `.shaw_chat_id` file under the data dir.
+- `api/src/routes/system.ts`: `getShawPresence()` and the `shaw_presence` field of
+  `GET /api/system/...` (read by the dashboard and iOS).
+- `api/src/routes/agents.ts`: the `${ts}_dashboard_shaw.json` upload filename.
+
+Rename each to its `operator_*` form **with a migration**: an `ALTER TABLE ... RENAME
+COLUMN` (SQLite ≥ 3.25) and a status-value UPDATE guarded to run once, a read-old-then-new
+fallback for the file names, and the API field emitted under both names for one release.
+Update every consumer in the same PR (grep the dashboard and the iOS repo for the field).
+
+**Acceptance.** `git grep -i shaw` over the tree returns only git-author lines; an
+existing data dir upgrades in place (`orchestra upgrade`) with no lost proposals/decisions;
+`/api/system` still answers with the presence field the clients read.
