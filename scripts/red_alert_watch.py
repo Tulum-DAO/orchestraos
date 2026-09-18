@@ -47,6 +47,12 @@ VERIFY_WAIT_S = 20      # seconds a respawned CLI gets before the by-effect chec
 CARD_FROM = "red-alert-builder"
 # the operator wants the pending queue INTACT this week (2026-09-18): the saturated surface is the
 # demo material. Never answer/dispose/retire a card here; correct it in place and leave it pending.
+# SECOND RULING, same day: the 7 past-due COMMITMENT rows stay too, and due-date escalation must
+# NOT be wired at them before Saturday — a working escalation would resolve them and destroy the
+# demo. So preservation also forbids RE-DATING, SNOOZING and any sweep pointed at a date. Nothing
+# in this file may grow such a verb; test_nothing_in_the_watchdog_touches_dates_snooze_or_expiry
+# fails if one appears. "Helpfully escalate an overdue row" is exactly the move that reads as
+# hygiene and is not.
 PRESERVE_PENDING_QUEUE = os.environ.get("RED_ALERT_CLOSE_CARDS", "") != "1"
 CLI_RUNTIMES = ("claude", "gemini", "codex")
 CARD_ONLY = {"login_screen", "gateway_unreachable", "tmux_server_dead", "process_suspended", "green_died"}
@@ -274,8 +280,8 @@ def note_card(card_id: str, text: str) -> bool:
     correction had been written (found 2026-09-18 against a real menu card). A correction that
     silently fails is worse than no correction, hence the return value and the caller's fallback.
 
-    DO NOT "fix" this by making the store accept in-place edits of pending rows (gm, 2026-09-18,
-    HELD indefinitely): a write path that mutates a pending card is the most dangerous thing that
+    DO NOT "fix" this by making the store accept in-place edits of pending rows, and do not
+    re-date, snooze or expire a row either (2026-09-18, HELD indefinitely): a write path that mutates a pending card is the most dangerous thing that
     could be added to that store, and its failure mode is not a crash — it is a card that silently
     reads differently in front of an audience. The mail fallback is the intended behaviour and stays
     even if the store ever gains that capability.

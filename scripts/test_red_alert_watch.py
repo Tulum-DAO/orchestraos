@@ -377,3 +377,23 @@ def test_close_card_falls_back_to_a_durable_record_when_the_card_cannot_be_edite
     monkeypatch.setattr(W, "mail_correction", lambda cid, text: mailed.append((cid, text)))
     W.close_card("apr_x", "the seat healed")
     assert mailed and mailed[0][0] == "apr_x"
+
+
+def test_nothing_in_the_watchdog_touches_dates_snooze_or_expiry_of_a_card():
+    """Preserve-the-queue, second ruling (2026-09-18): the past-due COMMITMENT cards stay as demo
+    material, so no re-dating, no snoozing and no date-pointed sweep. This watchdog must own no
+    such verb at all — 'helpfully escalate an overdue row' is the move that reads as hygiene.
+    """
+    import io
+    import tokenize
+    # CODE only — the rule is documented in this module's comments, and a grep over prose would
+    # trip on its own hold (same technique as test_red_alert_no_kills.code_only).
+    src = "".join(
+        tok.string + " "
+        for tok in tokenize.generate_tokens(io.StringIO(open(W.__file__).read()).readline)
+        if tok.type != tokenize.COMMENT and not (tok.type == tokenize.STRING and len(tok.string) > 40)
+    )
+    for verb in ("--snoozed-until", "snooze", "expire-sweep", "EXPIRE_PENDING", "due_ts", "--expires"):
+        assert verb not in src, f"the watchdog must not touch {verb}"
+    # the only approval verbs it may invoke
+    assert sorted({v for v in ("request", "patch", "get", "answer") if f'"{v}"' in src}) == ["answer", "get", "patch", "request"]

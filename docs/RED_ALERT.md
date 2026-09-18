@@ -110,6 +110,11 @@ make a row silently read differently in front of an audience. `note_card` report
 applied, and `close_card` routes the correction to the manager seat as a message when it did not —
 never by minting a second card.
 
+**Never re-date, snooze or expire a card either.** When the operator's pending queue is the
+evidence, an overdue row is part of it: a due-date escalation pointed at past-due commitment cards
+would resolve exactly the rows being demonstrated. The watchdog owns no snooze, re-date or
+date-pointed sweep verb, and a test fails if one is ever added.
+
 **Never retire a card to tidy the queue.** When a report heals, the watchdog writes the
 correction ONTO its card ("Update — no longer needs an answer: …") and leaves the row
 pending (`PRESERVE_PENDING_QUEUE`). A pending queue may be the operator's evidence, not a
