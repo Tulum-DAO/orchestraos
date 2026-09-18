@@ -93,7 +93,7 @@ Telegram (`tg-notify.sh`) and to Arturo (msg_store → gm, type `red_alert`). No
   (`classify --seat` returns null) before `status=resolved`.
 - Never `fg`, never SIGCONT-and-hope: a suspended CLI is respawned with `--resume`.
 - Never send text+Enter in one `send-keys`; wakes go through `scripts/nudge_pane.py`.
-- **NO KILLS, EVER (the operator, 00:20 Tulum 2026-09-18).** The self-heal loop never sends
+- **NO KILLS, EVER (the operator, 2026-09-18).** The self-heal loop never sends
   kill/TERM/KILL/STOP/pkill/kill-session/kill-server to anything and never runs a
   history-rewriting or tree-discarding git command on the live tree. Allowed repairs:
   `claude --resume` in a new or dead pane, `tmux respawn-pane` only when the process is

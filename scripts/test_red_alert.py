@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """RED-first contract for red_alert.py — the RED ALERT crash-report standard.
 
-Commission: prompts/red-alert-builder.md (the operator 2026-09-17 23:30 Tulum, after ^Z on the
+Commission: prompts/red-alert-builder.md (the operator, 2026-09-17, after ^Z on the
 harness bottom bar suspended gm). A crash report is ONE JSON file under
 state/red-alert/<ts>-<slug>.json with the fixed schema in docs/RED_ALERT.md, the CLI is
 scripts/red_alert.py (report / list / show / update / resolve / escalate), and the

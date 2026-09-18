@@ -3,7 +3,7 @@
 
 Standard: docs/RED_ALERT.md. One report = one JSON file
     state/red-alert/<UTC ts>-<seat>-<slug>.json
-Commissioned by the operator 2026-09-17 23:30 Tulum after the harness bottom-bar "^Z" button
+Commissioned by the operator, 2026-09-17 after the harness bottom-bar "^Z" button
 suspended the gm seat (pid STAT T, not killed) — "LOG EVERYTHING IN A RED ALERT CRASH
 REPORT ... a list of errors the system reports, logs, adds to and acts on immediately".
 
@@ -64,7 +64,7 @@ CATALOGUE = {
         "detect": "pane process tree has a STAT containing 'T' (SIGTSTP/^Z), or the screen "
                   "shows 'Claude Code has been suspended'",
         "immediate_fix": {"action": "card_only",
-                          "how": "NO KILLS rule (the operator 00:20 Tulum 2026-09-18): the process is still present, so the "
+                          "how": "NO KILLS rule (the operator, 2026-09-18): the process is still present, so the "
                                  "watchdog never touches it. Card + Telegram; a human resumes it (respawn-pane -k + "
                                  "`claude --resume <sid>` by hand — SIGCONT/tcsetpgrp did not stick on gm 04:31Z)"},
         "doc": "^Z from the harness bottom bar or a terminal; the CLI is stopped, not dead",

@@ -245,7 +245,7 @@ def _healthy(seat: str) -> tuple[bool, dict]:
 
 
 def repair_respawn(seat: str, session: str, ev: dict) -> tuple[bool, str]:
-    """HARD RULE (the operator 00:20 Tulum 2026-09-18): respawn ONLY a pane whose process is already
+    """HARD RULE (the operator, 2026-09-18): respawn ONLY a pane whose process is already
     gone — no -k, no signal of any kind. A suspended (STAT T) or otherwise present process is
     a card to the operator, never a repair."""
     procs = ev["process_state"].get(seat) or []

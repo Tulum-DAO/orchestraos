@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""HARD RULE (the operator, 00:20 Tulum 2026-09-18): the self-heal loop NEVER kills anything.
+"""HARD RULE (the operator, 2026-09-18): the self-heal loop NEVER kills anything.
 
 red-alert-builder's `kill 169668` killed the tmux server and took the whole fleet down
 (ra_8dc72329). This test fails if red_alert.py / red_alert_watch.py contain a kill-class call
