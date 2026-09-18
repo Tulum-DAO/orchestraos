@@ -57,8 +57,9 @@ slide's bullets — say those out loud, don't put them on the screen.
   down: device pairing, a zero-key assistant brain, on-device voice, the
   assistant's home screen, running without a manager agent, chat bridges as
   plugins, a visual restyle, push notifications without a third-party server,
-  installer hardening, docs and tutorials, and autonomous rotation proven on
-  every agent runtime.
+  installer hardening, docs and tutorials, autonomous rotation proven on
+  every agent runtime, and a critic loop that scores creative work before it
+  reaches you.
 - Full list with sizes and dependencies: `docs/tracks/README.md`. Each track's
   own doc has the design, the exact files to touch, and a start prompt you can
   hand straight to your agent.
@@ -67,7 +68,7 @@ slide's bullets — say those out loud, don't put them on the screen.
 
 ## 7. Picking a track
 
-- Solo or pair, your call. Tracks 1, 2, 5, 6, 9, 10, 11 don't depend on
+- Solo or pair, your call. Tracks 1, 2, 5, 6, 9, 10, 11, 12 don't depend on
   another track landing first — good solo starts. Tracks 3, 4, 7, 8 build on
   another track's contract — read that track's doc first if you pick one of
   these.

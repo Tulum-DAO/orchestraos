@@ -86,12 +86,13 @@ dying when it runs out of context — trigger one manually once so you have
 seen a handoff and readback before you ever need to trust it unattended.
 
 ```
-Rotate the "hello" seat: use `orchestra rotate hello` if that command exists
-on this checkout (check `orchestra --help` first), otherwise
-`python3 scripts/rotate_agent.py hello`. Show me the handoff document the old
-generation wrote, the successor's readback answering its canary questions,
-and confirm the registry's canonical pointer now points at the new
-generation.
+Rotate the "hello" seat: `orchestra rotate hello --synthesize` (the
+--synthesize flag writes a minimal handoff since "hello" has not banked one
+of its own — give it at least one real turn first, like writing a file with
+a distinctive word in it, so the successor has something to recall). Show me
+the handoff document the old generation wrote, the successor's readback
+answering its canary questions, and confirm the registry's canonical
+pointer now points at the new generation.
 ```
 
 ## Write a fact and recall it

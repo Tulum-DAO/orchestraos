@@ -133,3 +133,12 @@ an hour than a weekend.
 harness depends on and tells you, in one line each, what is missing and how to
 fix it. Read its output before asking anyone; it is built to answer the
 question you are about to ask.
+
+## If you're still stuck
+
+Three places, in order: the in-app **Report** button (dashboard top bar) files
+a structured report of exactly what broke, so whoever helps you starts from
+real state instead of a description; the GitHub Discussions "Start here" post
+pins the same path you're reading now for anyone else who lands there with the
+same question; and — if you're at the event in person — the room, out loud,
+any time. Nobody expects you to debug this alone.

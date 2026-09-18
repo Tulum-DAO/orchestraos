@@ -233,3 +233,8 @@ memory; a fact that only exists there will not survive.
 All seven green means you've exercised most of the files any track's doc
 will send you to. Pick a track (`docs/tracks/README.md`) or a
 `good-first-issue` (`docs/HACKATHON_ISSUES.md`).
+
+**Stuck on any step above?** The in-app **Report** button (dashboard top bar)
+files a structured report of what actually broke — use it before describing
+the problem from memory. The GitHub Discussions "Start here" post has this
+same path pinned. In person: the room, out loud, any time.
