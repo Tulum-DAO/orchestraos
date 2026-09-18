@@ -17,6 +17,11 @@ R=Tulum-DAO/orchestraos
 - [ ] `main` is green: `gh run list --repo $R --branch main --limit 1` → `completed success`.
 - [ ] Four scans at zero on `main` (the merge rule): env literals, credential shapes,
       business names, operator-as-word. Recipe in `docs/GATE.md`'s "Done" section.
+- [ ] **Stranger-test scan** at zero on `main` for BOTH repos — `scripts/stranger_scan.sh <repo>`.
+      Different question from the four scans: not "is a credential in here" but "does this tell a
+      stranger WHO this is or WHERE to look" — real names, customer names, live approval/session ids,
+      host addresses, and any sentence naming where a credential sits. Record the counts; characterise
+      anything non-zero before calling it clean (the product's own vocabulary is not a leak).
 - [ ] Seven-step gate re-run by the tester from a fresh container on the release SHA
       (`docs/GATE.md`; step 3 with a throwaway BotFather token). Report filed.
 - [ ] `docs/HACKATHON_ISSUES.md` reviewed: every T-track and G-issue has a size label and
