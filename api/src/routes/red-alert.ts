@@ -1,5 +1,5 @@
 /**
- * POST /api/red-alert/report — the report button (deliverable 6, the operator 00:10 Tulum 2026-09-18):
+ * POST /api/red-alert/report — the report button (deliverable 6, the operator, 2026-09-18):
  * "that whole alert system for crashes and bugs and improvements and suggestions should be
  * accessible from a new button on screen … the gateway to the ticket system."
  *
