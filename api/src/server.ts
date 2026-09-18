@@ -17,6 +17,7 @@ import memoryRouter from './routes/memory.js';
 import roadmapsRouter from './routes/roadmaps.js';
 import voiceRouter from './routes/voice.js';
 import arturoRouter from './routes/arturo.js';
+import agentsNewRouter from './routes/agents-new.js';
 import approvalsRouter from './routes/approvals.js';
 import analyticsRouter from './routes/analytics.js';
 import workflowsRouter from './routes/workflows.js';
@@ -96,6 +97,9 @@ app.get('/api/me', (req, res) => {
   res.json({ username, role, allowed_agents, client_scope: clientScope || null });
 });
 
+// /new and /login-shell must mount BEFORE the agents router, whose '/:id/spawn'
+// would otherwise swallow them as an agent id.
+app.use('/api/agents', agentsNewRouter);
 app.use('/api/agents', agentsRouter);
 app.use('/api/agents', chatTranscriptRouter); // /:id/transcript (falls through from agentsRouter)
 app.use('/api/agents', transcriptStreamRouter); // /:id/transcript/stream (F1 SSE lane; poll path above is the fallback)
