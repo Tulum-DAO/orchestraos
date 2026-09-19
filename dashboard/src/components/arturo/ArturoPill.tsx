@@ -1,7 +1,7 @@
 /**
- * ArturoPill — the always-available "Ask Arturo" pill on every non-home page (track T4, S5/S6).
+ * ArturoPill — the always-available "Ask Arturo" pill, bottom-right on EVERY page (track T4, S5/S6).
  *
- * Tap → a conversation pane over the dimmed page. Two things the operator asked for on
+ * Tap → a conversation pane anchored bottom-right. It does NOT dim or block the page. Two things the operator asked for on
  * 2026-09-18, after using the surface:
  *
  *  1. "swap between Arturo's previous conversations and pick up right where we left off" —
@@ -100,6 +100,14 @@ export function ArturoPill() {
     await resume(id);
   }
 
+  // Escape closes: the backdrop used to be the click-anywhere-to-close, and it is gone.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
+
   function toggleContextCard() {
     if (ctxOn) dismissContext(convId); else restoreContext(convId);
     setCtxOn(!ctxOn);
@@ -115,7 +123,9 @@ export function ArturoPill() {
   }
   return (
     <>
-      <div className="arturo-pill-back" onClick={() => setOpen(false)} />
+      {/* No backdrop, deliberately (operator, 2026-09-19): the pane must not dim the page and
+          must not swallow clicks on it — you keep working while Arturo is open, the way the
+          assistant panel in the previous build did. Close with the × or Escape. */}
       <div className="arturo-pill-panel" role="dialog" aria-label="Ask Arturo">
         <div className="arturo-pill-head">
           <span className="who">Arturo</span>
