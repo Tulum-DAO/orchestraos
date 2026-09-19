@@ -36,9 +36,20 @@ R=Tulum-DAO/orchestraos
 
 ## T-0 (Saturday, before 11:00)
 
-1. **Tag the release** (on the SHA the tester passed):
+1. **Tag the release.** Tag the sha whose **non-docs tree is identical to the sha the gate ran
+   against**, and name the tested sha in the tag message. "The sha the tester passed" is ambiguous the
+   moment anything lands after the gate — a docs-only commit does not change the product, and tagging
+   the older sha would ship documentation we already know is wrong.
+   **RE-MEASURE IMMEDIATELY BEFORE TAGGING — a reading taken last night is not evidence about now:**
    ```bash
-   git -C ~/repos/orchestraos fetch origin && git -C ~/repos/orchestraos tag -a v0.1.0-hackathon -m "OrchestraOS v0.1.0 — Build-a-thon release (Tulum DAO)" origin/main
+   TESTED=<sha the gate ran against>
+   git -C ~/repos/orchestraos fetch origin
+   git -C ~/repos/orchestraos diff --name-only $TESTED..origin/main | grep -v '^docs/'   # MUST be empty
+   ```
+   If that prints anything, **stop** — a non-docs change has landed since the gate and this rule does not
+   cover it. Escalate rather than tagging. If it is empty:
+   ```bash
+   git -C ~/repos/orchestraos tag -a v0.1.0-hackathon -m "OrchestraOS v0.1.0 — Build-a-thon release (Tulum DAO). Seven-step gate run against $TESTED; tagged at $(git -C ~/repos/orchestraos rev-parse --short origin/main); delta is documentation only, no product change." origin/main
    git -C ~/repos/orchestraos push origin v0.1.0-hackathon
    ```
 2. **Flip public** (and apply the naming ruling: Build-a-thon = the event, OrchestraOS = the product, Tulum DAO = the publisher):
