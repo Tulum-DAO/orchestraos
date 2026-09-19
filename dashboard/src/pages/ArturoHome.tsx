@@ -20,6 +20,8 @@ import { arturoHealth, arturoText, runtimesAvailable, brainLabel, greeting, slug
   isStarting, waitForArturo, STARTING_TEXT,
   type ArturoHealth, type RuntimeRow } from '../lib/arturo';
 import { listThreads, loadThread, type ThreadSummary } from '../lib/arturoThreads';
+import WebTerminal from '../components/WebTerminal';
+import { installCommand } from '../lib/providerConnect';
 
 type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[]; pending?: boolean;
   decision?: { options: string[]; onPick: (v: string) => void } };
@@ -70,6 +72,11 @@ export default function ArturoHome() {
   // G20: the home and the pill read ONE server-side thread space, so a conversation started
   // in either place is reachable from the other. The drawer is where you go back to one.
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
+  // The onboarding terminal. A first-time installer has NO CLI yet, so this is where they
+  // install one. POST /api/agents/login-shell works with nothing installed, so it is
+  // reachable BEFORE there is a brain to talk to — no chicken-and-egg.
+  const [onboardShell, setOnboardShell] = useState<string | null>(null);
+  const [shellError, setShellError] = useState<string | null>(null);
   const convId = useRef<string>(ls(LS_CONV) || '');
   useEffect(() => { if (!convId.current) { convId.current = newConversationId('web'); lsSet(LS_CONV, convId.current); } }, []);
   useEffect(() => { if (drawer) void listThreads().then(setThreads); }, [drawer]);
@@ -149,8 +156,37 @@ export default function ArturoHome() {
       const hint = installedOnly.length
         ? `I can see ${installedOnly.map((r) => r.label || r.id).join(', ')} installed but not logged in. `
         : 'I do not see any agent CLI on this machine yet. ';
-      patch(id, { pending: false, text: `${who}${hint}Open a terminal on the server and log in to one — \`claude\`, \`codex login\` or \`agy\` — then tap Check again. I run on the CLI you already pay for; no API key needed.`,
-        decision: { options: ['Check again'], onPick: () => { setTurns((t) => t.filter((x) => x.id !== id)); void runtimeStep(true); } } });
+      // "Open a terminal ON THE SERVER" was an instruction to LEAVE the product, given to
+      // the one person who cannot act on it: someone who just installed this and has no CLI
+      // and possibly no shell of their own. The terminal is offered HERE instead, first.
+      const nothingInstalled = installedOnly.length === 0;
+      patch(id, { pending: false,
+        text: `${who}${hint}${nothingInstalled
+          ? `You need one on this machine before I can think. Open a terminal right here and install one — \`${installCommand('claude')}\` — then run \`claude\` and sign in.`
+          : 'Open a terminal right here and sign in — `claude`, `codex login` or `agy`.'} I run on the CLI you already pay for; no API key needed.`,
+        decision: {
+          options: ['Open a terminal', 'Check again'],
+          onPick: (choice: string) => {
+            if (choice === 'Check again') {
+              setTurns((t) => t.filter((x) => x.id !== id));
+              void runtimeStep(true);
+              return;
+            }
+            setShellError(null);
+            void (async () => {
+              try {
+                const res = await fetch('/api/agents/login-shell', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+                });
+                const j = await res.json().catch(() => ({}));
+                if (!res.ok || !j.ok || !j.session) { setShellError(j.reason || j.error || `HTTP ${res.status}`); return; }
+                setOnboardShell(j.session);
+              } catch (e) {
+                setShellError(e instanceof Error ? e.message : 'could not open a terminal');
+              }
+            })();
+          },
+        } });
       return;
     }
     const brain = h.brain?.kind === 'api' ? `an API key (${brainLabel(h.brain)})` : `${brainLabel(h.brain)} through your logged-in CLI`;
@@ -264,6 +300,22 @@ export default function ArturoHome() {
           </div>
         ))}
       </div>
+
+      {(onboardShell || shellError) && (
+        <div className="arturo-onboard-shell">
+          {shellError ? (
+            <p className="shell-error">Could not open a terminal: {shellError}</p>
+          ) : (
+            <>
+              <div className="shell-head">
+                <span>Terminal on this machine · {onboardShell}</span>
+                <button onClick={() => { setOnboardShell(null); void runtimeStep(true); }}>Done — check again</button>
+              </div>
+              <WebTerminal session={onboardShell!} machine="vps" />
+            </>
+          )}
+        </div>
+      )}
 
       <div className="arturo-composer">
         <textarea ref={taRef} rows={1} value={draft} placeholder={`Ask ${name ? 'Arturo' : 'Arturo'}`}
