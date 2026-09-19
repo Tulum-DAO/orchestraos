@@ -23,6 +23,26 @@ Install and log in to ONE agent CLI (the runtime catalog probes these):
 | gemini | `agy`    | run `agy` once; token lands in `~/.gemini/antigravity-cli/antigravity-oauth-token` |
 | codex  | `codex`  | run `codex login`; `~/.codex/auth.json` gets a `tokens` key |
 
+### Pin the agent CLI version
+
+The harness reads the CLI's screen, transcripts, and hook events. It does not heal itself yet when
+the CLI changes shape under it, so pin the CLI to the version the reference install runs and turn the
+auto-updater off. The reference fleet runs **Claude Code 2.1.260** with the updater disabled; an
+unpinned native install moved from 2.1.263 to 2.1.278 in one morning with no action from the operator.
+
+```bash
+npm install -g @anthropic-ai/claude-code@2.1.260
+export DISABLE_AUTOUPDATER=1     # put it in your shell profile so every seat inherits it
+claude --version                 # must print 2.1.260
+```
+
+If you installed Claude Code with the native installer instead of npm, it auto-updates; switch to the
+npm install above for any machine that runs seats. For the Docker image, pass the pin as the build
+argument: `--build-arg AGENT_CLIS="@anthropic-ai/claude-code@2.1.260"`. Gemini and Codex CLIs: pin the
+same way with their package managers (the reference fleet runs agy 1.2.6 and codex-cli 0.153.4).
+[UNVERIFIED for the release gate: the gate containers were built without a pin and pulled the version
+current at build time; the number above is the reference fleet's.]
+
 ## 1. Clone, init, doctor
 
 ```bash
@@ -219,7 +239,7 @@ docker run -it --rm -p 8891:8891 -p 8888:8888 -p 8890:8890 orchestraos
 - VS Code / GitHub Codespaces: "Reopen in Container". The workspace is bind-mounted over
   the image's copy, so `postCreateCommand` re-runs `orchestra init` once (~1 min) to
   rebuild `.venv` and `node_modules` for the mounted tree.
-- Other CLIs: `docker build --build-arg AGENT_CLIS="@anthropic-ai/claude-code @openai/codex"`.
+- Other CLIs: `docker build --build-arg AGENT_CLIS="@anthropic-ai/claude-code@2.1.260 @openai/codex"` (pin the version; see "Pin the agent CLI version" above).
 - The container is one instance on one host: tmux inside it is its own, so the
   registry-scoping rules below apply per container.
 

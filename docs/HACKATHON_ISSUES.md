@@ -499,6 +499,22 @@ Update every consumer in the same PR (grep the dashboard and the iOS repo for th
 existing data dir upgrades in place (`orchestra upgrade`) with no lost proposals/decisions;
 `/api/system` still answers with the presence field the clients read.
 
+## G22 · `orchestra doctor` has no CLI-version row — an auto-updated CLI drifts under a running fleet
+`labels: good-first-issue, size:S, doctor, install`
+
+The harness reads the agent CLI's screen, transcripts and hook events, and does not heal itself yet when
+the CLI changes. On launch morning an unpinned native Claude Code install moved 2.1.263 -> 2.1.278 with no
+action from the operator. `docs/INSTALL.md` now tells people to pin (2.1.260) and set
+`DISABLE_AUTOUPDATER=1`, but nothing checks it.
+
+Add a `cli:version` row to `orchestra doctor` (`orchestra_cli/doctor.py`, one row per enabled runtime):
+- OK when the installed version equals the version the release was proven against (a constant beside
+  the runtime probe, updated at each release).
+- WARN on mismatch, remedy: the exact `npm install -g @anthropic-ai/claude-code@<version>` line.
+- WARN when `DISABLE_AUTOUPDATER` is unset in the environment doctor runs in, remedy: the export line.
+Never MISSING: a version mismatch must not block `orchestra up`. Pure over `DoctorProbes` like the other
+rows; RED test first (mismatch -> WARN, unset env -> WARN), then GREEN.
+
 ## G20 · Arturo threads are one-way: "New thread" exists, old threads are unreachable — FIXED
 `labels: arturo, ui, size:M, fixed`
 
