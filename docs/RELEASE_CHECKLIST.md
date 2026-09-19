@@ -351,7 +351,7 @@ R=Tulum-DAO/orchestraos
 
 ```bash
 git clone https://github.com/Tulum-DAO/orchestraos.git && cd orchestraos && make install
-orchestra init --yes && orchestra doctor        # every required row OK
+./bin/orchestra init --yes && ./bin/orchestra doctor   # every required row OK. ./bin/ on purpose: `make install` does NOT put `orchestra` on PATH — bare `orchestra` is exit 127 on a bare box (measured 2026-09-19)
 ```
 
 Then `docs/GATE.md` steps 1–2 by hand. If anything fails, the fix goes through a PR like

@@ -35,8 +35,10 @@ account with, or Claude if you have none:
 - **Claude Code:** `npm install -g @anthropic-ai/claude-code` (needs Node.js
   installed first — if `npm` prints "command not found", install Node.js from
   nodejs.org, then retry).
-- **Gemini CLI:** follow Google's install instructions for `gemini`/`agy` — it
-  has a free tier with no credit card, see `docs/COSTS.md`.
+- **Gemini (Antigravity `agy` CLI):** this harness detects Google's Antigravity `agy`
+  binary, not `@google/gemini-cli` — installing `gemini` will not be recognised. A
+  validated `agy` install recipe lands after the launch; the free-tier figures in
+  `docs/COSTS.md` are unverified against `agy`.
 - **Codex (OpenAI):** `npm install -g @openai/codex`, or see OpenAI's install
   docs — bundled with a ChatGPT Plus subscription.
 

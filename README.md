@@ -8,14 +8,14 @@ OrchestraOS, published by Tulum DAO: an open harness for running a fleet of codi
 
 ## What is in the box
 
-- **Seats and generations.** An agent is a seat with a lineage. Each generation is one CLI session (Claude Code, Gemini CLI, or Codex). When a generation nears its context ceiling it writes a handoff, a successor boots, proves it understood the handoff by answering questions anchored in the predecessor's own state, and is promoted. Rotation is autonomous and on by default for Claude seats; Gemini and Codex are experimental and are not armed unless you set `[rotation] experimental_runtimes = ["gemini", "codex"]`.
+- **Seats and generations.** An agent is a seat with a lineage. Each generation is one CLI session (Claude Code, Gemini (Antigravity `agy` CLI), or Codex). When a generation nears its context ceiling it writes a handoff, a successor boots, proves it understood the handoff by answering questions anchored in the predecessor's own state, and is promoted. Rotation is autonomous and on by default for Claude seats; Gemini and Codex are experimental and are not armed unless you set `[rotation] experimental_runtimes = ["gemini", "codex"]`.
 - **Inter-agent messaging.** A durable message store with inboxes, acks, threads, and a router that parks mail for busy seats instead of losing it.
 - **Memory.** A shared facts store with freshness, per-seat memory directories that survive rotation, and a recall hook that feeds the assistant.
 - **Approvals surface.** Every decision an agent needs from the human is a card: approve or deny, a menu, a questionnaire, or a "waiting on you" block. Cards render on a web dashboard and an iOS and watch app, and the human's answer resumes the agent that asked.
 - **Arturo.** The assistant. The main page, the new-chat page, and a button that is available on every other page and knows what you are looking at. Text today; voice through your own keys.
 - **Runtime catalog.** Probes which CLIs are installed and authenticated and offers their models, so the harness runs on whatever subscription you already have.
 
-**Before you start — log in first, before you clone.** You need one agent CLI already installed and **logged in** — Claude Code, Gemini CLI, or Codex, your choice. See `docs/INSTALL.md` §0 for the exact commands, `docs/COSTS.md` for what each plan costs (including a no-cost option), and `docs/BEGINNERS_GUIDE.md` if this is your first time in a terminal at all. Do the login before anything else: a seat spawned against a CLI you have not logged in to does not tell you that — it retries, prints `Injection FAILED`, and exits, while the CLI's own sign-in screen waits unread in the seat's terminal.
+**Before you start — log in first, before you clone.** You need one agent CLI already installed and **logged in** — Claude Code, Gemini (Antigravity `agy` CLI), or Codex, your choice. See `docs/INSTALL.md` §0 for the exact commands, `docs/COSTS.md` for what each plan costs (including a no-cost option), and `docs/BEGINNERS_GUIDE.md` if this is your first time in a terminal at all. Do the login before anything else: a seat spawned against a CLI you have not logged in to does not tell you that — it retries, prints `Injection FAILED`, and exits, while the CLI's own sign-in screen waits unread in the seat's terminal.
 
 ## Two ways to run it
 
