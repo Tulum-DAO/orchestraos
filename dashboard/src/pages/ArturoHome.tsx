@@ -1,6 +1,8 @@
 /**
  * ArturoHome — the MAIN page (track T4). A standalone phone shell, not a dashboard page:
- * one thin header (drawer glyph · "Arturo · <model> ⌄" · brain glyph), black canvas with the
+ * one thin header (settings gear · "Arturo · <model> ⌄" · brain), icons from the
+ * shared lucide set so the web pair matches the iOS pair (brain + gearshape) instead of
+ * a one-off hand-drawn glyph, black canvas with the
  * accent glow behind the composer, empty state = mark + serif greeting, one two-row composer.
  *
  * Onboarding is Arturo's FIRST THREAD, not a form: name → runtime detect (catalog probe +
@@ -23,6 +25,7 @@ import { listThreads, loadThread, type ThreadSummary } from '../lib/arturoThread
 import WebTerminal from '../components/WebTerminal';
 import { installCommand } from '../lib/providerConnect';
 import { uploadAttachment, attachmentPreamble, describeAttachment, type Attachment } from '../lib/arturoUpload';
+import { Brain, Settings } from 'lucide-react';
 
 type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[]; pending?: boolean;
   decision?: { options: string[]; onPick: (v: string) => void } };
@@ -272,14 +275,14 @@ export default function ArturoHome() {
   return (
     <div className="arturo-shell">
       <header className="arturo-header">
-        <button className="arturo-glyph" aria-label="Open menu" onClick={() => setDrawer(true)}>
-          <svg width="20" height="16" viewBox="0 0 20 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><line x1="1" y1="2" x2="19" y2="2" /><line x1="1" y1="8" x2="19" y2="8" /><line x1="1" y1="14" x2="19" y2="14" /></svg>
+        <button className="arturo-glyph" aria-label="Open settings" onClick={() => setDrawer(true)}>
+          <Settings size={22} strokeWidth={2.2} absoluteStrokeWidth />
         </button>
         <button className="arturo-title" onClick={() => setModelOpen(true)} aria-label="Select model">
           Arturo <span className="model">· {model}</span> <span className="chev">⌄</span>
         </button>
         <button className="arturo-glyph" aria-label="Open brain" onClick={() => setBrainOpen(true)}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M9 18c-3 0-5.5-2.7-5.5-6.5S6 5 9 5s5.5 2.7 5.5 6.5" /><path d="M15 18c3 0 5.5-2.7 5.5-6.5S18 5 15 5" /><path d="M9 5c0-1.7 1.3-3 3-3s3 1.3 3 3" /><path d="M9 18v1.5a1.5 1.5 0 0 0 3 0V18" /><path d="M12 18v1.5a1.5 1.5 0 0 0 3 0V18" /><line x1="12" y1="8.5" x2="12" y2="12" /></svg>
+          <Brain size={22} strokeWidth={2.2} absoluteStrokeWidth />
         </button>
       </header>
 
