@@ -139,8 +139,9 @@ the release candidate on 2026-09-18.
 
 This runs one operator's fleet every day — about 45 resident seats on one
 VPS. That is the reference install and it is real. It is not a finished
-product. Specific gaps are named in the source doc "known gaps", and every doc
-in the repo says where it is thin. Two worth saying here because they touch
+product. Specific gaps are named in the "Known gaps, measured" section that
+closes each deck page in this folder, and every doc in the repo says where it
+is thin. Two worth saying here because they touch
 the ideas above: the status surfaces (dashboard, registry, watch) can disagree
 about whether a seat is idle or working, which is the top open roadmap item;
 and the automated rotation defect above means "auto-rotation" is a claim about
