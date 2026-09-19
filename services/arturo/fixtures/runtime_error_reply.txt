@@ -1,0 +1,1 @@
+My claude brain hit a snag: Command '['claude', '-p', '--no-session-persistence', '--tools', '', '--strict-mcp-config', '--setting-sources', '', '--system-prompt', 'You are ARTURO — the operator\'s AI Operations Commander (the v
