@@ -4,7 +4,6 @@
 
 
 Written for the Tulum Build-a-thon, Sat 2026-09-19. Same rules as deck 1.
-as doc 01.
 
 ## The one-sentence version
 When an agent hits something only a human can decide, it files a card, stops,

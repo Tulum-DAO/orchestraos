@@ -4,7 +4,7 @@
 
 
 Written for the Tulum Build-a-thon, Sat 2026-09-19. Same rules as deck 1.
-as doc 01. Short, because the mechanism is simple and the honesty is that
+Short, because the mechanism is simple and the honesty is that
 recall on a clean install is file-based.
 
 ## The one-sentence version
