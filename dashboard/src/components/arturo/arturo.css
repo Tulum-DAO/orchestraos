@@ -94,16 +94,21 @@
 .model-row .desc{ font-size:13.5px; color:var(--grey); margin-top:2px; }
 .model-row .check{ color:#4fa8ff; font-size:17px; }
 /* pill on every other page */
+/* Bottom-RIGHT, never centred: the operator's reference is the assistant button in the
+   previous build (fixed bottom-6 right-6), which sits out of the way of page content and
+   of the composer on pages that have one. */
 .arturo-pill{
-  position:fixed; left:50%; transform:translateX(-50%); bottom:calc(22px + env(safe-area-inset-bottom)); z-index:35;
+  position:fixed; right:16px; left:auto; bottom:calc(20px + env(safe-area-inset-bottom)); z-index:35;
   display:flex; align-items:center; gap:8px; background:rgba(40,40,42,0.78); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
   border:1px solid rgba(255,255,255,0.10); border-radius:999px; padding:11px 20px 11px 18px; box-shadow:0 8px 24px rgba(0,0,0,0.35); color:#fff; font-size:15px; font-weight:500;
 }
 .arturo-pill .mic{ width:16px; height:16px; color:#d97757; }
-.arturo-pill-back{ position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:36; }
+/* .arturo-pill-back (a full-screen rgba(0,0,0,0.55) scrim) is GONE on purpose: it dimmed the
+   page and, being inset:0, swallowed every click on it. The pane is non-modal now. */
 .arturo-pill-panel{
-  position:fixed; left:12px; right:12px; bottom:calc(14px + env(safe-area-inset-bottom)); z-index:37;
-  display:flex; flex-direction:column; max-height:72vh;
+  position:fixed; right:16px; left:auto; width:min(380px, calc(100vw - 32px));
+  bottom:calc(20px + env(safe-area-inset-bottom)); z-index:37;
+  display:flex; flex-direction:column; max-height:min(60vh, 560px);
   background:#1c1c1c; border:1px solid rgba(255,255,255,0.08); border-radius:22px; padding:10px 12px;
   box-shadow:0 8px 34px rgba(0,0,0,0.55); color:#fff;
   font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter Variable",sans-serif;
