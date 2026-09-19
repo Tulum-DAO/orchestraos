@@ -54,7 +54,8 @@ slide's bullets — say those out loud, don't put them on the screen.
 ## 6. The tracks
 
 - Thirteen tracks, each a real gap in the harness with a design already written
-  down: device pairing, a zero-key assistant brain, on-device voice, the
+  down: device pairing, a zero-key assistant brain (note: "gemini" here means
+  Google's Antigravity `agy` CLI, not `@google/gemini-cli` — see `docs/COSTS.md`), on-device voice, the
   assistant's home screen, running without a manager agent, chat bridges as
   plugins, a visual restyle, push notifications without a third-party server,
   installer hardening, docs and tutorials, autonomous rotation proven on

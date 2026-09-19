@@ -11,7 +11,7 @@ short walkthrough, not part of this doc's steps.
 ## 0. Prerequisites
 
 ```bash
-sudo apt update && sudo apt install -y git tmux python3 python3-venv build-essential curl
+sudo apt update && sudo apt install -y git tmux python3 python3-venv build-essential curl iproute2   # iproute2 = `ss`, which `orchestra doctor` needs to attribute ports to its own supervisor
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs
 ```
 
