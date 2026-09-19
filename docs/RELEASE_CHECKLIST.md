@@ -141,6 +141,14 @@ R=Tulum-DAO/orchestraos
    #    match the SCAN pattern and this checklist would trip its own step (it did, while being written).
    printf 'srv%s.%s.%s\n' 1234567 "$TAILNET" 'ts.net' | grep -qE "$TRIPWIRE" \
      || { echo "STOP: tripwire did not fire on its own positive control — the pattern is broken, not the repo"; exit 1; }
+   #    CONTROL EACH HALF SEPARATELY. The whole-pattern control above passes if EITHER half matches, so a
+   #    broken tailnet half hides behind a working `srv` half — the same one-signal-two-meanings defect as
+   #    an exit code that means MISSING or FAIL. Assert both, against live output neither half built:
+   TS_OUT=$(tailscale status --json)
+   printf '%s' "$TS_OUT" | grep -qE 'srv[0-9]{6,}' \
+     || { echo "STOP: the srv half did not fire against live tailscale output"; exit 1; }
+   printf '%s' "$TS_OUT" | grep -qF "$TAILNET" \
+     || { echo "STOP: the tailnet half did not fire against live tailscale output — extraction is wrong"; exit 1; }
    #    Corroboration while the ref still exists (optional, and it WILL disappear one day):
    #      git log --all -S"$TRIPWIRE" --pickaxe-regex --oneline   # must list the known-bad commit
    #    EXPECTED, once the control has fired: ZERO hits on every ref. Any hit at all -> STOP.
