@@ -68,3 +68,7 @@ stronger claim, and it is not the one this run supports.
 ## Known gaps
 
 Listed as issues (`T1`–`T12`, `G1`–`G20`), seeded from `docs/HACKATHON_ISSUES.md`.
+
+## CI note for this release
+
+GitHub Actions was refused on billing from 2026-09-19 09:52Z; PRs #38–#40 merged on bare-box + CI-identical local evidence (council PASS at `c6b278c`; local run rc 0).
