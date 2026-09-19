@@ -12,7 +12,10 @@
   height:52px; flex:0 0 auto; display:flex; align-items:center; justify-content:space-between;
   padding:0 14px; padding-top:env(safe-area-inset-top); position:relative; z-index:5;
 }
-.arturo-glyph{ width:36px; height:36px; display:flex; align-items:center; justify-content:center; color:#fff; opacity:.92; background:none; border:0; border-radius:10px; }
+/* #8AA6A0 is the iOS app's Brand.mist (Sources/iOS/Theme.swift:27) — the header pair is
+   the same two marks in the same colour on both surfaces, not a web-only white. */
+.arturo-glyph{ width:36px; height:36px; display:flex; align-items:center; justify-content:center; color:#8AA6A0; background:none; border:0; border-radius:10px; }
+.arturo-glyph:hover{ color:#A8C0BC; }
 .arturo-glyph:active{ background:rgba(255,255,255,0.08); }
 .arturo-title{ display:flex; align-items:center; gap:6px; font-size:16px; font-weight:600; color:#fff; background:none; border:0; }
 .arturo-title .model{ color:var(--grey); font-weight:500; }
