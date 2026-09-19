@@ -12,9 +12,11 @@ import {
 
 // ---------- repairGatewayUrl: repair, don't reject ----------
 {
-  const p = repairGatewayUrl('srv1397016.tail8be541.ts.net:8444');
-  assert.equal(p.baseUrl, 'https://srv1397016.tail8be541.ts.net:8444');
-  assert.equal(p.host, 'srv1397016.tail8be541.ts.net');
+  // Neutral example host that still exercises the .ts.net shape — NEVER the operator's real
+  // tailnet hostname (this repo is public; no live operator host in a tracked fixture).
+  const p = repairGatewayUrl('srv.example.ts.net:8444');
+  assert.equal(p.baseUrl, 'https://srv.example.ts.net:8444');
+  assert.equal(p.host, 'srv.example.ts.net');
   assert.equal(p.port, 8444);
   assert.equal(p.scheme, 'https');
   assert.equal(p.explicitPort, true);
