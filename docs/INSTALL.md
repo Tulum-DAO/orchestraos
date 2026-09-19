@@ -206,6 +206,8 @@ runs at image build time, so `doctor` is instant on first open.
 ```bash
 docker build -t orchestraos .
 docker run -it --rm -p 8891:8891 -p 8888:8888 -p 8890:8890 orchestraos
+# NOTE: those -p publishes answer HTTP 000 until you add a relay — the services bind 127.0.0.1
+# inside the container. See "Running inside Docker: the services bind loopback" below.
 # inside:  claude            # log in ONCE — your login, never baked into the image
 #          orchestra doctor  # all required rows OK
 #          orchestra up      # then open http://127.0.0.1:8891 on the laptop
