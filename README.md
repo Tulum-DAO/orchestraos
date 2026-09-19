@@ -31,7 +31,7 @@ OrchestraOS, published by Tulum DAO: an open harness for running a fleet of codi
 - `docs/PROMPTS.md` — copy-paste prompts for the same seven steps, plus the tracks.
 - `docs/UPGRADE.md` — pulling latest `main` without losing a running seat.
 - `docs/COSTS.md` — what a VPS and a CLI plan actually cost, and the zero-key path.
-- `docs/tracks/README.md` — the twelve hackathon tracks, one doc each.
+- `docs/tracks/README.md` — the thirteen hackathon tracks, one doc each.
 - `docs/ARCHITECTURE.md` — the map. Read before touching rotation or approvals.
 - `docs/MEMORY.md` — per-seat memory (index + one-fact files + baton) and the facts store Arturo recalls from; the copy-paste prompt for gate step 7.
 
@@ -41,7 +41,7 @@ Copy `orchestra.example.toml` to `orchestra.toml` and fill in the data directory
 
 ## Hackathon tracks
 
-Twelve tracks, each with its own doc: Problem, Design, files to touch, numbered
+Thirteen tracks, each with its own doc: Problem, Design, files to touch, numbered
 steps, an acceptance test, and a start prompt you can paste straight into your own
 agent. See `docs/tracks/README.md` for the full index. The big ones:
 
@@ -57,6 +57,7 @@ agent. See `docs/tracks/README.md` for the full index. The big ones:
 10. Docs and tutorials.
 11. Autonomous rotation proven on all three runtimes on a clean install.
 12. Gauntlet mode: a critic loop that scores creative work against real references before it reaches you.
+13. Memory: a page that shows what each seat remembers, a budget on the index, and a pruner — the store exists today; nobody can see it.
 
 `good-first-issue` is real and small (see `docs/HACKATHON_ISSUES.md`). Start there
 if you want to land something in an hour. New to the command line entirely? Start
