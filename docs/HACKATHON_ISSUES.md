@@ -165,6 +165,35 @@ more loops / stop. Full design: `docs/tracks/12-gauntlet-mode.md`.
 with a ranked list, second attempt ≥ 8.5 → completion released at loop 2/3; `brutal`
 with loop 1 bar 9.5 fails the same attempt; exhausted loops raise the operator card.
 
+## T13 · Memory: see it, prune it, then teach it to extract
+`labels: track, size:S/M, core, ui, memory`
+
+**Problem.** A seat's memory is `$ORCHESTRA_DIR/memory/<lineage-id>/` (index + one-fact
+files) and nobody looks in it — there is no page. `api/src/routes/memory.ts` (mounted at
+`/api/memory`) reads the wrong stores: the Claude CLI's private auto-memory dir (line 101)
+and a private `OMNI_DIR` layout (lines 82, 196-229) that `orchestra init` never creates; no
+endpoint touches the per-seat dir, nothing in `dashboard/src` calls it, and it has no test.
+Because nobody looks, nothing prunes (the index has no budget and is silently truncated at
+boot once it outgrows the prompt) and nothing extracts (a fact is remembered only if the
+seat writes it the moment it learns it).
+
+**Design.** Leg 1 (S): repoint `memory.ts` at the real store — `GET /api/memory/seats`
+(per-lineage counts, index bytes vs. a `[memory] index_budget_bytes` budget, orphans,
+dangling lines), `/seats/:lineage` (parsed index + frontmatter), `/search` over the real
+dirs — and a `dashboard/src/pages/Memory.tsx` with a seats table (budget bar), a seat
+drawer (index → file body), cross-seat search, and a `memory` doctor row. Leg 2 (S/M):
+`scripts/memory_prune.py` (dry-run default; regenerates the index from the files, moves
+duplicates aside, never deletes) and an explicit over-budget warning in the boot prompt
+instead of silent truncation. Leg 3 (M, stretch): read the seat's own CLI transcript, have
+its own runtime propose candidate one-fact files into `.candidates/`, accept/discard from
+the page — nothing reaches the index without an accept. Full design:
+`docs/tracks/13-memory.md`.
+
+**Acceptance.** Clean install, gate step 7 → `/memory` lists `hello` with 1 file, green
+bar, the fact readable in the drawer. Pad the index past budget → red row, doctor WARN
+naming `hello`, next generation's boot prompt names the prune command. `memory_prune.py
+hello --apply` regenerates the index from the one real file; nothing deleted.
+
 ---
 
 # Good first issues
