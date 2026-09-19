@@ -31,15 +31,20 @@ down:
 status:
 	$(ORCHESTRA) status
 
+# `orchestra init` creates .venv and pip-installs requirements.txt (pytest lives THERE, not
+# in system python). Use the venv when it exists so `make test` works on a bare box after
+# `make init`; fall back to python3 so CI, which installs pytest system-wide, is unchanged.
+PY := $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
+
 test:
-	python3 -m pytest -q orchestra_cli/tests
-	python3 -m pytest -q test_router_prefixes.py test_msg_threading.py --ignore=scripts
-	python3 -m pytest -q services/arturo
-	python3 -m pytest -q scripts --ignore=scripts/lineage_daemon --ignore=scripts/identity_store --ignore=scripts/focus_registry
-	python3 -m pytest -q scripts/lineage_daemon
-	python3 -m pytest -q scripts/identity_store
-	python3 -m pytest -q scripts/focus_registry
-	python3 -m pytest -q contract
+	$(PY) -m pytest -q orchestra_cli/tests
+	$(PY) -m pytest -q test_router_prefixes.py test_msg_threading.py --ignore=scripts
+	$(PY) -m pytest -q services/arturo
+	$(PY) -m pytest -q scripts --ignore=scripts/lineage_daemon --ignore=scripts/identity_store --ignore=scripts/focus_registry
+	$(PY) -m pytest -q scripts/lineage_daemon
+	$(PY) -m pytest -q scripts/identity_store
+	$(PY) -m pytest -q scripts/focus_registry
+	$(PY) -m pytest -q contract
 
 install:
 	mkdir -p $(PREFIX)/bin && ln -sf $(CURDIR)/bin/orchestra $(PREFIX)/bin/orchestra && echo "installed $(PREFIX)/bin/orchestra"
