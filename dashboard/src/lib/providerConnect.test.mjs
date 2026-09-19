@@ -12,7 +12,7 @@
  *   node --experimental-strip-types dashboard/src/lib/providerConnect.test.mjs
  */
 import assert from 'node:assert';
-import { connectModes, defaultMode, connectPlan, reasonText, installCommand, installNote, connectSteps } from './providerConnect.ts';
+import { connectModes, defaultMode, connectPlan, reasonText, installCommand, installNote, connectSteps, signinCommand } from './providerConnect.ts';
 
 const notInstalled = { id: 'gemini', label: 'Gemini', installed: false, authed: false, auth_reason: 'not-installed' };
 const installedLoggedOut = { id: 'claude', label: 'Claude', installed: true, authed: false, auth_reason: 'loggedIn=false' };
@@ -150,6 +150,13 @@ for (const id of ['codex', 'claude', 'gemini']) {
   const cod = connectSteps('codex').join(' ');
   assert.match(cod, /EACCES/);                             // why a bare npm -g fails here
   assert.match(cod, /auth\.json/);
+  // A bare `codex login` opens a callback server on port 1455 of the SERVER and waits for a
+  // browser that is somewhere else. `--device-auth` is a real flag, measured by effect from
+  // `codex login --help` on codex-cli 0.153.4 (the version this install actually carries).
+  // The steps must name it, and must say why.
+  assert.match(cod, /--device-auth/);
+  assert.match(cod, /1455/);
+  assert.match(signinCommand('codex'), /--device-auth/);
   assert.equal(connectSteps('nope').length, 0);            // no invented steps for unknowns
 }
 

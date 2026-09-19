@@ -78,7 +78,10 @@ export function loginHint(rows: RuntimeRow[], providerId?: string): { cli: strin
     return { cli: rcli, hint, greeting: `${hint}\n\nInstall it here, run it once to log in, then close this window and try again.` };
   }
   const cli = requested ? cliOf(requested) : (installed[0] ? cliOf(installed[0]) : 'claude');
-  const loginCmd = cli === 'codex' ? 'codex login' : cli;
+  // --device-auth, never a bare `codex login`: the plain form opens a callback server on
+  // port 1455 of THIS machine and waits for a browser to reach it, which is impossible when
+  // the operator's browser is elsewhere. Device auth prints a code instead.
+  const loginCmd = cli === 'codex' ? 'codex login --device-auth' : cli;
   if (!requested && installed.length === 0) {
     const hint = 'No agent CLI is installed on this machine yet. Install one (e.g. `npm i -g @anthropic-ai/claude-code`), then run it once and log in.';
     return { cli, hint, greeting: `${hint}\n\nInstall one here, run it once to log in, then close this window and try again.` };
