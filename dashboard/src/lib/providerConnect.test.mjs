@@ -12,7 +12,7 @@
  *   node --experimental-strip-types dashboard/src/lib/providerConnect.test.mjs
  */
 import assert from 'node:assert';
-import { connectModes, defaultMode, connectPlan, reasonText, installCommand } from './providerConnect.ts';
+import { connectModes, defaultMode, connectPlan, reasonText, installCommand, installNote } from './providerConnect.ts';
 
 const notInstalled = { id: 'gemini', label: 'Gemini', installed: false, authed: false, auth_reason: 'not-installed' };
 const installedLoggedOut = { id: 'claude', label: 'Claude', installed: true, authed: false, auth_reason: 'loggedIn=false' };
@@ -78,12 +78,18 @@ const connected = { id: 'claude', label: 'Claude', installed: true, authed: true
   assert.match(plan.detail, /browser/i);
 }
 {
-  // A missing CLI now yields a REAL terminal plan carrying the install command, because a
-  // blank machine's whole path runs through that shell.
-  const plan = connectPlan(notInstalled, 'tmux');
+  // A missing CLI yields a REAL terminal plan, because a blank machine's whole path runs
+  // through that shell. It carries an install command ONLY where a real package exists.
+  const codexMissing = { id: 'codex', label: 'Codex', installed: false, authed: false, auth_reason: 'not-installed' };
+  const plan = connectPlan(codexMissing, 'tmux');
   assert.equal(plan.kind, 'login-shell');
   assert.match(plan.detail, /install/i);
   assert.match(plan.install_command, /npm i -g/);
+
+  // gemini has no npm package, so the plan carries NO command rather than a fabricated one.
+  const gem = connectPlan(notInstalled, 'tmux');
+  assert.equal(gem.kind, 'login-shell');
+  assert.equal(gem.install_command, undefined);
 }
 {
   // OAUTH on a missing CLI is still blocked — the browser flow is started BY the CLI.
@@ -104,7 +110,19 @@ const connected = { id: 'claude', label: 'Claude', installed: true, authed: true
 
 // --- the install command is real, per provider -------------------------------------------
 assert.match(installCommand('codex'), /@openai\/codex/);
-assert.match(installCommand('gemini'), /antigravity/);
+// gemini has NO npm package — @google/antigravity-cli 404s on the registry. It must return
+// null and a truthful note, never a fabricated command (the operator ran the invented one).
+assert.equal(installCommand('gemini'), null);
+assert.match(installNote('gemini'), /not on npm/i);
+assert.match(installNote('gemini'), /PATH/);
+assert.equal(installNote('codex'), null);      // it HAS a package, so no note
 assert.match(installCommand('claude'), /@anthropic-ai\/claude-code/);
+// The bare `npm i -g` form FAILED for the operator with EACCES: npm's prefix is /usr and the
+// terminal runs unprivileged. Every install command must target a user-writable prefix.
+for (const id of ['codex', 'claude']) {
+  assert.match(installCommand(id), /--prefix "\$HOME\/\.local"/,
+    `${id} install command must not need root`);
+  assert.doesNotMatch(installCommand(id), /^sudo /, `${id} must not tell a stranger to sudo`);
+}
 
 console.log('providerConnect.test.mjs: all assertions passed');
