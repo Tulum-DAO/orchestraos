@@ -499,8 +499,16 @@ Update every consumer in the same PR (grep the dashboard and the iOS repo for th
 existing data dir upgrades in place (`orchestra upgrade`) with no lost proposals/decisions;
 `/api/system` still answers with the presence field the clients read.
 
-## G20 · Arturo threads are one-way: "New thread" exists, old threads are unreachable
-`labels: arturo, ui, size:M`
+## G20 · Arturo threads are one-way: "New thread" exists, old threads are unreachable — FIXED
+`labels: arturo, ui, size:M, fixed`
+
+**SHIPPED — do not pick this up as open work.** The design below landed before the release.
+On the release tree `api/src/routes/arturo.ts` serves `GET /api/arturo/threads` (line 80) and
+`GET /api/arturo/threads/:id` (line 91), and `dashboard/src/components/arturo/ArturoPill.tsx`
+reads that list, so the thread list and every thread's turns come from the SERVER: "New thread"
+leaves the old one IN the list instead of losing it, the home and the pill read the same list,
+and `localStorage` holds only WHICH thread you were in, never the archive. Verified by effect
+against the release sha, 2026-09-19. The rest of this section is kept as the design record.
 
 The Ask-Arturo pill keeps one conversation and its history, and "New thread" starts a fresh
 one — but the previous thread is then gone from the UI: there is no list, no switcher, no way
