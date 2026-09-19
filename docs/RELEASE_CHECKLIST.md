@@ -44,10 +44,13 @@ R=Tulum-DAO/orchestraos
    ```bash
    TESTED=c33e33d          # the sha the Friday seven-step gate run actually measured
    git -C ~/repos/orchestraos fetch origin
-   git -C ~/repos/orchestraos diff --name-only $TESTED..origin/main | grep -v '^docs/'   # MUST be empty
+   # Documentation = docs/** PLUS root-level *.md (README.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md).
+   git -C ~/repos/orchestraos diff --name-only $TESTED..origin/main | grep -vE '^docs/|^[^/]*\.md$'   # MUST be empty
    ```
-   If that prints anything, **stop** — a non-docs change has landed since the gate and this rule does not
-   cover it. Escalate rather than tagging. If it is empty:
+   If that prints anything, **stop** — a change that is not documentation has landed since the gate and
+   this rule does not cover it. Escalate rather than tagging. It still stops on a single `.py`, `.ts`,
+   `.sh`, `Dockerfile` or CI file — verified by running it against PR #21 (3 files) and PR #23 (6 files),
+   both of which it correctly rejects. If it is empty:
    ```bash
    git -C ~/repos/orchestraos tag -a v0.1.0-hackathon -m "OrchestraOS v0.1.0 — Build-a-thon release (Tulum DAO). Seven-step gate run against $TESTED; tagged at $(git -C ~/repos/orchestraos rev-parse --short origin/main); delta is documentation only, no product change." origin/main
    git -C ~/repos/orchestraos push origin v0.1.0-hackathon
