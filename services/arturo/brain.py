@@ -37,6 +37,22 @@ BRAIN_MODES = ("auto", "api", "runtime")
 DEFAULT_RUNTIME_TIMEOUT_S = 120.0
 STREAM_CHUNK_CHARS = 48
 
+# codex exec never honoured the prose-only tool_protocol_block (measured 2026-09-19: 0/3, and it
+# FABRICATED actions instead of admitting no tool call happened). `codex exec --output-schema`
+# constrains its final response; paired with the SAME prompt block this reliably produces the
+# envelope. OpenAI strict mode requires additionalProperties:false on every object, which makes a
+# free-form `arguments` object illegal — so this schema carries arguments_json (a JSON-encoded
+# STRING) instead, decoded back to the common shape in parse_cli_reply. Claude and gemini never
+# see either file; it is wired in only on the codex branch of runtime_command, only when tools ride
+# the turn (a plain conversational turn must stay prose, not an empty forced envelope).
+#
+# Two variants: the prompt's own "you must call a tool" wording (tool_choice="required") is a
+# REQUEST the model can still ignore — measured 1/3 clean. `tool_calls.minItems: 1` is a
+# STRUCTURAL guarantee the API enforces, not a suggestion — measured 5/5. So tool_choice=="required"
+# gets the minItems schema; every other turn gets the general one that allows an empty tool_calls.
+CODEX_TOOL_SCHEMA = Path(__file__).parent / "codex_tool_schema.json"
+CODEX_TOOL_SCHEMA_REQUIRED = Path(__file__).parent / "codex_tool_schema_required.json"
+
 NULL_REASON = ("No brain configured: set GEMINI_API_KEY (api brain) or log in to one agent CLI "
                "(claude / codex / agy) and restart Arturo. `orchestra doctor` shows which CLIs are "
                "installed and authed; see docs/ARTURO.md.")
@@ -169,9 +185,15 @@ def parse_cli_reply(text: str):
     for tc in env["tool_calls"]:
         if not isinstance(tc, dict) or not tc.get("name"):
             continue
-        calls.append(_tool_call(str(tc["name"]), tc.get("arguments") or {}, tc.get("id")))
+        args = tc.get("arguments")
+        if args is None and "arguments_json" in tc:      # codex --output-schema envelope
+            args = _loads_or_raw(tc.get("arguments_json") or "{}")
+        calls.append(_tool_call(str(tc["name"]), args or {}, tc.get("id")))
     if not calls:
-        return make_response(text, None, "stop")
+        # codex's schema always carries a "text" field for the no-call case; other runtimes
+        # never emit one, so falling back to the raw string preserves today's behaviour for them.
+        fallback = env.get("text")
+        return make_response(fallback if isinstance(fallback, str) else text, None, "stop")
     return make_response(None, calls, "tool_calls")
 
 
@@ -190,7 +212,8 @@ class CommandSpec:
 
 
 def runtime_command(runtime: str, cli: str, system: str, prompt: str, model: str = "",
-                    scratch: Optional[Path] = None) -> CommandSpec:
+                    scratch: Optional[Path] = None, use_schema: bool = False,
+                    require_tool_call: bool = False) -> CommandSpec:
     """One non-interactive, tool-less, session-less invocation per runtime id (the ids are the
     runtime catalog's: claude / gemini / codex; `cli` is that provider's binary)."""
     if runtime == "claude":
@@ -209,8 +232,11 @@ def runtime_command(runtime: str, cli: str, system: str, prompt: str, model: str
         return CommandSpec(argv=argv, stdin=None)
     if runtime == "codex":
         out = Path(tempfile.mkstemp(prefix="arturo-codex-", suffix=".txt", dir=str(scratch) if scratch else None)[1])
-        argv = [cli, "exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only", "--color", "never",
-                "-o", str(out), "-"]
+        argv = [cli, "exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only", "--color", "never"]
+        if use_schema:
+            schema = CODEX_TOOL_SCHEMA_REQUIRED if require_tool_call else CODEX_TOOL_SCHEMA
+            argv += ["--output-schema", str(schema)]
+        argv += ["-o", str(out), "-"]
         if model:
             argv += ["-m", model]
         return CommandSpec(argv=argv, stdin=f"{system}\n\n{prompt}", output_file=out)
@@ -299,7 +325,8 @@ class RuntimeBrain(Brain):
         block = tool_protocol_block(tools, tool_choice)
         if block:
             system = f"{system}\n\n{block}" if system else block
-        spec = runtime_command(self.runtime, self.cli, system, prompt, self._model_flag)
+        spec = runtime_command(self.runtime, self.cli, system, prompt, self._model_flag,
+                               use_schema=bool(block), require_tool_call=(tool_choice == "required"))
         return self._run(spec, timeout or self._timeout)
 
     def complete(self, messages, tools=None, tool_choice=None, max_tokens=1024, temperature=0.7,
