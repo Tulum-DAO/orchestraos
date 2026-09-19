@@ -125,10 +125,12 @@ R=Tulum-DAO/orchestraos
    #    own FQDN, produced by a different code path than `MagicDNSSuffix`; requiring one to contain the
    #    other means a wrong resolution FAILS instead of quietly agreeing with itself.
    SELFDNS=$(tailscale status --json | sed -n 's/.*"DNSName" *: *"\([^"]*\)".*/\1/p' | head -1)
-   case "$SELFDNS" in
-     *"$TAILNET"*) : ;;
-     *) echo "STOP: resolved tailnet name is not present in this machine's own FQDN — do not trust it"; exit 1 ;;
-   esac
+   #    POSITIONAL EQUALITY, NOT CONTAINMENT. A containment test passes for ANY substring of the FQDN —
+   #    including FIELD 1, the hostname. An off-by-one in the extraction then grabs the host instead of
+   #    the tailnet, the check passes, and the tripwire silently collapses to its `srv` half.
+   EXPECT=$(printf '%s' "$SELFDNS" | cut -d. -f2)
+   [ -n "$EXPECT" ] && [ "$TAILNET" = "$EXPECT" ] \
+     || { echo "STOP: resolved tailnet name is not field 2 of this machine's own FQDN — extraction is wrong"; exit 1; }
    TRIPWIRE="srv[0-9]{6,}|$TAILNET"
    #    POSITIVE CONTROL — RUN BEFORE TRUSTING THE ZERO. A zero from a pattern that cannot match is
    #    indistinguishable from a zero from a clean repo. Prove the instrument fires, then believe it.
