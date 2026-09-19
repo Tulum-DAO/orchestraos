@@ -42,7 +42,7 @@ R=Tulum-DAO/orchestraos
    the older sha would ship documentation we already know is wrong.
    **RE-MEASURE IMMEDIATELY BEFORE TAGGING — a reading taken last night is not evidence about now:**
    ```bash
-   TESTED=<sha the gate ran against>
+   TESTED=c33e33d          # the sha the Friday seven-step gate run actually measured
    git -C ~/repos/orchestraos fetch origin
    git -C ~/repos/orchestraos diff --name-only $TESTED..origin/main | grep -v '^docs/'   # MUST be empty
    ```
