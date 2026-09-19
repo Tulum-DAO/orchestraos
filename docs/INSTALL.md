@@ -246,6 +246,18 @@ simplest setup.
 - data: `[data] dir` → `registry.json`, `state/` (sqlite, sessions, gateway token), `logs/`, `queue/`
 - code: the checkout; `ORCHESTRA_ROOT` / `PYTHONPATH` are exported to every child by the supervisor
 
+## Running inside Docker: the services bind loopback
+
+Every service (`gateway`, `api`, `dashboard`, `arturo`) binds `127.0.0.1` by default
+(`orchestra.toml` `[gateway] host`, `dashboard-proxy.js` `ORCHESTRA_DASHBOARD_HOST`). A Docker
+`-p` published port therefore answers **HTTP 000** even on a fully-up container — measured on the
+release image 2026-09-19: inside the container the dashboard answered 200, the published host
+port answered nothing. Until the bind is configurable (post-release), publish through a small
+in-container relay that listens on `0.0.0.0` and forwards to `127.0.0.1:8891`, and point your
+`ssh -L` / browser at the relay's port. A one-file Python relay is in `scripts/build-demo-box.sh`
+of the operator's reference install; any TCP forwarder (`socat TCP-LISTEN:18891,fork,reuseaddr
+TCP:127.0.0.1:8891`) does the same job.
+
 ## Reference install (the operator's own setup: VPS + Mac over Tailscale, ntfy, Telegram, voice)
 
 Not needed for the minimum path. See `orchestra.example.toml` `[machines]`,
