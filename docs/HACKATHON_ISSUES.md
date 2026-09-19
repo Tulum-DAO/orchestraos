@@ -296,6 +296,9 @@ INSTALL — `scripts/registry-update.py <seat> ...` then `./spawn-agent.sh <seat
 registers the seat but seeds no lineage, and rotation refuses it with
 `no authoritative generation ... seed the seat via the identity store (adopt_identity/register)`.
 Found by the docs-only gate run on 2026-09-17 (GATE.md now teaches `orchestra spawn` only).
+A seat commissioned through Arturo home (`POST /api/arturo/text` → its `spawn_agent` tool) takes
+that same legacy path without the operator typing any spawn command, so an Arturo-commissioned
+seat cannot be rotated either.
 
 Fix: make `spawn-agent.sh` (or `registry-update.py`) call the same identity seeding
 `orchestra_cli/seats.py` does when the seat has no lineage yet — idempotent, never inventing a
