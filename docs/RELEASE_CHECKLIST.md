@@ -36,6 +36,22 @@ R=Tulum-DAO/orchestraos
 
 ## T-0 (Saturday, before 11:00)
 
+0a. **MEASURE REFS, NEVER THE WORKING TREE — AND NEVER ASSUME WHICH BRANCH THE SHARED CHECKOUT IS ON.**
+   Every command in this step names an explicit ref (`origin/main`, `$TESTED..$SHA`, `--all`) for a
+   reason: several git commands silently read the WORKING TREE instead, and the shared clone on this host
+   is routinely sitting on someone else's feature branch. Measured eight hours before a flip, the shared
+   checkout was on an open PR's branch, not `main`.
+   • `git apply --check <patch>` tests against the **working tree** — it fails on a correct patch, and
+     passes a wrong one, purely because of what is checked out.
+   • `git grep <pattern>` with no ref reads the **working tree**; `git grep <pattern> origin/main` reads
+     the ref. The two answer different questions and look identical in a terminal.
+   • `git diff A..B` where a branch has been deleted silently compares against the working tree.
+   **If you are unsure, `git rev-parse --abbrev-ref HEAD` first, or work from a fresh `git clone` /
+   `--mirror`.** A control run from a detached mirror costs ten seconds and is the only way to know the
+   number you are reading belongs to the tree you think it does.
+   **DO NOT "fix" the shared checkout by checking out `main`** — another seat may be working in it, and a
+   checkout flips their branch under them.
+
 0. **PRE-FLIP ALL-REFS DISCLOSURE SCAN.** Run this BEFORE making the repo public. It scans the FULL
    COMMIT HISTORY of EVERY BRANCH the flip publishes — not the release sha, not `main`'s tip, not a
    working tree. `git grep` at a clean tip returns zero while the exposure sits one commit back.
