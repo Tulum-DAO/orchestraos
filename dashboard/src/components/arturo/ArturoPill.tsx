@@ -108,6 +108,32 @@ export function ArturoPill() {
     return () => window.removeEventListener('keydown', onKey);
   }, [open]);
 
+  /** Sit ABOVE whatever the page already docks at the bottom.
+   *  The agent session page docks its own composer there — Inject, the inject-mode toggle and
+   *  the two call buttons — and a pill pinned to bottom:20px lands right on top of them
+   *  (measured: 4 controls covered). Measured at runtime rather than keyed to routes, so a
+   *  page that grows a dock later is handled without touching this file. */
+  useEffect(() => {
+    const place = () => {
+      const vh = window.innerHeight;
+      let clear = 0;
+      for (const el of Array.from(document.querySelectorAll<HTMLElement>('div,footer,form,section'))) {
+        if (el.closest('.arturo-pill-panel') || el.classList.contains('arturo-pill')) continue;
+        const cs = getComputedStyle(el);
+        if (cs.position !== 'fixed' && cs.position !== 'sticky') continue;
+        const r = el.getBoundingClientRect();
+        if (r.height === 0 || r.width < window.innerWidth * 0.4) continue;
+        if (vh - r.bottom > 12) continue;           // not docked to the bottom
+        clear = Math.max(clear, Math.round(vh - r.top));
+      }
+      document.documentElement.style.setProperty('--arturo-pill-bottom', clear ? `${clear + 12}px` : '');
+    };
+    place();
+    window.addEventListener('resize', place);
+    const t = window.setInterval(place, 1000);     // docks appear after their data loads
+    return () => { window.removeEventListener('resize', place); window.clearInterval(t); };
+  }, [location.pathname]);
+
   function toggleContextCard() {
     if (ctxOn) dismissContext(convId); else restoreContext(convId);
     setCtxOn(!ctxOn);

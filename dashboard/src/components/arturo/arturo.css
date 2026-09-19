@@ -98,7 +98,9 @@
    previous build (fixed bottom-6 right-6), which sits out of the way of page content and
    of the composer on pages that have one. */
 .arturo-pill{
-  position:fixed; right:16px; left:auto; bottom:calc(20px + env(safe-area-inset-bottom)); z-index:35;
+  position:fixed; right:16px; left:auto; z-index:35;
+  /* --arturo-pill-bottom is set at runtime to clear a page's own bottom dock (see ArturoPill). */
+  bottom:calc(var(--arturo-pill-bottom, 20px) + env(safe-area-inset-bottom));
   display:flex; align-items:center; gap:8px; background:rgba(40,40,42,0.78); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
   border:1px solid rgba(255,255,255,0.10); border-radius:999px; padding:11px 20px 11px 18px; box-shadow:0 8px 24px rgba(0,0,0,0.35); color:#fff; font-size:15px; font-weight:500;
 }
@@ -107,7 +109,7 @@
    page and, being inset:0, swallowed every click on it. The pane is non-modal now. */
 .arturo-pill-panel{
   position:fixed; right:16px; left:auto; width:min(380px, calc(100vw - 32px));
-  bottom:calc(20px + env(safe-area-inset-bottom)); z-index:37;
+  bottom:calc(var(--arturo-pill-bottom, 20px) + env(safe-area-inset-bottom)); z-index:37;
   display:flex; flex-direction:column; max-height:min(60vh, 560px);
   background:#1c1c1c; border:1px solid rgba(255,255,255,0.08); border-radius:22px; padding:10px 12px;
   box-shadow:0 8px 34px rgba(0,0,0,0.55); color:#fff;
