@@ -12,7 +12,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { Mic, Plus, ArrowUp, AudioLines } from 'lucide-react';
+import { Mic, Plus, ArrowUp, AudioLines, Paperclip } from 'lucide-react';
 import '../components/arturo/arturo.css';
 import { BrainModal } from '../components/agent/BrainModal';
 import { ModelSelectorSheet } from '../components/agent/ModelSelectorSheet';
@@ -22,6 +22,7 @@ import { arturoHealth, arturoText, runtimesAvailable, brainLabel, greeting, slug
 import { listThreads, loadThread, type ThreadSummary } from '../lib/arturoThreads';
 import WebTerminal from '../components/WebTerminal';
 import { installCommand } from '../lib/providerConnect';
+import { uploadAttachment, attachmentPreamble, describeAttachment, type Attachment } from '../lib/arturoUpload';
 
 type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[]; pending?: boolean;
   decision?: { options: string[]; onPick: (v: string) => void } };
@@ -77,6 +78,12 @@ export default function ArturoHome() {
   // reachable BEFORE there is a brain to talk to — no chicken-and-egg.
   const [onboardShell, setOnboardShell] = useState<string | null>(null);
   const [shellError, setShellError] = useState<string | null>(null);
+  // Attachments the operator has added but not yet sent. POST /api/uploads already existed
+  // and worked; the + button was simply never wired to it.
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
   const convId = useRef<string>(ls(LS_CONV) || '');
   useEffect(() => { if (!convId.current) { convId.current = newConversationId('web'); lsSet(LS_CONV, convId.current); } }, []);
   useEffect(() => { if (drawer) void listThreads().then(setThreads); }, [drawer]);
@@ -226,12 +233,17 @@ export default function ArturoHome() {
       : text;
     setBusy(true);
     const id = say('', { pending: true });
-    let r = await arturoText(body, convId.current);
+    // The path rides in front of the message: Arturo runs on this machine with tool
+    // access, so a path is openable — a filename alone would be decoration.
+    const pre = attachmentPreamble(attachments);
+    const sent = pre ? `${pre}\n\n${body}` : body;
+    setAttachments([]);
+    let r = await arturoText(sent, convId.current);
     if (!r.ok && isStarting(r)) {          // G15: still booting -> say so, wait for health, retry once
       patch(id, { pending: false, text: STARTING_TEXT });
       const ready = await waitForArturo();
       setHealth(ready);
-      if (ready.ok) { patch(id, { pending: true, text: '' }); r = await arturoText(body, convId.current); }
+      if (ready.ok) { patch(id, { pending: true, text: '' }); r = await arturoText(sent, convId.current); }
     }
     setBusy(false);
     if (!r.ok) {
@@ -318,11 +330,38 @@ export default function ArturoHome() {
       )}
 
       <div className="arturo-composer">
+        <input ref={fileInput} type="file" multiple hidden aria-hidden="true"
+               onChange={async (e) => {
+                 const picked = Array.from(e.target.files || []);
+                 e.target.value = '';                 // re-picking the same file must work
+                 if (picked.length === 0) return;
+                 setUploading(true); setUploadError(null);
+                 for (const f of picked) {
+                   const r = await uploadAttachment(f);
+                   if (r.ok) setAttachments((prev) => [...prev, { name: r.name, path: r.path, size: r.size }]);
+                   else setUploadError(r.error);     // refusals are shown, never swallowed
+                 }
+                 setUploading(false);
+               }} />
+        {(attachments.length > 0 || uploading || uploadError) && (
+          <div className="arturo-attachments">
+            {attachments.map((a, i) => (
+              <span key={i} className="attach-chip">
+                <Paperclip size={12} /> {describeAttachment(a)}
+                <button aria-label={`Remove ${a.name}`}
+                        onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}>×</button>
+              </span>
+            ))}
+            {uploading && <span className="attach-note">Uploading…</span>}
+            {uploadError && <span className="attach-error">{uploadError}</span>}
+          </div>
+        )}
         <textarea ref={taRef} rows={1} value={draft} placeholder={`Ask ${name ? 'Arturo' : 'Arturo'}`}
           onChange={(e) => { setDraft(e.target.value); grow(); }} onKeyDown={onKey} aria-label="Message Arturo" />
         <div className="ctrl-row">
           <div className="cluster">
-            <button className="circle-btn" aria-label="Attach" title="Attachments come with the next build"><Plus size={18} /></button>
+            <button className="circle-btn" aria-label="Attach a file" title="Attach a file"
+                    onClick={() => fileInput.current?.click()} disabled={uploading}><Plus size={18} /></button>
             <button className="model-chip" onClick={() => setModelOpen(true)}><b>{model}</b>{eff && <span className="eff">{eff}</span>}</button>
           </div>
           <div className="cluster">
