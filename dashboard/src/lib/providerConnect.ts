@@ -51,7 +51,7 @@ export const cliFor = (id: string): string => CLI_FOR_ID[id] || id;
  *  others sign in from inside the running CLI. */
 export function signinCommand(id: string): string {
   const cli = cliFor(id);
-  if (id === 'codex') return 'codex login';
+  if (id === 'codex') return 'codex login --device-auth';
   if (id === 'claude') return 'claude   (then type /login)';
   return `${cli}   (then follow its sign-in prompt)`;
 }
@@ -102,8 +102,9 @@ export function connectSteps(id: string): string[] {
   if (id === 'codex') {
     return [
       'The install goes to ~/.local/bin, which is already on PATH — no sudo, and no root needed. `npm i -g` on its own fails here with EACCES because npm\'s global folder belongs to root and this terminal is not root.',
-      'Then run `codex login` here to sign in.',
-      'Signing in writes ~/.codex/auth.json, which is what this sheet checks. Reopen the sheet once it exists.',
+      'Then sign in with `codex login --device-auth`. Use that flag, not a bare `codex login`: the plain form starts a callback server on port 1455 of THIS machine and waits for your browser to hit it — which cannot happen when your browser is somewhere else. Device auth prints a short code instead and the CLI and browser talk through OpenAI, so no port has to be reachable.',
+      'Open the URL it prints, enter the code, and approve. The code is good for about 15 minutes.',
+      'Signing in writes ~/.codex/auth.json, which is exactly what this sheet checks. Reopen the sheet, or hit "check again", once it exists.',
     ];
   }
   if (id === 'claude') {
