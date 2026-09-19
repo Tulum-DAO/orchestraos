@@ -28,8 +28,11 @@ Three independent pieces of hardening, each small enough to land separately:
    `orchestra doctor` today knows CLIs, ports, config keys, builds, the rotation
    beat, foreign tmux sessions, and (since Tier 0 item 6) a
    `plugin:telegram` row — this track does not re-add that one; it adds
-   `notify:ntfy` (reachability when `NTFY_BASE` is set) for Track 8's push work
-   and `plugin:whatsapp` once Track 6 ships that plugin.
+   `notify:push` (the active push backend from `[notify] push_backend` and whether
+   its credentials are present) for Track 8's push work and `plugin:whatsapp` once
+   Track 6 ships that plugin. Do NOT add an ntfy-reachability row: ntfy is legacy,
+   is being replaced by Track 8, and a doctor row for it would tell a new installer
+   to stand up a server they do not need.
 2. **`make image` / machine-image step.** `docs/INSTALL.md`'s "Machine image (VPS
    snapshot)" section documents the manual recipe (run the Dockerfile's `RUN` steps
    in order on a fresh VPS, leave the CLI logged out, snapshot). This piece turns
@@ -53,8 +56,9 @@ without the sandbox script will strand sessions you can't tear down.
 
 ## Files you will touch
 
-- `orchestra_cli/doctor.py` — new rows: `notify:ntfy` (reachability when
-  `NTFY_BASE` is set, Track 8), `plugin:whatsapp` once Track 6 ships that plugin.
+- `orchestra_cli/doctor.py` — new rows: `notify:push` (the active backend per
+  `[notify] push_backend` + whether its config/credentials are present, Track 8),
+  `plugin:whatsapp` once Track 6 ships that plugin.
   `plugin:telegram` already exists (Tier 0 item 6) — do not duplicate it.
 - `Makefile` — new `image` target (or documented equivalent script under
   `scripts/`).

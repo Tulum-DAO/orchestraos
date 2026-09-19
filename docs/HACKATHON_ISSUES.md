@@ -262,8 +262,10 @@ from the checkout (`ORCHESTRA_ROOT` / `__file__`; see `cron_beat.code_path`,
 `labels: good-first-issue, size:S, install`
 
 Doctor knows CLIs, ports, config keys, builds, the rotation beat and foreign tmux sessions.
-Add rows for the notify channel (`[notify] channel` + its credentials present), the ntfy
-server reachability when `NTFY_BASE` is set, and enabled plugins (T6).
+Add rows for the notify channel (`[notify] channel` + its credentials present), the active
+push backend (`[notify] push_backend` + its credentials, T8), and enabled plugins (T6). Not
+ntfy reachability — ntfy is legacy and T8 replaces it; a doctor row for it would point a new
+installer at a server they do not need.
 
 **Acceptance.** Each row OK / MISSING / INFO with a one-line remedy; tests in
 `orchestra_cli/tests/test_doctor.py` with fake probes.
