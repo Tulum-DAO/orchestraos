@@ -11,7 +11,8 @@
  * reason was effectively unreachable. Here it is stated in words, on the surface.
  */
 import { useState } from 'react';
-import { X, Terminal, Globe } from 'lucide-react';
+import { X, Terminal, Globe, Copy } from 'lucide-react';
+import WebTerminal from '../WebTerminal';
 import {
   connectModes, defaultMode, connectPlan, reasonText, cliFor,
   type ProviderLike, type ModeId,
@@ -95,16 +96,32 @@ export function ProviderConnectModal({ provider, onClose, startLoginShell = real
             );
           }
           if (mode === 'tmux') {
+            const cmd = plan.kind === 'login-shell' ? plan.install_command : undefined;
             return (
               <div className="text-xs text-foreground/70 leading-relaxed flex flex-col gap-2" data-testid="mode-tmux">
                 <p>{m.blurb}</p>
-                {opened ? (
-                  <p className="text-foreground/80">Terminal <code>{opened}</code> is open — sign in there, then reopen this sheet.</p>
-                ) : (
+                {/* On a blank machine this command is the whole job, so it is offered where
+                    it is RUN — one tap to copy, then paste into the terminal below. */}
+                {cmd && (
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 px-2 py-1.5 rounded bg-muted text-foreground/90 overflow-x-auto">{cmd}</code>
+                    <button aria-label="Copy install command" title="Copy"
+                            onClick={() => { void navigator.clipboard?.writeText(cmd); }}
+                            className="p-1.5 rounded border border-border hover:bg-muted"><Copy size={13} /></button>
+                  </div>
+                )}
+                {!opened && (
                   <button onClick={() => void openTerminal()} disabled={busy}
                           className="self-start px-3 py-1.5 rounded-lg border border-border text-foreground hover:bg-muted disabled:opacity-50">
-                    {busy ? 'Opening…' : 'Open a terminal'}
+                    {busy ? 'Opening…' : cmd ? 'Open a terminal here' : 'Open a terminal'}
                   </button>
+                )}
+                {/* The terminal lives INSIDE the modal: a blank machine installs the CLI and
+                    signs in without ever leaving this window. */}
+                {opened && (
+                  <div className="rounded-lg overflow-hidden border border-border" data-testid="connect-terminal">
+                    <WebTerminal session={opened} machine="vps" />
+                  </div>
                 )}
                 {error && <p className="text-red-400/90">Could not open a terminal: {error}</p>}
                 <p className="text-foreground/45">{plan.kind === 'login-shell' ? plan.detail : ''}</p>

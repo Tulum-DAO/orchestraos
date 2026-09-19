@@ -12,7 +12,7 @@
  *   node --experimental-strip-types dashboard/src/lib/providerConnect.test.mjs
  */
 import assert from 'node:assert';
-import { connectModes, defaultMode, connectPlan, reasonText } from './providerConnect.ts';
+import { connectModes, defaultMode, connectPlan, reasonText, installCommand } from './providerConnect.ts';
 
 const notInstalled = { id: 'gemini', label: 'Gemini', installed: false, authed: false, auth_reason: 'not-installed' };
 const installedLoggedOut = { id: 'claude', label: 'Claude', installed: true, authed: false, auth_reason: 'loggedIn=false' };
@@ -21,17 +21,19 @@ const connected = { id: 'claude', label: 'Claude', installed: true, authed: true
 
 // --- which modes are available -------------------------------------------------------------
 {
-  // CLI absent: neither way can work yet. Both modes are listed (the toggle still renders,
-  // so the operator sees what the two options ARE) but both are unavailable, with a reason.
+  // CLI absent. The operator found the dead end this replaces: with TMUX marked
+  // unavailable, a blank machine could not progress from either tab — and the terminal is
+  // precisely where you INSTALL the CLI. So TMUX is ALWAYS available; refusing to open a
+  // shell because the CLI is missing was exactly backwards.
   const m = connectModes(notInstalled);
   assert.deepEqual(m.map((x) => x.id), ['tmux', 'oauth']);
-  assert.equal(m.every((x) => x.available === false), true);
-  assert.match(m[0].unavailable_reason, /not installed/i);
-  assert.match(m[1].unavailable_reason, /not installed/i);
-  // and the two reasons DIFFER: identical copy on both tabs makes the toggle look broken
-  assert.notEqual(m[0].unavailable_reason, m[1].unavailable_reason);
-  assert.match(m[0].unavailable_reason, /terminal/i);
-  assert.match(m[1].unavailable_reason, /browser/i);
+  assert.equal(m.find((x) => x.id === 'tmux').available, true);
+  assert.equal(m.find((x) => x.id === 'oauth').available, false);
+  assert.match(m.find((x) => x.id === 'oauth').unavailable_reason, /not installed/i);
+  // and OAUTH points at the tab that can fix it, rather than dead-ending
+  assert.match(m.find((x) => x.id === 'oauth').unavailable_reason, /tmux/i);
+  // the terminal tab says it is for INSTALLING, not just signing in
+  assert.match(m.find((x) => x.id === 'tmux').blurb, /install/i);
 }
 {
   // CLI present but logged out: BOTH ways genuinely work — the terminal walks the login,
@@ -76,10 +78,17 @@ const connected = { id: 'claude', label: 'Claude', installed: true, authed: true
   assert.match(plan.detail, /browser/i);
 }
 {
-  // A mode that is not available yields a plan that DOES NOTHING but says why.
+  // A missing CLI now yields a REAL terminal plan carrying the install command, because a
+  // blank machine's whole path runs through that shell.
   const plan = connectPlan(notInstalled, 'tmux');
-  assert.equal(plan.kind, 'blocked');
+  assert.equal(plan.kind, 'login-shell');
   assert.match(plan.detail, /install/i);
+  assert.match(plan.install_command, /npm i -g/);
+}
+{
+  // OAUTH on a missing CLI is still blocked — the browser flow is started BY the CLI.
+  const plan = connectPlan(notInstalled, 'oauth');
+  assert.equal(plan.kind, 'blocked');
 }
 
 // --- the reason line: this is the iOS fix ----------------------------------------------------
@@ -92,5 +101,10 @@ const connected = { id: 'claude', label: 'Claude', installed: true, authed: true
   // a provider with no reason string still gets an honest sentence, never a blank
   assert.notEqual(reasonText({ id: 'x', label: 'X', installed: true, authed: false }), '');
 }
+
+// --- the install command is real, per provider -------------------------------------------
+assert.match(installCommand('codex'), /@openai\/codex/);
+assert.match(installCommand('gemini'), /antigravity/);
+assert.match(installCommand('claude'), /@anthropic-ai\/claude-code/);
 
 console.log('providerConnect.test.mjs: all assertions passed');
