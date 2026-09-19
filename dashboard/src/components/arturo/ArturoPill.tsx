@@ -18,7 +18,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { Mic, ArrowUp, X, History, Focus } from 'lucide-react';
 import './arturo.css';
-import { arturoText, newConversationId, contextFromLocation } from '../../lib/arturo';
+import { arturoText, newConversationId, contextFromLocation, getArturoFocus, subscribeArturoFocus } from '../../lib/arturo';
 import {
   listThreads, loadThread, contextCardLabel, isContextDismissed, dismissContext,
   restoreContext, contextForTurn, type ThreadSummary,
@@ -55,7 +55,15 @@ export function ArturoPill() {
   const [ctxOn, setCtxOn] = useState(true);
   const ta = useRef<HTMLTextAreaElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
-  const ctx = contextFromLocation(location.pathname, params as Record<string, string | undefined>, location.search);
+  // Chat/dev mode opens an agent as an overlay WITHOUT changing the URL, so the route says
+  // "agents" and not which one. When the overlay publishes a focus, it wins over the route —
+  // that is what makes "what is this agent doing" answerable while you sit in its session.
+  const [focus, setFocus] = useState(getArturoFocus);
+  useEffect(() => subscribeArturoFocus(() => setFocus(getArturoFocus())), []);
+  const routeCtx = contextFromLocation(location.pathname, params as Record<string, string | undefined>, location.search);
+  const ctx = focus
+    ? { ...routeCtx, entityKind: focus.kind, entityId: focus.id }
+    : routeCtx;
 
   /** Pull this thread's turns from the server, so reopening the pill resumes it exactly. */
   const resume = useCallback(async (id: string) => {
@@ -123,6 +131,10 @@ export function ArturoPill() {
         if (cs.position !== 'fixed' && cs.position !== 'sticky') continue;
         const r = el.getBoundingClientRect();
         if (r.height === 0 || r.width < window.innerWidth * 0.4) continue;
+        // A DOCK is a strip. A full-screen overlay (the focused-agent view is fixed inset-0)
+        // is not, and treating it as one computed a clearance of the whole viewport and threw
+        // the pill off the top of the screen entirely.
+        if (r.height > vh * 0.45) continue;
         if (vh - r.bottom > 12) continue;           // not docked to the bottom
         clear = Math.max(clear, Math.round(vh - r.top));
       }
