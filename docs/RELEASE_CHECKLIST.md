@@ -125,10 +125,12 @@ R=Tulum-DAO/orchestraos
    #    own FQDN, produced by a different code path than `MagicDNSSuffix`; requiring one to contain the
    #    other means a wrong resolution FAILS instead of quietly agreeing with itself.
    SELFDNS=$(tailscale status --json | sed -n 's/.*"DNSName" *: *"\([^"]*\)".*/\1/p' | head -1)
-   case "$SELFDNS" in
-     *"$TAILNET"*) : ;;
-     *) echo "STOP: resolved tailnet name is not present in this machine's own FQDN — do not trust it"; exit 1 ;;
-   esac
+   #    POSITIONAL EQUALITY, NOT CONTAINMENT. A containment test passes for ANY substring of the FQDN —
+   #    including FIELD 1, the hostname. An off-by-one in the extraction then grabs the host instead of
+   #    the tailnet, the check passes, and the tripwire silently collapses to its `srv` half.
+   EXPECT=$(printf '%s' "$SELFDNS" | cut -d. -f2)
+   [ -n "$EXPECT" ] && [ "$TAILNET" = "$EXPECT" ] \
+     || { echo "STOP: resolved tailnet name is not field 2 of this machine's own FQDN — extraction is wrong"; exit 1; }
    TRIPWIRE="srv[0-9]{6,}|$TAILNET"
    #    POSITIVE CONTROL — RUN BEFORE TRUSTING THE ZERO. A zero from a pattern that cannot match is
    #    indistinguishable from a zero from a clean repo. Prove the instrument fires, then believe it.
@@ -141,6 +143,14 @@ R=Tulum-DAO/orchestraos
    #    match the SCAN pattern and this checklist would trip its own step (it did, while being written).
    printf 'srv%s.%s.%s\n' 1234567 "$TAILNET" 'ts.net' | grep -qE "$TRIPWIRE" \
      || { echo "STOP: tripwire did not fire on its own positive control — the pattern is broken, not the repo"; exit 1; }
+   #    CONTROL EACH HALF SEPARATELY. The whole-pattern control above passes if EITHER half matches, so a
+   #    broken tailnet half hides behind a working `srv` half — the same one-signal-two-meanings defect as
+   #    an exit code that means MISSING or FAIL. Assert both, against live output neither half built:
+   TS_OUT=$(tailscale status --json)
+   printf '%s' "$TS_OUT" | grep -qE 'srv[0-9]{6,}' \
+     || { echo "STOP: the srv half did not fire against live tailscale output"; exit 1; }
+   printf '%s' "$TS_OUT" | grep -qF "$TAILNET" \
+     || { echo "STOP: the tailnet half did not fire against live tailscale output — extraction is wrong"; exit 1; }
    #    Corroboration while the ref still exists (optional, and it WILL disappear one day):
    #      git log --all -S"$TRIPWIRE" --pickaxe-regex --oneline   # must list the known-bad commit
    #    EXPECTED, once the control has fired: ZERO hits on every ref. Any hit at all -> STOP.
