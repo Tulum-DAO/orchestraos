@@ -4,7 +4,7 @@
 
 
 Written for the Tulum Build-a-thon, Sat 2026-09-19. Same rules as
-doc 01: every claim names the file that proves it or the effect observed, with
+deck 1: every claim names the file that proves it or the effect observed, with
 a date. Unverified claims are marked [UNVERIFIED]. Do not soften.
 
 ## The one-sentence version

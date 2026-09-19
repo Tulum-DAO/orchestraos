@@ -4,7 +4,7 @@
 
 
 Written for the Tulum Build-a-thon, Sat 2026-09-19. Same rules as deck 1.
-as doc 01. Lead with the failure the operator hit himself on 2026-09-19.
+Lead with the failure the operator hit himself on 2026-09-19.
 
 ## The one-sentence version
 Every surface that says what an agent is doing must agree, and today they do
