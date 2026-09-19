@@ -12,7 +12,7 @@
  *   node --experimental-strip-types dashboard/src/lib/providerConnect.test.mjs
  */
 import assert from 'node:assert';
-import { connectModes, defaultMode, connectPlan, reasonText, installCommand, installNote } from './providerConnect.ts';
+import { connectModes, defaultMode, connectPlan, reasonText, installCommand, installNote, connectSteps } from './providerConnect.ts';
 
 const notInstalled = { id: 'gemini', label: 'Gemini', installed: false, authed: false, auth_reason: 'not-installed' };
 const installedLoggedOut = { id: 'claude', label: 'Claude', installed: true, authed: false, auth_reason: 'loggedIn=false' };
@@ -86,10 +86,12 @@ const connected = { id: 'claude', label: 'Claude', installed: true, authed: true
   assert.match(plan.detail, /install/i);
   assert.match(plan.install_command, /npm i -g/);
 
-  // gemini has no npm package, so the plan carries NO command rather than a fabricated one.
+  // gemini has no npm package but DOES have a real installer, so the plan carries that —
+  // never the fabricated npm name, and never nothing when something true exists.
   const gem = connectPlan(notInstalled, 'tmux');
   assert.equal(gem.kind, 'login-shell');
-  assert.equal(gem.install_command, undefined);
+  assert.match(gem.install_command, /antigravity\.google\/cli\/install\.sh/);
+  assert.doesNotMatch(gem.install_command, /npm/);
 }
 {
   // OAUTH on a missing CLI is still blocked — the browser flow is started BY the CLI.
@@ -112,10 +114,13 @@ const connected = { id: 'claude', label: 'Claude', installed: true, authed: true
 assert.match(installCommand('codex'), /@openai\/codex/);
 // gemini has NO npm package — @google/antigravity-cli 404s on the registry. It must return
 // null and a truthful note, never a fabricated command (the operator ran the invented one).
-assert.equal(installCommand('gemini'), null);
-assert.match(installNote('gemini'), /not on npm/i);
-assert.match(installNote('gemini'), /PATH/);
-assert.equal(installNote('codex'), null);      // it HAS a package, so no note
+// gemini is NOT an npm package (@google/antigravity-cli 404s — I invented that name and the
+// operator ran it). It has a REAL installer, verified by running it in a clean container:
+// exit 0, binary at ~/.local/bin/agy, and the probe then reported gemini installed=true.
+assert.match(installCommand('gemini'), /antigravity\.google\/cli\/install\.sh/);
+assert.doesNotMatch(installCommand('gemini'), /npm/);
+assert.equal(installNote('gemini'), null);     // it has a real command, so no fallback note
+assert.equal(installNote('codex'), null);
 assert.match(installCommand('claude'), /@anthropic-ai\/claude-code/);
 // The bare `npm i -g` form FAILED for the operator with EACCES: npm's prefix is /usr and the
 // terminal runs unprivileged. Every install command must target a user-writable prefix.
@@ -123,6 +128,29 @@ for (const id of ['codex', 'claude']) {
   assert.match(installCommand(id), /--prefix "\$HOME\/\.local"/,
     `${id} install command must not need root`);
   assert.doesNotMatch(installCommand(id), /^sudo /, `${id} must not tell a stranger to sudo`);
+}
+
+// --- every install command must leave the shell ABLE TO RUN what it just installed -------
+// The operator installed agy and then got "agy: command not found" in the same pane: the
+// tmux session is reused, so it predated the install and its PATH was stale. A command that
+// installs a binary the next line cannot run is not a working instruction.
+for (const id of ['codex', 'claude', 'gemini']) {
+  assert.match(installCommand(id), /exec bash -l$/,
+    `${id}: install command must reload the shell so PATH picks up the new binary`);
+}
+
+// --- the steps carry what was LEARNED BY RUNNING IT, not generic advice ------------------
+{
+  const gem = connectSteps('gemini').join(' ');
+  assert.match(gem, /~\/\.local\/bin/);                  // where the binary lands
+  assert.match(gem, /command not found/);                  // the stale-PATH trap he hit
+  assert.match(gem, /self-update/);                        // already-installed case
+  assert.match(gem, /no browser/);                         // server sign-in reality
+  assert.match(gem, /antigravity-oauth-token/);            // the file the probe watches
+  const cod = connectSteps('codex').join(' ');
+  assert.match(cod, /EACCES/);                             // why a bare npm -g fails here
+  assert.match(cod, /auth\.json/);
+  assert.equal(connectSteps('nope').length, 0);            // no invented steps for unknowns
 }
 
 console.log('providerConnect.test.mjs: all assertions passed');

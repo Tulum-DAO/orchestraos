@@ -26,6 +26,7 @@ import transitRouter from './routes/transit.js';
 import projectsRouter from './routes/projects.js';
 import authRouter from './routes/auth.js';
 import uploadsRouter from './routes/uploads.js';
+import paneUrlRouter from './routes/pane-url.js';
 import adaptiveRouter from './routes/adaptive.js';
 import messagesRouter from './routes/messages.js';
 import machinesRouter from './routes/machines.js';
@@ -120,6 +121,8 @@ app.use('/api/transit', transitRouter);
 app.use('/api/projects', projectsRouter);
 app.use('/api/system/vps-auth', authRouter);
 app.use('/api/uploads', uploadsRouter);
+// G21: recover a hard-wrapped sign-in URL from a terminal pane so the UI can make it clickable.
+app.use('/api/agents', paneUrlRouter);
 app.use('/api/adaptive', adaptiveRouter);
 app.use('/api/messages', messagesRouter);
 app.use('/api/machines', machinesRouter);
