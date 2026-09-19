@@ -39,7 +39,7 @@ export interface ConnectMode {
 }
 
 export type ConnectPlan =
-  | { kind: 'login-shell'; provider: string; endpoint: string; detail: string }
+  | { kind: 'login-shell'; provider: string; endpoint: string; detail: string; install_command?: string }
   | { kind: 'browser-signin'; provider: string; command: string; detail: string }
   | { kind: 'blocked'; provider: string; detail: string };
 
@@ -56,6 +56,15 @@ export function signinCommand(id: string): string {
   return `${cli}   (then follow its sign-in prompt)`;
 }
 
+/** How you actually get this CLI onto a blank machine. Shown IN the terminal tab so the
+ *  person can paste it where it runs, rather than being told to go elsewhere. */
+export function installCommand(id: string): string {
+  if (id === 'claude') return 'npm i -g @anthropic-ai/claude-code';
+  if (id === 'codex') return 'npm i -g @openai/codex';
+  if (id === 'gemini') return 'npm i -g @google/antigravity-cli';
+  return `# install the ${id} CLI, then run it once to sign in`;
+}
+
 export function installHint(id: string): string {
   const cli = cliFor(id);
   return `\`${cli}\` is not installed on this machine.`;
@@ -66,15 +75,19 @@ export function connectModes(p: ProviderLike): ConnectMode[] {
   const missing = !p.installed;
   // Mode-specific even when BLOCKED: if both tabs said the same sentence the toggle would
   // look broken, and the operator would have no way to tell what he is choosing between.
-  const tmuxBlocked = `${installHint(p.id)} Install it, then come back here and this tab opens a terminal to sign in.`;
-  const oauthBlocked = `${installHint(p.id)} The browser sign-in is started BY that CLI, so it has to exist first.`;
+  const oauthBlocked = `${installHint(p.id)} The browser sign-in is started BY that CLI, so it has to exist first — use the TMUX tab to install it.`;
   return [
     {
       id: 'tmux',
       label: 'TMUX',
-      blurb: `Open a terminal here and run \`${cli}\` — you sign in inside it and watch it happen.`,
-      available: !missing,
-      unavailable_reason: missing ? tmuxBlocked : undefined,
+      blurb: missing
+        ? `Open a terminal here and install \`${cli}\`, then run it to sign in — all without leaving this window.`
+        : `Open a terminal here and run \`${cli}\` — you sign in inside it and watch it happen.`,
+      // ALWAYS available: on a blank machine the terminal is where you INSTALL the CLI,
+      // so refusing to open one because the CLI is absent is exactly backwards — it made
+      // the tile a dead end for the only person who needed it most.
+      available: true,
+      unavailable_reason: undefined,
     },
     {
       id: 'oauth',
@@ -103,7 +116,10 @@ export function connectPlan(p: ProviderLike, mode: ModeId): ConnectPlan {
       kind: 'login-shell',
       provider: p.id,
       endpoint: '/api/agents/login-shell',
-      detail: `Opens a terminal running \`${cliFor(p.id)}\` so you can sign in here.`,
+      detail: p.installed
+        ? `Opens a terminal running \`${cliFor(p.id)}\` so you can sign in here.`
+        : `Opens a terminal on this machine. Install \`${cliFor(p.id)}\` in it, then run it to sign in.`,
+      install_command: p.installed ? undefined : installCommand(p.id),
     };
   }
   return {
