@@ -17,31 +17,41 @@ The first public release of OrchestraOS, published by Tulum DAO for the Build-a-
 
 ## Release gate: 5 of 7
 
-The seven-step gate (`docs/GATE.md`) was run against this release from a fresh container, in demo
-order. Five steps completed as designed. Two did not, for unrelated reasons, and neither is a defect
-in what you are installing.
+The seven-step gate (`docs/GATE.md`) was run end to end against this release. The commit it ran against
+and the commit tagged here differ only in documentation — no product code changed between them. Five
+steps passed. Two did not, for unrelated reasons, and **neither is a defect in what you are
+installing** — one of them is the system refusing to do something dangerous.
 
-**Steps 1, 2, 4 and 5 passed clean** — install and `orchestra doctor`, an always-on agent spawned and
-answering in its terminal, two seats exchanging a message visible in both inboxes, and an approval card
-answered from the dashboard.
+**Steps 1, 2, 4, 5 — install and doctor, spawn an agent, agent-to-agent mail, a decision card that
+resumes the agent — PASSED, clean.** A stranger can install this and run it: `doctor` exited 0, every
+process came up, the dashboard served.
 
-**Step 7 — write a fact, restart, agent recalls it — PASSED VIA THE RESTART BRANCH** of GATE.md's
-"restart or rotate". The rotate branch was unavailable because step 6 refused, so recall was proven
-across a real kill-and-respawn: the agent came back and answered from its memory file. It is **not**
-evidence of recall across a lineage rotation — only the restart path was exercised.
+**Step 3 — push notification to a phone — was RUN AND UNMET. It was not skipped.** The runner paused
+the notification router, opened the documented window and sent the ping. Nothing arrived, for two
+independent reasons, and neither is the notification path's fault. First, the step depends on a person
+being reachable and they were not. Second — and this is the one worth your attention if you are
+reproducing it — **the documented five-minute paused-router window is not performable as written on a
+host that runs the service watchdog**, because the watchdog restarts the router within about two
+minutes of it being stopped. The path was therefore never exercised, so we are not claiming it works
+and we are not claiming it is broken. We know nothing about it either way, which is why it is reported
+as unmet rather than passed or failed.
 
-**Step 6 — manual rotation — FAILED, and the failure is the system refusing to fabricate state.**
-`orchestra rotate` was asked to rotate a seat that had no authoritative generation in the identity
-store. It refused, with *"A rotation must not invent lineage numbers"*, named what was wrong and how to
-fix it, and did not corrupt a lineage, invent one, or half-rotate the seat. The underlying gap is the
-known issue `G9` — note in particular that a seat commissioned through Arturo takes that same legacy
-registration path.
+**Step 6 — rotate a seat — FAILED, and the failure is the system refusing to fabricate state.**
+`orchestra rotate` was asked to rotate an agent that had been registered without identity-store
+lineage. It refused, with: *"A rotation must not invent lineage numbers."* It did not corrupt a
+lineage, invent one, or half-rotate the agent — it stopped, said exactly what was wrong, and told the
+operator how to fix it. We would rather ship that than a rotation that guesses.
+Two things behind it, both known and both deliberately deferred to after this release:
+the underlying lineage gap is issue **G9**; and separately, **an agent commissioned through Arturo's
+own `spawn_agent` tool currently takes an older registration path that never records lineage**, so any
+agent created that way cannot be rotated until it is registered properly. If you spawn from the CLI
+you will not hit this.
 
-**Step 3 — phone connected, agent answers from Telegram — NOT COMPLETED**, for two independent causes,
-neither of them the notification path's fault. The person the step depends on was not reachable; and
-the five-minute paused-router window the step documents is not performable on the host it ran on, where
-a service watchdog restarts the router within two minutes of any stop. The path was never exercised, so
-this release makes no claim about it either way.
+**Step 7 — memory survives — PASSED VIA RESTART, not via rotation.** Because step 6's rotation
+refused, recall was proven by killing an agent and respawning it: its memory came back. What was
+**not** demonstrated is recall across a lineage rotation. Those are two different paths and only the
+first was exercised. If you hear "they rotated an agent and its memory survived" — that is the
+stronger claim, and it is not the one this run supports.
 
 ## Start here
 
