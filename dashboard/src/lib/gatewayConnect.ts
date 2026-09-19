@@ -67,7 +67,8 @@ export function repairGatewayUrl(raw: string): ParsedGateway | null {
 export type ConnectOutcome =
   | 'CANT_FIND' // no answer, host cannot be reached (default for opaque browser failure)
   | 'NO_ANSWER_ON_PORT' // host reached but the port is refused (best-effort from the web)
-  | 'NOT_A_GATEWAY' // answered, but /gateway/identity is not the frozen shape
+  | 'NOT_A_GATEWAY' // answered, but neither the frozen identity NOR a legacy OrchestraOS /health
+  | 'PRE_HANDSHAKE' // a REAL OrchestraOS gateway whose build predates the handshake (identity 404 + legacy /health)
   | 'BAD_TOKEN' // identity ok, capabilities returned 401
   | 'CONNECTED'; // identity ok + capabilities ok
 
@@ -83,6 +84,15 @@ export function isIdentityShape(body: unknown): boolean {
   const b = body as Record<string, unknown>;
   // protocol is an INTEGER, never a bool (typeof true === 'boolean', so the number check excludes it).
   return b.service === 'orchestraos-gateway' && typeof b.protocol === 'number';
+}
+
+// The legacy /health shape ({ok, pending, ...}) — the fingerprint of a REAL OrchestraOS gateway
+// whose build predates the handshake. Used to tell a pre-handshake gateway (sentence 5) from a
+// server that simply isn't a gateway (sentence 3). Heuristic, stated as such: `ok` present +
+// no gateway identity. (devex-review FINAL msg_8073f7ec: identity 404 AND legacy /health.)
+export function isLegacyHealth(body: unknown): boolean {
+  if (!body || typeof body !== 'object') return false;
+  return 'ok' in (body as Record<string, unknown>);
 }
 
 export function classifyProbe(result: ProbeResult, parsed: ParsedGateway): ConnectOutcome {
@@ -143,13 +153,15 @@ export async function probeSameOriginSession(
 export function messageFor(outcome: ConnectOutcome, p: ParsedGateway, protocol = 1): string {
   switch (outcome) {
     case 'CANT_FIND':
-      return `Can't find ${p.host}. Check the spelling — and if that's a tailnet name, make sure this phone is on the same tailnet.`;
+      return `Can't find ${p.host}. Check the spelling — and if that's a tailnet name, make sure this device is on the same tailnet.`;
     case 'NO_ANSWER_ON_PORT':
       return `Found ${p.host}, but nothing is answering on port ${p.port}. Is \`orchestra up\` running on that machine?`;
     case 'NOT_A_GATEWAY':
       return `Something is running at ${p.host}:${p.port}, but it isn't an OrchestraOS gateway. Check the port — the gateway is usually 8890, and 8891 is the dashboard.`;
+    case 'PRE_HANDSHAKE':
+      return `Found an OrchestraOS gateway at ${p.host}:${p.port}. This version predates device pairing, so there's nothing to connect to yet.`;
     case 'BAD_TOKEN':
-      return `That is an OrchestraOS gateway, but it didn't accept this token. Run \`orchestra pair\` on the server and scan the new code.`;
+      return `That is an OrchestraOS gateway, but it didn't accept this token. Run \`orchestra pair\` on the server and use the new code.`;
     case 'CONNECTED':
       return `Connected to ${p.host} · gateway v${protocol} · no cards yet — they appear here when an agent needs a decision.`;
   }
@@ -168,6 +180,24 @@ export async function probeGateway(
   const timeoutMs = opts.timeoutMs ?? 5000;
   const f = opts.fetchImpl ?? fetch;
 
+  // Degrade helper: identity answered but wasn't the frozen gateway shape. Probe legacy /health
+  // to tell a PRE-HANDSHAKE OrchestraOS gateway (sentence 5) from a server that isn't a gateway
+  // (sentence 3) — so a real gateway on the pre-handshake release SHA is never called "not a gateway".
+  const degradeViaHealth = async (): Promise<ConnectOutcome> => {
+    try {
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), timeoutMs);
+      const r = await f(`${parsed.baseUrl}/health`, { signal: ac.signal });
+      clearTimeout(t);
+      if (!r.ok) return 'NOT_A_GATEWAY';
+      let body: unknown;
+      try { body = await r.json(); } catch { return 'NOT_A_GATEWAY'; }
+      return isLegacyHealth(body) ? 'PRE_HANDSHAKE' : 'NOT_A_GATEWAY';
+    } catch {
+      return 'NOT_A_GATEWAY';
+    }
+  };
+
   // 1) identity (unauthenticated)
   let identityBody: unknown;
   try {
@@ -175,16 +205,16 @@ export async function probeGateway(
     const t = setTimeout(() => ac.abort(), timeoutMs);
     const r = await f(`${parsed.baseUrl}/gateway/identity`, { signal: ac.signal });
     clearTimeout(t);
-    if (!r.ok) return { outcome: 'NOT_A_GATEWAY' };
+    if (!r.ok) return { outcome: await degradeViaHealth() };
     try {
       identityBody = await r.json();
     } catch {
-      return { outcome: 'NOT_A_GATEWAY' };
+      return { outcome: await degradeViaHealth() };
     }
   } catch {
     return { outcome: classifyProbe({ kind: 'unreachable' }, parsed) };
   }
-  if (!isIdentityShape(identityBody)) return { outcome: 'NOT_A_GATEWAY' };
+  if (!isIdentityShape(identityBody)) return { outcome: await degradeViaHealth() };
   const protocol = (identityBody as { protocol: number }).protocol; // for the "gateway v<N>" success line
 
   // 2) capabilities (behind the bearer)

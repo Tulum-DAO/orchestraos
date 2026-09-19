@@ -81,7 +81,7 @@ assert.equal(classifyProbe({ kind: 'identity-ok', capabilitiesStatus: 503 }, exp
 // ---------- messageFor: EXACT verbatim (devex-review canonical msg_c9663cb3), host/port/N substituted ----------
 assert.equal(
   messageFor('CANT_FIND', explicit),
-  "Can't find host.example. Check the spelling — and if that's a tailnet name, make sure this phone is on the same tailnet.",
+  "Can't find host.example. Check the spelling — and if that's a tailnet name, make sure this device is on the same tailnet.",
 );
 assert.equal(
   messageFor('NO_ANSWER_ON_PORT', explicit),
@@ -92,8 +92,12 @@ assert.equal(
   "Something is running at host.example:8444, but it isn't an OrchestraOS gateway. Check the port — the gateway is usually 8890, and 8891 is the dashboard.",
 );
 assert.equal(
+  messageFor('PRE_HANDSHAKE', explicit),
+  "Found an OrchestraOS gateway at host.example:8444. This version predates device pairing, so there's nothing to connect to yet.",
+);
+assert.equal(
   messageFor('BAD_TOKEN', explicit),
-  'That is an OrchestraOS gateway, but it didn\'t accept this token. Run `orchestra pair` on the server and scan the new code.',
+  'That is an OrchestraOS gateway, but it didn\'t accept this token. Run `orchestra pair` on the server and use the new code.',
 );
 // success: middle-dot separators, gateway v<N> from the identity protocol, em-dash before "they"
 assert.equal(
@@ -151,7 +155,17 @@ async function run() {
   });
   assert.equal(r.outcome, 'NOT_A_GATEWAY');
 
-  // identity non-2xx -> NOT_A_GATEWAY
+  // REQUIRED DEGRADE (devex-review FINAL): identity 404 BUT legacy /health -> PRE_HANDSHAKE, never a false "not a gateway"
+  r = await probeGateway(P, 'tok', {
+    fetchImpl: stub((u) => (u.endsWith('/health') ? res(200, { ok: true, pending: 0 }) : res(404, {}))),
+  });
+  assert.equal(r.outcome, 'PRE_HANDSHAKE');
+
+  // identity 404 AND /health is not the legacy shape (or absent) -> genuinely NOT_A_GATEWAY
+  r = await probeGateway(P, 'tok', {
+    fetchImpl: stub((u) => (u.endsWith('/health') ? res(200, { random: 'server' }) : res(404, {}))),
+  });
+  assert.equal(r.outcome, 'NOT_A_GATEWAY');
   r = await probeGateway(P, 'tok', { fetchImpl: stub(() => res(404, {})) });
   assert.equal(r.outcome, 'NOT_A_GATEWAY');
 

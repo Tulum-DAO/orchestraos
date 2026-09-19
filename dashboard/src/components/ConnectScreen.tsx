@@ -71,6 +71,7 @@ export default function ConnectScreen() {
   const probing = phase.kind === 'probing';
   const result = phase.kind === 'result' ? phase : null;
   const connected = result?.outcome === 'CONNECTED';
+  const preHandshake = result?.outcome === 'PRE_HANDSHAKE'; // a real gateway, just too old — informational, not an error
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-neutral-950 text-neutral-100 px-4">
@@ -129,7 +130,13 @@ export default function ConnectScreen() {
           )}
         </form>
 
-        {result && !connected && (
+        {result && !connected && preHandshake && (
+          <div className="mt-4 rounded-lg border border-amber-800/60 bg-amber-950/30 px-3 py-2 text-[13px] leading-relaxed text-amber-200">
+            {messageFor(result.outcome, result.parsed)}
+          </div>
+        )}
+
+        {result && !connected && !preHandshake && (
           <div className="mt-4 rounded-lg border border-red-800/60 bg-red-950/30 px-3 py-2 text-[13px] leading-relaxed text-red-200">
             {messageFor(result.outcome, result.parsed)}
           </div>
