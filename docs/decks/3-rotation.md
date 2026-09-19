@@ -4,7 +4,7 @@
 
 
 Written for the Tulum Build-a-thon, Sat 2026-09-19. Same rules as deck 1.
-as doc 01. This is the deck a wrong slide came from; it carries the most proof.
+This is the deck a wrong slide came from; it carries the most proof.
 
 ## The one-sentence version
 A seat can be replaced by a successor that proves it absorbed the handoff, and
