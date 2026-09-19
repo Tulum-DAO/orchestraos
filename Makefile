@@ -41,10 +41,22 @@ test:
 	$(PY) -m pytest -q test_router_prefixes.py test_msg_threading.py --ignore=scripts
 	$(PY) -m pytest -q services/arturo
 	$(PY) -m pytest -q scripts --ignore=scripts/lineage_daemon --ignore=scripts/identity_store --ignore=scripts/focus_registry
-	$(PY) -m pytest -q scripts/lineage_daemon
+# cpu_measure_test is deselected from the DEFAULT suite and lives in `make test-perf` (below).
+# Why (gm-g73 ruling, 2026-09-19): its RELATIVE guard — "one-scan fanout must be materially cheaper
+# than the per-agent scan" (ms/tick ratio) — asserts unconditionally; its own docstring calls the
+# relative/structural guards "load-invariant", but on a busy host the ratio collapsed (0.55 vs 0.80
+# ms/tick) and it failed 3 of 5 runs in isolation at load 31 while passing everywhere quiet. A ratio
+# of milliseconds under uncontrolled load tests the HOST, not the product. `_high_load()` gates only
+# the absolute <1% CPU budget. Post-flip fix (do not touch the test before the tag): gate the relative
+# assertion on `_high_load()` too, or widen its tolerance / report instead of assert.
+	$(PY) -m pytest -q scripts/lineage_daemon --deselect scripts/lineage_daemon/realtime/cpu_measure_test.py::test_steady_state_cpu_under_one_percent_on_real_proc
 	$(PY) -m pytest -q scripts/identity_store
 	$(PY) -m pytest -q scripts/focus_registry
 	$(PY) -m pytest -q contract
+
+# Perf-ratio tests: they assume a QUIET host (see the comment in `test`). Run them deliberately.
+test-perf:
+	$(PY) -m pytest -q scripts/lineage_daemon/realtime/cpu_measure_test.py
 
 install:
 	mkdir -p $(PREFIX)/bin && ln -sf $(CURDIR)/bin/orchestra $(PREFIX)/bin/orchestra && echo "installed $(PREFIX)/bin/orchestra"

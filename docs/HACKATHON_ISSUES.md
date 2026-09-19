@@ -539,3 +539,22 @@ server is already the durable side; only the client forgets.
 **Acceptance.** Ask something in the pill, start a new thread, then reopen the previous one
 from the list and see its turns; the same thread is visible on the home page and survives a
 browser reload and a service restart (i.e. it is not localStorage-backed).
+
+## G21 · `make test` can fail one wall-clock ratio test on a busy host
+`labels: good-first-issue, size:XS, tests, harness`
+
+`scripts/lineage_daemon/realtime/cpu_measure_test.py::test_steady_state_cpu_under_one_percent_on_real_proc`
+asserts that the one-scan fanout tick is *materially cheaper* than a per-agent scan, as a ratio of
+milliseconds. Its docstring calls that relative guard "load-invariant"; it is not — on a busy laptop or a
+shared VPS the ratio collapses (measured 0.55 vs 0.80 ms/tick at load 31, 3 of 5 runs red in isolation)
+while it passes on any quiet box. `_high_load()` gates only the absolute "<1% CPU" budget.
+
+**What exists today.** The test is deselected from the default `make test` and lives in `make test-perf`
+(Makefile comment says why). So a first run is green, but the guard protects nothing until it is fixed.
+
+**Fix.** Gate the relative assertion on `_high_load()` too, or widen its tolerance, or turn it into a
+benchmark that *reports* the ratio instead of asserting it. Then put it back in the default suite.
+
+**Acceptance.** `make test` includes the test again; it passes 5/5 in isolation at load ≥ 2× cores AND on
+a quiet box; the docstring no longer claims the relative guard is load-invariant.
+
