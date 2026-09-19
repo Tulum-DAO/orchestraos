@@ -58,11 +58,35 @@ export function signinCommand(id: string): string {
 
 /** How you actually get this CLI onto a blank machine. Shown IN the terminal tab so the
  *  person can paste it where it runs, rather than being told to go elsewhere. */
-export function installCommand(id: string): string {
-  if (id === 'claude') return 'npm i -g @anthropic-ai/claude-code';
-  if (id === 'codex') return 'npm i -g @openai/codex';
-  if (id === 'gemini') return 'npm i -g @google/antigravity-cli';
-  return `# install the ${id} CLI, then run it once to sign in`;
+/** The npm package, ONLY where one genuinely exists. Verified against the registry:
+ *  @openai/codex and @anthropic-ai/claude-code resolve; there is NO npm package for agy —
+ *  `@google/antigravity-cli` 404s. It was a name I invented, the operator ran it, and it
+ *  failed in his hands. A command that cannot work is worse than no command: it spends the
+ *  newcomer's trust before anything else gets a chance to. */
+export function npmPackage(id: string): string | null {
+  if (id === 'claude') return '@anthropic-ai/claude-code';
+  if (id === 'codex') return '@openai/codex';
+  return null;
+}
+
+/** For a CLI with no npm package, say what is TRUE instead of printing a fake command. */
+export function installNote(id: string): string | null {
+  if (npmPackage(id)) return null;
+  if (id === 'gemini') {
+    return "`agy` is not on npm — it ships as a standalone binary from Google. Install it with Google's instructions for the Gemini/Antigravity CLI, put it on your PATH, then run `agy` here to sign in.";
+  }
+  return `Install the ${id} CLI however its vendor distributes it, put it on your PATH, then run it here to sign in.`;
+}
+
+export function installCommand(id: string): string | null {
+  // --prefix "$HOME/.local", NOT a bare `npm i -g`. The operator ran the bare form and got
+  // EACCES on /usr/lib/node_modules: npm's global prefix is /usr (root-owned) and the
+  // terminal runs as the unprivileged service user. A command that needs root is a command
+  // that does not work, and telling a stranger to sudo-install a CLI is worse advice still.
+  // ~/.local/bin is already on PATH, so the probe that decides "installed" sees it there.
+  const pkg = npmPackage(id);
+  if (!pkg) return null;                  // no invented commands: see installNote()
+  return `npm i -g --prefix "$HOME/.local" ${pkg}`;
 }
 
 export function installHint(id: string): string {
@@ -119,7 +143,7 @@ export function connectPlan(p: ProviderLike, mode: ModeId): ConnectPlan {
       detail: p.installed
         ? `Opens a terminal running \`${cliFor(p.id)}\` so you can sign in here.`
         : `Opens a terminal on this machine. Install \`${cliFor(p.id)}\` in it, then run it to sign in.`,
-      install_command: p.installed ? undefined : installCommand(p.id),
+      install_command: p.installed ? undefined : (installCommand(p.id) ?? undefined),
     };
   }
   return {

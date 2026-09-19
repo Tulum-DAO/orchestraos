@@ -10,11 +10,11 @@
  * attribute — which iOS Safari does not reliably surface on long-press. On a phone the
  * reason was effectively unreachable. Here it is stated in words, on the surface.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { X, Terminal, Globe, Copy } from 'lucide-react';
 import WebTerminal from '../WebTerminal';
 import {
-  connectModes, defaultMode, connectPlan, reasonText, cliFor,
+  connectModes, defaultMode, connectPlan, reasonText, cliFor, installNote,
   type ProviderLike, type ModeId,
 } from '../../lib/providerConnect';
 
@@ -45,6 +45,15 @@ export function ProviderConnectModal({ provider, onClose, startLoginShell = real
   const [busy, setBusy] = useState(false);
   const [opened, setOpened] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Switching provider inside the sheet must not keep the PREVIOUS provider's terminal.
+  // The operator hit this: the dialog said "Connect Codex" while the pane below it was the
+  // agy session he had opened a moment earlier — a shell attributed to the wrong provider.
+  useEffect(() => {
+    setOpened(null);
+    setError(null);
+    setMode(provider ? defaultMode(provider) : 'tmux');
+  }, [provider?.id]);
+
   if (!provider) return null;
 
   const modes = connectModes(provider);
@@ -102,6 +111,9 @@ export function ProviderConnectModal({ provider, onClose, startLoginShell = real
                 <p>{m.blurb}</p>
                 {/* On a blank machine this command is the whole job, so it is offered where
                     it is RUN — one tap to copy, then paste into the terminal below. */}
+                {!cmd && !provider.installed && installNote(provider.id) && (
+                  <p className="text-foreground/80" data-testid="install-note">{installNote(provider.id)}</p>
+                )}
                 {cmd && (
                   <div className="flex items-center gap-2">
                     <code className="flex-1 px-2 py-1.5 rounded bg-muted text-foreground/90 overflow-x-auto">{cmd}</code>
