@@ -230,6 +230,20 @@ R=Tulum-DAO/orchestraos
    Save the PR's metadata too (`gh pr view <n> --json number,title,body,headRefName,baseRefName`) — a
    deleted head branch CLOSES its PR, and the body is not reconstructable from memory.
 
+
+   **ACCEPTED HITS — the T-0 scan compares against this list; it does not judge.**
+   | commit | ref | what it is | decision | decided by | date |
+   |---|---|---|---|---|---|
+   | `9b30d3c` | `refs/pull/23/head` | introduces the operator's own host into a dashboard test fixture | ACCEPTED — see below | Shaw Cole | 2026-09-19 |
+   | `6d271e2` | `refs/pull/23/head` | removes it again at the branch tip | ACCEPTED — same PR ref | Shaw Cole | 2026-09-19 |
+   **WHY IT IS ACCEPTED RATHER THAN FIXED, so nobody re-opens it at a future T-0:** the branch
+   `web/first-run-connect` was DELETED and PR #23 was CLOSED, and `refs/pull/23/head` still resolved
+   afterwards — verified by effect, and corroborated by seven other PRs in this repo whose head branches
+   are gone while their pull refs still resolve. **No command removes a retained pull ref.** The remaining
+   routes are a GitHub support request or not publishing the repo, and the operator chose to publish.
+   **EXPECTED AT T-0: exactly these two commits, on `refs/pull/23/head`, and nothing else. A third commit,
+   a different ref, or a hit on any branch or on `main`'s tip is a STOP.**
+
 1. **Tag the release.**
    **THE TAG FOLLOWS THE RELEASE, NOT THE GATE** (operator ruling): whatever we release is stamped
    `v0.1.0`. The docs-only property below is therefore **DISCLOSURE, NOT A GATE** — it no longer decides
