@@ -206,6 +206,8 @@ runs at image build time, so `doctor` is instant on first open.
 ```bash
 docker build -t orchestraos .
 docker run -it --rm -p 8891:8891 -p 8888:8888 -p 8890:8890 orchestraos
+# NOTE: those -p publishes answer HTTP 000 until you add a relay — the services bind 127.0.0.1
+# inside the container. See "Running inside Docker: the services bind loopback" below.
 # inside:  claude            # log in ONCE — your login, never baked into the image
 #          orchestra doctor  # all required rows OK
 #          orchestra up      # then open http://127.0.0.1:8891 on the laptop
@@ -245,6 +247,18 @@ simplest setup.
 - config: `orchestra.toml` (or `$ORCHESTRA_CONFIG`) — every key documented in `orchestra.example.toml`; secrets only via env
 - data: `[data] dir` → `registry.json`, `state/` (sqlite, sessions, gateway token), `logs/`, `queue/`
 - code: the checkout; `ORCHESTRA_ROOT` / `PYTHONPATH` are exported to every child by the supervisor
+
+## Running inside Docker: the services bind loopback
+
+Every service (`gateway`, `api`, `dashboard`, `arturo`) binds `127.0.0.1` by default
+(`orchestra.toml` `[gateway] host`, `dashboard-proxy.js` `ORCHESTRA_DASHBOARD_HOST`). A Docker
+`-p` published port therefore answers **HTTP 000** even on a fully-up container — measured on the
+release image 2026-09-19: inside the container the dashboard answered 200, the published host
+port answered nothing. Until the bind is configurable (post-release), publish through a small
+in-container relay that listens on `0.0.0.0` and forwards to `127.0.0.1:8891`, and point your
+`ssh -L` / browser at the relay's port. A one-file Python relay is in `scripts/build-demo-box.sh`
+of the operator's reference install; any TCP forwarder (`socat TCP-LISTEN:18891,fork,reuseaddr
+TCP:127.0.0.1:8891`) does the same job.
 
 ## Reference install (the operator's own setup: VPS + Mac over Tailscale, ntfy, Telegram, voice)
 
