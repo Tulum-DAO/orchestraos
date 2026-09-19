@@ -16,7 +16,7 @@ and is resumed in its own live session by the answer.
   multi-choice menu, and questionnaire (items of kind menu or free_text).
   Stored in state/tasks.db (the approvals.db files are empty, dead).
 - Notify: approval_notify.py on a one-minute cron pushes the card to the
-  phone and watch (APNs), ntfy, and Telegram. The watch gateway on :9091
+  phone and watch (APNs) and to Telegram. The watch gateway on :9091
   serves the decision surface and the fleet feed.
 - Answer: approve, deny, hold, a menu option, or free text (`--text`, and
   questionnaire kind free_text). Nothing expires; the operator ruled it.
@@ -60,6 +60,5 @@ and is resumed in its own live session by the answer.
   that merges after the flip.
 - A card and a chat message about the same decision are two sources of truth.
   The operator ruled: the decision belongs on the card.
-- Push reaches the phone only on the tailnet unless the ntfy path is
-  funnelled; a phone off the tailnet can miss a push silently. [Fleet memory;
-  not re-measured.]
+- Push reaches the phone only while it is on the tailnet; a phone off the
+  tailnet can miss a push silently. [Fleet memory; not re-measured.]
