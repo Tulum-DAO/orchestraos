@@ -16,8 +16,13 @@ R=Tulum-DAO/orchestraos
 
 - [ ] `main` is green: `gh run list --repo $R --branch main --limit 1` → `completed success`.
 - [ ] Four scans at zero on `main` (the merge rule): env literals, credential shapes,
-      business names, operator-as-word. Recipe in `docs/GATE.md`'s "Done" section.
-- [ ] **Stranger-test scan** at zero on `main` for BOTH repos — `scripts/stranger_scan.sh <repo>`.
+      business names, operator-as-word. These run in CI as the `secret-scan` job
+      (`detect-secrets` against `.secrets.baseline`); the rules they enforce are in
+      `CONTRIBUTING.md`'s "What a reviewer checks" and "Running the checks locally".
+- [ ] **Stranger-test scan** on `main` for BOTH repos — `scripts/stranger_scan.sh <repo>`.
+      The rule is NOT "at zero": accepted rows are non-zero by design. The rule is that every row is
+      IDENTICAL to the previous `main`, and every non-zero row has been characterised. Reaching a
+      number by deleting something is the wrong remedy.
       Different question from the four scans: not "is a credential in here" but "does this tell a
       stranger WHO this is or WHERE to look" — real names, customer names, live approval/session ids,
       host addresses, and any sentence naming where a credential sits. Record the counts; characterise
@@ -25,7 +30,7 @@ R=Tulum-DAO/orchestraos
 - [ ] Seven-step gate re-run by the tester from a fresh container on the release SHA
       (`docs/GATE.md`; step 3 with a throwaway BotFather token). Report filed.
 - [ ] `docs/HACKATHON_ISSUES.md` reviewed: every T-track and G-issue has a size label and
-      an acceptance line (24 today).
+      an acceptance line. Take the count from the command below rather than from this line.
 - [ ] Brand subset present: `docs/design/brand/` (mark, lockups, favicons, `BRAND.md`).
 - [ ] `orchestra upgrade` works from a clone one commit behind (`docs/UPGRADE.md`).
 
@@ -44,8 +49,17 @@ R=Tulum-DAO/orchestraos
    ```
 3. **Branch protection on `main`** (needs public):
    ```bash
+   # NOTE: `contexts` matches CHECK-RUN / JOB names, NOT the workflow's `name:`.
+   # There is NO context called "CI" — that is the workflow. Pinning it creates a
+   # required check that never reports, so every contributor PR is unmergeable
+   # forever while admins (enforce_admins:false) keep merging and never notice.
+   # Verify the real names first:
+   #   gh api repos/$R/commits/<a recent PR HEAD sha>/check-runs --jq '.check_runs[].name'
+   # Use only STABLE non-matrix job names. Do NOT list the python-tests matrix legs:
+   # one is exactly 100 chars and ends in a literal "..." (GitHub truncates check-run
+   # names there), so it is unpinnable in practice and re-breaks on any matrix edit.
    gh api -X PUT repos/$R/branches/main/protection --input - <<'JSON'
-   {"required_status_checks":{"strict":true,"contexts":["CI"]},
+   {"required_status_checks":{"strict":true,"contexts":["dco","secret-scan","api-typecheck","dashboard-build"]},
     "enforce_admins":false,
     "required_pull_request_reviews":{"required_approving_review_count":1},
     "restrictions":null,
@@ -53,6 +67,9 @@ R=Tulum-DAO/orchestraos
    JSON
    gh api repos/$R/branches/main/protection --jq '.required_status_checks.contexts'
    ```
+   Then PROVE IT BY EFFECT before the doors open: open a throwaway PR and confirm a
+   non-admin path can actually merge it. A protection rule nobody has watched a
+   stranger pass is the same class as a gate nobody has watched fail.
    Merge discipline after this: PRs only; the maintainer seat merges with the four scans
    at zero and CI green (`docs/GATE.md` "Done", `CONTRIBUTING.md`).
 4. **Secret scanning + push protection** (needs public):
@@ -71,7 +88,7 @@ R=Tulum-DAO/orchestraos
 6. **Seed the issues** from `docs/HACKATHON_ISSUES.md` — one issue per `## T<n>` / `## G<n>`
    heading, labels from its `labels:` line, body = the section text:
    ```bash
-   python3 scripts/seed_issues.py --repo $R --dry-run     # prints the 24 titles + labels
+   python3 scripts/seed_issues.py --repo $R --dry-run     # prints every section's title + labels
    python3 scripts/seed_issues.py --repo $R               # creates them (idempotent by title)
    ```
 7. **Discussions**: already on. Pin a "Start here" discussion pointing at
