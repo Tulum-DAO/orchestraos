@@ -29,14 +29,13 @@ _own_proxies() {
     [ "$(readlink "/proc/$pid/cwd" 2>/dev/null)" = "$ORCH" ] && echo "$pid"
   done
 }
-# ponytail: mapfile is bash 4+; macOS /bin/bash is 3.2. Portable read loop instead.
-OLD=(); while IFS= read -r _p; do [ -n "$_p" ] && OLD+=("$_p"); done < <(_own_proxies)
+mapfile -t OLD < <(_own_proxies)
 if [ "${#OLD[@]}" -gt 0 ]; then
   echo "run.sh: killing ${#OLD[@]} existing arturo-proxy process(es) from $ORCH: ${OLD[*]}"
   kill "${OLD[@]}" 2>/dev/null || true
   sleep 2
   # hard-kill any survivor so we can never end up with two writers
-  STILL=(); while IFS= read -r _p; do [ -n "$_p" ] && STILL+=("$_p"); done < <(_own_proxies)
+  mapfile -t STILL < <(_own_proxies)
   if [ "${#STILL[@]}" -gt 0 ]; then
     echo "run.sh: force-killing survivors: ${STILL[*]}"
     kill -9 "${STILL[@]}" 2>/dev/null || true
