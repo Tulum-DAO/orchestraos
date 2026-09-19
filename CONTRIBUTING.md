@@ -74,6 +74,7 @@ Reviewers merge with a merge commit that repeats the tally and scan counts.
 
 ```bash
 make test                      # the per-package python suites, like CI
+# make test runs pytest from .venv, which `make init` creates; on a fresh clone run `make init` first
 (cd api && npx tsc --noEmit)   # api typecheck
 (cd dashboard && npm run build)
 pip install detect-secrets && detect-secrets-hook --baseline .secrets.baseline $(git ls-files)
