@@ -23,7 +23,7 @@ import { useGatewayConfig } from '../stores/gatewayConfig';
 type Phase =
   | { kind: 'idle' }
   | { kind: 'probing' }
-  | { kind: 'result'; outcome: ConnectOutcome; parsed: ParsedGateway; pending?: number };
+  | { kind: 'result'; outcome: ConnectOutcome; parsed: ParsedGateway; pending?: number; protocol?: number };
 
 const defaultUrl = typeof window !== 'undefined' ? window.location.origin : '';
 
@@ -59,8 +59,8 @@ export default function ConnectScreen() {
       return;
     }
     setPhase({ kind: 'probing' });
-    const { outcome, pending } = await probeGateway(parsed, token.trim(), { timeoutMs: 5000 });
-    setPhase({ kind: 'result', outcome, parsed, pending });
+    const { outcome, pending, protocol } = await probeGateway(parsed, token.trim(), { timeoutMs: 5000 });
+    setPhase({ kind: 'result', outcome, parsed, pending, protocol });
     if (outcome === 'CONNECTED') {
       connect({ baseUrl: parsed.baseUrl, token: token.trim() });
       // The gate keeps ConnectScreen mounted until the operator hits Continue, so the
@@ -138,7 +138,7 @@ export default function ConnectScreen() {
         {connected && result && (
           <div className="mt-4 space-y-3">
             <div className="rounded-lg border border-emerald-800/60 bg-emerald-950/30 px-3 py-2 text-[13px] leading-relaxed text-emerald-200">
-              {messageFor('CONNECTED', result.parsed)}
+              {messageFor('CONNECTED', result.parsed, result.protocol)}
               {typeof result.pending === 'number' && result.pending > 0 && (
                 <span> {result.pending} waiting.</span>
               )}

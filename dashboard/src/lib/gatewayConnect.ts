@@ -103,19 +103,55 @@ export function classifyProbe(result: ProbeResult, parsed: ParsedGateway): Conne
   }
 }
 
-// The five verbatim sentences (devex-review). Each failure echoes the host and port the user typed.
-export function messageFor(outcome: ConnectOutcome, p: ParsedGateway): string {
+/**
+ * Section-B ruling (devex-review, contract owner): the connect gate applies to unconfigured
+ * sessions with NO existing session only. A same-origin session with an existing VALID session
+ * auto-connects silently — the live connection IS the evidence, and the dashboard on the projector
+ * must never regress into a connect screen.
+ *
+ * We test "existing valid session" by probing the dashboard's own same-origin authenticated
+ * endpoint (`/api/me`) with the browser's cookie session. A 200 means a live authenticated
+ * session exists → auto-connect. Anything else (401/403 stranger, network error, timeout) →
+ * false, so ConnectScreen is the safe default.
+ *
+ * This is a RAW fetch, deliberately NOT the api.ts wrapper: the wrapper redirects to /login on
+ * 401, which would be wrong here — a stranger with no session should land on ConnectScreen, not a
+ * legacy login page. `credentials: 'same-origin'` so the cookie rides along. Capped so a hung
+ * endpoint never freezes the boot on a blank splash.
+ */
+export async function probeSameOriginSession(
+  opts: { timeoutMs?: number; fetchImpl?: typeof fetch } = {},
+): Promise<boolean> {
+  const timeoutMs = opts.timeoutMs ?? 5000;
+  const f = opts.fetchImpl ?? fetch;
+  try {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), timeoutMs);
+    const r = await f('/api/me', { signal: ac.signal, credentials: 'same-origin' });
+    clearTimeout(t);
+    return r.status === 200;
+  } catch {
+    return false;
+  }
+}
+
+// The five verbatim sentences (devex-review canonical, msg_c9663cb3). Substitute only <host>,
+// <port>, and <N> (the identity protocol). The two words "phone" (s1) and "scan" (s4) are
+// devex-review's exact wording carried from the shared iOS+web block; on THIS web screen they
+// read as iOS-isms ("device"/"paste" would be accurate) — kept verbatim per the explicit
+// "substitute only host/port" instruction and flagged to devex-review for a web-adaptation ruling.
+export function messageFor(outcome: ConnectOutcome, p: ParsedGateway, protocol = 1): string {
   switch (outcome) {
     case 'CANT_FIND':
-      return `Can't find ${p.host}. Check the spelling — and if that's a tailnet name, make sure this device is on the same tailnet.`;
+      return `Can't find ${p.host}. Check the spelling — and if that's a tailnet name, make sure this phone is on the same tailnet.`;
     case 'NO_ANSWER_ON_PORT':
-      return `Found ${p.host}, but nothing is answering on port ${p.port}. Is orchestra up running on that machine?`;
+      return `Found ${p.host}, but nothing is answering on port ${p.port}. Is \`orchestra up\` running on that machine?`;
     case 'NOT_A_GATEWAY':
       return `Something is running at ${p.host}:${p.port}, but it isn't an OrchestraOS gateway. Check the port — the gateway is usually 8890, and 8891 is the dashboard.`;
     case 'BAD_TOKEN':
-      return `That is an OrchestraOS gateway, but it didn't accept this token. Run orchestra pair on the server and paste the new code.`;
+      return `That is an OrchestraOS gateway, but it didn't accept this token. Run \`orchestra pair\` on the server and scan the new code.`;
     case 'CONNECTED':
-      return `Connected to ${p.host} — gateway v1 — no cards yet. They appear here when an agent needs a decision.`;
+      return `Connected to ${p.host} · gateway v${protocol} · no cards yet — they appear here when an agent needs a decision.`;
   }
 }
 
@@ -128,7 +164,7 @@ export async function probeGateway(
   parsed: ParsedGateway,
   token: string,
   opts: { timeoutMs?: number; fetchImpl?: typeof fetch } = {},
-): Promise<{ outcome: ConnectOutcome; pending?: number; capabilities?: unknown }> {
+): Promise<{ outcome: ConnectOutcome; pending?: number; capabilities?: unknown; protocol?: number }> {
   const timeoutMs = opts.timeoutMs ?? 5000;
   const f = opts.fetchImpl ?? fetch;
 
@@ -149,6 +185,7 @@ export async function probeGateway(
     return { outcome: classifyProbe({ kind: 'unreachable' }, parsed) };
   }
   if (!isIdentityShape(identityBody)) return { outcome: 'NOT_A_GATEWAY' };
+  const protocol = (identityBody as { protocol: number }).protocol; // for the "gateway v<N>" success line
 
   // 2) capabilities (behind the bearer)
   try {
@@ -171,14 +208,14 @@ export async function probeGateway(
         caps && typeof caps === 'object' && typeof (caps as any).pending === 'number'
           ? (caps as any).pending
           : undefined;
-      return { outcome, pending, capabilities: caps };
+      return { outcome, pending, capabilities: caps, protocol };
     }
-    return { outcome };
+    return { outcome, protocol };
   } catch {
     // identity was fine but caps timed out — the gateway is reachable; ask for a re-probe via BAD_TOKEN
     // path is misleading, but the honest state is "gateway there, caps unreachable". Surface bad-token
     // is wrong; treat as connected-unknown so the user isn't bounced to re-pair. We choose CONNECTED
     // with pending unknown rather than a false auth error.
-    return { outcome: 'CONNECTED' };
+    return { outcome: 'CONNECTED', protocol };
   }
 }

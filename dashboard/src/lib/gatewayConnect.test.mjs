@@ -7,6 +7,7 @@ import {
   isIdentityShape,
   messageFor,
   probeGateway,
+  probeSameOriginSession,
 } from './gatewayConnect.ts';
 
 // ---------- repairGatewayUrl: repair, don't reject ----------
@@ -77,17 +78,32 @@ assert.equal(classifyProbe({ kind: 'identity-ok', capabilitiesStatus: 403 }, exp
 // caps hiccup (5xx) while identity is fine must NOT read as a bad token
 assert.equal(classifyProbe({ kind: 'identity-ok', capabilitiesStatus: 503 }, explicit), 'CONNECTED');
 
-// ---------- messageFor: each failure echoes host and port; success is non-empty ----------
-assert.match(messageFor('CANT_FIND', explicit), /Can't find host\.example\./);
-assert.match(messageFor('CANT_FIND', explicit), /same tailnet/);
-assert.match(messageFor('NO_ANSWER_ON_PORT', explicit), /nothing is answering on port 8444/);
-assert.match(messageFor('NO_ANSWER_ON_PORT', explicit), /orchestra up/);
-assert.match(messageFor('NOT_A_GATEWAY', explicit), /host\.example:8444/);
-assert.match(messageFor('NOT_A_GATEWAY', explicit), /8890.*8891|8890/);
-assert.match(messageFor('BAD_TOKEN', explicit), /didn't accept this token/);
-assert.match(messageFor('BAD_TOKEN', explicit), /orchestra pair/);
-assert.match(messageFor('CONNECTED', explicit), /Connected to host\.example/);
-assert.match(messageFor('CONNECTED', explicit), /no cards yet/);
+// ---------- messageFor: EXACT verbatim (devex-review canonical msg_c9663cb3), host/port/N substituted ----------
+assert.equal(
+  messageFor('CANT_FIND', explicit),
+  "Can't find host.example. Check the spelling — and if that's a tailnet name, make sure this phone is on the same tailnet.",
+);
+assert.equal(
+  messageFor('NO_ANSWER_ON_PORT', explicit),
+  'Found host.example, but nothing is answering on port 8444. Is `orchestra up` running on that machine?',
+);
+assert.equal(
+  messageFor('NOT_A_GATEWAY', explicit),
+  "Something is running at host.example:8444, but it isn't an OrchestraOS gateway. Check the port — the gateway is usually 8890, and 8891 is the dashboard.",
+);
+assert.equal(
+  messageFor('BAD_TOKEN', explicit),
+  'That is an OrchestraOS gateway, but it didn\'t accept this token. Run `orchestra pair` on the server and scan the new code.',
+);
+// success: middle-dot separators, gateway v<N> from the identity protocol, em-dash before "they"
+assert.equal(
+  messageFor('CONNECTED', explicit, 2),
+  'Connected to host.example · gateway v2 · no cards yet — they appear here when an agent needs a decision.',
+);
+assert.equal(
+  messageFor('CONNECTED', explicit), // default N=1 when protocol omitted
+  'Connected to host.example · gateway v1 · no cards yet — they appear here when an agent needs a decision.',
+);
 
 // ---------- probeGateway: async, fetch-stubbed ----------
 function res(status, body) {
@@ -119,6 +135,7 @@ async function run() {
   });
   assert.equal(r.outcome, 'CONNECTED');
   assert.equal(r.pending, 4);
+  assert.equal(r.protocol, 1); // identity protocol threads through for the "gateway v<N>" line
 
   // identity ok, caps 401 -> BAD_TOKEN
   r = await probeGateway(P, 'bad', {
@@ -157,6 +174,49 @@ async function run() {
   // timeout on identity (hang) with a tiny cap -> unreachable -> port outcome
   r = await probeGateway(P, 'tok', { timeoutMs: 20, fetchImpl: stub(() => 'hang') });
   assert.equal(r.outcome, 'NO_ANSWER_ON_PORT');
+
+  // ---------- probeSameOriginSession: the section-B ruling ----------
+  // Ruling (devex-review, contract owner): a same-origin session with an existing valid
+  // session auto-connects silently — never a connect screen. The live connection IS the
+  // evidence, so we probe the dashboard's own same-origin authenticated endpoint (/api/me).
+
+  // existing valid cookie session (200) -> true, auto-connect silently
+  assert.equal(
+    await probeSameOriginSession({
+      fetchImpl: stub((u) => (u.endsWith('/api/me') ? res(200, { username: 'shaw', role: 'admin' }) : res(404, {}))),
+    }),
+    true,
+  );
+
+  // no session / stranger (401) -> false, must show the connect screen
+  assert.equal(
+    await probeSameOriginSession({ fetchImpl: stub(() => res(401, {})) }),
+    false,
+  );
+
+  // probe MUST NOT trigger the /login redirect on 401 — it does a raw same-origin fetch,
+  // not the api.ts wrapper. A stub that has no window means a redirect attempt would throw;
+  // returning false cleanly proves no redirect side-effect.
+  assert.equal(
+    await probeSameOriginSession({ fetchImpl: stub(() => res(403, {})) }),
+    false,
+  );
+
+  // network error -> false (don't gate a stranger any differently; ConnectScreen is the safe default)
+  assert.equal(
+    await probeSameOriginSession({
+      fetchImpl: stub(() => {
+        throw new TypeError('Failed to fetch');
+      }),
+    }),
+    false,
+  );
+
+  // timeout (hang) with a tiny cap -> false, never a hung splash
+  assert.equal(
+    await probeSameOriginSession({ timeoutMs: 20, fetchImpl: stub(() => 'hang') }),
+    false,
+  );
 }
 
 await run();

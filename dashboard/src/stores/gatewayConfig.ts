@@ -22,6 +22,11 @@ interface GatewayConfigState {
 interface GatewayConfigStore extends GatewayConfigState {
   connect: (args: { baseUrl: string; token: string }) => void;
   disconnect: () => void;
+  // Section-B ruling: a same-origin session with an existing valid session auto-connects
+  // silently. This keeps baseUrl/token null (same-origin cookie path) and only marks configured.
+  // Deliberately NOT persisted — it is re-proven from the live session on every boot, so the
+  // stored config keeps meaning "an explicitly paired gateway" and a logout is never sticky.
+  markSameOriginConnected: () => void;
 }
 
 const STORAGE_KEY = 'orchestra.gatewayConfig';
@@ -62,6 +67,10 @@ export const useGatewayConfig = create<GatewayConfigStore>((set) => ({
     const next: GatewayConfigState = { baseUrl: null, token: null, configured: false };
     persist(next);
     set(next);
+  },
+  markSameOriginConnected: () => {
+    // In-memory only (no persist): same-origin, cookie-authed, no client bearer.
+    set({ baseUrl: null, token: null, configured: true });
   },
 }));
 
