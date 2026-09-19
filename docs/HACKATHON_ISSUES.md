@@ -504,8 +504,10 @@ existing data dir upgrades in place (`orchestra upgrade`) with no lost proposals
 
 The harness reads the agent CLI's screen, transcripts and hook events, and does not heal itself yet when
 the CLI changes. On launch morning an unpinned native Claude Code install moved 2.1.263 -> 2.1.278 with no
-action from the operator. `docs/INSTALL.md` now tells people to pin (2.1.260) and set
-`DISABLE_AUTOUPDATER=1`, but nothing checks it.
+action from the operator. `docs/INSTALL.md` now tells people to pin (2.1.276, the version the release gate ran on; the reference
+fleet runs 2.1.260) and set `DISABLE_AUTOUPDATER=1`, but nothing checks it. Inside the Docker image
+auto-update is attempted every session and fails on npm-prefix permissions, so a stranger sees an
+`Auto-update failed` footer on every pane until they pin.
 
 Add a `cli:version` row to `orchestra doctor` (`orchestra_cli/doctor.py`, one row per enabled runtime):
 - OK when the installed version equals the version the release was proven against (a constant beside

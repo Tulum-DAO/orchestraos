@@ -26,22 +26,25 @@ Install and log in to ONE agent CLI (the runtime catalog probes these):
 ### Pin the agent CLI version
 
 The harness reads the CLI's screen, transcripts, and hook events. It does not heal itself yet when
-the CLI changes shape under it, so pin the CLI to the version the reference install runs and turn the
-auto-updater off. The reference fleet runs **Claude Code 2.1.260** with the updater disabled; an
-unpinned native install moved from 2.1.263 to 2.1.278 in one morning with no action from the operator.
+the CLI changes shape under it, so pin the CLI to a version this release was proven on and turn the
+auto-updater off. Two versions are known good, both measured on 2026-09-19: the release gate ran on
+**Claude Code 2.1.276** in the Docker image, and the reference fleet runs **2.1.260**. An unpinned
+native install moved from 2.1.263 to 2.1.278 in one morning with no action from the operator.
 
 ```bash
-npm install -g @anthropic-ai/claude-code@2.1.260
+npm install -g @anthropic-ai/claude-code@2.1.276
 export DISABLE_AUTOUPDATER=1     # put it in your shell profile so every seat inherits it
-claude --version                 # must print 2.1.260
+claude --version                 # must print 2.1.276
 ```
 
 If you installed Claude Code with the native installer instead of npm, it auto-updates; switch to the
 npm install above for any machine that runs seats. For the Docker image, pass the pin as the build
-argument: `--build-arg AGENT_CLIS="@anthropic-ai/claude-code@2.1.260"`. Gemini and Codex CLIs: pin the
-same way with their package managers (the reference fleet runs agy 1.2.6 and codex-cli 0.153.4).
-[UNVERIFIED for the release gate: the gate containers were built without a pin and pulled the version
-current at build time; the number above is the reference fleet's.]
+argument: `--build-arg AGENT_CLIS="@anthropic-ai/claude-code@2.1.276"`. Without it the image pulls
+whatever is current at build time, and inside the container auto-update is attempted every session
+and fails with `Auto-update failed: no write permission to npm prefix` because the npm prefix is not
+writable by the container user. That footer is not a fault in your setup; the pin and the export make
+it go away. Gemini and Codex CLIs: pin the same way with their package managers (the reference fleet
+runs agy 1.2.6 and codex-cli 0.153.4).
 
 ## 1. Clone, init, doctor
 
@@ -239,7 +242,7 @@ docker run -it --rm -p 8891:8891 -p 8888:8888 -p 8890:8890 orchestraos
 - VS Code / GitHub Codespaces: "Reopen in Container". The workspace is bind-mounted over
   the image's copy, so `postCreateCommand` re-runs `orchestra init` once (~1 min) to
   rebuild `.venv` and `node_modules` for the mounted tree.
-- Other CLIs: `docker build --build-arg AGENT_CLIS="@anthropic-ai/claude-code@2.1.260 @openai/codex"` (pin the version; see "Pin the agent CLI version" above).
+- Other CLIs: `docker build --build-arg AGENT_CLIS="@anthropic-ai/claude-code@2.1.276 @openai/codex"` (pin the version; see "Pin the agent CLI version" above).
 - The container is one instance on one host: tmux inside it is its own, so the
   registry-scoping rules below apply per container.
 
