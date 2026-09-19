@@ -107,6 +107,25 @@ const KIND: Record<string, string> = {
   inbox: 'inbox', roadmaps: 'roadmap', clients: 'clients', people: 'people', activity: 'activity',
 };
 
+// --- focused entity -------------------------------------------------------------------------
+// Chat mode and dev mode open an agent as a FULL-SCREEN OVERLAY without changing the URL, so
+// the route alone says "agents" and Arturo cannot tell WHICH agent you are sitting in. The
+// overlay publishes its agent here and the pill prefers it over the route.
+let _focus: { kind: string; id: string; label?: string } | null = null;
+const _subs = new Set<() => void>();
+
+export function setArturoFocus(f: { kind: string; id: string; label?: string } | null) {
+  const same = (!_focus && !f) || (_focus && f && _focus.kind === f.kind && _focus.id === f.id);
+  if (same) return;
+  _focus = f;
+  _subs.forEach((fn) => { try { fn(); } catch { /* a bad subscriber must not break the others */ } });
+}
+export function getArturoFocus() { return _focus; }
+export function subscribeArturoFocus(fn: () => void): () => void {
+  _subs.add(fn);
+  return () => { _subs.delete(fn); };
+}
+
 export function contextFromLocation(pathname: string, params: Record<string, string | undefined>, search: string): ArturoContext {
   const seg = pathname.split('/').filter(Boolean);
   const kind = KIND[seg[0] || ''] || (seg[0] || 'overview');

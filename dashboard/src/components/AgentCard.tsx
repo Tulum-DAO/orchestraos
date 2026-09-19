@@ -14,6 +14,7 @@ import AuthFlow from './AuthFlow';
 import { logAction, trackRecentAgent } from '../lib/user-actions';
 import { useRecentAgents } from '../stores/recentAgents';
 import { RecentAgentChips } from './RecentAgentChips';
+import { setArturoFocus } from '../lib/arturo';
 
 const PALETTE = [
   'bg-amber-600', 'bg-blue-600', 'bg-green-600', 'bg-purple-600',
@@ -116,11 +117,17 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
   // Status dots now bind to the v2 detector `agent.status` (see AgentStatusDot),
   // not a separate pane-scrape poll — fresh + app-aligned colors.
 
+  // Navigating away unmounts the overlay without any close handler running, so clear the
+  // published focus here too — a stale focus would make Arturo answer about an agent the
+  // operator is no longer looking at, which is worse than having no context at all.
+  useEffect(() => () => { setArturoFocus(null); }, []);
+
   // Cross-card focus coordination: chips/swipes ask the store; each card obeys.
   useEffect(() => {
     if (!focusRequest) return;
     if (focusRequest.id === agent.id) {
       setFocused(true);
+      setArturoFocus({ kind: 'agent', id: agent.id, label: agent.name || agent.id });
       setDevMode(true);
       setUseInjectMode(true);
       if (!focusRequest.viaSwipe) {
@@ -136,6 +143,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
 
   const openDevMode = () => {
     setFocused(true);
+    setArturoFocus({ kind: 'agent', id: agent.id, label: agent.name || agent.id });
     setDevMode(true);
     setUseInjectMode(true);
     bumpRecent(agent.id);
@@ -473,7 +481,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                 {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
               </button>
               <button
-                onClick={() => { setFocused(true); setExpanded(false); setUseInjectMode(true); logAction('agent.focus', agent.id, agent.name); trackRecentAgent(agent.id, agent.name || agent.id, agent.tier); }}
+                onClick={() => { setFocused(true); setArturoFocus({ kind: 'agent', id: agent.id, label: agent.name || agent.id }); setExpanded(false); setUseInjectMode(true); logAction('agent.focus', agent.id, agent.name); trackRecentAgent(agent.id, agent.name || agent.id, agent.tier); }}
                 className="flex items-center gap-1 text-xs px-2 py-1 min-h-[44px] rounded-md font-medium bg-neutral-800 text-neutral-400 hover:text-neutral-200 transition-colors"
                 title="Focus — open as chat window"
               >
@@ -570,7 +578,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
         <div className={clsx(
           "fixed inset-0 z-50 bg-black/70 flex overscroll-none",
           devMode ? 'items-stretch justify-center p-0 overflow-hidden' : 'items-center justify-center p-4'
-        )} onClick={() => setFocused(false)}>
+        )} onClick={() => { setFocused(false); setArturoFocus(null); }}>
           <div
             className={clsx(
               'bg-neutral-900 flex flex-col shadow-2xl',
@@ -641,7 +649,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                   </button>
                 </div>
                 <button
-                  onClick={() => setFocused(false)}
+                  onClick={() => { setFocused(false); setArturoFocus(null); }}
                   className="p-1.5 text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800 rounded-lg transition-colors"
                 >
                   <X size={16} />
