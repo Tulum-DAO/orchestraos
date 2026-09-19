@@ -106,10 +106,10 @@ scripting against either).
 ## What can go wrong, and what it means
 
 Every client (web, iOS, this doc) shows the exact same words, verbatim,
-for each of these four states:
+for each of these five states:
 
 - **Can't resolve the address.** Can't find `<host>`. Check the spelling —
-  and if that's a tailnet name, make sure this phone is on the same
+  and if that's a tailnet name, make sure this device is on the same
   tailnet.
 - **Nothing listening.** Found `<host>`, but nothing is answering on port
   `<port>`. Is `orchestra up` running on that machine?
@@ -117,14 +117,16 @@ for each of these four states:
   but it isn't an OrchestraOS gateway. Check the port — the gateway is
   usually 8890, and 8891 is the dashboard.
 - **Refused.** That is an OrchestraOS gateway, but it didn't accept this
-  token. Run `orchestra pair` on the server and scan the new code. (The web
-  dashboard says "paste the new code" instead of "scan," since it can't use
-  the camera.)
+  token. Run `orchestra pair` on the server and use the new code.
+- **Found a gateway, but it predates pairing.** Found an OrchestraOS gateway
+  at `<host>:<port>`. This version predates device pairing, so there's
+  nothing to connect to yet.
 
 The first two are both "nothing valid answered" — a typo/DNS problem versus
 a "nothing's listening on that port" problem, and they need opposite
-fixes — the third is "found something, but not a gateway," and the fourth
-is "found a gateway, but the token's no good; re-pair."
+fixes — the third is "found something, but not a gateway," the fourth is
+"found a gateway, but the token's no good; re-pair," and the fifth is
+"found a real gateway, but it's from before pairing existed."
 
 ## What success looks like
 
