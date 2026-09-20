@@ -14,6 +14,7 @@ import tasksRouter from './routes/tasks.js';
 import activityRouter from './routes/activity.js';
 import systemRouter from './routes/system.js';
 import memoryRouter from './routes/memory.js';
+import contextRouter from './routes/context.js';
 import roadmapsRouter from './routes/roadmaps.js';
 import voiceRouter from './routes/voice.js';
 import arturoRouter from './routes/arturo.js';
@@ -110,6 +111,7 @@ app.use('/api/red-alert', redAlertRouter); // the report button = ticket gateway
 app.use('/api/activity', activityRouter);
 app.use('/api/system', systemRouter);
 app.use('/api/memory', memoryRouter);
+app.use('/api/context', contextRouter);
 app.use('/api/roadmaps', roadmapsRouter);
 app.use('/api/voice', voiceRouter);
 app.use('/api/arturo', arturoRouter);

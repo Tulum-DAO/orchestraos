@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { readFileSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
+import { getAllTasks, getProjectsKnowledge, getAllAgentStates } from '../services/state-reader.js';
 
 const router = Router();
 const ORCHESTRA = process.env.ORCHESTRA_DIR!;
@@ -94,6 +95,46 @@ router.get('/', (_req: Request, res: Response) => {
     total_events_today: todayEvents.length,
     total_tasks: allTasks.length
   });
+});
+
+// GET /analytics/dashboard — the shape dashboard/src/pages/Analytics.tsx expects
+// (message_throughput, task_funnel, project_health). Never existed server-side
+// (404 on every load) — the frontend page shipped, the endpoint didn't. Reuses
+// the same sources / (getAllTasks, getProjectsKnowledge) as /api/tasks and
+// /api/projects rather than a new store, so this can't disagree with those pages.
+router.get('/dashboard', (_req: Request, res: Response) => {
+  const activityFile = join(ORCHESTRA, 'activity.jsonl');
+  let allEvents: any[] = [];
+  if (existsSync(activityFile)) {
+    allEvents = readFileSync(activityFile, 'utf-8').trim().split('\n')
+      .filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  }
+  const messageEvents = allEvents.filter(e => e.event === 'message_delivered');
+  const message_throughput = Array.from({ length: 7 }, (_, i) => {
+    const day = new Date(Date.now() - (6 - i) * 86400000).toISOString().split('T')[0];
+    return { date: day, count: messageEvents.filter(e => e.timestamp?.startsWith(day)).length };
+  });
+
+  const allTasks = getAllTasks() || [];
+  const task_funnel: Record<string, number> = {};
+  for (const t of allTasks) {
+    const status = String(t.status || 'unknown');
+    task_funnel[status] = (task_funnel[status] || 0) + 1;
+  }
+
+  const projects = getProjectsKnowledge() || {};
+  const agentStates = getAllAgentStates();
+  const project_health = Object.entries(projects as Record<string, any>).map(([slug, proj]: [string, any]) => {
+    const openTasks = allTasks.filter(t => t.client === slug
+      && !['complete', 'completed', 'done', 'reported'].includes(String(t.status))).length;
+    const agentTimestamps = (proj.agents || [])
+      .map((id: string) => agentStates[id]?.last_updated)
+      .filter(Boolean);
+    const lastActivity = agentTimestamps.sort().slice(-1)[0] || null;
+    return { slug, name: proj.name || slug, open_tasks: openTasks, last_activity: lastActivity };
+  });
+
+  res.json({ message_throughput, task_funnel, project_health });
 });
 
 export default router;
