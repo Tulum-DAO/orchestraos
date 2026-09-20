@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ARTURO_DIR = Path(__file__).resolve().parent
-ORCHESTRA_DIR = ARTURO_DIR.parent.parent
+ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", ARTURO_DIR.parent.parent))  # #86: env first, like every sibling
 sys.path.insert(0, str(ARTURO_DIR))
 sys.path.insert(0, str(ORCHESTRA_DIR / "scripts"))
 
