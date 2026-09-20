@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import { getVoiceAgentState, getVoiceTranscripts } from '../services/state-reader.js';
 import { execFile } from 'child_process';
-import { readFileSync } from 'fs';
 import { join } from 'path';
 
 const router = Router();
@@ -10,7 +9,7 @@ const ORCHESTRA = process.env.ORCHESTRA_DIR!;
 // Voice-call transcript proxy → the watch gateway (single owner of the call
 // JSONs + auth). Web voice-call cards fetch through here so the browser never
 // needs the gateway token. Read-only; the proxy owns all writes.
-const GATEWAY_TOKEN_FILE = `${process.env.HOME}/.config/jarvis/watch-gateway-token`;
+import { readGatewayToken } from '../lib/gateway-token.js';  // #85: honour WATCH_GATEWAY_TOKEN_FILE
 const GATEWAY_URL = process.env.WATCH_GATEWAY_URL || 'http://127.0.0.1:9091';
 
 // GET /api/voice/call?call_id= → gateway GET /voice-call. Passes the gateway
@@ -20,7 +19,7 @@ router.get('/call', async (req, res) => {
   const callId = String(req.query.call_id || '').trim();
   if (!callId) { res.status(400).json({ ok: false, error: 'call_id required' }); return; }
   let token = '';
-  try { token = readFileSync(GATEWAY_TOKEN_FILE, 'utf-8').trim(); } catch { /* no token */ }
+  token = readGatewayToken();
   if (!token) { res.status(502).json({ ok: false, error: 'gateway token unavailable' }); return; }
   try {
     const r = await fetch(`${GATEWAY_URL}/voice-call?call_id=${encodeURIComponent(callId)}`, {

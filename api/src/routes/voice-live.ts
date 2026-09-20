@@ -42,9 +42,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'orchestraOS-jwt-secret-2026';
 // Read fresh (not captured once at module-load) so tests can point this at a
 // fixture file via env without import-order games, and so a real deployment
 // that sets the env after other modules load still picks it up correctly.
-function gatewayTokenFile(): string {
-  return process.env.WATCH_GATEWAY_TOKEN_FILE || `${process.env.HOME}/.config/jarvis/watch-gateway-token`;
-}
+import { gatewayTokenFile } from '../lib/gateway-token.js';  // #85: shared reader
 const GATEWAY_WS_URL = process.env.WATCH_GATEWAY_WS_URL || 'ws://127.0.0.1:8890';  // #84: match [gateway] default
 export const VOICE_LIVE_PATH = '/api/voice/live';
 
