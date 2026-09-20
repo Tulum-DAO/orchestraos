@@ -390,3 +390,30 @@ def test_init_creates_facts_and_memory_dirs(tmp_path):
     ignored = (data / ".gitignore").read_text()
     # memory is per-agent durable knowledge — committed with the handoffs, not ignored
     assert "!/memory/**" in ignored
+
+
+def test_init_wires_the_shipped_pre_push_hook_when_root_is_a_git_checkout(tmp_path):
+    """The repo ships .git-hooks/pre-push (secret scan) but core.hooksPath is unset in a fresh
+    clone, so the hook never runs for anyone who did not read its header comment. `init` is
+    the one command every clone runs: it must point core.hooksPath at .git-hooks."""
+    root = _repo(tmp_path)
+    (root / ".git").mkdir()
+    (root / ".git-hooks").mkdir()
+    (root / ".git-hooks" / "pre-push").write_text("#!/bin/sh\nexit 0\n")
+    runner = Runner()
+    report = I.run_init(root, data_dir=tmp_path / "data", run=runner, skip_npm=True, skip_venv=True,
+                        skip_build=True)
+    done = {r.step: r for r in report}
+    assert done["git-hooks"].did is True
+    assert (("git", "-C", str(root), "config", "core.hooksPath", ".git-hooks"), str(root)) in runner.calls
+
+
+def test_init_skips_hook_wiring_outside_a_git_checkout(tmp_path):
+    """A tarball / demo-box install has no .git — nothing to configure, never an error."""
+    root = _repo(tmp_path)
+    runner = Runner()
+    report = I.run_init(root, data_dir=tmp_path / "data", run=runner, skip_npm=True, skip_venv=True,
+                        skip_build=True)
+    done = {r.step: r for r in report}
+    assert done["git-hooks"].did is False
+    assert not any(c[0][:1] == ("git",) and "core.hooksPath" in c[0] for c in runner.calls)
