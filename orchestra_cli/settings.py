@@ -206,6 +206,9 @@ def child_env(st: Settings, base: dict | None = None) -> dict:
         "WATCH_GATEWAY_HOST": st.gateway_host,
         "WATCH_GATEWAY_PORT": str(st.gateway_port),
         "WATCH_GATEWAY_URL": gateway_url,
+        # #84: the Node voice proxy (api/src/routes/voice-live.ts) dials this; derive it from the
+        # same host/port so a default install's WebSocket bridge reaches the gateway.
+        "WATCH_GATEWAY_WS_URL": f"ws://{st.gateway_host}:{st.gateway_port}",
         "WATCH_GATEWAY_TOKEN_FILE": str(st.token_file),
         "ORCHESTRA_API_HOST": st.api_host,
         "ORCHESTRA_API_PORT": str(st.api_port),

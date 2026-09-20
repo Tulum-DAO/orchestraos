@@ -92,6 +92,9 @@ def test_child_env_points_every_process_at_config_and_data_dir(tmp_path):
     assert env["PYTHONPATH"].split(os.pathsep)[:2] == [str(tmp_path), str(tmp_path / "scripts")]
     assert env["WATCH_GATEWAY_PORT"] == "8890"
     assert env["WATCH_GATEWAY_URL"] == "http://127.0.0.1:8890"
+    # #84: the Node voice proxy dials WATCH_GATEWAY_WS_URL; nothing exported it, so a default
+    # install dialled ws://127.0.0.1:9091 while the gateway listened on 8890.
+    assert env["WATCH_GATEWAY_WS_URL"] == "ws://127.0.0.1:8890"
     assert env["WATCH_GATEWAY_TOKEN_FILE"] == str(tmp_path / "data" / "state" / "watch-gateway-token")
     assert env["PORT"] == "8888" and env["ORCHESTRA_API_PORT"] == "8888"
     assert env["ORCHESTRA_DASHBOARD_PORT"] == "8891"
