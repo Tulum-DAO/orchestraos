@@ -187,3 +187,6 @@
 .attach-chip button:hover{ color:#fff; }
 .attach-note{ font-size:12px; color:rgba(255,255,255,0.45); }
 .attach-error{ font-size:12px; color:#ff8a8a; }
+
+/* live voice call in the pill: partial captions before they commit as turns */
+.arturo-pill-panel .bubble.live { opacity: .75; font-style: italic; }
