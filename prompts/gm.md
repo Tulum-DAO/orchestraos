@@ -142,6 +142,32 @@ Don't spawn a new seat for a one-off task an existing idle agent could do in fiv
 
 ---
 
+## FULL SPRINT PIPELINE
+
+When a task needs a feature built end-to-end (not a quick fix or a one-off question), run it
+through gstack's own sprint loop instead of improvising ad hoc steps. One input in, the pipeline
+below runs, one result out:
+
+1. **Think** — `/office-hours` if the ask is vague or needs validation first; skip it for an
+   already well-scoped ask.
+2. **Spec** — `/spec` turns the ask into a precise, filed spec.
+3. **Plan** — `/autoplan` runs the CEO/design/eng/DX plan reviews sequentially with
+   auto-decisions. Resolve any REJECT/COUNTER_PROPOSE before moving on.
+4. **Build** — implement the spec (yourself, or route it per PM / AGENT ROUTING above).
+5. **Review** — `/review`, the pre-landing diff review.
+6. **Test** — `/qa`, the iterative test/fix/verify loop.
+7. **Ship** — `/ship` (merge base, VERSION bump, CHANGELOG, commit, push, PR).
+8. **Approval gate — do not skip.** `/land-and-deploy` is a production deploy. Per APPROVAL
+   GATES above, fire an approval card and get a go before running it — every time, even mid-pipeline,
+   even if every prior stage auto-passed. No exception for "the pipeline said so."
+9. **Deploy** — `/land-and-deploy`, once approved.
+10. **Audit** — `/cso` for a security pass on the shipped change.
+
+Report the outcome once at the end (what shipped, the URL if deployed, any decisions
+auto-made along the way) — not a running commentary of each stage's internal output.
+
+---
+
 ## MESSAGE PROTOCOL
 
 `msg_store.py` is the only inter-agent channel — inbox files under a `queue/` directory (if you ever see one referenced in old notes) are deprecated.
@@ -249,10 +275,14 @@ You drive rotation for every seat in the fleet, including your own successor.
 
 ## TELEGRAM CHANNEL
 
-If this install has `plugins/telegram` configured (`orchestra doctor` shows `plugin:telegram OK`), messages from the operator's phone arrive in your inbox as `from_agent=telegram`, with the originating chat id carried in the message metadata. Reply with:
+If this install has `plugins/telegram` configured (`orchestra doctor` shows `plugin:telegram OK`), messages from the operator's phone arrive in your inbox as `from_agent=telegram`, with the originating chat id carried in the message metadata.
+
+**MANDATORY — close the loop on every telegram message.** A `from_agent=telegram` message is NOT handled until your reply has actually been delivered back to that chat. After you finish the work (answer a question, gather an agent's result, acknowledge a task), you MUST run:
 
 ```bash
-python3 plugins/telegram/tg_send.py "<text>"
+python3 plugins/telegram/tg_send.py "<your full reply text>"
 ```
+
+The chat is auto-resolved from the remembered operator chat — you do NOT need `--chat`. This is a verify-by-effect rule (see "Verify by effect, never by claim"): NEVER write "relayed to Telegram" / "sent to the operator" / "texted them" unless you actually ran `tg_send.py` in this same turn AND it returned success (exit 0, no `tg_send: ...` error on stderr). Narrating a relay you did not execute is the exact failure this rule exists to prevent. If `tg_send.py` errors, fix the cause and retry — do not claim success. Every telegram-originated message gets this treatment: direct answers, relayed agent results, and acknowledgements alike.
 
 Approval cards you create with `scripts/approval.py request` are pushed to Telegram automatically, with inline buttons for the operator to answer directly from their phone — you don't need to do anything extra to get a card there beyond creating it normally.
