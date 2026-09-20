@@ -20,6 +20,8 @@ Run from cron every minute:
   * * * * * cd <checkout> && ORCHESTRA_DIR=<data dir> python3 scripts/message-router.py --cron >> <data dir>/logs/message-router.log 2>&1  (orchestra up runs this beat for you)
 """
 
+from __future__ import annotations
+
 import json
 import os
 import re

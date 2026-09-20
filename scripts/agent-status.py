@@ -30,6 +30,10 @@ Usage:
     python3 agent-status.py --all [--oneline]        # all sessions
 """
 
+# PEP 604 unions (`str | None`) are used in annotations throughout; defer their
+# evaluation so this runs under macOS system Python 3.9, not only the 3.12 venv.
+from __future__ import annotations
+
 import hashlib
 import json
 import os

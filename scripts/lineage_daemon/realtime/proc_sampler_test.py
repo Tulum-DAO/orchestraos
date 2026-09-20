@@ -55,6 +55,19 @@ def test_one_scan_fanned_to_many_agents_never_per_agent(tmp_path):
         "per-agent scanning = the 2.57% FAIL)")
 
 
+def test_missing_proc_root_falls_back_to_real_process_table(tmp_path):
+    """proc_root pointing at nothing (the macOS case: /proc doesn't exist at all)
+    must not silently report every seat dead — it falls back to a psutil-based
+    scan of the real process table so a genuinely live root still reads alive.
+    Regression: this used to make derive_status read offline_crashed for every
+    seat on a box with no /proc, regardless of whether the seat was live."""
+    fake_root = str(tmp_path / "does-not-exist")
+    s = ProcSampler(proc_root=fake_root)
+    snap = s.sample([os.getpid()])
+    assert snap[os.getpid()]["alive"] is True
+    assert snap[os.getpid()]["live_pids"] >= 1
+
+
 def test_dead_root_reports_offline(tmp_path):
     root = str(tmp_path)
     _mkproc(root, 100, 1, 1, 1)

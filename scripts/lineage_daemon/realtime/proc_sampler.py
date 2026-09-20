@@ -40,10 +40,52 @@ _RESIDENT_CMDLINE_RE = re.compile(
     re.IGNORECASE)
 
 
+def _has_proc(proc_root):
+    """True for a real /proc (Linux) or a hermetic test's synthetic proc_root
+    (tests always pass an existing tmp_path). False ONLY when no such directory
+    exists at all — macOS, which has no /proc — so every read_* below falls back
+    to a psutil-based equivalent instead of silently reporting every pid dead."""
+    return os.path.isdir(proc_root)
+
+
+def _darwin_scan_stat(clk_tck):
+    """macOS has no /proc. ponytail: psutil.process_iter() is one pass over the
+    real process table (same "one scan per tick" shape _scan_stat has on Linux),
+    rebuilding the identical (kids, cpu, start, present) contract so everything
+    downstream (tree walk, classify) is unchanged. Ceiling: per-process disk io
+    isn't exposed by psutil on macOS (see _read_io) — upgrade path is libproc via
+    ctypes (proc_pid_rusage) if io-based COMPUTING detection is needed there too."""
+    import psutil
+    kids, cpu, start, present = {}, {}, {}, set()
+    for p in psutil.process_iter(("pid", "ppid", "create_time", "cpu_times")):
+        try:
+            info = p.info
+            pid, ppid, times = info["pid"], info["ppid"], info["cpu_times"]
+            if pid is None or ppid is None or times is None:
+                continue
+            present.add(pid)
+            cpu[pid] = (times.user + times.system) * clk_tck
+            start[pid] = (info["create_time"] or 0.0) * clk_tck
+            kids.setdefault(ppid, []).append(pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, KeyError):
+            continue
+    return kids, cpu, start, present
+
+
+def _darwin_cmdline(pid):
+    try:
+        import psutil
+        return " ".join(psutil.Process(pid).cmdline())
+    except Exception:
+        return ""
+
+
 def _read_cmdline(proc_root, pid):
     """The child's cmdline (NUL-joined -> spaces), '' on any error. Bounded to the
     fleet's own tree pids by the caller (same bound as _read_io; no per-agent
     fork, never every pid on the box)."""
+    if not _has_proc(proc_root):
+        return _darwin_cmdline(pid)
     try:
         with open(os.path.join(proc_root, str(pid), "cmdline"), "rb") as fh:
             return fh.read().replace(b"\x00", b" ").decode("utf-8", "replace").strip()
@@ -74,7 +116,13 @@ def _read_stat(proc_root, pid):
 
 def _read_uptime(proc_root):
     """System uptime in seconds (proc_root/uptime; tests override via a fake file).
-    Returns None on any error (age check then falls back to conservative worker)."""
+    Returns None on any error (age check then falls back to conservative worker).
+    On macOS (no /proc) returns wall-clock time instead — _darwin_scan_stat's
+    `start` is create_time in the same units, so `uptime - start/clk` still comes
+    out to the process's real age in seconds; the "since boot" framing is just a
+    relative anchor here, not literal."""
+    if not _has_proc(proc_root):
+        return time.time()
     try:
         with open(os.path.join(proc_root, "uptime")) as fh:
             return float(fh.read().split()[0])
@@ -84,7 +132,13 @@ def _read_uptime(proc_root):
 
 def _read_io(proc_root, pid):
     """read_bytes+write_bytes, or 0 on any error (PermissionError for another
-    user's pid, or a kernel without the io file) — never crash the scan."""
+    user's pid, or a kernel without the io file) — never crash the scan.
+    ponytail: macOS exposes no per-process disk-io counters to userspace via
+    psutil (Process.io_counters is Linux/Windows-only), so io stays 0 there —
+    COMPUTING detection degrades to CPU-only on Darwin. Upgrade path: libproc's
+    proc_pid_rusage via ctypes, if that signal turns out to matter there too."""
+    if not _has_proc(proc_root):
+        return 0
     try:
         with open(os.path.join(proc_root, str(pid), "io")) as fh:
             r = w = 0
@@ -112,6 +166,8 @@ class ProcSampler:
         """ONE pass over /proc: build pid->children and pid->cpu_ticks. This is
         the single fan-out scan (never per-agent)."""
         self.scan_count += 1
+        if not _has_proc(self._proc):
+            return _darwin_scan_stat(self._clk)
         kids, cpu, start, present = {}, {}, {}, set()
         try:
             names = os.listdir(self._proc)

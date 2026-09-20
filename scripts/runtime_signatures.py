@@ -10,6 +10,8 @@ definitions — no behavior change; an unknown runtime still fails safe to 'clau
 
 Consumers: message-router.py (idle-gate), and later spawn-agent dispatch (§4.2).
 """
+from __future__ import annotations
+
 import json
 import os
 from pathlib import Path
