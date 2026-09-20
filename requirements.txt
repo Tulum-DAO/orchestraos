@@ -10,3 +10,4 @@ tomli>=2.0; python_version < "3.11"
 pytest>=8.0
 pytest-asyncio>=0.23
 jsonschema>=4.0
+detect-secrets>=1.5    # .git-hooks/pre-push secret scan (init wires the hook; this makes it fire)
