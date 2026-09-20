@@ -45,7 +45,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'orchestraOS-jwt-secret-2026';
 function gatewayTokenFile(): string {
   return process.env.WATCH_GATEWAY_TOKEN_FILE || `${process.env.HOME}/.config/jarvis/watch-gateway-token`;
 }
-const GATEWAY_WS_URL = process.env.WATCH_GATEWAY_WS_URL || 'ws://127.0.0.1:9091';
+const GATEWAY_WS_URL = process.env.WATCH_GATEWAY_WS_URL || 'ws://127.0.0.1:8890';  // #84: match [gateway] default
 export const VOICE_LIVE_PATH = '/api/voice/live';
 
 function getCookie(req: IncomingMessage, name: string): string | null {
