@@ -359,6 +359,22 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
         except Exception as e:  # noqa: BLE001 — any failure to load = MISSING
             checks.append(Check("api:better-sqlite3", MISSING, f"native binding does not load: {str(e)[:80]}",
                                 f"cd {root / 'api'} && npm rebuild better-sqlite3  (or delete api/node_modules and run npm install)"))
+    # node-pty is the native addon behind the web terminal (dashboard-proxy.js and api
+    # /ws/terminal both require() it from the root install). On a host without the build
+    # toolchain, npm finishes with node-pty skipped or unbuilt, the app boots green, and every
+    # terminal pane answers "Web terminal unavailable: node-pty is not installed" (second-install
+    # DX report, 2026-09-20). Load it the way both servers will; REQUIRED, so `doctor` exits 1.
+    root_nm = root / "node_modules"
+    if (root / "package.json").exists() and root_nm.exists():
+        mod = root_nm / "node-pty"
+        try:
+            probes.run_cmd(["node", "-e", f"require({json.dumps(str(mod))})"])
+            checks.append(Check("terminal:node-pty", OK, "native addon loads (web terminal available)"))
+        except Exception as e:  # noqa: BLE001 — any failure to load = MISSING
+            checks.append(Check("terminal:node-pty", MISSING,
+                                f"native addon does not load: {str(e)[:80]} — the web terminal is dead on this host",
+                                f"sudo apt install -y build-essential python3 && cd {root} && npm rebuild node-pty  "
+                                f"(or delete node_modules and run npm install)"))
     for label, sub, artifact in (("api", "api", "dist/server.js"), ("dashboard", "dashboard", "dist/index.html")):
         d = root / sub
         if not (d / "package.json").exists():

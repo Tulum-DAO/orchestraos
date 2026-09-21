@@ -2,8 +2,12 @@
   "name": "orchestraos",
   "private": true,
   "version": "0.1.0",
-  "description": "Root deps for dashboard-proxy.js (the static dashboard + /api proxy + terminal websocket).",
-  "scripts": { "proxy": "node dashboard-proxy.js" },
-  "dependencies": { "ws": "^8.18.0" },
-  "optionalDependencies": { "node-pty": "^1.0.0" }
+  "description": "Root deps for dashboard-proxy.js (the static dashboard + /api proxy + terminal websocket). node-pty is a HARD dependency: the web terminal is a headline feature, so a failed native build must fail the install, not boot green.",
+  "scripts": {
+    "proxy": "node dashboard-proxy.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0",
+    "node-pty": "^1.0.0"
+  }
 }
