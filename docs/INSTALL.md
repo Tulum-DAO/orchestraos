@@ -125,6 +125,7 @@ new) and launches it in tmux with the install env carried into the pane.
 ```bash
 orchestra spawn gm --gm                  # the General Manager: prompts/gm.md, tier T1, always-on
 orchestra spawn hello --task "Say hello, then park."   # a worker seat (prompts/hello.md if present)
+orchestra agent create dev-x --template dev --parent pm-y --set PROJECT=demo   # one verb: fill the role template (refuses an unfilled {TOKEN}), record the parent, validate runtime/model, spawn, verify ALIVE
 tmux attach -t gm                        # talk to it; detach with Ctrl-B D
 ```
 

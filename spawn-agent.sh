@@ -122,6 +122,8 @@ model_is_1m() {
 
 # shellcheck source=scripts/spawn_model_verify.sh
 source "$SCRIPT_DIR/scripts/spawn_model_verify.sh"
+# shellcheck source=scripts/spawn_guards.sh
+source "$SCRIPT_DIR/scripts/spawn_guards.sh"   # issue #92: FATAL guards (model/runtime, injection)
 
 # Post-spawn model verify (by effect): capture the TUI status line and confirm the
 # running model is a [1m] variant. If bare and we know the intended model, switch
@@ -492,6 +494,9 @@ spawn_agent() {
         codex)  agent_bin="$(command -v codex 2>/dev/null || echo codex)" ;;
         *) err "$agent_id: unsupported resolved runtime '$runtime' — refusing"; exit 3 ;;
     esac
+    # issue #92: a model id that names ANOTHER runtime (claude-sonnet-5 on a codex seat)
+    # makes the CLI exit and the init prompt land in bare bash — refuse before any pane.
+    refuse_model_mismatch "$runtime" "$model" "$agent_id" || exit 3
 
     # Check if we're on the right machine
     local this_machine="mac"
@@ -518,7 +523,7 @@ spawn_agent() {
         warn "Agent $agent_id already running in tmux session '$tmux_name'"
         if [[ -n "$task" ]]; then
             log "Sending task to existing session..."
-            inject_prompt "$tmux_name" "$task"
+            inject_or_fail "$tmux_name" "$task" || return 1     # issue #92: never a silent miss
         fi
         return 0
     fi
@@ -826,10 +831,11 @@ spawn_agent() {
     # because their send-keys already carried "You are <id>"; only this path was cut.
     if [[ -n "$resume_sid" ]]; then
         log "  Resume: session $resume_sid (roster/adopt-gated); short wake line, no init file"
-        inject_prompt "$tmux_name" "You are $agent_id, resumed (session $resume_sid) after a crash by roster-resume-all. Check your msg_store inbox (python3 $SCRIPT_DIR/msg_store.py inbox --agent $agent_id) and continue your last task."
+        inject_or_fail "$tmux_name" "You are $agent_id, resumed (session $resume_sid) after a crash by roster-resume-all. Check your msg_store inbox (python3 $SCRIPT_DIR/msg_store.py inbox --agent $agent_id) and continue your last task." || exit 1
     else
-        inject_prompt "$tmux_name" "You are $agent_id. Read $init_file and follow all instructions in it."
+        inject_or_fail "$tmux_name" "You are $agent_id. Read $init_file and follow all instructions in it." || exit 1
     fi
+    # issue #92: past here the seat is instructed — only now may the spawn report success.
 
     # Record state (includes parent tracking for completion callbacks)
     python3 -c "
