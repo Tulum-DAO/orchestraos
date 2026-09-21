@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -143,6 +144,108 @@ def cmd_spawn(ns) -> int:
         return 1
     print(f"seat {seat} up: tmux session {row['tmux_session']} ({row['runtime']} {row.get('model', '')}, prompt {row['system_prompt']})")
     print(f"talk to it:   tmux attach -t {row['tmux_session']}\nmail it:      python3 msg_store.py send --from you --to {seat} --subject hi --body-file note.txt")
+    return 0
+
+
+def _pane_alive(tmux_session: str) -> bool:
+    """ALIVE = the session exists AND its pane runs a child process (the agent CLI), not a bare
+    shell left behind by a CLI that exited (issue #93: two 'spawned successfully' seats were dead)."""
+    if not _tmux_has_session(tmux_session):
+        return False
+    try:
+        out = subprocess.run(["tmux", "list-panes", "-t", f"={tmux_session}", "-F", "#{pane_pid}"],
+                             capture_output=True, text=True, timeout=5)
+        pid = (out.stdout.split() or [""])[0]
+        if not pid:
+            return False
+        kids = subprocess.run(["pgrep", "-P", pid], capture_output=True, text=True, timeout=5)
+        return bool(kids.stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+_TEMPLATE_KINDS = {"dev": "prompts/_dev-template.md", "pm": "prompts/_pm-template.md",
+                   "qa": "prompts/_qa-template.md"}
+_TOKEN_RE = re.compile(r"\{([A-Z][A-Z0-9_]*)\}")
+
+
+def fill_template(text: str, values: dict) -> tuple[str, list]:
+    """Substitute {TOKEN}s; return (filled, still-missing tokens). Never guesses a value."""
+    missing = sorted({t for t in _TOKEN_RE.findall(text) if t not in values})
+    filled = _TOKEN_RE.sub(lambda m: str(values.get(m.group(1), m.group(0))), text)
+    return filled, missing
+
+
+def cmd_agent(ns) -> int:
+    if ns.agent_command == "create":
+        return cmd_agent_create(ns)
+    print(f"unknown agent verb {ns.agent_command!r}", file=sys.stderr); return 2
+
+
+def cmd_agent_create(ns) -> int:
+    """issue #93: one verb instead of copy-template / sed / hand-edit registry.json / spawn.
+    Order is fail-early: template fully filled -> runtime/model pair valid -> register (with
+    reports_to) -> spawn -> ALIVE by effect. Nothing is written until the first two pass."""
+    st = S.load_settings()
+    if not st.config_exists:
+        print(f"no config at {st.config_path} — run `orchestra init` first", file=sys.stderr); return 2
+    name = ns.name
+    runtime = ns.runtime or (st.runtimes_enabled or ["claude"])[0]
+    # 1. runtime/model pair (the same rule spawn-agent.sh refuses on; here it is a clean message)
+    if ns.model:
+        sys.path.insert(0, str(st.repo_root / "scripts")) if str(st.repo_root / "scripts") not in sys.path else None
+        import runtime_signatures as rs
+        try:
+            rs.validate_model_for_runtime(runtime, ns.model, agent_id=name)
+        except rs.RuntimeResolutionError as e:
+            print(f"agent create refused: {e}", file=sys.stderr); return 2
+    # 2. template -> prompts/<name>.md, every {TOKEN} filled or refuse
+    prompt_rel = f"prompts/{name}.md"
+    if ns.template:
+        tpl_rel = _TEMPLATE_KINDS.get(ns.template, ns.template)
+        tpl = st.repo_root / tpl_rel
+        if not tpl.exists():
+            print(f"agent create refused: no template at {tpl} (kinds: {', '.join(_TEMPLATE_KINDS)} or a path)", file=sys.stderr); return 2
+        values = {"DEV_NAME": name, "PM_NAME": name, "YOUR_ID": name, "CWD": str(st.repo_root)}
+        if ns.parent:
+            values["PARENT_PM"] = ns.parent
+        for kv in ns.set or []:
+            if "=" not in kv:
+                print(f"agent create refused: --set expects KEY=VALUE, got {kv!r}", file=sys.stderr); return 2
+            k, v = kv.split("=", 1); values[k.strip()] = v
+        filled, missing = fill_template(tpl.read_text(), values)
+        if missing:
+            print(f"agent create refused: template {tpl_rel} still has unfilled placeholders: "
+                  f"{', '.join('{' + t + '}' for t in missing)} — pass --set {missing[0]}=... "
+                  f"(and --parent for {{PARENT_PM}})", file=sys.stderr); return 2
+        out = st.repo_root / prompt_rel
+        if out.exists():
+            print(f"agent create refused: {out} already exists (delete it or pick another name)", file=sys.stderr); return 2
+        out.write_text(filled)
+    elif not (st.repo_root / prompt_rel).exists():
+        print(f"warning: no {prompt_rel} and no --template; the seat boots on the foundation prompt only", file=sys.stderr)
+    # 3. register (+ parent), 4. spawn, 5. alive by effect
+    refused = _refuse_if_no_runtime_authed(st)
+    if refused is not None:
+        return refused
+    row = register_seat(st, name, gm=False, runtime=runtime, model=ns.model, tier=ns.tier, prompt=prompt_rel)
+    if ns.parent and row.get("reports_to") != ns.parent:
+        p, reg = _registry(st); reg["agents"][name]["reports_to"] = ns.parent; row["reports_to"] = ns.parent
+        tmp = p.with_suffix(".json.tmp"); tmp.write_text(json.dumps(reg, indent=2) + "\n"); os.replace(tmp, p)
+    env = S.child_env(st); env["AGENT_RUNTIME"] = row["runtime"]
+    if row.get("model"):
+        env["AGENT_MODEL"] = row["model"]
+    argv = [str(st.repo_root / "spawn-agent.sh"), name] + (["--task", ns.task] if ns.task else [])
+    rc = _run(argv, env=env, cwd=str(st.repo_root))
+    if rc != 0:
+        print(f"spawn-agent.sh exited {rc} — the seat was NOT created successfully", file=sys.stderr); return rc
+    if not _pane_alive(row["tmux_session"]):
+        print(f"seat {name} is not alive by effect: tmux session {row['tmux_session']!r} "
+              f"{'exists but runs no agent process' if _tmux_has_session(row['tmux_session']) else 'does not exist'}; "
+              f"check {st.data_dir / 'logs'}", file=sys.stderr); return 1
+    print(f"agent {name} created and alive: tmux {row['tmux_session']} ({row['runtime']} {row.get('model', '')}), "
+          f"prompt {prompt_rel}, reports to {ns.parent or '-'}")
+    print(f"talk to it:   tmux attach -t {row['tmux_session']}")
     return 0
 
 
