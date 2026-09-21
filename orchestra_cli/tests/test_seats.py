@@ -148,3 +148,68 @@ def test_spawn_FAILS_OPEN_when_the_probe_cannot_determine_auth(repo, tmp_path, m
         monkeypatch.setattr(SE, "_authed_runtimes", lambda st: ([], "probe unavailable"))
     assert M.main(["spawn", "hello"]) == 0, f"must proceed when auth is undetermined ({failure})"
     assert ran and ran[0][0].endswith("spawn-agent.sh")
+
+
+# --- issue #93: `orchestra agent create` ---------------------------------------------------
+# Fresh-install DX report (2026-09-20): creating an agent meant copying a template, sed-ing
+# placeholders nothing checks, editing registry.json with a Python snippet, then spawning.
+# One verb: fill the template (refuse an unfilled {TOKEN}), record the parent, validate the
+# runtime/model pair, register, spawn, and verify the seat is ALIVE (pane + process), not
+# merely that a tmux session name exists.
+
+@pytest.fixture
+def repo_with_templates(repo):
+    (repo / "prompts" / "_dev-template.md").write_text(
+        "# You are: {DEV_NAME}\n# Parent: {PARENT_PM}\n# Project: {PROJECT}\ncwd {CWD}\n")
+    (repo / "prompts" / "_pm-template.md").write_text(
+        "# {PM_NAME} for {CLIENT_NAME} ({CLIENT_SLUG}) on {PROJECT} branch {BRANCH}; id {YOUR_ID}\n")
+    return repo
+
+
+def test_parse_agent_create():
+    ns = M.parse_args(["agent", "create", "dev-x", "--tier", "T2", "--runtime", "claude",
+                       "--parent", "pm-y", "--template", "dev", "--set", "PROJECT=demo"])
+    assert ns.command == "agent" and ns.agent_command == "create" and ns.name == "dev-x"
+    assert ns.parent == "pm-y" and ns.template == "dev" and ns.set == ["PROJECT=demo"]
+
+
+def test_agent_create_fills_template_records_parent_and_spawns(repo_with_templates, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(SE, "_run", lambda argv, env=None, cwd=None: calls.append(argv) or 0)
+    monkeypatch.setattr(SE, "_tmux_has_session", lambda name: True)
+    monkeypatch.setattr(SE, "_pane_alive", lambda name: True)
+    rc = M.main(["agent", "create", "dev-x", "--parent", "pm-y", "--template", "dev",
+                 "--set", "PROJECT=demo", "--model", "claude-opus-5[1m]"])
+    assert rc == 0
+    prompt = (repo_with_templates / "prompts" / "dev-x.md").read_text()
+    assert "You are: dev-x" in prompt and "Parent: pm-y" in prompt and "Project: demo" in prompt
+    assert "{" not in prompt                                  # every token filled
+    reg = json.loads((tmp_path / "data" / "registry.json").read_text())["agents"]["dev-x"]
+    assert reg["reports_to"] == "pm-y" and reg["system_prompt"] == "prompts/dev-x.md"
+    assert calls and calls[-1][0].endswith("spawn-agent.sh") and calls[-1][1] == "dev-x"
+
+
+def test_agent_create_refuses_an_unfilled_placeholder_before_registering(repo_with_templates, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(SE, "_run", lambda argv, env=None, cwd=None: 0)
+    rc = M.main(["agent", "create", "pm-z", "--template", "pm", "--set", "PROJECT=demo"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "CLIENT_NAME" in err and "CLIENT_SLUG" in err and "BRANCH" in err
+    assert not (repo_with_templates / "prompts" / "pm-z.md").exists()
+    assert "pm-z" not in json.loads((tmp_path / "data" / "registry.json").read_text()).get("agents", {}) \
+        if (tmp_path / "data" / "registry.json").exists() else True
+
+
+def test_agent_create_refuses_a_model_of_another_runtime(repo_with_templates, monkeypatch, capsys):
+    monkeypatch.setattr(SE, "_run", lambda argv, env=None, cwd=None: 0)
+    rc = M.main(["agent", "create", "codex-helper", "--runtime", "codex", "--model", "claude-sonnet-5",
+                 "--template", "dev", "--set", "PROJECT=demo", "--parent", "gm"])
+    assert rc == 2 and "claude-sonnet-5" in capsys.readouterr().err
+
+
+def test_agent_create_fails_by_effect_when_the_seat_is_not_alive(repo_with_templates, monkeypatch, capsys):
+    monkeypatch.setattr(SE, "_run", lambda argv, env=None, cwd=None: 0)
+    monkeypatch.setattr(SE, "_tmux_has_session", lambda name: True)
+    monkeypatch.setattr(SE, "_pane_alive", lambda name: False)     # session exists, CLI died
+    rc = M.main(["agent", "create", "dev-dead", "--template", "dev", "--set", "PROJECT=demo", "--parent", "gm"])
+    assert rc == 1 and "not alive" in capsys.readouterr().err

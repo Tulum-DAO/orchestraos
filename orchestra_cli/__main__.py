@@ -32,6 +32,17 @@ def parse_args(argv=None) -> argparse.Namespace:
     u.add_argument("--dry-run", action="store_true", help="print the process table and exit")
     u.add_argument("-d", "--detach", action="store_true", help="run the supervisor in the background")
 
+    ag = sub.add_parser("agent", help="agent lifecycle verbs (`agent create <name>`)")
+    agsub = ag.add_subparsers(dest="agent_command", required=True)
+    ac = agsub.add_parser("create", help="fill a role template, register the seat (with its parent), validate runtime/model, spawn, verify it is alive")
+    ac.add_argument("name")
+    ac.add_argument("--tier", help="T1 (coordinator) or T2 (worker); default T2")
+    ac.add_argument("--runtime", choices=["claude", "gemini", "codex"], help="default: first of [runtimes] enabled")
+    ac.add_argument("--model", help="model id for the runtime (must belong to it)")
+    ac.add_argument("--parent", help="the seat this agent reports to (recorded as reports_to; fills {PARENT_PM})")
+    ac.add_argument("--template", help="dev | pm | qa (prompts/_<kind>-template.md) or a path relative to the checkout")
+    ac.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="fill a template {KEY}; repeatable")
+    ac.add_argument("--task", help="first instruction injected into the seat")
     sp = sub.add_parser("spawn", help="register + launch a seat in tmux (`--gm` = the General Manager)")
     sp.add_argument("seat")
     sp.add_argument("--gm", action="store_true", help="spawn as the General Manager (prompts/gm.md, tier T1, always-on)")
@@ -163,10 +174,10 @@ def cmd_status(ns) -> int:
 
 def main(argv=None) -> int:
     ns = parse_args(argv)
-    from .seats import cmd_rotate, cmd_spawn
+    from .seats import cmd_rotate, cmd_spawn, cmd_agent
     from .pair_cmd import run_pair
     return {"init": cmd_init, "doctor": cmd_doctor, "up": cmd_up, "down": cmd_down, "status": cmd_status,
-            "spawn": cmd_spawn, "rotate": cmd_rotate, "upgrade": cmd_upgrade,
+            "spawn": cmd_spawn, "agent": cmd_agent, "rotate": cmd_rotate, "upgrade": cmd_upgrade,
             "pair": run_pair}[ns.command](ns)
 
 
