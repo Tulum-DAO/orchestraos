@@ -12,6 +12,9 @@ short walkthrough, not part of this doc's steps.
 
 ```bash
 sudo apt update && sudo apt install -y git tmux python3 python3-venv build-essential curl iproute2   # iproute2 = `ss`, which `orchestra doctor` needs to attribute ports to its own supervisor
+# build-essential + python3 are not optional: node-pty (the web terminal's native addon) compiles at `npm install`;
+# without them the install used to finish green with the terminal dead. `orchestra doctor` now shows a red
+# `terminal:node-pty` row in that state; remedy: `npm rebuild node-pty` after installing the toolchain.
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs
 ```
 
