@@ -352,3 +352,35 @@ def test_plugin_telegram_row_is_info_when_disabled_and_missing_without_token(tmp
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "1:abc")
     names = _by_name(D.run_doctor(st, _probes()))
     assert names["plugin:telegram"].status == "OK"
+
+
+def test_doctor_flags_an_unbuilt_node_pty(tmp_path):
+    """The web terminal (dashboard-proxy.js /ws/terminal and api /ws/terminal) needs node-pty,
+    a native addon. On a host without the build toolchain the npm install completes with
+    node-pty skipped or unbuilt, the app boots green, and every terminal pane answers
+    'Web terminal unavailable: node-pty is not installed' (second-install DX report,
+    2026-09-20). doctor must catch it as a RED, required row before `up`."""
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+
+    probes = _probes()
+
+    def run_cmd(argv):
+        if argv[0] == "node" and "node-pty" in " ".join(argv):
+            raise RuntimeError("Cannot find module 'node-pty'")
+        return '{"loggedIn": true}'
+
+    probes.run_cmd = run_cmd
+    checks = {c.name: c for c in D.run_doctor(st, probes)}
+    assert checks["terminal:node-pty"].status == D.MISSING
+    assert checks["terminal:node-pty"].required is True
+    assert "npm rebuild node-pty" in checks["terminal:node-pty"].remedy
+    assert "build-essential" in checks["terminal:node-pty"].remedy
+    assert D.exit_code(list(checks.values())) == 1
+
+
+def test_doctor_node_pty_ok_when_the_native_addon_loads(tmp_path):
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    checks = {c.name: c for c in D.run_doctor(st, _probes())}
+    assert checks["terminal:node-pty"].status == D.OK
