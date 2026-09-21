@@ -23,6 +23,9 @@ def _sandbox(tmp_path, monkeypatch):
     env = dict(os.environ, TMUX_TMPDIR=str(sock_dir))
     env.pop("TMUX", None)
     # kill-server is forbidden on shared hosts (a wrapper refuses it); kill each session instead
-    ls = subprocess.run(["tmux", "ls", "-F", "#S"], env=env, capture_output=True, text=True)
-    for name in ls.stdout.split():
-        subprocess.run(["tmux", "kill-session", "-t", name], env=env, capture_output=True)
+    try:
+        ls = subprocess.run(["tmux", "ls", "-F", "#S"], env=env, capture_output=True, text=True)
+        for name in ls.stdout.split():
+            subprocess.run(["tmux", "kill-session", "-t", name], env=env, capture_output=True)
+    except FileNotFoundError:
+        pass
