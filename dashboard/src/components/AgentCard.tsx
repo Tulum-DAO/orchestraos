@@ -517,6 +517,19 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
               </button>
             </>
           )}
+          {!agent.alive && (
+            // A stopped seat cannot answer, but the entry must still be visible with the reason
+            // (QA run: a fresh install's three demo seats showed no way into a chat at all).
+            <button
+              disabled
+              className="flex items-center gap-1 text-xs px-2.5 py-1 min-h-[44px] rounded-md font-medium bg-neutral-800 text-neutral-500 opacity-60 cursor-not-allowed"
+              aria-label={`Open chat with ${displayName} (start it first)`}
+              title="Start the agent first"
+            >
+              <Maximize2 size={12} />
+              <span>Open chat</span>
+            </button>
+          )}
         </div>
       </div>
 
