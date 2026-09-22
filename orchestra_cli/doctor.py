@@ -338,6 +338,36 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
                             "Run `orchestra init` (pip install -r requirements.txt) or set [arturo] enabled=false",
                             required=False))
 
+    # -- arturo:local-stt (item C): can the web mic fall back to on-box transcription with no key?
+    # Opt-in, so "not installed" is INFO with the exact command, never a failure. Ready = OK.
+    if st.arturo_enabled:
+        try:
+            out = probes.run_cmd([st.python_bin(), "-c",
+                                  "import sys, json; sys.path.insert(0, %r); from services.arturo import local_stt as l; "
+                                  "print(json.dumps(l.state()))" % str(root)])
+            import json as _json
+            stt = _json.loads(out.strip().splitlines()[-1])
+        except Exception as e:  # noqa: BLE001
+            stt = {"state": "error", "reason": f"probe failed: {e}"}
+        state = stt.get("state")
+        if state == "ready":
+            checks.append(Check("arturo:local-stt", OK, f"local speech-to-text ready ({stt.get('model', '')}) — the web mic works in every browser, no key", "", required=False))
+        elif state == "not-installed":
+            checks.append(Check("arturo:local-stt", INFO, "not installed — the web mic dictates only in browsers with on-device speech (Chrome/Edge/Safari)",
+                                "Run `orchestra init --stt` (adds ~365 MB + a ~140 MB model) for Firefox / iPhone Chrome / Brave", required=False))
+        elif state == "off":
+            checks.append(Check("arturo:local-stt", INFO, "disabled (ARTURO_LOCAL_STT=0)", "", required=False))
+        else:
+            checks.append(Check("arturo:local-stt", WARN, f"{state}: {stt.get('reason', '')}"[:120],
+                                "Wait for the download, or run `orchestra init --stt` to fetch the model now", required=False))
+
+    # -- dashboard:https (item C): the microphone (and camera) only work in a secure context. A
+    # dashboard bound to a LAN/VPN address over plain http has no mic in ANY browser.
+    if st.dashboard_host not in ("127.0.0.1", "localhost", "::1"):
+        checks.append(Check("dashboard:https", INFO,
+                            f"dashboard bound to {st.dashboard_host} — browsers allow the microphone only over HTTPS or localhost",
+                            "Front it with `tailscale serve` or a TLS reverse proxy (see docs/ARTURO.md § Dictation)", required=False))
+
     # -- orchestra:version (issue #104): installed vs the newest tag on origin. Behind is a
     # NUDGE (WARN, not required); a remote that cannot be asked is INFO, never a failure.
     from . import version as V

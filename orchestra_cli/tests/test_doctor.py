@@ -423,3 +423,38 @@ def test_doctor_version_row_is_info_when_the_remote_cannot_be_asked(tmp_path):
     probes.run_cmd = run_cmd
     checks = {c.name: c for c in D.run_doctor(st, probes)}
     assert checks["orchestra:version"].status == D.INFO
+
+
+# ---- item C: arturo:local-stt + dashboard:https rows -----------------------------------------------
+def _stt_probes(state_json, **kw):
+    p = _probes(**kw)
+    real = p.run_cmd
+    def run_cmd(argv):
+        return state_json if any("local_stt" in a for a in argv) else real(argv)
+    return D.DoctorProbes(**{**p.__dict__, "run_cmd": run_cmd})
+
+
+def test_local_stt_not_installed_is_info_and_names_the_command(tmp_path):
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    checks = _by_name(D.run_doctor(st, _stt_probes('{"state": "not-installed", "install": "orchestra init --stt"}')))
+    c = checks["arturo:local-stt"]
+    assert c.status == D.INFO and c.required is False and "orchestra init --stt" in c.remedy
+
+
+def test_local_stt_ready_is_ok_and_warming_is_warn(tmp_path):
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    assert _by_name(D.run_doctor(st, _stt_probes('{"state": "ready", "model": "base.en"}')))["arturo:local-stt"].status == D.OK
+    c = _by_name(D.run_doctor(st, _stt_probes('{"state": "warming", "reason": "downloading"}')))["arturo:local-stt"]
+    assert c.status == D.WARN and c.required is False
+
+
+def test_dashboard_https_note_only_off_loopback(tmp_path):
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    assert "dashboard:https" not in _by_name(D.run_doctor(st, _probes()))
+    st2 = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    st2 = type(st2)(**{**st2.__dict__, "dashboard_host": "0.0.0.0"})
+    c = _by_name(D.run_doctor(st2, _probes()))["dashboard:https"]
+    assert c.status == D.INFO and "HTTPS" in c.detail

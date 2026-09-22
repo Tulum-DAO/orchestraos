@@ -22,6 +22,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     i.add_argument("--no-venv", action="store_true", help="skip python venv + pip")
     i.add_argument("--no-npm", action="store_true", help="skip npm install (and builds)")
     i.add_argument("--no-build", action="store_true", help="skip api/dashboard builds")
+    i.add_argument("--stt", action="store_true",
+                   help="also install local speech-to-text for the web mic (faster-whisper, ~365 MB + a ~140 MB model; no vendor key)")
     i.add_argument("--demo", action="store_true",
                    help="seed three fixture seats and one card of each kind (approval, menu, questionnaire, human task)")
 
@@ -83,7 +85,7 @@ def cmd_init(ns) -> int:
     root = S.repo_root_from_env()
     report = run_init(root, data_dir=Path(ns.data_dir) if ns.data_dir else None,
                       skip_npm=ns.no_npm, skip_venv=ns.no_venv, skip_build=ns.no_build, demo=ns.demo,
-                      yes=ns.yes)
+                      yes=ns.yes, stt=ns.stt)
     print(render_report(report))
     failed = [r for r in report if not r.did and ("failed" in r.detail)]
     st = _settings()

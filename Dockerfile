@@ -53,8 +53,11 @@ COPY --chown=${USERNAME}:${USERNAME} . .
 # settings are its own, so the hook rows are written without a prompt). Idempotent — re-running it
 # later (postCreateCommand, or by hand) only reports "present".
 ENV PATH="/home/${USERNAME}/.local/bin:${PATH}"
+# WITH_STT=1 bakes local speech-to-text for the web mic into the image (item C): +~365 MB in .venv
+# plus the ~140 MB model. Default off — `orchestra init --stt` inside a running container does the same.
+ARG WITH_STT=0
 RUN make install \
- && orchestra init --yes \
+ && orchestra init --yes $([ "$WITH_STT" = "1" ] && echo --stt) \
  && orchestra up --dry-run
 
 # gateway / api / dashboard

@@ -47,6 +47,7 @@ class Settings:
     dashboard_host: str = "127.0.0.1"
     dashboard_port: int = 8891
     arturo_enabled: bool = True
+    arturo_local_stt: bool = False        # item C: opt-in local speech-to-text (faster-whisper) for web dictation
     telemetry_enabled: bool = True
     menu_bridge_enabled: bool = True
     telegram_enabled: bool = False
@@ -154,6 +155,7 @@ def load_settings(repo_root: Path | None = None, config_path: Path | None = None
         dashboard_host=str(_get(raw, "dashboard", "host", "127.0.0.1")),
         dashboard_port=int(_get(raw, "dashboard", "port", 8891)),
         arturo_enabled=bool(_get(raw, "arturo", "enabled", True)),
+        arturo_local_stt=bool(_get(raw, "arturo", "local_stt", False)),
         telemetry_enabled=bool(_get(raw, "telemetry", "enabled", True)),
         menu_bridge_enabled=bool(_get(raw, "menus", "bridge_enabled", True)),
         telegram_enabled=bool(((raw.get("plugins") or {}).get("telegram") or {}).get("enabled", False)),
