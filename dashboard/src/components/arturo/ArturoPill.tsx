@@ -65,7 +65,7 @@ export function ArturoPill() {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const { dictating, note: dictNote, toggle: toggleDictation, stop: stopDictation } =
+  const { mode: dictMode, dictating, note: dictNote, toggle: toggleDictation, stop: stopDictation } =
     useDictation(draft, setDraft, () => ta.current?.focus());
   const scroller = useRef<HTMLDivElement>(null);
   // Chat/dev mode opens an agent as an overlay WITHOUT changing the URL, so the route says
@@ -318,9 +318,10 @@ export function ArturoPill() {
             )}
           </div>
           <div className="cluster">
-            <button className={dictating ? 'circle-btn listening' : 'circle-btn'} aria-label={dictating ? 'Stop dictation' : 'Dictate'}
-                    aria-pressed={dictating} title={inCall ? 'Captions run on their own during a call' : 'Dictate (Chrome/Edge)'}
-                    onClick={toggleDictation} disabled={inCall}><Mic size={16} /></button>
+            <button className={dictMode === 'idle' ? 'circle-btn' : `circle-btn ${dictMode}`}
+                    aria-label={dictMode === 'listening' ? 'Stop dictation' : dictMode === 'recording' ? 'Stop recording' : dictMode === 'transcribing' ? 'Transcribing' : 'Dictate'}
+                    aria-pressed={dictating} title={inCall ? 'Captions run on their own during a call' : dictMode === 'transcribing' ? 'Transcribing on the server…' : 'Dictate'}
+                    onClick={toggleDictation} disabled={inCall || dictMode === 'transcribing'}><Mic size={16} /></button>
             {inCall ? (
               <button className="circle-btn white" aria-label="End call" aria-pressed title="End call"
                       onClick={() => void toggleCall()}><PhoneOff size={18} /></button>
