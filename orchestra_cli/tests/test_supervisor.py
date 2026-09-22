@@ -235,3 +235,17 @@ def test_process_table_enables_telegram_from_config(tmp_path):
     st.telegram_enabled = True
     by = {e.name: e for e in PT.build_process_table(st)}
     assert by["telegram"].enabled is True
+
+
+def test_up_prints_one_update_notice_when_behind_and_never_blocks(tmp_path, monkeypatch, capsys):
+    """Issue #104: `orchestra up` prints ONE line when a newer tag exists on origin. It never
+    auto-updates and never blocks startup; when the remote cannot be asked it is silent."""
+    from orchestra_cli import __main__ as M
+    from orchestra_cli import version as V
+    monkeypatch.setattr(V, "status", lambda root, **kw: {"installed": "v0.1.0", "latest": "v0.2.0", "behind": True})
+    line = M.update_notice(tmp_path)
+    assert "v0.2.0" in line and "orchestra upgrade" in line
+    monkeypatch.setattr(V, "status", lambda root, **kw: {"installed": None, "latest": None, "behind": None})
+    assert M.update_notice(tmp_path) == ""
+    monkeypatch.setattr(V, "status", lambda root, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert M.update_notice(tmp_path) == ""              # a broken probe never blocks up

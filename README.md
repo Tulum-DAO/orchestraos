@@ -29,7 +29,7 @@ OrchestraOS, published by Tulum DAO: an open harness for running a fleet of codi
 - `docs/GATE.md` — the seven-step gate everyone completes first: command, expected output, and what to check if it fails, for each step.
 - `docs/ONBOARDING.md` — connecting your own phone and browser to your gateway (no baked-in token): pairing, the handshake, what each failure means.
 - `docs/PROMPTS.md` — copy-paste prompts for the same seven steps, plus the tracks.
-- `docs/UPGRADE.md` — pulling latest `main` without losing a running seat.
+- `docs/UPGRADE.md` — **updating:** `orchestra upgrade` pulls the newest release, re-runs `init`, re-checks `doctor`; running seats keep their code until their next spawn or rotation. `orchestra doctor` and `orchestra up` tell you when a newer release exists.
 - `docs/COSTS.md` — what a VPS and a CLI plan actually cost, and the zero-key path.
 - `docs/tracks/README.md` — the thirteen hackathon tracks, one doc each.
 - `docs/ARCHITECTURE.md` — the map. Read before touching rotation or approvals.

@@ -107,6 +107,16 @@ def cmd_doctor(ns) -> int:
     return D.exit_code(checks)
 
 
+def update_notice(root) -> str:
+    """Issue #104: ONE line when a newer tag exists on origin; empty otherwise. Fail-soft —
+    a broken probe or an unreachable remote never blocks `orchestra up`."""
+    try:
+        from . import version as V
+        return V.notice_line(V.status(root))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def cmd_up(ns) -> int:
     from . import process_table as PT
     from . import supervisor as SV
@@ -123,6 +133,9 @@ def cmd_up(ns) -> int:
     if missing:
         print("orchestra.toml missing required keys: " + ", ".join(missing), file=sys.stderr)
         return 2
+    notice = update_notice(st.repo_root)
+    if notice:
+        print(notice, file=sys.stderr)
     status = SV.read_status(st.data_dir)
     if status["running"]:
         print(f"supervisor already running (pid {status['pid']}); use `orchestra status` / `orchestra down`",
