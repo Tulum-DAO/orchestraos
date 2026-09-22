@@ -333,7 +333,8 @@ export class VoiceSession {
           this.ws.send(JSON.stringify({ event: 'user_turn', text }));
         }
       },
-      onError: (code) => { this.cb.onUnavailable?.(`dictation error: ${code}`); },
+      // 'aborted' = we (or a second recognizer) stopped it; 'no-speech' = silence. Neither is a failure.
+      onError: (code) => { if (code !== 'aborted' && code !== 'no-speech') this.cb.onUnavailable?.(`dictation error: ${code}`); },
     });
     if (!handle) {
       this.cb.onUnavailable?.(`voice isn't configured yet: ${DICTATION_UNAVAILABLE}`);
