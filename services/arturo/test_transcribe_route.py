@@ -43,17 +43,17 @@ def test_transcribe_accepts_webm_and_returns_text(monkeypatch):
     seen = {}
     def fake(audio_bytes, filename, content_type):
         seen.update(audio=audio_bytes, filename=filename, ct=content_type)
-        return {"text": "list the agents", "ms": 412, "backend": "local-whisper", "model": "base.en"}
+        return {"text": "list the agents", "ms": 412, "backend": "local-whisper", "engine": "sherpa", "model": "whisper-tiny.en"}
     monkeypatch.setattr(mod._local_stt, "transcribe", fake)
     r = _post(mod.app.test_client(), {"audio": (io.BytesIO(b"\x1aE\xdf\xa3opus"), "clip.webm", "audio/webm;codecs=opus")})
     assert r.status_code == 200
-    assert r.get_json() == {"ok": True, "text": "list the agents", "backend": "local-whisper", "model": "base.en", "ms": 412}
+    assert r.get_json() == {"ok": True, "text": "list the agents", "backend": "local-whisper", "engine": "sherpa", "model": "whisper-tiny.en", "ms": 412}
     assert seen["audio"].startswith(b"\x1aE") and seen["ct"].startswith("audio/webm")
 
 
 def test_transcribe_422_on_silence(monkeypatch):
     mod = _load_proxy()
-    monkeypatch.setattr(mod._local_stt, "transcribe", lambda *a, **k: {"text": "", "ms": 5, "backend": "local-whisper", "model": "base.en"})
+    monkeypatch.setattr(mod._local_stt, "transcribe", lambda *a, **k: {"text": "", "ms": 5, "backend": "local-whisper", "engine": "sherpa", "model": "whisper-tiny.en"})
     r = _post(mod.app.test_client(), {"audio": (io.BytesIO(b"x"), "c.wav", "audio/wav")})
     assert r.status_code == 422 and r.get_json()["error"] == "no_speech"
 
@@ -106,3 +106,13 @@ def test_proxy_boot_prefetch_runs_after_the_import(monkeypatch):
     monkeypatch.setattr(real, "prefetch", lambda *a, **k: calls.append(k) or False)
     mod = _load_proxy()
     assert mod._local_stt is real and len(calls) == 1 and calls[0]["log"] is mod.log
+
+
+def test_transcribe_415_when_the_default_engine_gets_a_non_wav_clip(monkeypatch):
+    mod = _load_proxy()
+    def wav_only(*a, **k):
+        raise mod._local_stt.WavRequired("not a WAV file")
+    monkeypatch.setattr(mod._local_stt, "transcribe", wav_only)
+    r = _post(mod.app.test_client(), {"audio": (io.BytesIO(b"\x1aE\xdf\xa3opus"), "clip.webm", "audio/webm")})
+    body = r.get_json()
+    assert r.status_code == 415 and body["error"] == "wav_required" and body["install"] == "orchestra init --stt"
