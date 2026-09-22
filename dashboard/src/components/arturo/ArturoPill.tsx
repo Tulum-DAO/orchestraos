@@ -20,7 +20,7 @@ import { Mic, ArrowUp, X, History, Focus, PhoneOff, AudioLines, Plus, Paperclip 
 import { useDictation } from './useDictation.ts';
 import { uploadAttachment, attachmentPreamble, describeAttachment, type Attachment } from '../../lib/arturoUpload';
 import './arturo.css';
-import { arturoText, newConversationId, contextFromLocation, getArturoFocus, subscribeArturoFocus, sendStateLabel, type SendState } from '../../lib/arturo';
+import { arturoText, newConversationId, contextFromLocation, getArturoFocus, subscribeArturoFocus, sendStateLabel, isStarting, waitForArturo, STARTING_TEXT, type SendState } from '../../lib/arturo';
 import {
   listThreads, loadThread, contextCardLabel, isContextDismissed, dismissContext,
   restoreContext, contextForTurn, type ThreadSummary,
@@ -174,12 +174,25 @@ export function ArturoPill() {
     const pre = attachmentPreamble(attachments);
     setAttachments([]);
     // The card is the switch: present → this turn carries the page context; deleted → it does not.
-    const r = await arturoText(pre ? `${pre}\n\n${text}` : text, convId, contextForTurn(convId, ctx), { onSent: () => setState('sent') });
+    const body = pre ? `${pre}\n\n${text}` : text;
+    let r = await arturoText(body, convId, contextForTurn(convId, ctx), { onSent: () => setState('sent') });
+    if (!r.ok && isStarting(r)) {
+      // Same rule as the home (G15): right after `orchestra up` the Arturo service is still booting and
+      // the api answers 502/503/504. That is "starting", not "unreachable" — say so, wait for /health,
+      // send the SAME message once more. Shaw hit the raw 502 by opening the pill before the home.
+      const noteAt = Date.now();
+      append({ role: 'arturo', text: STARTING_TEXT, at: noteAt, note: true });
+      const ready = await waitForArturo();
+      setTurns((prev) => prev.filter((t) => !(t.note && t.at === noteAt)));
+      if (ready.ok) r = await arturoText(body, convId, contextForTurn(convId, ctx), { onSent: () => setState('sent') });
+    }
     setBusy(false);
     setState(r.ok ? 'acked' : 'failed');
     append(r.ok
       ? { role: 'arturo', text: r.reply_text || '(no reply)', tools: r.tools_called, at: Date.now() }
-      : { role: 'arturo', text: `Could not reach Arturo: ${r.error || 'unknown'}`, at: Date.now() });
+      : { role: 'arturo', text: isStarting(r)
+          ? 'I am still starting up and could not answer yet — give `orchestra up` a moment and send that again.'
+          : `Could not reach Arturo: ${r.error || 'unknown'}`, at: Date.now() });
     void listThreads().then(setThreads);      // the thread it just created/updated joins the list
   }
 
@@ -286,7 +299,7 @@ export function ArturoPill() {
               (Shaw 2026-09-22). No Threads sentence — the Threads button says it. */}
           {turns.length === 0 && !busy && <p className="empty">Ask about what you are looking at, or anything else.</p>}
           {turns.map((t, i) => t.note ? (
-            <div key={i} className="row note"><div className="meta">I can't do that yet — {t.text}.</div></div>
+            <div key={i} className="row note"><div className="meta">{t.text === STARTING_TEXT ? t.text : `I can't do that yet — ${t.text}.`}</div></div>
           ) : (
             <div key={i} className={t.role === 'user' ? 'row user' : 'row arturo'}>
               <div className="bubble">{t.text}</div>
