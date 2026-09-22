@@ -22,8 +22,8 @@ import '../components/arturo/arturo.css';
 import { BrainModal } from '../components/agent/BrainModal';
 import { ModelSelectorSheet } from '../components/agent/ModelSelectorSheet';
 import { arturoHealth, arturoText, runtimesAvailable, brainLabel, greeting, newConversationId,
-  isStarting, waitForArturo, STARTING_TEXT, firstStep, stepAfterRuntime, onboardingTurn,
-  type ArturoHealth, type RuntimeRow } from '../lib/arturo';
+  isStarting, waitForArturo, STARTING_TEXT, firstStep, stepAfterRuntime, onboardingTurn, sendStateLabel,
+  type ArturoHealth, type RuntimeRow, type SendState } from '../lib/arturo';
 import { listThreads, loadThread, type ThreadSummary } from '../lib/arturoThreads';
 import WebTerminal from '../components/WebTerminal';
 import { installCommand } from '../lib/providerConnect';
@@ -31,7 +31,7 @@ import { uploadAttachment, attachmentPreamble, describeAttachment, type Attachme
 import { useDictation } from '../components/arturo/useDictation.ts';
 import { Brain, Settings } from 'lucide-react';
 
-type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[]; pending?: boolean;
+type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[]; pending?: boolean; state?: SendState;
   decision?: { options: string[]; onPick: (v: string) => void } };
 type Step = 'name' | 'runtime' | 'voice' | 'first' | 'done';
 
@@ -118,6 +118,7 @@ export default function ArturoHome() {
     setDrawer(false);
   }
 
+  const lastUserIdx = (() => { for (let i = turns.length - 1; i >= 0; i--) if (turns[i].role === 'user') return i; return -1; })();
   const feedRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const nextId = useRef(1);
@@ -234,7 +235,7 @@ export default function ArturoHome() {
     });
   }
 
-  const user = (text: string) => setTurns((t) => [...t, { id: nextId.current++, role: 'user', text }]);
+  const user = (text: string, state?: SendState) => { const id = nextId.current++; setTurns((t) => [...t, { id, role: 'user', text, state }]); return id; };
 
   async function send() {
     const text = draft.trim();
@@ -242,7 +243,7 @@ export default function ArturoHome() {
     if (dictating) stopDictation();      // the sent text is final; don't re-append into the empty box
     clearDictNote();
     setDraft('');
-    user(text);
+    const uid = user(text, 'sending');   // the bubble appears NOW; the box is already empty
     const isName = step === 'name';
     const isFirst = step === 'first';
     // The name step is a BRAIN turn: the marker makes the proxy add the step's directive, the
@@ -261,14 +262,16 @@ export default function ArturoHome() {
     // (a file attached during the name step must not push it down; peer review DEC-1790048447550594).
     const sent = isName ? onboardingTurn('name', withFiles) : withFiles;
     setAttachments([]);
-    let r = await arturoText(sent, convId.current);
+    const onSent = () => patch(uid, { state: 'sent' });
+    let r = await arturoText(sent, convId.current, null, { onSent });
     if (!r.ok && isStarting(r)) {          // G15: still booting -> say so, wait for health, retry once
       patch(id, { pending: false, text: STARTING_TEXT });
       const ready = await waitForArturo();
       setHealth(ready);
-      if (ready.ok) { patch(id, { pending: true, text: '' }); r = await arturoText(sent, convId.current); }
+      if (ready.ok) { patch(id, { pending: true, text: '' }); r = await arturoText(sent, convId.current, null, { onSent }); }
     }
     setBusy(false);
+    patch(uid, { state: r.ok ? 'acked' : 'failed' });
     if (!r.ok) {
       patch(id, { pending: false, text: isStarting(r)
         ? 'I am still starting up and could not answer yet — give `orchestra up` a moment and send that again.'
@@ -324,8 +327,9 @@ export default function ArturoHome() {
             <div className="greet serif">{greeting(name)}</div>
             {starting && <div className="tools" style={{ color: 'rgba(255,255,255,0.45)', fontSize: 13 }}>{STARTING_TEXT}</div>}
           </div>
-        ) : turns.map((t) => t.role === 'user' ? (
-          <div key={t.id} className="turn-user"><div className="bubble-user">{t.text}</div></div>
+        ) : turns.map((t, i) => t.role === 'user' ? (
+          <div key={t.id} className="turn-user"><div className="bubble-user">{t.text}</div>
+            {(t.state === 'failed' || (t.state && i === lastUserIdx)) && <div className={`turn-state ${t.state}`}>{sendStateLabel(t.state)}</div>}</div>
         ) : (
           <div key={t.id} className="turn-assistant">
             <ArturoMark className="mark-sm" />

@@ -20,14 +20,14 @@ import { Mic, ArrowUp, X, History, Focus, PhoneOff, AudioLines, Plus, Paperclip 
 import { useDictation } from './useDictation.ts';
 import { uploadAttachment, attachmentPreamble, describeAttachment, type Attachment } from '../../lib/arturoUpload';
 import './arturo.css';
-import { arturoText, newConversationId, contextFromLocation, getArturoFocus, subscribeArturoFocus } from '../../lib/arturo';
+import { arturoText, newConversationId, contextFromLocation, getArturoFocus, subscribeArturoFocus, sendStateLabel, type SendState } from '../../lib/arturo';
 import {
   listThreads, loadThread, contextCardLabel, isContextDismissed, dismissContext,
   restoreContext, contextForTurn, type ThreadSummary,
 } from '../../lib/arturoThreads';
 import { VoiceSession, type VoiceSessionState } from '../../lib/voiceSession';
 
-interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[]; at: number; live?: boolean;
+interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[]; at: number; live?: boolean; state?: SendState;
   /** A first-person status note (voice not configured, mic denied…) — rendered as a small interleaved
    *  row at the moment it happened, like a tool call, never as a message and never pinned to the bottom. */
   note?: boolean }
@@ -142,6 +142,7 @@ export function ArturoPill() {
   useEffect(() => { scroller.current?.scrollTo({ top: 1e9, behavior: 'smooth' }); }, [turns, open, busy]);
 
   const append = (t: PillTurn) => setTurns((prev) => [...prev, t]);
+  const lastUserIdx = (() => { for (let i = turns.length - 1; i >= 0; i--) if (turns[i].role === 'user') return i; return -1; })();
   appendRef.current = append;
   // One note per distinct reason in a row: a refused call can report twice (socket + server).
   noteRef.current = (reason: string) => setTurns((prev) => {
@@ -156,13 +157,16 @@ export function ArturoPill() {
     if (dictating) stopDictation();      // the sent text is final; don't re-append into the empty box
     clearDictNote();
     setDraft(''); setBusy(true);
-    append({ role: 'user', text, at: Date.now() });
+    const at = Date.now();
+    append({ role: 'user', text, at, state: 'sending' });
+    const setState = (state: SendState) => setTurns((prev) => prev.map((t) => t.at === at && t.role === 'user' ? { ...t, state } : t));
     // The path rides in front of the message (same grammar as the home composer).
     const pre = attachmentPreamble(attachments);
     setAttachments([]);
     // The card is the switch: present → this turn carries the page context; deleted → it does not.
-    const r = await arturoText(pre ? `${pre}\n\n${text}` : text, convId, contextForTurn(convId, ctx));
+    const r = await arturoText(pre ? `${pre}\n\n${text}` : text, convId, contextForTurn(convId, ctx), { onSent: () => setState('sent') });
     setBusy(false);
+    setState(r.ok ? 'acked' : 'failed');
     append(r.ok
       ? { role: 'arturo', text: r.reply_text || '(no reply)', tools: r.tools_called, at: Date.now() }
       : { role: 'arturo', text: `Could not reach Arturo: ${r.error || 'unknown'}`, at: Date.now() });
@@ -277,6 +281,7 @@ export function ArturoPill() {
             <div key={i} className={t.role === 'user' ? 'row user' : 'row arturo'}>
               <div className="bubble">{t.text}</div>
               {t.tools && t.tools.length > 0 && <div className="meta">ran {t.tools.join(', ')}</div>}
+              {t.role === 'user' && (t.state === 'failed' || (t.state && i === lastUserIdx)) && <div className={`turn-state ${t.state}`}>{sendStateLabel(t.state)}</div>}
             </div>
           ))}
           {busy && <div className="row arturo"><div className="bubble thinking">Thinking…</div></div>}
