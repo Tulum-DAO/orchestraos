@@ -104,7 +104,8 @@ test('POST /new spawns a registered seat on the authed runtime', async () => {
   assert.equal(r.json.id, 'docs-writer');
   assert.equal(r.json.session, 'docs-writer');
   assert.equal(r.json.runtime, 'claude');
-  assert.deepEqual((deps as any).calls.spawn[0], { name: 'docs-writer', task: 'write the README', runtime: 'claude' });
+  // gm:false is new on this object (the General Manager path); every other field is unchanged.
+  assert.deepEqual((deps as any).calls.spawn[0], { name: 'docs-writer', task: 'write the README', runtime: 'claude', gm: false });
 });
 
 test('POST /new works with no task', async () => {
@@ -126,6 +127,33 @@ test('POST /new passes the role as the first line of the spawn task', async () =
   const r = await post(deps, '/api/agents/new', { name: 'docs-writer', role: 'docs writer', task: 'write the README' });
   assert.equal(r.json.ok, true);
   assert.equal((deps as any).calls.spawn[0].task, 'Your role: docs writer.\n\nwrite the README');
+});
+
+test('gm is NOT reserved — docs/INSTALL.md tells a new operator to create it', () => {
+  assert.equal(normalizeAgentName('gm').error, undefined);
+  assert.equal(normalizeAgentName('gm').name, 'gm');
+  // the real sentinels stay reserved
+  for (const n of ['all', 'none', 'new', 'arturo', 'self', 'system']) {
+    assert.equal(normalizeAgentName(n).error, 'name_reserved', n);
+  }
+});
+
+test('POST /new with gm:true spawns the General Manager, not an ordinary worker', async () => {
+  // a FRESH install has no gm — the state Shaw hit: the name was refused and no gm existed
+  const deps = makeDeps({ existingNames: () => new Set<string>() });
+  const r = await post(deps, '/api/agents/new', { name: 'gm', gm: true, task: 'run the fleet' });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.ok, true);
+  assert.equal(r.json.gm, true);
+  // T0 + always-on + prompts/gm.md are what `orchestra spawn --gm` sets; the route must take that
+  // path, because spawn-agent.sh cannot set any of them.
+  assert.deepEqual((deps as any).calls.spawn[0], { name: 'gm', task: 'run the fleet', runtime: 'claude', gm: true });
+});
+
+test('POST /new without gm keeps the ordinary worker path', async () => {
+  const deps = makeDeps();
+  await post(deps, '/api/agents/new', { name: 'worker-1' });
+  assert.equal((deps as any).calls.spawn[0].gm, false);
 });
 
 test('POST /new refuses a duplicate name with 409', async () => {

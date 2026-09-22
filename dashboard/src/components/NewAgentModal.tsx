@@ -37,6 +37,9 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
   const [name, setName] = useState('');
   const [task, setTask] = useState('');
   const [role, setRole] = useState('');
+  // The General Manager is a different KIND of seat: tier T0, always-on, the gm prompt — the
+  // web equivalent of `orchestra spawn <name> --gm`, which is what docs/INSTALL.md tells you to run.
+  const [gm, setGm] = useState(false);
   const [error, setError] = useState('');
   const [created, setCreated] = useState<{ id: string; session: string; runtime?: string } | null>(null);
   const [shell, setShell] = useState<{ session: string; hint: string } | null>(null);
@@ -45,7 +48,7 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
 
   useEffect(() => {
     if (!open) return;
-    setPhase('probing'); setError(''); setCreated(null); setShell(null); setName(''); setTask(''); setRole('');
+    setPhase('probing'); setError(''); setCreated(null); setShell(null); setName(''); setTask(''); setRole(''); setGm(false);
     void probe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -75,7 +78,7 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
     const clean = previewName(name);
     if (!clean || phase === 'spawning') return;
     setPhase('spawning'); setError('');
-    const r = await createAgent(name, task, runtime || undefined, role);
+    const r = await createAgent(name, task, runtime || undefined, role, gm);
     if (r.ok && r.id) {
       setCreated({ id: r.id, session: r.session || r.id, runtime: r.runtime });
       setPhase('spawned');
@@ -119,8 +122,27 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
           <div className="p-6">
             <h3 className="text-lg font-semibold text-neutral-100 mb-1">New Agent</h3>
             <p className="text-sm text-neutral-400 mb-4">
-              What should it be called? It runs on {runtimeLabel(authed.find((r) => r.id === runtime) || authed[0])}, in a tmux session of its own.
+              {gm
+                ? <>The manager seat: always on, tier T0, and it runs on the gm prompt. One per install.</>
+                : <>What should it be called? It runs on {runtimeLabel(authed.find((r) => r.id === runtime) || authed[0])}, in a tmux session of its own.</>}
             </p>
+
+            <div className="mb-3 flex gap-2">
+              {[{ v: false, t: 'Worker', d: 'tier T2' }, { v: true, t: 'General Manager', d: 'tier T0, always on' }].map((k) => (
+                <button
+                  key={String(k.v)}
+                  type="button"
+                  onClick={() => { setGm(k.v); if (k.v && !name.trim()) setName('gm'); }}
+                  aria-pressed={gm === k.v}
+                  className={`flex-1 px-3 py-2 rounded-lg border text-left transition-colors ${gm === k.v
+                    ? 'border-blue-600 bg-blue-600/15 text-neutral-100'
+                    : 'border-neutral-700 bg-neutral-950 text-neutral-400 hover:text-neutral-200'}`}
+                >
+                  <div className="text-sm font-medium">{k.t}</div>
+                  <div className="text-[11px] text-neutral-500">{k.d}</div>
+                </button>
+              ))}
+            </div>
 
             <label className="block text-xs uppercase tracking-wider text-neutral-500 mb-1">Name</label>
             <input
@@ -188,7 +210,7 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
                 disabled={!canSubmit}
                 className="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors disabled:opacity-40"
               >
-                {phase === 'spawning' ? 'Starting…' : 'Create agent'}
+                {phase === 'spawning' ? 'Starting…' : gm ? 'Create the manager' : 'Create agent'}
               </button>
             </div>
           </div>

@@ -53,7 +53,8 @@ def register_seat(st: S.Settings, seat: str, *, gm: bool, runtime: str | None, m
     if model:
         row["model"] = model
     row.setdefault("model", DEFAULT_MODEL.get(row["runtime"], ""))
-    row.setdefault("tier", tier or ("T1" if gm else "T2"))
+    # T0 = the always-on manager seat, T1 = coordinators, T2 = workers (docs/REFERENCE_INSTALL.md).
+    row.setdefault("tier", tier or ("T0" if gm else "T2"))
     row.setdefault("machine", "local")
     row.setdefault("cwd", str(st.repo_root))
     row.setdefault("tmux_session", seat)

@@ -55,12 +55,14 @@ def test_spawn_registers_seat_and_runs_spawn_agent_with_child_env(repo, tmp_path
     assert env["AGENT_MODEL"] == "claude-opus-5[1m]" and env["ORCHESTRA_ROOT"] == str(repo)
 
 
-def test_spawn_gm_uses_gm_prompt_tier1_always_on(repo, tmp_path, monkeypatch):
+def test_spawn_gm_uses_gm_prompt_tier0_always_on(repo, tmp_path, monkeypatch):
+    """The manager seat is T0 (Shaw, 2026-09-22): docs/REFERENCE_INSTALL.md already defines
+    T0 as "the always-on manager seat" and T1 as coordinators, but --gm registered T1."""
     monkeypatch.setattr(SE, "_run", lambda argv, env=None, cwd=None: 0)
     monkeypatch.setattr(SE, "_tmux_has_session", lambda name: True)
     assert M.main(["spawn", "gm", "--gm"]) == 0
     a = json.loads((tmp_path / "data" / "registry.json").read_text())["agents"]["gm"]
-    assert a["tier"] == "T1" and a["always_on"] is True and a["system_prompt"] == "prompts/gm.md"
+    assert a["tier"] == "T0" and a["always_on"] is True and a["system_prompt"] == "prompts/gm.md"
 
 
 def test_spawn_fails_by_effect_when_no_tmux_session_appears(repo, monkeypatch, capsys):
