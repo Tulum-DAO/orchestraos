@@ -16,7 +16,9 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
-import { Mic, ArrowUp, X, History, Focus, PhoneCall, PhoneOff } from 'lucide-react';
+import { Mic, ArrowUp, X, History, Focus, PhoneOff, AudioLines, Plus, Paperclip } from 'lucide-react';
+import { useDictation } from './useDictation.ts';
+import { uploadAttachment, attachmentPreamble, describeAttachment, type Attachment } from '../../lib/arturoUpload';
 import './arturo.css';
 import { arturoText, newConversationId, contextFromLocation, getArturoFocus, subscribeArturoFocus } from '../../lib/arturo';
 import {
@@ -55,6 +57,16 @@ export function ArturoPill() {
   // Re-render when the card is deleted or restored; the value itself lives in storage.
   const [ctxOn, setCtxOn] = useState(true);
   const ta = useRef<HTMLTextAreaElement>(null);
+  // Same composer buttons as the Arturo home (Shaw 2026-09-21: "the buttons we see when Arturo
+  // first loads are the same buttons we should see in every instance of Ask Arturo"): attach,
+  // dictate, and send-or-voice in the right slot. Only the home's model chip has no twin here —
+  // the page-context card sits in its place.
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const { dictating, note: dictNote, toggle: toggleDictation, stop: stopDictation } =
+    useDictation(draft, setDraft, () => ta.current?.focus());
   const scroller = useRef<HTMLDivElement>(null);
   // Chat/dev mode opens an agent as an overlay WITHOUT changing the URL, so the route says
   // "agents" and not which one. When the overlay publishes a focus, it wins over the route —
@@ -124,10 +136,14 @@ export function ArturoPill() {
   async function send() {
     const text = draft.trim();
     if (!text || busy) return;
+    if (dictating) stopDictation();      // the sent text is final; don't re-append into the empty box
     setDraft(''); setBusy(true);
     append({ role: 'user', text, at: Date.now() });
+    // The path rides in front of the message (same grammar as the home composer).
+    const pre = attachmentPreamble(attachments);
+    setAttachments([]);
     // The card is the switch: present → this turn carries the page context; deleted → it does not.
-    const r = await arturoText(text, convId, contextForTurn(convId, ctx));
+    const r = await arturoText(pre ? `${pre}\n\n${text}` : text, convId, contextForTurn(convId, ctx));
     setBusy(false);
     append(r.ok
       ? { role: 'arturo', text: r.reply_text || '(no reply)', tools: r.tools_called, at: Date.now() }
@@ -250,6 +266,33 @@ export function ArturoPill() {
           {voiceNote && <div className="row arturo"><div className="bubble">I can't do that yet — {voiceNote}.</div></div>}
         </div>
 
+        <input ref={fileInput} type="file" multiple hidden aria-hidden="true"
+               onChange={async (e) => {
+                 const picked = Array.from(e.target.files || []);
+                 e.target.value = '';
+                 if (picked.length === 0) return;
+                 setUploading(true); setUploadError(null);
+                 for (const f of picked) {
+                   const r = await uploadAttachment(f);
+                   if (r.ok) setAttachments((prev) => [...prev, { name: r.name, path: r.path, size: r.size }]);
+                   else setUploadError(r.error);     // refusals are shown, never swallowed
+                 }
+                 setUploading(false);
+               }} />
+        {(attachments.length > 0 || uploading || uploadError || dictNote) && (
+          <div className="arturo-attachments">
+            {attachments.map((a, i) => (
+              <span key={i} className="attach-chip">
+                <Paperclip size={12} /> {describeAttachment(a)}
+                <button aria-label={`Remove ${a.name}`}
+                        onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}>×</button>
+              </span>
+            ))}
+            {uploading && <span className="attach-note">Uploading…</span>}
+            {uploadError && <span className="attach-error">{uploadError}</span>}
+            {dictNote && <span className="attach-error">{dictNote}</span>}
+          </div>
+        )}
         <textarea ref={ta} rows={1} value={draft} placeholder="Ask Arturo" onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} />
         <div className="ctrl-row">
@@ -258,6 +301,8 @@ export function ArturoPill() {
               something that happened earlier in the thread. Default on, × deletes it, and
               the stub it leaves behind puts it back. */}
           <div className="cluster">
+            <button className="circle-btn" aria-label="Attach a file" title="Attach a file"
+                    onClick={() => fileInput.current?.click()} disabled={uploading}><Plus size={18} /></button>
             {ctxOn ? (
               <span className="arturo-context-chip">
                 <Focus size={12} />
@@ -273,11 +318,18 @@ export function ArturoPill() {
             )}
           </div>
           <div className="cluster">
-            <button className={inCall ? 'circle-btn white' : 'circle-btn'} aria-label={inCall ? 'End call' : 'Start voice call'}
-                    aria-pressed={inCall} title={inCall ? 'End call' : 'Talk to Arturo (live)'} onClick={() => void toggleCall()}>
-              {inCall ? <PhoneOff size={18} /> : <PhoneCall size={18} />}
-            </button>
-            <button className="circle-btn white" aria-label="Send" onClick={() => void send()} disabled={busy || !draft.trim()}><ArrowUp size={18} /></button>
+            <button className={dictating ? 'circle-btn listening' : 'circle-btn'} aria-label={dictating ? 'Stop dictation' : 'Dictate'}
+                    aria-pressed={dictating} title={inCall ? 'Captions run on their own during a call' : 'Dictate (Chrome/Edge)'}
+                    onClick={toggleDictation} disabled={inCall}><Mic size={16} /></button>
+            {inCall ? (
+              <button className="circle-btn white" aria-label="End call" aria-pressed title="End call"
+                      onClick={() => void toggleCall()}><PhoneOff size={18} /></button>
+            ) : draft.trim() ? (
+              <button className="circle-btn white" aria-label="Send" onClick={() => void send()} disabled={busy}><ArrowUp size={18} /></button>
+            ) : (
+              <button className="circle-btn white" aria-label="Voice mode" title="Talk to Arturo (live)"
+                      onClick={() => void toggleCall()}><AudioLines size={16} /></button>
+            )}
           </div>
         </div>
       </div>
