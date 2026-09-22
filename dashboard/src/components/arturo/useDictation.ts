@@ -48,7 +48,7 @@ export function useDictation(draft: string, setDraft: (v: string) => void, onSta
 
   async function startTier2() {
     const blocked = recordingBlockedReason();
-    if (blocked) { setNote(blocked); setMode('idle'); return; }
+    if (blocked) { active.current = false; setNote(blocked); setMode('idle'); return; }
     const rec = await startRecording({
       onClip: async (blob) => {
         recorder.current = null;
@@ -64,9 +64,9 @@ export function useDictation(draft: string, setDraft: (v: string) => void, onSta
         }
         setMode('idle');
       },
-      onError: (reason) => { recorder.current = null; setNote(reason); setMode('idle'); },
+      onError: (reason) => { recorder.current = null; active.current = false; setNote(reason); setMode('idle'); },
     });
-    if (!rec) { setMode('idle'); return; }
+    if (!rec) { active.current = false; setMode('idle'); return; }
     recorder.current = rec;
     setMode('recording');
     onStarted?.();
@@ -79,8 +79,8 @@ export function useDictation(draft: string, setDraft: (v: string) => void, onSta
     base.current = draftRef.current;
     committed.current = [];
     gotResult.current = false;
+    active.current = true;                  // BEFORE either tier starts: onClip / onFinal check it
     if (!speechRecognitionCtor()) { void startTier2(); return; }
-    active.current = true;
     const h = startDictation({
       onPartial: (text) => { if (!active.current) return; gotResult.current = true; setDraft(mergeDictation(base.current, committed.current, text)); },
       onFinal: (text) => {
