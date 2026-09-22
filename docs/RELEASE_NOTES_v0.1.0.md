@@ -69,6 +69,8 @@ stronger claim, and it is not the one this run supports.
 
 Listed as issues (`T1`–`T12`, `G1`–`G20`), seeded from `docs/HACKATHON_ISSUES.md`.
 
+**Fixed after this release, on main:** every fresh install of v0.1.0 had an agent chat window that could not send — the inject path read the gateway token from a legacy path that `orchestra init` never writes. Fixed in `1ffb179` (PR #109); upgrade or apply that commit if you are on the tag.
+
 ## CI note for this release
 
 GitHub Actions was refused on billing from 2026-09-19 09:52Z; PRs #38–#40 merged on bare-box + CI-identical local evidence (council PASS at `c6b278c`; local run rc 0).
