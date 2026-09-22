@@ -201,6 +201,36 @@ def resolve_runtime(entry, *, agent_id=None, strict=True):
         f"backfill_registry_runtime.py --declare (spec §4.1 R4(a))")
 
 
+def model_runtime(model) -> "str | None":
+    """Runtime a model id POSITIVELY names, or None (no signal). Prefix rules only:
+    claude-* -> claude; gemini-* -> gemini; gpt-* / o<digit>* / codex-* -> codex.
+    Never guesses: an unknown family is None, not claude."""
+    m = (model or "").strip().lower()
+    if not m:
+        return None
+    if m.startswith("claude"):
+        return "claude"
+    if m.startswith("gemini"):
+        return "gemini"
+    if m.startswith(("gpt-", "codex")) or (len(m) >= 2 and m[0] == "o" and m[1].isdigit()):
+        return "codex"
+    return None
+
+
+def validate_model_for_runtime(runtime, model, *, agent_id=None):
+    """Issue #92: refuse a model id that positively names ANOTHER runtime (a Codex seat
+    launched with --model claude-sonnet-5 exits and its init prompt lands in bare bash).
+    A model with no runtime signal is not a mismatch. Raises RuntimeResolutionError."""
+    rt = _norm_runtime_token(runtime)
+    mr = model_runtime(model)
+    if mr is not None and rt in VALID_RUNTIMES and mr != rt:
+        who = f" for agent {agent_id!r}" if agent_id else ""
+        raise RuntimeResolutionError(
+            f"model {model!r} belongs to runtime '{mr}' but the seat{who} is declared "
+            f"runtime '{rt}' — refusing to spawn (the CLI would exit and the init prompt "
+            f"would be typed into a bare shell); fix AGENT_MODEL or the registry runtime")
+
+
 def validate_runtime_for_registration(record, *, agent_id=None):
     """Registration invariant (spec §4.1 R4(a)): a NEW registry row MUST carry a
     resolvable runtime so the zero-signal class cannot regrow. Returns the

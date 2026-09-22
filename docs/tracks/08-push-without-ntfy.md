@@ -12,6 +12,15 @@ unauthenticated"). That means push requires standing up and trusting a third
 server (self-hosted or otherwise) even for a single-operator install with the app
 already paired directly to the gateway.
 
+The push is also one-way in practice. The process that consumes its action-button
+taps (`scripts/approval_listener.py`) is not in the supervisor's process table and
+is not running on the operator's reference fleet, so no card has ever been answered
+through ntfy: of 628 recorded decisions the answer surfaces were watch 152, agent
+CLI 37, phone app 15, web 2 — ntfy zero. Two consequences for this track: `none` is
+the intended default for a single-operator install (the card is durable in the
+ledger the instant it is filed, and the app polls), and an APNs push must deep-link
+into the app rather than inherit ntfy's dead-end button pattern.
+
 ## Design
 
 A `notify` backend abstraction for push specifically (distinct from the channel

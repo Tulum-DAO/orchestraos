@@ -10,10 +10,11 @@
  * attribute — which iOS Safari does not reliably surface on long-press. On a phone the
  * reason was effectively unreachable. Here it is stated in words, on the surface.
  */
-import { useState } from 'react';
-import { X, Terminal, Globe } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { X, Terminal, Globe, Copy, ExternalLink } from 'lucide-react';
+import WebTerminal from '../WebTerminal';
 import {
-  connectModes, defaultMode, connectPlan, reasonText, cliFor,
+  connectModes, defaultMode, connectPlan, reasonText, cliFor, installNote, connectSteps,
   type ProviderLike, type ModeId,
 } from '../../lib/providerConnect';
 
@@ -22,6 +23,9 @@ interface Props {
   onClose: () => void;
   /** Injected in tests; defaults to the real POST. Returns the opened session name. */
   startLoginShell?: (providerId: string) => Promise<{ ok: boolean; session?: string; error?: string }>;
+  /** Re-run the runtime probe (fresh, never the cache) so this sheet can correct itself
+   *  the moment the operator finishes installing or signing in. */
+  onRecheck?: () => Promise<unknown>;
 }
 
 async function realStartLoginShell(providerId: string) {
@@ -39,11 +43,63 @@ async function realStartLoginShell(providerId: string) {
   }
 }
 
-export function ProviderConnectModal({ provider, onClose, startLoginShell = realStartLoginShell }: Props) {
+/** `backticked` spans render as code, the way they read in a terminal. */
+function renderTicks(line: string) {
+  return line.split(/(`[^`]+`)/g).map((part, i) =>
+    part.startsWith('`') && part.endsWith('`')
+      ? <code key={i} className="px-1 py-0.5 rounded bg-muted text-foreground/90">{part.slice(1, -1)}</code>
+      : <span key={i}>{part}</span>);
+}
+
+export function ProviderConnectModal({ provider, onClose, startLoginShell = realStartLoginShell, onRecheck }: Props) {
   const [mode, setMode] = useState<ModeId>(provider ? defaultMode(provider) : 'tmux');
   const [busy, setBusy] = useState(false);
   const [opened, setOpened] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [rechecking, setRechecking] = useState(false);
+  // The CLI prints its OAuth URL hard-wrapped across ~10 lines. Unclickable, and copying it
+  // drags the breaks along. The server rejoins it; this polls for it while the terminal is
+  // open so the moment the CLI prints one, the operator gets a real link.
+  const [signInUrl, setSignInUrl] = useState<string | null>(null);
+  // The steps are what you need BEFORE the terminal exists. Once it is open they are in the
+  // way — the operator could only see 19 of the CLI's 27 lines, which is also why the
+  // sign-in URL came back truncated. So opening a terminal collapses them, and they stay
+  // one tap away rather than gone.
+  const [stepsOpen, setStepsOpen] = useState(true);
+  useEffect(() => { setStepsOpen(!opened); }, [opened]);
+  useEffect(() => {
+    if (!opened) { setSignInUrl(null); return; }
+    let stop = false;
+    const tick = async () => {
+      try {
+        const r = await fetch(`/api/agents/${encodeURIComponent(opened)}/sign-in-url`);
+        const j = await r.json().catch(() => ({}));
+        if (!stop && j?.url) setSignInUrl(j.url as string);
+      } catch { /* the pane may not be readable for a moment; keep polling */ }
+    };
+    void tick();
+    const id = setInterval(tick, 2500);
+    return () => { stop = true; clearInterval(id); };
+  }, [opened]);
+
+  // While a terminal is open the operator is actively installing or signing in, so the
+  // banner above it goes stale by the second. Re-probe when the window regains focus —
+  // returning from the browser they were sent to for OAuth is exactly that event.
+  useEffect(() => {
+    if (!opened || !onRecheck) return;
+    const onFocus = () => { void onRecheck(); };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [opened, onRecheck]);
+  // Switching provider inside the sheet must not keep the PREVIOUS provider's terminal.
+  // The operator hit this: the dialog said "Connect Codex" while the pane below it was the
+  // agy session he had opened a moment earlier — a shell attributed to the wrong provider.
+  useEffect(() => {
+    setOpened(null);
+    setError(null);
+    setMode(provider ? defaultMode(provider) : 'tmux');
+  }, [provider?.id]);
+
   if (!provider) return null;
 
   const modes = connectModes(provider);
@@ -60,7 +116,7 @@ export function ProviderConnectModal({ provider, onClose, startLoginShell = real
 
   return (
     <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/50" onClick={onClose}>
-      <div className="w-full max-w-lg rounded-t-2xl bg-background border-t border-border p-4 pb-6"
+      <div className="w-full max-w-lg max-h-[94vh] flex flex-col rounded-t-2xl bg-background border-t border-border p-4 pb-6"
            role="dialog" aria-label={`Connect ${provider.label}`} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-1">
           <h2 className="text-sm font-medium text-foreground">Connect {provider.label}</h2>
@@ -68,7 +124,21 @@ export function ProviderConnectModal({ provider, onClose, startLoginShell = real
         </div>
 
         {/* The reason, in words. This is the half a phone could not reach before. */}
-        {reason && <p className="text-xs text-red-400/90 mb-3" data-testid="connect-reason">{provider.label} is not connected: {reason}</p>}
+        {reason && (
+          <p className="text-xs text-red-400/90 mb-3 flex items-center gap-2" data-testid="connect-reason">
+            <span>{provider.label} is not connected: {reason}</span>
+            {onRecheck && (
+              <button className="underline underline-offset-2 text-foreground/60 hover:text-foreground"
+                      disabled={rechecking}
+                      onClick={async () => { setRechecking(true); await onRecheck(); setRechecking(false); }}>
+                {rechecking ? 'checking…' : 'check again'}
+              </button>
+            )}
+          </p>
+        )}
+        {!reason && (
+          <p className="text-xs text-emerald-400/90 mb-3" data-testid="connect-ready">{provider.label} is connected.</p>
+        )}
 
         {/* The toggle the operator asked for, at the top. */}
         <div className="flex gap-1 p-1 rounded-lg bg-muted/60 mb-3" role="tablist" aria-label="How to connect">
@@ -84,6 +154,7 @@ export function ProviderConnectModal({ provider, onClose, startLoginShell = real
           ))}
         </div>
 
+        <div className="flex-1 min-h-0 overflow-y-auto">
         {(() => {
           const m = modes.find((x) => x.id === mode)!;
           if (!m.available) {
@@ -95,16 +166,73 @@ export function ProviderConnectModal({ provider, onClose, startLoginShell = real
             );
           }
           if (mode === 'tmux') {
+            const cmd = plan.kind === 'login-shell' ? plan.install_command : undefined;
             return (
               <div className="text-xs text-foreground/70 leading-relaxed flex flex-col gap-2" data-testid="mode-tmux">
                 <p>{m.blurb}</p>
-                {opened ? (
-                  <p className="text-foreground/80">Terminal <code>{opened}</code> is open — sign in there, then reopen this sheet.</p>
-                ) : (
+                {/* On a blank machine this command is the whole job, so it is offered where
+                    it is RUN — one tap to copy, then paste into the terminal below. */}
+                {!cmd && !provider.installed && installNote(provider.id) && (
+                  <p className="text-foreground/80" data-testid="install-note">{installNote(provider.id)}</p>
+                )}
+                {cmd && (
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 px-2 py-1.5 rounded bg-muted text-foreground/90 overflow-x-auto">{cmd}</code>
+                    <button aria-label="Copy install command" title="Copy"
+                            onClick={() => { void navigator.clipboard?.writeText(cmd); }}
+                            className="p-1.5 rounded border border-border hover:bg-muted"><Copy size={13} /></button>
+                  </div>
+                )}
+                {/* What actually has to happen, in order. Every line was established by
+                    running it, not inferred. */}
+                {connectSteps(provider.id).length > 0 && (
+                  stepsOpen ? (
+                    <>
+                      <ol className="flex flex-col gap-1.5 pl-4 list-decimal text-foreground/65" data-testid="connect-steps">
+                        {connectSteps(provider.id).map((line, i) => (
+                          <li key={i}>{renderTicks(line)}</li>
+                        ))}
+                      </ol>
+                      {opened && (
+                        <button className="self-start text-foreground/50 underline underline-offset-2"
+                                onClick={() => setStepsOpen(false)}>Hide the steps</button>
+                      )}
+                    </>
+                  ) : (
+                    <button className="self-start text-foreground/50 underline underline-offset-2"
+                            data-testid="steps-toggle"
+                            onClick={() => setStepsOpen(true)}>Show the {connectSteps(provider.id).length} steps</button>
+                  )
+                )}
+                {!opened && (
                   <button onClick={() => void openTerminal()} disabled={busy}
                           className="self-start px-3 py-1.5 rounded-lg border border-border text-foreground hover:bg-muted disabled:opacity-50">
-                    {busy ? 'Opening…' : 'Open a terminal'}
+                    {busy ? 'Opening…' : cmd ? 'Open a terminal here' : 'Open a terminal'}
                   </button>
+                )}
+                {/* The terminal lives INSIDE the modal: a blank machine installs the CLI and
+                    signs in without ever leaving this window. */}
+                {/* A real link, the moment the CLI prints one. This is the step that cannot
+                    be done by hand: 570 characters wrapped across ten terminal lines. */}
+                {signInUrl && (
+                  <div className="flex items-center gap-2" data-testid="signin-link">
+                    <a href={signInUrl} target="_blank" rel="noreferrer"
+                       className="flex-1 flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#d97757] text-white font-medium">
+                      <ExternalLink size={13} /> Open the sign-in page
+                    </a>
+                    <button aria-label="Copy the sign-in link" title="Copy the link"
+                            onClick={() => { void navigator.clipboard?.writeText(signInUrl); }}
+                            className="p-2 rounded-lg border border-border hover:bg-muted"><Copy size={13} /></button>
+                  </div>
+                )}
+                {signInUrl && (
+                  <p className="text-foreground/45">Sign in there, then paste the code it gives you back into the terminal below.</p>
+                )}
+                {opened && (
+                  <div className="rounded-lg overflow-hidden border border-border h-[62vh] min-h-[340px]"
+                       data-testid="connect-terminal">
+                    <WebTerminal session={opened} machine="vps" />
+                  </div>
                 )}
                 {error && <p className="text-red-400/90">Could not open a terminal: {error}</p>}
                 <p className="text-foreground/45">{plan.kind === 'login-shell' ? plan.detail : ''}</p>
@@ -119,6 +247,7 @@ export function ProviderConnectModal({ provider, onClose, startLoginShell = real
             </div>
           );
         })()}
+        </div>
       </div>
     </div>
   );

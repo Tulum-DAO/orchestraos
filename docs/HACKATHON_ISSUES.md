@@ -165,6 +165,35 @@ more loops / stop. Full design: `docs/tracks/12-gauntlet-mode.md`.
 with a ranked list, second attempt ≥ 8.5 → completion released at loop 2/3; `brutal`
 with loop 1 bar 9.5 fails the same attempt; exhausted loops raise the operator card.
 
+## T13 · Memory: see it, prune it, then teach it to extract
+`labels: track, size:S/M, core, ui, memory`
+
+**Problem.** A seat's memory is `$ORCHESTRA_DIR/memory/<lineage-id>/` (index + one-fact
+files) and nobody looks in it — there is no page. `api/src/routes/memory.ts` (mounted at
+`/api/memory`) reads the wrong stores: the Claude CLI's private auto-memory dir (line 101)
+and a private `OMNI_DIR` layout (lines 82, 196-229) that `orchestra init` never creates; no
+endpoint touches the per-seat dir, nothing in `dashboard/src` calls it, and it has no test.
+Because nobody looks, nothing prunes (the index has no budget and is silently truncated at
+boot once it outgrows the prompt) and nothing extracts (a fact is remembered only if the
+seat writes it the moment it learns it).
+
+**Design.** Leg 1 (S): repoint `memory.ts` at the real store — `GET /api/memory/seats`
+(per-lineage counts, index bytes vs. a `[memory] index_budget_bytes` budget, orphans,
+dangling lines), `/seats/:lineage` (parsed index + frontmatter), `/search` over the real
+dirs — and a `dashboard/src/pages/Memory.tsx` with a seats table (budget bar), a seat
+drawer (index → file body), cross-seat search, and a `memory` doctor row. Leg 2 (S/M):
+`scripts/memory_prune.py` (dry-run default; regenerates the index from the files, moves
+duplicates aside, never deletes) and an explicit over-budget warning in the boot prompt
+instead of silent truncation. Leg 3 (M, stretch): read the seat's own CLI transcript, have
+its own runtime propose candidate one-fact files into `.candidates/`, accept/discard from
+the page — nothing reaches the index without an accept. Full design:
+`docs/tracks/13-memory.md`.
+
+**Acceptance.** Clean install, gate step 7 → `/memory` lists `hello` with 1 file, green
+bar, the fact readable in the drawer. Pad the index past budget → red row, doctor WARN
+naming `hello`, next generation's boot prompt names the prune command. `memory_prune.py
+hello --apply` regenerates the index from the one real file; nothing deleted.
+
 ---
 
 # Good first issues
@@ -262,8 +291,10 @@ from the checkout (`ORCHESTRA_ROOT` / `__file__`; see `cron_beat.code_path`,
 `labels: good-first-issue, size:S, install`
 
 Doctor knows CLIs, ports, config keys, builds, the rotation beat and foreign tmux sessions.
-Add rows for the notify channel (`[notify] channel` + its credentials present), the ntfy
-server reachability when `NTFY_BASE` is set, and enabled plugins (T6).
+Add rows for the notify channel (`[notify] channel` + its credentials present), the active
+push backend (`[notify] push_backend` + its credentials, T8), and enabled plugins (T6). Not
+ntfy reachability — ntfy is legacy and T8 replaces it; a doctor row for it would point a new
+installer at a server they do not need.
 
 **Acceptance.** Each row OK / MISSING / INFO with a one-line remedy; tests in
 `orchestra_cli/tests/test_doctor.py` with fake probes.
@@ -468,8 +499,34 @@ Update every consumer in the same PR (grep the dashboard and the iOS repo for th
 existing data dir upgrades in place (`orchestra upgrade`) with no lost proposals/decisions;
 `/api/system` still answers with the presence field the clients read.
 
-## G20 · Arturo threads are one-way: "New thread" exists, old threads are unreachable
-`labels: arturo, ui, size:M`
+## G22 · `orchestra doctor` has no CLI-version row — an auto-updated CLI drifts under a running fleet
+`labels: good-first-issue, size:S, doctor, install`
+
+The harness reads the agent CLI's screen, transcripts and hook events, and does not heal itself yet when
+the CLI changes. On launch morning an unpinned native Claude Code install moved 2.1.263 -> 2.1.278 with no
+action from the operator. `docs/INSTALL.md` now tells people to pin (2.1.276, the version the release gate ran on; the reference
+fleet runs 2.1.260) and set `DISABLE_AUTOUPDATER=1`, but nothing checks it. Inside the Docker image
+auto-update is attempted every session and fails on npm-prefix permissions, so a stranger sees an
+`Auto-update failed` footer on every pane until they pin.
+
+Add a `cli:version` row to `orchestra doctor` (`orchestra_cli/doctor.py`, one row per enabled runtime):
+- OK when the installed version equals the version the release was proven against (a constant beside
+  the runtime probe, updated at each release).
+- WARN on mismatch, remedy: the exact `npm install -g @anthropic-ai/claude-code@<version>` line.
+- WARN when `DISABLE_AUTOUPDATER` is unset in the environment doctor runs in, remedy: the export line.
+Never MISSING: a version mismatch must not block `orchestra up`. Pure over `DoctorProbes` like the other
+rows; RED test first (mismatch -> WARN, unset env -> WARN), then GREEN.
+
+## G20 · Arturo threads are one-way: "New thread" exists, old threads are unreachable — FIXED
+`labels: arturo, ui, size:M, fixed`
+
+**SHIPPED — do not pick this up as open work.** The design below landed before the release.
+On the release tree `api/src/routes/arturo.ts` serves `GET /api/arturo/threads` (line 80) and
+`GET /api/arturo/threads/:id` (line 91), and `dashboard/src/components/arturo/ArturoPill.tsx`
+reads that list, so the thread list and every thread's turns come from the SERVER: "New thread"
+leaves the old one IN the list instead of losing it, the home and the pill read the same list,
+and `localStorage` holds only WHICH thread you were in, never the archive. Verified by effect
+against the release sha, 2026-09-19. The rest of this section is kept as the design record.
 
 The Ask-Arturo pill keeps one conversation and its history, and "New thread" starts a fresh
 one — but the previous thread is then gone from the UI: there is no list, no switcher, no way
@@ -500,3 +557,22 @@ server is already the durable side; only the client forgets.
 **Acceptance.** Ask something in the pill, start a new thread, then reopen the previous one
 from the list and see its turns; the same thread is visible on the home page and survives a
 browser reload and a service restart (i.e. it is not localStorage-backed).
+
+## G21 · `make test` can fail one wall-clock ratio test on a busy host
+`labels: good-first-issue, size:XS, tests, harness`
+
+`scripts/lineage_daemon/realtime/cpu_measure_test.py::test_steady_state_cpu_under_one_percent_on_real_proc`
+asserts that the one-scan fanout tick is *materially cheaper* than a per-agent scan, as a ratio of
+milliseconds. Its docstring calls that relative guard "load-invariant"; it is not — on a busy laptop or a
+shared VPS the ratio collapses (measured 0.55 vs 0.80 ms/tick at load 31, 3 of 5 runs red in isolation)
+while it passes on any quiet box. `_high_load()` gates only the absolute "<1% CPU" budget.
+
+**What exists today.** The test is deselected from the default `make test` and lives in `make test-perf`
+(Makefile comment says why). So a first run is green, but the guard protects nothing until it is fixed.
+
+**Fix.** Gate the relative assertion on `_high_load()` too, or widen its tolerance, or turn it into a
+benchmark that *reports* the ratio instead of asserting it. Then put it back in the default suite.
+
+**Acceptance.** `make test` includes the test again; it passes 5/5 in isolation at load ≥ 2× cores AND on
+a quiet box; the docstring no longer claims the relative guard is load-invariant.
+

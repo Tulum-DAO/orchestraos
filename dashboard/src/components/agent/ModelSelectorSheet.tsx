@@ -13,7 +13,7 @@
  *
  * Re-queries on every open (no stale sheet across a login/logout).
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { X, Plus } from 'lucide-react';
 import { ProviderConnectModal } from './ProviderConnectModal';
 import { useModelSelection } from '../../stores/modelSelection';
@@ -77,6 +77,33 @@ export function ModelSelectorSheet({ open, onClose }: ModelSelectorSheetProps) {
   const select = useModelSelection((s) => s.select);
   const currentProviderId = useModelSelection((s) => s.providerId);
   const currentModelId = useModelSelection((s) => s.modelId);
+
+  // Re-probing on demand. The sheet used to probe ONCE on open, so a provider installed or
+  // signed in WHILE the modal was open kept its stale red banner — the operator watched the
+  // header say "not-installed" directly above a terminal running that very CLI. A surface
+  // contradicting itself on screen reads as the product not knowing what is going on.
+  const probe = useCallback(async (fresh = false) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(fresh ? '/api/runtimes/available/refresh' : '/api/runtimes/available',
+                              fresh ? { method: 'POST' } : undefined);
+      if (!res.ok) throw new Error(`GET /api/runtimes/available -> ${res.status}`);
+      const data = (await res.json()) as RuntimesAvailableResponse;
+      const next = buildProviderRows(data.providers);
+      setRows(next);
+      setConnectRow((cur) => (cur ? next.find((r) => r.provider.id === cur.provider.id) ?? cur : cur));
+      setExpandedProviderId((prev) => prev ?? currentProviderId ?? null);
+      return next;
+    } catch (e) {
+      setError((e as Error).message);
+      return null;
+    } finally {
+      setLoading(false);
+    }
+    // currentProviderId is read once per probe to pre-expand, not to re-trigger it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -233,7 +260,8 @@ export function ModelSelectorSheet({ open, onClose }: ModelSelectorSheetProps) {
           authed: connectRow.provider.authed,
           auth_reason: connectRow.provider.auth_reason ?? connectRow.greyReason,
         } : null}
-        onClose={() => setConnectRow(null)}
+        onClose={() => { setConnectRow(null); void probe(true); }}
+        onRecheck={() => probe(true)}
       />
     </div>
   );

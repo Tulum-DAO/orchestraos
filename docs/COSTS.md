@@ -40,6 +40,13 @@ The harness runs on whatever agent CLI you already have a subscription for
 | Codex (OpenAI) | none standalone | Bundled with ChatGPT Plus: $20/mo | ChatGPT Pro: $100/mo |
 | Gemini CLI | **1,000 requests/day, no card, no expiration** | Google AI Pro (higher limits): varies by region | Google AI Ultra: higher still |
 
+**Read this first: the `gemini` runtime in this harness is Google's Antigravity `agy` CLI, not
+`@google/gemini-cli`.** `config/providers.json` detects it with `which agy` and reads its auth from
+`~/.gemini/antigravity-cli/antigravity-oauth-token`; the `gemini` binary is never probed. The
+free-tier figures in this file are Gemini CLI's published limits and are **unverified against `agy`** —
+treat them as a ceiling to check, not a promise. An `agy` install recipe validated on a bare box lands
+after the flip.
+
 Gemini CLI's free tier is the zero-key path's backbone: it is enough for a
 solo developer's full workday of moderate use with no subscription and no
 credit card. `orchestra doctor` reports which runtimes you have authed; the

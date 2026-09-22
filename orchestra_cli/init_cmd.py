@@ -243,6 +243,17 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
         report.append(Step("data-git", ok, f"git init {data_dir} (audit trail for handoffs + readbacks)" if ok
                            else "git init failed (rotation promotion will refuse until the data dir is a repo)"))
 
+    # 4c. the repo ships .git-hooks/pre-push (detect-secrets scan) but a fresh clone has
+    # core.hooksPath unset, so the hook is OFF for everyone who did not read its header.
+    # init is the one command every clone runs: wire it here. Skipped (not failed) when the
+    # root is not a git checkout (tarball / demo box) or ships no .git-hooks.
+    if (repo_root / ".git").exists() and (repo_root / ".git-hooks").is_dir():
+        rc = run(["git", "-C", str(repo_root), "config", "core.hooksPath", ".git-hooks"], cwd=repo_root)
+        report.append(Step("git-hooks", rc == 0, "core.hooksPath=.git-hooks (pre-push secret scan)" if rc == 0
+                           else f"git config core.hooksPath failed rc={rc}"))
+    else:
+        report.append(Step("git-hooks", False, "skipped (not a git checkout)"))
+
     # 5. gateway bearer token
     tok = data_dir / "state" / "watch-gateway-token"
     if tok.exists() and tok.read_text().strip():

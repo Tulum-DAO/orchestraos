@@ -11,7 +11,7 @@ placeholders — `<vps>`, `<laptop>`, `<tailnet>`, `<chat-id>` — fill in your 
 | machines | 1 | 2: a VPS (`<vps>`, always on) + a laptop (`<laptop>`) joined over Tailscale |
 | process model | `orchestra up` supervisor | supervisor **or** crontab + systemd units (this page) |
 | seats | one, spawned by hand | 20–50 tmux seats, registry-driven, auto-rotated |
-| decisions reach you via | web dashboard | dashboard + phone/watch app, push (ntfy or APNs), Telegram |
+| decisions reach you via | web dashboard | dashboard + phone/watch app, Telegram; push is legacy ntfy (one-way, see §4) with APNs as track T8 |
 | voice | off | Arturo voice brain (BYO vendor keys) |
 | data dir | `~/.orchestra` | the checkout itself (`[data] dir` = repo root) |
 
@@ -110,13 +110,22 @@ reconciler:** the rotation beat reads the identity store the reconciler just rep
   reference install uses `~/runtime`) so a sync tool never copies an e-brake between machines.
 - Tiers: T0 (the always-on manager seat), T1 (coordinators), T2 (workers, the armed tier).
 
-## 4. Push: ntfy or APNs (choose one, or none)
+## 4. Push: APNs, ntfy, or none (the minimum path has none)
 
-The minimum path has no push: cards wait in the dashboard. The reference install pushes
-every card to a phone/watch.
+The minimum path has no push: cards wait in the dashboard, and that is a supported
+configuration, not a degraded one. A card is durable in the ledger the moment an agent
+files it; push only shortens the time until you look.
 
-**ntfy (self-hosted, the reference default).** Run the `binwiederhier/ntfy` container on
-the VPS (`:9080`, reachable only over the tailnet) and point the notifier at it:
+**ntfy is legacy and is NOT recommended for a new install.** It is what track T8 replaces.
+Push is one-way through it: the process that consumes its action-button taps
+(`scripts/approval_listener.py`) is not in the supervisor's process table and is not
+running on the operator's own fleet, so **a tap on an ntfy notification does not answer a
+card.** On the operator's fleet, of 628 recorded decisions, ntfy answered **zero** — the
+watch answered 152, the agent CLI 37, the phone app 15, the web dashboard 2. Cards are
+answered in the dashboard, the phone/watch app, or Telegram; ntfy only ever announced them.
+
+**ntfy (self-hosted, legacy — the operator's fleet still runs it).** Run the
+`binwiederhier/ntfy` container on the VPS (`:9080`, reachable only over the tailnet) and point the notifier at it:
 
 ```bash
 export NTFY_BASE=http://127.0.0.1:9080          # default
@@ -128,7 +137,8 @@ export NTFY_TOKEN_FILE=~/.config/<app>/ntfy-token   # a token for the topics abo
 `approval_notify.py` publishes one message per pending card with three id-bound action
 buttons; the phone app subscribes. **Why tailnet-only:** the push carries card ids and
 question text; keeping the server off the public internet is the whole security model.
-The known gap: a phone off the tailnet gets no push until it is back.
+The known gaps: a phone off the tailnet gets no push until it is back, and — as above — the
+buttons on the notification lead nowhere without `approval_listener.py` running.
 
 **APNs (track T8).** `scripts/apns_notify.py` + `apns_devices.py` send directly to paired
 devices with a bundled key; no ntfy server. Device tokens come from pairing (track T1).
@@ -174,7 +184,7 @@ log line that is not in `scripts/`, that is why.
    remote-auth helper.
 2. `[data] dir` = the checkout instead of `~/.orchestra`.
 3. Beats and services from crontab/systemd instead of `orchestra up`.
-4. `approval_notify.py` on a per-minute cron + an ntfy server (or APNs) — push.
+4. `approval_notify.py` on a per-minute cron + an ntfy server (or APNs) — push (announce-only; see §4).
 5. `[notify] channel = "telegram"` + `.env.telegram` — Telegram.
 6. `[arturo] enabled = true` + vendor keys — voice.
 7. The phone/watch app pointed at the gateway over the tailnet.

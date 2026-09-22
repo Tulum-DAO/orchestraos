@@ -147,6 +147,10 @@ def tool_protocol_block(tools: list, tool_choice=None) -> str:
 
 # --- parsing the CLI's answer ---------------------------------------------------------------
 
+# What the operator sees when the CLI emitted tool-call markup we cannot turn into a call.
+# Saying nothing would drop the turn; printing the markup is the defect this replaces.
+NATIVE_MARKUP_FALLBACK = "Sorry — I garbled that one. Ask me again?"
+
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.S)
 
 
@@ -176,10 +180,56 @@ def _find_envelope(text: str) -> Optional[dict]:
     return None
 
 
+# A CLI that is ALSO a tool-using agent sometimes answers in its NATIVE tool-call syntax
+# instead of the JSON envelope the prompt asks for. That text carries no "tool_calls" key, so
+# it used to fall through as the assistant's CONTENT — the operator saw raw markup on the
+# Arturo home, and GET /api/arturo/threads stored it as the thread's snippet (found by effect
+# on release sha 4ec0229 running the run-of-show's own beat-3.1 prompt, 2026-09-19).
+_INVOKE_RE = re.compile(r'<invoke\s+name="([^"]*)"\s*>(.*?)</invoke>', re.S)
+_PARAM_RE = re.compile(r'<parameter\s+name="([^"]*)"\s*>(.*?)</parameter>', re.S)
+# A partial emission never closes its </invoke>; still markup, still must not be printed.
+_INVOKE_OPEN_RE = re.compile(r'<invoke\s+name="[^"]*"\s*>')
+
+
+def _coerce(raw: str):
+    """Parameter bodies arrive as text. Give back the JSON value when it plainly is one, so a
+    count reads as 30 and not "30"; otherwise the string, stripped."""
+    v = raw.strip()
+    try:
+        return json.loads(v)
+    except Exception:  # noqa: BLE001
+        return v
+
+
+def _find_native_calls(text: str) -> list:
+    """Tool calls expressed as the CLI's native in-voke/parameter tag blocks (the tag name is
+    written broken HERE on purpose: an unbroken one makes this file a court-guard tripwire for
+    anyone quoting it; the regexes above carry the real thing).
+    Returns [] when the text merely TALKS about the syntax — the opening tag must be present."""
+    calls = []
+    for name, body in _INVOKE_RE.findall(text):
+        if not name.strip():
+            continue
+        args = {k: _coerce(v) for k, v in _PARAM_RE.findall(body)}
+        calls.append(_tool_call(name.strip(), args))
+    return calls
+
+
+def _looks_like_native_markup(text: str) -> bool:
+    return bool(_INVOKE_OPEN_RE.search(text))
+
+
 def parse_cli_reply(text: str):
     text = (text or "").strip()
     env = _find_envelope(text) if "tool_calls" in text else None
     if env is None:
+        # No JSON envelope. Before treating this as prose, check whether it is the CLI's own
+        # tool-call syntax: honour the intent when it names a tool, and NEVER print the markup.
+        if _looks_like_native_markup(text):
+            native = _find_native_calls(text)
+            if native:
+                return make_response(None, native, "tool_calls")
+            return make_response(NATIVE_MARKUP_FALLBACK, None, "stop")
         return make_response(text, None, "stop")
     calls = []
     for tc in env["tool_calls"]:
@@ -335,7 +385,14 @@ class RuntimeBrain(Brain):
             text = self._text(messages, tools, tool_choice, timeout)
         except Exception as e:  # noqa: BLE001 — a CLI hiccup is a sentence, not a 500
             log.error(f"runtime brain ({self.runtime}) failed: {e}")
-            text = f"My {self.runtime} brain hit a snag: {str(e)[:200]}"
+            # The detail goes to the LOG above and NEVER into the reply: a CalledProcessError
+            # stringifies to the whole argv, which carries --system-prompt followed by Arturo's
+            # entire system prompt, and truncating to 200 chars only cuts it off mid-prompt
+            # (byte-captured: fixtures/runtime_error_reply.txt). It reached the operator's
+            # screen and persisted as the thread snippet. The operator gets prose.
+            text = (f"My {self.runtime} brain did not answer that time — the {self.cli} CLI "
+                    f"exited unexpectedly. Try that again, and run `orchestra doctor` if it "
+                    f"keeps happening.")
             tools = None
         if stream:
             return (make_chunk(c) for c in _chunked(text.strip()))
