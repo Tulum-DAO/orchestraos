@@ -35,6 +35,7 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
   const [runtime, setRuntime] = useState<string>('');
   const [name, setName] = useState('');
   const [task, setTask] = useState('');
+  const [role, setRole] = useState('');
   const [error, setError] = useState('');
   const [created, setCreated] = useState<{ id: string; session: string; runtime?: string } | null>(null);
   const [shell, setShell] = useState<{ session: string; hint: string } | null>(null);
@@ -43,7 +44,7 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
 
   useEffect(() => {
     if (!open) return;
-    setPhase('probing'); setError(''); setCreated(null); setShell(null); setName(''); setTask('');
+    setPhase('probing'); setError(''); setCreated(null); setShell(null); setName(''); setTask(''); setRole('');
     void probe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -73,7 +74,7 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
     const clean = previewName(name);
     if (!clean || phase === 'spawning') return;
     setPhase('spawning'); setError('');
-    const r = await createAgent(name, task, runtime || undefined);
+    const r = await createAgent(name, task, runtime || undefined, role);
     if (r.ok && r.id) {
       setCreated({ id: r.id, session: r.session || r.id, runtime: r.runtime });
       setPhase('spawned');
@@ -127,6 +128,7 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && canSubmit) void submit(); }}
               placeholder="docs writer"
+              aria-label="Name"
               className="w-full px-3 py-2 rounded-lg bg-neutral-950 border border-neutral-700 text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-neutral-500"
             />
             <div className="mt-1 h-5 text-xs">
@@ -137,6 +139,16 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
                   : null}
             </div>
 
+            <label className="block text-xs uppercase tracking-wider text-neutral-500 mt-3 mb-1">Role <span className="normal-case tracking-normal text-neutral-600">(optional)</span></label>
+            <input
+              value={role}
+              onChange={(e) => setRole(e.target.value.slice(0, 120))}
+              onKeyDown={(e) => { if (e.key === 'Enter' && canSubmit) void submit(); }}
+              placeholder="docs writer for this repo"
+              aria-label="Role"
+              className="w-full px-3 py-2 rounded-lg bg-neutral-950 border border-neutral-700 text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-neutral-500"
+            />
+
             <label className="block text-xs uppercase tracking-wider text-neutral-500 mt-3 mb-1">First task <span className="normal-case tracking-normal text-neutral-600">(optional)</span></label>
             <textarea
               value={task}
@@ -146,18 +158,25 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
               className="w-full px-3 py-2 rounded-lg bg-neutral-950 border border-neutral-700 text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-neutral-500 resize-none"
             />
 
-            {authed.length > 1 && (
-              <div className="mt-3">
-                <label className="block text-xs uppercase tracking-wider text-neutral-500 mb-1">Runtime</label>
-                <select
-                  value={runtime}
-                  onChange={(e) => setRuntime(e.target.value)}
-                  className="bg-neutral-950 border border-neutral-700 text-neutral-300 text-sm rounded-lg px-3 py-2"
-                >
-                  {authed.map((r) => <option key={r.id} value={r.id}>{runtimeLabel(r)}</option>)}
-                </select>
-              </div>
-            )}
+            <div className="mt-3">
+              <label className="block text-xs uppercase tracking-wider text-neutral-500 mb-1">Runtime</label>
+              <select
+                value={runtime}
+                onChange={(e) => setRuntime(e.target.value)}
+                aria-label="Runtime"
+                className="bg-neutral-950 border border-neutral-700 text-neutral-300 text-sm rounded-lg px-3 py-2"
+              >
+                {rows.map((r) => {
+                  const usable = r.installed && r.authed === true;
+                  const why = !r.installed ? 'not installed' : r.authed === 'unverified' ? 'sign-in unverified' : 'not signed in';
+                  return (
+                    <option key={r.id} value={r.id} disabled={!usable}>
+                      {runtimeLabel(r)}{usable ? '' : ` — ${why}`}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
 
             {error && <p className="mt-3 text-sm text-red-400 whitespace-pre-wrap">{error}</p>}
 

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { MoreVertical, Play, Square, Terminal, Send, ChevronDown, ChevronUp, X, Maximize2, KeyRound, FileText, Copy, Download, RotateCcw, Eye, Edit3 } from 'lucide-react';
 import { StatusDot } from './StatusDot';
@@ -54,6 +55,11 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
   const [confirmKill, setConfirmKill] = useState<'kill' | 'restart' | null>(null);
   const initial = (agent.name || '?')[0].toUpperCase();
   const color = PALETTE[hashName(agent.name || '') % PALETTE.length];
+  const displayName: string = agent.client && agent.id.includes(agent.client)
+    ? agent.id.startsWith('pm-')
+      ? `PM: ${(agent.client || '').split('-').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}`
+      : agent.id.replace(`-${agent.client}`, '').split('-').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+    : (agent.name || agent.id);
   // "Working on:" is the most prominent line on a card, and current_task has no
   // expiry — gm's T0 card read "GM restarted — recovering from cascading
   // failure" for FOUR MONTHS (last_updated 2026-04-11), surviving ~9 generations
@@ -141,6 +147,16 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
       setFocused(false); // another card is taking over
     }
   }, [focusRequest]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** The one way into this agent's chat: the "Open chat" button and a click on the card's name block. */
+  const openChat = () => {
+    setFocused(true);
+    setArturoFocus({ kind: 'agent', id: agent.id, label: agent.name || agent.id });
+    setExpanded(false);
+    setUseInjectMode(true);
+    logAction('agent.focus', agent.id, agent.name);
+    trackRecentAgent(agent.id, agent.name || agent.id, agent.tier);
+  };
 
   const openDevMode = () => {
     setFocused(true);
@@ -306,15 +322,21 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
         <div className={clsx('w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold text-white shrink-0', color)}>
           {initial}
         </div>
-        <div className="flex-1 min-w-0">
+        {/* The name is a link to the agent's page; a click anywhere else on this block opens the chat
+            (an icon-only button was the only way in before, and testers never found it). */}
+        <div
+          className={clsx('flex-1 min-w-0', agent.alive && 'cursor-pointer')}
+          onClick={() => { if (agent.alive) openChat(); }}
+        >
           <div className="flex items-center gap-2">
-            <span className="text-neutral-100 font-semibold truncate" title={agent.name}>
-              {agent.client && agent.id.includes(agent.client)
-                ? agent.id.startsWith('pm-')
-                  ? `PM: ${(agent.client || '').split('-').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}`
-                  : agent.id.replace(`-${agent.client}`, '').split('-').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
-                : agent.name}
-            </span>
+            <Link
+              to={`/agent/${encodeURIComponent(agent.id)}`}
+              onClick={(e) => e.stopPropagation()}
+              className="text-neutral-100 font-semibold truncate hover:underline"
+              title={agent.name}
+            >
+              {displayName}
+            </Link>
             <GenChip generation={agent.generation} />
             {agent.alive ? <AgentStatusDot status={agent.status} /> : <StatusDot status="stopped" />}
           </div>
@@ -477,17 +499,21 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
             <>
               <button
                 onClick={() => { setExpanded(!expanded); logAction(expanded ? 'agent.collapse' : 'agent.expand', agent.id, agent.name); if (!expanded) trackRecentAgent(agent.id, agent.name || agent.id, agent.tier); }}
-                className="flex items-center gap-1 text-xs px-2 py-1 min-h-[44px] rounded-md font-medium bg-neutral-800 text-neutral-400 hover:text-neutral-200 transition-colors"
+                className="flex items-center gap-1 text-xs px-2.5 py-1 min-h-[44px] rounded-md font-medium bg-neutral-800 text-neutral-400 hover:text-neutral-200 transition-colors"
+                aria-label={`${expanded ? 'Hide' : 'Show'} terminal for ${displayName}`}
+                aria-expanded={expanded}
               >
                 <Terminal size={12} />
+                <span>Terminal</span>
                 {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
               </button>
               <button
-                onClick={() => { setFocused(true); setArturoFocus({ kind: 'agent', id: agent.id, label: agent.name || agent.id }); setExpanded(false); setUseInjectMode(true); logAction('agent.focus', agent.id, agent.name); trackRecentAgent(agent.id, agent.name || agent.id, agent.tier); }}
-                className="flex items-center gap-1 text-xs px-2 py-1 min-h-[44px] rounded-md font-medium bg-neutral-800 text-neutral-400 hover:text-neutral-200 transition-colors"
-                title="Focus — open as chat window"
+                onClick={openChat}
+                className="flex items-center gap-1 text-xs px-2.5 py-1 min-h-[44px] rounded-md font-medium bg-neutral-800 text-neutral-400 hover:text-neutral-200 transition-colors"
+                aria-label={`Open chat with ${displayName}`}
               >
                 <Maximize2 size={12} />
+                <span>Open chat</span>
               </button>
             </>
           )}

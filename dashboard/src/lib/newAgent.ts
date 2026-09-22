@@ -72,7 +72,7 @@ export async function freshRuntimes(): Promise<RuntimeRow[]> {
   return [];
 }
 
-export const createAgent = (name: string, task: string, runtime?: string) =>
-  postJson<NewAgentResult>('/api/agents/new', { name, task, runtime });
+export const createAgent = (name: string, task: string, runtime?: string, role?: string) =>
+  postJson<NewAgentResult>('/api/agents/new', { name, task, runtime, role: role || undefined });
 
 export const openLoginShell = () => postJson<LoginShellResult>('/api/agents/login-shell', {});

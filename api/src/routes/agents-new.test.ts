@@ -12,7 +12,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import http from 'node:http';
-import { createAgentsNewRouter, normalizeAgentName, pickRuntime, loginHint, type NewAgentDeps } from './agents-new.js';
+import { createAgentsNewRouter, normalizeAgentName, pickRuntime, loginHint, composeTask, type NewAgentDeps } from './agents-new.js';
 
 function authedRow(id: string, cli: string, authed: boolean | 'unverified' = true) {
   // logo_svg/models are part of ProviderResult; the login paths ignore them, but loginHint
@@ -112,6 +112,20 @@ test('POST /new works with no task', async () => {
   const r = await post(deps, '/api/agents/new', { name: 'quiet-seat' });
   assert.equal(r.json.ok, true);
   assert.equal((deps as any).calls.spawn[0].task, '');
+});
+
+test('composeTask folds a role into the first task (no role column in the registry)', () => {
+  assert.equal(composeTask('docs writer', 'write the README'), 'Your role: docs writer.\n\nwrite the README');
+  assert.equal(composeTask('docs writer', ''), 'Your role: docs writer.');
+  assert.equal(composeTask('', 'write the README'), 'write the README');
+  assert.equal(composeTask('  ', '  '), '');
+});
+
+test('POST /new passes the role as the first line of the spawn task', async () => {
+  const deps = makeDeps();
+  const r = await post(deps, '/api/agents/new', { name: 'docs-writer', role: 'docs writer', task: 'write the README' });
+  assert.equal(r.json.ok, true);
+  assert.equal((deps as any).calls.spawn[0].task, 'Your role: docs writer.\n\nwrite the README');
 });
 
 test('POST /new refuses a duplicate name with 409', async () => {
