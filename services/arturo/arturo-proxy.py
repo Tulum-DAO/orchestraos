@@ -149,6 +149,9 @@ def _warm_facts_cache():
 # env-gated (run.sh sets it) so test imports of this module never touch the live db
 if os.environ.get("ARTURO_FACTS_RECALL") == "1":
     _threading.Thread(target=_warm_facts_cache, daemon=True, name="facts-cache-warm").start()
+    # item C: fetch the local speech model in the background (never inside a request). No-op on a
+    # slim install (faster-whisper absent) or when the files are already on disk.
+    _local_stt.prefetch(log=log)
     if _STREAM_RELAY is not None:
         _STREAM_RELAY.daemons.append("facts-cache-warm")
     log.info("facts cache warm started")
@@ -2927,6 +2930,7 @@ def _filter_voice_response(content):
 # journaled chat_completions() route — it builds context + calls the model directly.
 # ============================================================================================
 from services.arturo import ptt as _ptt
+from services.arturo import local_stt as _local_stt   # item C: key-free web dictation (lazy: never imports faster-whisper here)
 
 PTT_STT_MODEL = os.environ.get("ARTURO_PTT_STT_MODEL", "scribe_v1")
 # Arturo's ElevenLabs voice for TTS replies (mp3, AVAudioPlayer-native). Overridable.
@@ -4045,6 +4049,38 @@ def ptt_endpoint():
     return jsonify(result), code
 
 
+@app.route("/transcribe", methods=["POST"])
+def transcribe_endpoint():
+    """Item C — web composer dictation, transcribe ONLY (no brain, no TTS, no history, no journal):
+    the user reads the text and taps send. LOOPBACK-ONLY like /ptt: the gateway authenticates and
+    forwards. 200 {ok,text,backend,ms} | 422 no_speech | 400/413 bad clip | 503 stt_unavailable
+    (reason warming | not-installed | off | error, + install command) | 504 timeout."""
+    remote = request.remote_addr or ""
+    if remote not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+        return jsonify({"ok": False, "error": "loopback only"}), 403
+    f = request.files.get("audio")
+    if f is None:
+        return jsonify({"ok": False, "error": "audio field required"}), 400
+    audio_bytes = f.read()
+    ok, err = _ptt.validate_transcribe_audio(len(audio_bytes), f.content_type or "")
+    if not ok:
+        return jsonify({"ok": False, "error": err}), (413 if err == "too_large" else 400)
+    try:
+        r = _local_stt.transcribe(audio_bytes, f.filename or "audio.webm", f.content_type or "")
+    except _local_stt.SttUnavailable as e:
+        st = e.state
+        return jsonify({"ok": False, "error": "stt_unavailable", "reason": st.get("state"),
+                        "detail": e.reason, "install": st.get("install")}), 503
+    except TimeoutError as e:
+        return jsonify({"ok": False, "error": "timeout", "detail": str(e)}), 504
+    except Exception as e:  # noqa: BLE001
+        log.warning(f"transcribe: local STT failed: {e}")
+        return jsonify({"ok": False, "error": "stt_failed"}), 502
+    if not r["text"]:
+        return jsonify({"ok": False, "error": "no_speech", "ms": r["ms"]}), 422
+    return jsonify({"ok": True, "text": r["text"], "backend": r["backend"], "model": r["model"], "ms": r["ms"]}), 200
+
+
 # --- v2/(b) stream relay routes (registered ONLY when ARTURO_STREAM_RELAY=1 — flag-off the
 # proxy serves 404 on these paths, byte-identical to today) ---
 if _STREAM_RELAY is not None:
@@ -4328,6 +4364,8 @@ def health():
         "brain_mode": BRAIN_MODE,
         "mode": ARTURO_MODE,                       # "voice" | "text-only"
         "voice": bool(VOICE_VENDORS_PRESENT),
+        # item C: can the box transcribe a recorded clip with no vendor key? (web dictation tier 2)
+        "stt": _local_stt.state(),
         "tools": [t["function"]["name"] for t in TOOLS],
         # comm-probe-safe daemon liveness (gm msg_1f417cdd): threads registered at start
         "daemons": sorted(getattr(_STREAM_RELAY, "daemons", None) or []),
