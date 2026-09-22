@@ -17,6 +17,8 @@ import {
 
 interface ComposerProps {
   agentId?: string;
+  /** When set, this is a seat's own page: the box says whom you are messaging, not "Ask Arturo". */
+  seatName?: string;
 }
 
 async function uploadAttachment(file: File): Promise<SendAttachment> {
@@ -28,7 +30,7 @@ async function uploadAttachment(file: File): Promise<SendAttachment> {
   return { upload_id: data.filename };
 }
 
-export function Composer({ agentId = 'gm' }: ComposerProps) {
+export function Composer({ agentId = 'gm', seatName }: ComposerProps) {
   const settings = useAgentSettings();
   const location = useLocation();
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -66,7 +68,7 @@ export function Composer({ agentId = 'gm' }: ComposerProps) {
         <div className="pr-28">
           <ChatInput
             agentId={agentId}
-            placeholder={`Ask ${settings.assistantName}`}
+            placeholder={seatName ? `Message ${seatName}` : `Ask ${settings.assistantName}`}
             draft={draft}
             onDraftChange={setDraft}
             onSend={handleSend}
