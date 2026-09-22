@@ -5,9 +5,12 @@
  * a one-off hand-drawn glyph, black canvas with the
  * accent glow behind the composer, empty state = mark + serif greeting, one two-row composer.
  *
- * Onboarding is Arturo's FIRST THREAD, not a form: name → runtime detect (catalog probe +
- * /api/arturo/health) → optional voice → "what should your first agent do?" → spawn, all through
- * the conversation. Once a seat exists (spawn_agent ran) the thread is ordinary chat.
+ * Onboarding is Arturo's FIRST THREAD, not a form: runtime detect (catalog probe +
+ * /api/arturo/health) → name (a BRAIN turn: the brain extracts it with set_operator_fact —
+ * nothing here parses a reply) → optional voice → "what should your first agent do?" → spawn, all
+ * through the conversation. Once a seat exists (spawn_agent ran) the thread is ordinary chat.
+ * The operator's name is SERVER state (/api/arturo/health .operator.name); localStorage only
+ * caches it for the first paint.
  *
  * Every turn goes through POST /api/arturo/text (gateway → :5071/text), which runs the full
  * tool-enabled turn on whichever brain the install has (api key / authed CLI / none).
@@ -18,8 +21,8 @@ import { Mic, Plus, ArrowUp, AudioLines, Paperclip } from 'lucide-react';
 import '../components/arturo/arturo.css';
 import { BrainModal } from '../components/agent/BrainModal';
 import { ModelSelectorSheet } from '../components/agent/ModelSelectorSheet';
-import { arturoHealth, arturoText, runtimesAvailable, brainLabel, greeting, slugify, newConversationId,
-  isStarting, waitForArturo, STARTING_TEXT,
+import { arturoHealth, arturoText, runtimesAvailable, brainLabel, greeting, newConversationId,
+  isStarting, waitForArturo, STARTING_TEXT, firstStep, stepAfterRuntime, onboardingTurn,
   type ArturoHealth, type RuntimeRow } from '../lib/arturo';
 import { listThreads, loadThread, type ThreadSummary } from '../lib/arturoThreads';
 import WebTerminal from '../components/WebTerminal';
@@ -65,7 +68,7 @@ function renderText(t: string) {
 
 export default function ArturoHome() {
   const [name, setName] = useState<string>(ls(LS_NAME) || '');
-  const [step, setStep] = useState<Step>(ls(LS_ONBOARDED) === '1' ? 'done' : (ls(LS_NAME) ? 'runtime' : 'name'));
+  const [step, setStep] = useState<Step>(firstStep(ls(LS_ONBOARDED) === '1'));
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
@@ -125,6 +128,7 @@ export default function ArturoHome() {
     (async () => {
       const h = await arturoHealth();
       if (!alive) return;
+      if (h.operator?.name) { setName(h.operator.name); lsSet(LS_NAME, h.operator.name); }   // the server knows the operator
       if (h.ok || !isStarting(h)) { setHealth(h); return; }
       setStarting(true);
       const ready = await waitForArturo({ onTick: (last) => { if (alive) setHealth(last); } });
@@ -146,10 +150,10 @@ export default function ArturoHome() {
   useEffect(() => {
     if (startedStep.current === step) return;
     startedStep.current = step;
-    if (step === 'name' && turns.length === 0) {
-      say("Hi, I'm Arturo — the voice and text front door of this OrchestraOS. What should I call you?");
+    if (step === 'runtime') {
+      if (turns.length === 0) say("Hi, I'm Arturo — the voice and text front door of this OrchestraOS. One moment while I check what I can think with.");
+      void runtimeStep();
     }
-    if (step === 'runtime') void runtimeStep();
     if (step === 'first') say(`What should your first agent do? Describe the job in a sentence — I'll spawn a seat on the runtime you're logged in to and hand it the task.`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
@@ -167,7 +171,9 @@ export default function ArturoHome() {
     setHealth(h);
     const authed = rows.filter((r: RuntimeRow) => r.installed && r.authed === true);
     const installedOnly = rows.filter((r: RuntimeRow) => r.installed && r.authed !== true);
-    const who = name ? `Nice to meet you, ${name}. ` : '';
+    const known = h.operator?.name || name;
+    if (h.operator?.name && h.operator.name !== name) { setName(h.operator.name); lsSet(LS_NAME, h.operator.name); }
+    const who = known ? `Good to see you, ${known}. ` : '';
     if (h.brain?.kind === 'none' || (authed.length === 0 && h.brain?.kind !== 'api')) {
       const hint = installedOnly.length
         ? `I can see ${installedOnly.map((r) => r.label || r.id).join(', ')} installed but not logged in. `
@@ -207,19 +213,25 @@ export default function ArturoHome() {
     }
     const brain = h.brain?.kind === 'api' ? `an API key (${brainLabel(h.brain)})` : `${brainLabel(h.brain)} through your logged-in CLI`;
     const list = authed.length ? authed.map((r) => r.label || r.id).join(', ') : 'none';
-    patch(id, { pending: false, text: `${who}I can see ${authed.length || 'no'} runtime${authed.length === 1 ? '' : 's'} authenticated: ${list}. My brain is running on ${brain}.${h.mode === 'text-only' ? ' Voice needs a vendor key; text is free and on.' : ' Voice is on.'}` });
-    if (h.mode === 'text-only') {
-      say('Want voice now, or is text fine for today?', {
-        decision: { options: ['Text is fine', 'I will add a voice key'], onPick: (v) => {
-          user(v);
-          if (v.startsWith('Text')) say('Text it is. You can add ELEVENLABS_API_KEY later and restart Arturo — nothing else changes.');
-          else say('Put ELEVENLABS_API_KEY (or CARTESIA_API_KEY) in the environment `orchestra up` runs under, restart, and /health will say mode: voice.');
-          setStep('first');
-        } },
-      });
-    } else {
-      setStep('first');
-    }
+    const next = stepAfterRuntime(known, h.mode === 'text-only');
+    patch(id, { pending: false, text: `${who}I can see ${authed.length || 'no'} runtime${authed.length === 1 ? '' : 's'} authenticated: ${list}. My brain is running on ${brain}.${next === 'name' ? ' What should I call you?' : ''}` });
+    if (next === 'name') { setStep('name'); return; }
+    voiceStep();
+  }
+
+  /** The voice card. The mic already dictates with no key (on-device or the local STT); what
+   *  needs a vendor key is Arturo talking BACK. Say exactly that. */
+  function voiceStep() {
+    if (health?.mode !== 'text-only') { setStep('first'); return; }
+    setStep('voice');
+    say('You can already talk to me with the mic. Want me to talk back too (that needs a voice key), or is text fine for today?', {
+      decision: { options: ['Text is fine', 'I will add a voice key'], onPick: (v) => {
+        user(v);
+        if (v.startsWith('Text')) say('Text it is. You can add ELEVENLABS_API_KEY later and restart Arturo — nothing else changes.');
+        else say('Put ELEVENLABS_API_KEY (or CARTESIA_API_KEY) in the environment `orchestra up` runs under, restart, and /health will say mode: voice.');
+        setStep('first');
+      } },
+    });
   }
 
   const user = (text: string) => setTurns((t) => [...t, { id: nextId.current++, role: 'user', text }]);
@@ -231,23 +243,23 @@ export default function ArturoHome() {
     clearDictNote();
     setDraft('');
     user(text);
-    if (step === 'name') {
-      const n = text.replace(/^(i am|i'm|call me|my name is)\s+/i, '').replace(/[.!]+$/, '').trim().split(/\s+/)[0];
-      const clean = n.charAt(0).toUpperCase() + n.slice(1);
-      setName(clean); lsSet(LS_NAME, clean);
-      setStep('runtime');
-      return;
-    }
+    const isName = step === 'name';
     const isFirst = step === 'first';
+    // The name step is a BRAIN turn: the marker makes the proxy add the step's directive, the
+    // brain understands the reply (dictated or typed, any phrasing, any language) and records
+    // the name with set_operator_fact — or asks again in its own words. Nothing is parsed here.
     const body = isFirst
-      ? `Commission a new agent named "${slugify(text)}" on this machine (machine: vps) and give it this task: ${text}. Use the spawn_agent tool, then tell me the seat name in one sentence.`
+      ? `Commission a new agent on this machine for this task: ${text}. Pick a short seat name yourself, use the spawn_agent tool, then tell me the seat name in one sentence.`
       : text;
     setBusy(true);
     const id = say('', { pending: true });
     // The path rides in front of the message: Arturo runs on this machine with tool
     // access, so a path is openable — a filename alone would be decoration.
     const pre = attachmentPreamble(attachments);
-    const sent = pre ? `${pre}\n\n${body}` : body;
+    const withFiles = pre ? `${pre}\n\n${body}` : body;
+    // The onboarding marker is applied LAST so it is always line 1 — the proxy anchors on it
+    // (a file attached during the name step must not push it down; peer review DEC-1790048447550594).
+    const sent = isName ? onboardingTurn('name', withFiles) : withFiles;
     setAttachments([]);
     let r = await arturoText(sent, convId.current);
     if (!r.ok && isStarting(r)) {          // G15: still booting -> say so, wait for health, retry once
@@ -264,6 +276,14 @@ export default function ArturoHome() {
       return;
     }
     patch(id, { pending: false, text: r.reply_text || '(no reply)', tools: r.tools_called });
+    if (isName) {
+      // Advance only on the EFFECT: the brain recorded a name (the spawn_agent pattern). Otherwise
+      // its reply was a re-ask and the step stays — including the NullBrain sentence, where the
+      // honest path is to wait for a brain rather than store a guess.
+      const got = (r.tools_called || []).includes('set_operator_fact') ? (r.operator?.name || '') : '';
+      if (got) { setName(got); lsSet(LS_NAME, got); voiceStep(); }
+      return;
+    }
     if (isFirst && (r.tools_called || []).includes('spawn_agent')) {
       lsSet(LS_ONBOARDED, '1'); setStep('done');
       say('Your first seat is up. From here on, this thread is the front door: ask for status, commission more agents, or open the drawer for the rest of the OS.');
@@ -369,7 +389,7 @@ export default function ArturoHome() {
             {dictNote && <span className="attach-error">{dictNote}</span>}
           </div>
         )}
-        <textarea ref={taRef} rows={1} value={draft} placeholder={`Ask ${name ? 'Arturo' : 'Arturo'}`}
+        <textarea ref={taRef} rows={1} value={draft} placeholder="Ask Arturo"
           onChange={(e) => { setDraft(e.target.value); grow(); }} onKeyDown={onKey} aria-label="Message Arturo" />
         <div className="ctrl-row">
           <div className="cluster">

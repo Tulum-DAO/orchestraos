@@ -11,8 +11,8 @@
  */
 export interface ArturoBrain { kind: 'api' | 'runtime' | 'none'; runtime?: string; cli?: string; model: string; reason?: string; provider?: string }
 export interface ArturoStt { server: boolean; backend: 'local-whisper' | 'none'; state: 'ready' | 'warming' | 'not-installed' | 'off' | 'error'; reason?: string; install?: string; model?: string }
-export interface ArturoHealth { ok: boolean; status?: number; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; stt?: ArturoStt; error?: string }
-export interface ArturoReply { ok: boolean; status?: number; reply_text?: string; conversation_id?: string; brain?: ArturoBrain; tools_called?: string[]; error?: string; detail?: unknown }
+export interface ArturoHealth { operator?: OperatorFacts; ok: boolean; status?: number; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; stt?: ArturoStt; error?: string }
+export interface ArturoReply { operator?: OperatorFacts; ok: boolean; status?: number; reply_text?: string; conversation_id?: string; brain?: ArturoBrain; tools_called?: string[]; error?: string; detail?: unknown }
 export interface ArturoContext { route: string; entityKind?: string; entityId?: string; hint?: string }
 export interface RuntimeRow { id: string; label?: string; cli?: string; installed: boolean; authed: boolean | 'unverified'; auth_reason?: string | null }
 
@@ -84,6 +84,28 @@ export function prettyModel(id: string): string {
   if (m.startsWith('gpt')) return m.toUpperCase().replace(/-/g, ' ');
   if (m === 'codex') return 'Codex';
   return id;
+}
+
+/** Server-side operator facts (services/arturo/operator_store.py); carried on /health and every /text reply. */
+export type OperatorFacts = { name?: string | null; timezone?: string | null; role?: string | null; pronouns?: string | null };
+
+/** Where the first thread starts. runtime first — a brain must exist before it is asked to
+ *  listen; an onboarded browser goes straight to the thread. The known-name case is honoured
+ *  inside the runtime step (stepAfterRuntime), so this never depends on localStorage alone. */
+export function firstStep(onboarded: boolean): 'runtime' | 'done' {
+  return onboarded ? 'done' : 'runtime';
+}
+
+/** After a successful runtime probe: ask the name only if the SERVER does not know it. */
+export function stepAfterRuntime(operatorName?: string | null, textOnly?: boolean): 'name' | 'voice' | 'first' {
+  if (!operatorName) return 'name';
+  return textOnly ? 'voice' : 'first';
+}
+
+/** The onboarding turn a surface sends: a first-line marker the proxy strips and turns into the
+ *  step directive (services/arturo/onboarding.py). No parsing happens on this side, ever. */
+export function onboardingTurn(step: 'name', text: string): string {
+  return `[Onboarding: step=${step}]\n${text}`;
 }
 
 export function greeting(name?: string | null): string {
