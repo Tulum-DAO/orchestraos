@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import WebTerminal from './WebTerminal';
+import SignInLink from './SignInLink';
 import {
   authedRuntimes, createAgent, freshRuntimes, nameError, openLoginShell, previewName, runtimeLabel,
   type RuntimeRow,
@@ -211,6 +212,9 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
                 <button onClick={onClose} className="px-3 py-1.5 text-sm rounded-lg bg-neutral-800 text-neutral-300 hover:bg-neutral-700 transition-colors">Done</button>
               </div>
             </div>
+            <div className="px-2 pb-3">
+              <SignInLink session={created.session} />
+            </div>
             <div className="h-80 rounded-lg overflow-hidden border border-neutral-800">
               <WebTerminal session={created.session} machine="vps" />
             </div>
@@ -234,6 +238,11 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
                 </button>
                 <button onClick={onClose} className="px-3 py-1.5 text-sm rounded-lg bg-neutral-800 text-neutral-300 hover:bg-neutral-700 transition-colors">Close</button>
               </div>
+            </div>
+            {/* The CLI prints its sign-in URL wrapped across a dozen lines; this is the one
+                thing a person cannot do by hand from a terminal pane. */}
+            <div className="px-2 pb-3">
+              <SignInLink session={shell.session} />
             </div>
             <div className="h-80 rounded-lg overflow-hidden border border-neutral-800">
               <WebTerminal session={shell.session} machine="vps" />
