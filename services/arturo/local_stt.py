@@ -40,23 +40,25 @@ INSTALL_CMD_BETTER = "orchestra init --stt"
 MODEL_DEFAULTS = {"sherpa": "whisper-tiny.en", "faster-whisper": "base.en"}
 
 # Pinned model files (HuggingFace mirrors of the sherpa-onnx release; byte-identical, verified 2026-09-22).
+# The hex strings are sha256 INTEGRITY PINS of public model files, not credentials; the secret scanner
+# is told so inline so the CI gate keeps guarding real keys.
 _HF = "https://huggingface.co/csukuangfj/{repo}/resolve/main/{name}"
 SHERPA_MODELS = {
     "whisper-tiny.en": {
         "kind": "whisper", "repo": "sherpa-onnx-whisper-tiny.en", "backend": "local-whisper",
         "files": {
-            "encoder": ("tiny.en-encoder.int8.onnx", 12937772, "0ce578b827c94a961aacb8fa14b02f096504b337e5c94be37c36238cbe3e8bc6"),
-            "decoder": ("tiny.en-decoder.int8.onnx", 89853865, "06c0e6ff6348d427e51839219d1c886c18cfdf411e629e33f5e1679bff9c1527"),
-            "tokens":  ("tiny.en-tokens.txt",        835554,   "306cd27f03c1a714eca7108e03d66b7dc042abe8c258b44c199a7ed9838dd930"),
+            "encoder": ("tiny.en-encoder.int8.onnx", 12937772, "0ce578b827c94a961aacb8fa14b02f096504b337e5c94be37c36238cbe3e8bc6"),  # pragma: allowlist secret (sha256 integrity pin, not a credential)
+            "decoder": ("tiny.en-decoder.int8.onnx", 89853865, "06c0e6ff6348d427e51839219d1c886c18cfdf411e629e33f5e1679bff9c1527"),  # pragma: allowlist secret (sha256 integrity pin, not a credential)
+            "tokens":  ("tiny.en-tokens.txt",        835554,   "306cd27f03c1a714eca7108e03d66b7dc042abe8c258b44c199a7ed9838dd930"),  # pragma: allowlist secret (sha256 integrity pin, not a credential)
         },
     },
     "zipformer-small-en": {
         "kind": "transducer", "repo": "sherpa-onnx-zipformer-small-en-2023-06-26", "backend": "local-zipformer",
         "files": {
-            "encoder": ("encoder-epoch-99-avg-1.int8.onnx", 26015366, "3a6ac78a31cc2c60ca8c1e2e2f43c878fbbcaf051ada4900e0a42ef8ba53d375"),
-            "decoder": ("decoder-epoch-99-avg-1.int8.onnx", 1307236,  "f462ab9189ba6f9b2658774e6bf3d651913de54a3833655dc5e093e2f5e4c2b6"),
-            "joiner":  ("joiner-epoch-99-avg-1.int8.onnx",  259335,   "6b183b6ec656e4d3ca6b86d0aeca992dac14df80aae6b416d7c068d0ff2bd4d7"),
-            "tokens":  ("tokens.txt",                       5048,     "49e3c2646595fd907228b3c6787069658f67b17377c60aeb8619c4551b2316fb"),
+            "encoder": ("encoder-epoch-99-avg-1.int8.onnx", 26015366, "3a6ac78a31cc2c60ca8c1e2e2f43c878fbbcaf051ada4900e0a42ef8ba53d375"),  # pragma: allowlist secret (sha256 integrity pin, not a credential)
+            "decoder": ("decoder-epoch-99-avg-1.int8.onnx", 1307236,  "f462ab9189ba6f9b2658774e6bf3d651913de54a3833655dc5e093e2f5e4c2b6"),  # pragma: allowlist secret (sha256 integrity pin, not a credential)
+            "joiner":  ("joiner-epoch-99-avg-1.int8.onnx",  259335,   "6b183b6ec656e4d3ca6b86d0aeca992dac14df80aae6b416d7c068d0ff2bd4d7"),  # pragma: allowlist secret (sha256 integrity pin, not a credential)
+            "tokens":  ("tokens.txt",                       5048,     "49e3c2646595fd907228b3c6787069658f67b17377c60aeb8619c4551b2316fb"),  # pragma: allowlist secret (sha256 integrity pin, not a credential)
         },
     },
 }
