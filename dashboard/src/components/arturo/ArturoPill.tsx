@@ -323,9 +323,9 @@ export function ArturoPill() {
             <button className="circle-btn" aria-label="Attach a file" title="Attach a file"
                     onClick={() => fileInput.current?.click()} disabled={uploading}><Plus size={18} /></button>
             {ctxOn ? (
-              <span className="arturo-context-chip">
+              <span className="arturo-context-chip" title={`Looking at ${contextCardLabel(ctx)}`} aria-label={`Looking at ${contextCardLabel(ctx)}`}>
                 <Focus size={12} />
-                <span className="cc-label">Looking at <b>{contextCardLabel(ctx)}</b></span>
+                <span className="cc-label"><b>{contextCardLabel(ctx)}</b></span>
                 <button className="cc-x" onClick={toggleContextCard}
                         aria-label="Stop focusing on this page"><X size={12} /></button>
               </span>
