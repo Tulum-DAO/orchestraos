@@ -177,8 +177,11 @@ export default function ArturoHome() {
    *  manager" fact) to THIS turn only. */
   async function openHierarchy() {
     const id = say('', { pending: true });
-    const r = await arturoText(onboardingTurn('hierarchy',
-      'Tell me how the seats in this system are organised, and what I have so far.'), convId.current);
+    // A MINIMAL trigger on purpose: the directive server-side already says exactly what to say and
+    // ask. The first cut asked "and what I have so far", which invited a status answer — the brain
+    // called list_agents and reported the fleet instead of walking the operator through the tiers
+    // (caught on the box; every unit test passed).
+    const r = await arturoText(onboardingTurn('hierarchy', 'Explain how seats are organised here.'), convId.current);
     patch(id, { pending: false, text: r.ok ? (r.reply_text || '(no reply)') : 'I could not explain that just now — ask me any time.', tools: r.tools_called, spawned: r.spawned });
     if (!r.ok) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }
   }
