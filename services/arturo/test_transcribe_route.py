@@ -95,3 +95,14 @@ def test_validate_transcribe_audio_contract():
         assert ptt.validate_transcribe_audio(10, ct) == (True, None), ct
     # the watch rule is untouched
     assert ptt.validate_audio(10, "audio/webm") == (False, "bad_type") and ptt.MAX_AUDIO_BYTES == 1_000_000
+
+
+def test_proxy_boot_prefetch_runs_after_the_import(monkeypatch):
+    # Regression: the boot-time prefetch once sat ABOVE the local_stt import and killed :5071 at
+    # start (NameError) on the box, while tests passed because that block is env-guarded. Loading
+    # the module must call prefetch exactly once with the module logger, in every environment.
+    import services.arturo.local_stt as real
+    calls = []
+    monkeypatch.setattr(real, "prefetch", lambda *a, **k: calls.append(k) or False)
+    mod = _load_proxy()
+    assert mod._local_stt is real and len(calls) == 1 and calls[0]["log"] is mod.log

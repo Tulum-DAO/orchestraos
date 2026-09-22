@@ -149,9 +149,6 @@ def _warm_facts_cache():
 # env-gated (run.sh sets it) so test imports of this module never touch the live db
 if os.environ.get("ARTURO_FACTS_RECALL") == "1":
     _threading.Thread(target=_warm_facts_cache, daemon=True, name="facts-cache-warm").start()
-    # item C: fetch the local speech model in the background (never inside a request). No-op on a
-    # slim install (faster-whisper absent) or when the files are already on disk.
-    _local_stt.prefetch(log=log)
     if _STREAM_RELAY is not None:
         _STREAM_RELAY.daemons.append("facts-cache-warm")
     log.info("facts cache warm started")
@@ -2931,6 +2928,9 @@ def _filter_voice_response(content):
 # ============================================================================================
 from services.arturo import ptt as _ptt
 from services.arturo import local_stt as _local_stt   # item C: key-free web dictation (lazy: never imports faster-whisper here)
+# item C: fetch the local speech model in the background at boot (never inside a request). No-op on a
+# slim install (faster-whisper absent) or when the files are already on disk. Must sit AFTER the import.
+_local_stt.prefetch(log=log)
 
 PTT_STT_MODEL = os.environ.get("ARTURO_PTT_STT_MODEL", "scribe_v1")
 # Arturo's ElevenLabs voice for TTS replies (mp3, AVAudioPlayer-native). Overridable.
