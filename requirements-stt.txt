@@ -1,0 +1,5 @@
+# Optional: local speech-to-text for the web composer's Mic button (item C). Installed by
+# `orchestra init --stt` (or [arturo] local_stt = true) into <repo>/.venv — NOT by the default
+# install, because it adds ~365 MB (CTranslate2 + PyAV + onnxruntime) and the model is a one-time
+# ~140 MB download into <data dir>/models/whisper. No vendor key, no network at request time.
+faster-whisper>=1.1

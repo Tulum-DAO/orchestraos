@@ -123,7 +123,8 @@ browser / iOS
 
 `mode` is `voice` when any of `ELEVENLABS_API_KEY` / `CARTESIA_API_KEY` /
 `HUME_API_KEY` / `GEMINI_API_KEY` is present, else `text-only`. A text-only install
-disables the mic and voice circle on the home; the `/ptt*` voice routes still exist
+disables the voice-call circle on the home (the Mic button still DICTATES — see
+§ Dictation below); the `/ptt*` voice routes still exist
 and refuse vendor-less calls visibly.
 
 ## Commissioning an agent
@@ -216,3 +217,48 @@ response shape arturo-proxy already reads (choices[0].message.content /
 Before you start: `orchestra doctor` must show arturo:brain, and
 `curl -s localhost:5071/health | jq .brain` must match it.
 ```
+
+
+## Dictation — the Mic button works with no vendor key
+
+The Mic button in every Arturo composer (the home and the *Ask Arturo* pill) turns speech
+into text in the box. You read it, then tap send. It never needs ElevenLabs, Hume or any
+key. Three tiers, chosen per tap:
+
+1. **On-device speech (Chrome, Edge, Safari, Samsung Internet).** The browser's own
+   recognizer; words appear live while you talk. Chrome sends the audio to Google for
+   this, so it needs internet even though it needs no key.
+2. **Record, then transcribe on the box (everything else — Firefox, Chrome on iPhone,
+   Brave, keyless Chromium).** The browser records a clip; the box transcribes it with a
+   local Whisper model on its own CPU. Opt-in because it is heavy:
+
+   ```
+   ./bin/orchestra init --stt        # or [arturo] local_stt = true in orchestra.toml
+   ```
+
+   adds ~365 MB to `.venv` (faster-whisper / CTranslate2 / PyAV) and downloads the
+   `base.en` model once (~140 MB) into `<data dir>/models/whisper`. A 10 s clip
+   transcribes in about a second on 4 cores. `orchestra doctor` shows
+   `arturo:local-stt` = ready / not installed / warming. Env knobs:
+   `ARTURO_LOCAL_STT=0` (off), `ARTURO_LOCAL_STT_MODEL=tiny.en|base.en|small.en`.
+   Nothing is downloaded inside a request: until the model is on disk the composer
+   says so and the endpoint answers `503 stt_unavailable` with `reason: warming`.
+3. **Neither.** The button stays tappable and tells you exactly which of the above to
+   fix. It is never silently dead.
+
+**HTTPS is required for the microphone** in every browser, except on `localhost`. If
+your dashboard is bound to a LAN or VPN address over plain `http://`, no browser will
+open the mic. Put it behind `tailscale serve` or a TLS reverse proxy; `orchestra doctor`
+adds a `dashboard:https` note when the bind address is not loopback.
+
+Endpoint (browser → api → gateway → :5071, all bearer-guarded like `/text`):
+
+```
+POST /api/arturo/transcribe   multipart audio=<clip>   (webm/opus, mp4, ogg, wav; 10 MB cap)
+  200 {ok:true, text, backend:"local-whisper", model, ms}
+  422 no_speech · 503 stt_unavailable {reason: warming|not-installed|off|error, install}
+  400/413 bad or oversized clip · 504 timeout (25 s on the box, 35 s gateway, 40 s api)
+```
+
+The watch push-to-talk path (`/ptt`) is separate and unchanged: it still uses the vendor
+speech-to-text order and needs a voice key for the spoken reply.
