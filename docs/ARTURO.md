@@ -232,30 +232,36 @@ Before you start: `orchestra doctor` must show arturo:brain, and
 ```
 
 
-## Dictation — the Mic button works with no vendor key
+## Dictation — the Mic button works with no vendor key, in every browser
 
 The Mic button in every Arturo composer (the home and the *Ask Arturo* pill) turns speech
 into text in the box. You read it, then tap send. It never needs ElevenLabs, Hume or any
-key. Three tiers, chosen per tap:
+key, and there is nothing to decide or install: transcription is on straight out of the box.
+Three tiers, chosen per tap:
 
 1. **On-device speech (Chrome, Edge, Safari, Samsung Internet).** The browser's own
    recognizer; words appear live while you talk. Chrome sends the audio to Google for
    this, so it needs internet even though it needs no key.
 2. **Record, then transcribe on the box (everything else — Firefox, Chrome on iPhone,
-   Brave, keyless Chromium).** The browser records a clip; the box transcribes it with a
-   local Whisper model on its own CPU. Opt-in because it is heavy:
-
-   ```
-   ./bin/orchestra init --stt        # or [arturo] local_stt = true in orchestra.toml
-   ```
-
-   adds ~365 MB to `.venv` (faster-whisper / CTranslate2 / PyAV) and downloads the
-   `base.en` model once (~140 MB) into `<data dir>/models/whisper`. A 10 s clip
-   transcribes in about a second on 4 cores. `orchestra doctor` shows
-   `arturo:local-stt` = ready / not installed / warming. Env knobs:
-   `ARTURO_LOCAL_STT=0` (off), `ARTURO_LOCAL_STT_MODEL=tiny.en|base.en|small.en`.
-   Nothing is downloaded inside a request: until the model is on disk the composer
-   says so and the endpoint answers `503 stt_unavailable` with `reason: warming`.
+   Brave, keyless Chromium).** The browser records a clip, decodes it itself to 16 kHz WAV,
+   and the box transcribes it with a local Whisper model (`whisper tiny.en`, int8, via
+   sherpa-onnx) on its own CPU. About a third of a second per sentence; punctuation and
+   capitals come out right. What it costs: the sherpa-onnx wheel (~15 MB, part of
+   `orchestra init`) and a one-time ~99 MB model download into `<data dir>/models/sherpa`,
+   fetched in the background at `orchestra init` and retried at every `orchestra up`. Until it
+   is on disk the button says so in plain words; nothing is ever downloaded inside a request.
+   Clips longer than 28 s are split at the quietest point and joined (Whisper decodes 30 s at
+   a time). Options:
+   - `ARTURO_LOCAL_STT_MODEL=zipformer-small-en` — a 27 MB model for constrained boxes,
+     3x faster, same accuracy on natural speech, **but it outputs ALL CAPS with no punctuation
+     and is weak on synthetic or unusual voices.** Not the default anywhere.
+   - `./bin/orchestra init --stt` — adds **faster-whisper** (`base.en` by default,
+     `ARTURO_LOCAL_STT_MODEL=small.en` for the best quality), the better engine: +~365 MB in
+     `.venv` plus its own model. Once installed it is chosen automatically
+     (`ARTURO_LOCAL_STT_ENGINE=auto|faster-whisper|sherpa` overrides).
+   - `ARTURO_LOCAL_STT=0` switches server dictation off.
+   `orchestra doctor` shows `arturo:local-stt` = ready (engine + model) / warming / not
+   installed (the wheel had no build for this platform — Chrome/Edge/Safari still dictate).
 3. **Neither.** The button stays tappable and tells you exactly which of the above to
    fix. It is never silently dead.
 
@@ -267,10 +273,11 @@ adds a `dashboard:https` note when the bind address is not loopback.
 Endpoint (browser → api → gateway → :5071, all bearer-guarded like `/text`):
 
 ```
-POST /api/arturo/transcribe   multipart audio=<clip>   (webm/opus, mp4, ogg, wav; 10 MB cap)
-  200 {ok:true, text, backend:"local-whisper", model, ms}
-  422 no_speech · 503 stt_unavailable {reason: warming|not-installed|off|error, install}
-  400/413 bad or oversized clip · 504 timeout (25 s on the box, 35 s gateway, 40 s api)
+POST /api/arturo/transcribe   multipart audio=<clip>   (wav from the browser; webm/mp4/ogg accepted; 10 MB cap)
+  200 {ok:true, text, backend:"local-whisper", engine:"sherpa"|"faster-whisper", model, ms}
+  422 no_speech · 415 wav_required (default engine, undecodable clip) · 503 stt_unavailable
+      {reason: warming|not-installed|off|error, install} · 400/413 bad or oversized clip
+  504 timeout (25 s on the box, 35 s gateway, 40 s api; queue wait is not charged to a clip)
 ```
 
 The watch push-to-talk path (`/ptt`) is separate and unchanged: it still uses the vendor

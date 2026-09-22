@@ -12,6 +12,7 @@ import TranscriptChatView from './chat/TranscriptChatView';
 import ChatInput from './chat/ChatInput';
 import AuthFlow from './AuthFlow';
 import { logAction, trackRecentAgent } from '../lib/user-actions';
+import { GenChip } from './GenChip';
 import { useRecentAgents } from '../stores/recentAgents';
 import { RecentAgentChips } from './RecentAgentChips';
 import { setArturoFocus } from '../lib/arturo';
@@ -314,6 +315,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                   : agent.id.replace(`-${agent.client}`, '').split('-').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
                 : agent.name}
             </span>
+            <GenChip generation={agent.generation} />
             {agent.alive ? <AgentStatusDot status={agent.status} /> : <StatusDot status="stopped" />}
           </div>
         </div>

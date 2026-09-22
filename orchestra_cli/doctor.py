@@ -338,8 +338,9 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
                             "Run `orchestra init` (pip install -r requirements.txt) or set [arturo] enabled=false",
                             required=False))
 
-    # -- arturo:local-stt (item C): can the web mic fall back to on-box transcription with no key?
-    # Opt-in, so "not installed" is INFO with the exact command, never a failure. Ready = OK.
+    # -- arturo:local-stt (item C + P1-a): can the web mic fall back to on-box transcription with no key?
+    # sherpa-onnx is in the DEFAULT install, so "not installed" means `orchestra init` did not finish
+    # (WARN, never required); ready = OK and names engine + model.
     if st.arturo_enabled:
         try:
             out = probes.run_cmd([st.python_bin(), "-c",
@@ -350,16 +351,17 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
         except Exception as e:  # noqa: BLE001
             stt = {"state": "error", "reason": f"probe failed: {e}"}
         state = stt.get("state")
+        eng = f"{stt.get('engine', '?')} {stt.get('model', '')}".strip()
         if state == "ready":
-            checks.append(Check("arturo:local-stt", OK, f"local speech-to-text ready ({stt.get('model', '')}) — the web mic works in every browser, no key", "", required=False))
+            checks.append(Check("arturo:local-stt", OK, f"local speech-to-text ready ({eng}) — the web mic works in every browser, no key", "", required=False))
         elif state == "not-installed":
-            checks.append(Check("arturo:local-stt", INFO, "not installed — the web mic dictates only in browsers with on-device speech (Chrome/Edge/Safari)",
-                                "Run `orchestra init --stt` (adds ~365 MB + a ~140 MB model) for Firefox / iPhone Chrome / Brave", required=False))
+            checks.append(Check("arturo:local-stt", WARN, f"speech engine not installed ({eng}) — the web mic dictates only in browsers with on-device speech (Chrome/Edge/Safari)",
+                                f"Run `{stt.get('install', 'orchestra init')}` (sherpa-onnx wheel ~15 MB + a ~99 MB model, fetched in the background)", required=False))
         elif state == "off":
             checks.append(Check("arturo:local-stt", INFO, "disabled (ARTURO_LOCAL_STT=0)", "", required=False))
         else:
-            checks.append(Check("arturo:local-stt", WARN, f"{state}: {stt.get('reason', '')}"[:120],
-                                "Wait for the download, or run `orchestra init --stt` to fetch the model now", required=False))
+            checks.append(Check("arturo:local-stt", WARN, f"{state} ({eng}): {stt.get('reason', '')}"[:120],
+                                "Wait for the download (it retries at `orchestra up`), or run `orchestra init` to fetch the model now", required=False))
 
     # -- dashboard:https (item C): the microphone (and camera) only work in a secure context. A
     # dashboard bound to a LAN/VPN address over plain http has no mic in ANY browser.

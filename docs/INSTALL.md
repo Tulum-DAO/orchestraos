@@ -55,7 +55,8 @@ runs agy 1.2.6 and codex-cli 0.153.4).
 git clone https://github.com/Tulum-DAO/orchestraos.git orchestraos && cd orchestraos
 make install                 # symlinks bin/orchestra into ~/.local/bin
 ./bin/orchestra init         # data dir (~/.orchestra), orchestra.toml, .venv + pip, npm install, builds;
-                             #   add --stt for key-free mic dictation in every browser (+~500 MB, see docs/ARTURO.md)
+                             #   mic dictation works in every browser out of the box (~99 MB model, background);
+                             #   --stt adds the better faster-whisper engine (+~500 MB, see docs/ARTURO.md)
                              # shows the Claude hook rows it will add to ~/.claude/settings.json and asks (or --yes)
 $EDITOR orchestra.toml       # set [runtimes] enabled to the CLI you logged in to, e.g. ["claude"]
 ./bin/orchestra doctor       # every row OK (WARN/INFO rows are advisory); exit code 0

@@ -439,7 +439,7 @@ def test_init_stt_installs_the_extra_and_prefetches_the_model(tmp_path):
     fetch = [c for c in r.calls_with_env if any("local_stt" in a for a in c[0])]
     assert len(fetch) == 1 and fetch[0][2]["ORCHESTRA_DIR"] == str((tmp_path / "d").resolve())
     by = {s.step: s for s in report}
-    assert by["pip:stt"].did and by["stt:model"].did
+    assert by["pip:stt"].did and by["stt:model:faster-whisper"].did
     # idempotent: second run reports present, no second pip
     report2 = I.run_init(root, data_dir=tmp_path / "d", run=r, skip_npm=True, skip_build=True, stt=True)
     assert {s.step: s.detail for s in report2}["pip:stt"] == "local speech-to-text present"
@@ -453,3 +453,47 @@ def test_init_stt_from_config_flag(tmp_path):
     r = Runner()
     I.run_init(root, data_dir=tmp_path / "d", run=r, skip_npm=True, skip_build=True)
     assert any("requirements-stt.txt" in " ".join(c[0]) for c in r.calls)
+
+
+# ---- P1-a: the default install carries the speech engine; the model fetch is soft and skippable -----
+def test_init_installs_the_speech_engine_soft_fail_and_fetches_the_default_model(tmp_path):
+    root = _repo(tmp_path)
+    (root / "requirements-speech.txt").write_text("sherpa-onnx\n")
+    r = Runner()
+    report = I.run_init(root, data_dir=tmp_path / "d", run=r, skip_npm=True, skip_build=True)
+    by = {s.step: s for s in report}
+    assert by["pip:speech"].did
+    assert [c for c in r.calls if "requirements-speech.txt" in " ".join(c[0])]
+    fetch = [c for c in r.calls_with_env if any("engine='sherpa'" in a for a in c[0])]
+    assert len(fetch) == 1 and fetch[0][2]["ORCHESTRA_DIR"] == str((tmp_path / "d").resolve())
+    assert by["stt:model"].did
+    # idempotent: no second pip for the same file
+    I.run_init(root, data_dir=tmp_path / "d", run=r, skip_npm=True, skip_build=True)
+    assert len([c for c in r.calls if "requirements-speech.txt" in " ".join(c[0])]) == 1
+
+
+def test_init_speech_pip_failure_is_soft(tmp_path):
+    root = _repo(tmp_path)
+    (root / "requirements-speech.txt").write_text("sherpa-onnx\n")
+    class Failing(Runner):
+        def __call__(self, argv, cwd=None, env=None):
+            if "requirements-speech.txt" in " ".join(argv):
+                self.calls.append((tuple(argv), str(cwd))); return 1
+            return super().__call__(argv, cwd=cwd, env=env)
+    r = Failing()
+    report = I.run_init(root, data_dir=tmp_path / "d", run=r, skip_npm=True, skip_build=True)
+    by = {s.step: s for s in report}
+    assert not by["pip:speech"].did and "Chrome" in by["pip:speech"].detail
+    assert "stt:model" not in by                                   # no fetch without the engine
+    assert by["pip"].did or "requirements" in by["pip"].detail    # the main install is unaffected
+
+
+def test_init_skip_model_fetch_env_defers_to_up(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    (root / "requirements-speech.txt").write_text("sherpa-onnx\n")
+    monkeypatch.setenv("ORCHESTRA_SKIP_MODEL_FETCH", "1")
+    r = Runner()
+    report = I.run_init(root, data_dir=tmp_path / "d", run=r, skip_npm=True, skip_build=True)
+    by = {s.step: s for s in report}
+    assert by["pip:speech"].did and not by["stt:model"].did and "deferred" in by["stt:model"].detail
+    assert not [c for c in r.calls if any("local_stt" in a for a in c[0])]

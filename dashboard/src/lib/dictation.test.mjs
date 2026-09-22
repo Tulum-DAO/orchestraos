@@ -108,3 +108,37 @@ test('transcribeBlob posts multipart to /api/arturo/transcribe and transcribeRea
   const ok = await transcribeBlob(new Blob(['x'], { type: 'audio/mp4' }), async (u, i) => { seen = i; return { ok: true, status: 200, json: async () => ({ ok: true, text: 'hello', ms: 300 }) }; });
   assert.deepStrictEqual([ok.ok, ok.text, seen.body.get('audio').name], [true, 'hello', 'clip.mp4']);
 });
+
+// ---- P1-a: WAV in the browser ----------------------------------------------------------------
+import { encodeWav, toMono, resampleSinc, WAV_RATE } from './dictation.ts';
+
+test('encodeWav writes a valid 16-bit mono RIFF header and clamps samples', async () => {
+  const s = new Float32Array([0, 0.5, -0.5, 1.5, -1.5]);
+  const blob = encodeWav(s, WAV_RATE);
+  const b = Buffer.from(await blob.arrayBuffer());
+  assert.strictEqual(blob.type, 'audio/wav');
+  assert.strictEqual(b.toString('ascii', 0, 4), 'RIFF');
+  assert.strictEqual(b.toString('ascii', 8, 12), 'WAVE');
+  assert.strictEqual(b.readUInt16LE(20), 1);          // PCM
+  assert.strictEqual(b.readUInt16LE(22), 1);          // mono
+  assert.strictEqual(b.readUInt32LE(24), 16000);
+  assert.strictEqual(b.readUInt16LE(34), 16);
+  assert.strictEqual(b.readUInt32LE(40), 10);         // 5 samples * 2 bytes
+  assert.deepStrictEqual([0, 1, 2, 3, 4].map(i => b.readInt16LE(44 + i * 2)), [0, 16383, -16384, 32767, -32768]);
+});
+
+test('toMono averages channels', () => {
+  const m = toMono([new Float32Array([1, 0]), new Float32Array([0, 1])]);
+  assert.deepStrictEqual(Array.from(m), [0.5, 0.5]);
+  const one = new Float32Array([0.3]); assert.strictEqual(toMono([one]), one);
+});
+
+test('resampleSinc halves the length 48k -> 16k... 3:1 and keeps a low tone intact', () => {
+  const from = 48000, n = 4800;                        // 100 ms
+  const tone = new Float32Array(n); for (let i = 0; i < n; i++) tone[i] = Math.sin(2 * Math.PI * 300 * i / from);
+  const out = resampleSinc(tone, from, 16000);
+  assert.strictEqual(out.length, 1600);
+  let err = 0; for (let i = 100; i < 1500; i++) err = Math.max(err, Math.abs(out[i] - Math.sin(2 * Math.PI * 300 * i / 16000)));
+  assert.ok(err < 0.05, `max error ${err}`);
+  assert.strictEqual(resampleSinc(tone, from, from), tone);
+});
