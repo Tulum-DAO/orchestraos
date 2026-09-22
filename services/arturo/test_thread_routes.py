@@ -65,7 +65,7 @@ def test_threads_list_route_returns_summaries_newest_first(mod_and_tmp):
     assert "turns" in body["threads"][0] and isinstance(body["threads"][0]["turns"], int)
 
 
-def test_thread_detail_route_returns_turns_and_404s_for_an_unknown_id(mod_and_tmp):
+def test_thread_detail_route_returns_turns_and_a_null_thread_for_an_unknown_id(mod_and_tmp):
     mod, tmp_path = mod_and_tmp
     s = _store(mod, tmp_path)
     s.record_turn("c1", "q1", "a1")
@@ -74,8 +74,9 @@ def test_thread_detail_route_returns_turns_and_404s_for_an_unknown_id(mod_and_tm
     assert r.status_code == 200
     assert [(t["role"], t["content"]) for t in r.get_json()["thread"]["turns"]] == [
         ("user", "q1"), ("assistant", "a1")]
-    r404 = c.get("/threads/nope", environ_base={"REMOTE_ADDR": "127.0.0.1"})
-    assert r404.status_code == 404 and r404.get_json()["ok"] is False
+    # an id with no turns yet is the pill's normal first-open state, not a failed request
+    rnew = c.get("/threads/nope", environ_base={"REMOTE_ADDR": "127.0.0.1"})
+    assert rnew.status_code == 200 and rnew.get_json() == {"ok": True, "thread": None}
 
 
 def test_continuing_an_old_thread_rehydrates_its_context_after_a_restart(mod_and_tmp):

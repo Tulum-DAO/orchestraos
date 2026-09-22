@@ -4370,7 +4370,11 @@ def thread_detail_endpoint(conversation_id):
         return jsonify({"ok": False, "error": "loopback only"}), 403
     thread = _THREADS.get_thread(conversation_id)
     if thread is None:
-        return jsonify({"ok": False, "error": "not_found"}), 404
+        # A thread that has no turns yet is the NORMAL state the first time the pill opens (the
+        # browser mints the id before anything is said), not an error: 200 with thread=null, so a
+        # fresh install does not log a failed request on every page. Clients already treat a null
+        # thread as "nothing to resume".
+        return jsonify({"ok": True, "thread": None})
     return jsonify({"ok": True, "thread": thread})
 
 
