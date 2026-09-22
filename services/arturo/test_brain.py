@@ -174,6 +174,131 @@ def test_unknown_runtime_raises():
         B.runtime_command("nope", "nope", "S", "P")
 
 
+# ---- codex parity: --output-schema forces the JSON envelope shape (2026-09-19) ----------
+# codex exec never honoured the prose JSON-envelope protocol (0/3, fabricated actions instead
+# of admitting it made no tool call). `codex exec --output-schema <FILE>` constrains its final
+# response to a schema; paired with the SAME tool_protocol_block prompt this reliably produces
+# the envelope. Claude and gemini are untouched — this is additive, codex-only.
+
+def test_codex_command_adds_output_schema_when_tools_present(tmp_path):
+    spec = B.runtime_command("codex", "codex", "SYS", "PROMPT", model="", scratch=tmp_path,
+                             use_schema=True)
+    assert "--output-schema" in spec.argv
+    schema_path = Path(spec.argv[spec.argv.index("--output-schema") + 1])
+    assert schema_path.is_file()
+    schema = json.loads(schema_path.read_text())
+    # strict mode: every object needs additionalProperties:false, and arguments ride as a
+    # JSON-encoded STRING (arguments_json) because a free-form object is illegal in strict mode.
+    assert schema["additionalProperties"] is False
+    call_schema = schema["properties"]["tool_calls"]["items"]
+    assert call_schema["additionalProperties"] is False
+    assert set(call_schema["properties"]) == {"name", "arguments_json"}
+
+
+def test_codex_command_omits_output_schema_for_plain_turn(tmp_path):
+    spec = B.runtime_command("codex", "codex", "SYS", "PROMPT", model="", scratch=tmp_path,
+                             use_schema=False)
+    assert "--output-schema" not in spec.argv
+
+
+def test_claude_and_gemini_commands_unaffected_by_use_schema_flag():
+    # additive / codex-only: the flag does not even exist as an argv concept elsewhere
+    c = B.runtime_command("claude", "claude", "S", "P", model="", use_schema=True)
+    assert "--output-schema" not in c.argv
+    g = B.runtime_command("gemini", "agy", "S", "P", model="", use_schema=True)
+    assert "--output-schema" not in g.argv
+
+
+def test_parse_codex_envelope_decodes_arguments_json_string():
+    out = json.dumps({"tool_calls": [{"name": "spawn_agent",
+                                      "arguments_json": json.dumps({"session": "probe-seat", "task": "Say hi."})}],
+                      "text": ""})
+    r = B.parse_cli_reply(out)
+    tc = r.choices[0].message.tool_calls
+    assert len(tc) == 1 and tc[0].function.name == "spawn_agent"
+    assert json.loads(tc[0].function.arguments) == {"session": "probe-seat", "task": "Say hi."}
+    assert r.choices[0].finish_reason == "tool_calls"
+
+
+def test_parse_codex_envelope_empty_tool_calls_falls_back_to_text_field():
+    # a plain-answer turn under the schema: tool_calls:[] with the real answer in "text" —
+    # the raw JSON string must never leak into message.content as if it were prose.
+    out = json.dumps({"tool_calls": [], "text": "4"})
+    r = B.parse_cli_reply(out)
+    assert r.choices[0].message.content == "4"
+    assert r.choices[0].message.tool_calls is None
+    assert r.choices[0].finish_reason == "stop"
+
+
+def test_runtime_brain_codex_passes_output_schema_when_tools_present(monkeypatch):
+    seen = {}
+
+    def fake_run(spec, timeout):
+        seen["spec"] = spec
+        return json.dumps({"tool_calls": [{"name": "spawn_agent",
+                                           "arguments_json": json.dumps({"session": "probe-seat"})}],
+                           "text": ""})
+
+    b = B.RuntimeBrain("codex", "codex", model="", runner=fake_run)
+    r = b.complete([{"role": "system", "content": "S"}, {"role": "user", "content": "commission probe-seat"}],
+                   tools=[{"type": "function", "function": {"name": "spawn_agent", "description": "d",
+                                                            "parameters": {"type": "object", "properties": {}}}}],
+                   tool_choice="required")
+    assert "--output-schema" in seen["spec"].argv
+    assert r.choices[0].message.tool_calls[0].function.name == "spawn_agent"
+
+
+def test_codex_command_uses_minitems_schema_when_tool_choice_required(tmp_path):
+    # measured 2026-09-19: prompt-only "you must call a tool" wording still lets codex answer
+    # in prose 2/3 times. A schema with tool_calls.minItems=1 is a STRUCTURAL guarantee the API
+    # enforces, not a request the model can ignore — 5/5 clean with it, vs 1/3 without.
+    spec = B.runtime_command("codex", "codex", "SYS", "PROMPT", model="", scratch=tmp_path,
+                             use_schema=True, require_tool_call=True)
+    schema_path = Path(spec.argv[spec.argv.index("--output-schema") + 1])
+    schema = json.loads(schema_path.read_text())
+    assert schema["properties"]["tool_calls"]["minItems"] == 1
+
+
+def test_codex_command_general_schema_allows_empty_tool_calls_when_not_required(tmp_path):
+    spec = B.runtime_command("codex", "codex", "SYS", "PROMPT", model="", scratch=tmp_path,
+                             use_schema=True, require_tool_call=False)
+    schema_path = Path(spec.argv[spec.argv.index("--output-schema") + 1])
+    schema = json.loads(schema_path.read_text())
+    assert "minItems" not in schema["properties"]["tool_calls"]
+
+
+def test_runtime_brain_codex_selects_required_schema_for_tool_choice_required(monkeypatch):
+    seen = {}
+
+    def fake_run(spec, timeout):
+        seen["spec"] = spec
+        return json.dumps({"tool_calls": [{"name": "spawn_agent", "arguments_json": "{}"}], "text": ""})
+
+    b = B.RuntimeBrain("codex", "codex", model="", runner=fake_run)
+    b.complete([{"role": "user", "content": "commission it"}],
+              tools=[{"type": "function", "function": {"name": "spawn_agent", "parameters": {"type": "object", "properties": {}}}}],
+              tool_choice="required")
+    schema_path = Path(seen["spec"].argv[seen["spec"].argv.index("--output-schema") + 1])
+    assert json.loads(schema_path.read_text())["properties"]["tool_calls"]["minItems"] == 1
+
+
+def test_runtime_brain_codex_plain_turn_stays_prose_not_empty_envelope(monkeypatch):
+    """The regression this guards: a schema that FORCES the envelope shape on a turn with no
+    tools would turn "hello" into raw `{"tool_calls":[],"text":"..."}` prose. No tools ->
+    no schema flag -> the CLI's own text is what the user sees."""
+    seen = {}
+
+    def fake_run(spec, timeout):
+        seen["spec"] = spec
+        return "Hi there!"
+
+    b = B.RuntimeBrain("codex", "codex", model="", runner=fake_run)
+    r = b.complete([{"role": "user", "content": "hello"}])
+    assert "--output-schema" not in seen["spec"].argv
+    assert r.choices[0].message.content == "Hi there!"
+    assert r.choices[0].message.tool_calls is None
+
+
 # ---- RuntimeBrain end to end with a fake runner -----------------------------------------
 
 def test_runtime_brain_complete_uses_runner_and_parses(monkeypatch):

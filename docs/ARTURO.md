@@ -78,6 +78,28 @@ back into the OpenAI response shape (`choices[0].message.tool_calls[i].function.
 untouched. Fenced or prose-wrapped envelopes are tolerated; a reply with no envelope
 is plain text.
 
+**codex is the one exception.** Measured 2026-09-19: codex never honoured the prose
+envelope (0/3), and twice fabricated a completed action with no tool call in the
+transcript. `codex exec` alone among the three CLIs accepts `--output-schema <FILE>`,
+which constrains its final response to a JSON Schema — paired with the same `## Tools`
+prompt block this is reliable (5/5, then 3/3 + a negative control through the real
+`RuntimeBrain` code path). Only the codex branch of `runtime_command` sets this flag;
+claude and gemini are untouched. Two schema files ship in `services/arturo/`:
+`codex_tool_schema.json` (general — `tool_calls` may be empty) is used for every turn
+with tools, and `codex_tool_schema_required.json` (`tool_calls.minItems: 1`) replaces
+it only when `tool_choice="required"` — the prompt's own "you must call a tool" wording
+is a request the model can still ignore (measured 1/3 clean); `minItems` is an API-
+enforced structural guarantee. OpenAI strict mode requires `additionalProperties:false`
+on every object, which makes a free-form `arguments` object illegal, so the codex
+envelope carries `arguments_json` (a JSON-encoded string) instead of `arguments`;
+`parse_cli_reply` decodes it into the same shape the other two runtimes produce. A
+turn with no tools never gets `--output-schema` at all, so a plain conversational
+reply stays prose instead of becoming a forced `{"tool_calls":[],"text":"..."}`
+envelope. See `services/arturo/probe_codex_parity.py` for the by-effect proof — run it
+against a `CODEX_HOME` that holds only `auth.json` (+ a minimal `config.toml`), not an
+interactive fleet install whose own hooks intercept spawn-shaped turns before codex
+ever sees them.
+
 ## Text turn — the path every UI uses
 
 ```
