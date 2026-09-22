@@ -10,6 +10,7 @@ import { TierBadge } from '../components/TierBadge';
 import { AgentCard } from '../components/AgentCard';
 import { TopologyDiagram } from '../components/TopologyDiagram';
 import { getRecentAgents, loadAndMergeRecentAgents, type RecentAgent } from '../lib/user-actions';
+import { GenChip } from '../components/GenChip';
 
 const TIERS = ['For You', 'Recent', 'All', 'T0', 'T1', 'T2', 'T3'] as const;
 const STATUS_FILTERS = ['All', 'Active', 'Dead'] as const;
@@ -381,6 +382,7 @@ function AgentRow({ agent, isSelected, onClick }: { agent: any; isSelected: bool
         <td className="px-4 py-2.5 flex items-center gap-2">
           <StatusDot status={agent.alive ? 'running' : 'stopped'} />
           <span className="text-neutral-100 font-medium">{agent.name}</span>
+          <GenChip generation={agent.generation} />
         </td>
         <td className="px-4 py-2.5"><TierBadge tier={agent.tier} /></td>
         <td className="px-4 py-2.5 text-neutral-400">{agent.machine || '—'}</td>
