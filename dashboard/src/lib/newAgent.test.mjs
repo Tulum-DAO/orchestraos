@@ -20,7 +20,12 @@ assert.equal(previewName('Release_Notes 2'), 'release-notes-2');
 assert.equal(previewName('!!!'), '');
 assert.equal(nameError('', new Set()), null);                       // nothing typed yet
 assert.equal(nameError('!!!', new Set()), 'Use letters or numbers — that name has none.');
-assert.equal(nameError('gm', new Set()), '"gm" is reserved.');
+// DISCLOSED test change (Shaw, 2026-09-22): `gm` is no longer reserved — docs/INSTALL.md tells a
+// new operator to create it and the CLI allows it. The real sentinels still are.
+assert.equal(nameError('gm', new Set()), null);
+assert.equal(nameError('arturo', new Set()), '"arturo" is reserved.');
+assert.equal(nameError('system', new Set()), '"system" is reserved.');
+assert.equal(nameError('gm', new Set(['gm'])), '"gm" already exists.');   // taken still wins
 assert.equal(nameError('Docs Writer', new Set(['docs-writer'])), '"docs-writer" already exists.');
 assert.equal(nameError('Docs Writer', new Set()), null);
 

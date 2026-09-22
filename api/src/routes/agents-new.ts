@@ -30,7 +30,10 @@ const cliOf = (r: RuntimeRow): string => r.cli || CLI_FOR_ID[r.id] || r.id;
 const ORCHESTRA = process.env.ORCHESTRA_DIR || process.env.HOME || '.';
 const ORCHESTRA_ROOT = process.env.ORCHESTRA_ROOT || ORCHESTRA;
 const MAX_NAME = 64;
-const RESERVED = new Set(['all', 'none', 'new', 'gm', 'arturo', 'self', 'system']);
+// Sentinels only. `gm` is NOT one: docs/INSTALL.md tells a new operator to run
+// `orchestra spawn gm --gm`, the CLI allows it, and a fresh install has no gm at all — so the
+// web refusing the name blocked the product's own first instruction (Shaw, 2026-09-22).
+const RESERVED = new Set(['all', 'none', 'new', 'arturo', 'self', 'system']);
 
 // A new registry row must carry a resolvable runtime AND model or the flock-safe writer
 // refuses it (spawn-agent.sh R4 invariant). Same table Arturo's commission path uses.
@@ -43,7 +46,7 @@ const DEFAULT_MODEL_FOR_RUNTIME: Record<string, string> = {
 export interface NewAgentDeps {
   probeRuntimes: () => RuntimeRow[];
   existingNames: () => Set<string> | Promise<Set<string>>;
-  spawn: (args: { name: string; task: string; runtime: string }) => Promise<{ ok: boolean; output: string }>;
+  spawn: (args: { name: string; task: string; runtime: string; gm: boolean }) => Promise<{ ok: boolean; output: string }>;
   sessionExists: (session: string) => boolean;
   startLoginShell: (args: { session: string; greeting: string }) => Promise<{ ok: boolean; output: string }>;
 }
@@ -127,14 +130,18 @@ export function createAgentsNewRouter(deps: NewAgentDeps): Router {
     const role = String(req.body?.role ?? '').trim().slice(0, 120);
     const firstTask = String(req.body?.task ?? '').trim();
     const task = composeTask(role, firstTask);
-    const result = await deps.spawn({ name, task, runtime: runtime.id });
+    // The General Manager is a different KIND of seat: tier T0, always-on, prompts/gm.md
+    // (docs/REFERENCE_INSTALL.md: T0 is the always-on manager seat). Only `orchestra spawn --gm`
+    // sets those, so the gm path goes through the CLI rather than spawn-agent.sh.
+    const gm = req.body?.gm === true;
+    const result = await deps.spawn({ name, task, runtime: runtime.id, gm });
     if (!result.ok) {
       return res.status(502).json({ ok: false, reason: 'spawn_failed', detail: result.output.slice(-600) });
     }
     if (!deps.sessionExists(name)) {
       return res.status(502).json({ ok: false, reason: 'session_missing', detail: result.output.slice(-600) });
     }
-    return res.json({ ok: true, id: name, session: name, runtime: runtime.id, task });
+    return res.json({ ok: true, id: name, session: name, runtime: runtime.id, task, gm });
   });
 
   router.post('/login-shell', async (req: Request, res: Response) => {
@@ -177,8 +184,12 @@ function realSessionExists(session: string): boolean {
   } catch { return false; }
 }
 
-function realSpawn({ name, task, runtime }: { name: string; task: string; runtime: string }): Promise<{ ok: boolean; output: string }> {
-  const args = [`${ORCHESTRA_ROOT}/spawn-agent.sh`, name];
+function realSpawn({ name, task, runtime, gm }: { name: string; task: string; runtime: string; gm: boolean }): Promise<{ ok: boolean; output: string }> {
+  // `orchestra spawn <seat> --gm` registers T0 + always_on + prompts/gm.md and THEN calls
+  // spawn-agent.sh itself; the plain path calls spawn-agent.sh directly, as before.
+  const args = gm
+    ? [`${ORCHESTRA_ROOT}/bin/orchestra`, 'spawn', name, '--gm']
+    : [`${ORCHESTRA_ROOT}/spawn-agent.sh`, name];
   if (task) args.push('--task', task);
   const env = {
     ...process.env,
@@ -187,7 +198,7 @@ function realSpawn({ name, task, runtime }: { name: string; task: string; runtim
     PARENT_AGENT_ID: 'dashboard',
   };
   return new Promise((resolve) => {
-    execFile('bash', args, { timeout: 120000, cwd: ORCHESTRA_ROOT, env }, (err, stdout, stderr) => {
+    execFile(gm ? args[0] : 'bash', gm ? args.slice(1) : args, { timeout: 120000, cwd: ORCHESTRA_ROOT, env }, (err, stdout, stderr) => {
       resolve({ ok: !err, output: `${stdout || ''}\n${stderr || ''}`.trim() });
     });
   });
