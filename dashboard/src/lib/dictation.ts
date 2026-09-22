@@ -36,6 +36,7 @@ export interface SpeechRecognitionLike extends EventTarget {
   onresult: ((ev: RecognitionResultEventLike) => void) | null;
   onerror: ((ev: RecognitionErrorEventLike) => void) | null;
   onend: (() => void) | null;
+  onaudiostart?: (() => void) | null;
 }
 type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
 type WindowWithSpeech = { SpeechRecognition?: SpeechRecognitionCtor; webkitSpeechRecognition?: SpeechRecognitionCtor };
@@ -73,6 +74,9 @@ export interface DictationCallbacks {
   onEnd?: () => void;
   /** Recognizer error code, e.g. 'not-allowed' (mic permission), 'no-speech', 'network'. */
   onError?: (code: string) => void;
+  /** The mic is actually delivering audio. A recognizer that starts but never reaches this is
+   *  silently dead (no result, no error, no end) — the caller uses it to stop pretending. */
+  onAudioStart?: () => void;
 }
 
 export interface DictationHandle { stop(): void; }
@@ -104,6 +108,7 @@ export function startDictation(cb: DictationCallbacks, lang = 'en-US'): Dictatio
   rec.lang = lang;
   rec.onresult = (ev) => routeRecognitionEvent(ev, cb);
   rec.onerror = (ev) => { cb.onError?.(ev?.error || 'unknown'); };
+  rec.onaudiostart = () => { cb.onAudioStart?.(); };
   rec.onend = () => { cb.onEnd?.(); };
   rec.start();
   return { stop: () => { try { rec.stop(); } catch { /* already stopped */ } } };
