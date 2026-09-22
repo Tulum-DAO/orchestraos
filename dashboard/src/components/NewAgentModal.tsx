@@ -128,6 +128,7 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && canSubmit) void submit(); }}
               placeholder="docs writer"
+              aria-label="Name"
               className="w-full px-3 py-2 rounded-lg bg-neutral-950 border border-neutral-700 text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-neutral-500"
             />
             <div className="mt-1 h-5 text-xs">
