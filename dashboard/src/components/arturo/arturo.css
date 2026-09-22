@@ -229,3 +229,12 @@
 .spawned-go:hover { border-color: var(--arturo-line-hi, #3a3a3a); }
 .spawned-name { font-weight: 600; font-size: 13px; }
 .spawned-cta { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; opacity: .7; }
+
+/* The drawer is modal on a phone: it needs a visible way out, not just the dark sliver. */
+.arturo-drawer .drawer-top{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.arturo-drawer .drawer-close{
+  background:none; border:0; color:var(--grey2); cursor:pointer; font-family:inherit;
+  display:inline-flex; align-items:center; justify-content:center;
+  width:44px; height:44px; margin-right:-8px; border-radius:12px;
+}
+.arturo-drawer .drawer-close:hover{ background:rgba(255,255,255,0.07); color:#fff; }
