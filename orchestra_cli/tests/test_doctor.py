@@ -384,3 +384,42 @@ def test_doctor_node_pty_ok_when_the_native_addon_loads(tmp_path):
     st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
     checks = {c.name: c for c in D.run_doctor(st, _probes())}
     assert checks["terminal:node-pty"].status == D.OK
+
+
+def test_doctor_version_row_warns_when_behind_the_latest_tag(tmp_path):
+    """Issue #104: a `orchestra:version` row — installed (git describe) vs the newest tag on
+    origin; WARN with the `orchestra upgrade` remedy when behind, never REQUIRED."""
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    probes = _probes()
+
+    def run_cmd(argv):
+        if "describe" in argv:
+            return "v0.1.0\n"
+        if "ls-remote" in argv:
+            return "abc\trefs/tags/v0.1.0\ndef\trefs/tags/v0.2.0\n"
+        return '{"loggedIn": true}'
+
+    probes.run_cmd = run_cmd
+    checks = {c.name: c for c in D.run_doctor(st, probes)}
+    row = checks["orchestra:version"]
+    assert row.status == D.WARN and row.required is False
+    assert "v0.1.0" in row.detail and "v0.2.0" in row.detail and "orchestra upgrade" in row.remedy
+    assert D.exit_code(list(checks.values())) == 0        # behind is a nudge, not a failure
+
+
+def test_doctor_version_row_is_info_when_the_remote_cannot_be_asked(tmp_path):
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    probes = _probes()
+
+    def run_cmd(argv):
+        if "describe" in argv:
+            return "v0.1.0\n"
+        if "ls-remote" in argv:
+            raise RuntimeError("unable to access origin")
+        return '{"loggedIn": true}'
+
+    probes.run_cmd = run_cmd
+    checks = {c.name: c for c in D.run_doctor(st, probes)}
+    assert checks["orchestra:version"].status == D.INFO
