@@ -32,13 +32,17 @@ export function useDictation(draft: string, setDraft: (v: string) => void, onSta
   const draftRef = useRef(draft);
   useEffect(() => { draftRef.current = draft; }, [draft]);   // read in the tap handler, never during render
 
-  const stopWanted = useRef(false);
-  function stop() {
-    active.current = false;               // FIRST: Chrome fires the pending final result after stop()
+  /** Stop whatever is running. `keepClip` = a deliberate tap while recording: the clip goes on to
+   *  transcription. Otherwise (send pressed, unmount) everything is discarded and late results are
+   *  dropped — the box must stay exactly as the user left it. */
+  function stop(keepClip = false) {
+    if (!keepClip) active.current = false;   // FIRST: Chrome fires the pending final result after stop()
     handle.current?.stop();
     handle.current = null;
-    if (recorder.current && mode === 'recording' && stopWanted.current) { recorder.current.stop(); recorder.current = null; return; }   // onClip -> transcribing
-    if (recorder.current) { recorder.current.stop(); recorder.current = null; }
+    if (recorder.current) {
+      const rec = recorder.current; recorder.current = null; rec.stop();
+      if (keepClip) return;                   // onClip -> transcribing -> idle
+    }
     setMode('idle');
   }
 
@@ -71,7 +75,7 @@ export function useDictation(draft: string, setDraft: (v: string) => void, onSta
   function toggle() {
     setNote(null);
     if (mode === 'transcribing') return;
-    if (mode !== 'idle') { stopWanted.current = true; active.current = mode === 'recording'; stop(); stopWanted.current = false; return; }
+    if (mode !== 'idle') { stop(mode === 'recording'); return; }   // tap while recording keeps the clip; while listening just stops
     base.current = draftRef.current;
     committed.current = [];
     gotResult.current = false;
