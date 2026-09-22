@@ -7,6 +7,7 @@ import { Feed } from '../components/agent/Feed';
 import { Composer } from '../components/agent/Composer';
 import { ReportSheet } from '../components/agent/ReportSheet';
 import { useAgentSettings } from '../stores/agentSettings';
+import { useAgents } from '../hooks/useAgents';
 
 export default function AgentPage() {
   const { id } = useParams<{ id?: string }>();
@@ -15,6 +16,12 @@ export default function AgentPage() {
   const [brainOpen, setBrainOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const settings = useAgentSettings();
+  // A seat's own page names the seat (Shaw's QA run: the composer said "Ask Arturo" on demo-planner's page).
+  const { data } = useAgents();
+  // /api/agents answers { agents: [...] }; tolerate a bare array too.
+  const rows = (Array.isArray(data) ? data : (data as { agents?: unknown } | undefined)?.agents) as Array<{ id: string; generation?: unknown }> | undefined;
+  const seatRow = id && Array.isArray(rows) ? rows.find((a) => a.id === id) : undefined;
+  const seat = id ? { id, generation: seatRow?.generation } : undefined;
 
   // Load settings from storage on mount
   useEffect(() => {
@@ -28,6 +35,7 @@ export default function AgentPage() {
         onMenuOpen={() => setDrawerOpen(true)}
         onBrainOpen={() => setBrainOpen(true)}
         onReportOpen={() => setReportOpen(true)}
+        seat={seat}
       />
 
       {/* Report sheet — RED ALERT front door (docs/RED_ALERT.md) */}
@@ -45,7 +53,7 @@ export default function AgentPage() {
       </div>
 
       {/* Composer fixed at bottom */}
-      <Composer agentId={agentId} />
+      <Composer agentId={agentId} seatName={id} />
     </div>
   );
 }
