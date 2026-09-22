@@ -3407,6 +3407,61 @@ async def handle_arturo_ptt(request):
         return _json({"ok": False, "error": "arturo unreachable"}, status=502)
 
 
+# --- item C: web composer dictation (record-then-transcribe, no vendor key) -----------------------
+# Bearer front door for :5071/transcribe. Same shape as /arturo/ptt (multipart, loopback forward),
+# SEPARATE limits: a MediaRecorder clip is webm/opus (Chrome, Firefox) or mp4 (Safari), capped at
+# 10 MB (services/arturo/ptt.py MAX_TRANSCRIBE_BYTES) — the watch's 1 MB m4a rule is untouched.
+# Timeout ladder: proxy 25 s < gateway 35 s < api 40 s, so nothing is orphaned.
+TRANSCRIBE_MAX_BYTES = int(os.environ.get("WATCH_GATEWAY_TRANSCRIBE_MAX", str(10_000_000)))
+ARTURO_TRANSCRIBE_URL = os.environ.get("ARTURO_TRANSCRIBE_URL", "http://127.0.0.1:5071/transcribe")
+
+
+async def handle_arturo_transcribe(request):
+    """POST /arturo/transcribe — Bearer-authed thin proxy: multipart {audio} -> :5071/transcribe,
+    status + JSON passed through verbatim ({ok,text,backend,ms} | no_speech | stt_unavailable ...)."""
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    import aiohttp
+    try:
+        reader = await request.multipart()
+    except Exception:
+        return _json({"ok": False, "error": "multipart body required"}, status=400)
+    audio_bytes, audio_filename, audio_ct = None, "audio.webm", "application/octet-stream"
+    field = await reader.next()
+    while field is not None:
+        if field.name == "audio":
+            chunks, total = [], 0
+            while True:
+                chunk = await field.read_chunk(256 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > TRANSCRIBE_MAX_BYTES:
+                    return _json({"ok": False, "error": "too_large"}, status=413)
+                chunks.append(chunk)
+            audio_bytes = b"".join(chunks)
+            audio_filename = field.filename or "audio.webm"
+            audio_ct = field.headers.get("Content-Type", "application/octet-stream")
+        field = await reader.next()
+    if not audio_bytes:
+        return _json({"ok": False, "error": "audio field required"}, status=400)
+    data = aiohttp.FormData()
+    data.add_field("audio", audio_bytes, filename=audio_filename, content_type=audio_ct)
+    import asyncio
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(ARTURO_TRANSCRIBE_URL, data=data,
+                              timeout=aiohttp.ClientTimeout(total=35)) as r:
+                body = await r.json(content_type=None)
+                return _json(body, status=r.status)
+    except asyncio.TimeoutError:
+        log.warning("handle_arturo_transcribe: upstream :5071/transcribe timed out")
+        return _json({"ok": False, "error": "timeout"}, status=504)
+    except Exception as e:  # noqa: BLE001
+        log.error(f"handle_arturo_transcribe: upstream unreachable: {e}")
+        return _json({"ok": False, "error": "arturo unreachable"}, status=502)
+
+
 # --- v2/(b) Watch-Arturo stream relay thin proxies (ARCHITECTURE-B.md; auth+forward ONLY,
 # all relay logic lives on :5071 behind ARTURO_STREAM_RELAY; flag-off :5071 404s and these
 # forward that 404 honestly). Same trust model as /arturo/ptt: Bearer here, loopback upstream.
@@ -4792,6 +4847,7 @@ def build_app():
     app.router.add_get("/red-alert/reports", handle_red_alert_reports)
     app.router.add_post("/arturo/ptt", handle_arturo_ptt)
     app.router.add_post("/arturo/text", handle_arturo_text)
+    app.router.add_post("/arturo/transcribe", handle_arturo_transcribe)
     app.router.add_get("/arturo/health", handle_arturo_health)
     app.router.add_get("/arturo/threads", handle_arturo_threads)
     app.router.add_get("/arturo/threads/{conversation_id}", handle_arturo_threads)
