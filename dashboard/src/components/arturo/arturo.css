@@ -54,10 +54,17 @@
 .arturo-composer textarea::placeholder{ color:var(--grey); }
 .ctrl-row{ display:flex; align-items:center; justify-content:space-between; }
 .ctrl-row .cluster{ display:flex; align-items:center; gap:10px; }
-.circle-btn{ width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.08); color:#fff; border:0; flex:0 0 auto; font-size:18px; }
+.circle-btn{ width:34px; height:34px; aspect-ratio:1 / 1; border-radius:50%; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.08); color:#fff; border:0; flex:0 0 auto; font-size:18px; }
 .circle-btn.white{ background:#fff; color:#111; }
 .circle-btn.grey-send{ background:rgba(255,255,255,0.16); }
 .circle-btn:disabled{ opacity:.4; }
+/* index.css gives every button `min-height:44px` under 768px (touch targets). min-height beats
+   height, so a 34px circle became a 34x44 oval on phones. Meet the target instead of weakening it:
+   the composer circles and the header glyph pair are 44x44 on phone widths — always circles. */
+@media (max-width: 768px) {
+  .circle-btn { width:44px; height:44px; }
+  .arturo-glyph { width:44px; height:44px; }
+}
 .model-chip{ display:flex; align-items:center; gap:5px; background:rgba(255,255,255,0.08); border-radius:999px; padding:8px 14px; font-size:14px; border:0; color:#fff; }
 .model-chip b{ font-weight:600; }
 .model-chip .eff{ color:var(--grey); font-weight:400; }
