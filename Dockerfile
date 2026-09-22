@@ -53,11 +53,13 @@ COPY --chown=${USERNAME}:${USERNAME} . .
 # settings are its own, so the hook rows are written without a prompt). Idempotent — re-running it
 # later (postCreateCommand, or by hand) only reports "present".
 ENV PATH="/home/${USERNAME}/.local/bin:${PATH}"
-# WITH_STT=1 bakes local speech-to-text for the web mic into the image (item C): +~365 MB in .venv
-# plus the ~140 MB model. Default off — `orchestra init --stt` inside a running container does the same.
+# Local speech-to-text is DEFAULT-ON (P1-a): the sherpa-onnx wheel is installed here; the ~99 MB
+# whisper tiny.en model is fetched in the background at the first `orchestra up` inside the running
+# container (never inside a request). WITH_STT=1 bakes the model into the image AND adds the opt-in
+# faster-whisper engine (+~365 MB), so a demo box dictates the instant it boots.
 ARG WITH_STT=0
 RUN make install \
- && orchestra init --yes $([ "$WITH_STT" = "1" ] && echo --stt) \
+ && ORCHESTRA_SKIP_MODEL_FETCH=$([ "$WITH_STT" = "1" ] && echo 0 || echo 1) orchestra init --yes $([ "$WITH_STT" = "1" ] && echo --stt) \
  && orchestra up --dry-run
 
 # gateway / api / dashboard

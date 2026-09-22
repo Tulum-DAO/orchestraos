@@ -1,0 +1,7 @@
+# Default local speech-to-text for the web composer's Mic button (P1-a, DEC-1790055166991588):
+# sherpa-onnx (CPU, ~15 MB download / ~44 MB installed) runs whisper tiny.en int8 on the box with no
+# vendor key. `orchestra init` installs this in a SECOND, soft-fail pip step after requirements.txt so
+# a platform without a wheel still boots (Chrome/Edge/Safari then dictate on-device; other browsers
+# get an honest note). The ~99 MB model is fetched in the background, never inside a request.
+# `orchestra init --stt` adds faster-whisper (requirements-stt.txt), the better opt-in engine.
+sherpa-onnx>=1.13
