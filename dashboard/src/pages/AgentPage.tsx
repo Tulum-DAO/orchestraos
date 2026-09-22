@@ -17,8 +17,10 @@ export default function AgentPage() {
   const [reportOpen, setReportOpen] = useState(false);
   const settings = useAgentSettings();
   // A seat's own page names the seat (Shaw's QA run: the composer said "Ask Arturo" on demo-planner's page).
-  const { data: agents } = useAgents();
-  const seatRow = id ? (agents as Array<{ id: string; generation?: unknown }> | undefined)?.find((a) => a.id === id) : undefined;
+  const { data } = useAgents();
+  // /api/agents answers { agents: [...] }; tolerate a bare array too.
+  const rows = (Array.isArray(data) ? data : (data as { agents?: unknown } | undefined)?.agents) as Array<{ id: string; generation?: unknown }> | undefined;
+  const seatRow = id && Array.isArray(rows) ? rows.find((a) => a.id === id) : undefined;
   const seat = id ? { id, generation: seatRow?.generation } : undefined;
 
   // Load settings from storage on mount
