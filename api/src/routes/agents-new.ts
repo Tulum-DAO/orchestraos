@@ -97,6 +97,14 @@ export function loginHint(rows: RuntimeRow[], providerId?: string): { cli: strin
   };
 }
 
+/** Role + first task -> the one --task string spawn-agent.sh takes. Either may be empty. */
+export function composeTask(role: string, task: string): string {
+  const r = role.trim(); const t = task.trim();
+  if (r && t) return `Your role: ${r}.\n\n${t}`;
+  if (r) return `Your role: ${r}.`;
+  return t;
+}
+
 export function createAgentsNewRouter(deps: NewAgentDeps): Router {
   const router = Router();
 
@@ -114,7 +122,11 @@ export function createAgentsNewRouter(deps: NewAgentDeps): Router {
       return res.status(409).json({ ok: false, reason: 'name_taken', name });
     }
 
-    const task = String(req.body?.task ?? '').trim();
+    // The registry has no role column; a role is the first line of the seat's first task, which
+    // is what spawn-agent.sh --task delivers to the new pane.
+    const role = String(req.body?.role ?? '').trim().slice(0, 120);
+    const firstTask = String(req.body?.task ?? '').trim();
+    const task = composeTask(role, firstTask);
     const result = await deps.spawn({ name, task, runtime: runtime.id });
     if (!result.ok) {
       return res.status(502).json({ ok: false, reason: 'spawn_failed', detail: result.output.slice(-600) });
