@@ -246,6 +246,37 @@ function cleanArgs(args: any): Record<string, unknown> {
 }
 
 // One Claude transcript line -> normalized chat items (the grammar shared with iOS).
+/**
+ * Claude Code writes its own plumbing into the transcript as USER messages: the caveat block
+ * it prepends to a local command, the <command-name>/x</command-name> envelope, that
+ * command's stdout/stderr, injected <system-reminder> blocks, and the interrupt marker. None
+ * of it is something the operator said, and the chat rendered every one as a blue user bubble
+ * (Shaw's screenshot of the `test` seat, 2026-09-22) — the class 55134d0 named: raw internals
+ * must never reach the operator.
+ *
+ * A slash command IS what they typed, so it survives as `/login` (with its args); everything
+ * else is dropped. Prose that merely mentions the markup is untouched, because only a
+ * COMPLETE open+close pair is treated as plumbing. Returning '' drops the node: buildRenderItems
+ * already skips empty text.
+ */
+export function sanitizeClaudeUserText(text: string): string {
+  let t = String(text ?? '');
+  t = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '');
+  t = t.replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/g, '');
+  t = t.replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, '');
+  t = t.replace(/<local-command-stderr>[\s\S]*?<\/local-command-stderr>/g, '');
+  const name = /<command-name>\s*([^<]*?)\s*<\/command-name>/.exec(t);
+  if (name) {
+    const args = /<command-args>\s*([^<]*?)\s*<\/command-args>/.exec(t);
+    const typed = [name[1].trim(), (args?.[1] || '').trim()].filter(Boolean).join(' ');
+    t = t.replace(/<command-(name|message|args)>[\s\S]*?<\/command-\1>/g, '');
+    t = `${typed}\n${t}`;
+  }
+  // The harness's own interrupt marker, on its own line.
+  t = t.replace(/^\s*\[Request interrupted by user[^\]]*\]\s*$/gm, '');
+  return t.trim();
+}
+
 function normalizeClaudeEntry(o: any): any[] {
   const t = o?.type;
   if (t !== 'user' && t !== 'assistant') return [];
@@ -257,15 +288,18 @@ function normalizeClaudeEntry(o: any): any[] {
   const content = msg.content;
   const items: any[] = [];
   if (typeof content === 'string') {
-    items.push({ kind: 'text', role, text: content, ts, uuid });
+    const text = role === 'user' ? sanitizeClaudeUserText(content) : content;
+    if (text) items.push({ kind: 'text', role, text, ts, uuid });
     return items;
   }
   for (const b of content || []) {
     if (!b || typeof b !== 'object') continue;
     switch (b.type) {
-      case 'text':
-        items.push({ kind: 'text', role, text: b.text || '', ts, uuid });
+      case 'text': {
+        const text = role === 'user' ? sanitizeClaudeUserText(b.text || '') : (b.text || '');
+        if (text) items.push({ kind: 'text', role, text, ts, uuid });
         break;
+      }
       case 'thinking':
         items.push({ kind: 'thinking', role, text: b.thinking || '', ts, uuid });
         break;
