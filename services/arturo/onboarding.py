@@ -75,8 +75,10 @@ def _hierarchy(ctx) -> str:
             "from the Agents page. Ask no question."
         )
     return head + tail + (
-        " Do not list features, do not pitch, do not mention tiers you were not given, and do not exceed "
-        "one question."
+        " Answer from the facts in this instruction ONLY: do not call any tool, do not look the fleet up, "
+        "and do not report how many seats exist or which machines are online — that is not what this turn "
+        "is for. Do not list features, do not pitch, do not mention tiers you were not given, and do not "
+        "exceed one question."
     )
 
 
