@@ -29,9 +29,10 @@ import WebTerminal from '../components/WebTerminal';
 import { installCommand } from '../lib/providerConnect';
 import { uploadAttachment, attachmentPreamble, describeAttachment, type Attachment } from '../lib/arturoUpload';
 import { useDictation } from '../components/arturo/useDictation.ts';
+import SpawnedAgentCard from '../components/arturo/SpawnedAgentCard';
 import { Brain, Settings } from 'lucide-react';
 
-type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[]; pending?: boolean; state?: SendState;
+type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[]; spawned?: string[]; pending?: boolean; state?: SendState;
   decision?: { options: string[]; onPick: (v: string) => void } };
 type Step = 'name' | 'runtime' | 'voice' | 'first' | 'done';
 
@@ -278,7 +279,7 @@ export default function ArturoHome() {
         : `I could not reach my brain: ${r.error || 'unknown'}. Is \`orchestra up\` running? Check /health on the Arturo service.` });
       return;
     }
-    patch(id, { pending: false, text: r.reply_text || '(no reply)', tools: r.tools_called });
+    patch(id, { pending: false, text: r.reply_text || '(no reply)', tools: r.tools_called, spawned: r.spawned });
     if (isName) {
       // Advance only on the EFFECT: the brain recorded a name (the spawn_agent pattern). Otherwise
       // its reply was a re-ask and the step stays — including the NullBrain sentence, where the
@@ -335,6 +336,7 @@ export default function ArturoHome() {
             <ArturoMark className="mark-sm" />
             {t.pending ? <span className="thinking" aria-label="thinking" /> : <div className="txt">{renderText(t.text)}</div>}
             {t.tools && t.tools.length > 0 && <div className="tools">ran {t.tools.join(', ')}</div>}
+            <SpawnedAgentCard ids={t.spawned} />
             {t.decision && (
               <div className="decision-card">
                 {t.decision.options.map((o) => (

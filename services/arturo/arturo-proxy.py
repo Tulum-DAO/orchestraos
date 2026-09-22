@@ -183,6 +183,22 @@ _INJECT_ASYNC = True
 # execute_tool.
 import contextvars as _contextvars
 _TOOLS_THIS_TURN = _contextvars.ContextVar("arturo_tools_this_turn", default=None)
+# Seats CREATED during this turn. The seat id is known only inside the spawn tool, and the
+# surfaces need it to offer a way into the new agent (Shaw, 2026-09-22). Only the verified
+# success path records, so a FAILED spawn can never produce a link to nothing.
+_SPAWNED_THIS_TURN = _contextvars.ContextVar("arturo_spawned_this_turn", default=None)
+
+
+def _record_spawned_this_turn(session_name):
+    """Best-effort, turn-scoped. Outside a turn (voice, cron) it is a no-op, never an error."""
+    bucket = _SPAWNED_THIS_TURN.get()
+    if bucket is None or not session_name:
+        return
+    try:
+        if session_name not in bucket:
+            bucket.append(session_name)
+    except Exception:
+        pass
 
 # VQ-6 supersede-on-arrival (pause-duplication). DEC-1786425204 CONSENSUS_REACHED.
 # When the operator pauses mid-utterance the endpointer answers the PARTIAL, then the FULL utterance
@@ -1929,6 +1945,7 @@ def execute_tool(name, args, user_turns=None):
                 return f"FAILED: spawn-agent.sh ran but session '{session}' does not exist on vps: {out[-300:]}"
             msg_id = _file_commission_row(session, task)
             record_spawned_session(session)
+            _record_spawned_this_turn(session)
             _notify_spawned(session, "vps")
             # Registration is the thing that makes a seat real (dashboard, mail, rotation,
             # park-not-retire). Verify it by effect and SAY which it is — never claim
@@ -2000,6 +2017,7 @@ def execute_tool(name, args, user_turns=None):
 
         # Track in voice memory
         record_spawned_session(session)
+        _record_spawned_this_turn(session)
 
         # Auto-text session name + attach command to Telegram
         import requests as req_lib
@@ -4287,6 +4305,7 @@ def _brain_reply(messages, conversation_id):
     """One trip through the tool-enabled chat path. Returns (reply_text, tools_called).
     Extracted so the turn's THREADING can be tested without a brain."""
     token = _TOOLS_THIS_TURN.set([])
+    spawn_token = _SPAWNED_THIS_TURN.set([])
     try:
         with app.test_client() as c:
             r = c.post("/v1/chat/completions", json={"messages": messages, "stream": False,
@@ -4294,12 +4313,14 @@ def _brain_reply(messages, conversation_id):
                        headers={"X-Arturo-Internal": _INTERNAL_NONCE})
             body = r.get_json(silent=True) or {}
         tools_called = [t.get("tool", "?") for t in (_TOOLS_THIS_TURN.get() or [])]
+        spawned = list(_SPAWNED_THIS_TURN.get() or [])
     finally:
         _TOOLS_THIS_TURN.reset(token)
+        _SPAWNED_THIS_TURN.reset(spawn_token)
     if r.status_code != 200:
         raise _BrainHttpError(r.status_code, body)
     reply = ((body.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-    return reply, tools_called
+    return reply, tools_called, spawned
 
 
 def text_turn(text, conversation_id):
@@ -4333,7 +4354,10 @@ def text_turn(text, conversation_id):
             _TEXT_HISTORY.append(conversation_id, turn.get("role"), turn.get("content"))
     messages = _ptt.build_messages(context, history, text)
     try:
-        reply, tools_called = _brain_reply(messages, conversation_id)
+        _res = _brain_reply(messages, conversation_id)
+        # Tolerant unpack: a stub (and any older caller) may still return the 2-tuple.
+        reply, tools_called = _res[0], _res[1]
+        spawned = list(_res[2]) if len(_res) > 2 else []
     except _BrainHttpError as e:
         return 502, {"ok": False, "error": f"brain_http_{e.status}", "detail": e.body}
     _TEXT_HISTORY.append(conversation_id, "user", text)
@@ -4342,6 +4366,7 @@ def text_turn(text, conversation_id):
     from services.arturo import operator_store as _ops
     return 200, {"ok": True, "reply_text": reply, "conversation_id": conversation_id,
                  "brain": brain.describe(), "tools_called": tools_called,
+                 "spawned": spawned,
                  "operator": _ops.public(ARTURO_STATE)}
 
 
