@@ -27,7 +27,10 @@ import {
 } from '../../lib/arturoThreads';
 import { VoiceSession, type VoiceSessionState } from '../../lib/voiceSession';
 
-interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[]; at: number; live?: boolean }
+interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[]; at: number; live?: boolean;
+  /** A first-person status note (voice not configured, mic denied…) — rendered as a small interleaved
+   *  row at the moment it happened, like a tool call, never as a message and never pinned to the bottom. */
+  note?: boolean }
 const LS_CONV = 'orchestra.arturo.pill.conversation';
 
 /** Which thread was I in — the ONLY thing still kept in the browser. */
@@ -65,7 +68,7 @@ export function ArturoPill() {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const { mode: dictMode, dictating, note: dictNote, toggle: toggleDictation, stop: stopDictation } =
+  const { mode: dictMode, dictating, note: dictNote, toggle: toggleDictation, stop: stopDictation, clearNote: clearDictNote } =
     useDictation(draft, setDraft, () => ta.current?.focus());
   const scroller = useRef<HTMLDivElement>(null);
   // Chat/dev mode opens an agent as an overlay WITHOUT changing the URL, so the route says
@@ -85,9 +88,10 @@ export function ArturoPill() {
   const [callState, setCallState] = useState<VoiceSessionState>('idle');
   const [liveUser, setLiveUser] = useState('');
   const [liveArturo, setLiveArturo] = useState('');
-  const [voiceNote, setVoiceNote] = useState<string | null>(null);
+  const callStateRef = useRef<VoiceSessionState>('idle');
   const voice = useRef<VoiceSession | null>(null);
   const appendRef = useRef<(t: PillTurn) => void>(() => {});
+  const noteRef = useRef<(reason: string) => void>(() => {});
   function voiceSession(): VoiceSession {
     if (!voice.current) {
       voice.current = new VoiceSession({
@@ -96,8 +100,14 @@ export function ArturoPill() {
           if (role === 'user') setLiveUser(''); else setLiveArturo('');
           appendRef.current({ role, text, at: Date.now(), live: true });
         },
-        onUnavailable: (reason) => setVoiceNote(reason),
-        onStateChange: (s) => setCallState(s),
+        onUnavailable: (reason) => noteRef.current(reason),
+        onStateChange: (s) => {
+          callStateRef.current = s;
+          setCallState(s);
+          // The call is over (ended, refused, or failed): its on-device captions end with it, so a later
+          // Dictate tap never fights a stale recognizer (that fight surfaced as "dictation error: aborted").
+          if (s === 'idle' || s === 'error') { voice.current?.stopDictation(); setLiveUser(''); setLiveArturo(''); }
+        },
         onCallEnded: (marker, id) => {
           setLiveUser(''); setLiveArturo('');
           appendRef.current({ role: 'arturo', text: `Call ended (${id}). ${marker}`, at: Date.now(), live: true });
@@ -108,11 +118,12 @@ export function ArturoPill() {
   }
   const inCall = callState === 'live' || callState === 'connecting';
   async function toggleCall() {
-    setVoiceNote(null);
     if (inCall) { voiceSession().stop(); voiceSession().stopDictation(); return; }
     const focused = ctx.entityKind && ctx.entityId ? `${ctx.entityKind}:${ctx.entityId}` : null;
     await voiceSession().start({ route: ctx.route, focusedEntity: focused });
-    voiceSession().startDictation();          // your own captions, on-device
+    // Captions only for a call that actually opened; a refused call already left its note in the thread.
+    const st = callStateRef.current;
+    if (st === 'connecting' || st === 'live') voiceSession().startDictation();
   }
   useEffect(() => () => { voice.current?.stop(); voice.current?.stopDictation(); }, []);
   const routeCtx = contextFromLocation(location.pathname, params as Record<string, string | undefined>, location.search);
@@ -132,11 +143,18 @@ export function ArturoPill() {
 
   const append = (t: PillTurn) => setTurns((prev) => [...prev, t]);
   appendRef.current = append;
+  // One note per distinct reason in a row: a refused call can report twice (socket + server).
+  noteRef.current = (reason: string) => setTurns((prev) => {
+    const last = prev[prev.length - 1];
+    if (last && last.note && last.text === reason) return prev;
+    return [...prev, { role: 'arturo', text: reason, at: Date.now(), note: true }];
+  });
 
   async function send() {
     const text = draft.trim();
     if (!text || busy) return;
     if (dictating) stopDictation();      // the sent text is final; don't re-append into the empty box
+    clearDictNote();
     setDraft(''); setBusy(true);
     append({ role: 'user', text, at: Date.now() });
     // The path rides in front of the message (same grammar as the home composer).
@@ -253,7 +271,9 @@ export function ArturoPill() {
           {turns.length === 0 && !busy && (
             <p className="empty">Ask about what you are looking at, or anything else. Every conversation is kept — open <b>Threads</b> to go back to one.</p>
           )}
-          {turns.map((t, i) => (
+          {turns.map((t, i) => t.note ? (
+            <div key={i} className="row note"><div className="meta">I can't do that yet — {t.text}.</div></div>
+          ) : (
             <div key={i} className={t.role === 'user' ? 'row user' : 'row arturo'}>
               <div className="bubble">{t.text}</div>
               {t.tools && t.tools.length > 0 && <div className="meta">ran {t.tools.join(', ')}</div>}
@@ -263,7 +283,6 @@ export function ArturoPill() {
           {liveUser && <div className="row user"><div className="bubble live">{liveUser}…</div></div>}
           {liveArturo && <div className="row arturo"><div className="bubble live">{liveArturo}…</div></div>}
           {callState === 'connecting' && <div className="row arturo"><div className="bubble thinking">Connecting the call…</div></div>}
-          {voiceNote && <div className="row arturo"><div className="bubble">I can't do that yet — {voiceNote}.</div></div>}
         </div>
 
         <input ref={fileInput} type="file" multiple hidden aria-hidden="true"

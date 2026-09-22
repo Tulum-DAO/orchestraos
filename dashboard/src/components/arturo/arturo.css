@@ -147,6 +147,10 @@
 .arturo-pill-thread .row.arturo .bubble{ background:rgba(217,119,87,0.12); color:#f1efec; }
 .arturo-pill-thread .bubble.thinking{ color:rgba(255,255,255,0.45); }
 .arturo-pill-thread .meta{ font-size:11px; color:rgba(255,255,255,0.35); }
+/* status notes (voice not configured, mic denied…) sit IN the thread where they happened, styled like
+   a tool-call line — never a message bubble, never pinned under the latest turn. */
+.arturo-pill-thread .row.note{ align-items:flex-start; padding:2px 6px; }
+.arturo-pill-thread .row.note .meta{ color:rgba(255,255,255,0.45); font-style:italic; }
 .arturo-pill-count{ margin-left:2px; font-size:11px; color:rgba(255,255,255,0.55); background:rgba(255,255,255,0.10); border-radius:999px; padding:1px 7px; }
 .arturo-pill-panel textarea{ flex:0 0 auto; display:block; width:100%; resize:none; background:none; border:0; outline:0; color:#fff; font-size:16px; padding:6px 4px 10px; min-height:30px; max-height:120px; font-family:inherit; }
 .arturo-pill-panel textarea::placeholder{ color:rgba(255,255,255,0.45); }
