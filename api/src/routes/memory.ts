@@ -17,12 +17,9 @@ const router = Router();
 // GET /context — context_layer.json
 router.get('/context', (_req: Request, res: Response) => {
   try {
-    const data = getContextLayer();
-    if (!data) {
-      res.status(404).json({ error: 'Context layer not found' });
-      return;
-    }
-    res.json(data);
+    // No context layer yet is the normal state of a fresh install, not an error: an empty object
+    // (200) so the Overview and every QA tool stop seeing a failed request on each page load.
+    res.json(getContextLayer() || {});
   } catch (err) {
     res.status(500).json({ error: 'Failed to load context', detail: String(err) });
   }
