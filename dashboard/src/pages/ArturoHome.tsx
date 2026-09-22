@@ -34,7 +34,7 @@ import { Brain, Settings } from 'lucide-react';
 
 type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[]; spawned?: string[]; pending?: boolean; state?: SendState;
   decision?: { options: string[]; onPick: (v: string) => void } };
-type Step = 'name' | 'runtime' | 'voice' | 'first' | 'done';
+type Step = 'name' | 'runtime' | 'voice' | 'first' | 'hierarchy' | 'done';
 
 const LS_NAME = 'orchestra.arturo.name';
 const LS_ONBOARDED = 'orchestra.arturo.onboarded';
@@ -165,8 +165,23 @@ export default function ArturoHome() {
       void runtimeStep();
     }
     if (step === 'first') say(`What should your first agent do? Describe the job in a sentence — I'll spawn a seat on the runtime you're logged in to and hand it the task.`);
+    // The hierarchy step is the brain's to speak, but a marker-only turn is rejected as empty, so
+    // the client opens it with a synthetic prompt the same way `first` does. The directive (and the
+    // fact of whether a manager already exists) lives server-side.
+    if (step === 'hierarchy') void openHierarchy();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
+
+  /** Opens the hierarchy step: the brain explains the tiers and asks the one question. Sent as a
+   *  marked turn so the proxy attaches the step directive (and the server-side "is there already a
+   *  manager" fact) to THIS turn only. */
+  async function openHierarchy() {
+    const id = say('', { pending: true });
+    const r = await arturoText(onboardingTurn('hierarchy',
+      'Tell me how the seats in this system are organised, and what I have so far.'), convId.current);
+    patch(id, { pending: false, text: r.ok ? (r.reply_text || '(no reply)') : 'I could not explain that just now — ask me any time.', tools: r.tools_called, spawned: r.spawned });
+    if (!r.ok) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }
+  }
 
   async function runtimeStep(fresh = false) {
     const id = say('', { pending: true });
@@ -255,6 +270,7 @@ export default function ArturoHome() {
     const uid = user(text, 'sending');   // the bubble appears NOW; the box is already empty
     const isName = step === 'name';
     const isFirst = step === 'first';
+    const isHierarchy = step === 'hierarchy';
     // The name step is a BRAIN turn: the marker makes the proxy add the step's directive, the
     // brain understands the reply (dictated or typed, any phrasing, any language) and records
     // the name with set_operator_fact — or asks again in its own words. Nothing is parsed here.
@@ -269,7 +285,8 @@ export default function ArturoHome() {
     const withFiles = pre ? `${pre}\n\n${body}` : body;
     // The onboarding marker is applied LAST so it is always line 1 — the proxy anchors on it
     // (a file attached during the name step must not push it down; peer review DEC-1790048447550594).
-    const sent = isName ? onboardingTurn('name', withFiles) : withFiles;
+    const sent = isName ? onboardingTurn('name', withFiles)
+      : isHierarchy ? onboardingTurn('hierarchy', withFiles) : withFiles;
     setAttachments([]);
     const onSent = () => patch(uid, { state: 'sent' });
     let r = await arturoText(sent, convId.current, null, { onSent });
@@ -296,9 +313,20 @@ export default function ArturoHome() {
       if (got) { setName(got); lsSet(LS_NAME, got); voiceStep(); }
       return;
     }
-    if (isFirst && (r.tools_called || []).includes('spawn_agent')) {
-      lsSet(LS_ONBOARDED, '1'); setStep('done');
-      say('Your first seat is up. From here on, this thread is the front door: ask for status, commission more agents, or open the drawer for the rest of the OS.');
+    // By EFFECT, never by tool name: `spawned` is recorded only after the seat is verified up,
+    // while tools_called is appended at invocation and so fires on a FAILED spawn too.
+    if (isFirst && (r.spawned || []).length > 0) setStep('hierarchy');
+    if (isHierarchy) {
+      // Advance when a manager was VERIFIED up, or when they declined — but a decline is only
+      // legible when there IS a brain: a NullBrain turn also returns 200 with no tool call.
+      const madeManager = (r.spawned || []).length > 0;
+      const declined = (r.tools_called || []).length === 0 && health?.brain?.kind !== 'none';
+      if (madeManager || declined) {
+        lsSet(LS_ONBOARDED, '1'); setStep('done');
+        say(madeManager
+          ? 'Your manager is up. From here on, this thread is the front door: ask for status, commission more agents, or open the drawer for the rest of the OS.'
+          : 'Understood — no manager for now. From here on, this thread is the front door: ask for status, commission more agents, or open the drawer for the rest of the OS.');
+      }
     }
   }
 
