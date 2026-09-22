@@ -417,3 +417,39 @@ def test_init_skips_hook_wiring_outside_a_git_checkout(tmp_path):
     done = {r.step: r for r in report}
     assert done["git-hooks"].did is False
     assert not any(c[0][:1] == ("git",) and "core.hooksPath" in c[0] for c in runner.calls)
+
+
+# ---- item C: `orchestra init --stt` installs the opt-in local speech-to-text extra ------------------
+def test_init_without_stt_never_touches_requirements_stt(tmp_path):
+    root = _repo(tmp_path)
+    (root / "requirements-stt.txt").write_text("faster-whisper\n")
+    r = Runner()
+    report = I.run_init(root, data_dir=tmp_path / "d", run=r, skip_npm=True, skip_build=True)
+    assert not any("requirements-stt.txt" in " ".join(c[0]) for c in r.calls)
+    assert not any(s.step == "pip:stt" for s in report)
+
+
+def test_init_stt_installs_the_extra_and_prefetches_the_model(tmp_path):
+    root = _repo(tmp_path)
+    (root / "requirements-stt.txt").write_text("faster-whisper\n")
+    r = Runner()
+    report = I.run_init(root, data_dir=tmp_path / "d", run=r, skip_npm=True, skip_build=True, stt=True)
+    pip_calls = [c for c in r.calls if "requirements-stt.txt" in " ".join(c[0])]
+    assert len(pip_calls) == 1 and "-r" in pip_calls[0][0]
+    fetch = [c for c in r.calls_with_env if any("local_stt" in a for a in c[0])]
+    assert len(fetch) == 1 and fetch[0][2]["ORCHESTRA_DIR"] == str((tmp_path / "d").resolve())
+    by = {s.step: s for s in report}
+    assert by["pip:stt"].did and by["stt:model"].did
+    # idempotent: second run reports present, no second pip
+    report2 = I.run_init(root, data_dir=tmp_path / "d", run=r, skip_npm=True, skip_build=True, stt=True)
+    assert {s.step: s.detail for s in report2}["pip:stt"] == "local speech-to-text present"
+    assert len([c for c in r.calls if "requirements-stt.txt" in " ".join(c[0])]) == 1
+
+
+def test_init_stt_from_config_flag(tmp_path):
+    root = _repo(tmp_path)
+    (root / "requirements-stt.txt").write_text("faster-whisper\n")
+    (root / "orchestra.toml").write_text('[arturo]\nlocal_stt = true\n')
+    r = Runner()
+    I.run_init(root, data_dir=tmp_path / "d", run=r, skip_npm=True, skip_build=True)
+    assert any("requirements-stt.txt" in " ".join(c[0]) for c in r.calls)

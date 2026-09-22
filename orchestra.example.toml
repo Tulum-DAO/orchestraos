@@ -45,6 +45,11 @@ brain = "auto"
 runtime_model = ""
 # Voice (STT/TTS) needs ELEVENLABS_API_KEY / CARTESIA_API_KEY / HUME_API_KEY in the env or
 # .env.secrets; with none present Arturo runs TEXT-ONLY (/health mode = "text-only").
+# Local speech-to-text for the web composer's mic (no vendor key): the browser records, the box
+# transcribes with faster-whisper on CPU. Opt-in because it adds ~365 MB to .venv plus a one-time
+# ~140 MB model download. `orchestra init --stt` does the same as setting this to true.
+# local_stt = false
+
 
 [router]
 # message-router.py delivery backstop, run by `orchestra up` on this interval

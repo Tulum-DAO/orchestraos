@@ -29,6 +29,8 @@
  * called with an honest first-person reason — never a silent no-op.
  */
 
+import { startDictation, DICTATION_UNAVAILABLE, type DictationHandle } from './dictation.ts';
+
 // ── pure helpers (unit-testable without any real mic/WS) ───────────────────
 
 /** Float32 [-1,1] samples -> Int16 PCM (standard 16-bit linear clamp). */
@@ -147,26 +149,6 @@ export interface VoiceSessionStartOptions {
   voice?: string;
 }
 
-function speechRecognitionCtor(): (new () => SpeechRecognition) | null {
-  const w = window as any;
-  return w.SpeechRecognition || w.webkitSpeechRecognition || null;
-}
-
-/** Minimal shape of the parts of the Web Speech API this file touches
- * (lib.dom's SpeechRecognition typings are not universally present in every
- * TS/DOM lib config, so we declare just what we use). */
-interface SpeechRecognition extends EventTarget {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start(): void;
-  stop(): void;
-  abort(): void;
-  onresult: ((ev: any) => void) | null;
-  onerror: ((ev: any) => void) | null;
-  onend: (() => void) | null;
-}
-
 export class VoiceSession {
   state: VoiceSessionState = 'idle';
   private cb: VoiceSessionCallbacks;
@@ -178,7 +160,7 @@ export class VoiceSession {
   private playbackCtx: AudioContext | null = null;
   private playbackTime = 0;
   private callId: string | null = null;
-  private dictation: SpeechRecognition | null = null;
+  private dictation: DictationHandle | null = null;
 
   constructor(cb: VoiceSessionCallbacks = {}) {
     this.cb = cb;
@@ -343,43 +325,26 @@ export class VoiceSession {
   // NOT require an active VoiceSession/WS at all.
 
   startDictation(): void {
-    const Ctor = speechRecognitionCtor();
-    if (!Ctor) {
-      this.cb.onUnavailable?.(
-        'voice isn\'t configured yet: this browser has no on-device speech recognition ' +
-        '(Chrome/Edge only) and the gateway itself doesn\'t transcribe your own voice — ' +
-        'only Arturo\'s replies'
-      );
+    const handle = startDictation({
+      onPartial: (text) => { this.cb.onPartial?.(text, 'user'); },
+      onFinal: (text) => {
+        this.cb.onFinal?.(text, 'user');
+        if (this.ws?.readyState === WebSocket.OPEN) {
+          this.ws.send(JSON.stringify({ event: 'user_turn', text }));
+        }
+      },
+      // 'aborted' = we (or a second recognizer) stopped it; 'no-speech' = silence. Neither is a failure.
+      onError: (code) => { if (code !== 'aborted' && code !== 'no-speech') this.cb.onUnavailable?.(`dictation error: ${code}`); },
+    });
+    if (!handle) {
+      this.cb.onUnavailable?.(`voice isn't configured yet: ${DICTATION_UNAVAILABLE}`);
       return;
     }
-    const rec = new Ctor();
-    rec.continuous = true;
-    rec.interimResults = true;
-    rec.lang = 'en-US';
-    rec.onresult = (ev: any) => {
-      for (let i = ev.resultIndex; i < ev.results.length; i++) {
-        const r = ev.results[i];
-        const text = r[0]?.transcript ?? '';
-        if (!text) continue;
-        if (r.isFinal) {
-          this.cb.onFinal?.(text, 'user');
-          if (this.ws?.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({ event: 'user_turn', text }));
-          }
-        } else {
-          this.cb.onPartial?.(text, 'user');
-        }
-      }
-    };
-    rec.onerror = (ev: any) => {
-      this.cb.onUnavailable?.(`dictation error: ${ev?.error || 'unknown'}`);
-    };
-    this.dictation = rec;
-    rec.start();
+    this.dictation = handle;
   }
 
   stopDictation(): void {
-    try { this.dictation?.stop(); } catch { /* noop */ }
+    this.dictation?.stop();
     this.dictation = null;
   }
 }
