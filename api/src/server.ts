@@ -45,6 +45,7 @@ import telemetryRouter from './routes/telemetry.js';
 import agentSendRouter from './routes/agent-send.js';
 import runtimesAvailableRouter from './routes/runtimes-available.js';
 import factsRouter from './routes/facts.js';
+import chatHistoryRouter from './routes/chat-history.js';
 import { initActivityStream } from './services/activity-stream.js';
 import { initStatusStream, addStatusSSEClient } from './services/status-stream.js';
 import { setupTerminalWebSocket } from './routes/terminal.js';
@@ -140,6 +141,7 @@ app.use('/api/project-status', projectStatusRouter);
 app.use('/api/telemetry', telemetryRouter); // Build B: read-only telemetry query/stream (INERT — no cron/systemd)
 app.use('/api/runtimes', runtimesAvailableRouter);
 app.use('/api/facts', factsRouter);
+app.use('/api/chat-history', chatHistoryRouter); // the /chat-history page's list + thread reads (router existed, was never mounted)
 
 const ORCHESTRA_DIR_PATH = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
 // Stored-XSS fix (attach spec §B.2.4, agent-state-truth): uploads are USER

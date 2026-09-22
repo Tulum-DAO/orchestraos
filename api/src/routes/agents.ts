@@ -10,6 +10,7 @@ import { getDetectorStates, detectorCacheAgeMs, classifyNoSession, type Detector
 import { isCutoverActive, getCanonicalAgents, canonicalTmuxSession } from '../services/identity-store-reader.js';
 import { applyIdentityPrecedence, resolveMachineAndLiveness, discoverUnregistered } from './agents-identity.js';
 import { loadConfig } from '../lib/config.js';
+import { readGatewayToken } from '../lib/gateway-token.js';
 import { resolveSpecialKey } from '../lib/special-keys.js';
 
 function macSshTarget(): string {
@@ -515,13 +516,13 @@ function captureTmux(session: string, machine: string, lines: number = 50): stri
 // idle-state gate, active-turn guard, composer-occupied guard w/ ghost
 // discrimination + force override). Web and iOS now share this path — raw
 // send-keys remains ONLY for Mac agents the local gateway can't reach.
-const GATEWAY_TOKEN_FILE = `${process.env.HOME}/.config/jarvis/watch-gateway-token`;
+// #85 reader: WATCH_GATEWAY_TOKEN_FILE (what `orchestra init` exports) first, the legacy
+// ~/.config/jarvis path only as a fallback. A fresh install has no ~/.config/jarvis at all.
 const GATEWAY_URL = process.env.WATCH_GATEWAY_URL || 'http://127.0.0.1:9091';
 
 async function gatewayInject(session: string, text: string, force: boolean):
     Promise<{ delivered: boolean; busy?: boolean; reason?: string; state?: string; activity?: string }> {
-  let token = '';
-  try { token = readFileSync(GATEWAY_TOKEN_FILE, 'utf-8').trim(); } catch {}
+  const token = readGatewayToken();
   if (!token) throw new Error('gateway token unavailable');
   const resp = await fetch(`${GATEWAY_URL}/agent-message`, {
     method: 'POST',
@@ -548,8 +549,7 @@ async function gatewayInject(session: string, text: string, force: boolean):
 // Returns the gateway status verbatim so the OptionsCard can drive its UX.
 async function gatewayKey(session: string, key: string, confirm: boolean):
     Promise<{ status: number; body: any }> {
-  let token = '';
-  try { token = readFileSync(GATEWAY_TOKEN_FILE, 'utf-8').trim(); } catch {}
+  const token = readGatewayToken();
   if (!token) throw new Error('gateway token unavailable');
   const resp = await fetch(`${GATEWAY_URL}/agent-key`, {
     method: 'POST',
