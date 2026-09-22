@@ -26,8 +26,9 @@ import {
   restoreContext, contextForTurn, type ThreadSummary,
 } from '../../lib/arturoThreads';
 import { VoiceSession, type VoiceSessionState } from '../../lib/voiceSession';
+import SpawnedAgentCard from './SpawnedAgentCard';
 
-interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[]; at: number; live?: boolean; state?: SendState;
+interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[]; spawned?: string[]; at: number; live?: boolean; state?: SendState;
   /** A first-person status note (voice not configured, mic denied…) — rendered as a small interleaved
    *  row at the moment it happened, like a tool call, never as a message and never pinned to the bottom. */
   note?: boolean }
@@ -189,7 +190,7 @@ export function ArturoPill() {
     setBusy(false);
     setState(r.ok ? 'acked' : 'failed');
     append(r.ok
-      ? { role: 'arturo', text: r.reply_text || '(no reply)', tools: r.tools_called, at: Date.now() }
+      ? { role: 'arturo', text: r.reply_text || '(no reply)', tools: r.tools_called, spawned: r.spawned, at: Date.now() }
       : { role: 'arturo', text: isStarting(r)
           ? 'I am still starting up and could not answer yet — give `orchestra up` a moment and send that again.'
           : `Could not reach Arturo: ${r.error || 'unknown'}`, at: Date.now() });
@@ -304,6 +305,7 @@ export function ArturoPill() {
             <div key={i} className={t.role === 'user' ? 'row user' : 'row arturo'}>
               <div className="bubble">{t.text}</div>
               {t.tools && t.tools.length > 0 && <div className="meta">ran {t.tools.join(', ')}</div>}
+              <SpawnedAgentCard ids={t.spawned} />
               {t.role === 'user' && (t.state === 'failed' || (t.state && i === lastUserIdx)) && <div className={`turn-state ${t.state}`}>{sendStateLabel(t.state)}</div>}
             </div>
           ))}
