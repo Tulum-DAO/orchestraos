@@ -14,7 +14,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   startDictation, mergeDictation, DICTATION_UNAVAILABLE, isTier1DeadError,
-  startRecording, transcribeBlob, transcribeReason, recordingBlockedReason, speechRecognitionCtor,
+  startRecording, transcribeBlob, transcribeReason, recordingBlockedReason, speechRecognitionCtor, blobToWav16k,
   type DictationHandle, type RecordingHandle,
 } from '../../lib/dictation.ts';
 
@@ -32,25 +32,30 @@ export function useDictation(draft: string, setDraft: (v: string) => void, onSta
   const draftRef = useRef(draft);
   useEffect(() => { draftRef.current = draft; }, [draft]);   // read in the tap handler, never during render
 
-  const stopWanted = useRef(false);
-  function stop() {
-    active.current = false;               // FIRST: Chrome fires the pending final result after stop()
+  /** Stop whatever is running. `keepClip` = a deliberate tap while recording: the clip goes on to
+   *  transcription. Otherwise (send pressed, unmount) everything is discarded and late results are
+   *  dropped — the box must stay exactly as the user left it. */
+  function stop(keepClip = false) {
+    if (!keepClip) active.current = false;   // FIRST: Chrome fires the pending final result after stop()
     handle.current?.stop();
     handle.current = null;
-    if (recorder.current && mode === 'recording' && stopWanted.current) { recorder.current.stop(); recorder.current = null; return; }   // onClip -> transcribing
-    if (recorder.current) { recorder.current.stop(); recorder.current = null; }
+    if (recorder.current) {
+      const rec = recorder.current; recorder.current = null; rec.stop();
+      if (keepClip) return;                   // onClip -> transcribing -> idle
+    }
     setMode('idle');
   }
 
   async function startTier2() {
     const blocked = recordingBlockedReason();
-    if (blocked) { setNote(blocked); setMode('idle'); return; }
+    if (blocked) { active.current = false; setNote(blocked); setMode('idle'); return; }
     const rec = await startRecording({
       onClip: async (blob) => {
         recorder.current = null;
         if (!active.current) { setMode('idle'); return; }   // cancelled by a send
         setMode('transcribing');
-        const r = await transcribeBlob(blob);
+        const wav = await blobToWav16k(blob);          // 16 kHz WAV for the default engine; original if undecodable
+        const r = await transcribeBlob(wav || blob);
         if (r.ok && r.text) {
           committed.current = [...committed.current, r.text];
           setDraft(mergeDictation(base.current, committed.current, ''));
@@ -59,9 +64,9 @@ export function useDictation(draft: string, setDraft: (v: string) => void, onSta
         }
         setMode('idle');
       },
-      onError: (reason) => { recorder.current = null; setNote(reason); setMode('idle'); },
+      onError: (reason) => { recorder.current = null; active.current = false; setNote(reason); setMode('idle'); },
     });
-    if (!rec) { setMode('idle'); return; }
+    if (!rec) { active.current = false; setMode('idle'); return; }
     recorder.current = rec;
     setMode('recording');
     onStarted?.();
@@ -70,12 +75,12 @@ export function useDictation(draft: string, setDraft: (v: string) => void, onSta
   function toggle() {
     setNote(null);
     if (mode === 'transcribing') return;
-    if (mode !== 'idle') { stopWanted.current = true; active.current = mode === 'recording'; stop(); stopWanted.current = false; return; }
+    if (mode !== 'idle') { stop(mode === 'recording'); return; }   // tap while recording keeps the clip; while listening just stops
     base.current = draftRef.current;
     committed.current = [];
     gotResult.current = false;
+    active.current = true;                  // BEFORE either tier starts: onClip / onFinal check it
     if (!speechRecognitionCtor()) { void startTier2(); return; }
-    active.current = true;
     const h = startDictation({
       onPartial: (text) => { if (!active.current) return; gotResult.current = true; setDraft(mergeDictation(base.current, committed.current, text)); },
       onFinal: (text) => {
