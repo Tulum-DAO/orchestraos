@@ -16,7 +16,7 @@ export interface RuntimeRow {
   installed: boolean; authed: boolean | 'unverified'; auth_reason?: string | null;
 }
 export interface NewAgentResult {
-  ok: boolean; id?: string; session?: string; runtime?: string;
+  ok: boolean; id?: string; session?: string; runtime?: string; gm?: boolean;
   reason?: string; detail?: string; status?: number; runtimes?: RuntimeRow[];
 }
 export interface LoginShellResult {
@@ -43,7 +43,8 @@ export function nameError(raw: string, taken: Set<string>): string | null {
   if (!raw.trim()) return null;                       // nothing typed yet: no error, just disabled
   if (!n) return 'Use letters or numbers — that name has none.';
   if (n.length > 64) return 'That name is too long.';
-  if (['all', 'none', 'new', 'gm', 'arturo', 'self', 'system'].includes(n)) return `"${n}" is reserved.`;
+  // Sentinels only — `gm` is a seat the install docs tell you to create, not a reserved word.
+  if (['all', 'none', 'new', 'arturo', 'self', 'system'].includes(n)) return `"${n}" is reserved.`;
   if (taken.has(n)) return `"${n}" already exists.`;
   return null;
 }
@@ -72,7 +73,7 @@ export async function freshRuntimes(): Promise<RuntimeRow[]> {
   return [];
 }
 
-export const createAgent = (name: string, task: string, runtime?: string, role?: string) =>
-  postJson<NewAgentResult>('/api/agents/new', { name, task, runtime, role: role || undefined });
+export const createAgent = (name: string, task: string, runtime?: string, role?: string, gm?: boolean) =>
+  postJson<NewAgentResult>('/api/agents/new', { name, task, runtime, role: role || undefined, gm: gm || undefined });
 
 export const openLoginShell = () => postJson<LoginShellResult>('/api/agents/login-shell', {});
