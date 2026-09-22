@@ -20,6 +20,11 @@ import {
 
 export type DictationMode = 'idle' | 'listening' | 'recording' | 'transcribing';
 
+/** How long a started recognizer may deliver NOTHING — no audio, no result, no error, no end —
+ *  before we stop calling it listening. Long enough not to race a slow mic permission prompt,
+ *  short enough that a dead button never looks alive (measured dead case: for ever). */
+export const TIER1_SILENT_MS = 4000;
+
 export function useDictation(draft: string, setDraft: (v: string) => void, onStarted?: () => void) {
   const [mode, setMode] = useState<DictationMode>('idle');
   const [note, setNote] = useState<string | null>(null);
@@ -29,6 +34,13 @@ export function useDictation(draft: string, setDraft: (v: string) => void, onSta
   const committed = useRef<string[]>([]);
   const gotResult = useRef(false);
   const active = useRef(false);            // false after stop(): late recognizer results are dropped
+  // A recognizer can START and then say nothing at all — no result, no error, no end (a browser
+  // with the API but no speech backend, and the mic-denied case measured on the box: the button
+  // sat in 'listening' for ever and no note ever appeared). The watchdog makes that state
+  // impossible: if the mic has not delivered audio by the time it fires, stop pretending.
+  const heard = useRef(false);
+  const watchdog = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearWatchdog = () => { if (watchdog.current) { clearTimeout(watchdog.current); watchdog.current = null; } };
   const draftRef = useRef(draft);
   useEffect(() => { draftRef.current = draft; }, [draft]);   // read in the tap handler, never during render
 
@@ -36,6 +48,7 @@ export function useDictation(draft: string, setDraft: (v: string) => void, onSta
    *  transcription. Otherwise (send pressed, unmount) everything is discarded and late results are
    *  dropped — the box must stay exactly as the user left it. */
   function stop(keepClip = false) {
+    clearWatchdog();
     if (!keepClip) active.current = false;   // FIRST: Chrome fires the pending final result after stop()
     handle.current?.stop();
     handle.current = null;
@@ -89,7 +102,8 @@ export function useDictation(draft: string, setDraft: (v: string) => void, onSta
         committed.current = [...committed.current, text];
         setDraft(mergeDictation(base.current, committed.current, ''));
       },
-      onEnd: () => { if (handle.current) { handle.current = null; setMode('idle'); } },   // silence timeout / tab hidden
+      onAudioStart: () => { heard.current = true; clearWatchdog(); },
+      onEnd: () => { clearWatchdog(); if (handle.current) { handle.current = null; setMode('idle'); } },   // silence timeout / tab hidden
       onError: (code) => {
         if (code === 'no-speech' || code === 'aborted') return;       // ordinary; onEnd follows
         if (isTier1DeadError(code) && !gotResult.current) {          // API present, backend dead -> tier 2, same tap
@@ -97,6 +111,11 @@ export function useDictation(draft: string, setDraft: (v: string) => void, onSta
           void startTier2();
           return;
         }
+        // Leaving the listening state is part of reporting the failure: without it the button
+        // keeps its listening ring and "Stop dictation" label over a recognizer that is gone.
+        clearWatchdog();
+        handle.current?.stop(); handle.current = null;
+        active.current = false; setMode('idle');
         setNote(code === 'not-allowed' || code === 'service-not-allowed'
           ? 'microphone permission was denied — allow the mic for this site and tap again'
           : `dictation error: ${code}`);
@@ -104,9 +123,18 @@ export function useDictation(draft: string, setDraft: (v: string) => void, onSta
     });
     if (!h) { active.current = false; setNote(DICTATION_UNAVAILABLE); return; }
     handle.current = h;
+    heard.current = false;
     setMode('listening');
+    // Nothing at all within this window = the recognizer is there but dead. Take the SAME road as
+    // a tier-1 error: try the recorder, and if that cannot run either its own onError reports why.
+    clearWatchdog();
+    watchdog.current = setTimeout(() => {
+      if (heard.current || !active.current || handle.current !== h) return;
+      handle.current?.stop(); handle.current = null;
+      void startTier2();
+    }, TIER1_SILENT_MS);
     onStarted?.();
   }
-  useEffect(() => () => { handle.current?.stop(); recorder.current?.stop(); }, []);
+  useEffect(() => () => { clearWatchdog(); handle.current?.stop(); recorder.current?.stop(); }, []);
   return { mode, dictating: mode !== 'idle', note, toggle, stop, clearNote: () => setNote(null) };
 }
