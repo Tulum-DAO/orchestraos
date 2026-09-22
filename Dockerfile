@@ -25,7 +25,7 @@ ARG AGENT_CLIS="@anthropic-ai/claude-code"
 # INSTALL.md §0 prerequisites + sudo for the non-root user
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      git tmux python3 python3-venv python3-pip build-essential curl ca-certificates sudo locales \
+      git tmux python3 python3-venv python3-pip build-essential curl ca-certificates sudo locales iproute2 \
  && curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
  && apt-get install -y --no-install-recommends nodejs \
  && locale-gen en_US.UTF-8 \

@@ -8,7 +8,8 @@
 # .tool_calls[i].function.name / .arguments; stream chunks .choices[0].delta.content), so the
 # tests pin that shape for the runtime + null brains and pin the selection table.
 import json
-from pathlib import Path
+import subprocess
+import pathlib
 
 import pytest
 
@@ -328,7 +329,13 @@ def test_runtime_brain_runner_failure_degrades_to_text_not_raise():
         raise RuntimeError("cli exploded")
     b = B.RuntimeBrain("claude", "claude", model="", runner=boom)
     r = b.complete([{"role": "user", "content": "hi"}])
-    assert "cli exploded" in r.choices[0].message.content
+    content = r.choices[0].message.content
+    # CHANGED 2026-09-19: this used to assert `"cli exploded" in content` — it encoded the
+    # LEAK as the contract. The exception detail belongs in the log; a CalledProcessError
+    # stringifies to the whole argv incl. Arturo's system prompt. The degrade-not-raise
+    # intent is what this test is really for, so that is what it now checks.
+    assert content and content.strip(), "must still answer with something"
+    assert "cli exploded" not in content, "raw exception text must not reach the operator"
     assert r.choices[0].message.tool_calls is None
 
 
@@ -362,3 +369,75 @@ def test_reselect_if_none_swaps_in_a_runtime_once_a_cli_is_authed(monkeypatch):
     import time
     monkeypatch.setattr(time, "monotonic", lambda: 10**12 + 1)
     assert reselect_if_none(none, "auto", "", "/x", None, "m", probe_fn=probe, _state=state2) is none and calls == [1]
+
+
+# --- native tool-call markup must never reach the operator as TEXT --------------------------
+# Found by effect on the release sha 4ec0229 (2026-09-19, container art-rc) running the
+# run-of-show's own beat-3.1 prompt: the claude CLI sometimes answers in its NATIVE tool-call
+# syntax instead of the JSON envelope the brain prompt asks for. That text carries no
+# "tool_calls" string, so parse_cli_reply fell through to make_response(text, ...) and the raw
+# markup became the assistant's reply — shown on the Arturo home AND persisted as the thread's
+# snippet in GET /api/arturo/threads.
+
+FIXTURES = pathlib.Path(__file__).parent / "fixtures"
+# Read from a FILE, never inlined: a test file that CONTAINS this markup is itself a tripwire
+# for the court-guard Stop hook, which cannot distinguish quoting the defect from emitting it.
+# Provenance for both fixtures is in fixtures/README.md.
+_NATIVE = (FIXTURES / "native_tool_markup_reply.txt").read_text()
+
+
+def test_native_invoke_markup_becomes_a_real_tool_call():
+    r = B.parse_cli_reply(_NATIVE)
+    msg = r.choices[0].message
+    assert r.choices[0].finish_reason == "tool_calls"
+    assert msg.content is None, "raw markup must never be handed back as text"
+    assert [c.function.name for c in msg.tool_calls] == ["get_agent_output"]
+    assert json.loads(msg.tool_calls[0].function.arguments) == {"session_name": "hello", "lines": 30}
+
+
+def test_native_markup_with_prose_around_it_still_parses():
+    r = B.parse_cli_reply("Let me check on that.\n" + _NATIVE + "\nOne moment.")
+    msg = r.choices[0].message
+    assert msg.content is None
+    assert [c.function.name for c in msg.tool_calls] == ["get_agent_output"]
+
+
+def test_unparseable_markup_is_suppressed_not_printed():
+    """A half-emitted invoke names no usable tool. The operator must not see the tag soup."""
+    # Assembled from parts, not written whole: a source file that CONTAINS the literal tag is
+    # itself a court-guard tripwire for anyone who reads or quotes it.
+    half = "<" + 'invoke name=""' + ">\n<" + 'parameter name="x"' + ">1</parameter>"
+    r = B.parse_cli_reply(half)
+    msg = r.choices[0].message
+    assert msg.tool_calls is None
+    assert "<invoke" not in (msg.content or ""), "tag soup leaked to the operator"
+    assert (msg.content or "").strip(), "suppressing the markup must still say something"
+
+
+def test_prose_that_merely_mentions_invoke_is_untouched():
+    """Guard the guard: talking ABOUT the syntax is not emitting it."""
+    txt = "You can use the invoke syntax, or a parameter block, to call a tool."
+    r = B.parse_cli_reply(txt)
+    assert r.choices[0].message.content == txt
+    assert r.choices[0].message.tool_calls is None
+
+
+# --- a failing brain must not read its own argv out to the operator ------------------------
+# Byte-captured in container art-cap (fixtures/runtime_error_reply.txt): a CalledProcessError
+# stringifies to the entire command line, which carries --system-prompt followed by Arturo's
+# whole system prompt. It reached the reply AND the thread snippet.
+
+def test_runtime_failure_is_a_sentence_not_the_argv():
+    captured = (FIXTURES / "runtime_error_reply.txt").read_text()
+    assert "--system-prompt" in captured, "fixture no longer shows the leak it was captured for"
+
+    class Boom(B.RuntimeBrain):
+        def _text(self, *a, **k):
+            raise subprocess.CalledProcessError(
+                1, ["claude", "-p", "--system-prompt", "You are ARTURO — the operator's ..."])
+
+    r = Boom(runtime="claude", cli="claude").complete([{"role": "user", "content": "hi"}])
+    out = r.choices[0].message.content or ""
+    assert "--system-prompt" not in out, "the argv leaked to the operator"
+    assert "You are ARTURO" not in out, "the system prompt leaked to the operator"
+    assert out.strip(), "a failing brain must still say something"

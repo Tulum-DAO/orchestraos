@@ -43,6 +43,8 @@ Usage:
     # CLI mode
     python3 msg_store.py send --from gm --to pm-products --type route --subject "Build UI" --body "..."
     python3 msg_store.py inbox --agent pm-products
+    python3 msg_store.py get --id msg_xxx
+    python3 msg_store.py ack --id msg_xxx
     python3 msg_store.py stats
 """
 
@@ -1607,7 +1609,7 @@ def main():
 
     # dispose (§9.6-B.5)
     p = sub.add_parser("dispose")
-    p.add_argument("--message-id", required=True)
+    p.add_argument("--id", "--message-id", dest="message_id", required=True)
     p.add_argument("--disposition", required=True, choices=("acted", "queued", "declined"))
     p.add_argument("--by", required=True)
     p.add_argument("--reason", default=None)
@@ -1629,14 +1631,14 @@ def main():
 
     # reply
     p = sub.add_parser("reply")
-    p.add_argument("--message-id", required=True)
+    p.add_argument("--id", "--message-id", dest="message_id", required=True)
     p.add_argument("--body", required=True)
     p.add_argument("--from", dest="from_agent", default=None)
     p.add_argument("--close", action="store_true", default=False)
 
     # ack
     p = sub.add_parser("ack")
-    p.add_argument("--message-id", required=True)
+    p.add_argument("--id", "--message-id", dest="message_id", required=True)
 
     # thread
     p = sub.add_parser("thread")
@@ -1653,7 +1655,7 @@ def main():
 
     # get
     p = sub.add_parser("get")
-    p.add_argument("--id", required=True)
+    p.add_argument("--id", "--message-id", dest="id", required=True)
 
     args = parser.parse_args()
     store = MessageStore()

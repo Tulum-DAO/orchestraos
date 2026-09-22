@@ -4,10 +4,17 @@ One machine, one CLI (claude OR gemini OR codex), no voice, no Telegram.
 Target: gateway up, one seat spawned, one approval card answered from the web
 dashboard, in under 30 minutes on a clean Ubuntu 22.04/24.04 VPS.
 
+Once the gateway from step 2 below is up, connecting your own phone and
+browser to it (no baked-in token) is `docs/ONBOARDING.md` — a separate
+short walkthrough, not part of this doc's steps.
+
 ## 0. Prerequisites
 
 ```bash
-sudo apt update && sudo apt install -y git tmux python3 python3-venv build-essential curl
+sudo apt update && sudo apt install -y git tmux python3 python3-venv build-essential curl iproute2   # iproute2 = `ss`, which `orchestra doctor` needs to attribute ports to its own supervisor
+# build-essential + python3 are not optional: node-pty (the web terminal's native addon) compiles at `npm install`;
+# without them the install used to finish green with the terminal dead. `orchestra doctor` now shows a red
+# `terminal:node-pty` row in that state; remedy: `npm rebuild node-pty` after installing the toolchain.
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs
 ```
 
@@ -18,6 +25,29 @@ Install and log in to ONE agent CLI (the runtime catalog probes these):
 | claude | `claude` | run `claude`, complete the login; `claude auth status` must report `loggedIn: true` |
 | gemini | `agy`    | run `agy` once; token lands in `~/.gemini/antigravity-cli/antigravity-oauth-token` |
 | codex  | `codex`  | run `codex login`; `~/.codex/auth.json` gets a `tokens` key |
+
+### Pin the agent CLI version
+
+The harness reads the CLI's screen, transcripts, and hook events. It does not heal itself yet when
+the CLI changes shape under it, so pin the CLI to a version this release was proven on and turn the
+auto-updater off. Two versions are known good, both measured on 2026-09-19: the release gate ran on
+**Claude Code 2.1.276** in the Docker image, and the reference fleet runs **2.1.260**. An unpinned
+native install moved from 2.1.263 to 2.1.278 in one morning with no action from the operator.
+
+```bash
+npm install -g @anthropic-ai/claude-code@2.1.276
+export DISABLE_AUTOUPDATER=1     # put it in your shell profile so every seat inherits it
+claude --version                 # must print 2.1.276
+```
+
+If you installed Claude Code with the native installer instead of npm, it auto-updates; switch to the
+npm install above for any machine that runs seats. For the Docker image, pass the pin as the build
+argument: `--build-arg AGENT_CLIS="@anthropic-ai/claude-code@2.1.276"`. Without it the image pulls
+whatever is current at build time, and inside the container auto-update is attempted every session
+and fails with `Auto-update failed: no write permission to npm prefix` because the npm prefix is not
+writable by the container user. That footer is not a fault in your setup; the pin and the export make
+it go away. Gemini and Codex CLIs: pin the same way with their package managers (the reference fleet
+runs agy 1.2.6 and codex-cli 0.153.4).
 
 ## 1. Clone, init, doctor
 
@@ -95,6 +125,7 @@ new) and launches it in tmux with the install env carried into the pane.
 ```bash
 orchestra spawn gm --gm                  # the General Manager: prompts/gm.md, tier T1, always-on
 orchestra spawn hello --task "Say hello, then park."   # a worker seat (prompts/hello.md if present)
+orchestra agent create dev-x --template dev --parent pm-y --set PROJECT=demo   # one verb: fill the role template (refuses an unfilled {TOKEN}), record the parent, validate runtime/model, spawn, verify ALIVE
 tmux attach -t gm                        # talk to it; detach with Ctrl-B D
 ```
 
@@ -202,6 +233,8 @@ runs at image build time, so `doctor` is instant on first open.
 ```bash
 docker build -t orchestraos .
 docker run -it --rm -p 8891:8891 -p 8888:8888 -p 8890:8890 orchestraos
+# NOTE: those -p publishes answer HTTP 000 until you add a relay — the services bind 127.0.0.1
+# inside the container. See "Running inside Docker: the services bind loopback" below.
 # inside:  claude            # log in ONCE — your login, never baked into the image
 #          orchestra doctor  # all required rows OK
 #          orchestra up      # then open http://127.0.0.1:8891 on the laptop
@@ -213,7 +246,7 @@ docker run -it --rm -p 8891:8891 -p 8888:8888 -p 8890:8890 orchestraos
 - VS Code / GitHub Codespaces: "Reopen in Container". The workspace is bind-mounted over
   the image's copy, so `postCreateCommand` re-runs `orchestra init` once (~1 min) to
   rebuild `.venv` and `node_modules` for the mounted tree.
-- Other CLIs: `docker build --build-arg AGENT_CLIS="@anthropic-ai/claude-code @openai/codex"`.
+- Other CLIs: `docker build --build-arg AGENT_CLIS="@anthropic-ai/claude-code@2.1.276 @openai/codex"` (pin the version; see "Pin the agent CLI version" above).
 - The container is one instance on one host: tmux inside it is its own, so the
   registry-scoping rules below apply per container.
 
@@ -241,6 +274,18 @@ simplest setup.
 - config: `orchestra.toml` (or `$ORCHESTRA_CONFIG`) — every key documented in `orchestra.example.toml`; secrets only via env
 - data: `[data] dir` → `registry.json`, `state/` (sqlite, sessions, gateway token), `logs/`, `queue/`
 - code: the checkout; `ORCHESTRA_ROOT` / `PYTHONPATH` are exported to every child by the supervisor
+
+## Running inside Docker: the services bind loopback
+
+Every service (`gateway`, `api`, `dashboard`, `arturo`) binds `127.0.0.1` by default
+(`orchestra.toml` `[gateway] host`, `dashboard-proxy.js` `ORCHESTRA_DASHBOARD_HOST`). A Docker
+`-p` published port therefore answers **HTTP 000** even on a fully-up container — measured on the
+release image 2026-09-19: inside the container the dashboard answered 200, the published host
+port answered nothing. Until the bind is configurable (post-release), publish through a small
+in-container relay that listens on `0.0.0.0` and forwards to `127.0.0.1:8891`, and point your
+`ssh -L` / browser at the relay's port. A one-file Python relay is in `scripts/build-demo-box.sh`
+of the operator's reference install; any TCP forwarder (`socat TCP-LISTEN:18891,fork,reuseaddr
+TCP:127.0.0.1:8891`) does the same job.
 
 ## Reference install (the operator's own setup: VPS + Mac over Tailscale, ntfy, Telegram, voice)
 

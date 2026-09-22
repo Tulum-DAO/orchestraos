@@ -1,6 +1,6 @@
 # Hackathon tracks
 
-Twelve tracks, one doc each, same shape: Problem (with the file that proves it) /
+Thirteen tracks, one doc each, same shape: Problem (with the file that proves it) /
 Design / Files you will touch / Steps / Acceptance test / Start prompt / Out of
 scope. Paste a track's Start prompt into your own agent, pointed at this repo, to
 begin — no other setup needed beyond the seven-step gate everyone completes first
@@ -24,6 +24,7 @@ tells you where it lives (a branch, a PR) so you can build on it or work around 
 | [10](10-docs-tutorials.md) | Docs and tutorials | S | — |
 | [11](11-autonomous-rotation-all-runtimes.md) | Autonomous blue-green rotation on every runtime | L | — |
 | [12](12-gauntlet-mode.md) | Gauntlet mode: a critic loop for creative work | M | — |
+| [13](13-memory.md) | Memory: see it, prune it, then teach it to extract | S/M | — |
 
 `good-first-issue` is a separate, smaller list — see `docs/HACKATHON_ISSUES.md`'s
 second half (G1-G8). Start there if you want to land something in an hour instead
@@ -37,7 +38,7 @@ answered, one rotation, one fact recalled after a restart. That path touches
 most of the surfaces these tracks build on, so you will already recognize the
 files each doc names.
 
-Tracks 1, 2, 5, 6, 9, 10, 11, 12 have no dependency on another track landing first —
+Tracks 1, 2, 5, 6, 9, 10, 11, 12, 13 have no dependency on another track landing first —
 any of those is a reasonable solo or pair start. Tracks 3, 4, 7, 8 build on
 another track's contract; read that track's doc (or its author's latest state)
 before diverging from the design.

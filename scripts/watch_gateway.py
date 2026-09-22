@@ -4136,6 +4136,116 @@ async def handle_agent_suggest(request):
     return _json(body, status=status)
 
 
+# --- Onboarding handshake (the operator, 2026-09-18: strangers must be able to onboard on Saturday) --
+# Contract from devex-review's ruling msg_b1135ce2, relayed by ios-watch-dev, which is
+# building the iOS client against exactly this. /health is deliberately untouched: it has
+# callers (doctor, supervisor, INSTALL.md), and it cannot answer the question these do.
+#
+# The problem: today ANY 200 counts as a gateway. Type the dashboard port instead of the
+# gateway port and you get a FALSE GREEN — a broken app with no explanation. Identity turns
+# that into the single most useful sentence on the screen, because only a real gateway says
+# this exact thing.
+
+GATEWAY_PROTOCOL = 1          # INTEGER, never semver. The client compares it numerically.
+GATEWAY_SERVICE = "orchestraos-gateway"
+GATEWAY_SURFACES = ["approvals", "chat", "voice"]
+
+
+async def handle_gateway_identity(request):
+    """GET /gateway/identity — UNAUTHENTICATED and FROZEN FOREVER.
+
+    Never rename or remove a field; only add. It answers identically with, without, and
+    with a WRONG bearer, because a phone probes this before it has a token — turning that
+    into a 401 would hide the one sentence that tells the operator what they reached."""
+    return _json({"service": GATEWAY_SERVICE, "protocol": GATEWAY_PROTOCOL})
+
+
+def _capability_providers():
+    """Providers this install can actually use, as free-string ids — the client renders
+    FROM THE LIST and never from an enum, which is what keeps the phone provider-agnostic:
+    it holds no provider key and no provider name of its own."""
+    from pathlib import Path as _P
+    root = _P(os.environ.get("ORCHESTRA_ROOT", str(_P(__file__).resolve().parents[1])))
+    cfg = json.loads((root / "config" / "providers.json").read_text())
+    out = []
+    for prov in cfg.get("providers", []):
+        pid = prov.get("id")
+        if not pid:
+            continue
+        out.append({"id": str(pid), "kind": str(prov.get("kind") or "text")})
+    return out
+
+
+def _pending_count():
+    """How many approvals are waiting — the same source /pending-approvals serves, so the
+    badge the phone shows and the list it opens cannot disagree."""
+    store = ApprovalStore(); store.migrate()
+    return len(store.pending_to_notify() or [])
+
+
+async def handle_gateway_capabilities(request):
+    """GET /gateway/capabilities — BEHIND THE BEARER, additive-only.
+
+    Unknown keys are ignored by clients. An ABSENT block means UNKNOWN, never none: if the
+    provider probe throws we omit `providers` rather than sending [], because [] is a claim
+    ("this install has no providers") and we did not learn that. The endpoint still answers
+    200 so the phone can tell 'unknown' from 'gateway broken'."""
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    body = {"surfaces": list(GATEWAY_SURFACES)}
+    try:
+        body["providers"] = _capability_providers()
+    except Exception as e:  # noqa: BLE001 — absent means unknown; never a fabricated []
+        log.warning(f"gateway/capabilities: provider probe failed, omitting the block: {e}")
+    try:
+        body["pending"] = _pending_count()
+    except Exception as e:  # noqa: BLE001
+        log.warning(f"gateway/capabilities: pending count failed, omitting: {e}")
+    return _json(body)
+
+
+def _pairing_store():
+    """Where `orchestra pair` writes codes and this process redeems them. One file per code
+    under the data dir, so the CLI and the gateway share them with no database and no
+    running process between them."""
+    from scripts.pairing import PairingStore
+    return PairingStore(_pairing_dir())
+
+
+def _pairing_dir():
+    from pathlib import Path as _P
+    base = os.environ.get("ORCHESTRA_DIR") or str(_P.home() / ".orchestra")
+    return _P(base) / "state" / "pairing"
+
+
+async def handle_pair_exchange(request):
+    """POST /pair/exchange {code} -> {base_url, token}.
+
+    UNAUTHENTICATED by necessity: the caller has no token yet — that is precisely what it is
+    asking for. The CODE is the credential, which is why it is single-use and short-lived.
+
+    Every refusal is the SAME refusal. A spent code, an expired one and one that never
+    existed all return an identical 400, so nothing here tells someone guessing which half
+    of their guess was right."""
+    try:
+        data = await request.json()
+    except Exception:  # noqa: BLE001 — a malformed body is just a bad request
+        data = {}
+    code = str((data or {}).get("code") or "").strip()
+    if not code:
+        return _json({"ok": False, "error": "pairing failed"}, status=400)
+    store = _pairing_store()
+    try:
+        store.sweep()
+    except Exception as e:  # noqa: BLE001 — housekeeping must never fail the exchange
+        log.warning(f"pair/exchange: sweep failed: {e}")
+    got = store.redeem(code)
+    if not got:
+        return _json({"ok": False, "error": "pairing failed"}, status=400)
+    log.info("pair/exchange: a pairing code was redeemed")   # never log the code or token
+    return _json({"ok": True, "base_url": got["base_url"], "token": got["token"]})
+
+
 async def handle_health(request):
     store = ApprovalStore(); store.migrate()
     return _json({"ok": True, "pending": len(store.pending_to_notify()),
@@ -4704,6 +4814,9 @@ def build_app():
     app.router.add_post("/questionnaires/{id}/discard", handle_questionnaire_discard)
     app.router.add_get("/events", handle_events)
     app.router.add_get("/health", handle_health)
+    app.router.add_get("/gateway/identity", handle_gateway_identity)
+    app.router.add_get("/gateway/capabilities", handle_gateway_capabilities)
+    app.router.add_post("/pair/exchange", handle_pair_exchange)
     app.router.add_post("/surface", handle_surface_post)
     app.router.add_get("/live", handle_gemini_live)
     app.router.add_post("/telemetry", handle_telemetry)

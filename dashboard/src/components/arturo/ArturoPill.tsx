@@ -1,7 +1,7 @@
 /**
- * ArturoPill — the always-available "Ask Arturo" pill on every non-home page (track T4, S5/S6).
+ * ArturoPill — the always-available "Ask Arturo" pill, bottom-right on EVERY page (track T4, S5/S6).
  *
- * Tap → a conversation pane over the dimmed page. Two things the operator asked for on
+ * Tap → a conversation pane anchored bottom-right. It does NOT dim or block the page. Two things the operator asked for on
  * 2026-09-18, after using the surface:
  *
  *  1. "swap between Arturo's previous conversations and pick up right where we left off" —
@@ -16,15 +16,16 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
-import { Mic, ArrowUp, X, History, Focus } from 'lucide-react';
+import { Mic, ArrowUp, X, History, Focus, PhoneCall, PhoneOff } from 'lucide-react';
 import './arturo.css';
-import { arturoText, newConversationId, contextFromLocation } from '../../lib/arturo';
+import { arturoText, newConversationId, contextFromLocation, getArturoFocus, subscribeArturoFocus } from '../../lib/arturo';
 import {
   listThreads, loadThread, contextCardLabel, isContextDismissed, dismissContext,
   restoreContext, contextForTurn, type ThreadSummary,
 } from '../../lib/arturoThreads';
+import { VoiceSession, type VoiceSessionState } from '../../lib/voiceSession';
 
-interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[]; at: number }
+interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[]; at: number; live?: boolean }
 const LS_CONV = 'orchestra.arturo.pill.conversation';
 
 /** Which thread was I in — the ONLY thing still kept in the browser. */
@@ -55,7 +56,57 @@ export function ArturoPill() {
   const [ctxOn, setCtxOn] = useState(true);
   const ta = useRef<HTMLTextAreaElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
-  const ctx = contextFromLocation(location.pathname, params as Record<string, string | undefined>, location.search);
+  // Chat/dev mode opens an agent as an overlay WITHOUT changing the URL, so the route says
+  // "agents" and not which one. When the overlay publishes a focus, it wins over the route —
+  // that is what makes "what is this agent doing" answerable while you sit in its session.
+  const [focus, setFocus] = useState(getArturoFocus);
+  useEffect(() => subscribeArturoFocus(() => setFocus(getArturoFocus())), []);
+
+  // ── live voice call, IN THIS PANE ──────────────────────────────────────────
+  // The same VoiceSession the agent composer's call button uses (lib/voiceSession.ts →
+  // /api/voice/live → gateway /live → Gemini Live). Arturo's words arrive as
+  // {event:"transcript"} frames from the server; YOUR words are captioned on-device by
+  // the browser's SpeechRecognition (startDictation), because the gateway deliberately
+  // does not transcribe the caller. Both render live below the thread, then commit as
+  // turns when final. The call ends with the same `[voice-call: …]` marker the composer
+  // path uses, so the transcript card can be fetched by id later.
+  const [callState, setCallState] = useState<VoiceSessionState>('idle');
+  const [liveUser, setLiveUser] = useState('');
+  const [liveArturo, setLiveArturo] = useState('');
+  const [voiceNote, setVoiceNote] = useState<string | null>(null);
+  const voice = useRef<VoiceSession | null>(null);
+  const appendRef = useRef<(t: PillTurn) => void>(() => {});
+  function voiceSession(): VoiceSession {
+    if (!voice.current) {
+      voice.current = new VoiceSession({
+        onPartial: (text, role) => { if (role === 'user') setLiveUser(text); else setLiveArturo(text); },
+        onFinal: (text, role) => {
+          if (role === 'user') setLiveUser(''); else setLiveArturo('');
+          appendRef.current({ role, text, at: Date.now(), live: true });
+        },
+        onUnavailable: (reason) => setVoiceNote(reason),
+        onStateChange: (s) => setCallState(s),
+        onCallEnded: (marker, id) => {
+          setLiveUser(''); setLiveArturo('');
+          appendRef.current({ role: 'arturo', text: `Call ended (${id}). ${marker}`, at: Date.now(), live: true });
+        },
+      });
+    }
+    return voice.current;
+  }
+  const inCall = callState === 'live' || callState === 'connecting';
+  async function toggleCall() {
+    setVoiceNote(null);
+    if (inCall) { voiceSession().stop(); voiceSession().stopDictation(); return; }
+    const focused = ctx.entityKind && ctx.entityId ? `${ctx.entityKind}:${ctx.entityId}` : null;
+    await voiceSession().start({ route: ctx.route, focusedEntity: focused });
+    voiceSession().startDictation();          // your own captions, on-device
+  }
+  useEffect(() => () => { voice.current?.stop(); voice.current?.stopDictation(); }, []);
+  const routeCtx = contextFromLocation(location.pathname, params as Record<string, string | undefined>, location.search);
+  const ctx = focus
+    ? { ...routeCtx, entityKind: focus.kind, entityId: focus.id }
+    : routeCtx;
 
   /** Pull this thread's turns from the server, so reopening the pill resumes it exactly. */
   const resume = useCallback(async (id: string) => {
@@ -68,6 +119,7 @@ export function ArturoPill() {
   useEffect(() => { scroller.current?.scrollTo({ top: 1e9, behavior: 'smooth' }); }, [turns, open, busy]);
 
   const append = (t: PillTurn) => setTurns((prev) => [...prev, t]);
+  appendRef.current = append;
 
   async function send() {
     const text = draft.trim();
@@ -100,6 +152,44 @@ export function ArturoPill() {
     await resume(id);
   }
 
+  // Escape closes: the backdrop used to be the click-anywhere-to-close, and it is gone.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
+
+  /** Sit ABOVE whatever the page already docks at the bottom.
+   *  The agent session page docks its own composer there — Inject, the inject-mode toggle and
+   *  the two call buttons — and a pill pinned to bottom:20px lands right on top of them
+   *  (measured: 4 controls covered). Measured at runtime rather than keyed to routes, so a
+   *  page that grows a dock later is handled without touching this file. */
+  useEffect(() => {
+    const place = () => {
+      const vh = window.innerHeight;
+      let clear = 0;
+      for (const el of Array.from(document.querySelectorAll<HTMLElement>('div,footer,form,section'))) {
+        if (el.closest('.arturo-pill-panel') || el.classList.contains('arturo-pill')) continue;
+        const cs = getComputedStyle(el);
+        if (cs.position !== 'fixed' && cs.position !== 'sticky') continue;
+        const r = el.getBoundingClientRect();
+        if (r.height === 0 || r.width < window.innerWidth * 0.4) continue;
+        // A DOCK is a strip. A full-screen overlay (the focused-agent view is fixed inset-0)
+        // is not, and treating it as one computed a clearance of the whole viewport and threw
+        // the pill off the top of the screen entirely.
+        if (r.height > vh * 0.45) continue;
+        if (vh - r.bottom > 12) continue;           // not docked to the bottom
+        clear = Math.max(clear, Math.round(vh - r.top));
+      }
+      document.documentElement.style.setProperty('--arturo-pill-bottom', clear ? `${clear + 12}px` : '');
+    };
+    place();
+    window.addEventListener('resize', place);
+    const t = window.setInterval(place, 1000);     // docks appear after their data loads
+    return () => { window.removeEventListener('resize', place); window.clearInterval(t); };
+  }, [location.pathname]);
+
   function toggleContextCard() {
     if (ctxOn) dismissContext(convId); else restoreContext(convId);
     setCtxOn(!ctxOn);
@@ -115,7 +205,9 @@ export function ArturoPill() {
   }
   return (
     <>
-      <div className="arturo-pill-back" onClick={() => setOpen(false)} />
+      {/* No backdrop, deliberately (operator, 2026-09-19): the pane must not dim the page and
+          must not swallow clicks on it — you keep working while Arturo is open, the way the
+          assistant panel in the previous build did. Close with the × or Escape. */}
       <div className="arturo-pill-panel" role="dialog" aria-label="Ask Arturo">
         <div className="arturo-pill-head">
           <span className="who">Arturo</span>
@@ -152,6 +244,10 @@ export function ArturoPill() {
             </div>
           ))}
           {busy && <div className="row arturo"><div className="bubble thinking">Thinking…</div></div>}
+          {liveUser && <div className="row user"><div className="bubble live">{liveUser}…</div></div>}
+          {liveArturo && <div className="row arturo"><div className="bubble live">{liveArturo}…</div></div>}
+          {callState === 'connecting' && <div className="row arturo"><div className="bubble thinking">Connecting the call…</div></div>}
+          {voiceNote && <div className="row arturo"><div className="bubble">I can't do that yet — {voiceNote}.</div></div>}
         </div>
 
         <textarea ref={ta} rows={1} value={draft} placeholder="Ask Arturo" onChange={(e) => setDraft(e.target.value)}
@@ -177,6 +273,10 @@ export function ArturoPill() {
             )}
           </div>
           <div className="cluster">
+            <button className={inCall ? 'circle-btn white' : 'circle-btn'} aria-label={inCall ? 'End call' : 'Start voice call'}
+                    aria-pressed={inCall} title={inCall ? 'End call' : 'Talk to Arturo (live)'} onClick={() => void toggleCall()}>
+              {inCall ? <PhoneOff size={18} /> : <PhoneCall size={18} />}
+            </button>
             <button className="circle-btn white" aria-label="Send" onClick={() => void send()} disabled={busy || !draft.trim()}><ArrowUp size={18} /></button>
           </div>
         </div>

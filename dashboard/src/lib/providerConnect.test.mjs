@@ -12,7 +12,7 @@
  *   node --experimental-strip-types dashboard/src/lib/providerConnect.test.mjs
  */
 import assert from 'node:assert';
-import { connectModes, defaultMode, connectPlan, reasonText } from './providerConnect.ts';
+import { connectModes, defaultMode, connectPlan, reasonText, installCommand, installNote, connectSteps, signinCommand } from './providerConnect.ts';
 
 const notInstalled = { id: 'gemini', label: 'Gemini', installed: false, authed: false, auth_reason: 'not-installed' };
 const installedLoggedOut = { id: 'claude', label: 'Claude', installed: true, authed: false, auth_reason: 'loggedIn=false' };
@@ -21,17 +21,19 @@ const connected = { id: 'claude', label: 'Claude', installed: true, authed: true
 
 // --- which modes are available -------------------------------------------------------------
 {
-  // CLI absent: neither way can work yet. Both modes are listed (the toggle still renders,
-  // so the operator sees what the two options ARE) but both are unavailable, with a reason.
+  // CLI absent. The operator found the dead end this replaces: with TMUX marked
+  // unavailable, a blank machine could not progress from either tab — and the terminal is
+  // precisely where you INSTALL the CLI. So TMUX is ALWAYS available; refusing to open a
+  // shell because the CLI is missing was exactly backwards.
   const m = connectModes(notInstalled);
   assert.deepEqual(m.map((x) => x.id), ['tmux', 'oauth']);
-  assert.equal(m.every((x) => x.available === false), true);
-  assert.match(m[0].unavailable_reason, /not installed/i);
-  assert.match(m[1].unavailable_reason, /not installed/i);
-  // and the two reasons DIFFER: identical copy on both tabs makes the toggle look broken
-  assert.notEqual(m[0].unavailable_reason, m[1].unavailable_reason);
-  assert.match(m[0].unavailable_reason, /terminal/i);
-  assert.match(m[1].unavailable_reason, /browser/i);
+  assert.equal(m.find((x) => x.id === 'tmux').available, true);
+  assert.equal(m.find((x) => x.id === 'oauth').available, false);
+  assert.match(m.find((x) => x.id === 'oauth').unavailable_reason, /not installed/i);
+  // and OAUTH points at the tab that can fix it, rather than dead-ending
+  assert.match(m.find((x) => x.id === 'oauth').unavailable_reason, /tmux/i);
+  // the terminal tab says it is for INSTALLING, not just signing in
+  assert.match(m.find((x) => x.id === 'tmux').blurb, /install/i);
 }
 {
   // CLI present but logged out: BOTH ways genuinely work — the terminal walks the login,
@@ -76,10 +78,25 @@ const connected = { id: 'claude', label: 'Claude', installed: true, authed: true
   assert.match(plan.detail, /browser/i);
 }
 {
-  // A mode that is not available yields a plan that DOES NOTHING but says why.
-  const plan = connectPlan(notInstalled, 'tmux');
-  assert.equal(plan.kind, 'blocked');
+  // A missing CLI yields a REAL terminal plan, because a blank machine's whole path runs
+  // through that shell. It carries an install command ONLY where a real package exists.
+  const codexMissing = { id: 'codex', label: 'Codex', installed: false, authed: false, auth_reason: 'not-installed' };
+  const plan = connectPlan(codexMissing, 'tmux');
+  assert.equal(plan.kind, 'login-shell');
   assert.match(plan.detail, /install/i);
+  assert.match(plan.install_command, /npm i -g/);
+
+  // gemini has no npm package but DOES have a real installer, so the plan carries that —
+  // never the fabricated npm name, and never nothing when something true exists.
+  const gem = connectPlan(notInstalled, 'tmux');
+  assert.equal(gem.kind, 'login-shell');
+  assert.match(gem.install_command, /antigravity\.google\/cli\/install\.sh/);
+  assert.doesNotMatch(gem.install_command, /npm/);
+}
+{
+  // OAUTH on a missing CLI is still blocked — the browser flow is started BY the CLI.
+  const plan = connectPlan(notInstalled, 'oauth');
+  assert.equal(plan.kind, 'blocked');
 }
 
 // --- the reason line: this is the iOS fix ----------------------------------------------------
@@ -91,6 +108,56 @@ const connected = { id: 'claude', label: 'Claude', installed: true, authed: true
   assert.equal(reasonText(connected), '');
   // a provider with no reason string still gets an honest sentence, never a blank
   assert.notEqual(reasonText({ id: 'x', label: 'X', installed: true, authed: false }), '');
+}
+
+// --- the install command is real, per provider -------------------------------------------
+assert.match(installCommand('codex'), /@openai\/codex/);
+// gemini has NO npm package — @google/antigravity-cli 404s on the registry. It must return
+// null and a truthful note, never a fabricated command (the operator ran the invented one).
+// gemini is NOT an npm package (@google/antigravity-cli 404s — I invented that name and the
+// operator ran it). It has a REAL installer, verified by running it in a clean container:
+// exit 0, binary at ~/.local/bin/agy, and the probe then reported gemini installed=true.
+assert.match(installCommand('gemini'), /antigravity\.google\/cli\/install\.sh/);
+assert.doesNotMatch(installCommand('gemini'), /npm/);
+assert.equal(installNote('gemini'), null);     // it has a real command, so no fallback note
+assert.equal(installNote('codex'), null);
+assert.match(installCommand('claude'), /@anthropic-ai\/claude-code/);
+// The bare `npm i -g` form FAILED for the operator with EACCES: npm's prefix is /usr and the
+// terminal runs unprivileged. Every install command must target a user-writable prefix.
+for (const id of ['codex', 'claude']) {
+  assert.match(installCommand(id), /--prefix "\$HOME\/\.local"/,
+    `${id} install command must not need root`);
+  assert.doesNotMatch(installCommand(id), /^sudo /, `${id} must not tell a stranger to sudo`);
+}
+
+// --- every install command must leave the shell ABLE TO RUN what it just installed -------
+// The operator installed agy and then got "agy: command not found" in the same pane: the
+// tmux session is reused, so it predated the install and its PATH was stale. A command that
+// installs a binary the next line cannot run is not a working instruction.
+for (const id of ['codex', 'claude', 'gemini']) {
+  assert.match(installCommand(id), /exec bash -l$/,
+    `${id}: install command must reload the shell so PATH picks up the new binary`);
+}
+
+// --- the steps carry what was LEARNED BY RUNNING IT, not generic advice ------------------
+{
+  const gem = connectSteps('gemini').join(' ');
+  assert.match(gem, /~\/\.local\/bin/);                  // where the binary lands
+  assert.match(gem, /command not found/);                  // the stale-PATH trap he hit
+  assert.match(gem, /self-update/);                        // already-installed case
+  assert.match(gem, /no browser/);                         // server sign-in reality
+  assert.match(gem, /antigravity-oauth-token/);            // the file the probe watches
+  const cod = connectSteps('codex').join(' ');
+  assert.match(cod, /EACCES/);                             // why a bare npm -g fails here
+  assert.match(cod, /auth\.json/);
+  // A bare `codex login` opens a callback server on port 1455 of the SERVER and waits for a
+  // browser that is somewhere else. `--device-auth` is a real flag, measured by effect from
+  // `codex login --help` on codex-cli 0.153.4 (the version this install actually carries).
+  // The steps must name it, and must say why.
+  assert.match(cod, /--device-auth/);
+  assert.match(cod, /1455/);
+  assert.match(signinCommand('codex'), /--device-auth/);
+  assert.equal(connectSteps('nope').length, 0);            // no invented steps for unknowns
 }
 
 console.log('providerConnect.test.mjs: all assertions passed');

@@ -1,0 +1,4 @@
+<invoke name="get_agent_output">
+<parameter name="session_name">hello</parameter>
+<parameter name="lines">30</parameter>
+</invoke>

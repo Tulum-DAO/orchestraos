@@ -53,13 +53,15 @@ slide's bullets — say those out loud, don't put them on the screen.
 
 ## 6. The tracks
 
-- Twelve tracks, each a real gap in the harness with a design already written
-  down: device pairing, a zero-key assistant brain, on-device voice, the
+- Thirteen tracks, each a real gap in the harness with a design already written
+  down: device pairing, a zero-key assistant brain (note: "gemini" here means
+  Google's Antigravity `agy` CLI, not `@google/gemini-cli` — see `docs/COSTS.md`), on-device voice, the
   assistant's home screen, running without a manager agent, chat bridges as
   plugins, a visual restyle, push notifications without a third-party server,
   installer hardening, docs and tutorials, autonomous rotation proven on
-  every agent runtime, and a critic loop that scores creative work before it
-  reaches you.
+  every agent runtime, a critic loop that scores creative work before it
+  reaches you, and a memory page so you can finally see what a seat remembers
+  and prune it before its index outgrows its boot prompt.
 - Full list with sizes and dependencies: `docs/tracks/README.md`. Each track's
   own doc has the design, the exact files to touch, and a start prompt you can
   hand straight to your agent.

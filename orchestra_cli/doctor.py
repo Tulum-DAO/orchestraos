@@ -50,6 +50,12 @@ class DoctorProbes:
 
 # --- real probes -----------------------------------------------------------
 
+# The one wording for "you have not logged in to any runtime". `orchestra spawn` reuses this
+# verbatim rather than inventing a second phrasing for the same condition.
+RUNTIME_ANY_REMEDY = ("At least one of [runtimes] enabled must be installed and logged in "
+                      "(claude OR gemini OR codex)")
+
+
 def _port_owner_real(port: int) -> Optional[int]:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -265,7 +271,7 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
             checks.append(Check("arturo:brain", WARN, f"selection unavailable: {e}"))
     checks.append(Check("runtime:any", OK if any_authed else MISSING,
                         ", ".join(r["id"] for r in results if r["authed"] is True) or "no enabled runtime is installed AND authed",
-                        "At least one of [runtimes] enabled must be installed and logged in (claude OR gemini OR codex)"))
+                        RUNTIME_ANY_REMEDY))
 
     # -- ports
     sup = probes.supervisor_state(st.data_dir) or {}
@@ -353,6 +359,22 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
         except Exception as e:  # noqa: BLE001 — any failure to load = MISSING
             checks.append(Check("api:better-sqlite3", MISSING, f"native binding does not load: {str(e)[:80]}",
                                 f"cd {root / 'api'} && npm rebuild better-sqlite3  (or delete api/node_modules and run npm install)"))
+    # node-pty is the native addon behind the web terminal (dashboard-proxy.js and api
+    # /ws/terminal both require() it from the root install). On a host without the build
+    # toolchain, npm finishes with node-pty skipped or unbuilt, the app boots green, and every
+    # terminal pane answers "Web terminal unavailable: node-pty is not installed" (second-install
+    # DX report, 2026-09-20). Load it the way both servers will; REQUIRED, so `doctor` exits 1.
+    root_nm = root / "node_modules"
+    if (root / "package.json").exists() and root_nm.exists():
+        mod = root_nm / "node-pty"
+        try:
+            probes.run_cmd(["node", "-e", f"require({json.dumps(str(mod))})"])
+            checks.append(Check("terminal:node-pty", OK, "native addon loads (web terminal available)"))
+        except Exception as e:  # noqa: BLE001 — any failure to load = MISSING
+            checks.append(Check("terminal:node-pty", MISSING,
+                                f"native addon does not load: {str(e)[:80]} — the web terminal is dead on this host",
+                                f"sudo apt install -y build-essential python3 && cd {root} && npm rebuild node-pty  "
+                                f"(or delete node_modules and run npm install)"))
     for label, sub, artifact in (("api", "api", "dist/server.js"), ("dashboard", "dashboard", "dist/index.html")):
         d = root / sub
         if not (d / "package.json").exists():
