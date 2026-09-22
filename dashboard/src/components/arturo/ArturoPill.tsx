@@ -132,8 +132,13 @@ export function ArturoPill() {
     : routeCtx;
 
   /** Pull this thread's turns from the server, so reopening the pill resumes it exactly. */
+  // A reload that resolves AFTER the user has already sent something must not overwrite the local
+  // turns (it wiped a fresh 'Sending…' bubble when you dictated right after opening the pill).
+  const resumeGen = useRef(0);
   const resume = useCallback(async (id: string) => {
+    const mine = ++resumeGen.current;
     const t = await loadThread(id);
+    if (mine !== resumeGen.current) return;          // superseded by a send or a newer reload
     setTurns((t?.turns || []).map((x) => ({ role: x.role === 'user' ? 'user' : 'arturo', text: x.content, at: (x.ts || 0) * 1000 })));
   }, []);
 
@@ -157,6 +162,7 @@ export function ArturoPill() {
     if (dictating) stopDictation();      // the sent text is final; don't re-append into the empty box
     clearDictNote();
     setDraft(''); setBusy(true);
+    resumeGen.current++;                 // any in-flight thread reload is now stale
     const at = Date.now();
     append({ role: 'user', text, at, state: 'sending' });
     const setState = (state: SendState) => setTurns((prev) => prev.map((t) => t.at === at && t.role === 'user' ? { ...t, state } : t));
