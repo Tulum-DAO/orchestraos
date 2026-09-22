@@ -34,6 +34,29 @@ def validate_audio(size, content_type):
     return True, None
 
 
+# Web composer dictation clips (item C): what MediaRecorder produces — webm/opus (Chrome, Firefox),
+# mp4/aac (Safari), ogg, plus wav for tools. 10 MB cap: 60 s of opus is ~0.5 MB, so this is safe and
+# still shuts out abuse. SEPARATE from the watch rule above on purpose — that contract stays m4a/1 MB.
+MAX_TRANSCRIBE_BYTES = 10_000_000
+_TRANSCRIBE_CONTENT_TYPES = frozenset({
+    "audio/webm", "video/webm", "audio/ogg", "audio/wav", "audio/x-wav", "audio/wave",
+    "audio/mp4", "audio/m4a", "audio/x-m4a", "audio/aac", "audio/mpeg", "audio/mp3",
+    "application/octet-stream", "",
+})
+
+
+def validate_transcribe_audio(size, content_type):
+    """(ok, error_code) for a dictation clip. error_code in {'empty','too_large','bad_type'}."""
+    if size <= 0:
+        return False, "empty"
+    if size > MAX_TRANSCRIBE_BYTES:
+        return False, "too_large"
+    ct = (content_type or "").split(";")[0].strip().lower()
+    if ct not in _TRANSCRIBE_CONTENT_TYPES:
+        return False, "bad_type"
+    return True, None
+
+
 DEFAULT_MAX_CONVERSATIONS = 256   # cap distinct conversation_ids on the long-lived :5071 process
 
 
