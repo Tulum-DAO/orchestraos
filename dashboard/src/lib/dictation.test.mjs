@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert';
 import { test } from 'node:test';
-import { mergeDictation, routeRecognitionEvent, startDictation, dictationSupported, DICTATION_UNAVAILABLE } from './dictation.ts';
+import { mergeDictation, routeRecognitionEvent, startDictation, dictationSupported, DICTATION_UNAVAILABLE, pickRecordingMime, isTier1DeadError, recordingBlockedReason, transcribeBlob, transcribeReason } from './dictation.ts';
 
 test('mergeDictation keeps typed text, appends finals, swaps the partial', () => {
   assert.strictEqual(mergeDictation('', [], ''), '');
@@ -62,4 +62,49 @@ test('startDictation returns null without a recognizer and a stop handle with on
   } finally {
     globalThis.window = saved;
   }
+});
+
+// ---- item C: tier 2 helpers ----------------------------------------------------------------
+test('pickRecordingMime prefers webm/opus, falls to mp4 on Safari-shaped support, empty when none', () => {
+  assert.strictEqual(pickRecordingMime((t) => t.startsWith('audio/webm')), 'audio/webm;codecs=opus');
+  assert.strictEqual(pickRecordingMime((t) => t === 'audio/mp4'), 'audio/mp4');
+  assert.strictEqual(pickRecordingMime(() => false), '');
+  assert.strictEqual(pickRecordingMime(() => { throw new Error('no isTypeSupported'); }), '');
+});
+
+test('isTier1DeadError names the codes that mean "API present, backend dead"', () => {
+  assert.ok(isTier1DeadError('network') && isTier1DeadError('service-not-allowed'));
+  assert.ok(!isTier1DeadError('not-allowed') && !isTier1DeadError('no-speech'));
+});
+
+test('recordingBlockedReason gates on secure context in front of tier 2 only', () => {
+  assert.match(recordingBlockedReason({ isSecureContext: false }), /HTTPS/);
+  const saved = { MediaRecorder: globalThis.MediaRecorder, navigator: globalThis.navigator };
+  try {
+    globalThis.MediaRecorder = class {};
+    Object.defineProperty(globalThis, 'navigator', { value: { mediaDevices: { getUserMedia: async () => ({}) } }, configurable: true });
+    assert.strictEqual(recordingBlockedReason({ isSecureContext: true }), null);
+    Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true });
+    assert.match(recordingBlockedReason({ isSecureContext: true }), /cannot record/);
+  } finally {
+    globalThis.MediaRecorder = saved.MediaRecorder;
+    Object.defineProperty(globalThis, 'navigator', { value: saved.navigator, configurable: true });
+  }
+});
+
+test('transcribeBlob posts multipart to /api/arturo/transcribe and transcribeReason names the fix', async () => {
+  let seen = null;
+  const fakeFetch = async (url, init) => { seen = { url, init }; return { ok: false, status: 503, json: async () => ({ ok: false, error: 'stt_unavailable', reason: 'not-installed', install: 'orchestra init --stt' }) }; };
+  const r = await transcribeBlob(new Blob(['x'], { type: 'audio/webm' }), fakeFetch);
+  assert.strictEqual(seen.url, '/api/arturo/transcribe');
+  assert.strictEqual(seen.init.method, 'POST');
+  assert.ok(seen.init.body instanceof FormData);
+  assert.strictEqual(seen.init.body.get('audio').name, 'clip.webm');
+  assert.strictEqual(r.ok, false);
+  assert.match(transcribeReason(r), /orchestra init --stt/);
+  assert.match(transcribeReason({ ok: false, status: 503, error: 'stt_unavailable', reason: 'warming' }), /downloading/);
+  assert.match(transcribeReason({ ok: false, status: 422, error: 'no_speech' }), /did not catch/);
+  assert.strictEqual(transcribeReason({ ok: true, status: 200, text: 'hi' }), '');
+  const ok = await transcribeBlob(new Blob(['x'], { type: 'audio/mp4' }), async (u, i) => { seen = i; return { ok: true, status: 200, json: async () => ({ ok: true, text: 'hello', ms: 300 }) }; });
+  assert.deepStrictEqual([ok.ok, ok.text, seen.body.get('audio').name], [true, 'hello', 'clip.mp4']);
 });

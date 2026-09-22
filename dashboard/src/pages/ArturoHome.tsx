@@ -90,7 +90,7 @@ export default function ArturoHome() {
   // Zero-key dictation (item B): the Mic button transcribes on-device into the draft. Shared
   // hook with the "Ask Arturo" pill so every composer has the same buttons. Separate from the
   // AudioLines "Voice mode" button, which is the ElevenLabs/Hume CALL path (needs a vendor key).
-  const { dictating, note: dictNote, toggle: toggleDictation, stop: stopDictation } =
+  const { mode: dictMode, dictating, note: dictNote, toggle: toggleDictation, stop: stopDictation } =
     useDictation(draft, setDraft, () => taRef.current?.focus());
   const fileInput = useRef<HTMLInputElement>(null);
   const convId = useRef<string>(ls(LS_CONV) || '');
@@ -377,8 +377,10 @@ export default function ArturoHome() {
             <button className="model-chip" onClick={() => setModelOpen(true)}><b>{model}</b>{eff && <span className="eff">{eff}</span>}</button>
           </div>
           <div className="cluster">
-            <button className={dictating ? 'circle-btn listening' : 'circle-btn'} aria-label={dictating ? 'Stop dictation' : 'Dictate'}
-                    aria-pressed={dictating} title="Dictate (Chrome/Edge)" onClick={toggleDictation}><Mic size={16} /></button>
+            <button className={dictMode === 'idle' ? 'circle-btn' : `circle-btn ${dictMode}`}
+                    aria-label={dictMode === 'listening' ? 'Stop dictation' : dictMode === 'recording' ? 'Stop recording' : dictMode === 'transcribing' ? 'Transcribing' : 'Dictate'}
+                    aria-pressed={dictating} title={dictMode === 'transcribing' ? 'Transcribing on the server…' : 'Dictate'}
+                    onClick={toggleDictation} disabled={dictMode === 'transcribing'}><Mic size={16} /></button>
             {draft.trim() ? (
               <button className="circle-btn white" aria-label="Send" onClick={() => void send()} disabled={busy}><ArrowUp size={18} /></button>
             ) : (
