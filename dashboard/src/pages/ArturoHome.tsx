@@ -25,7 +25,7 @@ import { listThreads, loadThread, type ThreadSummary } from '../lib/arturoThread
 import WebTerminal from '../components/WebTerminal';
 import { installCommand } from '../lib/providerConnect';
 import { uploadAttachment, attachmentPreamble, describeAttachment, type Attachment } from '../lib/arturoUpload';
-import { startDictation, mergeDictation, DICTATION_UNAVAILABLE, type DictationHandle } from '../lib/dictation.ts';
+import { useDictation } from '../components/arturo/useDictation.ts';
 import { Brain, Settings } from 'lucide-react';
 
 type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[]; pending?: boolean;
@@ -87,14 +87,11 @@ export default function ArturoHome() {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  // Zero-key dictation (item B): the Mic button transcribes on-device (Web Speech API,
-  // Chrome/Edge) straight into the draft. Separate from the AudioLines "Voice mode"
-  // button, which is the ElevenLabs/Hume CALL path and really does need a vendor key.
-  const [dictating, setDictating] = useState(false);
-  const [dictNote, setDictNote] = useState<string | null>(null);
-  const dictHandle = useRef<DictationHandle | null>(null);
-  const dictBase = useRef('');            // what was typed before the mic was tapped
-  const dictCommitted = useRef<string[]>([]);
+  // Zero-key dictation (item B): the Mic button transcribes on-device into the draft. Shared
+  // hook with the "Ask Arturo" pill so every composer has the same buttons. Separate from the
+  // AudioLines "Voice mode" button, which is the ElevenLabs/Hume CALL path (needs a vendor key).
+  const { dictating, note: dictNote, toggle: toggleDictation, stop: stopDictation } =
+    useDictation(draft, setDraft, () => taRef.current?.focus());
   const fileInput = useRef<HTMLInputElement>(null);
   const convId = useRef<string>(ls(LS_CONV) || '');
   useEffect(() => { if (!convId.current) { convId.current = newConversationId('web'); lsSet(LS_CONV, convId.current); } }, []);
@@ -277,36 +274,6 @@ export default function ArturoHome() {
   };
   const grow = () => { const el = taRef.current; if (!el) return; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 140) + 'px'; };
   useEffect(() => { if (dictating) grow(); }, [draft, dictating]);   // live text grows the box
-  function stopDictation() {
-    dictHandle.current?.stop();
-    dictHandle.current = null;
-    setDictating(false);
-  }
-  function toggleDictation() {
-    setDictNote(null);
-    if (dictating) { stopDictation(); return; }
-    dictBase.current = draft;
-    dictCommitted.current = [];
-    const handle = startDictation({
-      onPartial: (text) => setDraft(mergeDictation(dictBase.current, dictCommitted.current, text)),
-      onFinal: (text) => {
-        dictCommitted.current = [...dictCommitted.current, text];
-        setDraft(mergeDictation(dictBase.current, dictCommitted.current, ''));
-      },
-      onEnd: () => { dictHandle.current = null; setDictating(false); },   // silence timeout / tab hidden
-      onError: (code) => {
-        if (code === 'no-speech' || code === 'aborted') return;           // ordinary; onEnd follows
-        setDictNote(code === 'not-allowed' || code === 'service-not-allowed'
-          ? 'microphone permission was denied — allow the mic for this site and tap again'
-          : `dictation error: ${code}`);
-      },
-    });
-    if (!handle) { setDictNote(DICTATION_UNAVAILABLE); return; }
-    dictHandle.current = handle;
-    setDictating(true);
-    taRef.current?.focus();
-  }
-  useEffect(() => () => { dictHandle.current?.stop(); }, []);
 
   const brain = health?.brain;
   const model = starting ? 'starting…' : brainLabel(brain);
