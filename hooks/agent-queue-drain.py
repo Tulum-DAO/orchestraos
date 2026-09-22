@@ -219,12 +219,16 @@ def run(payload, env=None):
         proc_ts = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())
         batch_id = hashlib.sha256(f"{head}|{proc_ts}".encode()).hexdigest()[:16]
         _stamp_surfaced(db_path, [r[0] for r in rows], canon, batch_id, proc_ts)
-        lines = [f"  {r[0]} | {r[1]} | {(r[2] or '(no subject)')[:60]}" for r in rows[:MAX_LINES]]
+        lines = [
+            f"  {r[0]} | {r[1]} | {(r[2] or '(no subject)')[:60]} — python3 msg_store.py get --id {r[0]} ; python3 msg_store.py ack --id {r[0]}"
+            for r in rows[:MAX_LINES]
+        ]
         more = f" (+{len(rows) - MAX_LINES} more)" if len(rows) > MAX_LINES else ""
         return {"decision": "block",
                 "reason": (f"[QUEUE-DIGEST] {len(rows)} pending message(s) for {canon} "
                            f"older than {AGE_GATE_S}s{more} — batch-process now (read "
-                           f"each via store, ack after processing, stale-banner "
+                           f"each via python3 msg_store.py get --id <id>, ack after processing via "
+                           f"python3 msg_store.py ack --id <id>, stale-banner "
                            f"discipline applies):\n" + "\n".join(lines))}
     except Exception:  # noqa: BLE001 — a mail hook must never wedge a session
         return None

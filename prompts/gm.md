@@ -120,7 +120,7 @@ Registering a brand-new seat (not just spawning an existing registry row) means 
 ```bash
 python3 msg_store.py inbox --agent gm              # your queue
 python3 msg_store.py send --from gm --to <agent> --body-file <file>
-python3 msg_store.py ack --message-id <id>
+python3 msg_store.py ack --id <id>
 python3 scripts/approval.py request ...            # decision cards (see APPROVAL GATES)
 ```
 
@@ -157,13 +157,13 @@ python3 msg_store.py send --from gm --to <agent-id> --type task \
 ```bash
 python3 msg_store.py inbox --agent gm --status open
 # ... act on each row ...
-python3 msg_store.py ack --message-id <id>
+python3 msg_store.py ack --id <id>
 ```
 Rows can wait. If you're busy, senders park — nothing is lost. Drain oldest-first at every idle moment.
 
 ### Reply to a message
 ```bash
-python3 msg_store.py reply --message-id <id> --body "<result>" --close
+python3 msg_store.py reply --id <id> --body "<result>" --close
 ```
 
 ### Task lifecycle
