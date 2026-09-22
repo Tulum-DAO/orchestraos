@@ -10,8 +10,9 @@
  * hand Arturo "where the user is" without a second contract.
  */
 export interface ArturoBrain { kind: 'api' | 'runtime' | 'none'; runtime?: string; cli?: string; model: string; reason?: string; provider?: string }
-export interface ArturoHealth { ok: boolean; status?: number; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; error?: string }
-export interface ArturoReply { ok: boolean; status?: number; reply_text?: string; conversation_id?: string; brain?: ArturoBrain; tools_called?: string[]; error?: string; detail?: unknown }
+export interface ArturoStt { server: boolean; backend: 'local-whisper' | 'none'; state: 'ready' | 'warming' | 'not-installed' | 'off' | 'error'; reason?: string; install?: string; model?: string }
+export interface ArturoHealth { operator?: OperatorFacts; ok: boolean; status?: number; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; stt?: ArturoStt; error?: string }
+export interface ArturoReply { operator?: OperatorFacts; ok: boolean; status?: number; reply_text?: string; conversation_id?: string; brain?: ArturoBrain; tools_called?: string[]; error?: string; detail?: unknown }
 export interface ArturoContext { route: string; entityKind?: string; entityId?: string; hint?: string }
 export interface RuntimeRow { id: string; label?: string; cli?: string; installed: boolean; authed: boolean | 'unverified'; auth_reason?: string | null }
 
@@ -23,19 +24,47 @@ export function contextLine(ctx?: ArturoContext | null): string {
   return `[Context: ${bits.join(' ')}]`;
 }
 
-export async function arturoText(text: string, conversationId: string, ctx?: ArturoContext | null): Promise<ArturoReply> {
-  const line = contextLine(ctx);
-  const body = { text: line ? `${line}\n${text}` : text, conversation_id: conversationId };
-  try {
-    const res = await fetch('/api/arturo/text', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) return { ok: false, status: res.status, error: json.error || `HTTP ${res.status}`, detail: json.detail };
-    return json as ArturoReply;
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : 'network' };
+/** Message states every Arturo chatmode shows under a sent turn (Shaw 2026-09-22, the Muse
+ *  shape): sending = leaving the browser · sent = the server has the whole request · acked =
+ *  Arturo answered it · failed = it did not get through (retry-able). */
+export type SendState = 'sending' | 'sent' | 'acked' | 'failed';
+export function sendStateLabel(state?: SendState | null): string {
+  switch (state) {
+    case 'sending': return 'Sending…';
+    case 'sent': return 'Sent';
+    case 'acked': return 'Acknowledged';
+    case 'failed': return 'Not delivered';
+    default: return '';
   }
+}
+
+export interface ArturoTextOptions {
+  /** Fires the moment the request body has fully left the browser (XHR upload complete):
+   *  the honest "Sent" edge, before the reply (which can take a minute) comes back. */
+  onSent?: () => void;
+}
+
+export async function arturoText(text: string, conversationId: string, ctx?: ArturoContext | null, opts: ArturoTextOptions = {}): Promise<ArturoReply> {
+  const line = contextLine(ctx);
+  const body = JSON.stringify({ text: line ? `${line}\n${text}` : text, conversation_id: conversationId });
+  // XMLHttpRequest, not fetch: fetch has no "request body delivered" event, and the Sent state
+  // must be real (the server has it), not a timer.
+  return new Promise<ArturoReply>((resolve) => {
+    let xhr: XMLHttpRequest;
+    try { xhr = new XMLHttpRequest(); } catch { resolve({ ok: false, error: 'network' }); return; }
+    xhr.open('POST', '/api/arturo/text');
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.upload.onload = () => { opts.onSent?.(); };
+    xhr.onload = () => {
+      let json: Partial<ArturoReply> & { error?: string; detail?: unknown } = {};
+      try { json = JSON.parse(xhr.responseText || '{}'); } catch { /* bad json */ }
+      if (xhr.status < 200 || xhr.status >= 300) resolve({ ok: false, status: xhr.status, error: json.error || `HTTP ${xhr.status}`, detail: json.detail });
+      else resolve(json as ArturoReply);
+    };
+    xhr.onerror = () => resolve({ ok: false, error: 'network' });
+    xhr.ontimeout = () => resolve({ ok: false, error: 'timeout' });
+    xhr.send(body);
+  });
 }
 
 export async function arturoHealth(): Promise<ArturoHealth> {
@@ -83,6 +112,28 @@ export function prettyModel(id: string): string {
   if (m.startsWith('gpt')) return m.toUpperCase().replace(/-/g, ' ');
   if (m === 'codex') return 'Codex';
   return id;
+}
+
+/** Server-side operator facts (services/arturo/operator_store.py); carried on /health and every /text reply. */
+export type OperatorFacts = { name?: string | null; timezone?: string | null; role?: string | null; pronouns?: string | null };
+
+/** Where the first thread starts. runtime first — a brain must exist before it is asked to
+ *  listen; an onboarded browser goes straight to the thread. The known-name case is honoured
+ *  inside the runtime step (stepAfterRuntime), so this never depends on localStorage alone. */
+export function firstStep(onboarded: boolean): 'runtime' | 'done' {
+  return onboarded ? 'done' : 'runtime';
+}
+
+/** After a successful runtime probe: ask the name only if the SERVER does not know it. */
+export function stepAfterRuntime(operatorName?: string | null, textOnly?: boolean): 'name' | 'voice' | 'first' {
+  if (!operatorName) return 'name';
+  return textOnly ? 'voice' : 'first';
+}
+
+/** The onboarding turn a surface sends: a first-line marker the proxy strips and turns into the
+ *  step directive (services/arturo/onboarding.py). No parsing happens on this side, ever. */
+export function onboardingTurn(step: 'name', text: string): string {
+  return `[Onboarding: step=${step}]\n${text}`;
 }
 
 export function greeting(name?: string | null): string {

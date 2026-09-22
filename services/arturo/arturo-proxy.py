@@ -1404,6 +1404,7 @@ TOOLS = [
             },
         },
     },
+    __import__("services.arturo.operator_store", fromlist=["TOOL"]).TOOL,   # set_operator_fact — ONE schema, owned by the store
     {
         "type": "function",
         "function": {
@@ -2353,6 +2354,20 @@ def execute_tool(name, args, user_turns=None):
             return f"Command output ({machine}):\n{out}"
         return f"Command failed on {machine}: {out[:500]}"
 
+    elif name == "set_operator_fact":
+        # Onboarding facts are BRAIN-extracted (Shaw 2026-09-22): the operator said who they are
+        # in conversation; the brain understood it; this is the only writer of operator.json.
+        from services.arturo import operator_store as _ops
+        try:
+            entry = _ops.set_fact(ARTURO_STATE, args.get("field", ""), args.get("value", ""), source="brain")
+        except ValueError as e:
+            return f"Not recorded: {e}"
+        except OSError as e:               # unwritable state dir: the turn must not 500 on a nicety
+            log.warning(f"operator fact not stored: {e}")
+            return f"Not recorded: could not write the operator store ({e.__class__.__name__})"
+        log.info(f"operator fact set [{args.get('field')}] = {entry['value']!r}")
+        return f"Recorded: {args.get('field')} = {entry['value']}"
+
     elif name == "remember_note":
         note = args.get("note", "")
         category = args.get("category", "behavior")
@@ -2647,6 +2662,15 @@ def build_context(calling_channel="voice"):
     # say "backed by a Gemini-powered layer" because this text was hardcoded). Read by effect from
     # the live brain object (it can be re-selected after a post-boot login, G14).
     parts.append(_brain_identity_line())
+    # Who the operator IS (brain-extracted at onboarding, services/arturo/operator_store.py).
+    # One line, only when something is actually known — never a placeholder name.
+    try:
+        from services.arturo import operator_store as _ops
+        _op_line = _ops.context_line(ARTURO_STATE)
+        if _op_line:
+            parts.append(_op_line)
+    except Exception:  # noqa: BLE001 — identity is a nicety; a turn never fails on it
+        pass
     parts.append(f"""ONE IDENTITY (critical): You and your deep brain are ONE. When you use gm_command / async_task / inject_message you are consulting your OWN deeper reasoning and full-context memory — the manager seat running in the '{VOICE_BRAIN_SESSION}' session. It is NOT a separate person. NEVER refer to "the GM" out loud, NEVER say "I've sent it to the GM", "I'll ask the GM", or "waiting to hear back from the GM". Speak in the FIRST PERSON: "Let me think on that — I'll text you", "Still working through it", "I looked into it", "Give me a bit and I'll get back to you". Any deep question you can't answer instantly, you route to your own deep brain via async_task (which guarantees a Telegram answer back to the operator) — and you say so in the first person.""")
     parts.append(f"""Rules: Be concise (2-3 sentences max). No markdown/bullets. Spoken dialogue only.
 Push back when you disagree. You're a strategic partner, not a yes-machine.
@@ -2927,6 +2951,10 @@ def _filter_voice_response(content):
 # journaled chat_completions() route — it builds context + calls the model directly.
 # ============================================================================================
 from services.arturo import ptt as _ptt
+from services.arturo import local_stt as _local_stt   # item C: key-free web dictation (lazy: never imports faster-whisper here)
+# item C: fetch the local speech model in the background at boot (never inside a request). No-op on a
+# slim install (faster-whisper absent) or when the files are already on disk. Must sit AFTER the import.
+_local_stt.prefetch(log=log)
 
 PTT_STT_MODEL = os.environ.get("ARTURO_PTT_STT_MODEL", "scribe_v1")
 # Arturo's ElevenLabs voice for TTS replies (mp3, AVAudioPlayer-native). Overridable.
@@ -4045,6 +4073,38 @@ def ptt_endpoint():
     return jsonify(result), code
 
 
+@app.route("/transcribe", methods=["POST"])
+def transcribe_endpoint():
+    """Item C — web composer dictation, transcribe ONLY (no brain, no TTS, no history, no journal):
+    the user reads the text and taps send. LOOPBACK-ONLY like /ptt: the gateway authenticates and
+    forwards. 200 {ok,text,backend,ms} | 422 no_speech | 400/413 bad clip | 503 stt_unavailable
+    (reason warming | not-installed | off | error, + install command) | 504 timeout."""
+    remote = request.remote_addr or ""
+    if remote not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+        return jsonify({"ok": False, "error": "loopback only"}), 403
+    f = request.files.get("audio")
+    if f is None:
+        return jsonify({"ok": False, "error": "audio field required"}), 400
+    audio_bytes = f.read()
+    ok, err = _ptt.validate_transcribe_audio(len(audio_bytes), f.content_type or "")
+    if not ok:
+        return jsonify({"ok": False, "error": err}), (413 if err == "too_large" else 400)
+    try:
+        r = _local_stt.transcribe(audio_bytes, f.filename or "audio.webm", f.content_type or "")
+    except _local_stt.SttUnavailable as e:
+        st = e.state
+        return jsonify({"ok": False, "error": "stt_unavailable", "reason": st.get("state"),
+                        "detail": e.reason, "install": st.get("install")}), 503
+    except TimeoutError as e:
+        return jsonify({"ok": False, "error": "timeout", "detail": str(e)}), 504
+    except Exception as e:  # noqa: BLE001
+        log.warning(f"transcribe: local STT failed: {e}")
+        return jsonify({"ok": False, "error": "stt_failed"}), 502
+    if not r["text"]:
+        return jsonify({"ok": False, "error": "no_speech", "ms": r["ms"]}), 422
+    return jsonify({"ok": True, "text": r["text"], "backend": r["backend"], "model": r["model"], "ms": r["ms"]}), 200
+
+
 # --- v2/(b) stream relay routes (registered ONLY when ARTURO_STREAM_RELAY=1 — flag-off the
 # proxy serves 404 on these paths, byte-identical to today) ---
 if _STREAM_RELAY is not None:
@@ -4245,7 +4305,19 @@ def text_turn(text, conversation_id):
     if len(text) > 8000:
         return 413, {"ok": False, "error": "too_large"}
     conversation_id = (conversation_id or "").strip()[:200] or f"text_{int(time.time())}"
+    # Onboarding turns carry a first-line marker; the step's directive lives server-side
+    # (services/arturo/onboarding.py) and rides in the system context for THIS turn only.
+    from services.arturo import onboarding as _onb
+    step, text = _onb.split_marker(text)
+    text = text.strip()
+    if not text:
+        return 400, {"ok": False, "error": "empty"}
     context = build_context(calling_channel="text")
+    _dir = _onb.directive(step)
+    if _dir:
+        context = f"{context}\n\n{_dir}"
+    elif step:
+        log.warning(f"onboarding marker with unknown step {step!r} — no directive applied")
     history = _TEXT_HISTORY.get(conversation_id)
     if not history:
         # Reopening an OLD thread (or any thread after a restart): memory is empty but the
@@ -4262,8 +4334,10 @@ def text_turn(text, conversation_id):
     _TEXT_HISTORY.append(conversation_id, "user", text)
     _TEXT_HISTORY.append(conversation_id, "assistant", reply)
     _THREADS.record_turn(conversation_id, text, reply)
+    from services.arturo import operator_store as _ops
     return 200, {"ok": True, "reply_text": reply, "conversation_id": conversation_id,
-                 "brain": brain.describe(), "tools_called": tools_called}
+                 "brain": brain.describe(), "tools_called": tools_called,
+                 "operator": _ops.public(ARTURO_STATE)}
 
 
 def _loopback_only():
@@ -4326,8 +4400,13 @@ def health():
         # T2/T3: which brain answers turns, and whether voice is even possible on this install.
         "brain": brain.describe(),
         "brain_mode": BRAIN_MODE,
+        # Who the operator is, from the server-side store — every surface (home, pill, iOS)
+        # reads the same name here instead of a per-browser localStorage copy.
+        "operator": __import__("services.arturo.operator_store", fromlist=["public"]).public(ARTURO_STATE),
         "mode": ARTURO_MODE,                       # "voice" | "text-only"
         "voice": bool(VOICE_VENDORS_PRESENT),
+        # item C: can the box transcribe a recorded clip with no vendor key? (web dictation tier 2)
+        "stt": _local_stt.state(),
         "tools": [t["function"]["name"] for t in TOOLS],
         # comm-probe-safe daemon liveness (gm msg_1f417cdd): threads registered at start
         "daemons": sorted(getattr(_STREAM_RELAY, "daemons", None) or []),

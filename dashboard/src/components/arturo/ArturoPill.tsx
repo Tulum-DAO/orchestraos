@@ -16,16 +16,21 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
-import { Mic, ArrowUp, X, History, Focus, PhoneCall, PhoneOff } from 'lucide-react';
+import { Mic, ArrowUp, X, History, Focus, PhoneOff, AudioLines, Plus, Paperclip } from 'lucide-react';
+import { useDictation } from './useDictation.ts';
+import { uploadAttachment, attachmentPreamble, describeAttachment, type Attachment } from '../../lib/arturoUpload';
 import './arturo.css';
-import { arturoText, newConversationId, contextFromLocation, getArturoFocus, subscribeArturoFocus } from '../../lib/arturo';
+import { arturoText, newConversationId, contextFromLocation, getArturoFocus, subscribeArturoFocus, sendStateLabel, type SendState } from '../../lib/arturo';
 import {
   listThreads, loadThread, contextCardLabel, isContextDismissed, dismissContext,
   restoreContext, contextForTurn, type ThreadSummary,
 } from '../../lib/arturoThreads';
 import { VoiceSession, type VoiceSessionState } from '../../lib/voiceSession';
 
-interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[]; at: number; live?: boolean }
+interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[]; at: number; live?: boolean; state?: SendState;
+  /** A first-person status note (voice not configured, mic denied…) — rendered as a small interleaved
+   *  row at the moment it happened, like a tool call, never as a message and never pinned to the bottom. */
+  note?: boolean }
 const LS_CONV = 'orchestra.arturo.pill.conversation';
 
 /** Which thread was I in — the ONLY thing still kept in the browser. */
@@ -55,6 +60,16 @@ export function ArturoPill() {
   // Re-render when the card is deleted or restored; the value itself lives in storage.
   const [ctxOn, setCtxOn] = useState(true);
   const ta = useRef<HTMLTextAreaElement>(null);
+  // Same composer buttons as the Arturo home (Shaw 2026-09-21: "the buttons we see when Arturo
+  // first loads are the same buttons we should see in every instance of Ask Arturo"): attach,
+  // dictate, and send-or-voice in the right slot. Only the home's model chip has no twin here —
+  // the page-context card sits in its place.
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const { mode: dictMode, dictating, note: dictNote, toggle: toggleDictation, stop: stopDictation, clearNote: clearDictNote } =
+    useDictation(draft, setDraft, () => ta.current?.focus());
   const scroller = useRef<HTMLDivElement>(null);
   // Chat/dev mode opens an agent as an overlay WITHOUT changing the URL, so the route says
   // "agents" and not which one. When the overlay publishes a focus, it wins over the route —
@@ -73,9 +88,10 @@ export function ArturoPill() {
   const [callState, setCallState] = useState<VoiceSessionState>('idle');
   const [liveUser, setLiveUser] = useState('');
   const [liveArturo, setLiveArturo] = useState('');
-  const [voiceNote, setVoiceNote] = useState<string | null>(null);
+  const callStateRef = useRef<VoiceSessionState>('idle');
   const voice = useRef<VoiceSession | null>(null);
   const appendRef = useRef<(t: PillTurn) => void>(() => {});
+  const noteRef = useRef<(reason: string) => void>(() => {});
   function voiceSession(): VoiceSession {
     if (!voice.current) {
       voice.current = new VoiceSession({
@@ -84,8 +100,14 @@ export function ArturoPill() {
           if (role === 'user') setLiveUser(''); else setLiveArturo('');
           appendRef.current({ role, text, at: Date.now(), live: true });
         },
-        onUnavailable: (reason) => setVoiceNote(reason),
-        onStateChange: (s) => setCallState(s),
+        onUnavailable: (reason) => noteRef.current(reason),
+        onStateChange: (s) => {
+          callStateRef.current = s;
+          setCallState(s);
+          // The call is over (ended, refused, or failed): its on-device captions end with it, so a later
+          // Dictate tap never fights a stale recognizer (that fight surfaced as "dictation error: aborted").
+          if (s === 'idle' || s === 'error') { voice.current?.stopDictation(); setLiveUser(''); setLiveArturo(''); }
+        },
         onCallEnded: (marker, id) => {
           setLiveUser(''); setLiveArturo('');
           appendRef.current({ role: 'arturo', text: `Call ended (${id}). ${marker}`, at: Date.now(), live: true });
@@ -96,11 +118,12 @@ export function ArturoPill() {
   }
   const inCall = callState === 'live' || callState === 'connecting';
   async function toggleCall() {
-    setVoiceNote(null);
     if (inCall) { voiceSession().stop(); voiceSession().stopDictation(); return; }
     const focused = ctx.entityKind && ctx.entityId ? `${ctx.entityKind}:${ctx.entityId}` : null;
     await voiceSession().start({ route: ctx.route, focusedEntity: focused });
-    voiceSession().startDictation();          // your own captions, on-device
+    // Captions only for a call that actually opened; a refused call already left its note in the thread.
+    const st = callStateRef.current;
+    if (st === 'connecting' || st === 'live') voiceSession().startDictation();
   }
   useEffect(() => () => { voice.current?.stop(); voice.current?.stopDictation(); }, []);
   const routeCtx = contextFromLocation(location.pathname, params as Record<string, string | undefined>, location.search);
@@ -109,8 +132,13 @@ export function ArturoPill() {
     : routeCtx;
 
   /** Pull this thread's turns from the server, so reopening the pill resumes it exactly. */
+  // A reload that resolves AFTER the user has already sent something must not overwrite the local
+  // turns (it wiped a fresh 'Sending…' bubble when you dictated right after opening the pill).
+  const resumeGen = useRef(0);
   const resume = useCallback(async (id: string) => {
+    const mine = ++resumeGen.current;
     const t = await loadThread(id);
+    if (mine !== resumeGen.current) return;          // superseded by a send or a newer reload
     setTurns((t?.turns || []).map((x) => ({ role: x.role === 'user' ? 'user' : 'arturo', text: x.content, at: (x.ts || 0) * 1000 })));
   }, []);
 
@@ -119,16 +147,32 @@ export function ArturoPill() {
   useEffect(() => { scroller.current?.scrollTo({ top: 1e9, behavior: 'smooth' }); }, [turns, open, busy]);
 
   const append = (t: PillTurn) => setTurns((prev) => [...prev, t]);
+  const lastUserIdx = (() => { for (let i = turns.length - 1; i >= 0; i--) if (turns[i].role === 'user') return i; return -1; })();
   appendRef.current = append;
+  // One note per distinct reason in a row: a refused call can report twice (socket + server).
+  noteRef.current = (reason: string) => setTurns((prev) => {
+    const last = prev[prev.length - 1];
+    if (last && last.note && last.text === reason) return prev;
+    return [...prev, { role: 'arturo', text: reason, at: Date.now(), note: true }];
+  });
 
   async function send() {
     const text = draft.trim();
     if (!text || busy) return;
+    if (dictating) stopDictation();      // the sent text is final; don't re-append into the empty box
+    clearDictNote();
     setDraft(''); setBusy(true);
-    append({ role: 'user', text, at: Date.now() });
+    resumeGen.current++;                 // any in-flight thread reload is now stale
+    const at = Date.now();
+    append({ role: 'user', text, at, state: 'sending' });
+    const setState = (state: SendState) => setTurns((prev) => prev.map((t) => t.at === at && t.role === 'user' ? { ...t, state } : t));
+    // The path rides in front of the message (same grammar as the home composer).
+    const pre = attachmentPreamble(attachments);
+    setAttachments([]);
     // The card is the switch: present → this turn carries the page context; deleted → it does not.
-    const r = await arturoText(text, convId, contextForTurn(convId, ctx));
+    const r = await arturoText(pre ? `${pre}\n\n${text}` : text, convId, contextForTurn(convId, ctx), { onSent: () => setState('sent') });
     setBusy(false);
+    setState(r.ok ? 'acked' : 'failed');
     append(r.ok
       ? { role: 'arturo', text: r.reply_text || '(no reply)', tools: r.tools_called, at: Date.now() }
       : { role: 'arturo', text: `Could not reach Arturo: ${r.error || 'unknown'}`, at: Date.now() });
@@ -237,19 +281,48 @@ export function ArturoPill() {
           {turns.length === 0 && !busy && (
             <p className="empty">Ask about what you are looking at, or anything else. Every conversation is kept — open <b>Threads</b> to go back to one.</p>
           )}
-          {turns.map((t, i) => (
+          {turns.map((t, i) => t.note ? (
+            <div key={i} className="row note"><div className="meta">I can't do that yet — {t.text}.</div></div>
+          ) : (
             <div key={i} className={t.role === 'user' ? 'row user' : 'row arturo'}>
               <div className="bubble">{t.text}</div>
               {t.tools && t.tools.length > 0 && <div className="meta">ran {t.tools.join(', ')}</div>}
+              {t.role === 'user' && (t.state === 'failed' || (t.state && i === lastUserIdx)) && <div className={`turn-state ${t.state}`}>{sendStateLabel(t.state)}</div>}
             </div>
           ))}
           {busy && <div className="row arturo"><div className="bubble thinking">Thinking…</div></div>}
           {liveUser && <div className="row user"><div className="bubble live">{liveUser}…</div></div>}
           {liveArturo && <div className="row arturo"><div className="bubble live">{liveArturo}…</div></div>}
           {callState === 'connecting' && <div className="row arturo"><div className="bubble thinking">Connecting the call…</div></div>}
-          {voiceNote && <div className="row arturo"><div className="bubble">I can't do that yet — {voiceNote}.</div></div>}
         </div>
 
+        <input ref={fileInput} type="file" multiple hidden aria-hidden="true"
+               onChange={async (e) => {
+                 const picked = Array.from(e.target.files || []);
+                 e.target.value = '';
+                 if (picked.length === 0) return;
+                 setUploading(true); setUploadError(null);
+                 for (const f of picked) {
+                   const r = await uploadAttachment(f);
+                   if (r.ok) setAttachments((prev) => [...prev, { name: r.name, path: r.path, size: r.size }]);
+                   else setUploadError(r.error);     // refusals are shown, never swallowed
+                 }
+                 setUploading(false);
+               }} />
+        {(attachments.length > 0 || uploading || uploadError || dictNote) && (
+          <div className="arturo-attachments">
+            {attachments.map((a, i) => (
+              <span key={i} className="attach-chip">
+                <Paperclip size={12} /> {describeAttachment(a)}
+                <button aria-label={`Remove ${a.name}`}
+                        onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}>×</button>
+              </span>
+            ))}
+            {uploading && <span className="attach-note">Uploading…</span>}
+            {uploadError && <span className="attach-error">{uploadError}</span>}
+            {dictNote && <span className="attach-error">{dictNote}</span>}
+          </div>
+        )}
         <textarea ref={ta} rows={1} value={draft} placeholder="Ask Arturo" onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} />
         <div className="ctrl-row">
@@ -258,10 +331,12 @@ export function ArturoPill() {
               something that happened earlier in the thread. Default on, × deletes it, and
               the stub it leaves behind puts it back. */}
           <div className="cluster">
+            <button className="circle-btn" aria-label="Attach a file" title="Attach a file"
+                    onClick={() => fileInput.current?.click()} disabled={uploading}><Plus size={18} /></button>
             {ctxOn ? (
-              <span className="arturo-context-chip">
+              <span className="arturo-context-chip" title={`Looking at ${contextCardLabel(ctx)}`} aria-label={`Looking at ${contextCardLabel(ctx)}`}>
                 <Focus size={12} />
-                <span className="cc-label">Looking at <b>{contextCardLabel(ctx)}</b></span>
+                <span className="cc-label"><b>{contextCardLabel(ctx)}</b></span>
                 <button className="cc-x" onClick={toggleContextCard}
                         aria-label="Stop focusing on this page"><X size={12} /></button>
               </span>
@@ -273,11 +348,19 @@ export function ArturoPill() {
             )}
           </div>
           <div className="cluster">
-            <button className={inCall ? 'circle-btn white' : 'circle-btn'} aria-label={inCall ? 'End call' : 'Start voice call'}
-                    aria-pressed={inCall} title={inCall ? 'End call' : 'Talk to Arturo (live)'} onClick={() => void toggleCall()}>
-              {inCall ? <PhoneOff size={18} /> : <PhoneCall size={18} />}
-            </button>
-            <button className="circle-btn white" aria-label="Send" onClick={() => void send()} disabled={busy || !draft.trim()}><ArrowUp size={18} /></button>
+            <button className={dictMode === 'idle' ? 'circle-btn' : `circle-btn ${dictMode}`}
+                    aria-label={dictMode === 'listening' ? 'Stop dictation' : dictMode === 'recording' ? 'Stop recording' : dictMode === 'transcribing' ? 'Transcribing' : 'Dictate'}
+                    aria-pressed={dictating} title={inCall ? 'Captions run on their own during a call' : dictMode === 'transcribing' ? 'Transcribing on the server…' : 'Dictate'}
+                    onClick={toggleDictation} disabled={inCall || dictMode === 'transcribing'}><Mic size={16} /></button>
+            {inCall ? (
+              <button className="circle-btn white" aria-label="End call" aria-pressed title="End call"
+                      onClick={() => void toggleCall()}><PhoneOff size={18} /></button>
+            ) : draft.trim() ? (
+              <button className="circle-btn white" aria-label="Send" onClick={() => void send()} disabled={busy}><ArrowUp size={18} /></button>
+            ) : (
+              <button className="circle-btn white" aria-label="Voice mode" title="Talk to Arturo (live)"
+                      onClick={() => void toggleCall()}><AudioLines size={16} /></button>
+            )}
           </div>
         </div>
       </div>

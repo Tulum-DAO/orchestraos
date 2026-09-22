@@ -29,7 +29,12 @@
 .arturo-hero{ flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px; transform:translateY(-6vh); }
 .arturo-mark{ width:46px; height:46px; color:var(--accent); }
 .arturo-hero .greet{ font-size:32px; font-weight:300; color:#ece7e2; letter-spacing:.2px; }
-.turn-user{ display:flex; justify-content:flex-end; }
+.turn-user{ display:flex; flex-direction:column; align-items:flex-end; gap:3px; }
+/* message state under the latest sent turn: Sending… → Sent → Acknowledged (or Not delivered) */
+.turn-state{ font-size:11px; color:rgba(255,255,255,0.35); padding-right:4px; }
+.turn-state.acked{ color:rgba(255,255,255,0.5); }
+.turn-state.failed{ color:#ff8a8a; }
+.arturo-pill-thread .row.user .turn-state{ align-self:flex-end; }
 .bubble-user{ background:#262626; color:#fff; border-radius:20px; padding:11px 16px; font-size:16px; max-width:78%; line-height:1.4; white-space:pre-wrap; }
 .turn-assistant{ display:flex; flex-direction:column; gap:8px; align-items:flex-start; }
 .turn-assistant .mark-sm{ width:18px; height:18px; color:var(--accent); }
@@ -54,10 +59,22 @@
 .arturo-composer textarea::placeholder{ color:var(--grey); }
 .ctrl-row{ display:flex; align-items:center; justify-content:space-between; }
 .ctrl-row .cluster{ display:flex; align-items:center; gap:10px; }
-.circle-btn{ width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.08); color:#fff; border:0; flex:0 0 auto; font-size:18px; }
+.circle-btn{ width:34px; height:34px; aspect-ratio:1 / 1; border-radius:50%; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.08); color:#fff; border:0; flex:0 0 auto; font-size:18px; }
 .circle-btn.white{ background:#fff; color:#111; }
 .circle-btn.grey-send{ background:rgba(255,255,255,0.16); }
 .circle-btn:disabled{ opacity:.4; }
+.circle-btn.listening{ background:var(--accent); color:#fff; animation:arturo-listen 1.2s ease-in-out infinite; }
+.circle-btn.recording{ background:#d94f4f; color:#fff; animation:arturo-record 1s ease-in-out infinite; }
+@keyframes arturo-record{ 0%,100%{ box-shadow:0 0 0 0 rgba(217,79,79,0.6) } 50%{ box-shadow:0 0 0 7px rgba(217,79,79,0) } }
+.circle-btn.transcribing{ background:rgba(255,255,255,0.16); color:#fff; opacity:1; animation:arturo-pulse 1s ease-in-out infinite; }
+@keyframes arturo-listen{ 0%,100%{ box-shadow:0 0 0 0 rgba(217,119,87,0.55) } 50%{ box-shadow:0 0 0 6px rgba(217,119,87,0) } }
+/* index.css gives every button `min-height:44px` under 768px (touch targets). min-height beats
+   height, so a 34px circle became a 34x44 oval on phones. Meet the target instead of weakening it:
+   the composer circles and the header glyph pair are 44x44 on phone widths — always circles. */
+@media (max-width: 768px) {
+  .circle-btn { width:44px; height:44px; }
+  .arturo-glyph { width:44px; height:44px; }
+}
 .model-chip{ display:flex; align-items:center; gap:5px; background:rgba(255,255,255,0.08); border-radius:999px; padding:8px 14px; font-size:14px; border:0; color:#fff; }
 .model-chip b{ font-weight:600; }
 .model-chip .eff{ color:var(--grey); font-weight:400; }
@@ -135,6 +152,10 @@
 .arturo-pill-thread .row.arturo .bubble{ background:rgba(217,119,87,0.12); color:#f1efec; }
 .arturo-pill-thread .bubble.thinking{ color:rgba(255,255,255,0.45); }
 .arturo-pill-thread .meta{ font-size:11px; color:rgba(255,255,255,0.35); }
+/* status notes (voice not configured, mic denied…) sit IN the thread where they happened, styled like
+   a tool-call line — never a message bubble, never pinned under the latest turn. */
+.arturo-pill-thread .row.note{ align-items:flex-start; padding:2px 6px; }
+.arturo-pill-thread .row.note .meta{ color:rgba(255,255,255,0.45); font-style:italic; }
 .arturo-pill-count{ margin-left:2px; font-size:11px; color:rgba(255,255,255,0.55); background:rgba(255,255,255,0.10); border-radius:999px; padding:1px 7px; }
 .arturo-pill-panel textarea{ flex:0 0 auto; display:block; width:100%; resize:none; background:none; border:0; outline:0; color:#fff; font-size:16px; padding:6px 4px 10px; min-height:30px; max-height:120px; font-family:inherit; }
 .arturo-pill-panel textarea::placeholder{ color:rgba(255,255,255,0.45); }
@@ -156,17 +177,22 @@
 .arturo-thread-list .thread-row.current{ background:rgba(217,119,87,0.14); color:#fff; }
 .arturo-thread-list .t-title{ flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .arturo-thread-list .t-meta{ flex:0 0 auto; font-size:11px; color:rgba(255,255,255,0.40); }
+/* Shaw 2026-09-22: the page-context chip is ALWAYS the same height as the circle buttons beside it
+   (34px, 44px on phone widths — the "on" state is a <span>, so the global 44px button rule never
+   reached it and it sat shorter than the circles), and it no longer spells out "Looking at": the
+   focus glyph says that, the label is just the page. */
 .arturo-context-chip{
-  display:inline-flex; align-items:center; gap:6px; max-width:min(62vw,230px);
-  background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.09); border-radius:999px;
-  padding:5px 6px 5px 10px; font-size:12px; color:rgba(255,255,255,0.72); font-family:inherit;
+  display:inline-flex; align-items:center; gap:6px; max-width:min(62vw,230px); box-sizing:border-box;
+  height:34px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.09); border-radius:999px;
+  padding:0 6px 0 10px; font-size:12px; color:rgba(255,255,255,0.72); font-family:inherit;
 }
+@media (max-width: 768px) { .arturo-context-chip{ height:44px; } }
 .arturo-context-chip > svg{ color:#d97757; flex:0 0 auto; align-self:center; }   /* the focus glyph only — not the × */
 .arturo-context-chip .cc-label{ flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .arturo-context-chip .cc-label b{ color:#fff; font-weight:600; }
 .arturo-context-chip .cc-x{ flex:0 0 auto; background:none; border:0; cursor:pointer; color:rgba(255,255,255,0.45); display:inline-flex; align-items:center; justify-content:center; line-height:0; padding:3px; border-radius:999px; align-self:center; }
 .arturo-context-chip .cc-x:hover{ color:#fff; background:rgba(255,255,255,0.10); }
-.arturo-context-chip.off{ cursor:pointer; border-style:dashed; color:rgba(255,255,255,0.45); padding:5px 12px; }
+.arturo-context-chip.off{ cursor:pointer; border-style:dashed; color:rgba(255,255,255,0.45); padding:0 12px; }
 .arturo-context-chip.off:hover{ color:rgba(255,255,255,0.75); }
 
 /* The onboarding terminal — a first-time installer has no CLI yet, and this is where they
