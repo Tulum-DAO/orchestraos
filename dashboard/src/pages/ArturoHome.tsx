@@ -17,7 +17,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { Mic, Plus, ArrowUp, AudioLines, Paperclip } from 'lucide-react';
+import { Mic, Plus, ArrowUp, AudioLines, Paperclip, X } from 'lucide-react';
 import '../components/arturo/arturo.css';
 import { BrainModal } from '../components/agent/BrainModal';
 import { ModelSelectorSheet } from '../components/agent/ModelSelectorSheet';
@@ -100,6 +100,14 @@ export default function ArturoHome() {
   const convId = useRef<string>(ls(LS_CONV) || '');
   useEffect(() => { if (!convId.current) { convId.current = newConversationId('web'); lsSet(LS_CONV, convId.current); } }, []);
   useEffect(() => { if (drawer) void listThreads().then(setThreads); }, [drawer]);
+  // On a phone the drawer covers the composer, and the only way out was a ~110 px sliver of dark
+  // page that does not read as a control. Escape closes it; there is also a close button inside.
+  useEffect(() => {
+    if (!drawer) return;
+    const onEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') setDrawer(false); };
+    window.addEventListener('keydown', onEsc);
+    return () => window.removeEventListener('keydown', onEsc);
+  }, [drawer]);
 
   /** Resume a previous conversation: its turns come from the server, so "pick up right where
    *  we left off" holds across a reload, another surface, and a service restart. */
@@ -307,8 +315,9 @@ export default function ArturoHome() {
 
   return (
     <div className="arturo-shell">
-      <header className="arturo-header">
-        <button className="arturo-glyph" aria-label="Open settings" onClick={() => setDrawer(true)}>
+      <header className="arturo-header" inert={drawer || undefined}>
+        <button className="arturo-glyph" aria-label={drawer ? 'Close menu' : 'Open settings'} aria-expanded={drawer}
+                onClick={() => setDrawer((d) => !d)}>
           <Settings size={22} strokeWidth={2.2} absoluteStrokeWidth />
         </button>
         <button className="arturo-title" onClick={() => setModelOpen(true)} aria-label="Select model">
@@ -321,7 +330,9 @@ export default function ArturoHome() {
 
       <div className="arturo-glow" />
 
-      <div className="arturo-feed" ref={feedRef}>
+      {/* While the modal drawer is open the page behind it must not be focusable or typable —
+          on a phone the composer sits under the overlay (gm/jev-helper first-run report). */}
+      <div className="arturo-feed" ref={feedRef} inert={drawer || undefined}>
         {empty ? (
           <div className="arturo-hero">
             <ArturoMark />
@@ -367,7 +378,7 @@ export default function ArturoHome() {
         </div>
       )}
 
-      <div className="arturo-composer">
+      <div className="arturo-composer" inert={drawer || undefined}>
         <input ref={fileInput} type="file" multiple hidden aria-hidden="true"
                onChange={async (e) => {
                  const picked = Array.from(e.target.files || []);
@@ -420,8 +431,13 @@ export default function ArturoHome() {
       {drawer && (
         <>
           <div className="arturo-drawer-back" onClick={() => setDrawer(false)} />
-          <nav className="arturo-drawer">
-            <div className="brand">OrchestraOS</div>
+          <nav className="arturo-drawer" aria-label="Menu">
+            <div className="drawer-top">
+              <div className="brand">OrchestraOS</div>
+              <button className="drawer-close" aria-label="Close menu" onClick={() => setDrawer(false)}>
+                <X size={18} />
+              </button>
+            </div>
             {DRAWER.map(([label, to]) => <NavLink key={to} to={to} onClick={() => setDrawer(false)}>{label}</NavLink>)}
             <div className="sect sect-head">
               <span>Conversations</span>
