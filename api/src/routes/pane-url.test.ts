@@ -79,3 +79,35 @@ test('a URL already on one line is returned unchanged', () => {
 test('trailing punctuation from prose is not swallowed', () => {
   assert.equal(extractSignInUrl('open https://example.com/x.'), 'https://example.com/x');
 });
+
+// The Claude CLI's own /login output, as the operator saw it on the Agents page's New agent
+// login shell (2026-09-22 screenshot): a docs link a few lines above, then the OAuth URL
+// hard-wrapped across seven lines, then prose. The link must be the OAuth one, intact.
+test('rejoins the Claude CLI /login OAuth URL and ignores the docs link above it', () => {
+  const pane = [
+    '  blocks the rest.',
+    '  https://code.claude.com/docs/en/permission-modes',
+    '  /login',
+    '',
+    '  Login',
+    "  Browser didn't open? Use the url below to sign in (c to copy)",
+    '',
+    'https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e',
+    '61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=https%3A%2',
+    'F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=org%3Acreate_',
+    'api_key+user%3Aprofile+user%3Ainference+user%3Asessions%3Aclaude_code',
+    '+user%3Amcp_servers+user%3Afile_upload+user%3Aplugins&code_challenge=',
+    'KyVBG1UlV2pxHn0VkFJevg6-Ct_UWtomaB2rkWiVWV0&code_challenge_method=S25',
+    '6&state=pDESEd3OXAun3Yg-6em5rhFqPOaPmTMl20Dn1NkBvm4',
+    '',
+    '  Paste code here if prompted >',
+  ].join('\n');
+  const url = extractSignInUrl(pane);
+  assert.equal(url,
+    'https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e'
+    + '&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback'
+    + '&scope=org%3Acreate_api_key+user%3Aprofile+user%3Ainference+user%3Asessions%3Aclaude_code'
+    + '+user%3Amcp_servers+user%3Afile_upload+user%3Aplugins'
+    + '&code_challenge=KyVBG1UlV2pxHn0VkFJevg6-Ct_UWtomaB2rkWiVWV0&code_challenge_method=S256'
+    + '&state=pDESEd3OXAun3Yg-6em5rhFqPOaPmTMl20Dn1NkBvm4');
+});
