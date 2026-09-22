@@ -70,3 +70,12 @@ assert.equal(stepAfterRuntime('Shaw', true), 'voice');    // known name -> never
 assert.equal(stepAfterRuntime('Shaw', false), 'first');
 assert.equal(onboardingTurn('name', 'hi my name is Shaw nice to meet you'), '[Onboarding: step=name]\nhi my name is Shaw nice to meet you');
 console.log('arturo.test.mjs: onboarding helpers ok');
+
+// --- message states: one vocabulary for every Arturo chatmode ---------------------------
+import { sendStateLabel } from './arturo.ts';
+assert.equal(sendStateLabel('sending'), 'Sending…');
+assert.equal(sendStateLabel('sent'), 'Sent');
+assert.equal(sendStateLabel('acked'), 'Acknowledged');
+assert.equal(sendStateLabel('failed'), 'Not delivered');
+assert.equal(sendStateLabel(undefined), '');
+console.log('arturo.test.mjs: send states ok');

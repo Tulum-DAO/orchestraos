@@ -24,19 +24,47 @@ export function contextLine(ctx?: ArturoContext | null): string {
   return `[Context: ${bits.join(' ')}]`;
 }
 
-export async function arturoText(text: string, conversationId: string, ctx?: ArturoContext | null): Promise<ArturoReply> {
-  const line = contextLine(ctx);
-  const body = { text: line ? `${line}\n${text}` : text, conversation_id: conversationId };
-  try {
-    const res = await fetch('/api/arturo/text', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) return { ok: false, status: res.status, error: json.error || `HTTP ${res.status}`, detail: json.detail };
-    return json as ArturoReply;
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : 'network' };
+/** Message states every Arturo chatmode shows under a sent turn (Shaw 2026-09-22, the Muse
+ *  shape): sending = leaving the browser · sent = the server has the whole request · acked =
+ *  Arturo answered it · failed = it did not get through (retry-able). */
+export type SendState = 'sending' | 'sent' | 'acked' | 'failed';
+export function sendStateLabel(state?: SendState | null): string {
+  switch (state) {
+    case 'sending': return 'Sending…';
+    case 'sent': return 'Sent';
+    case 'acked': return 'Acknowledged';
+    case 'failed': return 'Not delivered';
+    default: return '';
   }
+}
+
+export interface ArturoTextOptions {
+  /** Fires the moment the request body has fully left the browser (XHR upload complete):
+   *  the honest "Sent" edge, before the reply (which can take a minute) comes back. */
+  onSent?: () => void;
+}
+
+export async function arturoText(text: string, conversationId: string, ctx?: ArturoContext | null, opts: ArturoTextOptions = {}): Promise<ArturoReply> {
+  const line = contextLine(ctx);
+  const body = JSON.stringify({ text: line ? `${line}\n${text}` : text, conversation_id: conversationId });
+  // XMLHttpRequest, not fetch: fetch has no "request body delivered" event, and the Sent state
+  // must be real (the server has it), not a timer.
+  return new Promise<ArturoReply>((resolve) => {
+    let xhr: XMLHttpRequest;
+    try { xhr = new XMLHttpRequest(); } catch { resolve({ ok: false, error: 'network' }); return; }
+    xhr.open('POST', '/api/arturo/text');
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.upload.onload = () => { opts.onSent?.(); };
+    xhr.onload = () => {
+      let json: Partial<ArturoReply> & { error?: string; detail?: unknown } = {};
+      try { json = JSON.parse(xhr.responseText || '{}'); } catch { /* bad json */ }
+      if (xhr.status < 200 || xhr.status >= 300) resolve({ ok: false, status: xhr.status, error: json.error || `HTTP ${xhr.status}`, detail: json.detail });
+      else resolve(json as ArturoReply);
+    };
+    xhr.onerror = () => resolve({ ok: false, error: 'network' });
+    xhr.ontimeout = () => resolve({ ok: false, error: 'timeout' });
+    xhr.send(body);
+  });
 }
 
 export async function arturoHealth(): Promise<ArturoHealth> {

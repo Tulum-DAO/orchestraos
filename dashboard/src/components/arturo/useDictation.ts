@@ -28,13 +28,17 @@ export function useDictation(draft: string, setDraft: (v: string) => void, onSta
   const base = useRef('');                 // what was typed before the mic was tapped
   const committed = useRef<string[]>([]);
   const gotResult = useRef(false);
+  const active = useRef(false);            // false after stop(): late recognizer results are dropped
   const draftRef = useRef(draft);
   useEffect(() => { draftRef.current = draft; }, [draft]);   // read in the tap handler, never during render
 
+  const stopWanted = useRef(false);
   function stop() {
+    active.current = false;               // FIRST: Chrome fires the pending final result after stop()
     handle.current?.stop();
     handle.current = null;
-    if (recorder.current) { recorder.current.stop(); recorder.current = null; return; }   // onClip -> transcribing
+    if (recorder.current && mode === 'recording' && stopWanted.current) { recorder.current.stop(); recorder.current = null; return; }   // onClip -> transcribing
+    if (recorder.current) { recorder.current.stop(); recorder.current = null; }
     setMode('idle');
   }
 
@@ -44,6 +48,7 @@ export function useDictation(draft: string, setDraft: (v: string) => void, onSta
     const rec = await startRecording({
       onClip: async (blob) => {
         recorder.current = null;
+        if (!active.current) { setMode('idle'); return; }   // cancelled by a send
         setMode('transcribing');
         const r = await transcribeBlob(blob);
         if (r.ok && r.text) {
@@ -65,14 +70,16 @@ export function useDictation(draft: string, setDraft: (v: string) => void, onSta
   function toggle() {
     setNote(null);
     if (mode === 'transcribing') return;
-    if (mode !== 'idle') { stop(); return; }
+    if (mode !== 'idle') { stopWanted.current = true; active.current = mode === 'recording'; stop(); stopWanted.current = false; return; }
     base.current = draftRef.current;
     committed.current = [];
     gotResult.current = false;
     if (!speechRecognitionCtor()) { void startTier2(); return; }
+    active.current = true;
     const h = startDictation({
-      onPartial: (text) => { gotResult.current = true; setDraft(mergeDictation(base.current, committed.current, text)); },
+      onPartial: (text) => { if (!active.current) return; gotResult.current = true; setDraft(mergeDictation(base.current, committed.current, text)); },
       onFinal: (text) => {
+        if (!active.current) return;        // sent already: the box stays cleared
         gotResult.current = true;
         committed.current = [...committed.current, text];
         setDraft(mergeDictation(base.current, committed.current, ''));
@@ -90,7 +97,7 @@ export function useDictation(draft: string, setDraft: (v: string) => void, onSta
           : `dictation error: ${code}`);
       },
     });
-    if (!h) { setNote(DICTATION_UNAVAILABLE); return; }
+    if (!h) { active.current = false; setNote(DICTATION_UNAVAILABLE); return; }
     handle.current = h;
     setMode('listening');
     onStarted?.();
