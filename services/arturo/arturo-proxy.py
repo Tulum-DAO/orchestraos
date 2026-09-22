@@ -4095,6 +4095,11 @@ def transcribe_endpoint():
         st = e.state
         return jsonify({"ok": False, "error": "stt_unavailable", "reason": st.get("state"),
                         "detail": e.reason, "install": st.get("install")}), 503
+    except _local_stt.WavRequired as e:
+        # The default engine takes 16-bit PCM WAV (the browser encodes it); a raw container clip
+        # only works on the opt-in faster-whisper engine.
+        return jsonify({"ok": False, "error": "wav_required", "detail": str(e),
+                        "install": _local_stt.INSTALL_CMD_BETTER}), 415
     except TimeoutError as e:
         return jsonify({"ok": False, "error": "timeout", "detail": str(e)}), 504
     except Exception as e:  # noqa: BLE001
@@ -4102,7 +4107,7 @@ def transcribe_endpoint():
         return jsonify({"ok": False, "error": "stt_failed"}), 502
     if not r["text"]:
         return jsonify({"ok": False, "error": "no_speech", "ms": r["ms"]}), 422
-    return jsonify({"ok": True, "text": r["text"], "backend": r["backend"], "model": r["model"], "ms": r["ms"]}), 200
+    return jsonify({"ok": True, "text": r["text"], "backend": r["backend"], "engine": r.get("engine"), "model": r["model"], "ms": r["ms"]}), 200
 
 
 # --- v2/(b) stream relay routes (registered ONLY when ARTURO_STREAM_RELAY=1 — flag-off the
