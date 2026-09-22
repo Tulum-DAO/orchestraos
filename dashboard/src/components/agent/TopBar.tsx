@@ -1,13 +1,16 @@
 import { Menu, Sun, Moon, Monitor, Brain, Siren } from 'lucide-react';
 import { useTheme } from '../../theme/ThemeProvider';
+import { GenChip } from '../GenChip';
 
 interface TopBarProps {
   onMenuOpen: () => void;
   onBrainOpen: () => void;
   onReportOpen?: () => void;
+  /** The seat this page belongs to; shown in the middle so the page says whose it is (and hosts the gen chip). */
+  seat?: { id: string; generation?: unknown };
 }
 
-export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen }: TopBarProps) {
+export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen, seat }: TopBarProps) {
   const { theme, setTheme } = useTheme();
 
   const cycleTheme = () => {
@@ -26,6 +29,13 @@ export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen }: TopBarProps) {
       >
         <Menu size={24} />
       </button>
+
+      {seat && (
+        <div className="flex items-center gap-2 min-w-0 px-2" data-seat-header={seat.id}>
+          <span className="font-semibold text-foreground truncate">{seat.id}</span>
+          <GenChip generation={seat.generation} />
+        </div>
+      )}
 
       <button
         onClick={cycleTheme}
