@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import { clsx } from 'clsx';
-import { LayoutGrid, List, GitBranch } from 'lucide-react';
+import { LayoutGrid, List, GitBranch, Plus } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAgents } from '../hooks/useAgents';
 import { useUser, canSeeAgent } from '../hooks/useUser';
@@ -11,6 +11,7 @@ import { AgentCard } from '../components/AgentCard';
 import { TopologyDiagram } from '../components/TopologyDiagram';
 import { getRecentAgents, loadAndMergeRecentAgents, type RecentAgent } from '../lib/user-actions';
 import { GenChip } from '../components/GenChip';
+import NewAgentModal from '../components/NewAgentModal';
 
 const TIERS = ['For You', 'Recent', 'All', 'T0', 'T1', 'T2', 'T3'] as const;
 const STATUS_FILTERS = ['All', 'Active', 'Dead'] as const;
@@ -22,6 +23,7 @@ export default function Agents() {
   const { data, isLoading } = useAgents();
   const { data: user } = useUser();
   const queryClient = useQueryClient();
+  const [showNewAgent, setShowNewAgent] = useState(false);
   const [tierFilter, setTierFilter] = useState<string>('For You');
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('cards');
@@ -173,7 +175,20 @@ export default function Agents() {
             <h1 className="text-2xl font-bold text-neutral-100">Agents</h1>
             <p className="text-sm text-neutral-500 mt-0.5">{sorted.length} of {agents.length} agents</p>
           </div>
+          <button
+            onClick={() => setShowNewAgent(true)}
+            className="flex items-center gap-2 px-4 py-2 min-h-[44px] text-sm rounded-lg bg-blue-900/50 border border-blue-700/50 text-blue-200 hover:bg-blue-800/60 transition-colors"
+          >
+            <Plus size={16} />
+            New agent
+          </button>
         </div>
+        <NewAgentModal
+          open={showNewAgent}
+          onClose={() => setShowNewAgent(false)}
+          taken={new Set(agents.map((a: { id: string }) => String(a.id)))}
+          onCreated={() => { queryClient.invalidateQueries({ queryKey: ['agents'] }); }}
+        />
         {/* Options bar — horizontally scrollable on mobile */}
         <div className="flex items-center gap-3 overflow-x-auto pb-2 -mx-6 px-6 scrollbar-hide" style={{ WebkitOverflowScrolling: 'touch' }}>
           {/* Status filter */}
@@ -317,7 +332,21 @@ export default function Agents() {
             );
           })}
           {sorted.length === 0 && (
-            <p className="col-span-3 text-neutral-600 text-center py-8">No agents found</p>
+            agents.length === 0 ? (
+              <div className="col-span-3 text-center py-12">
+                <p className="text-neutral-300 font-medium">No agents yet</p>
+                <p className="text-sm text-neutral-500 mt-1 mb-4">Create one here, or run <code className="text-neutral-400">orchestra agent create &lt;name&gt;</code> in a terminal.</p>
+                <button
+                  onClick={() => setShowNewAgent(true)}
+                  className="inline-flex items-center gap-2 px-4 py-2 min-h-[44px] text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors"
+                >
+                  <Plus size={16} />
+                  New agent
+                </button>
+              </div>
+            ) : (
+              <p className="col-span-3 text-neutral-600 text-center py-8">No agents match this filter</p>
+            )
           )}
         </div>
       )}
