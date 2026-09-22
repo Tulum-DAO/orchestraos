@@ -338,6 +338,27 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
                             "Run `orchestra init` (pip install -r requirements.txt) or set [arturo] enabled=false",
                             required=False))
 
+    # -- orchestra:version (issue #104): installed vs the newest tag on origin. Behind is a
+    # NUDGE (WARN, not required); a remote that cannot be asked is INFO, never a failure.
+    from . import version as V
+
+    def _git_via_probe(argv, cwd=None):
+        return 0, probes.run_cmd(["git", "-C", str(cwd), *argv])
+    try:
+        vs = V.status(root, git=_git_via_probe)
+    except Exception:  # noqa: BLE001
+        vs = {"installed": None, "latest": None, "behind": None}
+    if vs["behind"]:
+        checks.append(Check("orchestra:version", WARN,
+                            f"installed {vs['installed']}, latest {vs['latest']} on origin",
+                            "run `orchestra upgrade` (then `orchestra down && orchestra up`)", required=False))
+    elif vs["installed"] and vs["latest"]:
+        checks.append(Check("orchestra:version", OK, f"{vs['installed']} (latest {vs['latest']})", required=False))
+    else:
+        checks.append(Check("orchestra:version", INFO,
+                            f"installed {vs['installed'] or 'unknown'}; latest unknown (origin not reachable or no tags)",
+                            None, required=False))
+
     # -- node deps + builds
     for label, sub in (("root", ""), ("api", "api"), ("dashboard", "dashboard")):
         d = root / sub if sub else root
