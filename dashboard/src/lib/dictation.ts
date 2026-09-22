@@ -181,6 +181,93 @@ export async function startRecording(cb: { onClip: (blob: Blob) => void; onError
   };
 }
 
+// ─── WAV in the browser (P1-a) ─────────────────────────────────────────────────────────────
+// The default server engine takes 16 kHz mono 16-bit PCM WAV, so the browser decodes its own
+// MediaRecorder clip (webm/opus in Chrome/Firefox, mp4/aac in Safari) and resamples it here.
+// No ffmpeg anywhere. 60 s -> 1.9 MB. Pure parts are unit-tested.
+
+export const WAV_RATE = 16000;
+
+/** Float32 samples (-1..1) -> RIFF/WAVE 16-bit PCM mono at `rate`. */
+export function encodeWav(samples: Float32Array, rate: number = WAV_RATE): Blob {
+  const buf = new ArrayBuffer(44 + samples.length * 2);
+  const v = new DataView(buf);
+  const str = (o: number, t: string) => { for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+  str(0, 'RIFF'); v.setUint32(4, 36 + samples.length * 2, true); str(8, 'WAVE');
+  str(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, 'data'); v.setUint32(40, samples.length * 2, true);
+  for (let i = 0; i < samples.length; i++) {
+    const x = Math.max(-1, Math.min(1, samples[i]));
+    v.setInt16(44 + i * 2, x < 0 ? x * 0x8000 : x * 0x7fff, true);
+  }
+  return new Blob([buf], { type: 'audio/wav' });
+}
+
+/** Mix channels to mono. */
+export function toMono(channels: Float32Array[]): Float32Array {
+  if (channels.length === 1) return channels[0];
+  const n = channels[0].length; const out = new Float32Array(n);
+  for (const ch of channels) for (let i = 0; i < n; i++) out[i] += ch[i] / channels.length;
+  return out;
+}
+
+/** Pure-TS resampler (windowed-sinc, 8 taps each side) for browsers whose OfflineAudioContext
+ *  refuses a 16 kHz render (old Safari). Good enough for speech; not used on the fast path. */
+export function resampleSinc(input: Float32Array, from: number, to: number, taps = 16): Float32Array {
+  if (from === to) return input;
+  const ratio = from / to; const n = Math.round(input.length / ratio); const out = new Float32Array(n);
+  const cutoff = Math.min(1, to / from);            // anti-alias at the new Nyquist when downsampling
+  for (let i = 0; i < n; i++) {
+    const center = i * ratio; const lo = Math.max(0, Math.floor(center) - taps), hi = Math.min(input.length - 1, Math.floor(center) + taps);
+    let acc = 0, wsum = 0;
+    for (let j = lo; j <= hi; j++) {
+      const t = j - center; const x = cutoff * t;
+      const sinc = x === 0 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x);
+      const w = 0.5 + 0.5 * Math.cos(Math.PI * t / (taps + 1));            // Hann window
+      acc += input[j] * sinc * w; wsum += sinc * w;
+    }
+    out[i] = wsum !== 0 ? acc / wsum : 0;
+  }
+  return out;
+}
+
+/** Decode a recorded clip to 16 kHz mono WAV. Fast path: OfflineAudioContext renders at 16 kHz
+ *  directly (no user gesture needed; it runs after the recording stopped). Fallback: decode at the
+ *  native rate with a plain AudioContext and resample in TS. Returns null when the browser cannot
+ *  decode the container at all — the caller then uploads the original blob (the opt-in
+ *  faster-whisper engine can still decode it; the default engine answers wav_required). */
+export async function blobToWav16k(blob: Blob): Promise<Blob | null> {
+  const bytes = await blob.arrayBuffer();
+  const Offline: typeof OfflineAudioContext | undefined = (window as unknown as { OfflineAudioContext?: typeof OfflineAudioContext; webkitOfflineAudioContext?: typeof OfflineAudioContext }).OfflineAudioContext
+    || (window as unknown as { webkitOfflineAudioContext?: typeof OfflineAudioContext }).webkitOfflineAudioContext;
+  const Ctx: typeof AudioContext | undefined = (window as unknown as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext }).AudioContext
+    || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  // 1. decode at native rate (any context can decode)
+  let decoded: AudioBuffer | null = null;
+  try {
+    const probe = Offline ? new Offline(1, 1, 44100) : Ctx ? new Ctx() : null;
+    if (!probe) return null;
+    decoded = await new Promise<AudioBuffer>((res, rej) => { const p = probe.decodeAudioData(bytes.slice(0), res, rej); if (p && typeof (p as Promise<AudioBuffer>).then === 'function') (p as Promise<AudioBuffer>).then(res, rej); });
+    if ('close' in probe && typeof (probe as AudioContext).close === 'function') void (probe as AudioContext).close();
+  } catch { return null; }
+  if (!decoded || decoded.length === 0) return null;
+  const channels: Float32Array[] = []; for (let c = 0; c < decoded.numberOfChannels; c++) channels.push(decoded.getChannelData(c));
+  const mono = toMono(channels);
+  // 2. resample to 16 kHz: OfflineAudioContext render (fast path) or pure TS
+  try {
+    if (Offline) {
+      const n = Math.ceil(mono.length * WAV_RATE / decoded.sampleRate);
+      const off = new Offline(1, n, WAV_RATE);
+      const src = off.createBufferSource(); const b = off.createBuffer(1, mono.length, decoded.sampleRate); b.copyToChannel(new Float32Array(mono), 0);
+      src.buffer = b; src.connect(off.destination); src.start(0);
+      const rendered = await off.startRendering();
+      return encodeWav(rendered.getChannelData(0), WAV_RATE);
+    }
+  } catch { /* old Safari: fall through */ }
+  return encodeWav(resampleSinc(mono, decoded.sampleRate, WAV_RATE), WAV_RATE);
+}
+
 export interface TranscribeResult { ok: boolean; status: number; text?: string; error?: string; reason?: string; install?: string; detail?: string; ms?: number }
 
 /** POST the clip to the box. The api relays to the gateway, which relays to :5071/transcribe. */
@@ -202,11 +289,12 @@ export function transcribeReason(r: TranscribeResult): string {
   if (r.ok) return '';
   if (r.error === 'no_speech') return 'I did not catch any words — try again a little closer to the mic';
   if (r.error === 'stt_unavailable') {
-    if (r.reason === 'warming') return 'the speech model is still downloading on the server — try again in a minute';
-    if (r.reason === 'not-installed') return `server dictation is not installed — run \`${r.install || 'orchestra init --stt'}\` on the box (or use Chrome/Edge/Safari)`;
+    if (r.reason === 'warming') return 'the speech model (~100 MB) is still downloading on the server — try again in a minute';
+    if (r.reason === 'not-installed') return `server dictation is not installed on this box — run \`${r.install || 'orchestra init'}\` (or use Chrome/Edge/Safari)`;
     if (r.reason === 'off') return 'server dictation is switched off (ARTURO_LOCAL_STT=0) — use Chrome/Edge/Safari';
     return `server dictation is unavailable${r.detail ? ` (${r.detail})` : ''}`;
   }
+  if (r.error === 'wav_required') return 'this browser could not decode its own recording — use Chrome/Edge/Safari, or run `orchestra init --stt` on the box for the engine that decodes anything';
   if (r.error === 'too_large') return 'that recording is too long — keep it under a minute';
   if (r.error === 'timeout') return 'the server took too long to transcribe — try a shorter clip';
   if (r.status === 0) return 'could not reach the server to transcribe';

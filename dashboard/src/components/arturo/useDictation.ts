@@ -14,7 +14,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   startDictation, mergeDictation, DICTATION_UNAVAILABLE, isTier1DeadError,
-  startRecording, transcribeBlob, transcribeReason, recordingBlockedReason, speechRecognitionCtor,
+  startRecording, transcribeBlob, transcribeReason, recordingBlockedReason, speechRecognitionCtor, blobToWav16k,
   type DictationHandle, type RecordingHandle,
 } from '../../lib/dictation.ts';
 
@@ -50,7 +50,8 @@ export function useDictation(draft: string, setDraft: (v: string) => void, onSta
         recorder.current = null;
         if (!active.current) { setMode('idle'); return; }   // cancelled by a send
         setMode('transcribing');
-        const r = await transcribeBlob(blob);
+        const wav = await blobToWav16k(blob);          // 16 kHz WAV for the default engine; original if undecodable
+        const r = await transcribeBlob(wav || blob);
         if (r.ok && r.text) {
           committed.current = [...committed.current, r.text];
           setDraft(mergeDictation(base.current, committed.current, ''));
