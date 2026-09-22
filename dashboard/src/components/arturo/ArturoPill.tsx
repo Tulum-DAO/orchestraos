@@ -147,6 +147,10 @@ export function ArturoPill() {
   useEffect(() => { scroller.current?.scrollTo({ top: 1e9, behavior: 'smooth' }); }, [turns, open, busy]);
 
   const append = (t: PillTurn) => setTurns((prev) => [...prev, t]);
+  // The box grows with its content up to ~6 lines, then scrolls (Shaw: you could not see two typed
+  // lines at once). Runs on typing AND on dictation / send, which set the draft without a change event.
+  const growTa = () => { const el = ta.current; if (!el) return; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 150) + 'px'; };
+  useEffect(() => { growTa(); }, [draft]);
   const lastUserIdx = (() => { for (let i = turns.length - 1; i >= 0; i--) if (turns[i].role === 'user') return i; return -1; })();
   appendRef.current = append;
   // One note per distinct reason in a row: a refused call can report twice (socket + server).
@@ -278,9 +282,9 @@ export function ArturoPill() {
         )}
 
         <div className="arturo-pill-thread" ref={scroller}>
-          {turns.length === 0 && !busy && (
-            <p className="empty">Ask about what you are looking at, or anything else. Every conversation is kept — open <b>Threads</b> to go back to one.</p>
-          )}
+          {/* One unwrapped hint, tucked under the head divider; gone the moment the first message is sent
+              (Shaw 2026-09-22). No Threads sentence — the Threads button says it. */}
+          {turns.length === 0 && !busy && <p className="empty">Ask about what you are looking at, or anything else.</p>}
           {turns.map((t, i) => t.note ? (
             <div key={i} className="row note"><div className="meta">I can't do that yet — {t.text}.</div></div>
           ) : (
@@ -323,7 +327,7 @@ export function ArturoPill() {
             {dictNote && <span className="attach-error">{dictNote}</span>}
           </div>
         )}
-        <textarea ref={ta} rows={1} value={draft} placeholder="Ask Arturo" onChange={(e) => setDraft(e.target.value)}
+        <textarea ref={ta} rows={1} value={draft} placeholder="Ask Arturo" onChange={(e) => { setDraft(e.target.value); growTa(); }}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} />
         <div className="ctrl-row">
           {/* The page-context CARD lives HERE, in place of the old "Arturo" chip: it sits
