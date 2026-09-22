@@ -132,7 +132,7 @@ export function stepAfterRuntime(operatorName?: string | null, textOnly?: boolea
 
 /** The onboarding turn a surface sends: a first-line marker the proxy strips and turns into the
  *  step directive (services/arturo/onboarding.py). No parsing happens on this side, ever. */
-export function onboardingTurn(step: 'name', text: string): string {
+export function onboardingTurn(step: 'name' | 'hierarchy', text: string): string {
   return `[Onboarding: step=${step}]\n${text}`;
 }
 
