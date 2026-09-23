@@ -12,7 +12,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ARTURO_DIR = Path(__file__).resolve().parent
-ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", ARTURO_DIR.parent.parent))  # #86: env first, like every sibling
+def _default_orchestra_dir() -> Path:
+    """#86: the DATA dir, not the repo root.
+
+    The bridge journals voice calls to <this>/state/voice-calls and the gateway serves transcript
+    cards from <data dir>/state/voice-calls. Defaulting to the repo root made those two different
+    directories on every fresh install, so every card 404'd — and the documented workaround was a
+    symlink, i.e. a per-machine patch for a path orchestra.toml already knows.
+    Falls back to the repo root only if the config cannot be read, which keeps a checkout with no
+    orchestra.toml working exactly as before.
+    """
+    try:
+        sys.path.insert(0, str(ARTURO_DIR.parent))
+        from config import load as _load_config       # services/config.py
+        return Path(_load_config().data_dir)
+    except Exception:
+        return ARTURO_DIR.parent.parent
+
+
+ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR") or _default_orchestra_dir())  # #86: env first
 sys.path.insert(0, str(ARTURO_DIR))
 sys.path.insert(0, str(ORCHESTRA_DIR / "scripts"))
 
