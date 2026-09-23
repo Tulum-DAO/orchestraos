@@ -33,10 +33,18 @@ def test_env_still_wins():
     assert _voice_calls_dir({"ORCHESTRA_DIR": "/srv/explicit"}) == Path("/srv/explicit/state/voice-calls")
 
 
-def test_default_is_the_CONFIGURED_data_dir_not_the_repo_root():
-    """RED before the fix: this resolves to <repo>/state/voice-calls, which the gateway never reads."""
-    env = {k: v for k, v in os.environ.items() if k != "ORCHESTRA_DIR"}
+def test_default_is_the_CONFIGURED_data_dir_not_the_repo_root(configured_install):
+    """RED before the fix: this resolves to <repo>/state/voice-calls, which the gateway never reads.
+
+    `configured_install` supplies an orchestra.toml the test owns. Without one, config.load()
+    raises, the bridge takes its documented last-resort checkout fallback, and this went red on
+    CI and on every fresh clone -- while passing on any already-configured box.
+
+    ASSERTS THE POSITIVE. The old `!=` form was satisfied by the bridge resolving ANYWHERE that
+    is not the repo root, including a wrong directory or a stale default, so it could not tell
+    a fix from a different bug. The equality names the one directory that is correct.
+    """
     os.environ.pop("ORCHESTRA_DIR", None)
     got = _voice_calls_dir({})
-    assert got != REPO / "state" / "voice-calls", (
-        f"bridge journals to the repo root ({got}); the gateway reads the configured data dir")
+    assert got == configured_install / "state" / "voice-calls", (
+        f"bridge journals to {got}; the gateway reads {configured_install}/state/voice-calls")

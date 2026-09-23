@@ -33,14 +33,19 @@ def test_orchestra_dir_env_wins(monkeypatch, tmp_path):
     assert mod.ORCHESTRA_DIR == tmp_path
 
 
-def test_configured_data_dir_is_the_default_when_env_unset(monkeypatch):
+def test_configured_data_dir_is_the_default_when_env_unset(monkeypatch, configured_install):
     """SUPERSEDED CONTRACT. This asserted the CHECKOUT as the fallback, which is the half of #86
     that was never actually fixed: honouring the env was, but an install that sets no env still
     journalled to the repo root while the gateway read the data dir, so every transcript card
-    404'd. The default is now the CONFIGURED data dir."""
-    import config as services_config
+    404'd. The default is now the CONFIGURED data dir.
+
+    Takes `configured_install` rather than reading the host's config. Without it this test
+    needs the MACHINE to have an orchestra.toml: green on a configured box, ConfigError on CI
+    and on any fresh clone -- red in the PR whose whole subject is the fresh install. It also
+    asserted against whatever data_dir the host declared, so its meaning moved with the host.
+    """
     mod = _fresh_import(monkeypatch, None)
-    assert mod.ORCHESTRA_DIR == Path(services_config.load().data_dir)
+    assert mod.ORCHESTRA_DIR == configured_install
 
 
 def test_checkout_is_the_LAST_resort_when_no_config_can_be_read(monkeypatch):
