@@ -56,3 +56,19 @@ def test_launch_prefix_carries_install_env_into_the_pane(tmp_path):
     src = open(os.path.join(os.path.dirname(HERE), "spawn-agent.sh")).read()
     assert "ORCHESTRA_DIR=%q ORCH_DIR=%q ORCHESTRA_ROOT=%q" in src
     assert "CLAUDE_CONFIG_DIR=%q" in src
+
+
+# ---- #95: the guard must not fire on a default install ------------------------------------
+# On a default install the configured model is a plain id (config/providers.json ships NO [1m]
+# SKU for any family), so classify returns `bare` and verify_spawn_model "corrects" toward a
+# variant that does not exist. Both lines from the issue then print on EVERY spawn, forever:
+#   '<agent>' came up on a BARE (non-[1m]) model — correcting
+#   still not [1m] after /model claude-sonnet-5 — flag for the operator
+# A correction is only meaningful when the operator ASKED for a [1m] model.
+
+def test_correction_is_only_warranted_when_the_intended_model_is_1m():
+    for intended, want in (("claude-sonnet-5", "no"), ("", "no"),
+                           ("claude-opus-4-8[1m]", "yes"), ("claude-opus-4-8", "no")):
+        r = _bash(f'correction_warranted "{intended}" && echo yes || echo no')
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.strip() == want, f"{intended!r} -> {r.stdout.strip()} (want {want})"
