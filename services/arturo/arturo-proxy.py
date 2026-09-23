@@ -3513,6 +3513,29 @@ def chat_completions():
     # (hardcoded tmux sessions, task counts, agent lists from when the prompt was last synced).
     # The proxy's build_context() provides fresh, live data instead.
     non_system = [m for m in messages if m.get("role") != "system"]
+    # ...except from the in-process caller (the /text route replaying through here via the Flask
+    # test client), whose system message is a PER-TURN DELTA, not a frozen context: the onboarding
+    # step's directive. Dropping it indiscriminately is why every onboarding directive — 'name' as
+    # well as 'hierarchy' — never reached the model (DEC-1790166878384418). The trust gate is the
+    # same per-process nonce check_auth() uses; an EL-shaped caller still loses its system message.
+    _carried = ""
+    if hmac.compare_digest(request.headers.get("X-Arturo-Internal", ""), _INTERNAL_NONCE):
+        # At most ONE, and only the first: the caller sends exactly one (ptt.build_messages puts it
+        # at index 0). Taking only the first keeps "history never holds a system role" enforced here
+        # rather than merely assumed of every future history path.
+        for _m in messages:
+            if _m.get("role") != "system":
+                continue
+            _c = _m.get("content")
+            # Multimodal content arrives as a list; str-only, because reading a list as text raises
+            # inside a public Funnel ingress handler and turns a legal request into a 500.
+            if isinstance(_c, str) and _c.strip():
+                # Cap: not a security boundary (this caller is already trusted) — it stops a runaway
+                # directive from crowding out the live context built just above. 8000 chars is ~2x
+                # the largest directive onboarding.py can emit, and well under build_context()'s own
+                # ~16 KB, so the handler's live state always dominates.
+                _carried = _c.strip()[:8000]
+            break
     # Semantic recall (DEC-1788771883922080, BUILD-AND-HOLD): <=250-token paths-only RECALL
     # block appended to the per-turn context. Env-gated BEFORE the import so flag-off boots
     # byte-identical (metadata-absent requests default to channel 'voice' — the flag, not the
@@ -3552,6 +3575,11 @@ def chat_completions():
                     context += "\n\n" + _rb
         except Exception as _rbe:
             log.error(f"stream-relay replay seam error (non-fatal): {_rbe}")
+    # Last, after every preamble seam above (semantic recall, facts recall, stream-relay replay), so
+    # the per-turn instruction is the most recent thing in the context and no later seam buries it.
+    if _carried:
+        context += "\n\n" + _carried
+        log.info(f"trusted system delta carried: {len(_carried)} chars")   # length only — it can name a seat
     final_messages = [{"role": "system", "content": context}]
     # Trim conversation to last 20 messages to prevent tool dropout
     if len(non_system) > 20:
@@ -4404,7 +4432,10 @@ def text_turn(text, conversation_id):
     text = text.strip()
     if not text:
         return 400, {"ok": False, "error": "empty"}
-    context = build_context(calling_channel="text")
+    # DELTA ONLY. chat_completions() builds the authoritative context itself and carries this
+    # message on top of it; building a second copy here would send ~16 KB twice per onboarding turn
+    # and admit two copies that can disagree. test_onboarding_seam.py pins this.
+    context = ""
     # The hierarchy step needs one fact only the server holds: whether a manager already exists.
     # It is passed as CONTEXT, never through the marker — the marker regex is anchored to the step
     # name, so appended context would fail to match and leak into the brain message and the archive.
@@ -4414,7 +4445,7 @@ def text_turn(text, conversation_id):
         _ctx = {"manager": _who, "manager_known": _known, "seat": (_SPAWNED_THIS_TURN.get() or [None])[0] or _last_spawned_seat()}
     _dir = _onb.directive(step, _ctx)
     if _dir:
-        context = f"{context}\n\n{_dir}"
+        context = f"{context}\n\n{_dir}".strip() if context else _dir
     elif step:
         log.warning(f"onboarding marker with unknown step {step!r} — no directive applied")
     history = _TEXT_HISTORY.get(conversation_id)
