@@ -221,7 +221,7 @@ function ThreadPanel({
           <div className="text-center text-neutral-600 py-6 text-sm">No messages yet</div>
         )}
         {messages.map((msg) => {
-          const isShaw = msg.from_agent === 'operator';
+          const isOperator = msg.from_agent === 'operator';
           return (
             <div key={msg.id} className="flex gap-3 px-4 py-3">
               <div
@@ -235,7 +235,7 @@ function ThreadPanel({
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-0.5">
-                  <span className={clsx('text-xs font-semibold', isShaw ? 'text-violet-400' : 'text-neutral-300')}>
+                  <span className={clsx('text-xs font-semibold', isOperator ? 'text-violet-400' : 'text-neutral-300')}>
                     {msg.from_agent}
                   </span>
                   {msg.to_agent && (
@@ -388,7 +388,7 @@ function ConversationCard({ conv }: { conv: Conversation }) {
 
 // ── the operator message card (for operator view) ─────────────────────────────────
 
-function ShawMessageCard({ msg }: { msg: any }) {
+function OperatorMessageCard({ msg }: { msg: any }) {
   return (
     <div className="flex gap-3 px-4 py-3 border border-neutral-800 rounded-xl bg-neutral-900/40 hover:bg-neutral-900/70 transition-colors">
       <div
@@ -448,7 +448,7 @@ export default function ChatHistory() {
     return data.groups || [];
   }, [data, view]);
 
-  const shawMessages: any[] = useMemo(() => {
+  const operatorMessages: any[] = useMemo(() => {
     if (view !== 'operator' || !data) return [];
     return data.messages || [];
   }, [data, view]);
@@ -481,7 +481,7 @@ export default function ChatHistory() {
           <MessageSquare size={14} />
           <span>
             {view === 'operator'
-              ? `${shawMessages.length} messages`
+              ? `${operatorMessages.length} messages`
               : `${filteredConversations.length} conversations`
             }
           </span>
@@ -626,13 +626,13 @@ export default function ChatHistory() {
       {/* ── the operator view ── */}
       {!isLoading && view === 'operator' && (
         <div className="space-y-2">
-          {shawMessages.length === 0 && (
+          {operatorMessages.length === 0 && (
             <div className="text-center text-neutral-600 py-12 text-sm">
               No messages found
             </div>
           )}
-          {shawMessages.map((msg: any) => (
-            <ShawMessageCard key={msg.id} msg={msg} />
+          {operatorMessages.map((msg: any) => (
+            <OperatorMessageCard key={msg.id} msg={msg} />
           ))}
         </div>
       )}

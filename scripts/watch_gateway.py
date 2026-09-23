@@ -3773,7 +3773,7 @@ async def handle_presence(request):
     the operator is looking at RIGHT NOW (web detail view / iOS foregrounded agent), or
     null when he leaves the view. Writes the flat focus signal
     state/operator-presence.json {"viewing","viewed_at"} that park-idle.py already
-    consumes (shaw_viewing_agent, 8b view-protection) — the app-emit side that was
+    consumes (operator_viewing_agent, 8b view-protection) — the app-emit side that was
     the missing dependency. Also the trigger the client uses to scope its fast
     single-pane poll (/agent-screen) to the ONE viewed agent, so typing/interrupt
     status flips within ~1s WITHOUT a fleet-wide fast loop.

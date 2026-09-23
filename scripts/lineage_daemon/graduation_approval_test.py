@@ -177,7 +177,7 @@ def test_confirmed_checked_before_graduated_signal_is_trusted():
 
 # --- default fallback preserves current behavior (no graduation caller) --------
 
-def test_default_fallback_is_the_shaw_card_gate():
+def test_default_fallback_is_the_operator_card_gate():
     """With no fallback_fn passed, the factory binds default_approval_gate — i.e.
     the current the operator-card behavior is the default when graduation isn't enabled."""
     from scripts.lineage_daemon import execute as ex

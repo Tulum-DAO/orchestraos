@@ -79,7 +79,7 @@ def test_notify_failure_never_blocks_the_sweep(store, monkeypatch):
     assert due[0].get("notified") is False
 
 
-def test_shaw_gate_off_means_no_expiry_even_on_apply(store, monkeypatch):
+def test_operator_gate_off_means_no_expiry_even_on_apply(store, monkeypatch):
     monkeypatch.setattr(approval_schema, "_expire_pending_enabled", lambda: False, raising=False)
     stale, _ = _seed(store)
     assert store.expire_due(dry_run=False, notify_fn=lambda row: None) == []

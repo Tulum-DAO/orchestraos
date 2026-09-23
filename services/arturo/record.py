@@ -73,7 +73,7 @@ def extract_asks_decisions_feedback(merged):
     return {"asks": cap(asks), "decisions": cap(decisions), "feedback": cap(feedback)}
 
 
-def is_genuine_shaw(journal):
+def is_genuine_operator(journal):
     """Genuine-the operator injection gate for the client-spine era: a server funnel
     journal OR the app-posted client journal (bearer-authed). Everything else
     (local/test/legacy-untagged) never injects."""
