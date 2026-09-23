@@ -46,13 +46,26 @@ import { tmpdir } from 'os';
 import { homedir } from 'os';
 import { getRegistry } from '../services/state-reader.js';
 import { loadConfig } from '../lib/config.js';
+import { gatewayTokenFile } from '../lib/gateway-token.js';
 
 const HOME = process.env.HOME || homedir();
 const ORCHESTRA_DIR = process.env.ORCHESTRA_DIR || join(HOME, 'scripts/agent-orchestra');
 const UPLOADS_DIR = join(ORCHESTRA_DIR, 'state', 'uploads');
 const MSG_STORE = join(ORCHESTRA_DIR, 'msg_store.py');
-const GATEWAY_TOKEN_FILE = join(HOME, '.config/jarvis/watch-gateway-token');
-const GATEWAY_URL = process.env.WATCH_GATEWAY_URL || 'http://127.0.0.1:9091';
+// #85: this hard-coded the legacy path, bypassing the one reader that knows where `orchestra
+// init` actually writes the bearer. #84: the default dialled :9091 while a fresh orchestra.toml
+// ships [gateway] port = 8890, so the API dialled a port nothing listens on.
+const GATEWAY_TOKEN_FILE = gatewayTokenFile();
+const GATEWAY_URL = process.env.WATCH_GATEWAY_URL || defaultGatewayUrl();
+
+function defaultGatewayUrl(): string {
+  try {
+    const c = loadConfig();
+    return `http://${c.gatewayHost}:${c.gatewayPort}`;
+  } catch {
+    return 'http://127.0.0.1:9091';
+  }
+}
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'bmp', 'svg']);
 
