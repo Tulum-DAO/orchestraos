@@ -31,7 +31,12 @@ def test_name_marker_is_stripped_and_directive_applied_for_that_turn_only(tmp_pa
     code, body = mod.text_turn("[Onboarding: step=name]\nhi my name is shaw", "c1")
     assert code == 200 and body["ok"]
     assert seen["user"] == "hi my name is shaw"                       # marker never reaches the brain as text
-    assert seen["system"].startswith("BASECTX") and "set_operator_fact" in seen["system"]
+    # CONTRACT CHANGE (DEC-1790166878384418): text_turn now passes the DELTA — the directive alone.
+    # chat_completions() owns the base context and carries this on top of it. This file stubs
+    # _brain_reply, so it can only ever see the message text_turn ASSEMBLED; production then threw
+    # that message away, which is why these assertions stayed green while the feature was dead.
+    # test_onboarding_seam.py is the one that crosses the seam — trust it over this file.
+    assert "set_operator_fact" in seen["system"] and "BASECTX" not in seen["system"]
     assert "[Onboarding" not in mod._THREADS.get_thread("c1")["turns"][0]["content"]   # nor the archive
     assert "operator" in body                                             # additive field on every reply
     code, _ = mod.text_turn("and what can you do?", "c1")
@@ -48,7 +53,9 @@ def test_ordinary_text_is_byte_identical(tmp_path):
     mod = _load_proxy(); seen = _wire(mod, tmp_path)
     text = "  keep  my   spacing [not a marker] please "
     mod.text_turn(text, "c3")
-    assert seen["user"] == text.strip() and seen["system"] == "BASECTX"
+    # Same contract change: with no marker there is no delta, so text_turn sends an empty system
+    # message and the handler supplies the whole context. The user text is still byte-identical.
+    assert seen["user"] == text.strip() and seen["system"] == ""
 
 
 def test_health_carries_operator_none_then_name(tmp_path):

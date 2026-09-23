@@ -35,5 +35,55 @@ def split_marker(text: str):
     return m.group(1).lower(), text[m.end():]
 
 
-def directive(step) -> str:
+HIERARCHY_TIERS = (
+    "Seats come in three tiers: T2 workers do the jobs, T1 coordinators run a lane of workers, and T0 is "
+    "the single always-on manager that runs the whole fleet for you."
+)
+
+
+def _hierarchy(ctx) -> str:
+    """Generated per turn, because whether to OFFER a manager depends on whether one exists — a fact
+    only the server holds. Three states, never two: known-absent offers, known-present names it, and
+    UNKNOWN (an unreadable registry) explains without offering, because "could not check" is not "no"."""
+    ctx = ctx or {}
+    seat = str(ctx.get("seat") or "").strip()
+    manager, known = ctx.get("manager"), bool(ctx.get("manager_known"))
+    head = (
+        "ONBOARDING, step 'hierarchy': the operator has just watched their first seat come up"
+        + (f" ({seat})" if seat else "")
+        + ". Explain the shape of the system in at most three short sentences, about 60 words, in their "
+        "terms. Use these facts and no others: " + HIERARCHY_TIERS + " "
+        + (f"Name their new seat {seat} as the T2 worker they already have. " if seat else "")
+    )
+    if manager:
+        tail = (
+            f"A manager already exists on this install: {manager}. Say so in one clause and DO NOT OFFER "
+            "to create another — there is one per install. Ask no question; close by saying they can ask "
+            "you for status any time."
+        )
+    elif known:
+        tail = (
+            "They have no manager yet. Ask exactly ONE question: whether to create it now. Say plainly "
+            "that it is always on, which means it keeps costing tokens whether or not it is asked "
+            "anything. If they say yes, call spawn_agent with kind='manager' and session_name='gm'. If "
+            "they say no, accept it in one clause and do not ask again."
+        )
+    else:
+        tail = (
+            "Whether a manager already exists could not be checked on this install, so DO NOT OFFER to "
+            "create one — an unchecked registry is not an empty one. Say a manager can be added later "
+            "from the Agents page. Ask no question."
+        )
+    return head + tail + (
+        " Answer from the facts in this instruction ONLY: do not call any tool, do not look the fleet up, "
+        "and do not report how many seats exist or which machines are online — that is not what this turn "
+        "is for. Do not list features, do not pitch, do not mention tiers you were not given, and do not "
+        "exceed one question."
+    )
+
+
+def directive(step, ctx=None) -> str:
+    """ctx is only read by steps that need a server-side fact (hierarchy). The one-arg call still works."""
+    if (step or "").lower() == "hierarchy":
+        return _hierarchy(ctx)
     return DIRECTIVES.get(step or "", "")
