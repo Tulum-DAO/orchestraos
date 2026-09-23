@@ -37,3 +37,16 @@ classify_model_line() {
     printf 'none'
     return 0
 }
+
+# correction_warranted INTENDED -> 0 when a [1m] correction makes sense, 1 otherwise.
+#
+# Issue #95: the guard fired on EVERY fresh spawn and could never succeed. config/providers.json
+# ships no [1m] SKU for any family, so a default install banners a plain id, classify says `bare`,
+# and verify "corrects" toward a variant that does not exist — printing two warnings per spawn,
+# permanently. Permanent noise trains users to ignore warnings.
+#
+# A [1m] correction is only meaningful when the OPERATOR ASKED for a [1m] model. If they did not,
+# a plain id is the correct outcome, not a leak.
+correction_warranted() {
+    [[ "${1:-}" == *'[1m]'* ]]
+}

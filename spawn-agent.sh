@@ -145,7 +145,14 @@ verify_spawn_model() {
         family) warn "  [1m]-verify: '$session' banner shows '$(printf '%s' "$line" | grep -oE "$SPAWN_MODEL_LABEL_RE" | head -1)' — [1m] cannot be confirmed from this banner; continuing (non-fatal)"; return 0 ;;
         none)   warn "  [1m]-verify: could not read a model from '$session' (non-fatal); continuing"; return 0 ;;
     esac
-    # bare: an explicit non-[1m] model id is visible — the one case the correction is valid for.
+    # bare: an explicit non-[1m] model id is visible. Correct ONLY if the operator asked for a
+    # [1m] model (#95): config/providers.json ships no [1m] SKU for any family, so on a default
+    # install this branch fired every spawn and could never succeed — permanent noise that trains
+    # users to ignore warnings.
+    if ! correction_warranted "$intended"; then
+        log "  [1m]-verify OK: '$session' running '$(printf '%s' "$line" | tr -d '\n')' (no [1m] requested)"
+        return 0
+    fi
     warn "  [1m]-verify: '$session' came up on a BARE (non-[1m]) model — correcting"
     local target="$intended"
     [[ -z "$target" ]] && target="claude-opus-4-8[1m]"   # settings default variant
@@ -790,13 +797,26 @@ spawn_agent() {
         # blanket shell/network/cross-tenant; anything outside still prompts
         # and escalates via Layer B (scripts/pane_reachability.py).
         local perm_settings=""
-        perm_settings="$(python3 "$SCRIPT_DIR/scripts/spawn_permission_rules.py" "$agent_id" "$cwd" 2>/dev/null || true)"
+        # STDERR IS KEPT (#95): this was `2>/dev/null || true`, so when the generator was
+        # missing entirely the operator saw "generation failed" with no cause — and a security
+        # feature degraded to "no rules" without ever saying why.
+        local perm_err=""
+        perm_err="$(mktemp)"
+        perm_settings="$(python3 "$SCRIPT_DIR/scripts/spawn_permission_rules.py" "$agent_id" "$cwd" 2>"$perm_err" || true)"
         if [[ -n "$perm_settings" && -f "$perm_settings" ]]; then
             launch_cmd+=" --settings $perm_settings"
             log "  Perms: project-local allow-rules -> $perm_settings"
         else
             warn "  Perms: allow-rule generation failed — spawning without (prompts escalate via Layer B)"
+            # if-form, not `[[ ]] && warn`. I expected the && form to abort the spawn under
+            # `set -euo pipefail` when the file is empty and DROVE IT: it does not — set -e
+            # ignores a failure that is not the command following the final &&. Kept as an if
+            # because it reads as a branch and cannot acquire that hazard later.
+            if [[ -s "$perm_err" ]]; then
+                warn "  Perms: cause: $(head -3 "$perm_err" | tr '\n' ' ')"
+            fi
         fi
+        rm -f "$perm_err"
         log "  Runtime: claude | Model: ${model:-<settings default opus-4-8[1m]>}"
     elif [[ "$runtime" == "codex" ]]; then
         [[ -n "$model" ]] && launch_cmd+=" --model $model"
