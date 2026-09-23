@@ -49,9 +49,12 @@ You are an agent in an OrchestraOS install — a multi-agent orchestration syste
 
 ## Spawning New Agents
 Read `$ORCHESTRA_ROOT/docs/agent-provisioning-guide.md` for the full guide. Quick version:
-1. Register in `registry.json` (add entry under `agents`)
-2. Write system prompt to `prompts/<agent-id>.md`
-3. Run `bash $ORCHESTRA_ROOT/spawn-agent.sh <agent-id>`
+1. `orchestra agent create <name> [--tier T2] [--runtime claude] [--parent <seat>]` — one command:
+   fills the role template, registers the seat, validates runtime/model, spawns, verifies alive
+2. Edit `prompts/<name>.md` to say what the seat is for
+3. `orchestra spawn <name> --task "..."` to bring it back up later
+Do NOT hand-edit `registry.json` to add an agent — `agent create` writes it, and an entry added by
+hand can disagree with what the spawner validated.
 
 **CRITICAL:** Agents launch in interactive mode. The init prompt is written to `/tmp/agent-init-{id}.md` and Claude reads it. NEVER use `claude -p` for long prompts — it breaks with shell escaping.
 
