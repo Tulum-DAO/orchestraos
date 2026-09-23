@@ -1296,6 +1296,11 @@ TOOLS = [
                         "type": "boolean",
                         "description": "If true, run in background (no visible window). Default false.",
                     },
+                    "kind": {
+                        "type": "string",
+                        "enum": ["worker", "manager"],
+                        "description": "worker (default) = an ordinary T2 seat that does a job. manager = THE General Manager: tier T0, always on, runs the fleet. There is ONE manager per install — only use manager when the operator has asked for the manager, and never to do a job.",
+                    },
                 },
                 "required": ["session_name", "machine"],
             },
@@ -1692,6 +1697,40 @@ def commission_plan(session, task, runtime=None, repo_root=None, model=None):
     return _CommissionPlan(argv, env, session, task)
 
 
+def _last_spawned_seat():
+    """The seat the operator just watched come up, so the hierarchy turn can name it. Best effort:
+    an unnameable seat only costs the directive one clause, never the step."""
+    try:
+        return (load_voice_memory().get("spawned_sessions") or [])[-1]["name"]
+    except Exception:
+        return ""
+
+
+def existing_manager():
+    """(manager seat name | None, known). THREE states, never two — the same discipline
+    registration_status keeps: an unreadable registry is "could not check", NOT "there is none".
+    A manager is a seat at tier T0 (docs/REFERENCE_INSTALL.md), found by TIER, never by the name
+    'gm', because the operator may have called it anything."""
+    try:
+        reg = json.loads((Path(ORCHESTRA_DIR) / "registry.json").read_text())
+    except Exception:
+        return None, False
+    for name, row in (reg.get("agents") or {}).items():
+        if str((row or {}).get("tier") or "").upper() == "T0":
+            return name, True
+    return None, True
+
+
+def manager_plan(session, repo_root=None):
+    """`orchestra spawn <seat> --gm` — the ONLY path that registers tier T0 + always_on +
+    prompts/gm.md (orchestra_cli/seats.py). spawn-agent.sh cannot set any of them, which is why the
+    manager does not go through commission_plan. ORCHESTRA_DIR is pinned because the CLI writes the
+    registry the proxy reads (peer catch: the two resolve differently otherwise)."""
+    root = Path(repo_root or _REPO_ROOT)
+    env = {"ORCHESTRA_DIR": str(ORCHESTRA_DIR), "PARENT_AGENT_ID": "arturo"}
+    return _CommissionPlan([str(root / "bin" / "orchestra"), "spawn", session, "--gm"], env, session, "")
+
+
 def registration_status(name):
     """THREE states, never two: registered / not registered / could not check.
 
@@ -1929,6 +1968,33 @@ def execute_tool(name, args, user_turns=None):
             return (f"FAILED: I can only create REGISTERED seats, and that goes through this "
                     f"machine's spawn-agent.sh — I have no way to register '{session}' on another "
                     f"machine. Run `orchestra spawn {session}` there, or let me spawn it here.")
+
+        # THE MANAGER is a different kind of seat (tier T0, always on, prompts/gm.md) and only
+        # `orchestra spawn --gm` sets those. One per install, refused HERE rather than in the tool
+        # name, because this same tool list rides the voice path (peer note: a mis-pick on a phone
+        # call must not be able to create a second always-on seat).
+        if str(args.get("kind") or "worker").lower() == "manager":
+            who, known = existing_manager()
+            if who:
+                return (f"This install already has a manager: {who}. There is one per install, so I "
+                        f"did not create another. Talk to {who} for anything fleet-wide.")
+            if not known:
+                return ("I could not read the registry to check whether a manager already exists, so I "
+                        "did not create one — an unchecked registry is not an empty one. Check the "
+                        "Agents page and ask me again.")
+            plan = manager_plan(session)
+            log.info(f"COMMISSION MANAGER: {' '.join(plan.argv[:3])}")
+            ok, out = _run_commission(plan, 180)
+            if not ok:
+                return f"FAILED to create the manager '{session}': {out[-400:]}"
+            verify_ok, _ = run_local(f"tmux has-session -t {session} 2>/dev/null", timeout=3)
+            if not verify_ok:
+                return f"FAILED: orchestra spawn ran but session '{session}' does not exist: {out[-300:]}"
+            record_spawned_session(session)
+            _record_spawned_this_turn(session)
+            _notify_spawned(session, "vps")
+            return (f"The manager '{session}' is up: tier T0, always on, running the fleet prompt. "
+                    f"It is registered and on the Agents page.")
 
         if True:
             # VPS: a real seat through spawn-agent.sh + a msg_store commission row (T2).
@@ -3447,6 +3513,29 @@ def chat_completions():
     # (hardcoded tmux sessions, task counts, agent lists from when the prompt was last synced).
     # The proxy's build_context() provides fresh, live data instead.
     non_system = [m for m in messages if m.get("role") != "system"]
+    # ...except from the in-process caller (the /text route replaying through here via the Flask
+    # test client), whose system message is a PER-TURN DELTA, not a frozen context: the onboarding
+    # step's directive. Dropping it indiscriminately is why every onboarding directive — 'name' as
+    # well as 'hierarchy' — never reached the model (DEC-1790166878384418). The trust gate is the
+    # same per-process nonce check_auth() uses; an EL-shaped caller still loses its system message.
+    _carried = ""
+    if hmac.compare_digest(request.headers.get("X-Arturo-Internal", ""), _INTERNAL_NONCE):
+        # At most ONE, and only the first: the caller sends exactly one (ptt.build_messages puts it
+        # at index 0). Taking only the first keeps "history never holds a system role" enforced here
+        # rather than merely assumed of every future history path.
+        for _m in messages:
+            if _m.get("role") != "system":
+                continue
+            _c = _m.get("content")
+            # Multimodal content arrives as a list; str-only, because reading a list as text raises
+            # inside a public Funnel ingress handler and turns a legal request into a 500.
+            if isinstance(_c, str) and _c.strip():
+                # Cap: not a security boundary (this caller is already trusted) — it stops a runaway
+                # directive from crowding out the live context built just above. 8000 chars is ~2x
+                # the largest directive onboarding.py can emit, and well under build_context()'s own
+                # ~16 KB, so the handler's live state always dominates.
+                _carried = _c.strip()[:8000]
+            break
     # Semantic recall (DEC-1788771883922080, BUILD-AND-HOLD): <=250-token paths-only RECALL
     # block appended to the per-turn context. Env-gated BEFORE the import so flag-off boots
     # byte-identical (metadata-absent requests default to channel 'voice' — the flag, not the
@@ -3486,6 +3575,11 @@ def chat_completions():
                     context += "\n\n" + _rb
         except Exception as _rbe:
             log.error(f"stream-relay replay seam error (non-fatal): {_rbe}")
+    # Last, after every preamble seam above (semantic recall, facts recall, stream-relay replay), so
+    # the per-turn instruction is the most recent thing in the context and no later seam buries it.
+    if _carried:
+        context += "\n\n" + _carried
+        log.info(f"trusted system delta carried: {len(_carried)} chars")   # length only — it can name a seat
     final_messages = [{"role": "system", "content": context}]
     # Trim conversation to last 20 messages to prevent tool dropout
     if len(non_system) > 20:
@@ -4338,10 +4432,20 @@ def text_turn(text, conversation_id):
     text = text.strip()
     if not text:
         return 400, {"ok": False, "error": "empty"}
-    context = build_context(calling_channel="text")
-    _dir = _onb.directive(step)
+    # DELTA ONLY. chat_completions() builds the authoritative context itself and carries this
+    # message on top of it; building a second copy here would send ~16 KB twice per onboarding turn
+    # and admit two copies that can disagree. test_onboarding_seam.py pins this.
+    context = ""
+    # The hierarchy step needs one fact only the server holds: whether a manager already exists.
+    # It is passed as CONTEXT, never through the marker — the marker regex is anchored to the step
+    # name, so appended context would fail to match and leak into the brain message and the archive.
+    _ctx = None
+    if step == "hierarchy":
+        _who, _known = existing_manager()
+        _ctx = {"manager": _who, "manager_known": _known, "seat": (_SPAWNED_THIS_TURN.get() or [None])[0] or _last_spawned_seat()}
+    _dir = _onb.directive(step, _ctx)
     if _dir:
-        context = f"{context}\n\n{_dir}"
+        context = f"{context}\n\n{_dir}".strip() if context else _dir
     elif step:
         log.warning(f"onboarding marker with unknown step {step!r} — no directive applied")
     history = _TEXT_HISTORY.get(conversation_id)
