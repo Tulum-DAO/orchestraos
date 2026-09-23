@@ -243,7 +243,7 @@ def default_safety_recheck(canary, orchestra_dir=None):
             bool(reg_agents.get(canary, {}).get("always_on")),
             attached.get(canary, False), live, meta, pane_plain, pane_ansi,
             has_uncommitted_work=pk.cwd_has_uncommitted_work(cwd),
-            shaw_viewing=pk.shaw_viewing_agent(canary, presence),
+            operator_viewing=pk.operator_viewing_agent(canary, presence),
             state_age_s=pk.session_activity_age(canary),
             own_work_at_risk=own_risk,
         )

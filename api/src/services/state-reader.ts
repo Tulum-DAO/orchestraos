@@ -178,7 +178,7 @@ export function getMacHeartbeat(): Record<string, unknown> | null {
   return readJsonSafe(path.join(ORCHESTRA_DIR, 'state', 'mac-heartbeat.json'));
 }
 
-export function getShawPresence(): Record<string, unknown> | null {
+export function getOperatorPresence(): Record<string, unknown> | null {
   const data = readJsonSafe<Record<string, unknown>>(path.join(ORCHESTRA_DIR, 'state', 'operator-presence.json'));
   if (!data || !data.last_telegram_message) return data;
 
