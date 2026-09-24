@@ -134,9 +134,15 @@ function findGeminiByDeclaration(agentId: string): { path: string; sid: string }
 // would render ANOTHER project's conversation as this seat's on a shared box. A blank pane is
 // correct; a wrong pane is a data exposure. chat-transcript.codex.test.ts pins that fence.
 //
-// There is deliberately no live-process tier: unlike Gemini (whose brain log stays open, hence
-// liveGeminiSid above), a running codex holds NO descriptor for its rollout — measured on a live
-// seat in state "working": its only fds are the pty, eventfd/eventpoll, io_uring and pipes.
+// DO NOT ADD A /proc TIER FOR CODEX. It works for Gemini (liveGeminiSid above) and it cannot work
+// here, for a structural reason rather than an incidental one. Measured on a live codex seat in
+// state "working", the complete fd list of its process was:
+//     /dev/pts/N, 0, anon_inode:[eventfd], anon_inode:[eventpoll], anon_inode:[io_uring], pipes
+// Zero descriptors under the home directory; zero matching codex|sqlite|rollout. Gemini holds its
+// brain log OPEN, so its sid is readable off /proc. Codex opens-writes-closes, and its file I/O
+// goes through io_uring, which never surfaces a persistent descriptor to read back at all. A tier
+// that can never match is worse than no tier: it reads as though live seats were handled specially
+// while silently always falling through to the join below.
 const CODEX_STATE_DB = join(HOME, '.codex', 'state_5.sqlite');
 
 export function findCodexByDeclaration(agentId: string, dbPath = CODEX_STATE_DB):
@@ -308,6 +314,9 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
   // paths because a codex seat has no Claude hook sid and no ~/.claude/projects dir to fall into.
   // A miss falls through and ultimately returns {null,null} — never a cwd guess (see the header
   // comment on findCodexByDeclaration).
+  // NOTE: there is no live-process (/proc) step here on purpose, unlike 0a for Gemini directly
+  // above. A running codex holds no descriptor for its rollout — see the fd enumeration and the
+  // io_uring reason in the block comment above findCodexByDeclaration before adding one.
   const cx = findCodexByDeclaration(agentId);
   if (cx && existsSync(cx.path)) return { path: cx.path, sid: cx.sid };
 
