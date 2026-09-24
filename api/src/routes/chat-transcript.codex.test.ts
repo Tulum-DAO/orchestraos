@@ -280,3 +280,25 @@ test('a corrupt database file degrades to no match instead of throwing', () => {
   writeFileSync(p, 'this is not a sqlite file');
   assert.equal(findCodexByDeclaration('gm', p), null);
 });
+
+// ------------------------------------------- plumbing must not read as operator speech
+
+test('codex harness envelopes are marked system, not rendered as the operator talking', () => {
+  // Seen on a live seat: codex injects these as role 'user'. Without this they render as blue
+  // user bubbles the operator never typed — the defect class already fixed for Claude in 55134d0.
+  for (const tag of ['environment_context', 'skills_instructions', 'multi_agent_mode', 'user_instructions']) {
+    const items = parseCodexRollout([
+      rec(2, 'response_item', { type: 'message', id: 'p', role: 'user',
+                                content: [{ type: 'input_text', text: `<${tag}>\n  <cwd>/srv/app</cwd>\n</${tag}>` }] }),
+    ]);
+    assert.equal(items[0].is_system, true, `<${tag}> must not render as operator speech`);
+  }
+});
+
+test('a real operator message that merely mentions a tag is still operator speech', () => {
+  const items = parseCodexRollout([
+    rec(2, 'response_item', { type: 'message', id: 'u', role: 'user',
+                              content: [{ type: 'input_text', text: 'why does <environment_context> show up in my chat?' }] }),
+  ]);
+  assert.notEqual(items[0].is_system, true);
+});

@@ -185,6 +185,12 @@ export function looksLikeCodex(lines: string[]): boolean {
   return false;
 }
 
+/** Harness envelopes codex injects as role 'user'. Observed on a live seat: environment_context,
+ *  the skills/multi-agent preambles, and user_instructions. Anchored at the start so an operator
+ *  quoting one of these tags in a real message is not silently reclassified. */
+const CODEX_PLUMBING =
+  /^\s*<(environment_context|skills_instructions|multi_agent_mode|user_instructions|system_context)\b/i;
+
 function codexText(content: any): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -232,7 +238,11 @@ export function parseCodexRollout(lines: string[]): any[] {
         if (!text) break;
         const role = p.role === 'assistant' ? 'assistant' : 'user';
         const it: any = { kind: 'text', role, text, ts: r.ts, uuid };
-        if (p.role === 'developer') it.is_system = true;   // the spawn brief, as Claude's is treated
+        // The operator never typed the harness's own envelopes. Same rule as the Claude path
+        // (sanitizeClaudeUserText, 55134d0): internals must not render as operator speech.
+        // A developer-role message is the brief; codex also injects environment/context envelopes
+        // as role 'user', which would otherwise show up as a blue bubble the operator never sent.
+        if (p.role === 'developer' || CODEX_PLUMBING.test(text)) it.is_system = true;
         items.push(it);
         break;
       }
