@@ -15,6 +15,7 @@ import { join } from 'path';
 import { execFileSync } from 'child_process';
 import { mergeQueuedItems } from '../services/queued-merge.js';
 import { homedir } from 'os';
+import Database from 'better-sqlite3';
 
 const router = Router();
 
@@ -121,6 +122,163 @@ function findGeminiByDeclaration(agentId: string): { path: string; sid: string }
   } catch { return null; }
 }
 
+// --- codex ------------------------------------------------------------------
+// Codex writes rollouts to ~/.codex/sessions/<Y>/<M>/<D>/rollout-<ts>-<uuid>.jsonl and indexes
+// them in ~/.codex/state_5.sqlite table `threads` (id, rollout_path, cwd, thread_source,
+// first_user_message, updated_at_ms).
+//
+// Resolution is a POSITIVE seat-name declaration join on first_user_message — the same shape as
+// findGeminiByDeclaration above — and NEVER a cwd match. Congruence DEC-1790239929422621: every
+// seat shares repo_root by construction (orchestra_cli/seats.py register_seat does
+// setdefault("cwd", str(st.repo_root))), so cwd cannot identify a seat, and a cwd/recency fallback
+// would render ANOTHER project's conversation as this seat's on a shared box. A blank pane is
+// correct; a wrong pane is a data exposure. chat-transcript.codex.test.ts pins that fence.
+//
+// There is deliberately no live-process tier: unlike Gemini (whose brain log stays open, hence
+// liveGeminiSid above), a running codex holds NO descriptor for its rollout — measured on a live
+// seat in state "working": its only fds are the pty, eventfd/eventpoll, io_uring and pipes.
+const CODEX_STATE_DB = join(HOME, '.codex', 'state_5.sqlite');
+
+export function findCodexByDeclaration(agentId: string, dbPath = CODEX_STATE_DB):
+  { path: string; sid: string } | null {
+  if (!existsSync(dbPath)) return null;
+  const baseId = agentId.replace(/-(?:gen\d+|g\d+|next|\d+)$/, '');
+  let db: any = null;
+  try {
+    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    const rows = db.prepare(
+      "SELECT id, rollout_path, first_user_message FROM threads "
+      + "WHERE thread_source = 'user' AND first_user_message IS NOT NULL "
+      + 'ORDER BY updated_at_ms DESC LIMIT 500',
+    ).all() as { id: string; rollout_path: string; first_user_message: string }[];
+    // Whole-name match. \b is NOT enough: a hyphen is a non-word char, so /you are gm\b/ happily
+    // matches "You are gm-watcher" and would hand this seat another seat's conversation. The
+    // lookahead denies a following word char OR hyphen.
+    const esc = baseId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const declares = new RegExp(`^\\s*you are ${esc}(?![\\w-])`, 'i');
+    for (const r of rows) {
+      if (r.rollout_path && declares.test(String(r.first_user_message))) {
+        return { path: r.rollout_path, sid: r.id };
+      }
+    }
+    return null;
+  } catch {
+    return null;            // missing table, corrupt file, locked db — a blank pane, never a 500
+  } finally {
+    try { db?.close(); } catch {}
+  }
+}
+
+/** Codex rollout lines are self-describing, so the SSE tail and the poll path cannot disagree
+ *  about which parser to use (they call normalizeTranscript independently). */
+export function looksLikeCodex(lines: string[]): boolean {
+  for (const l of lines.slice(0, 40)) {
+    if (!l.trim()) continue;
+    try {
+      const d = JSON.parse(l);
+      if (d && typeof d.ordinal === 'number'
+          && (d.type === 'session_meta' || d.type === 'response_item' || d.type === 'token_usage_record')) {
+        return true;
+      }
+    } catch { /* torn or foreign line */ }
+  }
+  return false;
+}
+
+function codexText(content: any): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.map((c: any) => (c && typeof c.text === 'string' ? c.text : '')).join('').trim();
+}
+
+/** Codex tool arguments arrive as a JSON STRING; toolSummary()/capInput() expect an object, so an
+ *  unparsed string renders a blank summary. Always hand downstream an object. */
+function codexArgs(raw: any): Record<string, unknown> {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
+  if (typeof raw === 'string') {
+    try {
+      const p = JSON.parse(raw);
+      if (p && typeof p === 'object' && !Array.isArray(p)) return p as Record<string, unknown>;
+      return { value: p };
+    } catch { return { value: raw }; }
+  }
+  return {};
+}
+
+/** Map a codex rollout to the SAME flat item grammar the Claude/Gemini paths emit, so enrichItems,
+ *  capInput, toolSummary and buildRenderItems are all reused untouched. */
+export function parseCodexRollout(lines: string[]): any[] {
+  const recs: { ordinal: number; ts: string; payload: any; type: string }[] = [];
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const d = JSON.parse(line);
+      if (!d || typeof d !== 'object') continue;
+      recs.push({ ordinal: Number(d.ordinal ?? 0), ts: String(d.timestamp || ''), payload: d.payload || {}, type: String(d.type || '') });
+    } catch { /* torn final line while the seat is still writing — keep everything before it */ }
+  }
+  // Explicit ordinal order: the file can be appended by more than one writer
+  // (~/.codex/thread-writer-locks/ exists), so line order is not authoritative.
+  recs.sort((a, b) => a.ordinal - b.ordinal);
+
+  const items: any[] = [];
+  for (const r of recs) {
+    if (r.type !== 'response_item') continue;     // event_msg/token_usage_record/world_state/turn_context = telemetry
+    const p = r.payload || {};
+    const uuid = String(p.id || `${r.ordinal}`);
+    switch (p.type) {
+      case 'message': {
+        const text = codexText(p.content);
+        if (!text) break;
+        const role = p.role === 'assistant' ? 'assistant' : 'user';
+        const it: any = { kind: 'text', role, text, ts: r.ts, uuid };
+        if (p.role === 'developer') it.is_system = true;   // the spawn brief, as Claude's is treated
+        items.push(it);
+        break;
+      }
+      case 'agent_message': {
+        const text = codexText(p.content ?? p.message);
+        if (text) items.push({ kind: 'text', role: 'assistant', text, ts: r.ts, uuid });
+        break;
+      }
+      case 'reasoning': {
+        // encrypted_content is opaque ciphertext and is NEVER decoded or emitted. In 1570 real
+        // records summary[] was populated 0 times, so this virtually always emits nothing —
+        // deliberately, rather than surfacing an empty thinking bubble.
+        const text = Array.isArray(p.summary)
+          ? p.summary.map((s: any) => (s && typeof s.text === 'string' ? s.text : '')).join('\n').trim()
+          : '';
+        if (text) items.push({ kind: 'thinking', role: 'assistant', text, ts: r.ts, uuid });
+        break;
+      }
+      case 'custom_tool_call':
+      case 'function_call': {
+        items.push({
+          kind: 'tool_use', role: 'assistant',
+          tool: String(p.name || ''),
+          input: codexArgs(p.input ?? p.arguments),
+          id: String(p.call_id || p.id || ''),     // pairs with tool_use_id below
+          ts: r.ts, uuid,
+        });
+        break;
+      }
+      case 'custom_tool_call_output':
+      case 'function_call_output': {
+        items.push({
+          kind: 'tool_result', role: 'user',
+          text: codexText(p.output),
+          tool_use_id: String(p.call_id || ''),
+          is_error: !!p.is_error,
+          ts: r.ts, uuid,
+        });
+        break;
+      }
+      default: break;                              // compacted/unknown: not conversation
+    }
+  }
+  return items;
+}
+
 // Resolve an agent id to its transcript JSONL path (re-read fresh per request).
 // Exported for the F1 streaming lane (transcript-stream.ts) — same resolution,
 // same file, so poll and stream can never disagree on WHICH transcript.
@@ -135,6 +293,13 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
     const gPath = join(GEMINI_BRAIN, gSid, '.system_generated', 'logs', 'transcript.jsonl');
     if (existsSync(gPath)) return { path: gPath, sid: gSid };
   }
+
+  // 0c. Codex: the seat's own declaration in ~/.codex/state_5.sqlite. Checked before the Claude
+  // paths because a codex seat has no Claude hook sid and no ~/.claude/projects dir to fall into.
+  // A miss falls through and ultimately returns {null,null} — never a cwd guess (see the header
+  // comment on findCodexByDeclaration).
+  const cx = findCodexByDeclaration(agentId);
+  if (cx && existsSync(cx.path)) return { path: cx.path, sid: cx.sid };
 
   // 0b. Hook event sid for live Claude process
   const hook = hookEventSid(tmuxSession);
@@ -638,6 +803,11 @@ export function normalizeTranscript(
   let items: any[] = [];
   if (isAntigravity) {
     items = normalizeAntigravity(lines);
+  } else if (looksLikeCodex(lines)) {
+    // Detected from the lines themselves, NOT from a caller-passed hint: transcript-tail.ts (SSE)
+    // and this route (poll) call normalizeTranscript independently, and a hint only one of them
+    // passes is how the two lanes drift apart.
+    items = parseCodexRollout(lines);
   } else {
     for (const line of lines) {
       if (!line.trim()) continue;
@@ -664,7 +834,17 @@ export function normalizeTranscript(
 router.get('/:id/transcript', (req: Request, res: Response) => {
   const agentId = String(req.params.id);
   const limit = Math.min(parseInt(String(req.query.limit)) || 150, 500);
-  const { path, sid } = resolveTranscriptPath(agentId);
+  // Resolution is INSIDE the try (gm ruling on DEC-1790239929422621): it touches the filesystem,
+  // tmux and now a sqlite index, and this route is reachable on a PUBLIC ingress — an
+  // unhandled throw here is a 500, not an empty pane.
+  let path: string | null = null;
+  let sid: string | null = null;
+  try {
+    ({ path, sid } = resolveTranscriptPath(agentId));
+  } catch (err) {
+    res.json({ agent_id: agentId, session_id: null, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: String(err) });
+    return;
+  }
   if (!path) {
     res.json({ agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: 'no transcript resolved' });
     return;
