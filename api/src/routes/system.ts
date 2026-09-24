@@ -9,7 +9,7 @@ import {
   isDispatcherRunning,
   getRegistry,
   getAllAgentStates,
-  getShawPresence,
+  getOperatorPresence,
 } from '../services/state-reader.js';
 import { getTmuxSessions, getTmuxSessionNames } from '../services/tmux-monitor.js';
 import { getMacStatus, getSyncStatus, getVpsTmuxSessions, probeMacTmux } from '../services/cross-machine.js';
@@ -124,7 +124,7 @@ router.get('/', async (_req: Request, res: Response) => {
         vps: vpsMachine,
       },
       sync: syncStatus,
-      shaw_presence: getShawPresence(),
+      shaw_presence: getOperatorPresence(),
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed to load system status', detail: String(err) });

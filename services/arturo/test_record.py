@@ -73,9 +73,9 @@ def test_build_injection_payload_strips_control_chars():
     assert "\x1b" not in payload and "\x07" not in payload and "\u202e" not in payload
 
 
-def test_is_genuine_shaw_gate():
-    assert record.is_genuine_shaw({"origin": "funnel"}) is True
-    assert record.is_genuine_shaw({"source": "client"}) is True
-    assert record.is_genuine_shaw({"origin": "local"}) is False
-    assert record.is_genuine_shaw({"origin": "test"}) is False
-    assert record.is_genuine_shaw({}) is False
+def test_is_genuine_operator_gate():
+    assert record.is_genuine_operator({"origin": "funnel"}) is True
+    assert record.is_genuine_operator({"source": "client"}) is True
+    assert record.is_genuine_operator({"origin": "local"}) is False
+    assert record.is_genuine_operator({"origin": "test"}) is False
+    assert record.is_genuine_operator({}) is False

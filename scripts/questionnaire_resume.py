@@ -321,7 +321,7 @@ def age_escalation_sweep(store=None):
                 "class": "target-live-not-receiving" if target_live else "target-not-live",
                 "age_min": round(age_min, 1),
                 "routed_to": "operator" if target_live else "gm",
-                "shaw_notified": bool(target_live),
+                "operator_notified": bool(target_live),
                 "armed": _armed(),
                 "detector": None,
             }

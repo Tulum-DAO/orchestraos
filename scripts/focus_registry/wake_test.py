@@ -265,7 +265,7 @@ def test_digest_lists_items_with_agent_subject_priority():
     assert "2) ob — seam armed [HIGH]" in d
 
 
-def test_digest_flags_shaw_candidates_but_decides_nothing():
+def test_digest_flags_operator_candidates_but_decides_nothing():
     items = [_msg("m1", "critical", "app-dev", "watch build failing"),
              _msg("m2", "high", "ob", "seam armed")]
     d = build_wake_digest(items)
