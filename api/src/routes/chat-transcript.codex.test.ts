@@ -114,7 +114,9 @@ test('tool_use id and tool_result tool_use_id pair on call_id, so v2 pairing wor
 // ------------------------------------------------- privacy: encrypted reasoning
 
 test('reasoning with an empty summary emits NOTHING and never leaks ciphertext', () => {
-  const CIPHER = 'gAAAAABqqLiDBg3J4juxoNnJy5ef26SWlyA3rdZAjggyL';
+  // A non-entropic sentinel on purpose: the test asserts this string is ABSENT from the output, and
+  // a realistic fernet-shaped blob here would trip the repo's secret scanner for no added coverage.
+  const CIPHER = 'ENCRYPTED-REASONING-MUST-NOT-BE-EMITTED';
   const items = parseCodexRollout([
     rec(9, 'response_item', { type: 'reasoning', id: 'r1', summary: [], encrypted_content: CIPHER }),
   ]);
