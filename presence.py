@@ -9,7 +9,7 @@ PRESENCE_FILE = Path.home() / "scripts" / "agent-orchestra" / "state" / "operato
 HEARTBEAT_FILE = Path.home() / "scripts" / "agent-orchestra" / "state" / "mac-heartbeat.json"
 
 
-def get_shaw_presence() -> dict:
+def get_operator_presence() -> dict:
     """Returns {status, minutes_ago, behavior}"""
     # Check Telegram activity
     try:
@@ -55,7 +55,7 @@ def get_shaw_presence() -> dict:
 
 
 if __name__ == "__main__":
-    result = get_shaw_presence()
+    result = get_operator_presence()
     if "--json" in sys.argv:
         print(json.dumps(result))
     else:

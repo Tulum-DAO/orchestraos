@@ -346,7 +346,7 @@ def test_in_tree_sentinel_is_advisory_not_a_brake(tmp_path, monkeypatch):
 
 # --- guard 4: persistent exclude list -----------------------------------------
 
-def test_default_exclude_shaw_p1_agents_never_armed(tmp_path):
+def test_default_exclude_operator_p1_agents_never_armed(tmp_path):
     """v8 + red-team are in DEFAULT_EXCLUDE — even at HARD ctx + T2 they're skipped."""
     reg = {"agents": {"orchestraos-app-dev-v8": {"generation": 1, "tier": "T2",
                                                  "lineage_root": "orchestraos-app-dev-v8"}}}

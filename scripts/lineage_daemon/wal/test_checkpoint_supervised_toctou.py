@@ -37,7 +37,7 @@ def _fake_clock():
     return now
 
 
-def test_shaw_attaching_between_wrapper_check_and_inject_is_recaught(tmp_path):
+def test_operator_attaching_between_wrapper_check_and_inject_is_recaught(tmp_path):
     store, resolver = _seed(tmp_path)
     calls = {"operator": 0, "inject": 0}
 
@@ -63,7 +63,7 @@ def test_shaw_attaching_between_wrapper_check_and_inject_is_recaught(tmp_path):
     assert out["source"] == "wal-derived", "fell back to (b) once the re-check saw the operator"
 
 
-def test_no_shaw_still_injects_and_blue_authors(tmp_path):
+def test_no_operator_still_injects_and_blue_authors(tmp_path):
     # regression: when the operator stays absent through BOTH checks, the inject still fires
     store, resolver = _seed(tmp_path)
 

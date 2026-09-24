@@ -23,7 +23,7 @@ def test_not_pause_real_short_question():
 
 
 # ---- is_reengagement_filler ----
-def test_flags_the_exact_shaw_phrase():
+def test_flags_the_exact_operator_phrase():
     assert vg.is_reengagement_filler("Is there anything specific you'd like me to help you with?")
 
 
