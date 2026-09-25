@@ -187,6 +187,10 @@ _TOOLS_THIS_TURN = _contextvars.ContextVar("arturo_tools_this_turn", default=Non
 # surfaces need it to offer a way into the new agent (Shaw, 2026-09-22). Only the verified
 # success path records, so a FAILED spawn can never produce a link to nothing.
 _SPAWNED_THIS_TURN = _contextvars.ContextVar("arturo_spawned_this_turn", default=None)
+# The turn's ToolDedupLedger, so the INDIRECT dispatch sites can consult the same ledger the tool
+# loop uses. ask_gm/deep_query/research call execute_tool("async_task", ...) inside a tool handler,
+# which the loop never sees — they bypassed the guard entirely (DEC-1790305211739337, peer finding).
+_TURN_DEDUP = _contextvars.ContextVar("arturo_turn_dedup", default=None)
 
 
 def _record_spawned_this_turn(session_name):
@@ -1816,6 +1820,40 @@ def _file_commission_row(session, task):
         return ""
 
 
+def _dispatch_guarded(tool_name, tool_args):
+    """Dispatch a nested tool through THIS TURN's dedupe ledger.
+
+    The tool loop reserves every call it can see, but a tool HANDLER that dispatches another tool
+    (ask_gm, deep_query, research -> async_task) runs inside an already-reserved call, so its inner
+    dispatch was invisible to the ledger. Route those here. Deliberately explicit rather than hooking
+    execute_tool itself: the loop has already reserved its own call, and a blanket hook would
+    re-reserve it and suppress the legitimate first execution.
+    """
+    led = _TURN_DEDUP.get()
+    if led is not None:
+        prior = led.reserve(tool_name, tool_args)
+        if prior is not None:
+            log.warning(f"DUP-CALL SUPPRESSED (indirect): {tool_name} not re-dispatched this turn. "
+                        f"reason={prior[:90]!r} args={_dedup_argsum(tool_args)}")
+            return prior
+    result = execute_tool(tool_name, tool_args)
+    if led is not None:
+        led.record(tool_name, tool_args, result)
+    return result
+
+
+def _dedup_argsum(args):
+    """A short, log-safe rendering of tool args for a suppression line. Values are TRUNCATED and
+    never dumped whole: tool args carry task prose and, until the token-by-reference rule lands,
+    can carry secret values (gm 03:1xZ: the bot token is in 227 transcripts)."""
+    try:
+        if not isinstance(args, dict):
+            return f"<{type(args).__name__}>"
+        return "{" + ", ".join(f"{k}={str(v)[:40]!r}" for k, v in sorted(args.items())) + "}"
+    except Exception:
+        return "<unrenderable>"
+
+
 def _notify_spawned(session, machine):
     if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
         return
@@ -2332,7 +2370,7 @@ def execute_tool(name, args, user_turns=None):
         _ok, _text = _dp.run_analyst(question)
         if _ok:
             return _text
-        execute_tool("async_task", {
+        _dispatch_guarded("async_task", {
             "tool_name": "gm_command",
             "tool_args": {"prompt": question, "timeout": 120},
             "summary": f"Deep dive: {question[:80]}",
@@ -2347,7 +2385,7 @@ def execute_tool(name, args, user_turns=None):
         request = args.get("request", "")
         if not request:
             return "ERROR: ask_gm called with an empty request."
-        execute_tool("async_task", {
+        _dispatch_guarded("async_task", {
             "tool_name": "gm_command",
             "tool_args": {"prompt": request, "timeout": 120},
             "summary": args.get("summary") or request[:80],
@@ -2513,7 +2551,7 @@ def execute_tool(name, args, user_turns=None):
         query = args.get("query", "")
         if not query:
             return "No research query provided."
-        return execute_tool("async_task", {
+        return _dispatch_guarded("async_task", {
             "tool_name": "spawn_agent",
             "tool_args": {
                 "session_name": f"research-{int(time.time()) % 10000}",
@@ -3798,6 +3836,10 @@ def chat_completions():
                 # model repeating an identical SIDE-EFFECTING call across tool
                 # rounds executes it once (the operator watched 3x inject into v2's pane).
                 _dedup = _voice_guards.ToolDedupLedger()
+                # Publish it for the turn so handler-level dispatches (_dispatch_guarded) share the
+                # same ledger rather than bypassing it. Set, never reset: the ContextVar is per
+                # request context, and generate() owns the turn.
+                _TURN_DEDUP.set(_dedup)
 
                 # Leg-3 pacing heartbeat (msg_b82abb4f item 3, the operator's verbatim
                 # cadence): ONE per-turn policy object — informative re-pings at
@@ -3840,17 +3882,21 @@ def chat_completions():
                     for tc in tool_calls:
                         fn_name = tc.function.name
                         fn_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
-                        _prior = _dedup.check(fn_name, fn_args)
+                        # RESERVE, not check: this loop decides for EVERY tool_call in the round
+                        # before the second loop records any result, so a check-then-record ledger
+                        # let a same-round twin through. reserve() claims the key here
+                        # (DEC-1790305211739337).
+                        _prior = _dedup.reserve(fn_name, fn_args)
                         if _prior is not None:
-                            log.warning(f"DUP-CALL SUPPRESSED: {fn_name} repeated with "
-                                        f"identical args this turn — not re-executed")
-                            workers_and_holders.append((tc, fn_name, fn_args, None, {"r": _prior}))
+                            log.warning(f"DUP-CALL SUPPRESSED: {fn_name} not re-executed this turn. "
+                                        f"reason={_prior[:90]!r} args={_dedup_argsum(fn_args)}")
+                            workers_and_holders.append((tc, fn_name, fn_args, None, {"r": _prior}, True))
                         else:
                             _worker, _holder = _spawn_tool_worker(fn_name, fn_args,
                                                                   user_turns=_q0_user_turns)
-                            workers_and_holders.append((tc, fn_name, fn_args, _worker, _holder))
+                            workers_and_holders.append((tc, fn_name, fn_args, _worker, _holder, False))
 
-                    for tc, fn_name, fn_args, _worker, _holder in workers_and_holders:
+                    for tc, fn_name, fn_args, _worker, _holder, _suppressed in workers_and_holders:
                         while _worker is not None:
                             _worker.join(timeout=0.5)
                             if not _worker.is_alive():
@@ -3865,7 +3911,14 @@ def chat_completions():
                         if "r" not in _holder:      # AGY pass: abnormal worker death
                             raise RuntimeError(f"tool worker died without result: {fn_name}")
                         result = _holder["r"]
-                        _dedup.record(fn_name, fn_args, result)
+                        # Do NOT record a SUPPRESSED call. Its "result" IS the replay message, so
+                        # recording it overwrites the stored first result with a message quoting
+                        # itself; by the fourth reworded call the original result has been pushed
+                        # past record()'s 300-char cap and "a retry returns the first result" (gm)
+                        # quietly stops holding — at exactly the three-call shape of the incident
+                        # this guard exists for (peer NIT, congruence round 2).
+                        if not _suppressed:
+                            _dedup.record(fn_name, fn_args, result)
                         log.info(f"Tool result ({fn_name}): {result[:200]}")
                         tool_results.append({
                             "role": "tool",
