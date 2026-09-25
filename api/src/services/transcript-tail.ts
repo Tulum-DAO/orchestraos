@@ -22,6 +22,9 @@
 import { readFileSync, statSync } from 'fs';
 import { normalizeTranscript, buildRenderItems, GRAMMAR_VERSION } from '../routes/chat-transcript.js';
 
+/** Upper bound on items the SSE tailer will normalize per tick (see the call site). */
+const TAIL_ITEM_CAP = 2000;
+
 export interface TailEvent {
   type: 'snapshot' | 'delta';
   /** SSE event id: `<session_id>:<full-transcript item offset after this event>` */
@@ -85,8 +88,12 @@ export class TranscriptTailer {
 
     let lines: string[] = [];
     try { lines = readFileSync(path, 'utf-8').split('\n'); } catch { lines = []; }
+    // BOUNDED. This runs on a ~1 s poll, and codex rollouts reach 13-25 MB: normalizing an
+    // unbounded item list every tick is a self-inflicted load collapse (congruence
+    // DEC-1790239929422621, both peers). The chat view never renders more than a few hundred
+    // items anyway, and the cap is well above the poll route's own 500 ceiling.
     const env = normalizeTranscript(
-      lines, this.agentId, sid, Number.MAX_SAFE_INTEGER, path.includes('antigravity-cli'));
+      lines, this.agentId, sid, TAIL_ITEM_CAP, path.includes('antigravity-cli'));
 
     const truncated = !rotated && env.items.length < prevCount;
     this.sid = sid;
