@@ -3890,13 +3890,13 @@ def chat_completions():
                         if _prior is not None:
                             log.warning(f"DUP-CALL SUPPRESSED: {fn_name} not re-executed this turn. "
                                         f"reason={_prior[:90]!r} args={_dedup_argsum(fn_args)}")
-                            workers_and_holders.append((tc, fn_name, fn_args, None, {"r": _prior}))
+                            workers_and_holders.append((tc, fn_name, fn_args, None, {"r": _prior}, True))
                         else:
                             _worker, _holder = _spawn_tool_worker(fn_name, fn_args,
                                                                   user_turns=_q0_user_turns)
-                            workers_and_holders.append((tc, fn_name, fn_args, _worker, _holder))
+                            workers_and_holders.append((tc, fn_name, fn_args, _worker, _holder, False))
 
-                    for tc, fn_name, fn_args, _worker, _holder in workers_and_holders:
+                    for tc, fn_name, fn_args, _worker, _holder, _suppressed in workers_and_holders:
                         while _worker is not None:
                             _worker.join(timeout=0.5)
                             if not _worker.is_alive():
@@ -3911,7 +3911,14 @@ def chat_completions():
                         if "r" not in _holder:      # AGY pass: abnormal worker death
                             raise RuntimeError(f"tool worker died without result: {fn_name}")
                         result = _holder["r"]
-                        _dedup.record(fn_name, fn_args, result)
+                        # Do NOT record a SUPPRESSED call. Its "result" IS the replay message, so
+                        # recording it overwrites the stored first result with a message quoting
+                        # itself; by the fourth reworded call the original result has been pushed
+                        # past record()'s 300-char cap and "a retry returns the first result" (gm)
+                        # quietly stops holding — at exactly the three-call shape of the incident
+                        # this guard exists for (peer NIT, congruence round 2).
+                        if not _suppressed:
+                            _dedup.record(fn_name, fn_args, result)
                         log.info(f"Tool result ({fn_name}): {result[:200]}")
                         tool_results.append({
                             "role": "tool",

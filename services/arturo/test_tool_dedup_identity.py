@@ -212,3 +212,92 @@ def test_a_missing_identity_field_falls_back_to_exact_args():
     led.record("spawn_agent", {"task": "no name given"}, "r")
     assert led.reserve("spawn_agent", {"task": "no name given"}) is not None
     assert led.reserve("spawn_agent", {"task": "different"}) is None
+
+
+# --- Congruence round 2 NITs of DEC-1790369372448894 -------------------------------------------
+# Both peers APPROVED Change A; these two are the defects their review turned up in it.
+
+def test_recording_a_replay_cannot_clobber_the_first_result():
+    """The loop used to record EVERY entry including suppressed ones, whose "result" is the replay
+    message itself. Three reworded calls is the shape of the real incident, and by the fourth the
+    original result had been pushed past the 300-char cap — so gm's "a retry returns the first
+    result" quietly stopped holding. The ledger now refuses to absorb its own replay, so the
+    invariant survives even a caller that hands one back."""
+    led = _turn()
+    first = "CONFIRMED: seat app-dev-v4 is running on vps (pid 4131)"
+    led.reserve("spawn_agent", {"session_name": "app-dev-v4", "task": "build the thing"})
+    led.record("spawn_agent", {"session_name": "app-dev-v4", "task": "build the thing"}, first)
+
+    for reworded in ("actually could you also make it fast",
+                     "and please have it check the tests too",
+                     "one more thing, run the linter"):
+        replay = led.reserve("spawn_agent", {"session_name": "app-dev-v4", "task": reworded})
+        assert replay is not None and "NOT delivered" in replay
+        # simulate the old loop handing the replay straight back to record()
+        led.record("spawn_agent", {"session_name": "app-dev-v4", "task": reworded}, replay)
+
+    final = led.reserve("spawn_agent", {"session_name": "app-dev-v4", "task": "and finally, deploy"})
+    assert first in final, (
+        "the first result must still be the thing replayed after three reworded calls; got: %r"
+        % final)
+
+
+def test_suppressed_call_does_not_overwrite_the_first_result():
+    """A retry must return the FIRST result (gm). Recording a suppressed call stored the replay
+    message as the new 'first result', so each further reworded call quoted the previous message and
+    the real result was pushed past the 300-char cap. Three calls is the shape of the real incident.
+    """
+    led = _turn()
+    first = "CONFIRMED: seat app-dev-v4 is running on vps (pid 4131)"
+    assert led.reserve("spawn_agent", {"session_name": "app-dev-v4", "task": "build the thing"}) is None
+    led.record("spawn_agent", {"session_name": "app-dev-v4", "task": "build the thing"}, first)
+
+    # Second and third reworded requests for the SAME seat: suppressed, and NOT recorded.
+    for reworded in ("actually could you also make it fast",
+                     "and please have it check the tests too"):
+        msg = led.reserve("spawn_agent", {"session_name": "app-dev-v4", "task": reworded})
+        assert msg is not None, "reworded request for the same seat must be suppressed"
+        assert "NOT delivered" in msg
+        assert first in msg, (
+            "the first result must survive verbatim in every replay; got: %r" % msg)
+
+
+def test_kill_then_respawn_on_a_non_default_machine_is_not_suppressed():
+    """kill_agent names no machine, spawn_agent keys on it. Normalising the absent machine to the
+    default cleared only the vps key, so spawn-on-mac -> kill -> spawn-on-mac wrongly suppressed a
+    legitimate re-spawn. Task prose differs so the EXACT-args rule is not what is under test."""
+    led = _turn()
+    led.reserve("spawn_agent", {"session_name": "voice-box", "machine": "mac", "task": "a"})
+    led.record("spawn_agent", {"session_name": "voice-box", "machine": "mac", "task": "a"},
+               "CONFIRMED: voice-box running on mac")
+    led.reserve("kill_agent", {"session_name": "voice-box"})
+    led.record("kill_agent", {"session_name": "voice-box"}, "killed voice-box")
+    assert led.reserve("spawn_agent",
+                       {"session_name": "voice-box", "machine": "mac", "task": "b"}) is None, \
+        "a spawn after a kill is a second LEGITIMATE spawn on any machine, not a duplicate"
+
+
+def test_kill_then_respawn_still_dedupes_the_second_respawn():
+    """Control for the wildcard invalidation: it must clear the claim, not disable the guard."""
+    led = _turn()
+    led.reserve("spawn_agent", {"session_name": "voice-box", "machine": "mac", "task": "a"})
+    led.record("spawn_agent", {"session_name": "voice-box", "machine": "mac", "task": "a"}, "up")
+    led.reserve("kill_agent", {"session_name": "voice-box"})
+    led.record("kill_agent", {"session_name": "voice-box"}, "killed")
+    led.reserve("spawn_agent", {"session_name": "voice-box", "machine": "mac", "task": "b"})
+    led.record("spawn_agent", {"session_name": "voice-box", "machine": "mac", "task": "b"}, "up again")
+    assert led.reserve("spawn_agent",
+                       {"session_name": "voice-box", "machine": "mac", "task": "c"}) is not None, \
+        "the re-spawn must itself be guarded"
+
+
+def test_invalidation_does_not_clear_a_different_seat():
+    """Wildcarding the machine must not wildcard the session_name."""
+    led = _turn()
+    led.reserve("spawn_agent", {"session_name": "seat-a", "machine": "mac", "task": "a"})
+    led.record("spawn_agent", {"session_name": "seat-a", "machine": "mac", "task": "a"}, "seat-a up")
+    led.reserve("kill_agent", {"session_name": "seat-b"})
+    led.record("kill_agent", {"session_name": "seat-b"}, "killed seat-b")
+    assert led.reserve("spawn_agent",
+                       {"session_name": "seat-a", "machine": "mac", "task": "b"}) is not None, \
+        "killing seat-b must not release the guard on seat-a"

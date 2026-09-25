@@ -530,6 +530,13 @@ _OPPOSES = {
     "spawn_agent": ("kill_agent",),
 }
 
+# Every suppression message carries this marker, so record() can recognise a REPLAY handed back to
+# it and refuse to store it as a result. Without that, a caller that records the suppressed call
+# overwrites the stored first result with a message quoting itself, and by the fourth reworded call
+# the real result has been pushed past the 300-char cap — so "a retry returns the first result"
+# (gm's rule) silently stops holding at the three-call shape this guard exists for.
+_GUARD_MARKER = "(duplicate-call guard)"
+
 
 class ToolDedupLedger:
     """Per-TURN record of executed side-effecting calls. Constructed fresh for
@@ -629,6 +636,11 @@ class ToolDedupLedger:
     def record(self, name, args, result):
         if not is_side_effecting(name):
             return
+        if _GUARD_MARKER in str(result):
+            # A SUPPRESSED call's "result" IS the replay message. Storing it would clobber the first
+            # result it exists to repeat. Fail-safe: the worst case of skipping a record is one extra
+            # dispatch later, never a wrong suppression.
+            return
         ident = self._identity_key(name, args)
         exact = self._key(name, args)
         self._done[exact] = str(result)[:300]
@@ -638,11 +650,39 @@ class ToolDedupLedger:
             self._inflight.discard(ident)
         # An opposing lifecycle act clears the other's claim on this identity.
         inner_name, inner_args = self._unwrap(name, args)
-        for opposed in _OPPOSES.get(inner_name, ()):
-            okey = self._identity_key(opposed, inner_args)
-            if okey:
-                self._done.pop(okey, None)
-                self._inflight.discard(okey)
+        self._invalidate_opposed(inner_name, inner_args)
+
+    def _invalidate_opposed(self, acting_name, acting_args):
+        """Clear the opposing lifecycle tool's claim on the identity this call just acted on.
+
+        The acting tool's args may not carry every field the OPPOSED tool keys on: kill_agent names
+        no machine, while spawn_agent keys on (session_name, machine). Normalising the absent field
+        to its default would clear only the default machine's key, so spawn-on-mac -> kill ->
+        spawn-on-mac left the mac key claimed and wrongly suppressed a legitimate re-spawn (peer NIT,
+        congruence round 2 of DEC-1790305211739337). So match on the fields we actually have and
+        WILDCARD the rest.
+        """
+        if not isinstance(acting_args, dict):
+            return
+        for opposed in _OPPOSES.get(acting_name, ()):
+            fields = _IDENTITY_FIELDS.get(opposed) or ()
+            parts = []
+            for f in fields:
+                if f not in acting_args:
+                    break                      # wildcard from this field on
+                parts.append(f"{f}={acting_args[f]}")
+            if not parts:
+                continue
+            prefix = f"id:{opposed}|" + "|".join(parts)
+            # Fully specified -> one exact key. Partially specified -> every key under that prefix.
+            if len(parts) == len(fields):
+                matches = [prefix]
+            else:
+                matches = [k for k in list(self._done) + list(self._inflight)
+                           if k.startswith(prefix + "|")]
+            for key in matches:
+                self._done.pop(key, None)
+                self._inflight.discard(key)
 
 
 import hashlib as _hashlib
