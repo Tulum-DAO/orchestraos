@@ -506,12 +506,44 @@ def is_side_effecting(tool_name: str) -> bool:
     return tool_name in SIDE_EFFECTING_TOOLS
 
 
+# LIFECYCLE tools act on a NAMED thing, so two calls naming the same thing are the same act even
+# when the rest of the prose differs. Everything else keeps exact-args semantics: two different
+# messages to one seat, or two different shell commands, are legitimately distinct in one turn
+# (congruence DEC-1790305211739337, both peers independently).
+_IDENTITY_FIELDS = {
+    "spawn_agent": ("session_name", "machine"),
+    "kill_agent": ("session_name",),
+}
+
+# Omitted args must be normalised to the DEFAULT THE HANDLER APPLIES before hashing, or one call
+# omitting `machine` and one passing machine="vps" are the same seat under two different keys
+# (arturo-proxy.py: args.get("machine", "vps")).
+_ARG_DEFAULTS = {
+    "spawn_agent": {"machine": "vps"},
+}
+
+# An opposing lifecycle call invalidates the identity: spawn X -> kill X -> spawn X in one turn is
+# TWO legitimate spawns, and replaying "running" for a seat that was just killed is worse than a
+# duplicate spawn.
+_OPPOSES = {
+    "kill_agent": ("spawn_agent",),
+    "spawn_agent": ("kill_agent",),
+}
+
+
 class ToolDedupLedger:
     """Per-TURN record of executed side-effecting calls. Constructed fresh for
-    each request, so a later turn may legitimately repeat a call."""
+    each request, so a later turn may legitimately repeat a call.
+
+    Two keys per call. The EXACT-ARGS key is the original rule. The IDENTITY key is narrower and
+    exists only for lifecycle tools, because a model that rewords the same request is not making a
+    new one. `reserve()` claims both AT CHECK TIME: the proxy checks every tool_call in a round
+    before any result is recorded, so a record-after-execute ledger let same-round twins through.
+    """
 
     def __init__(self):
-        self._done = {}
+        self._done = {}          # key -> result string (completed)
+        self._inflight = set()   # keys claimed by reserve() but not yet recorded
 
     @staticmethod
     def _key(name, args):
@@ -520,20 +552,97 @@ class ToolDedupLedger:
         except (TypeError, ValueError):
             return f"{name}|{str(args)}"
 
-    def check(self, name, args):
-        """Prior result string if this exact side-effecting call already ran
-        this turn (caller should SKIP re-execution), else None."""
+    @staticmethod
+    def _unwrap(name, args):
+        """async_task is indirect: its identity is the INNER tool's. A direct spawn and an
+        async-wrapped spawn of one seat must collide."""
+        if name == "async_task" and isinstance(args, dict):
+            inner = args.get("tool_name")
+            inner_args = args.get("tool_args")
+            if isinstance(inner, str) and inner and isinstance(inner_args, dict):
+                return inner, inner_args
+        return name, args
+
+    @classmethod
+    def _identity_key(cls, name, args):
+        """None when this tool has no identity dimension, or the naming field is absent (then the
+        exact-args rule still applies — a call must never bypass the ledger entirely)."""
+        name, args = cls._unwrap(name, args)
+        fields = _IDENTITY_FIELDS.get(name)
+        if not fields or not isinstance(args, dict):
+            return None
+        defaults = _ARG_DEFAULTS.get(name, {})
+        parts = []
+        for f in fields:
+            v = args.get(f, defaults.get(f))
+            if v is None:
+                return None          # cannot identify it; fall back to exact args
+            parts.append(f"{f}={v}")
+        return f"id:{name}|" + "|".join(parts)
+
+    def reserve(self, name, args):
+        """Claim this call for the turn. Returns None when the caller should EXECUTE, or a message
+        for the model when it must not. Call this instead of check() at the point of decision."""
         if not is_side_effecting(name):
             return None
-        prior = self._done.get(self._key(name, args))
-        if prior is None:
+        ident = self._identity_key(name, args)
+        exact = self._key(name, args)
+
+        for key, by_identity in ((ident, True), (exact, False)):
+            if key is None:
+                continue
+            if key in self._done:
+                prior = self._done[key]
+                if by_identity:
+                    # The operator-visible half: say plainly that the later wording did not run,
+                    # or the model narrates several queued tasks when one happened.
+                    return (f"Already done this turn for the same target — this second request was "
+                            f"NOT delivered and nothing was repeated (duplicate-call guard). "
+                            f"The first result stands: {prior}")
+                return (f"Already done this turn — not repeated (duplicate-call guard). "
+                        f"Previous result: {prior}")
+            if key in self._inflight:
+                return ("Already in flight this turn for the same target — this second request was "
+                        "NOT delivered and nothing was repeated (duplicate-call guard).")
+
+        if ident is not None:
+            self._inflight.add(ident)
+        self._inflight.add(exact)
+        return None
+
+    def check(self, name, args):
+        """Back-compat read-only probe. Prefer reserve(), which also claims the key so a
+        same-round twin cannot slip between check and record."""
+        if not is_side_effecting(name):
             return None
-        return (f"Already done this turn — not repeated (duplicate-call guard). "
-                f"Previous result: {prior}")
+        for key, by_identity in ((self._identity_key(name, args), True), (self._key(name, args), False)):
+            if key is not None and key in self._done:
+                prior = self._done[key]
+                if by_identity:
+                    return (f"Already done this turn for the same target — this second request was "
+                            f"NOT delivered and nothing was repeated (duplicate-call guard). "
+                            f"The first result stands: {prior}")
+                return (f"Already done this turn — not repeated (duplicate-call guard). "
+                        f"Previous result: {prior}")
+        return None
 
     def record(self, name, args, result):
-        if is_side_effecting(name):
-            self._done[self._key(name, args)] = str(result)[:300]
+        if not is_side_effecting(name):
+            return
+        ident = self._identity_key(name, args)
+        exact = self._key(name, args)
+        self._done[exact] = str(result)[:300]
+        self._inflight.discard(exact)
+        if ident is not None:
+            self._done[ident] = str(result)[:300]
+            self._inflight.discard(ident)
+        # An opposing lifecycle act clears the other's claim on this identity.
+        inner_name, inner_args = self._unwrap(name, args)
+        for opposed in _OPPOSES.get(inner_name, ()):
+            okey = self._identity_key(opposed, inner_args)
+            if okey:
+                self._done.pop(okey, None)
+                self._inflight.discard(okey)
 
 
 import hashlib as _hashlib
