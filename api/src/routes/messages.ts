@@ -41,6 +41,123 @@ export function recentMessages(dataDir: string, limit = 50): RecentMessage[] {
   } catch { return []; }
 }
 
+/* ── Canonical per-pair message counts and history ───────────────────────────
+ * 2D Agents View spec §16 (architecture lock) pins BOTH the connection-line
+ * count and the conversation panel to ONE backend: the SQLite `messages` table
+ * in <data>/state/tasks.db — the same table recentMessages() above reads. The
+ * other three stores in this repo already disagree with each other (tasks.db's
+ * iteration_count is only bumped in reply() not send(); the per-agent JSONL
+ * logs drift from the per-conversation JSONL; the queue/inbox JSON store
+ * truncates to 20 while reporting an untruncated total). The spec's "49 vs 40"
+ * bug is what picking two of them looks like, so: one table, both numbers.
+ *
+ * Time comparisons all go through julianday(). Every row today is uniform
+ * ISO-8601 with a +00:00 offset (verified: 871/871, and julianday() parses all
+ * of them), but the column DEFAULT is datetime('now') — which writes
+ * 'YYYY-MM-DD HH:MM:SS', no 'T' and no offset. A lexicographic compare would
+ * sort any such row before every ISO row (space < 'T') and silently drop it
+ * from the window. julianday() is format-agnostic, and at this table's size the
+ * lost index is not worth a correctness hole.
+ *
+ * Known ceiling: pairCounts' `last_at` is a plain max(created_at), so it IS a
+ * lexicographic pick. If a DEFAULT-format row is ever the newest on a line, the
+ * "last message" in the line tooltip reads slightly stale — counts and ordering
+ * stay correct, only that one label. Upgrade when it matters: select the
+ * created_at of the row with max(julianday(created_at)) instead of the string max.
+ */
+
+const PAIR_COLUMNS = `id, conversation_id, from_agent, to_agent, type, subject, body, priority,
+                      status, created_at, delivered_at, acknowledged_at`;
+
+export interface PairCount { a: string; b: string; count: number; last_at: string | null; }
+
+function openMessagesDb(dataDir: string): Database.Database | null {
+  const dbPath = join(dataDir, 'state', 'tasks.db');
+  if (!existsSync(dbPath)) return null;
+  try { return new Database(dbPath, { readonly: true, fileMustExist: true }); } catch { return null; }
+}
+
+function cutoffIso(windowHours: number): string {
+  return new Date(Date.now() - windowHours * 3600_000).toISOString();
+}
+
+/** Message count per UNORDERED agent pair inside the window, newest activity first.
+ *  Both directions of an exchange collapse into one row, because a connection line is
+ *  one line. Self-sends (from === to) are excluded: they are real rows, but a line needs
+ *  two ends. Missing db/table => []. */
+export function pairCounts(dataDir: string, windowHours = 24): PairCount[] {
+  const db = openMessagesDb(dataDir);
+  if (!db) return [];
+  try {
+    return db.prepare(
+      `select min(from_agent, to_agent) as a, max(from_agent, to_agent) as b,
+              count(*) as count, max(created_at) as last_at
+         from messages
+        where archived_at is null
+          and from_agent <> to_agent
+          and julianday(created_at) >= julianday(?)
+        group by a, b
+        order by count desc`).all(cutoffIso(windowHours)) as PairCount[];
+  } catch { return []; } finally { db.close(); }
+}
+
+export interface PairPage {
+  a: string; b: string;
+  /** Matches the connection-line label exactly — same table, same window. */
+  total_in_window: number;
+  /** What "load older" can eventually reach. Pagination is NOT capped by the window. */
+  total_all_time: number;
+  window_hours: number;
+  messages: Record<string, unknown>[];
+  next_before: string | null;
+  has_more: boolean;
+}
+
+/** One pair's history, newest first, paged by a created_at cursor.
+ *  `before` returns rows strictly older than that instant, so passing back the previous
+ *  response's next_before walks history without re-sending the boundary row. */
+export function pairMessages(
+  dataDir: string, a: string, b: string,
+  limit = 40, before?: string | null, windowHours = 24,
+): PairPage {
+  const empty: PairPage = {
+    a, b, total_in_window: 0, total_all_time: 0, window_hours: windowHours,
+    messages: [], next_before: null, has_more: false,
+  };
+  const db = openMessagesDb(dataDir);
+  if (!db) return empty;
+  try {
+    const pair = `archived_at is null
+                    and ((from_agent = ? and to_agent = ?) or (from_agent = ? and to_agent = ?))`;
+    const ends = [a, b, b, a];
+    const totalAllTime = (db.prepare(`select count(*) as n from messages where ${pair}`)
+      .get(...ends) as { n: number }).n;
+    const totalInWindow = (db.prepare(
+      `select count(*) as n from messages where ${pair} and julianday(created_at) >= julianday(?)`)
+      .get(...ends, cutoffIso(windowHours)) as { n: number }).n;
+
+    // limit + 1 so has_more is observed, not inferred from a full page.
+    const rows = before
+      ? db.prepare(`select ${PAIR_COLUMNS} from messages
+                     where ${pair} and julianday(created_at) < julianday(?)
+                     order by julianday(created_at) desc limit ?`).all(...ends, before, limit + 1)
+      : db.prepare(`select ${PAIR_COLUMNS} from messages
+                     where ${pair}
+                     order by julianday(created_at) desc limit ?`).all(...ends, limit + 1);
+    const page = (rows as Record<string, unknown>[]).slice(0, limit);
+    const hasMore = (rows as unknown[]).length > limit;
+    return {
+      a, b,
+      total_in_window: totalInWindow,
+      total_all_time: totalAllTime,
+      window_hours: windowHours,
+      messages: page,
+      next_before: hasMore && page.length ? String(page[page.length - 1].created_at) : null,
+      has_more: hasMore,
+    };
+  } catch { return empty; } finally { db.close(); }
+}
+
 function runBus(args: (string | string[])[]): any {
   const flatArgs = args.flat() as string[];
   try {
@@ -95,6 +212,28 @@ router.get('/inbox/:agentId', (req: Request, res: Response) => {
 router.get('/recent', (req: Request, res: Response) => {
   const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit || '50'), 10) || 50));
   res.json({ messages: recentMessages(ORCHESTRA, limit) });
+});
+
+function windowHoursFrom(q: unknown): number {
+  const h = parseInt(String(q ?? '24'), 10);
+  return Number.isFinite(h) && h > 0 ? Math.min(24 * 90, h) : 24;
+}
+
+// GET /api/messages/pair-counts?hours=24 — message count per connection line.
+// The ONLY source for any count rendered on a line (spec §16).
+router.get('/pair-counts', (req: Request, res: Response) => {
+  const hours = windowHoursFrom(req.query.hours);
+  res.json({ window_hours: hours, pairs: pairCounts(ORCHESTRA, hours) });
+});
+
+// GET /api/messages/pair/:a/:b?limit=40&before=<iso>&hours=24 — one pair's history for the
+// conversation panel. Same table as /pair-counts, so the header count and the line agree
+// by construction; `before` walks past the window, total_in_window does not.
+router.get('/pair/:a/:b', (req: Request, res: Response) => {
+  const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit || '40'), 10) || 40));
+  const before = req.query.before ? String(req.query.before) : null;
+  res.json(pairMessages(ORCHESTRA, String(req.params.a), String(req.params.b),
+    limit, before, windowHoursFrom(req.query.hours)));
 });
 
 // GET /api/messages/thread/:conversationId — get full conversation thread

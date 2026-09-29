@@ -29,7 +29,10 @@ export default function Agents() {
   const [viewMode, setViewMode] = useState<ViewMode>('cards');
   const [pendingSpawn, setPendingSpawn] = useState<Set<string>>(new Set());
   const [pendingKill, setPendingKill] = useState<Set<string>>(new Set());
-  const [statusFilter, setStatusFilter] = useState<string>('Active');
+  // 2D Agents View spec §2/§3 and build-order step 1: nothing important is hidden.
+  // Defaulting to 'Active' meant a down agent was invisible until you thought to
+  // look for it, which is the opposite of what this page is for. Default is All.
+  const [statusFilter, setStatusFilter] = useState<string>('All');
   const [clientFilter, setClientFilter] = useState<string>('All');
   const [machineFilter, setMachineFilter] = useState<string>('All');
   const [recentAgents, setRecentAgents] = useState<RecentAgent[]>(getRecentAgents());
