@@ -52,6 +52,7 @@ import { setupTerminalWebSocket } from './routes/terminal.js';
 import { setupVoiceLiveWebSocket } from './routes/voice-live.js';
 import { loadConfig } from './lib/config.js';
 import { principal } from './lib/principal.js';
+import { accessLog } from './lib/access-log.js';
 
 const app = express();
 
@@ -88,6 +89,9 @@ app.use(cors({
   },
   credentials: true,
 }));
+// Forensic access log. Mounted before the routes and before the body parser so a
+// request is recorded even if parsing rejects it.
+app.use(accessLog);
 app.use(express.json({ limit: '10mb' }));
 
 app.get('/health', (_, res) => res.json({ status: 'ok', service: 'orchestraOS-api' }));
