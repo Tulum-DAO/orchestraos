@@ -55,7 +55,35 @@ when the trap has been stepped in.
 | 1. merge | **PASS** | `7109aaa` "Merge branch 'build/router-offset-commit-then-confirm'" on `fix-arturo-mapfile-bash32` (gm merged it) |
 | 2. `--is-ancestor` | **PASS** | prints `CONTAINS-FIX` |
 | 3. grep on disk | **PASS** | returns `5` (was `0` pre-merge) — **but re-run it at the literal last second before the restart; this tree is shared and unstable** |
-| 4. process picked it up | **PENDING** | pid 10767 still `STARTED Tue Sep 29 08:57:58` → old code still in memory; `<data>/state/telegram/` still has only `chat-id, notified.json, offset` (no `last-done`). Correct — awaiting the restart. |
+| 4. process picked it up | **PASS — closed 2026-09-29T11:56:50Z** | pid 10767 gone; router is now **pid 3445, started 11:22:59**. `last-done` appeared at 11:56:50 — a file only the fixed code can create. Detail below. |
+
+### Step 4 closed — P0 verified in production, not just in the harness
+
+Two operator messages landed at 11:56, and all three P0 properties are observable on real traffic:
+
+```
+last-done = 589340061          (mtime 11:56:50)
+offset    = 589340062          (mtime 11:56:50)
+msg_store rows:  tg-589340061  11:56:50   "And make sure you follow the ontology of…"
+                 tg-589340060  11:56:18   "Thank you for sending back the latest up…"
+```
+
+1. **`last-done` exists at all** → the new code path executed. The old code cannot create this file.
+2. **`offset == last_done + 1`** → commit-then-confirm's invariant holds live.
+3. **One row per `update_id`, keyed `tg-<update_id>`** → the idempotency key working on real traffic;
+   two updates in, two rows out, no gap and no duplicate.
+4. **No `escalate` row and no `dropped` metadata from `telegram`** → `_alert_stepped_over` never
+   fired; nothing was stepped over.
+
+Minor correction to gm's read of the same evidence: `last-done 589340061` pairs with **`tg-589340061`**,
+not `tg-589340060` (off by one). The substance is unaffected and the actual evidence is *stronger* than
+a single message — two consecutive updates were both delivered with matching ids.
+
+**Still not deployed: F6.** pid 3445 started 11:22:59; F6's merge (`6816ad0`) landed 11:26:36, so the
+running process is **P0 + F1 + F5 only**, by design ("rides the next natural restart"). The on-disk
+file *does* contain F6, so a `grep` of `router.py` today would wrongly suggest F6 is live — check pid
+3445's start time against 11:26:36 instead. Disk is currently **ahead of** the process, the inverse of
+the trap in §1a.
 
 **The verdict transfers to what will actually run:**
 `git diff b834241 HEAD -- plugins/telegram/router.py plugins/telegram/test_router_offset.py` is
