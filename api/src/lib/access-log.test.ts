@@ -83,3 +83,48 @@ test('an array-valued identity header is flattened, not dropped', () => {
   assert.equal(e.identity['x-orchestra-user'], 'alice,gm',
     'a smuggled second identity must still be visible in the log');
 });
+
+// ── identity namespace is an allowlist, not an open prefix ─────────────────
+// review found this gating fc55a89: logging every x-orchestra-* header BY VALUE is a
+// latent trap for the authenticating-proxy work principal.ts anticipates — a future
+// x-orchestra-signature would have landed in the audit log in cleartext.
+
+test('the four known identity headers are still logged by value', () => {
+  const e = describeReq(req({ headers: {
+    'x-orchestra-user': 'alice', 'x-orchestra-role': 'admin',
+    'x-orchestra-client': 'acme', 'x-orchestra-allowed-agents': 'a,b',
+  } }))!;
+  assert.equal(e.identity['x-orchestra-user'], 'alice');
+  assert.equal(e.identity['x-orchestra-role'], 'admin');
+  assert.equal(e.identity['x-orchestra-client'], 'acme');
+  assert.equal(e.identity['x-orchestra-allowed-agents'], 'a,b');
+  assert.deepEqual(e.unloggedIdentity, []);
+});
+
+test('a future proxy signature header is NOT logged by value', () => {
+  const e = describeReq(req({ headers: {
+    'x-orchestra-signature': 'deadbeefcafe', 'x-orchestra-proxy-token': 'hunter2',
+  } }))!;
+  const line = format(e);
+  assert.ok(!line.includes('deadbeefcafe'), 'signature value leaked into the audit log');
+  assert.ok(!line.includes('hunter2'), 'proxy token value leaked into the audit log');
+});
+
+test('an unknown identity header is still recorded as PRESENT', () => {
+  // An allowlist alone would drop it silently; an unexpected header in this namespace
+  // is exactly the signal you want during an incident.
+  const e = describeReq(req({ headers: { 'x-orchestra-signature': 'deadbeef' } }))!;
+  assert.ok(e.unloggedIdentity.includes('x-orchestra-signature'));
+  assert.ok(e.reasons.includes('identity-headers'), 'unknown header must still trip the log');
+  assert.ok(format(e).includes('identity_headers_unlogged=x-orchestra-signature'));
+});
+
+test('known and unknown identity headers coexist correctly', () => {
+  const e = describeReq(req({ headers: {
+    'x-orchestra-user': 'eve', 'x-orchestra-secret': 's3cr3t',
+  } }))!;
+  const line = format(e);
+  assert.ok(line.includes('"eve"'), 'the claim we DO want must survive');
+  assert.ok(!line.includes('s3cr3t'), 'the value we do NOT want leaked');
+  assert.deepEqual(e.unloggedIdentity, ['x-orchestra-secret']);
+});

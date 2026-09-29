@@ -28,6 +28,27 @@ const IDENTITY_PREFIX = 'x-orchestra-';
 const SECRET_HEADERS = new Set(['authorization', 'cookie', 'proxy-authorization']);
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
+/**
+ * Identity headers whose VALUE is safe to record. An allowlist, not the bare
+ * `x-orchestra-` prefix: the prefix is an open namespace, and the authenticating-proxy
+ * work that principal.ts already anticipates would plausibly introduce something like
+ * x-orchestra-signature or x-orchestra-proxy-token in it. Under a prefix match those
+ * would have been written to the audit log in cleartext — turning the log into the
+ * credential store this module explicitly set out not to be.
+ */
+const LOGGABLE_IDENTITY = new Set([
+  'x-orchestra-user',
+  'x-orchestra-role',
+  'x-orchestra-client',
+  'x-orchestra-allowed-agents',
+]);
+
+/**
+ * Second gate, in case someone later adds a credential-ish header to the allowlist
+ * above without thinking about it. Cheap, and the failure it prevents is silent.
+ */
+const SENSITIVE_NAME = /token|secret|signature|key|auth|cred|pass|sig\b/i;
+
 /** Loopback in v4, v6, and the v4-mapped-v6 form Node reports on a dual-stack socket. */
 export function isLoopback(addr: string | undefined): boolean {
   if (!addr) return false;
@@ -44,6 +65,8 @@ export interface AccessEvent {
   method: string;
   path: string;
   identity: Record<string, string>;
+  /** Identity-namespace headers seen but NOT recorded by value (unknown or sensitive). */
+  unloggedIdentity: string[];
   /** Claimed upstream chain. Recorded as a CLAIM — never trusted, never used for control. */
   forwardedFor: string | null;
   secretsPresent: string[];
@@ -53,12 +76,21 @@ export interface AccessEvent {
 export function describe(req: Request): AccessEvent | null {
   const addr = clientAddr(req);
   const identity: Record<string, string> = {};
+  const unloggedIdentity: string[] = [];
   const secretsPresent: string[] = [];
 
   for (const [k, v] of Object.entries(req.headers)) {
     const key = k.toLowerCase();
     if (key.startsWith(IDENTITY_PREFIX)) {
-      identity[key] = Array.isArray(v) ? v.join(',') : String(v ?? '');
+      if (LOGGABLE_IDENTITY.has(key) && !SENSITIVE_NAME.test(key)) {
+        identity[key] = Array.isArray(v) ? v.join(',') : String(v ?? '');
+      } else {
+        // Unknown or credential-looking key in the identity namespace. Record that it
+        // was PRESENT but never its value — an unexpected header appearing is itself
+        // forensically interesting (a new proxy, or someone probing), and dropping it
+        // silently would lose that signal while an allowlist alone would too.
+        unloggedIdentity.push(key);
+      }
     } else if (SECRET_HEADERS.has(key)) {
       secretsPresent.push(key);
     }
@@ -66,7 +98,7 @@ export function describe(req: Request): AccessEvent | null {
 
   const reasons: string[] = [];
   if (!isLoopback(addr)) reasons.push('non-loopback');
-  if (Object.keys(identity).length) reasons.push('identity-headers');
+  if (Object.keys(identity).length || unloggedIdentity.length) reasons.push('identity-headers');
   if (!SAFE_METHODS.has((req.method || '').toUpperCase())) reasons.push('mutating');
   if (!reasons.length) return null;
 
@@ -76,6 +108,7 @@ export function describe(req: Request): AccessEvent | null {
     method: req.method,
     path: (req.originalUrl || req.url || '').split('?')[0],
     identity,
+    unloggedIdentity,
     forwardedFor: xff ? (Array.isArray(xff) ? xff.join(',') : String(xff)) : null,
     secretsPresent,
     reasons,
@@ -90,6 +123,7 @@ export function format(e: AccessEvent): string {
     `why=${e.reasons.join('+')}`,
   ];
   for (const [k, v] of Object.entries(e.identity)) bits.push(`${k}=${JSON.stringify(v)}`);
+  if (e.unloggedIdentity.length) bits.push(`identity_headers_unlogged=${e.unloggedIdentity.join(',')}`);
   if (e.forwardedFor) bits.push(`x-forwarded-for(claimed)=${JSON.stringify(e.forwardedFor)}`);
   if (e.secretsPresent.length) bits.push(`credentials_present=${e.secretsPresent.join(',')}`);
   return `[access ${new Date().toISOString()}] ${bits.join(' ')}`;
