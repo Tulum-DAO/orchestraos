@@ -86,6 +86,10 @@ jobs:
           node-version: "22"
       - run: npm ci
       - run: npx tsc --noEmit
+      # The route/lib tests were never run here (only typechecked), so 6 of 13 route files had
+      # quietly stopped running on a clean checkout: they import config at load time and there
+      # is no orchestra.toml. `npm test` points them at the example config.
+      - run: npm test
 
   dashboard-build:
     runs-on: ubuntu-latest
