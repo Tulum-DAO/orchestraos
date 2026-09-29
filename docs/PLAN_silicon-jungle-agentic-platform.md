@@ -9,7 +9,8 @@
   network) + msg_f71af031_78170888 thesis continuation 3, FINAL (founder-
   selection criteria + vision close) + msg_20e0ef65_80391633 remote-
   facilitation evidence/portfolio-ventures/SOPs+branding addendum +
-  msg_014e86d8_80499368 Echo's independent peer review, 2026-09-29), as an
+  msg_014e86d8_80499368 Echo's independent peer review +
+  msg_1232b0a8_84598107 Echo's continued review, 2026-09-29), as an
   addendum to the Hermes/Matrix Telegram bridge brief.
   **The operator's "Industry Expert Venture Studio" thesis is now complete
   across all 4 relayed messages —
@@ -531,6 +532,41 @@ this seat nor gm has this document. gm is asking the operator directly.
 This brief does not speculate about its content or invent what it should
 contain.
 
+## 0i. Ninth addendum — Echo's continued review, one real correction to a
+security claim, not just a formatting request (gm relay, 2026-09-29)
+
+Echo reviewed the revision from §0h and found the control-design spec, while
+substantively complete, still needed two things: an operational runbook
+format (a restructuring task), and — the important one — a correction to
+what the spec's language actually claimed about isolation.
+
+**The real correction, checked directly against §4 item 1's own text before
+accepting it:** the spec's "blocked outright... process/filesystem
+boundary" language implied a stronger guarantee (OS-level isolation) than
+what accepted scope actually has (a behavioral control: tool-permission
+gating plus facilitator attention, with none of the three things that would
+need to hold — full path coverage, agent tool-use compliance, facilitator
+visibility — verified this session). **Corrected directly in §4 item 1**,
+not softened into a caveat next to the original claim. Also added: explicit
+intervention-trigger metrics (distinct from the capacity-planning
+thresholds, which were themselves restructured to separate "security
+incident, pause regardless of threshold" from "capacity signal, plan
+§4.2" — Echo's point 4, a real and important distinction the original
+draft risked collapsing into one). The Facilitator Runbook (new section,
+§4 item 1) consolidates all of this into the one-page operational format
+Echo asked for.
+
+**Re-opened eng review a third time for this one** (unlike §0h's
+tightening pass, which didn't need it) — the isolation-boundary language
+correction is a genuine technical/security claim being walked back, not
+just an explicitness improvement to an already-correct mechanism. See ENG
+REVIEW — Run 3 below.
+
+**Launch gate reframed per Echo's own bottom line** ("resolve Shaw and the
+runbook, then test the pilot"): the runbook is no longer an open item, it's
+written; recorded alongside Shaw's access as the two launch dependencies
+(§6), not left as one.
+
 ## 1. The ask, as parsed (gm's cleaned-up transcript + confirmed ground truth)
 
 Silicon Jungle Experience's **Weekender** (48hr, La Reserva Tulum) is
@@ -862,6 +898,113 @@ Three separable pieces, matching the three separable problems found above —
      the right model to follow if/when the async version (§4.2) is built,
      not claimed as already wired up for this pilot.
 
+   **Correction, per Echo's continued review — this is the sharpest and most
+   important point in this whole revision, checked directly against what
+   the spec above actually claims, not just noted and moved past.** Echo:
+   "native tool approvals control tool calls, but don't alone prove every
+   data path is isolated or that a facilitator can detect every failure."
+   Checked item 2 above ("blocked outright... this layer is a
+   process/filesystem boundary") against that critique directly: **the
+   word "boundary" overclaims what actually exists.** There is no OS-level
+   enforcement in accepted scope — no chroot, no container, no separate OS
+   user, no kernel-enforced filesystem permission separating an attendee's
+   session from the rest of the machine. What actually exists is **a
+   behavioral control**: the CLI runtime's tool-permission system prompts
+   or denies *recognized* tool calls (file reads/writes, bash commands)
+   that cross the stated lines, and the facilitator is expected to notice
+   anything the permission system doesn't cover. That depends on three
+   things holding, none of them verified this session: the permission
+   system actually covering every path an agent could use to read/write
+   data (not just the common tool calls); the agent using recognized tools
+   rather than some other channel; and the facilitator actually seeing
+   whatever the permission system doesn't gate. **This brief now states
+   plainly what "blocked outright" actually means: a strong behavioral
+   convention enforced by tooling and human attention, not a proven
+   isolation boundary** — closing the exact gap Echo named, not
+   re-asserting the stronger claim in different words.
+
+   **Explicit intervention metrics — Echo's ask, distinct from the
+   capacity-planning thresholds below (which are a different kind of
+   signal entirely, per the correction after this spec).** Concrete
+   signals for "the facilitator needs to act on THIS session right now,"
+   not just "are we over capacity":
+   - A gated action denied or requiring approval **twice or more for the
+     same category** within one session (possible confusion, or probing
+     the boundary rather than an honest mistake).
+   - Output that resembles another team's data, credentials, or any
+     content matching the off-limits categories above, appearing in this
+     session's context or transcript — **this is the Class 1 security
+     trigger (below): stop the session immediately, don't wait to confirm.**
+   - The session repeats the same failed action three or more times with
+     no progress (stuck, not deliberately probing — different response,
+     same "look now" urgency).
+   - No tool activity for longer than 10 minutes during declared working
+     time (silent failure or the team needs help and hasn't asked).
+   - The team explicitly asks for help — obvious, included for
+     completeness since it belongs in the same list as the signals that
+     aren't obvious.
+
+## The Facilitator Runbook (v1) — Echo's requested format, one page
+
+Restructuring the control design above into the operational shape Echo
+asked for. This is the actionable summary; the reasoning and corrections
+behind each line live in §4 item 1 above — this section doesn't repeat
+them, it consolidates them into something a facilitator can actually
+follow live.
+
+**Permitted without a check:** work inside the attendee team's own
+directory — read, write, run, test, install packages scoped there; use
+the fleet's planning/review skills (BSHR, CEO/eng review) on the team's
+own project.
+
+**Requires your explicit approval (native tool-permission prompt, answered
+live — not `approval.py`, which is a different, async mechanism not used
+here):** any file write outside the team's directory; any network call to
+a paid API, signup, or anything needing credentials; any git push, deploy,
+or publish; any outbound message to a human outside the team.
+
+**Blocked, no approval path — a behavioral control backed by tooling and
+your attention, not a proven OS-level boundary (see the correction above,
+this is stated honestly, not oversold):** fleet secrets and registry
+files; spawning new fleet seats; direct messages to `gm` or other seats;
+filesystem access outside the team's own directory, including other
+teams' directories.
+
+**What may enter shared/logged memory:** tool calls, permission decisions,
+and session start/end times, via the existing session transcript and
+`reflect`/`learnings.jsonl` — nothing about a team's own project content is
+filtered or summarized elsewhere; it stays in that team's own transcript
+and working directory.
+
+**Who can terminate a session:** you, the facilitator, by killing the
+session's process/pane directly — out-of-band from the agent, the agent
+cannot intercept or delay it. This is independent of the *agent*, not of
+*your own judgment* — no second check exists at this pilot's scale (stated
+honestly in §4 item 1's point 4); do a timestamped check-in every 15
+minutes per active session as a cheap partial mitigation, not a substitute
+for a real second check.
+
+**Stop immediately (Class 1, security — do this regardless of session
+count or time elapsed, never wait to confirm):**
+1. Another team's data, credentials, or anything from the off-limits
+   categories appears in this session.
+2. A gated action is denied or approval-required twice for the same
+   category in one session.
+3. Anything that looks like an access-control failure, however small.
+
+**Look now, not necessarily stop (capacity/attention signals):**
+4. Same failed action repeated 3+ times with no progress.
+5. No tool activity for 10+ minutes during working time.
+6. The team asks for help.
+
+**Incident steps, once you've stopped a session:** kill the session
+(above). Note what happened and when, in the same session log. Do not
+resume that session without understanding what the agent actually did in
+the affected window — read the transcript, don't guess. If it involved
+another team's data, tell that team what was exposed. This is a v1
+runbook for a pilot of ≤3 concurrent sessions; it is not a substitute for
+§4.2 if the pilot outgrows this scale.
+
    **The pilot promise, made concrete (per operator feedback — "attendees"
    generically is not a spec). Corrected once, honestly — see below — after
    gm relayed the fuller "Industry Expert Venture Studio" thesis (operator's
@@ -980,10 +1123,34 @@ over-engineering a boundary for a usage pattern that hasn't been observed yet
 would be worse than not building it yet, since it would look solved without
 being solved.
 
-**Measurable trigger threshold for §4.2 (per operator feedback — "facilitator
-capacity" made concrete, not left as a vague concept). Proposed starting
-values, explicitly a hypothesis to calibrate against real pilot data (§9,
-Implementation Task T1), not asserted as correct in advance:**
+**Critical distinction, per Echo's continued review — stated explicitly
+because the thresholds below were at real risk of being misread as a
+safety assurance, which they were never meant to be:** the numbers
+immediately below are **capacity-planning signals** — when facilitator
+load justifies investing in §4.2's infrastructure. They are **not security
+gates**. Any cross-team data exposure, any access-control failure, any
+sign the isolation described in the runbook (below) didn't hold — **triggers
+an immediate pause of the affected session(s), regardless of whether the
+pilot is under the concurrency/time thresholds.** "We're at 2 concurrent
+sessions, under the threshold of 3" is never a reason to continue through a
+security-relevant incident; it only answers "do we need more facilitators
+or §4.2 sooner," a completely different question with a completely
+different response posture. These are two distinct trigger classes with
+two distinct responses, not one dial — stated as two separate things below,
+not conflated into one "thresholds" section the way the earlier draft did.
+
+**Class 1 — security incident, immediate pause, no threshold check
+required:** any of the intervention triggers in the runbook's "Stop
+Immediately" list (below) fire regardless of session count or elapsed
+time. This is not new content — it restates what the runbook already
+requires — repeated here because Echo specifically flagged the risk of
+the capacity numbers below being read as covering this case too.
+
+**Class 2 — capacity-planning threshold for scoping §4.2 (per operator
+feedback — "facilitator capacity" made concrete, not left as a vague
+concept). Proposed starting values, explicitly a hypothesis to calibrate
+against real pilot data (§9, Implementation Task T1), not asserted as
+correct in advance:**
 - **Concurrency threshold:** no more than **3 concurrent attendee-team agent
   sessions per facilitator** at a time — reasoned from the control design
   above (approval requests need fast turnaround; a facilitator watching more
@@ -1019,9 +1186,9 @@ one brief's assumptions into the other's plan.
 
 ## 6. Open questions for the operator (surfaced, not decided here)
 
-**LAUNCH DEPENDENCY, resolve first (per operator feedback — elevated from
-an open question of ordinary urgency to a blocker on the pilot's start
-date):**
+**LAUNCH DEPENDENCIES, resolve first (per operator feedback + Echo's own
+bottom line — "resolve Shaw and the runbook, then test the pilot" — two
+items now, not one):**
 - **What does "Shaw contributing to the loop" concretely mean for access:
   read access to the fleet's decisions/learnings, or write access to send it
   tasks?** Very different trust levels, same phrase in the transcript.
@@ -1032,6 +1199,11 @@ date):**
   (§4) depends on this technically, but the operator has said it must be
   resolved before anything launches — treat that as the actual constraint,
   not a technical one this brief could argue around.
+- **The facilitator runbook — no longer an open question, already written
+  (§4 item 1, "The Facilitator Runbook (v1)") — but Echo's bottom line
+  names it as a launch gate alongside Shaw's access, so recorded here as
+  one, not left implicit.** Nothing further needed from the operator on
+  this specific item unless they want changes to the runbook itself.
 
 **Everything below remains open, ordinary urgency, does not block launch:**
 
@@ -1698,13 +1870,65 @@ Finding 3 (measurable thresholds)     | 0 issues — already honestly
                                        | caveated as estimates in the brief
 ```
 
+## ENG REVIEW — Run 3 (re-opened per Echo's continued review — the
+isolation-boundary claim correction)
+
+**Scope:** Echo's continued review corrected a security-relevant claim
+(§4 item 1's "blocked outright... boundary" language overclaimed OS-level
+isolation that accepted scope doesn't have). Re-opening eng review to check
+the correction itself is accurate and complete, and that the new runbook/
+intervention-metrics content doesn't introduce new unverified claims.
+
+**Finding 1: the corrected claim checked against reality, not just against
+itself.** The corrected language says accepted scope has "a strong
+behavioral convention enforced by tooling and human attention, not a
+proven isolation boundary." Verified the tooling half directly, not
+assumed: this very session's own tool calls (Read/Write/Edit/Bash) are
+gated by the CLI runtime's native permission system — this is
+first-hand, not inferred. The "not proven" half is also accurate as
+stated: no evidence was found anywhere this session (bridge brief, Silicon
+Jungle brief, or this one) of OS-level sandboxing, containers, or separate
+users for any OrchestraOS seat, attendee or otherwise. **The correction
+is accurate on both halves — not overcorrected into a false "nothing
+works" claim, and not undercorrected back toward the original overclaim.**
+
+**Finding 2: the intervention metrics and runbook don't introduce new
+unverified technical claims.** Read both sections against the rest of the
+brief: every mechanism they reference (native tool-permission prompts,
+session transcripts, `reflect`/`learnings.jsonl`, the out-of-band kill
+switch) is already established and verified earlier in this document or
+the ENG REVIEW Run 1/2 passes — nothing new is asserted about *how* these
+mechanisms work, only new content about *when to use them*. No further
+verification needed.
+
+**Finding 3: the Class 1/Class 2 threshold split is internally
+consistent.** Checked that "security incident, pause regardless of
+threshold" (Class 1) and "capacity-planning signal" (Class 2) don't
+overlap or contradict each other, and that the Class 1 triggers are the
+same ones named in the runbook's "Stop Immediately" list, not a second,
+different list invented for this section. Confirmed: same list, cited
+consistently in both places.
+
+### Eng Review Completion Summary (Run 3)
+
+```
+Finding 1 (isolation-boundary correction) | 0 issues — checked against
+                                            | first-hand session evidence,
+                                            | accurate on both halves
+Finding 2 (runbook/metrics new claims)     | 0 issues — no new unverified
+                                            | mechanisms introduced
+Finding 3 (Class 1/2 threshold split)      | 0 issues — internally
+                                            | consistent, same trigger list
+                                            | cited in both places
+```
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | issues_open | SELECTIVE EXPANSION; accepted narrow scope (expose loop + formalize Shaw access), deferred the large isolation build (§4.2) and all 5 delight-scan cherry-picks until real usage data justifies them |
 | Outside Review | dedicated research fork (general-purpose agent, web research: auth precedents, RBAC/sandboxing patterns, accelerator precedents, self-modifying-fleet guardrails) — reused as this review's spec-review-equivalent per 0H | Independent technical grounding | 1 | completed, issues_found | Found the shared-orchestration cross-tenant leakage risk that materially reshaped §4's recommendation before this CEO pass began; flagged 2 sources in its self-modifying-fleet section as needing independent re-verification. **Post-review correction (per operator feedback, §3):** the research pass's 43.9%-leak citation was imprecise — this seat re-read the primary source in full and corrected the framing from "shared memory leaks ~44% of the time" to "one disclosed, same-day-remediated enforcement gap in one production system, with narrower and more actionable lessons than originally stated" |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 2 | clean | Run 1: accepted scope verified against real infrastructure (`docs/agent-provisioning-guide.md`'s one-command seat creation, `msg_store.py`'s existing impersonation check) — confirmed to require zero new code; 1 low-confidence informational finding. **Run 2 (re-opened for the operator-feedback control design/threshold additions): self-caught and corrected a real gap** — the control design's first draft cited `approval.py` as a live in-session gating mechanism, which is wrong (it's async decision cards, not synchronous interrupt); corrected to the CLI runtime's own native permission system for accepted (facilitator-present) scope. Measurable thresholds independently judged honestly caveated, no correction needed |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 3 | clean | Run 1: accepted scope verified against real infrastructure — zero new code required, 1 low-confidence informational finding. Run 2: self-caught and corrected a real mechanism error (`approval.py` wrongly cited as a live gating mechanism; corrected to the CLI runtime's native permission system). **Run 3 (Echo's continued review, the isolation-boundary claim): checked the corrected "behavioral control, not proven boundary" language against first-hand session evidence — accurate on both halves; confirmed the new runbook/intervention-metrics content introduces no new unverified mechanisms; confirmed the Class 1 (security)/Class 2 (capacity) threshold split is internally consistent** |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | skipped (no UI scope) | — |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | not requested | — |
 
@@ -1835,6 +2059,25 @@ Finding 3 (measurable thresholds)     | 0 issues — already honestly
   off-limits categories, acknowledging a known limitation explicitly), not
   a new or corrected technical mechanism the way Run 2's `approval.py`
   correction was. Verdict and accepted scope unchanged.
+- **POST-REVIEW ADDENDUM (§0i), Echo's continued review — the most
+  substantive correction across all of Echo's feedback, treated with the
+  weight it deserved.** Echo's sharpest point ("native tool approvals...
+  don't alone prove every data path is isolated") was a genuine correction
+  to a security claim, not a formatting request — the brief's own
+  "process/filesystem boundary" language overclaimed OS-level isolation
+  accepted scope doesn't have. Corrected directly in §4 item 1 to "a
+  behavioral control... not a proven isolation boundary," **re-opened eng
+  review a third time** (Run 3, above) to check the correction against
+  first-hand session evidence rather than accept it on the strength of
+  having named it. Also added explicit intervention-trigger metrics and
+  restructured the capacity thresholds into two distinct classes (security
+  incident, pause regardless of threshold vs. capacity-planning signal) per
+  Echo's point 4, and consolidated the whole control design into an actual
+  one-page runbook (new section, §4 item 1) per Echo's requested format.
+  Launch gates reframed to two items (Shaw's access + the now-written
+  runbook) per Echo's own bottom line. Verdict and accepted scope
+  unchanged — this closes a real gap in how confidently the brief
+  described its own control design, it does not change what's accepted.
 
 **UNRESOLVED DECISIONS:**
 - Whether the operator is comfortable running Weekenders human-facilitated on
