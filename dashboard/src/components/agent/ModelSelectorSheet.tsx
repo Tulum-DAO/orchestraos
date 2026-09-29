@@ -14,7 +14,9 @@
  * Re-queries on every open (no stale sheet across a login/logout).
  */
 import { useCallback, useEffect, useState } from 'react';
-import { X, Plus } from 'lucide-react';
+import { X, Plus, Terminal, Copy } from 'lucide-react';
+import WebTerminal from '../WebTerminal';
+import { installCommand, installNote, cliFor } from '../../lib/providerConnect';
 import { ProviderConnectModal } from './ProviderConnectModal';
 import { useModelSelection } from '../../stores/modelSelection';
 import {
@@ -35,28 +37,108 @@ interface RuntimesAvailableResponse {
 /** Sentinel for the "Add a provider" tile: it expands like a provider, but is not one. */
 const ADD_PROVIDER = '__add_provider__';
 
-/** What it actually takes for a provider to show up in this row. A provider appears when
- *  its CLI is INSTALLED and SIGNED IN — the sheet only reports what the probe found, so the
- *  honest answer is the command to run, not a form that pretends to add one from here. */
-function AddProviderPanel({ rows }: { rows: ProviderRow[] }) {
+/** What it actually takes for a provider to show up in this row.
+ *
+ *  A provider appears once its CLI is INSTALLED on this machine and SIGNED IN, so the
+ *  honest answer is the command to run — not a form pretending the dashboard can add one.
+ *  But telling someone the command and then leaving them to find a terminal somewhere else
+ *  is half an answer: this panel opens one here, the same tmux window the connect modal
+ *  uses (operator, 2026-09-29). The shell is an INSTALL shell, not a login for a provider
+ *  that already exists, or a box with claude installed would greet "claude is installed but
+ *  not logged in" — the wrong errand.
+ */
+function AddProviderPanel({ rows, onInstalled }: { rows: ProviderRow[]; onInstalled: () => void }) {
   const missing = rows.filter((r) => !r.selectable);
+  const [session, setSession] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+
+  async function openTerminal() {
+    if (busy) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await fetch('/api/agents/login-shell', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ purpose: 'install' }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.ok) setError(json.reason || json.error || `HTTP ${res.status}`);
+      else setSession(json.session as string);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'network');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="text-xs text-foreground/70 leading-relaxed px-1 py-2 flex flex-col gap-2">
       <p className="text-foreground/80">
         A provider shows up here once its CLI is installed on this machine and signed in.
       </p>
       {missing.length > 0 && (
-        <ul className="flex flex-col gap-1">
-          {missing.map((r) => (
-            <li key={r.provider.id} className="flex flex-col">
-              <span className="text-foreground/80">{r.provider.label}</span>
-              <span className="text-foreground/45">{r.greyReason}</span>
-            </li>
-          ))}
+        <ul className="flex flex-col gap-2">
+          {missing.map((r) => {
+            const cmd = installCommand(r.provider.id);
+            return (
+              <li key={r.provider.id} className="flex flex-col gap-1">
+                <span className="text-foreground/80">
+                  {r.provider.label} <span className="text-foreground/45">— {r.greyReason}</span>
+                </span>
+                {cmd ? (
+                  <div className="flex items-start gap-1">
+                    <code className="flex-1 px-2 py-1 rounded bg-muted text-foreground/90 break-all">{cmd}</code>
+                    <button
+                      aria-label={`Copy the ${cliFor(r.provider.id)} install command`}
+                      className="p-1 rounded hover:bg-muted shrink-0"
+                      onClick={() => {
+                        void navigator.clipboard?.writeText(cmd);
+                        setCopied(r.provider.id);
+                        setTimeout(() => setCopied((c) => (c === r.provider.id ? null : c)), 1500);
+                      }}
+                    >
+                      {copied === r.provider.id ? <span className="text-[10px]">copied</span> : <Copy size={14} />}
+                    </button>
+                  </div>
+                ) : (
+                  <span className="text-foreground/45">{installNote(r.provider.id)}</span>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
+
+      {!session && (
+        <button
+          onClick={openTerminal}
+          disabled={busy}
+          data-testid="add-provider-terminal"
+          className="self-start inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-border hover:bg-muted text-foreground/90 disabled:opacity-60"
+        >
+          <Terminal size={14} />
+          {busy ? 'Opening a terminal…' : 'Open a terminal here'}
+        </button>
+      )}
+      {error && <p className="text-red-400/90">Could not open a terminal: {error}</p>}
+      {session && (
+        <>
+          <div className="rounded-lg overflow-hidden border border-border h-[52vh] min-h-[300px]"
+               data-testid="add-provider-terminal-pane">
+            <WebTerminal session={session} machine="vps" />
+          </div>
+          {/* The probe is what decides red vs selectable, so finishing an install is only
+              half of it — this is the button that makes the sheet notice. */}
+          <button onClick={onInstalled}
+                  className="self-start underline underline-offset-2 text-foreground/60 hover:text-foreground">
+            check again
+          </button>
+        </>
+      )}
       <p className="text-foreground/45">
-        Install it, run the CLI once and sign in, then reopen this sheet — it re-probes every
+        Install it, run the CLI once and sign in, then check again — the sheet re-probes every
         time it opens. Providers themselves come from the install's provider catalogue.
       </p>
     </div>
@@ -248,7 +330,9 @@ export function ModelSelectorSheet({ open, onClose, selection, onPick, onPickDef
             {/* Models for the expanded provider */}
             <div className="flex flex-col gap-1 max-h-64 overflow-y-auto">
               {(() => {
-                if (expandedProviderId === ADD_PROVIDER) return <AddProviderPanel rows={rows} />;
+                if (expandedProviderId === ADD_PROVIDER) {
+                  return <AddProviderPanel rows={rows} onInstalled={() => { void probe(true); }} />;
+                }
                 const expandedRow = rows.find((r) => r.provider.id === expandedProviderId);
                 if (!expandedRow) return null;
                 const models = modelsForProvider(expandedRow);

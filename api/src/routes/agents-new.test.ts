@@ -267,3 +267,40 @@ test('POST /login-shell with no provider still behaves as it did before', async 
   assert.equal(res.status, 200);
   assert.equal(res.json.session, 'login-claude');
 });
+
+// ---- the "Add a provider" tile needs a terminal of its own -----------------------------
+// It listed what to install and then left the operator to find a terminal elsewhere. The
+// shell it needs is NOT a login shell for an existing provider: on a box where claude is
+// installed, the no-provider form greets with "claude is installed but not logged in",
+// which is the wrong errand entirely (operator, 2026-09-29).
+
+test('login-shell with purpose:install opens an INSTALL shell, not a login for an installed cli', async () => {
+  const deps = makeDeps({ rows: [authedRow('claude', 'claude')] });
+  const r = await post(deps, '/api/agents/login-shell', { purpose: 'install' });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.ok, true);
+  assert.equal(r.json.session, 'login-install');
+  assert.doesNotMatch(r.json.hint, /not logged in/i);
+  assert.match(r.json.hint, /install/i);
+  const greeting = deps.calls.loginShell[0].greeting as string;
+  assert.match(greeting, /install/i);
+});
+
+test('the install shell is ONE reused session, like every other login shell', async () => {
+  const deps = makeDeps({ rows: [authedRow('claude', 'claude')] });
+  const a = await post(deps, '/api/agents/login-shell', { purpose: 'install' });
+  const b = await post(deps, '/api/agents/login-shell', { purpose: 'install' });
+  assert.equal(a.json.session, b.json.session);
+});
+
+test('an unknown purpose is ignored — it never silently becomes an install shell', async () => {
+  const deps = makeDeps({ rows: [authedRow('claude', 'claude')] });
+  const r = await post(deps, '/api/agents/login-shell', { purpose: 'wat' });
+  assert.equal(r.json.session, 'login-claude');
+});
+
+test('a named provider still wins over the install purpose', async () => {
+  const deps = makeDeps({ rows: [authedRow('claude', 'claude'), { ...authedRow('gemini', 'agy'), installed: false, authed: false }] });
+  const r = await post(deps, '/api/agents/login-shell', { provider: 'gemini', purpose: 'install' });
+  assert.equal(r.json.cli, 'agy');
+});

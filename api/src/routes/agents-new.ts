@@ -69,6 +69,21 @@ export function pickRuntime(rows: RuntimeRow[], requested: string | undefined): 
 }
 
 /** What to tell someone who has no logged-in CLI, keyed to what is actually on the box. */
+/** The "Add a provider" shell. NOT a login for a provider that already exists: on a box
+ *  where claude is installed, the no-provider form greets with "claude is installed but not
+ *  logged in", which is the wrong errand when the operator came to ADD one. `install` is a
+ *  purpose, not a cli, so the reused session is `login-install`. */
+export function installShellHint(rows: RuntimeRow[]): { cli: string; hint: string; greeting: string } {
+  const missing = (rows || []).filter((r) => !r.installed).map((r) => cliOf(r));
+  const named = missing.length ? ` Not installed here yet: ${missing.join(', ')}.` : '';
+  const hint = `Install a provider CLI on this machine, then run it once to sign in.${named}`;
+  return {
+    cli: 'install',
+    hint,
+    greeting: `Install a provider CLI here, then run it once to sign in.${named}\n\nThe sheet re-probes every time it opens, so once a CLI is installed and signed in it turns selectable.`,
+  };
+}
+
 export function loginHint(rows: RuntimeRow[], providerId?: string): { cli: string; hint: string; greeting: string } {
   const installed = (rows || []).filter((r) => r.installed);
   // G21 — the disconnected-provider modal opens a login for the tile the operator TAPPED.
@@ -149,7 +164,10 @@ export function createAgentsNewRouter(deps: NewAgentDeps): Router {
     // {provider} is optional: the modal sends the tapped provider, the older New-Agent path
     // sends nothing and keeps its previous behaviour.
     const provider = req.body?.provider ? String(req.body.provider).slice(0, 40) : undefined;
-    const { cli, hint, greeting } = loginHint(rows, provider);
+    // {purpose:'install'} is the "Add a provider" tile: no provider chosen yet. A named
+    // provider still wins — it is the more specific request of the two.
+    const wantsInstall = !provider && req.body?.purpose === 'install';
+    const { cli, hint, greeting } = wantsInstall ? installShellHint(rows) : loginHint(rows, provider);
     // ONE session per cli, reused: tapping twice must not leave a litter of shells.
     const session = `login-${cli}`;
     const started = await deps.startLoginShell({ session, greeting });
