@@ -218,3 +218,50 @@ def test_claude_catalog_offers_opus_5_5():
     # 2026-09-29: the claude CLI's own default is Opus 5.5 and it accepts --model=claude-opus-5-5,
     # but the static catalog stopped at Opus 5, so the operator could not pick it explicitly.
     assert "claude-opus-5-5" in B.load_model_catalog(PROVIDERS)["claude"]
+
+
+# --- the live catalog: the picker must not offer a model the proxy then refuses ---
+# api/src/routes/model-catalog.ts asks each CLI what THIS login can run and caches the ids.
+# Before this, validate_model only knew providers.json model_catalog.static, so every model
+# the probe found but the static list lacked (6 of 28 on the operator's own box) was offered
+# in the picker and 502'd on pick.
+
+def test_live_catalog_ids_are_accepted_alongside_static(tmp_path):
+    live = tmp_path / "model-catalog-live.json"
+    live.write_text(json.dumps({"providers": {"claude": ["claude-opus-4-6"]}}))
+    cat = B.load_model_catalog(PROVIDERS, live)
+    B.validate_model("claude", "claude-opus-4-6", cat)   # live-only id: allowed
+    B.validate_model("claude", "claude-sonnet-5", cat)   # static id: still allowed
+
+
+def test_live_catalog_never_invents_a_provider(tmp_path):
+    live = tmp_path / "model-catalog-live.json"
+    live.write_text(json.dumps({"providers": {"grok": ["grok-9"]}}))
+    cat = B.load_model_catalog(PROVIDERS, live)
+    assert "grok" not in cat
+    with pytest.raises(B.ModelNotAllowed):
+        B.validate_model("grok", "grok-9", cat)
+
+
+def test_live_catalog_still_rejects_a_model_nobody_reported(tmp_path):
+    live = tmp_path / "model-catalog-live.json"
+    live.write_text(json.dumps({"providers": {"claude": ["claude-opus-4-6"]}}))
+    cat = B.load_model_catalog(PROVIDERS, live)
+    with pytest.raises(B.ModelNotAllowed):
+        B.validate_model("claude", "claude-sonnet-4", cat)
+
+
+def test_missing_or_corrupt_live_catalog_falls_back_to_static(tmp_path):
+    assert B.load_model_catalog(PROVIDERS, tmp_path / "nope.json")["claude"]
+    corrupt = tmp_path / "corrupt.json"
+    corrupt.write_text("{not json")
+    cat = B.load_model_catalog(PROVIDERS, corrupt)
+    B.validate_model("claude", "claude-sonnet-5", cat)
+
+
+def test_a_live_id_that_is_not_well_shaped_is_still_refused(tmp_path):
+    live = tmp_path / "model-catalog-live.json"
+    live.write_text(json.dumps({"providers": {"claude": ["--version"]}}))
+    cat = B.load_model_catalog(PROVIDERS, live)
+    with pytest.raises(B.ModelNotAllowed):
+        B.validate_model("claude", "--version", cat)

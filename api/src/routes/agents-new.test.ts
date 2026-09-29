@@ -17,7 +17,10 @@ import { createAgentsNewRouter, normalizeAgentName, pickRuntime, loginHint, comp
 function authedRow(id: string, cli: string, authed: boolean | 'unverified' = true) {
   // logo_svg/models are part of ProviderResult; the login paths ignore them, but loginHint
   // takes RuntimeRow[] so the fixture has to be a real row rather than a near-miss.
-  return { id, label: id, cli, installed: true, authed, auth_reason: undefined, logo_svg: '', models: [] };
+  return {
+    id, label: id, cli, installed: true, authed, auth_reason: undefined, logo_svg: '',
+    models: [], model_catalog_source: 'static' as const,
+  };
 }
 
 function makeDeps(over: Partial<NewAgentDeps> & { rows?: any[] } = {}): NewAgentDeps & { calls: any } {

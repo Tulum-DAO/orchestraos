@@ -1,5 +1,5 @@
 {
- "$schema_note": "Agent Page v1 B2 — the SELF-HEALING provider/model catalog registry. This file adds UI + probe METADATA only. Runtime truth (which ids are valid runtimes) stays scripts/runtime_signatures.py VALID_RUNTIMES = (claude, gemini, codex, service). 'service' is deliberately omitted here — it is an internal seat kind, never a user-facing model provider. The route (api/src/routes/runtimes-available.ts) must iterate this array generically (dispatch by auth_probe.kind, never by provider id) so it carries zero provider literals in its core logic.",
+ "$schema_note": "Agent Page v1 B2 \u2014 the SELF-HEALING provider/model catalog registry. This file adds UI + probe METADATA only. model_catalog.source='probe' asks the operator's OWN CLI what their login can run (api/src/routes/model-catalog.ts, dispatched on probe.kind \u2014 no provider literals); 'static' is the fallback served when a probe fails, so a broken CLI can never empty the picker. Runtime truth (which ids are valid runtimes) stays scripts/runtime_signatures.py VALID_RUNTIMES = (claude, gemini, codex, service). 'service' is deliberately omitted here \u2014 it is an internal seat kind, never a user-facing model provider. The route (api/src/routes/runtimes-available.ts) must iterate this array generically (dispatch by auth_probe.kind, never by provider id) so it carries zero provider literals in its core logic.",
  "providers": [
   {
    "id": "claude",
@@ -21,7 +21,19 @@
     }
    },
    "model_catalog": {
-    "source": "static",
+    "source": "probe",
+    "probe": {
+     "kind": "stdin-json-stream",
+     "cmd": "claude -p --input-format stream-json --output-format stream-json --verbose --no-session-persistence",
+     "stdin": "{\"type\":\"control_request\",\"request_id\":\"orchestraos-model-probe\",\"request\":{\"subtype\":\"initialize\"}}",
+     "match": {
+      "type": "control_response"
+     },
+     "list_path": "response.response.models",
+     "id_key": "value",
+     "label_key": "displayName",
+     "timeout_ms": 30000
+    },
     "static": [
      {
       "id": "claude-opus-5-5",
@@ -157,7 +169,14 @@
     "expiry_key": "token.expiry"
    },
    "model_catalog": {
-    "source": "static",
+    "source": "probe",
+    "probe": {
+     "kind": "tsv-stdout",
+     "cmd": "agy models",
+     "id_field": 0,
+     "label_field": 1,
+     "timeout_ms": 30000
+    },
     "static": [
      {
       "id": "gemini-3.8-flash-high",
@@ -316,8 +335,7 @@
        "context_window"
       ]
      }
-    ],
-    "$note": "ids are agy's own (`agy models`, agy 1.2.13, 2026-09-29): agy rejects a bare family id like gemini-3.7-flash ('requires --effort'), so every id carries its effort suffix. Pinned by services/arturo/test_brain_routing.py."
+    ]
    }
   },
   {
@@ -335,7 +353,19 @@
     "key": "tokens"
    },
    "model_catalog": {
-    "source": "static",
+    "source": "probe",
+    "probe": {
+     "kind": "jsonrpc-stdio",
+     "cmd": "codex app-server",
+     "method": "model/list",
+     "list_path": "result.data",
+     "cursor_path": "result.nextCursor",
+     "id_key": "id",
+     "label_key": "displayName",
+     "hidden_key": "hidden",
+     "modalities_key": "inputModalities",
+     "timeout_ms": 30000
+    },
     "static": [
      {
       "id": "gpt-5.6-terra",

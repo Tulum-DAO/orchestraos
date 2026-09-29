@@ -23,16 +23,21 @@
  */
 import { Router, type Request, type Response } from 'express';
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { probeModelCatalog, type CatalogResult, type ModelProbeConfig } from './model-catalog.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // api/src/routes -> repo root is three levels up.
 const DEFAULT_PROVIDERS_PATH = resolvePath(__dirname, '../../../config/providers.json');
 
 const TTL_S = 300;
+// The proxy validates an explicitly picked model against this file (union'd with
+// providers.json static ids). Offering a model in the picker and then refusing it is
+// the bug this closes, so a PROBED catalog is published where validation can see it.
+const DEFAULT_LIVE_CATALOG_PATH = resolvePath(__dirname, '../../../state/model-catalog-live.json');
 
 export interface ModelCapabilities {
   text: boolean;
@@ -67,7 +72,12 @@ export interface ProviderConfig {
   aliases: string[];
   detect: { cmd: string };
   auth_probe: AuthProbeConfig;
-  model_catalog: { source: 'registry' | 'cli' | 'static'; static?: StaticModel[] };
+  model_catalog: {
+    source: 'registry' | 'cli' | 'static' | 'probe';
+    /** Live, login-specific list (source: 'probe'); `static` stays the fallback. */
+    probe?: ModelProbeConfig;
+    static?: StaticModel[];
+  };
 }
 
 export interface AuthResult {
@@ -79,6 +89,8 @@ export interface ModelInfo {
   id: string;
   label: string;
   capabilities: ModelCapabilities;
+  /** Fields we have NOT confirmed for this model — never silently assumed. */
+  capabilities_unverified?: string[];
 }
 
 export interface ProviderResult {
@@ -89,6 +101,10 @@ export interface ProviderResult {
   authed: boolean | 'unverified';
   auth_reason?: string;
   models: ModelInfo[];
+  /** Where `models` came from: a live probe, the static list, or the static
+   *  list AFTER a probe failed (with `model_catalog_reason` saying why). */
+  model_catalog_source: CatalogResult['source'];
+  model_catalog_reason?: string;
 }
 
 export interface RuntimesAvailableResponse {
@@ -209,27 +225,67 @@ export function defaultProbeAuth(provider: ProviderConfig): AuthResult {
   return runAuthProbe(provider.auth_probe);
 }
 
-export function defaultLoadModelCatalog(provider: ProviderConfig): ModelInfo[] {
-  if (provider.model_catalog.source === 'static') {
-    return (provider.model_catalog.static || []).map((m) => ({
-      id: m.id,
-      label: m.label,
-      capabilities: m.capabilities,
-    }));
+function staticCatalog(provider: ProviderConfig, reason?: string): CatalogResult {
+  const models = (provider.model_catalog.static || []).map((m) => ({
+    id: m.id,
+    label: m.label,
+    capabilities: m.capabilities,
+    ...(m.capabilities_unverified?.length ? { capabilities_unverified: m.capabilities_unverified } : {}),
+  }));
+  return reason ? { models, source: 'static-fallback', reason } : { models, source: 'static' };
+}
+
+/**
+ * The catalog for one provider. A `probe` source asks the operator's OWN CLI
+ * what it can run (see model-catalog.ts); anything else serves the static
+ * list. A probe is only worth running against a CLI that is installed and
+ * authed — a logged-out CLI cannot answer, and waiting for it to fail would
+ * stall the route.
+ */
+export function defaultLoadModelCatalog(provider: ProviderConfig, auth?: AuthResult): CatalogResult {
+  const probe = provider.model_catalog.probe;
+  if (provider.model_catalog.source !== 'probe' || !probe) {
+    if (provider.model_catalog.source === 'static') return staticCatalog(provider);
+    // 'registry' / 'cli' sources: no live consumer and no agreed shape — the
+    // static list, said out loud, rather than a guess.
+    return staticCatalog(provider, `unwired-source:${provider.model_catalog.source}`);
   }
-  // 'registry' / 'cli' sources: not yet wired (no live consumer needs them
-  // for B2's static-fleet-model set) — LOUD unverified empty list rather than
-  // guessing a shape.
-  return [];
+  if (auth && auth.authed !== true) {
+    return staticCatalog(provider, `not-authed:${auth.auth_reason || auth.authed}`);
+  }
+  return probeModelCatalog(probe, provider.model_catalog.static || []);
 }
 
 // ---- probe deps + cache ------------------------------------------------
+
+/** Atomic, best-effort: this is a cache. A failure to publish must never fail a probe. */
+export function defaultPublishLiveCatalog(
+  providers: ProviderResult[],
+  path: string = DEFAULT_LIVE_CATALOG_PATH,
+): void {
+  try {
+    const live: Record<string, string[]> = {};
+    for (const p of providers) {
+      // Only a LIVE answer is published; a static fallback is already known to the reader.
+      if (p.model_catalog_source !== 'probe') continue;
+      live[p.id] = p.models.map((m) => m.id);
+    }
+    if (!Object.keys(live).length) return;
+    mkdirSync(dirname(path), { recursive: true });
+    const tmp = `${path}.tmp`;
+    writeFileSync(tmp, `${JSON.stringify({ providers: live, probed_at: Date.now() }, null, 1)}\n`);
+    renameSync(tmp, path);
+  } catch {
+    /* cache only — the picker and the probe are unaffected */
+  }
+}
 
 export interface ProbeDeps {
   loadProviders: () => ProviderConfig[];
   isInstalled: (provider: ProviderConfig) => boolean;
   probeAuth: (provider: ProviderConfig) => AuthResult;
-  loadModelCatalog: (provider: ProviderConfig) => ModelInfo[];
+  loadModelCatalog: (provider: ProviderConfig, auth?: AuthResult) => CatalogResult;
+  publishLiveCatalog: (providers: ProviderResult[]) => void;
   now: () => number;
 }
 
@@ -239,6 +295,7 @@ export function makeDefaultDeps(providersPath?: string): ProbeDeps {
     isInstalled: defaultIsInstalled,
     probeAuth: defaultProbeAuth,
     loadModelCatalog: defaultLoadModelCatalog,
+    publishLiveCatalog: (providers) => defaultPublishLiveCatalog(providers),
     now: () => Date.now(),
   };
 }
@@ -253,7 +310,7 @@ export function probeAll(deps: ProbeDeps): RuntimesAvailableResponse {
     const auth = installed
       ? deps.probeAuth(provider)
       : { authed: false as const, auth_reason: 'not-installed' };
-    const models = deps.loadModelCatalog(provider);
+    const catalog = deps.loadModelCatalog(provider, auth);
     return {
       id: provider.id,
       label: provider.label,
@@ -261,9 +318,12 @@ export function probeAll(deps: ProbeDeps): RuntimesAvailableResponse {
       installed,
       authed: auth.authed,
       auth_reason: auth.auth_reason,
-      models,
+      models: catalog.models,
+      model_catalog_source: catalog.source,
+      ...(catalog.reason ? { model_catalog_reason: catalog.reason } : {}),
     };
   });
+  deps.publishLiveCatalog(results);
   return { providers: results, probed_at: deps.now(), ttl_s: TTL_S };
 }
 
