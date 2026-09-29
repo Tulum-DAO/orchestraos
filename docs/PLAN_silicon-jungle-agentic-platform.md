@@ -2,14 +2,16 @@
 
 - **Requested by:** operator, via gm (msg_6568c41b_74190686 + msg_0d4c2eea_74781096
   ground-truth confirmation + msg_6a2b5afd_74610984 domains/partners/event
-  addendum, 2026-09-29), as an addendum to the Hermes/Matrix Telegram bridge brief
+  addendum + msg_ffd21b6f_76509819 Shaw identity/toddi.to/traction addendum,
+  2026-09-29), as an addendum to the Hermes/Matrix Telegram bridge brief
 - **Authored by:** plan (BSHR research + brief, non-interactive)
 - **Status:** CEO + ENG REVIEWED, CLEARED for accepted (narrow) scope — awaiting
-  the operator's answer to §6's load-bearing question before acting. **§0b
-  (below) is a post-review addendum** folded in after CEO+eng review completed —
-  reinforces the accepted recommendation with real operational precedent found
-  during verification; does not change the reviewed scope or verdict. Coherence
-  checked against §2-§6, no contradiction found.
+  the operator's answer to §6's load-bearing question before acting. **§0b and
+  §0c (below) are post-review addenda** folded in after CEO+eng review
+  completed — reinforce the accepted recommendation with real operational
+  precedent and traction data found during verification; neither changes the
+  reviewed scope or verdict. Coherence checked against §2-§6 each time, no
+  contradiction found.
 - **Scope:** strategic brief only. No implementation authorized. Kept as a
   **separate document from** `docs/PLAN_hermes-matrix-telegram-bridge.md`, which
   it references — per gm's explicit instruction not to let the bridge brief
@@ -169,6 +171,103 @@ product decision this brief should build on, not relitigate — and it directly
 overlaps with the Hermes/Matrix bridge brief's finding that WhatsApp is already
 the one network with real (if dormant) bridge infra on this machine
 (`mautrix-whatsapp` at `/Users/flybyflow/substrate/infra/matrix/`).
+
+## 0c. Third ground-truth addendum (post-review, gm addendum 4) — Shaw's
+identity resolved, toddi.to reframed, real event/funding traction
+
+**Shaw Cole's identity — RESOLVED, verified directly, not taken on gm's relay
+alone.** Fetched `https://luma.com/edn6uxdl` (BUILD-A-THON.v8, "THE TULUMINATOR
+AGENT," Sep 19-20, Panza Tulum). Confirmed: **Shaw Cole is real**, listed as
+guest host alongside the operator (Mo), and the page states directly he
+"has also created OrchestraOS, a custom agent framework he'll teach
+participants to implement during the weekend." Also confirmed: Shaw's own
+project is **ListMagic** (stealth), "combining intent data with AI voice
+technology for personalized outreach," processing "~60 billion weekly signals
+matched against 265 million U.S. adults" — this is the "intent-driven data
+for GTM/targeted ads" product referenced in addendum 4's event/sponsor
+context below. Secondary check: `bio.site/ShawCole` does **not** mention
+OrchestraOS, Silicon Jungle, or ListMagic at all — focused on Colorado
+small-business marketing services instead. Read together: the Luma page is
+detailed, specific, and consistent with everything else in this thread; the
+bio.site page reads as an older/generic personal-branding page not updated
+for the newer agent-framework work. Noting the discrepancy rather than
+silently picking the convenient source — but the Luma page's specificity
+(exact framework name, exact event, co-hosting with the operator) makes this
+seat confident Shaw Cole is who gm's addendum says he is.
+
+**This resolves one thing and leaves a separate thing exactly as open as
+before — worth stating precisely, since the original operator transcript
+conflated them:** Shaw Cole, a real co-founder, is confirmed as OrchestraOS's
+author (this fleet's own codebase). That is now settled. It does **not**
+touch the Hermes/NousResearch finding in the bridge brief (§0a/§2 there) —
+Hermes is a separate project, credited to NousResearch in its own plugin
+metadata, unrelated to Shaw or OrchestraOS. Two different facts, not one
+contradiction to resolve — see the bridge brief's own updated note.
+
+**Paul Graham's "Making Startups Powerful"** (`paulgraham.com/powerful.html`,
+read directly per gm's explicit instruction not to guess at its content, sent
+by the operator as GTM/ontology inspiration): core argument is that durable
+startup power comes from **owning the customer relationship** and **creating
+more value than you capture**, not from incremental revenue or lock-in —
+"the most powerful position involves controlling how money flows through
+your platform and maintaining direct customer contact." This maps directly
+onto the operator's own stated thesis (§0b): "long on relationships first...
+gets us attention and distribution." Not a new finding, a citation that the
+operator's stated strategy has a specific, identifiable intellectual lineage,
+which may matter if this brief or a future one is used to explain the
+strategy to a partner or investor.
+
+**toddi.to — reframed, not resolved, surfaced as an open question per gm's
+explicit instruction.** A prior finding (from `ea`, relayed by gm, not
+independently re-verified by this seat — flagging that provenance plainly)
+concluded a local `mic-program-toddito` repo was unrelated legacy code and
+"no app exists yet" for toddi.to. New context complicates that conclusion:
+the operator describes "Todd's methodology" as a real, existing thing — "38
+years of organizational diagnostic science, applied research over 5000
+companies and 5 continents" — meant to be showcased to event attendees/
+sponsors alongside Shaw's ListMagic. Read together, the original ask ("check
+on toddi.to, give me feedback on next steps") may have been about
+**positioning/onboarding a real person's existing methodology into the event/
+sponsor pipeline**, not about whether an app needs building. This seat is
+**not deciding which reading is right** — per gm's instruction, surfacing it
+as an open question (added to §6 below) rather than silently keeping the
+"treat as a build task" framing or silently replacing it with the new one.
+
+**Real event/funding traction (operator's own numbers, relayed by gm, not
+independently re-verified beyond the Luma page confirming event #8 is real):**
+8 BUILD-A-THON events run to date (v8 = Sep 19-20, confirmed live via Luma),
+event #9 in planning, format actively iterating each time. Now courting
+sponsors, with a "big fish" strategy — using the events themselves as
+sponsor visibility/product-trial vehicles, with Shaw's ListMagic and Todd's
+diagnostic methodology as the named sponsor-facing candidates. At least one
+concrete joint venture already exists from a past event, with fractional
+ownership: **"Snap Eats,"** a food app, structured so the fleet/technical
+side owns "the technology" and JV partners own go-to-market — i.e., the
+"Silicon Ventures" concept from addendum 1 (§1) is not just a named program,
+it already has a real precedent. A fund manager (unnamed, described as a
+"9-figure fund") has expressed interest in funding a future competition
+winner if the format evolves into a judged competition with demo days —
+**explicitly speculative/in-progress**, not committed, treated as such here.
+
+**Does this change the accepted-scope recommendation from the CEO/eng
+review above? This seat's independent read, not a rubber-stamp of gm's
+framing (which suggested "no change," this seat mostly agrees but with one
+sharpening worth stating):** the traction data is real evidence *for*
+staying lean on infrastructure right now — 8 successful events, a real JV,
+and active sponsor conversations happened *without* any of the isolation
+infrastructure this brief deferred (§3/§4), which is direct validation the
+sequencing call was right, not just plausible. **The one nuance gm's
+framing didn't quite capture:** "event #9 already in planning" and
+"potential judged competition with demo days" both point toward the pace of
+real usage *picking up*, not staying flat — which means the brief's trigger
+condition for §4.2 (per-tenant isolation), originally framed as "gated on
+real usage data" with no urgency implied, may arrive on a shorter timeline
+than the brief's original tone suggested. Not a scope change — the
+recommended sequence (facilitate → formalize access → isolate, in that
+order) is unchanged — but the operator should read "gated on real usage
+data" as **"probably sooner rather than later, given 8 events already run
+and a 9th already planned,"** not as an indefinitely deferred, low-priority
+item.
 
 ## 1. The ask, as parsed (gm's cleaned-up transcript + confirmed ground truth)
 
@@ -394,9 +493,19 @@ one brief's assumptions into the other's plan.
   by either brief; a real architecture question the two threads share.
 - What does "Shaw contributing to the loop" concretely mean for access: read
   access to the fleet's decisions/learnings, or write access to send it tasks?
-  Very different trust levels, same phrase in the transcript.
+  Very different trust levels, same phrase in the transcript. **(Shaw's
+  identity itself is now resolved per §0c — real, confirmed OrchestraOS
+  author — this question is now purely about access level, not who he is.)**
+- **(Added per §0c)** toddi.to — is "check on toddi.to" actually a positioning/
+  onboarding question (Todd's real, existing diagnostic methodology, meant for
+  the event/sponsor pipeline) rather than a build question (the original
+  "no app exists yet" reading, from a local-repo finding that's still
+  factually true but may answer the wrong question)? Genuinely unresolved;
+  this seat is not picking a reading.
 - Is there a target build-weekend date that puts a real clock on §4.2's
-  identity-layer work, or is this multi-quarter exploration?
+  identity-layer work, or is this multi-quarter exploration? **(Sharpened by
+  §0c: 8 events already run, a 9th in planning — "gated on real usage data"
+  likely means sooner than the brief's original open-ended framing implied.)**
 - Guiding imperatives (prosperity, reduced suffering/friction, curiosity) read
   as product principles more than acceptance criteria — worth the operator
   confirming whether CEO review should hold the plan to them explicitly (e.g.
@@ -1003,13 +1112,31 @@ Outside Voice             | reused from CEO review (same document, same pass)
   gateway) rather than contradicting it. One new open question added to §6
   as a result (shared vs. dedicated gateway for Silicon Jungle's own WhatsApp
   presence). Verdict and accepted scope above are unchanged by this addendum.
+- **POST-REVIEW ADDENDUM (§0c):** gm's fourth addendum (Shaw Cole's identity
+  resolved via direct Luma-page verification, the PG essay read directly,
+  toddi.to reframed as an open positioning question rather than a settled
+  "no app" finding, and real event/funding traction — 8 events run, a real
+  JV precedent, sponsor/funding conversations in progress) folded in as §0c,
+  coherence-checked, not a full re-review. This seat's independent read
+  mostly agrees with gm's "no scope change" framing but adds one sharpening:
+  the pace of real usage (event #9 already planned) means §4.2's "gated on
+  real usage data" trigger likely arrives sooner than the brief's original
+  open-ended tone implied — noted explicitly in §6, not treated as a scope
+  change. Verdict and accepted scope unchanged.
 
 **UNRESOLVED DECISIONS:**
 - Whether the operator is comfortable running Weekenders human-facilitated on
   today's system before any isolation work starts (§6) — the load-bearing
   question this whole sequencing recommendation depends on.
-- What "Shaw contributing to the loop" means concretely for access level (§6).
-- Whether there's a real clock (target date) on the eventual §4.2 work (§6).
+- What "Shaw contributing to the loop" means concretely for access level (§6)
+  — **Shaw's identity itself is now resolved (§0c)**, this is purely about
+  access level now.
+- **(Added per §0c)** Whether "check on toddi.to" was a positioning/onboarding
+  question about a real person's existing methodology, or a build question —
+  genuinely unresolved, not decided by this seat (§0c/§6).
+- Whether there's a real clock (target date) on the eventual §4.2 work (§6) —
+  **sharpened by §0c**: likely sooner than originally framed, given 8 events
+  run and a 9th in planning, though still not a hard date.
 - Whether the guiding imperatives (prosperity/friction/curiosity) should gate
   future reviews explicitly or stay background culture (§6).
 - The two research-pass sources flagged as needing independent re-verification

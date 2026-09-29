@@ -1,16 +1,19 @@
 # Product Brief: Replace OrchestraOS's Telegram Bridge with Hermes (+ optional Matrix)
 
 - **Requested by:** operator, via gm (msg_1f3acb80_74023124, 2026-09-29; Elon's-
-  team open question resolved via msg_a45fe321_75270887)
+  team open question resolved via msg_a45fe321_75270887; Shaw's identity
+  resolved via the Silicon Jungle brief's addendum 4, msg_ffd21b6f_76509819)
 - **Authored by:** plan (BSHR research + brief, non-interactive)
 - **Status:** REVIEWED (CEO + Eng, both with material corrections integrated) —
   awaiting the operator's one load-bearing decision (§5) before any implementation.
   **Post-review updates (operator-requested, folded in directly, not deferred):**
   the "Elon's team" open question resolved with Hermes vendor-docs corroboration
-  added to §4a (both independently re-verified), plus a new §6 comparing
-  OrchestraOS's fleet architecture against xAI's Grok Bot at the operator's
-  explicit request — real analysis, not a footnote. None of these change §4's
-  core recommendation or the open (a)/(b) decision; §6 says explicitly why not.
+  added to §4a (both independently re-verified); a new §6 comparing
+  OrchestraOS's fleet architecture against xAI's Grok Bot; and Shaw's real
+  identity resolved (Shaw Cole, confirmed OrchestraOS author) — this brief's
+  own original "Shaw Walters?" guess was wrong, corrected plainly in §2 rather
+  than quietly dropped. None of these change §4's core recommendation or the
+  open (a)/(b) decision.
 - **Scope:** brief only. No implementation authorized.
 
 ## 1. The ask, as parsed from the operator's transcript
@@ -89,12 +92,35 @@ operator clarifying separately. It does validate the operator's underlying
 instinct (agent-to-agent messaging, approval-gated autonomy, coordinated
 groups) — but that instinct is already implemented in this fleet today via
 `msg_store` + `scripts/approval.py`, not something the Hermes/Matrix bridge
-question was ever blocking on. (Superseded framing below, kept for its still-
-live Shaw/NousResearch finding:) Hermes's own plugin
-metadata attributes authorship to **NousResearch**, not Shaw Walters/ElizaOS — worth
-surfacing to the operator directly, since the brief was framed around a conversation with
-Shaw, but Hermes itself isn't Shaw's project. Recommend asking the operator directly which
-call/source this came from rather than the brief asserting an unverified match.
+question was ever blocking on.
+
+**Shaw's identity — RESOLVED (2026-09-29, gm's Silicon Jungle addendum 4,
+independently corroborated there via a direct Luma-page fetch — see
+`docs/PLAN_silicon-jungle-agentic-platform.md` §0c), and this original
+brief's own speculative guess below was wrong, worth correcting plainly
+rather than quietly dropping.** The original draft below guessed "Shaw" might
+be Shaw Walters of ElizaOS/ai16z, based on his being a well-known public
+figure in the agent-framework space, and flagged a mismatch against Hermes's
+NousResearch authorship credit. **That guess was never verified and turned
+out to be the wrong Shaw.** The real Shaw, per the Silicon Jungle brief's
+direct verification: **Shaw Cole**, a real co-founder, guest-hosting Silicon
+Jungle's BUILD-A-THON events, and — confirmed on the event's own page —
+**the actual author of OrchestraOS itself** (this fleet's own codebase).
+Shaw Cole's own project is **ListMagic** (stealth, intent-data + AI voice
+outreach), not Hermes.
+
+**What this does and doesn't resolve, precisely — two separate facts, not
+one contradiction:** (1) *Who is Shaw* — resolved, real, confirmed. (2) *Is
+Hermes Shaw's project* — still no, unchanged, and now on firmer footing:
+Hermes's own plugin metadata credits **NousResearch**, and Shaw Cole's own
+confirmed project is ListMagic, a different thing entirely. The original
+transcript's framing ("discussed with Shaw... orchestra should release as a
+layer") makes more sense now that Shaw's identity is known: he's the person
+who *wrote OrchestraOS*, which is a materially different and more load-
+bearing fact for this brief than a vague reference to an agent-framework
+influencer would have been — worth the operator's attention for that reason,
+independent of whether it changes anything about the Hermes/Telegram
+decision itself (it doesn't; see §4/§5, unchanged).
 
 ## 3. What Matrix would actually add, if pursued
 
@@ -232,11 +258,13 @@ scoped:
   like it was answering a different question than the one this brief now knows
   it's actually asking.
 - ~~Which specific claim/conversation is "the Elon orchestration layer"~~ —
-  **RESOLVED**: xAI's Grok Bot (§2, operator-sourced, re-verified). The
-  **Shaw/NousResearch mismatch is still open** — Grok Bot is unrelated to
-  Hermes, so it doesn't resolve whether Hermes itself is actually "Shaw's"
-  project (it isn't, per its own plugin metadata) — still worth the operator
-  clarifying before that framing gets repeated as rationale for anything.
+  **RESOLVED**: xAI's Grok Bot (§2, operator-sourced, re-verified).
+- ~~Who is "Shaw"~~ — **RESOLVED**: Shaw Cole, real co-founder, confirmed
+  author of OrchestraOS itself (§2, verified via Silicon Jungle brief §0c).
+  **The Hermes/NousResearch mismatch is still open, on firmer footing now**:
+  confirmed Shaw Cole's own project is ListMagic, not Hermes — Hermes remains
+  NousResearch's, unrelated to Shaw — still worth the operator having this
+  precisely, given Shaw wrote this very fleet's codebase.
 - If (b) is chosen: is a *dedicated* Hermes instance for OrchestraOS acceptable (extra
   process/infra to run), or is a cleanly-isolated profile on the existing gateway
   preferred despite the de-enmeshment precedent?
@@ -978,9 +1006,13 @@ Outside Voice             | reused from CEO review (same document, same pass)
   recommendation for OrchestraOS's own channel specifically. See
   `docs/PLAN_silicon-jungle-agentic-platform.md` §0b/§6.
 - ~~The "Elon orchestration layer" reference~~ — **RESOLVED** (§2, §5: xAI's
-  Grok Bot, operator-sourced, verified). The **Shaw-NousResearch rationale
-  mismatch is still open** — needs the operator's direct clarification before
-  it's repeated as justification (§2, §5).
+  Grok Bot, operator-sourced, verified).
+- ~~Who is "Shaw"~~ — **RESOLVED** (§2, §5: Shaw Cole, real co-founder and
+  confirmed OrchestraOS author, verified via Silicon Jungle brief §0c). The
+  **Hermes/NousResearch mismatch is still open, now on firmer footing** —
+  Shaw's confirmed project is ListMagic, not Hermes; Hermes remains
+  NousResearch's — worth the operator having this precisely, given Shaw wrote
+  this fleet's own codebase (§2, §5).
 - Whether the operator has a concrete second network in mind for Matrix, or
   whether Matrix was long-term direction only (§5).
 - + 0 unresolved from prior reviews (no prior review history exists for this
