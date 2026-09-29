@@ -567,6 +567,71 @@ runbook, then test the pilot"): the runbook is no longer an open item, it's
 written; recorded alongside Shaw's access as the two launch dependencies
 (§6), not left as one.
 
+## 0j. Tenth addendum — operator confirmations, a name correction, and real
+onboarding material (gm relay, 2026-09-29)
+
+**Both brief-level pending decisions confirmed by the operator directly:**
+(1) the bridge brief's path (a+) — harden `router.py` — is approved,
+decided, no longer open (that decision lives in the bridge brief, noted
+here only because it was one of the two open items this brief's own §6
+tracked cross-referenced against); (2) **YES, continue running facilitated
+events** on today's system — the load-bearing premise §5's whole
+recommended sequence depends on is confirmed, not just assumed.
+
+**Facilitator model is already transitioning, and the first version of
+this relayed to this seat was wrong — corrected here, not silently
+patched.** gm's first relay described a handoff to a human facilitator
+named "Kiana" starting event #7. That was a mis-transcription — **the
+correct name is Keonda**, and it is not a person. Operator confirmed:
+starting event #7, a human still runs the event live, now with support
+from **Keonda acting as an AI facilitator** (already tested in an
+office-hours-style format); by event #8 the operator was "testing it
+myself somewhat," i.e. already less hands-on, more delegated to this
+AI-assisted mode. Keonda was built during "buildathon.v7" — a real repo
+the operator suggested an agent inspect to understand what it actually
+does, not yet dispatched (flagging as a real, useful next step per gm's
+instruction, rather than guessing at Keonda's capabilities here). **What
+"handoff to Keonda" concretely means operationally is still unclear and
+not guessed at** — this brief's facilitator-capacity/runbook sections
+(§4 item 1, the Runbook) still assume a human facilitator as the primary
+control point; if Keonda ends up doing more than assisting (e.g. making
+gating decisions itself), that would need its own security review against
+§3's threat model, not an assumption that "AI facilitator" inherits the
+same trust posture as "human facilitator" for free.
+
+**toddi.to / Pulse confirmed as the same project** — operator is migrating
+branding from `getyourpulse.io`/Pulse toward `toddi.to`, the domain they
+actually own. Resolves §6's earlier open "positioning vs. build" question
+cleanly: **toddi.to is a positioning/GTM question, not a build task**
+(operator's own words on the differentiator: "continuous holistic
+meaning" — the full organization, not just the executive team; voice-first;
+backed by Todd's 38-year diagnostic-science body of work). Initial target:
+boutique firms ("that's a blue ocean"). A second angle raised, not yet
+scoped as work: positioning toddi.to's methodology as a **due-diligence /
+de-risking tool for PE and M&A investors** evaluating a company before
+committing capital — connects to the fact that some Weekender/build-a-thon
+winners are already attracting funder interest (§0c). The actual
+positioning copywriting itself is real future product-marketing work, not
+something this brief writes — recorded here as the resolved direction, not
+as completed deliverable.
+
+**Real hackathon onboarding material obtained (PDF, operator-provided) —
+ground truth for what Door 1/Door 2 onboarding currently looks like, not
+invented:** a generic technical checklist — create accounts (Claude,
+GitHub, Vercel), add MCP connectors, install CLIs (`node`/`git`/`gh`/
+`vercel`), optionally install gstack, verify everything works, timed for
+the night before the event. Operator's own assessment, direct: solid
+content, but generic — "not using our stack," "not being delivered by
+Keonda." Real gap, not yet scoped as work: this onboarding should
+eventually be Keonda-delivered and stack-specific rather than a generic
+setup checklist — noted here as a real future improvement, not designed.
+
+**Scope note, operator-stated, keeps future asks from drifting:** the
+operator will handle their own infrastructure/keys/deployment-platform
+setup personally (mentioned Coolify) — the fleet's job is building things,
+not managing secrets or hosting on the operator's behalf. Worth holding
+this boundary on any future infra-adjacent ask.
+
 ## 1. The ask, as parsed (gm's cleaned-up transcript + confirmed ground truth)
 
 Silicon Jungle Experience's **Weekender** (48hr, La Reserva Tulum) is
@@ -642,6 +707,20 @@ operator's identity" is not a config change. Dispatched a dedicated research
 pass on this specifically (auth precedent, RBAC/sandboxing patterns, and
 self-modifying-agent-fleet guardrails); its findings sharpen and partly
 correct the framing below.
+
+**Real, operator-confirmed access-model decision, directly narrows this
+threat model — not just a business/distribution choice (gm relay
+msg_df3115a1_84854026):** pilot access stays **exclusive to people who
+actually attended an event** — explicitly not open-sourced or made
+publicly available. That is a security decision as much as a go-to-market
+one: it caps the population this section's "semi-trusted external humans"
+actually is at a small, vetted, in-person-screened set (Door 1/Door 2
+intake, §0a) rather than an open internet surface, which is exactly what
+keeps the shared-orchestration-layer risk below tractable rather than
+unbounded. Doesn't resolve the risk (Weakness/threat below still holds for
+every attendee who *is* let in), but it is the reason the narrow pilot in
+§4 is a defensible bet instead of a reckless one — worth stating plainly
+rather than leaving as an implicit assumption.
 
 - **Execution sandboxing itself is a solved, commoditized problem — this is
   NOT the hard part, don't over-invest here.** Per-session microVM isolation
@@ -1198,7 +1277,11 @@ items now, not one):**
   this brief's completeness (§4 item 3). Nothing in item 1's pilot scope
   (§4) depends on this technically, but the operator has said it must be
   resolved before anything launches — treat that as the actual constraint,
-  not a technical one this brief could argue around.
+  not a technical one this brief could argue around. **Echo's own
+  recommendation, worth weighing as a real answer, not just another open
+  flag (gm relay msg_6c655312_84650112):** read-only first, with
+  narrowly-scoped write access granted only if the pilot actually turns
+  out to need it — still the operator's call to make, not decided here.
 - **The facilitator runbook — no longer an open question, already written
   (§4 item 1, "The Facilitator Runbook (v1)") — but Echo's bottom line
   names it as a launch gate alongside Shaw's access, so recorded here as
@@ -1207,22 +1290,38 @@ items now, not one):**
 
 **Everything below remains open, ordinary urgency, does not block launch:**
 
-- Does "facilitated at first" mean the operator is comfortable running one or
-  two build weekends on today's system, human-watched, with zero new
-  sandboxing infrastructure, before any of §4.2's identity/RBAC work starts?
-  That reading drives the whole recommended sequence in §5.
+- ~~Does "facilitated at first" mean the operator is comfortable running one
+  or two build weekends on today's system, human-watched, with zero new
+  sandboxing infrastructure, before any of §4.2's identity/RBAC work
+  starts?~~ — **RESOLVED, per §0j: operator confirmed YES directly.** The
+  whole recommended sequence in §5 now runs on a confirmed premise, not an
+  assumed one.
 - **(Added per §0b)** Silicon Jungle's WhatsApp presence already runs on the
   shared keonda Hermes gateway in `observe_only` mode (§0b) — should that stay
   on the shared instance in this same restricted posture, or does it get the
   same "dedicated instance" treatment the bridge brief recommends for the
   operator's own channel, once/if it moves beyond observe-only? Not decided
   by either brief; a real architecture question the two threads share.
-- **(Added per §0c)** toddi.to — is "check on toddi.to" actually a positioning/
-  onboarding question (Todd's real, existing diagnostic methodology, meant for
-  the event/sponsor pipeline) rather than a build question (the original
-  "no app exists yet" reading, from a local-repo finding that's still
-  factually true but may answer the wrong question)? Genuinely unresolved;
-  this seat is not picking a reading.
+  **Echo's recommendation (gm relay msg_6c655312_84650112):** make this
+  depend on an explicit cross-tenant data-flow threat model, not a default
+  choice either way — still not decided here. **Naming note, flagged not
+  conflated:** the shared gateway's own config persona is named "keonda"
+  (lowercase) — the same word as the AI-facilitator product "Keonda"
+  clarified in §0j. Unverified this session whether these are the same
+  thing under one name or a genuine coincidence; worth the operator
+  confirming directly before this brief or the bridge brief assumes either
+  way.
+- ~~toddi.to — is "check on toddi.to" actually a positioning/onboarding
+  question... rather than a build question~~ — **RESOLVED, per §0j:
+  confirmed positioning/GTM question, not a build task.** Direction: the
+  "continuous holistic meaning" / full-organization / voice-first
+  differentiator, targeting boutique firms first, with a PE/M&A
+  due-diligence angle as a second positioning thread. **Echo's framing
+  (gm relay msg_6c655312_84650112), already satisfied by this
+  resolution:** classify toddi.to as positioning-or-build before scoping
+  any work — done, it's positioning. The actual copywriting/GTM work
+  itself remains unscoped future product-marketing work, not this brief's
+  deliverable.
 - Is there a target build-weekend date that puts a real clock on §4.2's
   identity-layer work, or is this multi-quarter exploration? **(Sharpened by
   §0c: 8 events already run, a 9th in planning — "gated on real usage data"
