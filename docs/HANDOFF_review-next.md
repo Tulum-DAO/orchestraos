@@ -153,6 +153,39 @@ produced three findings in a row.
 
 F2 and F3 remain open and non-blocking, unchanged.
 
+## 1d. Fourth gate — F6 consolidating fix `cfc420c` (`build/telegram-name-unrendered-always`): **CLEARED**
+
+Task: gm `msg_a3be1126_80839422`. Findings:
+`$ORCHESTRA_DIR/state/review/router-offset-b834241/findings-f6-cfc420c.md`.
+Stack: P0 `b834241` → F1 `a062d57` → F5 `649cb44` (merged) → F6 `cfc420c`.
+
+**Correction to my own F6 finding — build was right.** I framed F6 as "the same seam that produced
+F1 and F5". F1 was never gated on `if not text:` — it used `if lines:` and appended, so caption +
+failed download already named the photo pre-F6. Verified on the merged code:
+`caption + FAILED photo` → `see this crash \n\n Attachments: \n photo: [download failed — …]`. So F6
+was **specific to F5**, and "three findings in a row from one seam" overstated it. The finding's
+substance was right; the attribution wasn't. (One nuance the other way: F5 didn't *introduce* the gap
+either — pre-F5 that case also delivered the caption alone. F6 is an **incompleteness in F5's fix**.)
+
+- **F6 is genuinely closed** — re-ran **my own two repro cases**: `animation + caption` and
+  `video_note + caption` now append `  <kind>: [unsupported type — resend as text]` with
+  `meta["unsupported"]` set. Both previously delivered the caption alone.
+- **No double-labelling** — the risk this consolidation creates, and it's handled: `caption + FAILED
+  photo` names the photo **once**, as a download failure only, never also "unsupported". `handled.add(key)`
+  fires right after `if not obj: continue`, so an enumerated key counts as handled whether its
+  download succeeded or failed, and `set(msg) - _ENVELOPE_KEYS - handled` excludes it. Right decomposition.
+- **Mixed message** (photo + sticker + caption): each outcome named exactly once, no overlap in `meta`.
+- **Guards hold** — plain text passes through undecorated; an envelope-only message still yields
+  `(unsupported message type — resend as text)` with `meta["unsupported"]=['unknown']`.
+- **`plugins/` suite: 45 passed**; mutation reproduces exactly (**5 red** when re-gated behind
+  `if not text` — the 4 parametrised caption kinds + the mixed-message test); compiles under 3.12.13.
+
+Nit, no action: the new comment inherits my overstatement ("three findings in a row"). If the file is
+touched again, "F5's blind spot" is the accurate wording.
+
+**With F6 merged I know of no remaining silent-drop path in `handle_message`.** F2 and F3 remain open
+and non-blocking.
+
 ## 2. Verified independently (not from build's report)
 
 - **Bug is real and still live:** `plugins/telegram/router.py:323` in the main checkout advances
