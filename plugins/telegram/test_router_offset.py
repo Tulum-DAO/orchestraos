@@ -352,3 +352,84 @@ def test_attempt_counter_resets_after_success(rt, tmp_path):
     r.poll_once()
     assert state.offset == 2
     assert state.attempts_for(1) == 0, "strike count survived a successful delivery"
+
+
+# --------------------------------------------------------------------------------------
+# 5. F1 — attachment fetch failure must not vanish the message
+# --------------------------------------------------------------------------------------
+
+def _photo_update(uid: int, caption: str = "") -> dict:
+    m = {"message_id": 1000 + uid, "chat": {"id": 7}, "from": {"username": "operator"},
+         "photo": [{"file_id": "small"}, {"file_id": "big"}]}
+    if caption:
+        m["caption"] = caption
+    return {"update_id": uid, "message": m}
+
+
+def test_photo_only_message_survives_a_failed_download(rt, tmp_path):
+    """F1: a bare screenshot whose fetch fails used to vanish without a trace.
+
+    download_file() swallows its own exception and returns None, so with no caption the
+    text stays empty, `if not text: return` bails, poll_once sees SUCCESS and confirms the
+    offset. Silent permanent loss — the exact class the P0 fix exists to remove, reached by
+    a path that never raises so none of that machinery engages.
+    """
+    mod = rt
+
+    def api(method, payload=None, timeout=None):
+        if method == "getUpdates":
+            off = (payload or {}).get("offset", 0)
+            return {"ok": True, "result": [_photo_update(1)] if 1 >= off else []}
+        if method == "getFile":
+            return {"ok": False, "description": "file is temporarily unavailable"}
+        return {"ok": True, "result": {}}
+
+    r, calls, state = _mk(mod, tmp_path, api=api)
+    r.poll_once()
+
+    assert calls["delivered"], (
+        "photo-only message with a failed download reached nobody — silently dropped")
+    text, meta = calls["delivered"][0]
+    assert "download failed" in text.lower(), (
+        f"delivered text carries no signal that an attachment was lost: {text!r}")
+    assert meta.get("attachment_failures"), "the failure is not recorded in metadata"
+
+
+def test_caption_message_still_delivers_and_flags_the_failed_attachment(rt, tmp_path):
+    """With a caption the text always survived; the lost attachment must still be visible."""
+    mod = rt
+
+    def api(method, payload=None, timeout=None):
+        if method == "getUpdates":
+            off = (payload or {}).get("offset", 0)
+            return {"ok": True, "result": [_photo_update(2, "look at this")] if 2 >= off else []}
+        if method == "getFile":
+            return {"ok": False, "description": "nope"}
+        return {"ok": True, "result": {}}
+
+    r, calls, state = _mk(mod, tmp_path, api=api)
+    r.poll_once()
+    text, meta = calls["delivered"][0]
+    assert "look at this" in text
+    assert "download failed" in text.lower(), "caption survived but the lost photo is invisible"
+
+
+def test_successful_attachment_is_unchanged(rt, tmp_path):
+    """Don't fix the failure path by regressing the happy one."""
+    mod = rt
+    dest = tmp_path / "fetched"
+
+    def api(method, payload=None, timeout=None):
+        if method == "getUpdates":
+            off = (payload or {}).get("offset", 0)
+            return {"ok": True, "result": [_photo_update(3, "hi")] if 3 >= off else []}
+        if method == "getFile":
+            return {"ok": True, "result": {"file_path": "photos/x.jpg"}}
+        return {"ok": True, "result": {}}
+
+    r, calls, state = _mk(mod, tmp_path, api=api)
+    r.fetch = lambda fpath: b"jpegbytes"
+    r.poll_once()
+    text, meta = calls["delivered"][0]
+    assert "Attachments:" in text and "download failed" not in text.lower()
+    assert len(meta["attachments"]) == 1 and not meta.get("attachment_failures")
