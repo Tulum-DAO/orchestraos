@@ -5,18 +5,25 @@
   resolved via the Silicon Jungle brief's addendum 4, msg_ffd21b6f_76509819;
   external adversarial review reconciled via msg_8b696347_76706490)
 - **Authored by:** plan (BSHR research + brief, non-interactive)
-- **Status:** CEO + ENG + EXTERNAL ADVERSARIAL REVIEW COMPLETE, reconciled
-  into **"path (a+)"** (§7) — awaiting the operator's one load-bearing
-  decision (§5) before any implementation. **§7 is a real, eng-review-depth
-  reconciliation, not a citation edit**: the operator's own outside
-  adversarial review (`docs/REVIEW_hermes-matrix-telegram-bridge-external.md`)
-  correctly predicted, and this seat's direct code read then confirmed, a
-  real P0 message-loss bug in `router.py` (§7.1) — not hypothetical, live in
-  production code today, independent of the Hermes/Matrix decision. The
+- **Status:** CEO + ENG + EXTERNAL ADVERSARIAL REVIEW + BUILD IMPLEMENTATION
+  COMPLETE, reconciled into **"path (a+)"** (§7) — awaiting the operator's
+  one load-bearing decision (§5) before any implementation of path (b); the
+  confirmed P0 bug in path (a) is already fixed and verified (build, commit
+  `b834241`). **§7 is a real, eng-review-depth reconciliation, not a
+  citation edit, and §7.5 records a genuine correction, not just an
+  addition**: build, actually implementing the confirmed P0 fix, caught
+  that this brief's own eng review and the external adversarial review were
+  both wrong that `router.py` had zero test coverage (17 existing tests
+  found, a real research gap on this seat's part), and that the proposed
+  fix ("never advance offset on failure") directly contradicted an
+  existing, correct test — the real fix splits transient vs. permanently-
+  malformed failures, which no review layer before build surfaced. The
   strategic recommendation (harden the existing bridge, defer Hermes/Matrix)
-  is unchanged across all three review passes — this is convergent
-  validation, not a reversal. Other post-review updates (Elon's team,
-  Grok Bot comparison, Shaw's identity) remain folded in as before.
+  is unchanged across all four passes — this is convergent validation with
+  an honest asterisk about what review catches vs. what only an implementer
+  checking against real tests catches (§7.5's closing note). Other post-
+  review updates (Elon's team, Grok Bot comparison, Shaw's identity) remain
+  folded in as before.
 - **Scope:** brief only. No implementation authorized.
 
 ## 1. The ask, as parsed from the operator's transcript
@@ -532,7 +539,81 @@ Phase 3: decision gate for path (b)/Matrix, using §5's re-open criteria
   agrees defer is correct for both).
 ```
 
-### 7.5 What stays exactly as recommended before this review landed
+### 7.5 Correction — this brief's own test-coverage claim was wrong, and
+the "never advance on failure" fix was incomplete (found by build,
+implementing T1-REVISED, not caught by this seat or the external review)
+
+**Two real errors, owned plainly, not glossed over — this section exists
+because build checked build's own work against reality rather than
+implementing this brief's fix literally, and caught what both this seat's
+original eng review and the operator's external adversarial review missed:**
+
+1. **"router.py has zero dedicated test coverage" (Eng Review §Test Review,
+   external review's own framing) was wrong.** Verified directly, not taken
+   on build's word: `plugins/telegram/tests/test_router.py` is real, 237
+   lines, 17 existing tests — `git log --follow` confirms it shipped in the
+   *original* commit that added the Telegram plugin (`cf323f2`), not
+   something added recently. **This seat's original eng review searched
+   `scripts/` (finding only `test_approval_notify_telegram.py`) and never
+   checked for a `tests/` subdirectory inside `plugins/telegram/` itself —
+   a real research gap, not a defensible judgment call.** The external
+   review, working without repo access, correctly inherited this brief's
+   own wrong claim [B] rather than a new error of its own.
+2. **"Only advance the offset after an update's effect is durably
+   committed" (§7.1/§7.4's T1-REVISED, this brief's own proposed fix,
+   independently endorsed by the external review's F1/F2) is directly
+   contradicted by an existing, deliberately-written test:**
+   `test_a_bad_update_is_skipped_and_offset_still_advances` (verified, read
+   directly, line 142) asserts a malformed update is skipped *and the
+   offset still advances past it*. Implementing T1-REVISED's fix literally
+   — never advance on any failure — breaks this test, and build's own
+   analysis (relayed, this seat did not independently re-derive the
+   distributed-systems argument but the conclusion is sound and the test
+   itself is directly verifiable) explains why the test is *correct*, not
+   stale: **retrying a permanently malformed update forever would
+   head-of-line-block every real operator message behind it in the queue.**
+   The correct fix splits two cases this brief's original framing
+   collapsed into one — **transient failures** (network blip, a momentary
+   `msg_store` write failure — never confirm, let Telegram redeliver) vs.
+   **permanently malformed updates** (structurally broken, will never
+   succeed on retry — confirm/step over immediately, log loudly, don't
+   block the queue behind it). Both this seat's original P0 framing and the
+   external review's F1/F2 treated this as one failure mode; it's two, with
+   opposite correct handling.
+
+**Resolution: build has already implemented and verified the corrected fix**
+(commit `b834241`, `fix(telegram): stop silently dropping operator messages
+on transient failures`) — split transient/permanent handling, per build's
+own report: mutation-tested, plus a live `kill -9` drill confirming a
+message survives a transient failure without duplication. **This
+supersedes T1-REVISED above as written** — the confirmed P0 bug from §7.1
+(the underlying finding: offset advances unconditionally, including on
+failures that should retry) was real and is now fixed; the *specific fix
+description* in T1-REVISED (undifferentiated "never advance on failure")
+was incomplete and should not be implemented literally by anyone reading
+this brief after this correction. See `docs/HANDOFF_build-next.md` for
+build's own detailed account.
+
+**What this means for T3-REVISED, T5, T6, T7, T8 above:** unaffected by
+this specific correction — those address callback authorization, rate
+limits, webhook safety, and observability, none of which depend on the
+offset-advance framing that was wrong. Still open, still recommended as
+written.
+
+**Why this correction matters beyond the one bug:** this is the second time
+in this brief's lifecycle a claim survived multiple layers of review
+(this seat's own eng review, an external adversarial review with real
+citations) before an implementer actually checking it against the existing
+test suite caught the gap. Worth naming as a pattern, not just an incident:
+**review catches what review is built to catch; it does not substitute for
+running the existing tests and reading them before proposing a fix that
+contradicts one.** Neither this seat's Test Review section nor the external
+review's Phase 1 test plan cross-checked the *proposed new tests* against
+the *existing test suite's actual assertions* — both proposed tests that
+would have needed to be reconciled with `test_a_bad_update_is_skipped_and_
+offset_still_advances` before shipping, and neither did.
+
+### 7.6 What stays exactly as recommended before this review landed
 
 Per the review's own bottom line: gm remains the only persona, `approval.py`
 remains the system of record, no new runtime, no Hermes in the loop, no
@@ -1039,6 +1120,11 @@ real gap. Well under the 8-file/2-service threshold. **Skip Scope Challenge B**
 (complexity selectors) — go directly to C.
 
 **C. Findings.**
+> **WRONG — corrected in §7.5, read that before trusting this finding.**
+> This seat searched `scripts/` and missed `plugins/telegram/tests/
+> test_router.py`, a real, 17-test file that shipped with router.py's
+> original commit. Left here verbatim as the historical record of what
+> this pass actually found (and got wrong), not edited in place.
 1. `[P3]` (confidence: 6/10) `plugins/telegram/router.py` has zero dedicated
    test coverage — `scripts/test_approval_notify_telegram.py` exists but tests
    the approval-notify integration, not `Router`/`State`/`poll_once` directly
@@ -1191,8 +1277,9 @@ Outside Voice             | reused from CEO review (same document, same pass)
 |--------|---------|-----|------|--------|----------|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | issues_open | HOLD SCOPE; original CRITICAL GAP (offset/missed-message parity) later corrected by eng review — see below; outside-voice overturned Recommendation 1's risk framing |
 | Outside Review | native Claude subagent (Plan, read-only, dispatched via Agent tool — Codex CLI present but not probed/authenticated in this non-interactive seat) | Independent 2nd opinion | 1 | completed, issues_found | 6 findings; 5 integrated and resolved by revising §4/§4a/§5; 1 (Elon/Shaw rationale) already carried as an open operator question, unchanged |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 2 | issues_open | Run 1: path (a) scoped, CEO's CRITICAL GAP corrected, 5 test-coverage GAPS + 1 open verification item. **Run 2 (§7, this reconciliation): resolved that open item by direct code read — CONFIRMED real P0 bug (offset advances past a failed update unconditionally, `poll_once` lines 310-324), not hypothetical.** Recommendation refined to "path (a+)" with a concrete channel contract, 3 new P0/P1 tasks, F16/F12 internal-consistency fixes |
-| External Adversarial Review | operator-sourced PDF, transcribed to `docs/REVIEW_hermes-matrix-telegram-bridge-external.md` | Independent, real-citations technical review (Telegram Bot API, Hermes docs, Matrix spec, mautrix release notes) | 1 | completed, issues_found, reconciled | Endorsed path (a), refined to "path (a+)"; 16 numbered findings, 11-item risk register, reconciled in §7 — this seat independently verified the headline finding (confirmed the bug directly) rather than accepting on citation strength alone; no findings rejected, one scope concern considered and judged appropriate, not excessive (§7.3) |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 2 | issues_open | Run 1: path (a) scoped, CEO's CRITICAL GAP corrected, **falsely claimed 0/5 test coverage** (real gap: this seat searched `scripts/` and missed `plugins/telegram/tests/test_router.py`, 17 existing tests — corrected §7.5) + 1 open verification item. **Run 2 (§7): resolved the open item by direct code read — confirmed a real P0 bug, but the proposed fix ("never advance offset on failure") directly contradicted an existing test and was incomplete — build caught this implementing it (§7.5), correct fix splits transient-vs-permanently-malformed failures.** Recommendation refined to "path (a+)"; build's actual fix (commit `b834241`) supersedes this brief's own fix description |
+| External Adversarial Review | operator-sourced PDF, transcribed to `docs/REVIEW_hermes-matrix-telegram-bridge-external.md` | Independent, real-citations technical review (Telegram Bot API, Hermes docs, Matrix spec, mautrix release notes) | 1 | completed, issues_found, reconciled | Endorsed path (a), refined to "path (a+)"; 16 numbered findings, 11-item risk register, reconciled in §7 — this seat independently verified the headline finding (confirmed the bug directly) rather than accepting on citation strength alone; no findings rejected, one scope concern considered and judged appropriate, not excessive (§7.3). **Inherited this brief's own wrong 0-coverage claim [B] without repo access to catch it — not this review's error, but worth noting its finding was only as good as this brief's own facts (§7.5).** |
+| Build (implementer) | commit `b834241` + `docs/HANDOFF_build-next.md` | Ground truth — actually implemented and tested the fix | 1 | completed, corrections found | Fixed the confirmed P0 bug (mutation-tested + live kill-9 drill, message survives without duplication) and, in doing so, caught two real errors in this brief and the external review: the false 0/5-coverage claim, and the incomplete "never advance on failure" fix (breaks an existing, correct test; real fix splits transient vs. permanently-malformed failures) — see §7.5 |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | skipped (no UI scope) | — |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | not requested | — |
 
@@ -1207,23 +1294,31 @@ Outside Voice             | reused from CEO review (same document, same pass)
   opinion.
 - **CROSS-MODEL:** not applicable — no completed external-provider review to
   compare against; skip per the skill's own rule for native-fallback-only runs.
-- **VERDICT:** CEO + ENG REVIEW + EXTERNAL ADVERSARIAL REVIEW COMPLETE,
-  RECONCILED INTO "PATH (A+)" — three independent corrections landed across
-  this brief's lifecycle, each one caught by verifying rather than trusting:
-  outside-voice caught a wrong risk assessment in the original draft (§4a);
-  eng review caught that CEO review's own CRITICAL GAP was itself overstated;
-  the external adversarial review then correctly predicted, and this seat's
-  direct code read then **confirmed**, a real P0 message-loss bug in
-  `router.py` that existed before this brief was ever written. Every
-  correction is now integrated, and the underlying strategic recommendation
-  has not moved once across all three passes: harden the existing bridge,
-  defer Hermes and Matrix. **This is the strongest form of validation this
-  kind of review can produce** — independent passes converging on the same
-  conclusion while still finding real, separate, concrete defects each time.
-  Ready for the operator's one load-bearing decision (§5, path a vs. b).
-  **Not** a green light to build path (b) — path (a+)'s test/verification
-  work (§7.4, now including a confirmed P0 fix) is ready to pick up without
-  further review, once the operator confirms path (a) is the direction.
+- **VERDICT:** CEO + ENG REVIEW + EXTERNAL ADVERSARIAL REVIEW + BUILD
+  IMPLEMENTATION COMPLETE, RECONCILED INTO "PATH (A+)" — **four** independent
+  corrections landed across this brief's lifecycle, each caught by verifying
+  rather than trusting the layer before it: outside-voice caught a wrong
+  risk assessment in the original draft (§4a); eng review caught that CEO
+  review's own CRITICAL GAP was itself overstated; the external adversarial
+  review correctly predicted, and this seat's direct code read then
+  confirmed, a real P0 message-loss bug in `router.py`; **and build, actually
+  implementing the fix, caught that both this seat's eng review and the
+  external review were wrong about test coverage (17 existing tests, not
+  zero) and that the proposed fix itself was incomplete (§7.5) — the real
+  fix required splitting transient-vs-permanently-malformed failures, which
+  neither review layer surfaced.** Every correction is now integrated. The
+  underlying strategic recommendation has not moved once across all four
+  passes: harden the existing bridge, defer Hermes and Matrix. **This is
+  real validation of the review chain's value, with an honest asterisk**:
+  three review layers (CEO, eng, external adversarial) each added real
+  signal, and none of them alone was sufficient — the actual implementer,
+  checking the fix against the real, existing test suite, is what caught
+  the most consequential and subtle error. Worth carrying forward as an
+  operating lesson (§7.5's closing paragraph), not just a footnote. Ready
+  for the operator's one load-bearing decision (§5, path a vs. b). **Not**
+  a green light to build path (b) — path (a)'s confirmed bug is already
+  fixed and verified (build, commit `b834241`); T3-REVISED/T5/T6/T7/T8
+  (§7.4) remain open, unaffected by this correction.
 
 **UNRESOLVED DECISIONS:**
 - Path (a) vs. path (b) for the Telegram leg — operator decision, §4.2/§5, not
@@ -1259,6 +1354,7 @@ Outside Voice             | reused from CEO review (same document, same pass)
   §8 (severity model, edit/delete semantics, isolation topology if (b) ever
   happens) — largely already covered by this brief's existing open questions
   above; flagged for completeness, not new substance.
-- + 1 unresolved from the prior CEO+Eng review pass, now resolved in this
-  reconciliation (the offset/commit-ordering verification item — see §7.1,
-  no longer open, superseded by a confirmed P0 fix in §7.4).
+- + 1 unresolved from the prior CEO+Eng review pass, now resolved — the
+  offset/commit-ordering verification item (§7.1) is fixed and verified by
+  build (commit `b834241`), not by the fix description this brief itself
+  proposed in §7.4, which §7.5 found was incomplete.
