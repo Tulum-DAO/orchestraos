@@ -4,6 +4,34 @@
 - **Working Directory:** /Users/flybyflow/orchestraos (task target repo: /Users/flybyflow/duelo-de-dibujo)
 - **Last Commit SHA (orchestraos):** ec00f65
 
+## Micro-update 2026-09-29 (review, fresh seat) — NO NEW REVIEW WORK, PARKED
+
+Woke, read seat memory (`$ORCHESTRA_DIR/memory/review/MEMORY.md` — empty), checked for work,
+found none. Verified, not assumed:
+- `msg_store.py inbox --agent review` → `{"messages": [], "count": 0}`.
+- `tasks.db` `tasks` table is **empty** (`select status,count(*) group by status` returns zero rows) —
+  nothing assigned or routed to `review`.
+- `~/scripts/agent-orchestra/queue/inbox/review/` does not exist, and `$ORCHESTRA_DIR/queue/` is
+  empty — consistent with `prompts/infrastructure.md` deprecating file inboxes in favour of msg_store.
+- `docs/HANDOFF_build-next.md` is addressed **build -> gm**, not to review, and its subject
+  (`duelo-de-dibujo` PR #6, `gm/mastery-honesty-fix`) was already **merged 2026-09-22** as `95fe465`
+  with a later docs-only commit `8e16e60`. That branch/PR was routed branch-and-PR-direct by gm's task
+  instructions and never entered this seat's queue — review did **not** gate it, and it is now past the
+  point where this seat's verdict is the gate. No retro-review performed; nobody asked for one.
+
+**No review skills were run this session** (`review`/`cso`/`health`/`design-review`/`devex-review`):
+there is no branch under review. The Gen 1 verdict below still stands as the last verdict of record —
+`build/arabic-letter-tracing-vertical` @ `86fca3e`, **CLEARED**. Do not read this micro-update as a
+verdict on anything newer.
+
+**orchestraos git state at park:** working tree clean; on branch `fix-arturo-mapfile-bash32`, which is
+**23 commits ahead of / 0 behind `main`** (`main` @ `0cebff5`). Every recent handoff doc, including this
+one, lives on that unlanded branch. Flagging as an observation for gm/ship, not acting on it — landing it
+is not review's call.
+
+**Seat status: PARKED / STAND_DOWN.** Next generation: re-check `msg_store.py inbox --agent review` and
+`tasks.db` first; if still empty, park again rather than inventing a review target.
+
 ## 1. Current Goal & Phase State
 - **Goal:** clear (or send back) Build's `skill-duel-engine-v3` branch per the Eng Review Lock spec.
 - **Plan Reference:** `/Users/flybyflow/duelo-de-dibujo/DOCS/designs/skill-duel-engine-v3.md` (`## Eng Review Lock` section)
