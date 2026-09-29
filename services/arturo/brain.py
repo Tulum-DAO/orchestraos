@@ -359,11 +359,39 @@ class ProviderUnavailable(RuntimeError):
         self.reason = reason
 
 
-def load_model_catalog(path) -> dict:
-    """{provider id: [model ids]} from providers.json model_catalog.static."""
+LIVE_CATALOG_FILENAME = "model-catalog-live.json"
+
+
+def load_model_catalog(path, live_path=None) -> dict:
+    """{provider id: [model ids]} — the STATIC list in providers.json, plus whatever the
+    operator's own CLIs reported live.
+
+    The picker shows what the login can actually run (api/src/routes/model-catalog.ts probes
+    the CLIs and caches the ids here), so validating against the static list alone would 502
+    on every model the static list had not heard of — offering a model and then refusing it.
+    A missing or unreadable live file just means static-only; it is a cache, never a
+    requirement."""
     data = json.loads(Path(path).read_text())
-    return {p["id"]: [m["id"] for m in (p.get("model_catalog") or {}).get("static", [])]
-            for p in data.get("providers", [])}
+    catalog = {p["id"]: [m["id"] for m in (p.get("model_catalog") or {}).get("static", [])]
+               for p in data.get("providers", [])}
+    live = _load_live_catalog(live_path if live_path is not None
+                              else Path(path).parent.parent / "state" / LIVE_CATALOG_FILENAME)
+    for provider, ids in live.items():
+        if provider not in catalog:
+            continue  # a provider the registry does not declare is not routable
+        known = catalog[provider]
+        seen = set(known)
+        known.extend(i for i in ids if isinstance(i, str) and i and i not in seen and not seen.add(i))
+    return catalog
+
+
+def _load_live_catalog(path) -> dict:
+    try:
+        data = json.loads(Path(path).read_text())
+    except Exception:  # noqa: BLE001 — absent/corrupt cache = static only, never a failure
+        return {}
+    providers = data.get("providers")
+    return providers if isinstance(providers, dict) else {}
 
 
 def validate_model(provider: str, model: str, catalog: dict) -> None:
