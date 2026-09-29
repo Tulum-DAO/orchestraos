@@ -2,16 +2,21 @@
 
 - **Requested by:** operator, via gm (msg_6568c41b_74190686 + msg_0d4c2eea_74781096
   ground-truth confirmation + msg_6a2b5afd_74610984 domains/partners/event
-  addendum + msg_ffd21b6f_76509819 Shaw identity/toddi.to/traction addendum,
-  2026-09-29), as an addendum to the Hermes/Matrix Telegram bridge brief
+  addendum + msg_ffd21b6f_76509819 Shaw identity/toddi.to/traction addendum +
+  msg_e7e62d4b_76786880 direct operator feedback/revision request, 2026-09-29),
+  as an addendum to the Hermes/Matrix Telegram bridge brief
 - **Authored by:** plan (BSHR research + brief, non-interactive)
-- **Status:** CEO + ENG REVIEWED, CLEARED for accepted (narrow) scope — awaiting
-  the operator's answer to §6's load-bearing question before acting. **§0b and
-  §0c (below) are post-review addenda** folded in after CEO+eng review
-  completed — reinforce the accepted recommendation with real operational
-  precedent and traction data found during verification; neither changes the
-  reviewed scope or verdict. Coherence checked against §2-§6 each time, no
-  contradiction found.
+- **Status:** CEO + ENG REVIEWED (Eng Review run twice — re-opened for a
+  direct operator-requested revision pass), CLEARED for accepted (narrow)
+  scope — one item elevated to an explicit **launch dependency** (Shaw's
+  access level, §4 item 3/§6), everything else awaiting the operator's
+  answer to §6's load-bearing sequencing question. **§0b, §0c are post-
+  review addenda; the final revision pass (end of file, GSTACK REVIEW
+  REPORT) is a real content revision, not an addendum** — corrected a
+  mechanism error in the facilitator control design (self-caught by eng
+  review Run 2) and corrected the 43.9% citation at the source after
+  re-reading the primary paper in full. Coherence/correctness checked at
+  every step, no contradiction found, verdict CLEARED throughout.
 - **Scope:** strategic brief only. No implementation authorized. Kept as a
   **separate document from** `docs/PLAN_hermes-matrix-telegram-bridge.md`, which
   it references — per gm's explicit instruction not to let the bridge brief
@@ -357,15 +362,56 @@ correct the framing below.
   *same shared orchestration/reasoning layer* used for internal CEO/eng
   reviews — a single trust domain, not per-tenant isolated instances.** That
   breaks isolation in ways execution-sandboxing doesn't reach at all: shared
-  LLM-serving KV-cache can leak prompt-prefix content across tenants; one
-  measured multi-tenant agent-memory system leaked cross-tenant data via
-  semantic search at a **43.9% rate** even with direct-ID lookups blocked, per
-  the research pass's citation (arXiv 2606.24535); and writing "don't reveal
-  tenant B's data" as a system-prompt instruction is not a real control — a
-  confused or cleverly-prompted session simply ignores it. The empirically
-  common real-world root cause in disclosed incidents is banal and directly
-  relevant here: **one shared credential/API key used across all tenants**,
-  which makes the shared orchestrator itself the blast-radius multiplier.
+  LLM-serving KV-cache can leak prompt-prefix content across tenants; and
+  writing "don't reveal tenant B's data" as a system-prompt instruction is
+  not a real control — a confused or cleverly-prompted session simply
+  ignores it. The empirically common real-world root cause in disclosed
+  incidents is banal and directly relevant here: **one shared credential/API
+  key used across all tenants**, which makes the shared orchestrator itself
+  the blast-radius multiplier.
+
+  **The 43.9% figure, corrected — per operator feedback, this seat went back
+  and read the primary source in full (arXiv 2606.24535, "Governed Shared
+  Memory for Multi-Agent LLM Systems," Margalit et al., Caura.ai, 2026) rather
+  than qualify the number blind.** The original citation (from a dispatched
+  research pass, not independently checked before) mischaracterized what this
+  number means, and the corrected picture is both more precise and more
+  useful than "shared memory leaks ~44% of the time":
+  - It is **one specific, disclosed, and same-day-remediated bug** in one
+    production service (MemClaw), not a general property of shared-memory
+    architectures. On 2026-05-30, the paper's own measurement found
+    `SEARCH_LEAK_RATE = 72/164 = 0.439` — cross-fleet semantic-search probes
+    that should have been scope-denied but weren't, because the search
+    handler's fleet filter "coexists with embedding-similarity ranking" that
+    could still surface a denied row. **The authors disclosed the gap and it
+    was fixed server-side the next day** (2026-05-31); a scaled re-probe (96
+    GET-by-id checks) confirmed 0/36 cross-fleet leaks post-fix.
+  - The paper's own stated limitations (§10, in their words): "this is an
+    evaluation of our own production service, not an independent audit"
+    (self-evaluation bias, disclosed by the authors themselves); "all
+    measurements were collected from a single MemClaw tenant... the
+    cross-tenant leakage probe surface... is not measurable in this
+    configuration" (this specific paper tested cross-*fleet* isolation
+    within one tenant, not cross-*tenant* isolation — a narrower claim than
+    "cross-tenant leakage" implies); 200 trials, not adversarially
+    constructed probes.
+  - **The paper's actual thesis argues the opposite of "shared memory can't
+    be secured":** it's a proposed architecture (scope, time, provenance,
+    propagation as first-class governance primitives) that, once the one
+    enforcement gap was fixed, achieved 0/96 cross-fleet leaks, 100%
+    provenance accuracy, and 90/90 correct contradiction resolution. The
+    lesson this brief should actually draw is narrower and more actionable
+    than the original citation implied: **enforcement must be checked on
+    every access path independently** (this system enforced scope
+    correctly on `POST /search` but not on `GET /memories/{id}` until the
+    gap was found) — a real, concrete design requirement for §4.2 whenever
+    it's built, not a reason the whole approach is unsound.
+  - **This does not reverse this brief's sequencing recommendation** — a
+    real, disclosed, same-week-fixed enforcement bug in a purpose-built
+    governed-memory system is still evidence that this class of work is
+    easy to get subtly wrong and needs real engineering rigor when it's
+    eventually done (§4.2) — it just doesn't support the stronger, incorrect
+    claim the original number's framing implied.
   Real disclosed incidents in this exact class (agent + fs/bash/network access,
   found by the research pass): a GitHub Copilot prompt-injection that
   exfiltrated a live token via a symlink + JSON-schema URL with zero user
@@ -420,7 +466,85 @@ Three separable pieces, matching the three separable problems found above —
    scoped "guest" context, for the Weekender's first runs, human-facilitated —
    a facilitator (the operator or delegate) drives the fleet on the
    attendees' behalf, or watches every session directly. No new orchestration
-   isolation needed yet, because nothing is unsupervised (§3).
+   isolation needed yet, because nothing is unsupervised (§3). **"Watches" is
+   a posture, not a control design — per operator feedback, specified below,
+   not left implicit:**
+
+   **Facilitator control design (v1, calibrate during the pilot, not final).
+   Corrected once during this seat's own eng-review-depth check of this
+   addition (below) — worth stating the correction here directly, not just
+   in the review section, since it changes the actual mechanism:**
+   - **Requires facilitator approval — via the underlying CLI runtime's own
+     native tool-permission system (the same mechanism gating this very
+     session's own tool calls), NOT `approval.py`.** This seat's first draft
+     of this control design cited `approval.py` as the gating mechanism;
+     checking that claim (per this seat's own verify-by-rederiving standard)
+     found `approval.py`'s actual pattern is discrete, asynchronous decision
+     cards — post a card, answer it later (the exact pattern both this brief
+     and the bridge brief already document for operator decisions) — not a
+     live, synchronous, in-session interrupt that blocks a tool call while
+     the agent waits. For accepted scope specifically (facilitator drives
+     the session directly, or watches it live), the CLI runtime's own native
+     permission prompts are the correct mechanism, because a facilitator who
+     is physically present/watching can answer them in real time — no new
+     tooling needed. Gated categories: any file write outside the attendee
+     team's own working directory; any network call to a paid API, third-
+     party signup, or anything needing credentials; any git push, deploy, or
+     publish action; any outbound message to a human outside the attendee
+     team. **`approval.py`'s async pattern becomes relevant only if/when
+     §4.2 (unsupervised access) is ever built** — a live facilitator doesn't
+     need it; an absent one would.
+   - **Blocked outright, no approval path, hard-denied — this layer is a
+     process/filesystem boundary, not a runtime permission prompt, so it
+     doesn't depend on which gating mechanism is used above:** access to
+     `registry.json`, `orchestra.toml`, or any other seat's credentials;
+     spawning new T0/T1/T2 seats (only the facilitator provisions seats, via
+     the existing `orchestra agent create` mechanism — verified, see ENG
+     REVIEW below); direct `msg_store` sends to `gm` or any seat other than
+     the attendee's own supervised session; filesystem access outside the
+     attendee's designated working directory (no reads/writes into
+     `~/.orchestra/`, other attendees' directories, or the fleet's own
+     codebase).
+   - **Logged, reusing existing infrastructure, not new tooling:** every tool
+     call and every permission decision in the attendee session's own
+     transcript (already inherent to the CLI runtime, corrected above);
+     session start/end per team, feeding the same `reflect`/
+     `learnings.jsonl` mechanism already recommended for facilitator-capacity
+     data (§10, Implementation Tasks T1). `approval.py`'s audit pattern is
+     the right model to follow if/when the async version (§4.2) is built,
+     not claimed as already wired up for this pilot.
+   - **Independent kill switch:** the facilitator's control over a session
+     (killing its process/pane) must be genuinely out-of-band from the
+     attendee's own agent session — not something that session could
+     intercept, delay, or disable — same principle already named in item 3
+     below for self-modification guardrails ("kill-switch logic outside the
+     fleet's own editable runtime"), applied here to attendee sessions too.
+
+   **The pilot promise, made concrete (per operator feedback — "attendees"
+   generically is not a spec). Built from the confirmed funnel data (§0a)
+   and BUILD-A-THON precedent (§0c), not invented:**
+   - **Buyer, specifically:** the **technical-talent side of a Weekender
+     team** — per SJE's own positioning (§0a), teams pair an "industry
+     operator" (brings customer trust/relationships) with technical talent.
+     The fleet-access capability this brief scopes benefits the technical
+     builder specifically: someone who can code but has limited experience
+     independently running a full research → plan → review → build cycle in
+     48 hours. Not the industry-operator side, and not "attendees" as an
+     undifferentiated group.
+   - **What they leave with, specifically:** by Sunday's demo (per the
+     confirmed Weekender format, §0a), a working MVP — **plus**, specific to
+     what facilitator-driven fleet access adds beyond what an unaided team
+     would produce, a CEO+eng-reviewed plan artifact (the same review
+     gauntlet this very brief went through) they can show a sponsor or the
+     Experience-stage evaluators, demonstrating a level of rigor a 48-hour
+     hackathon team couldn't otherwise produce unaided.
+   - **Measurable outcome that justifies running another session:** (a) the
+     team's plan clears CEO+eng review with zero unresolved critical gaps by
+     the Sunday demo, and (b) the team elects to continue into the Experience
+     stage (§0a's confirmed 2-6 week sprint) — a real funnel-conversion
+     signal SJE already tracks, not a new metric invented for this brief.
+     Both are checkable from data this pilot would generate on its own,
+     without new instrumentation beyond what §4/T1 already proposes logging.
 2. **A genuinely new identity + membership layer, PLUS per-tenant orchestration
    isolation — these are one piece of work, not two.** §3's research finding
    means "WhatsApp-phone identity + token-gated membership + RBAC" is not
@@ -436,6 +560,12 @@ Three separable pieces, matching the three separable problems found above —
 3. **Formalize the already-running self-improvement loop** to include Shaw as
    a stated contributor — primarily an access/process question (who can send
    tasks into this fleet and under what review gate), not a new architecture.
+   **Elevated per operator feedback: this is now a real launch dependency,
+   not one open question among several of varying urgency.** Item 1 above
+   (the facilitator-driven pilot) is scoped to run without item 3, but the
+   operator has stated Shaw's access must be resolved *before* any of this
+   launches — meaning the read-vs-write access-level question in §6 below
+   blocks the pilot's start date, not just this brief's completeness.
    If/when the fleet is ever tasked with modifying its own infrastructure as
    part of this loop, the research pass names four practices beyond the
    existing PR-review + operator-approval hard-stop worth eng review's
@@ -462,6 +592,26 @@ over-engineering a boundary for a usage pattern that hasn't been observed yet
 would be worse than not building it yet, since it would look solved without
 being solved.
 
+**Measurable trigger threshold for §4.2 (per operator feedback — "facilitator
+capacity" made concrete, not left as a vague concept). Proposed starting
+values, explicitly a hypothesis to calibrate against real pilot data (§9,
+Implementation Task T1), not asserted as correct in advance:**
+- **Concurrency threshold:** no more than **3 concurrent attendee-team agent
+  sessions per facilitator** at a time — reasoned from the control design
+  above (approval requests need fast turnaround; a facilitator watching more
+  than ~3 sessions can't realistically evaluate an approval or catch a
+  problem before it compounds). Above this, either add facilitators 1:1 or
+  treat it as the isolation-work trigger.
+- **Time-based backstop:** if a facilitator spends **more than 50% of a
+  Weekender's working hours on approval-queue backlog and interventions**
+  (measured via the approval-audit logging above) rather than proactive
+  mentorship, that's the trigger regardless of raw team count — a low team
+  count with a high-maintenance cohort should trigger isolation work just as
+  much as a high team count would.
+- **Either threshold crossed on 2 consecutive events (not once)** triggers
+  scoping §4.2 as real, accepted work — a single rough session doesn't
+  trigger a multi-quarter infrastructure build; a pattern does.
+
 ## 5. The split gm asked to have flagged
 
 This is explicitly **not** "phase 2 of the Telegram bridge swap." The bridge
@@ -481,6 +631,22 @@ one brief's assumptions into the other's plan.
 
 ## 6. Open questions for the operator (surfaced, not decided here)
 
+**LAUNCH DEPENDENCY, resolve first (per operator feedback — elevated from
+an open question of ordinary urgency to a blocker on the pilot's start
+date):**
+- **What does "Shaw contributing to the loop" concretely mean for access:
+  read access to the fleet's decisions/learnings, or write access to send it
+  tasks?** Very different trust levels, same phrase in the transcript.
+  Shaw's identity itself is resolved (§0c — real, confirmed OrchestraOS
+  author) — what remains is purely the access-level decision, and per the
+  operator's own framing this now **blocks the pilot's launch**, not just
+  this brief's completeness (§4 item 3). Nothing in item 1's pilot scope
+  (§4) depends on this technically, but the operator has said it must be
+  resolved before anything launches — treat that as the actual constraint,
+  not a technical one this brief could argue around.
+
+**Everything below remains open, ordinary urgency, does not block launch:**
+
 - Does "facilitated at first" mean the operator is comfortable running one or
   two build weekends on today's system, human-watched, with zero new
   sandboxing infrastructure, before any of §4.2's identity/RBAC work starts?
@@ -491,11 +657,6 @@ one brief's assumptions into the other's plan.
   same "dedicated instance" treatment the bridge brief recommends for the
   operator's own channel, once/if it moves beyond observe-only? Not decided
   by either brief; a real architecture question the two threads share.
-- What does "Shaw contributing to the loop" concretely mean for access: read
-  access to the fleet's decisions/learnings, or write access to send it tasks?
-  Very different trust levels, same phrase in the transcript. **(Shaw's
-  identity itself is now resolved per §0c — real, confirmed OrchestraOS
-  author — this question is now purely about access level, not who he is.)**
 - **(Added per §0c)** toddi.to — is "check on toddi.to" actually a positioning/
   onboarding question (Todd's real, existing diagnostic methodology, meant for
   the event/sponsor pipeline) rather than a build question (the original
@@ -1058,7 +1219,7 @@ outside pass this soon, on the same accepted (thin) scope, would add cost
 without new signal for the narrow work actually being gated here. Coverage:
 `outside_status: reused-from-ceo-review`.
 
-### Eng Review Completion Summary
+### Eng Review Completion Summary (Run 1)
 
 ```
 Section 1 (Architecture)  | 0 issues; confirmed seat-provisioning mechanism
@@ -1070,13 +1231,63 @@ Section 4 (Performance)   | 0 issues found
 Outside Voice             | reused from CEO review (same document, same pass)
 ```
 
+## ENG REVIEW — Run 2 (re-opened per operator feedback on the brief)
+
+**Scope:** operator feedback added two pieces of genuinely new content —
+the facilitator control design (§4 item 1) and the measurable isolation
+threshold (§4, after the recommendation) — both touch the accepted scope's
+actual security/control posture, not just prose. Re-opening eng review for
+these two specifically, per gm's explicit "your call on depth" — Run 1's
+architecture/test findings are unaffected and not re-litigated.
+
+**Finding 1 (self-caught, corrected in place — §4 item 1, not left for a
+reader to discover):** the control design's first draft claimed
+`approval.py` as the live gating mechanism for in-session tool calls.
+Checked that claim against `approval.py`'s actual documented pattern
+(discrete async decision cards, per both this brief's §2 and the bridge
+brief's extensive `approval.py` research) — **the claim was wrong.**
+`approval.py` is not built for synchronously blocking a live tool call
+mid-session; it's built for posting a decision and answering it later.
+Corrected directly in §4 item 1: the actual mechanism for accepted scope
+(facilitator physically present) is the underlying CLI runtime's own native
+tool-permission system, with `approval.py`'s async pattern held in reserve
+for if/when unsupervised access (§4.2) is ever built. This is exactly the
+kind of gap an eng-review pass exists to catch — verified before it shipped
+as a claim, not after.
+
+**Finding 2 (verified, no issue):** the "blocked outright" list's claim that
+"only the facilitator provisions seats, via `orchestra agent create`" is
+accurate — this is the same mechanism Run 1 already verified directly
+against `docs/agent-provisioning-guide.md`. No new verification needed;
+citing the existing finding rather than re-deriving it.
+
+**Finding 3 (accepted, with an explicit caveat carried into the brief, not
+silently dropped):** the measurable isolation thresholds (3 concurrent
+sessions/facilitator; 50% approval-backlog time) are reasoned from the
+corrected control design, not from real usage data — the brief itself
+already frames them as "a hypothesis to calibrate," and this eng-review pass
+agrees that framing is honest and correctly caveated, not overconfident.
+No further correction needed; noting that the numbers themselves are
+estimates, not measurements.
+
+### Eng Review Completion Summary (Run 2)
+
+```
+Finding 1 (control design mechanism) | 1 real gap found and corrected
+                                       | in place before this review ended
+Finding 2 (seat provisioning claim)   | 0 issues — re-verified, matches
+                                       | Run 1's existing finding
+Finding 3 (measurable thresholds)     | 0 issues — already honestly
+                                       | caveated as estimates in the brief
+```
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | issues_open | SELECTIVE EXPANSION; accepted narrow scope (expose loop + formalize Shaw access), deferred the large isolation build (§4.2) and all 5 delight-scan cherry-picks until real usage data justifies them |
-| Outside Review | dedicated research fork (general-purpose agent, web research: auth precedents, RBAC/sandboxing patterns, accelerator precedents, self-modifying-fleet guardrails) — reused as this review's spec-review-equivalent per 0H | Independent technical grounding | 1 | completed, issues_found | Found the shared-orchestration cross-tenant leakage risk (43.9% measured leak rate in one real system) that materially reshaped §4's recommendation before this CEO pass began; flagged 2 sources in its self-modifying-fleet section as needing independent re-verification |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | clean | Accepted scope verified against real infrastructure (`docs/agent-provisioning-guide.md`'s one-command seat creation, `msg_store.py`'s existing impersonation check) — confirmed to require zero new code; 1 low-confidence informational finding (no T3/guest tier exists today, expected and not a remedy) |
+| Outside Review | dedicated research fork (general-purpose agent, web research: auth precedents, RBAC/sandboxing patterns, accelerator precedents, self-modifying-fleet guardrails) — reused as this review's spec-review-equivalent per 0H | Independent technical grounding | 1 | completed, issues_found | Found the shared-orchestration cross-tenant leakage risk that materially reshaped §4's recommendation before this CEO pass began; flagged 2 sources in its self-modifying-fleet section as needing independent re-verification. **Post-review correction (per operator feedback, §3):** the research pass's 43.9%-leak citation was imprecise — this seat re-read the primary source in full and corrected the framing from "shared memory leaks ~44% of the time" to "one disclosed, same-day-remediated enforcement gap in one production system, with narrower and more actionable lessons than originally stated" |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 2 | clean | Run 1: accepted scope verified against real infrastructure (`docs/agent-provisioning-guide.md`'s one-command seat creation, `msg_store.py`'s existing impersonation check) — confirmed to require zero new code; 1 low-confidence informational finding. **Run 2 (re-opened for the operator-feedback control design/threshold additions): self-caught and corrected a real gap** — the control design's first draft cited `approval.py` as a live in-session gating mechanism, which is wrong (it's async decision cards, not synchronous interrupt); corrected to the CLI runtime's own native permission system for accepted (facilitator-present) scope. Measurable thresholds independently judged honestly caveated, no correction needed |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | skipped (no UI scope) | — |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | not requested | — |
 
@@ -1123,14 +1334,40 @@ Outside Voice             | reused from CEO review (same document, same pass)
   real usage data" trigger likely arrives sooner than the brief's original
   open-ended tone implied — noted explicitly in §6, not treated as a scope
   change. Verdict and accepted scope unchanged.
+- **REVISION PASS (per direct operator feedback on the full brief, gm's
+  relay msg_e7e62d4b_76786880):** operator endorsed the core thesis
+  ("productizing a venture-building process... facilitator as the initial
+  trust boundary... staged rollout more credible than pretending isolation
+  is solved" — direct validation of §4/§5) and named five concrete gaps,
+  all addressed as real revision, not filed-and-noted: (1) the facilitator
+  control design turned from a posture into an actual spec — and eng review
+  Run 2 (above) caught and corrected a real mechanism error in that spec
+  before it shipped; (2) the pilot promise made concrete (specific buyer,
+  specific deliverable, specific measurable outcome, all derived from
+  already-confirmed funnel data, §4 item 1); (3) the isolation trigger
+  turned into explicit measurable thresholds (3 concurrent sessions/
+  facilitator, 50% approval-backlog time), honestly framed as a calibratable
+  hypothesis; (4) the 43.9% citation corrected at the source — re-read the
+  primary paper in full, found it describes one disclosed-and-fixed bug in
+  one production system, not a general property, and corrected the framing
+  throughout rather than just appending a caveat; (5) Shaw's access decision
+  elevated from one open question among several to an explicit launch
+  dependency (§4 item 3, §6), per the operator's direct statement. **This
+  revision pass changed real content (a corrected technical claim, a
+  corrected citation, a corrected mechanism), not just added footnotes —
+  eng review was genuinely re-opened for items (1) and (3), not rubber-
+  stamped.** Verdict remains CLEARED for accepted scope; the launch
+  dependency (Shaw access) is now explicit rather than implicit.
 
 **UNRESOLVED DECISIONS:**
 - Whether the operator is comfortable running Weekenders human-facilitated on
   today's system before any isolation work starts (§6) — the load-bearing
   question this whole sequencing recommendation depends on.
-- What "Shaw contributing to the loop" means concretely for access level (§6)
-  — **Shaw's identity itself is now resolved (§0c)**, this is purely about
-  access level now.
+- **(Elevated to a launch dependency per the revision pass above)** What
+  "Shaw contributing to the loop" means concretely for access level (§6) —
+  Shaw's identity itself is resolved (§0c); this is purely the access-level
+  decision now, and the operator has stated it blocks launch, not just this
+  brief's completeness.
 - **(Added per §0c)** Whether "check on toddi.to" was a positioning/onboarding
   question about a real person's existing methodology, or a build question —
   genuinely unresolved, not decided by this seat (§0c/§6).
