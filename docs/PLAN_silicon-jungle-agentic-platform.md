@@ -1310,13 +1310,13 @@ items now, not one):**
   by either brief; a real architecture question the two threads share.
   **Echo's recommendation (gm relay msg_6c655312_84650112):** make this
   depend on an explicit cross-tenant data-flow threat model, not a default
-  choice either way — still not decided here. **Naming note, flagged not
-  conflated:** the shared gateway's own config persona is named "keonda"
-  (lowercase) — the same word as the AI-facilitator product "Keonda"
-  clarified in §0j. Unverified this session whether these are the same
-  thing under one name or a genuine coincidence; worth the operator
-  confirming directly before this brief or the bridge brief assumes either
-  way.
+  choice either way — still not decided here. **Naming coincidence,
+  RESOLVED (gm relay msg_be7d8e49_7939974): confirmed, not a coincidence.**
+  Operator confirmed directly: the shared WhatsApp gateway persona "keonda"
+  IS the event-facilitator product "Keonda" from §0j/§7 — one thing, meant
+  to eventually connect to "the community shared space." This ties §0b's
+  WhatsApp-gateway question, §0j's facilitator-transition context, and §7's
+  community-brain finding into a single thread, not three adjacent ones.
 - ~~toddi.to — is "check on toddi.to" actually a positioning/onboarding
   question... rather than a build question~~ — **RESOLVED, per §0j:
   confirmed positioning/GTM question, not a build task.** Direction: the
@@ -1497,6 +1497,41 @@ background work; (b) confirm the cacao-ceremony/Gigi's-dinner identification
 above if the exact hospitality format matters for `seating.py`'s design;
 (c) route the existing design-review spec to build once (a) is confirmed —
 no further review needed on the design itself.
+
+**5. Addendum — keonda's state-routing design, the "active vs. normal
+state" / "onboarded vs. hasn't stepped into the house" distinction gm
+relayed (msg_be7d8e49_7939974, 2026-09-28).** Found the referenced prior
+plan directly: `~/.gstack/projects/conductor/ceo-plans/
+2026-09-20-keonda-state-routing.md` — same day as the community-brain
+design review, already CLEARED at both design- and eng-review depth, not
+re-derived here, just reported. **The design:** one centralized WhatsApp
+number, no per-person config — keonda reads two orthogonal signals per
+turn: **person-state** (OPERATOR / KNOWN — a graph node, onboarded /
+NEW — not found, matching gm's "hasn't stepped into the house yet") ×
+**community-mode** (EVENT-ACTIVE, a time-boxed flag on the community
+config / STEADY-STATE). "The number is a stateless door; state lives in
+the graph." A NEW person always gets the same one 5-question Living
+Profile intake — EVENT-mode only flavors the phrasing (urgency, build-
+specific language), it never branches to a second intake. Eng review
+found the one real risk (opening a cold-DM onboarding lane touches shared
+`resolve_context.py`, which the paid `jason-cre` pilot also depends on)
+and resolved it as an **opt-in-per-community, reversible config flag**
+(Option A) — `jason-cre` verified isolated by its own profile-forced
+community, unaffected by construction. **Implementation status, checked
+directly against the `keonda.io` repo, not assumed:** zero commits to
+`resolve_context.py` since 2026-09-20, and no `event:` block found in a
+search of that repo's community configs — the live configs actually live
+under `~/.hermes/skills/keonda/communities/` (a runtime location, not
+this git repo, consistent with the same "applied live, not committed"
+pattern §7 item 3 already found for the cognee isolation fix) — did not
+chase further into that live-config tree since gm's ask was to find and
+report the design, not audit its build status. **Relevant to this
+section's own §7 item 3 finding:** this state-routing design already
+treats onboarding-lane isolation as a first-class, reversible, tested
+concern (5 named tests incl. an isolation regression test) — a second,
+independent example of the operator's own team applying real isolation
+discipline on this stack, in the same direction as this brief's own §3
+recommendation, not a new risk.
 
 ## CEO REVIEW — Step 0
 
