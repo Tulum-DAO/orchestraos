@@ -4,8 +4,10 @@
   ground-truth confirmation + msg_6a2b5afd_74610984 domains/partners/event
   addendum + msg_ffd21b6f_76509819 Shaw identity/toddi.to/traction addendum +
   msg_e7e62d4b_76786880 direct operator feedback/revision request +
-  msg_e28003b6_78054130 fuller thesis continuation, 2026-09-29), as an
-  addendum to the Hermes/Matrix Telegram bridge brief
+  msg_e28003b6_78054130 fuller thesis continuation +
+  msg_f0e69f89_78115881 thesis continuation 2 (shared platform/founder
+  network), 2026-09-29), as an addendum to the Hermes/Matrix Telegram
+  bridge brief
 - **Authored by:** plan (BSHR research + brief, non-interactive)
 - **Status:** CEO + ENG REVIEWED (Eng Review run twice — re-opened for a
   direct operator-requested revision pass), CLEARED for accepted (narrow)
@@ -335,6 +337,59 @@ leverage.** The buyer is the industry expert, not the technical talent —
 corrected directly in §4 item 1 below, not left standing as a plausible-but-
 now-outdated inference now that better primary evidence exists.
 
+## 0e. Fifth ground-truth addendum — "shared platform + founder network"
+(thesis continuation 2, operator's own writing, relayed by gm, flagged as
+directly load-bearing for §3/§4.2, not just background)
+
+Continues directly from §0d. Reproduced faithfully:
+
+> Every company launched within the studio contributes to a shared
+> technology stack, operating system, and knowledge base that benefits
+> every future company. ... A lead-generation system built for a real
+> estate company may become the foundation for a healthcare company. ...
+> The first company starts with the platform. The tenth company starts with
+> the platform plus everything learned from the previous nine. ... Every
+> company strengthens the platform. The platform strengthens every company.
+>
+> **The Founder Network.** The studio is not simply a portfolio. It is a
+> community. ... a shared learning system.
+>
+> **Why Wouldn't The Founder Just Do It Themselves?** A founder working
+> with the studio starts with: Capital. A rich technology platform. AI
+> infrastructure. Reusable software components. ... The founder is not
+> paying for services. The founder is joining an ecosystem.
+>
+> **Founder Selection Becomes Everything.** If this thesis is correct, then
+> founder selection becomes the most important function of the studio. Not
+> idea selection. Not technology selection. Founder selection.
+
+Cut off again ("founder selection" section trails off) — gm flagged more
+may follow; not inventing an ending.
+
+**Why gm flagged this as load-bearing for §3/§4.2, and this seat's own
+verification of that claim before writing it down (not accepted on gm's
+framing alone):** the operator explicitly wants cross-company sharing —
+read carelessly, that could be misread as "so maybe the isolation finding
+doesn't apply after all." Checked this reasoning directly: it doesn't hold.
+The shared-platform vision here is about reusable components, aggregate
+patterns, and accumulated knowledge compounding across companies over
+time — a fundamentally different, more tractable kind of sharing than the
+live-session/data leakage risk §3 found. **The distinction is now made
+explicit and sharp in §3 itself** (a comparison table + a named boundary-
+crossing design requirement), not left as an implicit assumption a reader
+could get wrong. Net: the operator's stated wish for platform sharing is
+**not blocked by §3's finding and is not evidence against it either** —
+they're answers to different questions, and this brief now says so plainly.
+
+**Also surfaces one addition to §6's founder-selection topic, not
+previously in this brief:** the thesis's own claim ("founder selection
+becomes the most important function of the studio... not technology
+selection") is a genuine, load-bearing business claim this brief hasn't
+had reason to engage with before — worth a note in §6 that the pilot's
+own selection criteria (who gets into a Weekender, per Door 1/Door 2, §0a)
+is arguably as consequential a design decision as anything in this brief's
+technical scope, per the operator's own stated priority ordering.
+
 ## 1. The ask, as parsed (gm's cleaned-up transcript + confirmed ground truth)
 
 Silicon Jungle Experience's **Weekender** (48hr, La Reserva Tulum) is
@@ -517,6 +572,50 @@ correct the framing below.
   agent tooling). Read this as **an open position, not validated whitespace** —
   worth a dedicated competitive-landscape pass before the operator treats it
   as a differentiator in outward-facing materials.
+
+**A distinction this brief now needs to make sharp, per gm's explicit flag
+on the fuller thesis (§0e) — "the operator wants sharing" must not be read
+as "so the isolation finding doesn't apply." Verified this reasoning before
+writing it down, not accepted on gm's framing alone:**
+
+The fuller thesis (§0e) describes the operator explicitly *wanting*
+cross-company sharing: "every company strengthens the platform, the
+platform strengthens every company" — a lead-gen system built for one
+company becoming the foundation for another, a shared technology stack that
+compounds across the portfolio. **This is a different kind of sharing than
+the leakage risk above, not a contradiction of it:**
+
+| | What §3's leakage finding is about | What the operator's "shared platform" thesis is about |
+|---|---|---|
+| **Unit shared** | Live session context, active data, credentials, in-progress work — a running tenant's private state | Reusable software components, aggregate patterns, accumulated knowledge — durable artifacts, not live state |
+| **When it moves** | Continuously, automatically, as a side effect of shared runtime infrastructure (KV-cache, semantic memory) — the risk *is* that it moves without anyone deciding it should | Deliberately, as a curation decision — someone (or some process) decides "this CRM enhancement is now a reusable pattern" and promotes it |
+| **Tractability** | Genuinely hard — per the corrected §3 finding, one purpose-built governed-memory system found and fixed exactly this class of bug; still an open engineering problem for this fleet | Well-understood and common — this is architecturally close to an internal open-source program or a shared component library, a solved problem class |
+| **Does this brief's finding block it?** | No — this row is exactly what §3/§4.2 is about, and stays deferred per §4's sequencing | **No — this is not blocked by anything in §3.** Nothing about the leakage finding argues against building a shared pattern/tooling library across portfolio companies. |
+
+**The one real design requirement this distinction surfaces, worth naming
+rather than leaving implicit:** the boundary crossing between the two rows
+— promoting something from one company's private, live work into the
+shared platform — needs deliberate curation/sanitization, not automation.
+A CRM enhancement built for company A almost certainly contains company-A-
+specific identifiers, credentials, or proprietary business logic that must
+be stripped before it becomes a reusable pattern for company B. Getting
+*this* step wrong (auto-promoting something with embedded company-specific
+secrets) would be its own leakage vector — different in kind from §3's
+finding, but real, and worth a named control (human review before
+promotion, at minimum) whenever the shared-platform vision moves from
+thesis to implementation. Not this brief's scope to design — flagged for
+whoever eventually scopes the shared-platform library, the same way §3
+flags §4.2 for whoever eventually scopes isolation.
+
+**Real synergy worth noting, grounded in what's already verified this
+session, not invented:** the "platform compounds across companies" vision
+is architecturally the same pattern this fleet's own `reflect` +
+`learnings.jsonl` mechanism (§2) already proves internally — durable,
+curated knowledge accumulating across cycles, not live session sharing.
+The operator's shared-platform thesis for portfolio companies and this
+fleet's own internal self-improvement loop are the same idea at two
+different scales, both already validated as workable in this specific
+codebase.
 
 ## 4. Proposed shape (strategic, not implementation-ready)
 
@@ -751,6 +850,15 @@ date):**
   confirming whether CEO review should hold the plan to them explicitly (e.g.
   "does this feature increase friction for a first-time builder?") or treat
   them as background culture, not a gate.
+- **(Added per §0e)** The thesis states "founder selection becomes the most
+  important function of the studio... not technology selection" — if the
+  operator holds this view, the pilot's own selection criteria (who gets
+  into a Weekender at all, per Door 1/Door 2, §0a) is arguably as
+  consequential a decision as anything in this brief's technical scope, and
+  currently has no stated criteria beyond the funnel's own intake fields.
+  Not this brief's scope to design (a business/selection question, not a
+  fleet-access one) — surfaced because the operator's own priority
+  ordering says it should be, not because this brief has an opinion on it.
 
 ## CEO REVIEW — Step 0
 
@@ -1149,6 +1257,17 @@ implementation contracts._
   - Files: to be determined — this is genuinely new infrastructure
   - Verify: trigger condition (T1's data, or a stage-progression need) is
     explicit and named before work starts, not retroactively justified
+- [ ] **T4 (P3, own future brief, not this one — added per §0e/§3)** — if/when
+  the "shared platform" vision (§0e) moves from thesis to implementation,
+  design a deliberate curation/sanitization step for promoting a company's
+  private work into the shared component/pattern library — a different,
+  more tractable problem than §4.2's isolation work, but not zero-risk
+  either (auto-promoting something with embedded company-specific secrets
+  would be its own leakage vector)
+  - Surfaced by: Section 3 (the sharp distinction added this pass)
+  - Files: to be determined — genuinely new, and genuinely deferred; no
+    shared-platform library exists yet to retrofit this onto
+  - Verify: N/A until the shared-platform work itself is in scope
 
 ### Completion Summary
 
@@ -1449,6 +1568,21 @@ Finding 3 (measurable thresholds)     | 0 issues — already honestly
   eng review again (unlike items 1/3 of the prior revision pass). Verdict
   and accepted scope unchanged; the deliverable and measurable-outcome
   parts of the pilot promise were adjusted to match, not invalidated.
+- **POST-REVIEW ADDENDUM (§0e):** gm relayed thesis continuation 2 (shared
+  platform + founder network), explicitly flagged as load-bearing for §3/
+  §4.2, not just background. **Made a sharp, explicit distinction in §3**
+  between what must stay isolated (live session/data, §3's original
+  finding, unchanged) and what the operator explicitly wants shared
+  (reusable components/patterns/knowledge, a fundamentally different and
+  more tractable kind of sharing) — verified this distinction holds before
+  writing it down, not accepted on gm's framing alone. One new design
+  requirement named (curation/sanitization at the private-to-shared
+  boundary) and carried to Implementation Tasks as T4, explicitly deferred.
+  One new item added to §6 (founder-selection criteria, per the thesis's
+  own stated priority). Verdict and accepted scope unchanged — this
+  addendum's whole point is that the operator's sharing wish and this
+  brief's isolation finding are not in tension, and the brief now says so
+  explicitly rather than leaving it for a reader to reconcile.
 
 **UNRESOLVED DECISIONS:**
 - Whether the operator is comfortable running Weekenders human-facilitated on
@@ -1475,4 +1609,9 @@ Finding 3 (measurable thresholds)     | 0 issues — already honestly
   shared keonda gateway (current, restricted, observe-only) or eventually
   moves to its own dedicated instance — shared open question with the bridge
   brief, not decided by either.
+- **(Added per §0e)** No stated criteria yet for who gets into a Weekender
+  beyond the funnel's own intake fields — per the operator's own thesis
+  ("founder selection... not technology selection" is the studio's most
+  important function), worth the operator's explicit attention; not this
+  brief's scope to design (§6).
 - + 0 unresolved from prior reviews (first pass on this document).
