@@ -9,7 +9,11 @@ Usage:
     # Full scan — discover all sessions from ~/.claude/projects/
     python3 session-index.py scan
 
-    # Update a single agent entry (called by spawn-agent.sh)
+    # Update a single agent entry. NOTE: spawn-agent.sh does NOT call this — the
+    # claim that it did went unchallenged while state/agent-sessions.json sat empty
+    # from 2026-09-19, silently breaking every transcript reader. Freshness now comes
+    # from the `session_index` supervisor beat running `scan`; callers today are
+    # agent-recovery.sh and promote_successor.py.
     python3 session-index.py update <agent_id> [--session-id X] [--cwd X] [--prompt X] [--summary "X"]
 
     # Lookup a single agent
@@ -18,6 +22,12 @@ Usage:
     # List all indexed agents
     python3 session-index.py list
 """
+# PEP 604 unions (`dict | None`) appear in five signatures below and are evaluated at
+# import time on Python < 3.10 — so `session-index.py scan` died with
+# "TypeError: unsupported operand type(s) for |" under the repo's default python3 (3.9),
+# even though it runs fine under the 3.12 the supervisor uses. This makes annotations
+# lazy so the module imports on both, rather than rewriting five signatures.
+from __future__ import annotations
 
 import json
 import os

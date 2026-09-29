@@ -56,6 +56,15 @@ def build_process_table(st: Settings) -> list:
         # cards never expire on their own (operator ruling).
         ProcEntry("approval_resume", "beat", [py, str(root / "scripts" / "approval_resume.py")], cwd,
                   env={"EXPIRE_PENDING": "0"}, interval=60, note="deliver answered approvals to their seat"),
+        # state/agent-sessions.json maps each seat to its live Claude transcript + tmux
+        # session. It had been {} since 2026-09-19: session-index.py's own docstring says
+        # `update` is "called by spawn-agent.sh", but spawn-agent.sh never calls it, so
+        # nothing repopulated the index and every transcript reader (the /field dashboard,
+        # gm spawn/resume, agent-recovery, promote_successor) saw an empty map. A periodic
+        # scan is preferred over wiring the spawn path: it costs ~0.4s, and it self-heals
+        # for seats that rotate or are started by any route, not just spawn-agent.sh.
+        ProcEntry("session_index", "beat", [py, str(root / "scripts" / "session-index.py"), "scan"], cwd,
+                  interval=120, note="refresh state/agent-sessions.json (agent -> transcript/tmux map)"),
         # An in-agent menu (Claude's AskUserQuestion widget) becomes a decision card on the
         # approvals surface; the operator's answer is driven back into the pane.
         ProcEntry("menu_bridge", "beat", [py, str(root / "scripts" / "menu_bridge.py"), "--cron"], cwd,

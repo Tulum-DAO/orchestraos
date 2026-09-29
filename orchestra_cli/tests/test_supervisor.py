@@ -36,7 +36,13 @@ def test_process_table_default_shape(tmp_path):
     assert by["dashboard"].port == 8891 and by["dashboard"].argv[-1].endswith("dashboard-proxy.js")
     assert by["arturo"].port == 5071 and by["arturo"].argv[-1].endswith("services/arturo/run.sh")
     beats = {e.name: e.interval for e in table if e.kind == "beat"}
-    assert beats == {"bus_beat": 60, "boundary_delivery": 60, "cron_beat": 900, "router": 60, "approval_resume": 60, "menu_bridge": 60}
+    assert beats == {"bus_beat": 60, "boundary_delivery": 60, "cron_beat": 900, "router": 60,
+                     "approval_resume": 60, "menu_bridge": 60, "session_index": 120}
+    # session_index refreshes state/agent-sessions.json, which had gone stale at {} because
+    # nothing repopulated it — every transcript reader saw an empty map (the /field "no
+    # transcript" bug). Pin the scan subcommand: a beat that runs the wrong verb is silent.
+    assert by["session_index"].argv[-2:] == [by["session_index"].argv[-2], "scan"]
+    assert by["session_index"].argv[-2].endswith("scripts/session-index.py")
     assert by["boundary_delivery"].env["BOUNDARY_DELIVER_ARMED"] == "1"
     assert all(e.enabled for e in table if e.name != "telegram")   # telegram is opt-in
     for e in table:
