@@ -1,101 +1,121 @@
-# Handoff: plan -> (STOPPED FOR OPERATOR DECISION — brief only, no build authorized)
+# Handoff: plan -> (STOPPED FOR OPERATOR DECISIONS — two briefs done, no build authorized)
 - **Lineage:** plan (Gen 1)
-- **Timestamp:** 2026-09-29T10:15:00Z
+- **Timestamp:** 2026-09-29T11:10:00Z
 - **Working Directory:** /Users/flybyflow/orchestraos
-- **Last Commit SHA:** f1d1b8b
+- **Last Commit SHA:** f6562d7
 
 ## 1. Current Goal & Phase State
-- **Goal:** gm task "Product brief: replace OrchestraOS's built-in Telegram bridge
-  with Hermes+Matrix" (msg_1f3acb80_74023124) — BSHR research, product brief,
-  CEO review, eng review, report back to gm. Explicitly brief-only, no implementation.
-- **Plan Reference:** `docs/PLAN_hermes-matrix-telegram-bridge.md`
-- **Phase:** Complete. Both CEO review and eng review ran, each caught and fixed a
-  real error (outside-voice caught a wrong risk framing in the original
-  recommendation; eng review then caught that CEO review's own CRITICAL GAP was
-  itself overstated). Reported to gm via msg_store reply to msg_1f3acb80_74023124.
-- **Current Step:** None — this round's work is done. Waiting on the operator's
-  one remaining decision (brief §5): harden `router.py` in place (path a,
-  recommended, ships now) vs. build a connector against Hermes's experimental
-  relay contract (path b, real new engineering, only if the operator specifically
-  wants fleet-command traffic on Hermes's own infra).
+- **Goal:** two related gm tasks this round: (1) Hermes/Matrix Telegram bridge
+  brief (msg_1f3acb80_74023124), and (2) its strategic addendum, the Silicon
+  Jungle agentic-platform brief (msg_6568c41b_74190686 + ground-truth
+  confirmation msg_0d4c2eea_74781096). Both explicitly brief-only, both
+  explicitly required CEO + eng review before reporting back.
+- **Plan References:**
+  `docs/PLAN_hermes-matrix-telegram-bridge.md` (CEO+eng reviewed, CLEARED for
+  path (a) test/verification work, path (a) vs (b) decision outstanding) and
+  `docs/PLAN_silicon-jungle-agentic-platform.md` (CEO+eng reviewed, CLEARED
+  for accepted narrow scope, one load-bearing operator decision outstanding).
+- **Phase:** Both complete. Both reported to gm via msg_store replies.
+- **Current Step:** None — waiting on operator decisions for both. Do not
+  self-initiate further scoping/build on either without an explicit answer.
 
 ## 2. Open Loops & Active Callbacks
-- [ ] Wait for gm/operator to pick path (a) or (b) from brief §5. Do not self-scope
-  further engineering work from this brief without that answer — it determines
-  almost everything downstream (whether the eng review's 4 proposed tests are the
-  whole job, or whether a much bigger Node/TS connector build is in scope).
-- [ ] If (a): the brief's own Test Review section already has 4 concrete pytest
-  tests scoped and one real open verification item (does `router.py`'s
-  `handle_update` drop-vs-halt on a mid-batch exception?) — ready to hand to build
-  once approved, no further review needed.
-- [ ] If (b): needs its own eng review at implementation-ready depth before any
-  build — this brief only reviewed it strategically (it's a new client-server
-  service against an EXPERIMENTAL contract, not an extension of router.py).
-- [ ] Separately unresolved, not blocking: the "Elon orchestration layer" claim
-  couldn't be verified — the brief recommends the operator clarify the source
-  directly rather than have it repeated as rationale.
+- [ ] **Bridge brief:** operator must pick path (a) — harden `router.py` in
+  place, ships now, near-zero risk — or path (b) — build a connector against
+  Hermes's own EXPERIMENTAL relay contract, real new engineering. If (a): the
+  eng review's 4 scoped pytest tests + 1 open verification item are ready to
+  hand to build directly, no further review needed. If (b): needs its own
+  eng review at implementation-ready depth first.
+- [ ] **Silicon Jungle brief:** operator must confirm whether human-facilitated
+  Weekenders on today's system (zero new infra) are acceptable before any
+  per-tenant isolation work starts — this is the load-bearing question the
+  whole recommended sequence (expose loop → formalize Shaw access → isolation,
+  only once triggered by real usage data) depends on. If confirmed: nothing
+  else to build right now beyond one CLI seat-creation command for Shaw, once
+  the operator says what access level that seat should have.
+- [ ] Separately unresolved on the Silicon Jungle brief: what "Shaw
+  contributing to the loop" means for access level (read vs. write), whether
+  there's a target date pressuring the isolation work, and 2 sources in the
+  research pass's self-modifying-fleet section that should be independently
+  re-verified before that section is ever relied on for a real decision.
+- [ ] Also unresolved on the bridge brief: the "Elon's team orchestration
+  layer" claim couldn't be verified and may need direct correction with the
+  operator (Hermes's own plugin metadata credits NousResearch, not
+  Shaw Walters/ElizaOS).
+- [ ] The two briefs share one real technical link (WhatsApp/Hermes decisions
+  could eventually overlap) but neither is scoped assuming the other's
+  outcome — flagged explicitly in the Silicon Jungle brief's §5, per gm's
+  instruction not to let one balloon into the other silently.
 
 ## 3. Decisions Made & Rationale
-1. **Decision:** recommended path (a) — harden `router.py` in place — over the
-   originally-drafted "point Hermes's native Telegram adapter at the bot token."
-   **Rationale:** outside-voice review (dispatched via Agent tool, Plan subagent,
-   read-only) verified Hermes is agent-first by design (its own README: "the
-   self-improving AI agent... closed learning loop") with no passive/relay-only
-   mode in its Telegram adapter (grepped, confirmed none) — pointing it at the
-   bot token would make Hermes itself the responding persona, not a transport for
-   gm. Verified this myself against the code before accepting the correction,
-   per this seat's re-derive standard, rather than taking the review at its word.
-2. **Decision:** corrected the CEO review's own "CRITICAL GAP" (offset/missed-
-   message persistence) during eng review. **Rationale:** read `router.py`'s
-   `State` class directly — it already does atomic tmp-file + `os.replace`
-   durable writes (lines 101-112) and `poll_once()` only advances the offset
-   after processing each update (line 323). The gap was never real for path
-   (a); it only would have mattered for a *new* relay (path b).
-3. **Decision:** HOLD SCOPE mode for CEO review, self-decided non-interactively.
-   **Rationale:** `prompts/plan.md` instructs deciding toward the narrowest scope
-   when no human is present to answer AskUserQuestion; this is a transport-layer
-   infra swap, not a new user-facing feature.
-4. **Decision:** did not re-run a second full outside-voice pass for eng review.
-   **Rationale:** the same document had already been through one adversarial
-   pass minutes earlier that materially changed the plan; a second pass against
-   largely the same content would be redundant cost without new signal — logged
-   explicitly as a deliberate efficiency call, not a silently skipped step.
+1. **Decision:** corrected the bridge brief's original "point Hermes's native
+   Telegram adapter at the bot token" recommendation to "harden router.py in
+   place" instead. **Rationale:** dispatched outside-voice review verified
+   (README framing, hardcoded callback-handler dispatch, no passive-mode flag)
+   that Hermes is agent-first, not a relay — pointing it at the token would
+   make Hermes itself answer the operator, not gm.
+2. **Decision:** eng review then corrected the CEO review's own "CRITICAL GAP"
+   finding (router.py's offset persistence) as overstated. **Rationale:** read
+   `router.py`'s `State` class directly — it already does atomic durable
+   writes; the gap was never real for the recommended path.
+3. **Decision:** Silicon Jungle brief's CEO review (SELECTIVE EXPANSION mode)
+   accepted only a narrow, zero-new-code near-term scope and deferred the
+   large per-tenant-isolation build, all 5 delight-scan cherry-picks, and the
+   "review gauntlet as attendee-facing product" 10x vision. **Rationale:** a
+   dedicated research pass found that giving external users access to the
+   *same shared orchestration layer* used internally is a materially bigger,
+   less-solved problem than generic sandboxing (execution sandboxing is
+   commoditized via microVMs; cross-tenant leakage through a shared
+   reasoning/memory layer measured at 43.9% in one real system is not) —
+   building that prematurely, before real Weekender usage data exists to
+   design against, risks building it wrong.
+4. **Decision:** verified Shaw's "contributing to the loop" is achievable via
+   existing infrastructure (`orchestra agent create`, one command, per
+   `docs/agent-provisioning-guide.md`), not new engineering. **Rationale:**
+   read the provisioning guide and `msg_store.py`'s existing impersonation
+   check directly rather than assuming a new access-control system was needed.
+5. **Decision:** fetched `sje.ploy.build` directly (WebFetch) rather than
+   relying solely on gm's relayed summary of it. **Rationale:** this seat's
+   own verify-by-re-deriving standard — a URL and business-model claim this
+   load-bearing deserved direct confirmation, not secondhand trust, even
+   though gm had already fetched and summarized it accurately.
 
 ## 4. Declared First Effect
-None — this round has no "first effect" in the build sense; it's a completed
-brief awaiting an operator decision. The next agent to touch this thread should
-read `docs/PLAN_hermes-matrix-telegram-bridge.md` in full (especially §4/§4a/§5
-and the GSTACK REVIEW REPORT's UNRESOLVED DECISIONS) before doing anything, and
-should NOT self-select path (a) or (b) — that's the operator's call, explicitly
-left open by both reviews.
+None — both threads are complete briefs awaiting operator decisions, not
+build handoffs. The next agent to touch either thread should read the
+relevant plan file's GSTACK REVIEW REPORT and UNRESOLVED DECISIONS section in
+full before doing anything, and should NOT self-select path (a)/(b) on the
+bridge brief or self-authorize the Silicon Jungle brief's accepted scope to
+start running — both are the operator's calls, explicitly left open.
 
 ## 5. Next 3 Immediate Actions
-1. Wait for gm/operator direction on path (a) vs (b) (brief §5). Do not
-   self-initiate a build handoff from this thread alone.
-2. If path (a) is confirmed: hand `docs/PLAN_hermes-matrix-telegram-bridge.md`'s
-   ENG REVIEW → Section 3 (Test Review) directly to build — it's already scoped
-   at implementation-ready detail (4 tests, file:line references, one open
-   verification item to resolve first).
-3. If path (b) is confirmed: this needs a fresh eng review at implementation-
-   ready depth before any build — the current brief only covers it strategically.
+1. Wait for gm/operator direction on both outstanding decisions. Do not
+   self-initiate build handoffs from either thread alone.
+2. If the bridge brief's path (a) is confirmed: hand its ENG REVIEW → Section
+   3 (Test Review) directly to build — implementation-ready detail already
+   there.
+3. If the Silicon Jungle brief's human-facilitated-pilot premise is confirmed:
+   the only concrete next action is a single `orchestra agent create` call
+   for Shaw once the operator specifies the access level — everything else in
+   accepted scope is a process change (facilitator behavior), not a build.
 
 ## 6. Grounding Canary Questions (Questions Only — No Answers!)
-1. **Q1:** What three pieces of file-level evidence (README framing, adapter
-   callback-handler dispatch, absence of a passive-mode flag) does the outside-
-   voice review cite to establish Hermes's Telegram adapter cannot act as a dumb
-   relay (jsonl regarding the CEO review's §4a correction)?
-2. **Q2:** What specific code (class, method, line range) in `router.py` did eng
-   review read to overturn the CEO review's own CRITICAL GAP finding about
-   offset/missed-message persistence (jsonl regarding the Eng Review Scope
+1. **Q1:** What three pieces of file-level evidence does the bridge brief's
+   outside-voice review cite to establish Hermes's Telegram adapter cannot
+   act as a dumb relay (jsonl regarding the bridge brief's §4a correction)?
+2. **Q2:** What specific measured statistic from the Silicon Jungle brief's
+   research pass proves that shared-orchestration multi-tenancy is riskier
+   than generic execution sandboxing, and what real system was it measured
+   against (jsonl regarding brief §3's shared-orchestration finding)?
+3. **Q3:** What real, existing OrchestraOS document and CLI command did eng
+   review cite to conclude that formalizing Shaw's access requires zero new
+   engineering (jsonl regarding the Silicon Jungle brief's ENG REVIEW Scope
    Challenge section)?
-3. **Q3:** Why did this seat choose NOT to re-run a second outside-voice pass for
-   the eng review stage, and where in the plan file is that choice recorded
-   (jsonl regarding the Outside Voice section under ENG REVIEW)?
-4. **Q4:** What is the one real open verification item eng review flagged that it
-   could NOT resolve by reading code alone, and why does the brief call it
-   higher-value than anything Hermes-related (jsonl regarding Section 3's
-   closing paragraph)?
-5. **Q5:** What prior, already-written decision in a different config file (not
-   this brief) did this seat cite as direct evidence for the dedicated-instance
-   topology recommendation, rather than reasoning from first principles (jsonl
-   regarding brief §2's "Operational-boundary risk" finding)?
+4. **Q4:** Which of the two briefs' review modes differed (HOLD SCOPE vs.
+   SELECTIVE EXPANSION), and what concrete reasoning justified each choice,
+   given both were self-decided non-interactively (jsonl regarding each
+   brief's Step 0 mode-selection rationale)?
+5. **Q5:** What did this seat verify directly via WebFetch rather than take
+   on gm's relayed summary alone, and why, given gm explicitly said it had
+   already fetched and confirmed the same URL (jsonl regarding the addendum-3
+   message and the §0a verification section)?
