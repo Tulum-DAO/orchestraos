@@ -9,11 +9,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import http from 'node:http';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   createRuntimesAvailableRouter,
+  defaultPublishLiveCatalog,
   probeAll,
   salvageCliJsonAnswer,
   defaultProbeAuth,
@@ -57,7 +58,12 @@ function makeFakeDeps(opts: {
     loadProviders: () => opts.providers,
     isInstalled: (p) => opts.installed[p.id] ?? false,
     probeAuth: (p) => opts.auth[p.id] ?? { authed: 'unverified', auth_reason: 'no-fixture' },
-    loadModelCatalog: (p) => (p.model_catalog.static || []).map((m) => ({ id: m.id, label: m.label, capabilities: m.capabilities })),
+    loadModelCatalog: (p) => ({
+      models: (p.model_catalog.static || []).map((m) => ({ id: m.id, label: m.label, capabilities: m.capabilities })),
+      valid_ids: (p.model_catalog.static || []).map((m) => m.id),
+      source: 'static' as const,
+    }),
+    publishLiveCatalog: () => {},
     now: () => (nowSeq.length ? nowSeq[Math.min(call++, nowSeq.length - 1)] : Date.now()),
   };
 }
@@ -86,7 +92,8 @@ test('probeAll: not-installed provider is LOUD false, never probed for auth', ()
       authProbed = true;
       return { authed: true };
     },
-    loadModelCatalog: () => [],
+    loadModelCatalog: () => ({ models: [], valid_ids: [], source: 'static' as const }),
+    publishLiveCatalog: () => {},
     now: () => 1000,
   };
   const result = probeAll(deps);
@@ -140,7 +147,8 @@ test('GET /available caches within TTL (probeAuth called once for two GETs)', as
       probeCount += 1;
       return { authed: true };
     },
-    loadModelCatalog: () => [],
+    loadModelCatalog: () => ({ models: [], valid_ids: [], source: 'static' as const }),
+    publishLiveCatalog: () => {},
     now: () => 1000, // frozen clock => cache never expires between calls
   };
   const { router } = createRuntimesAvailableRouter(deps);
@@ -163,7 +171,8 @@ test('POST /available/refresh self-heals: forces re-probe even within TTL', asyn
       probeCount += 1;
       return { authed };
     },
-    loadModelCatalog: () => [],
+    loadModelCatalog: () => ({ models: [], valid_ids: [], source: 'static' as const }),
+    publishLiveCatalog: () => {},
     now: () => 1000,
   };
   const { router } = createRuntimesAvailableRouter(deps);
@@ -245,4 +254,96 @@ test('defaultProbeAuth believes a logged-out CLI that exits non-zero, over the f
     process.env.PATH = prevPath;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+
+// --- the probed catalog must reach the proxy that validates picks ----------
+// The proxy only allowed providers.json static ids, so a probed-but-not-static model was
+// shown in the picker and 502'd when picked. probeAll publishes what it probed.
+
+test('probeAll publishes ONLY live-probed ids, and skips a static fallback', () => {
+  const published: Record<string, string[]>[] = [];
+  const deps: ProbeDeps = {
+    loadProviders: () => [fakeProvider({ id: 'claude' }), fakeProvider({ id: 'codex', cli: 'codex' })],
+    isInstalled: () => true,
+    probeAuth: () => ({ authed: true }),
+    loadModelCatalog: (p) =>
+      p.id === 'claude'
+        ? { models: [{ id: 'live-1', label: 'Live 1', capabilities: { text: true, image: false, audio: false, video: false, context_window: null } }], valid_ids: ['live-1', 'collapsed-alias'], source: 'probe' as const }
+        : { models: [{ id: 'static-1', label: 'Static 1', capabilities: { text: true, image: false, audio: false, video: false, context_window: null } }], valid_ids: ['static-1'], source: 'static-fallback' as const, reason: 'probe-failed:ENOENT' },
+    publishLiveCatalog: (rows) => {
+      const live: Record<string, string[]> = {};
+      for (const r of rows) if (r.model_catalog_source === 'probe') live[r.id] = r.model_catalog_valid_ids;
+      published.push(live);
+    },
+    now: () => 1,
+  };
+  const res = probeAll(deps);
+  // the collapsed alias is published for VALIDATION even though it is not offered
+  assert.deepEqual(published[0], { claude: ['live-1', 'collapsed-alias'] });
+  assert.equal(res.providers[1].model_catalog_source, 'static-fallback');
+  assert.match(res.providers[1].model_catalog_reason || '', /probe-failed/);
+});
+
+test('publishing the live catalog writes atomically and survives an unwritable path', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'orch-live-'));
+  const target = join(dir, 'nested', 'model-catalog-live.json');
+  const row = {
+    id: 'claude', label: 'Claude', logo_svg: '', installed: true, authed: true as const,
+    models: [{ id: 'm1', label: 'M1', capabilities: { text: true, image: false, audio: false, video: false, context_window: null } }],
+    model_catalog_source: 'probe' as const,
+    model_catalog_valid_ids: ['m1'],
+  };
+  defaultPublishLiveCatalog([row], target);
+  assert.deepEqual(JSON.parse(readFileSync(target, 'utf-8')).providers, { claude: ['m1'] });
+  // a path that cannot be written is a cache miss, never a thrown probe
+  // (a plain FILE standing where a directory would have to be: ENOTDIR)
+  const blocker = join(dir, 'blocker');
+  writeFileSync(blocker, 'not a directory');
+  assert.doesNotThrow(() => defaultPublishLiveCatalog([row], join(blocker, 'live.json')));
+  rmSync(dir, { recursive: true, force: true });
+});
+
+// Other routes need "what is installed and signed in" too. They must share THIS cache:
+// probing is now a live CLI spawn, and paying for it per request turned opening a terminal
+// into a 3.5s call that 502'd behind a proxy.
+
+test('getCached shares the route cache — a GET then a getCached is ONE probe', async () => {
+  let probes = 0;
+  const deps: ProbeDeps = {
+    loadProviders: () => [fakeProvider()],
+    isInstalled: () => true,
+    probeAuth: () => { probes += 1; return { authed: true }; },
+    loadModelCatalog: () => ({ models: [], valid_ids: [], source: 'static' as const }),
+    publishLiveCatalog: () => {},
+    now: () => 1000,
+  };
+  const { router, getCached } = createRuntimesAvailableRouter(deps);
+  const app = express();
+  app.use('/api/runtimes', router);
+  const server = app.listen(0);
+  const port = (server.address() as { port: number }).port;
+  await new Promise<void>((r) => { http.get(`http://127.0.0.1:${port}/api/runtimes/available`, (res) => { res.resume(); res.on('end', () => r()); }); });
+  getCached();
+  getCached();
+  server.close();
+  assert.equal(probes, 1, 'the cache must be shared, not per-caller');
+});
+
+test('withModels:false never asks a CLI for its catalog, and never publishes one', () => {
+  let catalogCalls = 0;
+  let published = 0;
+  const deps: ProbeDeps = {
+    loadProviders: () => [fakeProvider()],
+    isInstalled: () => true,
+    probeAuth: () => ({ authed: true }),
+    loadModelCatalog: () => { catalogCalls += 1; return { models: [], valid_ids: [], source: 'probe' as const }; },
+    publishLiveCatalog: () => { published += 1; },
+    now: () => 1,
+  };
+  const res = probeAll(deps, { withModels: false });
+  assert.equal(catalogCalls, 0);
+  assert.equal(published, 0, 'an empty catalog must never overwrite a real one');
+  assert.equal(res.providers[0].authed, true, 'auth is still answered');
+  assert.equal(res.providers[0].model_catalog_source, 'not-probed');
 });

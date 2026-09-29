@@ -897,9 +897,35 @@ def _turn_brain():
     return _BRAIN_THIS_TURN.get() or brain
 
 
+_PROVIDERS_PATH = _REPO_ROOT / "config" / "providers.json"
+_LIVE_CATALOG_PATH = _REPO_ROOT / "state" / _brain.LIVE_CATALOG_FILENAME
+_CATALOG_CACHE = {"stamp": None, "value": {}}
+
+
+def _model_catalog():
+    """The catalog, re-read when the live cache changes.
+
+    A fresh probe (POST /api/runtimes/available/refresh) must reach validation without a
+    proxy restart: a model the operator can SEE in the picker has to be pickable in the
+    same session."""
+    try:
+        stamp = _LIVE_CATALOG_PATH.stat().st_mtime_ns
+    except OSError:
+        stamp = None
+    if _CATALOG_CACHE["stamp"] == stamp and _CATALOG_CACHE["value"]:
+        return _CATALOG_CACHE["value"]
+    try:
+        value = _brain.load_model_catalog(_PROVIDERS_PATH, _LIVE_CATALOG_PATH)
+    except Exception as _e:  # noqa: BLE001 — no catalog = no explicit brains, never a boot failure
+        log.error(f"model catalog unreadable, explicit brains disabled: {_e}")
+        value = {}
+    _CATALOG_CACHE.update(stamp=stamp, value=value)
+    return value
+
+
 try:
-    _MODEL_CATALOG = _brain.load_model_catalog(_REPO_ROOT / "config" / "providers.json")
-except Exception as _e:  # noqa: BLE001 — no catalog = no explicit brains, never a boot failure
+    _MODEL_CATALOG = _model_catalog()
+except Exception as _e:  # noqa: BLE001
     log.error(f"model catalog unreadable, explicit brains disabled: {_e}")
     _MODEL_CATALOG = {}
 
@@ -4542,10 +4568,11 @@ def _resolve_turn_brain(req):
         return None, None, (400, {"ok": False, "error": "bad_brain", "field": "brain.provider"})
     if not isinstance(model, str):
         return None, None, (400, {"ok": False, "error": "unknown_model", "field": "brain.model"})
-    if provider != _brain.API_PROVIDER and provider not in _MODEL_CATALOG:
+    catalog = _model_catalog()
+    if provider != _brain.API_PROVIDER and provider not in catalog:
         return None, None, (400, {"ok": False, "error": "bad_brain", "field": "brain.provider"})
     try:
-        _brain.validate_model(provider, model, _MODEL_CATALOG)
+        _brain.validate_model(provider, model, catalog)
     except _brain.ModelNotAllowed:
         return None, None, (400, {"ok": False, "error": "unknown_model", "field": "brain.model"})
     try:

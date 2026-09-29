@@ -64,6 +64,28 @@ export function buildProviderRows(providers: ProviderAvailability[]): ProviderRo
   });
 }
 
+/**
+ * The expanded-tile toggle. Tapping the tile that is already open CLOSES it: without this
+ * an expansion could only be undone by closing the whole sheet (reported on staging,
+ * 2026-09-29). Tapping a different tile switches to it rather than collapsing.
+ */
+export function nextExpanded(current: string | null | undefined, clicked: string): string | null {
+  return current === clicked ? null : clicked;
+}
+
+/**
+ * The pre-expansion applied when the sheet has not been touched yet: open on the provider
+ * already in use. `undefined` means "the operator has not chosen"; `null` is a DELIBERATE
+ * collapse and must survive a re-probe, or hitting refresh would silently re-open the tile
+ * they just closed.
+ */
+export function initialExpanded(
+  prev: string | null | undefined,
+  currentProviderId: string | null,
+): string | null {
+  return prev === undefined ? currentProviderId ?? null : prev;
+}
+
 /** Models for a provider are only ever offered from a selectable provider. */
 export function modelsForProvider(row: ProviderRow): ProviderModel[] {
   return row.selectable ? row.provider.models : [];
