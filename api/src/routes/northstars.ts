@@ -5,13 +5,14 @@
 import { Router, type Request, type Response } from 'express';
 import { queryDb, execDb } from '../lib/db.js';
 import { loadConfig } from '../lib/config.js';
+import { actingAgent, tenantScope } from '../lib/principal.js';
 
 const router = Router();
 
 function getTenantScope(req: any) {
-  const role = (req.headers['x-orchestra-role'] as string) || 'admin';
-  const clientScope = (req.headers['x-orchestra-client'] as string) || null;
-  const username = (req.headers['x-orchestra-user'] as string) || loadConfig().operatorId;
+  const { isAdmin: _isAdmin, clientScope } = tenantScope(req);
+  const role = _isAdmin ? 'admin' : '';
+  const username = actingAgent(req) || loadConfig().operatorId;
   return { isAdmin: role === 'admin', clientScope: role === 'admin' ? null : clientScope, username };
 }
 

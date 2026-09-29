@@ -4,6 +4,7 @@ import { join } from 'path';
 import { getAllTasks, getPendingContext, getCompletedReports } from '../services/state-reader.js';
 import { logInteraction } from '../services/learning.js';
 import { loadConfig } from '../lib/config.js';
+import { actingAgent } from '../lib/principal.js';
 
 const router = Router();
 const ORCHESTRA = process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
@@ -371,7 +372,7 @@ router.post('/', (req: Request, res: Response) => {
     }
 
     // LEARNING: Log task creation
-    const user = (req.headers['x-orchestra-user'] as string) || loadConfig().operatorId;
+    const user = actingAgent(req) || loadConfig().operatorId;
     logInteraction({
       channel: 'dashboard',
       userId: user,

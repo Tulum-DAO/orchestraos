@@ -12,21 +12,21 @@
  */
 import type { Request } from 'express';
 import { getRegistry } from './state-reader.js';
+import { principal } from '../lib/principal.js';
 
 interface TenantCtx { clientScope: string; allowed: '*' | Set<string> }
 
 export function tenantCtx(req: Request): TenantCtx {
-  const clientScope = (req.headers['x-orchestra-client'] as string) || '';
-  const allowedRaw = (req.headers['x-orchestra-allowed-agents'] as string) || '*';
+  // Scope from the principal, not raw headers: untrusted mode yields '*' (unchanged
+  // behaviour), trusted mode yields [] when the proxy asserted none — fail closed.
+  const p = principal(req);
+  const clientScope = p?.clientScope || '';
+  const allowedAgents = p?.allowedAgents ?? [];
   if (clientScope) return { clientScope, allowed: '*' };
-  if (allowedRaw === '*') return { clientScope: '', allowed: '*' };
-  let ids: string[];
-  try {
-    const parsed = JSON.parse(allowedRaw);
-    ids = Array.isArray(parsed) ? parsed.map(String) : String(parsed).split(',');
-  } catch {
-    ids = allowedRaw.split(',');
-  }
+  if (allowedAgents === '*') return { clientScope: '', allowed: '*' };
+  const ids = Array.isArray(allowedAgents)
+    ? allowedAgents.map(String)
+    : String(allowedAgents).split(',');
   return { clientScope: '', allowed: new Set(ids.map((s) => s.trim()).filter(Boolean)) };
 }
 
