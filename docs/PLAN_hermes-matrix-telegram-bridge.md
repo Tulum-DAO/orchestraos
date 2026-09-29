@@ -600,18 +600,55 @@ limits, webhook safety, and observability, none of which depend on the
 offset-advance framing that was wrong. Still open, still recommended as
 written.
 
-**Why this correction matters beyond the one bug:** this is the second time
-in this brief's lifecycle a claim survived multiple layers of review
-(this seat's own eng review, an external adversarial review with real
-citations) before an implementer actually checking it against the existing
-test suite caught the gap. Worth naming as a pattern, not just an incident:
-**review catches what review is built to catch; it does not substitute for
-running the existing tests and reading them before proposing a fix that
-contradicts one.** Neither this seat's Test Review section nor the external
-review's Phase 1 test plan cross-checked the *proposed new tests* against
-the *existing test suite's actual assertions* — both proposed tests that
-would have needed to be reconciled with `test_a_bad_update_is_skipped_and_
-offset_still_advances` before shipping, and neither did.
+**Why this correction matters beyond the one bug — updated, a fourth layer
+found a fourth instance, and it sharpens rather than just repeats the
+lesson above.** A second commit, `a062d57` (`fix(telegram): a failed
+attachment download no longer vanishes the message`), landed after this
+section was first written — verified directly (commit + diff read in
+full), not taken on build's word. It fixes the **same defect class**
+(silent, permanent message loss) at a **different site**: `download_file()`
+swallows its own exception and returns `None`, so a photo-only message
+whose download failed ended up with empty text, hit `if not text: return`,
+and was confirmed as a clean success — silent loss reached by a path that
+never raises, which means `b834241`'s retry/step-over machinery (built for
+the offset bug) could not see it at all. **This was found by the `review`
+seat auditing build's own implementation, not by build, and not by this
+brief** — build's own commit message says so plainly: "My earlier commit
+message overclaimed coverage on this specific route."
+
+**The accurate sequence, now four layers deep, is stronger evidence than
+"three layers, implementer catches the rest":** external adversarial
+review found the offset bug → this seat confirmed it → build's
+implementation caught the existing-test contradiction the first two
+missed → `review`, auditing that implementation, caught a *second*,
+independent instance of the same defect class that build's own fix
+couldn't see. **No single layer — including the implementer — closed the
+whole defect class. Each layer caught something real and missed something
+else real.** That is the honest lesson, not "the implementer is where it
+finally gets caught."
+
+**The fix confirms the transient-vs-permanent axis generalizes, not just
+applies once:** `b834241` retries transient failures and never confirms
+them until they succeed. `a062d57` deliberately does **not** retry a failed
+download — verified in its own commit message's stated reasoning — because
+a permanently unfetchable file (the Bot API's 20MB limit being the obvious
+case) would head-of-line-block real traffic for the whole retry budget;
+it delivers a flagged placeholder (`"[download failed — ask the operator to
+resend]"`) instead. Same class, opposite correct handling, same axis:
+**can retrying this specific failure ever succeed?** If yes, retry and
+never confirm. If no, confirm immediately and make the failure visible.
+This is now confirmed across two independent call sites in the same file,
+not asserted from one.
+
+**Implementation Tasks note:** `a062d57` is a real fix, reviewed and cleared
+per `docs/HANDOFF_review-next.md` (verified: "review CLEARS the F1
+attachment-placeholder fix (a062d57)") and merged via `58d1fb7` — not a new
+open task for this brief; recorded here for the same reason `b834241` was,
+as ground truth this brief's own recommendations should be read against,
+not as new scope. Given the pace of parallel fixes landing in this same
+codepath family, this brief does not attempt to track every subsequent one
+in real time — flag any further instance to this seat explicitly rather
+than expecting it to notice unprompted.
 
 ### 7.6 What stays exactly as recommended before this review landed
 
