@@ -88,9 +88,17 @@ const warnedOrigins = new Set<string>();
 // The decision itself lives in lib/cors-origin.ts, with its own tests.
 app.use((req, res, next) => cors({
   origin(origin, cb) {
+    // x-forwarded-host is trusted ONLY from a loopback peer — i.e. the dashboard proxy on
+    // this machine, which is the only thing that should ever be forwarding for us. Any
+    // client can send that header, and honouring it from an arbitrary peer would let a
+    // caller nominate itself as same-origin and be handed Access-Control-Allow-Origin
+    // (flagged in review, 2026-09-29). The API binds loopback today, so this costs nothing
+    // and stops the bypass if it is ever exposed directly.
+    const peer = req.socket.remoteAddress || '';
+    const peerIsLocal = peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1';
     const decision = originDecision({
       origin: origin || undefined,
-      forwardedHost: String(req.headers['x-forwarded-host'] || '') || undefined,
+      forwardedHost: peerIsLocal ? String(req.headers['x-forwarded-host'] || '') || undefined : undefined,
       hostHeader: req.headers.host,
       allowlist: corsAllowlist(),
     });

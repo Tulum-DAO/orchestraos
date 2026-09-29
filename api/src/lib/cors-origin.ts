@@ -20,7 +20,13 @@
 
 export interface OriginInputs {
   origin?: string;
-  /** X-Forwarded-Host, when a proxy preserved the address the browser actually used. */
+  /**
+   * X-Forwarded-Host, when a proxy preserved the address the browser actually used.
+   * ONLY pass this when the request arrived from a trusted peer: any client can send the
+   * header, and trusting it from an arbitrary peer would let a caller nominate its own
+   * origin as same-origin (flagged in review, 2026-09-29). The caller decides trust; this
+   * module never reads a socket.
+   */
   forwardedHost?: string;
   /** The request's own Host header (right when nothing rewrote it). */
   hostHeader?: string;
@@ -57,7 +63,9 @@ export function originDecision(i: OriginInputs): OriginDecision {
   if (!authority) return { allow: false, sameOrigin: false, reason: 'malformed-origin' };
 
   // Same-origin: the page lives at the very address this request was sent to. An EXACT
-  // authority match — a suffix test would let evil-<host> pass for <host>.
+  // authority match — a suffix test would let evil-<host> pass for <host>. Both inputs are
+  // client-settable in principle; it is the CALLER's job to have passed a forwardedHost
+  // only from a trusted peer (see server.ts), which is why this is stated in the type.
   const addressedAs = (i.forwardedHost || i.hostHeader || '').trim().toLowerCase();
   if (addressedAs && addressedAs === authority.toLowerCase()) {
     return { allow: true, sameOrigin: true, reason: 'same-origin' };

@@ -94,3 +94,24 @@ test('publicOrigins drops any path — an origin is scheme://host:port only', ()
   assert.deepEqual(publicOrigins('https://box.example:8891/dashboard/'),
                    ['https://box.example:8891']);
 });
+
+// Review finding (2026-09-29): x-forwarded-host is client-settable, so same-origin must not
+// be derivable from it unless a trusted peer sent it. This module takes trust as an INPUT —
+// server.ts passes forwardedHost only for a loopback peer — so the contract to keep here is
+// that an absent forwardedHost cannot be conjured from anything else.
+
+test('with no forwarded host, a foreign origin cannot claim same-origin', () => {
+  const d = originDecision({
+    origin: 'https://evil.example',
+    hostHeader: 'srv1397016.tail8be541.ts.net:18891',
+    allowlist: ALLOW,
+  });
+  assert.equal(d.allow, false);
+  assert.equal(d.sameOrigin, false);
+});
+
+test('an untrusted forwarded host is simply not passed — and then nothing matches', () => {
+  // what server.ts does for a NON-loopback peer: forwardedHost omitted entirely
+  const d = originDecision({ origin: 'https://attacker.example', allowlist: ALLOW });
+  assert.equal(d.allow, false);
+});
