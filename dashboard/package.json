@@ -9,7 +9,8 @@
     "build:check": "npm run guard && tsc -b && vite build --outDir /tmp/dashboard-build-check --emptyOutDir",
     "build": "npm run guard && echo '!! vite build writes dashboard/dist — that IS the LIVE served dashboard. To test a build safely use: npm run build:check' && tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "tsx --test src/lib/*.test.ts"
   },
   "dependencies": {
     "@elevenlabs/react": "^1.0.1",
@@ -36,6 +37,7 @@
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.4.0",
     "tailwindcss": "^4.2.2",
+    "tsx": "^4.19.0",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.57.0",
     "vite": "^8.0.1"

@@ -16,7 +16,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
-import { Mic, ArrowUp, X, History, Focus, PhoneOff, AudioLines, Plus, Paperclip } from 'lucide-react';
+import { Mic, ArrowUp, X, History, Focus, PhoneOff, AudioLines, Plus, Paperclip, Cpu } from 'lucide-react';
 import { useDictation } from './useDictation.ts';
 import { uploadAttachment, attachmentPreamble, describeAttachment, type Attachment } from '../../lib/arturoUpload';
 import './arturo.css';
@@ -27,6 +27,9 @@ import {
 } from '../../lib/arturoThreads';
 import { VoiceSession, type VoiceSessionState } from '../../lib/voiceSession';
 import SpawnedAgentCard from './SpawnedAgentCard';
+import { ModelSelectorSheet } from '../agent/ModelSelectorSheet';
+import { useArturoBrain } from '../../stores/arturoBrain';
+import { brainFromThread, describeTurnError, toWireBrain } from '../../lib/arturoBrain';
 
 interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[]; spawned?: string[]; at: number; live?: boolean; state?: SendState;
   /** A first-person status note (voice not configured, mic denied…) — rendered as a small interleaved
@@ -60,11 +63,15 @@ export function ArturoPill() {
   const [convId, setConvId] = useState<string>(loadConv);
   // Re-render when the card is deleted or restored; the value itself lives in storage.
   const [ctxOn, setCtxOn] = useState(true);
+  // Which brain answers the next turn: the same Arturo-scoped choice the home uses.
+  const brainChoice = useArturoBrain((s) => s.choice);
+  const chooseBrain = useArturoBrain((s) => s.choose);
+  const [modelOpen, setModelOpen] = useState(false);
   const ta = useRef<HTMLTextAreaElement>(null);
   // Same composer buttons as the Arturo home (Shaw 2026-09-21: "the buttons we see when Arturo
   // first loads are the same buttons we should see in every instance of Ask Arturo"): attach,
-  // dictate, and send-or-voice in the right slot. Only the home's model chip has no twin here —
-  // the page-context card sits in its place.
+  // dictate, and send-or-voice in the right slot. The page-context card sits where the home's
+  // model chip is, and the brain chip beside it picks the model (DEC-1790669162399904).
   const fileInput = useRef<HTMLInputElement>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -140,8 +147,11 @@ export function ArturoPill() {
     const mine = ++resumeGen.current;
     const t = await loadThread(id);
     if (mine !== resumeGen.current) return;          // superseded by a send or a newer reload
+    // A thread the server knows answers on the brain it last used. A fresh thread (null) leaves
+    // the current choice alone: resume runs on every open, and must not undo a pick just made.
+    if (t) chooseBrain(brainFromThread(t, {}));
     setTurns((t?.turns || []).map((x) => ({ role: x.role === 'user' ? 'user' : 'arturo', text: x.content, at: (x.ts || 0) * 1000 })));
-  }, []);
+  }, [chooseBrain]);
 
   useEffect(() => { setCtxOn(!isContextDismissed(convId)); }, [convId]);
   useEffect(() => { if (open) { void resume(convId); void listThreads().then(setThreads); setTimeout(() => ta.current?.focus(), 30); } }, [open, convId, resume]);
@@ -176,7 +186,8 @@ export function ArturoPill() {
     setAttachments([]);
     // The card is the switch: present → this turn carries the page context; deleted → it does not.
     const body = pre ? `${pre}\n\n${text}` : text;
-    let r = await arturoText(body, convId, contextForTurn(convId, ctx), { onSent: () => setState('sent') });
+    const turnBrain = toWireBrain(brainChoice);
+    let r = await arturoText(body, convId, contextForTurn(convId, ctx), { onSent: () => setState('sent'), brain: turnBrain });
     if (!r.ok && isStarting(r)) {
       // Same rule as the home (G15): right after `orchestra up` the Arturo service is still booting and
       // the api answers 502/503/504. That is "starting", not "unreachable" — say so, wait for /health,
@@ -185,7 +196,7 @@ export function ArturoPill() {
       append({ role: 'arturo', text: STARTING_TEXT, at: noteAt, note: true });
       const ready = await waitForArturo();
       setTurns((prev) => prev.filter((t) => !(t.note && t.at === noteAt)));
-      if (ready.ok) r = await arturoText(body, convId, contextForTurn(convId, ctx), { onSent: () => setState('sent') });
+      if (ready.ok) r = await arturoText(body, convId, contextForTurn(convId, ctx), { onSent: () => setState('sent'), brain: turnBrain });
     }
     setBusy(false);
     setState(r.ok ? 'acked' : 'failed');
@@ -193,7 +204,7 @@ export function ArturoPill() {
       ? { role: 'arturo', text: r.reply_text || '(no reply)', tools: r.tools_called, spawned: r.spawned, at: Date.now() }
       : { role: 'arturo', text: isStarting(r)
           ? 'I am still starting up and could not answer yet — give `orchestra up` a moment and send that again.'
-          : `Could not reach Arturo: ${r.error || 'unknown'}`, at: Date.now() });
+          : describeTurnError(r)?.message || `Could not reach Arturo: ${r.error || 'unknown'}`, at: Date.now() });
     void listThreads().then(setThreads);      // the thread it just created/updated joins the list
   }
 
@@ -365,6 +376,11 @@ export function ArturoPill() {
                 <Focus size={12} /> <span className="cc-label">Use this page</span>
               </button>
             )}
+            <button className="arturo-context-chip" onClick={() => setModelOpen(true)}
+                    title={brainChoice ? `Answering on ${brainChoice.label}` : 'Answering on the default brain'}
+                    aria-label={brainChoice ? `Brain: ${brainChoice.label}. Change` : 'Brain: default. Change'}>
+              <Cpu size={12} /> <span className="cc-label">{brainChoice ? brainChoice.label : 'Default brain'}</span>
+            </button>
           </div>
           <div className="cluster">
             <button className={dictMode === 'idle' ? 'circle-btn' : `circle-btn ${dictMode}`}
@@ -383,6 +399,13 @@ export function ArturoPill() {
           </div>
         </div>
       </div>
+      <ModelSelectorSheet
+        open={modelOpen}
+        onClose={() => setModelOpen(false)}
+        selection={brainChoice ? { providerId: brainChoice.provider, modelId: brainChoice.model } : null}
+        onPick={(p) => chooseBrain({ provider: p.providerId, model: p.modelId, label: p.modelLabel })}
+        onPickDefault={() => chooseBrain(null)}
+      />
     </>
   );
 }

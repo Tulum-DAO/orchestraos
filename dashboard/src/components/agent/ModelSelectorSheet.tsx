@@ -64,9 +64,14 @@ function AddProviderPanel({ rows }: { rows: ProviderRow[] }) {
 interface ModelSelectorSheetProps {
   open: boolean;
   onClose: () => void;
+  /** Arturo passes its own selection + handlers (DEC-1790669162399904 §1.5). Without them the
+   *  sheet reads and writes the shared modelSelection store, as the Agent page expects. */
+  selection?: { providerId: string; modelId: string } | null;
+  onPick?: (pick: { providerId: string; modelId: string; modelLabel: string }) => void;
+  onPickDefault?: () => void;
 }
 
-export function ModelSelectorSheet({ open, onClose }: ModelSelectorSheetProps) {
+export function ModelSelectorSheet({ open, onClose, selection, onPick, onPickDefault }: ModelSelectorSheetProps) {
   const [rows, setRows] = useState<ProviderRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -75,8 +80,11 @@ export function ModelSelectorSheet({ open, onClose }: ModelSelectorSheetProps) {
   // instead of doing nothing, which is also the only way the reason reaches a phone.
   const [connectRow, setConnectRow] = useState<ProviderRow | null>(null);
   const select = useModelSelection((s) => s.select);
-  const currentProviderId = useModelSelection((s) => s.providerId);
-  const currentModelId = useModelSelection((s) => s.modelId);
+  const sharedProviderId = useModelSelection((s) => s.providerId);
+  const sharedModelId = useModelSelection((s) => s.modelId);
+  const scoped = onPick !== undefined;
+  const currentProviderId = scoped ? (selection?.providerId ?? null) : sharedProviderId;
+  const currentModelId = scoped ? (selection?.modelId ?? null) : sharedModelId;
 
   // Re-probing on demand. The sheet used to probe ONCE on open, so a provider installed or
   // signed in WHILE the modal was open kept its stale red banner — the operator watched the
@@ -212,6 +220,17 @@ export function ModelSelectorSheet({ open, onClose }: ModelSelectorSheetProps) {
               </button>
             </div>
 
+            {onPickDefault && (
+              <button
+                onClick={() => { onPickDefault(); onClose(); }}
+                className={`text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                  !currentProviderId ? 'bg-muted text-foreground' : 'text-foreground/80 hover:bg-muted'
+                }`}
+              >
+                Use the default brain
+                <span className="ml-2 text-[10px] text-foreground/40">whatever this install is set up with</span>
+              </button>
+            )}
             {/* Models for the expanded provider */}
             <div className="flex flex-col gap-1 max-h-64 overflow-y-auto">
               {(() => {
@@ -226,12 +245,16 @@ export function ModelSelectorSheet({ open, onClose }: ModelSelectorSheetProps) {
                   <button
                     key={model.id}
                     onClick={() => {
-                      select({
-                        providerId: expandedRow.provider.id,
-                        modelId: model.id,
-                        modelLabel: model.label,
-                        capabilities: model.capabilities,
-                      });
+                      if (onPick) {
+                        onPick({ providerId: expandedRow.provider.id, modelId: model.id, modelLabel: model.label });
+                      } else {
+                        select({
+                          providerId: expandedRow.provider.id,
+                          modelId: model.id,
+                          modelLabel: model.label,
+                          capabilities: model.capabilities,
+                        });
+                      }
                       onClose();
                     }}
                     className={`text-left px-3 py-2 rounded-lg text-sm transition-colors ${

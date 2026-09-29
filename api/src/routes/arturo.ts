@@ -1,7 +1,7 @@
 /**
  * Arturo text bridge (tracks T2/T4) — the browser's path to Arturo's brain and its threads.
  *
- * POST /api/arturo/text        {text, conversation_id?} -> gateway /arturo/text -> :5071/text
+ * POST /api/arturo/text        {text, conversation_id?, brain?, context?} -> gateway /arturo/text -> :5071/text
  * GET  /api/arturo/health                               -> gateway /arturo/health
  * GET  /api/arturo/threads     [?limit=&offset=]        -> gateway /arturo/threads      (G20)
  * GET  /api/arturo/threads/:id                          -> gateway /arturo/threads/{id} (G20)
@@ -35,6 +35,39 @@ export interface ArturoDeps {
   /** Item C: stream a request body (multipart dictation clip) upstream untouched — fetchJson parses
    *  JSON and takes a materialised init, so the relay has its own seam. Returns status + parsed body. */
   forwardStream: (url: string, req: any, headers: Record<string, string>, timeoutMs: number) => Promise<{ status: number; body: any }>;
+}
+
+// Per-turn brain + page context (DEC-1790669162399904 §1.1-1.2). Shape checks only, for an early
+// 400 with the proxy's own error names. The proxy is authoritative: it alone holds the model
+// catalog, so a well-shaped but unlisted model is refused there. Only known fields are forwarded.
+const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,99}$/;
+const CTX_FIELDS = ['route', 'entityKind', 'entityId', 'hint'] as const;
+const CTX_MAX = 300;
+
+type Refusal = { error: string; field: string };
+type Picked<T> = { ok: true; value: T } | { ok: false; refusal: Refusal };
+
+export function pickBrain(raw: unknown): Picked<{ provider: string; model: string }> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, refusal: { error: 'bad_brain', field: 'brain' } };
+  const { provider, model = '' } = raw as Record<string, unknown>;
+  if (typeof provider !== 'string' || !provider || provider.length > 40) return { ok: false, refusal: { error: 'bad_brain', field: 'brain.provider' } };
+  if (typeof model !== 'string' || (model !== '' && !MODEL_ID_RE.test(model))) return { ok: false, refusal: { error: 'unknown_model', field: 'brain.model' } };
+  return { ok: true, value: { provider, model } };
+}
+
+export function pickContext(raw: unknown): Picked<Record<string, string>> {
+  const bad: Picked<Record<string, string>> = { ok: false, refusal: { error: 'bad_context', field: 'context' } };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return bad;
+  const src = raw as Record<string, unknown>;
+  if (typeof src.route !== 'string' || !src.route) return bad;
+  const out: Record<string, string> = {};
+  for (const k of CTX_FIELDS) {
+    const v = src[k];
+    if (v === undefined || v === null) continue;
+    if (typeof v !== 'string' || v.length > CTX_MAX) return bad;
+    out[k] = v;
+  }
+  return { ok: true, value: out };
 }
 
 export function defaultArturoDeps(): ArturoDeps {
@@ -77,10 +110,18 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     const text = String((req.body || {}).text || '').trim();
     if (!text) { res.status(400).json({ ok: false, error: 'text required' }); return; }
     const conversation_id = String((req.body || {}).conversation_id || '').slice(0, 200);
+    const upstream: Record<string, unknown> = { text, conversation_id };
+    for (const [key, pick] of [['brain', pickBrain], ['context', pickContext]] as const) {
+      const raw = (req.body || {})[key];
+      if (raw === undefined || raw === null) continue;
+      const picked = pick(raw);
+      if (!picked.ok) { res.status(400).json({ ok: false, ...picked.refusal }); return; }
+      upstream[key] = picked.value;
+    }
     await forward(res, '/arturo/text', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, conversation_id }),
+      body: JSON.stringify(upstream),
     }, 195000);
   });
 
