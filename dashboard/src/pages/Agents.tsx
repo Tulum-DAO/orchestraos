@@ -1,14 +1,16 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { clsx } from 'clsx';
 import { LayoutGrid, List, GitBranch, Plus } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAgents } from '../hooks/useAgents';
 import { useSystem } from '../hooks/useSystem';
 import { useUser, canSeeAgent } from '../hooks/useUser';
-import { spawnAgent, killAgent, getAdaptiveAgents, fetchPairCounts } from '../lib/api';
+import { spawnAgent, killAgent, getAdaptiveAgents, fetchPairCounts, fetchRecentMessages } from '../lib/api';
 import { AgentsSummaryStrip } from '../components/AgentsSummaryStrip';
 import { AgentDetailPanel } from '../components/AgentDetailPanel';
 import { ConversationPanel } from '../components/ConversationPanel';
+import { FleetTicker } from '../components/FleetTicker';
+import { newlyArrived, type TrafficMessage } from '../lib/fleetTraffic';
 import { StatusDot } from '../components/StatusDot';
 import { TierBadge } from '../components/TierBadge';
 import { AgentCard } from '../components/AgentCard';
@@ -68,6 +70,36 @@ export default function Agents() {
     queryFn: () => fetchPairCounts(WINDOW_HOURS),
     refetchInterval: 15_000,
   });
+
+  // Step 7. Recent mail drives BOTH the ticker and the travelling dots, from the same
+  // canonical table as the line counts — so a dot, a ticker row and a line count are three
+  // views of one event rather than three stores disagreeing.
+  const { data: recent } = useQuery({
+    queryKey: ['recent-messages'],
+    queryFn: () => fetchRecentMessages(40),
+    refetchInterval: 8_000,
+  });
+  // useMemo so the identity is stable and the effect below can depend on the ARRAY rather
+  // than on the query result it was derived from — the two are equivalent today, but the
+  // lint rule is right that depending on the wrong one is how a stale-closure bug starts.
+  const recentMessages = useMemo<TrafficMessage[]>(() => recent?.messages ?? [], [recent]);
+  // A dot is emitted only for an id that was absent from the previous poll, and it is cleared
+  // once its one-shot animation has played. Never a loop: spec §2 says if a dot moves, a
+  // message is actually moving, so idle traffic must render idle lines.
+  const seenIdsRef = useRef<Set<string>>(new Set());
+  const [dots, setDots] = useState<TrafficMessage[]>([]);
+  const [freshIds, setFreshIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (recentMessages.length === 0) return;
+    const fresh = newlyArrived(seenIdsRef.current, recentMessages);
+    seenIdsRef.current = new Set(recentMessages.map((m) => m.id));
+    if (fresh.length === 0) return;
+    setDots(fresh);
+    setFreshIds(new Set(fresh.map((m) => m.id)));
+    // 1100ms > the 900ms keyframe, so the dot unmounts after it finishes rather than mid-flight.
+    const t = setTimeout(() => { setDots([]); setFreshIds(new Set()); }, 1100);
+    return () => clearTimeout(t);
+  }, [recentMessages]);
 
   const { data: adaptiveScores } = useQuery({
     queryKey: ['adaptive-agents'],
@@ -474,7 +506,18 @@ export default function Agents() {
               onSelectConnection={openConversation}
               onSelectAgent={openAgentPanel}
               selectedAgentId={panelAgentId}
+              onClearSelection={closePanel}
+              dots={dots}
             />
+            {/* Bottom live ticker (spec §3). The time scrubber that shares this row is
+                step 9 and is not built. */}
+            <div className="border-t border-neutral-800 mt-2">
+              <FleetTicker
+                messages={recentMessages}
+                freshIds={freshIds}
+                onSelectConnection={openConversation}
+              />
+            </div>
           </div>
           {(panelAgent || selectedConnection) && (
             <aside className="w-full lg:w-[380px] shrink-0 lg:max-h-[75vh]">

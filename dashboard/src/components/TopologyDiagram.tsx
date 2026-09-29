@@ -4,6 +4,7 @@ import { StatusDot } from './StatusDot';
 import { TierBadge } from './TierBadge';
 import type { PairCountRow } from '../lib/api';
 import { lineWidthPx, pairKey, shortAgo } from '../lib/topologyLines';
+import { dotColor, type TrafficMessage } from '../lib/fleetTraffic';
 
 interface Agent {
   id: string;
@@ -36,6 +37,12 @@ interface TopologyDiagramProps {
   onSelectAgent?: (id: string) => void;
   /** Agent whose panel is currently open — gets a bright border (spec §4 selection). */
   selectedAgentId?: string | null;
+  /** Clicking empty space clears the selection (spec §4). */
+  onClearSelection?: () => void;
+  /** Messages that JUST arrived, one dot each, colour by type and direction by sender
+   *  (spec §4). The page owns the poll-diff and the expiry; this component only draws what
+   *  it is handed, so a dot can never appear without a real message behind it (spec §2). */
+  dots?: TrafficMessage[];
 }
 
 /** A box or a line is a real control when it has a handler and plain markup when it does not.
@@ -64,6 +71,35 @@ function Clickable({
 // exporting nothing but components (react-refresh/only-export-components).
 
 type PairLookup = { get: (a: string, b: string) => PairCountRow | undefined; busiest: number };
+
+/** Spec §4 selection: the selected agent and everyone it talks to stay bright, everything
+ *  else fades. Returns null when nothing is selected, which the callers read as "no fading" —
+ *  distinct from "an empty neighbour set", where everything else SHOULD fade. */
+function useBrightSet(
+  selectedAgentId: string | null | undefined, pairs: PairCountRow[] | undefined,
+): Set<string> | null {
+  return useMemo(() => {
+    if (!selectedAgentId) return null;
+    const bright = new Set<string>([selectedAgentId]);
+    for (const p of pairs ?? []) {
+      if (p.a === selectedAgentId) bright.add(p.b);
+      else if (p.b === selectedAgentId) bright.add(p.a);
+    }
+    return bright;
+  }, [selectedAgentId, pairs]);
+}
+
+function useDotsByPair(dots: TrafficMessage[] | undefined): Map<string, TrafficMessage[]> {
+  return useMemo(() => {
+    const m = new Map<string, TrafficMessage[]>();
+    for (const d of dots ?? []) {
+      const k = pairKey(d.from_agent, d.to_agent);
+      const list = m.get(k);
+      if (list) list.push(d); else m.set(k, [d]);
+    }
+    return m;
+  }, [dots]);
+}
 
 function usePairLookup(pairs: PairCountRow[] | undefined): PairLookup {
   return useMemo(() => {
@@ -101,8 +137,8 @@ function isWorking(agent: Agent): boolean {
 }
 
 function AgentNode({
-  agent, onSelect, selected,
-}: { agent: Agent; onSelect?: (id: string) => void; selected?: boolean }) {
+  agent, onSelect, selected, dimmed,
+}: { agent: Agent; onSelect?: (id: string) => void; selected?: boolean; dimmed?: boolean }) {
   const working = isWorking(agent);
   // Agent-level only. The operator explicitly did NOT want skill/prompt execution detail,
   // so this shows the task a seat is on, never which tool or skill is running.
@@ -116,6 +152,9 @@ function AgentNode({
         // Selection reads as a ring, not a border swap: overwriting the border would throw
         // away the status colour, which is the one thing that must never be hidden (spec §2).
         selected && 'ring-2 ring-sky-300 ring-offset-2 ring-offset-neutral-900',
+        // Fade, not hide: a down agent that is also unrelated to the selection still has to
+        // stay on screen and still has to be red (spec §2, §7 — nothing important is hidden).
+        dimmed && 'opacity-30',
         getNodeOpacity(agent)
       )}
       title={working ? (agent.activity || 'working') : (agent.status || (agent.alive ? 'idle' : 'stopped'))}
@@ -156,10 +195,11 @@ function AgentNode({
  *  `stubPx` is the length of the line above and below the label, so the caller keeps the
  *  spacing the tree already had instead of this component guessing at layout. */
 function Connection({
-  a, b, lookup, windowHours, onSelect, stubPx,
+  a, b, lookup, windowHours, onSelect, stubPx, dimmed, dots,
 }: {
   a: string; b: string; lookup: PairLookup; windowHours: number;
   onSelect?: (a: string, b: string) => void; stubPx: number;
+  dimmed?: boolean; dots?: TrafficMessage[];
 }) {
   const row = lookup.get(a, b);
   const count = row?.count ?? 0;
@@ -200,18 +240,37 @@ function Connection({
     </span>
   );
   return (
-    <div className="flex flex-col items-center gap-0">
+    // `relative` so a dot animates across the WHOLE connection, label included, rather than
+    // across one half of it — over a 30px segment, half the travel reads as a flicker.
+    <div className={clsx('relative flex flex-col items-center gap-0', dimmed && 'opacity-30')}>
       {line}
       {label}
       {line}
+      {/* `a` is always the upper node in the tree, so a message sent BY `a` travels down and
+          one sent TO it travels up. Direction comes off the message, never from the line. */}
+      {(dots ?? []).map((d) => (
+        <span
+          key={d.id}
+          aria-hidden
+          className={clsx('fleet-dot', d.from_agent === a ? 'fleet-dot-down' : 'fleet-dot-up',
+            dotColor(d.type))}
+        />
+      ))}
     </div>
   );
 }
 
 export function TopologyDiagram({
   agents, pairs, windowHours = 24, onSelectConnection, onSelectAgent, selectedAgentId,
+  onClearSelection, dots,
 }: TopologyDiagramProps) {
   const lookup = usePairLookup(pairs);
+  const bright = useBrightSet(selectedAgentId, pairs);
+  const dotsByPair = useDotsByPair(dots);
+  const isDim = (id: string) => bright !== null && !bright.has(id);
+  // A line stays bright only if the selected agent is one of its two ends.
+  const lineDim = (a: string, b: string) =>
+    bright !== null && a !== selectedAgentId && b !== selectedAgentId;
   // Separate by tier
   const gm = agents.find((a) => a.tier === 'T0');
   const pms = agents.filter((a) => a.tier === 'T1');
@@ -231,11 +290,17 @@ export function TopologyDiagram({
   const orphanWorkers = workers.filter((w) => !w.parent || !pmIds.has(w.parent));
 
   return (
-    <div className="flex flex-col items-center gap-0 py-6 overflow-x-auto">
+    // Spec §4: clicking empty space clears. Guarded on e.target === e.currentTarget so a
+    // click that bubbled up from a node or a line does not immediately undo the selection
+    // it just made — without that check, selecting anything is impossible.
+    <div
+      className="flex flex-col items-center gap-0 py-6 overflow-x-auto"
+      onClick={(e) => { if (onClearSelection && e.target === e.currentTarget) onClearSelection(); }}
+    >
       {/* T0: GM */}
       {gm && (
         <>
-          <AgentNode agent={gm} onSelect={onSelectAgent} selected={selectedAgentId === gm.id} />
+          <AgentNode agent={gm} onSelect={onSelectAgent} selected={selectedAgentId === gm.id} dimmed={isDim(gm.id)} />
           {/* Trunk down to the PM bar. Deliberately unlabelled: this is a bus, not a pair,
               and the "hub-spoke" string it replaces described the shape rather than the
               traffic. The real gm<->pm counts sit on each PM's own segment below. */}
@@ -268,10 +333,12 @@ export function TopologyDiagram({
                   {gm && (
                     <Connection
                       a={gm.id} b={pm.id} lookup={lookup} windowHours={windowHours}
-                      onSelect={onSelectConnection} stubPx={8}
+                      onSelect={onSelectConnection} stubPx={18}
+                      dimmed={lineDim(gm.id, pm.id)}
+                      dots={dotsByPair.get(pairKey(gm.id, pm.id))}
                     />
                   )}
-                  <AgentNode agent={pm} onSelect={onSelectAgent} selected={selectedAgentId === pm.id} />
+                  <AgentNode agent={pm} onSelect={onSelectAgent} selected={selectedAgentId === pm.id} dimmed={isDim(pm.id)} />
 
                   {/* Workers under this PM. Each worker gets its OWN line to the PM rather
                       than sharing one "mesh" label for the group — a per-pair count is the
@@ -282,9 +349,11 @@ export function TopologyDiagram({
                         <div key={w.id} className="flex flex-col items-center gap-0">
                           <Connection
                             a={pm.id} b={w.id} lookup={lookup} windowHours={windowHours}
-                            onSelect={onSelectConnection} stubPx={6}
+                            onSelect={onSelectConnection} stubPx={14}
+                            dimmed={lineDim(pm.id, w.id)}
+                            dots={dotsByPair.get(pairKey(pm.id, w.id))}
                           />
-                          <AgentNode agent={w} onSelect={onSelectAgent} selected={selectedAgentId === w.id} />
+                          <AgentNode agent={w} onSelect={onSelectAgent} selected={selectedAgentId === w.id} dimmed={isDim(w.id)} />
                         </div>
                       ))}
                     </div>
@@ -302,7 +371,7 @@ export function TopologyDiagram({
           <p className="text-xs text-neutral-600 text-center mb-3">Unassigned agents</p>
           <div className="flex items-start gap-3 flex-wrap justify-center">
             {orphanWorkers.map((w) => (
-              <AgentNode key={w.id} agent={w} onSelect={onSelectAgent} selected={selectedAgentId === w.id} />
+              <AgentNode key={w.id} agent={w} onSelect={onSelectAgent} selected={selectedAgentId === w.id} dimmed={isDim(w.id)} />
             ))}
           </div>
         </div>

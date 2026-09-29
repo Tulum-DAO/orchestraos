@@ -73,6 +73,18 @@ export const fetchPairMessages = (
   return get<PairPage>(`/messages/pair/${encodeURIComponent(a)}/${encodeURIComponent(b)}?${q}`);
 };
 
+/** Latest seat-to-seat mail across the fleet, newest first. Same canonical `messages` table
+ *  as fetchPairCounts, so the ticker and the line counts describe the same traffic. Carries
+ *  direction and type, which the per-pair counts do not — that is what lets a travelling dot
+ *  mean something (spec §2: if a dot moves, a message is actually moving). */
+export interface RecentMessageRow {
+  id: string; conversation_id: string | null; from_agent: string; to_agent: string;
+  type: string | null; subject: string | null; priority: string | null; status: string | null;
+  created_at: string | null; delivered_at: string | null; acknowledged_at: string | null;
+}
+export const fetchRecentMessages = (limit = 50) =>
+  get<{ messages: RecentMessageRow[] }>(`/messages/recent?limit=${limit}`);
+
 export const fetchProjects = () => get('/projects');
 export const fetchProject = (slug: string) => get(`/projects/${slug}`);
 
