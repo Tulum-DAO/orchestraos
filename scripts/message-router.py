@@ -1180,6 +1180,13 @@ def format_injection(msg, store) -> str:
         f"To reply: python3 {CODE_ROOT / 'msg_store.py'} send "
         f"--from YOUR_AGENT_ID --to {msg['from_agent']} --type reply "
         f"--subject 're: {(msg.get('subject') or '')[:40]}' --body 'your reply'"
+        # The selection query above is `WHERE status='pending'`, so a row stays in the
+        # re-injection pool until it is ACKed. Agents were never told this: two seats
+        # independently ran `dispose` believing it cleared their inbox (it only stamps
+        # metadata) and got the same message pushed at them again. Say it here, where
+        # every agent actually reads it, rather than in a doc nobody opens.
+        f" | When done: python3 {CODE_ROOT / 'msg_store.py'} ack "
+        f"--message-id {msg['id']}  (ack is what stops re-delivery; dispose does NOT)"
     )
 
 

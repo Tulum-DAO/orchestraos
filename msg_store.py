@@ -681,7 +681,23 @@ class MessageStore:
         """Record the receiver's disposition on a row (§9.6-B.5,
         DEC-1787032722): acted / queued / declined(+reason). Returns False on
         an unknown id (the #13 ack lesson — never ok:true on a ghost row).
-        Raises ValueError on an invalid disposition or a reason-less decline."""
+        Raises ValueError on an invalid disposition or a reason-less decline.
+
+        DOES NOT CLEAR THE INBOX — use acknowledge() for that. This stamps
+        `disposition` into the row's metadata and never touches `status`, while
+        inbox() and the router both select on status='pending'. So a disposed-but-
+        unacked row keeps being re-delivered. Two seats hit this independently on
+        2026-09-29, both believing 'disposing to clear the inbox' had worked.
+
+        They are orthogonal on purpose and dispose must NOT imply ack: `queued`
+        means "received, not acted on yet", and auto-acking that would silently
+        drop a row the agent deliberately parked. Call both when you are done with
+        a message: dispose records WHY (it feeds per-sender interruption stats),
+        acknowledge stops the re-delivery.
+
+        Note also that the stamped key lives in metadata, so a raw row dict from
+        inbox() shows `disposition: None` even on success — read metadata (or use
+        get()) before concluding a dispose failed."""
         if disposition not in self.DISPOSITIONS:
             raise ValueError(f"disposition must be one of {self.DISPOSITIONS}, "
                              f"got {disposition!r}")
@@ -829,9 +845,11 @@ class MessageStore:
             conn.close()
 
     def acknowledge(self, msg_id: str) -> bool:
-        """Mark message as acknowledged (agent confirmed receipt). Returns True
-        iff a row was actually updated — acking an unknown id must NEVER be a
-        silent success (replay-flood class: the agent believes it acked, the
+        """Mark message as acknowledged (agent confirmed receipt). THIS is what
+        removes a row from the inbox and the router's re-injection pool — both
+        select on status='pending'; dispose() does not (see its docstring).
+        Returns True iff a row was actually updated — acking an unknown id must
+        NEVER be a silent success (replay-flood class: the agent believes it acked, the
         router re-injects forever; self-caught in the 2026-08-18 edge campaign,
         msg_22587546)."""
         conn = self._conn()
@@ -1608,7 +1626,10 @@ def main():
                    help="§9.6-B.4 envelope: initiative/node/mission ref")
 
     # dispose (§9.6-B.5)
-    p = sub.add_parser("dispose")
+    p = sub.add_parser(
+        "dispose",
+        help="record WHY a message was handled (feeds interruption stats). "
+             "Does NOT clear your inbox — run `ack` for that.")
     p.add_argument("--id", "--message-id", dest="message_id", required=True)
     p.add_argument("--disposition", required=True, choices=("acted", "queued", "declined"))
     p.add_argument("--by", required=True)
@@ -1637,7 +1658,10 @@ def main():
     p.add_argument("--close", action="store_true", default=False)
 
     # ack
-    p = sub.add_parser("ack")
+    p = sub.add_parser(
+        "ack",
+        help="clear a message from your inbox and stop it being re-delivered. "
+             "This is the one that stops replays; dispose does not.")
     p.add_argument("--id", "--message-id", dest="message_id", required=True)
 
     # thread
