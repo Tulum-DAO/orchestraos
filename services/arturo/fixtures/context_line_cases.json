@@ -1,0 +1,6 @@
+[
+  {"ctx": {"route": "/overview"}, "line": "[Context: route=/overview]"},
+  {"ctx": {"route": "/agent", "entityKind": "agent", "entityId": "gm"}, "line": "[Context: route=/agent entity=agent:gm]"},
+  {"ctx": {"route": "/approvals", "entityKind": "approval"}, "line": "[Context: route=/approvals entity=approval]"},
+  {"ctx": {"route": "/agents", "entityKind": "agent", "entityId": "pm-x", "hint": "looking at the red dot"}, "line": "[Context: route=/agents entity=agent:pm-x hint=looking at the red dot]"}
+]

@@ -47,6 +47,35 @@ CREATE TABLE IF NOT EXISTS turns (
 CREATE INDEX IF NOT EXISTS idx_threads_updated ON threads(updated DESC);
 """
 
+# Columns added after the tables first shipped. `CREATE TABLE IF NOT EXISTS` never alters an
+# existing threads.db, so each is added by an idempotent ALTER on open. '' = the default brain.
+_MIGRATIONS = {
+    "threads": [("last_brain_provider", "TEXT NOT NULL DEFAULT ''"),
+                ("last_brain_model", "TEXT NOT NULL DEFAULT ''")],
+    "turns": [("brain_provider", "TEXT NOT NULL DEFAULT ''"),
+              ("brain_model", "TEXT NOT NULL DEFAULT ''")],
+}
+_THREAD_COLS = "id, title, created, updated, turns, snippet, last_brain_provider, last_brain_model"
+
+
+def _migrate(conn):
+    for table, cols in _MIGRATIONS.items():
+        have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for name, decl in cols:
+            if name not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+
+def _brain(provider, model):
+    """A stored brain pair as the API shape: None for the default brain."""
+    return {"provider": provider, "model": model or ""} if provider else None
+
+
+def _thread_row(r):
+    out = dict(r)
+    out["last_brain"] = _brain(out.pop("last_brain_provider"), out.pop("last_brain_model"))
+    return out
+
 
 def derive_title(text, limit=TITLE_MAX):
     """A thread's title is its FIRST user message, trimmed to one line — the operator is
@@ -73,6 +102,7 @@ class ThreadStore:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self._connect() as conn:
                 conn.executescript(_SCHEMA)
+                _migrate(conn)
             self.usable = True
         except Exception:  # noqa: BLE001 — unwritable archive must not break a turn
             self.usable = False
@@ -84,12 +114,14 @@ class ThreadStore:
 
     # --- write ---------------------------------------------------------------------
 
-    def record_turn(self, conversation_id, user_text, assistant_text, ts=None):
+    def record_turn(self, conversation_id, user_text, assistant_text, ts=None, brain=None):
         """Archive one completed turn (the user's message and Arturo's reply). Called AFTER
-        the brain answers, so a failed turn leaves no half-thread. Never raises."""
+        the brain answers, so a failed turn leaves no half-thread. Never raises.
+        `brain` = {provider, model} when the operator chose one for this turn, None = default."""
         if not self.usable or not conversation_id:
             return False
         now = float(ts if ts is not None else time.time())
+        bp, bm = ((brain or {}).get("provider") or "", (brain or {}).get("model") or "")
         try:
             with self._connect() as conn:
                 row = conn.execute("SELECT turns FROM threads WHERE id = ?",
@@ -103,13 +135,14 @@ class ThreadStore:
                 else:
                     seq = int(row["turns"])
                 conn.executemany(
-                    "INSERT OR REPLACE INTO turns (thread_id, seq, role, content, ts)"
-                    " VALUES (?, ?, ?, ?, ?)",
-                    [(conversation_id, seq, "user", user_text or "", now),
-                     (conversation_id, seq + 1, "assistant", assistant_text or "", now)])
+                    "INSERT OR REPLACE INTO turns (thread_id, seq, role, content, ts, brain_provider, brain_model)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [(conversation_id, seq, "user", user_text or "", now, "", ""),
+                     (conversation_id, seq + 1, "assistant", assistant_text or "", now, bp, bm)])
                 conn.execute(
-                    "UPDATE threads SET updated = ?, turns = ?, snippet = ? WHERE id = ?",
-                    (now, seq + 2, (assistant_text or "")[:SNIPPET_MAX], conversation_id))
+                    "UPDATE threads SET updated = ?, turns = ?, snippet = ?,"
+                    " last_brain_provider = ?, last_brain_model = ? WHERE id = ?",
+                    (now, seq + 2, (assistant_text or "")[:SNIPPET_MAX], bp, bm, conversation_id))
             return True
         except Exception:  # noqa: BLE001 — the archive is never worth failing a turn over
             return False
@@ -123,10 +156,10 @@ class ThreadStore:
         try:
             with self._connect() as conn:
                 rows = conn.execute(
-                    "SELECT id, title, created, updated, turns, snippet FROM threads"
+                    f"SELECT {_THREAD_COLS} FROM threads"
                     " ORDER BY updated DESC, id DESC LIMIT ? OFFSET ?",
                     (max(1, min(int(limit), 200)), max(0, int(offset)))).fetchall()
-            return [dict(r) for r in rows]
+            return [_thread_row(r) for r in rows]
         except Exception:  # noqa: BLE001
             return []
 
@@ -137,15 +170,15 @@ class ThreadStore:
         try:
             with self._connect() as conn:
                 head = conn.execute(
-                    "SELECT id, title, created, updated, turns, snippet FROM threads"
-                    " WHERE id = ?", (conversation_id,)).fetchone()
+                    f"SELECT {_THREAD_COLS} FROM threads WHERE id = ?", (conversation_id,)).fetchone()
                 if head is None:
                     return None
                 rows = conn.execute(
-                    "SELECT role, content, ts FROM turns WHERE thread_id = ? ORDER BY seq",
-                    (conversation_id,)).fetchall()
-            out = dict(head)
-            out["turns"] = [dict(r) for r in rows]
+                    "SELECT role, content, ts, brain_provider, brain_model FROM turns"
+                    " WHERE thread_id = ? ORDER BY seq", (conversation_id,)).fetchall()
+            out = _thread_row(head)
+            out["turns"] = [{"role": r["role"], "content": r["content"], "ts": r["ts"],
+                             "brain": _brain(r["brain_provider"], r["brain_model"])} for r in rows]
             return out
         except Exception:  # noqa: BLE001
             return None

@@ -21,6 +21,8 @@ import { Mic, Plus, ArrowUp, AudioLines, Paperclip, X } from 'lucide-react';
 import '../components/arturo/arturo.css';
 import { BrainModal } from '../components/agent/BrainModal';
 import { ModelSelectorSheet } from '../components/agent/ModelSelectorSheet';
+import { useArturoBrain } from '../stores/arturoBrain';
+import { brainFromThread, describeTurnError, toWireBrain } from '../lib/arturoBrain';
 import { arturoHealth, arturoText, runtimesAvailable, brainLabel, greeting, newConversationId,
   isStarting, waitForArturo, STARTING_TEXT, firstStep, stepAfterRuntime, onboardingTurn, sendStateLabel,
   type ArturoHealth, type RuntimeRow, type SendState } from '../lib/arturo';
@@ -78,6 +80,8 @@ export default function ArturoHome() {
   const [drawer, setDrawer] = useState(false);
   const [brainOpen, setBrainOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
+  const brainChoice = useArturoBrain((s) => s.choice);
+  const chooseBrain = useArturoBrain((s) => s.choose);
   // G20: the home and the pill read ONE server-side thread space, so a conversation started
   // in either place is reachable from the other. The drawer is where you go back to one.
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
@@ -115,6 +119,8 @@ export default function ArturoHome() {
     const t = await loadThread(id);
     if (!t) return;
     convId.current = id; lsSet(LS_CONV, id);
+    // A thread answers on the brain it last used; one that used the default brain goes back to it.
+    chooseBrain(brainFromThread(t, {}));
     setTurns(t.turns.map((x) => ({ id: nextId.current++, role: x.role === 'user' ? 'user' : 'arturo', text: x.content })));
     setStep('done'); lsSet(LS_ONBOARDED, '1');
     setDrawer(false);
@@ -292,18 +298,21 @@ export default function ArturoHome() {
       : isHierarchy ? onboardingTurn('hierarchy', withFiles) : withFiles;
     setAttachments([]);
     const onSent = () => patch(uid, { state: 'sent' });
-    let r = await arturoText(sent, convId.current, null, { onSent });
+    const turnBrain = toWireBrain(brainChoice);
+    let r = await arturoText(sent, convId.current, null, { onSent, brain: turnBrain });
     if (!r.ok && isStarting(r)) {          // G15: still booting -> say so, wait for health, retry once
       patch(id, { pending: false, text: STARTING_TEXT });
       const ready = await waitForArturo();
       setHealth(ready);
-      if (ready.ok) { patch(id, { pending: true, text: '' }); r = await arturoText(sent, convId.current, null, { onSent }); }
+      if (ready.ok) { patch(id, { pending: true, text: '' }); r = await arturoText(sent, convId.current, null, { onSent, brain: turnBrain }); }
     }
     setBusy(false);
     patch(uid, { state: r.ok ? 'acked' : 'failed' });
     if (!r.ok) {
+      const chosenErr = describeTurnError(r);
       patch(id, { pending: false, text: isStarting(r)
         ? 'I am still starting up and could not answer yet — give `orchestra up` a moment and send that again.'
+        : chosenErr ? chosenErr.message
         : `I could not reach my brain: ${r.error || 'unknown'}. Is \`orchestra up\` running? Check /health on the Arturo service.` });
       return;
     }
@@ -340,8 +349,9 @@ export default function ArturoHome() {
   useEffect(() => { if (dictating) grow(); }, [draft, dictating]);   // live text grows the box
 
   const brain = health?.brain;
-  const model = starting ? 'starting…' : brainLabel(brain);
-  const eff = brain?.kind === 'runtime' ? 'CLI' : brain?.kind === 'api' ? 'API' : '';
+  // The chip shows the CHOSEN brain when there is one; otherwise what the install defaults to.
+  const model = starting ? 'starting…' : brainChoice ? brainChoice.label : brainLabel(brain);
+  const eff = brainChoice ? 'CLI' : brain?.kind === 'runtime' ? 'CLI' : brain?.kind === 'api' ? 'API' : '';
   const empty = turns.length === 0;
 
   return (
@@ -489,7 +499,13 @@ export default function ArturoHome() {
         </>
       )}
       <BrainModal isOpen={brainOpen} onClose={() => setBrainOpen(false)} />
-      <ModelSelectorSheet open={modelOpen} onClose={() => setModelOpen(false)} />
+      <ModelSelectorSheet
+        open={modelOpen}
+        onClose={() => setModelOpen(false)}
+        selection={brainChoice ? { providerId: brainChoice.provider, modelId: brainChoice.model } : null}
+        onPick={(p) => chooseBrain({ provider: p.providerId, model: p.modelId, label: p.modelLabel })}
+        onPickDefault={() => chooseBrain(null)}
+      />
     </div>
   );
 }

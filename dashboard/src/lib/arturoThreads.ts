@@ -20,7 +20,7 @@ import type { ArturoContext } from './arturo';
 export interface ThreadSummary { id: string; title: string; created?: number; updated: number; turns: number; snippet?: string }
 export interface ThreadTurn { role: 'user' | 'assistant'; content: string; ts?: number }
 export interface ThreadDetail extends ThreadSummary { turns: number; }
-export interface LoadedThread { id: string; title: string; turns: ThreadTurn[] }
+export interface LoadedThread { id: string; title: string; turns: ThreadTurn[]; last_brain?: { provider: string; model: string } | null }
 export interface ContextCard { kind: 'page-context'; label: string; context: ArturoContext }
 
 /** The thread list, newest first. A dead hop shows NO threads rather than throwing into a
@@ -40,10 +40,17 @@ export async function loadThread(id: string): Promise<LoadedThread | null> {
     const res = await fetch(`/api/arturo/threads/${encodeURIComponent(id)}`);
     if (!res.ok) return null;
     const json = await res.json();
-    const t = json.thread;
-    if (!t) return null;
-    return { id: t.id, title: t.title || '', turns: (t.turns || []) as ThreadTurn[] };
+    return threadFromJson(json.thread);
   } catch { return null; }
+}
+
+/** The server's thread JSON as the client uses it. last_brain rides along (null = default brain)
+ *  so reopening a thread restores the brain it last answered on (DEC-1790669162399904 §1.5). */
+interface ThreadJson { id: string; title?: string; turns?: ThreadTurn[]; last_brain?: { provider: string; model: string } | null }
+
+export function threadFromJson(t: ThreadJson | null | undefined): LoadedThread | null {
+  if (!t) return null;
+  return { id: t.id, title: t.title || '', turns: t.turns || [], last_brain: t.last_brain ?? null };
 }
 
 const PRETTY: Record<string, string> = {

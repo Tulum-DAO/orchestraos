@@ -885,6 +885,37 @@ elif brain.kind == "none":
     log.error(f"brain: NONE — {brain.reason}")
 log.info(f"brain: {brain.describe()} (arturo.brain={BRAIN_MODE})")
 
+# --- Per-turn brain routing (DEC-1790669162399904, spec v4 §1.2-1.3) ---
+# A text turn may name its brain. The chosen brain rides a ContextVar for the length of the
+# turn and is read at the four text-path call sites through _turn_brain(). PTT (_ptt_brain)
+# and the voice-only retry never read it, and the module-global `brain` above stays the
+# default (and stays what /health reselects).
+_BRAIN_THIS_TURN = _contextvars.ContextVar("arturo_brain_this_turn", default=None)
+
+
+def _turn_brain():
+    return _BRAIN_THIS_TURN.get() or brain
+
+
+try:
+    _MODEL_CATALOG = _brain.load_model_catalog(_REPO_ROOT / "config" / "providers.json")
+except Exception as _e:  # noqa: BLE001 — no catalog = no explicit brains, never a boot failure
+    log.error(f"model catalog unreadable, explicit brains disabled: {_e}")
+    _MODEL_CATALOG = {}
+
+_PROBE_CACHE = {"at": 0.0, "rows": []}
+
+
+def _probes_cached(ttl_s=30.0):
+    """The runtime probe runs the CLIs; a turn must not pay that every time."""
+    if time.time() - _PROBE_CACHE["at"] > ttl_s:
+        _PROBE_CACHE["rows"] = _brain.probe_runtimes(_REPO_ROOT, _RUNTIMES_ENABLED or None)
+        _PROBE_CACHE["at"] = time.time()
+    return _PROBE_CACHE["rows"]
+
+
+_BRAIN_POOL = _brain.BrainPool(probes=_probes_cached, api_key=GEMINI_API_KEY, api_model=_API_MODEL)
+
 # Voice needs a vendor key; without one the service runs TEXT-ONLY (the text turn + tools still
 # work through the brain, the /ptt + /v1/chat/completions voice callbacks answer 503 vendor-less).
 _VOICE_KEYS = ("ELEVENLABS_API_KEY", "CARTESIA_API_KEY", "HUME_API_KEY", "GEMINI_API_KEY")
@@ -2748,8 +2779,9 @@ def save_transcript(conversation_id, transcript_data):
 # --- Context Injection ---
 
 def _brain_identity_line():
-    """One sentence, by effect, about what is generating this very reply."""
-    b = brain
+    """One sentence, by effect, about what is generating this very reply: the brain chosen for THIS
+    turn when there is one (a codex turn was being told it was Claude), else the default."""
+    b = _turn_brain()
     d = b.describe() if hasattr(b, "describe") else {"kind": getattr(b, "kind", "?")}
     if d.get("kind") == "runtime":
         pretty = {"claude": "Claude", "gemini": "Gemini", "codex": "Codex"}.get(d.get("runtime", ""), d.get("runtime", ""))
@@ -3698,7 +3730,7 @@ def chat_completions():
         log.info(f"generate() START: channel={calling_channel}, history={len(final_messages)} msgs")
         try:
             # First call — with tools, force tool_choice auto
-            response = brain.complete(
+            response = _turn_brain().complete(
                 model=LLM_MODEL,
                 messages=final_messages,
                 max_tokens=1024,
@@ -3719,7 +3751,7 @@ def chat_completions():
             if not choice.message.tool_calls and not (choice.message.content or "").strip():
                 log.warning("Empty response with no tools — retrying with tool_choice=required")
                 try:
-                    response = brain.complete(
+                    response = _turn_brain().complete(
                         model=LLM_MODEL,
                         messages=final_messages,
                         max_tokens=1024,
@@ -3736,6 +3768,8 @@ def chat_completions():
                     # Final fallback — just acknowledge
                     if not choice.message.tool_calls and not (choice.message.content or "").strip():
                         choice.message.content = "I'm having trouble processing that. Could you try again?"
+                        if _BRAIN_THIS_TURN.get() is not None:
+                            _brain.TURN_FAILURE.set({"code": "empty_response"})
                         log.warning("Using fallback response after empty retry")
 
             # Check if the model wants to call tools
@@ -3943,7 +3977,7 @@ def chat_completions():
                     loop_messages = loop_messages + [assistant_msg] + tool_results
 
                     # Ask model: do you need more tools, or are you ready to answer?
-                    followup_resp = brain.complete(
+                    followup_resp = _turn_brain().complete(
                         model=LLM_MODEL,
                         messages=loop_messages,
                         max_tokens=1024,
@@ -4005,7 +4039,7 @@ def chat_completions():
                 else:
                     # Hit MAX_TOOL_ROUNDS — force a final answer without tools
                     log.warning(f"Hit max tool rounds ({MAX_TOOL_ROUNDS}). Forcing final answer.")
-                    stream_resp = brain.complete(
+                    stream_resp = _turn_brain().complete(
                         model=LLM_MODEL, messages=loop_messages,
                         max_tokens=1024, temperature=0.7, stream=True,
                     )
@@ -4104,6 +4138,9 @@ def chat_completions():
         except Exception as e:
             import traceback as _tb
             log.error(f"generate() EXCEPTION after {time.time() - _gen_t0:.2f}s: {e}\n{_tb.format_exc()[:600]}")
+            if _BRAIN_THIS_TURN.get() is not None:
+                # A chosen brain's failure is an error for the turn, not "I hit a snag" saved as a reply.
+                _brain.TURN_FAILURE.set({"code": "brain_failed"})
             yield make_sse_chunk(f"I hit a snag. {str(e)[:100]}")
             yield make_sse_done()
         finally:
@@ -4470,8 +4507,69 @@ def _brain_reply(messages, conversation_id):
     return reply, tools_called, spawned
 
 
-def text_turn(text, conversation_id):
-    """Returns (http_status, {ok, reply_text, conversation_id, brain, tools_called})."""
+_CTX_FIELDS = ("route", "entityKind", "entityId", "hint")
+_CTX_MAX = 300
+
+
+def _context_line(ctx):
+    """The exact line the web client's contextLine() used to prepend (lib/arturo.ts), now built
+    here. Fixture shared with the TS test: fixtures/context_line_cases.json."""
+    bits = [f"route={ctx['route']}"]
+    if ctx.get("entityKind"):
+        bits.append(f"entity={ctx['entityKind']}" + (f":{ctx['entityId']}" if ctx.get("entityId") else ""))
+    if ctx.get("hint"):
+        bits.append(f"hint={ctx['hint']}")
+    return f"[Context: {' '.join(bits)}]"
+
+
+def _valid_context(ctx):
+    if not isinstance(ctx, dict) or not isinstance(ctx.get("route"), str) or not ctx["route"]:
+        return False
+    for k in _CTX_FIELDS:
+        v = ctx.get(k)
+        if v is not None and (not isinstance(v, str) or len(v) > _CTX_MAX):
+            return False
+    return True
+
+
+def _resolve_turn_brain(req):
+    """(brain, normalized {provider, model}, None) for a valid request, else (None, None,
+    (status, body)). Validated HERE, at the proxy: the gateway forwards bodies untouched."""
+    if not isinstance(req, dict):
+        return None, None, (400, {"ok": False, "error": "bad_brain", "field": "brain"})
+    provider, model = req.get("provider"), req.get("model") or ""
+    if not isinstance(provider, str) or not provider:
+        return None, None, (400, {"ok": False, "error": "bad_brain", "field": "brain.provider"})
+    if not isinstance(model, str):
+        return None, None, (400, {"ok": False, "error": "unknown_model", "field": "brain.model"})
+    if provider != _brain.API_PROVIDER and provider not in _MODEL_CATALOG:
+        return None, None, (400, {"ok": False, "error": "bad_brain", "field": "brain.provider"})
+    try:
+        _brain.validate_model(provider, model, _MODEL_CATALOG)
+    except _brain.ModelNotAllowed:
+        return None, None, (400, {"ok": False, "error": "unknown_model", "field": "brain.model"})
+    try:
+        chosen = _BRAIN_POOL.get(provider, model)
+    except _brain.ProviderUnavailable as e:
+        return None, None, (409, {"ok": False, "error": "provider_unavailable",
+                                  "provider": e.provider, "reason": e.reason})
+    return chosen, {"provider": provider, "model": model}, None
+
+
+def text_turn(text, conversation_id, brain=None, context=None):
+    """Returns (http_status, {ok, reply_text, conversation_id, brain, tools_called}).
+    `brain` = {provider, model} names this turn's brain (None = the default); `context` = the
+    web client's ArturoContext {route, entityKind?, entityId?, hint?} (None = none)."""
+    # The parameter names are the wire names; inside, they are renamed at once so neither can be
+    # confused with the module-global `brain` or with the directive `context` built further down.
+    brain_req, page_ctx = brain, context
+    chosen, chosen_id = None, None
+    if brain_req is not None:
+        chosen, chosen_id, refusal = _resolve_turn_brain(brain_req)
+        if refusal:
+            return refusal
+    if page_ctx is not None and not _valid_context(page_ctx):
+        return 400, {"ok": False, "error": "bad_context", "field": "context"}
     text = (text or "").strip()
     if not text:
         return 400, {"ok": False, "error": "empty"}
@@ -4485,6 +4583,10 @@ def text_turn(text, conversation_id):
     text = text.strip()
     if not text:
         return 400, {"ok": False, "error": "empty"}
+    if page_ctx is not None:
+        # After split_marker (the marker is anchored to the first line), and stored exactly as
+        # the client-prepended line was, so model input and history stay byte-identical.
+        text = f"{_context_line(page_ctx)}\n{text}"
     # DELTA ONLY. chat_completions() builds the authoritative context itself and carries this
     # message on top of it; building a second copy here would send ~16 KB twice per onboarding turn
     # and admit two copies that can disagree. test_onboarding_seam.py pins this.
@@ -4510,19 +4612,38 @@ def text_turn(text, conversation_id):
         for turn in history:
             _TEXT_HISTORY.append(conversation_id, turn.get("role"), turn.get("content"))
     messages = _ptt.build_messages(context, history, text)
+    brain_tok = _BRAIN_THIS_TURN.set(chosen) if chosen is not None else None
+    fail_tok = _brain.TURN_FAILURE.set(None)
     try:
         _res = _brain_reply(messages, conversation_id)
         # Tolerant unpack: a stub (and any older caller) may still return the 2-tuple.
         reply, tools_called = _res[0], _res[1]
         spawned = list(_res[2]) if len(_res) > 2 else []
+        failure = _brain.TURN_FAILURE.get()
     except _BrainHttpError as e:
         return 502, {"ok": False, "error": f"brain_http_{e.status}", "detail": e.body}
+    finally:
+        _brain.TURN_FAILURE.reset(fail_tok)
+        if brain_tok is not None:
+            _BRAIN_THIS_TURN.reset(brain_tok)
+    if chosen is not None:
+        if failure is None and not (reply or "").strip():
+            failure = {"code": "empty_response"}
+        if failure is not None:
+            # An explicitly chosen brain that failed answers with an error, and nothing is saved:
+            # its apology prose must never become a reply in the thread. tools_called says what
+            # already ran, so a retry is never presented as side-effect free.
+            return 502, {"ok": False, "error": failure.get("code", "brain_failed"),
+                         **({"reason": failure["reason"]} if failure.get("reason") else {}),
+                         "provider": chosen_id["provider"], "model": chosen_id["model"],
+                         "tools_called": tools_called, "spawned": spawned,
+                         "conversation_id": conversation_id}
     _TEXT_HISTORY.append(conversation_id, "user", text)
     _TEXT_HISTORY.append(conversation_id, "assistant", reply)
-    _THREADS.record_turn(conversation_id, text, reply)
+    _THREADS.record_turn(conversation_id, text, reply, brain=chosen_id)
     from services.arturo import operator_store as _ops
     return 200, {"ok": True, "reply_text": reply, "conversation_id": conversation_id,
-                 "brain": brain.describe(), "tools_called": tools_called,
+                 "brain": (chosen or _turn_brain()).describe(), "tools_called": tools_called,
                  "spawned": spawned,
                  "operator": _ops.public(ARTURO_STATE)}
 
@@ -4566,7 +4687,8 @@ def text_endpoint():
     if remote not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
         return jsonify({"ok": False, "error": "loopback only"}), 403
     data = request.get_json(silent=True) or {}
-    code, result = text_turn(data.get("text"), data.get("conversation_id"))
+    code, result = text_turn(data.get("text"), data.get("conversation_id"),
+                             brain=data.get("brain"), context=data.get("context"))
     return jsonify(result), code
 
 
