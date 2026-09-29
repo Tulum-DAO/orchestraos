@@ -8,7 +8,45 @@
 
 ## 1. Verdict
 
-**CLEARED to merge and restart.**
+**CLEARED to merge and restart — CONDITIONAL on the §1a deploy gate below passing.**
+
+The code is cleared. The *deploy* is not cleared until §1a is walked, because the working tree
+that actually feeds the live process does not currently contain the fix. A sign-off that stops at
+"the merge looks good" would be a green light over a silently-still-broken deploy — the exact
+failure class this commit exists to kill.
+
+## 1a. DEPLOY GATE — mandatory, walk it in order, immediately before and after the restart
+
+Folded in at gm's request (`msg_1567b7d7_78676841`), and independently confirmed by me before
+writing this. **Current state, re-verified 2026-09-29T10:47Z:**
+
+```
+branch:                             fix-arturo-mapfile-bash32
+git merge-base --is-ancestor b834241 HEAD   ->  NO      # tree does NOT contain the fix
+grep -c MAX_UPDATE_ATTEMPTS plugins/telegram/router.py  ->  0   # on-disk file is the OLD code
+live pid 10767 started              Tue Sep 29 08:57:58 2026   # predates b834241 (10:35)
+<data>/state/telegram/              chat-id, notified.json, offset   # no last-done
+```
+
+The shared checkout was switched to another branch mid-session, so `b834241` is safe in git but
+absent from disk. Restarting right now would relaunch the **old, buggy** router.
+
+1. **Merge** `b834241` into the branch the working tree actually has checked out (or switch the
+   tree to a branch containing it). Merging to `main` alone does nothing for pid 10767.
+2. **Confirm the checkout contains the fix:**
+   `git merge-base --is-ancestor b834241 HEAD && echo CONTAINS-FIX` → must print `CONTAINS-FIX`.
+3. **Confirm on disk, immediately before the restart** (this is the step that catches a
+   mid-session branch switch, which git-level checks alone will not):
+   `grep -c MAX_UPDATE_ATTEMPTS plugins/telegram/router.py` → must be **≥ 1**. It is `0` right now.
+4. **Confirm the running process actually picked it up, after the restart:**
+   - new pid ≠ `10767`, and `ps -p <newpid> -o lstart=` postdates the merge;
+   - then have the operator send **one** message and check that
+     **`<data>/state/telegram/last-done` now exists** — that file does not exist today and the old
+     code can never create it, so its appearance is positive proof the new code is the one running.
+     `offset` alone proves nothing; both versions write it.
+
+Do not report the deploy as done on steps 1–2 alone. Steps 3 and 4 are the ones that fail loudly
+when the trap has been stepped in.
 
 One required follow-up (F1), two notes (F2/F3), one accepted-as-designed (F4) — all recorded in
 the findings file, none of them worth leaving the live process on the buggy code for. Today every
@@ -72,19 +110,16 @@ build's word for it.
 
 ## 5. Declared First Effect
 
-Before restarting pid 10767: the live process runs
-`/Users/flybyflow/orchestraos/plugins/telegram/router.py` from the **main checkout, currently on
-branch `fix-arturo-mapfile-bash32`** — a restart picks up whatever is on disk there. **Merging only
-to `main` would restart the router on the old buggy code.** Land the fix in the branch that working
-tree has checked out (or switch the tree) first, then verify
-`grep -c MAX_UPDATE_ATTEMPTS plugins/telegram/router.py` is non-zero, then restart.
+Run **§1a step 3** — `grep -c MAX_UPDATE_ATTEMPTS plugins/telegram/router.py` — and do not touch
+pid 10767 until it returns ≥ 1. It returns `0` as of this writing, so the very first action is the
+merge in §1a step 1, not the restart.
 
 ## 6. Next 3 Immediate Actions
 
-1. gm: get the operator's go-ahead for the brief channel interruption, then land `b834241` into the
-   checked-out branch of the main working tree (not just `main`).
-2. Whoever restarts: confirm the on-disk file is the fixed one before `kill`, and confirm
-   `last-done` appears in `<data>/state/telegram/` after the first delivered message.
+1. gm: get the operator's go-ahead for the brief channel interruption, then walk **§1a steps 1–2**
+   (land `b834241` into the branch the main working tree has checked out, not just `main`).
+2. Whoever restarts: **§1a steps 3–4** — grep on disk before `kill`, then new-pid check and confirm
+   `last-done` appears in `<data>/state/telegram/` after the operator's first message.
 3. build: F1 follow-up commit (attachment-fetch placeholder) + optionally F2's one-line backoff.
 
 ## 7. Grounding Canary Questions (Questions Only — No Answers!)
