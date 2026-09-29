@@ -4633,6 +4633,7 @@ def text_turn(text, conversation_id, brain=None, context=None):
             # its apology prose must never become a reply in the thread. tools_called says what
             # already ran, so a retry is never presented as side-effect free.
             return 502, {"ok": False, "error": failure.get("code", "brain_failed"),
+                         **({"reason": failure["reason"]} if failure.get("reason") else {}),
                          "provider": chosen_id["provider"], "model": chosen_id["model"],
                          "tools_called": tools_called, "spawned": spawned,
                          "conversation_id": conversation_id}

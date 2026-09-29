@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { ARTURO_BRAIN_KEY, loadArturoBrain, saveArturoBrain, brainFromThread, toWireBrain, describeTurnError } from './arturoBrain';
-import { buildTextBody, contextLine } from './arturo';
+import { buildTextBody, contextLine, type ArturoReply } from './arturo';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -51,9 +51,9 @@ test('a corrupt or wrong-version value reads as null, never throws', () => {
 });
 
 test('storage that throws (private mode) reads as null and saving is a no-op', () => {
-  const broken = { getItem: () => { throw new Error('denied'); }, setItem: () => { throw new Error('denied'); }, removeItem: () => {} };
-  assert.equal(loadArturoBrain(broken as any), null);
-  assert.doesNotThrow(() => saveArturoBrain(broken as any, { provider: 'claude', model: '', label: 'Claude' }));
+  const broken: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> = { getItem: () => { throw new Error('denied'); }, setItem: () => { throw new Error('denied'); }, removeItem: () => {} };
+  assert.equal(loadArturoBrain(broken as ArturoReply), null);
+  assert.doesNotThrow(() => saveArturoBrain(broken, { provider: 'claude', model: '', label: 'Claude' }));
 });
 
 // ---- the wire -------------------------------------------------------------------------------
@@ -97,7 +97,7 @@ test("a thread's last_brain becomes the selection; a default thread clears it", 
 // ---- honest error states --------------------------------------------------------------------
 
 test('409 provider_unavailable says which provider and offers to connect it', () => {
-  const e = describeTurnError({ ok: false, status: 409, error: 'provider_unavailable', provider: 'codex', reason: 'its CLI is installed but not logged in' } as any);
+  const e = describeTurnError({ ok: false, status: 409, error: 'provider_unavailable', provider: 'codex', reason: 'its CLI is installed but not logged in' } as ArturoReply);
   assert.equal(e.action, 'connect');
   assert.equal(e.provider, 'codex');
   assert.match(e.message, /Codex/);
@@ -105,7 +105,7 @@ test('409 provider_unavailable says which provider and offers to connect it', ()
 });
 
 test('502 brain_failed names the brain and lists actions that already ran', () => {
-  const e = describeTurnError({ ok: false, status: 502, error: 'brain_failed', provider: 'claude', model: 'claude-sonnet-5', tools_called: ['send_telegram', 'spawn_agent'] } as any);
+  const e = describeTurnError({ ok: false, status: 502, error: 'brain_failed', provider: 'claude', model: 'claude-sonnet-5', tools_called: ['send_telegram', 'spawn_agent'] } as ArturoReply);
   assert.equal(e.action, 'retry');
   assert.match(e.message, /Claude/);
   assert.match(e.message, /send_telegram/);
@@ -113,17 +113,26 @@ test('502 brain_failed names the brain and lists actions that already ran', () =
 });
 
 test('502 with no tools run does not claim anything ran', () => {
-  const e = describeTurnError({ ok: false, status: 502, error: 'empty_response', provider: 'gemini', tools_called: [] } as any);
+  const e = describeTurnError({ ok: false, status: 502, error: 'empty_response', provider: 'gemini', tools_called: [] } as ArturoReply);
   assert.doesNotMatch(e.message, /already ran/);
   assert.match(e.message, /Gemini/);
 });
 
 test('400 unknown_model offers to pick another model', () => {
-  const e = describeTurnError({ ok: false, status: 400, error: 'unknown_model' } as any);
+  const e = describeTurnError({ ok: false, status: 400, error: 'unknown_model' } as ArturoReply);
   assert.equal(e.action, 'pick');
 });
 
 test('anything else is null (the existing error handling stays in charge)', () => {
-  assert.equal(describeTurnError({ ok: false, status: 504, error: 'timeout' } as any), null);
-  assert.equal(describeTurnError({ ok: true } as any), null);
+  assert.equal(describeTurnError({ ok: false, status: 504, error: 'timeout' } as ArturoReply), null);
+  assert.equal(describeTurnError({ ok: true } as ArturoReply), null);
+});
+
+test('502 brain_failed because the CLI is logged out says so and offers to reconnect', () => {
+  // The live 2026-09-29 failure: an expired OAuth session in the claude CLI.
+  const e = describeTurnError({ ok: false, status: 502, error: 'brain_failed', reason: 'not_logged_in', provider: 'claude', tools_called: [] } as ArturoReply);
+  assert.equal(e?.action, 'connect');
+  assert.equal(e?.provider, 'claude');
+  assert.match(e!.message, /Claude/);
+  assert.match(e!.message, /isn't logged in/);
 });

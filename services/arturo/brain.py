@@ -295,6 +295,21 @@ def runtime_command(runtime: str, cli: str, system: str, prompt: str, model: str
     raise UnsupportedRuntime(runtime)
 
 
+# A non-zero exit whose output reads like a login problem (expired OAuth, logged out, 401).
+_AUTH_FAILURE_RE = re.compile(r"authenticat|log ?in|logged out|oauth|unauthori[sz]ed|\b401\b|session expired|/login",
+                              re.IGNORECASE)
+
+
+class CliFailed(RuntimeError):
+    """The CLI exited non-zero. `auth` = its output reads like a login failure. The message
+    carries the CLI's own words for the LOG; callers must never show it to the operator."""
+
+    def __init__(self, cli: str, returncode: int, output: str):
+        self.returncode = returncode
+        self.auth = bool(_AUTH_FAILURE_RE.search(output or ""))
+        super().__init__(f"{cli} exited {returncode}: {(output or '').strip()[:300]}")
+
+
 def run_command(spec: CommandSpec, timeout: float) -> str:
     env = dict(os.environ)
     for k in spec.env_unset:
@@ -309,8 +324,10 @@ def run_command(spec: CommandSpec, timeout: float) -> str:
                 text = ""
             if text.strip():
                 return text
-        if r.returncode != 0 and not (r.stdout or "").strip():
-            raise RuntimeError(f"{spec.argv[0]} exited {r.returncode}: {(r.stderr or '').strip()[:300]}")
+        if r.returncode != 0:
+            # Non-zero is a failure EVEN WITH stdout: `claude -p` with an expired OAuth session exits 1
+            # and prints the error on stdout, which used to come back as the brain's answer.
+            raise CliFailed(spec.argv[0], r.returncode, f"{r.stdout or ''}\n{r.stderr or ''}")
         return r.stdout or ""
     finally:
         if spec.output_file is not None:
@@ -466,16 +483,23 @@ class RuntimeBrain(Brain):
             text = self._text(messages, tools, tool_choice, timeout)
         except Exception as e:  # noqa: BLE001 — a CLI hiccup is a sentence, not a 500
             log.error(f"runtime brain ({self.runtime}) failed: {e}")
+            logged_out = isinstance(e, CliFailed) and e.auth
             if self.strict:
-                TURN_FAILURE.set({"code": "brain_failed", "provider": self.runtime, "model": self._model_flag})
+                TURN_FAILURE.set({"code": "brain_failed", "provider": self.runtime, "model": self._model_flag,
+                                  **({"reason": "not_logged_in"} if logged_out else {})})
             # The detail goes to the LOG above and NEVER into the reply: a CalledProcessError
             # stringifies to the whole argv, which carries --system-prompt followed by Arturo's
             # entire system prompt, and truncating to 200 chars only cuts it off mid-prompt
             # (byte-captured: fixtures/runtime_error_reply.txt). It reached the operator's
             # screen and persisted as the thread snippet. The operator gets prose.
-            text = (f"My {self.runtime} brain did not answer that time — the {self.cli} CLI "
-                    f"exited unexpectedly. Try that again, and run `orchestra doctor` if it "
-                    f"keeps happening.")
+            if logged_out:
+                text = (f"My {self.runtime} brain isn't logged in any more: the {self.cli} CLI's session "
+                        f"expired. Log in again (run `{self.cli}` in a terminal on this machine and sign "
+                        f"in), or pick another brain.")
+            else:
+                text = (f"My {self.runtime} brain did not answer that time — the {self.cli} CLI "
+                        f"exited unexpectedly. Try that again, and run `orchestra doctor` if it "
+                        f"keeps happening.")
             tools = None
         if stream:
             return (make_chunk(c) for c in _chunked(text.strip()))

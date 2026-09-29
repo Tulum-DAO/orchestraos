@@ -165,3 +165,50 @@ def test_pool_api_provider_needs_the_key():
     pool = B.BrainPool(probes=lambda: [], api_key="k", api_model="gemini-2.5-flash",
                        api_factory=lambda key, model: built.setdefault("b", B.NullBrain(f"{key}:{model}")))
     assert pool.get("api", "") is built["b"] and built["b"].reason == "k:gemini-2.5-flash"
+
+
+# ---- a CLI that exits non-zero has FAILED, even when it printed to stdout -------------------
+# Found live 2026-09-29: `claude -p` with an expired OAuth session exits 1 and prints
+# "Failed to authenticate: OAuth session expired and could not be refreshed" on STDOUT (stderr
+# empty). run_command only raised when stdout was EMPTY, so the error came back as an answer
+# and was saved into the operator's thread.
+
+AUTH_FAIL = ["sh", "-c", "echo 'Failed to authenticate: OAuth session expired and could not be refreshed'; exit 1"]
+
+
+def test_nonzero_exit_with_stdout_raises_and_is_classified_as_auth():
+    with pytest.raises(B.CliFailed) as e:
+        B.run_command(B.CommandSpec(argv=AUTH_FAIL), timeout=10)
+    assert e.value.auth is True and e.value.returncode == 1
+
+
+def test_nonzero_exit_that_is_not_about_login_is_a_plain_failure():
+    with pytest.raises(B.CliFailed) as e:
+        B.run_command(B.CommandSpec(argv=["sh", "-c", "echo 'rate limited, try later'; exit 2"]), timeout=10)
+    assert e.value.auth is False and e.value.returncode == 2
+
+
+def test_a_zero_exit_still_returns_its_stdout():
+    assert B.run_command(B.CommandSpec(argv=["sh", "-c", "echo PONG"]), timeout=10).strip() == "PONG"
+
+
+def _auth_runner(spec, timeout):
+    return B.run_command(B.CommandSpec(argv=AUTH_FAIL), timeout)
+
+
+def test_default_brain_says_it_is_logged_out_instead_of_echoing_the_cli():
+    r = B.RuntimeBrain("claude", "claude", model="", runner=_auth_runner).complete([{"role": "user", "content": "hi"}])
+    text = r.choices[0].message.content
+    assert "logged in" in text and "claude" in text
+    assert "OAuth session expired" not in text          # the raw CLI line stays in the log
+
+
+def test_strict_brain_reports_not_logged_in():
+    tok = B.TURN_FAILURE.set(None)
+    try:
+        B.RuntimeBrain("codex", "codex", model="", runner=_auth_runner, strict=True).complete(
+            [{"role": "user", "content": "hi"}])
+        f = B.TURN_FAILURE.get()
+        assert f["code"] == "brain_failed" and f["reason"] == "not_logged_in" and f["provider"] == "codex"
+    finally:
+        B.TURN_FAILURE.reset(tok)

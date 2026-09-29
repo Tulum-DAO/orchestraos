@@ -62,6 +62,11 @@ export function describeTurnError(r: ArturoReply): TurnErrorView | null {
     return { action: 'connect', provider: r.provider,
              message: `${who} isn't available on this machine: ${r.reason || 'it is not set up'}. Connect it to use it, or switch brains.` };
   }
+  if (r.error === 'brain_failed' && r.reason === 'not_logged_in') {
+    const ran = (r.tools_called || []).length ? ` These actions already ran: ${(r.tools_called || []).join(', ')}.` : '';
+    return { action: 'connect', provider: r.provider,
+             message: `${who} isn't logged in any more on this machine (its session expired). Log in again, or pick another brain.${ran}` };
+  }
   if (r.error === 'brain_failed' || r.error === 'empty_response') {
     const what = r.error === 'empty_response' ? 'came back empty' : "didn't answer";
     const ran = (r.tools_called || []).length

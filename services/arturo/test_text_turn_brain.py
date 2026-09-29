@@ -218,3 +218,15 @@ def test_text_route_forwards_brain_and_context(P):
                                   "context": {"route": "/overview"}})
     assert r.status_code == 200 and r.get_json()["reply_text"] == "from the chosen brain"
     assert P._THREADS.get_thread("cr")["turns"][0]["content"] == "[Context: route=/overview]\nhi"
+
+
+def test_a_chosen_brain_whose_cli_is_logged_out_is_a_502_not_logged_in_and_nothing_is_saved(P):
+    # The live 2026-09-29 failure, through the real run_command: exit 1, message on stdout.
+    def logged_out(spec, timeout):
+        return P._brain.run_command(P._brain.CommandSpec(
+            argv=["sh", "-c", "echo 'Failed to authenticate: OAuth session expired and could not be refreshed'; exit 1"]), timeout)
+    P._test.pool(logged_out)
+    code, body = P.text_turn("hello", "c-auth", brain={"provider": "claude", "model": ""})
+    assert code == 502 and body["error"] == "brain_failed" and body["reason"] == "not_logged_in"
+    assert "Failed to authenticate" not in json.dumps(body)
+    assert _rows(P, "c-auth") == 0
