@@ -12,7 +12,7 @@
 export interface ArturoBrain { kind: 'api' | 'runtime' | 'none'; runtime?: string; cli?: string; model: string; reason?: string; provider?: string }
 export interface ArturoStt { server: boolean; backend: 'local-whisper' | 'none'; state: 'ready' | 'warming' | 'not-installed' | 'off' | 'error'; reason?: string; install?: string; model?: string }
 export interface ArturoHealth { operator?: OperatorFacts; ok: boolean; status?: number; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; stt?: ArturoStt; error?: string }
-export interface ArturoReply { operator?: OperatorFacts; ok: boolean; status?: number; reply_text?: string; conversation_id?: string; brain?: ArturoBrain; tools_called?: string[]; spawned?: string[]; error?: string; detail?: unknown }
+export interface ArturoReply { operator?: OperatorFacts; ok: boolean; status?: number; reply_text?: string; conversation_id?: string; brain?: ArturoBrain; tools_called?: string[]; spawned?: string[]; error?: string; detail?: unknown; provider?: string; model?: string; reason?: string; field?: string }
 export interface ArturoContext { route: string; entityKind?: string; entityId?: string; hint?: string }
 export interface RuntimeRow { id: string; label?: string; cli?: string; installed: boolean; authed: boolean | 'unverified'; auth_reason?: string | null }
 
@@ -42,11 +42,23 @@ export interface ArturoTextOptions {
   /** Fires the moment the request body has fully left the browser (XHR upload complete):
    *  the honest "Sent" edge, before the reply (which can take a minute) comes back. */
   onSent?: () => void;
+  /** This turn's brain, when the operator chose one (null/undefined = the default brain). */
+  brain?: { provider: string; model: string };
+}
+
+/** The /api/arturo/text body. Context is a FIELD now; the proxy renders the same line
+ *  contextLine() produced, after the onboarding marker, so model input is unchanged.
+ *  `brain` is sent only when the operator chose one (DEC-1790669162399904 §1.5-1.6). */
+export function buildTextBody(text: string, conversationId: string, ctx?: ArturoContext | null,
+                              brain?: { provider: string; model: string }): Record<string, unknown> {
+  const body: Record<string, unknown> = { text, conversation_id: conversationId };
+  if (ctx) body.context = ctx;
+  if (brain) body.brain = brain;
+  return body;
 }
 
 export async function arturoText(text: string, conversationId: string, ctx?: ArturoContext | null, opts: ArturoTextOptions = {}): Promise<ArturoReply> {
-  const line = contextLine(ctx);
-  const body = JSON.stringify({ text: line ? `${line}\n${text}` : text, conversation_id: conversationId });
+  const body = JSON.stringify(buildTextBody(text, conversationId, ctx, opts.brain));
   // XMLHttpRequest, not fetch: fetch has no "request body delivered" event, and the Sent state
   // must be real (the server has it), not a timer.
   return new Promise<ArturoReply>((resolve) => {

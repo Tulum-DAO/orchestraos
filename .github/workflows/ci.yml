@@ -102,4 +102,6 @@ jobs:
         with:
           node-version: "22"
       - run: npm ci
+      # Pure-logic web tests (tsx + node:test, no DOM). There were none before this job ran them.
+      - run: npm test
       - run: npm run build
