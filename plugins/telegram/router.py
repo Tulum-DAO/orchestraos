@@ -277,6 +277,35 @@ class Router:
             log(f"card {cid} -> chat {chat}: {'sent' if sent else 'send FAILED'}")
         return n
 
+    # ---- gm text replies -> phone ----
+    def push_pending_replies(self) -> int:
+        """Drain pending gm->telegram text replies to the operator's chat.
+
+        The GM composes a reply as a msg_store row (from=gm, to=telegram) but does
+        NOT itself call the transport — cards deliver, plain replies rotted as
+        'pending' forever (operator got silence). This sweep is the outbound
+        transport for text: send via tg_send, then mark delivered so it never
+        re-fires. Oldest-first so the phone reads in order.
+        """
+        chat = self.operator_chat()
+        if chat is None:
+            return 0
+        import msg_store  # noqa: WPS433 (CODE_ROOT on sys.path)
+        store = msg_store.MessageStore()
+        rows = store.query(from_agent=GM_SEAT, to_agent="telegram", status="pending")
+        n = 0
+        for m in reversed(rows):  # query() returns newest-first; deliver oldest-first
+            text = (m.get("body") or m.get("subject") or "").strip()
+            if not text:
+                store.deliver(m["id"])  # nothing to send; don't let it linger
+                continue
+            if tg_send.send_text(text, chat_id=chat):
+                store.deliver(m["id"]); n += 1
+                log(f"reply {m['id']} -> chat {chat}: sent")
+            else:
+                log(f"reply {m['id']} -> chat {chat}: send FAILED (stays pending, retries next sweep)")
+        return n
+
     # ---- loop ----
     def poll_once(self) -> int:
         r = self.api("getUpdates", {"offset": self.state.offset, "timeout": POLL_TIMEOUT,
@@ -309,6 +338,10 @@ class Router:
                     self.push_pending_cards()
                 except Exception as e:  # noqa: BLE001
                     log(f"card sweep failed: {e!r}")
+                try:
+                    self.push_pending_replies()
+                except Exception as e:  # noqa: BLE001
+                    log(f"reply sweep failed: {e!r}")
                 last_cards = time.time()
 
 
