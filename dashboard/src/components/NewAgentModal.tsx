@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import WebTerminal from './WebTerminal';
+import SignInLink from './SignInLink';
 import {
   authedRuntimes, createAgent, freshRuntimes, nameError, openLoginShell, previewName, runtimeLabel,
   type RuntimeRow,
@@ -35,6 +36,10 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
   const [runtime, setRuntime] = useState<string>('');
   const [name, setName] = useState('');
   const [task, setTask] = useState('');
+  const [role, setRole] = useState('');
+  // The General Manager is a different KIND of seat: tier T0, always-on, the gm prompt — the
+  // web equivalent of `orchestra spawn <name> --gm`, which is what docs/INSTALL.md tells you to run.
+  const [gm, setGm] = useState(false);
   const [error, setError] = useState('');
   const [created, setCreated] = useState<{ id: string; session: string; runtime?: string } | null>(null);
   const [shell, setShell] = useState<{ session: string; hint: string } | null>(null);
@@ -43,7 +48,7 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
 
   useEffect(() => {
     if (!open) return;
-    setPhase('probing'); setError(''); setCreated(null); setShell(null); setName(''); setTask('');
+    setPhase('probing'); setError(''); setCreated(null); setShell(null); setName(''); setTask(''); setRole(''); setGm(false);
     void probe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -73,7 +78,7 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
     const clean = previewName(name);
     if (!clean || phase === 'spawning') return;
     setPhase('spawning'); setError('');
-    const r = await createAgent(name, task, runtime || undefined);
+    const r = await createAgent(name, task, runtime || undefined, role, gm);
     if (r.ok && r.id) {
       setCreated({ id: r.id, session: r.session || r.id, runtime: r.runtime });
       setPhase('spawned');
@@ -117,8 +122,27 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
           <div className="p-6">
             <h3 className="text-lg font-semibold text-neutral-100 mb-1">New Agent</h3>
             <p className="text-sm text-neutral-400 mb-4">
-              What should it be called? It runs on {runtimeLabel(authed.find((r) => r.id === runtime) || authed[0])}, in a tmux session of its own.
+              {gm
+                ? <>The manager seat: always on, tier T0, and it runs on the gm prompt. One per install.</>
+                : <>What should it be called? It runs on {runtimeLabel(authed.find((r) => r.id === runtime) || authed[0])}, in a tmux session of its own.</>}
             </p>
+
+            <div className="mb-3 flex gap-2">
+              {[{ v: false, t: 'Worker', d: 'tier T2' }, { v: true, t: 'General Manager', d: 'tier T0, always on' }].map((k) => (
+                <button
+                  key={String(k.v)}
+                  type="button"
+                  onClick={() => { setGm(k.v); if (k.v && !name.trim()) setName('gm'); }}
+                  aria-pressed={gm === k.v}
+                  className={`flex-1 px-3 py-2 rounded-lg border text-left transition-colors ${gm === k.v
+                    ? 'border-blue-600 bg-blue-600/15 text-neutral-100'
+                    : 'border-neutral-700 bg-neutral-950 text-neutral-400 hover:text-neutral-200'}`}
+                >
+                  <div className="text-sm font-medium">{k.t}</div>
+                  <div className="text-[11px] text-neutral-500">{k.d}</div>
+                </button>
+              ))}
+            </div>
 
             <label className="block text-xs uppercase tracking-wider text-neutral-500 mb-1">Name</label>
             <input
@@ -127,6 +151,7 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && canSubmit) void submit(); }}
               placeholder="docs writer"
+              aria-label="Name"
               className="w-full px-3 py-2 rounded-lg bg-neutral-950 border border-neutral-700 text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-neutral-500"
             />
             <div className="mt-1 h-5 text-xs">
@@ -137,6 +162,16 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
                   : null}
             </div>
 
+            <label className="block text-xs uppercase tracking-wider text-neutral-500 mt-3 mb-1">Role <span className="normal-case tracking-normal text-neutral-600">(optional)</span></label>
+            <input
+              value={role}
+              onChange={(e) => setRole(e.target.value.slice(0, 120))}
+              onKeyDown={(e) => { if (e.key === 'Enter' && canSubmit) void submit(); }}
+              placeholder="docs writer for this repo"
+              aria-label="Role"
+              className="w-full px-3 py-2 rounded-lg bg-neutral-950 border border-neutral-700 text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-neutral-500"
+            />
+
             <label className="block text-xs uppercase tracking-wider text-neutral-500 mt-3 mb-1">First task <span className="normal-case tracking-normal text-neutral-600">(optional)</span></label>
             <textarea
               value={task}
@@ -146,18 +181,25 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
               className="w-full px-3 py-2 rounded-lg bg-neutral-950 border border-neutral-700 text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-neutral-500 resize-none"
             />
 
-            {authed.length > 1 && (
-              <div className="mt-3">
-                <label className="block text-xs uppercase tracking-wider text-neutral-500 mb-1">Runtime</label>
-                <select
-                  value={runtime}
-                  onChange={(e) => setRuntime(e.target.value)}
-                  className="bg-neutral-950 border border-neutral-700 text-neutral-300 text-sm rounded-lg px-3 py-2"
-                >
-                  {authed.map((r) => <option key={r.id} value={r.id}>{runtimeLabel(r)}</option>)}
-                </select>
-              </div>
-            )}
+            <div className="mt-3">
+              <label className="block text-xs uppercase tracking-wider text-neutral-500 mb-1">Runtime</label>
+              <select
+                value={runtime}
+                onChange={(e) => setRuntime(e.target.value)}
+                aria-label="Runtime"
+                className="bg-neutral-950 border border-neutral-700 text-neutral-300 text-sm rounded-lg px-3 py-2"
+              >
+                {rows.map((r) => {
+                  const usable = r.installed && r.authed === true;
+                  const why = !r.installed ? 'not installed' : r.authed === 'unverified' ? 'sign-in unverified' : 'not signed in';
+                  return (
+                    <option key={r.id} value={r.id} disabled={!usable}>
+                      {runtimeLabel(r)}{usable ? '' : ` — ${why}`}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
 
             {error && <p className="mt-3 text-sm text-red-400 whitespace-pre-wrap">{error}</p>}
 
@@ -168,7 +210,7 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
                 disabled={!canSubmit}
                 className="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors disabled:opacity-40"
               >
-                {phase === 'spawning' ? 'Starting…' : 'Create agent'}
+                {phase === 'spawning' ? 'Starting…' : gm ? 'Create the manager' : 'Create agent'}
               </button>
             </div>
           </div>
@@ -191,6 +233,9 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
                 </button>
                 <button onClick={onClose} className="px-3 py-1.5 text-sm rounded-lg bg-neutral-800 text-neutral-300 hover:bg-neutral-700 transition-colors">Done</button>
               </div>
+            </div>
+            <div className="px-2 pb-3">
+              <SignInLink session={created.session} />
             </div>
             <div className="h-80 rounded-lg overflow-hidden border border-neutral-800">
               <WebTerminal session={created.session} machine="vps" />
@@ -215,6 +260,11 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
                 </button>
                 <button onClick={onClose} className="px-3 py-1.5 text-sm rounded-lg bg-neutral-800 text-neutral-300 hover:bg-neutral-700 transition-colors">Close</button>
               </div>
+            </div>
+            {/* The CLI prints its sign-in URL wrapped across a dozen lines; this is the one
+                thing a person cannot do by hand from a terminal pane. */}
+            <div className="px-2 pb-3">
+              <SignInLink session={shell.session} />
             </div>
             <div className="h-80 rounded-lg overflow-hidden border border-neutral-800">
               <WebTerminal session={shell.session} machine="vps" />

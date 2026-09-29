@@ -5,6 +5,7 @@
  * GET  /api/arturo/health                               -> gateway /arturo/health
  * GET  /api/arturo/threads     [?limit=&offset=]        -> gateway /arturo/threads      (G20)
  * GET  /api/arturo/threads/:id                          -> gateway /arturo/threads/{id} (G20)
+ * POST /api/arturo/transcribe  multipart {audio}       -> gateway /arturo/transcribe -> :5071/transcribe (item C)
  *
  * Same trust model as routes/voice.ts: this Node process is the only holder of the
  * gateway bearer; the browser never sees it and never reaches the gateway or :5071.
@@ -31,6 +32,9 @@ export interface ArturoDeps {
   token: () => string;
   /** One authed round trip; returns the upstream status so it can be passed through. */
   fetchJson: (url: string, init: RequestInit, timeoutMs: number) => Promise<{ status: number; body: any }>;
+  /** Item C: stream a request body (multipart dictation clip) upstream untouched — fetchJson parses
+   *  JSON and takes a materialised init, so the relay has its own seam. Returns status + parsed body. */
+  forwardStream: (url: string, req: any, headers: Record<string, string>, timeoutMs: number) => Promise<{ status: number; body: any }>;
 }
 
 export function defaultArturoDeps(): ArturoDeps {
@@ -38,6 +42,14 @@ export function defaultArturoDeps(): ArturoDeps {
     token: gatewayToken,
     fetchJson: async (url, init, timeoutMs) => {
       const r = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+      const body = await r.json().catch(() => ({ ok: false, error: 'bad gateway json' }));
+      return { status: r.status, body };
+    },
+    forwardStream: async (url, req, headers, timeoutMs) => {
+      // Node 22 fetch: a Readable body needs duplex:'half'. Content-Type carries the multipart boundary.
+      const r = await fetch(url, {
+        method: 'POST', headers, body: req, duplex: 'half', signal: AbortSignal.timeout(timeoutMs),
+      } as RequestInit);
       const body = await r.json().catch(() => ({ ok: false, error: 'bad gateway json' }));
       return { status: r.status, body };
     },
@@ -70,6 +82,24 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, conversation_id }),
     }, 195000);
+  });
+
+  // Item C — web dictation tier 2: the browser records (MediaRecorder) and the box transcribes
+  // (local faster-whisper, no vendor key). Multipart streams through untouched; express.json only
+  // parses application/json so it never touches this body. 40 s > gateway 35 s > proxy 25 s.
+  router.post('/transcribe', async (req, res) => {
+    const token = deps.token();
+    if (!token) { res.status(502).json({ ok: false, error: 'gateway token unavailable' }); return; }
+    const ct = String(req.headers['content-type'] || '');
+    if (!ct.startsWith('multipart/form-data')) { res.status(400).json({ ok: false, error: 'multipart body required' }); return; }
+    const headers: Record<string, string> = { 'Authorization': `Bearer ${token}`, 'Content-Type': ct };
+    if (req.headers['content-length']) headers['Content-Length'] = String(req.headers['content-length']);
+    try {
+      const { status, body } = await deps.forwardStream(`${GATEWAY_URL}/arturo/transcribe`, req, headers, 40000);
+      res.status(status).json(body);
+    } catch (err: any) {
+      res.status(502).json({ ok: false, error: 'gateway unreachable', detail: err.message });
+    }
   });
 
   router.get('/health', async (_req, res) => {

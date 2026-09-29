@@ -98,10 +98,10 @@ function JarvisPanelLegacy() {
               <p className="text-xs text-neutral-600 text-center py-6">No messages yet</p>
             )}
             {messages.map((msg: any, i: number) => {
-              const isShaw = msg.role === 'operator' || msg.role === 'user';
+              const isOperator = msg.role === 'operator' || msg.role === 'user';
               const channel = msg.channel || 'dashboard';
               return (
-                <div key={i} className={clsx('flex flex-col gap-1', isShaw ? 'items-end' : 'items-start')}>
+                <div key={i} className={clsx('flex flex-col gap-1', isOperator ? 'items-end' : 'items-start')}>
                   <div className="flex items-center gap-1.5">
                     <span className={clsx('text-[10px] px-1.5 py-0.5 rounded-full font-medium', CHANNEL_COLORS[channel] || 'bg-neutral-700/50 text-neutral-400')}>
                       {channel}
@@ -112,7 +112,7 @@ function JarvisPanelLegacy() {
                   </div>
                   <div className={clsx(
                     'text-xs px-3 py-2 rounded-lg max-w-[85%] leading-relaxed',
-                    isShaw
+                    isOperator
                       ? 'bg-blue-500/15 text-blue-200'
                       : 'bg-neutral-800 text-neutral-300'
                   )}>

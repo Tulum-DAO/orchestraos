@@ -22,6 +22,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     i.add_argument("--no-venv", action="store_true", help="skip python venv + pip")
     i.add_argument("--no-npm", action="store_true", help="skip npm install (and builds)")
     i.add_argument("--no-build", action="store_true", help="skip api/dashboard builds")
+    i.add_argument("--stt", action="store_true",
+                   help="also install local speech-to-text for the web mic (faster-whisper, ~365 MB + a ~140 MB model; no vendor key)")
     i.add_argument("--demo", action="store_true",
                    help="seed three fixture seats and one card of each kind (approval, menu, questionnaire, human task)")
 
@@ -32,13 +34,24 @@ def parse_args(argv=None) -> argparse.Namespace:
     u.add_argument("--dry-run", action="store_true", help="print the process table and exit")
     u.add_argument("-d", "--detach", action="store_true", help="run the supervisor in the background")
 
+    ag = sub.add_parser("agent", help="agent lifecycle verbs (`agent create <name>`)")
+    agsub = ag.add_subparsers(dest="agent_command", required=True)
+    ac = agsub.add_parser("create", help="fill a role template, register the seat (with its parent), validate runtime/model, spawn, verify it is alive")
+    ac.add_argument("name")
+    ac.add_argument("--tier", help="T0 (the always-on manager), T1 (coordinator) or T2 (worker); default T2")
+    ac.add_argument("--runtime", choices=["claude", "gemini", "codex"], help="default: first of [runtimes] enabled")
+    ac.add_argument("--model", help="model id for the runtime (must belong to it)")
+    ac.add_argument("--parent", help="the seat this agent reports to (recorded as reports_to; fills {PARENT_PM})")
+    ac.add_argument("--template", help="dev | pm | qa (prompts/_<kind>-template.md) or a path relative to the checkout")
+    ac.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="fill a template {KEY}; repeatable")
+    ac.add_argument("--task", help="first instruction injected into the seat")
     sp = sub.add_parser("spawn", help="register + launch a seat in tmux (`--gm` = the General Manager)")
     sp.add_argument("seat")
-    sp.add_argument("--gm", action="store_true", help="spawn as the General Manager (prompts/gm.md, tier T1, always-on)")
+    sp.add_argument("--gm", action="store_true", help="spawn as the General Manager (prompts/gm.md, tier T0, always-on)")
     sp.add_argument("--task", help="first instruction injected into the seat")
     sp.add_argument("--runtime", choices=["claude", "gemini", "codex"], help="default: first of [runtimes] enabled")
     sp.add_argument("--model", help="model id for the runtime (default per runtime)")
-    sp.add_argument("--tier", help="T1 (always-on, coordinator) or T2 (worker); default T2, T1 with --gm")
+    sp.add_argument("--tier", help="T0 (the always-on manager), T1 (coordinator) or T2 (worker); default T2, T0 with --gm")
     sp.add_argument("--prompt", help="role prompt path relative to the checkout (default prompts/<seat>.md)")
 
     ro = sub.add_parser("rotate", help="rotate a seat: spawn a successor, it answers the baton's canary, strict grade, promote")
@@ -72,7 +85,7 @@ def cmd_init(ns) -> int:
     root = S.repo_root_from_env()
     report = run_init(root, data_dir=Path(ns.data_dir) if ns.data_dir else None,
                       skip_npm=ns.no_npm, skip_venv=ns.no_venv, skip_build=ns.no_build, demo=ns.demo,
-                      yes=ns.yes)
+                      yes=ns.yes, stt=ns.stt)
     print(render_report(report))
     failed = [r for r in report if not r.did and ("failed" in r.detail)]
     st = _settings()
@@ -96,6 +109,16 @@ def cmd_doctor(ns) -> int:
     return D.exit_code(checks)
 
 
+def update_notice(root) -> str:
+    """Issue #104: ONE line when a newer tag exists on origin; empty otherwise. Fail-soft —
+    a broken probe or an unreachable remote never blocks `orchestra up`."""
+    try:
+        from . import version as V
+        return V.notice_line(V.status(root))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def cmd_up(ns) -> int:
     from . import process_table as PT
     from . import supervisor as SV
@@ -112,6 +135,9 @@ def cmd_up(ns) -> int:
     if missing:
         print("orchestra.toml missing required keys: " + ", ".join(missing), file=sys.stderr)
         return 2
+    notice = update_notice(st.repo_root)
+    if notice:
+        print(notice, file=sys.stderr)
     status = SV.read_status(st.data_dir)
     if status["running"]:
         print(f"supervisor already running (pid {status['pid']}); use `orchestra status` / `orchestra down`",
@@ -163,10 +189,10 @@ def cmd_status(ns) -> int:
 
 def main(argv=None) -> int:
     ns = parse_args(argv)
-    from .seats import cmd_rotate, cmd_spawn
+    from .seats import cmd_rotate, cmd_spawn, cmd_agent
     from .pair_cmd import run_pair
     return {"init": cmd_init, "doctor": cmd_doctor, "up": cmd_up, "down": cmd_down, "status": cmd_status,
-            "spawn": cmd_spawn, "rotate": cmd_rotate, "upgrade": cmd_upgrade,
+            "spawn": cmd_spawn, "agent": cmd_agent, "rotate": cmd_rotate, "upgrade": cmd_upgrade,
             "pair": run_pair}[ns.command](ns)
 
 

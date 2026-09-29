@@ -2,13 +2,17 @@
 # Pre-push secret scan. Install with: git config core.hooksPath .git-hooks
 set -euo pipefail
 
-if ! command -v detect-secrets-hook >/dev/null 2>&1; then
-  echo "pre-push: detect-secrets not installed (pip install detect-secrets) — skipping scan" >&2
+cd "$(git rev-parse --show-toplevel)"
+# `orchestra init` pip-installs detect-secrets into <repo>/.venv, which is NOT on PATH in a
+# normal shell — prefer the venv copy, fall back to PATH, only then skip (loudly).
+HOOK=detect-secrets-hook
+[ -x .venv/bin/detect-secrets-hook ] && HOOK=.venv/bin/detect-secrets-hook
+if ! command -v "$HOOK" >/dev/null 2>&1; then
+  echo "pre-push: detect-secrets not installed (run \`orchestra init\` or pip install detect-secrets) — skipping scan" >&2
   exit 0
 fi
 
-cd "$(git rev-parse --show-toplevel)"
-if ! detect-secrets-hook --baseline .secrets.baseline $(git ls-files); then
+if ! "$HOOK" --baseline .secrets.baseline $(git ls-files); then
   echo "pre-push: new secrets detected that aren't in .secrets.baseline — blocking push." >&2
   echo "Review with: detect-secrets scan --all-files --baseline .secrets.baseline" >&2
   exit 1

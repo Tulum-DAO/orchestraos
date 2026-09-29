@@ -122,6 +122,8 @@ model_is_1m() {
 
 # shellcheck source=scripts/spawn_model_verify.sh
 source "$SCRIPT_DIR/scripts/spawn_model_verify.sh"
+# shellcheck source=scripts/spawn_guards.sh
+source "$SCRIPT_DIR/scripts/spawn_guards.sh"   # issue #92: FATAL guards (model/runtime, injection)
 
 # Post-spawn model verify (by effect): capture the TUI status line and confirm the
 # running model is a [1m] variant. If bare and we know the intended model, switch
@@ -143,7 +145,14 @@ verify_spawn_model() {
         family) warn "  [1m]-verify: '$session' banner shows '$(printf '%s' "$line" | grep -oE "$SPAWN_MODEL_LABEL_RE" | head -1)' — [1m] cannot be confirmed from this banner; continuing (non-fatal)"; return 0 ;;
         none)   warn "  [1m]-verify: could not read a model from '$session' (non-fatal); continuing"; return 0 ;;
     esac
-    # bare: an explicit non-[1m] model id is visible — the one case the correction is valid for.
+    # bare: an explicit non-[1m] model id is visible. Correct ONLY if the operator asked for a
+    # [1m] model (#95): config/providers.json ships no [1m] SKU for any family, so on a default
+    # install this branch fired every spawn and could never succeed — permanent noise that trains
+    # users to ignore warnings.
+    if ! correction_warranted "$intended"; then
+        log "  [1m]-verify OK: '$session' running '$(printf '%s' "$line" | tr -d '\n')' (no [1m] requested)"
+        return 0
+    fi
     warn "  [1m]-verify: '$session' came up on a BARE (non-[1m]) model — correcting"
     local target="$intended"
     [[ -z "$target" ]] && target="claude-opus-4-8[1m]"   # settings default variant
@@ -492,6 +501,9 @@ spawn_agent() {
         codex)  agent_bin="$(command -v codex 2>/dev/null || echo codex)" ;;
         *) err "$agent_id: unsupported resolved runtime '$runtime' — refusing"; exit 3 ;;
     esac
+    # issue #92: a model id that names ANOTHER runtime (claude-sonnet-5 on a codex seat)
+    # makes the CLI exit and the init prompt land in bare bash — refuse before any pane.
+    refuse_model_mismatch "$runtime" "$model" "$agent_id" || exit 3
 
     # Check if we're on the right machine
     local this_machine="mac"
@@ -518,7 +530,7 @@ spawn_agent() {
         warn "Agent $agent_id already running in tmux session '$tmux_name'"
         if [[ -n "$task" ]]; then
             log "Sending task to existing session..."
-            inject_prompt "$tmux_name" "$task"
+            inject_or_fail "$tmux_name" "$task" || return 1     # issue #92: never a silent miss
         fi
         return 0
     fi
@@ -785,13 +797,26 @@ spawn_agent() {
         # blanket shell/network/cross-tenant; anything outside still prompts
         # and escalates via Layer B (scripts/pane_reachability.py).
         local perm_settings=""
-        perm_settings="$(python3 "$SCRIPT_DIR/scripts/spawn_permission_rules.py" "$agent_id" "$cwd" 2>/dev/null || true)"
+        # STDERR IS KEPT (#95): this was `2>/dev/null || true`, so when the generator was
+        # missing entirely the operator saw "generation failed" with no cause — and a security
+        # feature degraded to "no rules" without ever saying why.
+        local perm_err=""
+        perm_err="$(mktemp)"
+        perm_settings="$(python3 "$SCRIPT_DIR/scripts/spawn_permission_rules.py" "$agent_id" "$cwd" 2>"$perm_err" || true)"
         if [[ -n "$perm_settings" && -f "$perm_settings" ]]; then
             launch_cmd+=" --settings $perm_settings"
             log "  Perms: project-local allow-rules -> $perm_settings"
         else
             warn "  Perms: allow-rule generation failed — spawning without (prompts escalate via Layer B)"
+            # if-form, not `[[ ]] && warn`. I expected the && form to abort the spawn under
+            # `set -euo pipefail` when the file is empty and DROVE IT: it does not — set -e
+            # ignores a failure that is not the command following the final &&. Kept as an if
+            # because it reads as a branch and cannot acquire that hazard later.
+            if [[ -s "$perm_err" ]]; then
+                warn "  Perms: cause: $(head -3 "$perm_err" | tr '\n' ' ')"
+            fi
         fi
+        rm -f "$perm_err"
         log "  Runtime: claude | Model: ${model:-<settings default opus-4-8[1m]>}"
     elif [[ "$runtime" == "codex" ]]; then
         [[ -n "$model" ]] && launch_cmd+=" --model $model"
@@ -826,10 +851,11 @@ spawn_agent() {
     # because their send-keys already carried "You are <id>"; only this path was cut.
     if [[ -n "$resume_sid" ]]; then
         log "  Resume: session $resume_sid (roster/adopt-gated); short wake line, no init file"
-        inject_prompt "$tmux_name" "You are $agent_id, resumed (session $resume_sid) after a crash by roster-resume-all. Check your msg_store inbox (python3 $SCRIPT_DIR/msg_store.py inbox --agent $agent_id) and continue your last task."
+        inject_or_fail "$tmux_name" "You are $agent_id, resumed (session $resume_sid) after a crash by roster-resume-all. Check your msg_store inbox (python3 $SCRIPT_DIR/msg_store.py inbox --agent $agent_id) and continue your last task." || exit 1
     else
-        inject_prompt "$tmux_name" "You are $agent_id. Read $init_file and follow all instructions in it."
+        inject_or_fail "$tmux_name" "You are $agent_id. Read $init_file and follow all instructions in it." || exit 1
     fi
+    # issue #92: past here the seat is instructed — only now may the spawn report success.
 
     # Record state (includes parent tracking for completion callbacks)
     python3 -c "

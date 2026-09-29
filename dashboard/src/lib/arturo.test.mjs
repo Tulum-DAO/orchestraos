@@ -3,7 +3,7 @@
  *   node --experimental-strip-types dashboard/src/lib/arturo.test.mjs
  */
 import assert from 'node:assert';
-import { isStarting, waitForArturo, contextLine, contextFromLocation, brainLabel, slugify } from './arturo.ts';
+import { isStarting, waitForArturo, contextLine, contextFromLocation, brainLabel, slugify, firstStep, stepAfterRuntime, onboardingTurn } from './arturo.ts';
 
 // --- isStarting: boot-window errors are "starting", real errors are not ------------------
 assert.equal(isStarting({ ok: false, error: 'HTTP 502' }), true);
@@ -61,3 +61,21 @@ assert.equal(brainLabel({ kind: 'runtime', runtime: 'claude', model: 'claude-hai
 assert.equal(slugify('write a haiku about tmux and print it'), 'write-haiku-tmux');
 
 console.log('arturo.test.mjs: all assertions passed');
+
+// --- onboarding is decided by what the SERVER knows; no surface parses a name ----------------
+assert.equal(firstStep(true), 'done');
+assert.equal(firstStep(false), 'runtime');          // a brain must exist before it is asked to listen (even when a name is cached)
+assert.equal(stepAfterRuntime(null, true), 'name');       // server knows no name -> ask (via the brain)
+assert.equal(stepAfterRuntime('Shaw', true), 'voice');    // known name -> never asked twice
+assert.equal(stepAfterRuntime('Shaw', false), 'first');
+assert.equal(onboardingTurn('name', 'hi my name is Shaw nice to meet you'), '[Onboarding: step=name]\nhi my name is Shaw nice to meet you');
+console.log('arturo.test.mjs: onboarding helpers ok');
+
+// --- message states: one vocabulary for every Arturo chatmode ---------------------------
+import { sendStateLabel } from './arturo.ts';
+assert.equal(sendStateLabel('sending'), 'Sending…');
+assert.equal(sendStateLabel('sent'), 'Sent');
+assert.equal(sendStateLabel('acked'), 'Acknowledged');
+assert.equal(sendStateLabel('failed'), 'Not delivered');
+assert.equal(sendStateLabel(undefined), '');
+console.log('arturo.test.mjs: send states ok');

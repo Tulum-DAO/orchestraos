@@ -338,6 +338,59 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
                             "Run `orchestra init` (pip install -r requirements.txt) or set [arturo] enabled=false",
                             required=False))
 
+    # -- arturo:local-stt (item C + P1-a): can the web mic fall back to on-box transcription with no key?
+    # sherpa-onnx is in the DEFAULT install, so "not installed" means `orchestra init` did not finish
+    # (WARN, never required); ready = OK and names engine + model.
+    if st.arturo_enabled:
+        try:
+            out = probes.run_cmd([st.python_bin(), "-c",
+                                  "import sys, json; sys.path.insert(0, %r); from services.arturo import local_stt as l; "
+                                  "print(json.dumps(l.state()))" % str(root)])
+            import json as _json
+            stt = _json.loads(out.strip().splitlines()[-1])
+        except Exception as e:  # noqa: BLE001
+            stt = {"state": "error", "reason": f"probe failed: {e}"}
+        state = stt.get("state")
+        eng = f"{stt.get('engine', '?')} {stt.get('model', '')}".strip()
+        if state == "ready":
+            checks.append(Check("arturo:local-stt", OK, f"local speech-to-text ready ({eng}) — the web mic works in every browser, no key", "", required=False))
+        elif state == "not-installed":
+            checks.append(Check("arturo:local-stt", WARN, f"speech engine not installed ({eng}) — the web mic dictates only in browsers with on-device speech (Chrome/Edge/Safari)",
+                                f"Run `{stt.get('install', 'orchestra init')}` (sherpa-onnx wheel ~15 MB + a ~99 MB model, fetched in the background)", required=False))
+        elif state == "off":
+            checks.append(Check("arturo:local-stt", INFO, "disabled (ARTURO_LOCAL_STT=0)", "", required=False))
+        else:
+            checks.append(Check("arturo:local-stt", WARN, f"{state} ({eng}): {stt.get('reason', '')}"[:120],
+                                "Wait for the download (it retries at `orchestra up`), or run `orchestra init` to fetch the model now", required=False))
+
+    # -- dashboard:https (item C): the microphone (and camera) only work in a secure context. A
+    # dashboard bound to a LAN/VPN address over plain http has no mic in ANY browser.
+    if st.dashboard_host not in ("127.0.0.1", "localhost", "::1"):
+        checks.append(Check("dashboard:https", INFO,
+                            f"dashboard bound to {st.dashboard_host} — browsers allow the microphone only over HTTPS or localhost",
+                            "Front it with `tailscale serve` or a TLS reverse proxy (see docs/ARTURO.md § Dictation)", required=False))
+
+    # -- orchestra:version (issue #104): installed vs the newest tag on origin. Behind is a
+    # NUDGE (WARN, not required); a remote that cannot be asked is INFO, never a failure.
+    from . import version as V
+
+    def _git_via_probe(argv, cwd=None):
+        return 0, probes.run_cmd(["git", "-C", str(cwd), *argv])
+    try:
+        vs = V.status(root, git=_git_via_probe)
+    except Exception:  # noqa: BLE001
+        vs = {"installed": None, "latest": None, "behind": None}
+    if vs["behind"]:
+        checks.append(Check("orchestra:version", WARN,
+                            f"installed {vs['installed']}, latest {vs['latest']} on origin",
+                            "run `orchestra upgrade` (then `orchestra down && orchestra up`)", required=False))
+    elif vs["installed"] and vs["latest"]:
+        checks.append(Check("orchestra:version", OK, f"{vs['installed']} (latest {vs['latest']})", required=False))
+    else:
+        checks.append(Check("orchestra:version", INFO,
+                            f"installed {vs['installed'] or 'unknown'}; latest unknown (origin not reachable or no tags)",
+                            None, required=False))
+
     # -- node deps + builds
     for label, sub in (("root", ""), ("api", "api"), ("dashboard", "dashboard")):
         d = root / sub if sub else root
@@ -359,6 +412,22 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
         except Exception as e:  # noqa: BLE001 — any failure to load = MISSING
             checks.append(Check("api:better-sqlite3", MISSING, f"native binding does not load: {str(e)[:80]}",
                                 f"cd {root / 'api'} && npm rebuild better-sqlite3  (or delete api/node_modules and run npm install)"))
+    # node-pty is the native addon behind the web terminal (dashboard-proxy.js and api
+    # /ws/terminal both require() it from the root install). On a host without the build
+    # toolchain, npm finishes with node-pty skipped or unbuilt, the app boots green, and every
+    # terminal pane answers "Web terminal unavailable: node-pty is not installed" (second-install
+    # DX report, 2026-09-20). Load it the way both servers will; REQUIRED, so `doctor` exits 1.
+    root_nm = root / "node_modules"
+    if (root / "package.json").exists() and root_nm.exists():
+        mod = root_nm / "node-pty"
+        try:
+            probes.run_cmd(["node", "-e", f"require({json.dumps(str(mod))})"])
+            checks.append(Check("terminal:node-pty", OK, "native addon loads (web terminal available)"))
+        except Exception as e:  # noqa: BLE001 — any failure to load = MISSING
+            checks.append(Check("terminal:node-pty", MISSING,
+                                f"native addon does not load: {str(e)[:80]} — the web terminal is dead on this host",
+                                f"sudo apt install -y build-essential python3 && cd {root} && npm rebuild node-pty  "
+                                f"(or delete node_modules and run npm install)"))
     for label, sub, artifact in (("api", "api", "dist/server.js"), ("dashboard", "dashboard", "dist/index.html")):
         d = root / sub
         if not (d / "package.json").exists():

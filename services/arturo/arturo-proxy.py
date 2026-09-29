@@ -183,6 +183,26 @@ _INJECT_ASYNC = True
 # execute_tool.
 import contextvars as _contextvars
 _TOOLS_THIS_TURN = _contextvars.ContextVar("arturo_tools_this_turn", default=None)
+# Seats CREATED during this turn. The seat id is known only inside the spawn tool, and the
+# surfaces need it to offer a way into the new agent (Shaw, 2026-09-22). Only the verified
+# success path records, so a FAILED spawn can never produce a link to nothing.
+_SPAWNED_THIS_TURN = _contextvars.ContextVar("arturo_spawned_this_turn", default=None)
+# The turn's ToolDedupLedger, so the INDIRECT dispatch sites can consult the same ledger the tool
+# loop uses. ask_gm/deep_query/research call execute_tool("async_task", ...) inside a tool handler,
+# which the loop never sees — they bypassed the guard entirely (DEC-1790305211739337, peer finding).
+_TURN_DEDUP = _contextvars.ContextVar("arturo_turn_dedup", default=None)
+
+
+def _record_spawned_this_turn(session_name):
+    """Best-effort, turn-scoped. Outside a turn (voice, cron) it is a no-op, never an error."""
+    bucket = _SPAWNED_THIS_TURN.get()
+    if bucket is None or not session_name:
+        return
+    try:
+        if session_name not in bucket:
+            bucket.append(session_name)
+    except Exception:
+        pass
 
 # VQ-6 supersede-on-arrival (pause-duplication). DEC-1786425204 CONSENSUS_REACHED.
 # When the operator pauses mid-utterance the endpointer answers the PARTIAL, then the FULL utterance
@@ -1280,6 +1300,11 @@ TOOLS = [
                         "type": "boolean",
                         "description": "If true, run in background (no visible window). Default false.",
                     },
+                    "kind": {
+                        "type": "string",
+                        "enum": ["worker", "manager"],
+                        "description": "worker (default) = an ordinary T2 seat that does a job. manager = THE General Manager: tier T0, always on, runs the fleet. There is ONE manager per install — only use manager when the operator has asked for the manager, and never to do a job.",
+                    },
                 },
                 "required": ["session_name", "machine"],
             },
@@ -1404,6 +1429,7 @@ TOOLS = [
             },
         },
     },
+    __import__("services.arturo.operator_store", fromlist=["TOOL"]).TOOL,   # set_operator_fact — ONE schema, owned by the store
     {
         "type": "function",
         "function": {
@@ -1675,6 +1701,40 @@ def commission_plan(session, task, runtime=None, repo_root=None, model=None):
     return _CommissionPlan(argv, env, session, task)
 
 
+def _last_spawned_seat():
+    """The seat the operator just watched come up, so the hierarchy turn can name it. Best effort:
+    an unnameable seat only costs the directive one clause, never the step."""
+    try:
+        return (load_voice_memory().get("spawned_sessions") or [])[-1]["name"]
+    except Exception:
+        return ""
+
+
+def existing_manager():
+    """(manager seat name | None, known). THREE states, never two — the same discipline
+    registration_status keeps: an unreadable registry is "could not check", NOT "there is none".
+    A manager is a seat at tier T0 (docs/REFERENCE_INSTALL.md), found by TIER, never by the name
+    'gm', because the operator may have called it anything."""
+    try:
+        reg = json.loads((Path(ORCHESTRA_DIR) / "registry.json").read_text())
+    except Exception:
+        return None, False
+    for name, row in (reg.get("agents") or {}).items():
+        if str((row or {}).get("tier") or "").upper() == "T0":
+            return name, True
+    return None, True
+
+
+def manager_plan(session, repo_root=None):
+    """`orchestra spawn <seat> --gm` — the ONLY path that registers tier T0 + always_on +
+    prompts/gm.md (orchestra_cli/seats.py). spawn-agent.sh cannot set any of them, which is why the
+    manager does not go through commission_plan. ORCHESTRA_DIR is pinned because the CLI writes the
+    registry the proxy reads (peer catch: the two resolve differently otherwise)."""
+    root = Path(repo_root or _REPO_ROOT)
+    env = {"ORCHESTRA_DIR": str(ORCHESTRA_DIR), "PARENT_AGENT_ID": "arturo"}
+    return _CommissionPlan([str(root / "bin" / "orchestra"), "spawn", session, "--gm"], env, session, "")
+
+
 def registration_status(name):
     """THREE states, never two: registered / not registered / could not check.
 
@@ -1758,6 +1818,40 @@ def _file_commission_row(session, task):
     except Exception as e:  # noqa: BLE001
         log.warning(f"commission row for {session} not filed: {e}")
         return ""
+
+
+def _dispatch_guarded(tool_name, tool_args):
+    """Dispatch a nested tool through THIS TURN's dedupe ledger.
+
+    The tool loop reserves every call it can see, but a tool HANDLER that dispatches another tool
+    (ask_gm, deep_query, research -> async_task) runs inside an already-reserved call, so its inner
+    dispatch was invisible to the ledger. Route those here. Deliberately explicit rather than hooking
+    execute_tool itself: the loop has already reserved its own call, and a blanket hook would
+    re-reserve it and suppress the legitimate first execution.
+    """
+    led = _TURN_DEDUP.get()
+    if led is not None:
+        prior = led.reserve(tool_name, tool_args)
+        if prior is not None:
+            log.warning(f"DUP-CALL SUPPRESSED (indirect): {tool_name} not re-dispatched this turn. "
+                        f"reason={prior[:90]!r} args={_dedup_argsum(tool_args)}")
+            return prior
+    result = execute_tool(tool_name, tool_args)
+    if led is not None:
+        led.record(tool_name, tool_args, result)
+    return result
+
+
+def _dedup_argsum(args):
+    """A short, log-safe rendering of tool args for a suppression line. Values are TRUNCATED and
+    never dumped whole: tool args carry task prose and, until the token-by-reference rule lands,
+    can carry secret values (gm 03:1xZ: the bot token is in 227 transcripts)."""
+    try:
+        if not isinstance(args, dict):
+            return f"<{type(args).__name__}>"
+        return "{" + ", ".join(f"{k}={str(v)[:40]!r}" for k, v in sorted(args.items())) + "}"
+    except Exception:
+        return "<unrenderable>"
 
 
 def _notify_spawned(session, machine):
@@ -1913,6 +2007,33 @@ def execute_tool(name, args, user_turns=None):
                     f"machine's spawn-agent.sh — I have no way to register '{session}' on another "
                     f"machine. Run `orchestra spawn {session}` there, or let me spawn it here.")
 
+        # THE MANAGER is a different kind of seat (tier T0, always on, prompts/gm.md) and only
+        # `orchestra spawn --gm` sets those. One per install, refused HERE rather than in the tool
+        # name, because this same tool list rides the voice path (peer note: a mis-pick on a phone
+        # call must not be able to create a second always-on seat).
+        if str(args.get("kind") or "worker").lower() == "manager":
+            who, known = existing_manager()
+            if who:
+                return (f"This install already has a manager: {who}. There is one per install, so I "
+                        f"did not create another. Talk to {who} for anything fleet-wide.")
+            if not known:
+                return ("I could not read the registry to check whether a manager already exists, so I "
+                        "did not create one — an unchecked registry is not an empty one. Check the "
+                        "Agents page and ask me again.")
+            plan = manager_plan(session)
+            log.info(f"COMMISSION MANAGER: {' '.join(plan.argv[:3])}")
+            ok, out = _run_commission(plan, 180)
+            if not ok:
+                return f"FAILED to create the manager '{session}': {out[-400:]}"
+            verify_ok, _ = run_local(f"tmux has-session -t {session} 2>/dev/null", timeout=3)
+            if not verify_ok:
+                return f"FAILED: orchestra spawn ran but session '{session}' does not exist: {out[-300:]}"
+            record_spawned_session(session)
+            _record_spawned_this_turn(session)
+            _notify_spawned(session, "vps")
+            return (f"The manager '{session}' is up: tier T0, always on, running the fleet prompt. "
+                    f"It is registered and on the Agents page.")
+
         if True:
             # VPS: a real seat through spawn-agent.sh + a msg_store commission row (T2).
             plan = commission_plan(session, task)
@@ -1928,6 +2049,7 @@ def execute_tool(name, args, user_turns=None):
                 return f"FAILED: spawn-agent.sh ran but session '{session}' does not exist on vps: {out[-300:]}"
             msg_id = _file_commission_row(session, task)
             record_spawned_session(session)
+            _record_spawned_this_turn(session)
             _notify_spawned(session, "vps")
             # Registration is the thing that makes a seat real (dashboard, mail, rotation,
             # park-not-retire). Verify it by effect and SAY which it is — never claim
@@ -1999,6 +2121,7 @@ def execute_tool(name, args, user_turns=None):
 
         # Track in voice memory
         record_spawned_session(session)
+        _record_spawned_this_turn(session)
 
         # Auto-text session name + attach command to Telegram
         import requests as req_lib
@@ -2247,7 +2370,7 @@ def execute_tool(name, args, user_turns=None):
         _ok, _text = _dp.run_analyst(question)
         if _ok:
             return _text
-        execute_tool("async_task", {
+        _dispatch_guarded("async_task", {
             "tool_name": "gm_command",
             "tool_args": {"prompt": question, "timeout": 120},
             "summary": f"Deep dive: {question[:80]}",
@@ -2262,7 +2385,7 @@ def execute_tool(name, args, user_turns=None):
         request = args.get("request", "")
         if not request:
             return "ERROR: ask_gm called with an empty request."
-        execute_tool("async_task", {
+        _dispatch_guarded("async_task", {
             "tool_name": "gm_command",
             "tool_args": {"prompt": request, "timeout": 120},
             "summary": args.get("summary") or request[:80],
@@ -2353,6 +2476,20 @@ def execute_tool(name, args, user_turns=None):
             return f"Command output ({machine}):\n{out}"
         return f"Command failed on {machine}: {out[:500]}"
 
+    elif name == "set_operator_fact":
+        # Onboarding facts are BRAIN-extracted (Shaw 2026-09-22): the operator said who they are
+        # in conversation; the brain understood it; this is the only writer of operator.json.
+        from services.arturo import operator_store as _ops
+        try:
+            entry = _ops.set_fact(ARTURO_STATE, args.get("field", ""), args.get("value", ""), source="brain")
+        except ValueError as e:
+            return f"Not recorded: {e}"
+        except OSError as e:               # unwritable state dir: the turn must not 500 on a nicety
+            log.warning(f"operator fact not stored: {e}")
+            return f"Not recorded: could not write the operator store ({e.__class__.__name__})"
+        log.info(f"operator fact set [{args.get('field')}] = {entry['value']!r}")
+        return f"Recorded: {args.get('field')} = {entry['value']}"
+
     elif name == "remember_note":
         note = args.get("note", "")
         category = args.get("category", "behavior")
@@ -2414,7 +2551,7 @@ def execute_tool(name, args, user_turns=None):
         query = args.get("query", "")
         if not query:
             return "No research query provided."
-        return execute_tool("async_task", {
+        return _dispatch_guarded("async_task", {
             "tool_name": "spawn_agent",
             "tool_args": {
                 "session_name": f"research-{int(time.time()) % 10000}",
@@ -2647,6 +2784,15 @@ def build_context(calling_channel="voice"):
     # say "backed by a Gemini-powered layer" because this text was hardcoded). Read by effect from
     # the live brain object (it can be re-selected after a post-boot login, G14).
     parts.append(_brain_identity_line())
+    # Who the operator IS (brain-extracted at onboarding, services/arturo/operator_store.py).
+    # One line, only when something is actually known — never a placeholder name.
+    try:
+        from services.arturo import operator_store as _ops
+        _op_line = _ops.context_line(ARTURO_STATE)
+        if _op_line:
+            parts.append(_op_line)
+    except Exception:  # noqa: BLE001 — identity is a nicety; a turn never fails on it
+        pass
     parts.append(f"""ONE IDENTITY (critical): You and your deep brain are ONE. When you use gm_command / async_task / inject_message you are consulting your OWN deeper reasoning and full-context memory — the manager seat running in the '{VOICE_BRAIN_SESSION}' session. It is NOT a separate person. NEVER refer to "the GM" out loud, NEVER say "I've sent it to the GM", "I'll ask the GM", or "waiting to hear back from the GM". Speak in the FIRST PERSON: "Let me think on that — I'll text you", "Still working through it", "I looked into it", "Give me a bit and I'll get back to you". Any deep question you can't answer instantly, you route to your own deep brain via async_task (which guarantees a Telegram answer back to the operator) — and you say so in the first person.""")
     parts.append(f"""Rules: Be concise (2-3 sentences max). No markdown/bullets. Spoken dialogue only.
 Push back when you disagree. You're a strategic partner, not a yes-machine.
@@ -2927,6 +3073,10 @@ def _filter_voice_response(content):
 # journaled chat_completions() route — it builds context + calls the model directly.
 # ============================================================================================
 from services.arturo import ptt as _ptt
+from services.arturo import local_stt as _local_stt   # item C: key-free web dictation (lazy: never imports faster-whisper here)
+# item C: fetch the local speech model in the background at boot (never inside a request). No-op on a
+# slim install (faster-whisper absent) or when the files are already on disk. Must sit AFTER the import.
+_local_stt.prefetch(log=log)
 
 PTT_STT_MODEL = os.environ.get("ARTURO_PTT_STT_MODEL", "scribe_v1")
 # Arturo's ElevenLabs voice for TTS replies (mp3, AVAudioPlayer-native). Overridable.
@@ -3401,6 +3551,29 @@ def chat_completions():
     # (hardcoded tmux sessions, task counts, agent lists from when the prompt was last synced).
     # The proxy's build_context() provides fresh, live data instead.
     non_system = [m for m in messages if m.get("role") != "system"]
+    # ...except from the in-process caller (the /text route replaying through here via the Flask
+    # test client), whose system message is a PER-TURN DELTA, not a frozen context: the onboarding
+    # step's directive. Dropping it indiscriminately is why every onboarding directive — 'name' as
+    # well as 'hierarchy' — never reached the model (DEC-1790166878384418). The trust gate is the
+    # same per-process nonce check_auth() uses; an EL-shaped caller still loses its system message.
+    _carried = ""
+    if hmac.compare_digest(request.headers.get("X-Arturo-Internal", ""), _INTERNAL_NONCE):
+        # At most ONE, and only the first: the caller sends exactly one (ptt.build_messages puts it
+        # at index 0). Taking only the first keeps "history never holds a system role" enforced here
+        # rather than merely assumed of every future history path.
+        for _m in messages:
+            if _m.get("role") != "system":
+                continue
+            _c = _m.get("content")
+            # Multimodal content arrives as a list; str-only, because reading a list as text raises
+            # inside a public Funnel ingress handler and turns a legal request into a 500.
+            if isinstance(_c, str) and _c.strip():
+                # Cap: not a security boundary (this caller is already trusted) — it stops a runaway
+                # directive from crowding out the live context built just above. 8000 chars is ~2x
+                # the largest directive onboarding.py can emit, and well under build_context()'s own
+                # ~16 KB, so the handler's live state always dominates.
+                _carried = _c.strip()[:8000]
+            break
     # Semantic recall (DEC-1788771883922080, BUILD-AND-HOLD): <=250-token paths-only RECALL
     # block appended to the per-turn context. Env-gated BEFORE the import so flag-off boots
     # byte-identical (metadata-absent requests default to channel 'voice' — the flag, not the
@@ -3440,6 +3613,11 @@ def chat_completions():
                     context += "\n\n" + _rb
         except Exception as _rbe:
             log.error(f"stream-relay replay seam error (non-fatal): {_rbe}")
+    # Last, after every preamble seam above (semantic recall, facts recall, stream-relay replay), so
+    # the per-turn instruction is the most recent thing in the context and no later seam buries it.
+    if _carried:
+        context += "\n\n" + _carried
+        log.info(f"trusted system delta carried: {len(_carried)} chars")   # length only — it can name a seat
     final_messages = [{"role": "system", "content": context}]
     # Trim conversation to last 20 messages to prevent tool dropout
     if len(non_system) > 20:
@@ -3658,6 +3836,10 @@ def chat_completions():
                 # model repeating an identical SIDE-EFFECTING call across tool
                 # rounds executes it once (the operator watched 3x inject into v2's pane).
                 _dedup = _voice_guards.ToolDedupLedger()
+                # Publish it for the turn so handler-level dispatches (_dispatch_guarded) share the
+                # same ledger rather than bypassing it. Set, never reset: the ContextVar is per
+                # request context, and generate() owns the turn.
+                _TURN_DEDUP.set(_dedup)
 
                 # Leg-3 pacing heartbeat (msg_b82abb4f item 3, the operator's verbatim
                 # cadence): ONE per-turn policy object — informative re-pings at
@@ -3700,17 +3882,21 @@ def chat_completions():
                     for tc in tool_calls:
                         fn_name = tc.function.name
                         fn_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
-                        _prior = _dedup.check(fn_name, fn_args)
+                        # RESERVE, not check: this loop decides for EVERY tool_call in the round
+                        # before the second loop records any result, so a check-then-record ledger
+                        # let a same-round twin through. reserve() claims the key here
+                        # (DEC-1790305211739337).
+                        _prior = _dedup.reserve(fn_name, fn_args)
                         if _prior is not None:
-                            log.warning(f"DUP-CALL SUPPRESSED: {fn_name} repeated with "
-                                        f"identical args this turn — not re-executed")
-                            workers_and_holders.append((tc, fn_name, fn_args, None, {"r": _prior}))
+                            log.warning(f"DUP-CALL SUPPRESSED: {fn_name} not re-executed this turn. "
+                                        f"reason={_prior[:90]!r} args={_dedup_argsum(fn_args)}")
+                            workers_and_holders.append((tc, fn_name, fn_args, None, {"r": _prior}, True))
                         else:
                             _worker, _holder = _spawn_tool_worker(fn_name, fn_args,
                                                                   user_turns=_q0_user_turns)
-                            workers_and_holders.append((tc, fn_name, fn_args, _worker, _holder))
+                            workers_and_holders.append((tc, fn_name, fn_args, _worker, _holder, False))
 
-                    for tc, fn_name, fn_args, _worker, _holder in workers_and_holders:
+                    for tc, fn_name, fn_args, _worker, _holder, _suppressed in workers_and_holders:
                         while _worker is not None:
                             _worker.join(timeout=0.5)
                             if not _worker.is_alive():
@@ -3725,7 +3911,14 @@ def chat_completions():
                         if "r" not in _holder:      # AGY pass: abnormal worker death
                             raise RuntimeError(f"tool worker died without result: {fn_name}")
                         result = _holder["r"]
-                        _dedup.record(fn_name, fn_args, result)
+                        # Do NOT record a SUPPRESSED call. Its "result" IS the replay message, so
+                        # recording it overwrites the stored first result with a message quoting
+                        # itself; by the fourth reworded call the original result has been pushed
+                        # past record()'s 300-char cap and "a retry returns the first result" (gm)
+                        # quietly stops holding — at exactly the three-call shape of the incident
+                        # this guard exists for (peer NIT, congruence round 2).
+                        if not _suppressed:
+                            _dedup.record(fn_name, fn_args, result)
                         log.info(f"Tool result ({fn_name}): {result[:200]}")
                         tool_results.append({
                             "role": "tool",
@@ -4045,6 +4238,43 @@ def ptt_endpoint():
     return jsonify(result), code
 
 
+@app.route("/transcribe", methods=["POST"])
+def transcribe_endpoint():
+    """Item C — web composer dictation, transcribe ONLY (no brain, no TTS, no history, no journal):
+    the user reads the text and taps send. LOOPBACK-ONLY like /ptt: the gateway authenticates and
+    forwards. 200 {ok,text,backend,ms} | 422 no_speech | 400/413 bad clip | 503 stt_unavailable
+    (reason warming | not-installed | off | error, + install command) | 504 timeout."""
+    remote = request.remote_addr or ""
+    if remote not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+        return jsonify({"ok": False, "error": "loopback only"}), 403
+    f = request.files.get("audio")
+    if f is None:
+        return jsonify({"ok": False, "error": "audio field required"}), 400
+    audio_bytes = f.read()
+    ok, err = _ptt.validate_transcribe_audio(len(audio_bytes), f.content_type or "")
+    if not ok:
+        return jsonify({"ok": False, "error": err}), (413 if err == "too_large" else 400)
+    try:
+        r = _local_stt.transcribe(audio_bytes, f.filename or "audio.webm", f.content_type or "")
+    except _local_stt.SttUnavailable as e:
+        st = e.state
+        return jsonify({"ok": False, "error": "stt_unavailable", "reason": st.get("state"),
+                        "detail": e.reason, "install": st.get("install")}), 503
+    except _local_stt.WavRequired as e:
+        # The default engine takes 16-bit PCM WAV (the browser encodes it); a raw container clip
+        # only works on the opt-in faster-whisper engine.
+        return jsonify({"ok": False, "error": "wav_required", "detail": str(e),
+                        "install": _local_stt.INSTALL_CMD_BETTER}), 415
+    except TimeoutError as e:
+        return jsonify({"ok": False, "error": "timeout", "detail": str(e)}), 504
+    except Exception as e:  # noqa: BLE001
+        log.warning(f"transcribe: local STT failed: {e}")
+        return jsonify({"ok": False, "error": "stt_failed"}), 502
+    if not r["text"]:
+        return jsonify({"ok": False, "error": "no_speech", "ms": r["ms"]}), 422
+    return jsonify({"ok": True, "text": r["text"], "backend": r["backend"], "engine": r.get("engine"), "model": r["model"], "ms": r["ms"]}), 200
+
+
 # --- v2/(b) stream relay routes (registered ONLY when ARTURO_STREAM_RELAY=1 — flag-off the
 # proxy serves 404 on these paths, byte-identical to today) ---
 if _STREAM_RELAY is not None:
@@ -4222,6 +4452,7 @@ def _brain_reply(messages, conversation_id):
     """One trip through the tool-enabled chat path. Returns (reply_text, tools_called).
     Extracted so the turn's THREADING can be tested without a brain."""
     token = _TOOLS_THIS_TURN.set([])
+    spawn_token = _SPAWNED_THIS_TURN.set([])
     try:
         with app.test_client() as c:
             r = c.post("/v1/chat/completions", json={"messages": messages, "stream": False,
@@ -4229,12 +4460,14 @@ def _brain_reply(messages, conversation_id):
                        headers={"X-Arturo-Internal": _INTERNAL_NONCE})
             body = r.get_json(silent=True) or {}
         tools_called = [t.get("tool", "?") for t in (_TOOLS_THIS_TURN.get() or [])]
+        spawned = list(_SPAWNED_THIS_TURN.get() or [])
     finally:
         _TOOLS_THIS_TURN.reset(token)
+        _SPAWNED_THIS_TURN.reset(spawn_token)
     if r.status_code != 200:
         raise _BrainHttpError(r.status_code, body)
     reply = ((body.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-    return reply, tools_called
+    return reply, tools_called, spawned
 
 
 def text_turn(text, conversation_id):
@@ -4245,7 +4478,29 @@ def text_turn(text, conversation_id):
     if len(text) > 8000:
         return 413, {"ok": False, "error": "too_large"}
     conversation_id = (conversation_id or "").strip()[:200] or f"text_{int(time.time())}"
-    context = build_context(calling_channel="text")
+    # Onboarding turns carry a first-line marker; the step's directive lives server-side
+    # (services/arturo/onboarding.py) and rides in the system context for THIS turn only.
+    from services.arturo import onboarding as _onb
+    step, text = _onb.split_marker(text)
+    text = text.strip()
+    if not text:
+        return 400, {"ok": False, "error": "empty"}
+    # DELTA ONLY. chat_completions() builds the authoritative context itself and carries this
+    # message on top of it; building a second copy here would send ~16 KB twice per onboarding turn
+    # and admit two copies that can disagree. test_onboarding_seam.py pins this.
+    context = ""
+    # The hierarchy step needs one fact only the server holds: whether a manager already exists.
+    # It is passed as CONTEXT, never through the marker — the marker regex is anchored to the step
+    # name, so appended context would fail to match and leak into the brain message and the archive.
+    _ctx = None
+    if step == "hierarchy":
+        _who, _known = existing_manager()
+        _ctx = {"manager": _who, "manager_known": _known, "seat": (_SPAWNED_THIS_TURN.get() or [None])[0] or _last_spawned_seat()}
+    _dir = _onb.directive(step, _ctx)
+    if _dir:
+        context = f"{context}\n\n{_dir}".strip() if context else _dir
+    elif step:
+        log.warning(f"onboarding marker with unknown step {step!r} — no directive applied")
     history = _TEXT_HISTORY.get(conversation_id)
     if not history:
         # Reopening an OLD thread (or any thread after a restart): memory is empty but the
@@ -4256,14 +4511,20 @@ def text_turn(text, conversation_id):
             _TEXT_HISTORY.append(conversation_id, turn.get("role"), turn.get("content"))
     messages = _ptt.build_messages(context, history, text)
     try:
-        reply, tools_called = _brain_reply(messages, conversation_id)
+        _res = _brain_reply(messages, conversation_id)
+        # Tolerant unpack: a stub (and any older caller) may still return the 2-tuple.
+        reply, tools_called = _res[0], _res[1]
+        spawned = list(_res[2]) if len(_res) > 2 else []
     except _BrainHttpError as e:
         return 502, {"ok": False, "error": f"brain_http_{e.status}", "detail": e.body}
     _TEXT_HISTORY.append(conversation_id, "user", text)
     _TEXT_HISTORY.append(conversation_id, "assistant", reply)
     _THREADS.record_turn(conversation_id, text, reply)
+    from services.arturo import operator_store as _ops
     return 200, {"ok": True, "reply_text": reply, "conversation_id": conversation_id,
-                 "brain": brain.describe(), "tools_called": tools_called}
+                 "brain": brain.describe(), "tools_called": tools_called,
+                 "spawned": spawned,
+                 "operator": _ops.public(ARTURO_STATE)}
 
 
 def _loopback_only():
@@ -4291,7 +4552,11 @@ def thread_detail_endpoint(conversation_id):
         return jsonify({"ok": False, "error": "loopback only"}), 403
     thread = _THREADS.get_thread(conversation_id)
     if thread is None:
-        return jsonify({"ok": False, "error": "not_found"}), 404
+        # A thread that has no turns yet is the NORMAL state the first time the pill opens (the
+        # browser mints the id before anything is said), not an error: 200 with thread=null, so a
+        # fresh install does not log a failed request on every page. Clients already treat a null
+        # thread as "nothing to resume".
+        return jsonify({"ok": True, "thread": None})
     return jsonify({"ok": True, "thread": thread})
 
 
@@ -4326,8 +4591,13 @@ def health():
         # T2/T3: which brain answers turns, and whether voice is even possible on this install.
         "brain": brain.describe(),
         "brain_mode": BRAIN_MODE,
+        # Who the operator is, from the server-side store — every surface (home, pill, iOS)
+        # reads the same name here instead of a per-browser localStorage copy.
+        "operator": __import__("services.arturo.operator_store", fromlist=["public"]).public(ARTURO_STATE),
         "mode": ARTURO_MODE,                       # "voice" | "text-only"
         "voice": bool(VOICE_VENDORS_PRESENT),
+        # item C: can the box transcribe a recorded clip with no vendor key? (web dictation tier 2)
+        "stt": _local_stt.state(),
         "tools": [t["function"]["name"] for t in TOOLS],
         # comm-probe-safe daemon liveness (gm msg_1f417cdd): threads registered at start
         "daemons": sorted(getattr(_STREAM_RELAY, "daemons", None) or []),

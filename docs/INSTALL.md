@@ -12,6 +12,9 @@ short walkthrough, not part of this doc's steps.
 
 ```bash
 sudo apt update && sudo apt install -y git tmux python3 python3-venv build-essential curl iproute2   # iproute2 = `ss`, which `orchestra doctor` needs to attribute ports to its own supervisor
+# build-essential + python3 are not optional: node-pty (the web terminal's native addon) compiles at `npm install`;
+# without them the install used to finish green with the terminal dead. `orchestra doctor` now shows a red
+# `terminal:node-pty` row in that state; remedy: `npm rebuild node-pty` after installing the toolchain.
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs
 ```
 
@@ -52,6 +55,8 @@ runs agy 1.2.6 and codex-cli 0.153.4).
 git clone https://github.com/Tulum-DAO/orchestraos.git orchestraos && cd orchestraos
 make install                 # symlinks bin/orchestra into ~/.local/bin
 ./bin/orchestra init         # data dir (~/.orchestra), orchestra.toml, .venv + pip, npm install, builds;
+                             #   mic dictation works in every browser out of the box (~99 MB model, background);
+                             #   --stt adds the better faster-whisper engine (+~500 MB, see docs/ARTURO.md)
                              # shows the Claude hook rows it will add to ~/.claude/settings.json and asks (or --yes)
 $EDITOR orchestra.toml       # set [runtimes] enabled to the CLI you logged in to, e.g. ["claude"]
 ./bin/orchestra doctor       # every row OK (WARN/INFO rows are advisory); exit code 0
@@ -120,8 +125,9 @@ The one-command way: `orchestra spawn` registers the seat in the data-dir regist
 new) and launches it in tmux with the install env carried into the pane.
 
 ```bash
-orchestra spawn gm --gm                  # the General Manager: prompts/gm.md, tier T1, always-on
+orchestra spawn gm --gm                  # the General Manager: prompts/gm.md, tier T0, always-on
 orchestra spawn hello --task "Say hello, then park."   # a worker seat (prompts/hello.md if present)
+orchestra agent create dev-x --template dev --parent pm-y --set PROJECT=demo   # one verb: fill the role template (refuses an unfilled {TOKEN}), record the parent, validate runtime/model, spawn, verify ALIVE
 tmux attach -t gm                        # talk to it; detach with Ctrl-B D
 ```
 

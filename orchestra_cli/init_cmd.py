@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-from .settings import DEFAULT_DATA_DIR, read_toml, resolve_data_dir
+from .settings import _get, DEFAULT_DATA_DIR, read_toml, resolve_data_dir
 
 DATA_SUBDIRS = ("state", "logs", "queue", "state/event-stream", "state/uploads",
                 "state/arturo", "logs/arturo", "state/agent-handoffs",
@@ -179,7 +179,7 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
              skip_npm: bool = False, skip_venv: bool = False, skip_build: bool = False,
              config_path: Optional[Path] = None, demo: bool = False,
              yes: bool = False, confirm: Optional[Callable[[str], bool]] = None,
-             interactive: Optional[bool] = None) -> list:
+             interactive: Optional[bool] = None, stt: bool = False) -> list:
     """yes / $ORCHESTRA_YES=1: write the Claude settings hooks without asking. confirm(plan) -> bool:
     the prompt (tests inject one; the CLI reads a y/N from the terminal). interactive=None:
     detect a TTY; False: never prompt (a non-interactive run without --yes SKIPS the hooks)."""
@@ -242,6 +242,17 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
         ok = _git_init_data_dir(data_dir, run)
         report.append(Step("data-git", ok, f"git init {data_dir} (audit trail for handoffs + readbacks)" if ok
                            else "git init failed (rotation promotion will refuse until the data dir is a repo)"))
+
+    # 4c. the repo ships .git-hooks/pre-push (detect-secrets scan) but a fresh clone has
+    # core.hooksPath unset, so the hook is OFF for everyone who did not read its header.
+    # init is the one command every clone runs: wire it here. Skipped (not failed) when the
+    # root is not a git checkout (tarball / demo box) or ships no .git-hooks.
+    if (repo_root / ".git").exists() and (repo_root / ".git-hooks").is_dir():
+        rc = run(["git", "-C", str(repo_root), "config", "core.hooksPath", ".git-hooks"], cwd=repo_root)
+        report.append(Step("git-hooks", rc == 0, "core.hooksPath=.git-hooks (pre-push secret scan)" if rc == 0
+                           else f"git config core.hooksPath failed rc={rc}"))
+    else:
+        report.append(Step("git-hooks", False, "skipped (not a git checkout)"))
 
     # 5. gateway bearer token
     tok = data_dir / "state" / "watch-gateway-token"
@@ -336,6 +347,74 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
                 if rc == 0:
                     stamp.write_text(digest)
                 report.append(Step("pip", rc == 0, "installed requirements.txt" if rc == 0 else f"pip failed rc={rc}"))
+
+    # 6a. Default local speech-to-text (P1-a): requirements-speech.txt (sherpa-onnx) in a SECOND,
+    # SOFT-FAIL pip step — a platform without a wheel still boots — then the ~99 MB whisper tiny.en
+    # model in the foreground (non-fatal offline: the proxy retries in the background at `orchestra up`).
+    # ORCHESTRA_SKIP_MODEL_FETCH=1 (the default Docker image) installs the wheel but leaves the fetch to
+    # the first `orchestra up`, so the image does not carry the model unless WITH_STT=1 asks for it.
+    req_speech = repo_root / "requirements-speech.txt"
+    if skip_venv:
+        report.append(Step("pip:speech", False, "skipped (--no-venv)"))
+    elif not req_speech.exists():
+        report.append(Step("pip:speech", False, "no requirements-speech.txt"))
+    else:
+        import hashlib
+        stamp_sp = venv / ".requirements-speech.sha"
+        digest = hashlib.sha256(req_speech.read_bytes()).hexdigest()
+        if stamp_sp.exists() and stamp_sp.read_text().strip() == digest:
+            report.append(Step("pip:speech", False, "speech engine present"))
+            rc = 0
+        else:
+            rc = run([str(venv / "bin" / "python"), "-m", "pip", "install", "-q", "-r", str(req_speech)], cwd=repo_root)
+            if rc == 0:
+                stamp_sp.write_text(digest)
+            report.append(Step("pip:speech", rc == 0, "installed requirements-speech.txt (sherpa-onnx)" if rc == 0
+                               else f"pip failed rc={rc} — no wheel for this platform? the mic still dictates on-device in Chrome/Edge/Safari"))
+        if rc == 0 and os.environ.get("ORCHESTRA_SKIP_MODEL_FETCH", "") not in ("", "0"):
+            report.append(Step("stt:model", False, "fetch deferred to the first `orchestra up` (ORCHESTRA_SKIP_MODEL_FETCH)"))
+        elif rc == 0:
+            sp_env = dict(os.environ, ORCHESTRA_DIR=str(data_dir), PYTHONPATH=str(repo_root))
+            rc2 = run([str(venv / "bin" / "python"), "-c",
+                       "import sys; from services.arturo import local_stt as l; "
+                       "ok = l.prefetch(blocking=True, engine='sherpa'); print(l.state()); sys.exit(0 if ok else 1)"],
+                      cwd=repo_root, env=sp_env)
+            report.append(Step("stt:model", rc2 == 0,
+                               f"speech model ready in {data_dir / 'models' / 'sherpa'}" if rc2 == 0
+                               else "speech model download failed (offline?) — it retries in the background at `orchestra up`"))
+
+    # 6b. --stt / [arturo] local_stt = true: the OPT-IN local speech-to-text extra (item C). Installs
+    # requirements-stt.txt into the same venv (stamped like requirements.txt) and fetches the speech
+    # model now, in the foreground, so the first mic tap never waits on a download.
+    want_stt = stt or bool(_get(raw, "arturo", "local_stt", False))
+    if want_stt and skip_venv:
+        report.append(Step("pip:stt", False, "skipped (--no-venv)"))
+    elif want_stt:
+        req_stt = repo_root / "requirements-stt.txt"
+        if not req_stt.exists():
+            report.append(Step("pip:stt", False, "no requirements-stt.txt"))
+        else:
+            import hashlib
+            stamp_stt = venv / ".requirements-stt.sha"
+            digest = hashlib.sha256(req_stt.read_bytes()).hexdigest()
+            if stamp_stt.exists() and stamp_stt.read_text().strip() == digest:
+                report.append(Step("pip:stt", False, "local speech-to-text present"))
+                rc = 0
+            else:
+                rc = run([str(venv / "bin" / "python"), "-m", "pip", "install", "-q", "-r", str(req_stt)], cwd=repo_root)
+                if rc == 0:
+                    stamp_stt.write_text(digest)
+                report.append(Step("pip:stt", rc == 0, "installed requirements-stt.txt (faster-whisper)" if rc == 0
+                                   else f"pip failed rc={rc}"))
+            if rc == 0:
+                stt_env = dict(os.environ, ORCHESTRA_DIR=str(data_dir), PYTHONPATH=str(repo_root))
+                rc = run([str(venv / "bin" / "python"), "-c",
+                          "import sys; from services.arturo import local_stt as l; "
+                          "ok = l.prefetch(blocking=True, engine='faster-whisper'); print(l.state()); sys.exit(0 if ok else 1)"],
+                         cwd=repo_root, env=stt_env)
+                report.append(Step("stt:model:faster-whisper", rc == 0,
+                                   f"faster-whisper model ready in {data_dir / 'models' / 'whisper'}" if rc == 0
+                                   else "faster-whisper model download failed (offline?) — it retries in the background at `orchestra up`"))
 
     # 7. npm installs (root = dashboard-proxy deps, api, dashboard)
     for label, sub in (("root", ""), ("api", "api"), ("dashboard", "dashboard")):

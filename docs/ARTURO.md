@@ -78,6 +78,28 @@ back into the OpenAI response shape (`choices[0].message.tool_calls[i].function.
 untouched. Fenced or prose-wrapped envelopes are tolerated; a reply with no envelope
 is plain text.
 
+**codex is the one exception.** Measured 2026-09-19: codex never honoured the prose
+envelope (0/3), and twice fabricated a completed action with no tool call in the
+transcript. `codex exec` alone among the three CLIs accepts `--output-schema <FILE>`,
+which constrains its final response to a JSON Schema — paired with the same `## Tools`
+prompt block this is reliable (5/5, then 3/3 + a negative control through the real
+`RuntimeBrain` code path). Only the codex branch of `runtime_command` sets this flag;
+claude and gemini are untouched. Two schema files ship in `services/arturo/`:
+`codex_tool_schema.json` (general — `tool_calls` may be empty) is used for every turn
+with tools, and `codex_tool_schema_required.json` (`tool_calls.minItems: 1`) replaces
+it only when `tool_choice="required"` — the prompt's own "you must call a tool" wording
+is a request the model can still ignore (measured 1/3 clean); `minItems` is an API-
+enforced structural guarantee. OpenAI strict mode requires `additionalProperties:false`
+on every object, which makes a free-form `arguments` object illegal, so the codex
+envelope carries `arguments_json` (a JSON-encoded string) instead of `arguments`;
+`parse_cli_reply` decodes it into the same shape the other two runtimes produce. A
+turn with no tools never gets `--output-schema` at all, so a plain conversational
+reply stays prose instead of becoming a forced `{"tool_calls":[],"text":"..."}`
+envelope. See `services/arturo/probe_codex_parity.py` for the by-effect proof — run it
+against a `CODEX_HOME` that holds only `auth.json` (+ a minimal `config.toml`), not an
+interactive fleet install whose own hooks intercept spawn-shaped turns before codex
+ever sees them.
+
 ## Text turn — the path every UI uses
 
 ```
@@ -101,7 +123,8 @@ browser / iOS
 
 `mode` is `voice` when any of `ELEVENLABS_API_KEY` / `CARTESIA_API_KEY` /
 `HUME_API_KEY` / `GEMINI_API_KEY` is present, else `text-only`. A text-only install
-disables the mic and voice circle on the home; the `/ptt*` voice routes still exist
+disables the voice-call circle on the home (the Mic button still DICTATES — see
+§ Dictation below); the `/ptt*` voice routes still exist
 and refuse vendor-less calls visibly.
 
 ## Commissioning an agent
@@ -132,19 +155,32 @@ Mac targets keep the legacy raw-tmux spawn (spawn-agent.sh is a server-side scri
 
 ### Onboarding (the first thread)
 
-Driven by `localStorage` keys `orchestra.arturo.name` and
-`orchestra.arturo.onboarded`; clear them to run it again.
+The operator's name is **server state**: `services/arturo/operator_store.py` writes
+`<ARTURO_STATE>/operator.json`, `/health` and every `/text` reply carry
+`operator: {name, …}`, and every surface reads it there. `localStorage`
+`orchestra.arturo.name` is only a cache for the first paint;
+`orchestra.arturo.onboarded` marks a browser that finished the thread. Clear both
+and delete `operator.json` to run onboarding again.
 
-1. **name** — "What should I call you?" (used in the greeting).
-2. **runtime detect** — reads `/api/runtimes/available` + `/api/arturo/health`;
-   if nothing is logged in you get the exact commands and a *Check again* card.
-3. **voice** — *Text is fine* / *I will add a voice key* decision card (free-text row
-   included), only shown in text-only mode.
+1. **runtime detect** — reads `/api/runtimes/available` + `/api/arturo/health`; if
+   nothing is logged in you get a terminal here and a *Check again* card. A brain must
+   exist before it is asked to listen, so this runs first.
+2. **name** — "What should I call you?" is a **brain turn**. The page sends the reply
+   with a first-line marker `[Onboarding: step=name]`; the proxy strips it and adds the
+   step's directive (`services/arturo/onboarding.py`) to the system context for that turn.
+   The brain understands the reply — typed or dictated, any phrasing, any language —
+   and records it with the `set_operator_fact` tool, or asks again in its own words.
+   The page advances when `tools_called` includes `set_operator_fact` (the same rule
+   the first-agent step uses for `spawn_agent`). Nothing parses a name on the client,
+   and a browser the server already knows is never asked twice.
+3. **voice** — the mic already dictates with no key; the card asks whether Arturo
+   should talk *back* (vendor key) or stay text-only. Only shown in text-only mode.
 4. **first agent** — "What should your first agent do?" → your answer is sent as a
-   commission; when `spawn_agent` ran, the thread flips to ordinary chat.
+   commission; the brain picks the seat name and runs `spawn_agent`; when it ran, the
+   thread flips to ordinary chat.
 
 Pairing (Track 1) is not in the web thread yet; the iOS thread adds it between
-steps 1 and 2 when it lands.
+steps 1 and 2 when it lands, and reads the name from `/health` like the web does.
 
 ## Paths, config keys, env — the index
 
@@ -194,3 +230,55 @@ response shape arturo-proxy already reads (choices[0].message.content /
 Before you start: `orchestra doctor` must show arturo:brain, and
 `curl -s localhost:5071/health | jq .brain` must match it.
 ```
+
+
+## Dictation — the Mic button works with no vendor key, in every browser
+
+The Mic button in every Arturo composer (the home and the *Ask Arturo* pill) turns speech
+into text in the box. You read it, then tap send. It never needs ElevenLabs, Hume or any
+key, and there is nothing to decide or install: transcription is on straight out of the box.
+Three tiers, chosen per tap:
+
+1. **On-device speech (Chrome, Edge, Safari, Samsung Internet).** The browser's own
+   recognizer; words appear live while you talk. Chrome sends the audio to Google for
+   this, so it needs internet even though it needs no key.
+2. **Record, then transcribe on the box (everything else — Firefox, Chrome on iPhone,
+   Brave, keyless Chromium).** The browser records a clip, decodes it itself to 16 kHz WAV,
+   and the box transcribes it with a local Whisper model (`whisper tiny.en`, int8, via
+   sherpa-onnx) on its own CPU. About a third of a second per sentence; punctuation and
+   capitals come out right. What it costs: the sherpa-onnx wheel (~15 MB, part of
+   `orchestra init`) and a one-time ~99 MB model download into `<data dir>/models/sherpa`,
+   fetched in the background at `orchestra init` and retried at every `orchestra up`. Until it
+   is on disk the button says so in plain words; nothing is ever downloaded inside a request.
+   Clips longer than 28 s are split at the quietest point and joined (Whisper decodes 30 s at
+   a time). Options:
+   - `ARTURO_LOCAL_STT_MODEL=zipformer-small-en` — a 27 MB model for constrained boxes,
+     3x faster, same accuracy on natural speech, **but it outputs ALL CAPS with no punctuation
+     and is weak on synthetic or unusual voices.** Not the default anywhere.
+   - `./bin/orchestra init --stt` — adds **faster-whisper** (`base.en` by default,
+     `ARTURO_LOCAL_STT_MODEL=small.en` for the best quality), the better engine: +~365 MB in
+     `.venv` plus its own model. Once installed it is chosen automatically
+     (`ARTURO_LOCAL_STT_ENGINE=auto|faster-whisper|sherpa` overrides).
+   - `ARTURO_LOCAL_STT=0` switches server dictation off.
+   `orchestra doctor` shows `arturo:local-stt` = ready (engine + model) / warming / not
+   installed (the wheel had no build for this platform — Chrome/Edge/Safari still dictate).
+3. **Neither.** The button stays tappable and tells you exactly which of the above to
+   fix. It is never silently dead.
+
+**HTTPS is required for the microphone** in every browser, except on `localhost`. If
+your dashboard is bound to a LAN or VPN address over plain `http://`, no browser will
+open the mic. Put it behind `tailscale serve` or a TLS reverse proxy; `orchestra doctor`
+adds a `dashboard:https` note when the bind address is not loopback.
+
+Endpoint (browser → api → gateway → :5071, all bearer-guarded like `/text`):
+
+```
+POST /api/arturo/transcribe   multipart audio=<clip>   (wav from the browser; webm/mp4/ogg accepted; 10 MB cap)
+  200 {ok:true, text, backend:"local-whisper", engine:"sherpa"|"faster-whisper", model, ms}
+  422 no_speech · 415 wav_required (default engine, undecodable clip) · 503 stt_unavailable
+      {reason: warming|not-installed|off|error, install} · 400/413 bad or oversized clip
+  504 timeout (25 s on the box, 35 s gateway, 40 s api; queue wait is not charged to a clip)
+```
+
+The watch push-to-talk path (`/ptt`) is separate and unchanged: it still uses the vendor
+speech-to-text order and needs a voice key for the spoken reply.

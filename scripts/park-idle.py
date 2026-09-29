@@ -352,7 +352,7 @@ def _parse_iso(ts):
         return None
 
 
-def shaw_viewing_agent(name, presence, now=None, grace=VIEW_GRACE_S) -> bool:
+def operator_viewing_agent(name, presence, now=None, grace=VIEW_GRACE_S) -> bool:
     """8b — True iff the operator is viewing THIS agent in the app/phone now or within
     `grace` seconds. FAIL-OPEN: absent/stale/malformed signal => False (a missing
     focus signal must NEVER block retires fleet-wide — positive-signal rule).
@@ -422,7 +422,7 @@ def composer_has_typed_text(pane_ansi: str) -> bool:
 
 def classify(name, entry, in_registry, always_on, is_attached,
              live, meta, pane_plain, pane_ansi,
-             has_uncommitted_work=False, shaw_viewing=False, state_age_s=None,
+             has_uncommitted_work=False, operator_viewing=False, state_age_s=None,
              own_work_at_risk=False):
     """Pure classifier → (category, reason). Categories:
       PROTECTED, ATTACHED, HELD, PENDING_WORK,
@@ -432,7 +432,7 @@ def classify(name, entry, in_registry, always_on, is_attached,
     Gap 8 signals (pure; computed by main() / the daemon and passed in — never
     IO here):
       has_uncommitted_work : 8a — cwd git repo dirty/unpushed/unreadable (fail-safe)
-      shaw_viewing         : 8b — the operator viewing this agent in app/phone (fail-open)
+      operator_viewing         : 8b — the operator viewing this agent in app/phone (fail-open)
       state_age_s          : 8c — seconds since last activity (None => unknown)
 
     A-with-guard (H7, DEC-1786724046): for a SUPERSEDED agent whose live head
@@ -460,7 +460,7 @@ def classify(name, entry, in_registry, always_on, is_attached,
     # --- 8b/8c stay AHEAD of the override (monotonic — apply to ALL agents,
     # superseded or not; a live-work signal always beats the override).
     # 8b: the operator viewing in the OrchestraOS app / iPhone (fail-open when absent).
-    if shaw_viewing:
+    if operator_viewing:
         return ("HELD", "the operator viewing in app")
     # 8c: momentarily idle between turns after real work — recent-activity cooldown.
     if state_age_s is not None and state_age_s < RECENT_WORK_COOLDOWN_S:
@@ -678,7 +678,7 @@ def main():
             bool(reg_agents.get(name, {}).get("always_on")),
             attached.get(name, False), live, meta, pane_plain, pane_ansi,
             has_uncommitted_work=cwd_has_uncommitted_work(cwd),   # 8a
-            shaw_viewing=shaw_viewing_agent(name, presence),      # 8b (fail-open)
+            operator_viewing=operator_viewing_agent(name, presence),      # 8b (fail-open)
             state_age_s=session_activity_age(name),               # 8c
         )
         rss = claude_rss_mb(name)
