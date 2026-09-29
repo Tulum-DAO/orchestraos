@@ -600,55 +600,63 @@ limits, webhook safety, and observability, none of which depend on the
 offset-advance framing that was wrong. Still open, still recommended as
 written.
 
-**Why this correction matters beyond the one bug — updated, a fourth layer
-found a fourth instance, and it sharpens rather than just repeats the
-lesson above.** A second commit, `a062d57` (`fix(telegram): a failed
-attachment download no longer vanishes the message`), landed after this
-section was first written — verified directly (commit + diff read in
-full), not taken on build's word. It fixes the **same defect class**
-(silent, permanent message loss) at a **different site**: `download_file()`
-swallows its own exception and returns `None`, so a photo-only message
-whose download failed ended up with empty text, hit `if not text: return`,
-and was confirmed as a clean success — silent loss reached by a path that
-never raises, which means `b834241`'s retry/step-over machinery (built for
-the offset bug) could not see it at all. **This was found by the `review`
-seat auditing build's own implementation, not by build, and not by this
-brief** — build's own commit message says so plainly: "My earlier commit
-message overclaimed coverage on this specific route."
+**Why this correction matters beyond the one bug — rewritten a second time,
+because the first rewrite ("four layers, no single one catches everything")
+was itself still understated, and counting layers turned out to be the
+wrong frame entirely.** Two more commits landed after this section was
+first written, each verified directly (commit + diff read in full, not
+taken on build's word):
 
-**The accurate sequence, now four layers deep, is stronger evidence than
-"three layers, implementer catches the rest":** external adversarial
-review found the offset bug → this seat confirmed it → build's
-implementation caught the existing-test contradiction the first two
-missed → `review`, auditing that implementation, caught a *second*,
-independent instance of the same defect class that build's own fix
-couldn't see. **No single layer — including the implementer — closed the
-whole defect class. Each layer caught something real and missed something
-else real.** That is the honest lesson, not "the implementer is where it
-finally gets caught."
+- `a062d57` (`fix(telegram): a failed attachment download no longer
+  vanishes the message`) — `download_file()` swallows its own exception and
+  returns `None`, so a photo-only message whose download failed hit
+  `if not text: return` and was confirmed as a clean success. Found by the
+  `review` seat auditing build's own implementation, not by build and not
+  by this brief — build's commit message says so plainly.
+- `649cb44` (`fix(telegram): an unrenderable message type no longer
+  vanishes silently`, "F5") — `handle_message`'s attachment loop only
+  enumerates photo/document/voice/video/audio; a message whose sole content
+  is any other kind (sticker, GIF, round video, location, poll...) never
+  even attempts a download, so there's no failure for the *previous* fix to
+  record either — same `if not text: return`, same silent loss, a *third*
+  distinct route to the same outcome in the same function. Found by
+  `review` auditing the *previous* fix, not the original bug.
 
-**The fix confirms the transient-vs-permanent axis generalizes, not just
-applies once:** `b834241` retries transient failures and never confirms
-them until they succeed. `a062d57` deliberately does **not** retry a failed
-download — verified in its own commit message's stated reasoning — because
-a permanently unfetchable file (the Bot API's 20MB limit being the obvious
-case) would head-of-line-block real traffic for the whole retry budget;
-it delivers a flagged placeholder (`"[download failed — ask the operator to
-resend]"`) instead. Same class, opposite correct handling, same axis:
-**can retrying this specific failure ever succeed?** If yes, retry and
-never confirm. If no, confirm immediately and make the failure visible.
-This is now confirmed across two independent call sites in the same file,
-not asserted from one.
+**The honest version of this lesson is not a number of layers — it's that
+the defect class survived a declared "this is fixed" four separate times,
+and what actually exhausted it was re-reviewing each fix, not re-reviewing
+the original bug.** External review found the offset bug. This seat
+confirmed it. Build's implementation caught an existing-test contradiction
+the first two passes missed. Review, auditing that implementation, found a
+second silent-loss route. Review, auditing *that* fix, found a third. Each
+pass found something real by checking the pass before it, not by re-deriving
+from the original finding — which is a different and more useful discipline
+than "more review layers eventually catch everything."
 
-**Implementation Tasks note:** `a062d57` is a real fix, reviewed and cleared
-per `docs/HANDOFF_review-next.md` (verified: "review CLEARS the F1
-attachment-placeholder fix (a062d57)") and merged via `58d1fb7` — not a new
-open task for this brief; recorded here for the same reason `b834241` was,
-as ground truth this brief's own recommendations should be read against,
-not as new scope. Given the pace of parallel fixes landing in this same
-codepath family, this brief does not attempt to track every subsequent one
-in real time — flag any further instance to this seat explicitly rather
-than expecting it to notice unprompted.
+**The transient-vs-permanent axis is not just generalizing across call
+sites — it's the actual decision rule selecting between three different
+correct answers to the same defect class:** the P0 fix retries transient
+failures and never confirms until they succeed. The attachment-download fix
+deliberately does *not* retry (a file over the Bot API's 20MB limit will
+never succeed no matter how many attempts) — it confirms immediately and
+delivers a flagged placeholder instead. The unrenderable-type fix has
+*nothing to retry at all* (no download was ever attempted) — it's a pure
+catch-all that names what arrived and confirms. Three routes, three
+different right answers, all selected by one question: **can retrying this
+specific failure ever succeed?** That's a stronger claim than "the axis
+generalizes" — it's the axis doing real selection work across genuinely
+different failure shapes, not just recurring.
+
+**Implementation Tasks note:** both `a062d57` and `649cb44` are real,
+review-cleared fixes (verified: `docs/HANDOFF_review-next.md` records both
+clearances) — `649cb44` is not yet merged to `main` as of this writing
+(confirmed via `git merge-base --is-ancestor`); cite the commit directly,
+not a merge commit, if this brief is read before that lands. Neither is new
+open scope for this brief; recorded as ground truth this brief's own
+recommendations should be read against. **This brief will not chase further
+instances of this defect class in real time** — build has said this is the
+last one currently known, and this seat's own stated policy stands: flag
+any future instance explicitly, don't expect it noticed unprompted.
 
 ### 7.6 What stays exactly as recommended before this review landed
 
@@ -1316,7 +1324,7 @@ Outside Voice             | reused from CEO review (same document, same pass)
 | Outside Review | native Claude subagent (Plan, read-only, dispatched via Agent tool — Codex CLI present but not probed/authenticated in this non-interactive seat) | Independent 2nd opinion | 1 | completed, issues_found | 6 findings; 5 integrated and resolved by revising §4/§4a/§5; 1 (Elon/Shaw rationale) already carried as an open operator question, unchanged |
 | Eng Review | `/plan-eng-review` | Architecture & tests (required) | 2 | issues_open | Run 1: path (a) scoped, CEO's CRITICAL GAP corrected, **falsely claimed 0/5 test coverage** (real gap: this seat searched `scripts/` and missed `plugins/telegram/tests/test_router.py`, 17 existing tests — corrected §7.5) + 1 open verification item. **Run 2 (§7): resolved the open item by direct code read — confirmed a real P0 bug, but the proposed fix ("never advance offset on failure") directly contradicted an existing test and was incomplete — build caught this implementing it (§7.5), correct fix splits transient-vs-permanently-malformed failures.** Recommendation refined to "path (a+)"; build's actual fix (commit `b834241`) supersedes this brief's own fix description |
 | External Adversarial Review | operator-sourced PDF, transcribed to `docs/REVIEW_hermes-matrix-telegram-bridge-external.md` | Independent, real-citations technical review (Telegram Bot API, Hermes docs, Matrix spec, mautrix release notes) | 1 | completed, issues_found, reconciled | Endorsed path (a), refined to "path (a+)"; 16 numbered findings, 11-item risk register, reconciled in §7 — this seat independently verified the headline finding (confirmed the bug directly) rather than accepting on citation strength alone; no findings rejected, one scope concern considered and judged appropriate, not excessive (§7.3). **Inherited this brief's own wrong 0-coverage claim [B] without repo access to catch it — not this review's error, but worth noting its finding was only as good as this brief's own facts (§7.5).** |
-| Build (implementer) | commit `b834241` + `docs/HANDOFF_build-next.md` | Ground truth — actually implemented and tested the fix | 1 | completed, corrections found | Fixed the confirmed P0 bug (mutation-tested + live kill-9 drill, message survives without duplication) and, in doing so, caught two real errors in this brief and the external review: the false 0/5-coverage claim, and the incomplete "never advance on failure" fix (breaks an existing, correct test; real fix splits transient vs. permanently-malformed failures) — see §7.5 |
+| Build + Review (implementation + audit chain) | commits `b834241`, `a062d57`, `649cb44` + `docs/HANDOFF_build-next.md` / `docs/HANDOFF_review-next.md` | Ground truth — implemented, then audited, then audited again | 3 fixes / 2 review-of-implementation passes | completed, corrections found each pass | Fixed the confirmed P0 bug (`b834241`, mutation-tested + live kill-9 drill), then two more instances of the same silent-loss defect class found by `review` auditing each successive fix (`a062d57` — failed attachment download; `649cb44` — unrenderable message type), plus the false 0/5-coverage claim in this brief and the external review. See §7.5 — the honest lesson is not a layer count, it's that re-reviewing each fix (not the original bug) is what closed the class. |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | skipped (no UI scope) | — |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | not requested | — |
 
@@ -1332,30 +1340,29 @@ Outside Voice             | reused from CEO review (same document, same pass)
 - **CROSS-MODEL:** not applicable — no completed external-provider review to
   compare against; skip per the skill's own rule for native-fallback-only runs.
 - **VERDICT:** CEO + ENG REVIEW + EXTERNAL ADVERSARIAL REVIEW + BUILD
-  IMPLEMENTATION COMPLETE, RECONCILED INTO "PATH (A+)" — **four** independent
-  corrections landed across this brief's lifecycle, each caught by verifying
-  rather than trusting the layer before it: outside-voice caught a wrong
-  risk assessment in the original draft (§4a); eng review caught that CEO
-  review's own CRITICAL GAP was itself overstated; the external adversarial
-  review correctly predicted, and this seat's direct code read then
-  confirmed, a real P0 message-loss bug in `router.py`; **and build, actually
-  implementing the fix, caught that both this seat's eng review and the
-  external review were wrong about test coverage (17 existing tests, not
-  zero) and that the proposed fix itself was incomplete (§7.5) — the real
-  fix required splitting transient-vs-permanently-malformed failures, which
-  neither review layer surfaced.** Every correction is now integrated. The
-  underlying strategic recommendation has not moved once across all four
-  passes: harden the existing bridge, defer Hermes and Matrix. **This is
-  real validation of the review chain's value, with an honest asterisk**:
-  three review layers (CEO, eng, external adversarial) each added real
-  signal, and none of them alone was sufficient — the actual implementer,
-  checking the fix against the real, existing test suite, is what caught
-  the most consequential and subtle error. Worth carrying forward as an
-  operating lesson (§7.5's closing paragraph), not just a footnote. Ready
-  for the operator's one load-bearing decision (§5, path a vs. b). **Not**
-  a green light to build path (b) — path (a)'s confirmed bug is already
-  fixed and verified (build, commit `b834241`); T3-REVISED/T5/T6/T7/T8
-  (§7.4) remain open, unaffected by this correction.
+  IMPLEMENTATION + REVIEW-OF-IMPLEMENTATION COMPLETE, RECONCILED INTO
+  "PATH (A+)" — corrections landed at every stage of this brief's lifecycle,
+  each caught by verifying the stage before it, not trusting it: outside-
+  voice caught a wrong risk assessment in the original draft (§4a); eng
+  review caught that CEO review's own CRITICAL GAP was itself overstated;
+  the external adversarial review correctly predicted, and this seat's
+  direct code read confirmed, a real P0 message-loss bug in `router.py`;
+  build's implementation caught that eng review and the external review
+  were both wrong about test coverage and that the proposed fix was
+  incomplete; and `review`, auditing build's own fix, found two *further*
+  independent instances of the same silent-loss defect class in the same
+  function (§7.5) — each one found by checking the fix before it, not by
+  re-deriving from the original bug. Every correction is now integrated.
+  The underlying strategic recommendation has not moved once across any of
+  these passes: harden the existing bridge, defer Hermes and Matrix.
+  **The honest lesson (§7.5) is not "how many layers" — it's that this
+  defect class survived a declared "fixed" four separate times, and what
+  actually exhausted it was re-reviewing each fix, not re-reviewing the
+  original finding.** Ready for the operator's one load-bearing decision
+  (§5, path a vs. b). **Not** a green light to build path (b) — path (a)'s
+  known instances of this defect class are fixed and review-cleared
+  (`b834241`, `a062d57`, `649cb44` — the last not yet merged to `main`,
+  §7.5); T3-REVISED/T5/T6/T7/T8 (§7.4) remain open, unaffected.
 
 **UNRESOLVED DECISIONS:**
 - Path (a) vs. path (b) for the Telegram leg — operator decision, §4.2/§5, not
