@@ -212,3 +212,9 @@ def test_strict_brain_reports_not_logged_in():
         assert f["code"] == "brain_failed" and f["reason"] == "not_logged_in" and f["provider"] == "codex"
     finally:
         B.TURN_FAILURE.reset(tok)
+
+
+def test_claude_catalog_offers_opus_5_5():
+    # 2026-09-29: the claude CLI's own default is Opus 5.5 and it accepts --model=claude-opus-5-5,
+    # but the static catalog stopped at Opus 5, so the operator could not pick it explicitly.
+    assert "claude-opus-5-5" in B.load_model_catalog(PROVIDERS)["claude"]

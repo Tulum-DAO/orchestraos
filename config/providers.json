@@ -24,6 +24,20 @@
     "source": "static",
     "static": [
      {
+      "id": "claude-opus-5-5",
+      "label": "Opus 5.5",
+      "capabilities": {
+       "text": true,
+       "image": true,
+       "audio": false,
+       "video": false,
+       "context_window": 200000
+      },
+      "capabilities_unverified": [
+       "video"
+      ]
+     },
+     {
       "id": "claude-fable-5-1",
       "label": "Fable 5.1",
       "capabilities": {
