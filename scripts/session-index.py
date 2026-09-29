@@ -12,8 +12,10 @@ Usage:
     # Update a single agent entry. NOTE: spawn-agent.sh does NOT call this — the
     # claim that it did went unchallenged while state/agent-sessions.json sat empty
     # from 2026-09-19, silently breaking every transcript reader. Freshness now comes
-    # from the `session_index` supervisor beat running `scan`; callers today are
-    # agent-recovery.sh and promote_successor.py.
+    # from the `session_index` supervisor beat running `scan`. Verified 2026-09-29:
+    # NOTHING in the repo invokes `update` — every other mention of session-index is
+    # prose. Its READERS are the /field dashboard, gm spawn/resume, agent-recovery.sh
+    # and promote_successor.py; those read the index, they do not call this.
     python3 session-index.py update <agent_id> [--session-id X] [--cwd X] [--prompt X] [--summary "X"]
 
     # Lookup a single agent
