@@ -100,9 +100,9 @@ function VoiceCallInner({ pmId, agentId, onClose }: Props) {
             'w-14 h-14 rounded-full flex items-center justify-center shadow-xl transition-all',
             isConnected
               ? isSpeaking
-                ? 'bg-green-600 scale-110 shadow-green-500/40 animate-pulse'
+                ? 'bg-green-600 scale-110 shadow-green-500/40 motion-safe:animate-pulse'
                 : 'bg-green-700 shadow-green-500/20'
-              : 'bg-neutral-700 animate-pulse'
+              : 'bg-neutral-700 motion-safe:animate-pulse'
           )}
         >
           {isSpeaking ? <Volume2 size={22} className="text-white" /> : <Mic size={22} className="text-white" />}
@@ -129,7 +129,7 @@ function VoiceCallInner({ pmId, agentId, onClose }: Props) {
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-800">
         <div className="flex items-center gap-2">
-          <span className={clsx('w-2 h-2 rounded-full', isConnected ? 'bg-green-500' : 'bg-amber-500 animate-pulse')} />
+          <span className={clsx('w-2 h-2 rounded-full', isConnected ? 'bg-green-500' : 'bg-amber-500 motion-safe:animate-pulse')} />
           <span className="text-sm font-medium">{meta?.label || pmId}</span>
         </div>
         <div className="flex items-center gap-1">
@@ -151,9 +151,9 @@ function VoiceCallInner({ pmId, agentId, onClose }: Props) {
                 : 'bg-green-900/30 text-green-500'
               : conversation.status === 'error'
                 ? 'bg-red-900/30 text-red-500'
-                : 'bg-neutral-800 text-neutral-500 animate-pulse'
+                : 'bg-neutral-800 text-neutral-500 motion-safe:animate-pulse'
           )}>
-            {isSpeaking ? <Volume2 size={24} className="animate-pulse" /> : <Mic size={24} />}
+            {isSpeaking ? <Volume2 size={24} className="motion-safe:animate-pulse" /> : <Mic size={24} />}
           </div>
         </div>
 
