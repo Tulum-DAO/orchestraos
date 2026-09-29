@@ -12,6 +12,7 @@ import { applyIdentityPrecedence, resolveMachineAndLiveness, discoverUnregistere
 import { loadConfig } from '../lib/config.js';
 import { readGatewayToken } from '../lib/gateway-token.js';
 import { resolveSpecialKey } from '../lib/special-keys.js';
+import { actingAgent, principal } from '../lib/principal.js';
 
 function macSshTarget(): string {
   const cfg = loadConfig();
@@ -328,9 +329,12 @@ router.get('/', async (_req: Request, res: Response) => {
       }
     }
 
-    // Server-side agent filtering by user permissions
-    const clientScope = _req.headers['x-orchestra-client'] as string || '';
-    const allowedRaw = _req.headers['x-orchestra-allowed-agents'] as string || '*';
+    // Server-side agent filtering by user permissions. Scope comes from the principal,
+    // not raw headers: untrusted mode yields '*' (today's behaviour, unchanged), trusted
+    // mode yields [] when the proxy asserted no scope — fail closed, not wide open.
+    const _p = principal(_req);
+    const clientScope = _p?.clientScope || '';
+    const allowedAgents = _p?.allowedAgents ?? [];
     let visibleAgents = allAgents;
 
     if (clientScope) {
@@ -339,9 +343,11 @@ router.get('/', async (_req: Request, res: Response) => {
         const tags: string[] = (a as any).tags || [];
         return tags.includes(`client:${clientScope}`);
       });
-    } else if (allowedRaw !== '*') {
-      // Legacy: explicit agent list filtering
-      const allowed = new Set(allowedRaw.split(',').map(s => s.trim()));
+    } else if (allowedAgents !== '*') {
+      // Explicit agent list filtering (an empty list legitimately shows nothing).
+      const allowed = new Set(
+        (Array.isArray(allowedAgents) ? allowedAgents : String(allowedAgents).split(','))
+          .map(s => String(s).trim()).filter(Boolean));
       visibleAgents = allAgents.filter(a => allowed.has(a.id));
     }
 
@@ -657,7 +663,7 @@ router.post('/:id/inject', async (req: Request, res: Response) => {
     try { appendFileSync(activityFile, event + '\n'); } catch {}
 
     // LEARNING: Log dashboard inject interaction
-    const user = (req.headers['x-orchestra-user'] as string) || loadConfig().operatorId;
+    const user = actingAgent(req) || loadConfig().operatorId;
     logInteraction({
       channel: 'dashboard',
       userId: user,
@@ -678,7 +684,7 @@ router.post('/:id/inject', async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     // LEARNING: Log failure
-    const user = (req.headers['x-orchestra-user'] as string) || loadConfig().operatorId;
+    const user = actingAgent(req) || loadConfig().operatorId;
     logInteraction({
       channel: 'dashboard',
       userId: user,

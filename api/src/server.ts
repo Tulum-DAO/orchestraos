@@ -52,6 +52,7 @@ import { initStatusStream, addStatusSSEClient } from './services/status-stream.j
 import { setupTerminalWebSocket } from './routes/terminal.js';
 import { setupVoiceLiveWebSocket } from './routes/voice-live.js';
 import { loadConfig } from './lib/config.js';
+import { principal } from './lib/principal.js';
 
 const app = express();
 
@@ -118,19 +119,19 @@ app.get('/api/status/stream', (_req, res) => {
   res.on('close', () => clearInterval(heartbeat));
 });
 
-// User identity from combo-proxy auth headers
+// Caller identity. Derived by lib/principal, never inline from raw headers — the inline
+// version defaulted to admin + wildcard scope and let `X-Orchestra-User: eve` mint an
+// admin identity. Absent identity is a 401 here, never a default admin.
 app.get('/api/me', (req, res) => {
-  const username = req.headers['x-orchestra-user'] as string || loadConfig().operatorId;
-  const role = req.headers['x-orchestra-role'] as string || 'admin';
-  const clientScope = req.headers['x-orchestra-client'] as string || '';
-  const allowedRaw = req.headers['x-orchestra-allowed-agents'] as string || '*';
-  let allowed_agents: string | string[] = '*';
-  if (clientScope) {
-    allowed_agents = clientScope; // tag-based: API filters by client tag
-  } else if (allowedRaw !== '*') {
-    try { allowed_agents = JSON.parse(allowedRaw); } catch { allowed_agents = allowedRaw.split(',').map(s => s.trim()); }
-  }
-  res.json({ username, role, allowed_agents, client_scope: clientScope || null });
+  const p = principal(req);
+  if (!p) { res.status(401).json({ error: 'unauthenticated' }); return; }
+  res.json({
+    username: p.username,
+    role: p.role,
+    allowed_agents: p.allowedAgents,
+    client_scope: p.clientScope,
+    trusted: p.trusted,
+  });
 });
 
 // /new and /login-shell must mount BEFORE the agents router, whose '/:id/spawn'

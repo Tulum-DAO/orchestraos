@@ -2,13 +2,12 @@ import { Router, type Request, type Response } from 'express';
 import { getProjectsKnowledge, getRegistry, getAllAgentStates } from '../services/state-reader.js';
 import { queryDb, execDb } from '../lib/db.js';
 import { loadConfig } from '../lib/config.js';
+import { actingAgent, tenantScope } from '../lib/principal.js';
 
 const router = Router();
 
 function getTenantScope(req: any) {
-  const role = (req.headers['x-orchestra-role'] as string) || 'admin';
-  const clientScope = (req.headers['x-orchestra-client'] as string) || null;
-  return { isAdmin: role === 'admin', clientScope: role === 'admin' ? null : clientScope };
+  return tenantScope(req);
 }
 
 function nanoid(): string {
@@ -81,7 +80,7 @@ router.post('/:slug/blockers', (req: Request, res: Response) => {
   const { description, type, linked_id } = req.body;
   if (!description) { res.status(400).json({ error: 'description required' }); return; }
   const id = nanoid();
-  const username = (req.headers['x-orchestra-user'] as string) || loadConfig().operatorId;
+  const username = actingAgent(req) || loadConfig().operatorId;
   execDb("INSERT INTO project_blockers (id, tenant_id, project_id, description, type, linked_id, created_by, created_at) VALUES (?,'operator',?,?,?,?,?,?)",
     [id, String(req.params.slug), description, type || 'general', linked_id || null, username, new Date().toISOString()]);
   const created = queryDb('SELECT * FROM project_blockers WHERE id = ?', [id]);
