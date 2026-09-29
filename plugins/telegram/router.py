@@ -305,8 +305,23 @@ class Router:
             path = download_file(obj["file_id"], self.uploads, api=self.api, fetch=self.fetch)
             if path:
                 meta["attachments"].append({"kind": kind, "path": str(path), "name": obj.get("file_name")})
-        if meta["attachments"]:
-            text = (text + "\n\n" if text else "") + "Attachments:\n" + "\n".join(f"  {a['kind']}: {a['path']}" for a in meta["attachments"])
+            else:
+                # download_file() swallows its own exception and returns None, so this path
+                # never raises and none of poll_once's retry/step-over machinery engages.
+                # Without recording the failure, a photo-only message (a bare screenshot,
+                # no caption) ends up with empty text, hits `if not text: return`, and looks
+                # like a clean success — silent permanent loss, the exact class the offset
+                # fix removed. A placeholder is not the attachment, but it is a signal.
+                meta.setdefault("attachment_failures", []).append(
+                    {"kind": kind, "file_id": obj.get("file_id"), "name": obj.get("file_name")})
+        lines = [f"  {a['kind']}: {a['path']}" for a in meta["attachments"]]
+        lines += [f"  {f['kind']}: [download failed — ask the operator to resend]"
+                  for f in meta.get("attachment_failures", [])]
+        if lines:
+            text = (text + "\n\n" if text else "") + "Attachments:\n" + "\n".join(lines)
+        if meta.get("attachment_failures"):
+            log(f"{len(meta['attachment_failures'])} attachment(s) failed to download for "
+                f"chat {chat_id}; delivering the message with a placeholder rather than dropping it")
         if not text:
             return
         mid = self.deliver(text, meta)
