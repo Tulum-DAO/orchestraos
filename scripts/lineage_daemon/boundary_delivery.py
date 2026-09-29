@@ -26,6 +26,12 @@ BINDING CONDITIONS (non-negotiable, gm + agy):
       session name). Verified inject; a delivered row never re-fires.
   (D) ships disabled → --shadow (log WOULD-deliver, zero injects/claims) → gm-arm.
 """
+# PEP 604 unions (`X | None`) appear in annotations below and are EVALUATED at import
+# time before Python 3.10, so this module died with "TypeError: unsupported operand
+# type(s) for |" under the repo's default python3 (3.9) while importing fine under the
+# 3.12 the supervisor runs. Making annotations lazy fixes every occurrence at once.
+from __future__ import annotations
+
 import json
 import os
 import sys

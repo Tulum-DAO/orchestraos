@@ -33,6 +33,12 @@ HERMETIC/CANARY-ONLY (the operator ruling, spec §7 R4 row): no PRODUCTION Gemin
 uses these adapters until R8 identity fencing arms. Provider emission develops
 hermetically first.
 """
+# PEP 604 unions (`X | None`) appear in annotations below and are EVALUATED at import
+# time before Python 3.10, so this module died with "TypeError: unsupported operand
+# type(s) for |" under the repo's default python3 (3.9) while importing fine under the
+# 3.12 the supervisor runs. Making annotations lazy fixes every occurrence at once.
+from __future__ import annotations
+
 import json
 import os
 import subprocess
