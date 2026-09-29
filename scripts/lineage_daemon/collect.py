@@ -102,14 +102,40 @@ def jsonl_fallback_pct(jsonl_tokens, model) -> Optional[int]:
     if not model or str(model).strip().lower() == "unknown":
         print("ctx:jsonl-fallback-skipped model=unknown", file=sys.stderr)
         return None
-    return round(jsonl_tokens / effective_ceiling(model) * 100)
+    # ceiling() now fails closed on an unrecognised model instead of guessing
+    # 200k. This docstring already promised "never guess a ceiling for an
+    # unknown model"; before 2026-09-29 only the literal string "unknown" was
+    # refused, while any unfamiliar model id silently took the 200k default.
+    # Skipping LOUDLY so an unmapped model shows up as a log line rather than
+    # as a confident wrong percentage.
+    eff = effective_ceiling(model)
+    if not eff:
+        print(f"ctx:jsonl-fallback-skipped model-unmapped={model!r}", file=sys.stderr)
+        return None
+    return round(jsonl_tokens / eff * 100)
 
 
 def _range_guarded(p, source, seat) -> Optional[int]:
     """0..100 or None; an out-of-range value is dropped LOUDLY so the caller
-    falls through to the next source instead of propagating a lie."""
+    falls through to the next source instead of propagating a lie.
+
+    EXCEPT >100 from the jsonl fallback, which is CLAMPED to 100 rather than
+    dropped. For the pane source an out-of-range reading is a parse error — a
+    status bar cannot say 120% — so dropping it is right. For the jsonl source
+    it is a real measurement: the seat's tokens exceed the assumed effective
+    ceiling, i.e. it is at or past the context wall. That is precisely the
+    exhaustion signal, and dropping it silenced it for exactly the seats
+    closest to the wall while happily reporting the idle ones (measured
+    2026-09-29: two live seats computed 120% and 102% and would both have been
+    discarded). Clamping keeps the signal; the log line keeps the anomaly
+    visible.
+    """
     if p is None:
         return None
+    if p > 100 and source == "jsonl":
+        print(f"ctx:at-or-past-ceiling source={source} value={p} seat={seat} "
+              f"(clamped to 100)", file=sys.stderr)
+        return 100
     if not 0 <= p <= 100:
         print(f"ctx:out-of-range source={source} value={p} seat={seat}",
               file=sys.stderr)
