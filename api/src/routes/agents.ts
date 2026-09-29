@@ -51,6 +51,7 @@ interface AgentEntry {
   id: string;
   tier: string;
   name: string;
+  parent?: string;   // T1 lead this worker reports to (drives dashboard org tree)
   machine: string;
   tmux_session: string;
   always_on: boolean;
@@ -135,6 +136,7 @@ router.get('/', async (_req: Request, res: Response) => {
         id,
         tier: (def.tier as string) || 'T2',
         name: (def.name as string) || id,
+        parent: (def.reports_to as string) || (def.parent as string) || undefined,  // reports_to = canonical (agent create); parent = legacy
         machine,
         tmux_session: tmuxSession,
         always_on: (def.always_on as boolean) || false,
