@@ -211,7 +211,7 @@ export default function Inbox() {
       <div className="flex items-center gap-3">
         <h1 className="text-2xl font-bold text-white">Inbox</h1>
         {totalPending > 0 && (
-          <span className="bg-red-600 text-white text-xs font-bold px-2 py-0.5 rounded-full animate-pulse">
+          <span className="bg-red-600 text-white text-xs font-bold px-2 py-0.5 rounded-full motion-safe:animate-pulse">
             {totalPending}
           </span>
         )}

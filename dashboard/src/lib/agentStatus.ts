@@ -44,9 +44,9 @@ export function normalizeAgentState(s?: string): LiveState {
 // #FF9F0A (long-running, probably fine). stranded (unsent draft) = purple
 // #BF5AF2 so it no longer collides with waiting's needs-you amber.
 export const STATE_STYLE: Record<LiveState, { label: string; dot: string; text: string }> = {
-  working:  { label: 'working',          dot: 'bg-orange-400 animate-pulse', text: 'text-orange-300' },
+  working:  { label: 'working',          dot: 'bg-orange-400 motion-safe:animate-pulse', text: 'text-orange-300' },
   idle:     { label: 'idle · at prompt', dot: 'bg-green-500',               text: 'text-green-400' },
-  waiting:  { label: 'needs you',        dot: 'bg-amber-400 animate-pulse', text: 'text-amber-300' },
+  waiting:  { label: 'needs you',        dot: 'bg-amber-400 motion-safe:animate-pulse', text: 'text-amber-300' },
   stranded: { label: 'unsent draft',     dot: 'bg-[#BF5AF2]',               text: 'text-[#BF5AF2]' },
   stalled:  { label: 'stalled',          dot: 'bg-[#FF9F0A]',               text: 'text-[#FF9F0A]' },
   stopped:  { label: 'stopped',          dot: 'bg-red-500',                 text: 'text-red-400' },
