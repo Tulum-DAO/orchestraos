@@ -2779,8 +2779,9 @@ def save_transcript(conversation_id, transcript_data):
 # --- Context Injection ---
 
 def _brain_identity_line():
-    """One sentence, by effect, about what is generating this very reply."""
-    b = brain
+    """One sentence, by effect, about what is generating this very reply: the brain chosen for THIS
+    turn when there is one (a codex turn was being told it was Claude), else the default."""
+    b = _turn_brain()
     d = b.describe() if hasattr(b, "describe") else {"kind": getattr(b, "kind", "?")}
     if d.get("kind") == "runtime":
         pretty = {"claude": "Claude", "gemini": "Gemini", "codex": "Codex"}.get(d.get("runtime", ""), d.get("runtime", ""))

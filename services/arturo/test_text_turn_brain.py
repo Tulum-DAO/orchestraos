@@ -230,3 +230,30 @@ def test_a_chosen_brain_whose_cli_is_logged_out_is_a_502_not_logged_in_and_nothi
     assert code == 502 and body["error"] == "brain_failed" and body["reason"] == "not_logged_in"
     assert "Failed to authenticate" not in json.dumps(body)
     assert _rows(P, "c-auth") == 0
+
+
+def test_the_system_prompt_names_the_brain_that_is_actually_answering(P):
+    # Live 2026-09-29: a turn routed to codex answered "I think with Claude ... claude CLI" because
+    # the identity line in the system context described the process DEFAULT brain.
+    P.build_context = lambda **k: P._brain_identity_line()      # real identity line, computed in-turn
+    seen = []
+    def runner(spec, timeout):
+        seen.append(spec.stdin or " ".join(spec.argv))
+        return "ok"
+    P._test.pool(runner)
+    P.brain = P._brain.RuntimeBrain("claude", "claude", runner=lambda s, t: "default")   # default = claude
+    code, _ = P.text_turn("which model are you", "c-id", brain={"provider": "codex", "model": "gpt-5.6-terra"})
+    assert code == 200
+    assert "thinking with Codex (gpt-5.6-terra)" in seen[0]
+    assert "thinking with Claude" not in seen[0]
+
+
+def test_with_no_brain_chosen_the_identity_is_still_the_default(P):
+    P.build_context = lambda **k: P._brain_identity_line()
+    got = {}
+    def default_runner(spec, timeout):
+        got["sys"] = " ".join(spec.argv)
+        return "ok"
+    P.brain = P._brain.RuntimeBrain("claude", "claude", runner=default_runner)
+    P.text_turn("which model are you", "c-id2")
+    assert "thinking with Claude" in got["sys"]
