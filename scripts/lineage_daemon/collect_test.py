@@ -294,3 +294,39 @@ def test_collect_fleet_with_an_empty_registry_is_empty():
     status_list = [{"session": "x", "state": "idle", "context_pct": "1%", "state_age_s": 1, "model": ""}]
     assert collect_fleet(status_list, {"agents": {}}) == []
     assert collect_fleet(status_list, {}) == []
+
+
+# --- 2026-09-29: don't discard the seats closest to the wall ----------------
+
+def test_jsonl_over_100_is_clamped_not_dropped():
+    """A jsonl reading >100% means tokens exceed the effective ceiling — the
+    seat is AT the wall. Dropping it silenced exactly the seats that needed
+    rotating while still reporting the idle ones (two live seats measured
+    120% and 102% and would both have been discarded)."""
+    from lineage_daemon.collect import _range_guarded
+    assert _range_guarded(120, "jsonl", "gm") == 100
+    assert _range_guarded(102, "jsonl", "build") == 100
+
+def test_pane_over_100_is_still_dropped_as_a_parse_error():
+    """A status bar cannot read 120% — for the pane source that is a parse
+    lie, not a measurement, so the old drop behaviour is correct there."""
+    from lineage_daemon.collect import _range_guarded
+    assert _range_guarded(120, "pane", "gm") is None
+
+def test_in_range_values_are_untouched_for_both_sources():
+    from lineage_daemon.collect import _range_guarded
+    for src in ("jsonl", "pane", "context_pct"):
+        assert _range_guarded(0, src, "s") == 0
+        assert _range_guarded(57, src, "s") == 57
+        assert _range_guarded(100, src, "s") == 100
+    assert _range_guarded(None, "jsonl", "s") is None
+
+def test_unmapped_model_skips_the_fallback_instead_of_guessing():
+    from lineage_daemon.collect import jsonl_fallback_pct
+    assert jsonl_fallback_pct(500_000, "some-future-model-9") is None
+    assert jsonl_fallback_pct(500_000, "unknown") is None
+
+def test_known_model_still_computes():
+    from lineage_daemon.collect import jsonl_fallback_pct
+    # 400k against opus-5's 800k effective ceiling
+    assert jsonl_fallback_pct(400_000, "claude-opus-5") == 50
