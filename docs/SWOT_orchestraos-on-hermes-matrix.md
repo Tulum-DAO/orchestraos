@@ -37,18 +37,38 @@ architecture sketch, not marketing copy — it names real components (SOP
 builder, simulation-before-acting, an explicit org-brain schema) that map
 onto real engineering decisions, not just vision language.
 
-**"The Industry Expert Venture Studio" thesis excerpt** (operator's own
-writing, 2026-09-17, shared with collaborators): "AI is making execution
-abundant, it is not making trust abundant" — the same thesis already found
-independently in the Silicon Jungle North Star doc ("Code got cheap. Trust
-didn't.") and the operator's stated GTM thesis (§0b of that brief). **This
-excerpt is explicitly cut off mid-thought per gm's own note.** Checked
-`~/Downloads/` for a fuller version — found none; two thematically-adjacent
-docs exist (`trust-vetting-interview-synthesis.md.pdf`,
+**"The Industry Expert Venture Studio" thesis, now with the fuller
+continuation gm relayed after this SWOT's first draft** (operator's own
+writing, 2026-09-17): "Code got cheap. Trust didn't" — the same thesis
+already found independently in the Silicon Jungle North Star doc and the
+operator's stated GTM thesis. The fuller text (reproduced in full in the
+Silicon Jungle brief's §0d, not repeated verbatim here) makes the model
+explicit: the studio exists to turn **industry experts — people with
+customer access, relationships, and domain trust but no technical execution
+capability — into founders**, by supplying "technology, AI infrastructure,
+product development" as leverage (named examples: a hotel operator, a
+physician, a tourism operator in Quintana Roo, a real estate broker — none
+technical). **Still cut off again** at "The Shared Platform Advantage... a
+continuously expanding platform" — not inventing what comes after. Checked
+`~/Downloads/` for a fuller version before the continuation landed — found
+none; two thematically-adjacent docs exist
+(`trust-vetting-interview-synthesis.md.pdf`,
 `business-etymology-synthesis.md.pdf`) but the former is a **different
 project** ("My Source Network," advising someone named "Sunny," about a
 wellness-community trust-vetting problem) — not Silicon Jungle, not used
-here. Treating the excerpt as a fragment, not inventing its ending.
+here.
+
+**This sharpens, and partially corrects, the Silicon Jungle brief's pilot-
+buyer answer** (fixed directly in that brief's §4 item 1, not left standing)
+— worth noting here too since it bears on this SWOT's own Strength 4 and
+Opportunity 3 (the org/ontology sketch as a real design asset): the sketch's
+Surface layer ("Team & collaborators: partners, operators, guests") and
+Control Layer read differently once "operators" is understood as the
+industry-expert founders the whole system is built around, not a generic
+role label. Doesn't change this SWOT's S/W/O/T findings or verdict — those
+were about the Hermes/Matrix runtime question, which this thesis doesn't
+bear on directly — but the org/ontology sketch's own internal logic is
+clearer with this context, worth the note.
 
 **"Garry Tan" ontology credit — unverified, flagging rather than guessing,
 consistent with how this seat handled the "Elon's team" and "Shaw" claims

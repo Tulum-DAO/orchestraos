@@ -3,20 +3,27 @@
 - **Requested by:** operator, via gm (msg_6568c41b_74190686 + msg_0d4c2eea_74781096
   ground-truth confirmation + msg_6a2b5afd_74610984 domains/partners/event
   addendum + msg_ffd21b6f_76509819 Shaw identity/toddi.to/traction addendum +
-  msg_e7e62d4b_76786880 direct operator feedback/revision request, 2026-09-29),
-  as an addendum to the Hermes/Matrix Telegram bridge brief
+  msg_e7e62d4b_76786880 direct operator feedback/revision request +
+  msg_e28003b6_78054130 fuller thesis continuation, 2026-09-29), as an
+  addendum to the Hermes/Matrix Telegram bridge brief
 - **Authored by:** plan (BSHR research + brief, non-interactive)
 - **Status:** CEO + ENG REVIEWED (Eng Review run twice — re-opened for a
   direct operator-requested revision pass), CLEARED for accepted (narrow)
   scope — one item elevated to an explicit **launch dependency** (Shaw's
   access level, §4 item 3/§6), everything else awaiting the operator's
-  answer to §6's load-bearing sequencing question. **§0b, §0c are post-
-  review addenda; the final revision pass (end of file, GSTACK REVIEW
-  REPORT) is a real content revision, not an addendum** — corrected a
-  mechanism error in the facilitator control design (self-caught by eng
-  review Run 2) and corrected the 43.9% citation at the source after
-  re-reading the primary paper in full. Coherence/correctness checked at
-  every step, no contradiction found, verdict CLEARED throughout.
+  answer to §6's load-bearing sequencing question. **§0b, §0c, §0d are
+  post-review addenda; the revision pass (end of file, GSTACK REVIEW
+  REPORT) contains real content corrections, not just additions** —
+  corrected a mechanism error in the facilitator control design (self-
+  caught by eng review Run 2), corrected the 43.9% citation at the source
+  after re-reading the primary paper in full, and **corrected (not just
+  added to) the "who's the buyer" answer** once the operator's fuller
+  thesis (§0d) made clear the studio's actual model targets industry
+  experts, not technical talent — this seat's original answer was a
+  reasonable inference from limited data that turned out incomplete once
+  better primary evidence arrived, and is fixed directly rather than left
+  standing. Coherence/correctness checked at every step, verdict CLEARED
+  throughout.
 - **Scope:** strategic brief only. No implementation authorized. Kept as a
   **separate document from** `docs/PLAN_hermes-matrix-telegram-bridge.md`, which
   it references — per gm's explicit instruction not to let the bridge brief
@@ -274,6 +281,60 @@ data" as **"probably sooner rather than later, given 8 events already run
 and a 9th already planned,"** not as an indefinitely deferred, low-priority
 item.
 
+## 0d. Fourth ground-truth addendum — the "Industry Expert Venture Studio"
+thesis (operator's own writing, 2026-09-17, relayed verbatim by gm across
+two messages after being cut off mid-sentence the first time)
+
+The operator's own strategic thesis, reproduced faithfully (not
+paraphrased, per gm's explicit instruction — this is primary source):
+
+> "Code got cheap. Trust didn't." ... "It is not creating customer
+> relationships. It is not creating industry expertise. It is not creating
+> judgment. It is not creating distribution. It is not creating
+> persistence. Those remain scarce. And those may be the attributes that
+> matter most."
+>
+> **The Industry Expert Thesis.** Traditional venture capital often
+> searches for entrepreneurs and hopes they discover a market. We believe
+> there is a better approach. Instead of searching for entrepreneurs and
+> hoping they find customers, we search for people who already understand
+> customers and help them become entrepreneurs. ... The most valuable
+> founders of the AI era may not be traditional startup founders at all.
+> They may be industry experts. A hotel operator with relationships to 500
+> hotel owners. A physician trusted by thousands of physicians. A wellness
+> coach with 100,000 followers. A tourism operator in Quintana Roo... A real
+> estate broker who has spent twenty years earning trust in a local market.
+> ... These people already possess something far more difficult to acquire
+> than technical skills: Trust. Relationships. Domain expertise. Customer
+> access. Distribution.
+>
+> **The Hybrid Model.** The studio continuously develops two assets: a
+> growing network of industry experts, and a growing library of validated
+> opportunities... the studio becomes a matching engine between: Problems.
+> Industry experts. Technology. Capital. Execution.
+>
+> **What The Founder Brings:** Customer access. Industry expertise.
+> Relationships. Trust. Distribution. Judgment. Taste. Persistence.
+> **What The Studio Brings:** Capital. Technology. AI infrastructure.
+> Product development. Design. Marketing support. Growth systems... The
+> founder supplies the market. The studio supplies leverage.
+
+Cut off again mid-sentence at "The Shared Platform Advantage... It is a
+continuously expanding platform." Checked whether a further continuation
+had landed — per gm's own note, none has yet; **not inventing what comes
+after**, same discipline as the first cutoff (§0c).
+
+**This corrects, not just adds to, this brief's earlier answer to "who's
+the buyer" (§4 item 1).** That section originally named the technical-talent
+side of a Weekender team, inferred from §0a's funnel-data alone (Door 1
+pairs an industry operator with technical talent). The fuller thesis is
+explicit and more specific: **the studio's entire model is built around
+turning industry experts — who explicitly lack technical execution
+capability — into founders, by supplying technology/AI infrastructure as
+leverage.** The buyer is the industry expert, not the technical talent —
+corrected directly in §4 item 1 below, not left standing as a plausible-but-
+now-outdated inference now that better primary evidence exists.
+
 ## 1. The ask, as parsed (gm's cleaned-up transcript + confirmed ground truth)
 
 Silicon Jungle Experience's **Weekender** (48hr, La Reserva Tulum) is
@@ -521,27 +582,45 @@ Three separable pieces, matching the three separable problems found above —
      fleet's own editable runtime"), applied here to attendee sessions too.
 
    **The pilot promise, made concrete (per operator feedback — "attendees"
-   generically is not a spec). Built from the confirmed funnel data (§0a)
-   and BUILD-A-THON precedent (§0c), not invented:**
-   - **Buyer, specifically:** the **technical-talent side of a Weekender
-     team** — per SJE's own positioning (§0a), teams pair an "industry
-     operator" (brings customer trust/relationships) with technical talent.
-     The fleet-access capability this brief scopes benefits the technical
-     builder specifically: someone who can code but has limited experience
-     independently running a full research → plan → review → build cycle in
-     48 hours. Not the industry-operator side, and not "attendees" as an
-     undifferentiated group.
+   generically is not a spec). Corrected once, honestly — see below — after
+   gm relayed the fuller "Industry Expert Venture Studio" thesis (operator's
+   own writing, 2026-09-17), which sharpens this beyond what §0a's funnel
+   data alone could support:**
+   - **Buyer, corrected: the industry expert, not the technical talent.**
+     This seat's first draft named the technical-talent side of a Weekender
+     team as the buyer, reasoning from §0a's funnel data alone (Door 1 pairs
+     an "industry operator" with technical talent) — a reasonable inference
+     from limited evidence, but the fuller thesis makes the actual model
+     explicit and it's more specific than that inference: **the studio
+     exists to turn industry experts — people with "customer access,
+     industry expertise, relationships, trust, distribution" but no
+     technical execution capability — into founders, by supplying
+     "technology, AI infrastructure, product development" as leverage.**
+     The thesis's own examples are concrete and non-technical: a hotel
+     operator with relationships to 500 hotel owners, a physician trusted by
+     thousands of physicians, a tourism operator in Quintana Roo, a real
+     estate broker of twenty years' local trust. **The fleet-access
+     capability this brief scopes is specifically how the studio supplies
+     that "technology/AI infrastructure" leverage to someone who explicitly
+     cannot build it themselves** — not a convenience for a technical
+     co-founder who already could, with help. Technical talent on the team
+     benefits too, but they are not who this studio model is built around;
+     correcting the framing to match the primary source now that it exists,
+     rather than leaving the earlier, more limited inference standing.
    - **What they leave with, specifically:** by Sunday's demo (per the
      confirmed Weekender format, §0a), a working MVP — **plus**, specific to
-     what facilitator-driven fleet access adds beyond what an unaided team
-     would produce, a CEO+eng-reviewed plan artifact (the same review
-     gauntlet this very brief went through) they can show a sponsor or the
-     Experience-stage evaluators, demonstrating a level of rigor a 48-hour
-     hackathon team couldn't otherwise produce unaided.
+     what facilitator-driven fleet access adds beyond what an unaided
+     non-technical founder could produce, a CEO+eng-reviewed plan artifact
+     (the same review gauntlet this very brief went through) they can show a
+     sponsor or the Experience-stage evaluators, demonstrating a level of
+     rigor neither a 48-hour hackathon format nor a non-technical founder
+     alone could otherwise produce.
    - **Measurable outcome that justifies running another session:** (a) the
      team's plan clears CEO+eng review with zero unresolved critical gaps by
-     the Sunday demo, and (b) the team elects to continue into the Experience
-     stage (§0a's confirmed 2-6 week sprint) — a real funnel-conversion
+     the Sunday demo, and (b) **the industry expert elects to continue as
+     founder** into the Experience stage (§0a's confirmed 2-6 week sprint) —
+     matching the thesis's own framing ("help them become entrepreneurs") —
+     a real funnel-conversion
      signal SJE already tracks, not a new metric invented for this brief.
      Both are checkable from data this pilot would generate on its own,
      without new instrumentation beyond what §4/T1 already proposes logging.
@@ -1358,6 +1437,18 @@ Finding 3 (measurable thresholds)     | 0 issues — already honestly
   eng review was genuinely re-opened for items (1) and (3), not rubber-
   stamped.** Verdict remains CLEARED for accepted scope; the launch
   dependency (Shaw access) is now explicit rather than implicit.
+- **POST-REVIEW ADDENDUM (§0d):** gm relayed the fuller "Industry Expert
+  Venture Studio" thesis (operator's own writing, previously cut off mid-
+  sentence) — folded in as §0d. **This one is a genuine correction, not
+  just an addition:** it fixes the pilot-promise "buyer" answer from the
+  revision pass above (item 2) — the studio's own model targets industry
+  experts (no technical execution capability) as founders, not the
+  technical-talent inference this seat originally drew from more limited
+  funnel data alone. Corrected directly in §4 item 1. Business/positioning
+  correction, not a technical/security one — does not require re-opening
+  eng review again (unlike items 1/3 of the prior revision pass). Verdict
+  and accepted scope unchanged; the deliverable and measurable-outcome
+  parts of the pilot promise were adjusted to match, not invalidated.
 
 **UNRESOLVED DECISIONS:**
 - Whether the operator is comfortable running Weekenders human-facilitated on
