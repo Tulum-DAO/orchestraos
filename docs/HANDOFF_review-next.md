@@ -1,4 +1,41 @@
 # Handoff: review -> gm (ship gate)
+
+## ⏳ READ FIRST — the only thing outstanding: FIVE restart-gated checks
+
+As of 2026-09-29T15:15Z **no restart has happened** (api still pid 51440 @ 12:58:47, router still
+pid 3445 @ 11:22:59). Five changes are merged, built, and **not running**. Each has a positive proof
+that only the new code can produce — run all five in one pass once the supervisor cycles:
+
+| # | Change | Proof it is actually live |
+|---|---|---|
+| 1 | access log `fc55a89` | `grep -c '\[access ' ~/.orchestra/logs/api.log` > 0 after any identity-header request (**currently 0**) |
+| 2 | router F6 `cfc420c` | a caption + unsupported-media message names the media in the body |
+| 3 | TMUX-strip `df92625` | a supervised daemon's env has no `TMUX`/`TMUX_PANE` |
+| 4 | session_index beat `d4725b9` | `~/.orchestra/state/agent-sessions.json` mtime advances within 120 s |
+| 5 | agents-live-status `3383805` | `curl -s localhost:8888/api/agents` → a working seat shows `status_source=transcript` (**currently `detector`/`idle` for a provably-working seat**) |
+
+4 and 5 are distinct: 5 needs the API restart to appear at all; 4 keeps 5 accurate as seats rotate.
+
+**Also open, not mine to drive:** Cloudflare dashboard confirm on tunnel
+`43f26a47-9bc1-43c3-80ab-6222a44daac4` (the only control holding that vector shut — a loopback bind
+does **not** close it, cloudflared dials its origin over loopback); rotate the tunnel token (readable
+from root's argv via `ps`); 3 files still failing to import under python3.9 with the same PEP 604 bug
+(`approval_adapters.py`, `lineage_daemon/boundary_delivery.py`, `spawn_permission_rules.py` — two on
+the **approval** and **spawn** paths); ntfy push is down (config gap, deprecated, cards still reach
+Telegram with working buttons — do not revive it, see the diagnosis); `prefers-reduced-motion` nit on
+the new working badge.
+
+**PR #133** (`main <- fix-arturo-mapfile-bash32`, Tulum-DAO) carries everything and is **pushed** —
+the branch is `0 0` against its remote, so nothing lives only on this laptop any more. Waiting on a
+merge click; gm lacks merge rights.
+
+**Today's records:** `$ORCHESTRA_DIR/state/review/router-offset-b834241/` (router P0 + F1/F5/F6, the
+API security incident, the cso baseline) and `$ORCHESTRA_DIR/state/review/ship-2026-09-29/` (the ship
+report, session-index and CI-coverage gates). Eleven gates and one ship today; every verdict is in
+those two directories.
+
+---
+
 - **Lineage:** build -> review (Gen 2)
 - **Timestamp:** 2026-09-29T10:45:00Z
 - **Working Directory:** /Users/flybyflow/orchestraos
