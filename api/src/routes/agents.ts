@@ -6,6 +6,7 @@ import { getRegistry, getAllAgentStates, getInboxCounts } from '../services/stat
 import { getTmuxSessionNames } from '../services/tmux-monitor.js';
 import { getUnifiedAgentStatus, spawnAgent, killAgent, getMacStatus, getMacSessionsCache } from '../services/cross-machine.js';
 import { logInteraction } from '../services/learning.js';
+import { isTranscriptActive } from '../services/transcript-activity.js';
 import { getDetectorStates, detectorCacheAgeMs, classifyNoSession, type DetectorStatus } from '../services/agent-status.js';
 import { isCutoverActive, getCanonicalAgents, canonicalTmuxSession } from '../services/identity-store-reader.js';
 import { applyIdentityPrecedence, resolveMachineAndLiveness, discoverUnregistered } from './agents-identity.js';
@@ -29,6 +30,17 @@ function mergeDetector(agent: AgentEntry, d: DetectorStatus | undefined): void {
   agent.status = d.state;
   agent.status_source = 'detector';
   agent.activity = d.activity || '';
+  // Corroboration, not override: the detector wins whenever it sees work. It only gets
+  // second-guessed in the one direction it was provably wrong on 2026-09-29 — reporting
+  // idle for every seat at once, including seats mid-turn. A transcript being appended to
+  // right now is direct evidence of an open turn, so trust that over an idle verdict.
+  // status_source records which signal actually decided, so a wrong answer is traceable
+  // to its source rather than blamed on "the dashboard".
+  if (d.state === 'idle' && isTranscriptActive(agent.id)) {
+    agent.status = 'working';
+    agent.status_source = 'transcript';
+    agent.activity = 'Working (transcript active; detector reported idle)';
+  }
   agent.tool = d.tool || '';
   agent.context_pct = d.context_pct || '';
   agent.confidence = d.confidence;
