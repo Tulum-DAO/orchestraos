@@ -1,0 +1,57 @@
+/**
+ * 2D Agents View step 3 — connection-line maths (spec §4, §12).
+ *   node --experimental-strip-types dashboard/src/lib/topologyLines.test.mjs
+ *
+ * The one thing worth testing here is the property the sqrt scaling exists for: a quiet
+ * but ALIVE line must be visually distinguishable from a dead one even when the busiest
+ * line on screen is two orders of magnitude bigger. Linear scaling passes every other
+ * assertion in this file and fails that one.
+ */
+import assert from 'node:assert';
+import { lineWidthPx, pairKey, shortAgo, MAX_LINE_PX } from './topologyLines.ts';
+
+// No traffic is 1px, never 0 — a line you cannot see is a line you cannot click.
+assert.equal(lineWidthPx(0, 150), 1);
+assert.equal(lineWidthPx(-5, 150), 1);
+assert.equal(lineWidthPx(NaN, 150), 1);
+assert.equal(lineWidthPx(10, 0), 1, 'no busiest line yet (empty window) must not divide by zero');
+assert.equal(lineWidthPx(10, NaN), 1);
+
+// The busiest line is exactly the cap, and nothing exceeds it.
+assert.equal(lineWidthPx(150, 150), MAX_LINE_PX);
+assert.equal(lineWidthPx(9999, 150), MAX_LINE_PX, 'thickness caps (spec §12)');
+
+// THE POINT: 3 messages against a 150-message busiest line must still be thicker than
+// silence. This is the assertion linear scaling fails — 1 + 4*(3/150) rounds to 1px,
+// identical to a dead line.
+assert.ok(lineWidthPx(3, 150) > lineWidthPx(0, 150),
+  'a quiet line must not render identically to a dead one');
+
+// Monotonic: more traffic is never thinner.
+let prev = 0;
+for (const c of [0, 1, 3, 10, 40, 90, 150]) {
+  const w = lineWidthPx(c, 150);
+  assert.ok(w >= prev, `width must not decrease: ${c} gave ${w} after ${prev}`);
+  assert.ok(w >= 1 && w <= MAX_LINE_PX, `width out of range at ${c}: ${w}`);
+  prev = w;
+}
+
+// A pair is unordered — both directions are one line, so they must hash the same.
+assert.equal(pairKey('gm', 'build'), pairKey('build', 'gm'));
+assert.equal(pairKey('gm', 'build'), 'build|gm');
+assert.equal(pairKey('a', 'a'), 'a|a');
+
+// Relative time. `now` is injected so this is deterministic rather than clock-dependent.
+const T = Date.parse('2026-09-29T12:00:00Z');
+assert.equal(shortAgo(null, T), 'never');
+assert.equal(shortAgo(undefined, T), 'never');
+assert.equal(shortAgo('not a date', T), 'never');
+assert.equal(shortAgo('2026-09-29T11:59:30Z', T), 'just now');
+assert.equal(shortAgo('2026-09-29T11:45:00Z', T), '15m ago');
+assert.equal(shortAgo('2026-09-29T09:00:00Z', T), '3h ago');
+assert.equal(shortAgo('2026-09-26T12:00:00Z', T), '3d ago');
+// A future stamp (clock skew between machines is normal in this fleet) reads as "just
+// now" rather than a negative age.
+assert.equal(shortAgo('2026-09-29T12:05:00Z', T), 'just now');
+
+console.log('topologyLines: all assertions passed');

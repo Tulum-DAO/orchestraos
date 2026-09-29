@@ -3,8 +3,12 @@ import { clsx } from 'clsx';
 import { LayoutGrid, List, GitBranch, Plus } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAgents } from '../hooks/useAgents';
+import { useSystem } from '../hooks/useSystem';
 import { useUser, canSeeAgent } from '../hooks/useUser';
-import { spawnAgent, killAgent, getAdaptiveAgents } from '../lib/api';
+import { spawnAgent, killAgent, getAdaptiveAgents, fetchPairCounts } from '../lib/api';
+import { AgentsSummaryStrip } from '../components/AgentsSummaryStrip';
+import { AgentDetailPanel } from '../components/AgentDetailPanel';
+import { ConversationPanel } from '../components/ConversationPanel';
 import { StatusDot } from '../components/StatusDot';
 import { TierBadge } from '../components/TierBadge';
 import { AgentCard } from '../components/AgentCard';
@@ -36,11 +40,34 @@ export default function Agents() {
   const [clientFilter, setClientFilter] = useState<string>('All');
   const [machineFilter, setMachineFilter] = useState<string>('All');
   const [recentAgents, setRecentAgents] = useState<RecentAgent[]>(getRecentAgents());
+  const [search, setSearch] = useState('');
+  // Spec §3: one right-hand panel, one mode at a time. A line click sets the pair, an agent
+  // click sets the id, and opening one explicitly clears the other — two panels open at once
+  // is the clutter §2 rules out, and leaving both set would make which one renders depend on
+  // the order of the JSX rather than on what was clicked.
+  const [selectedConnection, setSelectedConnection] = useState<[string, string] | null>(null);
+  const [panelAgentId, setPanelAgentId] = useState<string | null>(null);
+  const openAgentPanel = (id: string) => { setSelectedConnection(null); setPanelAgentId(id); };
+  const openConversation = (a: string, b: string) => { setPanelAgentId(null); setSelectedConnection([a, b]); };
+  const closePanel = () => { setPanelAgentId(null); setSelectedConnection(null); };
+  // Spec §7 makes the window a control (1h / 6h / 24h). That control is step 9; until then
+  // the window is fixed at 24h and every number derived from it says so, rather than
+  // showing an unlabelled count whose basis you have to guess.
+  const WINDOW_HOURS = 24;
 
   // On mount: merge localStorage with server-persisted recents
   useEffect(() => {
     loadAndMergeRecentAgents().then(setRecentAgents);
   }, []);
+
+  const { data: system } = useSystem();
+  // Canonical per-pair message counts (spec §16): the ONE source for every count and
+  // thickness on a connection line and for the strip's message/connection numbers.
+  const { data: pairData } = useQuery({
+    queryKey: ['pair-counts', WINDOW_HOURS],
+    queryFn: () => fetchPairCounts(WINDOW_HOURS),
+    refetchInterval: 15_000,
+  });
 
   const { data: adaptiveScores } = useQuery({
     queryKey: ['adaptive-agents'],
@@ -122,11 +149,21 @@ export default function Agents() {
     : machineFiltered.filter((a: any) => a.tier === tierFilter);
 
   // Filter by status
-  const filtered = statusFilter === 'All'
+  const statusFiltered = statusFilter === 'All'
     ? tierFiltered
     : statusFilter === 'Active'
       ? tierFiltered.filter((a: any) => a.alive)
       : tierFiltered.filter((a: any) => !a.alive);
+
+  // Spec §8 in full — matching repos, prompts and files, and grouping results by type — is
+  // build-order step 10. This is the agents-only half, which is step 8's first line ("search
+  // matches agents first"). Deliberately shipped rather than leaving the strip's search box
+  // inert: a control that does nothing is worse than a control that does less than the spec.
+  const q = search.trim().toLowerCase();
+  const filtered = q
+    ? statusFiltered.filter((a: { id?: string; name?: string; role?: string; tier?: string }) =>
+        [a.id, a.name, a.role, a.tier].some((v) => String(v ?? '').toLowerCase().includes(q)))
+    : statusFiltered;
 
   // Sort: alive first, then by tier (default)
   const defaultSorted = [...filtered].sort((a: any, b: any) => {
@@ -163,6 +200,25 @@ export default function Agents() {
     );
   }
 
+  // Summary-strip numbers (spec §3). All of them derive from the two canonical sources —
+  // /api/agents for liveness, /api/messages/pair-counts for traffic — so the strip cannot
+  // disagree with the connection lines or with the status-filter counts below it.
+  const pairs = pairData?.pairs ?? [];
+  const messagesInWindow = pairs.reduce((n, p) => n + p.count, 0);
+  const activeConnections = pairs.filter((p) => p.count > 0).length;
+  const busiest = pairs.length ? pairs[0] : null;   // endpoint already orders by count desc
+  // The VPS is the always-on machine this view is about; hostname comes from /api/system,
+  // which is fine for a LABEL — §16 only forbids using that route's agent COUNTS.
+  const machineName = system?.machines?.vps?.hostname ?? 'unknown host';
+  const machineLive = (system?.machines?.vps?.status ?? 'online') === 'online';
+
+  // Peers an agent actually exchanged messages with in the window, busiest first — `pairs`
+  // already arrives ordered by count, so no second sort. This is what makes spec §5's
+  // "connection count (click to list)" a list rather than a bare number.
+  const peersOf = (id: string): string[] =>
+    pairs.filter((p) => p.a === id || p.b === id).map((p) => (p.a === id ? p.b : p.a));
+  const panelAgent = panelAgentId ? agents.find((a: { id: string }) => a.id === panelAgentId) : null;
+
   // Health summary
   const healthy = agents.filter((a: any) => a.alive).length;
   const sleeping = agents.filter((a: any) => a.machine === 'mac' && (a.machine_status === 'sleeping' || a.machine_status === 'offline')).length;
@@ -171,12 +227,28 @@ export default function Agents() {
 
   return (
     <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-neutral-100">Agents</h1>
-            <p className="text-sm text-neutral-500 mt-0.5">{sorted.length} of {agents.length} agents</p>
+      {/* Header. Spec §3 wants the top bar fixed and never covered — sticky rather than
+          position:fixed so it stays inside this page's scroll container and cannot end up
+          floating over another route's content. The opaque background matters: without it
+          the cards scroll visibly through the numbers. */}
+      <div className="sticky top-0 z-20 -mx-6 px-6 pt-1 pb-3 bg-neutral-950 border-b border-neutral-900 space-y-3">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <AgentsSummaryStrip
+              machineName={machineName}
+              machineLive={machineLive}
+              agentsUp={healthy}
+              agentsTotal={agents.length}
+              messages24h={messagesInWindow}
+              activeConnections={activeConnections}
+              busiest={busiest}
+              windowHours={WINDOW_HOURS}
+              search={search}
+              onSearchChange={setSearch}
+            />
+            <p className="text-sm text-neutral-500 mt-0.5">
+              showing {sorted.length} of {agents.length}
+            </p>
           </div>
           <button
             onClick={() => setShowNewAgent(true)}
@@ -388,10 +460,42 @@ export default function Agents() {
         </div>
       )}
 
-      {/* Topology view */}
+      {/* Topology view. Spec §3: the panel sits beside the graph and the graph stays visible.
+          Stacked full-width under lg rather than a true overlay sheet — §12's small-screen
+          bullet asks for full-screen, and full-width-stacked is that shape without a second
+          modal implementation; a real sheet can replace it when someone uses this on a phone. */}
       {viewMode === 'topology' && (
-        <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-4 overflow-x-auto">
-          <TopologyDiagram agents={agents} />
+        <div className="flex flex-col lg:flex-row gap-4 items-stretch">
+          <div className="flex-1 min-w-0 rounded-xl border border-neutral-800 bg-neutral-900 p-4 overflow-x-auto">
+            <TopologyDiagram
+              agents={agents}
+              pairs={pairs}
+              windowHours={WINDOW_HOURS}
+              onSelectConnection={openConversation}
+              onSelectAgent={openAgentPanel}
+              selectedAgentId={panelAgentId}
+            />
+          </div>
+          {(panelAgent || selectedConnection) && (
+            <aside className="w-full lg:w-[380px] shrink-0 lg:max-h-[75vh]">
+              {selectedConnection ? (
+                <ConversationPanel
+                  a={selectedConnection[0]}
+                  b={selectedConnection[1]}
+                  onOpenAgent={openAgentPanel}
+                  onClose={closePanel}
+                />
+              ) : panelAgent ? (
+                <AgentDetailPanel
+                  agent={panelAgent}
+                  connectionCount={peersOf(panelAgent.id).length}
+                  connections={peersOf(panelAgent.id)}
+                  onOpenConversation={(peer) => openConversation(panelAgent.id, peer)}
+                  onClose={closePanel}
+                />
+              ) : null}
+            </aside>
+          )}
         </div>
       )}
     </div>

@@ -45,6 +45,34 @@ export const deleteTask = (project: string, phaseIdx: number, taskIdx: number): 
   fetch(`/api/roadmaps/${project}/phases/${phaseIdx}/tasks/${taskIdx}`, { method: 'DELETE' }).then(r => r.json());
 
 
+// 2D Agents View (spec §16): the ONLY two message helpers the view may use. Both hit the
+// canonical SQLite `messages` table. fetchPairCounts feeds every count and thickness on a
+// connection line; fetchPairMessages feeds the conversation panel, including "load older"
+// via the `before` cursor. Do not reach for /messages/thread/:conversationId or
+// /messages/conversations/:agentId from this view — they read JSONL, and disagreeing with
+// this table is exactly the "49 vs 40" bug the spec exists to kill.
+export interface PairCountRow { a: string; b: string; count: number; last_at: string | null }
+export const fetchPairCounts = (hours = 24) =>
+  get<{ window_hours: number; pairs: PairCountRow[] }>(`/messages/pair-counts?hours=${hours}`);
+
+export interface PairMessage {
+  id: string; conversation_id: string | null; from_agent: string; to_agent: string;
+  type: string | null; subject: string | null; body: string | null; priority: string | null;
+  status: string | null; created_at: string | null;
+  delivered_at: string | null; acknowledged_at: string | null;
+}
+export interface PairPage {
+  a: string; b: string; total_in_window: number; total_all_time: number; window_hours: number;
+  messages: PairMessage[]; next_before: string | null; has_more: boolean;
+}
+export const fetchPairMessages = (
+  a: string, b: string, opts: { limit?: number; before?: string | null; hours?: number } = {},
+) => {
+  const q = new URLSearchParams({ limit: String(opts.limit ?? 40), hours: String(opts.hours ?? 24) });
+  if (opts.before) q.set('before', opts.before);
+  return get<PairPage>(`/messages/pair/${encodeURIComponent(a)}/${encodeURIComponent(b)}?${q}`);
+};
+
 export const fetchProjects = () => get('/projects');
 export const fetchProject = (slug: string) => get(`/projects/${slug}`);
 
