@@ -166,6 +166,15 @@ seat's own verify-by-re-deriving standard, not taking the review at its word):
   in the adapter (grepped, found none) — confirming every inbound Telegram
   message drives Hermes's normal agent turn, there is no toggle to suppress that
   and use the adapter as pure plumbing.
+- **Independent corroboration, vendor docs (not just code):** Hermes's own
+  published documentation, https://hermesbible.com/docs/user-guide/messaging/matrix
+  (operator-sourced, re-fetched and confirmed directly) — describes Hermes as
+  integrating with Matrix "as a client-based bot," not a bridge, with
+  explicitly agent-driven interaction ("chat with your agent from any
+  device"); no relay-only, passive, or non-agentic mode is mentioned anywhere
+  in the docs. Same conclusion as the code-level finding above, from an
+  independent source (vendor docs vs. adapter source) — this correction now
+  rests on two independent lines of evidence, not one.
 - `/Users/flybyflow/.hermes/hermes-agent/docs/relay-connector-contract.md` is
   real (50KB, exists) and is explicitly labeled `# Relay ↔ Connector Contract
   (v1, EXPERIMENTAL)` — confirming §4.2(b) above is accurately scoped as bigger
