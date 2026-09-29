@@ -19,8 +19,10 @@ so the five call sites in arturo-proxy.py are one-line swaps (`brain.complete(..
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
+import threading
 import os
 import re
 import subprocess
@@ -272,13 +274,13 @@ def runtime_command(runtime: str, cli: str, system: str, prompt: str, model: str
         argv = [cli, "-p", "--no-session-persistence", "--tools", "", "--strict-mcp-config",
                 "--setting-sources", "", "--system-prompt", system]
         if model:
-            argv += ["--model", model]
+            argv.append(f"--model={model}")
         return CommandSpec(argv=argv, stdin=prompt, env_unset=["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"])
     if runtime == "gemini":
         # agy --print swallows the next bare arg as the prompt, so the prompt is attached with `=`.
         argv = [cli, f"--print={system}\n\n{prompt}"]
         if model:
-            argv += ["--model", model]
+            argv.append(f"--model={model}")
         return CommandSpec(argv=argv, stdin=None)
     if runtime == "codex":
         out = Path(tempfile.mkstemp(prefix="arturo-codex-", suffix=".txt", dir=str(scratch) if scratch else None)[1])
@@ -286,9 +288,9 @@ def runtime_command(runtime: str, cli: str, system: str, prompt: str, model: str
         if use_schema:
             schema = CODEX_TOOL_SCHEMA_REQUIRED if require_tool_call else CODEX_TOOL_SCHEMA
             argv += ["--output-schema", str(schema)]
-        argv += ["-o", str(out), "-"]
         if model:
-            argv += ["-m", model]
+            argv.append(f"--model={model}")
+        argv += ["-o", str(out), "-"]
         return CommandSpec(argv=argv, stdin=f"{system}\n\n{prompt}", output_file=out)
     raise UnsupportedRuntime(runtime)
 
@@ -316,6 +318,84 @@ def run_command(spec: CommandSpec, timeout: float) -> str:
                 spec.output_file.unlink()
             except OSError:
                 pass
+
+
+# --- per-turn routing (DEC-1790669162399904) --------------------------------------------------
+
+# Set by a STRICT (explicitly chosen) brain when it fails, so the turn can answer with an error
+# instead of recording the brain's apology prose as a reply. Read by arturo-proxy's text_turn.
+TURN_FAILURE: contextvars.ContextVar = contextvars.ContextVar("arturo_turn_failure", default=None)
+
+# A leading alphanumeric keeps a value from ever reading as a flag, whatever the argv form.
+MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,99}$")
+API_PROVIDER = "api"
+
+
+class ModelNotAllowed(ValueError):
+    """A requested (provider, model) is outside the catalog allow-list or malformed."""
+
+
+class ProviderUnavailable(RuntimeError):
+    def __init__(self, provider: str, reason: str):
+        super().__init__(f"{provider}: {reason}")
+        self.provider = provider
+        self.reason = reason
+
+
+def load_model_catalog(path) -> dict:
+    """{provider id: [model ids]} from providers.json model_catalog.static."""
+    data = json.loads(Path(path).read_text())
+    return {p["id"]: [m["id"] for m in (p.get("model_catalog") or {}).get("static", [])]
+            for p in data.get("providers", [])}
+
+
+def validate_model(provider: str, model: str, catalog: dict) -> None:
+    """Empty model = the provider's own default. Anything else must be a catalog id AND well-shaped."""
+    model = model or ""
+    if provider == API_PROVIDER:
+        if model:
+            raise ModelNotAllowed("the api provider takes only its configured model in v1")
+        return
+    if provider not in catalog:
+        raise ModelNotAllowed(f"unknown provider {provider!r}")
+    if not model:
+        return
+    if not MODEL_ID_RE.match(model) or model not in catalog[provider]:
+        raise ModelNotAllowed(f"model {model!r} is not in the {provider} catalog")
+
+
+class BrainPool:
+    """One brain per (provider, model), built on demand. Pool brains are STRICT: they report
+    failure through TURN_FAILURE. The process default brain is NOT here; it stays the module global."""
+
+    def __init__(self, probes: Callable[[], list], api_key: str = "", api_model: str = "gemini-2.5-flash",
+                 api_factory: Optional[Callable] = None, runner: Callable = run_command):
+        self._probes = probes
+        self._api_key = api_key
+        self._api_model = api_model
+        self._api_factory = api_factory or (lambda key, model: ApiBrain(key, model))
+        self._runner = runner
+        self._lock = threading.Lock()
+        self._brains: dict = {}
+
+    def get(self, provider: str, model: str = "") -> "Brain":
+        key = (provider, model or "")
+        with self._lock:
+            if key in self._brains:
+                return self._brains[key]
+            if provider == API_PROVIDER:
+                if not self._api_key:
+                    raise ProviderUnavailable(provider, "no API key is set")
+                b = self._api_factory(self._api_key, self._api_model)
+            else:
+                row = next((p for p in (self._probes() or []) if p.get("id") == provider), None)
+                if not row or not row.get("installed"):
+                    raise ProviderUnavailable(provider, "its CLI is not installed on this machine")
+                if row.get("authed") is not True:
+                    raise ProviderUnavailable(provider, "its CLI is installed but not logged in")
+                b = RuntimeBrain(provider, row["cli"], model or "", runner=self._runner, strict=True)
+            self._brains[key] = b
+            return b
 
 
 # --- the brains -----------------------------------------------------------------------------
@@ -362,8 +442,9 @@ class RuntimeBrain(Brain):
     kind = "runtime"
 
     def __init__(self, runtime: str, cli: str, model: str = "", runner: Callable = run_command,
-                 timeout: float = DEFAULT_RUNTIME_TIMEOUT_S):
+                 timeout: float = DEFAULT_RUNTIME_TIMEOUT_S, strict: bool = False):
         self.runtime = runtime
+        self.strict = strict
         self.cli = cli
         self.model = model or f"{runtime}-cli-default"
         self._model_flag = model
@@ -385,6 +466,8 @@ class RuntimeBrain(Brain):
             text = self._text(messages, tools, tool_choice, timeout)
         except Exception as e:  # noqa: BLE001 — a CLI hiccup is a sentence, not a 500
             log.error(f"runtime brain ({self.runtime}) failed: {e}")
+            if self.strict:
+                TURN_FAILURE.set({"code": "brain_failed", "provider": self.runtime, "model": self._model_flag})
             # The detail goes to the LOG above and NEVER into the reply: a CalledProcessError
             # stringifies to the whole argv, which carries --system-prompt followed by Arturo's
             # entire system prompt, and truncating to 200 chars only cuts it off mid-prompt

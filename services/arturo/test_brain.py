@@ -149,9 +149,12 @@ def test_claude_command_puts_system_in_flag_and_prompt_on_stdin():
 
 
 def test_claude_command_model_flag_only_when_set():
-    assert "--model" not in B.runtime_command("claude", "claude", "S", "P", model="").argv
+    # CHANGED 2026-09-29 (DEC-1790669162399904 §1.2): the model rides ATTACHED (--model=<id>),
+    # never as a separate argv element, so a value can never be parsed as a flag of its own.
+    argv = B.runtime_command("claude", "claude", "S", "P", model="").argv
+    assert not any(a == "--model" or a.startswith("--model=") for a in argv)
     argv = B.runtime_command("claude", "claude", "S", "P", model="claude-haiku-4-5-20251001").argv
-    assert argv[argv.index("--model") + 1] == "claude-haiku-4-5-20251001"
+    assert "--model=claude-haiku-4-5-20251001" in argv and "--model" not in argv
 
 
 def test_gemini_command_attaches_prompt_to_print_flag():
