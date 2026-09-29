@@ -160,14 +160,23 @@ export function ModelSelectorSheet({ open, onClose, selection, onPick, onPickDef
           </button>
         </div>
 
-        {loading && <div className="text-xs text-foreground/50 py-4">Checking providers…</div>}
+        {/* Only a FIRST load empties the sheet. A re-probe (coming back from the connect
+            modal, or "check again") keeps the tiles on screen and says it is working — the
+            back button otherwise landed the operator on a blank sheet for the length of a
+            cold probe, which is the dead end it was meant to fix. */}
+        {loading && rows.length === 0 && (
+          <div className="text-xs text-foreground/50 py-4">Checking providers…</div>
+        )}
+        {loading && rows.length > 0 && (
+          <div className="text-[10px] text-foreground/40 mb-2">Re-checking providers…</div>
+        )}
         {error && (
           <div className="text-xs text-red-500 py-2" role="alert">
             Could not load providers: {error}
           </div>
         )}
 
-        {!loading && !error && (
+        {(!loading || rows.length > 0) && !error && (
           <>
             {/* Provider tiles — a centred 4-up grid, not a scrolling flex row. With the
                 "Add a provider" tile there are four: a flex row either ran off the edge of a
@@ -288,7 +297,10 @@ export function ModelSelectorSheet({ open, onClose, selection, onPick, onPickDef
           authed: connectRow.provider.authed,
           auth_reason: connectRow.provider.auth_reason ?? connectRow.greyReason,
         } : null}
-        onClose={() => { setConnectRow(null); void probe(true); }}
+        // Back returns to the provider row (re-probing, so a just-finished login shows);
+        // the X means what it looks like and dismisses the sheet as well.
+        onBack={() => { setConnectRow(null); void probe(true); }}
+        onClose={() => { setConnectRow(null); onClose(); }}
         onRecheck={() => probe(true)}
       />
     </div>

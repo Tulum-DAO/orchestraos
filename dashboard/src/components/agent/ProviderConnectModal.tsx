@@ -11,7 +11,7 @@
  * reason was effectively unreachable. Here it is stated in words, on the surface.
  */
 import { useEffect, useState } from 'react';
-import { X, Terminal, Globe, Copy, ExternalLink } from 'lucide-react';
+import { X, ChevronLeft, Terminal, Globe, Copy, ExternalLink } from 'lucide-react';
 import WebTerminal from '../WebTerminal';
 import {
   connectModes, defaultMode, connectPlan, reasonText, cliFor, installNote, connectSteps,
@@ -20,7 +20,15 @@ import {
 
 interface Props {
   provider: ProviderLike | null;
+  /** Dismiss everything — this modal AND the sheet that opened it. */
   onClose: () => void;
+  /**
+   * Back to the provider row. Tapping an uninstalled provider opens this modal OVER the
+   * sheet, so without a back affordance the provider tiles are unreachable: the operator
+   * could see Claude's and Codex's models but a tap on a disconnected provider was a dead
+   * end (operator, 2026-09-29). Only the X returned, and an X reads as "close everything".
+   */
+  onBack?: () => void;
   /** Injected in tests; defaults to the real POST. Returns the opened session name. */
   startLoginShell?: (providerId: string) => Promise<{ ok: boolean; session?: string; error?: string }>;
   /** Re-run the runtime probe (fresh, never the cache) so this sheet can correct itself
@@ -51,7 +59,7 @@ function renderTicks(line: string) {
       : <span key={i}>{part}</span>);
 }
 
-export function ProviderConnectModal({ provider, onClose, startLoginShell = realStartLoginShell, onRecheck }: Props) {
+export function ProviderConnectModal({ provider, onClose, onBack, startLoginShell = realStartLoginShell, onRecheck }: Props) {
   const [mode, setMode] = useState<ModeId>(provider ? defaultMode(provider) : 'tmux');
   const [busy, setBusy] = useState(false);
   const [opened, setOpened] = useState<string | null>(null);
@@ -114,12 +122,23 @@ export function ProviderConnectModal({ provider, onClose, startLoginShell = real
     if (r.ok) setOpened(r.session || null); else setError(r.error || 'could not open a terminal');
   }
 
+  // Dismissing by backdrop is the LEAST destructive exit available: step back to the
+  // providers when there is somewhere to step back to.
+  const dismiss = onBack || onClose;
+
   return (
-    <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/50" onClick={onClose}>
+    <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/50" onClick={dismiss}>
       <div className="w-full max-w-lg max-h-[94vh] flex flex-col rounded-t-2xl bg-background border-t border-border p-4 pb-6"
            role="dialog" aria-label={`Connect ${provider.label}`} onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-1">
-          <h2 className="text-sm font-medium text-foreground">Connect {provider.label}</h2>
+        <div className="flex items-center gap-2 mb-1">
+          {onBack && (
+            <button onClick={onBack} aria-label="Back to providers" data-testid="connect-back"
+                    className="-ml-1 p-1 rounded hover:bg-muted text-foreground/70 hover:text-foreground flex items-center gap-1">
+              <ChevronLeft size={18} />
+              <span className="text-xs">Providers</span>
+            </button>
+          )}
+          <h2 className="text-sm font-medium text-foreground flex-1 truncate">Connect {provider.label}</h2>
           <button onClick={onClose} aria-label="Close" className="p-1 rounded hover:bg-muted"><X size={18} /></button>
         </div>
 
