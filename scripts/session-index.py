@@ -18,6 +18,12 @@ Usage:
     # List all indexed agents
     python3 session-index.py list
 """
+# PEP 604 unions (`dict | None`) appear in five signatures below and are evaluated at
+# import time on Python < 3.10 — so `session-index.py scan` died with
+# "TypeError: unsupported operand type(s) for |" under the repo's default python3 (3.9),
+# even though it runs fine under the 3.12 the supervisor uses. This makes annotations
+# lazy so the module imports on both, rather than rewriting five signatures.
+from __future__ import annotations
 
 import json
 import os
