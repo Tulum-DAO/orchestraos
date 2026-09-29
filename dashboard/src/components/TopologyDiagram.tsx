@@ -66,7 +66,13 @@ function AgentNode({ agent }: { agent: Agent }) {
           aria-hidden
           className="absolute -top-1 -right-1 flex h-2.5 w-2.5"
         >
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75" />
+          {/* motion-safe: the expanding ring is decoration, so it is the only part gated.
+              Every bit of INFORMATION survives prefers-reduced-motion — the solid dot
+              below, the sky border and the task subtitle all stay — so a reader who
+              suppresses motion loses the animation, never the meaning. A continuously
+              looping pulse is the shape that actually troubles vestibular sensitivity,
+              which is why this one is worth gating and a one-shot spinner is not. */}
+          <span className="absolute inline-flex h-full w-full motion-safe:animate-ping rounded-full bg-sky-400 opacity-75" />
           <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-sky-400" />
         </span>
       )}
