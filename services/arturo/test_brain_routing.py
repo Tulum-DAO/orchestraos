@@ -34,8 +34,10 @@ def test_hostile_model_value_never_becomes_its_own_argv_element(runtime, cli, tm
 
 # ---- the catalog allow-list ---------------------------------------------------------------
 
-def test_load_model_catalog_reads_model_catalog_static():
-    cat = B.load_model_catalog(PROVIDERS)
+def test_load_model_catalog_reads_model_catalog_static(tmp_path):
+    # Explicitly WITHOUT a live cache: the default path is a real file on a machine that has
+    # probed its CLIs, which would make this test depend on who ran it.
+    cat = B.load_model_catalog(PROVIDERS, tmp_path / "no-live-cache.json")
     assert set(cat) >= {"claude", "gemini", "codex"}
     raw = json.loads(PROVIDERS.read_text())
     for p in raw["providers"]:

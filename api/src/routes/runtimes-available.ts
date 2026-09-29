@@ -105,6 +105,8 @@ export interface ProviderResult {
    *  list AFTER a probe failed (with `model_catalog_reason` saying why). */
   model_catalog_source: CatalogResult['source'];
   model_catalog_reason?: string;
+  /** Ids validation accepts for this provider — a superset of `models` (see CatalogResult). */
+  model_catalog_valid_ids: string[];
 }
 
 export interface RuntimesAvailableResponse {
@@ -226,13 +228,16 @@ export function defaultProbeAuth(provider: ProviderConfig): AuthResult {
 }
 
 function staticCatalog(provider: ProviderConfig, reason?: string): CatalogResult {
+  const staticIds = (provider.model_catalog.static || []).map((m) => m.id);
   const models = (provider.model_catalog.static || []).map((m) => ({
     id: m.id,
     label: m.label,
     capabilities: m.capabilities,
     ...(m.capabilities_unverified?.length ? { capabilities_unverified: m.capabilities_unverified } : {}),
   }));
-  return reason ? { models, source: 'static-fallback', reason } : { models, source: 'static' };
+  return reason
+    ? { models, valid_ids: staticIds, source: 'static-fallback', reason }
+    : { models, valid_ids: staticIds, source: 'static' };
 }
 
 /**
@@ -268,7 +273,9 @@ export function defaultPublishLiveCatalog(
     for (const p of providers) {
       // Only a LIVE answer is published; a static fallback is already known to the reader.
       if (p.model_catalog_source !== 'probe') continue;
-      live[p.id] = p.models.map((m) => m.id);
+      // The VALIDATION set, not the offered set: a collapsed alias is still a real
+      // --model argument, and a saved pick of one must keep working.
+      live[p.id] = p.model_catalog_valid_ids;
     }
     if (!Object.keys(live).length) return;
     mkdirSync(dirname(path), { recursive: true });
@@ -320,6 +327,7 @@ export function probeAll(deps: ProbeDeps): RuntimesAvailableResponse {
       auth_reason: auth.auth_reason,
       models: catalog.models,
       model_catalog_source: catalog.source,
+      model_catalog_valid_ids: catalog.valid_ids,
       ...(catalog.reason ? { model_catalog_reason: catalog.reason } : {}),
     };
   });

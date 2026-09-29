@@ -32,7 +32,9 @@
      "list_path": "response.response.models",
      "id_key": "value",
      "label_key": "displayName",
-     "timeout_ms": 30000
+     "timeout_ms": 30000,
+     "resolved_key": "resolvedModel",
+     "default_id": "default"
     },
     "static": [
      {

@@ -19,7 +19,7 @@ function authedRow(id: string, cli: string, authed: boolean | 'unverified' = tru
   // takes RuntimeRow[] so the fixture has to be a real row rather than a near-miss.
   return {
     id, label: id, cli, installed: true, authed, auth_reason: undefined, logo_svg: '',
-    models: [], model_catalog_source: 'static' as const,
+    models: [], model_catalog_source: 'static' as const, model_catalog_valid_ids: [],
   };
 }
 

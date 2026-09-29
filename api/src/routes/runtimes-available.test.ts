@@ -60,6 +60,7 @@ function makeFakeDeps(opts: {
     probeAuth: (p) => opts.auth[p.id] ?? { authed: 'unverified', auth_reason: 'no-fixture' },
     loadModelCatalog: (p) => ({
       models: (p.model_catalog.static || []).map((m) => ({ id: m.id, label: m.label, capabilities: m.capabilities })),
+      valid_ids: (p.model_catalog.static || []).map((m) => m.id),
       source: 'static' as const,
     }),
     publishLiveCatalog: () => {},
@@ -91,7 +92,7 @@ test('probeAll: not-installed provider is LOUD false, never probed for auth', ()
       authProbed = true;
       return { authed: true };
     },
-    loadModelCatalog: () => ({ models: [], source: 'static' as const }),
+    loadModelCatalog: () => ({ models: [], valid_ids: [], source: 'static' as const }),
     publishLiveCatalog: () => {},
     now: () => 1000,
   };
@@ -146,7 +147,7 @@ test('GET /available caches within TTL (probeAuth called once for two GETs)', as
       probeCount += 1;
       return { authed: true };
     },
-    loadModelCatalog: () => ({ models: [], source: 'static' as const }),
+    loadModelCatalog: () => ({ models: [], valid_ids: [], source: 'static' as const }),
     publishLiveCatalog: () => {},
     now: () => 1000, // frozen clock => cache never expires between calls
   };
@@ -170,7 +171,7 @@ test('POST /available/refresh self-heals: forces re-probe even within TTL', asyn
       probeCount += 1;
       return { authed };
     },
-    loadModelCatalog: () => ({ models: [], source: 'static' as const }),
+    loadModelCatalog: () => ({ models: [], valid_ids: [], source: 'static' as const }),
     publishLiveCatalog: () => {},
     now: () => 1000,
   };
@@ -268,17 +269,18 @@ test('probeAll publishes ONLY live-probed ids, and skips a static fallback', () 
     probeAuth: () => ({ authed: true }),
     loadModelCatalog: (p) =>
       p.id === 'claude'
-        ? { models: [{ id: 'live-1', label: 'Live 1', capabilities: { text: true, image: false, audio: false, video: false, context_window: null } }], source: 'probe' as const }
-        : { models: [{ id: 'static-1', label: 'Static 1', capabilities: { text: true, image: false, audio: false, video: false, context_window: null } }], source: 'static-fallback' as const, reason: 'probe-failed:ENOENT' },
+        ? { models: [{ id: 'live-1', label: 'Live 1', capabilities: { text: true, image: false, audio: false, video: false, context_window: null } }], valid_ids: ['live-1', 'collapsed-alias'], source: 'probe' as const }
+        : { models: [{ id: 'static-1', label: 'Static 1', capabilities: { text: true, image: false, audio: false, video: false, context_window: null } }], valid_ids: ['static-1'], source: 'static-fallback' as const, reason: 'probe-failed:ENOENT' },
     publishLiveCatalog: (rows) => {
       const live: Record<string, string[]> = {};
-      for (const r of rows) if (r.model_catalog_source === 'probe') live[r.id] = r.models.map((m) => m.id);
+      for (const r of rows) if (r.model_catalog_source === 'probe') live[r.id] = r.model_catalog_valid_ids;
       published.push(live);
     },
     now: () => 1,
   };
   const res = probeAll(deps);
-  assert.deepEqual(published[0], { claude: ['live-1'] });
+  // the collapsed alias is published for VALIDATION even though it is not offered
+  assert.deepEqual(published[0], { claude: ['live-1', 'collapsed-alias'] });
   assert.equal(res.providers[1].model_catalog_source, 'static-fallback');
   assert.match(res.providers[1].model_catalog_reason || '', /probe-failed/);
 });
@@ -290,6 +292,7 @@ test('publishing the live catalog writes atomically and survives an unwritable p
     id: 'claude', label: 'Claude', logo_svg: '', installed: true, authed: true as const,
     models: [{ id: 'm1', label: 'M1', capabilities: { text: true, image: false, audio: false, video: false, context_window: null } }],
     model_catalog_source: 'probe' as const,
+    model_catalog_valid_ids: ['m1'],
   };
   defaultPublishLiveCatalog([row], target);
   assert.deepEqual(JSON.parse(readFileSync(target, 'utf-8')).providers, { claude: ['m1'] });

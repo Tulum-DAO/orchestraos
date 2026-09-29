@@ -35,6 +35,7 @@ const CLAUDE_STDOUT = [
       response: {
         models: [
           { value: 'default', resolvedModel: 'claude-opus-5-5', displayName: 'Default (recommended)' },
+          { value: 'opus', resolvedModel: 'claude-opus-5-5', displayName: 'Opus 5.5' },
           { value: 'claude-fable-5-1', resolvedModel: 'claude-fable-5-1', displayName: 'Fable 5.1' },
         ],
       },
@@ -63,6 +64,8 @@ const AGY_PROBE: ModelProbeConfig = {
 };
 const CLAUDE_PROBE: ModelProbeConfig = {
   kind: 'stdin-json-stream',
+  resolved_key: 'resolvedModel',
+  default_id: 'default',
   cmd: 'claude -p --input-format stream-json --output-format stream-json --verbose --no-session-persistence',
   stdin: '{"type":"control_request","request_id":"probe","request":{"subtype":"initialize"}}',
   match: { type: 'control_response' },
@@ -117,7 +120,8 @@ test('stdin-json-stream: writes the control request and reads the matching line 
   const spy = { calls: [] as { bin: string; args: string[]; input?: string; lingerMs?: number }[] };
   const got = probeModelCatalog(CLAUDE_PROBE, [], execReturning(CLAUDE_STDOUT, spy));
   assert.equal(got.source, 'probe');
-  assert.deepEqual(got.models.map((m) => m.id), ['default', 'claude-fable-5-1']);
+  // 'default' is the CLI's own pointer row, not a model — see the alias tests below
+  assert.deepEqual(got.models.map((m) => m.id), ['opus', 'claude-fable-5-1']);
   assert.equal(spy.calls[0].bin, 'claude');
   assert.match(spy.calls[0].input || '', /control_request/);
 });
@@ -129,7 +133,7 @@ test('stdin-json-stream: a model the probe finds keeps VERIFIED static capabilit
   assert.equal(fable.capabilities.context_window, 400000);
   // the LIVE label wins over the static one; the login is the source of truth
   assert.equal(fable.label, 'Fable 5.1');
-  const unknown = got.models.find((m) => m.id === 'default');
+  const unknown = got.models.find((m) => m.id === 'opus');
   assert.ok(unknown);
   assert.ok((unknown.capabilities_unverified || []).includes('context_window'));
 });
@@ -218,4 +222,68 @@ test('duplicate ids collapse — one row per model', () => {
   const dupes = ['a\tA', 'a\tA again', 'b\tB'].join('\n');
   const got = probeModelCatalog(AGY_PROBE, [], execReturning(dupes));
   assert.deepEqual(got.models.map((m) => m.id), ['a', 'b']);
+});
+
+
+// --- aliases: the CLI lists POINTERS next to real models -------------------
+// `claude` returns `default` (-> claude-opus-5-5) beside `opus` (-> the same model). The
+// sheet already offers "Use the default brain" as the empty-model row, so the probe's
+// `default` rendered as a SECOND default ("Default (recommended)") directly under it
+// (operator, 2026-09-29). But `opus` is the ONLY id that reaches Opus 5.5, so dropping
+// every alias would lose the model.
+
+const CLAUDE_ALIASES = [
+  { value: 'default', resolvedModel: 'claude-opus-5-5', displayName: 'Default (recommended)' },
+  { value: 'opus', resolvedModel: 'claude-opus-5-5', displayName: 'Opus 5.5' },
+  { value: 'sonnet', resolvedModel: 'claude-sonnet-5-5', displayName: 'Sonnet 5.5' },
+  { value: 'claude-sonnet-5', resolvedModel: 'claude-sonnet-5', displayName: 'Sonnet 5' },
+];
+
+function claudeStdout(models: unknown[]): string {
+  return JSON.stringify({ type: 'control_response', response: { response: { models } } });
+}
+
+test("the CLI's default POINTER is dropped — the sheet already has a default row", () => {
+  const got = probeModelCatalog(CLAUDE_PROBE, [], execReturning(claudeStdout(CLAUDE_ALIASES)));
+  assert.ok(!got.models.some((m) => m.id === 'default'), 'the default pointer must not be a model row');
+});
+
+test('an alias that is the ONLY way to reach a model is kept, under its own name', () => {
+  const got = probeModelCatalog(CLAUDE_PROBE, [], execReturning(claudeStdout(CLAUDE_ALIASES)));
+  const opus = got.models.find((m) => m.id === 'opus');
+  assert.ok(opus, 'opus is the only id resolving to claude-opus-5-5');
+  assert.equal(opus.label, 'Opus 5.5');
+  // sonnet -> claude-sonnet-5-5 is NOT the same model as the concrete claude-sonnet-5 row
+  assert.ok(got.models.some((m) => m.id === 'sonnet'));
+  assert.ok(got.models.some((m) => m.id === 'claude-sonnet-5'));
+});
+
+test('when a CONCRETE id reaches the same model, the alias collapses into it', () => {
+  const withConcrete = [
+    ...CLAUDE_ALIASES,
+    { value: 'claude-opus-5-5', resolvedModel: 'claude-opus-5-5', displayName: 'Opus 5.5' },
+  ];
+  const got = probeModelCatalog(CLAUDE_PROBE, [], execReturning(claudeStdout(withConcrete)));
+  assert.ok(got.models.some((m) => m.id === 'claude-opus-5-5'));
+  assert.ok(!got.models.some((m) => m.id === 'opus'), 'the alias duplicates a concrete row');
+});
+
+test('a provider with no alias concept is untouched', () => {
+  const got = probeModelCatalog(AGY_PROBE, [], execReturning(AGY_STDOUT));
+  assert.equal(got.models.length, 3);
+});
+
+
+// A collapsed alias is still a REAL --model argument. The picker stops offering it, but an
+// operator whose saved pick predates the collapse must not start getting `unknown_model`.
+test('valid_ids keeps what the picker no longer offers', () => {
+  const got = probeModelCatalog(CLAUDE_PROBE, [], execReturning(claudeStdout(CLAUDE_ALIASES)));
+  assert.ok(!got.models.some((m) => m.id === 'default'), 'not offered');
+  assert.ok(got.valid_ids.includes('default'), 'still accepted');
+  for (const m of got.models) assert.ok(got.valid_ids.includes(m.id), 'offered implies accepted');
+});
+
+test('valid_ids on a static fallback is just the static list', () => {
+  const got = probeModelCatalog(CLAUDE_PROBE, STATIC, () => { throw new Error('ENOENT'); });
+  assert.deepEqual(got.valid_ids, ['claude-fable-5-1']);
 });

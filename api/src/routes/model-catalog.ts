@@ -58,6 +58,12 @@ export interface ModelProbeConfig {
   list_path?: string;
   id_key?: string;
   label_key?: string;
+  /** Key holding the model an id RESOLVES to (claude: `resolvedModel`). Ids that resolve
+   *  to the same model are one row, and a concrete id beats an alias. */
+  resolved_key?: string;
+  /** The CLI's own "use my default" POINTER, which is not a model: the picker already
+   *  offers the default as its empty-model row. */
+  default_id?: string;
   hidden_key?: string;
   modalities_key?: string;
 }
@@ -69,7 +75,12 @@ export type ProbeExec = (
 ) => string;
 
 export interface CatalogResult {
+  /** What the picker OFFERS: one row per model, pointers and duplicate aliases removed. */
   models: ModelInfo[];
+  /** What validation ACCEPTS: the offered ids PLUS the ids that were collapsed away.
+   *  A pointer like `default` is a real, valid --model argument, and an operator whose
+   *  saved pick predates the collapse must not start getting `unknown_model`. */
+  valid_ids: string[];
   source: 'probe' | 'static' | 'static-fallback';
   reason?: string;
 }
@@ -124,7 +135,7 @@ function jsonLines(stdout: string): Record<string, unknown>[] {
   return out;
 }
 
-interface RawModel { id: string; label?: string; modalities?: string[] }
+interface RawModel { id: string; label?: string; modalities?: string[]; resolved?: string }
 
 function readRows(rows: unknown, cfg: ModelProbeConfig): RawModel[] {
   if (!Array.isArray(rows)) return [];
@@ -137,10 +148,12 @@ function readRows(rows: unknown, cfg: ModelProbeConfig): RawModel[] {
     if (typeof id !== 'string' || !id) continue;
     const label = r[cfg.label_key || 'label'];
     const modalities = cfg.modalities_key ? r[cfg.modalities_key] : undefined;
+    const resolved = cfg.resolved_key ? r[cfg.resolved_key] : undefined;
     out.push({
       id,
       label: typeof label === 'string' ? label : undefined,
       modalities: Array.isArray(modalities) ? modalities.filter((m): m is string => typeof m === 'string') : undefined,
+      resolved: typeof resolved === 'string' && resolved ? resolved : undefined,
     });
   }
   return out;
@@ -217,6 +230,29 @@ function runProbe(cfg: ModelProbeConfig, exec: ProbeExec, notes: string[]): RawM
   throw new Error(`unknown-probe-kind:${(cfg as { kind: string }).kind}`);
 }
 
+/**
+ * A CLI may list POINTERS beside models: `default` and `opus` can both resolve to
+ * claude-opus-5-5. The picker's own "use the default brain" row is the empty model, so
+ * the CLI's default pointer rendered as a second default right beneath it.
+ *
+ * Dropping every alias is wrong too — `opus` is the ONLY id that reaches Opus 5.5. So:
+ * drop the default pointer, then keep ONE id per resolved model, preferring the concrete
+ * id when the CLI lists one.
+ */
+function collapseAliases(raw: RawModel[], cfg: ModelProbeConfig): RawModel[] {
+  const rows = cfg.default_id ? raw.filter((r) => r.id !== cfg.default_id) : raw;
+  if (!cfg.resolved_key) return rows;
+  const byTarget = new Map<string, RawModel>();
+  for (const row of rows) {
+    const target = row.resolved || row.id;
+    const held = byTarget.get(target);
+    if (!held) { byTarget.set(target, row); continue; }
+    // A row whose id IS the model it resolves to is the concrete one.
+    if (held.id !== target && row.id === target) byTarget.set(target, row);
+  }
+  return rows.filter((row) => byTarget.get(row.resolved || row.id) === row);
+}
+
 function toModels(raw: RawModel[], staticModels: StaticModel[]): ModelInfo[] {
   const byId = new Map(staticModels.map((m) => [m.id, m]));
   const out: ModelInfo[] = [];
@@ -253,6 +289,7 @@ function toModels(raw: RawModel[], staticModels: StaticModel[]): ModelInfo[] {
 
 function staticFallback(staticModels: StaticModel[], reason: string): CatalogResult {
   return {
+    valid_ids: staticModels.map((m) => m.id),
     models: staticModels.map((m) => ({
       id: m.id,
       label: m.label,
@@ -282,7 +319,9 @@ export function probeModelCatalog(
     if (msg.startsWith('unknown-probe-kind:')) return staticFallback(staticModels, msg);
     return staticFallback(staticModels, `probe-failed:${msg.split('\n')[0].slice(0, 120)}`);
   }
-  const models = toModels(raw, staticModels);
+  const models = toModels(collapseAliases(raw, cfg), staticModels);
   if (!models.length) return staticFallback(staticModels, 'probe-empty');
-  return { models, source: 'probe', ...(notes.length ? { reason: notes.join(',') } : {}) };
+  const offered = new Set(models.map((m) => m.id));
+  const valid_ids = [...models.map((m) => m.id), ...raw.map((r) => r.id).filter((id) => !offered.has(id))];
+  return { models, valid_ids, source: 'probe', ...(notes.length ? { reason: notes.join(',') } : {}) };
 }
