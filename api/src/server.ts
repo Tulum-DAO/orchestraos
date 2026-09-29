@@ -54,7 +54,40 @@ import { setupVoiceLiveWebSocket } from './routes/voice-live.js';
 import { loadConfig } from './lib/config.js';
 
 const app = express();
-app.use(cors());
+
+// CORS: an explicit allowlist, not `cors()` — the bare call reflects ANY origin, so any
+// page the operator visited could read this API from their browser. Allows the dashboard's
+// own origin (both loopback spellings) plus anything in ORCHESTRA_API_CORS_ORIGINS
+// (comma-separated) for a non-default deployment. Requests with no Origin header (curl,
+// server-side callers, same-origin fetches) are still allowed — CORS is a browser control
+// and rejecting those would break every non-browser client without adding protection.
+const corsAllowlist = (): string[] => {
+  const cfg = loadConfig();
+  const extra = (process.env.ORCHESTRA_API_CORS_ORIGINS || '')
+    .split(',').map(s => s.trim()).filter(Boolean);
+  const hosts = cfg.dashboardHost === '0.0.0.0' || cfg.dashboardHost === '::'
+    ? ['127.0.0.1', 'localhost']
+    : [cfg.dashboardHost, cfg.dashboardHost === '127.0.0.1' ? 'localhost' : cfg.dashboardHost];
+  const origins = new Set<string>(extra);
+  for (const h of hosts) {
+    origins.add(`http://${h}:${cfg.dashboardPort}`);
+    origins.add(`https://${h}:${cfg.dashboardPort}`);
+  }
+  return [...origins];
+};
+
+app.use(cors({
+  origin(origin, cb) {
+    if (!origin) return cb(null, true);          // non-browser caller; see note above
+    if (corsAllowlist().includes(origin)) return cb(null, true);
+    // Reject by withholding Access-Control-Allow-Origin rather than throwing: the browser
+    // blocks the read either way, and an Error here surfaces as a 500 that pollutes error
+    // monitoring and masks real faults.
+    console.warn(`[cors] blocked origin: ${origin}`);
+    return cb(null, false);
+  },
+  credentials: true,
+}));
 app.use(express.json({ limit: '10mb' }));
 
 app.get('/health', (_, res) => res.json({ status: 'ok', service: 'orchestraOS-api' }));
@@ -171,7 +204,13 @@ const wss = new WebSocketServer({ server, path: '/ws/terminal' });
 setupTerminalWebSocket(wss);
 setupVoiceLiveWebSocket(server);
 
-server.listen(PORT, () => console.log(`OrchestraOS API on :${PORT} (WebSocket terminal enabled)`));
+// HOST must be passed explicitly: server.listen(PORT, cb) makes Node bind ALL interfaces,
+// so `[api] host = "127.0.0.1"` in orchestra.toml was stated intent the code never honoured.
+// Verified live before this change — lsof showed *:8888 and the LAN IP served /api/me.
+const HOST = process.env.ORCHESTRA_API_HOST || loadConfig().apiHost || '127.0.0.1';
+
+server.listen(Number(PORT), HOST, () => console.log(
+  `OrchestraOS API on ${HOST}:${PORT} (WebSocket terminal enabled)`));
 
 // A 60 s memory heartbeat so a supervisor restart leaves a trend in the API log
 // (heap cap vs event-loop stall was unanswerable without it — docs/RED_ALERT.md api_health_fail).
