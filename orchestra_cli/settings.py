@@ -185,6 +185,16 @@ def child_env(st: Settings, base: dict | None = None) -> dict:
     Secrets are never read from the toml (bot tokens etc. come from the caller's env).
     """
     env = dict(os.environ if base is None else base)
+    # A supervised daemon is NOT running "in" the pane that happened to launch the
+    # supervisor. Leaving these inherited makes msg_store.sender_identity() resolve a
+    # daemon's caller to that pane's session name, so `telegram`/`router`/`approval-loop`
+    # would look like they are impersonating whichever seat ran `orchestra up`. Harmless
+    # while the impersonation guard is in shadow mode; with IMPERSONATION_REFUSE=1 it
+    # would make every daemon send raise, taking the operator's Telegram channel down.
+    # Today they are clean only because the supervisor happens to be started outside
+    # tmux — stripping makes that a guarantee instead of an accident.
+    for _tmux_var in ("TMUX", "TMUX_PANE"):
+        env.pop(_tmux_var, None)
     data = str(st.data_dir)
     root = str(st.repo_root)
     py_path = [root, str(st.repo_root / "scripts")]

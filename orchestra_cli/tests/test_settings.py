@@ -156,3 +156,43 @@ def test_rotation_experimental_runtimes_default_empty_and_exported(tmp_path):
     (root / "orchestra.toml").write_text('[data]\ndir = "x"\n[rotation]\nexperimental_runtimes = ["gemini", "Codex"]\n')
     st = S.load_settings(root)
     assert S.child_env(st, {})["ORCHESTRA_ROTATION_EXPERIMENTAL_RUNTIMES"] == "gemini,codex"
+
+
+def _st(tmp_path):
+    _example(tmp_path)
+    cfg = tmp_path / "orchestra.toml"
+    cfg.write_text((tmp_path / "orchestra.example.toml").read_text().replace(
+        "/var/lib/orchestraos", str(tmp_path / "data")))
+    return S.load_settings(repo_root=tmp_path, config_path=cfg)
+
+
+def test_child_env_strips_tmux_so_daemons_have_no_pane_identity(tmp_path):
+    """A supervised daemon is not running "in" the pane that launched the supervisor.
+
+    msg_store.sender_identity() reads TMUX_PANE. If a daemon inherits it, its caller
+    resolves to that pane's session name and every send looks like impersonation by
+    whichever seat ran `orchestra up` in the foreground. Harmless in shadow mode; with
+    IMPERSONATION_REFUSE=1 it takes down the telegram channel, message-router and
+    approval-loop at once. Stripping makes daemon caller=None a guarantee rather than
+    an accident of how the supervisor happened to be started.
+    """
+    env = S.child_env(_st(tmp_path), base={"PATH": "/usr/bin",
+                                           "TMUX": "/tmp/tmux-501/default,123,0",
+                                           "TMUX_PANE": "%12"})
+    assert "TMUX" not in env, "TMUX leaked into the child environment"
+    assert "TMUX_PANE" not in env, "TMUX_PANE leaked — daemons will resolve a pane identity"
+    assert env["PATH"] == "/usr/bin", "stripping tmux must not disturb the rest of the env"
+
+
+def test_child_env_strip_is_harmless_when_no_tmux_present(tmp_path):
+    env = S.child_env(_st(tmp_path), base={"PATH": "/usr/bin"})
+    assert "TMUX" not in env and "TMUX_PANE" not in env
+    assert env["PATH"] == "/usr/bin"
+
+
+def test_child_env_strips_tmux_inherited_from_the_real_environ(tmp_path, monkeypatch):
+    """base=None is the production path — it reads os.environ directly."""
+    monkeypatch.setenv("TMUX_PANE", "%7")
+    monkeypatch.setenv("TMUX", "/tmp/tmux-501/default,999,1")
+    env = S.child_env(_st(tmp_path))
+    assert "TMUX_PANE" not in env and "TMUX" not in env
