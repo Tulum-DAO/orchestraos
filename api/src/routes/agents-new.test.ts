@@ -304,3 +304,21 @@ test('a named provider still wins over the install purpose', async () => {
   const r = await post(deps, '/api/agents/login-shell', { provider: 'gemini', purpose: 'install' });
   assert.equal(r.json.cli, 'agy');
 });
+
+test('a failed login shell is LOGGED, not only returned in the body', async () => {
+  const deps = makeDeps({ rows: [authedRow('claude', 'claude')] });
+  deps.startLoginShell = async () => ({ ok: false, output: 'no server running on /tmp/tmux-1000/default' });
+  const warns: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (...a: unknown[]) => { warns.push(a.join(' ')); };
+  try {
+    const r = await post(deps, '/api/agents/login-shell', {});
+    assert.equal(r.status, 502);
+    assert.equal(r.json.reason, 'shell_failed');
+  } finally {
+    console.warn = realWarn;
+  }
+  assert.equal(warns.length, 1);
+  assert.match(warns[0], /shell_failed/);
+  assert.match(warns[0], /tmux-1000/, 'the reason the shell failed must reach the log');
+});

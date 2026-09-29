@@ -307,7 +307,14 @@ export function makeDefaultDeps(providersPath?: string): ProbeDeps {
   };
 }
 
-export function probeAll(deps: ProbeDeps): RuntimesAvailableResponse {
+/**
+ * `withModels: false` answers "what is installed and signed in" WITHOUT asking any CLI for
+ * its model list. Auth probes are milliseconds; a live catalog probe is seconds. Callers
+ * that never show a model (the login-shell path) must not pay for one, or the first click
+ * after a restart is a multi-second request — a 502 behind a proxy.
+ */
+export function probeAll(deps: ProbeDeps, opts: { withModels?: boolean } = {}): RuntimesAvailableResponse {
+  const withModels = opts.withModels !== false;
   const providers = deps.loadProviders();
   const results: ProviderResult[] = providers.map((provider) => {
     const installed = deps.isInstalled(provider);
@@ -317,7 +324,9 @@ export function probeAll(deps: ProbeDeps): RuntimesAvailableResponse {
     const auth = installed
       ? deps.probeAuth(provider)
       : { authed: false as const, auth_reason: 'not-installed' };
-    const catalog = deps.loadModelCatalog(provider, auth);
+    const catalog: CatalogResult = withModels
+      ? deps.loadModelCatalog(provider, auth)
+      : { models: [], valid_ids: [], source: 'not-probed' };
     return {
       id: provider.id,
       label: provider.label,
@@ -331,7 +340,8 @@ export function probeAll(deps: ProbeDeps): RuntimesAvailableResponse {
       ...(catalog.reason ? { model_catalog_reason: catalog.reason } : {}),
     };
   });
-  deps.publishLiveCatalog(results);
+  // Never publish from a run that did not ask: an empty catalog is not an answer.
+  if (withModels) deps.publishLiveCatalog(results);
   return { providers: results, probed_at: deps.now(), ttl_s: TTL_S };
 }
 
@@ -348,6 +358,9 @@ interface CacheEntry {
 export function createRuntimesAvailableRouter(deps: ProbeDeps = makeDefaultDeps()): {
   router: Router;
   invalidate: () => void;
+  getCached: () => RuntimesAvailableResponse;
+  /** The cached value if it is still fresh, else null — never probes. */
+  peek: () => RuntimesAvailableResponse | null;
 } {
   const router = Router();
   let cache: CacheEntry | null = null;
@@ -377,10 +390,34 @@ export function createRuntimesAvailableRouter(deps: ProbeDeps = makeDefaultDeps(
     res.json(getFresh());
   });
 
-  return { router, invalidate };
+  const peek = () => (cache && deps.now() < cache.expiresAt ? cache.value : null);
+
+  return { router, invalidate, getCached: getCachedOrFresh, peek };
 }
 
 const production = createRuntimesAvailableRouter();
+
+/**
+ * The same probe the route serves, through the SAME cache.
+ *
+ * Any other route that needs "what is installed and signed in" must come through here.
+ * agents-new called probeAll(makeDefaultDeps()) directly, which was cheap while the model
+ * catalog was a static list — once the catalog became a LIVE CLI probe it meant ~3.5s of
+ * CLI spawning on every login-shell POST, and behind a proxy that is a 502 (operator:
+ * "it requires I click it three times", 2026-09-29).
+ */
+export const getCachedRuntimes = production.getCached;
+
+/**
+ * For callers that need installed/authed only. Serves the shared cache when it is warm —
+ * so the answer matches what the sheet is showing — and otherwise probes auth ALONE rather
+ * than waiting on a live model probe it has no use for.
+ */
+export function getRuntimesForAuth(): ProviderResult[] {
+  const cached = production.peek();
+  if (cached) return cached.providers;
+  return probeAll(makeDefaultDeps(), { withModels: false }).providers;
+}
 
 // Exported so a future spawn/401 failure signal can self-heal the cache
 // without waiting out the 300s TTL (contract requirement; no caller wired

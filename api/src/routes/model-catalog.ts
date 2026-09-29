@@ -81,7 +81,7 @@ export interface CatalogResult {
    *  A pointer like `default` is a real, valid --model argument, and an operator whose
    *  saved pick predates the collapse must not start getting `unknown_model`. */
   valid_ids: string[];
-  source: 'probe' | 'static' | 'static-fallback';
+  source: 'probe' | 'static' | 'static-fallback' | 'not-probed';
   reason?: string;
 }
 

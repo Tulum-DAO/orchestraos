@@ -303,3 +303,47 @@ test('publishing the live catalog writes atomically and survives an unwritable p
   assert.doesNotThrow(() => defaultPublishLiveCatalog([row], join(blocker, 'live.json')));
   rmSync(dir, { recursive: true, force: true });
 });
+
+// Other routes need "what is installed and signed in" too. They must share THIS cache:
+// probing is now a live CLI spawn, and paying for it per request turned opening a terminal
+// into a 3.5s call that 502'd behind a proxy.
+
+test('getCached shares the route cache — a GET then a getCached is ONE probe', async () => {
+  let probes = 0;
+  const deps: ProbeDeps = {
+    loadProviders: () => [fakeProvider()],
+    isInstalled: () => true,
+    probeAuth: () => { probes += 1; return { authed: true }; },
+    loadModelCatalog: () => ({ models: [], valid_ids: [], source: 'static' as const }),
+    publishLiveCatalog: () => {},
+    now: () => 1000,
+  };
+  const { router, getCached } = createRuntimesAvailableRouter(deps);
+  const app = express();
+  app.use('/api/runtimes', router);
+  const server = app.listen(0);
+  const port = (server.address() as { port: number }).port;
+  await new Promise<void>((r) => { http.get(`http://127.0.0.1:${port}/api/runtimes/available`, (res) => { res.resume(); res.on('end', () => r()); }); });
+  getCached();
+  getCached();
+  server.close();
+  assert.equal(probes, 1, 'the cache must be shared, not per-caller');
+});
+
+test('withModels:false never asks a CLI for its catalog, and never publishes one', () => {
+  let catalogCalls = 0;
+  let published = 0;
+  const deps: ProbeDeps = {
+    loadProviders: () => [fakeProvider()],
+    isInstalled: () => true,
+    probeAuth: () => ({ authed: true }),
+    loadModelCatalog: () => { catalogCalls += 1; return { models: [], valid_ids: [], source: 'probe' as const }; },
+    publishLiveCatalog: () => { published += 1; },
+    now: () => 1,
+  };
+  const res = probeAll(deps, { withModels: false });
+  assert.equal(catalogCalls, 0);
+  assert.equal(published, 0, 'an empty catalog must never overwrite a real one');
+  assert.equal(res.providers[0].authed, true, 'auth is still answered');
+  assert.equal(res.providers[0].model_catalog_source, 'not-probed');
+});

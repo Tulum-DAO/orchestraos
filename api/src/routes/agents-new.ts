@@ -16,7 +16,7 @@
  */
 import { Router, type Request, type Response } from 'express';
 import { execFile, execFileSync } from 'node:child_process';
-import { probeAll, makeDefaultDeps, type ProviderResult } from './runtimes-available.js';
+import { getRuntimesForAuth, type ProviderResult } from './runtimes-available.js';
 
 /** A catalog row as this route needs it. GET /api/runtimes/available does not expose the
  *  binary name, so `cli` is optional and falls back to the provider id (they match for
@@ -172,7 +172,12 @@ export function createAgentsNewRouter(deps: NewAgentDeps): Router {
     const session = `login-${cli}`;
     const started = await deps.startLoginShell({ session, greeting });
     if (!started.ok) {
-      return res.status(502).json({ ok: false, reason: 'shell_failed', detail: started.output.slice(-400) });
+      // LOG it, don't only return it. The detail rode home in the response body and nowhere
+      // else, so a 502 the operator hit left no trace on the box: triage afterwards was
+      // guesswork over a log that had never seen the failure (2026-09-29).
+      const detail = started.output.slice(-400);
+      console.warn(`[login-shell] shell_failed session=${session} cli=${cli} detail=${detail.replace(/\n/g, ' | ')}`);
+      return res.status(502).json({ ok: false, reason: 'shell_failed', detail });
     }
     return res.json({ ok: true, session, cli, hint, machine: 'vps' });
   });
@@ -238,7 +243,9 @@ function realStartLoginShell({ session, greeting }: { session: string; greeting:
 }
 
 export const productionDeps: NewAgentDeps = {
-  probeRuntimes: () => probeAll(makeDefaultDeps()).providers,
+  // Installed/authed only, from the shared cache when it is warm. Paying for a live model
+  // probe here made opening a terminal a 3.5s round trip — a 502 behind a proxy.
+  probeRuntimes: () => getRuntimesForAuth(),
   existingNames: realExistingNames,
   spawn: realSpawn,
   sessionExists: realSessionExists,
