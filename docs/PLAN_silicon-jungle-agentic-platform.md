@@ -1,11 +1,15 @@
 # Strategic Brief: Silicon Jungle as an Agentic Product Lab Platform
 
 - **Requested by:** operator, via gm (msg_6568c41b_74190686 + msg_0d4c2eea_74781096
-  ground-truth confirmation, 2026-09-29), as an addendum to the Hermes/Matrix
-  Telegram bridge brief
+  ground-truth confirmation + msg_6a2b5afd_74610984 domains/partners/event
+  addendum, 2026-09-29), as an addendum to the Hermes/Matrix Telegram bridge brief
 - **Authored by:** plan (BSHR research + brief, non-interactive)
 - **Status:** CEO + ENG REVIEWED, CLEARED for accepted (narrow) scope — awaiting
-  the operator's answer to §6's load-bearing question before acting
+  the operator's answer to §6's load-bearing question before acting. **§0b
+  (below) is a post-review addendum** folded in after CEO+eng review completed —
+  reinforces the accepted recommendation with real operational precedent found
+  during verification; does not change the reviewed scope or verdict. Coherence
+  checked against §2-§6, no contradiction found.
 - **Scope:** strategic brief only. No implementation authorized. Kept as a
   **separate document from** `docs/PLAN_hermes-matrix-telegram-bridge.md`, which
   it references — per gm's explicit instruction not to let the bridge brief
@@ -48,6 +52,88 @@ not speculative product strategy, it's a live, named, three-stage program
 The Hermes/Matrix bridge + WhatsApp-auth RBAC work (§4.2 below) is explicitly
 the connective tissue that lets Door 1/Door 2 applicants actually interact
 with the agent fleet once accepted — per gm's own framing of the close.
+
+## 0b. Second ground-truth addendum (post-review, gm addendum 2) — domains,
+partners, reference event, and a real operational precedent found by mistake
+
+gm relayed a second addendum (sent *before* addendum 3 chronologically, but
+delivered to this seat after CEO+eng review had already completed — folded in
+here rather than re-running the full review, per the coherence check noted at
+the top of this file). Three items independently verified, one item corrects
+gm's own flagged uncertainty, and one is a genuinely significant finding this
+seat connected from research already done for the bridge brief.
+
+**Domain resolution (gm flagged this as uncertain — checked directly, both
+claims turn out true simultaneously, not contradictory):**
+- `siliconjungle.io` — **verified via `dig`**: has active MX records (email
+  forwarding through `registrar-servers.com`) but **no A/AAAA records** — a
+  real, owned, email-configured domain with no website currently hosted there.
+- `sje.ploy.build` — **reconfirmed live** (already fetched directly in §0a;
+  gm's speculation that this might be a garbled deploy-preview URL doesn't
+  hold — it's the real, current landing page, consistent across two
+  independent fetches).
+- **Read together:** `siliconjungle.io` is the reserved brand domain (email
+  live, no site); `sje.ploy.build` is where the actual product/funnel lives
+  today. Not a discrepancy to resolve — just two different pieces of the same
+  real setup.
+
+**Partners and reference event (relayed by gm as already fetched/verified —
+not independently re-fetched by this seat, cited as gm's finding):** Tulum
+Co-Working is a live collaborator (hosted the reference "BUILD-A-THON" event
+at KAN Tulum, operator as partner); Tulum Dinner Club is the next planned
+collaboration, explicitly named as the pilot venue for "Keonda" (the
+community-relationship-graph product). The BUILD-A-THON format — Day 1 team
+formation + building, Day 2 demos/feedback, on-site meals, office hours — maps
+almost exactly onto SJE's own confirmed Weekender format (§0a), reinforcing
+that the funnel's format is proven in practice, not just described on a
+landing page.
+
+**Operator's stated thesis (verbatim, relayed by gm, directly shapes
+prioritization):** *"our current thesis is that the tech moat is gone and
+we're doing a big short on technology to go long on relationships first which
+gets us attention and distribution, especially in Tulum — the land of
+influencers."* This reframes §3/§4's isolation-vs-facilitation sequencing
+question usefully: if relationships/distribution are the actual current bet,
+not technology, that's a real argument *for* this brief's "don't over-build
+the isolation layer yet" recommendation, not just a security-driven one — the
+operator's own stated strategy agrees with staying lean on infrastructure
+right now, independent of this brief's technical risk findings.
+
+**The significant finding: the operator has already piloted a version of
+exactly what this brief recommends, on the existing shared Keonda gateway —
+found by re-checking research already done for the bridge brief, not newly
+fetched.** `/Users/flybyflow/.hermes/config.yaml` (read directly, lines
+47-48 and 66-76) shows:
+```yaml
+observe_only:
+  - 120363427836751184@g.us   # BUILD-A-THON.v8 — observe + operator-broadcast
+                               #   ONLY, never auto-reply
+profile_routes:
+  - name: silicon-jungle-buildathon
+    platform: whatsapp
+    chat_id: 120363427836751184@g.us
+    profile: sj-fac
+    enabled: true
+```
+The **same WhatsApp group chat** is both explicitly `observe_only` (no
+autonomous agent replies) and has a live, `enabled: true` profile route named
+`silicon-jungle-buildathon`. **This is real, live, already-running precedent**
+for a cautious, non-agentic "watch and let the operator broadcast" posture on
+Silicon Jungle's own event community — independently arrived at by the
+operator before this brief was ever requested. Two implications for §4:
+1. **Directly validates the "start cautious, human-facilitated, no
+   unsupervised agent access" sequencing** this brief already recommended —
+   this isn't a novel idea this brief is introducing, it's consistent with
+   what the operator already does in practice.
+2. **A genuine open question this brief hadn't surfaced before:** this
+   precedent runs on the *shared* keonda Hermes instance (the same one the
+   bridge brief's de-enmeshment finding argued against reusing for
+   OrchestraOS's *own* operator channel). Whether Silicon Jungle's WhatsApp
+   presence should stay on the shared gateway indefinitely (in this same
+   restricted mode), or eventually get the same "dedicated instance"
+   treatment the bridge brief recommends for the operator's channel, is a
+   real, undecided architecture question — added to §6 below, not decided
+   here.
 
 ## 0. Source material used (checked before finalizing, per gm's instruction)
 
@@ -300,6 +386,12 @@ one brief's assumptions into the other's plan.
   two build weekends on today's system, human-watched, with zero new
   sandboxing infrastructure, before any of §4.2's identity/RBAC work starts?
   That reading drives the whole recommended sequence in §5.
+- **(Added per §0b)** Silicon Jungle's WhatsApp presence already runs on the
+  shared keonda Hermes gateway in `observe_only` mode (§0b) — should that stay
+  on the shared instance in this same restricted posture, or does it get the
+  same "dedicated instance" treatment the bridge brief recommends for the
+  operator's own channel, once/if it moves beyond observe-only? Not decided
+  by either brief; a real architecture question the two threads share.
 - What does "Shaw contributing to the loop" concretely mean for access: read
   access to the fleet's decisions/learnings, or write access to send it tasks?
   Very different trust levels, same phrase in the transcript.
@@ -653,6 +745,12 @@ no screens, components, or interaction surfaces are proposed at this stage.
 - A real, live, named three-stage funnel (Weekender → Experience →
   Incubator) at `sje.ploy.build`, confirmed directly (§0a) — this brief
   didn't have to invent the product shape, only the fleet-access question.
+- **(Added per §0b)** A live, real-world precedent for cautious external-event
+  agent presence: the shared keonda Hermes gateway already has an `enabled`
+  WhatsApp profile route for Silicon Jungle's actual BUILD-A-THON event group,
+  running in `observe_only` (no autonomous replies) mode — the operator
+  independently arrived at the same "don't give attendees unsupervised agent
+  access yet" posture this brief recommends, before this brief existed.
 
 ## Dream state delta
 
@@ -897,6 +995,14 @@ Outside Voice             | reused from CEO review (same document, same pass)
   human-facilitated use of today's system acceptable before any isolation
   work starts). §4.2 needs its own future eng review once it's ever accepted
   scope.
+- **POST-REVIEW ADDENDUM (§0b):** gm's second addendum (domains, partners,
+  BUILD-A-THON reference event, operator's thesis) arrived after this review
+  completed and was folded in as §0b with a coherence check, not a full
+  re-review — it reinforces the accepted recommendation (real precedent for
+  the "cautious, observe-only" posture already exists on the shared keonda
+  gateway) rather than contradicting it. One new open question added to §6
+  as a result (shared vs. dedicated gateway for Silicon Jungle's own WhatsApp
+  presence). Verdict and accepted scope above are unchanged by this addendum.
 
 **UNRESOLVED DECISIONS:**
 - Whether the operator is comfortable running Weekenders human-facilitated on
@@ -910,4 +1016,8 @@ Outside Voice             | reused from CEO review (same document, same pass)
   (self-modifying-fleet guardrails, §4 item 3's caveat) — not blocking, since
   that whole item is itself deferred, but should be resolved before that
   section is ever relied on for a real self-modification decision.
+- **(Added per §0b)** Whether Silicon Jungle's WhatsApp presence stays on the
+  shared keonda gateway (current, restricted, observe-only) or eventually
+  moves to its own dedicated instance — shared open question with the bridge
+  brief, not decided by either.
 - + 0 unresolved from prior reviews (first pass on this document).
