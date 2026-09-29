@@ -784,6 +784,12 @@ rather than leaving as an implicit assumption.
     easy to get subtly wrong and needs real engineering rigor when it's
     eventually done (§4.2) — it just doesn't support the stronger, incorrect
     claim the original number's framing implied.
+  **A second, stronger data point — first-hand, not third-party (§7,
+  added 2026-09-29):** the operator's own `keonda.io` repo has a confirmed,
+  real, already-fixed instance of this exact failure class — a cross-
+  tenant PII leak in a shared cognee semantic-memory index, on the same
+  Hermes-adjacent stack this brief is evaluating. See §7 item 3 for detail;
+  cited here only as a pointer, not duplicated.
   Real disclosed incidents in this exact class (agent + fs/bash/network access,
   found by the research pass): a GitHub Copilot prompt-injection that
   exfiltrated a live token via a symlink + JSON-schema URL with zero user
@@ -1349,6 +1355,148 @@ items now, not one):**
   problem statement alone — the operator should name what's actually
   scattered before this becomes real work, or this seat will be guessing
   at a workstream that doesn't yet have edges.
+
+## 7. Community Brain / Matchmaking — status check + focused CEO review
+(gm relay msg_2f64c196_99786227, 2026-09-29)
+
+**Read as an extension of this brief, not a separate thread, per gm's
+instruction.** Everything below is verified by reading the actual repo
+directly (`/Users/flybyflow/conductor/repos/keonda.io`, real code and real
+git history) and the locked 2026-09-20 design-review doc
+(`~/.gstack/projects/conductor/ceo-plans/2026-09-20-community-brain-cx.md`)
+— not re-derived from memory or from this brief's own earlier text, since
+neither the community-brain work nor "keonda" as a product appeared in
+this brief before now.
+
+**1. Status check — the connection, confirmed, and one thing not literally
+confirmed.** The "community brain" work and the "cacao ceremony matchmaking
+dinner club" concept are the same thread the operator described, not two
+separate things:
+- A design review on 2026-09-20 (`/plan-design-review`, locked, PROCEED
+  verdict) found the current community-brain viz (`community-brain-3d`,
+  live at `community-brain-3d.vercel.app`) is a "god-view hairball" — 125
+  nodes / 191 edges, force-directed, infra-flavored (KIND/STATUS/IDLE) —
+  rated **2/10 on job-to-be-done** (8/10 on aesthetic craft, which the
+  review explicitly says to keep). The fix locked: rebuild as a **Host/Gigi
+  answer-first view** — three decision lenses (super-connectors, people to
+  rescue, seating), human-readable node cards, hairball hidden by default.
+  **Verified directly: zero commits have touched `community-brain-3d`,
+  `seating-ui`, `dinner.py`, or `graph.py` since that review** — PROCEED
+  was locked, nothing has been built yet.
+- A companion spec (`2026-09-20-seating-plan-spec.md`) names the actual
+  dinner-club mechanism: **"Gigi's dinner"** — keonda outputs a seating
+  arrangement + a per-seat, privacy-safe rationale for a host, built on top
+  of the existing `who_can_help` complement-matching engine. This is the
+  "who can help who with what" pattern gm asked about — confirmed, same
+  thing, not re-derived from scratch.
+- **What is NOT literally confirmed:** the exact phrase "cacao ceremony"
+  does not appear anywhere in the design-review doc, the seating spec, the
+  one-pager, or a text search of the keonda.io repo. Cacao ceremonies are a
+  real, common Tulum hospitality/wellness format, so it is a reasonable
+  inference that this is the specific event format "Gigi's dinner" runs as
+  — but this is inference, not a verified match, and is stated as such
+  rather than presented as confirmed. Worth the operator confirming
+  directly if the exact format matters for how this gets built.
+- **Correction to gm's relay, checked directly rather than assumed
+  correct:** there is no file literally named `brain.py` in the repo. The
+  real pipeline is `agent/scripts/graph.py` (673 lines, the matching/graph
+  engine) generating a static `brain.json` export that `community-brain-3d`
+  reads. `seating.py` is genuinely missing, exactly as relayed — spec'd,
+  not built. `dinner.py` (164 lines) already exists and already works
+  (`--demo` mode) — it forms lane-diverse dinner tables using "the same
+  enrich/score/rank/match engine as the CRE lead pipeline," per its own
+  docstring. **The table-forming core of "Gigi's dinner" is mostly built
+  already; what's missing is the host-facing, privacy-safe rationale layer
+  (`seating.py`) and the viz rebuild (Host/Gigi view) — not a green-field
+  build.**
+
+**2. The strategic insight, folded in to sharpen priority and design, not
+just noted as a quote (per gm's explicit instruction).** The operator's
+framing — the relationship graph itself is the moat, hospitality is the
+product mechanism for building it, not an afterthought — changes what
+"community brain" actually is in this brief's terms: it is not a
+visualization side-project, it is the **concrete, already-partially-built
+instance of the "relationship graph as the actual value" idea** this brief
+already argues for elsewhere (the org/ontology sketch's Relationship
+record type, referenced in the SWOT's Opportunity 3). The Host/Gigi rebuild
+and `seating.py` are the two pieces standing between "static hairball" and
+"a system that composes tables on purpose and gets smarter every dinner"
+(the one-pager's own framing) — given the moat framing, **these two pieces
+are now the highest-leverage next build on the whole keonda.io surface**,
+ahead of generic viz polish, because they're the mechanism that turns
+"attended a Weekender" into "is in the graph, gets matched, gets invited
+back" — the actual retention loop the North Star doc's Weekender→
+Experience→Incubator funnel depends on.
+
+**3. Real, first-hand corroboration of this brief's own §3 risk finding —
+stronger evidence than the arXiv citation already used there.** Reading
+the keonda.io repo directly surfaced a **confirmed, real, already-fixed
+cross-tenant PII leak in the operator's own live system** (commit
+`8bd2829`, "fix(isolation): port the live cognee cross-tenant PII-leak fix
+into git"): the `who_can_help` semantic-memory index (cognee) returned
+`person_id`s from *other communities* on semantic search hits, exactly the
+failure class §3 already describes from a third-party paper (MemClaw,
+arXiv 2606.24535). The commit message states this was a **CONFIRMED leak**
+in production, fixed via an explicit member-set filter on semantic hits.
+This is not a new risk — it's first-hand, same-operator, same-tech-stack
+(Hermes + a shared memory layer) proof that §3's finding isn't
+hypothetical or someone else's problem: it already happened here, on a
+system directly adjacent to what this brief is scoping. Worth citing back
+into §3 by reference (not duplicating the finding) as a second, stronger
+data point. It also means the isolation-work trigger flagged in §0c as
+"likely sooner than expected" may already be partially in motion on the
+keonda.io side (a `layer1-tenant-isolation` branch exists in that repo,
+not reviewed here — out of this brief's scope, flagged for whoever owns
+that repo's roadmap).
+
+**4. Focused CEO review.**
+
+**Mode: HOLD SCOPE.** The design decision itself (Host/Gigi rebuild,
+`seating.py`'s privacy model) is already locked by a proper `/plan-design-
+review` pass at implementation-ready depth — re-litigating it here would
+be redundant, not rigorous. This review's job is the one thing gm actually
+asked for: does the fuller Silicon Jungle strategic context change the
+verdict or the priority.
+
+- **Premise challenge:** real problem, real do-nothing cost. Without this,
+  Tulum's community relationships stay "scattered across a dozen WhatsApp
+  groups where knowledge scrolls up and dies" (the one-pager's own words)
+  — every event re-starts from zero instead of compounding. The current
+  viz actively fails at this (2/10 JTBD) — shipping nothing is not neutral,
+  it's actively worse than the static hairball being gone entirely, since
+  it currently misrepresents "connected" as the product's job when the
+  real job is "who should I seat next to whom, and why."
+- **Existing leverage:** substantial, verified directly, not assumed —
+  `graph.py`'s matching engine, `dinner.py`'s table-forming core, and the
+  cognee memory layer (with its isolation defense now fixed and committed)
+  are real and already running in production for the adjacent CRE/BDR
+  pipeline. `seating.py` is additive work on top of proven infrastructure,
+  not a new system.
+- **Does the fuller Silicon Jungle context change anything?** Yes, on
+  priority, not on the design itself: the moat framing (item 2 above)
+  argues this should be pulled forward relative to other unscoped Silicon
+  Jungle backlog items (SOP cleanup, toddi.to positioning — both
+  explicitly out of pilot scope per §0i) — it is infrastructure for the
+  *retention* half of the funnel, not a nice-to-have.
+- **What this review does NOT do:** write a new engineering plan. The
+  locked design review already specifies the build at the right depth
+  (extend `dinner.py`, add `seating.py` per its 10-point spec, wire the
+  Host/Gigi HUD into the existing 3D canvas + `brain.json` fields) — that
+  is ready to hand to build directly once the operator confirms priority.
+  Producing a second, redundant plan here would be exactly the
+  "thoroughness theater" this session has been disciplined about avoiding
+  elsewhere.
+
+**Verdict: PROCEED confirmed, priority sharpened, no new engineering plan
+needed.** The Sept 20 design review's own PROCEED verdict stands. The new
+information here doesn't change *what* to build — it changes *how urgently*,
+given the moat framing, and it hands this brief's §3 a stronger real-world
+data point rather than a purely hypothetical one. Recommend gm relay to
+the operator: (a) confirm this is now a priority pull-forward, not
+background work; (b) confirm the cacao-ceremony/Gigi's-dinner identification
+above if the exact hospitality format matters for `seating.py`'s design;
+(c) route the existing design-review spec to build once (a) is confirmed —
+no further review needed on the design itself.
 
 ## CEO REVIEW — Step 0
 
