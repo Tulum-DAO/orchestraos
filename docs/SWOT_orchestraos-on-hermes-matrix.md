@@ -1,19 +1,31 @@
 # SWOT: Re-platforming OrchestraOS onto Hermes+Matrix for Many:Many Orchestration
 
 - **Requested by:** operator, via gm (msg_a6eb4e96_78020597 +
-  msg_014e86d8_80499368 Echo's independent peer review, 2026-09-29)
+  msg_014e86d8_80499368 Echo's independent peer review +
+  msg_6c655312_84650112 Echo's SWOT-only follow-up review +
+  msg_864f5887_85217789 / msg_9fbe4ddc_85342414 Garry Tan attribution
+  resolution, 2026-09-29)
 - **Authored by:** plan (non-interactive)
 - **Depth:** lighter than a full CEO/eng review cycle, per gm's explicit
   instruction — cross-references and reuses facts already verified this
   session in the bridge brief and Silicon Jungle brief rather than
   re-deriving them. Strategic analysis only; no implementation authorized,
   no scope accepted.
-- **Post-review update:** Echo (the operator's peer-review agent, same
+- **Post-review updates:** Echo (the operator's peer-review agent, same
   source as the bridge brief's external adversarial review) proposed a
-  specific hub-and-spoke architecture, evaluated on its merits in a new
-  section below — genuinely sharpens the verdict (resolves the "who's the
-  brain" ambiguity in the original question) without changing the "defer"
-  recommendation or moving up the decision timeline.
+  specific hub-and-spoke architecture, evaluated on its merits — genuinely
+  sharpens the verdict (resolves the "who's the brain" ambiguity in the
+  original question) without changing the "defer" recommendation or moving
+  up the decision timeline. **A follow-up Echo review (SWOT-only, correctly
+  scoped to just this document per Echo's own note that the other two
+  weren't attached) tightened the adapter-boundary language and adopted
+  Echo's own closing framing verbatim** ("design hypothesis, not proof of
+  safe multi-tenancy"). **The Garry Tan attribution — initially removed per
+  Echo's binary ask, then reversed once real verification landed** (see §0
+  below): the operator's source is Garry Tan's own open-source `gstack` and
+  `gbrain` projects (the literal skill suite this session runs on), gm
+  independently confirmed both repos exist on GitHub, and the citation is
+  restored as `[V]` verified — not left removed.
 - **Scope of the question:** explicitly distinct from the bridge brief's
   path (b) ("should gm's own Telegram channel route through Hermes") and
   from the Silicon Jungle brief's §4.2 ("should attendees get isolated
@@ -77,14 +89,24 @@ were about the Hermes/Matrix runtime question, which this thesis doesn't
 bear on directly — but the org/ontology sketch's own internal logic is
 clearer with this context, worth the note.
 
-**"Garry Tan" ontology credit — unverified, flagging rather than guessing,
-consistent with how this seat handled the "Elon's team" and "Shaw" claims
-earlier this session.** The operator said they're "translating ontologies"
-they admire, crediting Garry Tan (president of Y Combinator). No specific,
-named Garry Tan framework was identified or verified this session — if this
-matters for how the org/ontology sketch above is presented externally, the
-operator should be asked directly which framework, rather than this brief
-guessing at a match.
+**"Garry Tan" ontology credit — `[V]` verified, not removed.** Echo's
+follow-up review forced a binary ("name and source the exact framework, or
+remove the attribution entirely"); at that point neither this seat nor the
+operator's own words had named a specific framework, so it was removed as
+a citation, pending. Two messages later the binary resolved the other way:
+the operator named the source directly — **`gstack` and `gbrain`**, Garry
+Tan's own open-source projects (`github.com/garrytan/gstack`,
+`github.com/garrytan/gbrain`) — and gm independently confirmed both repos
+are real. `gstack` is literally the skill suite this session is running on
+(CEO/Eng-Manager/QA slash-command personas); `gbrain` is its companion
+memory/knowledge-base project. The operator is accurately crediting a real,
+specific, verifiable source for "translating ontologies I admire" — not
+guessing or misattributing. One adjacent, unverified detail flagged rather
+than folded in as fact: `gbrain`'s own README ties it to "OpenClaw/Hermes
+Agent Brain" — a *different* Hermes reference than NousResearch's
+`hermes-agent` this SWOT is about. Worth noting as a name collision, not
+conflating the two without further checking; doesn't change any finding in
+this document since the two are architecturally unrelated regardless.
 
 ## S — Strengths
 
@@ -282,22 +304,40 @@ whole fleet, *if* the adapter boundary is real and OrchestraOS's own side
 of the contract is what's authoritative. Genuine, not asserted as free —
 building and maintaining that boundary honestly is exactly Weakness 4.
 
-**Echo's naming point, adopted directly:** don't call the OrchestraOS-side
-connector "another messaging system" — call it an adapter/relay whose job
-is translating a workflow contract and *failing loudly*, not silently
-degrading (matching this SWOT's own Weakness/Threat 2 on silent
-degradation). Terminology worth carrying into any future brief that
-actually scopes this.
+**Echo's naming point, adopted directly and tightened per Echo's own
+follow-up review — checked this document's own wording didn't leave room
+for the softer misreading, not just noted.** Don't call the OrchestraOS-
+side connector "another messaging system" — call it a **narrow adapter
+translating a typed workflow contract**. Echo's sharpening, stated
+explicitly here rather than left implicit: this adapter is **not a second
+message bus, and not another owner of identity/state** — Orchestra remains
+the single owner of identity, tenant context, and authorization (Weakness
+3); the adapter's only job is translating between Orchestra's contract and
+whatever a given execution runtime (Hermes or otherwise) expects, and
+*failing loudly* when it can't, not silently degrading (matching this
+SWOT's own Weakness/Threat 2). Checked this section's own prior wording
+("Hermes becomes swappable underneath a stable, OrchestraOS-owned
+contract") against Echo's point directly — already consistent with "single
+owner," not contradicting it, but stating the "not a second bus, not
+another identity owner" boundary explicitly here closes any room for a
+future reader to misread the adapter as broader than it is.
 
 ## Verdict — including the question gm asked directly, and Echo's sharpening
 
 **Does this change the "defer §4.2" recommendation?** No. If anything it
-reinforces it (Weakness 3, now independently corroborated by Echo): neither
-re-platforming onto Hermes nor Echo's hub-and-spoke refinement hands
-OrchestraOS a ready-made multi-tenancy solution, so there's no new reason to
-build the isolation layer sooner, and a real reason (Weakness 2, worse
-under Echo's proposal, not better) to be *more* cautious about the
-substrate it's eventually built on.
+reinforces it (Weakness 3, now **three independent sources** in agreement
+— this session's own research pass, Echo's first review, and Echo's
+follow-up review reiterating it a second time): neither re-platforming
+onto Hermes nor Echo's hub-and-spoke refinement hands OrchestraOS a
+ready-made multi-tenancy solution, so there's no new reason to build the
+isolation layer sooner, and a real reason (Weakness 2, worse under Echo's
+proposal, not better) to be *more* cautious about the substrate it's
+eventually built on. **Echo's own closing framing for this, worth stating
+in these exact terms rather than paraphrased weaker:** treat the
+hub-and-spoke split as a **design hypothesis, not proof of safe
+multi-tenancy** — a small pilot plus real contract/isolation tests, not
+architectural elegance alone, is what should decide whether this earns
+further engineering investment.
 
 **Fair question the operator raised and gm asked to be answered even though
 the build stays deferred: "if/when §4.2 is ever built, should it be built on
@@ -344,11 +384,16 @@ would concretely look like; it does not move up the timeline for deciding.
 
 ## Open questions for the operator (surfaced, not decided here)
 
-- Which specific Garry Tan framework/ontology is the org/ontology sketch
-  translating — unverified this session, worth the operator naming it
-  directly if it matters for external presentation of this design.
-- Is there a fuller version of "The Industry Expert Venture Studio" thesis
-  beyond the cut-off excerpt provided — checked `~/Downloads/`, found none.
+- ~~Which specific Garry Tan framework the org/ontology sketch
+  translates~~ — **RESOLVED, `[V]` verified.** `gstack` + `gbrain`
+  (`github.com/garrytan/gstack`, `github.com/garrytan/gbrain`), confirmed
+  real by gm directly. No longer open.
+- ~~Is there a fuller version of "The Industry Expert Venture Studio"
+  thesis~~ — **RESOLVED**, closed. The full thesis was relayed across four
+  messages and is documented completely in the Silicon Jungle brief's §0d,
+  §0e, §0f — no longer open here.
 - Given three strategic threads are now open simultaneously (bridge brief,
   Silicon Jungle brief, this SWOT), does the operator want an explicit
-  sequencing decision, or is parallel exploration the intended mode?
+  sequencing decision, or is parallel exploration the intended mode? —
+  **Echo independently agrees with the sequencing call** (finish the two
+  narrower decisions first) — convergent validation, not a new answer.
