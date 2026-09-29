@@ -238,3 +238,21 @@
   width:44px; height:44px; margin-right:-8px; border-radius:12px;
 }
 .arturo-drawer .drawer-close:hover{ background:rgba(255,255,255,0.07); color:#fff; }
+
+/* Reduced motion. These four are raw-CSS `animation: … infinite`, so the Tailwind
+   motion-safe: variant used everywhere else in the dashboard cannot reach them — a real
+   media query is the only tool here.
+
+   Each state was checked to survive without its animation rather than assumed:
+     .thinking      the bubble says "Thinking…" / "Connecting the call…" in words
+     .listening     background:var(--accent) + aria-label="Stop dictation"
+     .recording     background:#d94f4f (red) + aria-label="Stop recording"
+     .transcribing  distinct background + aria-label="Transcribing" + a title tooltip
+   All four animate only opacity or a box-shadow ripple, so `animation: none` removes the
+   motion and leaves the colour, the label and the text — the state is still legible. */
+@media (prefers-reduced-motion: reduce) {
+  .turn-assistant .thinking,
+  .circle-btn.listening,
+  .circle-btn.recording,
+  .circle-btn.transcribing { animation: none; }
+}
