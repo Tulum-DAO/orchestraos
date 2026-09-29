@@ -8,8 +8,9 @@
   msg_f0e69f89_78115881 thesis continuation 2 (shared platform/founder
   network) + msg_f71af031_78170888 thesis continuation 3, FINAL (founder-
   selection criteria + vision close) + msg_20e0ef65_80391633 remote-
-  facilitation evidence/portfolio-ventures/SOPs+branding addendum,
-  2026-09-29), as an addendum to the Hermes/Matrix Telegram bridge brief.
+  facilitation evidence/portfolio-ventures/SOPs+branding addendum +
+  msg_014e86d8_80499368 Echo's independent peer review, 2026-09-29), as an
+  addendum to the Hermes/Matrix Telegram bridge brief.
   **The operator's "Industry Expert Venture Studio" thesis is now complete
   across all 4 relayed messages —
   no further continuation of this specific document expected.**
@@ -490,6 +491,46 @@ operator also mentioned wanting to start on branding/websites soon
 direction, no scoping work attempted, matching gm's explicit instruction
 that this one doesn't need it yet.
 
+## 0h. Eighth addendum — Echo's independent peer review, convergent
+validation plus two real refinements (gm relay, 2026-09-29)
+
+Echo — the operator's friend's review agent, source of the bridge brief's
+earlier external adversarial review (§0a of that document) — independently
+reviewed newer versions of this brief and the SWOT, pasted by the operator.
+**Convergent validation, not new information, on three points:** industry
+expert (not technical talent) as buyer, the 43.9%-leakage correction, and
+Shaw's access decision as a launch gate. Two genuine refinements, checked
+and accepted on their merits, not appended because they're from Echo:
+
+1. **Pilot success metric sharpened** — "8 events prove you can run events,
+   not yet repeatable venture outcomes." Correct: the original metric
+   (clears review clean + continues to the Experience stage) measures
+   process quality and stated interest, not whether a real venture actually
+   resulted. Fixed in §4 item 1 with a two-horizon framing — near-term
+   signal unchanged (it's still the right measure for what this pilot
+   itself decides), long-term venture-outcome signal named explicitly so
+   it isn't silently conflated with the near-term one, with the operator
+   left to name the actual milestone rather than this brief inventing one.
+2. **Facilitator control-design spec tightened against a 4-point
+   checklist** (explicit allowed-actions baseline, audit trail, independent
+   stop mechanism, explicit off-limits data categories) — checked all four
+   directly in §4 item 1 rather than assuming coverage. Audit trail was
+   already explicit. Two were real gaps, now closed: an explicit "what's
+   simply allowed" baseline, and explicit off-limits *data categories*
+   (not just the actions that touch them). **One is honestly not fully
+   closed, stated as such rather than asserted away:** the "independent"
+   kill switch is independent of the attendee's *agent*, not independent of
+   the *facilitator's own judgment* — for this pilot's narrow scope there is
+   no second human or automated check. Recommended a cheap, in-scope
+   mitigation (timestamped check-ins) rather than either ignoring the gap
+   or over-building a second-actor system this pilot doesn't need yet.
+
+**Also unresolved, explicitly not guessed at:** Echo references a "Tulum
+RCO canvas" and a "filled-in canvas" the operator is meant to send. Neither
+this seat nor gm has this document. gm is asking the operator directly.
+This brief does not speculate about its content or invent what it should
+contain.
+
 ## 1. The ask, as parsed (gm's cleaned-up transcript + confirmed ground truth)
 
 Silicon Jungle Experience's **Weekender** (48hr, La Reserva Tulum) is
@@ -731,11 +772,21 @@ Three separable pieces, matching the three separable problems found above —
    not left implicit:**
 
    **Facilitator control design (v1, calibrate during the pilot, not final).
-   Corrected once during this seat's own eng-review-depth check of this
-   addition (below) — worth stating the correction here directly, not just
-   in the review section, since it changes the actual mechanism:**
-   - **Requires facilitator approval — via the underlying CLI runtime's own
-     native tool-permission system (the same mechanism gating this very
+   Corrected once during this seat's own eng-review-depth check (below);
+   tightened a second time against Echo's (the operator's peer-review
+   agent) four-point checklist — checked the spec against each point
+   directly rather than assuming it already covered them, and two genuinely
+   didn't:**
+   - **0. Allowed baseline, explicit — Echo's point, a real gap, not
+     previously stated.** Everything not gated or blocked below is
+     permitted without a check: reading, writing, running, and testing code
+     inside the attendee team's own working directory; installing packages
+     scoped to that directory; using the fleet's planning/review skills
+     (BSHR research, CEO/eng review) on the team's own project. Stating
+     this explicitly, not leaving "what's simply allowed" as an inference
+     from the gated/blocked lists below.
+   - **1. Requires facilitator approval — via the underlying CLI runtime's
+     own native tool-permission system (the same mechanism gating this very
      session's own tool calls), NOT `approval.py`.** This seat's first draft
      of this control design cited `approval.py` as the gating mechanism;
      checking that claim (per this seat's own verify-by-rederiving standard)
@@ -754,7 +805,7 @@ Three separable pieces, matching the three separable problems found above —
      team. **`approval.py`'s async pattern becomes relevant only if/when
      §4.2 (unsupervised access) is ever built** — a live facilitator doesn't
      need it; an absent one would.
-   - **Blocked outright, no approval path, hard-denied — this layer is a
+   - **2. Blocked outright, no approval path, hard-denied — this layer is a
      process/filesystem boundary, not a runtime permission prompt, so it
      doesn't depend on which gating mechanism is used above:** access to
      `registry.json`, `orchestra.toml`, or any other seat's credentials;
@@ -765,6 +816,43 @@ Three separable pieces, matching the three separable problems found above —
      attendee's designated working directory (no reads/writes into
      `~/.orchestra/`, other attendees' directories, or the fleet's own
      codebase).
+   - **3. Explicit off-limits data categories — Echo's point, and the
+     action-based list above only implies this, doesn't state it.** Naming
+     the categories directly, not just the actions that would touch them:
+     other Weekender teams' working directories and session data (even
+     though multiple teams may run concurrently, §4's threshold work);
+     any other attendee's personal/contact information beyond what that
+     specific team consented to share; the fleet's own operational secrets
+     (bot tokens, API keys, any credential in `~/.orchestra/` or
+     `.env`-pattern files); Silicon Jungle's own business/financial data
+     beyond what's needed for the team's own project. The "blocked
+     outright" filesystem boundary above is the *mechanism*; this is the
+     *reason* stated plainly, per Echo's request.
+   - **4. Independent stop mechanism — Echo's sharpest point, and this
+     seat is being honest that the current design does NOT fully satisfy
+     it, not papering over the gap.** The facilitator's control over a
+     session (killing its process/pane) is genuinely out-of-band from the
+     attendee's own *agent* session — the agent cannot intercept, delay, or
+     disable it, same principle as item 3's self-modification guardrails
+     ("kill-switch logic outside the fleet's own editable runtime"). **But
+     that is independence from the agent, not independence from the
+     facilitator's own judgment** — Echo's actual point. For accepted scope
+     (one facilitator, ≤3 concurrent sessions per §4's threshold), there is
+     currently no second check beyond that one person noticing something is
+     wrong: no automated monitoring, no second human, no time-boxed
+     automatic pause. **This is a real, accepted limitation of the pilot's
+     narrow scope, stated honestly rather than closed by asserting
+     independence this design doesn't actually have.** Recommend, as a
+     concrete near-zero-cost mitigation within accepted scope (not new
+     infrastructure): a simple time-based check-in (facilitator explicitly
+     confirms "still fine" at a fixed interval, e.g. every 15 minutes per
+     active session) logged the same way as other session data (§ above) —
+     this doesn't create a *second independent actor*, but it does convert
+     "the facilitator's judgment" from a single unbounded assumption into a
+     checkable, timestamped one. A genuinely independent second check (a
+     second human, or automated monitoring) is real future work, correctly
+     scoped as part of §4.2 if/when unsupervised or higher-throughput access
+     is ever built, not this pilot's accepted scope.
    - **Logged, reusing existing infrastructure, not new tooling:** every tool
      call and every permission decision in the attendee session's own
      transcript (already inherent to the CLI runtime, corrected above);
@@ -773,12 +861,6 @@ Three separable pieces, matching the three separable problems found above —
      data (§10, Implementation Tasks T1). `approval.py`'s audit pattern is
      the right model to follow if/when the async version (§4.2) is built,
      not claimed as already wired up for this pilot.
-   - **Independent kill switch:** the facilitator's control over a session
-     (killing its process/pane) must be genuinely out-of-band from the
-     attendee's own agent session — not something that session could
-     intercept, delay, or disable — same principle already named in item 3
-     below for self-modification guardrails ("kill-switch logic outside the
-     fleet's own editable runtime"), applied here to attendee sessions too.
 
    **The pilot promise, made concrete (per operator feedback — "attendees"
    generically is not a spec). Corrected once, honestly — see below — after
@@ -814,15 +896,43 @@ Three separable pieces, matching the three separable problems found above —
      sponsor or the Experience-stage evaluators, demonstrating a level of
      rigor neither a 48-hour hackathon format nor a non-technical founder
      alone could otherwise produce.
-   - **Measurable outcome that justifies running another session:** (a) the
-     team's plan clears CEO+eng review with zero unresolved critical gaps by
-     the Sunday demo, and (b) **the industry expert elects to continue as
-     founder** into the Experience stage (§0a's confirmed 2-6 week sprint) —
-     matching the thesis's own framing ("help them become entrepreneurs") —
-     a real funnel-conversion
-     signal SJE already tracks, not a new metric invented for this brief.
-     Both are checkable from data this pilot would generate on its own,
-     without new instrumentation beyond what §4/T1 already proposes logging.
+   - **Measurable outcome, sharpened per Echo's peer review — this seat
+     checked the critique before accepting it, and it's correct, not just
+     plausible.** Echo's point: "8 events prove you can run events — not
+     yet repeatable venture outcomes." Checked the original metric against
+     that directly: "clears CEO+eng review clean" measures *process
+     quality* (did the plan-review gauntlet work as intended), and "elects
+     to continue into the Experience stage" measures *stated interest*
+     (did the founder like the weekend enough to keep going) — **neither
+     one measures whether a real, viable venture actually resulted.** Echo
+     is right that these are leading indicators, not the outcome itself.
+     **Two-horizon fix, not a single replacement metric** (a pilot can't
+     wait months for a venture-outcome signal before deciding whether to
+     run session #2, but the *program* absolutely should track the real
+     outcome):
+     - **Near-term (this pilot's own timescale, unchanged, still valid for
+       its actual purpose):** (a) the team's plan clears CEO+eng review
+       with zero unresolved critical gaps by the Sunday demo, (b) the
+       industry expert elects to continue into the Experience stage. These
+       remain the right signal for "did this specific facilitated-access
+       mechanism work," which is what this brief's own accepted scope (§4
+       item 1) is actually deciding — not whether the venture studio model
+       itself produces viable companies, a separate and much longer-horizon
+       question this brief was never positioned to answer from one pilot.
+     - **Long-term (program-level, outside this brief's own decision
+       window, named so it isn't silently dropped):** whether ventures that
+       pass through this funnel reach a real outcome milestone — a paying
+       customer, a formalized JV (§0b/§0c already document one real
+       precedent, Snap Eats), survival past some stated horizon. This
+       brief does not propose a specific milestone or timeframe — that's
+       the operator's call, not an inference this brief should make — but
+       names the gap explicitly so "did the pilot work" and "does the
+       studio model work" don't get conflated, which is exactly what Echo
+       flagged.
+     Both near-term signals are checkable from data this pilot would
+     generate on its own, without new instrumentation beyond what §4/T1
+     already proposes logging. The long-term signal needs the operator to
+     name what counts as a milestone before it's trackable at all.
 2. **A genuinely new identity + membership layer, PLUS per-tenant orchestration
    isolation — these are one piece of work, not two.** §3's research finding
    means "WhatsApp-phone identity + token-gated membership + RBAC" is not
@@ -1712,6 +1822,19 @@ Finding 3 (measurable thresholds)     | 0 issues — already honestly
   intents: "clean up the SOPs" (recorded as an open item, not scoped — no
   specific SOPs named yet) and branding/websites (noted, correctly not
   scoped, per gm's own framing). Verdict and accepted scope unchanged.
+- **POST-REVIEW ADDENDUM (§0h), Echo's independent peer review — real
+  refinements, checked before accepting, not appended on authority.**
+  Two genuine improvements: the pilot success metric now distinguishes
+  near-term process signal from long-term venture-outcome signal (§4 item
+  1), and the facilitator control-design spec is tightened against a
+  4-point checklist, with one real gap (the "independent" stop mechanism
+  is not independent of the facilitator's own judgment) stated honestly
+  rather than closed by assertion. **Did not re-open eng review a third
+  time** — these are explicitness/completeness improvements to an already-
+  reviewed mechanism (naming an implicit allowed-baseline, naming implicit
+  off-limits categories, acknowledging a known limitation explicitly), not
+  a new or corrected technical mechanism the way Run 2's `approval.py`
+  correction was. Verdict and accepted scope unchanged.
 
 **UNRESOLVED DECISIONS:**
 - Whether the operator is comfortable running Weekenders human-facilitated on
