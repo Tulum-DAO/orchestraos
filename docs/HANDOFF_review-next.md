@@ -71,6 +71,44 @@ operator *text* message on the fleet's only command channel is destroyed silentl
 transient failure; this commit fixes that, and I verified the fix works rather than taking
 build's word for it.
 
+## 1b. Second gate — F1 fix `a062d57` (`build/telegram-attachment-placeholder`): **CLEARED**
+
+Task: gm `msg_54e5f57c_79450344`. Findings:
+`$ORCHESTRA_DIR/state/review/router-offset-b834241/findings-f1-a062d57.md`.
+Merge target `fix-arturo-mapfile-bash32`; no restart decision needed — it rides along on the next
+router restart. Based on `7109aaa` (`--is-ancestor` YES), so it applies on top of the merged P0.
+
+I proposed this fix in the P0 review, so I tried to break it rather than confirm it:
+
+- **F1 is genuinely closed** — re-ran **my own original reproduction** (the harness that found the
+  bug), not build's tests: photo-only message, no caption, `fetch` raises. Was `delivered: 0`;
+  now **`delivered: 1`** with body `Attachments:\n  photo: [download failed — ask the operator to
+  resend]`. The reproduction no longer reproduces.
+- **`plugins/` suite: 30 passed** (27 existing + 3 new) — matches build.
+- **Mutation claim reproduced exactly** — stubbing out the failure-recording branch turns **2 of
+  the 3** new tests red; the third is the happy-path guard, which correctly stays green because the
+  mutation doesn't touch it. Restored → 30 pass.
+- **F4 undisturbed** — `router.py:305` `download_file(obj["file_id"], ...)` is unchanged, so
+  `photo: [{}]` still raises `KeyError` *before* the download and is still TRANSIENT → step-over.
+- Compiles under the live Python 3.12.13. `msg_id` derivation untouched → the P0's exactly-once
+  guarantee is unaffected. The only newly-delivered messages are ones previously discarded silently.
+- **Agreed with build's call not to raise on download failure** — raising would recover a transient
+  blip but head-of-line block the channel for the full attempt budget on a permanently unfetchable
+  file (>20 MB Bot API limit). Build named the trade-off and corrected the P0 commit's overclaim
+  rather than quietly widening scope.
+
+**F5 — NEW, out of scope, gm to scope separately.** Same symptom as the P0, different cause:
+the attachment loop enumerates only `photo, document, voice, video, audio`, so a message whose only
+content is an unenumerated kind never attempts a download, has no failure to record, and hits
+`if not text: return`. Verified — `sticker`, `animation` (GIF) and `video_note` (round video) all
+give `delivered=0 offset=701 warned=0`, i.e. silent drop. Pre-existing in both commits, not a
+regression. Cheap fix in the same spirit: when a message yields no text *and* no attachments at all,
+deliver an "(unsupported message type — resend as text)" placeholder instead of returning silently.
+That closes the last silent-drop path I can find in `handle_message`. Not proposing enumerating
+every Bot API media kind — that list grows; the catch-all covers it permanently.
+
+F2 and F3 remain open and non-blocking, unchanged by this commit.
+
 ## 2. Verified independently (not from build's report)
 
 - **Bug is real and still live:** `plugins/telegram/router.py:323` in the main checkout advances
