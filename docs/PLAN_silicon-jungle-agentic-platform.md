@@ -7,9 +7,11 @@
   msg_e28003b6_78054130 fuller thesis continuation +
   msg_f0e69f89_78115881 thesis continuation 2 (shared platform/founder
   network) + msg_f71af031_78170888 thesis continuation 3, FINAL (founder-
-  selection criteria + vision close), 2026-09-29), as an addendum to the
-  Hermes/Matrix Telegram bridge brief. **The operator's "Industry Expert
-  Venture Studio" thesis is now complete across all 4 relayed messages —
+  selection criteria + vision close) + msg_20e0ef65_80391633 remote-
+  facilitation evidence/portfolio-ventures/SOPs+branding addendum,
+  2026-09-29), as an addendum to the Hermes/Matrix Telegram bridge brief.
+  **The operator's "Industry Expert Venture Studio" thesis is now complete
+  across all 4 relayed messages —
   no further continuation of this specific document expected.**
 - **Authored by:** plan (BSHR research + brief, non-interactive)
 - **Status:** CEO + ENG REVIEWED (Eng Review run twice — re-opened for a
@@ -435,6 +437,58 @@ narrative color:**
    no further inference or speculation needed on this point. The correction
    already made in §4 item 1 stands as the final answer, not a working
    draft.
+
+## 0g. Seventh addendum — remote-facilitation evidence, a garbled portfolio-
+ventures list, and two new stated intents (SOPs cleanup, branding) — lower
+priority per gm, folded in without blocking the Echo instruction deliverable
+
+**Real evidence for facilitator scalability, strengthening §4's sequencing
+call rather than changing it:** of the 8 BUILD-A-THON events run to date
+(§0c), at least one ran with the operator physically remote ("on the other
+side of the world," per gm's relay) — the facilitated-pilot process has
+already been proven to work without the operator's physical presence at
+the venue. This directly supports §4's recommendation to start with human
+facilitation rather than building isolation infrastructure first: "human
+facilitation" does not require "operator on-site," which was an unstated
+assumption this brief hadn't previously confirmed or denied.
+
+**A real, existing portfolio of hackathon-originated ventures — relayed
+with garbled numbering, deliberately NOT force-ordered into a clean list
+per gm's explicit instruction:** the operator named several real ventures
+that originated from these events, with unclear/inconsistent venture
+numbers in the voice transcript. Known, not invented: **OrchestraOS itself**
+started as a hackathon venture (this very fleet's own codebase). A
+**"management consulting" venture**, which the operator numbered "#3" —
+number not independently confirmable. Something called **"Matrix
+integration"**, possibly "#1" — **genuinely ambiguous whether this refers
+to the messaging protocol (§2-3 of this brief, and the bridge brief's own
+subject) or a company name** — not assumed either way. **Snap Eats**
+(already known from §0b, "#7," a food app with fractional ownership —
+fleet/technical side owns the technology, JV partners own go-to-market).
+**Kokoro** — per gm's relay, "should probably be folded in as one of these
+ventures too," though its exact number/relationship to the list is
+unstated. **This brief does not attempt to reconstruct a clean ordinal
+list from a garbled transcript** — if the exact numbering ever matters
+(e.g. for external-facing materials), the operator should confirm it
+directly rather than this brief guessing. What the list does establish,
+even garbled: "Silicon Ventures" (§1) has multiple real precedents, not
+just the one (Snap Eats) previously documented — reinforces, doesn't
+change, the funnel's credibility.
+
+**New stated intent: "clean up the SOPs."** The operator wants this scoped
+as a real workstream — but the detail given ("a lot of scattered writing/
+documentation with no clear framework to measure things") is a problem
+statement, not yet a scope. **This brief is not inventing a plan from
+that alone** — no SOPs have been named, no measurement framework specified,
+no owner or timeline given. Recorded here as a genuine open item (added to
+§6), not scoped work, consistent with this brief's discipline throughout
+of not building on inference where a direct answer is cheap to get.
+
+**Lighter intent, correctly not scoped, per gm's own framing:** the
+operator also mentioned wanting to start on branding/websites soon
+("show don't tell, showcase what we're building") — noted as a stated
+direction, no scoping work attempted, matching gm's explicit instruction
+that this one doesn't need it yet.
 
 ## 1. The ask, as parsed (gm's cleaned-up transcript + confirmed ground truth)
 
@@ -908,6 +962,12 @@ date):**
   scope to design or build (a business/selection question, not a fleet-
   access one) — surfaced as a reusable asset the operator already has in
   hand, not a gap needing more research.
+- **(Added per §0g)** "Clean up the SOPs" — a stated intent, not yet a
+  scope. No specific SOPs named, no measurement framework specified, no
+  owner or timeline given. This brief is not inventing a plan from a
+  problem statement alone — the operator should name what's actually
+  scattered before this becomes real work, or this seat will be guessing
+  at a workstream that doesn't yet have edges.
 
 ## CEO REVIEW — Step 0
 
@@ -1641,6 +1701,17 @@ Finding 3 (measurable thresholds)     | 0 issues — already honestly
   Lightest of the four thesis-related addenda: no new technical distinction
   to verify (unlike §0e), mostly a completion/closure update. Verdict and
   accepted scope unchanged.
+- **POST-REVIEW ADDENDUM (§0g), lower priority per gm, folded in without
+  blocking an urgent separate deliverable.** Real evidence that the
+  facilitated-pilot process already works without the operator physically
+  present (one of 8 events run remotely) — reinforces §4's sequencing, no
+  scope change. A garbled portfolio-ventures list relayed and deliberately
+  NOT force-ordered into a clean list, per gm's explicit instruction —
+  strengthens the "Silicon Ventures has real precedent" claim without
+  inventing precision the source material doesn't have. Two new stated
+  intents: "clean up the SOPs" (recorded as an open item, not scoped — no
+  specific SOPs named yet) and branding/websites (noted, correctly not
+  scoped, per gm's own framing). Verdict and accepted scope unchanged.
 
 **UNRESOLVED DECISIONS:**
 - Whether the operator is comfortable running Weekenders human-facilitated on
