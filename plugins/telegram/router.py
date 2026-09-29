@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import time
@@ -40,6 +41,10 @@ POLL_TIMEOUT = 25            # long-poll seconds
 CARD_POLL_EVERY = 20         # seconds between pending-card sweeps
 GM_SEAT = os.environ.get("ORCHESTRA_GM_SEAT", "gm")
 PY = sys.executable or "python3"
+# How many times one update may fail before we step over it to unblock the channel.
+# Never advancing at all would let a single malformed update head-of-line block the
+# operator's ONLY command channel forever — a worse outage than the drop we're fixing.
+MAX_UPDATE_ATTEMPTS = 5
 
 
 def log(msg: str) -> None:
@@ -111,6 +116,38 @@ class State:
     def offset(self, v: int) -> None:
         self._write("offset", int(v))
 
+    # ---- commit-then-confirm bookkeeping ----
+    # last_done is the high-water mark of updates whose effect DURABLY landed. offset is
+    # only ever what we've told Telegram. Keeping them separate is what lets a redelivered
+    # update be recognised as already-done instead of re-run.
+    @property
+    def last_done(self) -> int:
+        return int(self._read("last-done", 0) or 0)
+
+    @last_done.setter
+    def last_done(self, v: int) -> None:
+        self._write("last-done", int(v))
+
+    def attempts_for(self, update_id: int) -> int:
+        """Consecutive failures recorded against this update_id (0 if none/other)."""
+        d = self._read("attempts.json", {}) or {}
+        if d.get("update_id") != int(update_id):
+            return 0
+        return int(d.get("n") or 0)
+
+    def record_attempt(self, update_id: int) -> int:
+        """Bump and persist the strike count for update_id; returns the new count.
+
+        Persisted, not in-memory: a crash-loop on the same poison update must still
+        converge on giving up rather than retrying forever across restarts.
+        """
+        n = self.attempts_for(update_id) + 1
+        self._write("attempts.json", {"update_id": int(update_id), "n": n})
+        return n
+
+    def clear_attempts(self) -> None:
+        self._write("attempts.json", {})
+
     def notified(self) -> dict:
         return self._read("notified.json", {})
 
@@ -127,12 +164,31 @@ class State:
 # ---- core seams (injectable for tests) ----------------------------------------------------
 
 def deliver_to_gm(text: str, meta: dict, seat: str = GM_SEAT) -> str:
-    """One msg_store row in the gm inbox. Import path = the checkout (code), DB = data dir."""
+    """One msg_store row in the gm inbox. Import path = the checkout (code), DB = data dir.
+
+    Idempotent on Telegram's update_id. That id is already per-bot monotonic and unique,
+    so deriving the row's primary key from it makes a redelivered update a no-op insert —
+    including across a kill -9 that loses our offset file, where the router has no memory
+    of the update at all and only the DB can tell it apart from a fresh one.
+    """
     import msg_store  # noqa: WPS433  (CODE_ROOT is on sys.path)
     subject = (text.strip().splitlines() or ["(media)"])[0][:120]
-    return msg_store.MessageStore().send(
-        from_agent="telegram", to_agent=seat, type="task_request", subject=subject,
-        body=text, priority="high", source="telegram", metadata=dict(meta, channel="telegram"))
+    uid = meta.get("update_id")
+    msg_id = f"tg-{int(uid)}" if uid is not None else None
+    store = msg_store.MessageStore()
+    if msg_id and store.get(msg_id):
+        log(f"update {uid} already delivered as {msg_id}; redelivery ignored")
+        return msg_id
+    try:
+        return store.send(
+            from_agent="telegram", to_agent=seat, type="task_request", subject=subject,
+            body=text, priority="high", source="telegram", msg_id=msg_id,
+            metadata=dict(meta, channel="telegram"))
+    except sqlite3.IntegrityError:
+        # Lost the race against another poller (or a partially-committed retry): the row
+        # exists, which is exactly the outcome we wanted. Not an error.
+        log(f"update {uid} already delivered as {msg_id} (insert raced); redelivery ignored")
+        return msg_id
 
 
 def pending_cards() -> list:
@@ -161,6 +217,26 @@ def answer_card(card_id: str, verb: str) -> tuple:
 
 
 # ---- update handling -----------------------------------------------------------------------
+
+def unprocessable_reason(upd: dict) -> Optional[str]:
+    """Structural defects no amount of retrying can fix — safe to skip immediately.
+
+    This is the line between the two failure kinds, and it matters: a TRANSIENT failure
+    (msg_store blip, network) must never be confirmed, or the operator's message is lost
+    forever. A PERMANENT one must not be retried, or a single malformed update
+    head-of-line blocks the operator's only command channel until its attempt budget
+    drains. Only shape is inspected here, never the outcome of an effect, so a store
+    outage can never be misread as "malformed".
+    """
+    msg = upd.get("message")
+    if msg is not None:
+        cid = (msg.get("chat") or {}).get("id")
+        try:
+            int(cid)
+        except (TypeError, ValueError):
+            return f"message has no usable chat.id ({cid!r})"
+    return None
+
 
 def parse_callback(data: str) -> Optional[tuple]:
     parts = (data or "").split("|")
@@ -203,9 +279,9 @@ class Router:
         if "callback_query" in upd:
             self.handle_callback(upd["callback_query"])
         elif "message" in upd:
-            self.handle_message(upd["message"])
+            self.handle_message(upd["message"], update_id=upd.get("update_id"))
 
-    def handle_message(self, msg: dict) -> None:
+    def handle_message(self, msg: dict, update_id: Optional[int] = None) -> None:
         chat_id = int((msg.get("chat") or {}).get("id"))
         if not self.authorized(chat_id):
             log(f"ignored message from unauthorized chat {chat_id}")
@@ -218,7 +294,8 @@ class Router:
                                              "Send anything; decision cards arrive here with buttons."})
             return
         meta = {"chat_id": chat_id, "message_id": msg.get("message_id"),
-                "username": ((msg.get("from") or {}).get("username")), "attachments": []}
+                "username": ((msg.get("from") or {}).get("username")),
+                "update_id": update_id, "attachments": []}
         for kind, key in (("photo", "photo"), ("document", "document"), ("voice", "voice"), ("video", "video"), ("audio", "audio")):
             obj = msg.get(key)
             if not obj:
@@ -248,13 +325,21 @@ class Router:
         card_id, verb = parsed
         ok, detail = self.answer(card_id, verb)
         label = verb[1:] and f"option {verb[1:]}" if verb.startswith("o") and verb[1:].isdigit() else verb
-        self.api("answerCallbackQuery", {"callback_query_id": cq_id,
-                                         "text": f"{card_id}: {label} recorded" if ok else f"{card_id}: failed — {detail[:150]}",
-                                         "show_alert": not ok})
-        msg = cq.get("message") or {}
-        if ok and msg.get("message_id"):
-            self.api("editMessageText", {"chat_id": chat_id, "message_id": msg["message_id"],
-                                         "text": (msg.get("text") or card_id) + f"\n\n✔ answered: {label}"})
+        # The decision has now landed in the ONE core — that is the durable effect. The
+        # calls below only repaint the chat, so a network blip in them must NOT bubble up:
+        # poll_once would decline to confirm, Telegram would redeliver the tap, and we'd
+        # answer an already-answered card. Unlike messages there is no update_id-keyed
+        # dedupe here, so the cheapest guard is to not let cosmetics fail the update.
+        try:
+            self.api("answerCallbackQuery", {"callback_query_id": cq_id,
+                                             "text": f"{card_id}: {label} recorded" if ok else f"{card_id}: failed — {detail[:150]}",
+                                             "show_alert": not ok})
+            msg = cq.get("message") or {}
+            if ok and msg.get("message_id"):
+                self.api("editMessageText", {"chat_id": chat_id, "message_id": msg["message_id"],
+                                             "text": (msg.get("text") or card_id) + f"\n\n✔ answered: {label}"})
+        except Exception as e:  # noqa: BLE001
+            log(f"card {card_id} answered but chat UI update failed (not retrying): {e!r}")
         log(f"card {card_id} {label}: {'ok' if ok else 'FAILED ' + detail[:120]}")
 
     # ---- cards -> phone ----
@@ -307,7 +392,37 @@ class Router:
         return n
 
     # ---- loop ----
+    def _alert_stepped_over(self, uid: int, upd: dict, err: Exception) -> None:
+        """A dropped operator message must be LOUD. Silence is the bug we're fixing."""
+        chat = self.operator_chat()
+        if chat is not None:
+            try:
+                self.api("sendMessage", {
+                    "chat_id": chat,
+                    "text": (f"⚠️ Your message (update {uid}) failed to process "
+                             f"{MAX_UPDATE_ATTEMPTS}x and was skipped so the channel keeps "
+                             f"working. It was NOT delivered — please resend.\n\n{err!r}")})
+            except Exception as e:  # noqa: BLE001
+                log(f"could not warn operator about stepped-over update {uid}: {e!r}")
+        try:
+            import msg_store  # noqa: WPS433 (CODE_ROOT on sys.path)
+            msg_store.MessageStore().send(
+                from_agent="telegram", to_agent=GM_SEAT, type="escalate",
+                subject=f"Telegram update {uid} dropped after {MAX_UPDATE_ATTEMPTS} attempts",
+                body=f"Error: {err!r}\n\nRaw update:\n{json.dumps(upd)[:1000]}",
+                priority="critical", source="telegram",
+                metadata={"update_id": uid, "channel": "telegram", "dropped": True})
+        except Exception as e:  # noqa: BLE001
+            log(f"could not record stepped-over update {uid} to {GM_SEAT}: {e!r}")
+
     def poll_once(self) -> int:
+        """Commit-then-confirm: offset only moves past an update once its effect landed.
+
+        Telegram's getUpdates never redelivers an update below the confirmed offset, so
+        confirming before the effect succeeded destroys the message permanently. The old
+        code advanced the offset outside the try/except, so ANY transient exception silently
+        lost an operator message on the fleet's only command channel.
+        """
         r = self.api("getUpdates", {"offset": self.state.offset, "timeout": POLL_TIMEOUT,
                                     "allowed_updates": ["message", "callback_query"]})
         if not r.get("ok"):
@@ -316,11 +431,41 @@ class Router:
             return 0
         updates = r.get("result") or []
         for upd in updates:
+            uid = int(upd["update_id"])
+            if uid <= self.state.last_done:
+                # Already handled; Telegram redelivered because our confirm never stuck.
+                # Re-confirm so it stops coming back, but don't run the effect twice.
+                self.state.offset = uid + 1
+                continue
+            bad = unprocessable_reason(upd)
+            if bad:
+                # Permanent by construction — retrying would only stall real messages.
+                log(f"update {uid} unprocessable, skipped ({bad}); retrying cannot help")
+                self.state.last_done = uid
+                self.state.offset = uid + 1
+                self.state.clear_attempts()
+                continue
             try:
                 self.handle_update(upd)
             except Exception as e:  # noqa: BLE001
-                log(f"update {upd.get('update_id')} failed: {e!r}")
-            self.state.offset = int(upd["update_id"]) + 1
+                n = self.state.record_attempt(uid)
+                if n >= MAX_UPDATE_ATTEMPTS:
+                    log(f"update {uid} failed {n}x — GIVING UP, stepping over it; the "
+                        f"operator message is DROPPED and they are being told: {e!r}")
+                    self._alert_stepped_over(uid, upd, e)
+                    self.state.last_done = uid
+                    self.state.offset = uid + 1
+                    self.state.clear_attempts()
+                    continue
+                log(f"update {uid} failed (attempt {n}/{MAX_UPDATE_ATTEMPTS}) — NOT "
+                    f"confirming, Telegram will redeliver it: {e!r}")
+                # Stop the batch here. Everything after this update stays unconfirmed too,
+                # which keeps operator messages in order and keeps last_done a valid
+                # high-water mark (a gap would make it unsafe as a dedupe key).
+                break
+            self.state.last_done = uid
+            self.state.offset = uid + 1
+            self.state.clear_attempts()
         return len(updates)
 
     def run(self) -> None:

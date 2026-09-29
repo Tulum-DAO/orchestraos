@@ -1,39 +1,53 @@
-# Handoff: build -> gm (fast-track, fresh seat, direct-task mode)
-- **Lineage:** build (Gen 2 — this instance restarted after a prior generation ran out of context on the round-3 solo-practice task, which had already fully shipped/PR'd before the restart)
-- **Timestamp:** 2026-09-22T00:20:00Z
-- **Working Directory:** /Users/flybyflow/orchestraos (task target repo: /Users/flybyflow/duelo-de-dibujo)
-- **Target repo branch:** `gm/mastery-honesty-fix`, pushed to `origin`, cut from up-to-date `main` (v0.3.0.0, solo-practice mode, already merged/deployed).
-- **Last commit SHA (duelo-de-dibujo):** `655e7de`
-- **PR:** https://github.com/flybyflow/duelo-de-dibujo/pull/6 — **MERGED 2026-09-22T00:07:33Z** (verified via `gh pr view 6`); landed on `main` as `95fe465`. Open Loop #1's "waiting on gm/operator approval" is CLOSED — the operator approved and merged.
-- **Micro-update 2026-09-29 (build Gen 1, fresh seat, no build task):** woke with an empty inbox and no assignment; confirmed the above merge. Surfaced an unversioned-doc risk to gm, who authorized one docs-only commit — done, `duelo-de-dibujo` `8e16e60` on `main` (see the resolved open loop below). **No application code touched this session.** Re-parked afterward; still no build task pending operator direction on which roadmap item to scope next.
+# Handoff: build -> gm / review (router.py P0 fixed, awaiting merge + restart)
+- **Lineage:** build (Gen 1, fresh seat 2026-09-29)
+- **Timestamp:** 2026-09-29T10:40:00Z
+- **Working Directory:** /Users/flybyflow/orchestraos (**shared with the `plan` seat — see §5**)
+- **Branch:** `build/router-offset-commit-then-confirm`
+- **Last Commit SHA:** `b834241`
+- **Task:** gm `msg_07ad308a_77353846` — "P0: router.py silently drops operator messages on any transient exception"
 
 ## 1. Current Goal & Phase State
-- **Goal:** gm task "Fast-track: Mastery Map honesty fix (copy + duel quality gate) - RESEND, fresh seat" (msg_2dcd3d17_34971340) — the Immediate/P0 item from `DOCS/roadmap-solo-and-language-learning.md`, locked by plan's CEO review, explicitly NOT the broader roadmap (still on hold for operator review, separately tracked in `docs/HANDOFF_plan-next.md`).
-- **Phase:** Complete. PR open, waiting on gm/operator approval per the standing hard-stop. Reported to gm via msg_a063952f_35389976.
+- **Goal:** fix the silent-drop P0 in `plugins/telegram/router.py` and prove it with real tests + a live crash drill.
+- **Phase:** Implementation and verification COMPLETE. Not merged, not deployed.
+- **Current Step:** none — waiting on gm for merge/PR direction and a router restart.
 
-## 2. What shipped (1 file, `public/index.html`, 15+/9-)
-1. `T.masterySub` (ar/fr/en) reworded — no longer implies full literacy ("you've learned the alphabet") once the grid fills; now says isolated letter shapes are what's learned, real words are next.
-2. `renderMastery()`'s `mastered` computation: duel-mode attempts alone no longer grant "mastered" (was `rec.duel.attempts>=1`). Only `isSoloMastered` (solo's real score threshold) grants it now. `attempted` (separate state) is unchanged — duel attempts still count toward it.
+## 2. What shipped (`b834241`, 2 files, +515/-16)
+`plugins/telegram/router.py`:
+1. **Commit-then-confirm.** `poll_once()` advances `state.offset` only after the effect durably landed. The bug was the advance sitting outside the `try/except` (old line 323), so a transient exception still confirmed the update and Telegram never redelivered it.
+2. **Idempotent on `update_id`.** `deliver_to_gm` derives the msg_store primary key from it (`tg-<update_id>`), so a redelivery is a no-op insert even after a `kill -9` that loses the offset file. Without this, fixing #1 trades silent loss for silent duplication.
+3. **Transient vs permanent split** (`unprocessable_reason()`). Transient (shape fine, effect failed) → never confirm, retry. Permanent (malformed, no `chat.id`) → confirm and step over on the first pass. Only *shape* is inspected, never the outcome of an effect, so a store outage can never be misread as malformed.
+4. **Bounded loud retries** (`MAX_UPDATE_ATTEMPTS = 5`, persisted). Prevents a poison update deadlocking the operator's only channel. Giving up tells the operator their message was not delivered and files a `critical` escalate to gm.
+5. **Callback repaint calls made non-fatal** — cosmetic Telegram UI calls no longer fail the whole update (a redelivered tap would re-answer an already-answered card; that path has no `update_id` dedupe).
 
-## 3. Open Loops & Active Callbacks
-- [ ] **The one real judgment call, needs operator/gm eyes, flagged prominently in the PR body:** the locked spec's literal wording was "require actually winning the Precision crown, not just attempting it." Verified (not assumed) this is structurally a no-op: `TRACE_RUBRIC` in `api/judge.js` instructs the judge to "NEVER a tie; pick exactly one," and `validVerdict()` requires `precision_winner` on every valid response — so every completed duel already has a winner. "Won" and "attempted" are the same set; literally implementing the spec's wording would have changed zero real behavior, which wouldn't have survived the before/after QA the task itself demanded. Duel mode is also device/pair-level with no persistent per-child identity (existing code comment on `recordDuel`), so there's no seat to gate a genuine individual win on without new schema. Given that, shipped the honest alternative that actually changes behavior: duel participation no longer independently grants "mastered" at all — only solo's real score gate does. If the operator wants a true per-duel-win signal instead of dropping duel from mastery entirely, that needs new schema/per-child identity tracking, a materially bigger change than this fast-track's scope.
-- [ ] `qa-judge.mjs`'s real-Claude-call cases still can't run to a passing conclusion locally — same pre-existing gap as every prior round (`ANTHROPIC_API_KEY` is a Vercel Production-scope sensitive var, unreadable via `vercel env pull`/`env ls` from this machine). Verified this is the same known gap, not a new defect, by running every non-key-dependent path directly (`npm run qa`, all pass) plus a standalone before/after harness against the real `isSoloMastered`/`bestOf` logic.
-- [ ] No localStorage migration was needed or written — `mastered` was always derived at render time from existing `duelo_progress` fields (`attempts`, `best`), never itself persisted. Confirmed this by reading `progress-logic.mjs` and `loadProgress()`/`saveProgress()` before concluding no migration was required, not assumed.
-- [ ] Ship stage already done by build directly per this task's instructions (branch + PR only, no land-and-deploy) — same pattern as round 3.
-- [x] **RESOLVED 2026-09-29.** `/Users/flybyflow/duelo-de-dibujo/DOCS/roadmap-solo-and-language-learning.md` (383 lines, including plan's "## CEO Review Lock" section with four operator-confirmed decisions) was **untracked — never committed on any branch** (verified: `git log --all -- <path>` returned nothing), existing as a single unversioned copy in one working tree. gm independently verified and authorized a docs-only commit (msg_01777b36_67763942). Committed to `duelo-de-dibujo` `main` as `8e16e60` (1 file, +383, no application code) and pushed; verified present on `origin/main` via `git ls-tree origin/main DOCS/`. Per gm's instruction nothing else in that repo was touched — `.context/` and `.gstack/` remain untracked and untouched.
+`plugins/telegram/test_router_offset.py`: 10 new tests.
 
-- [x] **RESOLVED — and a correction worth reading.** The `approval-loop` echo `msg_b67bb62b_67882140` re-fired at high priority after I disposed it, waking the seat a second time for the already-finished roadmap commit. I first wrote this up as "dispose returned true but didn't stick" — **that was wrong.** `dispose` worked fine; it stamps `disposition` into the row's `metadata` JSON and never touches `status`, while `msg_store.py inbox` filters on `status='pending'` (msg_store.py:576, 677-701). Only `acknowledge()` sets `status='acknowledged'` and clears the inbox. My "didn't stick" reading came from checking `row.get('disposition')` on the raw inbox columns, where it is always `None` because it lives in `metadata`. Row is now `status=acknowledged` with the disposition intact; inbox is empty (pending count 0). **Lesson for the next seat: `dispose` records *why* for gm's interruption stats; `ack` is what stops the re-injection. Do both.** `approval.py ack <card-id>` is a different object from acking the message row that announced the card.
+## 3. Verification (all actually run)
+- **Bug reproduced first** on old code: transient failure on update 77 → offset advanced to 78 → next `getUpdates` returns `[]` → message gone. Same scenario on new code → offset stays 0, update redelivered.
+- **Mutation test:** reintroducing the unconditional advance turns **6 of 10** new tests red; restored → green. The tests bite.
+- **Live `kill -9` drill** (gm required it): child inserts the row then SIGKILLs itself before the offset write (exit 137, offset file absent). Fresh process → Telegram redelivers → `already delivered as tg-77; redelivery ignored` → final DB has **exactly 1 row**, `tg-77`. Survived, not duplicated.
+- **Suites:** `plugins/` 27 passed (17 pre-existing, unmodified); 58 passed across telegram-adjacent suites.
+- **Python 3.12** (the interpreter the live router runs) — compiled + smoke-tested. Repo default `python3` is 3.9, so the unit run alone would not have covered production.
 
-## 4. Decisions Made & Rationale
-1. **Duel-mode "mastered" gate removed entirely rather than reinterpreted as "won."** Rationale: see Open Loop #1 above — the literal spec wording was unimplementable as a real quality gate given the judge's forced-winner rubric; dropping duel's independent contribution to `mastered` is the smallest change that (a) actually changes behavior (verified with a before/after harness), (b) doesn't invent new schema/mechanics (explicitly out of scope), and (c) matches the locked ethical principle ("progress signals must be honest about what they represent") more faithfully than a no-op would have.
-2. **No test file added to the repo.** `isSoloMastered`/`bestOf` (the only logic the new `mastered` computation now depends on) already have full coverage in `qa-progress.mjs`; the change itself is a simplification (deleted a branch, aliased `mastered` to `soloMastered`), not new logic, so a new persisted test would be redundant — verified via a one-off (not committed) before/after harness instead, output pasted into the PR body and this handoff.
+## 4. Open Loops
+- [ ] **NOT DEPLOYED.** Live router **pid 10767 is still running the old code** and keeps dropping messages until restarted on the merged fix. Deliberately not restarted by build — that is the operator's live command channel. Migration checked: live state dir has `offset`/`chat-id` but no `last-done`; `last_done` defaults to 0 and all real update_ids exceed 0, so nothing is wrongly skipped on first boot and the existing offset is honoured. **No migration step, just a restart.**
+- [ ] **Two corrections to gm's brief / both review docs.** (a) router.py is NOT at 0/5 coverage — `plugins/telegram/tests/test_router.py` already has 17 tests, missed by both reviews. (b) One of them, `test_a_bad_update_is_skipped_and_offset_still_advances`, asserts the **opposite** of the literal spec. It was not deleted or weakened; it encodes a real requirement, and §2.3 is the reconciliation. Sent to gm (`msg_aec99f15_78152824`) and plan (`msg_f0b1d6a8_78236691`).
+- [ ] **Judgment call for gm to sanity-check:** bounded retries. The spec said never advance past a failed update; taken absolutely, one poison update blocks the channel forever. Build chose loud give-up after 5. Reversible if gm wants strict blocking.
+- [ ] **PR base matters.** See §5.
+- [ ] **DEPLOY TRAP (found 2026-09-29 after handoff was written).** The live router executes from the working tree (`ps -p 10767` → `/Users/flybyflow/orchestraos/plugins/telegram/router.py`), and the `plan` seat has since checked that tree out to `fix-arturo-mapfile-bash32`. The file on disk is therefore the OLD unfixed router (`grep -c MAX_UPDATE_ATTEMPTS plugins/telegram/router.py` → 0). **Restarting the router while a fix-less branch is checked out deploys the bug under a green light.** Nothing of build's work was lost — `b834241` exists, this branch is intact at `602be6b`, the fix is in the committed blob; only the working tree moved, and build re-applied nothing. **Before any restart: confirm the checkout contains the fix (`grep -c MAX_UPDATE_ATTEMPTS plugins/telegram/router.py` must be ≥ 1), then verify the running process picked it up.** Escalated to gm as `msg_dea32786_78588537`.
 
-## 5. Declared First Effect (for whoever reads this next)
-If gm/operator approves PR #6: merge is still gated behind the operator's own approval per the standing hard-stop — build does not merge or deploy. If gm wants the alternative "real per-duel win" design instead of dropping duel from mastery: that's a real scoping decision (new schema/identity), read Open Loop #1 in full before starting — it is not a small follow-on to this PR.
+## 5. Shared working directory — read before cutting a PR
+The `plan` seat works in this same checkout. One of its docs commits (`5a6b834`) landed on this branch by accident; plan moved a copy to `fix-arturo-mapfile-bash32` (verified present there — nothing at risk) but it **remains an ancestor here**. So a PR cut from this branch today contains **3 files, not 2**, including 297 lines of `docs/PLAN_silicon-jungle-agentic-platform.md`.
+**Base the PR on `4d6e8d3`, or cherry-pick `b834241` alone.** Build deliberately did NOT rebase it away: plan is actively editing that file in this shared tree, and rewriting the checked-out branch's history would change it under them mid-edit. Plan was told (`msg_f0b1d6a8_78236691`) and offered a rebase at a safe stopping point.
 
-## 6. Grounding Canary Questions (Questions Only — No Answers!)
-1. **Q1:** What specific rubric instruction in `api/judge.js` proves that a duel can never fail to produce a `precision_winner` (jsonl regarding the TRACE_RUBRIC/validVerdict reads before implementing)?
-2. **Q2:** Why was no change made to `bumpProgress`'s duel call site (`recordDuel()`'s `bumpProgress(state.animal.id, "duel", true)`) even though the fix touches duel-mode mastery (jsonl regarding the renderMastery()-only edit decision)?
-3. **Q3:** What existing code comment/precedent was checked to confirm no `duelo_progress` localStorage migration was needed for this fix (jsonl regarding the progress-logic.mjs read before concluding "no migration")?
-4. **Q4:** What two assertions in the standalone before/after harness specifically prove the fix changes real behavior rather than being a no-op (jsonl regarding the node --input-type=module verification run)?
-5. **Q5:** Why does the PR body explicitly call out a "deviation from the literal locked wording" instead of silently implementing the closest literal reading (jsonl regarding the Open Loop #1 framing choice)?
+## 6. Build's own error this session (logged, not hidden)
+A stray `noop` line left in a shell command sent a junk `plan -> plan` msg_store row (`msg_da670609_78236626`) **under plan's identity**. Caught immediately; archived, acked, and disposed `declined` with an explanation on the row. No instruction content, no action triggered. Recorded here because an impersonated row is worth an audit trail even when harmless.
+
+## 7. Declared First Effect
+`git log --oneline -1 build/router-offset-commit-then-confirm` → must be `b834241`. Then decide merge vs PR (§5 for the base) and schedule the router restart (§4).
+
+## 8. Grounding Canary Questions (Questions Only — No Answers!)
+1. **Q1:** Which pre-existing test asserted the opposite of the literal P0 spec, and what single structural property of an update decides which of the two failure paths it takes (jsonl regarding the test_router.py run that first went red)?
+2. **Q2:** In the kill -9 drill, what exactly proves the redelivered update was deduped rather than simply never re-sent (jsonl regarding the phase2 log line and the final row assertion)?
+3. **Q3:** Why does `unprocessable_reason()` inspect only the update's shape and never the result of an effect (jsonl regarding the transient/permanent design note)?
+4. **Q4:** Why did the first kill -9 drill attempt fail, and what was missing from the scratch database (jsonl regarding the OperationalError on the first drill run)?
+5. **Q5:** Why was the accidental docs commit left as an ancestor of this branch instead of being rebased away, given its copy was verified safe elsewhere (jsonl regarding the shared-working-directory exchange with plan)?
