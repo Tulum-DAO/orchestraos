@@ -109,6 +109,50 @@ every Bot API media kind — that list grows; the catch-all covers it permanentl
 
 F2 and F3 remain open and non-blocking, unchanged by this commit.
 
+## 1c. Third gate — F5 fix `649cb44` (`build/telegram-unsupported-placeholder`): **CLEARED**
+
+Task: gm `msg_6df0cc87_80058153`. Findings:
+`$ORCHESTRA_DIR/state/review/router-offset-b834241/findings-f5-649cb44.md`.
+Stacked on F1's `a062d57` (`--is-ancestor` YES); merge target `fix-arturo-mapfile-bash32`.
+
+- **F5 is genuinely closed** — re-ran **my own F5 reproduction**: `sticker`, `animation`,
+  `video_note` all now `delivered=1` with `(unsupported message type: <kind> — resend as text)` and
+  `meta["unsupported"]` set. Was `delivered=0`, no signal.
+- **`plugins/` suite: 38 passed** — matches build. Compiles under the live Python 3.12.13.
+- **Mutation claim reproduced exactly** — restoring the bare `return` turns **6 of 8** red (the 5
+  parametrised kinds + the naming test). The 2 staying green are the guards, correctly unaffected.
+- **F1/F5 don't double-report** — a failed photo download delivers the F1 placeholder only, with
+  `attachment_failures` and no `unsupported`. Ordinary text passes through verbatim.
+- The reflection approach (`set(msg) - _ENVELOPE_KEYS`) is right and keeps the anti-rot property: an
+  unknown future Bot API kind gets *reported*, never dropped, so a stale key set degrades the
+  wording and nothing else.
+
+**On gm's flagged service-message concern — agreed, and the exposure is smaller than the flag
+implies.** (1) This is a 1:1 private DM, so the group-only service messages
+(`new_chat_members`, `left_chat_member`, `group_chat_created`, `new_chat_title`, `video_chat_*`,
+`forum_topic_*`, …) **cannot occur at all**; what stays reachable is essentially `pinned_message`
+and `message_auto_delete_timer_changed`, both operator-initiated and rare (verified: a
+`pinned_message` yields exactly one row). (2) `router.py:469` passes
+`allowed_updates=["message","callback_query"]`, so `edited_message`/`my_chat_member`/`chat_member`
+never arrive. **And the dangerous version of "new traffic" is absent — no feedback loop:** the bot's
+own outgoing sends, including `_alert_stepped_over` warnings and pushed cards, are not echoed back
+through `getUpdates`, so a placeholder cannot beget placeholders. Right trade, and not
+pre-emptively suppressing is also right — guessing which service messages matter recreates the
+rotting enumeration this commit removed.
+
+**F6 — NEW, out of scope, gm to scope.** Same structural pattern that produced F1 and F5: *the guard
+only fires when `text` is empty.* Add a caption to an unsupported kind and the media vanishes
+unmentioned. Verified: `animation + caption` → delivers `look at this bug`; `video_note + caption` →
+`urgent, see this`; neither carries `unsupported` or `attachment_failures`. **Not a regression** —
+identical pre-F1/pre-F5 — and milder than F1/F5 since the operator's words do arrive. But it
+misleads in a way a pure drop does not: gm reads "urgent, see this" with nothing to see. Cheap fix
+(~3 lines): compute `kinds` **unconditionally** and *append* a named line the way F1 appends its
+failure line, instead of only substituting for empty text. That collapses F1/F5/F6 into one rule —
+anything the router could not render gets named in the body — and removes the seam that has now
+produced three findings in a row.
+
+F2 and F3 remain open and non-blocking, unchanged.
+
 ## 2. Verified independently (not from build's report)
 
 - **Bug is real and still live:** `plugins/telegram/router.py:323` in the main checkout advances
