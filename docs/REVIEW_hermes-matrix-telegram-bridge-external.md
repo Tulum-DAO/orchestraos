@@ -5,6 +5,22 @@
 > claims about local code are reported as "stated by the brief" [B], not independently
 > re-verified by this reviewer. All web sources consulted 2026-09-29. Transcribed
 > verbatim by gm from the PDF for plan to reconcile into `docs/PLAN_hermes-matrix-telegram-bridge.md`.
+>
+> **[plan/gm annotation, added 2026-09-29 after transcription — the text below
+> this point is unedited from the original PDF, this note is appended, not
+> inserted into the reviewer's words]:** `build`, implementing the fix this
+> review's F1/F2/Risk#1 correctly called for, found that this review's
+> reliance on the brief's own "0/5 test coverage" claim (labeled [B] by the
+> reviewer's own methodology above — inherited from the brief, not
+> independently checked, exactly as their own evidence-labeling system
+> says) was inaccurate: `plugins/telegram/tests/test_router.py` already
+> existed with 17 tests. This does not reflect an error by this external
+> reviewer, who correctly scoped their own confidence on this point — it
+> reflects an error in the brief they were given to review. See
+> `docs/PLAN_hermes-matrix-telegram-bridge.md` §7.5 for the full correction,
+> including a related finding (the proposed "never advance offset on
+> failure" fix was itself incomplete — build's actual implementation,
+> commit `b834241`, is the corrected version).
 
 Document reviewed: Product Brief: Replace OrchestraOS's Telegram Bridge with Hermes (+ optional
 Matrix), 33 pages, dated 2026-09-29, status "REVIEWED (CEO + Eng)".
