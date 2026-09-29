@@ -136,6 +136,17 @@ def send_photo(path: str, caption: Optional[str] = None, chat_id: Optional[int] 
     return bool(r.get("ok"))
 
 
+def send_document(path: str, caption: Optional[str] = None, chat_id: Optional[int] = None) -> bool:
+    chat = _target(chat_id)
+    if chat is None or not Path(path).is_file():
+        return False
+    payload = {"chat_id": chat}
+    if caption:
+        payload["caption"] = caption[:1024]
+    r = _api("sendDocument", payload, files={"document": path})
+    return bool(r.get("ok"))
+
+
 # ---- decision cards with inline buttons -------------------------------------------------
 # callback_data is at most 64 bytes: "a|<card id>|<verb or option n>"
 
@@ -199,6 +210,7 @@ def main(argv=None) -> int:
     ap.add_argument("text", nargs="?", help="message text (or pipe it on stdin)")
     ap.add_argument("--chat", type=int, default=None, help="chat id (default: the remembered operator chat)")
     ap.add_argument("--photo", default=None, help="send this image file, text becomes the caption")
+    ap.add_argument("--document", default=None, help="send this file as a document, text becomes the caption")
     ap.add_argument("--from", dest="label", default=None, help="prefix the text with [label]")
     ns = ap.parse_args(argv)
     text = ns.text if ns.text is not None else sys.stdin.read()
@@ -207,6 +219,8 @@ def main(argv=None) -> int:
         text = f"[{ns.label}] {text}"
     if ns.photo:
         return 0 if send_photo(ns.photo, caption=text or None, chat_id=ns.chat) else 1
+    if ns.document:
+        return 0 if send_document(ns.document, caption=text or None, chat_id=ns.chat) else 1
     if not text.strip():
         print("tg_send: empty message", file=sys.stderr)
         return 2
