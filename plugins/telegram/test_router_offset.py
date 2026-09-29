@@ -433,3 +433,85 @@ def test_successful_attachment_is_unchanged(rt, tmp_path):
     text, meta = calls["delivered"][0]
     assert "Attachments:" in text and "download failed" not in text.lower()
     assert len(meta["attachments"]) == 1 and not meta.get("attachment_failures")
+
+
+# --------------------------------------------------------------------------------------
+# 6. F5 — a message we cannot render must not vanish either
+# --------------------------------------------------------------------------------------
+
+def _bare(uid: int, **payload) -> dict:
+    m = {"message_id": 1000 + uid, "chat": {"id": 7}, "from": {"username": "operator"},
+         "date": 1700000000}
+    m.update(payload)
+    return {"update_id": uid, "message": m}
+
+
+@pytest.mark.parametrize("kind,payload", [
+    ("sticker", {"sticker": {"file_id": "s1", "emoji": "👍"}}),
+    ("animation", {"animation": {"file_id": "g1"}}),
+    ("video_note", {"video_note": {"file_id": "v1"}}),
+    ("location", {"location": {"latitude": 1.0, "longitude": 2.0}}),
+    ("poll", {"poll": {"question": "?"}}),
+])
+def test_unrenderable_message_is_delivered_not_dropped(rt, tmp_path, kind, payload):
+    """F5: the attachment loop enumerates 5 kinds; anything else never even attempts a
+    download, so there is no failure to record — text stays empty, `if not text: return`
+    fires, and the update is confirmed. Silent loss with zero signal.
+
+    Parametrised across kinds review verified plus two it only suspected, to prove the fix
+    is a catch-all and not another enumeration that will rot as the Bot API grows.
+    """
+    mod = rt
+    r, calls, state = _mk(mod, tmp_path, api=_batch([_bare(1, **payload)]))
+    r.poll_once()
+
+    assert calls["delivered"], f"{kind}-only message reached nobody — silently dropped"
+    text, meta = calls["delivered"][0]
+    assert "unsupported" in text.lower(), f"no signal in delivered text: {text!r}"
+    assert meta.get("unsupported"), "the drop-reason is not recorded in metadata"
+    assert state.offset == 2
+
+
+def test_unsupported_placeholder_names_what_arrived(rt, tmp_path):
+    """'resend as text' is far more actionable if it says what could not be read.
+
+    Derived by reflecting over the message's own keys, NOT from a hardcoded kind list —
+    an unknown future type still gets named instead of silently becoming '(unsupported)'.
+    """
+    mod = rt
+    r, calls, state = _mk(mod, tmp_path,
+                          api=_batch([_bare(1, dice={"emoji": "🎲", "value": 4})]))
+    r.poll_once()
+    text, meta = calls["delivered"][0]
+    assert "dice" in text.lower(), f"placeholder does not name the content kind: {text!r}"
+    assert "dice" in (meta.get("unsupported") or [])
+
+
+def test_text_and_attachment_messages_are_untouched_by_the_catch_all(rt, tmp_path):
+    """The catch-all must only fire when nothing usable was found."""
+    mod = rt
+    r, calls, state = _mk(mod, tmp_path, api=_batch([_msg_update(1, "plain text")]))
+    r.poll_once()
+    text, meta = calls["delivered"][0]
+    assert text == "plain text"
+    assert not meta.get("unsupported"), "catch-all fired on a perfectly good text message"
+
+
+def test_failed_download_does_not_also_trip_the_unsupported_catch_all(rt, tmp_path):
+    """F1 and F5 must not double-report the same message."""
+    mod = rt
+
+    def api(method, payload=None, timeout=None):
+        if method == "getUpdates":
+            off = (payload or {}).get("offset", 0)
+            return {"ok": True, "result": [_photo_update(4)] if 4 >= off else []}
+        if method == "getFile":
+            return {"ok": False, "description": "unavailable"}
+        return {"ok": True, "result": {}}
+
+    r, calls, state = _mk(mod, tmp_path, api=api)
+    r.poll_once()
+    text, meta = calls["delivered"][0]
+    assert "download failed" in text.lower()
+    assert not meta.get("unsupported"), (
+        "a failed photo download was also reported as an unsupported type — double signal")

@@ -45,6 +45,17 @@ PY = sys.executable or "python3"
 # Never advancing at all would let a single malformed update head-of-line block the
 # operator's ONLY command channel forever — a worse outage than the drop we're fixing.
 MAX_UPDATE_ATTEMPTS = 5
+# Envelope fields every message carries — subtracted from a message's keys to work out
+# what the CONTENT actually was. Used only to name an unrenderable message in the
+# placeholder; an unknown key falling through here gets reported, never dropped, so this
+# set going stale degrades the wording and nothing else.
+_ENVELOPE_KEYS = frozenset({
+    "message_id", "message_thread_id", "from", "sender_chat", "chat", "date", "edit_date",
+    "text", "caption", "entities", "caption_entities", "reply_to_message", "via_bot",
+    "forward_from", "forward_from_chat", "forward_date", "forward_signature",
+    "author_signature", "media_group_id", "reply_markup", "has_protected_content",
+    "is_topic_message", "is_automatic_forward", "link_preview_options",
+})
 
 
 def log(msg: str) -> None:
@@ -323,7 +334,23 @@ class Router:
             log(f"{len(meta['attachment_failures'])} attachment(s) failed to download for "
                 f"chat {chat_id}; delivering the message with a placeholder rather than dropping it")
         if not text:
-            return
+            # Nothing usable was found: no text, no caption, and the attachment loop had
+            # no enumerated kind to even attempt (sticker, GIF, round video, location,
+            # poll, dice...). Previously this returned, poll_once saw success, and the
+            # operator's message vanished with zero signal.
+            #
+            # Deliberately a catch-all rather than a longer kind list: that list only
+            # grows, and every kind missing from it is another silent drop. Keying off
+            # "nothing usable was found" covers every future Bot API type for free. The
+            # content is NAMED by reflecting over the message's own keys, so an unknown
+            # kind still gets reported instead of a bare "(unsupported)".
+            kinds = sorted(set(msg) - _ENVELOPE_KEYS)
+            meta["unsupported"] = kinds or ["unknown"]
+            named = ", ".join(kinds)
+            text = (f"(unsupported message type: {named} — resend as text)" if kinds
+                    else "(unsupported message type — resend as text)")
+            log(f"chat {chat_id} sent an unrenderable message ({named or 'unknown'}); "
+                f"delivering a placeholder rather than dropping it")
         mid = self.deliver(text, meta)
         log(f"-> {GM_SEAT} inbox {mid} from chat {chat_id}: {text[:60]!r}")
 
