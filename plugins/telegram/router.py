@@ -307,10 +307,12 @@ class Router:
         meta = {"chat_id": chat_id, "message_id": msg.get("message_id"),
                 "username": ((msg.get("from") or {}).get("username")),
                 "update_id": update_id, "attachments": []}
+        handled = set()
         for kind, key in (("photo", "photo"), ("document", "document"), ("voice", "voice"), ("video", "video"), ("audio", "audio")):
             obj = msg.get(key)
             if not obj:
                 continue
+            handled.add(key)
             if kind == "photo":
                 obj = obj[-1]   # largest size
             path = download_file(obj["file_id"], self.uploads, api=self.api, fetch=self.fetch)
@@ -325,31 +327,38 @@ class Router:
                 # fix removed. A placeholder is not the attachment, but it is a signal.
                 meta.setdefault("attachment_failures", []).append(
                     {"kind": kind, "file_id": obj.get("file_id"), "name": obj.get("file_name")})
+        # ONE rule, applied unconditionally: anything the router could not render gets
+        # named in the body. Previously the unsupported-kind branch only ran when `text`
+        # was empty, so a caption silently suppressed it — the words arrived and the media
+        # vanished unmentioned, which reads as a complete message and is worse than an
+        # obvious gap. Computing this regardless of `text` removes the "only when empty"
+        # seam that produced three findings in a row rather than patching it a third time.
+        #
+        # Content keys minus the envelope minus the ones the loop already accounted for
+        # (rendered OR attempted-and-failed), so nothing is reported twice and a
+        # download failure is never mislabelled "unsupported".
+        unrendered = sorted(set(msg) - _ENVELOPE_KEYS - handled)
+        if unrendered:
+            meta["unsupported"] = unrendered
         lines = [f"  {a['kind']}: {a['path']}" for a in meta["attachments"]]
         lines += [f"  {f['kind']}: [download failed — ask the operator to resend]"
                   for f in meta.get("attachment_failures", [])]
+        lines += [f"  {k}: [unsupported type — resend as text]" for k in unrendered]
         if lines:
             text = (text + "\n\n" if text else "") + "Attachments:\n" + "\n".join(lines)
         if meta.get("attachment_failures"):
             log(f"{len(meta['attachment_failures'])} attachment(s) failed to download for "
                 f"chat {chat_id}; delivering the message with a placeholder rather than dropping it")
+        if unrendered:
+            log(f"chat {chat_id} sent content the router cannot render "
+                f"({', '.join(unrendered)}); naming it in the body rather than dropping it")
         if not text:
-            # Nothing usable was found: no text, no caption, and the attachment loop had
-            # no enumerated kind to even attempt (sticker, GIF, round video, location,
-            # poll, dice...). Previously this returned, poll_once saw success, and the
-            # operator's message vanished with zero signal.
-            #
-            # Deliberately a catch-all rather than a longer kind list: that list only
-            # grows, and every kind missing from it is another silent drop. Keying off
-            # "nothing usable was found" covers every future Bot API type for free. The
-            # content is NAMED by reflecting over the message's own keys, so an unknown
-            # kind still gets reported instead of a bare "(unsupported)".
-            kinds = sorted(set(msg) - _ENVELOPE_KEYS)
-            meta["unsupported"] = kinds or ["unknown"]
-            named = ", ".join(kinds)
-            text = (f"(unsupported message type: {named} — resend as text)" if kinds
-                    else "(unsupported message type — resend as text)")
-            log(f"chat {chat_id} sent an unrenderable message ({named or 'unknown'}); "
+            # Nothing at all: no text, no caption, no attachment, and no content key the
+            # reflection above could name. Rare (an envelope-only message), but it must
+            # still not vanish silently.
+            meta["unsupported"] = ["unknown"]
+            text = "(unsupported message type — resend as text)"
+            log(f"chat {chat_id} sent a message with no readable content at all; "
                 f"delivering a placeholder rather than dropping it")
         mid = self.deliver(text, meta)
         log(f"-> {GM_SEAT} inbox {mid} from chat {chat_id}: {text[:60]!r}")

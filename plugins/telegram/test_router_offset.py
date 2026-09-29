@@ -515,3 +515,93 @@ def test_failed_download_does_not_also_trip_the_unsupported_catch_all(rt, tmp_pa
     assert "download failed" in text.lower()
     assert not meta.get("unsupported"), (
         "a failed photo download was also reported as an unsupported type — double signal")
+
+
+# --------------------------------------------------------------------------------------
+# 7. F6 — a caption must not suppress the mention of what could not be rendered
+# --------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("kind,payload,caption", [
+    ("animation", {"animation": {"file_id": "g1"}}, "look at this bug"),
+    ("video_note", {"video_note": {"file_id": "v1"}}, "urgent, see this"),
+    ("sticker", {"sticker": {"file_id": "s1"}}, "my reaction"),
+    ("location", {"location": {"latitude": 1.0, "longitude": 2.0}}, "meet me here"),
+])
+def test_caption_does_not_hide_an_unrenderable_attachment(rt, tmp_path, kind, payload, caption):
+    """F6: F5's guard only fired when text was EMPTY, so a caption suppressed it entirely.
+
+    Milder than F1/F5 — the words arrive, so nothing looks broken — and that is exactly
+    what makes it worse to read: the operator sees 'urgent, see this' and believes they
+    sent evidence that never landed. Content loss masquerading as a delivered message.
+    """
+    mod = rt
+    msg = dict({"message_id": 1, "chat": {"id": 7}, "from": {"username": "operator"},
+                "date": 1, "caption": caption}, **payload)
+    r, calls, state = _mk(mod, tmp_path, api=_batch([{"update_id": 1, "message": msg}]))
+    r.poll_once()
+
+    text, meta = calls["delivered"][0]
+    assert caption in text, "the caption itself must still arrive"
+    assert kind in text.lower(), (
+        f"the {kind} is never mentioned — operator thinks their attachment landed: {text!r}")
+    assert kind in (meta.get("unsupported") or []), "not recorded in metadata either"
+
+
+def test_caption_plus_failed_download_still_names_the_photo(rt, tmp_path):
+    """Regression guard: F1 already handled this (verified pre-fix) — keep it that way."""
+    mod = rt
+
+    def api(method, payload=None, timeout=None):
+        if method == "getUpdates":
+            off = (payload or {}).get("offset", 0)
+            u = {"update_id": 1, "message": {"message_id": 1, "chat": {"id": 7},
+                                             "from": {"username": "operator"}, "date": 1,
+                                             "caption": "see attached",
+                                             "photo": [{"file_id": "p"}]}}
+            return {"ok": True, "result": [u] if 1 >= off else []}
+        if method == "getFile":
+            return {"ok": False, "description": "no"}
+        return {"ok": True, "result": {}}
+
+    r, calls, state = _mk(mod, tmp_path, api=api)
+    r.poll_once()
+    text, meta = calls["delivered"][0]
+    assert "see attached" in text and "download failed" in text.lower()
+    assert not meta.get("unsupported"), "an attempted-but-failed photo is not 'unsupported'"
+
+
+def test_mixed_message_names_every_outcome_exactly_once(rt, tmp_path):
+    """Good photo + unrenderable sticker + caption: all three accounted for, no dupes."""
+    mod = rt
+
+    def api(method, payload=None, timeout=None):
+        if method == "getUpdates":
+            off = (payload or {}).get("offset", 0)
+            u = {"update_id": 1, "message": {"message_id": 1, "chat": {"id": 7},
+                                             "from": {"username": "operator"}, "date": 1,
+                                             "caption": "both of these",
+                                             "photo": [{"file_id": "p"}],
+                                             "sticker": {"file_id": "s"}}}
+            return {"ok": True, "result": [u] if 1 >= off else []}
+        if method == "getFile":
+            return {"ok": True, "result": {"file_path": "p/x.jpg"}}
+        return {"ok": True, "result": {}}
+
+    r, calls, state = _mk(mod, tmp_path, api=api)
+    r.fetch = lambda p: b"bytes"
+    r.poll_once()
+    text, meta = calls["delivered"][0]
+    assert "both of these" in text
+    assert len(meta["attachments"]) == 1, "the good photo should still be downloaded"
+    assert meta.get("unsupported") == ["sticker"], f"got {meta.get('unsupported')}"
+    assert text.lower().count("sticker") == 1, f"sticker mentioned more than once: {text!r}"
+
+
+def test_plain_text_gains_no_attachment_noise(rt, tmp_path):
+    """Computing unconditionally must not start decorating ordinary messages."""
+    mod = rt
+    r, calls, state = _mk(mod, tmp_path, api=_batch([_msg_update(1, "just a sentence")]))
+    r.poll_once()
+    text, meta = calls["delivered"][0]
+    assert text == "just a sentence"
+    assert not meta.get("unsupported") and not meta.get("attachment_failures")
