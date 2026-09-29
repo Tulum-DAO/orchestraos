@@ -516,6 +516,18 @@ class MessageStore:
                 f"[impersonation-shadow] WOULD REFUSE {msg_id}: {_why} "
                 f"(to={to_agent}, self_addressed={_sv['self_addressed']}, "
                 f"trivial_body={_sv['trivial_body']})")
+            # ...and say it where the caller will actually see it. The line above goes
+            # to a log file nobody tails, so in shadow mode a suspect row was silently
+            # accepted: on 2026-09-29 two seats each wrote rows under the other's
+            # identity and neither got any signal at the time. Shadow mode should still
+            # be loud — it costs nothing and it is the only feedback until the refusal
+            # is armed via IMPERSONATION_REFUSE=1.
+            print(f"[msg_store] WARNING: suspect send accepted in SHADOW mode — {_why}. "
+                  f"Row {msg_id} ({from_agent} -> {to_agent}) was written anyway. "
+                  f"If this was not deliberate, the row is attributed to the wrong "
+                  f"agent: ack/dispose it and resend as yourself. "
+                  f"Set IMPERSONATION_REFUSE=1 to make this a refusal.",
+                  file=sys.stderr, flush=True)
 
         # leg-4 act 3: classify the DESTINATION (never the sender) before writing.
         try:
