@@ -1,9 +1,13 @@
 # Product Brief: Replace OrchestraOS's Telegram Bridge with Hermes (+ optional Matrix)
 
-- **Requested by:** operator, via gm (msg_1f3acb80_74023124, 2026-09-29)
+- **Requested by:** operator, via gm (msg_1f3acb80_74023124, 2026-09-29; Elon's-
+  team open question resolved via msg_a45fe321_75270887)
 - **Authored by:** plan (BSHR research + brief, non-interactive)
 - **Status:** REVIEWED (CEO + Eng, both with material corrections integrated) —
-  awaiting the operator's one load-bearing decision (§5) before any implementation
+  awaiting the operator's one load-bearing decision (§5) before any implementation.
+  **Post-review update:** the "Elon's team" open question is now resolved
+  (§2/§5, operator-sourced citation, independently re-verified) — a lightweight
+  edit, not a new review pass; verdict and accepted work unchanged.
 - **Scope:** brief only. No implementation authorized.
 
 ## 1. The ask, as parsed from the operator's transcript
@@ -69,11 +73,21 @@ keonda. Bolting it onto the shared keonda Hermes instance repeats the exact patt
 operator already reversed once. This argues for a **dedicated Hermes instance** for
 OrchestraOS, not a new profile on the existing one.
 
-**"Elon's team" reference — could not verify, flagging rather than guessing.** No
-specific, named xAI/Musk-affiliated "agent orchestration framework released as a layer"
-matches the transcript. Closest candidates (Grok 4 Heavy's multi-agent mode, the Feb-2026
-"Macrohard" xAI initiative) are products, not released frameworks, and neither maps
-cleanly onto "orchestra should release as a layer." Separately: Hermes's own plugin
+**"Elon's team" reference — RESOLVED (operator-sourced, gm relayed, independently
+re-fetched and confirmed by this seat: https://x.ai/news/introducing-grok-bot).**
+It's xAI's **Grok Bot**: always-on autonomous agents, each on its own dedicated
+cloud machine, that sign into apps/tools directly (including ones with no
+API/MCP), message each other and share context within threads, coordinate in
+groups on parallel workstreams, and only surface back to a human when
+something needs approval — beta on SuperGrok/Cursor/Enterprise waitlist as of
+this writing. This is xAI's own product, unrelated to Hermes/NousResearch —
+**does not change** the Shaw/NousResearch mismatch below, still worth the
+operator clarifying separately. It does validate the operator's underlying
+instinct (agent-to-agent messaging, approval-gated autonomy, coordinated
+groups) — but that instinct is already implemented in this fleet today via
+`msg_store` + `scripts/approval.py`, not something the Hermes/Matrix bridge
+question was ever blocking on. (Superseded framing below, kept for its still-
+live Shaw/NousResearch finding:) Hermes's own plugin
 metadata attributes authorship to **NousResearch**, not Shaw Walters/ElizaOS — worth
 surfacing to the operator directly, since the brief was framed around a conversation with
 Shaw, but Hermes itself isn't Shaw's project. Recommend asking the operator directly which
@@ -205,9 +219,12 @@ scoped:
   The original transcript's rationale ("richer integration/tool surface") reads
   like it was answering a different question than the one this brief now knows
   it's actually asking.
-- Which specific claim/conversation is "the Elon orchestration layer" — can't verify, and
-  the Shaw/NousResearch mismatch (§2) suggests the framing may need correcting before it's
-  repeated as rationale.
+- ~~Which specific claim/conversation is "the Elon orchestration layer"~~ —
+  **RESOLVED**: xAI's Grok Bot (§2, operator-sourced, re-verified). The
+  **Shaw/NousResearch mismatch is still open** — Grok Bot is unrelated to
+  Hermes, so it doesn't resolve whether Hermes itself is actually "Shaw's"
+  project (it isn't, per its own plugin metadata) — still worth the operator
+  clarifying before that framing gets repeated as rationale for anything.
 - If (b) is chosen: is a *dedicated* Hermes instance for OrchestraOS acceptable (extra
   process/infra to run), or is a cleanly-isolated profile on the existing gateway
   preferred despite the de-enmeshment precedent?
@@ -890,10 +907,17 @@ Outside Voice             | reused from CEO review (same document, same pass)
   material, non-narrowest-scope fork plan.md instructs this seat not to
   self-decide; it changes the entire engineering scope downstream).
 - Dedicated-instance vs. shared-gateway topology — only live if path (b) is
-  chosen (§5).
-- The "Elon orchestration layer" / Shaw-NousResearch rationale mismatch — needs
-  the operator's direct clarification before it's repeated as justification
-  (§2, §5).
+  chosen (§5). **New data point (2026-09-29, via the Silicon Jungle strategic
+  brief's own addendum):** the shared keonda gateway already runs a live,
+  `observe_only` WhatsApp presence for a real Silicon Jungle event — real
+  precedent for staying on a shared gateway in restricted mode, which the
+  operator may want to weigh against this brief's dedicated-instance
+  recommendation for OrchestraOS's own channel specifically. See
+  `docs/PLAN_silicon-jungle-agentic-platform.md` §0b/§6.
+- ~~The "Elon orchestration layer" reference~~ — **RESOLVED** (§2, §5: xAI's
+  Grok Bot, operator-sourced, verified). The **Shaw-NousResearch rationale
+  mismatch is still open** — needs the operator's direct clarification before
+  it's repeated as justification (§2, §5).
 - Whether the operator has a concrete second network in mind for Matrix, or
   whether Matrix was long-term direction only (§5).
 - + 0 unresolved from prior reviews (no prior review history exists for this
