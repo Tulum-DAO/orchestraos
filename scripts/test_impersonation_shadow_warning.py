@@ -85,4 +85,8 @@ def main():
     return 0
 
 
-sys.exit(main())
+# Guarded: this file is named test_*.py, so pytest IMPORTS it during collection. A bare
+# sys.exit() at module level raises SystemExit there, which pytest reports as INTERNALERROR
+# and aborts the whole scripts/ shard — 620 tests stopped running. Still runs standalone.
+if __name__ == "__main__":
+    sys.exit(main())
