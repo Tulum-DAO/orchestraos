@@ -47,7 +47,11 @@ export function VoiceAgentCard({ pmId, agentId, voice, updatedAt, isInCall, onCa
             isPending
               ? 'bg-neutral-800 text-neutral-500 cursor-not-allowed'
               : isInCall
-                ? 'bg-green-900/40 text-green-400 cursor-not-allowed animate-pulse'
+                // motion-safe: this pulse runs for the WHOLE duration of a call, and it
+                // animates an entire button rather than a small dot. The in-call state is
+                // already carried by the green treatment, the 'In Call...' label and the
+                // disabled cursor, so suppressing the motion costs no information.
+                ? 'bg-green-900/40 text-green-400 cursor-not-allowed motion-safe:animate-pulse'
                 : 'bg-green-600 hover:bg-green-500 text-white'
           )}
         >
