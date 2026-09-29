@@ -14,6 +14,12 @@ This module then routes by APPROVAL_TRANSPORT (default "ntfy" = unchanged):
 Because the default is "ntfy" and approval.py is NOT yet swapped, importing or
 deploying this changes nothing on the live loop.
 """
+# PEP 604 unions (`X | None`) appear in annotations below and are EVALUATED at import
+# time before Python 3.10, so this module died with "TypeError: unsupported operand
+# type(s) for |" under the repo's default python3 (3.9) while importing fine under the
+# 3.12 the supervisor runs. Making annotations lazy fixes every occurrence at once.
+from __future__ import annotations
+
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from apns_config import APPROVAL_TRANSPORT
