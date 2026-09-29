@@ -46,6 +46,7 @@ import { tmpdir } from 'os';
 import { homedir } from 'os';
 import { getRegistry } from '../services/state-reader.js';
 import { loadConfig } from '../lib/config.js';
+import { actingAgent } from '../lib/principal.js';
 import { gatewayTokenFile } from '../lib/gateway-token.js';
 
 const HOME = process.env.HOME || homedir();
@@ -248,7 +249,16 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
     return;
   }
 
-  const fromAgent = (req.headers['x-orchestra-user'] as string) || loadConfig().operatorId;
+  // from_agent decides who a message in every seat's inbox APPEARS TO BE FROM. Taking it
+  // from a raw client header let any local caller post instructions attributed to gm — the
+  // worst half of the 2026-09-29 finding, because seats act on gm's mail. Now it comes from
+  // the principal: the configured operator when no proxy vouches for anyone, the
+  // proxy-asserted user when one does. Never attacker-chosen.
+  const fromAgent = actingAgent(req);
+  if (!fromAgent) {
+    res.status(401).json({ ok: false, error: 'unauthenticated' });
+    return;
+  }
   const session = deps.resolveSession(agentId);
   const messageText = buildMessageText(text, body.attachments);
 
