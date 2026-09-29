@@ -20,6 +20,8 @@ import { useModelSelection } from '../../stores/modelSelection';
 import {
   buildProviderRows,
   modelsForProvider,
+  nextExpanded,
+  initialExpanded,
   type ProviderAvailability,
   type ProviderRow,
 } from '../../lib/modelSelectorFilter';
@@ -75,7 +77,8 @@ export function ModelSelectorSheet({ open, onClose, selection, onPick, onPickDef
   const [rows, setRows] = useState<ProviderRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [expandedProviderId, setExpandedProviderId] = useState<string | null>(null);
+  // undefined = untouched (pre-expand the provider in use); null = deliberately collapsed.
+  const [expandedProviderId, setExpandedProviderId] = useState<string | null | undefined>(undefined);
   // G21: the tile the operator tapped while it was DISCONNECTED — it opens the connect modal
   // instead of doing nothing, which is also the only way the reason reaches a phone.
   const [connectRow, setConnectRow] = useState<ProviderRow | null>(null);
@@ -101,7 +104,7 @@ export function ModelSelectorSheet({ open, onClose, selection, onPick, onPickDef
       const next = buildProviderRows(data.providers);
       setRows(next);
       setConnectRow((cur) => (cur ? next.find((r) => r.provider.id === cur.provider.id) ?? cur : cur));
-      setExpandedProviderId((prev) => prev ?? currentProviderId ?? null);
+      setExpandedProviderId((prev) => initialExpanded(prev, currentProviderId ?? null));
       return next;
     } catch (e) {
       setError((e as Error).message);
@@ -126,7 +129,7 @@ export function ModelSelectorSheet({ open, onClose, selection, onPick, onPickDef
       .then((data) => {
         if (cancelled) return;
         setRows(buildProviderRows(data.providers));
-        setExpandedProviderId((prev) => prev ?? currentProviderId ?? null);
+        setExpandedProviderId((prev) => initialExpanded(prev, currentProviderId ?? null));
       })
       .catch((e: Error) => {
         if (!cancelled) setError(e.message);
@@ -174,7 +177,9 @@ export function ModelSelectorSheet({ open, onClose, selection, onPick, onPickDef
               {rows.map((row) => (
                 <button
                   key={row.provider.id}
-                  onClick={() => row.selectable ? setExpandedProviderId(row.provider.id) : setConnectRow(row)}
+                  onClick={() => row.selectable
+                    ? setExpandedProviderId((cur) => nextExpanded(cur, row.provider.id))
+                    : setConnectRow(row)}
                   title={row.selectable ? row.provider.label : `${row.provider.label}: ${row.greyReason} — tap to connect`}
                   className={`flex flex-col items-center justify-center gap-1 h-full min-h-[4.5rem] px-2 py-2 rounded-lg border transition-colors ${
                     row.selectable
@@ -205,7 +210,7 @@ export function ModelSelectorSheet({ open, onClose, selection, onPick, onPickDef
               {/* Fourth tile: add a provider. Never a dead end — it expands the same way a
                   provider does, with what actually has to happen for one to appear here. */}
               <button
-                onClick={() => setExpandedProviderId(ADD_PROVIDER)}
+                onClick={() => setExpandedProviderId((cur) => nextExpanded(cur, ADD_PROVIDER))}
                 title="Add a provider"
                 className={`flex flex-col items-center justify-center gap-1 h-full min-h-[4.5rem] px-2 py-2 rounded-lg border border-dashed transition-colors ${
                   expandedProviderId === ADD_PROVIDER
