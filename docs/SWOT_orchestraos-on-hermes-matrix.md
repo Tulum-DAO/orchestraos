@@ -1,12 +1,19 @@
 # SWOT: Re-platforming OrchestraOS onto Hermes+Matrix for Many:Many Orchestration
 
-- **Requested by:** operator, via gm (msg_a6eb4e96_78020597, 2026-09-29)
+- **Requested by:** operator, via gm (msg_a6eb4e96_78020597 +
+  msg_014e86d8_80499368 Echo's independent peer review, 2026-09-29)
 - **Authored by:** plan (non-interactive)
 - **Depth:** lighter than a full CEO/eng review cycle, per gm's explicit
   instruction — cross-references and reuses facts already verified this
   session in the bridge brief and Silicon Jungle brief rather than
   re-deriving them. Strategic analysis only; no implementation authorized,
   no scope accepted.
+- **Post-review update:** Echo (the operator's peer-review agent, same
+  source as the bridge brief's external adversarial review) proposed a
+  specific hub-and-spoke architecture, evaluated on its merits in a new
+  section below — genuinely sharpens the verdict (resolves the "who's the
+  brain" ambiguity in the original question) without changing the "defer"
+  recommendation or moving up the decision timeline.
 - **Scope of the question:** explicitly distinct from the bridge brief's
   path (b) ("should gm's own Telegram channel route through Hermes") and
   from the Silicon Jungle brief's §4.2 ("should attendees get isolated
@@ -113,17 +120,21 @@ guessing at a match.
 ## W — Weaknesses
 
 1. **The exact same agent-first mismatch found for the Telegram bridge
-   applies at the scale of the whole fleet, not just one channel.**
-   Verified twice this session, from two independent sources (code read +
-   Hermes's own vendor docs, bridge brief §4a): Hermes has no documented
-   "pure substrate, no opinion on top" mode. Every integration point
-   (platform adapters, the relay contract) assumes *Hermes's own agent* is
-   what answers. "Layering orchestra around it" (the operator's phrase)
-   requires either subordinating Hermes's own agent loop or running
-   entirely outside it via the relay contract — and the relay contract
-   (below) doesn't obviously support "many independent org-scoped
-   orchestration layers," only one gateway-to-connector relationship per
-   the architecture found in the bridge brief's §7.2 (F7).
+   applies at the scale of the whole fleet, not just one channel — AS
+   ORIGINALLY FRAMED. Corrected below (Echo's proposal, evaluated) once a
+   peer review sharpened the question; read that section before treating
+   this finding as still fully standing.** Verified twice this session,
+   from two independent sources (code read + Hermes's own vendor docs,
+   bridge brief §4a): Hermes has no documented "pure substrate, no opinion
+   on top" mode. Every integration point (platform adapters, the relay
+   contract) assumes *Hermes's own agent* is what answers. Read literally,
+   "layering orchestra around it" (the operator's original phrase) would
+   require either subordinating Hermes's own agent loop or running
+   entirely outside it via the relay contract. **This mismatch is real for
+   the literal "run on top of Hermes" reading — it does not apply to the
+   hub-and-spoke reading (OrchestraOS as brain, Hermes as swappable
+   adapter) Echo's proposal makes explicit**, which resolves the "who's
+   the brain" ambiguity this finding was originally about.
 2. **The relay contract's experimental status is a much bigger bet at this
    scale.** Bridge brief §4a: "EXPERIMENTAL, v1... MAY CHANGE without a
    deprecation cycle until at least two real Class-1 platforms have
@@ -204,31 +215,123 @@ guessing at a match.
    actually ships because attention keeps re-spreading across a widening
    set of open strategic questions.
 
-## Verdict — including the question gm asked directly
+## Echo's proposed architecture, evaluated on its merits
+
+Echo (the operator's peer-review agent, independently reviewing this SWOT)
+proposed a specific architecture: **Matrix is the communication/federation
+fabric, OrchestraOS is the control plane, Hermes is one replaceable
+execution runtime invoked through adapters — not the layer that owns
+orchestration or the tenant model.** Topology: participants/tools ↔ Matrix
+↔ Orchestra; Orchestra invokes Hermes (or other runtimes) through adapters,
+hub-and-spoke with Orchestra at the hub. gm asked directly whether this
+holds up, changes the verdict, or just sharpens the checklist — evaluated
+below, not appended because it's from a peer reviewer.
+
+**It holds up, and it resolves real ambiguity in the original question —
+this is the finding, not a restatement of Weakness 1.** The original ask
+(operator's own words, §0: "getting it ready to run on top of Hermes agent,
+and layering orchestra around it") was genuinely ambiguous about *who's the
+brain* — Weakness 1 above treated that ambiguity as a mismatch, because
+Hermes has no documented mode where it isn't the agent answering. Echo's
+framing removes the ambiguity by being explicit: OrchestraOS's own agents
+(gm, plan, build...) stay the brain; Hermes is invoked as a swappable
+adapter/connector, the same relationship the bridge brief already found and
+recommended *against building yet* for path (b) — gm implementing the
+*gateway* side of Hermes's own relay contract, with Hermes's own agent
+runtime never in that loop at all (bridge brief §7.2, F7). **Read
+precisely, Echo's proposal is "generalize path (b)'s shape to every
+external channel/tool, not just Telegram" — not "subordinate OrchestraOS to
+Hermes."** That is a materially different, better-specified question than
+the one this SWOT originally evaluated.
+
+**What this changes:** Weakness 1 (the agent-first mismatch) is resolved
+*for this specific reading* — hub-and-spoke with OrchestraOS at the hub
+does not require subordinating OrchestraOS's own orchestration to Hermes's
+agent loop. Corrected here directly rather than left standing as if
+unaffected.
+
+**What this does not change — checked each directly, not assumed to
+survive:**
+- **Weakness 2 (experimental relay contract) still applies, and arguably
+  gets worse, not better, under this proposal.** Generalizing "build a
+  connector against Hermes's relay contract" from one channel to *every*
+  external channel/tool multiplies exposure to a contract still
+  "EXPERIMENTAL... MAY CHANGE without a deprecation cycle," validated
+  against only two named platforms. More surface area on an unstable
+  foundation is a larger bet, not a smaller one.
+- **Weakness 3 (no evidence of native multi-tenancy) is independently
+  corroborated by Echo, not contradicted.** Echo's own words: "Matrix gives
+  federation and room-level communication, not tenant isolation or
+  business governance — identity, authorization, tenant context, and audit
+  still need explicit enforcement regardless." This is a different party,
+  reasoning independently, reaching the same conclusion this SWOT already
+  had — genuine convergent validation, worth citing as such rather than
+  treating as a new finding.
+- **Weakness 4 (foundation-level migration) shrinks but does not
+  disappear.** A formal adapter/connector abstraction is real,
+  non-trivial infrastructure OrchestraOS does not have today — smaller in
+  scope than literally replacing the runtime every seat executes under, but
+  still genuine engineering, not a config change.
+
+**One real Opportunity this sharpening adds, not previously in this SWOT:**
+if built as a genuine adapter layer (not a runtime replacement), Hermes
+becomes *swappable* underneath a stable, OrchestraOS-owned contract —
+partially reduces Threat 1 (vendor/roadmap coupling), since a different
+execution runtime could be substituted later without re-architecting the
+whole fleet, *if* the adapter boundary is real and OrchestraOS's own side
+of the contract is what's authoritative. Genuine, not asserted as free —
+building and maintaining that boundary honestly is exactly Weakness 4.
+
+**Echo's naming point, adopted directly:** don't call the OrchestraOS-side
+connector "another messaging system" — call it an adapter/relay whose job
+is translating a workflow contract and *failing loudly*, not silently
+degrading (matching this SWOT's own Weakness/Threat 2 on silent
+degradation). Terminology worth carrying into any future brief that
+actually scopes this.
+
+## Verdict — including the question gm asked directly, and Echo's sharpening
 
 **Does this change the "defer §4.2" recommendation?** No. If anything it
-reinforces it (Weakness 3): re-platforming onto Hermes does not appear to
-hand OrchestraOS a ready-made multi-tenancy solution, so there's no new
-reason to build the isolation layer sooner, and a real reason (Weakness 2,
-the experimental contract's narrow validation) to be *more* cautious about
-which substrate it's eventually built on.
+reinforces it (Weakness 3, now independently corroborated by Echo): neither
+re-platforming onto Hermes nor Echo's hub-and-spoke refinement hands
+OrchestraOS a ready-made multi-tenancy solution, so there's no new reason to
+build the isolation layer sooner, and a real reason (Weakness 2, worse
+under Echo's proposal, not better) to be *more* cautious about the
+substrate it's eventually built on.
 
 **Fair question the operator raised and gm asked to be answered even though
 the build stays deferred: "if/when §4.2 is ever built, should it be built on
-Hermes+Matrix rather than bespoke?"** Honest answer: **not decidable with
-confidence yet**, and this brief should say so plainly rather than dodge it.
-Two concrete, unverified facts would need to be checked *before* that
-decision could be made responsibly — this is the actual, actionable output
-of this SWOT, not a vague "more research needed":
+Hermes+Matrix rather than bespoke?"** Honest answer, **updated by Echo's
+proposal, not just restated: still not decidable with confidence — but the
+question itself is now better-specified than it was.** The original,
+ambiguous version of this question ("should OrchestraOS run on top of
+Hermes") is effectively answered: **no** — that reading has a real
+architectural mismatch (Weakness 1, original framing) and isn't what a
+careful proposal would recommend anyway. The question worth actually
+tracking is narrower: **should OrchestraOS build a formal, swappable
+adapter/connector layer (Echo's hub-and-spoke shape, generalizing the
+bridge brief's own path-(b) pattern) for reaching external
+channels/tools, rather than continuing today's per-channel bespoke bridging
+(`router.py`'s own pattern)?** Three concrete, unverified facts would need
+checking before *that* decision could be made responsibly — two carried
+forward, one new:
 1. **Does Hermes itself have any native multi-tenant isolation model** (not
    just multi-*profile* routing, which is what the keonda instance's
    `profile_routes` config actually is — a routing table, not a trust
    boundary)? Unverified this session either way.
 2. **Has the relay contract validated a third Class-1 platform beyond
    Discord/Telegram** (its own stated bar for graduating out of
-   "EXPERIMENTAL, may change without deprecation")? If not, building
-   OrchestraOS's core orchestration on it is still premature regardless of
-   the multi-tenancy answer.
+   "EXPERIMENTAL, may change without deprecation")? If not, building any
+   part of OrchestraOS's orchestration on it is premature regardless of the
+   multi-tenancy answer.
+3. **(New, surfaced by Echo's sharpening) Is the number of external
+   channels/tools OrchestraOS actually needs to reach big enough yet to
+   justify a formal adapter abstraction, or is per-channel bespoke bridging
+   still cheaper at today's scale (Telegram, WhatsApp)?** A generalized
+   adapter layer is real infrastructure investment that pays off with
+   scale — building it for two channels may cost more than it saves.
+   Unverified; depends on how many channels the operator actually expects
+   to add, not assessed this session.
 
 **Recommended sequencing, explicit, matching the process-threat (T3)
 above:** finish the two in-flight, narrower decisions first (bridge brief's
@@ -236,7 +339,8 @@ path a/b; Silicon Jungle's facilitated-pilot go-ahead) before treating this
 platform-level question as anything more than a documented direction. This
 SWOT is the right depth for *informing* that eventual decision — it is not,
 and per gm's own framing was never meant to be, a green light to start
-building on Hermes+Matrix now.
+building on Hermes+Matrix now. Echo's proposal sharpens what a future "yes"
+would concretely look like; it does not move up the timeline for deciding.
 
 ## Open questions for the operator (surfaced, not decided here)
 
