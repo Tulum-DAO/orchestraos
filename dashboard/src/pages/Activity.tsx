@@ -311,7 +311,7 @@ export default function ActivityPage() {
         {sseConnected && (
           <div className="flex items-center gap-2 px-4 py-2 border-b border-neutral-800 bg-neutral-900/60">
             <span className="relative flex h-2.5 w-2.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+              <span className="motion-safe:animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500" />
             </span>
             <span className="text-xs font-medium text-green-400">Live</span>

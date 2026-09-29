@@ -176,7 +176,7 @@ export default function Approvals() {
         <div className="flex items-center gap-3">
           <h1 className="text-2xl font-bold text-white">Approvals</h1>
           {pendingCount > 0 && (
-            <span className="bg-red-600 text-white text-xs font-bold px-2 py-0.5 rounded-full animate-pulse">
+            <span className="bg-red-600 text-white text-xs font-bold px-2 py-0.5 rounded-full motion-safe:animate-pulse">
               {pendingCount}
             </span>
           )}
@@ -232,7 +232,7 @@ export default function Approvals() {
               <div key={item.id} className={clsx(
                 'rounded-xl border border-neutral-800 bg-neutral-900 overflow-hidden border-l-4',
                 URGENCY_BORDER[item.urgency],
-                item.urgency === 'critical' && 'shadow-[0_0_12px_rgba(239,68,68,0.3)] animate-[border-pulse_2s_ease-in-out_infinite]'
+                item.urgency === 'critical' && 'shadow-[0_0_12px_rgba(239,68,68,0.3)] motion-safe:animate-[border-pulse_2s_ease-in-out_infinite]'
               )}>
               <style>{`@keyframes border-pulse { 0%,100% { border-left-color: #ef4444; box-shadow: 0 0 8px rgba(239,68,68,0.2); } 50% { border-left-color: #f87171; box-shadow: 0 0 16px rgba(239,68,68,0.4); } }`}</style>
                 <div className="p-4 space-y-3">
