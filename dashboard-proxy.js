@@ -23,7 +23,10 @@ function serveStatic(req,res){const up=req.url.split("?")[0];const fp=path.join(
 const API_HOST = process.env.ORCHESTRA_API_HOST || "127.0.0.1";
 const API_PORT = parseInt(process.env.ORCHESTRA_API_PORT || "8888", 10);
 const VPS_API = "http://" + API_HOST + ":" + API_PORT;
-function proxyTo(base,req,res,timeoutMs){const u=base+req.url;const o=new URL(u);const opts={hostname:o.hostname,port:o.port,path:o.pathname+(o.search||""),method:req.method,headers:{...req.headers,host:o.host},timeout:timeoutMs||30000};const p=http.request(opts,(r)=>{res.writeHead(r.statusCode,r.headers);r.pipe(res);});p.on("error",(e)=>{res.writeHead(502,{"Content-Type":"application/json"});res.end(JSON.stringify({error:"upstream unreachable",detail:e.message}));});p.on("timeout",()=>{p.destroy();});req.pipe(p);}
+// x-forwarded-host preserves the address the BROWSER used. `host` below is rewritten to the
+// upstream, so without this the API cannot tell a same-origin request from a foreign one
+// and logs every request from this very dashboard as a blocked origin (2026-09-29).
+function proxyTo(base,req,res,timeoutMs){const u=base+req.url;const o=new URL(u);const fwdHost=req.headers["x-forwarded-host"]||req.headers.host;const fwdProto=req.headers["x-forwarded-proto"]||(req.socket&&req.socket.encrypted?"https":"http");const opts={hostname:o.hostname,port:o.port,path:o.pathname+(o.search||""),method:req.method,headers:{...req.headers,host:o.host,"x-forwarded-host":fwdHost,"x-forwarded-proto":fwdProto},timeout:timeoutMs||30000};const p=http.request(opts,(r)=>{res.writeHead(r.statusCode,r.headers);r.pipe(res);});p.on("error",(e)=>{res.writeHead(502,{"Content-Type":"application/json"});res.end(JSON.stringify({error:"upstream unreachable",detail:e.message}));});p.on("timeout",()=>{p.destroy();});req.pipe(p);}
 function proxyToLocal(req,res){proxyTo(VPS_API,req,res);}
 
 const server = http.createServer((req,res)=>{

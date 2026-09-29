@@ -53,15 +53,10 @@ import { setupVoiceLiveWebSocket } from './routes/voice-live.js';
 import { loadConfig } from './lib/config.js';
 import { principal } from './lib/principal.js';
 import { accessLog } from './lib/access-log.js';
+import { originDecision, publicOrigins } from './lib/cors-origin.js';
 
 const app = express();
 
-// CORS: an explicit allowlist, not `cors()` — the bare call reflects ANY origin, so any
-// page the operator visited could read this API from their browser. Allows the dashboard's
-// own origin (both loopback spellings) plus anything in ORCHESTRA_API_CORS_ORIGINS
-// (comma-separated) for a non-default deployment. Requests with no Origin header (curl,
-// server-side callers, same-origin fetches) are still allowed — CORS is a browser control
-// and rejecting those would break every non-browser client without adding protection.
 const corsAllowlist = (): string[] => {
   const cfg = loadConfig();
   const extra = (process.env.ORCHESTRA_API_CORS_ORIGINS || '')
@@ -69,7 +64,7 @@ const corsAllowlist = (): string[] => {
   const hosts = cfg.dashboardHost === '0.0.0.0' || cfg.dashboardHost === '::'
     ? ['127.0.0.1', 'localhost']
     : [cfg.dashboardHost, cfg.dashboardHost === '127.0.0.1' ? 'localhost' : cfg.dashboardHost];
-  const origins = new Set<string>(extra);
+  const origins = new Set<string>([...extra, ...publicOrigins(cfg.publicHost)]);
   for (const h of hosts) {
     origins.add(`http://${h}:${cfg.dashboardPort}`);
     origins.add(`https://${h}:${cfg.dashboardPort}`);
@@ -77,18 +72,46 @@ const corsAllowlist = (): string[] => {
   return [...origins];
 };
 
-app.use(cors({
+// One line per distinct origin. This fired on EVERY request from the operator's own
+// dashboard, so a real signal would have been buried in copies of a false alarm.
+const warnedOrigins = new Set<string>();
+
+// CORS: an explicit allowlist, not `cors()` — the bare call reflects ANY origin, so any
+// page the operator visited could read this API from their browser. Allowed: the
+// dashboard's own origin (both loopback spellings), the install's externally-reachable
+// address from [public].host, anything in ORCHESTRA_API_CORS_ORIGINS (comma-separated),
+// and a request whose Origin IS the address it was sent to. That last case is SAME-ORIGIN
+// — the page and the API on one address — which CORS never governed in the first place;
+// treating it as cross-origin is what made a healthy dashboard log "blocked origin" on
+// every request (2026-09-29). Requests with no Origin (curl, server-side callers) are
+// allowed: CORS is a browser control and refusing them adds nothing.
+// The decision itself lives in lib/cors-origin.ts, with its own tests.
+app.use((req, res, next) => cors({
   origin(origin, cb) {
-    if (!origin) return cb(null, true);          // non-browser caller; see note above
-    if (corsAllowlist().includes(origin)) return cb(null, true);
-    // Reject by withholding Access-Control-Allow-Origin rather than throwing: the browser
-    // blocks the read either way, and an Error here surfaces as a 500 that pollutes error
-    // monitoring and masks real faults.
-    console.warn(`[cors] blocked origin: ${origin}`);
-    return cb(null, false);
+    const decision = originDecision({
+      origin: origin || undefined,
+      forwardedHost: String(req.headers['x-forwarded-host'] || '') || undefined,
+      hostHeader: req.headers.host,
+      allowlist: corsAllowlist(),
+    });
+    if (!decision.allow && origin && !warnedOrigins.has(origin)) {
+      warnedOrigins.add(origin);
+      // Say what actually happened: the header is withheld, so a CROSS-origin browser read
+      // fails. Nothing else is refused, and same-origin traffic is untouched.
+      console.warn(
+        `[cors] withholding Access-Control-Allow-Origin for ${origin} — not the address ` +
+        `this request was sent to, and not in the allowlist (${corsAllowlist().join(', ')}). ` +
+        `Cross-origin browser reads from it will fail; set [public].host or ` +
+        `ORCHESTRA_API_CORS_ORIGINS if it should be allowed.`,
+      );
+    }
+    // Withhold the header rather than throwing: an Error here surfaces as a 500 that
+    // pollutes error monitoring and masks real faults.
+    return cb(null, decision.allow);
   },
   credentials: true,
-}));
+})(req, res, next));
+// Forensic access log.
 // Forensic access log. Mounted before the routes and before the body parser so a
 // request is recorded even if parsing rejects it.
 app.use(accessLog);
