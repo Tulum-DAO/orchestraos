@@ -48,6 +48,23 @@ absent from disk. Restarting right now would relaunch the **old, buggy** router.
 Do not report the deploy as done on steps 1–2 alone. Steps 3 and 4 are the ones that fail loudly
 when the trap has been stepped in.
 
+### Gate status — last re-checked 2026-09-29T10:51Z
+
+| Step | Status | Evidence |
+|---|---|---|
+| 1. merge | **PASS** | `7109aaa` "Merge branch 'build/router-offset-commit-then-confirm'" on `fix-arturo-mapfile-bash32` (gm merged it) |
+| 2. `--is-ancestor` | **PASS** | prints `CONTAINS-FIX` |
+| 3. grep on disk | **PASS** | returns `5` (was `0` pre-merge) — **but re-run it at the literal last second before the restart; this tree is shared and unstable** |
+| 4. process picked it up | **PENDING** | pid 10767 still `STARTED Tue Sep 29 08:57:58` → old code still in memory; `<data>/state/telegram/` still has only `chat-id, notified.json, offset` (no `last-done`). Correct — awaiting the restart. |
+
+**The verdict transfers to what will actually run:**
+`git diff b834241 HEAD -- plugins/telegram/router.py plugins/telegram/test_router_offset.py` is
+**empty** — the merge altered the reviewed code by zero bytes — and the post-merge tree passes
+**27/27**. No re-review is needed after the merge.
+
+Blocked on: the operator's go-ahead for the brief channel interruption (gm asked, not yet
+answered). gm will ping review for a second pair of eyes on step 4 after restarting.
+
 One required follow-up (F1), two notes (F2/F3), one accepted-as-designed (F4) — all recorded in
 the findings file, none of them worth leaving the live process on the buggy code for. Today every
 operator *text* message on the fleet's only command channel is destroyed silently by any
