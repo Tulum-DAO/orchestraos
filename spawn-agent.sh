@@ -780,6 +780,17 @@ spawn_agent() {
     _orch_prefix="$(printf 'ORCHESTRA_DIR=%q ORCH_DIR=%q ORCHESTRA_ROOT=%q' "$ORCHESTRA_DIR" "$ORCHESTRA_DIR" "$SCRIPT_DIR")"
     [[ -n "${ORCHESTRA_CONFIG:-}" ]] && _orch_prefix="$_orch_prefix $(printf 'ORCHESTRA_CONFIG=%q' "$ORCHESTRA_CONFIG")"
     [[ -n "${CLAUDE_CONFIG_DIR:-}" ]] && _orch_prefix="$_orch_prefix $(printf 'CLAUDE_CONFIG_DIR=%q' "$CLAUDE_CONFIG_DIR")"
+    # Arm msg_store's impersonation refusal inside the seat. Seats are the only population
+    # that CAN impersonate — they run in a tmux pane, so sender_identity() resolves a real
+    # caller — and they are unreachable by an ambient export, because `tmux new-session`
+    # inherits the tmux SERVER env rather than ours (same reason the vars above are carried
+    # explicitly). Daemons never see this: they are spawned from the supervisor's child_env,
+    # so arming here cannot affect the telegram channel, message-router or approval-loop.
+    # Defaults ON but honours an explicit override, so a seat can still be spawned unarmed
+    # for debugging. Fleet-wide kill switch if this ever misfires: create
+    # $ORCHESTRA_DIR/../runtime/ADDRESSABILITY_DISABLED — _impersonation_armed() checks it
+    # first and returns False regardless of this variable.
+    _orch_prefix="$_orch_prefix $(printf 'IMPERSONATION_REFUSE=%q' "${IMPERSONATION_REFUSE:-1}")"
     launch_cmd="$_orch_prefix $launch_cmd"
     if [[ -n "$resume_sid" && "$runtime" != "claude" ]]; then
         err "$agent_id: --resume is claude-only (runtime=$runtime has no resume adapter here)"
