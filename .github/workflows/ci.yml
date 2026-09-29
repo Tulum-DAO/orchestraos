@@ -51,9 +51,13 @@ jobs:
       matrix:
         include:
           - name: orchestra-cli
-            args: "orchestra_cli/tests"
+            # `orchestra_cli` not `orchestra_cli/tests`: test_pair_cmd.py lives beside the
+            # package, outside tests/, so the narrower path silently skipped it.
+            args: "orchestra_cli"
           - name: root
-            args: "test_router_prefixes.py test_msg_threading.py --ignore=scripts"
+            # Explicit filenames (a bare `.` would collect the whole tree), so a new root
+            # test is invisible until it is named here — test_msg_store_cli.py was.
+            args: "test_router_prefixes.py test_msg_threading.py test_msg_store_cli.py --ignore=scripts"
           - name: services-arturo
             args: "services/arturo"
           - name: scripts-top
@@ -66,6 +70,14 @@ jobs:
             args: "scripts/focus_registry"
           - name: contract
             args: "contract"
+          # plugins/ was in no shard, so all 45 telegram router tests — including every
+          # commit-then-confirm / exactly-once case gating the P0 silent-message-loss fix
+          # — passed locally and ran nowhere. A regression there drops the operator's
+          # messages silently, which is precisely the failure those tests exist to catch.
+          - name: plugins
+            args: "plugins"
+          - name: hooks
+            args: "hooks/tests"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
