@@ -9,7 +9,11 @@ Usage:
     # Full scan — discover all sessions from ~/.claude/projects/
     python3 session-index.py scan
 
-    # Update a single agent entry (called by spawn-agent.sh)
+    # Update a single agent entry. NOTE: spawn-agent.sh does NOT call this — the
+    # claim that it did went unchallenged while state/agent-sessions.json sat empty
+    # from 2026-09-19, silently breaking every transcript reader. Freshness now comes
+    # from the `session_index` supervisor beat running `scan`; callers today are
+    # agent-recovery.sh and promote_successor.py.
     python3 session-index.py update <agent_id> [--session-id X] [--cwd X] [--prompt X] [--summary "X"]
 
     # Lookup a single agent
