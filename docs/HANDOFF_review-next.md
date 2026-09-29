@@ -1,82 +1,112 @@
-# Handoff: review -> test
-- **Lineage:** build -> review -> test (Gen 1)
-- **Timestamp:** 2026-09-20T21:15:00Z
-- **Working Directory:** /Users/flybyflow/orchestraos (task target repo: /Users/flybyflow/duelo-de-dibujo)
-- **Last Commit SHA (orchestraos):** ec00f65
+# Handoff: review -> gm (ship gate)
+- **Lineage:** build -> review (Gen 2)
+- **Timestamp:** 2026-09-29T10:45:00Z
+- **Working Directory:** /Users/flybyflow/orchestraos
+- **Reviewed:** branch `build/router-offset-commit-then-confirm` @ **`b834241`** (the P0 fix commit only — the branch carries 25 commits; the other 24 were not in scope for this gate)
+- **Findings file:** `$ORCHESTRA_DIR/state/review/router-offset-b834241/findings.md`
+- **Task:** gm `msg_52d5354a_78316399` — ship gate before merge + restart of live router pid 10767
 
-## Micro-update 2026-09-29 (review, fresh seat) — NO NEW REVIEW WORK, PARKED
+## 1. Verdict
 
-Woke, read seat memory (`$ORCHESTRA_DIR/memory/review/MEMORY.md` — empty), checked for work,
-found none. Verified, not assumed:
-- `msg_store.py inbox --agent review` → `{"messages": [], "count": 0}`.
-- `tasks.db` `tasks` table is **empty** (`select status,count(*) group by status` returns zero rows) —
-  nothing assigned or routed to `review`.
-- `~/scripts/agent-orchestra/queue/inbox/review/` does not exist, and `$ORCHESTRA_DIR/queue/` is
-  empty — consistent with `prompts/infrastructure.md` deprecating file inboxes in favour of msg_store.
-- `docs/HANDOFF_build-next.md` is addressed **build -> gm**, not to review, and its subject
-  (`duelo-de-dibujo` PR #6, `gm/mastery-honesty-fix`) was already **merged 2026-09-22** as `95fe465`
-  with a later docs-only commit `8e16e60`. That branch/PR was routed branch-and-PR-direct by gm's task
-  instructions and never entered this seat's queue — review did **not** gate it, and it is now past the
-  point where this seat's verdict is the gate. No retro-review performed; nobody asked for one.
+**CLEARED to merge and restart.**
 
-**No review skills were run this session** (`review`/`cso`/`health`/`design-review`/`devex-review`):
-there is no branch under review. The Gen 1 verdict below still stands as the last verdict of record —
-`build/arabic-letter-tracing-vertical` @ `86fca3e`, **CLEARED**. Do not read this micro-update as a
-verdict on anything newer.
+One required follow-up (F1), two notes (F2/F3), one accepted-as-designed (F4) — all recorded in
+the findings file, none of them worth leaving the live process on the buggy code for. Today every
+operator *text* message on the fleet's only command channel is destroyed silently by any
+transient failure; this commit fixes that, and I verified the fix works rather than taking
+build's word for it.
 
-**orchestraos git state at park:** working tree clean; on branch `fix-arturo-mapfile-bash32`, which is
-**23 commits ahead of / 0 behind `main`** (`main` @ `0cebff5`). Every recent handoff doc, including this
-one, lives on that unlanded branch. Flagging as an observation for gm/ship, not acting on it — landing it
-is not review's call.
+## 2. Verified independently (not from build's report)
 
-**Seat status: PARKED / STAND_DOWN.** Next generation: re-check `msg_store.py inbox --agent review` and
-`tasks.db` first; if still empty, park again rather than inventing a review target.
+- **Bug is real and still live:** `plugins/telegram/router.py:323` in the main checkout advances
+  the offset outside the `try/except`. `ps -p 10767` → Python **3.12.13** running that exact file,
+  which has no `MAX_UPDATE_ATTEMPTS`/`last_done` → still old code.
+- **`plugins/` suite: 27 passed** at `b834241` in a clean worktree (Python 3.9.6) — matches build.
+- **Mutation claim reproduced exactly:** reintroducing the unconditional advance turns **6 red,
+  21 pass**; the 6 are the ones build named. Restored → 27 pass.
+- **Exactly-once under the worst crash:** deleted **both** `offset` and `last-done` (router has no
+  memory of the update at all), let Telegram redeliver from 0 → **one row, `tg-77`**. The
+  store-level `tg-<update_id>` dedupe, not the offset file, is the real guarantee. It holds.
+- **`msg_store` API the fix needs exists:** `send(..., msg_id=)` and `get(msg_id)`.
+- **Under the live 3.12 interpreter:** compiles and imports, shape classifier behaves as
+  documented. **pytest is not installed on 3.12** — so build's "compiled and smoke-tested under
+  3.12" is precisely worded; nobody has run the suite on the live interpreter, me included.
 
-## 1. Current Goal & Phase State
-- **Goal:** clear (or send back) Build's `skill-duel-engine-v3` branch per the Eng Review Lock spec.
-- **Plan Reference:** `/Users/flybyflow/duelo-de-dibujo/DOCS/designs/skill-duel-engine-v3.md` (`## Eng Review Lock` section)
-- **Phase:** Review complete.
-- **Current Step:** None — handing off to Test.
+## 3. Open Loops
 
-## 2. Verdict
-
-**CLEARED** — Branch `build/arabic-letter-tracing-vertical` @ `86fca3e` (repo: `/Users/flybyflow/duelo-de-dibujo`).
-
-Every requirement in the Eng Review Lock section verified against the actual diff/code, not just against the Build handoff's claims. No blocking findings. Two open items remain, both explicitly scoped to Test in the design doc itself — non-blocking, not review gaps.
-
-### Verified (read the diff + ran/curled the real thing)
-- Security boundary: client (`public/index.html`) sends only `challengeId`, never rubric text. `api/judge.js` resolves `rubric` server-side via a `Map` built from `challenges.json`; unknown id -> `400`. Ordering confirmed in `api/judge.js`: origin check -> rate limiter -> `challengeId` lookup — sits after both, doesn't weaken either.
-- Reproduced live against the existing preview deploy (`https://duelo-de-dibujo-5l6fnvbq2-mos-projects-a67736c7.vercel.app`): forged `origin` -> 403; missing `challengeId` -> 400; `challengeId=alif` -> `"missing ANTHROPIC_API_KEY"` (not `"unknown challengeId"`), proving `challenges.json` bundles/reads correctly under Vercel's real runtime tracer, not just plain Node.
-- `FALLBACK_CHALLENGES` in `api/judge.js` is byte-identical to the 4 animals' live `rubric` text in `challenges.json` — regression-safe if the file load ever fails.
-- `JUDGE_PROMPT` reworded verb-neutral (`judgePrompt(rubric)`, "a friendly duel" / "reproduced the reference"). `alif`'s `rubric.vibe` independently authored (stroke confidence/flow), keeps the "usually give it to the other player" fairness line.
-- All 5 named `T{}` keys (`tagline`/`learnTitle`/`learnSub`/`done`/`capSub`) reworded verb-neutral in `ar`/`fr`/`en` — checked all three languages, not just English.
-- `.key` -> `.id` rename: grepped `api/`, `public/*.html`, `qa-*.mjs` — clean, no stragglers.
-- `qa-judge.mjs`: ran it. Case 3 (unknown `challengeId` -> 400) PASSES. Cases 1/2 (real Claude calls, frog regression + alif trace) fail here on missing `ANTHROPIC_API_KEY` — confirmed this is the pre-existing key-availability gap on this machine, not a code-path bug (the 502 body is `"missing ANTHROPIC_API_KEY"`, same as the live preview). `qa-ratelimit.mjs`: unchanged, ran, still all-PASS (rate limit fires before `challengeId` is read).
-- `public/img/alif.png`: real 1024x1024 PNG, single vertical stroke + numbered stroke-order arrow — visually correct.
-- Video `fKwOMa3r1_c`: verified via YouTube oEmbed myself (not trusted from the handoff) — public, embeddable, "Arabic Alphabet for English Speaking kids - The letter Alif" by Learn With Zakaria.
-- `T.nextPick` still says "animal" in all 3 languages — correctly out of the locked spec's named 5-key list, disclosed as a known residual, not a miss.
-
-## 3. Open Loops & Active Callbacks (Test-stage, non-blocking)
-- [ ] Run `qa-judge.mjs`'s two real-Claude-call cases (frog regression + alif trace) to green with a Production-scoped `ANTHROPIC_API_KEY` this machine can't read.
-- [ ] Real-kid playtest of the reframed `rubric.vibe` wording for letter-tracing (design doc Open Question #4).
-- [ ] RTL layout + Arabic TTS pronunciation check for the new vocabulary (ألف / Alif), all 3 languages.
-- [ ] Actually watch video `fKwOMa3r1_c` for content accuracy (oEmbed/public/embeddable already confirmed by Review).
+- [ ] **F1 (required follow-up, NOT a merge blocker).** The "attachment fetch error" case the
+  commit message lists as fixed is **still a silent permanent loss**. `download_file` swallows its
+  own exception and returns `None`, so a photo-only message (no caption) whose fetch fails never
+  raises → `if not text: return` → `poll_once` sees success → offset advances past it. Reproduced:
+  `delivered 0, offset 91→92, attempts 0, operator warned: []`. Pre-existing and identical in the
+  old code, so not a regression — but the commit message overstates coverage. Small fix: when an
+  attachment object existed but `path` is `None`, append a placeholder line so the message still
+  reaches gm (preferred), or raise so commit-then-confirm retries it.
+- [ ] **F2 (note).** The 5-attempt budget buys **~22 ms measured** (~0.5–1.5 s in production), not
+  a real outage window: `run()` has no backoff and `getUpdates` returns immediately while an update
+  is pending. Weaker than it first looks — `msg_store` sets `busy_timeout=30000`, so the likeliest
+  blip (sqlite lock contention) blocks in-call instead of raising and never touches the budget.
+  Exposed class is fast-raising environment failures. `time.sleep(min(2 ** n, 30))` closes it.
+- [ ] **F3 (note).** `_alert_stepped_over` writes gm's critical row through the same `msg_store`
+  whose failure likely caused the step-over, so that signal goes missing exactly when it's needed
+  (hit this in my harness; the code logs and continues, correctly). The operator warning rides
+  Telegram, an independent path, and worked in every probe — loudness survives where it counts.
+- [ ] **F4 (accepted, no action).** `photo: [{}]` → `KeyError('file_id')` is classified TRANSIENT
+  and burns all 5 attempts before a loud step-over. Verified; safe outcome. Deliberately NOT
+  widening `unprocessable_reason` — each shape check added there is a new chance to misclassify a
+  transient failure as permanent, and that direction loses messages.
 
 ## 4. Decisions Made & Rationale
-1. **Verdict is CLEARED, not NOT-CLEARED, despite two open items** — both are explicitly named as Test-stage work in the design doc's own Test Plan section, not engineering gaps Review should block on. Confirmed each independently (live curl + oEmbed) rather than taking Build's word for it.
-2. **No code changes made.** All findings were clean; nothing needed fix-first.
 
-## 5. Declared First Effect (for Test)
-Test stage runs `qa-judge.mjs`'s two real-Claude cases with a working key, then the manual checks in §3 (playtest, RTL/TTS, video watch), before clearing for Ship.
+1. **CLEARED rather than NOT CLEARED despite F1.** F1 is a pre-existing sibling case, byte-identical
+   in the old code, and holding the merge would keep the live router destroying the operator's text
+   messages — the more common and more important path. Fixing F1 is a follow-up commit, not a gate.
+2. **Answered gm's question on bounded-retry-then-escalate: the design is right.** Retry-forever on
+   the only command channel is strictly worse — one poison update blocks every later approval. The
+   seam (shape → permanent/never retried, effect → transient/never confirmed) is drawn correctly,
+   and `unprocessable_reason` inspecting *only* shape is the load-bearing asymmetry that keeps a
+   store outage from being misread as malformed. My one change is F2's backoff, which tunes the
+   budget, not the design.
+3. **Reviewed `b834241` alone, not the 25-commit branch.** That is what the gate was asked about.
+   The other 24 commits have not been reviewed by this seat and this verdict says nothing about them.
+
+## 5. Declared First Effect
+
+Before restarting pid 10767: the live process runs
+`/Users/flybyflow/orchestraos/plugins/telegram/router.py` from the **main checkout, currently on
+branch `fix-arturo-mapfile-bash32`** — a restart picks up whatever is on disk there. **Merging only
+to `main` would restart the router on the old buggy code.** Land the fix in the branch that working
+tree has checked out (or switch the tree) first, then verify
+`grep -c MAX_UPDATE_ATTEMPTS plugins/telegram/router.py` is non-zero, then restart.
 
 ## 6. Next 3 Immediate Actions
-1. Test seat: obtain/borrow a Production-scoped `ANTHROPIC_API_KEY` (or run from a context that has one) and get `qa-judge.mjs` cases 1-2 to green.
-2. Test seat: real-kid playtest of `rubric.vibe` wording + RTL/TTS check + watch the sourced video.
-3. Ship stage: branch + PR only per the operator's hard-stop (no land-and-deploy without a fresh approval gate).
+
+1. gm: get the operator's go-ahead for the brief channel interruption, then land `b834241` into the
+   checked-out branch of the main working tree (not just `main`).
+2. Whoever restarts: confirm the on-disk file is the fixed one before `kill`, and confirm
+   `last-done` appears in `<data>/state/telegram/` after the first delivered message.
+3. build: F1 follow-up commit (attachment-fetch placeholder) + optionally F2's one-line backoff.
 
 ## 7. Grounding Canary Questions (Questions Only — No Answers!)
-1. **Q1:** What HTTP status and body does the live preview deployment return for `challengeId=alif` with a placeholder image payload, and what does that prove about Vercel's bundler (jsonl regarding this handoff's §2, verified section)?
-2. **Q2:** Which qa-judge.mjs case number exercises the unknown-`challengeId` 400 guard, and did it PASS or FAIL in this environment (jsonl regarding this handoff's §2)?
-3. **Q3:** Which single `T{}` key was identified as still animal-specific but correctly left unfixed as out-of-spec-scope (jsonl regarding this handoff's §2, last bullet)?
-4. **Q4:** Why does the missing-`ANTHROPIC_API_KEY` failure on `qa-judge.mjs` cases 1-2 not count as a Review blocker (jsonl regarding this handoff's §4, decision 1)?
-5. **Q5:** What source did Review use to verify the sourced video is public/embeddable, independent of Build's own claim (jsonl regarding this handoff's §2, video bullet)?
+
+1. **Q1:** Which two state files did review delete to prove exactly-once survives a crash where the
+   router retains no memory of the update, and what single row id came back (jsonl regarding the
+   probe2 harness run against the real msg_store)?
+2. **Q2:** How many tests went red under review's own mutation, and which branch of `poll_once` was
+   mutated to produce that (jsonl regarding the independent mutation check)?
+3. **Q3:** What measured wall-clock number did the 5-attempt budget survive for, and which
+   `msg_store` PRAGMA is the reason that number is less alarming than it looks (jsonl regarding F2)?
+4. **Q4:** Which function's internal `try/except` is the reason the commit's claimed
+   "attachment fetch error" coverage does not actually exist (jsonl regarding F1's reproduction)?
+5. **Q5:** Why does merging `b834241` to `main` alone fail to deploy the fix to pid 10767 (jsonl
+   regarding the `ps -p 10767` read and the main checkout's current branch)?
+
+---
+
+## Superseded: prior verdict of record (Gen 1, 2026-09-20) — duelo-de-dibujo
+
+Kept for lineage only; consumed by Test long ago. Branch `build/arabic-letter-tracing-vertical`
+@ `86fca3e` in `/Users/flybyflow/duelo-de-dibujo`: **CLEARED**, no blocking findings, two
+Test-stage open items (real-Claude `qa-judge.mjs` cases needing a Production-scoped
+`ANTHROPIC_API_KEY`; real-kid playtest + RTL/TTS + watch video `fKwOMa3r1_c`). Full detail in
+git history of this file at `231f1d0` and earlier.
