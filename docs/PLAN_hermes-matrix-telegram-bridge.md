@@ -2,18 +2,21 @@
 
 - **Requested by:** operator, via gm (msg_1f3acb80_74023124, 2026-09-29; Elon's-
   team open question resolved via msg_a45fe321_75270887; Shaw's identity
-  resolved via the Silicon Jungle brief's addendum 4, msg_ffd21b6f_76509819)
+  resolved via the Silicon Jungle brief's addendum 4, msg_ffd21b6f_76509819;
+  external adversarial review reconciled via msg_8b696347_76706490)
 - **Authored by:** plan (BSHR research + brief, non-interactive)
-- **Status:** REVIEWED (CEO + Eng, both with material corrections integrated) —
-  awaiting the operator's one load-bearing decision (§5) before any implementation.
-  **Post-review updates (operator-requested, folded in directly, not deferred):**
-  the "Elon's team" open question resolved with Hermes vendor-docs corroboration
-  added to §4a (both independently re-verified); a new §6 comparing
-  OrchestraOS's fleet architecture against xAI's Grok Bot; and Shaw's real
-  identity resolved (Shaw Cole, confirmed OrchestraOS author) — this brief's
-  own original "Shaw Walters?" guess was wrong, corrected plainly in §2 rather
-  than quietly dropped. None of these change §4's core recommendation or the
-  open (a)/(b) decision.
+- **Status:** CEO + ENG + EXTERNAL ADVERSARIAL REVIEW COMPLETE, reconciled
+  into **"path (a+)"** (§7) — awaiting the operator's one load-bearing
+  decision (§5) before any implementation. **§7 is a real, eng-review-depth
+  reconciliation, not a citation edit**: the operator's own outside
+  adversarial review (`docs/REVIEW_hermes-matrix-telegram-bridge-external.md`)
+  correctly predicted, and this seat's direct code read then confirmed, a
+  real P0 message-loss bug in `router.py` (§7.1) — not hypothetical, live in
+  production code today, independent of the Hermes/Matrix decision. The
+  strategic recommendation (harden the existing bridge, defer Hermes/Matrix)
+  is unchanged across all three review passes — this is convergent
+  validation, not a reversal. Other post-review updates (Elon's team,
+  Grok Bot comparison, Shaw's identity) remain folded in as before.
 - **Scope:** brief only. No implementation authorized.
 
 ## 1. The ask, as parsed from the operator's transcript
@@ -271,6 +274,21 @@ scoped:
 - Does the operator have a concrete second network in mind for Matrix (WhatsApp already
   has infra; Discord does not), or was Telegram-via-Hermes the whole near-term ask and
   Matrix was framed more as long-term direction?
+- **(Added per §7.2, external review F12)** Is Telegram genuinely the
+  operator's *only* channel to the fleet, or one of three (alongside the
+  dashboard and Apple Watch, which this brief documents as sharing the same
+  `approval.py` core)? This brief uses "only channel" language in places that
+  implies total loss of fleet control on failure — if the dashboard/watch
+  remain usable during a Telegram outage, the actual severity of every
+  failure mode in Section 2/Section 8 is lower than stated. Worth an explicit
+  answer before Phase 2's rollback urgency is calibrated.
+- **(Added per §7.2, external review F7)** If path (b) is chosen: understood
+  precisely that "Hermes as transport, gm as brain" means gm implements the
+  *gateway* side of Hermes's relay contract against NousResearch's connector
+  — the Hermes *agent runtime* itself (the "richer tool surface" originally
+  cited as rationale) is not actually used in that design. Worth confirming
+  the operator still wants (b) with this precise understanding, not the
+  vaguer "use Hermes" framing from the original transcript.
 
 ## 6. Inspiration: xAI Grok Bot — where this fleet already matches, where it doesn't
 
@@ -322,6 +340,209 @@ having in general. The Grok Bot comparison sharpens *why* the fleet's
 tiered/threaded/approval-gated architecture is worth preserving as-is
 (§10's ecosystem-fit finding, now doubly supported), it doesn't argue for a
 different Telegram path.
+
+## 7. External adversarial review, reconciled — "path (a+)"
+
+The operator's own outside adversarial review landed (`docs/REVIEW_hermes-matrix-telegram-bridge-external.md`,
+transcribed by gm from a PDF — **read in full before this section, it is the
+primary source, not this reconciliation alone**). It is genuinely rigorous:
+real citations against the Telegram Bot API reference, Hermes's own docs,
+Matrix spec, and mautrix release notes — not a vibes-based critique. It
+**endorses path (a)** and refines it into **"path (a+)."** This section is a
+real reconciliation, not a citation bolt-on: what's accepted, what this seat
+independently verified before accepting, and where this seat pushed back.
+
+### 7.1 The headline finding — independently verified, and it's worse than
+either document assumed
+
+The review's most important point (F1/F2, Risk #1): the brief's Eng Review
+left one open question — does a mid-batch exception in `handle_update` let
+the offset advance past a failed update? **This seat re-read `poll_once`
+directly (lines 310-324) to answer it, rather than leaving it open or taking
+the review's inference at face value:**
+
+```python
+for upd in updates:
+    try:
+        self.handle_update(upd)
+    except Exception as e:
+        log(f"update {upd.get('update_id')} failed: {e!r}")
+    self.state.offset = int(upd["update_id"]) + 1   # <-- OUTSIDE the try/except,
+                                                       #     runs unconditionally
+```
+
+**Confirmed: this is a real, current bug, not a hypothetical risk.** The
+offset advance is outside the `try`/`except` and executes regardless of
+whether `handle_update` succeeded or raised. `deliver_to_gm` (the function
+`handle_message` calls) has no internal retry or durability of its own — a
+transient `msg_store` write failure, or any other exception during
+processing, is caught, logged, and then **the offset silently advances past
+that update anyway.** Per the Bot API's own confirmation semantics (the
+review's F1, independently plausible and consistent with how long-poll
+`getUpdates` is documented to work), once the offset advances past an
+`update_id`, Telegram does not redeliver it. **Net effect: a transient
+failure processing any single operator message causes that message to be
+silently and permanently lost, with no retry, no redelivery, and (per the
+brief's own Section 8 finding) no alert that anything went wrong.** This is
+live in production code today, independent of anything about Hermes or
+Matrix — the Telegram bridge decision doesn't cause this bug, but path (a+)
+is the natural place to fix it since it's the same file already in scope.
+
+**This resolves — with an answer, not just a citation — Eng Review's
+Section 3 "one real open verification item," and elevates it from a proposed
+test to a confirmed P0 fix**, matching Risk #1 in the review's own risk
+register. Superseding the earlier "recommend as the first concrete task"
+framing: it's not a recommendation anymore, it's a defect with an exact
+line number.
+
+**The fix is not "add more persistence"** (the CEO review's original framing,
+already partly corrected by Eng review) — atomic offset writes don't help if
+the write happens at the wrong time relative to delivery. Per the review's
+correct framing: the offset must only advance *after* the update's effect is
+durably committed, and because Telegram can then redeliver an
+already-processed update within its retention window, delivery must be
+**idempotent, keyed by `update_id`** — both halves are required together, not
+either alone (advancing late without idempotency reprocesses; idempotency
+without correct ordering doesn't stop the loss in the first place).
+
+### 7.2 Other findings accepted into path (a+), independently assessed
+
+Accepting these because the underlying technical claims are correctly
+sourced (Bot API docs, Hermes's own docs) and consistent with what this
+seat already independently verified about the codebase — not accepted
+merely because they're external:
+
+- **Callback/approval-tap authorization must be written down explicitly**
+  (F8, Risk #2). The brief said this was "carried, not re-verified" —
+  correct that it needed re-verification, and this review supplies the
+  concrete spec (numeric `from.id` + chat allowlist + pending-state check +
+  server-side answer-once + audit) rather than leaving it vague. Reading
+  `handle_callback` (lines 238-258) directly: it does call `self.authorized`
+  and `self.answer` (which routes through `approval.py`), but this brief
+  never verified `approval.py`'s own internal checks match the review's
+  spec — that verification is now Phase 0 work (§7.4), not assumed done.
+- **Hermes's documented cold-boot default (`drop_pending_updates=True`) and
+  one-gateway-process-per-host under multiplexing** (F3, F4) — real,
+  vendor-documented, and directly relevant to the still-open path (b)
+  dedicated-instance question. Strengthens (doesn't create) the brief's
+  existing caution about the native-adapter path.
+- **Path (b)'s actual actor model** (F7) — if gm implements the gateway side
+  of Hermes's relay contract, "Hermes" in that design means NousResearch's
+  connector only; the Hermes *agent runtime* (the "richer tool surface" the
+  operator originally wanted) is not actually in the loop. This is a real
+  clarification this brief should have stated more plainly in §4.2 — noted
+  here, and worth restating to the operator alongside the path (a)/(b)
+  question in §5.
+- **Rate limits, 429 handling, webhook/polling mutual exclusion for
+  rollback** (F9, F10) — concrete, sourced, and directly actionable; folded
+  into the channel contract below.
+- **F16 (completion summary says "0 unresolved decisions" while the doc
+  lists several) — real inconsistency, fixed directly.** That line
+  described the CEO review's own internal process (no new AskUserQuestion
+  gate it needed to raise), not the brief's operator-facing open questions
+  in §5 — a real distinction, but confusingly stated. Corrected in the
+  Completion Summary below rather than left to confuse a future reader.
+- **F12 (this brief calls Telegram "the operator's only channel" in two
+  places while also documenting that the dashboard/Apple Watch share the
+  same approval core) — real ambiguity, worth the operator's explicit
+  answer, added to §5.** Whether Telegram is the sole channel or one of
+  three changes the actual severity of every failure mode discussed in
+  Section 2/Section 8.
+
+### 7.3 Where this seat did not simply defer to the external review
+
+Per gm's explicit instruction not to accept everything reflexively:
+
+- **F11 (concurrent-poller conflict errors)** — the review itself flags this
+  as [I] (inference, not confirmed against the official page). Treating it
+  the same way here: plausible, consistent with how Telegram's long-poll API
+  is generally understood to behave, but not independently verified this
+  session either. Carried as an assumption, not asserted as fact.
+- **The proposed channel-contract scope (9 invariants) and 6 additional
+  tests could look like scope creep against a "harden a 369-line file"
+  recommendation — considered this directly, decided it isn't.** The
+  review's own Round 3 dialectic already rejects building a code-level
+  abstraction layer for a hypothetical second transport (correctly, that
+  would violate HOLD SCOPE) and settles on "a one-page contract doc + tests
+  against the existing injectable seams" — no new classes, no new files
+  beyond tests. Given §7.1 confirms a real bug exists, the additional rigor
+  is now justified by a live defect, not speculative future-proofing.
+  Accepting this scope as appropriate, not excessive.
+- **Nothing else in the review reads as wrong or overstated on inspection** —
+  its citations are specific (Bot API version numbers, exact byte limits,
+  named release notes) in a way that's easy to spot-check and hard to fake
+  convincingly; where it wasn't sure, it labeled itself [I] rather than [V].
+
+### 7.4 Revised Implementation Tasks (supersedes the equivalent tasks in the
+Eng Review section above — same numbering convention, marked superseded, not
+duplicated)
+
+- [ ] **T1-REVISED (P0, was P1)** — fix the confirmed offset/commit-ordering
+  bug: only advance `self.state.offset` after an update's effect is durably
+  committed; make delivery idempotent keyed by `update_id` so a redelivered-
+  but-already-processed update is a safe no-op.
+  - Surfaced by: §7.1 (this seat's direct code read), external review F1/F2/Risk#1
+  - Files: `plugins/telegram/router.py` (`poll_once`, `handle_update`, `deliver_to_gm`)
+  - Verify: `test_exception_mid_batch_does_not_confirm_failed_update` (deliver
+    raises on update 2 of 3 → offset does not pass update 2; after retry,
+    exactly one inbox row per update) and `test_redelivered_update_is_idempotent`
+    (same `update_id` delivered twice → one inbox row) — both from the
+    external review's Phase 1 plan
+- [ ] **T3-REVISED (P0, was P1)** — callback authorization, made concrete:
+  verify (Phase 0) then test that `approval.py`'s tap path actually enforces
+  numeric `from.id` + chat allowlist + pending-state check + server-side
+  answer-once + audit record — not just that a tap "lands," per the
+  original T3's weaker framing.
+  - Surfaced by: §7.2, external review F8/Risk#2
+  - Files: `scripts/approval.py`
+  - Verify: `test_callback_from_unauthorized_user_rejected`,
+    `test_callback_for_resolved_approval_is_noop`, `test_double_tap_resolves_once`
+- [ ] **T5 (P1, new)** — rate-limit handling: honor `retry_after` on 429,
+  queue rather than drop a burst of pending cards after an outage.
+  - Surfaced by: external review F9, Risk #8
+  - Files: `plugins/telegram/router.py` (`push_pending_cards`)
+  - Verify: `test_429_honours_retry_after` (fake API)
+- [ ] **T6 (P1, new)** — startup safety: fail closed if a webhook is set on
+  the token (prevents the rollback-blocked-by-leftover-webhook failure mode).
+  - Surfaced by: external review F10, Risk #11
+  - Files: `plugins/telegram/router.py` (startup/`run`)
+  - Verify: `test_startup_fails_closed_if_webhook_set`
+- [ ] **T7 (P2, new)** — heartbeat + observability: `last_successful_poll_at`
+  metric, alert distinct from "gm idle" (supersedes the earlier, vaguer T4).
+  - Surfaced by: external review §7 item 8, Risk #4
+  - Files: to be determined
+  - Verify: live drill (kill -9 mid-poll, confirm alert fires within N minutes)
+- [ ] **T8 (P3, new)** — write the one-page channel contract document (§7's
+  9 invariants, adapted) — not a code abstraction, a versioned doc any
+  future transport must satisfy, per the review's own Round 3 synthesis.
+  - Surfaced by: external review §7
+  - Files: new, small — a doc, not code
+
+**Phased rollout (adopted from the external review's §9, appropriate for
+this file's size):**
+```
+Phase 0 (~half day, no behavior change): trace poll_once/handle_update's
+  actual before/after ordering [DONE — §7.1, confirmed the bug]; document
+  approval.py's exact authorization checks; confirm what supervises
+  router.py and whether anything alerts on its death.
+Phase 1: T1-REVISED, T3-REVISED, T5, T6, plus the brief's original 4 tests.
+Phase 2: T7 (heartbeat/observability) + runbook.
+Phase 3: decision gate for path (b)/Matrix, using §5's re-open criteria
+  (unchanged from this brief's existing framing — the external review
+  agrees defer is correct for both).
+```
+
+### 7.5 What stays exactly as recommended before this review landed
+
+Per the review's own bottom line: gm remains the only persona, `approval.py`
+remains the system of record, no new runtime, no Hermes in the loop, no
+Matrix. **Path (a+) is path (a), specified precisely and with one confirmed
+bug fixed — not a different recommendation.** The open (a)/(b) decision in
+§5 is unchanged; the review independently reaches the same "defer (b), defer
+Matrix" conclusion this brief already had, for the same underlying reasons
+(experimental contract, silent-degradation failure mode for approval cards,
+autonomy/cost risk), which is real corroboration of the strategic call, not
+just the technical details.
 
 ## Note on the review sections below
 
@@ -779,8 +1000,13 @@ not implementation contracts — per this review's chosen depth._
 |                        | phasing, dream-state, deployment sequence, |
 |                        | rollback via disable/re-enable)            |
 | Stale diagrams found   | 0 (no prior diagrams in this doc)          |
-| Unresolved decisions   | 0 from this review (2 open questions for   |
-|                        | the operator remain in brief §5, by design)|
+| Unresolved decisions   | 0 NEW AskUserQuestion-style gates raised by |
+|                        | this CEO review process itself — NOT the   |
+|                        | same as brief §5's operator-facing open    |
+|                        | questions (several, by design; see §5 and  |
+|                        | the terminal report's own unresolved list  |
+|                        | below — external review F16 flagged this   |
+|                        | line as confusingly worded, fixed here)    |
 +====================================================================+
 ```
 
@@ -903,13 +1129,11 @@ test framework needed):**
   atomic-write path actually round-trips (protects the fact this review just
   used to correct the CEO review's CRITICAL GAP — don't let that correction
   rest on an untested assumption).
-- `test_poll_once_advances_offset_only_after_processing` — injected fake `api`
-  returning 2 updates; assert `state.offset` reflects `update_id + 1` for the
-  last one processed, and that a raised exception from `deliver` mid-batch
-  doesn't advance past the failed update (this is the one actual behavior
-  question this review could NOT settle by reading alone — `handle_update`
-  at line 202 needs tracing to confirm; flagged as the one real open
-  verification item below, not asserted either way).
+- `test_poll_once_advances_offset_only_after_processing` — **now a P0 fix
+  verification, not a speculative test: §7.1 confirmed `poll_once` currently
+  does NOT skip the offset advance on a failed update.** This test should
+  assert the *fixed* behavior (offset does not pass a failed update) and
+  will fail against the current code until T1-REVISED (§7.4) lands.
 - `test_handle_callback_malformed_data_is_ignored_not_crashed` — feeds
   `parse_callback` inputs that fail its 3-part/`"a"`-prefix check; asserts
   `handle_callback` doesn't raise.
@@ -917,16 +1141,19 @@ test framework needed):**
   `pending`/`api`; asserts a card is sent once and `notified()` records it
   (protects the approval-card path CEO review flagged as unverified).
 
-**One real open verification item this review could not resolve by reading
-alone:** does `handle_update` (line 202) stop processing the rest of a batch
-if `deliver_to_gm` or `answer_card` raises for one update, or does it
-continue and silently drop that one update's effect while still advancing
-past it? This determines whether a single malformed/failing update can cause
-silent message loss *today*, independent of any Hermes/Matrix question.
-**This is the actual highest-value verification for path (a)** — higher than
-anything Hermes-related, since it's a live gap in the code being kept, not a
-hypothetical one in code that might never get built. Recommend as the first
-concrete task, ahead of any Hermes work.
+**RESOLVED (§7.1, post-review addendum, operator's external adversarial
+review prompted a re-check that this seat then confirmed directly against
+the code):** `poll_once` (lines 310-324), not `handle_update` (this seat's
+original line citation was off by one call frame) — `self.state.offset =
+int(upd["update_id"]) + 1` sits **outside** the `try`/`except` wrapping
+`self.handle_update(upd)` and runs unconditionally. **Confirmed: yes, a
+single failing update's offset advances anyway, and Telegram will not
+redeliver it — this is real, current, silent message loss, not a
+hypothetical.** No longer an open verification item; now a confirmed P0 defect
+with a concrete fix (§7.1, §7.4 T1-REVISED). This was in fact "the actual
+highest-value verification for path (a)," as this section originally
+guessed — the guess was right, and it's now proven, not just recommended
+as a next step.
 
 ### Section 4: Performance Review
 
@@ -964,7 +1191,8 @@ Outside Voice             | reused from CEO review (same document, same pass)
 |--------|---------|-----|------|--------|----------|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | issues_open | HOLD SCOPE; original CRITICAL GAP (offset/missed-message parity) later corrected by eng review — see below; outside-voice overturned Recommendation 1's risk framing |
 | Outside Review | native Claude subagent (Plan, read-only, dispatched via Agent tool — Codex CLI present but not probed/authenticated in this non-interactive seat) | Independent 2nd opinion | 1 | completed, issues_found | 6 findings; 5 integrated and resolved by revising §4/§4a/§5; 1 (Elon/Shaw rationale) already carried as an open operator question, unchanged |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | issues_open | path (a) scoped: CEO's CRITICAL GAP corrected (router.py's offset persistence already atomic/durable — no new work needed); 5 test-coverage GAPS found (0/5 on router.py directly) + 1 real open verification item (error-mid-batch offset/deliver semantics); path (b) reviewed at strategic level only |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 2 | issues_open | Run 1: path (a) scoped, CEO's CRITICAL GAP corrected, 5 test-coverage GAPS + 1 open verification item. **Run 2 (§7, this reconciliation): resolved that open item by direct code read — CONFIRMED real P0 bug (offset advances past a failed update unconditionally, `poll_once` lines 310-324), not hypothetical.** Recommendation refined to "path (a+)" with a concrete channel contract, 3 new P0/P1 tasks, F16/F12 internal-consistency fixes |
+| External Adversarial Review | operator-sourced PDF, transcribed to `docs/REVIEW_hermes-matrix-telegram-bridge-external.md` | Independent, real-citations technical review (Telegram Bot API, Hermes docs, Matrix spec, mautrix release notes) | 1 | completed, issues_found, reconciled | Endorsed path (a), refined to "path (a+)"; 16 numbered findings, 11-item risk register, reconciled in §7 — this seat independently verified the headline finding (confirmed the bug directly) rather than accepting on citation strength alone; no findings rejected, one scope concern considered and judged appropriate, not excessive (§7.3) |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | skipped (no UI scope) | — |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | not requested | — |
 
@@ -979,18 +1207,23 @@ Outside Voice             | reused from CEO review (same document, same pass)
   opinion.
 - **CROSS-MODEL:** not applicable — no completed external-provider review to
   compare against; skip per the skill's own rule for native-fallback-only runs.
-- **VERDICT:** CEO + ENG REVIEW COMPLETE WITH MATERIAL CORRECTIONS ON BOTH PASSES
-  — outside-voice caught a wrong risk assessment in the original draft (§4a);
-  eng review then caught that CEO review's own CRITICAL GAP was itself
-  overstated (router.py's offset persistence was already correct — no new work
-  needed for path (a)). Both corrections are now integrated. The brief is
-  internally consistent and ready for the operator's one load-bearing decision
-  (§5, path a vs. b) — everything downstream (whether any of the eng-review
-  test/verification tasks below even apply to a "keep router.py" world, versus
-  a much bigger path-(b) build) depends on that answer. **Not** a green light to
-  build path (b) — only path (a)'s narrow, already-scoped test/verification
-  work (Test Review above) is ready to pick up without further review, and only
-  once the operator confirms path (a) is in fact the direction (§5).
+- **VERDICT:** CEO + ENG REVIEW + EXTERNAL ADVERSARIAL REVIEW COMPLETE,
+  RECONCILED INTO "PATH (A+)" — three independent corrections landed across
+  this brief's lifecycle, each one caught by verifying rather than trusting:
+  outside-voice caught a wrong risk assessment in the original draft (§4a);
+  eng review caught that CEO review's own CRITICAL GAP was itself overstated;
+  the external adversarial review then correctly predicted, and this seat's
+  direct code read then **confirmed**, a real P0 message-loss bug in
+  `router.py` that existed before this brief was ever written. Every
+  correction is now integrated, and the underlying strategic recommendation
+  has not moved once across all three passes: harden the existing bridge,
+  defer Hermes and Matrix. **This is the strongest form of validation this
+  kind of review can produce** — independent passes converging on the same
+  conclusion while still finding real, separate, concrete defects each time.
+  Ready for the operator's one load-bearing decision (§5, path a vs. b).
+  **Not** a green light to build path (b) — path (a+)'s test/verification
+  work (§7.4, now including a confirmed P0 fix) is ready to pick up without
+  further review, once the operator confirms path (a) is the direction.
 
 **UNRESOLVED DECISIONS:**
 - Path (a) vs. path (b) for the Telegram leg — operator decision, §4.2/§5, not
@@ -1015,5 +1248,17 @@ Outside Voice             | reused from CEO review (same document, same pass)
   this fleet's own codebase (§2, §5).
 - Whether the operator has a concrete second network in mind for Matrix, or
   whether Matrix was long-term direction only (§5).
-- + 0 unresolved from prior reviews (no prior review history exists for this
-  brief — first pass).
+- **(Added per §7.2, external review F12)** Whether Telegram is genuinely the
+  operator's only channel or one of three (with dashboard/watch) — changes
+  the real severity of every failure mode discussed (§5, §7.2).
+- **(Added per §7.2, external review F7)** Whether the operator still wants
+  path (b) with the precise understanding that it means gm implements the
+  gateway side of Hermes's relay contract, not "use the Hermes agent" (§5,
+  §7.2).
+- **(Not blocking, editorial only)** D4/D5/D6 in the external review's own
+  §8 (severity model, edit/delete semantics, isolation topology if (b) ever
+  happens) — largely already covered by this brief's existing open questions
+  above; flagged for completeness, not new substance.
+- + 1 unresolved from the prior CEO+Eng review pass, now resolved in this
+  reconciliation (the offset/commit-ordering verification item — see §7.1,
+  no longer open, superseded by a confirmed P0 fix in §7.4).
