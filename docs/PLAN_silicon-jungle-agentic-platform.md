@@ -6,8 +6,11 @@
   msg_e7e62d4b_76786880 direct operator feedback/revision request +
   msg_e28003b6_78054130 fuller thesis continuation +
   msg_f0e69f89_78115881 thesis continuation 2 (shared platform/founder
-  network), 2026-09-29), as an addendum to the Hermes/Matrix Telegram
-  bridge brief
+  network) + msg_f71af031_78170888 thesis continuation 3, FINAL (founder-
+  selection criteria + vision close), 2026-09-29), as an addendum to the
+  Hermes/Matrix Telegram bridge brief. **The operator's "Industry Expert
+  Venture Studio" thesis is now complete across all 4 relayed messages —
+  no further continuation of this specific document expected.**
 - **Authored by:** plan (BSHR research + brief, non-interactive)
 - **Status:** CEO + ENG REVIEWED (Eng Review run twice — re-opened for a
   direct operator-requested revision pass), CLEARED for accepted (narrow)
@@ -389,6 +392,49 @@ had reason to engage with before — worth a note in §6 that the pilot's
 own selection criteria (who gets into a Weekender, per Door 1/Door 2, §0a)
 is arguably as consequential a design decision as anything in this brief's
 technical scope, per the operator's own stated priority ordering.
+
+## 0f. Sixth and final thesis addendum — founder-selection criteria + vision
+close (gm's continuation 3, marked complete — the operator's own document
+ends here with a closing triple-quote and "some old thoughts to reference";
+no further continuation of this specific document expected)
+
+Reproduced faithfully, closing the thesis:
+
+> We are evaluating whether a person possesses the assets AI cannot create.
+> Can they name the first hundred customers? Do customers trust them? Do
+> they have strong opinions about their market? Have they spent years
+> understanding a problem? Have they demonstrated persistence? Do they
+> possess judgment? Will they continue when things become difficult? The
+> studio succeeds or fails based on its ability to identify these people
+> before everyone else does.
+>
+> **The Vision.** Our goal is not to build companies for founders. Our goal
+> is to build a system that repeatedly transforms industry expertise,
+> customer access, and validated opportunities into scalable businesses. ...
+> The future will not belong solely to those who know how to build
+> technology. The future will belong to those who understand customers. ...
+> Together, we will create a portfolio of companies, a shared technology
+> platform, a community of founders, a library of opportunities, and a
+> growing body of knowledge that makes every future company stronger than
+> the last.
+
+**Two concrete things this closing piece gives the brief, not just
+narrative color:**
+
+1. **A real, ready-made founder-selection rubric** — "can they name the
+   first hundred customers, do customers trust them, years understanding
+   the problem, judgment, persistence" — these are concrete, checkable
+   questions, not vibes. Noted in §6 (updated below) as directly reusable
+   for Door 1/Door 2's actual screening fields (§0a) if the operator ever
+   wants to tighten intake — **not proposed as a build task here**, per
+   gm's explicit instruction; recorded as a reusable asset, not scoped work.
+2. **"Who's the buyer" is now closed, not just answered.** Between §0d
+   (the studio targets industry experts, not technical talent) and this
+   closing piece (the specific traits the studio selects for), this brief
+   now has authoritative primary-source material on the buyer question —
+   no further inference or speculation needed on this point. The correction
+   already made in §4 item 1 stands as the final answer, not a working
+   draft.
 
 ## 1. The ask, as parsed (gm's cleaned-up transcript + confirmed ground truth)
 
@@ -850,15 +896,18 @@ date):**
   confirming whether CEO review should hold the plan to them explicitly (e.g.
   "does this feature increase friction for a first-time builder?") or treat
   them as background culture, not a gate.
-- **(Added per §0e)** The thesis states "founder selection becomes the most
-  important function of the studio... not technology selection" — if the
-  operator holds this view, the pilot's own selection criteria (who gets
-  into a Weekender at all, per Door 1/Door 2, §0a) is arguably as
-  consequential a decision as anything in this brief's technical scope, and
-  currently has no stated criteria beyond the funnel's own intake fields.
-  Not this brief's scope to design (a business/selection question, not a
-  fleet-access one) — surfaced because the operator's own priority
-  ordering says it should be, not because this brief has an opinion on it.
+- **(Added per §0e, sharpened per §0f)** The thesis states "founder
+  selection becomes the most important function of the studio... not
+  technology selection" — if the operator holds this view, the pilot's own
+  selection criteria (who gets into a Weekender at all, per Door 1/Door 2,
+  §0a) is arguably as consequential a decision as anything in this brief's
+  technical scope. **A concrete, ready-made rubric now exists** (§0f: can
+  they name the first hundred customers, do customers trust them, years
+  understanding the problem, judgment, persistence) — currently not
+  reflected in Door 1/Door 2's actual intake fields (§0a). Not this brief's
+  scope to design or build (a business/selection question, not a fleet-
+  access one) — surfaced as a reusable asset the operator already has in
+  hand, not a gap needing more research.
 
 ## CEO REVIEW — Step 0
 
@@ -1583,6 +1632,15 @@ Finding 3 (measurable thresholds)     | 0 issues — already honestly
   addendum's whole point is that the operator's sharing wish and this
   brief's isolation finding are not in tension, and the brief now says so
   explicitly rather than leaving it for a reader to reconcile.
+- **POST-REVIEW ADDENDUM (§0f), FINAL — the operator's thesis document is now
+  complete across all 4 relayed messages.** Closing piece gave a concrete,
+  ready-made founder-selection rubric (folded into §6 as a reusable asset,
+  not scoped as build work) and closed the "who's the buyer" question with
+  authoritative primary-source material — no further inference needed on
+  that point (§4 item 1's correction stands as final, not provisional).
+  Lightest of the four thesis-related addenda: no new technical distinction
+  to verify (unlike §0e), mostly a completion/closure update. Verdict and
+  accepted scope unchanged.
 
 **UNRESOLVED DECISIONS:**
 - Whether the operator is comfortable running Weekenders human-facilitated on
@@ -1609,9 +1667,10 @@ Finding 3 (measurable thresholds)     | 0 issues — already honestly
   shared keonda gateway (current, restricted, observe-only) or eventually
   moves to its own dedicated instance — shared open question with the bridge
   brief, not decided by either.
-- **(Added per §0e)** No stated criteria yet for who gets into a Weekender
-  beyond the funnel's own intake fields — per the operator's own thesis
-  ("founder selection... not technology selection" is the studio's most
-  important function), worth the operator's explicit attention; not this
-  brief's scope to design (§6).
+- **(Added per §0e, a concrete rubric now exists per §0f)** No stated
+  criteria yet for who gets into a Weekender beyond the funnel's own intake
+  fields, despite the operator's own thesis naming founder selection as the
+  studio's most important function and now providing a concrete rubric
+  (§0f) — worth the operator's explicit attention on whether/how to apply
+  it; not this brief's scope to design or build (§6).
 - + 0 unresolved from prior reviews (first pass on this document).
