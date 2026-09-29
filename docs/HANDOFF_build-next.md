@@ -4,7 +4,8 @@
 - **Working Directory:** /Users/flybyflow/orchestraos (task target repo: /Users/flybyflow/duelo-de-dibujo)
 - **Target repo branch:** `gm/mastery-honesty-fix`, pushed to `origin`, cut from up-to-date `main` (v0.3.0.0, solo-practice mode, already merged/deployed).
 - **Last commit SHA (duelo-de-dibujo):** `655e7de`
-- **PR:** https://github.com/flybyflow/duelo-de-dibujo/pull/6 — OPEN, not merged, no production touch (hard-stop respected).
+- **PR:** https://github.com/flybyflow/duelo-de-dibujo/pull/6 — **MERGED 2026-09-22T00:07:33Z** (verified via `gh pr view 6`); landed on `main` as `95fe465`. Open Loop #1's "waiting on gm/operator approval" is CLOSED — the operator approved and merged.
+- **Micro-update 2026-09-29 (build Gen 1, fresh seat, no task):** woke with an empty inbox and no assignment; confirmed the above merge, then re-parked. No code touched this session. One new finding surfaced to gm — see Open Loop #5 below.
 
 ## 1. Current Goal & Phase State
 - **Goal:** gm task "Fast-track: Mastery Map honesty fix (copy + duel quality gate) - RESEND, fresh seat" (msg_2dcd3d17_34971340) — the Immediate/P0 item from `DOCS/roadmap-solo-and-language-learning.md`, locked by plan's CEO review, explicitly NOT the broader roadmap (still on hold for operator review, separately tracked in `docs/HANDOFF_plan-next.md`).
@@ -19,6 +20,7 @@
 - [ ] `qa-judge.mjs`'s real-Claude-call cases still can't run to a passing conclusion locally — same pre-existing gap as every prior round (`ANTHROPIC_API_KEY` is a Vercel Production-scope sensitive var, unreadable via `vercel env pull`/`env ls` from this machine). Verified this is the same known gap, not a new defect, by running every non-key-dependent path directly (`npm run qa`, all pass) plus a standalone before/after harness against the real `isSoloMastered`/`bestOf` logic.
 - [ ] No localStorage migration was needed or written — `mastered` was always derived at render time from existing `duelo_progress` fields (`attempts`, `best`), never itself persisted. Confirmed this by reading `progress-logic.mjs` and `loadProgress()`/`saveProgress()` before concluding no migration was required, not assumed.
 - [ ] Ship stage already done by build directly per this task's instructions (branch + PR only, no land-and-deploy) — same pattern as round 3.
+- [ ] **NEW (found 2026-09-29, not build's to fix):** `/Users/flybyflow/duelo-de-dibujo/DOCS/roadmap-solo-and-language-learning.md` (383 lines, including plan's "## CEO Review Lock" section with four operator-confirmed decisions) is **untracked — never committed on any branch** (verified: `git log --all -- <path>` returns nothing). It exists as a single unversioned copy in one working tree. Losing that tree loses the locked decisions. Not committed by this seat: it's plan's artifact in the product repo and build had no task authorizing a commit there. Whoever owns the next round on this app should commit it early.
 
 ## 4. Decisions Made & Rationale
 1. **Duel-mode "mastered" gate removed entirely rather than reinterpreted as "won."** Rationale: see Open Loop #1 above — the literal spec wording was unimplementable as a real quality gate given the judge's forced-winner rubric; dropping duel's independent contribution to `mastered` is the smallest change that (a) actually changes behavior (verified with a before/after harness), (b) doesn't invent new schema/mechanics (explicitly out of scope), and (c) matches the locked ethical principle ("progress signals must be honest about what they represent") more faithfully than a no-op would have.
