@@ -121,7 +121,7 @@ test('an unknown identity header is still recorded as PRESENT', () => {
 
 test('known and unknown identity headers coexist correctly', () => {
   const e = describeReq(req({ headers: {
-    'x-orchestra-user': 'eve', 'x-orchestra-secret': 's3cr3t',
+    'x-orchestra-user': 'eve', 'x-orchestra-secret': 's3cr3t', // pragma: allowlist secret
   } }))!;
   const line = format(e);
   assert.ok(line.includes('"eve"'), 'the claim we DO want must survive');
