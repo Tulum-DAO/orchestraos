@@ -237,37 +237,44 @@ function MessageComposer({ agentId, disabled }: { agentId: string; disabled: boo
   return (
     <div>
       <h3 className="text-[11px] uppercase tracking-wider text-neutral-500 mb-1.5">Message</h3>
-      {disabled ? (
-        <p className="text-xs text-neutral-600 rounded-lg border border-dashed border-neutral-800 p-2.5">
-          Agent is down — messaging disabled.
-        </p>
-      ) : (
-        <div className="space-y-1.5">
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
-              placeholder={`Message ${agentId}...`}
-              className="flex-1 min-w-0 px-3 py-1.5 text-sm rounded-lg bg-neutral-900 border border-neutral-800 text-neutral-100 placeholder:text-neutral-600 focus:outline-none focus:border-neutral-600"
-            />
-            <button
-              onClick={submit}
-              disabled={status === 'sending' || !text.trim()}
-              className="shrink-0 p-1.5 rounded-lg bg-neutral-800 text-neutral-300 hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed"
-              aria-label="Send"
-            >
-              <Send size={14} />
-            </button>
-          </div>
-          {status !== 'idle' && (
-            <p className={clsx('text-[11px]', SEND_STATUS_STYLE[status] || 'text-neutral-500')}>
-              {status === 'sending' ? 'sending…' : (detail || status)}
-            </p>
-          )}
+      {/* Spec §5 asks for the box "disabled with a note when the agent is down". It used to
+          swap the whole control out for the note, which review's DOM probe measured as an
+          ABSENT input rather than a disabled one. The note alone reads as a rendering gap —
+          the panel just stops where a control should be — whereas a control you can see is
+          disabled tells the operator both that messaging exists here and why it is
+          unavailable. One input, always rendered, `disabled` when down, note beside it. */}
+      <div className="space-y-1.5">
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+            disabled={disabled}
+            placeholder={disabled ? `${agentId} is down` : `Message ${agentId}...`}
+            aria-describedby={disabled ? `msg-disabled-${agentId}` : undefined}
+            className="flex-1 min-w-0 px-3 py-1.5 text-sm rounded-lg bg-neutral-900 border border-neutral-800 text-neutral-100 placeholder:text-neutral-600 focus:outline-none focus:border-neutral-600 disabled:opacity-50 disabled:cursor-not-allowed"
+          />
+          <button
+            onClick={submit}
+            disabled={disabled || status === 'sending' || !text.trim()}
+            className="shrink-0 p-1.5 rounded-lg bg-neutral-800 text-neutral-300 hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed"
+            aria-label="Send"
+          >
+            <Send size={14} />
+          </button>
         </div>
-      )}
+        {disabled && (
+          <p id={`msg-disabled-${agentId}`} className="text-[11px] text-neutral-500">
+            Agent is down — messaging disabled.
+          </p>
+        )}
+        {!disabled && status !== 'idle' && (
+          <p className={clsx('text-[11px]', SEND_STATUS_STYLE[status] || 'text-neutral-500')}>
+            {status === 'sending' ? 'sending…' : (detail || status)}
+          </p>
+        )}
+      </div>
     </div>
   );
 }
