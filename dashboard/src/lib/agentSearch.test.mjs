@@ -60,12 +60,17 @@ test('agents group is files scoped out even with no repos provided', () => {
 });
 
 test('stable order within the agents group: id match ranks before name-only match', () => {
+  // Deliberately adversarial fixture: the name-match agent sorts FIRST alphabetically by id
+  // and appears FIRST in the input array. If rank sorting is dropped, both the "fall back to
+  // alphabetical" and the "fall back to input order" failure modes produce the SAME (wrong)
+  // order as each other -- so a fixture where rank order, alphabetical order and input order
+  // all disagree is what actually pins the rank behaviour down.
   const pool = [
-    { id: 'zeta', name: 'contains-echo-in-name' },
-    { id: 'echo', name: 'alpha' },
+    { id: 'aaa-name-only', name: 'contains-marker-in-name' },
+    { id: 'zzz-id-match-marker', name: 'unrelated' },
   ];
-  const result = searchFleet('echo', { agents: pool });
-  assert.deepStrictEqual(result.agents.map((h) => h.id), ['echo', 'zeta']);
+  const result = searchFleet('marker', { agents: pool });
+  assert.deepStrictEqual(result.agents.map((h) => h.id), ['zzz-id-match-marker', 'aaa-name-only']);
 });
 
 test('stable order within the agents group: alphabetical tiebreak on equal rank', () => {
