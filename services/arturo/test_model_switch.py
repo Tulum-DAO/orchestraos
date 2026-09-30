@@ -193,7 +193,20 @@ def test_identity_explains_replies_from_an_earlier_model():
     d = {"kind": "runtime", "runtime": "codex", "cli": "codex", "model": "gpt-5.6-luna"}
     line = B.identity_line(d, default_model=None)
     assert "Codex (gpt-5.6-luna)" in line
-    assert "answered earlier by" in line and "never call them wrong" in line.lower()
+    assert "answered earlier by" in line and "accurate for that model" in line
+    # ...but it is context, not a talking point: unprompted, it was tacked onto a plain answer
+    # ("The earlier answers were accurate for the models you had switched to", 2026-09-30).
+    assert "don't bring them up unless asked" in line
+
+
+def test_identity_asks_for_the_model_alone_not_the_plumbing():
+    # "say exactly that" after "— no API key is involved" made every answer to "what model?"
+    # end in "No API key is involved." (operator: "we don't have to say that every time").
+    d = {"kind": "runtime", "runtime": "codex", "cli": "codex", "model": "gpt-6.1-sol"}
+    line = B.identity_line(d)
+    assert "say exactly that" not in line
+    assert "just name the model" in line
+    assert "unless asked how you are connected" in line
 
 
 def test_effective_brain_resolves_the_default_to_its_probed_name():

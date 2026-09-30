@@ -423,8 +423,13 @@ def effective_brain(describe: dict, defaults: dict) -> dict:
 _RUNTIME_PRETTY = {"claude": "Claude", "gemini": "Gemini", "codex": "Codex"}
 
 _EARLIER_REPLIES = ("Replies marked 'answered earlier by' another model came from that model before "
-                    "the operator switched; they were accurate for it. Never call them wrong because "
-                    "you are a different model — if asked, say which model you are now.")
+                    "the operator switched: treat them as accurate for that model, and don't bring "
+                    "them up unless asked.")
+# The facts go in; the instruction is to answer with the model alone. "Say exactly that" after
+# "— no API key is involved" had every answer to "what model?" end in "No API key is involved."
+_ANSWER_SHAPE = ("If asked what model you are, just name the model in a short sentence, and don't mention the "
+                 "CLI or API keys unless asked how you are connected. Never claim another "
+                 "provider or a 'layer'.")
 
 
 def identity_line(describe: dict, default_model=None) -> str:
@@ -443,14 +448,12 @@ def identity_line(describe: dict, default_model=None) -> str:
         else:
             what = (f"{pretty} on the CLI's default model — you do not know its exact name, so say "
                     f"that rather than guessing one")
-        return (f"YOUR BRAIN (by effect): you are thinking with {what} through the operator's own "
-                f"logged-in `{cli}` CLI — no API key is involved. If asked what model or provider "
-                f"you run on, say exactly that; never claim another provider or a 'layer'. "
+        return (f"YOUR BRAIN (by effect): you are thinking with {what}, running through the "
+                f"operator's own logged-in {cli} CLI rather than an API key. {_ANSWER_SHAPE} "
                 f"{_EARLIER_REPLIES}")
     if describe.get("kind") == "api":
         return (f"YOUR BRAIN (by effect): you are thinking with the {describe.get('model', 'configured')} "
-                f"API model via the operator's API key. If asked what model you run on, say exactly "
-                f"that. {_EARLIER_REPLIES}")
+                f"API model via the operator's API key. {_ANSWER_SHAPE} {_EARLIER_REPLIES}")
     return ("YOUR BRAIN (by effect): no brain is configured yet (no API key and no logged-in CLI); "
             "if asked, say so plainly and point at `orchestra doctor`.")
 
