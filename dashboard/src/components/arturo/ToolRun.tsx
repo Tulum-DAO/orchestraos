@@ -15,7 +15,7 @@ import {
   MessageSquare, Search, Send, Terminal, Wrench, X,
 } from 'lucide-react';
 import type { ToolPart } from '../../lib/turnParts';
-import { runHeader, toolChip, toolLabel } from '../../lib/toolDisplay';
+import { runHeader, toolChip, toolLabel, toolResultLines } from '../../lib/toolDisplay';
 
 const ICONS: Record<string, ReactNode> = {
   list_agents: <ListTree size={13} />,
@@ -75,7 +75,7 @@ export default function ToolRun({ tools, className }: { tools: ToolPart[]; class
             {tools.map((t) => {
               const rowOpen = openRows.has(t.callId);
               const chip = toolChip(t.argsSummary);
-              const detail = (t.summary || '').split('\n').filter((l) => l.trim()).slice(0, 8);
+              const detail = toolResultLines(t.summary || '');
               const canOpen = t.status !== 'running' && detail.length > 0;
               return (
                 <div key={t.callId} style={{ animation: `fade-up 300ms ${EASE} both` }}>

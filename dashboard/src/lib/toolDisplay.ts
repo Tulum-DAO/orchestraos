@@ -78,3 +78,23 @@ export function runHeader(tools: ToolPart[]): string {
   const failed = tools.filter((t) => t.status === 'failed').length;
   return `${n} tool call${n === 1 ? '' : 's'}${failed ? ` · ${failed} failed` : ''}`;
 }
+
+// A tool's internal name in a sentence means the sentence is addressed to the model ("consider
+// using gm_command or read_file"), not to the operator. Only the snake_case names count: one-word
+// tools (knowledge, research) are ordinary words — "No knowledge found" is for the operator.
+const INTERNAL = new RegExp(`\\b(${Object.keys(LABELS).filter((k) => k.includes('_')).join('|')})\\b`);
+
+/**
+ * A tool's result as the card shows it: line by line, without the sentences written to the
+ * model. Results are the model's input first — some end in advice about which tool to try
+ * next — and "gm" on screen would break Arturo's one identity. Nothing left = nothing to expand.
+ */
+export function toolResultLines(result: string, max = 8): string[] {
+  const out: string[] = [];
+  for (const line of (result || '').split('\n')) {
+    const kept = line.split(/(?<=[.!?])\s+/).filter((sentence) => !INTERNAL.test(sentence)).join(' ').trim();
+    if (kept) out.push(kept);
+    if (out.length >= max) break;
+  }
+  return out;
+}
