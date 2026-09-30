@@ -6,7 +6,8 @@ import { StatusDot } from './StatusDot';
 import { AgentStatusDot } from './AgentStatusDot';
 import { TierBadge } from './TierBadge';
 import { normalizeAgentState, STATE_STYLE } from '../lib/agentStatus';
-import { getAgentOutput, injectToAgent, messageAgent, sendKeyToAgent } from '../lib/api';
+import { getAgentOutput, injectToAgent, sendKeyToAgent } from '../lib/api';
+import { sendToAgent, isDelivered, isQueued, isHeld, describeSendState } from '../lib/agentSend';
 import ActionBar from './ActionBar';
 import WebTerminal from './WebTerminal';
 import TranscriptChatView from './chat/TranscriptChatView';
@@ -297,9 +298,19 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
     setInjecting(true);
     setInjectResult(null);
     try {
-      await messageAgent(agent.id, injectText.trim());
-      setInjectResult('Sent');
-      setInjectText('');
+      // Durable path. This used to call messageAgent() -> POST /api/agents/:id/message,
+      // which wrote a file into queue/inbox/ and returned {sent:true} — a path NO live agent
+      // reads (prompts/infrastructure.md says so outright). The box reported "Sent" and the
+      // instruction vanished. Found by test during the 2D QA pass, reproduced twice.
+      const result = await sendToAgent(agent.id, { text: injectText.trim() });
+      if (isDelivered(result) || isQueued(result) || isHeld(result)) {
+        // Report what actually happened rather than a flat "Sent": queued and held are real,
+        // distinct outcomes, and flattening them is how the old path got away with lying.
+        setInjectResult(describeSendState(result) || 'Sent');
+        setInjectText('');
+      } else {
+        setInjectResult('Error: ' + (describeSendState(result) || result.error || 'send failed'));
+      }
     } catch (err: any) {
       setInjectResult('Error: ' + (err.message || 'unknown'));
     } finally {

@@ -438,31 +438,36 @@ router.post('/:id/kill', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/agents/:id/message — write to inbox
-router.post('/:id/message', (req: Request, res: Response) => {
-  try {
-    const { message } = req.body;
-    if (!message) { res.status(400).json({ error: 'message required' }); return; }
-    const inboxDir = join(process.env.ORCHESTRA_DIR!, 'queue', 'inbox', req.params.id as string);
-    if (!existsSync(inboxDir)) mkdirSync(inboxDir, { recursive: true });
-    const filename = `${Date.now()}_dashboard_shaw.json`;
-    const msg = {
-      id: `dash_${Date.now()}`,
-      type: 'task_request',
-      from: 'operator-dashboard',
-      to: req.params.id,
-      subject: message.slice(0, 100),
-      description: message,
-      body: message,
-      source: 'dashboard',
-      created: new Date().toISOString()
-    };
-    writeFileSync(join(inboxDir, filename), JSON.stringify(msg, null, 2));
-    res.json({ sent: true, file: filename });
-  } catch (err) {
-    res.status(500).json({ error: 'Message failed', detail: String(err) });
-  }
-});
+/**
+ * POST /api/agents/:id/message — GONE (410) since 2026-09-30.
+ *
+ * This wrote a JSON file into `queue/inbox/<agent>/` and answered `{sent:true}`. Nothing
+ * reads that directory — prompts/infrastructure.md says so outright ("DO NOT use
+ * queue/inbox/ — they are deprecated") — so every message sent through it was silently
+ * discarded while the UI reported success. Found by test during the 2D QA pass and
+ * reproduced twice, once through the UI and once by curl straight at this route. The
+ * operator could believe an instruction had reached an agent and have it vanish.
+ *
+ * It answers 410 rather than being deleted outright, deliberately. A deleted route 404s,
+ * which reads as a typo or a stale client; 410 with a pointer tells any surviving caller
+ * exactly what happened and what to use instead. The one thing this path must never do
+ * again is succeed.
+ *
+ * Durable replacement: POST /api/agents/:id/send (api/src/routes/agent-send.ts), which goes
+ * through msg_store. Client: sendToAgent() in dashboard/src/lib/agentSend.ts.
+ */
+export function handleDeprecatedMessage(req: Request, res: Response): void {
+  console.warn('[gone] POST /api/agents/:id/message — a caller is still using the dropped send path', {
+    agentId: req.params.id,
+    hasBody: Boolean(req.body?.message),
+  });
+  res.status(410).json({
+    error: 'This endpoint is gone: it wrote to queue/inbox/, which no agent reads.',
+    code: 'endpoint_gone',
+    use_instead: 'POST /api/agents/:id/send',
+  });
+}
+router.post('/:id/message', handleDeprecatedMessage);
 
 // GET /api/agents/:id/output — capture last N lines from agent's tmux pane
 router.get('/:id/output', (req: Request, res: Response) => {

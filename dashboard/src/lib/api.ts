@@ -152,7 +152,10 @@ export const getAdaptiveAgents = (userId: string = 'operator') =>
 
 export const spawnAgent = (id: string, task?: string) => post(`/agents/${id}/spawn`, task ? { task } : undefined);
 export const killAgent = (id: string) => post(`/agents/${id}/kill`);
-export const messageAgent = (id: string, message: string) => post(`/agents/${id}/message`, { message });
+// messageAgent() DELETED 2026-09-30. It posted to /api/agents/:id/message, which wrote a
+// file into queue/inbox/ that no live agent reads, and returned {sent:true} — so the UI
+// reported success while the operator's instruction vanished. Use sendToAgent() from
+// lib/agentSend.ts (POST /:id/send, msg_store-backed). The endpoint now 410s.
 
 export const getAgentOutput = (id: string, lines = 50) => get(`/agents/${id}/output?lines=${lines}`);
 export const injectToAgent = (id: string, text: string) => post(`/agents/${id}/inject`, { text });

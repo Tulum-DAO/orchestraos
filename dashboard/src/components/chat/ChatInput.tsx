@@ -4,7 +4,8 @@
 import { useState, useRef } from 'react';
 import { clsx } from 'clsx';
 import { Send, Paperclip, X, ClipboardList } from 'lucide-react';
-import { injectAgentVerified, messageAgent, type InjectResult } from '../../lib/api';
+import { injectAgentVerified, type InjectResult } from '../../lib/api';
+import { sendToAgent, isDelivered, isQueued, isHeld, describeSendState } from '../../lib/agentSend';
 import { logAction } from '../../lib/user-actions';
 import { isLargePaste, fencePaste } from '../../lib/pastedText';
 
@@ -245,11 +246,17 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           setResult('Failed' + (res.error ? ': ' + res.error : ''));
         }
       } else {
-        await messageAgent(agentId, messageText);
-        setResult('Sent');
-        setText('');
-        setPastes([]);
-        pasteIdRef.current = 1;
+        // Durable path — see the note in AgentCard.tsx. messageAgent() wrote to queue/inbox/,
+        // which nothing reads, and still reported success.
+        const res2 = await sendToAgent(agentId, { text: messageText });
+        if (isDelivered(res2) || isQueued(res2) || isHeld(res2)) {
+          setResult(describeSendState(res2) || 'Sent');
+          setText('');
+          setPastes([]);
+          pasteIdRef.current = 1;
+        } else {
+          setResult('Failed' + (res2.error ? ': ' + res2.error : ''));
+        }
       }
     } catch (err: any) {
       setResult('Error: ' + (err.message || 'unknown'));
