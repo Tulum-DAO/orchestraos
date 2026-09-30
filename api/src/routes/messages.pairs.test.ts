@@ -18,7 +18,7 @@ import { mkdtempSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import Database from 'better-sqlite3';
-import { pairCounts, pairMessages } from './messages.js';
+import { pairCounts, pairMessages, parseAsof } from './messages.js';
 
 function hoursAgo(h: number): string {
   return new Date(Date.now() - h * 3600_000).toISOString();
@@ -108,4 +108,51 @@ test('pairMessages pages newest-first by a created_at cursor, past the window', 
   assert.deepEqual(none.messages, []);
   assert.equal(none.total_all_time, 0);
   assert.equal(pairMessages(join(data, 'nowhere'), 'gm', 'build', 40, null, 24).total_all_time, 0);
+});
+
+test('asof moves the window back in time and never silently empties it', () => {
+  const data = makeDb();
+
+  // Looking at "now": the 3 recent gm<->build rows, not the 40-day-old one.
+  assert.equal(pairMessages(data, 'gm', 'build', 40, null, 24).total_in_window, 3);
+
+  // Scrub back 4 hours: m3 (1h ago) and m2 (3h ago) are now in the FUTURE relative to the
+  // moment being viewed, so only m1 (5h ago) is inside the 24h window ending there. Without
+  // the upper bound this stays 3 and the scrubber is decorative.
+  const fourHoursAgo = Date.now() - 4 * 3600_000;
+  assert.equal(pairMessages(data, 'gm', 'build', 40, null, 24, fourHoursAgo).total_in_window, 1);
+
+  // total_all_time ignores asof entirely — it is what "load older" can reach, not a window.
+  assert.equal(pairMessages(data, 'gm', 'build', 40, null, 24, fourHoursAgo).total_all_time, 4);
+
+  // Same for the line counts, so the line and the panel agree at the scrubbed moment too.
+  const scrubbed = new Map(pairCounts(data, 24, fourHoursAgo).map((r) => [`${r.a}|${r.b}`, r]));
+  assert.equal(scrubbed.get('build|gm')?.count, 1);
+  assert.equal(scrubbed.get('gm|plan'), undefined, '2h-ago row is in the future at this moment');
+
+  // Scrub to a moment 39.5 days back: the 24h window ending there spans 40.5..39.5 days ago,
+  // so the 40-day-old row is inside it. (40.5 days back would put that row in the FUTURE
+  // relative to the viewed moment — which is the whole point of the upper bound.)
+  const longAgo = Date.now() - 24 * 39.5 * 3600_000;
+  assert.equal(pairMessages(data, 'gm', 'build', 40, null, 24, longAgo).total_in_window, 1);
+
+  // A null asof is live, not "epoch" — an unset scrubber must not collapse the window.
+  assert.equal(pairMessages(data, 'gm', 'build', 40, null, 24, null).total_in_window, 3);
+});
+
+test('parseAsof repairs the +-decodes-to-space case and refuses anything else', () => {
+  // The bug this exists for, caught live: '+' in a query string decodes to a SPACE, so an
+  // ISO offset arrives mangled from any hand-built or copied URL. Unrepaired it does not
+  // parse, and an earlier version fell back to now — returning LIVE counts for a request
+  // that asked for six hours ago, which looked perfectly healthy.
+  const iso = '2026-09-29T18:04:04.742630+00:00';
+  assert.equal(parseAsof(iso.replace('+', ' ')), Date.parse(iso), 'space-for-plus must be repaired');
+  assert.equal(parseAsof(iso), Date.parse(iso));
+  assert.equal(parseAsof('2026-09-29T18:04:04Z'), Date.parse('2026-09-29T18:04:04Z'));
+
+  // Anything still unusable is null, so the route can REFUSE. Returning now instead would be
+  // plausible numbers for the wrong moment — the failure mode this whole feature removes.
+  assert.equal(parseAsof('banana'), null);
+  assert.equal(parseAsof(''), null);
+  assert.equal(parseAsof('2026-13-45T99:99:99Z'), null);
 });

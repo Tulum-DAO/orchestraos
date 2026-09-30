@@ -52,8 +52,12 @@ export const deleteTask = (project: string, phaseIdx: number, taskIdx: number): 
 // /messages/conversations/:agentId from this view — they read JSONL, and disagreeing with
 // this table is exactly the "49 vs 40" bug the spec exists to kill.
 export interface PairCountRow { a: string; b: string; count: number; last_at: string | null }
-export const fetchPairCounts = (hours = 24) =>
-  get<{ window_hours: number; pairs: PairCountRow[] }>(`/messages/pair-counts?hours=${hours}`);
+export const fetchPairCounts = (hours = 24, asof?: string | null) => {
+  const q = new URLSearchParams({ hours: String(hours) });
+  if (asof) q.set('asof', asof);   // omitted entirely means live
+  return get<{ window_hours: number; asof: string | null; pairs: PairCountRow[] }>(
+    `/messages/pair-counts?${q}`);
+};
 
 export interface PairMessage {
   id: string; conversation_id: string | null; from_agent: string; to_agent: string;
@@ -66,10 +70,12 @@ export interface PairPage {
   messages: PairMessage[]; next_before: string | null; has_more: boolean;
 }
 export const fetchPairMessages = (
-  a: string, b: string, opts: { limit?: number; before?: string | null; hours?: number } = {},
+  a: string, b: string,
+  opts: { limit?: number; before?: string | null; hours?: number; asof?: string | null } = {},
 ) => {
   const q = new URLSearchParams({ limit: String(opts.limit ?? 40), hours: String(opts.hours ?? 24) });
   if (opts.before) q.set('before', opts.before);
+  if (opts.asof) q.set('asof', opts.asof);
   return get<PairPage>(`/messages/pair/${encodeURIComponent(a)}/${encodeURIComponent(b)}?${q}`);
 };
 

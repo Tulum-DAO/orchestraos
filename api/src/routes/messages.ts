@@ -77,17 +77,38 @@ function openMessagesDb(dataDir: string): Database.Database | null {
   try { return new Database(dbPath, { readonly: true, fileMustExist: true }); } catch { return null; }
 }
 
-function cutoffIso(windowHours: number): string {
-  return new Date(Date.now() - windowHours * 3600_000).toISOString();
+/**
+ * Parse an `asof` query value, or null if it is not a usable instant.
+ *
+ * The space-repair is not defensive padding, it is a bug I hit live: `+` in a query string
+ * decodes to a SPACE, so an ISO timestamp with a `+00:00` offset arrives as `... 00:00`
+ * whenever the URL was hand-built or copied rather than run through URLSearchParams. That
+ * string does not parse, and the first version of this code fell back to now — so a request
+ * to look at six hours ago returned live counts and looked perfectly healthy. Plausible
+ * numbers for the wrong moment is the exact failure this feature exists to remove, so the
+ * common case is repaired and anything still unparseable is REFUSED by the caller rather
+ * than silently reinterpreted.
+ */
+export function parseAsof(raw: string): number | null {
+  const repaired = raw.replace(/ (\d{2}:\d{2})$/, '+$1');
+  const t = new Date(repaired).getTime();
+  return Number.isFinite(t) ? t : null;
+}
+
+/** Window bounds: the `windowHours` ending at `asofMs` (or now). */
+function windowBounds(windowHours: number, asofMs?: number | null): { from: string; to: string } {
+  const to = asofMs ?? Date.now();
+  return { from: new Date(to - windowHours * 3600_000).toISOString(), to: new Date(to).toISOString() };
 }
 
 /** Message count per UNORDERED agent pair inside the window, newest activity first.
  *  Both directions of an exchange collapse into one row, because a connection line is
  *  one line. Self-sends (from === to) are excluded: they are real rows, but a line needs
  *  two ends. Missing db/table => []. */
-export function pairCounts(dataDir: string, windowHours = 24): PairCount[] {
+export function pairCounts(dataDir: string, windowHours = 24, asofMs?: number | null): PairCount[] {
   const db = openMessagesDb(dataDir);
   if (!db) return [];
+  const { from, to } = windowBounds(windowHours, asofMs);
   try {
     return db.prepare(
       `select min(from_agent, to_agent) as a, max(from_agent, to_agent) as b,
@@ -96,8 +117,9 @@ export function pairCounts(dataDir: string, windowHours = 24): PairCount[] {
         where archived_at is null
           and from_agent <> to_agent
           and julianday(created_at) >= julianday(?)
+          and julianday(created_at) <= julianday(?)
         group by a, b
-        order by count desc`).all(cutoffIso(windowHours)) as PairCount[];
+        order by count desc`).all(from, to) as PairCount[];
   } catch { return []; } finally { db.close(); }
 }
 
@@ -118,7 +140,7 @@ export interface PairPage {
  *  response's next_before walks history without re-sending the boundary row. */
 export function pairMessages(
   dataDir: string, a: string, b: string,
-  limit = 40, before?: string | null, windowHours = 24,
+  limit = 40, before?: string | null, windowHours = 24, asofMs?: number | null,
 ): PairPage {
   const empty: PairPage = {
     a, b, total_in_window: 0, total_all_time: 0, window_hours: windowHours,
@@ -132,9 +154,11 @@ export function pairMessages(
     const ends = [a, b, b, a];
     const totalAllTime = (db.prepare(`select count(*) as n from messages where ${pair}`)
       .get(...ends) as { n: number }).n;
+    const { from, to } = windowBounds(windowHours, asofMs);
     const totalInWindow = (db.prepare(
-      `select count(*) as n from messages where ${pair} and julianday(created_at) >= julianday(?)`)
-      .get(...ends, cutoffIso(windowHours)) as { n: number }).n;
+      `select count(*) as n from messages where ${pair}
+         and julianday(created_at) >= julianday(?) and julianday(created_at) <= julianday(?)`)
+      .get(...ends, from, to) as { n: number }).n;
 
     // limit + 1 so has_more is observed, not inferred from a full page.
     const rows = before
@@ -223,7 +247,19 @@ function windowHoursFrom(q: unknown): number {
 // The ONLY source for any count rendered on a line (spec §16).
 router.get('/pair-counts', (req: Request, res: Response) => {
   const hours = windowHoursFrom(req.query.hours);
-  res.json({ window_hours: hours, pairs: pairCounts(ORCHESTRA, hours) });
+  const raw = req.query.asof ? String(req.query.asof) : null;
+  const asofMs = raw ? parseAsof(raw) : null;
+  // Refuse rather than reinterpret: serving live counts for a request that asked for a past
+  // moment is the worst outcome available, because it looks right.
+  if (raw && asofMs === null) {
+    res.status(400).json({ error: 'asof is not a parseable instant', code: 'bad_asof', asof: raw });
+    return;
+  }
+  res.json({
+    window_hours: hours,
+    asof: asofMs === null ? null : new Date(asofMs).toISOString(),
+    pairs: pairCounts(ORCHESTRA, hours, asofMs),
+  });
 });
 
 // GET /api/messages/pair/:a/:b?limit=40&before=<iso>&hours=24 — one pair's history for the
@@ -232,8 +268,14 @@ router.get('/pair-counts', (req: Request, res: Response) => {
 router.get('/pair/:a/:b', (req: Request, res: Response) => {
   const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit || '40'), 10) || 40));
   const before = req.query.before ? String(req.query.before) : null;
+  const raw = req.query.asof ? String(req.query.asof) : null;
+  const asofMs = raw ? parseAsof(raw) : null;
+  if (raw && asofMs === null) {
+    res.status(400).json({ error: 'asof is not a parseable instant', code: 'bad_asof', asof: raw });
+    return;
+  }
   res.json(pairMessages(ORCHESTRA, String(req.params.a), String(req.params.b),
-    limit, before, windowHoursFrom(req.query.hours)));
+    limit, before, windowHoursFrom(req.query.hours), asofMs));
 });
 
 // GET /api/messages/thread/:conversationId — get full conversation thread

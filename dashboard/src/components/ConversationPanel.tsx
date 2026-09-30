@@ -10,6 +10,12 @@ export interface ConversationPanelProps {
   b: string;
   onOpenAgent: (agentId: string) => void;
   onClose: () => void;
+  /** Window and moment the header count is computed over. Threaded from the page so the
+   *  panel header and the connection line are literally the same number even while the time
+   *  bar is scrubbed — a panel pinned to 24h/live beside a scrubbed line is the 49-vs-40 bug
+   *  wearing a different hat. */
+  windowHours?: number;
+  asof?: string | null;
 }
 
 const TYPE_BADGE: Record<string, string> = {
@@ -19,14 +25,16 @@ const TYPE_BADGE: Record<string, string> = {
 };
 const typeBadgeClass = (t: string | null) => (t && TYPE_BADGE[t]) || 'bg-neutral-700/40 text-neutral-400';
 
-export function ConversationPanel({ a, b, onOpenAgent, onClose }: ConversationPanelProps) {
+export function ConversationPanel({
+  a, b, onOpenAgent, onClose, windowHours: windowHoursProp = 24, asof = null,
+}: ConversationPanelProps) {
   const [typeFilter, setTypeFilter] = useState<MessageTypeFilter>('All');
   const [newestFirst, setNewestFirst] = useState(true);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
 
   const { data, isLoading, isError, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
-    queryKey: ['messages-pair', a, b],
-    queryFn: ({ pageParam }) => fetchPairMessages(a, b, { limit: 40, before: pageParam, hours: 24 }),
+    queryKey: ['messages-pair', a, b, windowHoursProp, asof],
+    queryFn: ({ pageParam }) => fetchPairMessages(a, b, { limit: 40, before: pageParam, hours: windowHoursProp, asof }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => (lastPage.has_more ? lastPage.next_before ?? undefined : undefined),
   });
@@ -43,7 +51,7 @@ export function ConversationPanel({ a, b, onOpenAgent, onClose }: ConversationPa
   // window_hours so it reads as windowed, not absolute.
   const firstPage = data?.pages[0];
   const totalInWindow = firstPage?.total_in_window ?? 0;
-  const windowHours = firstPage?.window_hours ?? 24;
+  const windowHours = firstPage?.window_hours ?? windowHoursProp;
   const loaded = data?.pages.flatMap((p) => p.messages) ?? [];
   const ordered = newestFirst ? loaded : [...loaded].reverse();
   const filtered = ordered.filter((m) => matchesTypeFilter(m.type, typeFilter));

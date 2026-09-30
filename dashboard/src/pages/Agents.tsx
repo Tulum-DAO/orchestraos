@@ -10,6 +10,8 @@ import { AgentsSummaryStrip } from '../components/AgentsSummaryStrip';
 import { AgentDetailPanel } from '../components/AgentDetailPanel';
 import { ConversationPanel } from '../components/ConversationPanel';
 import { FleetTicker } from '../components/FleetTicker';
+import { TimeBar } from '../components/TimeBar';
+import { useOrchestraStore } from '../stores/useOrchestraStore';
 import { newlyArrived, type TrafficMessage } from '../lib/fleetTraffic';
 import { StatusDot } from '../components/StatusDot';
 import { TierBadge } from '../components/TierBadge';
@@ -42,20 +44,21 @@ export default function Agents() {
   const [clientFilter, setClientFilter] = useState<string>('All');
   const [machineFilter, setMachineFilter] = useState<string>('All');
   const [recentAgents, setRecentAgents] = useState<RecentAgent[]>(getRecentAgents());
-  const [search, setSearch] = useState('');
-  // Spec §3: one right-hand panel, one mode at a time. A line click sets the pair, an agent
-  // click sets the id, and opening one explicitly clears the other — two panels open at once
-  // is the clutter §2 rules out, and leaving both set would make which one renders depend on
-  // the order of the JSX rather than on what was clicked.
-  const [selectedConnection, setSelectedConnection] = useState<[string, string] | null>(null);
-  const [panelAgentId, setPanelAgentId] = useState<string | null>(null);
-  const openAgentPanel = (id: string) => { setSelectedConnection(null); setPanelAgentId(id); };
-  const openConversation = (a: string, b: string) => { setPanelAgentId(null); setSelectedConnection([a, b]); };
-  const closePanel = () => { setPanelAgentId(null); setSelectedConnection(null); };
-  // Spec §7 makes the window a control (1h / 6h / 24h). That control is step 9; until then
-  // the window is fixed at 24h and every number derived from it says so, rather than
-  // showing an unlabelled count whose basis you have to guess.
-  const WINDOW_HOURS = 24;
+  // Spec §9: selection, moment, window and search live in ONE store rather than in this
+  // component, so every surface reads the same values. §3's one-panel-at-a-time rule is
+  // enforced in the store's setters — openAgentPanel and openConversation clear each other
+  // there, so it cannot be violated by a caller that forgets.
+  const search = useOrchestraStore((st) => st.search);
+  const setSearch = useOrchestraStore((st) => st.setSearch);
+  const windowHours = useOrchestraStore((st) => st.windowHours);
+  const setWindowHours = useOrchestraStore((st) => st.setWindowHours);
+  const asof = useOrchestraStore((st) => st.asof);
+  const setAsof = useOrchestraStore((st) => st.setAsof);
+  const panelAgentId = useOrchestraStore((st) => st.selectedAgentId);
+  const selectedConnection = useOrchestraStore((st) => st.selectedConnection);
+  const openAgentPanel = useOrchestraStore((st) => st.openAgentPanel);
+  const openConversation = useOrchestraStore((st) => st.openConversation);
+  const closePanel = useOrchestraStore((st) => st.closePanel);
 
   // On mount: merge localStorage with server-persisted recents
   useEffect(() => {
@@ -66,9 +69,14 @@ export default function Agents() {
   // Canonical per-pair message counts (spec §16): the ONE source for every count and
   // thickness on a connection line and for the strip's message/connection numbers.
   const { data: pairData } = useQuery({
-    queryKey: ['pair-counts', WINDOW_HOURS],
-    queryFn: () => fetchPairCounts(WINDOW_HOURS),
-    refetchInterval: 15_000,
+    // asof is in the key on purpose: without it, scrubbing back in time would be served the
+    // cached counts for "now" and the scrubber would look broken in the most confusing
+    // possible way — plausible numbers for the wrong moment.
+    queryKey: ['pair-counts', windowHours, asof],
+    queryFn: () => fetchPairCounts(windowHours, asof),
+    // Polling a frozen past moment is pointless work and would also make a scrubbed view
+    // twitch as if it were live.
+    refetchInterval: asof ? false : 15_000,
   });
 
   // Step 7. Recent mail drives BOTH the ticker and the travelling dots, from the same
@@ -77,7 +85,10 @@ export default function Agents() {
   const { data: recent } = useQuery({
     queryKey: ['recent-messages'],
     queryFn: () => fetchRecentMessages(40),
-    refetchInterval: 8_000,
+    // Frozen while scrubbed: a live ticker beside a past moment is showing stale as fresh,
+    // which §12 rules out by name.
+    refetchInterval: asof ? false : 8_000,
+    enabled: !asof,
   });
   // useMemo so the identity is stable and the effect below can depend on the ARRAY rather
   // than on the query result it was derived from — the two are equivalent today, but the
@@ -274,7 +285,7 @@ export default function Agents() {
               messages24h={messagesInWindow}
               activeConnections={activeConnections}
               busiest={busiest}
-              windowHours={WINDOW_HOURS}
+              windowHours={windowHours}
               search={search}
               onSearchChange={setSearch}
             />
@@ -502,7 +513,7 @@ export default function Agents() {
             <TopologyDiagram
               agents={agents}
               pairs={pairs}
-              windowHours={WINDOW_HOURS}
+              windowHours={windowHours}
               onSelectConnection={openConversation}
               onSelectAgent={openAgentPanel}
               selectedAgentId={panelAgentId}
@@ -512,11 +523,26 @@ export default function Agents() {
             {/* Bottom live ticker (spec §3). The time scrubber that shares this row is
                 step 9 and is not built. */}
             <div className="border-t border-neutral-800 mt-2">
-              <FleetTicker
-                messages={recentMessages}
-                freshIds={freshIds}
-                onSelectConnection={openConversation}
+              <TimeBar
+                windowHours={windowHours}
+                onWindowChange={setWindowHours}
+                asof={asof}
+                onAsofChange={setAsof}
               />
+              {asof ? (
+                // §12: never show stale as fresh. The ticker is a live feed by definition, so
+                // while a past moment is being viewed it says what it is instead of quietly
+                // rendering now's traffic under a scrubbed graph.
+                <div className="text-xs text-amber-300/80 py-2">
+                  Viewing a past moment — live ticker paused. Press Live to resume.
+                </div>
+              ) : (
+                <FleetTicker
+                  messages={recentMessages}
+                  freshIds={freshIds}
+                  onSelectConnection={openConversation}
+                />
+              )}
             </div>
           </div>
           {(panelAgent || selectedConnection) && (
@@ -527,6 +553,8 @@ export default function Agents() {
                   b={selectedConnection[1]}
                   onOpenAgent={openAgentPanel}
                   onClose={closePanel}
+                  windowHours={windowHours}
+                  asof={asof}
                 />
               ) : panelAgent ? (
                 <AgentDetailPanel
