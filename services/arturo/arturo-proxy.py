@@ -901,6 +901,18 @@ def _turn_brain():
     return _BRAIN_THIS_TURN.get() or brain
 
 
+def _context_as(chosen, **kw):
+    """build_context() as the turn's CHOSEN brain. The identity line reads _turn_brain(), and
+    only /text set it: a streamed Codex turn was told "you are thinking with Claude" (2026-09-30).
+    Set for the build only — the turn itself runs in another thread."""
+    tok = _BRAIN_THIS_TURN.set(chosen) if chosen is not None else None
+    try:
+        return build_context(**kw)
+    finally:
+        if tok is not None:
+            _BRAIN_THIS_TURN.reset(tok)
+
+
 _PROVIDERS_PATH = _REPO_ROOT / "config" / "providers.json"
 _LIVE_CATALOG_PATH = _REPO_ROOT / "state" / _brain.LIVE_CATALOG_FILENAME
 _CATALOG_CACHE = {"stamp": None, "value": {}}
@@ -4774,7 +4786,7 @@ def text_prewarm_endpoint():
     history = _conversation_history(conversation_id)
     # Everything the turn will have BEFORE its new message, built the way the turn builds it,
     # so the prewarmed process is the one the turn would have started itself.
-    prior = _ptt.build_messages(build_context(calling_channel="text"), history, "",
+    prior = _ptt.build_messages(_context_as(chosen, calling_channel="text"), history, "",
                                 current_brain=_effective_brain(turn_brain))[:-1]
     argv = _text_stream.warm_argv(turn_brain, prior, TOOLS)
     env = dict(os.environ)
@@ -4825,7 +4837,7 @@ def text_stream_endpoint():
     # The authoritative context — who Arturo is and what is live on this box — is built by
     # build_context(), the same call the tool loop makes. Streaming without it answers as a
     # bare model with no identity and no tools.
-    _stream_context = build_context(calling_channel="text")
+    _stream_context = _context_as(chosen, calling_channel="text")
     messages = _ptt.build_messages(_stream_context, history, body_text, current_brain=effective)
 
     def _spawn(cmd):
