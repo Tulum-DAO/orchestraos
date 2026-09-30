@@ -37,6 +37,18 @@ PROSE = "prose"
 
 _FENCE = "```"
 _SENTENCE_END_RE = re.compile(r"[.!?]")
+# Could this partial line still turn into a bare tool line? Matches a complete opener, and
+# any PREFIX of one, because the line is not finished yet.
+_BARE_TOOL_OPENERS = ("tool_code", "print(default_api", "default_api.")
+
+
+def _could_become_tool_line(partial: str) -> bool:
+    head = partial.lstrip().lower()
+    squashed = head.replace(" ", "").replace("\t", "")
+    for opener in _BARE_TOOL_OPENERS:
+        if squashed.startswith(opener) or opener.startswith(squashed):
+            return True
+    return False
 
 
 def batch_sanitize(text):
@@ -113,9 +125,19 @@ class StreamingSanitizer:
         resolved, _head_end = self._leading_region_resolved(raw)
         if not resolved:
             return 0
-        # Whole lines only.
+        # A bare `tool_code` / `print(default_api` / `default_api.` line is only recognisable
+        # once the line ends, so a line that COULD still become one is held whole. Any other
+        # line may stream mid-line, up to its last sentence terminator — without this, a
+        # single-paragraph reply (no newline until the end) never streamed at all.
         last_nl = raw.rfind("\n")
         cut = last_nl + 1 if last_nl >= 0 else 0
+        partial = raw[cut:]
+        if partial and not _could_become_tool_line(partial):
+            end = None
+            for m in _SENTENCE_END_RE.finditer(partial):
+                end = m.end()
+            if end:
+                cut += end
         # Never a prefix that cuts a fence in half. The balance is checked IN THE PREFIX:
         # the raw text may already hold a closing fence the prefix does not include.
         while cut > 0 and raw[:cut].count(_FENCE) % 2 == 1:

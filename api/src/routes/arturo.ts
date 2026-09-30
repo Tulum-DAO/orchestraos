@@ -34,6 +34,8 @@ export interface ArturoDeps {
   fetchJson: (url: string, init: RequestInit, timeoutMs: number) => Promise<{ status: number; body: any }>;
   /** Item C: stream a request body (multipart dictation clip) upstream untouched — fetchJson parses
    *  JSON and takes a materialised init, so the relay has its own seam. Returns status + parsed body. */
+  pipeStream?: (url: string, headers: Record<string, string>, body: string, timeoutMs: number) =>
+    Promise<{ status: number; contentType: string; body: unknown; json: () => Promise<any> }>;
   forwardStream: (url: string, req: any, headers: Record<string, string>, timeoutMs: number) => Promise<{ status: number; body: any }>;
 }
 
@@ -77,6 +79,10 @@ export function defaultArturoDeps(): ArturoDeps {
       const r = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
       const body = await r.json().catch(() => ({ ok: false, error: 'bad gateway json' }));
       return { status: r.status, body };
+    },
+    pipeStream: async (url, headers, body, timeoutMs) => {
+      const r = await fetch(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(timeoutMs) });
+      return { status: r.status, contentType: r.headers.get('content-type') || '', body: r.body, json: async () => r.json().catch(() => ({ ok: false, error: 'bad gateway json' })) };
     },
     forwardStream: async (url, req, headers, timeoutMs) => {
       // Node 22 fetch: a Readable body needs duplex:'half'. Content-Type carries the multipart boundary.
@@ -123,6 +129,61 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(upstream),
     }, 195000);
+  });
+
+  /**
+   * POST /api/arturo/text/stream — the same turn as /text, as it happens (spec §2.1).
+   *
+   * Piped, never buffered: `fetchJson` would collect the whole body and hand back one reply,
+   * which is the very thing this endpoint exists not to do. flushHeaders sends the SSE head
+   * before the first frame, and X-Accel-Buffering stops a proxy re-buffering what we just
+   * took care not to buffer.
+   */
+  router.post('/text/stream', async (req, res) => {
+    const text = String((req.body || {}).text || '').trim();
+    if (!text) { res.status(400).json({ ok: false, error: 'text required' }); return; }
+    const conversation_id = String((req.body || {}).conversation_id || '').slice(0, 200);
+    const upstream: Record<string, unknown> = { text, conversation_id };
+    for (const [key, pick] of [['brain', pickBrain], ['context', pickContext]] as const) {
+      const raw = (req.body || {})[key];
+      if (raw === undefined || raw === null) continue;
+      const picked = pick(raw);
+      if (!picked.ok) { res.status(400).json({ ok: false, ...picked.refusal }); return; }
+      upstream[key] = picked.value;
+    }
+    const token = deps.token();
+    if (!token) { res.status(502).json({ ok: false, error: 'gateway token unavailable' }); return; }
+    if (!deps.pipeStream) { res.status(500).json({ ok: false, error: 'streaming unavailable' }); return; }
+    try {
+      const up = await deps.pipeStream(`${GATEWAY_URL}/arturo/text/stream`, {
+        'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`,
+      }, JSON.stringify(upstream), 195000);
+      if (up.status !== 200 || !up.contentType.includes('text/event-stream')) {
+        // A refusal is ordinary JSON — the client never opened a stream, so answer like /text.
+        res.status(up.status).json(await up.json());
+        return;
+      }
+      res.status(200);
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('X-Accel-Buffering', 'no');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders?.();
+      if (!up.body) { res.end(); return; }
+      const reader = (up.body as ReadableStream<Uint8Array>).getReader();
+      // The client going away must reach the CLI at the far end, not leak a subprocess.
+      let aborted = false;
+      res.on('close', () => { aborted = true; void reader.cancel().catch(() => {}); });
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done || aborted) break;
+        res.write(Buffer.from(value));
+      }
+      res.end();
+    } catch (err: any) {
+      if (res.headersSent) { res.end(); return; }
+      res.status(502).json({ ok: false, error: 'gateway unreachable', detail: err.message });
+    }
   });
 
   // Item C — web dictation tier 2: the browser records (MediaRecorder) and the box transcribes

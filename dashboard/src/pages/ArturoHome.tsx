@@ -22,6 +22,7 @@ import '../components/arturo/arturo.css';
 import { BrainModal } from '../components/agent/BrainModal';
 import { ModelSelectorSheet } from '../components/agent/ModelSelectorSheet';
 import { useArturoBrain } from '../stores/arturoBrain';
+import { arturoTurn } from '../lib/arturoStream';
 import { brainFromThread, describeTurnError, toWireBrain } from '../lib/arturoBrain';
 import { arturoHealth, arturoText, runtimesAvailable, brainLabel, greeting, newConversationId,
   isStarting, waitForArturo, STARTING_TEXT, firstStep, stepAfterRuntime, onboardingTurn, sendStateLabel,
@@ -34,7 +35,7 @@ import { useDictation } from '../components/arturo/useDictation.ts';
 import SpawnedAgentCard from '../components/arturo/SpawnedAgentCard';
 import { Brain, Settings } from 'lucide-react';
 
-type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[]; spawned?: string[]; pending?: boolean; state?: SendState;
+type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[]; spawned?: string[]; pending?: boolean; streaming?: boolean; state?: SendState;
   decision?: { options: string[]; onPick: (v: string) => void } };
 type Step = 'name' | 'runtime' | 'voice' | 'first' | 'hierarchy' | 'done';
 
@@ -299,12 +300,22 @@ export default function ArturoHome() {
     setAttachments([]);
     const onSent = () => patch(uid, { state: 'sent' });
     const turnBrain = toWireBrain(brainChoice);
-    let r = await arturoText(sent, convId.current, null, { onSent, brain: turnBrain });
+    // Stream the reply into the pending bubble as it is written. `streamed` is what the
+    // operator has already read, so a failure can clear it rather than leave half a sentence.
+    let streamed = '';
+    // pending renders the thinking dot INSTEAD of the text, so the first delta ends it —
+    // otherwise the reply streams into a bubble nobody can see (found on staging).
+    const onDelta = (t: string) => {
+      streamed += t;
+      patch(id, { pending: false, streaming: true, text: streamed });
+    };
+    let r = await arturoTurn(sent, convId.current, null, { onSent, brain: turnBrain, onDelta });
+    if (!r.ok) { streamed = ''; patch(id, { pending: true, streaming: false, text: '' }); }
     if (!r.ok && isStarting(r)) {          // G15: still booting -> say so, wait for health, retry once
       patch(id, { pending: false, text: STARTING_TEXT });
       const ready = await waitForArturo();
       setHealth(ready);
-      if (ready.ok) { patch(id, { pending: true, text: '' }); r = await arturoText(sent, convId.current, null, { onSent, brain: turnBrain }); }
+      if (ready.ok) { patch(id, { pending: true, text: '' }); r = await arturoTurn(sent, convId.current, null, { onSent, brain: turnBrain, onDelta }); }
     }
     setBusy(false);
     patch(uid, { state: r.ok ? 'acked' : 'failed' });
@@ -316,7 +327,7 @@ export default function ArturoHome() {
         : `I could not reach my brain: ${r.error || 'unknown'}. Is \`orchestra up\` running? Check /health on the Arturo service.` });
       return;
     }
-    patch(id, { pending: false, text: r.reply_text || '(no reply)', tools: r.tools_called, spawned: r.spawned });
+    patch(id, { pending: false, streaming: false, text: r.reply_text || streamed || '(no reply)', tools: r.tools_called, spawned: r.spawned });
     if (isName) {
       // Advance only on the EFFECT: the brain recorded a name (the spawn_agent pattern). Otherwise
       // its reply was a re-ask and the step stays — including the NullBrain sentence, where the
@@ -386,7 +397,12 @@ export default function ArturoHome() {
         ) : (
           <div key={t.id} className="turn-assistant">
             <ArturoMark className="mark-sm" />
-            {t.pending ? <span className="thinking" aria-label="thinking" /> : <div className="txt">{renderText(t.text)}</div>}
+            {t.pending ? <span className="thinking" aria-label="thinking" /> : (
+              <div className="txt">
+                {renderText(t.text)}
+                {t.streaming && <span className="stream-caret" aria-hidden="true" />}
+              </div>
+            )}
             {t.tools && t.tools.length > 0 && <div className="tools">ran {t.tools.join(', ')}</div>}
             <SpawnedAgentCard ids={t.spawned} />
             {t.decision && (

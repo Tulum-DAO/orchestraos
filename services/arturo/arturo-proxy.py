@@ -25,7 +25,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, request, Response, jsonify
+from flask import Flask, request, Response, jsonify, stream_with_context
 
 # --- Intent Router + Conversation Log ---
 try:
@@ -211,6 +211,7 @@ def _record_spawned_this_turn(session_name):
 # dispatch (cancel cannot un-run execute_tool). Lock is held only for tiny flag ops.
 from services.arturo import thread_store as _thread_store   # G20 durable thread archive
 from services.arturo import vq6 as _vq6
+from services.arturo import text_stream as _text_stream   # Phase 2 /text/stream
 _VQ6 = _vq6.InflightRegistry()
 from services.arturo import voice_guards as _voice_guards   # VQ-9 re-engagement-filler suppression
 # F2 cross-request dedup (DEC-1788674600635445, congruence: AGY + in-process Claude). MODULE-LEVEL
@@ -4665,9 +4666,7 @@ def text_turn(text, conversation_id, brain=None, context=None):
                          "provider": chosen_id["provider"], "model": chosen_id["model"],
                          "tools_called": tools_called, "spawned": spawned,
                          "conversation_id": conversation_id}
-    _TEXT_HISTORY.append(conversation_id, "user", text)
-    _TEXT_HISTORY.append(conversation_id, "assistant", reply)
-    _THREADS.record_turn(conversation_id, text, reply, brain=chosen_id)
+    _record_text_turn(conversation_id=conversation_id, text=text, reply=reply, brain=chosen_id)
     from services.arturo import operator_store as _ops
     return 200, {"ok": True, "reply_text": reply, "conversation_id": conversation_id,
                  "brain": (chosen or _turn_brain()).describe(), "tools_called": tools_called,
@@ -4706,6 +4705,91 @@ def thread_detail_endpoint(conversation_id):
         # thread as "nothing to resume".
         return jsonify({"ok": True, "thread": None})
     return jsonify({"ok": True, "thread": thread})
+
+
+def _record_text_turn(conversation_id, text, reply, brain=None):
+    """The ONE place a text turn is persisted. /text and /text/stream both come through here,
+    so a streamed turn and a whole one leave the same history and the same thread row."""
+    _TEXT_HISTORY.append(conversation_id, "user", text)
+    _TEXT_HISTORY.append(conversation_id, "assistant", reply)
+    _THREADS.record_turn(conversation_id, text, reply, brain=brain)
+
+
+@app.route("/text/stream", methods=["POST"])
+def text_stream_endpoint():
+    """The turn as it happens (spec §2.1). /text is unchanged; this is opt-in.
+
+    A reply that turns out to be a tool envelope is never streamed: that turn re-runs down
+    /text, tool loop and all, so tools behave identically on both endpoints."""
+    remote = request.remote_addr or ""
+    if remote not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+        return jsonify({"ok": False, "error": "loopback only"}), 403
+    data = request.get_json(silent=True) or {}
+    text_in = (data.get("text") or "").strip()
+    conversation_id = (data.get("conversation_id") or "").strip()[:200] or f"text_{int(time.time())}"
+    brain_req, page_ctx = data.get("brain"), data.get("context")
+
+    # Validation answers with an ordinary JSON status — a client that got a bad request never
+    # opened a stream, and an SSE body carrying a 400 would be read as a turn that started.
+    if not text_in:
+        return jsonify({"ok": False, "error": "empty"}), 400
+    if len(text_in) > 8000:
+        return jsonify({"ok": False, "error": "too_large"}), 413
+    chosen, chosen_id = None, None
+    if brain_req is not None:
+        chosen, chosen_id, refusal = _resolve_turn_brain(brain_req)
+        if refusal:
+            return jsonify(refusal[1]), refusal[0]
+    if page_ctx is not None and not _valid_context(page_ctx):
+        return jsonify({"ok": False, "error": "bad_context", "field": "context"}), 400
+
+    turn_brain = chosen or _turn_brain()
+    history = _TEXT_HISTORY.get(conversation_id) or _THREADS.history(conversation_id)
+    body_text = f"{_context_line(page_ctx)}\n{text_in}" if page_ctx is not None else text_in
+    messages = _ptt.build_messages("", history, body_text)
+
+    def _spawn(cmd):
+        """Line-by-line stdout from the CLI. The process is killed when the client goes away."""
+        env = dict(os.environ)
+        for key in (cmd.env_unset or []):
+            env.pop(key, None)
+        proc = subprocess.Popen(cmd.argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
+        try:
+            if cmd.stdin is not None:
+                proc.stdin.write(cmd.stdin)
+            if proc.stdin:
+                proc.stdin.close()
+            for line in proc.stdout:
+                yield line
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+
+    def _fallback():
+        return text_turn(text_in, conversation_id, brain=brain_req, context=page_ctx)
+
+    def _generate():
+        try:
+            for event in _text_stream.stream_turn(
+                    text=body_text, conversation_id=conversation_id, brain=turn_brain,
+                    brain_id=chosen_id, messages=messages, spawn=_spawn,
+                    fallback=_fallback, record=_record_text_turn):
+                yield _text_stream.sse_frame(event)
+        except GeneratorExit:
+            raise
+        except Exception as e:  # noqa: BLE001 — a dead stream must still say why
+            log.error(f"/text/stream failed: {e}")
+            yield _text_stream.sse_frame({"event": "error", "data": {
+                "code": "stream_failed", "message": str(e)[:200]}})
+
+    return Response(stream_with_context(_generate()), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                             "Connection": "keep-alive"})
 
 
 @app.route("/text", methods=["POST"])
