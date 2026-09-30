@@ -273,3 +273,26 @@ test('POST /text/prewarm refuses a hostile model id before it reaches a spawn', 
   assert.equal(r.status, 400);
   assert.equal(called, false);
 });
+
+// --- POST /client-log: a turn that died in the browser reports where -----------------------
+test('POST /client-log keeps only the flat diagnostic fields, capped, and never message text', async () => {
+  const lines: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (...a: unknown[]) => { lines.push(a.join(' ')); };
+  try {
+    const r = await postSse(makeDeps(), '/api/arturo/client-log', {
+      stage: 'stream_fetch_rejected', error: 'x'.repeat(500), ua: 'Safari',
+      text: 'the operator said something private', reply_text: 'secret',
+    });
+    assert.equal(r.status, 204);
+  } finally {
+    console.warn = realWarn;
+  }
+  assert.equal(lines.length, 1);
+  const rec = JSON.parse(lines[0].replace('[arturo-client] ', ''));
+  assert.equal(rec.stage, 'stream_fetch_rejected');
+  assert.equal(rec.error.length, 200);
+  assert.equal(rec.ua, 'Safari');
+  assert.equal(rec.text, undefined, 'message text must never reach the log');
+  assert.equal(rec.reply_text, undefined);
+});

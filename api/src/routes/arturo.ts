@@ -131,6 +131,18 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     }, 195000);
   });
 
+  // A turn that died in the operator's browser reports where, so it reaches a log on the box.
+  // Only a short, flat record is kept: stage, error, timings, user agent — never message text.
+  router.post('/client-log', (req, res) => {
+    const b = (req.body && typeof req.body === 'object') ? req.body : {};
+    const keep: Record<string, string> = {};
+    for (const k of ['stage', 'error', 'stream_error', 'started', 'ms', 'ua', 'at']) {
+      if (b[k] !== undefined) keep[k] = String(b[k]).slice(0, 200);
+    }
+    console.warn(`[arturo-client] ${JSON.stringify(keep)}`);
+    res.status(204).end();
+  });
+
   // Start the conversation's warm CLI before its first message, so turn one does not pay for
   // the process start. Fire-and-forget from the page; idempotent on the proxy.
   router.post('/text/prewarm', async (req, res) => {

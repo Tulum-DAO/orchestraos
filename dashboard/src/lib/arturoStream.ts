@@ -71,6 +71,29 @@ export async function readStream(
   }
 }
 
+/**
+ * Report a failed turn to the server log, so a failure on the operator's own machine is visible
+ * without them opening devtools. Found necessary live: a turn died in the operator's browser
+ * (the streaming request never left it, and a fallback the server DID answer never came back)
+ * while every reproduction on the box succeeded. sendBeacon survives the page being closed.
+ */
+export function reportTurnFailure(stage: string, detail: Record<string, unknown> = {}): void {
+  try {
+    const body = JSON.stringify({
+      stage, ...detail,
+      ua: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+      at: new Date().toISOString(),
+    });
+    if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+      navigator.sendBeacon('/api/arturo/client-log', new Blob([body], { type: 'application/json' }));
+    } else {
+      void fetch('/api/arturo/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(() => {});
+    }
+  } catch { /* diagnostics must never break a turn */ }
+  // eslint-disable-next-line no-console
+  console.warn('[arturo] turn failed at', stage, detail);
+}
+
 export interface StreamCallbacks {
   onStart?: (data: any) => void;
   onDelta?: (text: string) => void;
@@ -88,14 +111,29 @@ export async function arturoTextStream(
   signal?: AbortSignal,
 ): Promise<{ ok: boolean; reply_text?: string; error?: string }> {
   let res: Response;
+  // A deadline on the request itself, not only on its reads: the server sends turn.start the
+  // moment it has the turn, so no response head within 20s is a stuck request, and without this
+  // a request that never got going hung the turn with nothing to say why.
+  const headDeadline = new AbortController();
+  const headTimer = setTimeout(() => headDeadline.abort(), 20000);
+  const onOuterAbort = () => headDeadline.abort();
+  signal?.addEventListener('abort', onOuterAbort);
+  const t0 = Date.now();
   try {
     res = await fetch('/api/arturo/text/stream', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body), signal,
+      body: JSON.stringify(body), signal: headDeadline.signal,
     });
   } catch (e) {
-    cb.onError?.({ code: 'network' });
-    return { ok: false, error: 'network' };
+    const timedOut = headDeadline.signal.aborted && !signal?.aborted;
+    reportTurnFailure(timedOut ? 'stream_no_response_head' : 'stream_fetch_rejected', {
+      error: String((e as Error)?.message || e).slice(0, 200), ms: Date.now() - t0,
+    });
+    cb.onError?.({ code: timedOut ? 'stream_timeout' : 'network' });
+    return { ok: false, error: timedOut ? 'stream_timeout' : 'network' };
+  } finally {
+    clearTimeout(headTimer);
+    signal?.removeEventListener('abort', onOuterAbort);
   }
   const ctype = res.headers.get('content-type') || '';
   if (!ctype.includes('text/event-stream')) {
@@ -119,6 +157,7 @@ export async function arturoTextStream(
   if (outcome !== 'done' && !final) {
     // Nothing usable arrived and the connection is gone: say so, so the caller can re-ask
     // rather than leave a bubble spinning.
+    reportTurnFailure(outcome === 'stalled' ? 'stream_stalled' : 'stream_broken', { ms: Date.now() - t0 });
     cb.onError?.({ code: outcome === 'stalled' ? 'stream_stalled' : 'stream_broken' });
     return { ok: false, error: outcome === 'stalled' ? 'stream_stalled' : 'stream_broken' };
   }
@@ -159,8 +198,14 @@ export async function arturoTurn(
   if (opts.signal?.aborted) return { ok: false, error: 'aborted' } as ArturoReply;
   // Anything that failed BEFORE the first delta is safe to re-ask; a turn that failed after
   // partial text is re-asked too, and the caller clears what it had shown.
-  void started;
-  return arturoText(text, conversationId, ctx, { onSent: opts.onSent, brain: opts.brain });
+  const t0 = Date.now();
+  const whole = await arturoText(text, conversationId, ctx, { onSent: opts.onSent, brain: opts.brain });
+  if (!whole.ok) {
+    reportTurnFailure('fallback_failed', { error: (whole as any).error, stream_error: res.error, started, ms: Date.now() - t0 });
+  } else {
+    reportTurnFailure('fell_back_ok', { stream_error: res.error, started, ms: Date.now() - t0 });
+  }
+  return whole;
 }
 
 
