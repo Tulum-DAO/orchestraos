@@ -21,6 +21,11 @@ What makes a warm session WRONG rather than merely slow, and what this module do
 * **Bounded memory.** Idle sessions are evicted after `idle_ttl_s`, and the pool holds at most
   `max_sessions` processes, dropping the least recently used.
 * **A dead process is replaced, never reused.**
+* **A session behind its conversation is replaced.** A turn answered anywhere else — another
+  model, the `/text` path, a fallback — never reaches this process, and one the operator switches
+  back to would answer from a conversation missing those turns. Each session carries the
+  conversation VERSION it is in step with (the archive's turn count: it only grows and survives
+  restarts); a turn that brings a different version gets a fresh process seeded from history.
 """
 import json
 import threading
@@ -39,6 +44,9 @@ class WarmSession:
         self._clock = clock
         self.started_at = clock()
         self.last_used = self.started_at
+        #: The conversation version this process has seen all of. None = unknown (a turn is in
+        #: flight, or finished without being recorded), which no caller's version matches.
+        self.version = None
 
     def alive(self) -> bool:
         return self.proc.poll() is None
@@ -101,11 +109,19 @@ class WarmPool:
         self._sessions: Dict[Key, WarmSession] = {}
         self._lock = threading.Lock()
 
-    def _get(self, key: Key, argv: Optional[list] = None, env: Optional[dict] = None) -> Tuple[WarmSession, bool]:
-        """(session, fresh). A dead or stale session is replaced."""
+    def _get(self, key: Key, argv: Optional[list] = None, env: Optional[dict] = None,
+             version: Optional[int] = None) -> Tuple[WarmSession, bool]:
+        """(session, fresh). A dead, stale or out-of-step session is replaced; a fresh one is in
+        step with `version`, because it is seeded from the history that version describes.
+        `version=None` checks nothing (a later tool round of a turn already checked)."""
         with self._lock:
             s = self._sessions.get(key)
-            if s is not None and (not s.alive() or s.age() > self.max_age_s):
+            # A session serving a turn is never replaced from under it: its version is None
+            # only because that turn has not been recorded yet. turn() re-checks once it has
+            # the lock; a prewarm simply leaves it be.
+            behind = (version is not None and s is not None and s.version != version
+                      and not s.lock.locked())
+            if s is not None and (not s.alive() or s.age() > self.max_age_s or behind):
                 s.kill()
                 del self._sessions[key]
                 s = None
@@ -116,6 +132,7 @@ class WarmPool:
                 env = self._env_for(key)
             proc = self._spawn(argv if argv is not None else self._argv_for(key), env=env)
             s = WarmSession(proc, clock=self._clock)
+            s.version = version
             self._sessions[key] = s
             return s, True
 
@@ -130,7 +147,7 @@ class WarmPool:
             return bool(s and s.alive() and s.age() <= self.max_age_s)
 
     def turn(self, key: Key, text: str, argv: Optional[list] = None,
-             env: Optional[dict] = None) -> Iterator[str]:
+             env: Optional[dict] = None, version: Optional[int] = None) -> Iterator[str]:
         """`argv` is used only if this turn has to START a process — the system prompt (with
         the conversation so far) is fixed at spawn, and a live session already has it.
 
@@ -142,8 +159,20 @@ class WarmPool:
         pipe, where the next turn would read it as its own — so that session is discarded.
         """
         self.evict_idle()
-        session, _fresh = self._get(key, argv=argv, env=env)
+        session, _fresh = self._get(key, argv=argv, env=env, version=version)
         session.lock.acquire()
+        if version is not None and session.version != version:
+            # It was busy when we looked, and the turn we waited on left it out of step.
+            session.lock.release()
+            with self._lock:
+                if self._sessions.get(key) is session:
+                    del self._sessions[key]
+            session.kill()
+            session, _fresh = self._get(key, argv=argv, env=env, version=version)
+            session.lock.acquire()
+        # From here the process holds a turn the archive does not have yet; sync() stamps it
+        # once the turn is recorded. A turn that is never recorded leaves it unusable.
+        session.version = None
         state = {"released": False, "finished": False}
 
         def release():
@@ -170,12 +199,22 @@ class WarmPool:
                 session.kill()
             release()
 
-    def prewarm(self, key: Key, argv: list, env: Optional[dict] = None) -> bool:
+    def prewarm(self, key: Key, argv: list, env: Optional[dict] = None,
+                version: Optional[int] = None) -> bool:
         """Start the conversation's process before its first message, so the first turn does
-        not pay for the spawn. Returns True if a process was started, False if one was live."""
+        not pay for the spawn. Returns True if a process was started, False if one was live.
+        `version` must be read BEFORE the history `argv` was built from: a turn recorded in
+        between then leaves this session behind, and the turn replaces it."""
         self.evict_idle()
-        _session, fresh = self._get(key, argv=argv, env=env)
+        _session, fresh = self._get(key, argv=argv, env=env, version=version)
         return fresh
+
+    def sync(self, key: Key, version: int):
+        """The turn this session just served is recorded: it is in step with `version`."""
+        with self._lock:
+            s = self._sessions.get(key)
+            if s is not None:
+                s.version = version
 
     def discard(self, key: Key):
         with self._lock:

@@ -2808,23 +2808,25 @@ def save_transcript(conversation_id, transcript_data):
 
 # --- Context Injection ---
 
+def _default_models():
+    """Each login's own default model, as its CLI told the catalog probe (never written down)."""
+    return _brain.load_default_models(_LIVE_CATALOG_PATH)
+
+
+def _effective_brain(b=None):
+    """{provider, model} of what ACTUALLY answers a turn — a default model by its probed name."""
+    b = b or _turn_brain()
+    d = b.describe() if hasattr(b, "describe") else {"kind": getattr(b, "kind", "?")}
+    return _brain.effective_brain(d, _default_models())
+
+
 def _brain_identity_line():
     """One sentence, by effect, about what is generating this very reply: the brain chosen for THIS
     turn when there is one (a codex turn was being told it was Claude), else the default."""
     b = _turn_brain()
     d = b.describe() if hasattr(b, "describe") else {"kind": getattr(b, "kind", "?")}
-    if d.get("kind") == "runtime":
-        pretty = {"claude": "Claude", "gemini": "Gemini", "codex": "Codex"}.get(d.get("runtime", ""), d.get("runtime", ""))
-        model = d.get("model", "")
-        model_txt = "" if (not model or model.endswith("-cli-default")) else f" ({model})"
-        return (f"YOUR BRAIN (by effect): you are thinking with {pretty}{model_txt} through the operator's own "
-                f"logged-in `{d.get('cli', pretty.lower())}` CLI — no API key is involved. If asked what model or "
-                f"provider you run on, say exactly that; never claim another provider or a 'layer'.")
-    if d.get("kind") == "api":
-        return (f"YOUR BRAIN (by effect): you are thinking with the {d.get('model', 'configured')} API model via the "
-                f"operator's API key. If asked what model you run on, say exactly that.")
-    return ("YOUR BRAIN (by effect): no brain is configured yet (no API key and no logged-in CLI); "
-            "if asked, say so plainly and point at `orchestra doctor`.")
+    provider = d.get("runtime") if d.get("kind") == "runtime" else "api"
+    return _brain.identity_line(d, default_model=_default_models().get(provider or ""))
 
 
 def build_context(calling_channel="voice"):
@@ -4634,15 +4636,9 @@ def text_turn(text, conversation_id, brain=None, context=None):
         context = f"{context}\n\n{_dir}".strip() if context else _dir
     elif step:
         log.warning(f"onboarding marker with unknown step {step!r} — no directive applied")
-    history = _TEXT_HISTORY.get(conversation_id)
-    if not history:
-        # Reopening an OLD thread (or any thread after a restart): memory is empty but the
-        # conversation is not new. Rehydrate from the archive, or Arturo answers a
-        # continuing question with no idea what was already said.
-        history = _THREADS.history(conversation_id)
-        for turn in history:
-            _TEXT_HISTORY.append(conversation_id, turn.get("role"), turn.get("content"))
-    messages = _ptt.build_messages(context, history, text)
+    history = _conversation_history(conversation_id)
+    effective = _effective_brain(chosen)
+    messages = _ptt.build_messages(context, history, text, current_brain=effective)
     brain_tok = _BRAIN_THIS_TURN.set(chosen) if chosen is not None else None
     fail_tok = _brain.TURN_FAILURE.set(None)
     try:
@@ -4669,7 +4665,8 @@ def text_turn(text, conversation_id, brain=None, context=None):
                          "provider": chosen_id["provider"], "model": chosen_id["model"],
                          "tools_called": tools_called, "spawned": spawned,
                          "conversation_id": conversation_id}
-    _record_text_turn(conversation_id=conversation_id, text=text, reply=reply, brain=chosen_id)
+    _record_text_turn(conversation_id=conversation_id, text=text, reply=reply, brain=chosen_id,
+                      effective=effective)
     from services.arturo import operator_store as _ops
     return 200, {"ok": True, "reply_text": reply, "conversation_id": conversation_id,
                  "brain": (chosen or _turn_brain()).describe(), "tools_called": tools_called,
@@ -4722,12 +4719,28 @@ _WARM_POOL = _warm_session.WarmPool(spawn=_spawn_warm, argv_for=lambda key: [],
 atexit.register(_WARM_POOL.close_all)
 
 
-def _record_text_turn(conversation_id, text, reply, brain=None):
+def _record_text_turn(conversation_id, text, reply, brain=None, effective=None):
     """The ONE place a text turn is persisted. /text and /text/stream both come through here,
-    so a streamed turn and a whole one leave the same history and the same thread row."""
+    so a streamed turn and a whole one leave the same history and the same thread row.
+    `brain` = what the operator chose (None = default); `effective` = what actually wrote the
+    reply, kept on the turn so a later turn on another model knows it was not its own."""
     _TEXT_HISTORY.append(conversation_id, "user", text)
-    _TEXT_HISTORY.append(conversation_id, "assistant", reply)
-    _THREADS.record_turn(conversation_id, text, reply, brain=brain)
+    _TEXT_HISTORY.append(conversation_id, "assistant", reply, brain=effective)
+    _THREADS.record_turn(conversation_id, text, reply, brain=brain, effective=effective)
+
+
+def _conversation_history(conversation_id):
+    """The conversation so far, for a turn. Memory is empty after a restart, an eviction, or on an
+    old thread — but the conversation is not new, so it is refilled from the archive, or Arturo
+    answers a continuing question with no idea what was already said. Every text endpoint comes
+    through here, so /text, /text/stream and /text/prewarm cannot see different pasts."""
+    history = _TEXT_HISTORY.get(conversation_id)
+    if not history:
+        history = _THREADS.history(conversation_id)
+        for turn in history:
+            _TEXT_HISTORY.append(conversation_id, turn.get("role"), turn.get("content"),
+                                 brain=turn.get("brain"))
+    return history
 
 
 @app.route("/text/prewarm", methods=["POST"])
@@ -4755,17 +4768,21 @@ def text_prewarm_endpoint():
     runtime = getattr(turn_brain, "runtime", "")
     if getattr(turn_brain, "kind", "") != "runtime" or runtime not in _cli_events.WARM_RUNTIMES:
         return jsonify({"ok": True, "warmed": False, "reason": "not_warmable"})
-    history = _TEXT_HISTORY.get(conversation_id) or _THREADS.history(conversation_id)
+    # The version is read BEFORE the history: a turn recorded in between leaves this session
+    # behind, and the turn that finds it replaces it rather than trusting it.
+    version = _THREADS.turn_count(conversation_id)
+    history = _conversation_history(conversation_id)
     # Everything the turn will have BEFORE its new message, built the way the turn builds it,
     # so the prewarmed process is the one the turn would have started itself.
-    prior = _ptt.build_messages(build_context(calling_channel="text"), history, "")[:-1]
+    prior = _ptt.build_messages(build_context(calling_channel="text"), history, "",
+                                current_brain=_effective_brain(turn_brain))[:-1]
     argv = _text_stream.warm_argv(turn_brain, prior, TOOLS)
     env = dict(os.environ)
     for key in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"):
         env.pop(key, None)
     key = (conversation_id, runtime, getattr(turn_brain, "_model_flag", "") or "")
     try:
-        started = _WARM_POOL.prewarm(key, argv, env=env)
+        started = _WARM_POOL.prewarm(key, argv, env=env, version=version)
     except Exception as e:  # noqa: BLE001 — a failed prewarm only means the turn spawns it
         log.error(f"/text/prewarm failed: {e}")
         return jsonify({"ok": False, "error": "prewarm_failed"}), 500
@@ -4801,13 +4818,15 @@ def text_stream_endpoint():
         return jsonify({"ok": False, "error": "bad_context", "field": "context"}), 400
 
     turn_brain = chosen or _turn_brain()
-    history = _TEXT_HISTORY.get(conversation_id) or _THREADS.history(conversation_id)
+    version = _THREADS.turn_count(conversation_id)          # before the history: see prewarm
+    history = _conversation_history(conversation_id)
+    effective = _effective_brain(turn_brain)
     body_text = f"{_context_line(page_ctx)}\n{text_in}" if page_ctx is not None else text_in
     # The authoritative context — who Arturo is and what is live on this box — is built by
     # build_context(), the same call the tool loop makes. Streaming without it answers as a
     # bare model with no identity and no tools.
     _stream_context = build_context(calling_channel="text")
-    messages = _ptt.build_messages(_stream_context, history, body_text)
+    messages = _ptt.build_messages(_stream_context, history, body_text, current_brain=effective)
 
     def _spawn(cmd):
         """Line-by-line stdout from the CLI. The process is killed when the client goes away."""
@@ -4868,11 +4887,21 @@ def text_stream_endpoint():
             results.append({"name": name, "ok": ok, "result": result})
         return results
 
+    _checked = []
+
     def _warm(argv, new_text):
         env = dict(os.environ)
         for key in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"):
             env.pop(key, None)
-        return _WARM_POOL.turn(warm_key, new_text, argv=argv, env=env)
+        # The turn's FIRST call checks the session is in step with the conversation; its later
+        # tool rounds continue the same exchange and are not re-checked.
+        v = None if _checked else version
+        _checked.append(True)
+        return _WARM_POOL.turn(warm_key, new_text, argv=argv, env=env, version=v)
+
+    def _record(**kw):
+        _record_text_turn(**kw, effective=effective)
+        _WARM_POOL.sync(warm_key, _THREADS.turn_count(conversation_id))
 
     def _generate():
         # with_heartbeat keeps the connection alive through a silent stretch — the tool-loop
@@ -4881,7 +4910,7 @@ def text_stream_endpoint():
         turn = _text_stream.stream_turn(
             text=body_text, conversation_id=conversation_id, brain=turn_brain,
             brain_id=chosen_id, messages=messages, spawn=_spawn,
-            fallback=_fallback, record=_record_text_turn, tools=TOOLS,
+            fallback=_fallback, record=_record, tools=TOOLS,
             warm=_warm, discard=lambda: _WARM_POOL.discard(warm_key), run_tools=_run_tools)
         try:
             for frame in _text_stream.with_heartbeat(turn, interval_s=10.0):

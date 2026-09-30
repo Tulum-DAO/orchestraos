@@ -109,7 +109,11 @@ def render_transcript(messages: list) -> tuple[str, str]:
                 args = fn.get("arguments") if isinstance(fn, dict) else getattr(fn, "arguments", "{}")
                 lines.append(f"ASSISTANT (tool call): {json.dumps({'name': name, 'arguments': _loads_or_raw(args)})}")
             if content:
-                lines.append(f"ASSISTANT: {content}")
+                speaker = "ASSISTANT"
+                if m.get("answered_by"):
+                    speaker = (f"ASSISTANT (answered earlier by {m['answered_by']}, before the "
+                               f"operator switched models)")
+                lines.append(f"{speaker}: {content}")
         elif role == "tool":
             lines.append(f"TOOL RESULT ({m.get('name') or m.get('tool_call_id') or 'tool'}): {content}")
     lines.append("ASSISTANT:")
@@ -385,6 +389,88 @@ def load_model_catalog(path, live_path=None) -> dict:
     return catalog
 
 
+def load_default_models(path) -> dict:
+    """{provider: model id} — each login's OWN default, as its CLI reported it to the probe.
+    Login-specific (one box's codex default was gpt-6.1-sol, another's gpt-6-astra), so it is
+    never written down. Absent = unknown, never a failure."""
+    try:
+        data = json.loads(Path(path).read_text())
+    except Exception:  # noqa: BLE001 — a cache, not a requirement
+        return {}
+    defaults = data.get("defaults")
+    if not isinstance(defaults, dict):
+        return {}
+    return {k: v for k, v in defaults.items() if isinstance(k, str) and isinstance(v, str) and v}
+
+
+def _is_default_model(model) -> bool:
+    return not model or model.endswith("-cli-default")
+
+
+def effective_brain(describe: dict, defaults: dict) -> dict:
+    """{provider, model} for what ACTUALLY answers: a default model is named by the probe, so
+    "" / *-cli-default / the probed name are one identity and default turns never look like a
+    switch against each other."""
+    if describe.get("kind") == "runtime":
+        provider, model = describe.get("runtime") or "", describe.get("model") or ""
+    else:
+        provider, model = "api", describe.get("model") or ""
+    if _is_default_model(model):
+        model = (defaults or {}).get(provider, "")
+    return {"provider": provider, "model": model}
+
+
+_RUNTIME_PRETTY = {"claude": "Claude", "gemini": "Gemini", "codex": "Codex"}
+
+_EARLIER_REPLIES = ("Replies marked 'answered earlier by' another model came from that model before "
+                    "the operator switched; they were accurate for it. Never call them wrong because "
+                    "you are a different model — if asked, say which model you are now.")
+
+
+def identity_line(describe: dict, default_model=None) -> str:
+    """One sentence, by effect, about what is generating this very reply. A default model is
+    named when the probe knows it; when it does not, the brain is told to say so — told only
+    "you are Codex", it guessed "GPT-6" (2026-09-30)."""
+    if describe.get("kind") == "runtime":
+        runtime = describe.get("runtime", "")
+        pretty = _RUNTIME_PRETTY.get(runtime, runtime)
+        model = describe.get("model", "")
+        cli = describe.get("cli", pretty.lower())
+        if not _is_default_model(model):
+            what = f"{pretty} ({model})"
+        elif default_model:
+            what = f"{pretty} ({default_model})"
+        else:
+            what = (f"{pretty} on the CLI's default model — you do not know its exact name, so say "
+                    f"that rather than guessing one")
+        return (f"YOUR BRAIN (by effect): you are thinking with {what} through the operator's own "
+                f"logged-in `{cli}` CLI — no API key is involved. If asked what model or provider "
+                f"you run on, say exactly that; never claim another provider or a 'layer'. "
+                f"{_EARLIER_REPLIES}")
+    if describe.get("kind") == "api":
+        return (f"YOUR BRAIN (by effect): you are thinking with the {describe.get('model', 'configured')} "
+                f"API model via the operator's API key. If asked what model you run on, say exactly "
+                f"that. {_EARLIER_REPLIES}")
+    return ("YOUR BRAIN (by effect): no brain is configured yet (no API key and no logged-in CLI); "
+            "if asked, say so plainly and point at `orchestra doctor`.")
+
+
+_CHAT_FIELDS = ("role", "content", "tool_calls", "tool_call_id", "name")
+
+
+def api_messages(messages) -> list:
+    """Messages as an OpenAI-compatible API accepts them: chat fields only. A reply from an
+    earlier model has no speaker line to carry that, so the note goes at the head of its text."""
+    out = []
+    for m in messages or []:
+        msg = {k: m[k] for k in _CHAT_FIELDS if k in m}
+        if m.get("answered_by") and isinstance(msg.get("content"), str):
+            msg["content"] = (f"[answered earlier by {m['answered_by']}, before the operator "
+                              f"switched models] {msg['content']}")
+        out.append(msg)
+    return out
+
+
 def _load_live_catalog(path) -> dict:
     try:
         data = json.loads(Path(path).read_text())
@@ -468,7 +554,8 @@ class ApiBrain(Brain):
 
     def complete(self, messages, tools=None, tool_choice=None, max_tokens=1024, temperature=0.7,
                  stream=False, timeout=None, model=None):
-        kw = dict(model=self.model, messages=messages, max_tokens=max_tokens, temperature=temperature)
+        kw = dict(model=self.model, messages=api_messages(messages), max_tokens=max_tokens,
+                  temperature=temperature)
         if tools:
             kw["tools"] = tools
             kw["tool_choice"] = tool_choice or "auto"
