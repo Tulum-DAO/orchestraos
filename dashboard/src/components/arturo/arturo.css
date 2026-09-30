@@ -238,19 +238,3 @@
   width:44px; height:44px; margin-right:-8px; border-radius:12px;
 }
 .arturo-drawer .drawer-close:hover{ background:rgba(255,255,255,0.07); color:#fff; }
-
-
-/* The reply is still being written. A caret says "live" without moving the layout — it sits
-   on the last line inline, so text reflowing under it does not jump. */
-.stream-caret {
-  display: inline-block;
-  width: 0.5em;
-  height: 1em;
-  margin-left: 2px;
-  vertical-align: text-bottom;
-  background: currentColor;
-  opacity: 0.55;
-  animation: arturo-caret 1s steps(2, start) infinite;
-}
-@keyframes arturo-caret { 0%, 100% { opacity: 0.55; } 50% { opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .stream-caret { animation: none; } }

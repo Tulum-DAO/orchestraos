@@ -25,6 +25,7 @@ import json
 import time
 import uuid
 
+from .brain import render_transcript, tool_protocol_block
 from .cli_events import stream_command, read_events, TextDelta, ThinkingDelta, TurnEnd, StreamError
 from .stream_sanitize import PassClassifier, StreamingSanitizer, HOLD, PROSE
 
@@ -39,7 +40,7 @@ def _ev(name, **data):
 
 
 def stream_turn(text, conversation_id, brain, brain_id, messages, spawn, fallback, record,
-                turn_id=None):
+                tools=None, turn_id=None):
     """Yield the turn's events. Pure over its injected deps so the tests never spawn a CLI.
 
     spawn(CommandSpec) -> iterator of stdout lines; fallback() -> (status, body) from the
@@ -54,7 +55,15 @@ def stream_turn(text, conversation_id, brain, brain_id, messages, spawn, fallbac
         yield from _whole_reply(turn_id, conversation_id, fallback, brain)
         return
 
-    cmd = stream_command(brain.runtime, brain.cli, _system_of(messages), _prompt_of(messages),
+    # The SAME rendering RuntimeBrain._text uses, so a streamed turn reaches the CLI with the
+    # identical system prompt (Arturo's live context) and the identical tool protocol. Building
+    # a second, simpler prompt here is exactly how a streamed turn ends up answered by a bare
+    # model that has never heard of Arturo or its tools (found on staging, 2026-09-29).
+    system, prompt = render_transcript(messages)
+    block = tool_protocol_block(tools or [], None)
+    if block:
+        system = f"{system}\n\n{block}" if system else block
+    cmd = stream_command(brain.runtime, brain.cli, system, prompt,
                          model=getattr(brain, "_model_flag", "") or "")
     classifier, sanitizer = PassClassifier(), StreamingSanitizer()
     verdict, held, failure = None, "", None
@@ -122,21 +131,3 @@ def _whole_reply(turn_id, conversation_id, fallback, brain):
               tools_called=body.get("tools_called", []),
               spawned=body.get("spawned", []),
               brain=body.get("brain") or brain.describe())
-
-
-def _system_of(messages):
-    for m in messages:
-        if m.get("role") == "system":
-            return m.get("content") or ""
-    return ""
-
-
-def _prompt_of(messages):
-    """The transcript the CLI sees: history plus this turn, minus the system block."""
-    parts = []
-    for m in messages:
-        role = m.get("role")
-        if role == "system":
-            continue
-        parts.append(f"{'User' if role == 'user' else 'Assistant'}: {m.get('content') or ''}")
-    return "\n\n".join(parts)

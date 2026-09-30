@@ -397,12 +397,7 @@ export default function ArturoHome() {
         ) : (
           <div key={t.id} className="turn-assistant">
             <ArturoMark className="mark-sm" />
-            {t.pending ? <span className="thinking" aria-label="thinking" /> : (
-              <div className="txt">
-                {renderText(t.text)}
-                {t.streaming && <span className="stream-caret" aria-hidden="true" />}
-              </div>
-            )}
+            {t.pending ? <span className="thinking" aria-label="thinking" /> : <div className="txt">{renderText(t.text)}</div>}
             {t.tools && t.tools.length > 0 && <div className="tools">ran {t.tools.join(', ')}</div>}
             <SpawnedAgentCard ids={t.spawned} />
             {t.decision && (

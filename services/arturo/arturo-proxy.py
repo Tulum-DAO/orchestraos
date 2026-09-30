@@ -4746,7 +4746,11 @@ def text_stream_endpoint():
     turn_brain = chosen or _turn_brain()
     history = _TEXT_HISTORY.get(conversation_id) or _THREADS.history(conversation_id)
     body_text = f"{_context_line(page_ctx)}\n{text_in}" if page_ctx is not None else text_in
-    messages = _ptt.build_messages("", history, body_text)
+    # The authoritative context — who Arturo is and what is live on this box — is built by
+    # build_context(), the same call the tool loop makes. Streaming without it answers as a
+    # bare model with no identity and no tools.
+    _stream_context = build_context(calling_channel="text")
+    messages = _ptt.build_messages(_stream_context, history, body_text)
 
     def _spawn(cmd):
         """Line-by-line stdout from the CLI. The process is killed when the client goes away."""
@@ -4778,7 +4782,7 @@ def text_stream_endpoint():
             for event in _text_stream.stream_turn(
                     text=body_text, conversation_id=conversation_id, brain=turn_brain,
                     brain_id=chosen_id, messages=messages, spawn=_spawn,
-                    fallback=_fallback, record=_record_text_turn):
+                    fallback=_fallback, record=_record_text_turn, tools=TOOLS):
                 yield _text_stream.sse_frame(event)
         except GeneratorExit:
             raise

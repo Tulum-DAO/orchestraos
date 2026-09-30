@@ -125,25 +125,25 @@ class StreamingSanitizer:
         resolved, _head_end = self._leading_region_resolved(raw)
         if not resolved:
             return 0
-        # A bare `tool_code` / `print(default_api` / `default_api.` line is only recognisable
-        # once the line ends, so a line that COULD still become one is held whole. Any other
-        # line may stream mid-line, up to its last sentence terminator — without this, a
-        # single-paragraph reply (no newline until the end) never streamed at all.
+        # Past the leading region the only rules left are strip_tool_code's, so text may leave
+        # WORD BY WORD rather than a sentence at a time — streaming that waits for a full stop
+        # is barely streaming (operator, 2026-09-29). What still has to be held:
+        #   - anything inside an open fence, wherever it opened;
+        #   - a partial line that could still become a bare `tool_code` / `print(default_api`
+        #     line, since that is only recognisable once the line ends.
+        cut = len(raw)
         last_nl = raw.rfind("\n")
-        cut = last_nl + 1 if last_nl >= 0 else 0
-        partial = raw[cut:]
-        if partial and not _could_become_tool_line(partial):
-            end = None
-            for m in _SENTENCE_END_RE.finditer(partial):
-                end = m.end()
-            if end:
-                cut += end
-        # Never a prefix that cuts a fence in half. The balance is checked IN THE PREFIX:
-        # the raw text may already hold a closing fence the prefix does not include.
+        line_start = last_nl + 1 if last_nl >= 0 else 0
+        if _could_become_tool_line(raw[line_start:]):
+            cut = line_start
+        # A trailing run of backticks may be a fence about to open — "``" is not yet "```",
+        # and emitting it means the fence's first characters have already escaped.
+        while cut > 0 and raw[cut - 1] == "`":
+            cut -= 1
         while cut > 0 and raw[:cut].count(_FENCE) % 2 == 1:
             open_at = raw.rindex(_FENCE, 0, cut)
-            line_start = raw.rfind("\n", 0, open_at)
-            cut = line_start + 1 if line_start >= 0 else 0
+            fence_line = raw.rfind("\n", 0, open_at)
+            cut = fence_line + 1 if fence_line >= 0 else 0
         settled = raw[:cut]
         return len(settled.rstrip()) if settled.strip() else 0
 
