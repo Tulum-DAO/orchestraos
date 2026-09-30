@@ -41,6 +41,36 @@ export function parseSseChunks(onEvent: (e: ArturoStreamEvent) => void): (chunk:
   };
 }
 
+/**
+ * Read a body, handing each chunk to `onChunk`, and give up if nothing arrives for
+ * `idleMs`. The server sends a keep-alive comment every 10s, so a longer silence is a dead
+ * connection — without this a turn whose socket died left the bubble spinning while the
+ * answer sat finished on the server (found live, 2026-09-30).
+ */
+export async function readStream(
+  body: ReadableStream<Uint8Array>,
+  onChunk: (text: string) => void,
+  idleMs = 45000,
+): Promise<'done' | 'stalled' | 'broken'> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  try {
+    for (;;) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const idle = new Promise<'idle'>((resolve) => { timer = setTimeout(() => resolve('idle'), idleMs); });
+      const next = reader.read().then((r) => r);
+      const winner = await Promise.race([next, idle]);
+      clearTimeout(timer);
+      if (winner === 'idle') { void reader.cancel().catch(() => {}); return 'stalled'; }
+      const { done, value } = winner as ReadableStreamReadResult<Uint8Array>;
+      if (done) return 'done';
+      if (value) onChunk(decoder.decode(value, { stream: true }));
+    }
+  } catch {
+    return 'broken';
+  }
+}
+
 export interface StreamCallbacks {
   onStart?: (data: any) => void;
   onDelta?: (text: string) => void;
@@ -85,16 +115,12 @@ export async function arturoTextStream(
     else if (e.event === 'error') { failed = e.data; cb.onError?.(e.data); }
   });
 
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      feed(decoder.decode(value, { stream: true }));
-    }
-  } catch {
-    if (!final) { cb.onError?.({ code: 'stream_broken' }); return { ok: false, error: 'stream_broken' }; }
+  const outcome = await readStream(res.body, feed, 45000);
+  if (outcome !== 'done' && !final) {
+    // Nothing usable arrived and the connection is gone: say so, so the caller can re-ask
+    // rather than leave a bubble spinning.
+    cb.onError?.({ code: outcome === 'stalled' ? 'stream_stalled' : 'stream_broken' });
+    return { ok: false, error: outcome === 'stalled' ? 'stream_stalled' : 'stream_broken' };
   }
   if (failed && !final) return { ok: false, error: failed.code || 'turn_failed' };
   if (!final) return { ok: false, error: 'incomplete' };

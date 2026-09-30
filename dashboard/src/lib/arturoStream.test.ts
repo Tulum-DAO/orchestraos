@@ -7,7 +7,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseSseChunks, type ArturoStreamEvent } from './arturoStream.js';
+import { parseSseChunks, readStream, type ArturoStreamEvent } from './arturoStream.js';
 
 function collect(chunks: string[]): ArturoStreamEvent[] {
   const out: ArturoStreamEvent[] = [];
@@ -62,4 +62,45 @@ test('an error frame is delivered like any other event', () => {
 
 test('a trailing partial frame is NOT emitted — half a turn is not a turn', () => {
   assert.equal(collect([START, 'event: text.delta\ndata: {"text":"half']).length, 1);
+});
+
+// --- the stream must never hang forever ------------------------------------------------
+// Found live: a turn whose connection died mid-flight left the bubble spinning for TEN
+// MINUTES while the answer sat finished on the server. The server sends a keep-alive every
+// 10s, so silence past that is a dead stream, not a slow one.
+
+test('a stream that goes silent past the idle limit gives up instead of spinning', async () => {
+  const stalled = new ReadableStream<Uint8Array>({ start() { /* never enqueues, never closes */ } });
+  const t0 = Date.now();
+  const res = await readStream(stalled, () => {}, 120);
+  assert.equal(res, 'stalled');
+  assert.ok(Date.now() - t0 < 2000, 'it must give up promptly, not wait out the request');
+});
+
+test('a stream that keeps sending is never cut off by the idle limit', async () => {
+  let n = 0;
+  const chunks = new ReadableStream<Uint8Array>({
+    async pull(c) {
+      if (n >= 4) { c.close(); return; }
+      await new Promise((r) => setTimeout(r, 60));   // steady traffic, under the limit
+      c.enqueue(new TextEncoder().encode(`event: text.delta\ndata: {"text":"${n++}"}\n\n`));
+    },
+  });
+  const seen: string[] = [];
+  const res = await readStream(chunks, (s) => seen.push(s), 200);
+  assert.equal(res, 'done');
+  assert.equal(seen.join('').match(/text.delta/g)?.length, 4);
+});
+
+test('a keep-alive comment counts as traffic — it is the server saying it is alive', async () => {
+  let sent = 0;
+  const pinged = new ReadableStream<Uint8Array>({
+    async pull(c) {
+      if (sent >= 3) { c.close(); return; }
+      await new Promise((r) => setTimeout(r, 60));
+      sent += 1;
+      c.enqueue(new TextEncoder().encode(': ping\n\n'));
+    },
+  });
+  assert.equal(await readStream(pinged, () => {}, 200), 'done');
 });
