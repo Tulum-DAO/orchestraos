@@ -151,3 +151,148 @@ test('POST /transcribe refuses a non-multipart body before touching the gateway'
   assert.equal(r.status, 400);
   assert.equal(called, false);
 });
+
+// --- POST /text/stream (spec §2.1): piped, never buffered ------------------------------
+// The whole point is that frames leave as they arrive. A test that only checked the final
+// body would pass against a buffered implementation, so these assert the SSE head and that
+// the client's disconnect reaches the far end.
+
+/** POST JSON and read the RAW body — an SSE response is not JSON. */
+async function postSse(deps: ArturoDeps, path: string, body: unknown) {
+  const app = express();
+  app.use(express.json());
+  app.use('/api/arturo', createArturoRouter(deps));
+  const server = app.listen(0);
+  const port = (server.address() as any).port;
+  const payload = JSON.stringify(body);
+  try {
+    return await new Promise<{ status: number; headers: Record<string, any>; text: string }>((resolve, reject) => {
+      const req = http.request({
+        host: '127.0.0.1', port, path, method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+      }, (res) => {
+        let data = '';
+        res.on('data', (c) => (data += c));
+        res.on('end', () => resolve({ status: res.statusCode || 0, headers: res.headers as any, text: data }));
+      });
+      req.on('error', reject);
+      req.end(payload);
+    });
+  } finally {
+    server.close();
+  }
+}
+
+function sseUpstream(frames: string[], opts: { status?: number; contentType?: string } = {}) {
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const f of frames) controller.enqueue(new TextEncoder().encode(f));
+      controller.close();
+    },
+    cancel() { cancelled = true; },
+  });
+  return {
+    up: {
+      status: opts.status ?? 200,
+      contentType: opts.contentType ?? 'text/event-stream',
+      body,
+      json: async () => ({ ok: false, error: 'not json here' }),
+    },
+    wasCancelled: () => cancelled,
+  };
+}
+
+test('POST /text/stream answers with an SSE head and forwards the frames', async () => {
+  const { up } = sseUpstream([
+    'event: turn.start\ndata: {"turn_id":"t1"}\n\n',
+    'event: text.delta\ndata: {"text":"On it"}\n\n',
+    'event: turn.end\ndata: {"reply_text":"On it"}\n\n',
+  ]);
+  const deps = makeDeps({ pipeStream: async () => up });
+  const r = await postSse(deps, '/api/arturo/text/stream', { text: 'hi' });
+  assert.equal(r.status, 200);
+  assert.match(r.headers['content-type'] || '', /text\/event-stream/);
+  assert.equal(r.headers['x-accel-buffering'], 'no');
+  assert.match(r.text, /event: turn\.start/);
+  assert.match(r.text, /event: text\.delta/);
+  assert.match(r.text, /"reply_text":"On it"/);
+});
+
+test('POST /text/stream passes a JSON refusal through as JSON, not as a stream', async () => {
+  const { up } = sseUpstream([], { status: 400, contentType: 'application/json' });
+  up.json = async () => ({ ok: false, error: 'unknown_model', field: 'brain.model' });
+  const deps = makeDeps({ pipeStream: async () => up });
+  const r = await postSse(deps, '/api/arturo/text/stream', { text: 'hi' });
+  assert.equal(r.status, 400);
+  assert.equal(JSON.parse(r.text).error, 'unknown_model');
+});
+
+test('POST /text/stream validates the brain before opening a stream', async () => {
+  let opened = false;
+  const deps = makeDeps({ pipeStream: async () => { opened = true; return sseUpstream([]).up; } });
+  const r = await postSse(deps, '/api/arturo/text/stream',
+    { text: 'hi', brain: { provider: 'claude', model: '--version' } });
+  assert.equal(r.status, 400);
+  assert.equal(opened, false, 'a bad request must never reach the gateway');
+});
+
+test('POST /text/stream requires text, like /text', async () => {
+  const deps = makeDeps({ pipeStream: async () => sseUpstream([]).up });
+  const r = await postSse(deps, '/api/arturo/text/stream', { text: '   ' });
+  assert.equal(r.status, 400);
+});
+
+// --- POST /text/prewarm: start the warm CLI before the first message ------------------------
+test('POST /text/prewarm forwards the conversation and the chosen brain', async () => {
+  const bodies: any[] = [];
+  const deps = makeDeps({
+    fetchJson: async (url: string, init: any) => {
+      bodies.push({ url, body: JSON.parse(init.body) });
+      return { status: 200, body: { ok: true, warmed: true } };
+    },
+  });
+  const r = await postSse(deps, '/api/arturo/text/prewarm',
+    { conversation_id: 'c1', brain: { provider: 'claude', model: 'claude-opus-5' } });
+  assert.equal(r.status, 200);
+  assert.match(bodies[0].url, /\/arturo\/text\/prewarm$/);
+  assert.deepEqual(bodies[0].body, { conversation_id: 'c1', brain: { provider: 'claude', model: 'claude-opus-5' } });
+});
+
+test('POST /text/prewarm needs a conversation — there is nothing to warm without one', async () => {
+  const deps = makeDeps();
+  const r = await postSse(deps, '/api/arturo/text/prewarm', {});
+  assert.equal(r.status, 400);
+});
+
+test('POST /text/prewarm refuses a hostile model id before it reaches a spawn', async () => {
+  let called = false;
+  const deps = makeDeps({ fetchJson: async () => { called = true; return { status: 200, body: {} }; } });
+  const r = await postSse(deps, '/api/arturo/text/prewarm',
+    { conversation_id: 'c1', brain: { provider: 'claude', model: '--version' } });
+  assert.equal(r.status, 400);
+  assert.equal(called, false);
+});
+
+// --- POST /client-log: a turn that died in the browser reports where -----------------------
+test('POST /client-log keeps only the flat diagnostic fields, capped, and never message text', async () => {
+  const lines: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (...a: unknown[]) => { lines.push(a.join(' ')); };
+  try {
+    const r = await postSse(makeDeps(), '/api/arturo/client-log', {
+      stage: 'stream_fetch_rejected', error: 'x'.repeat(500), ua: 'Safari',
+      text: 'the operator said something private', reply_text: 'secret',
+    });
+    assert.equal(r.status, 204);
+  } finally {
+    console.warn = realWarn;
+  }
+  assert.equal(lines.length, 1);
+  const rec = JSON.parse(lines[0].replace('[arturo-client] ', ''));
+  assert.equal(rec.stage, 'stream_fetch_rejected');
+  assert.equal(rec.error.length, 200);
+  assert.equal(rec.ua, 'Safari');
+  assert.equal(rec.text, undefined, 'message text must never reach the log');
+  assert.equal(rec.reply_text, undefined);
+});

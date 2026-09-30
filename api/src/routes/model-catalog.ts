@@ -64,6 +64,9 @@ export interface ModelProbeConfig {
   /** The CLI's own "use my default" POINTER, which is not a model: the picker already
    *  offers the default as its empty-model row. */
   default_id?: string;
+  /** Key flagging the login's DEFAULT model on its row (codex: `isDefault`). Where the CLI
+   *  instead lists a default POINTER (`default_id`), the pointer's resolved model is it. */
+  default_key?: string;
   hidden_key?: string;
   modalities_key?: string;
 }
@@ -83,6 +86,9 @@ export interface CatalogResult {
   valid_ids: string[];
   source: 'probe' | 'static' | 'static-fallback' | 'not-probed';
   reason?: string;
+  /** The model an EMPTY model runs — what "the CLI's default" is for this login. A brain told
+   *  only its provider guesses its own model ("GPT-6"); absent when the CLI does not say. */
+  default_model?: string;
 }
 
 export const defaultProbeExec: ProbeExec = (bin, args, opts) => {
@@ -135,7 +141,7 @@ function jsonLines(stdout: string): Record<string, unknown>[] {
   return out;
 }
 
-interface RawModel { id: string; label?: string; modalities?: string[]; resolved?: string }
+interface RawModel { id: string; label?: string; modalities?: string[]; resolved?: string; isDefault?: boolean }
 
 function readRows(rows: unknown, cfg: ModelProbeConfig): RawModel[] {
   if (!Array.isArray(rows)) return [];
@@ -149,11 +155,13 @@ function readRows(rows: unknown, cfg: ModelProbeConfig): RawModel[] {
     const label = r[cfg.label_key || 'label'];
     const modalities = cfg.modalities_key ? r[cfg.modalities_key] : undefined;
     const resolved = cfg.resolved_key ? r[cfg.resolved_key] : undefined;
+    const isDefault = cfg.default_key ? r[cfg.default_key] === true : false;
     out.push({
       id,
       label: typeof label === 'string' ? label : undefined,
       modalities: Array.isArray(modalities) ? modalities.filter((m): m is string => typeof m === 'string') : undefined,
       resolved: typeof resolved === 'string' && resolved ? resolved : undefined,
+      ...(isDefault ? { isDefault } : {}),
     });
   }
   return out;
@@ -253,6 +261,14 @@ function collapseAliases(raw: RawModel[], cfg: ModelProbeConfig): RawModel[] {
   return rows.filter((row) => byTarget.get(row.resolved || row.id) === row);
 }
 
+/** The login's default model: the row the CLI flags, else what its default pointer resolves to. */
+function defaultModel(raw: RawModel[], cfg: ModelProbeConfig): string | undefined {
+  const flagged = raw.find((r) => r.isDefault);
+  if (flagged) return flagged.id;
+  if (cfg.default_id) return raw.find((r) => r.id === cfg.default_id)?.resolved;
+  return undefined;
+}
+
 function toModels(raw: RawModel[], staticModels: StaticModel[]): ModelInfo[] {
   const byId = new Map(staticModels.map((m) => [m.id, m]));
   const out: ModelInfo[] = [];
@@ -323,5 +339,10 @@ export function probeModelCatalog(
   if (!models.length) return staticFallback(staticModels, 'probe-empty');
   const offered = new Set(models.map((m) => m.id));
   const valid_ids = [...models.map((m) => m.id), ...raw.map((r) => r.id).filter((id) => !offered.has(id))];
-  return { models, valid_ids, source: 'probe', ...(notes.length ? { reason: notes.join(',') } : {}) };
+  const default_model = defaultModel(raw, cfg);
+  return {
+    models, valid_ids, source: 'probe',
+    ...(notes.length ? { reason: notes.join(',') } : {}),
+    ...(default_model ? { default_model } : {}),
+  };
 }

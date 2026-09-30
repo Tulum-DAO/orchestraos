@@ -72,13 +72,18 @@ class PttHistory:
         self.max_conversations = max_conversations
         self._by_conv = OrderedDict()
 
-    def append(self, conversation_id, role, content):
+    def append(self, conversation_id, role, content, brain=None):
+        """`brain` = the {provider, model} that WROTE an assistant turn, so a later turn on a
+        different model can be told which replies were not its own."""
         turns = self._by_conv.get(conversation_id)
         if turns is None:
             turns = []
             self._by_conv[conversation_id] = turns
         self._by_conv.move_to_end(conversation_id)          # mark most-recently-used
-        turns.append({"role": role, "content": content})
+        turn = {"role": role, "content": content}
+        if brain:
+            turn["brain"] = dict(brain)
+        turns.append(turn)
         if len(turns) > self.max_turns:
             del turns[: len(turns) - self.max_turns]         # keep the last max_turns
         while len(self._by_conv) > self.max_conversations:
@@ -109,8 +114,46 @@ class TurnCache:
             self._d.popitem(last=False)             # evict oldest
 
 
-def build_messages(system_context, history, user_text, max_history=DEFAULT_MAX_HISTORY):
-    """[system(context)] + last max_history history turns + the new user turn."""
+# What a chat message may carry to a model. Anything else a history turn holds (the brain that
+# wrote it) is bookkeeping, and an OpenAI-compatible API rejects keys it does not know.
+_CHAT_FIELDS = ("role", "content", "tool_calls", "tool_call_id", "name")
+
+
+def build_messages(system_context, history, user_text, max_history=DEFAULT_MAX_HISTORY,
+                   current_brain=None, label=None):
+    """[system(context)] + last max_history history turns + the new user turn.
+
+    Every message is a fresh dict of chat fields only — the history is never mutated. When
+    `current_brain` is known, an assistant turn written by a DIFFERENT {provider, model} gets
+    `answered_by` (its label), which render_transcript puts on the speaker line: a model that
+    reads another model's answer as its own calls it wrong (Codex, told "Claude Opus 5.5" by an
+    earlier turn, answered that it was "incorrect for this session", 2026-09-30). A turn with no
+    brain on record is left as it is."""
+    label = label or brain_label
     trimmed = history[-max_history:] if len(history) > max_history else list(history)
-    return [{"role": "system", "content": system_context}] + trimmed + \
-           [{"role": "user", "content": user_text}]
+    out = [{"role": "system", "content": system_context}]
+    for turn in trimmed:
+        msg = {k: turn[k] for k in _CHAT_FIELDS if k in turn}
+        wrote = turn.get("brain")
+        if (current_brain and wrote and turn.get("role") == "assistant"
+                and _same_brain(wrote, current_brain) is False):
+            msg["answered_by"] = label(wrote)
+        out.append(msg)
+    return out + [{"role": "user", "content": user_text}]
+
+
+def _same_brain(a, b):
+    return ((a.get("provider") or ""), (a.get("model") or "")) == \
+           ((b.get("provider") or ""), (b.get("model") or ""))
+
+
+_PRETTY = {"claude": "Claude", "codex": "Codex", "gemini": "Gemini", "api": "the API model"}
+
+
+def brain_label(brain):
+    """'Claude claude-opus-5-5' — the model is always named, so a switch between two models of
+    one provider is as visible as a switch between providers."""
+    provider = (brain or {}).get("provider") or ""
+    model = (brain or {}).get("model") or ""
+    name = _PRETTY.get(provider, provider or "another model")
+    return f"{name} {model}" if model else f"{name} (its default model)"

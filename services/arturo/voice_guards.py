@@ -175,22 +175,50 @@ def strip_thought_block(text):
     return ""
 
 
-_TICKED_SENTENCE_RE = re.compile(r"\s*[^.!?]*`[^`]+`[^.!?]*[.!?]")
+# Ticks pair left to right: text between spans excludes backticks, so a span cannot close on
+# the NEXT sentence's opening tick (which made one "sentence" of "via `ask_gm`. You're on
+# `codex` tonight."). A span may hold dots — `gpt-5.6-luna` does not end a sentence.
+_TICKED_SENTENCE_RE = re.compile(r"\s*[^.!?`]*`[^`]+`(?:[^.!?`]*`[^`]+`)*[^.!?`]*[.!?]")
+_TICK_SPAN_RE = re.compile(r"`([^`]+)`")
+# A tool is named by its identifier shape: snake_case (`ask_gm`, `remember_note`), optionally
+# called (`gm_command(text=...)`), or in the native-call namespace (`default_api.send`).
+_TOOL_IDENT_RE = re.compile(r"^(?:default_api\.[A-Za-z_][\w.]*|[a-z][a-z0-9]*(?:_[a-z0-9]+)+)"
+                            r"(?:\(.*\))?$", re.S)
+# One-word tools have no shape to go on, so they are named.
+_ONE_WORD_TOOLS = frozenset({"knowledge", "research"})
+
+
+def _is_tool_token(token):
+    token = token.strip()
+    return bool(_TOOL_IDENT_RE.match(token)) or token.split("(")[0] in _ONE_WORD_TOOLS
+
+
+def leading_tool_sentence(text):
+    """The match for `text`'s first sentence if it is tool-planning — a complete sentence that
+    names a tool in backticks — else None. Shared with the streaming sanitiser, so what streams
+    and what is journalled cannot disagree about which sentence is reasoning."""
+    m = _TICKED_SENTENCE_RE.match(text)
+    if m and any(_is_tool_token(t) for t in _TICK_SPAN_RE.findall(m.group(0))):
+        return m
+    return None
 
 
 def strip_leading_tool_reasoning(text):
     """Thought-leak VARIANT (ios msg_72c19e09): reasoning glued to the answer with NO
     'thought' marker — e.g. 'Therefore, the `ask_gm` tool is appropriate... I will combine
-    both requests into a single `ask_gm` call.On it, I'll text...'. A voice reply never
-    legitimately SPEAKS backticked identifiers, so leading sentences containing a backticked
-    token are reasoning: strip them until the first backtick-free sentence (which is the
-    answer). All-reasoning => '' (silence beats spoken tool-planning). Handles the glued
-    'call.On it' case because the match ends at the period regardless of spacing."""
+    both requests into a single `ask_gm` call.On it, I'll text...'. Leading sentences that
+    name a backticked TOOL are reasoning: strip them until the first sentence that names none
+    (which is the answer). All-reasoning => '' (silence beats spoken tool-planning). Handles
+    the glued 'call.On it' case because the match ends at the period regardless of spacing.
+
+    A tool, not any backtick: a reply may tick a CLI or model name ("your `codex` CLI"), and
+    Arturo is told to state exactly which runtime it runs on — treating every tick as planning
+    turned "what model are we using?" into "5." or into nothing (operator, 2026-09-30)."""
     if not text or "`" not in text:
         return text
     out, n = text, 0
     while True:
-        m = _TICKED_SENTENCE_RE.match(out)
+        m = leading_tool_sentence(out)
         if not m:
             break
         out = out[m.end():].lstrip()

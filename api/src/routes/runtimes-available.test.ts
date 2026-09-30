@@ -347,3 +347,30 @@ test('withModels:false never asks a CLI for its catalog, and never publishes one
   assert.equal(res.providers[0].authed, true, 'auth is still answered');
   assert.equal(res.providers[0].model_catalog_source, 'not-probed');
 });
+
+test('the live catalog publishes each login\'s default model, and only a probed one', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'orch-live-'));
+  const target = join(dir, 'model-catalog-live.json');
+  const cap = { text: true, image: false, audio: false, video: false, context_window: null };
+  const base = { label: '', logo_svg: '', installed: true, authed: true as const };
+  defaultPublishLiveCatalog([
+    { ...base, id: 'codex', models: [{ id: 'gpt-6.1-sol', label: 'x', capabilities: cap }],
+      model_catalog_source: 'probe' as const, model_catalog_valid_ids: ['gpt-6.1-sol'],
+      model_catalog_default: 'gpt-6.1-sol' },
+    { ...base, id: 'gemini', models: [{ id: 'g', label: 'g', capabilities: cap }],
+      model_catalog_source: 'probe' as const, model_catalog_valid_ids: ['g'] },
+  ], target);
+  assert.deepEqual(JSON.parse(readFileSync(target, 'utf-8')).defaults, { codex: 'gpt-6.1-sol' });
+});
+
+test('probeAll carries the probed default model onto the provider row', () => {
+  const deps: ProbeDeps = {
+    loadProviders: () => [fakeProvider({ id: 'codex', cli: 'codex' })],
+    isInstalled: () => true,
+    probeAuth: () => ({ authed: true }),
+    loadModelCatalog: () => ({ models: [{ id: 'gpt-6.1-sol', label: 'x', capabilities: { text: true, image: false, audio: false, video: false, context_window: null } }], valid_ids: ['gpt-6.1-sol'], source: 'probe' as const, default_model: 'gpt-6.1-sol' }),
+    publishLiveCatalog: () => {},
+    now: () => 1,
+  };
+  assert.equal(probeAll(deps).providers[0].model_catalog_default, 'gpt-6.1-sol');
+});

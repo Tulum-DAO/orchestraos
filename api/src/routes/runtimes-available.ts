@@ -107,6 +107,8 @@ export interface ProviderResult {
   model_catalog_reason?: string;
   /** Ids validation accepts for this provider — a superset of `models` (see CatalogResult). */
   model_catalog_valid_ids: string[];
+  /** The model an empty model runs for this login, when the CLI says (see CatalogResult). */
+  model_catalog_default?: string;
 }
 
 export interface RuntimesAvailableResponse {
@@ -270,17 +272,19 @@ export function defaultPublishLiveCatalog(
 ): void {
   try {
     const live: Record<string, string[]> = {};
+    const defaults: Record<string, string> = {};
     for (const p of providers) {
       // Only a LIVE answer is published; a static fallback is already known to the reader.
       if (p.model_catalog_source !== 'probe') continue;
       // The VALIDATION set, not the offered set: a collapsed alias is still a real
       // --model argument, and a saved pick of one must keep working.
       live[p.id] = p.model_catalog_valid_ids;
+      if (p.model_catalog_default) defaults[p.id] = p.model_catalog_default;
     }
     if (!Object.keys(live).length) return;
     mkdirSync(dirname(path), { recursive: true });
     const tmp = `${path}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify({ providers: live, probed_at: Date.now() }, null, 1)}\n`);
+    writeFileSync(tmp, `${JSON.stringify({ providers: live, defaults, probed_at: Date.now() }, null, 1)}\n`);
     renameSync(tmp, path);
   } catch {
     /* cache only — the picker and the probe are unaffected */
@@ -337,6 +341,7 @@ export function probeAll(deps: ProbeDeps, opts: { withModels?: boolean } = {}): 
       models: catalog.models,
       model_catalog_source: catalog.source,
       model_catalog_valid_ids: catalog.valid_ids,
+      ...(catalog.default_model ? { model_catalog_default: catalog.default_model } : {}),
       ...(catalog.reason ? { model_catalog_reason: catalog.reason } : {}),
     };
   });

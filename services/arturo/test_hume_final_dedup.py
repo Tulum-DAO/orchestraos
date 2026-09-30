@@ -7,6 +7,7 @@ reasoning ('thought\\nThe user is reporting...'). Three seams: (1) relay _dispat
 absorbs window-local duplicate/subset finals and emits a superset as a SAME-TURN
 replacement; (2) voice_guards.latest_is_answered_superset catches the CLM re-answer;
 (3) voice_guards.strip_thought_block keeps the answer, never the reasoning."""
+import pytest
 import threading
 import time
 
@@ -89,6 +90,38 @@ def test_strip_leading_tool_reasoning_passthrough_and_all_reasoning():
         "Two decisions are pending. Want the list?"
     # pure backticked reasoning -> empty (silence beats spoken tool-planning)
     assert vg.strip_leading_tool_reasoning("I will call `remember_note` with the text.") == ""
+
+
+# The guard reads a backticked TOOL IDENTIFIER as leaked planning — not any backtick. Text
+# replies legitimately tick a CLI or model name, and the system prompt tells Arturo to state
+# exactly which runtime it runs on, so "any backtick" ate the answer to "what model are we
+# using?": "5." on one turn, nothing at all on another (operator, 2026-09-30).
+MODEL_STATEMENTS = [
+    "I'm Arturo, thinking with Codex (`gpt-5.6-luna`) through your logged-in `codex` CLI. "
+    "No API key is involved.",
+    "I am running on Codex, model `gpt-5.6-luna`, via your logged-in `codex` CLI.",
+    "Your `claude` CLI is logged in, so I'm on `claude-opus-5-5`.",
+    "The `orchestraos-builder` seat is idle.",
+]
+
+
+@pytest.mark.parametrize("text", MODEL_STATEMENTS)
+def test_strip_leading_tool_reasoning_keeps_ticked_names_that_are_not_tools(text):
+    assert vg.strip_leading_tool_reasoning(text) == text
+
+
+@pytest.mark.parametrize("text", [
+    "I'll use `research` for that.",                       # a one-word tool, by name
+    "Calling `gm_command(text='status')` now.",            # a tool, called
+    "I will call `default_api.send_telegram` with it.",    # the native-call namespace
+])
+def test_strip_leading_tool_reasoning_still_strips_tool_identifiers(text):
+    assert vg.strip_leading_tool_reasoning(text + " On it.") == "On it."
+
+
+def test_strip_leading_tool_reasoning_stops_at_the_first_sentence_that_names_no_tool():
+    text = "I'll route it via `ask_gm`. You're on `codex` tonight. Want the list?"
+    assert vg.strip_leading_tool_reasoning(text) == "You're on `codex` tonight. Want the list?"
 
 
 # ---------- (1) relay final dedup ----------
