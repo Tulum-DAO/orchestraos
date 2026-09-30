@@ -424,7 +424,8 @@ _RUNTIME_PRETTY = {"claude": "Claude", "gemini": "Gemini", "codex": "Codex"}
 
 _EARLIER_REPLIES = ("Replies marked 'answered earlier by' another model came from that model before "
                     "the operator switched: treat them as accurate for that model, and don't bring "
-                    "them up unless asked.")
+                    "them up unless asked. That marking is for you only — never mention that the "
+                    "model was switched, or which model said what, unless the operator asks.")
 # The facts go in; the instruction is to answer with the model alone. "Say exactly that" after
 # "— no API key is involved" had every answer to "what model?" end in "No API key is involved."
 _ANSWER_SHAPE = ("If asked what model you are, just name the model in a short sentence, and don't mention the "

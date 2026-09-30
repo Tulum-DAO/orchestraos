@@ -197,6 +197,9 @@ def test_identity_explains_replies_from_an_earlier_model():
     # ...but it is context, not a talking point: unprompted, it was tacked onto a plain answer
     # ("The earlier answers were accurate for the models you had switched to", 2026-09-30).
     assert "don't bring them up unless asked" in line
+    # Sonnet still volunteered "The earlier greeting came from a different model before you
+    # switched" in answer to "what model are we on?" — the switch itself is not a talking point.
+    assert "never mention that the model was switched" in line
 
 
 def test_identity_asks_for_the_model_alone_not_the_plumbing():
