@@ -318,6 +318,7 @@ export default function Agents() {
               windowHours={windowHours}
               search={search}
               onSearchChange={setSearch}
+              onSelectBusiest={busiest ? () => openConversation(busiest.a, busiest.b) : undefined}
             />
             <p className="text-sm text-neutral-500 mt-0.5">
               showing {sorted.length} of {agents.length}

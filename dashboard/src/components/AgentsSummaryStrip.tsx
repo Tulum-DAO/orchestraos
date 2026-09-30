@@ -12,6 +12,11 @@ export interface AgentsSummaryStripProps {
   windowHours: number;
   search: string;
   onSearchChange: (next: string) => void;
+  /** Open the busiest connection's conversation. review flagged that the strip advertised a
+   *  pair the operator could not click or find — often gm<->telegram, which is real traffic
+   *  but not a node in the graph. Rather than hide the busiest pair (it IS the busiest), give
+   *  it the affordance it was missing. */
+  onSelectBusiest?: () => void;
 }
 
 function formatAgentsUp(agentsUp: number, agentsTotal: number): string {
@@ -33,6 +38,7 @@ export function AgentsSummaryStrip({
   windowHours,
   search,
   onSearchChange,
+  onSelectBusiest,
 }: AgentsSummaryStripProps) {
   return (
     // review's browser pass (2026-09-30) found two real layout bugs here, both desktop-first:
@@ -63,7 +69,18 @@ export function AgentsSummaryStrip({
           <span className="whitespace-nowrap">{formatAgentsUp(agentsUp, agentsTotal)}</span>
           <span className="whitespace-nowrap">{messages24h} messages ({windowHours}h)</span>
           <span className="whitespace-nowrap">{activeConnections} active connections</span>
-          <span className="whitespace-nowrap">busiest: {formatBusiest(busiest)}</span>
+          {busiest && onSelectBusiest ? (
+            <button
+              type="button"
+              onClick={onSelectBusiest}
+              title={`Open ${busiest.a} ⇄ ${busiest.b}`}
+              className="whitespace-nowrap underline decoration-neutral-700 hover:text-neutral-100 focus:outline-none focus:ring-1 focus:ring-sky-500 rounded"
+            >
+              busiest: {formatBusiest(busiest)}
+            </button>
+          ) : (
+            <span className="whitespace-nowrap">busiest: {formatBusiest(busiest)}</span>
+          )}
         </div>
         {/* Full width on its own row when space is tight, right-aligned once there is room.
             w-full basis means it drops to a new flex line instead of squeezing the numbers. */}
