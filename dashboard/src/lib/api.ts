@@ -67,6 +67,8 @@ export interface PairMessage {
 }
 export interface PairPage {
   a: string; b: string; total_in_window: number; total_all_time: number; window_hours: number;
+  /** Echo of the moment the page was computed at; null when live. */
+  asof: string | null;
   messages: PairMessage[]; next_before: string | null; has_more: boolean;
 }
 export const fetchPairMessages = (

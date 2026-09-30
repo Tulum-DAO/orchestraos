@@ -194,3 +194,55 @@ test('julianday, not string compare: a DEFAULT-format row lands in a SAME-DAY wi
   const early = Date.parse('2026-06-15T10:15:00Z');    // window 04:15..10:15 — d2 is later
   assert.equal(pairMessages(data, 'gm', 'review', 40, null, 6, early).total_in_window, 1);
 });
+
+test('G1: the row list never contains a message sent after the moment being viewed', () => {
+  // review, Gate 14: total_in_window was bounded by both ends of the window but the queries
+  // that fetch the ROWS had no upper bound at all, so the header described the past while the
+  // body showed the present — scrubbed 6h back on live data, 38 of 40 rows were newer than the
+  // moment requested. This asserts the invariant directly rather than a row count, because a
+  // count can be right while the contents are wrong, which is precisely what happened.
+  const data = makeDb();
+  const fourHoursAgo = Date.now() - 4 * 3600_000;
+
+  const page = pairMessages(data, 'gm', 'build', 40, null, 24, fourHoursAgo);
+  assert.ok(page.messages.length > 0, 'fixture must return something, or this proves nothing');
+  for (const m of page.messages) {
+    assert.ok(new Date(String(m.created_at)).getTime() <= fourHoursAgo,
+      `row ${m.id} at ${m.created_at} is AFTER the viewed moment`);
+  }
+  // m1 (5h ago) is the only gm<->build row at or before that moment inside the window; m4 is
+  // 40 days old and therefore also before it, so both are legitimately listed.
+  assert.deepEqual(page.messages.map((m) => m.id), ['m1', 'm4']);
+
+  // The lower end stays OPEN on purpose: load-older must still reach history from before the
+  // window started. m4 is 40 days old and inside a 24h window ending 4h ago only because of
+  // that, so its presence is the proof.
+  assert.ok(page.messages.some((m) => m.id === 'm4'), 'load-older must not be capped at the window start');
+
+  // Live (no asof) is unbounded above, so the newest row is present.
+  assert.equal(pairMessages(data, 'gm', 'build', 40, null, 24).messages[0].id, 'm3');
+
+  // The cursor path needs the bound too, and it has to be exercised DELIBERATELY. Paging
+  // normally cannot hit it — a cursor always comes from an already-bounded page, so rows older
+  // than it are automatically older than asof, and a mutation removing the clause survives a
+  // natural paging test. The reachable case is a caller passing `before` directly with a value
+  // NEWER than asof, which a hand-built request can do. Here `before` is now and asof is 4h
+  // ago, so m2 (3h) and m3 (1h) are older than the cursor but newer than the viewed moment:
+  // without the clause they come back.
+  const handBuilt = pairMessages(
+    data, 'gm', 'build', 40, new Date().toISOString(), 24, fourHoursAgo);
+  for (const m of handBuilt.messages) {
+    assert.ok(new Date(String(m.created_at)).getTime() <= fourHoursAgo,
+      `paged row ${m.id} at ${m.created_at} is AFTER the viewed moment`);
+  }
+  assert.ok(!handBuilt.messages.some((m) => m.id === 'm2' || m.id === 'm3'),
+    'rows between the viewed moment and the cursor must not be listed');
+
+  // And normal paging still works and still respects it.
+  const first = pairMessages(data, 'gm', 'build', 1, null, 24, fourHoursAgo);
+  const second = pairMessages(data, 'gm', 'build', 40, first.next_before, 24, fourHoursAgo);
+  for (const m of second.messages) {
+    assert.ok(new Date(String(m.created_at)).getTime() <= fourHoursAgo,
+      `paged row ${m.id} at ${m.created_at} is AFTER the viewed moment`);
+  }
+});

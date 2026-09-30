@@ -137,6 +137,10 @@ export interface PairPage {
   /** What "load older" can eventually reach. Pagination is NOT capped by the window. */
   total_all_time: number;
   window_hours: number;
+  /** The moment this page was computed at, echoed back so a caller can verify what it got
+   *  rather than what it asked for. /pair-counts already did this; review had to work around
+   *  its absence here while reproducing G1. */
+  asof: string | null;
   messages: Record<string, unknown>[];
   next_before: string | null;
   has_more: boolean;
@@ -149,9 +153,10 @@ export function pairMessages(
   dataDir: string, a: string, b: string,
   limit = 40, before?: string | null, windowHours = 24, asofMs?: number | null,
 ): PairPage {
+  const asofIso = asofMs == null ? null : new Date(asofMs).toISOString();
   const empty: PairPage = {
     a, b, total_in_window: 0, total_all_time: 0, window_hours: windowHours,
-    messages: [], next_before: null, has_more: false,
+    asof: asofIso, messages: [], next_before: null, has_more: false,
   };
   const db = openMessagesDb(dataDir);
   if (!db) return empty;
@@ -167,14 +172,23 @@ export function pairMessages(
          and julianday(created_at) >= julianday(?) and julianday(created_at) <= julianday(?)`)
       .get(...ends, from, to) as { n: number }).n;
 
+    // The row queries carry the window's UPPER bound and NOT its lower one, and the asymmetry
+    // is the point. `to` is the moment being viewed, so a message sent after it has not
+    // happened yet and must not be listed — review found (Gate 14, G1) that bounding only the
+    // COUNT left the header describing the past while the body showed the present: scrubbed 6h
+    // back, 38 of 40 rows were newer than the moment requested. Exactly the failure the asof
+    // parse bug had, one layer further in, and just as healthy-looking. The lower end stays
+    // open so "load older" can still walk past the window start into real history.
+    //
     // limit + 1 so has_more is observed, not inferred from a full page.
     const rows = before
       ? db.prepare(`select ${PAIR_COLUMNS} from messages
                      where ${pair} and julianday(created_at) < julianday(?)
-                     order by julianday(created_at) desc limit ?`).all(...ends, before, limit + 1)
+                       and julianday(created_at) <= julianday(?)
+                     order by julianday(created_at) desc limit ?`).all(...ends, before, to, limit + 1)
       : db.prepare(`select ${PAIR_COLUMNS} from messages
-                     where ${pair}
-                     order by julianday(created_at) desc limit ?`).all(...ends, limit + 1);
+                     where ${pair} and julianday(created_at) <= julianday(?)
+                     order by julianday(created_at) desc limit ?`).all(...ends, to, limit + 1);
     const page = (rows as Record<string, unknown>[]).slice(0, limit);
     const hasMore = (rows as unknown[]).length > limit;
     return {
@@ -182,6 +196,7 @@ export function pairMessages(
       total_in_window: totalInWindow,
       total_all_time: totalAllTime,
       window_hours: windowHours,
+      asof: asofIso,
       messages: page,
       next_before: hasMore && page.length ? String(page[page.length - 1].created_at) : null,
       has_more: hasMore,
