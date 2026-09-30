@@ -291,3 +291,72 @@ assert.equal(isRotationPredecessor({ id: 'build' }, [{ id: 'build', alive: true 
 }
 
 console.log('isFleetMember: retired + rotation-predecessor + negative control all hold — FIX 2 2nd addendum');
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CAPTURED PAYLOAD. Every fixture above this line was written from the author's
+// MODEL of an /api/agents row — and all of them set `parent:`, which the API has
+// never sent. That is why a green suite sat on top of a tree that drew gm plus four
+// leads and dropped all eight workers into "Not in the tree": the tests encoded the
+// belief, and only live data could falsify it. Found by review on the rendered page
+// at 6f6d8cd, not by this file.
+//
+// These rows are TRANSCRIBED from a real GET /api/agents against this branch — field
+// names and values as they actually arrive, nothing invented. Of 16 rows: `parent`
+// absent on every one, `parent_id` present but null on every one, `reports_to`
+// populated on all 12 non-root, non-ghost rows.
+//
+// Keep this shape honest. If /api/agents changes, re-capture rather than hand-edit.
+{
+  const captured = [
+    { id: 'gm',         tier: 'T0', parent_id: null, reports_to: undefined, alive: true },
+    { id: 'plan',       tier: 'T1', parent_id: null, reports_to: 'gm',      alive: true },
+    { id: 'build',      tier: 'T1', parent_id: null, reports_to: 'gm',      alive: true },
+    { id: 'review',     tier: 'T1', parent_id: null, reports_to: 'gm',      alive: true },
+    { id: 'ea',         tier: 'T1', parent_id: null, reports_to: 'gm',      alive: true },
+    { id: 'brain',      tier: 'T2', parent_id: null, reports_to: 'plan',    alive: true },
+    { id: 'bshr',       tier: 'T2', parent_id: null, reports_to: 'plan',    alive: true },
+    { id: 'think',      tier: 'T2', parent_id: null, reports_to: 'plan',    alive: true },
+    { id: 'builder-1',  tier: 'T2', parent_id: null, reports_to: 'build',   alive: true },
+    { id: 'builder-2',  tier: 'T2', parent_id: null, reports_to: 'build',   alive: true },
+    { id: 'test',       tier: 'T2', parent_id: null, reports_to: 'review',  alive: true },
+    { id: 'ship',       tier: 'T2', parent_id: null, reports_to: 'review',  alive: true },
+    { id: 'reflect',    tier: 'T2', parent_id: null, reports_to: 'review',  alive: true },
+  ];
+
+  // Nothing in a captured row carries `parent`. If this ever fails, the payload changed
+  // and the rest of this block is testing a shape that no longer exists.
+  assert.ok(captured.every((a) => a.parent === undefined),
+    'precondition: the real payload has no `parent` field — that was the whole bug');
+
+  const p = allRendered(captured, 'captured /api/agents rows');
+
+  assert.equal(p.root.id, 'gm', 'the live T0 roots the tree');
+  assert.deepEqual(p.leads.map((a) => a.id).sort(), ['build', 'ea', 'plan', 'review'],
+    'the four leads form the row under the root');
+
+  // THE REGRESSION THIS BLOCK EXISTS FOR: every worker attaches to its lead, and
+  // "Not in the tree" is EMPTY. Before reading reports_to, rest held all eight.
+  assert.deepEqual(p.rest.map((a) => a.id), [],
+    'no worker falls into "Not in the tree" — spec section 4 is gm / leads / workers');
+  assert.deepEqual(p.workersByLead.plan?.map((a) => a.id).sort(), ['brain', 'bshr', 'think']);
+  assert.deepEqual(p.workersByLead.build?.map((a) => a.id).sort(), ['builder-1', 'builder-2']);
+  assert.deepEqual(p.workersByLead.review?.map((a) => a.id).sort(), ['reflect', 'ship', 'test']);
+  assert.equal(p.workersByLead.ea, undefined, 'ea genuinely has no workers — absent, not empty');
+
+  const attached = Object.values(p.workersByLead).flat().length;
+  assert.equal(attached, 8, 'all eight T2 workers are attached, not bucketed');
+
+  // `parent` still wins when a caller does set it, so the older fixtures above and any
+  // consumer that populates it are unaffected.
+  const bothKeys = [
+    { id: 'gm', tier: 'T0', alive: true },
+    { id: 'plan', tier: 'T1', reports_to: 'gm', alive: true },
+    { id: 'build', tier: 'T1', reports_to: 'gm', alive: true },
+    { id: 'w', tier: 'T2', parent: 'build', reports_to: 'plan', alive: true },
+  ];
+  const pb = allRendered(bothKeys, 'parent takes precedence over reports_to');
+  assert.deepEqual(pb.workersByLead.build?.map((a) => a.id), ['w'],
+    'an explicit parent still wins over reports_to');
+
+  console.log('captured payload: workers attach via reports_to — "Not in the tree" is empty');
+}

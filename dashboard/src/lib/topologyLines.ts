@@ -73,6 +73,11 @@ export interface TopologyAgent {
   id: string;
   tier?: string;
   parent?: string;
+  /** What the API ACTUALLY sends. Measured against a running instance of this branch: of
+   *  16 rows, `parent` is absent from every one, `parent_id` is present but null on every
+   *  one, and `reports_to` is populated on all 12 non-root, non-ghost rows. `parent` was
+   *  the module's own model of the payload, never the payload. */
+  reports_to?: string | null;
   alive?: boolean;
   /** Set by the boundary dedup (api/src/routes/agents.ts) on a superseded predecessor —
    *  e.g. gm-g2 after an atomic promotion to gm. Different ids never fold, so both rows
@@ -152,6 +157,21 @@ export interface TopologyPartition<T extends TopologyAgent> {
   rest: T[];
 }
 
+/**
+ * Which lead a worker hangs off. `reports_to` is what /api/agents actually sends;
+ * `parent` is what this module assumed it sent, and nothing has ever populated it.
+ *
+ * The consequence was the whole point of the feature: spec section 4 is "gm on top, the
+ * leads below it, the workers below them", and with `a.parent` always undefined the
+ * attach condition could never be true, so all eight T2 workers fell through to the
+ * "Not in the tree" bucket. The tree drew gm plus four leads and nothing else.
+ *
+ * Both keys are read, `parent` first, so a caller that does set it keeps working.
+ */
+function parentOf(a: TopologyAgent): string | undefined {
+  return a.parent ?? a.reports_to ?? undefined;
+}
+
 export function partitionTopology<T extends TopologyAgent>(agents: T[]): TopologyPartition<T> {
   // FIX 2 (2026-09-30): the old root pick was `find(a => a.tier === 'T0')` — first-in-array,
   // no liveness preference. registry has both `gm` (live) and `gm-g2` (retired predecessor,
@@ -179,8 +199,9 @@ export function partitionTopology<T extends TopologyAgent>(agents: T[]): Topolog
   for (const a of agents) {
     if (drawn.has(a.id)) continue;
     const isWorker = a.tier === 'T2' || a.tier === 'T3';
-    if (isWorker && a.parent && leadIds.has(a.parent)) {
-      (workersByLead[a.parent] ??= []).push(a);
+    const parent = parentOf(a);
+    if (isWorker && parent && leadIds.has(parent)) {
+      (workersByLead[parent] ??= []).push(a);
       drawn.add(a.id);
     }
   }
