@@ -54,7 +54,7 @@ router.get('/', async (_req: Request, res: Response) => {
         status: 'online',
         location: 'local',
         // This branch runs ON the Mac, so os.hostname() is the Mac's. It was being reported
-        // as the VPS's instead (review found the VPS card showing 'Waels-MacBook-Air.local'
+        // as the VPS's instead (review found the VPS card showing the Mac's own hostname
         // while the Mac card's hostname was missing entirely) — the local hostname was simply
         // attached to the wrong machine.
         hostname: os.hostname(),
