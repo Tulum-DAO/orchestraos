@@ -273,9 +273,16 @@ export default function Agents() {
   const messagesInWindow = pairs.reduce((n, p) => n + p.count, 0);
   const activeConnections = pairs.filter((p) => p.count > 0).length;
   const busiest = pairs.length ? pairs[0] : null;   // endpoint already orders by count desc
-  // The VPS is the always-on machine this view is about; hostname comes from /api/system,
-  // which is fine for a LABEL — §16 only forbids using that route's agent COUNTS.
-  const machineName = system?.machines?.vps?.hostname ?? 'unknown host';
+  // The VPS is the always-on machine this view is about, so its hostname is the label — but
+  // it is only known when orchestra.toml sets machines.vps_hostname, and it is blank on a
+  // single-machine install. Falls back to the machine actually serving this dashboard rather
+  // than to "unknown host", because a real local name is more use than a placeholder. (The
+  // api used to paper over this by reporting os.hostname() as the VPS's, which is how the VPS
+  // card ended up showing a MacBook name — fixed in the same commit as this.)
+  const machineName = system?.machines?.vps?.hostname
+    || system?.machines?.mac?.hostname
+    || system?.hostname
+    || 'unknown host';
   const machineLive = (system?.machines?.vps?.status ?? 'online') === 'online';
 
   // Peers an agent actually exchanged messages with in the window, busiest first — `pairs`

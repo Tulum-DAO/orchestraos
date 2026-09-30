@@ -53,6 +53,11 @@ router.get('/', async (_req: Request, res: Response) => {
       macMachine = {
         status: 'online',
         location: 'local',
+        // This branch runs ON the Mac, so os.hostname() is the Mac's. It was being reported
+        // as the VPS's instead (review found the VPS card showing 'Waels-MacBook-Air.local'
+        // while the Mac card's hostname was missing entirely) — the local hostname was simply
+        // attached to the wrong machine.
+        hostname: os.hostname(),
         last_heartbeat: new Date().toISOString(),
         tailscale_ip: loadConfig().macTailscaleIp,
         agents_hosted: macAgents,
@@ -63,7 +68,10 @@ router.get('/', async (_req: Request, res: Response) => {
       const vpsSessions = getVpsTmuxSessions();
       vpsMachine = {
         status: 'online' as const,
-        hostname: os.hostname(),
+        // Not os.hostname(): from the Mac we do not know the VPS's hostname unless it is
+        // configured. null is the honest answer — naming the wrong machine is worse than
+        // admitting we cannot name it, and a UI can fall back to the local name.
+        hostname: loadConfig().vpsHostname || null,
         tailscale_ip: loadConfig().vpsTailscaleIp,
         agents_hosted: Object.entries(agentDefs).filter(([, a]: any) => a.machine === 'vps').map(([id]) => id),
         agents_alive: vpsSessions.size,
@@ -76,6 +84,9 @@ router.get('/', async (_req: Request, res: Response) => {
 
       macMachine = {
         status: macState.status,
+        // Running on the VPS: the Mac is remote and its hostname is not something we can read
+        // from here. null rather than a guess.
+        hostname: null,
         last_heartbeat: macState.heartbeat?.last_check || null,
         tailscale_ip: loadConfig().macTailscaleIp,
         agents_hosted: Object.entries(agentDefs).filter(([, a]: any) => a.machine === 'mac').map(([id]) => id),
