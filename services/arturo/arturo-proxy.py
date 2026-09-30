@@ -4970,7 +4970,14 @@ def text_stream_endpoint():
         # with_heartbeat keeps the connection alive through a silent stretch — the tool-loop
         # fallback produces nothing while it runs, and every hop in front of us drops an idle
         # socket (the dashboard proxy at 30s), which reached the operator as a mid-turn 502.
-        if _onboarding_step:
+        # Only Claude has a streaming tool loop (a warm session). Any other CLI runtime streamed
+        # the cold way reached for its OWN sandboxed tools instead of Arturo's — codex answered
+        # "I couldn't access the live session list from this environment" (staging, 2026-09-30) —
+        # and codex hands over whole messages anyway. So those turns run whole, through the tool
+        # loop, until they have a streaming loop of their own.
+        _no_stream_loop = (getattr(turn_brain, "kind", "") == "runtime"
+                           and getattr(turn_brain, "runtime", "") not in _cli_events.WARM_RUNTIMES)
+        if _onboarding_step or _no_stream_loop:
             # Only text_turn knows the onboarding marker and its directive, so the step runs
             # there, whole, and arrives as one reply.
             turn = _text_stream.whole_turn(conversation_id, turn_brain, _fallback)

@@ -131,3 +131,36 @@ def test_merged_spawned_keeps_order_and_never_duplicates_a_seat(P, monkeypatch):
     with P.app.test_client() as c:
         end = _turn_end(_events(c.post("/text/stream", json={"text": "team up", "conversation_id": "c6"})))
     assert end["spawned"] == ["dev-2", "qa-3", "mgr-1"]
+
+
+# ---- a runtime with no streaming tool loop runs whole, with Arturo's tools ----------------
+# Found on staging, 2026-09-30: a streamed Codex turn opened with prose ("I'm checking the live
+# agent sessions now."), so it streamed — and then reached for codex's OWN sandboxed shell
+# instead of Arturo's tools: "I couldn't access the live session list from this environment."
+# Only Claude has a streaming tool loop; codex's CLI hands over whole messages anyway, so
+# streaming it bought nothing and cost the tools.
+
+def test_a_codex_turn_runs_whole_through_the_tool_loop(P, monkeypatch):
+    monkeypatch.setattr(P, "text_turn", lambda text, conversation_id, brain=None, context=None: (
+        200, {"ok": True, "reply_text": "Four sessions.", "tools_called": ["list_agents"], "spawned": []}))
+    monkeypatch.setattr(P._text_stream, "stream_turn",
+                        lambda **kw: (_ for _ in ()).throw(AssertionError("codex must not take the cold stream")))
+    with P.app.test_client() as c:
+        r = c.post("/text/stream", json={"text": "check which agents are running", "conversation_id": "c7",
+                                         "brain": {"provider": "codex", "model": "gpt-5.6-terra"}})
+        end = _turn_end(_events(r))
+    assert end["tools_called"] == ["list_agents"]
+
+
+def test_a_claude_turn_still_streams(P, monkeypatch):
+    called = {}
+
+    def fake_stream_turn(**kw):
+        called["yes"] = True
+        yield {"event": "turn.end", "data": {"reply_text": "hi", "tools_called": [], "brain": {}}}
+
+    monkeypatch.setattr(P._text_stream, "stream_turn", fake_stream_turn)
+    with P.app.test_client() as c:
+        _turn_end(_events(c.post("/text/stream", json={"text": "hi", "conversation_id": "c8",
+                                                       "brain": {"provider": "claude", "model": "claude-sonnet-5"}})))
+    assert called.get("yes")

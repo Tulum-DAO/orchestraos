@@ -14,6 +14,7 @@ def _stub_streaming(P, seen):
     P.build_context = lambda **k: (seen.append(P._turn_brain()), "CTX")[1]
     P._text_stream = types.SimpleNamespace(
         stream_turn=lambda **kw: iter(()),
+        whole_turn=lambda *a, **kw: iter(()),
         with_heartbeat=lambda turn, interval_s=10.0: iter(()),
         sse_frame=lambda ev: "",
         warm_argv=lambda *a, **k: ["cli"],
