@@ -22,6 +22,7 @@ import '../components/arturo/arturo.css';
 import { BrainModal } from '../components/agent/BrainModal';
 import { ModelSelectorSheet } from '../components/agent/ModelSelectorSheet';
 import { useArturoBrain } from '../stores/arturoBrain';
+import { arturoTurn, arturoPrewarm } from '../lib/arturoStream';
 import { brainFromThread, describeTurnError, toWireBrain } from '../lib/arturoBrain';
 import { arturoHealth, arturoText, runtimesAvailable, brainLabel, greeting, newConversationId,
   isStarting, waitForArturo, STARTING_TEXT, firstStep, stepAfterRuntime, onboardingTurn, sendStateLabel,
@@ -34,7 +35,7 @@ import { useDictation } from '../components/arturo/useDictation.ts';
 import SpawnedAgentCard from '../components/arturo/SpawnedAgentCard';
 import { Brain, Settings } from 'lucide-react';
 
-type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[]; spawned?: string[]; pending?: boolean; state?: SendState;
+type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[]; spawned?: string[]; pending?: boolean; streaming?: boolean; state?: SendState;
   decision?: { options: string[]; onPick: (v: string) => void } };
 type Step = 'name' | 'runtime' | 'voice' | 'first' | 'hierarchy' | 'done';
 
@@ -103,6 +104,10 @@ export default function ArturoHome() {
   const fileInput = useRef<HTMLInputElement>(null);
   const convId = useRef<string>(ls(LS_CONV) || '');
   useEffect(() => { if (!convId.current) { convId.current = newConversationId('web'); lsSet(LS_CONV, convId.current); } }, []);
+  // Warm this conversation's CLI while the operator is still reading or typing, and again if
+  // they switch brain (a different model is a different process). The first turn then adopts
+  // a live process instead of starting one.
+  useEffect(() => { arturoPrewarm(convId.current, toWireBrain(brainChoice)); }, [brainChoice]);
   useEffect(() => { if (drawer) void listThreads().then(setThreads); }, [drawer]);
   // On a phone the drawer covers the composer, and the only way out was a ~110 px sliver of dark
   // page that does not read as a control. Escape closes it; there is also a close button inside.
@@ -120,7 +125,9 @@ export default function ArturoHome() {
     if (!t) return;
     convId.current = id; lsSet(LS_CONV, id);
     // A thread answers on the brain it last used; one that used the default brain goes back to it.
-    chooseBrain(brainFromThread(t, {}));
+    const resumedBrain = brainFromThread(t, {});
+    chooseBrain(resumedBrain);
+    arturoPrewarm(id, toWireBrain(resumedBrain));
     setTurns(t.turns.map((x) => ({ id: nextId.current++, role: x.role === 'user' ? 'user' : 'arturo', text: x.content })));
     setStep('done'); lsSet(LS_ONBOARDED, '1');
     setDrawer(false);
@@ -129,6 +136,7 @@ export default function ArturoHome() {
   /** New thread — the one you leave stays in the list rather than becoming unreachable. */
   function startNewThread() {
     convId.current = newConversationId('web'); lsSet(LS_CONV, convId.current);
+    arturoPrewarm(convId.current, toWireBrain(brainChoice));
     setTurns([]);
     setDrawer(false);
   }
@@ -299,12 +307,22 @@ export default function ArturoHome() {
     setAttachments([]);
     const onSent = () => patch(uid, { state: 'sent' });
     const turnBrain = toWireBrain(brainChoice);
-    let r = await arturoText(sent, convId.current, null, { onSent, brain: turnBrain });
+    // Stream the reply into the pending bubble as it is written. `streamed` is what the
+    // operator has already read, so a failure can clear it rather than leave half a sentence.
+    let streamed = '';
+    // pending renders the thinking dot INSTEAD of the text, so the first delta ends it —
+    // otherwise the reply streams into a bubble nobody can see (found on staging).
+    const onDelta = (t: string) => {
+      streamed += t;
+      patch(id, { pending: false, streaming: true, text: streamed });
+    };
+    let r = await arturoTurn(sent, convId.current, null, { onSent, brain: turnBrain, onDelta });
+    if (!r.ok) { streamed = ''; patch(id, { pending: true, streaming: false, text: '' }); }
     if (!r.ok && isStarting(r)) {          // G15: still booting -> say so, wait for health, retry once
       patch(id, { pending: false, text: STARTING_TEXT });
       const ready = await waitForArturo();
       setHealth(ready);
-      if (ready.ok) { patch(id, { pending: true, text: '' }); r = await arturoText(sent, convId.current, null, { onSent, brain: turnBrain }); }
+      if (ready.ok) { patch(id, { pending: true, text: '' }); r = await arturoTurn(sent, convId.current, null, { onSent, brain: turnBrain, onDelta }); }
     }
     setBusy(false);
     patch(uid, { state: r.ok ? 'acked' : 'failed' });
@@ -316,7 +334,7 @@ export default function ArturoHome() {
         : `I could not reach my brain: ${r.error || 'unknown'}. Is \`orchestra up\` running? Check /health on the Arturo service.` });
       return;
     }
-    patch(id, { pending: false, text: r.reply_text || '(no reply)', tools: r.tools_called, spawned: r.spawned });
+    patch(id, { pending: false, streaming: false, text: r.reply_text || streamed || '(no reply)', tools: r.tools_called, spawned: r.spawned });
     if (isName) {
       // Advance only on the EFFECT: the brain recorded a name (the spawn_agent pattern). Otherwise
       // its reply was a re-ask and the step stays — including the NullBrain sentence, where the

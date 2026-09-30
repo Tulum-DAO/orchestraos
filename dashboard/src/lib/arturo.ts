@@ -75,6 +75,11 @@ export async function arturoText(text: string, conversationId: string, ctx?: Art
     };
     xhr.onerror = () => resolve({ ok: false, error: 'network' });
     xhr.ontimeout = () => resolve({ ok: false, error: 'timeout' });
+    // ontimeout above never fired, because no timeout was ever set: a connection that stalled
+    // after the server had answered left the bubble waiting for as long as the tab stayed open
+    // (seen live, 2026-09-30). 200s sits just past the server's own 195s ceiling, so it can
+    // only trip on a turn that is already lost.
+    xhr.timeout = 200000;
     xhr.send(body);
   });
 }

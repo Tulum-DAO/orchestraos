@@ -114,14 +114,21 @@ class ThreadStore:
 
     # --- write ---------------------------------------------------------------------
 
-    def record_turn(self, conversation_id, user_text, assistant_text, ts=None, brain=None):
+    def record_turn(self, conversation_id, user_text, assistant_text, ts=None, brain=None,
+                    effective=None):
         """Archive one completed turn (the user's message and Arturo's reply). Called AFTER
         the brain answers, so a failed turn leaves no half-thread. Never raises.
-        `brain` = {provider, model} when the operator chose one for this turn, None = default."""
+        `brain` = {provider, model} when the operator chose one for this turn, None = default —
+        that is what `last_brain` keeps, and what the picker restores. `effective` = the brain
+        that actually WROTE the reply (a default turn names its model): that is what the turn
+        row keeps, so a later turn on another model can be told which replies were not its own.
+        Omitted, the turn row keeps `brain`, as before."""
         if not self.usable or not conversation_id:
             return False
         now = float(ts if ts is not None else time.time())
         bp, bm = ((brain or {}).get("provider") or "", (brain or {}).get("model") or "")
+        wrote = effective if effective is not None else brain
+        tp, tm = ((wrote or {}).get("provider") or "", (wrote or {}).get("model") or "")
         try:
             with self._connect() as conn:
                 row = conn.execute("SELECT turns FROM threads WHERE id = ?",
@@ -138,7 +145,7 @@ class ThreadStore:
                     "INSERT OR REPLACE INTO turns (thread_id, seq, role, content, ts, brain_provider, brain_model)"
                     " VALUES (?, ?, ?, ?, ?, ?, ?)",
                     [(conversation_id, seq, "user", user_text or "", now, "", ""),
-                     (conversation_id, seq + 1, "assistant", assistant_text or "", now, bp, bm)])
+                     (conversation_id, seq + 1, "assistant", assistant_text or "", now, tp, tm)])
                 conn.execute(
                     "UPDATE threads SET updated = ?, turns = ?, snippet = ?,"
                     " last_brain_provider = ?, last_brain_model = ? WHERE id = ?",
@@ -192,9 +199,30 @@ class ThreadStore:
         try:
             with self._connect() as conn:
                 rows = conn.execute(
-                    "SELECT role, content FROM turns WHERE thread_id = ?"
-                    " ORDER BY seq DESC LIMIT ?",
+                    "SELECT role, content, brain_provider, brain_model FROM turns"
+                    " WHERE thread_id = ? ORDER BY seq DESC LIMIT ?",
                     (conversation_id, max(0, int(max_turns)))).fetchall()
-            return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+            out = []
+            for r in reversed(rows):
+                turn = {"role": r["role"], "content": r["content"]}
+                wrote = _brain(r["brain_provider"], r["brain_model"])
+                if wrote:
+                    turn["brain"] = wrote
+                out.append(turn)
+            return out
         except Exception:  # noqa: BLE001
             return []
+
+    def turn_count(self, conversation_id):
+        """How many messages this thread has ever had — the conversation's VERSION. It only
+        grows, and it survives restarts, so a warm CLI session stamped with it can tell that
+        the conversation moved on without it. 0 when unknown."""
+        if not self.usable or not conversation_id:
+            return 0
+        try:
+            with self._connect() as conn:
+                row = conn.execute("SELECT turns FROM threads WHERE id = ?",
+                                   (conversation_id,)).fetchone()
+            return int(row["turns"]) if row else 0
+        except Exception:  # noqa: BLE001
+            return 0

@@ -287,3 +287,33 @@ test('valid_ids on a static fallback is just the static list', () => {
   const got = probeModelCatalog(CLAUDE_PROBE, STATIC, () => { throw new Error('ENOENT'); });
   assert.deepEqual(got.valid_ids, ['claude-fable-5-1']);
 });
+
+// ---- the login's DEFAULT model -----------------------------------------
+// An empty model means "the CLI's default", and a brain told only "you are Codex" guesses its
+// own model ("GPT-6"). The default is login-specific (staging: gpt-6.1-sol, host: gpt-6-astra),
+// so it is read from the probe, never written down.
+
+test('jsonrpc-stdio: the row flagged by default_key is the default model', () => {
+  const stdout = [
+    JSON.stringify({ jsonrpc: '2.0', id: 1, result: { userAgent: 'codex' } }),
+    codexPage(2, [ // shape captured from codex app-server model/list, 2026-09-30
+      { id: 'gpt-6.1-sol', displayName: 'GPT-6.1-Sol', hidden: false, isDefault: true, inputModalities: ['text'] },
+      { id: 'gpt-5.6-luna', displayName: 'GPT-5.6-Luna', hidden: false, isDefault: false, inputModalities: ['text'] },
+    ], null),
+    '',
+  ].join('\n');
+  const r = probeModelCatalog({ ...CODEX_PROBE, default_key: 'isDefault' }, [], execReturning(stdout));
+  assert.equal(r.default_model, 'gpt-6.1-sol');
+});
+
+test('stdin-json-stream: the default POINTER resolves to the default model', () => {
+  const r = probeModelCatalog(CLAUDE_PROBE, [], execReturning(CLAUDE_STDOUT));
+  assert.equal(r.default_model, 'claude-opus-5-5');
+});
+
+test('no default is claimed when the CLI does not say which it is', () => {
+  const r = probeModelCatalog(AGY_PROBE, [], execReturning(AGY_STDOUT));
+  assert.equal(r.default_model, undefined);
+  const f = probeModelCatalog(CODEX_PROBE, [], () => { throw new Error('boom'); });
+  assert.equal(f.default_model, undefined);
+});

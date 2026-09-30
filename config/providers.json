@@ -365,6 +365,7 @@
      "id_key": "id",
      "label_key": "displayName",
      "hidden_key": "hidden",
+     "default_key": "isDefault",
      "modalities_key": "inputModalities",
      "timeout_ms": 30000
     },
