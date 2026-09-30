@@ -320,14 +320,60 @@ def _fallback_reply(turn_id, conversation_id, fallback, brain):
     yield from _whole_reply(turn_id, conversation_id, fallback, brain)
 
 
-def whole_turn(conversation_id, brain, fallback, turn_id=None):
+class ToolEvents:
+    """What a whole turn's tool loop reports as it works: each call opens a card, each result
+    closes it. Ids run c1, c2… across the turn, the same shape as the warm loop's events."""
+
+    def __init__(self, emit):
+        self._emit = emit
+        self._n = 0
+
+    def call(self, name, arguments):
+        self._n += 1
+        call_id = f"c{self._n}"
+        self._emit("tool.call", call_id=call_id, name=name,
+                   args_summary=json.dumps(arguments or {}, ensure_ascii=False)[:200])
+        return call_id
+
+    def result(self, call_id, name, ok, summary):
+        self._emit("tool.result", call_id=call_id, name=name, ok=bool(ok), summary=str(summary)[:200])
+
+
+def whole_turn(conversation_id, brain, fallback, turn_id=None, run_with_sink=None):
     """A turn served whole on the streaming endpoint: turn.start, then the ordinary path's
     reply as one delta. For a turn only /text knows how to run — an onboarding step, whose
-    marker and directive text_turn applies."""
+    marker and directive text_turn applies — or a runtime with no streaming tool loop (codex).
+
+    `run_with_sink(sink)` runs the turn in a worker and returns what `fallback()` would; its
+    tool loop reports calls and results to `sink` as they happen, and they stream out here
+    live, so a whole turn still shows its tool cards before its answer."""
     turn_id = turn_id or f"turn_{uuid.uuid4().hex[:12]}"
     yield _ev("turn.start", turn_id=turn_id, conversation_id=conversation_id,
               brain=brain.describe(), at=time.time())
-    yield from _whole_reply(turn_id, conversation_id, fallback, brain)
+    if run_with_sink is None:
+        yield from _whole_reply(turn_id, conversation_id, fallback, brain)
+        return
+    q, box = queue.Queue(), {}
+    sink = ToolEvents(lambda event, **data: q.put(_ev(event, turn_id=turn_id, **data)))
+
+    def work():
+        try:
+            box["r"] = run_with_sink(sink)
+        except BaseException as e:  # noqa: BLE001 — reported below as the turn's error
+            box["e"] = e
+        finally:
+            q.put(_SENTINEL)
+
+    threading.Thread(target=work, daemon=True, name=f"whole-turn-{turn_id}").start()
+    while True:
+        item = q.get()
+        if item is _SENTINEL:
+            break
+        yield item
+    if "e" in box:
+        yield _ev("error", turn_id=turn_id, code="turn_failed", message=str(box["e"])[:200])
+        return
+    yield from _whole_reply(turn_id, conversation_id, lambda: box["r"], brain)
 
 
 def _whole_reply(turn_id, conversation_id, fallback, brain):
