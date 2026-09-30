@@ -81,6 +81,12 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
   };
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<string | null>(null);
+  // Success is a BOOLEAN. The styling below tested `result === 'Sent'`, which held only while
+  // every success said exactly that — the durable path also reports "Queued — agent is busy"
+  // and "Held — will deliver at the next turn boundary", both SUCCESSES, both rendered RED.
+  // Same regression as d3cd511 in AgentCard, missed here. Found by the eslint selector rule
+  // added in this commit, in seconds, after a grep and two readings had not.
+  const [resultOk, setResultOk] = useState(false);
   const [injectMode, setInjectMode] = useState(true);
   const [busy, setBusy] = useState<{
     reason?: string; state?: string; activity?: string;
@@ -177,6 +183,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     if (force && !busy?.attemptText) return;
     logAction(injectMode ? 'chat.inject' : 'chat.message', agentId, text.trim().slice(0, 100));
     setSending(true);
+    setResultOk(false);
     setResult(null);
     try {
       // Expand any held large pastes into the fenced grammar at their position.
@@ -194,6 +201,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
         const res = await onSend({ text: messageText, attachments }, { force });
         if (res.ok) {
           setBusy(null);
+          setResultOk(true);
           setResult(res.note || 'Sent');
           setText('');
           setPastes([]);
@@ -207,8 +215,10 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
             activity: res.note,
             attemptText: messageText,
           });
+          setResultOk(false);
           setResult(null);
         } else {
+          setResultOk(false);
           setResult(res.note || 'Failed');
         }
         return;
@@ -225,6 +235,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
         const res: InjectResult = await injectAgentVerified(agentId, messageText, force);
         if (res.status === 200 && res.injected) {
           setBusy(null);
+          setResultOk(true);
           setResult('Sent');
           setText('');
           setPastes([]);
@@ -239,10 +250,13 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
             stranded: res.stranded,
             attemptText: messageText,
           });
+          setResultOk(false);
           setResult(null);
         } else if (res.status === 502) {
+          setResultOk(false);
           setResult('Delivery unverified — try again');
         } else {
+          setResultOk(false);
           setResult('Failed' + (res.error ? ': ' + res.error : ''));
         }
       } else {
@@ -250,15 +264,18 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
         // which nothing reads, and still reported success.
         const res2 = await sendToAgent(agentId, { text: messageText });
         if (isDelivered(res2) || isQueued(res2) || isHeld(res2)) {
+          setResultOk(true);
           setResult(describeSendState(res2) || 'Sent');
           setText('');
           setPastes([]);
           pasteIdRef.current = 1;
         } else {
+          setResultOk(false);
           setResult('Failed' + (res2.error ? ': ' + res2.error : ''));
         }
       }
     } catch (err: any) {
+      setResultOk(false);
       setResult('Error: ' + (err.message || 'unknown'));
     } finally {
       setSending(false);
@@ -410,7 +427,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
         </div>
       )}
       {result && (
-        <span className={clsx('text-[10px] mt-1 block', result === 'Sent' ? 'text-green-500' : 'text-red-400')}>
+        <span className={clsx('text-[10px] mt-1 block', resultOk ? 'text-green-500' : 'text-red-400')}>
           {result}
         </span>
       )}
