@@ -1,13 +1,22 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { clsx } from 'clsx';
-import { X, FileText, AlertTriangle, Link2 } from 'lucide-react';
+import { X, FileText, AlertTriangle, Link2, Copy, Check, ArrowDown, WifiOff, Send } from 'lucide-react';
 import { normalizeAgentState, STATE_STYLE } from '../lib/agentStatus';
 import { TierBadge } from './TierBadge';
+import { buildRenderList, toolSummary, fetchTranscript, type RenderNode } from '../lib/transcript';
+import { subscribeTranscriptStream } from '../lib/transcriptStream';
+import { isNearBottom } from '../lib/liveFeedScroll';
+import { sendToAgent, isDelivered, isHeld, isQueued, isComposerHold, describeSendState, type SendState } from '../lib/agentSend';
 
 export interface AgentDetailPanelProps {
   agent: {
     id: string; tier?: string; role?: string; status?: string; alive?: boolean;
-    session?: string; cwd?: string; prompt_file?: string; machine?: string;
+    session?: string; cwd?: string; machine?: string;
+    /** Path to the seat's prompt file. The live /api/agents payload calls this
+     *  `system_prompt` (e.g. "prompts/build.md") — there is no `prompt_file` field on any
+     *  row, which is what an earlier version of this interface asked for and never got.
+     *  Caught by curling the endpoint rather than reading the spec. */
+    system_prompt?: string;
     last_seen?: string; current_task?: string;
   };
   connectionCount: number;
@@ -45,6 +54,217 @@ function formatLastSeen(iso?: string): string | null {
   if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ago`;
   if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h ago`;
   return `${Math.floor(ms / 86_400_000)}d ago`;
+}
+
+const FALLBACK_POLL_MS = 3000;
+
+/** Plain-text form of a render node, shared by the copy button and (for
+ * plain-text kinds) the rendered line itself. */
+function blockText(node: RenderNode): string {
+  switch (node.kind) {
+    case 'tool': {
+      const summary = toolSummary(node.tool, node.input);
+      return node.result ? `${node.tool}: ${summary}\n${node.result}` : `${node.tool}: ${summary}`;
+    }
+    case 'queued_batch':
+      return node.entries.map((e) => `${e.agent}: ${e.body}`).join('\n');
+    default:
+      return node.text;
+  }
+}
+
+/** Docked (non-floating) live activity feed for one agent — real SSE via
+ * transcriptStream.ts, falling back to the same poll path the chat view uses
+ * if the stream drops (§12: show the drop, don't render stale as fresh). */
+function DetailLiveFeed({ agentId }: { agentId: string }) {
+  const [nodes, setNodes] = useState<RenderNode[]>([]);
+  const [live, setLive] = useState(true);
+  const [following, setFollowing] = useState(true);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+    const unsubscribe = subscribeTranscriptStream(agentId, 150, {
+      onItems: (items) => setNodes(buildRenderList(items)),
+      onFallback: () => {
+        setLive(false);
+        const poll = async () => {
+          try {
+            const res = await fetchTranscript(agentId, 150);
+            setNodes(buildRenderList(res.items));
+          } catch {
+            // transient — the WifiOff banner already tells the reader this isn't live
+          }
+        };
+        poll();
+        pollTimer = setInterval(poll, FALLBACK_POLL_MS);
+      },
+    });
+
+    return () => {
+      unsubscribe();
+      if (pollTimer) clearInterval(pollTimer);
+    };
+  }, [agentId]);
+
+  useEffect(() => {
+    if (!following) return;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [nodes, following]);
+
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setFollowing(isNearBottom(el.scrollTop, el.scrollHeight, el.clientHeight));
+  };
+
+  const jumpToLatest = () => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+    setFollowing(true);
+  };
+
+  const copyBlock = (key: string, text: string) => {
+    navigator.clipboard?.writeText(text).catch(() => {});
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey((k) => (k === key ? null : k)), 1500);
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1.5">
+        <h3 className="text-[11px] uppercase tracking-wider text-neutral-500">Live feed</h3>
+        {!live && (
+          <span className="flex items-center gap-1 text-[11px] text-amber-400">
+            <WifiOff size={11} />
+            Reconnecting — showing last poll
+          </span>
+        )}
+      </div>
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="relative rounded-xl border border-neutral-800 bg-neutral-950 p-2.5 max-h-64 overflow-y-auto space-y-1.5"
+      >
+        {nodes.length === 0 && <p className="text-xs text-neutral-600">No activity yet</p>}
+        {nodes.map((node) => {
+          const text = blockText(node);
+          return (
+            <div key={node.key} className="group flex items-start gap-1.5 text-xs">
+              <div className="min-w-0 flex-1">
+                {node.kind === 'tool' ? (
+                  <div>
+                    <span className={clsx(
+                      'inline-block px-1.5 py-0.5 rounded text-[10px] font-medium',
+                      node.isError ? 'bg-red-900/40 text-red-300' : 'bg-neutral-800 text-neutral-300'
+                    )}>
+                      {node.tool}
+                    </span>
+                    <span className="text-neutral-500 ml-1.5 break-words">{toolSummary(node.tool, node.input)}</span>
+                  </div>
+                ) : (
+                  <p className={clsx('break-words whitespace-pre-wrap', node.kind === 'thinking' ? 'text-neutral-600 italic' : 'text-neutral-300')}>
+                    {text}
+                  </p>
+                )}
+              </div>
+              {text && (
+                <button
+                  onClick={() => copyBlock(node.key, text)}
+                  className="shrink-0 p-1 text-neutral-600 hover:text-neutral-200 opacity-0 group-hover:opacity-100 transition-opacity"
+                  aria-label="Copy"
+                  title="Copy"
+                >
+                  {copiedKey === node.key ? <Check size={11} /> : <Copy size={11} />}
+                </button>
+              )}
+            </div>
+          );
+        })}
+        {!following && (
+          <button
+            onClick={jumpToLatest}
+            className="sticky bottom-0 left-1/2 -translate-x-1/2 flex items-center gap-1 px-2 py-1 rounded-full text-[11px] bg-neutral-800 text-neutral-200 border border-neutral-700 hover:bg-neutral-700 shadow"
+          >
+            <ArrowDown size={11} />
+            Jump to latest
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const SEND_STATUS_STYLE: Record<string, string> = {
+  sending: 'text-neutral-500',
+  delivered: 'text-green-400',
+  queued: 'text-amber-400',
+  held: 'text-amber-400',
+  error: 'text-red-400',
+};
+
+/** Message box for the panel — sending/delivered/held/queued vocabulary comes
+ * from agentSend.ts (already tested) rather than inventing new labels. */
+function MessageComposer({ agentId, disabled }: { agentId: string; disabled: boolean }) {
+  const [text, setText] = useState('');
+  const [status, setStatus] = useState<'idle' | 'sending' | SendState | 'error'>('idle');
+  const [detail, setDetail] = useState('');
+
+  const submit = async () => {
+    const trimmed = text.trim();
+    if (!trimmed || disabled || status === 'sending') return;
+    setStatus('sending');
+    setDetail('');
+    const result = await sendToAgent(agentId, { text: trimmed });
+    if (isComposerHold(result) || (!isDelivered(result) && !isQueued(result) && !isHeld(result))) {
+      setStatus('error');
+      setDetail(describeSendState(result) || 'Send failed');
+      return;
+    }
+    setStatus(result.state as SendState);
+    setDetail(describeSendState(result));
+    setText('');
+  };
+
+  return (
+    <div>
+      <h3 className="text-[11px] uppercase tracking-wider text-neutral-500 mb-1.5">Message</h3>
+      {disabled ? (
+        <p className="text-xs text-neutral-600 rounded-lg border border-dashed border-neutral-800 p-2.5">
+          Agent is down — messaging disabled.
+        </p>
+      ) : (
+        <div className="space-y-1.5">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+              placeholder={`Message ${agentId}...`}
+              className="flex-1 min-w-0 px-3 py-1.5 text-sm rounded-lg bg-neutral-900 border border-neutral-800 text-neutral-100 placeholder:text-neutral-600 focus:outline-none focus:border-neutral-600"
+            />
+            <button
+              onClick={submit}
+              disabled={status === 'sending' || !text.trim()}
+              className="shrink-0 p-1.5 rounded-lg bg-neutral-800 text-neutral-300 hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed"
+              aria-label="Send"
+            >
+              <Send size={14} />
+            </button>
+          </div>
+          {status !== 'idle' && (
+            <p className={clsx('text-[11px]', SEND_STATUS_STYLE[status] || 'text-neutral-500')}>
+              {status === 'sending' ? 'sending…' : (detail || status)}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function AgentDetailPanel({
@@ -128,7 +348,7 @@ export function AgentDetailPanel({
             >
               <FileText size={13} className="text-neutral-500 shrink-0" />
               <span className="text-neutral-500 w-[7.5rem] shrink-0">Prompt file</span>
-              <span className="break-words underline decoration-neutral-700">{agent.prompt_file || 'view'}</span>
+              <span className="break-words underline decoration-neutral-700">{agent.system_prompt || 'view'}</span>
             </button>
             {promptOpen && (
               <div className="mt-2 ml-[1.4rem] rounded-lg border border-neutral-800 bg-neutral-950 p-2.5">
@@ -170,11 +390,11 @@ export function AgentDetailPanel({
           </div>
         </div>
 
-        {/* Live feed + message box mount here at build-order step 8. Intentionally
-            not built in this chunk (scope cut per build's handoff). */}
-        <div className="rounded-xl border border-dashed border-neutral-800 p-4 text-xs text-neutral-600">
-          Live feed and message box mount here (step 8).
-        </div>
+        {/* Live feed + message box — build-order step 8. key=agent.id remounts
+            (fresh subscription + cleared feed) on agent switch instead of
+            resetting state inside the effect. */}
+        <DetailLiveFeed key={agent.id} agentId={agent.id} />
+        <MessageComposer key={agent.id} agentId={agent.id} disabled={isDown} />
 
         {/* Recent problems */}
         <div>
