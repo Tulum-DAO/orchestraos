@@ -242,3 +242,34 @@ test('POST /text/stream requires text, like /text', async () => {
   const r = await postSse(deps, '/api/arturo/text/stream', { text: '   ' });
   assert.equal(r.status, 400);
 });
+
+// --- POST /text/prewarm: start the warm CLI before the first message ------------------------
+test('POST /text/prewarm forwards the conversation and the chosen brain', async () => {
+  const bodies: any[] = [];
+  const deps = makeDeps({
+    fetchJson: async (url: string, init: any) => {
+      bodies.push({ url, body: JSON.parse(init.body) });
+      return { status: 200, body: { ok: true, warmed: true } };
+    },
+  });
+  const r = await postSse(deps, '/api/arturo/text/prewarm',
+    { conversation_id: 'c1', brain: { provider: 'claude', model: 'claude-opus-5' } });
+  assert.equal(r.status, 200);
+  assert.match(bodies[0].url, /\/arturo\/text\/prewarm$/);
+  assert.deepEqual(bodies[0].body, { conversation_id: 'c1', brain: { provider: 'claude', model: 'claude-opus-5' } });
+});
+
+test('POST /text/prewarm needs a conversation — there is nothing to warm without one', async () => {
+  const deps = makeDeps();
+  const r = await postSse(deps, '/api/arturo/text/prewarm', {});
+  assert.equal(r.status, 400);
+});
+
+test('POST /text/prewarm refuses a hostile model id before it reaches a spawn', async () => {
+  let called = false;
+  const deps = makeDeps({ fetchJson: async () => { called = true; return { status: 200, body: {} }; } });
+  const r = await postSse(deps, '/api/arturo/text/prewarm',
+    { conversation_id: 'c1', brain: { provider: 'claude', model: '--version' } });
+  assert.equal(r.status, 400);
+  assert.equal(called, false);
+});

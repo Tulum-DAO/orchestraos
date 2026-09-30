@@ -3569,6 +3569,23 @@ async def handle_arturo_text(request):
         return _json({"ok": False, "error": "arturo unreachable"}, status=502)
 
 
+async def handle_arturo_text_prewarm(request):
+    """POST /arturo/text/prewarm — start the conversation's warm CLI before its first message."""
+    import aiohttp
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    body = await request.read()
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(f"{ARTURO_TEXT_BASE}/text/prewarm", data=body,
+                              headers={"Content-Type": "application/json"},
+                              timeout=aiohttp.ClientTimeout(total=30)) as r:
+                return _json(await r.json(content_type=None), status=r.status)
+    except Exception as e:  # noqa: BLE001
+        log.error(f"arturo/text/prewarm forward: {e}")
+        return _json({"ok": False, "error": "arturo unreachable"}, status=502)
+
+
 async def handle_arturo_text_stream(request):
     """POST /arturo/text/stream — the same turn as /arturo/text, streamed (spec §2.1).
 
@@ -4894,6 +4911,7 @@ def build_app():
     app.router.add_post("/arturo/ptt", handle_arturo_ptt)
     app.router.add_post("/arturo/text", handle_arturo_text)
     app.router.add_post("/arturo/text/stream", handle_arturo_text_stream)
+    app.router.add_post("/arturo/text/prewarm", handle_arturo_text_prewarm)
     app.router.add_post("/arturo/transcribe", handle_arturo_transcribe)
     app.router.add_get("/arturo/health", handle_arturo_health)
     app.router.add_get("/arturo/threads", handle_arturo_threads)

@@ -214,3 +214,86 @@ def test_a_session_serves_one_turn_at_a_time():
     s = WarmSession(FakeProc(replies=["x"]), clock=lambda: 0)
     assert s.lock.acquire(blocking=False)
     s.lock.release()
+
+
+# ---- found live: "the third response never populates" ---------------------------------
+# read_events stops pulling lines the moment it sees a turn's `result`, so the pool's turn
+# generator is never resumed past that line. The session lock was released only when the
+# generator exited, i.e. whenever Python got round to collecting it, so a later turn on the
+# same conversation could wait on the lock forever.
+
+def _consume_like_read_events(it):
+    """Pull lines until the result line, then STOP, holding a reference, never closing."""
+    out = []
+    for line in it:
+        out.append(line)
+        if json.loads(line).get("type") == "result":
+            break
+    return out
+
+
+def test_a_consumer_that_stops_at_the_result_does_not_hold_the_session():
+    proc = FakeProc(replies=["one", "two", "three"])
+    pool = WarmPool(spawn=spawner([proc]), argv_for=lambda key: ["claude"], clock=lambda: 0)
+    key = ("c1", "claude", "")
+    held = []                                  # keep every generator alive, like a live frame would
+    for n in range(3):
+        it = pool.turn(key, f"turn {n}")
+        held.append(it)
+        done = threading.Event()
+        result = {}
+
+        def run():
+            result["lines"] = _consume_like_read_events(it)
+            done.set()
+
+        threading.Thread(target=run, daemon=True).start()
+        assert done.wait(timeout=3), f"turn {n + 1} hung waiting on the previous turn's lock"
+        assert text_of(result["lines"]) == ["one", "two", "three"][n]
+
+
+def test_a_turn_ABANDONED_mid_stream_discards_its_session():
+    """If a turn is dropped before its result, the rest of that turn's output is still in the
+    pipe; the next turn on that process would read the previous answer as its own."""
+    first = FakeProc(replies=["unfinished"])
+    second = FakeProc(replies=["fresh"])
+    spawn = spawner([first, second])
+    pool = WarmPool(spawn=spawn, argv_for=lambda key: ["claude"], clock=lambda: 0)
+    key = ("c1", "claude", "")
+    it = pool.turn(key, "hi")
+    next(it)                                   # read the first delta, then walk away
+    it.close()                                 # the client disconnected
+    assert first.killed, "a half-read process must not be reused"
+    assert text_of(pool.turn(key, "again")) == "fresh"
+    assert len(spawn.started) == 2
+
+
+# ---- prewarm: the first turn should not pay for the spawn -------------------------------
+
+def test_prewarm_starts_the_process_and_the_first_turn_reuses_it():
+    spawn = spawner([FakeProc(replies=["hello"])])
+    pool = WarmPool(spawn=spawn, argv_for=lambda key: ["claude"], clock=lambda: 0)
+    key = ("c1", "claude", "")
+    assert pool.prewarm(key, ["claude", "--system-prompt", "S"]) is True
+    assert text_of(pool.turn(key, "hi")) == "hello"
+    assert len(spawn.started) == 1, "the turn must adopt the prewarmed process, not start another"
+
+
+def test_prewarming_twice_does_not_start_a_second_process():
+    spawn = spawner([FakeProc(), FakeProc()])
+    pool = WarmPool(spawn=spawn, argv_for=lambda key: ["claude"], clock=lambda: 0)
+    key = ("c1", "claude", "")
+    assert pool.prewarm(key, ["claude"]) is True
+    assert pool.prewarm(key, ["claude"]) is False
+    assert len(spawn.started) == 1
+
+
+def test_a_prewarmed_session_left_idle_is_still_evicted():
+    now = [0.0]
+    proc = FakeProc()
+    pool = WarmPool(spawn=spawner([proc]), argv_for=lambda key: ["claude"],
+                    clock=lambda: now[0], idle_ttl_s=300)
+    pool.prewarm(("c1", "claude", ""), ["claude"])
+    now[0] = 301
+    pool.evict_idle()
+    assert proc.killed, "a tab opened and abandoned must not hold a process forever"

@@ -162,3 +162,20 @@ export async function arturoTurn(
   void started;
   return arturoText(text, conversationId, ctx, { onSent: opts.onSent, brain: opts.brain });
 }
+
+
+/**
+ * Start this conversation's warm CLI before the operator sends anything, so the first turn
+ * does not pay for the process start (~0.6-1.2s, measured). Fire-and-forget: a prewarm that
+ * fails only means the first turn starts the process itself, exactly as it did before.
+ */
+export function arturoPrewarm(conversationId: string, brain?: { provider: string; model: string }): void {
+  if (!conversationId) return;
+  const body: Record<string, unknown> = { conversation_id: conversationId };
+  if (brain) body.brain = brain;
+  try {
+    void fetch('/api/arturo/text/prewarm', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    }).catch(() => {});
+  } catch { /* no fetch — nothing to warm, nothing lost */ }
+}

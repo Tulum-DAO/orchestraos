@@ -214,6 +214,7 @@ from services.arturo import thread_store as _thread_store   # G20 durable thread
 from services.arturo import vq6 as _vq6
 from services.arturo import text_stream as _text_stream   # Phase 2 /text/stream
 from services.arturo import warm_session as _warm_session   # one live CLI per conversation
+from services.arturo import cli_events as _cli_events
 _VQ6 = _vq6.InflightRegistry()
 from services.arturo import voice_guards as _voice_guards   # VQ-9 re-engagement-filler suppression
 # F2 cross-request dedup (DEC-1788674600635445, congruence: AGY + in-process Claude). MODULE-LEVEL
@@ -4727,6 +4728,48 @@ def _record_text_turn(conversation_id, text, reply, brain=None):
     _TEXT_HISTORY.append(conversation_id, "user", text)
     _TEXT_HISTORY.append(conversation_id, "assistant", reply)
     _THREADS.record_turn(conversation_id, text, reply, brain=brain)
+
+
+@app.route("/text/prewarm", methods=["POST"])
+def text_prewarm_endpoint():
+    """Start this conversation's warm CLI BEFORE its first message (warm_session.py).
+
+    A warm process is spawned by the first turn, so that turn paid ~0.6-1.2s the later ones did
+    not (operator: "our first response takes a second longer than it should"). The page calls
+    this when it opens a conversation, while the operator is still typing. It is idempotent: a
+    live session is left alone. Nothing is sent to the model."""
+    remote = request.remote_addr or ""
+    if remote not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+        return jsonify({"ok": False, "error": "loopback only"}), 403
+    data = request.get_json(silent=True) or {}
+    conversation_id = (data.get("conversation_id") or "").strip()[:200]
+    if not conversation_id:
+        return jsonify({"ok": False, "error": "conversation_id required"}), 400
+    brain_req = data.get("brain")
+    chosen = None
+    if brain_req is not None:
+        chosen, _chosen_id, refusal = _resolve_turn_brain(brain_req)
+        if refusal:
+            return jsonify(refusal[1]), refusal[0]
+    turn_brain = chosen or _turn_brain()
+    runtime = getattr(turn_brain, "runtime", "")
+    if getattr(turn_brain, "kind", "") != "runtime" or runtime not in _cli_events.WARM_RUNTIMES:
+        return jsonify({"ok": True, "warmed": False, "reason": "not_warmable"})
+    history = _TEXT_HISTORY.get(conversation_id) or _THREADS.history(conversation_id)
+    # Everything the turn will have BEFORE its new message, built the way the turn builds it,
+    # so the prewarmed process is the one the turn would have started itself.
+    prior = _ptt.build_messages(build_context(calling_channel="text"), history, "")[:-1]
+    argv = _text_stream.warm_argv(turn_brain, prior, TOOLS)
+    env = dict(os.environ)
+    for key in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"):
+        env.pop(key, None)
+    key = (conversation_id, runtime, getattr(turn_brain, "_model_flag", "") or "")
+    try:
+        started = _WARM_POOL.prewarm(key, argv, env=env)
+    except Exception as e:  # noqa: BLE001 — a failed prewarm only means the turn spawns it
+        log.error(f"/text/prewarm failed: {e}")
+        return jsonify({"ok": False, "error": "prewarm_failed"}), 500
+    return jsonify({"ok": True, "warmed": started})
 
 
 @app.route("/text/stream", methods=["POST"])

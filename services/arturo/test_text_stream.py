@@ -282,3 +282,14 @@ def test_a_failed_warm_turn_discards_the_session_too():
     warm_events([json.dumps({"type": "result", "is_error": True, "result": "boom"}) + "\n"],
                 [{"role": "user", "content": "x"}], discarded)
     assert discarded == [True]
+
+
+def test_the_prewarm_and_the_turn_build_the_SAME_process():
+    """A prewarm that built a different prompt would be adopted by a conversation it does not
+    match — the turn would run on the prewarm's context instead of its own."""
+    prior = [{"role": "system", "content": "SYS"},
+             {"role": "user", "content": "earlier"},
+             {"role": "assistant", "content": "reply"}]
+    msgs = prior + [{"role": "user", "content": "new"}]
+    _, warm = warm_events(CLAUDE_PROSE, msgs, [])
+    assert warm.calls[0][0] == TS.warm_argv(FakeBrain(), prior, None)

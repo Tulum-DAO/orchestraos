@@ -22,7 +22,7 @@ import '../components/arturo/arturo.css';
 import { BrainModal } from '../components/agent/BrainModal';
 import { ModelSelectorSheet } from '../components/agent/ModelSelectorSheet';
 import { useArturoBrain } from '../stores/arturoBrain';
-import { arturoTurn } from '../lib/arturoStream';
+import { arturoTurn, arturoPrewarm } from '../lib/arturoStream';
 import { brainFromThread, describeTurnError, toWireBrain } from '../lib/arturoBrain';
 import { arturoHealth, arturoText, runtimesAvailable, brainLabel, greeting, newConversationId,
   isStarting, waitForArturo, STARTING_TEXT, firstStep, stepAfterRuntime, onboardingTurn, sendStateLabel,
@@ -104,6 +104,10 @@ export default function ArturoHome() {
   const fileInput = useRef<HTMLInputElement>(null);
   const convId = useRef<string>(ls(LS_CONV) || '');
   useEffect(() => { if (!convId.current) { convId.current = newConversationId('web'); lsSet(LS_CONV, convId.current); } }, []);
+  // Warm this conversation's CLI while the operator is still reading or typing, and again if
+  // they switch brain (a different model is a different process). The first turn then adopts
+  // a live process instead of starting one.
+  useEffect(() => { arturoPrewarm(convId.current, toWireBrain(brainChoice)); }, [brainChoice]);
   useEffect(() => { if (drawer) void listThreads().then(setThreads); }, [drawer]);
   // On a phone the drawer covers the composer, and the only way out was a ~110 px sliver of dark
   // page that does not read as a control. Escape closes it; there is also a close button inside.
@@ -121,7 +125,9 @@ export default function ArturoHome() {
     if (!t) return;
     convId.current = id; lsSet(LS_CONV, id);
     // A thread answers on the brain it last used; one that used the default brain goes back to it.
-    chooseBrain(brainFromThread(t, {}));
+    const resumedBrain = brainFromThread(t, {});
+    chooseBrain(resumedBrain);
+    arturoPrewarm(id, toWireBrain(resumedBrain));
     setTurns(t.turns.map((x) => ({ id: nextId.current++, role: x.role === 'user' ? 'user' : 'arturo', text: x.content })));
     setStep('done'); lsSet(LS_ONBOARDED, '1');
     setDrawer(false);
@@ -130,6 +136,7 @@ export default function ArturoHome() {
   /** New thread — the one you leave stays in the list rather than becoming unreachable. */
   function startNewThread() {
     convId.current = newConversationId('web'); lsSet(LS_CONV, convId.current);
+    arturoPrewarm(convId.current, toWireBrain(brainChoice));
     setTurns([]);
     setDrawer(false);
   }

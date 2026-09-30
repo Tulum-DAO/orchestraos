@@ -132,11 +132,50 @@ class WarmPool:
     def turn(self, key: Key, text: str, argv: Optional[list] = None,
              env: Optional[dict] = None) -> Iterator[str]:
         """`argv` is used only if this turn has to START a process — the system prompt (with
-        the conversation so far) is fixed at spawn, and a live session already has it."""
+        the conversation so far) is fixed at spawn, and a live session already has it.
+
+        The session is released the moment the turn's `result` line arrives, NOT when this
+        generator exits. The reader downstream stops pulling at the result, so waiting for the
+        generator to finish meant waiting for garbage collection: a later turn on the same
+        conversation could wait on the lock forever ("the third response never populates",
+        2026-09-30). And a turn dropped BEFORE its result leaves the rest of its answer in the
+        pipe, where the next turn would read it as its own — so that session is discarded.
+        """
         self.evict_idle()
         session, _fresh = self._get(key, argv=argv, env=env)
-        with session.lock:
-            yield from session.turn(text)
+        session.lock.acquire()
+        state = {"released": False, "finished": False}
+
+        def release():
+            if not state["released"]:
+                state["released"] = True
+                session.last_used = self._clock()
+                session.lock.release()
+
+        try:
+            for line in session.turn(text):
+                if _is_turn_end(line):
+                    state["finished"] = True
+                    release()              # the turn is over the instant its result exists
+                yield line
+                if state["finished"]:
+                    return
+        finally:
+            if not state["finished"]:
+                # Abandoned mid-turn, or the process died: whatever it still has to say
+                # belongs to a turn nobody is reading. Never hand it to the next one.
+                with self._lock:
+                    if self._sessions.get(key) is session:
+                        del self._sessions[key]
+                session.kill()
+            release()
+
+    def prewarm(self, key: Key, argv: list, env: Optional[dict] = None) -> bool:
+        """Start the conversation's process before its first message, so the first turn does
+        not pay for the spawn. Returns True if a process was started, False if one was live."""
+        self.evict_idle()
+        _session, fresh = self._get(key, argv=argv, env=env)
+        return fresh
 
     def discard(self, key: Key):
         with self._lock:

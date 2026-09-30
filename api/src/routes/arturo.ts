@@ -131,6 +131,23 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     }, 195000);
   });
 
+  // Start the conversation's warm CLI before its first message, so turn one does not pay for
+  // the process start. Fire-and-forget from the page; idempotent on the proxy.
+  router.post('/text/prewarm', async (req, res) => {
+    const conversation_id = String((req.body || {}).conversation_id || '').slice(0, 200);
+    if (!conversation_id) { res.status(400).json({ ok: false, error: 'conversation_id required' }); return; }
+    const upstream: Record<string, unknown> = { conversation_id };
+    const raw = (req.body || {}).brain;
+    if (raw !== undefined && raw !== null) {
+      const picked = pickBrain(raw);
+      if (!picked.ok) { res.status(400).json({ ok: false, ...picked.refusal }); return; }
+      upstream.brain = picked.value;
+    }
+    await forward(res, '/arturo/text/prewarm', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(upstream),
+    }, 30000);
+  });
+
   /**
    * POST /api/arturo/text/stream — the same turn as /text, as it happens (spec §2.1).
    *

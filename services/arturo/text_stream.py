@@ -69,10 +69,7 @@ def stream_turn(text, conversation_id, brain, brain_id, messages, spawn, fallbac
     model_flag = getattr(brain, "_model_flag", "") or ""
     if warm is not None and brain.runtime in WARM_RUNTIMES:
         # A warm process already remembers the conversation, so it gets ONLY the new message.
-        # The history rides in the system prompt, and only when the process has to start.
-        history_prompt = render_transcript(messages[:-1])[1] if len(messages) > 1 else ""
-        seed = f"{system}\n\nThe conversation so far:\n{history_prompt}" if history_prompt.strip() else system
-        source = warm(warm_command(brain.runtime, brain.cli, seed, model_flag), messages[-1].get("content") or "")
+        source = warm(warm_argv(brain, messages[:-1], tools), messages[-1].get("content") or "")
     else:
         source = spawn(stream_command(brain.runtime, brain.cli, system, prompt, model=model_flag))
     classifier, sanitizer = PassClassifier(), StreamingSanitizer()
@@ -131,6 +128,24 @@ def stream_turn(text, conversation_id, brain, brain_id, messages, spawn, fallbac
 
     # HOLD, or a stream that stopped before it finished: the ordinary path owns this turn.
     yield from _whole_reply(turn_id, conversation_id, fallback, brain)
+
+
+def warm_argv(brain, prior_messages, tools=None):
+    """argv for a conversation's warm process, from everything BEFORE the new message.
+
+    The system prompt is Arturo's context plus the tool protocol, rendered exactly as
+    RuntimeBrain renders it; the history rides in it because a warm process takes only new
+    messages as turns. Shared by the turn and the prewarm, so a prewarmed process is the same
+    process the turn would have started — a prewarm that built a different prompt would be
+    reused for a conversation it does not match.
+    """
+    system, history_prompt = render_transcript(prior_messages)
+    block = tool_protocol_block(tools or [], None)
+    if block:
+        system = f"{system}\n\n{block}" if system else block
+    if history_prompt.strip():
+        system = f"{system}\n\nThe conversation so far:\n{history_prompt}"
+    return warm_command(brain.runtime, brain.cli, system, getattr(brain, "_model_flag", "") or "")
 
 
 def _whole_reply(turn_id, conversation_id, fallback, brain):
