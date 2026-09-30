@@ -99,6 +99,12 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
   const [injectText, setInjectText] = useState('');
   const [injecting, setInjecting] = useState(false);
   const [injectResult, setInjectResult] = useState<string | null>(null);
+  // Success is a BOOLEAN, not a string comparison. The styling below used to test
+  // `injectResult === 'Sent'`, which worked only while every success said exactly "Sent".
+  // The durable path also reports "Queued — agent is busy" and "Held — will deliver at the
+  // next turn boundary": both are successes, and both rendered RED under the string test.
+  // That was a regression I introduced when I switched this box to sendToAgent().
+  const [injectOk, setInjectOk] = useState(false);
   const [useInjectMode, setUseInjectMode] = useState(false);
   const [devMode, setDevMode] = useState(false);
   const [showAuthFlow, setShowAuthFlow] = useState(false);
@@ -276,11 +282,13 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
     logAction('agent.inject', agent.id, injectText.trim().slice(0, 100));
     setInjecting(true);
     setInjectResult(null);
+    setInjectOk(false);
     try {
       const result = await injectToAgent(agent.id, injectText.trim());
       setInjectResult(result.injected ? 'Sent' : 'Failed');
       setInjectText('');
     } catch (err: any) {
+      setInjectOk(false);
       setInjectResult('Error: ' + (err.message || 'unknown'));
     } finally {
       setInjecting(false);
@@ -297,21 +305,26 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
     logAction('agent.message', agent.id, injectText.trim().slice(0, 100));
     setInjecting(true);
     setInjectResult(null);
+    setInjectOk(false);
     try {
       // Durable path. This used to call messageAgent() -> POST /api/agents/:id/message,
       // which wrote a file into queue/inbox/ and returned {sent:true} — a path NO live agent
       // reads (prompts/infrastructure.md says so outright). The box reported "Sent" and the
       // instruction vanished. Found by test during the 2D QA pass, reproduced twice.
       const result = await sendToAgent(agent.id, { text: injectText.trim() });
-      if (isDelivered(result) || isQueued(result) || isHeld(result)) {
+      const accepted = isDelivered(result) || isQueued(result) || isHeld(result);
+      setInjectOk(accepted);
+      if (accepted) {
         // Report what actually happened rather than a flat "Sent": queued and held are real,
         // distinct outcomes, and flattening them is how the old path got away with lying.
+        // describeSendState() returns '' for a plain delivery, hence the fallback.
         setInjectResult(describeSendState(result) || 'Sent');
         setInjectText('');
       } else {
         setInjectResult('Error: ' + (describeSendState(result) || result.error || 'send failed'));
       }
     } catch (err: any) {
+      setInjectOk(false);
       setInjectResult('Error: ' + (err.message || 'unknown'));
     } finally {
       setInjecting(false);
@@ -601,14 +614,14 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                     'text-[10px] px-1.5 py-0.5 rounded transition-colors',
                     useInjectMode ? 'text-amber-400 bg-amber-500/10' : 'text-neutral-600 hover:text-neutral-400'
                   )}
-                  title={useInjectMode ? 'Inject mode: sends directly to tmux session' : 'Inbox mode: sends to agent inbox'}
+                  title={useInjectMode ? 'Inject mode: types straight into the tmux session' : 'Send mode: durable delivery via msg_store — the agent reads it on its next turn'}
                 >
-                  {useInjectMode ? 'inject' : 'inbox'}
+                  {useInjectMode ? 'inject' : 'send'}
                 </button>
               </div>
             </div>
             {injectResult && (
-              <span className={clsx('text-[10px] mt-1 block', injectResult === 'Sent' ? 'text-green-500' : 'text-red-400')}>
+              <span className={clsx('text-[10px] mt-1 block', injectOk ? 'text-green-500' : 'text-red-400')}>
                 {injectResult}
               </span>
             )}
@@ -702,6 +715,8 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                 </div>
                 <button
                   onClick={() => { setFocused(false); setArturoFocus(null); }}
+                  aria-label="Close agent panel"
+                  title="Close agent panel"
                   className="p-1.5 text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800 rounded-lg transition-colors"
                 >
                   <X size={16} />
@@ -758,7 +773,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                 <span className="text-sm font-semibold text-neutral-200">{promptEditing ? 'Edit' : 'View'} Prompt — {agent.name || agent.id}</span>
                 {isProtected && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400">read-only</span>}
               </div>
-              <button onClick={() => setShowPromptModal(false)} className="text-neutral-500 hover:text-neutral-300"><X size={16} /></button>
+              <button onClick={() => setShowPromptModal(false)} aria-label="Close prompt viewer" title="Close prompt viewer" className="text-neutral-500 hover:text-neutral-300"><X size={16} /></button>
             </div>
             <div className="flex-1 overflow-y-auto p-4 min-h-0">
               {promptContent === null ? (
