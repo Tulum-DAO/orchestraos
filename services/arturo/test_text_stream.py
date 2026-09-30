@@ -293,3 +293,117 @@ def test_the_prewarm_and_the_turn_build_the_SAME_process():
     msgs = prior + [{"role": "user", "content": "new"}]
     _, warm = warm_events(CLAUDE_PROSE, msgs, [])
     assert warm.calls[0][0] == TS.warm_argv(FakeBrain(), prior, None)
+
+
+# ---- the tool loop runs INSIDE the warm session ----------------------------------------
+# Found live: after the first message Arturo nearly always asks for a tool. The stream could
+# not run tools, so it threw the warm session away and re-ran the whole turn down /text —
+# every turn after the first was slow, arrived whole, and killed the session it was meant to
+# reuse. The loop now executes the calls itself, hands the results back to the SAME process,
+# and streams the answer.
+
+def delta_line(text):
+    return json.dumps({"type": "stream_event", "event": {"type": "content_block_delta",
+                       "delta": {"type": "text_delta", "text": text}}}) + "\n"
+
+
+RESULT = json.dumps({"type": "result", "is_error": False, "result": "ok"}) + "\n"
+
+
+class WarmScript:
+    """A warm session whose successive turns return successive scripted passes."""
+
+    def __init__(self, passes):
+        self.passes = list(passes)
+        self.sent = []
+        self.argvs = []
+
+    def __call__(self, argv, text):
+        self.argvs.append(argv)
+        self.sent.append(text)
+        return iter(self.passes.pop(0) if self.passes else [RESULT])
+
+
+def loop_events(passes, run_tools, fallback=None, record=None):
+    warm = WarmScript(passes)
+    discarded = []
+    evs = list(TS.stream_turn(
+        text="what's new?", conversation_id="c1", brain=FakeBrain(),
+        brain_id={"provider": "claude", "model": "claude-opus-5"},
+        messages=[{"role": "system", "content": "SYS"}, {"role": "user", "content": "what's new?"}],
+        spawn=lambda cmd: iter([]),
+        fallback=fallback or (lambda: (_ for _ in ()).throw(AssertionError("must not fall back"))),
+        record=record or (lambda **kw: None), warm=warm, discard=lambda: discarded.append(True),
+        run_tools=run_tools))
+    return evs, warm, discarded
+
+
+TOOL_PASS = [delta_line('{"tool_calls":[{"name":"list_agents","arguments":{}}]}'), RESULT]
+ANSWER_PASS = [delta_line("Four agents are "), delta_line("running."), RESULT]
+
+
+def test_a_tool_turn_runs_its_tools_in_the_session_and_STREAMS_the_answer():
+    ran = []
+
+    def run_tools(calls):
+        ran.extend(c["name"] for c in calls)
+        return [{"name": "list_agents", "ok": True, "result": "4 agents: a, b, c, d"}]
+
+    evs, warm, discarded = loop_events([TOOL_PASS, ANSWER_PASS], run_tools)
+    assert ran == ["list_agents"]
+    streamed = "".join(d["text"] for d in payloads(evs, "text.delta"))
+    assert streamed == "Four agents are running."
+    end = payloads(evs, "turn.end")[0]
+    assert end["reply_text"] == "Four agents are running."
+    assert end["tools_called"] == ["list_agents"]
+    assert discarded == [], "the session saw its own tool results — its memory is still true"
+
+
+def test_the_results_go_back_to_the_SAME_process_in_the_protocol_format():
+    evs, warm, _ = loop_events(
+        [TOOL_PASS, ANSWER_PASS],
+        lambda calls: [{"name": "list_agents", "ok": True, "result": "4 agents"}])
+    assert warm.sent[0] == "what's new?"
+    assert "TOOL RESULT (list_agents): 4 agents" in warm.sent[1]
+
+
+def test_tool_events_are_emitted_so_the_client_can_say_what_is_happening():
+    evs, _, _ = loop_events(
+        [TOOL_PASS, ANSWER_PASS],
+        lambda calls: [{"name": "list_agents", "ok": True, "result": "4 agents"}])
+    assert [p["name"] for p in payloads(evs, "tool.call")] == ["list_agents"]
+    assert payloads(evs, "tool.result")[0]["ok"] is True
+
+
+def test_prose_BEFORE_a_tool_call_streams_and_the_envelope_never_does():
+    mixed = [delta_line("Let me check. "),
+             delta_line('{"tool_ca'), delta_line('lls":[{"name":"list_agents","arguments":{}}]}'),
+             RESULT]
+    evs, _, _ = loop_events(
+        [mixed, ANSWER_PASS],
+        lambda calls: [{"name": "list_agents", "ok": True, "result": "4"}])
+    streamed = "".join(d["text"] for d in payloads(evs, "text.delta"))
+    assert "tool_calls" not in streamed and "{" not in streamed, "the envelope leaked into the reply"
+    assert streamed.startswith("Let me check.")
+    assert streamed.endswith("Four agents are running.")
+
+
+def test_a_failing_tool_is_reported_to_the_model_not_raised_to_the_client():
+    def run_tools(calls):
+        return [{"name": "list_agents", "ok": False, "result": "error: registry unreadable"}]
+
+    evs, warm, _ = loop_events([TOOL_PASS, ANSWER_PASS], run_tools)
+    assert "error: registry unreadable" in warm.sent[1]
+    assert payloads(evs, "tool.result")[0]["ok"] is False
+    assert payloads(evs, "turn.end")
+
+
+def test_a_model_that_never_stops_calling_tools_is_cut_off_and_falls_back():
+    calls = []
+    evs, _, discarded = loop_events(
+        [TOOL_PASS] * 10,
+        lambda cs: calls.append(1) or [{"name": "list_agents", "ok": True, "result": "4"}],
+        fallback=lambda: (200, {"ok": True, "reply_text": "done the slow way", "tools_called": [], "spawned": []}))
+    assert len(calls) <= TS.MAX_TOOL_ROUNDS
+    assert discarded == [True]
+    assert payloads(evs, "turn.end")[0]["reply_text"] == "done the slow way"

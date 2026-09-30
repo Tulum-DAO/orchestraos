@@ -4837,6 +4837,37 @@ def text_stream_endpoint():
     warm_key = (conversation_id, getattr(turn_brain, "runtime", ""),
                 getattr(turn_brain, "_model_flag", "") or "")
 
+    # The tool loop's executor for a streamed turn: execute_tool itself, behind the SAME
+    # per-turn dedupe ledger /text uses (so a model repeating a side-effecting call in a later
+    # round runs it once), and with the operator's recent words as user_turns so the
+    # send_telegram check reads real intent rather than failing closed.
+    _user_turns = [t.get("content") for t in (history or []) if t.get("role") == "user"] + [text_in]
+    _stream_ledger = _voice_guards.ToolDedupLedger()
+
+    def _run_tools(calls):
+        # These ContextVars are per thread; the turn runs in with_heartbeat's worker, so they are
+        # published here, in that thread, where execute_tool and nested dispatches read them.
+        if _TURN_DEDUP.get() is None:
+            _TURN_DEDUP.set(_stream_ledger)
+        if _TOOLS_THIS_TURN.get() is None:
+            _TOOLS_THIS_TURN.set([])
+        results = []
+        for call in calls:
+            name, args = call["name"], call.get("arguments") or {}
+            prior = _stream_ledger.reserve(name, args)
+            if prior is not None:
+                log.warning(f"DUP-CALL SUPPRESSED (stream): {name} args={_dedup_argsum(args)}")
+                results.append({"name": name, "ok": True, "result": prior})
+                continue
+            try:
+                result, ok = execute_tool(name, args, user_turns=_user_turns), True
+            except Exception as e:  # noqa: BLE001 — a failed tool is information for the model
+                result, ok = f"error: {e}", False
+            _stream_ledger.record(name, args, result)
+            log.info(f"Tool result ({name}): {str(result)[:200]}")
+            results.append({"name": name, "ok": ok, "result": result})
+        return results
+
     def _warm(argv, new_text):
         env = dict(os.environ)
         for key in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"):
@@ -4851,7 +4882,7 @@ def text_stream_endpoint():
             text=body_text, conversation_id=conversation_id, brain=turn_brain,
             brain_id=chosen_id, messages=messages, spawn=_spawn,
             fallback=_fallback, record=_record_text_turn, tools=TOOLS,
-            warm=_warm, discard=lambda: _WARM_POOL.discard(warm_key))
+            warm=_warm, discard=lambda: _WARM_POOL.discard(warm_key), run_tools=_run_tools)
         try:
             for frame in _text_stream.with_heartbeat(turn, interval_s=10.0):
                 yield frame
