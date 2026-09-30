@@ -16,7 +16,9 @@ import {
   type AgentSendDeps,
   type GatewayInjectResult,
   type MsgStoreSendResult,
+  MSG_STORE,
 } from './agent-send.js';
+import { resolveMsgStorePath } from './messages.js';
 
 function req(opts: { params?: any; body?: any; headers?: Record<string, string> } = {}): Request {
   return {
@@ -218,4 +220,40 @@ test('buildMessageText: image attachment gets an [IMAGE: path] marker prefix', (
 test('buildMessageText: non-image attachment gets [FILE: path]', () => {
   const out = buildMessageText('', [{ upload_id: '123-abc.pdf' }]);
   assert.match(out, /^\[FILE: .*123-abc\.pdf\]$/);
+});
+
+test('MSG_STORE resolves to the CODE checkout, never the data dir', () => {
+  // test found (2026-09-30) that this was join(ORCHESTRA_DIR, 'msg_store.py') — the DATA dir,
+  // a path that has never existed. So the durable-first fallback shelled out to a missing file
+  // and answered {state:'held', reason:'durable_write_failed'} at HTTP 502: the safety net for
+  // a pane that is down or busy could not write anywhere, the message was genuinely gone, and
+  // the response read as safely-queued. Reproducible 100% of the time.
+  //
+  // The regression this guards is not "the path is wrong" but "someone recomputes the path
+  // here instead of reusing the helper that already got it right". ORCHESTRA_DIR is the data
+  // dir (state/, queue/, logs/); msg_store.py is CODE and lives in the checkout.
+  const root = resolveMsgStorePath({ ORCHESTRA_ROOT: '/opt/orchestraos' }, import.meta.url);
+  assert.equal(root, '/opt/orchestraos/msg_store.py');
+
+  // With no ORCHESTRA_ROOT it walks up from the module (<root>/api/dist/routes/x.js), so it
+  // still lands in the checkout rather than anywhere under the data dir.
+  const derived = resolveMsgStorePath({}, import.meta.url);
+  assert.ok(derived.endsWith('/msg_store.py'), derived);
+  assert.ok(!derived.includes('/api/'), `must not resolve inside api/: ${derived}`);
+
+  // The specific wrong answer must never come back: a data dir is not a code checkout.
+  const wrong = resolveMsgStorePath({ ORCHESTRA_DIR: '/home/u/.orchestra' } as Record<string, string>, import.meta.url);
+  assert.ok(!wrong.startsWith('/home/u/.orchestra'),
+    'ORCHESTRA_DIR must not be consulted for a code path');
+
+  // AND — the part that actually guards the bug. The assertions above only prove the HELPER
+  // works; they pass just as happily while this module ignores it. I wrote them first, then
+  // mutated MSG_STORE back to join(ORCHESTRA_DIR, 'msg_store.py') and NOTHING went red: a
+  // vacuous guard for the very defect it was written for. This asserts the value the module
+  // actually uses.
+  assert.equal(MSG_STORE, resolveMsgStorePath(process.env, import.meta.url),
+    'agent-send must USE the shared resolver, not recompute the path');
+  assert.ok(!MSG_STORE.includes('/.orchestra/'),
+    `MSG_STORE must not point into the data dir: ${MSG_STORE}`);
+  assert.ok(MSG_STORE.endsWith('/msg_store.py'), MSG_STORE);
 });

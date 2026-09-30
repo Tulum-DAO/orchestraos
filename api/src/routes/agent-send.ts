@@ -48,11 +48,24 @@ import { getRegistry } from '../services/state-reader.js';
 import { loadConfig } from '../lib/config.js';
 import { actingAgent } from '../lib/principal.js';
 import { gatewayTokenFile } from '../lib/gateway-token.js';
+import { resolveMsgStorePath } from './messages.js';
 
 const HOME = process.env.HOME || homedir();
 const ORCHESTRA_DIR = process.env.ORCHESTRA_DIR || join(HOME, 'scripts/agent-orchestra');
 const UPLOADS_DIR = join(ORCHESTRA_DIR, 'state', 'uploads');
-const MSG_STORE = join(ORCHESTRA_DIR, 'msg_store.py');
+// msg_store.py is CODE, so it lives in the CHECKOUT, not the data dir. This was
+// join(ORCHESTRA_DIR, 'msg_store.py') — a path that has never existed — so the durable-first
+// fallback below shelled out to a missing file and returned
+// {state:'held', reason:'durable_write_failed'} at HTTP 502. That is the safety net for
+// exactly the case this route exists to handle (pane down or busy), and it could not write
+// anywhere: the message was genuinely gone while the response read as safely-queued, with a
+// raw Python traceback fragment in a client-facing JSON body. Found by test, 2026-09-30.
+//
+// Reusing messages.ts's resolveMsgStorePath() rather than computing a second answer here —
+// that helper exists because this exact mistake was already made and fixed once, and its own
+// comment says "Never the data dir (a fresh install has no code there)". Two sources for one
+// fact is how they drift apart. cwd stays ORCHESTRA_DIR: msg_store resolves its DB from there.
+export const MSG_STORE = resolveMsgStorePath(process.env, import.meta.url);
 // #85: this hard-coded the legacy path, bypassing the one reader that knows where `orchestra
 // init` actually writes the bearer. #84: the default dialled :9091 while a fresh orchestra.toml
 // ships [gateway] port = 8890, so the API dialled a port nothing listens on.
