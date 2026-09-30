@@ -8,7 +8,7 @@
  * assertion in this file and fails that one.
  */
 import assert from 'node:assert';
-import { lineWidthPx, pairKey, shortAgo, MAX_LINE_PX } from './topologyLines.ts';
+import { lineWidthPx, pairKey, shortAgo, MAX_LINE_PX, isRetired } from './topologyLines.ts';
 
 // No traffic is 1px, never 0 — a line you cannot see is a line you cannot click.
 assert.equal(lineWidthPx(0, 150), 1);
@@ -90,6 +90,47 @@ function allRendered(agents, label) {
   assert.ok(p.rest.some((a) => a.id === 'gm-g2'), 'the extra T0 must land in rest, not nowhere');
 }
 
+// ── FIX 2 (2026-09-30): root selection had no liveness preference ────────────────────────
+// find() = first-in-array. The block above passes today only because `gm` happens to be
+// listed first — it does not exercise liveness at all (neither fixture agent even sets
+// `alive`). These do, and the first one deliberately lists the retired agent FIRST so an
+// order-lucky fix cannot pass it.
+
+// (a) The live T0 roots the tree even when it is not first in the array.
+{
+  const p = allRendered([
+    { id: 'gm-g2', tier: 'T0', alive: false, retired_at: '2026-09-29T20:34:04Z' },
+    { id: 'gm', tier: 'T0', alive: true },
+    { id: 'build', tier: 'T1' },
+    { id: 'builder-1', tier: 'T2', parent: 'build' },
+  ], 'retired T0 listed before the live one');
+  assert.equal(p.root.id, 'gm', 'the LIVE T0 must root the tree regardless of array order');
+  assert.ok(p.rest.some((a) => a.id === 'gm-g2'), 'the retired T0 still renders, just not as root');
+}
+
+// (b)'s repro, tested at this layer too (defense in depth, not just relying on the caller to
+// filter retired out of the Down view): if a retired T0 is the ONLY T0 in the array — the
+// exact shape Topology received under the Down filter before fix (b) — it must still not
+// become root. No root beats a wrong one.
+{
+  const p = partitionTopology([
+    { id: 'gm-g2', tier: 'T0', alive: false, retired_at: '2026-09-29T20:34:04Z' },
+  ]);
+  assert.equal(p.root, undefined, 'a retired-only T0 array must not crown a root');
+  assert.deepEqual(p.rest.map((a) => a.id), ['gm-g2'], 'the retired agent still renders as a node');
+}
+
+// MUST NOT REGRESS (af199c1, "the graph silently dropped agents, including the only DOWN
+// one"): a genuinely down T0 — NOT retired, just unreachable — with no live alternative must
+// still root the tree. Retired is what disqualifies a root candidate; merely being down is not.
+{
+  const p = allRendered([
+    { id: 'gm', tier: 'T0', alive: false },
+    { id: 'build', tier: 'T1' },
+  ], 'genuinely down T0, no retired_at');
+  assert.equal(p.root?.id, 'gm', 'a down-but-not-retired T0 still roots rather than the tree going rootless');
+}
+
 // A worker whose parent is not a lead, and one with no parent at all.
 {
   const p = allRendered([
@@ -122,3 +163,65 @@ allRendered([{ id: 'solo', tier: 'T2', parent: 'gone' }], 'no root at all');
 }
 
 console.log('partitionTopology: every-agent-rendered invariant holds');
+
+// ── FIX 2 ADDENDUM (2026-09-30, gm): generalize to ANY retired seat ───────────────────────
+// build's own gen1->gen2 rotation produced `build-g2` the same night gm-g2 was found — every
+// rotation leaves one of these behind, for any seat. isRetired() must key off explicit
+// registry fields only, never an id shape (`-gN` etc.), or the next rotation with a
+// differently-shaped id repeats this bug.
+
+// isRetired(): the field/value contract this fix keys on, verified live against the real API
+// tonight (both gm-g2 and build-g2 carry retired_at; `status` was NOT reliable pre-fix —
+// observed 'offline' for one and transiently 'spawning' for the other — so status alone is
+// covered too, for when the API side of this fix lands an explicit state).
+assert.equal(isRetired({ retired_at: '2026-09-30T08:57:21Z' }), true, 'retired_at present -> retired');
+assert.equal(isRetired({ retired_at: null, status: 'retired' }), true, 'status "retired" -> retired');
+assert.equal(isRetired({ retired_at: null, status: 'archived' }), true, 'status "archived" -> retired');
+assert.equal(isRetired({ retired_at: null, status: 'offline' }), false, 'merely offline is NOT retired');
+assert.equal(isRetired({ status: 'spawning' }), false, 'merely spawning is NOT retired');
+assert.equal(isRetired({}), false, 'no signal at all -> not retired');
+// THE GENERALIZATION PROOF: no `-g` suffix, no "gm"/"build" in the id — an id-pattern check
+// would pass every fixture above and still fail this one.
+assert.equal(isRetired({ id: 'scout', retired_at: '2026-09-30T00:00:00Z' }), true,
+  'retired is a field, not an id shape — a non "-gN" id must still read as retired');
+
+// TWO retired ghosts SIDE BY SIDE (a retired T0 AND a retired T1), next to live ones — the
+// exact composition Agents.tsx runs (`agents.filter(a => !isRetired(a))` before handing the
+// result to partitionTopology). Assert neither retired seat draws anywhere in the tree: not
+// root, not leads, not workersByLead, not even `rest`. That is the "excluded BY DEFAULT from
+// the tree" half of the addendum; partitionTopology's own "never dropped" invariant is exactly
+// why this must happen in the filter the caller applies, not by silently special-casing inside
+// partitionTopology itself (see the note on TopologyPartition.rest).
+{
+  const raw = [
+    { id: 'gm-g2', tier: 'T0', alive: false, retired_at: '2026-09-29T20:34:04Z' },      // retired T0, has the "-gN" shape
+    { id: 'build-g2', tier: 'T1', alive: false, retired_at: '2026-09-30T08:57:21Z' },   // retired T1, has the "-gN" shape
+    { id: 'scout', tier: 'T2', parent: 'build', status: 'retired' },                     // retired WORKER, no "-gN" shape at all
+    { id: 'gm', tier: 'T0', alive: true },
+    { id: 'build', tier: 'T1', alive: true },
+    { id: 'builder-1', tier: 'T2', parent: 'build', alive: false },  // genuinely down, NOT retired
+  ];
+  const visible = raw.filter((a) => !isRetired(a));
+  assert.deepEqual(visible.map((a) => a.id).sort(), ['build', 'builder-1', 'gm'],
+    'exactly the three non-retired seats remain — this IS the denominator gm asked to check');
+
+  const p = allRendered(visible, 'two retired ghosts + one retired worker, filtered before partitioning');
+  const drawnIds = [
+    ...(p.root ? [p.root.id] : []),
+    ...p.leads.map((a) => a.id),
+    ...Object.values(p.workersByLead).flat().map((a) => a.id),
+    ...p.rest.map((a) => a.id),
+  ];
+  for (const ghost of ['gm-g2', 'build-g2', 'scout']) {
+    assert.ok(!drawnIds.includes(ghost), `retired seat "${ghost}" must not appear anywhere in the tree`);
+  }
+  // MUST NOT REGRESS (af199c1): the genuinely down (not retired) worker is NOT collateral
+  // damage of this fix — it still comes through the filter (isRetired is false for it) and
+  // still renders, exactly where a live worker would, so it can still show red and still
+  // appear under the Down filter upstream in Agents.tsx.
+  assert.equal(p.root.id, 'gm', 'the live T0 still roots');
+  assert.deepEqual(p.workersByLead.build?.map((a) => a.id), ['builder-1'],
+    'the genuinely-down worker still renders under its lead, unaffected by the retired-ghost filter');
+}
+
+console.log('isRetired: generalizes off registry fields, not id shape — FIX 2 addendum holds');

@@ -69,7 +69,34 @@ export function shortAgo(ts: string | null | undefined, now = Date.now()): strin
  * `rest` by SUBTRACTION, which no tier value, missing parent or unexpected shape can slip
  * through. `partitionTopology` is pure so that invariant is testable rather than hoped for.
  */
-export interface TopologyAgent { id: string; tier?: string; parent?: string }
+export interface TopologyAgent {
+  id: string;
+  tier?: string;
+  parent?: string;
+  alive?: boolean;
+  /** Set by the boundary dedup (api/src/routes/agents.ts) on a superseded predecessor —
+   *  e.g. gm-g2 after an atomic promotion to gm. Different ids never fold, so both rows
+   *  reach this module; retired marks "intentionally decommissioned", not "down". */
+  retired_at?: string | null;
+  status?: string;
+}
+
+/**
+ * FIX 2 ADDENDUM (2026-09-30, gm): EVERY rotation leaves a retired `seat-gN` row behind —
+ * build's own gen1->gen2 rotation produced `build-g2` the same night gm-g2 was found, so this
+ * is not a gm-g2 special case. Keys off explicit registry fields ONLY — never an id shape
+ * (`-gN` suffix etc.) — an id-pattern check would work today and silently miss the next
+ * rotation, or the next seat that happens not to follow the `-gN` convention.
+ *
+ * `retired_at` is the signal already present and correct today (verified live: both gm-g2 and
+ * build-g2 carry it; their `status` field is NOT reliable pre-fix — observed as `offline` for
+ * one and transiently `spawning` for the other). `status === 'retired' | 'archived'` is
+ * included so this keeps working once the API side of this fix (build/gm, api/src/routes/
+ * agents.ts) lands an explicit state, without a second migration of this predicate.
+ */
+export function isRetired(agent: { retired_at?: string | null; status?: string }): boolean {
+  return Boolean(agent.retired_at) || agent.status === 'retired' || agent.status === 'archived';
+}
 
 export interface TopologyPartition<T extends TopologyAgent> {
   /** First T0, the tree's root. Undefined if the list has none. */
@@ -79,12 +106,31 @@ export interface TopologyPartition<T extends TopologyAgent> {
   /** lead id -> its workers (T2/T3 whose parent is one of `leads`). */
   workersByLead: Record<string, T[]>;
   /** Everything the tree would not otherwise draw — extra roots, parentless workers, workers
-   *  whose parent is not a lead, unknown tiers. Rendered, never dropped. */
+   *  whose parent is not a lead, unknown tiers. Rendered, never dropped — this function's own
+   *  invariant is "every agent given to it comes out exactly once" (see allRendered() in the
+   *  test file), so a retired seat is NOT dropped here. Full exclusion from the tree is a
+   *  CALLER decision: filter with `!isRetired(a)` before calling this (Agents.tsx does), so a
+   *  retired record never reaches this function in normal operation. Root selection below
+   *  still refuses a retired candidate as defense-in-depth if one arrives anyway. */
   rest: T[];
 }
 
 export function partitionTopology<T extends TopologyAgent>(agents: T[]): TopologyPartition<T> {
-  const root = agents.find((a) => a.tier === 'T0');
+  // FIX 2 (2026-09-30): the old root pick was `find(a => a.tier === 'T0')` — first-in-array,
+  // no liveness preference. registry has both `gm` (live) and `gm-g2` (retired predecessor,
+  // same tier, different id — the boundary dedup only folds SAME ids across generations, so
+  // both reach here). Unfiltered this was correct only by luck (defaultSorted happens to put
+  // gm first); filtered to Down the live gm is the one removed, so gm-g2 — a decommissioned
+  // record, not a down one — became the org chart's ROOT.
+  //
+  // Prefer the live T0. Failing that, prefer any NON-retired T0 (a genuinely down-but-live-
+  // lineage T0 with no live alternative should still root the tree rather than leaving it
+  // rootless — that is the af199c1 "don't hide the only down agent" principle, applied to
+  // root selection). A retired T0 is never a root candidate, order-independent and even when
+  // it is the only T0 in the array: it still renders, via the `rest` bucket below, just not
+  // promoted to root.
+  const root = agents.find((a) => a.tier === 'T0' && a.alive)
+    ?? agents.find((a) => a.tier === 'T0' && !isRetired(a));
   const leads = agents.filter((a) => a.tier === 'T1');
   const leadIds = new Set(leads.map((l) => l.id));
 
