@@ -292,26 +292,24 @@ export function TopologyDiagram({
   // SUBTRACTION — whatever the tree does not claim is still rendered — because the previous
   // tier-matching version could drop an agent that matched no bucket, and did: the fleet's
   // only down agent (gm-g2, also tier T0) appeared nowhere. See the note on the function.
-  const { root: gm, leads: pms, workersByLead: workersByParent, rest: orphanAgents } =
-    partitionTopology(agents);
-
-  // Derived entirely from `agents` inside the memo rather than from the locals above, so the
-  // dependency list is honest — the locals are rebuilt every render and listing them would
-  // defeat the memo while satisfying the linter, which is the wrong trade.
-  const drawnKeys = useMemo(() => {
+  //
+  // ONE memo produces BOTH the partition and the drawn-line set, deliberately. drawnKeys used
+  // to recompute the tiers itself — its own `find` for the root, its own lead filter — which
+  // was a second copy of the same partition that could drift from the one actually rendered.
+  // It caused no visible bug (a second T0 draws no line either way), but it is the same
+  // two-sources-for-one-fact shape as the disagreeing message stores this feature exists to
+  // have killed, so it goes before it becomes one. A single memo also keeps the Set identity
+  // stable for usePairLookup, which is why drawnKeys was memoised in the first place.
+  const { partition, drawnKeys } = useMemo(() => {
+    const part = partitionTopology(agents);
     const keys = new Set<string>();
-    const top = agents.find((a) => a.tier === 'T0');
-    const leads = agents.filter((a) => a.tier === 'T1');
-    const leadIds = new Set(leads.map((l) => l.id));
-    for (const lead of leads) {
-      if (top) keys.add(pairKey(top.id, lead.id));
+    for (const lead of part.leads) {
+      if (part.root) keys.add(pairKey(part.root.id, lead.id));
+      for (const w of part.workersByLead[lead.id] ?? []) keys.add(pairKey(lead.id, w.id));
     }
-    for (const w of agents) {
-      if (w.tier !== 'T2' && w.tier !== 'T3') continue;
-      if (w.parent && leadIds.has(w.parent)) keys.add(pairKey(w.parent, w.id));
-    }
-    return keys;
+    return { partition: part, drawnKeys: keys };
   }, [agents]);
+  const { root: gm, leads: pms, workersByLead: workersByParent, rest: orphanAgents } = partition;
 
   const lookup = usePairLookup(pairs, drawnKeys);
   const selectionBright = useBrightSet(selectedAgentId, pairs);
