@@ -192,6 +192,17 @@ _SPAWNED_THIS_TURN = _contextvars.ContextVar("arturo_spawned_this_turn", default
 # loop uses. ask_gm/deep_query/research call execute_tool("async_task", ...) inside a tool handler,
 # which the loop never sees — they bypassed the guard entirely (DEC-1790305211739337, peer finding).
 _TURN_DEDUP = _contextvars.ContextVar("arturo_turn_dedup", default=None)
+# Set ONLY around a streamed turn's whole-reply fallback: that fallback continues a turn whose
+# tools already ran in the stream, so it must share the stream's ledger — a fresh one re-ran
+# them (send_telegram twice). Everything else — voice, plain /text — gets a fresh ledger.
+_INHERIT_DEDUP = _contextvars.ContextVar("arturo_inherit_dedup", default=False)
+
+
+def _turn_ledger():
+    """The dedupe ledger for a tool loop that is starting: the stream's, when this loop is that
+    stream's fallback; otherwise a fresh one."""
+    inherited = _TURN_DEDUP.get() if _INHERIT_DEDUP.get() else None
+    return inherited if inherited is not None else _voice_guards.ToolDedupLedger()
 
 
 def _record_spawned_this_turn(session_name):
@@ -3913,7 +3924,7 @@ def chat_completions():
                 # duplicate-inject guard (gm msg_c74d3ae3): per-TURN ledger so a
                 # model repeating an identical SIDE-EFFECTING call across tool
                 # rounds executes it once (the operator watched 3x inject into v2's pane).
-                _dedup = _voice_guards.ToolDedupLedger()
+                _dedup = _turn_ledger()
                 # Publish it for the turn so handler-level dispatches (_dispatch_guarded) share the
                 # same ledger rather than bypassing it. Set, never reset: the ContextVar is per
                 # request context, and generate() owns the turn.
@@ -4863,7 +4874,15 @@ def text_stream_endpoint():
                 pass
 
     def _fallback():
-        return text_turn(text_in, conversation_id, brain=brain_req, context=page_ctx)
+        # The whole-reply path continues THIS turn, so it inherits the stream's ledger: a tool
+        # the stream already ran is not run again. Scoped to the call, reset in finally.
+        inherit_tok = _INHERIT_DEDUP.set(True)
+        ledger_tok = _TURN_DEDUP.set(_stream_ledger)
+        try:
+            return text_turn(text_in, conversation_id, brain=brain_req, context=page_ctx)
+        finally:
+            _TURN_DEDUP.reset(ledger_tok)
+            _INHERIT_DEDUP.reset(inherit_tok)
 
     warm_key = (conversation_id, getattr(turn_brain, "runtime", ""),
                 getattr(turn_brain, "_model_flag", "") or "")
@@ -4874,6 +4893,7 @@ def text_stream_endpoint():
     # send_telegram check reads real intent rather than failing closed.
     _user_turns = [t.get("content") for t in (history or []) if t.get("role") == "user"] + [text_in]
     _stream_ledger = _voice_guards.ToolDedupLedger()
+    _spawned = []
 
     def _run_tools(calls):
         # These ContextVars are per thread; the turn runs in with_heartbeat's worker, so they are
@@ -4882,6 +4902,11 @@ def text_stream_endpoint():
             _TURN_DEDUP.set(_stream_ledger)
         if _TOOLS_THIS_TURN.get() is None:
             _TOOLS_THIS_TURN.set([])
+        # spawn_agent appends a VERIFIED seat here. One list, made by the endpoint: the tools run
+        # in with_heartbeat's worker and turn.end is finished in the request thread, and a
+        # ContextVar set in one is invisible in the other.
+        if _SPAWNED_THIS_TURN.get() is None:
+            _SPAWNED_THIS_TURN.set(_spawned)
         results = []
         for call in calls:
             name, args = call["name"], call.get("arguments") or {}
@@ -4915,15 +4940,47 @@ def text_stream_endpoint():
         _record_text_turn(**kw, effective=effective)
         _WARM_POOL.sync(warm_key, _THREADS.turn_count(conversation_id))
 
+    from services.arturo import onboarding as _onb
+    from services.arturo import operator_store as _ops
+    # Found on text_in, the operator's message: the page-context line sits in front of it in
+    # body_text, pushing the marker off line 1.
+    _onboarding_step, _ = _onb.split_marker(text_in)
+
+    def _complete(event):
+        """turn.end reports what the turn DID, as /text does — the home page's onboarding steps
+        advance on tools_called, spawned and operator. A whole-reply turn.end already carries
+        text_turn's spawned; the stream's list is merged in after it, never written over it."""
+        if event.get("event") != "turn.end":
+            return event
+        data = dict(event.get("data") or {})
+        merged = []
+        for seat in list(data.get("spawned") or []) + _spawned:
+            if seat not in merged:
+                merged.append(seat)
+        data["spawned"] = merged
+        data.setdefault("tools_called", [])
+        if "operator" not in data:
+            try:
+                data["operator"] = _ops.public(ARTURO_STATE)
+            except Exception:  # noqa: BLE001 — the operator card is never worth a turn
+                data["operator"] = {}
+        return {**event, "data": data}
+
     def _generate():
         # with_heartbeat keeps the connection alive through a silent stretch — the tool-loop
         # fallback produces nothing while it runs, and every hop in front of us drops an idle
         # socket (the dashboard proxy at 30s), which reached the operator as a mid-turn 502.
-        turn = _text_stream.stream_turn(
-            text=body_text, conversation_id=conversation_id, brain=turn_brain,
-            brain_id=chosen_id, messages=messages, spawn=_spawn,
-            fallback=_fallback, record=_record, tools=TOOLS,
-            warm=_warm, discard=lambda: _WARM_POOL.discard(warm_key), run_tools=_run_tools)
+        if _onboarding_step:
+            # Only text_turn knows the onboarding marker and its directive, so the step runs
+            # there, whole, and arrives as one reply.
+            turn = _text_stream.whole_turn(conversation_id, turn_brain, _fallback)
+        else:
+            turn = _text_stream.stream_turn(
+                text=body_text, conversation_id=conversation_id, brain=turn_brain,
+                brain_id=chosen_id, messages=messages, spawn=_spawn,
+                fallback=_fallback, record=_record, tools=TOOLS,
+                warm=_warm, discard=lambda: _WARM_POOL.discard(warm_key), run_tools=_run_tools)
+        turn = (_complete(e) for e in turn)
         try:
             for frame in _text_stream.with_heartbeat(turn, interval_s=10.0):
                 yield frame

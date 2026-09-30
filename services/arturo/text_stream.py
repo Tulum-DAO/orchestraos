@@ -128,7 +128,8 @@ def stream_turn(text, conversation_id, brain, brain_id, messages, spawn, fallbac
                     yield _ev("text.delta", turn_id=turn_id, text=out)
                 continue
             if isinstance(event, TurnEnd):
-                if verdict != PROSE:
+                # truncated = the CLI's output stopped before its result line: half an answer.
+                if verdict != PROSE or event.truncated:
                     break
                 tail = sanitizer.finish()
                 if tail:
@@ -157,7 +158,7 @@ def stream_turn(text, conversation_id, brain, brain_id, messages, spawn, fallbac
         return
 
     # HOLD, or a stream that stopped before it finished: the ordinary path owns this turn.
-    yield from _whole_reply(turn_id, conversation_id, fallback, brain)
+    yield from _fallback_reply(turn_id, conversation_id, fallback, brain)
 
 
 def _warm_tool_loop(turn_id, text, conversation_id, brain, brain_id, messages, tools,
@@ -173,6 +174,7 @@ def _warm_tool_loop(turn_id, text, conversation_id, brain, brain_id, messages, t
     argv = warm_argv(brain, messages[:-1], tools)
     next_message = messages[-1].get("content") or ""
     shown, tools_called = "", []
+    n_calls = 0
 
     for _round in range(MAX_TOOL_ROUNDS + 1):
         classifier, sanitizer = PassClassifier(), StreamingSanitizer()
@@ -212,7 +214,9 @@ def _warm_tool_loop(turn_id, text, conversation_id, brain, brain_id, messages, t
                             if frame:
                                 yield frame
                 elif isinstance(event, TurnEnd):
-                    ended = True
+                    # A truncated end is the process dying mid-pass: not ended, so the pass
+                    # falls back rather than recording half an answer as the reply.
+                    ended = not event.truncated
                     break
         except Exception as e:                  # noqa: BLE001 — a broken pipe is a failed turn
             failure = StreamError("stream_failed", str(e)[:200])
@@ -223,7 +227,7 @@ def _warm_tool_loop(turn_id, text, conversation_id, brain, brain_id, messages, t
             if failure is not None:
                 yield _ev("error", turn_id=turn_id, code=failure.code, message=failure.message)
                 return
-            yield from _whole_reply(turn_id, conversation_id, fallback, brain)
+            yield from _fallback_reply(turn_id, conversation_id, fallback, brain)
             return
 
         # What is left of the pass: prose held back, and possibly a tool envelope.
@@ -267,20 +271,25 @@ def _warm_tool_loop(turn_id, text, conversation_id, brain, brain_id, messages, t
         if _round == MAX_TOOL_ROUNDS:
             break
 
+        # Each call is its own card on the client, closed by its own result. Results pair with
+        # calls by id, not by position — two calls to one tool in a pass made position a guess.
+        # run_tools answers in call order, so the id rides from call to result by zip.
         for c in calls:
-            yield _ev("tool.call", turn_id=turn_id, name=c["name"],
+            n_calls += 1
+            c["call_id"] = f"c{n_calls}"
+            yield _ev("tool.call", turn_id=turn_id, call_id=c["call_id"], name=c["name"],
                       args_summary=json.dumps(c["arguments"], ensure_ascii=False)[:200])
-        results = run_tools(calls)
-        for r in results:
+        results = run_tools([{"name": c["name"], "arguments": c["arguments"]} for c in calls])
+        for c, r in zip(calls, results):
             tools_called.append(r["name"])
-            yield _ev("tool.result", turn_id=turn_id, name=r["name"], ok=bool(r.get("ok")),
-                      summary=str(r.get("result"))[:200])
+            yield _ev("tool.result", turn_id=turn_id, call_id=c["call_id"], name=r["name"],
+                      ok=bool(r.get("ok")), summary=str(r.get("result"))[:200])
         next_message = "\n".join(f"TOOL RESULT ({r['name']}): {r.get('result')}" for r in results)
 
     # Still asking for tools after the ceiling: the ordinary path owns this turn.
     if discard is not None:
         discard()
-    yield from _whole_reply(turn_id, conversation_id, fallback, brain)
+    yield from _fallback_reply(turn_id, conversation_id, fallback, brain)
 
 
 def warm_argv(brain, prior_messages, tools=None):
@@ -301,6 +310,26 @@ def warm_argv(brain, prior_messages, tools=None):
     return warm_command(brain.runtime, brain.cli, system, getattr(brain, "_model_flag", "") or "")
 
 
+def _fallback_reply(turn_id, conversation_id, fallback, brain):
+    """The whole-reply path taking over a turn that may already have shown text or tool cards.
+
+    `turn.reset` first: the whole reply repeats the answer from the top, so whatever the dead
+    attempt put on screen has to go, or the operator reads half a reply, orphaned tool rows,
+    and then the whole reply beneath them. A client with nothing shown treats it as a no-op."""
+    yield _ev("turn.reset", turn_id=turn_id, reason="fallback")
+    yield from _whole_reply(turn_id, conversation_id, fallback, brain)
+
+
+def whole_turn(conversation_id, brain, fallback, turn_id=None):
+    """A turn served whole on the streaming endpoint: turn.start, then the ordinary path's
+    reply as one delta. For a turn only /text knows how to run — an onboarding step, whose
+    marker and directive text_turn applies."""
+    turn_id = turn_id or f"turn_{uuid.uuid4().hex[:12]}"
+    yield _ev("turn.start", turn_id=turn_id, conversation_id=conversation_id,
+              brain=brain.describe(), at=time.time())
+    yield from _whole_reply(turn_id, conversation_id, fallback, brain)
+
+
 def _whole_reply(turn_id, conversation_id, fallback, brain):
     status, body = fallback()
     if status != 200 or not body.get("ok"):
@@ -314,6 +343,7 @@ def _whole_reply(turn_id, conversation_id, fallback, brain):
     yield _ev("turn.end", turn_id=turn_id, conversation_id=conversation_id, reply_text=reply,
               tools_called=body.get("tools_called", []),
               spawned=body.get("spawned", []),
+              **({"operator": body["operator"]} if "operator" in body else {}),
               brain=body.get("brain") or brain.describe())
 
 
