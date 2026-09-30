@@ -105,16 +105,35 @@ function useDotsByPair(dots: TrafficMessage[] | undefined): Map<string, TrafficM
   }, [dots]);
 }
 
-function usePairLookup(pairs: PairCountRow[] | undefined): PairLookup {
+/**
+ * `busiest` is the denominator every line's thickness is scaled against, and it MUST be the
+ * busiest line actually DRAWN — not the busiest pair in the data.
+ *
+ * review's browser pass (2026-09-30) caught this: the global busiest pair was gm<->telegram
+ * at 150, but telegram is not a node in this tree — it is invisible and unclickable. So every
+ * visible line was scaled against a number the operator cannot see and drawn systematically
+ * too thin relative to the busiest line on screen (gm<->build, 131). The thicknesses were
+ * internally consistent and quietly wrong, which is why only looking at it found this.
+ *
+ * `drawnKeys` is the set of pairKeys the tree renders. Empty (nothing drawn yet) falls back to
+ * the global max rather than to 0, so the first render cannot divide by zero.
+ */
+function usePairLookup(pairs: PairCountRow[] | undefined, drawnKeys: Set<string>): PairLookup {
   return useMemo(() => {
     const map = new Map<string, PairCountRow>();
-    let busiest = 0;
+    let globalMax = 0;
+    let drawnMax = 0;
     for (const p of pairs ?? []) {
-      map.set(pairKey(p.a, p.b), p);
-      if (p.count > busiest) busiest = p.count;
+      const k = pairKey(p.a, p.b);
+      map.set(k, p);
+      if (p.count > globalMax) globalMax = p.count;
+      if (drawnKeys.has(k) && p.count > drawnMax) drawnMax = p.count;
     }
-    return { get: (a: string, b: string) => map.get(pairKey(a, b)), busiest };
-  }, [pairs]);
+    return {
+      get: (a: string, b: string) => map.get(pairKey(a, b)),
+      busiest: drawnKeys.size > 0 ? drawnMax : globalMax,
+    };
+  }, [pairs, drawnKeys]);
 }
 
 function getNodeBorder(agent: Agent): string {
