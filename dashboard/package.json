@@ -7,7 +7,7 @@
     "dev": "vite",
     "guard": "bash scripts/guard-one-truth.sh",
     "build:check": "npm run guard && tsc -b && vite build --outDir /tmp/dashboard-build-check --emptyOutDir",
-    "build": "npm run guard && echo '!! vite build writes dashboard/dist \u2014 that IS the LIVE served dashboard. To test a build safely use: npm run build:check' && tsc -b && vite build && { S=$(git rev-parse --short HEAD 2>/dev/null || echo unknown); [ -z \"$(git status --porcelain -- . 2>/dev/null)\" ] || S=\"$S-dirty\"; echo \"$S\" > dist/BUILD_SHA; }",
+    "build": "npm run guard && echo '!! vite build writes dashboard/dist \u2014 that IS the LIVE served dashboard. To test a build safely use: npm run build:check' && tsc -b && vite build && { S=$(git rev-parse --short HEAD 2>/dev/null || echo unknown); if ! OUT=$(git status --porcelain -- . 2>&1) || [ -n \"$OUT\" ]; then S=\"${S}-dirty\"; fi; echo \"$S\" > dist/BUILD_SHA; }",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "tsx --test src/lib/*.test.ts && for f in src/lib/*.test.mjs; do node --experimental-strip-types \"$f\" || exit 1; done"
