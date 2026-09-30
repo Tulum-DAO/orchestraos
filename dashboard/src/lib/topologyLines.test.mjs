@@ -8,7 +8,7 @@
  * assertion in this file and fails that one.
  */
 import assert from 'node:assert';
-import { lineWidthPx, pairKey, shortAgo, MAX_LINE_PX, isRetired } from './topologyLines.ts';
+import { lineWidthPx, pairKey, shortAgo, MAX_LINE_PX, isRetired, isRotationPredecessor, isFleetMember } from './topologyLines.ts';
 
 // No traffic is 1px, never 0 — a line you cannot see is a line you cannot click.
 assert.equal(lineWidthPx(0, 150), 1);
@@ -177,6 +177,14 @@ console.log('partitionTopology: every-agent-rendered invariant holds');
 assert.equal(isRetired({ retired_at: '2026-09-30T08:57:21Z' }), true, 'retired_at present -> retired');
 assert.equal(isRetired({ retired_at: null, status: 'retired' }), true, 'status "retired" -> retired');
 assert.equal(isRetired({ retired_at: null, status: 'archived' }), true, 'status "archived" -> retired');
+// The explicit boolean the API half of this fix added (cb5e213). Its own case, with NO
+// retired_at and NO status: every other fixture here carries one of those, so the OR
+// short-circuits before reaching this clause and it would otherwise go unexercised —
+// deleting `Boolean(agent.retired) ||` left the whole suite green until this line existed.
+assert.equal(isRetired({ retired: true }), true, 'the API retired flag alone -> retired');
+assert.equal(isRetired({ retired: false, status: 'offline' }), false, 'retired:false does not invent retirement');
+assert.equal(isRetired({ retired: null, retired_at: '2026-09-30T08:57:21Z' }), true,
+  'retired:null falls through to the other signals rather than overriding them');
 assert.equal(isRetired({ retired_at: null, status: 'offline' }), false, 'merely offline is NOT retired');
 assert.equal(isRetired({ status: 'spawning' }), false, 'merely spawning is NOT retired');
 assert.equal(isRetired({}), false, 'no signal at all -> not retired');
@@ -225,3 +233,61 @@ assert.equal(isRetired({ id: 'scout', retired_at: '2026-09-30T00:00:00Z' }), tru
 }
 
 console.log('isRetired: generalizes off registry fields, not id shape — FIX 2 addendum holds');
+
+// ── FIX 2, 2nd ADDENDUM (2026-09-30, gm/build): a second, structurally different ghost ────
+// build-gen1 is NOT marked retired at all (measured live in registry.json: no status, no
+// generation, no reports_to) — an auto-discovered rotation-predecessor tmux session. gm was
+// explicit: the `-genN` name pattern alone is not enough; require a LIVE successor sharing
+// the base name, both signals together.
+
+assert.equal(isRotationPredecessor({ id: 'build-gen1' }, [{ id: 'build', alive: true }]), true,
+  'name matches AND the base is alive -> predecessor');
+assert.equal(isRotationPredecessor({ id: 'build-gen1' }, [{ id: 'build', alive: false }]), false,
+  'base present but NOT alive -> the row stays visible, not silently hidden');
+assert.equal(isRotationPredecessor({ id: 'build-gen1' }, []), false,
+  'NEGATIVE CONTROL: base entirely absent -> not a predecessor (a regex-only check would say yes; the cross-check says no)');
+assert.equal(isRotationPredecessor({ id: 'build' }, [{ id: 'build', alive: true }]), false,
+  'no "-genN" suffix at all -> never a predecessor, regardless of who else is alive');
+
+// ONE fixture with ALL THREE kinds together, per gm's explicit ask (not three separate
+// tests): a retired seat-gN (gm-g2), a rotation-predecessor seat-genN (build-gen1) alongside
+// the live successor it orphaned (build), a genuinely-down-but-neither-kind agent
+// (builder-2 — must-preserve, af199c1), and a negative-control seat-genN whose base ("ghost")
+// is entirely absent from the fixture, proving the cross-check gates this and not the regex.
+{
+  const allAgents = [
+    { id: 'gm', tier: 'T0', alive: true },
+    { id: 'gm-g2', tier: 'T0', alive: false, retired_at: '2026-09-29T20:34:04Z' },
+    { id: 'build', tier: 'T1', parent: 'gm', alive: true },
+    { id: 'build-gen1', tier: 'T2', parent: 'build', alive: true },  // rotation predecessor of "build"
+    { id: 'builder-1', tier: 'T2', parent: 'build', alive: true },
+    { id: 'builder-2', tier: 'T2', parent: 'build', alive: false }, // genuinely down, neither ghost kind
+    { id: 'ghost-gen9', tier: 'T2', parent: 'build', alive: true }, // "-genN" shape, but base "ghost" is absent
+  ];
+
+  const visible = allAgents.filter((a) => isFleetMember(a, allAgents));
+  assert.deepEqual(visible.map((a) => a.id).sort(),
+    ['build', 'builder-1', 'builder-2', 'ghost-gen9', 'gm'],
+    'exactly 5 of 7 are real fleet members — gm-g2 (retired) and build-gen1 (superseded predecessor) drop out; ghost-gen9 stays because its base is absent');
+
+  const p = allRendered(visible, 'two ghost kinds + a negative control, filtered before partitioning');
+  assert.equal(p.root.id, 'gm', 'gm is the live T0 and roots the tree');
+  assert.ok(!p.rest.some((a) => a.id === 'gm'), 'gm must NOT land in rest / "Not in the tree" — it is the root');
+  const drawnIds = [
+    ...(p.root ? [p.root.id] : []),
+    ...p.leads.map((a) => a.id),
+    ...Object.values(p.workersByLead).flat().map((a) => a.id),
+    ...p.rest.map((a) => a.id),
+  ];
+  for (const ghost of ['gm-g2', 'build-gen1']) {
+    assert.ok(!drawnIds.includes(ghost), `"${ghost}" must not draw anywhere in the tree, count in the summary, or appear under Down`);
+  }
+  // MUST PRESERVE (af199c1) + the negative control, in the SAME fixture: the down-but-neither-
+  // ghost-kind worker is not collateral damage, and the seat-genN with no live base renders
+  // exactly like any other worker — proving isRotationPredecessor's cross-check gates this,
+  // not the regex alone (a regex-only implementation would have dropped ghost-gen9 too).
+  assert.deepEqual(p.workersByLead.build?.map((a) => a.id).sort(), ['builder-1', 'builder-2', 'ghost-gen9'],
+    'the down-but-not-retired worker AND the negative-control seat-genN both render under their lead');
+}
+
+console.log('isFleetMember: retired + rotation-predecessor + negative control all hold — FIX 2 2nd addendum');

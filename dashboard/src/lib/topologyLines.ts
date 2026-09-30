@@ -79,6 +79,10 @@ export interface TopologyAgent {
    *  reach this module; retired marks "intentionally decommissioned", not "down". */
   retired_at?: string | null;
   status?: string;
+  /** Explicit boolean added by the API-side half of this fix (build, cb5e213) — the most
+   *  authoritative signal when present. isRetired() also still reads retired_at/status so it
+   *  does not regress against an older API payload that predates this field. */
+  retired?: boolean | null;
 }
 
 /**
@@ -94,8 +98,41 @@ export interface TopologyAgent {
  * included so this keeps working once the API side of this fix (build/gm, api/src/routes/
  * agents.ts) lands an explicit state, without a second migration of this predicate.
  */
-export function isRetired(agent: { retired_at?: string | null; status?: string }): boolean {
-  return Boolean(agent.retired_at) || agent.status === 'retired' || agent.status === 'archived';
+export function isRetired(agent: { retired_at?: string | null; status?: string; retired?: boolean | null }): boolean {
+  return Boolean(agent.retired) || Boolean(agent.retired_at) || agent.status === 'retired' || agent.status === 'archived';
+}
+
+/**
+ * FIX 2, 2nd ADDENDUM (2026-09-30, gm/build): a SECOND, structurally different kind of ghost
+ * row. `isRetired` catches a row the registry explicitly marked decommissioned. This catches
+ * the other one: `build-gen1` — a rotation predecessor's tmux session, auto-discovered and
+ * registered, that is NOT marked retired at all (measured live in registry.json: status
+ * absent, generation absent, reports_to absent — three structural oddities at once, not a
+ * commissioned seat).
+ *
+ * gm was explicit: do not rely on the `-genN` name pattern alone — a name match plus a LIVE
+ * successor sharing its base name, required TOGETHER. Name-alone would hide any seat that
+ * genuinely happens to be called "something-gen3"; requiring the live successor too means a
+ * predecessor is only hidden once superseded, and if the successor is gone the row stays
+ * visible instead of silently vanishing a seat that is still the only one answering.
+ */
+export function isRotationPredecessor(
+  agent: { id: string },
+  allAgents: { id: string; alive?: boolean }[]
+): boolean {
+  const match = /^(.+)-gen\d+$/.exec(agent.id);
+  if (!match) return false;
+  const base = allAgents.find((a) => a.id === match[1]);
+  return Boolean(base?.alive);
+}
+
+/** A row belongs in the fleet view (tree, Down filter, summary counts, header denominator)
+ *  only if it is neither kind of ghost. The one predicate every surface should call. */
+export function isFleetMember(
+  agent: TopologyAgent & { retired?: boolean | null },
+  allAgents: { id: string; alive?: boolean }[]
+): boolean {
+  return !isRetired(agent) && !isRotationPredecessor(agent, allAgents);
 }
 
 export interface TopologyPartition<T extends TopologyAgent> {

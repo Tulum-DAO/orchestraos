@@ -19,7 +19,7 @@ import { StatusDot } from '../components/StatusDot';
 import { TierBadge } from '../components/TierBadge';
 import { AgentCard } from '../components/AgentCard';
 import { TopologyDiagram } from '../components/TopologyDiagram';
-import { isRetired } from '../lib/topologyLines';
+import { isFleetMember } from '../lib/topologyLines';
 import { getRecentAgents, loadAndMergeRecentAgents, type RecentAgent } from '../lib/user-actions';
 import { GenChip } from '../components/GenChip';
 import NewAgentModal from '../components/NewAgentModal';
@@ -158,13 +158,17 @@ export default function Agents() {
   const permittedAgents = user?.allowed_agents === '*'
     ? allAgents
     : allAgents.filter((a: any) => canSeeAgent(user?.allowed_agents || '*', a.id));
-  // FIX 2 ADDENDUM (2026-09-30, gm): a retired seat (gm-g2, build-g2, ANY future `-gN` row —
-  // keyed on isRetired()'s registry fields, never an id shape) is excluded here, once, at the
-  // single source every other computation on this page reads from — cards, table, topology,
-  // search, tag extraction, the health-summary counts and the header denominator all derive
-  // from `agents` below. One filter point means the denominator cannot independently forget
-  // to apply it, which is the exact failure mode gm flagged ("13 of 15 phantom entries").
-  const agents = permittedAgents.filter((a: any) => !isRetired(a));
+  // FIX 2, 2nd ADDENDUM (2026-09-30, gm/build): THREE kinds of non-agent row are excluded
+  // here, once, at the single source every other computation on this page reads from — cards,
+  // table, topology, search, tag extraction, the health-summary counts and the header
+  // denominator all derive from `agents` below. One filter point means the denominator cannot
+  // independently forget to apply it (gm's "13 of 15 phantom entries" failure mode).
+  // isFleetMember = !isRetired (gm-g2, build-g2 — explicitly decommissioned) &&
+  // !isRotationPredecessor (build-gen1 — an auto-discovered predecessor tmux session, not
+  // marked retired at all, hidden only once its live successor is confirmed present).
+  // allAgents, not `permittedAgents`: whether a predecessor's successor is alive is a
+  // structural fact, not something that should change with the viewer's permissions.
+  const agents = permittedAgents.filter((a: any) => isFleetMember(a, allAgents));
 
   // Step 10. Same `agents` array the rest of the page uses, so a search hit and a card can
   // never describe different fleets. Repos come from /api/projects; prompts are derived from
