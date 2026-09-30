@@ -3,7 +3,7 @@ import { clsx } from 'clsx';
 import { StatusDot } from './StatusDot';
 import { TierBadge } from './TierBadge';
 import type { PairCountRow } from '../lib/api';
-import { lineWidthPx, pairKey, shortAgo } from '../lib/topologyLines';
+import { lineWidthPx, pairKey, shortAgo, partitionTopology } from '../lib/topologyLines';
 import { dotColor, type TrafficMessage } from '../lib/fleetTraffic';
 
 interface Agent {
@@ -287,18 +287,13 @@ export function TopologyDiagram({
   agents, pairs, windowHours = 24, onSelectConnection, onSelectAgent, selectedAgentId,
   onClearSelection, dots, brightIds,
 }: TopologyDiagramProps) {
-  // Tier split first: the set of lines the tree will draw is what the thickness denominator
-  // has to be computed from, so it cannot wait until render.
-  const gm = agents.find((a) => a.tier === 'T0');
-  const pms = agents.filter((a) => a.tier === 'T1');
-  const workers = agents.filter((a) => a.tier === 'T2' || a.tier === 'T3');
-
-  const workersByParent: Record<string, Agent[]> = {};
-  for (const w of workers) {
-    const parent = w.parent || '_unassigned';
-    if (!workersByParent[parent]) workersByParent[parent] = [];
-    workersByParent[parent].push(w);
-  }
+  // Partition first: the set of lines the tree will draw is what the thickness denominator has
+  // to be computed from, so it cannot wait until render. partitionTopology computes `rest` by
+  // SUBTRACTION — whatever the tree does not claim is still rendered — because the previous
+  // tier-matching version could drop an agent that matched no bucket, and did: the fleet's
+  // only down agent (gm-g2, also tier T0) appeared nowhere. See the note on the function.
+  const { root: gm, leads: pms, workersByLead: workersByParent, rest: orphanAgents } =
+    partitionTopology(agents);
 
   // Derived entirely from `agents` inside the memo rather than from the locals above, so the
   // dependency list is honest — the locals are rebuilt every render and listing them would
@@ -332,10 +327,6 @@ export function TopologyDiagram({
   // A line stays bright only if the selected agent is one of its two ends.
   const lineDim = (a: string, b: string) =>
     bright !== null && a !== selectedAgentId && b !== selectedAgentId;
-  // PMs that have workers or exist
-  const pmIds = new Set(pms.map((p) => p.id));
-  // Workers with no matching PM parent
-  const orphanWorkers = workers.filter((w) => !w.parent || !pmIds.has(w.parent));
 
   return (
     // Spec §4: clicking empty space clears. Guarded on e.target === e.currentTarget so a
@@ -414,11 +405,11 @@ export function TopologyDiagram({
       )}
 
       {/* Orphan workers (no parent or parent not a PM) */}
-      {orphanWorkers.length > 0 && (
+      {orphanAgents.length > 0 && (
         <div className="mt-6 pt-4 border-t border-neutral-800 w-full">
-          <p className="text-xs text-neutral-600 text-center mb-3">Unassigned agents</p>
+          <p className="text-xs text-neutral-600 text-center mb-3">Not in the tree ({orphanAgents.length})</p>
           <div className="flex items-start gap-3 flex-wrap justify-center">
-            {orphanWorkers.map((w) => (
+            {orphanAgents.map((w) => (
               <AgentNode key={w.id} agent={w} onSelect={onSelectAgent} selected={selectedAgentId === w.id} dimmed={isDim(w.id)} />
             ))}
           </div>

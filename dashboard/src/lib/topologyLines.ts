@@ -50,3 +50,59 @@ export function shortAgo(ts: string | null | undefined, now = Date.now()): strin
   const h = Math.floor(m / 60);
   return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`;
 }
+
+/**
+ * Partition a flat agent list into the shape the tree draws: one root, its leads, each lead's
+ * workers, and everything else.
+ *
+ * THE INVARIANT THIS EXISTS FOR: every agent handed in comes out in exactly one bucket. The
+ * old code picked buckets by tier — `find(a => a.tier === 'T0')` for the root, `filter(tier
+ * === 'T2' || 'T3')` for workers, and an orphan bucket that only collected T2/T3 — so an
+ * agent could match nothing and vanish. review found it live (2026-09-30): the fleet's ONLY
+ * down agent, gm-g2, is also tier T0, so `find` returned the live gm and gm-g2 rendered
+ * nowhere on the page. Filter to Down and the header read "showing 1 of 14" above a graph of
+ * thirteen live boxes.
+ *
+ * That is a direct violation of the spec's first rule (§2, "Nothing important is hidden. A
+ * down agent stays on screen, in red") and of its done-criterion (§15, "find any down agent
+ * within two seconds"). So the fix is not "also handle a second T0" — it is to compute
+ * `rest` by SUBTRACTION, which no tier value, missing parent or unexpected shape can slip
+ * through. `partitionTopology` is pure so that invariant is testable rather than hoped for.
+ */
+export interface TopologyAgent { id: string; tier?: string; parent?: string }
+
+export interface TopologyPartition<T extends TopologyAgent> {
+  /** First T0, the tree's root. Undefined if the list has none. */
+  root: T | undefined;
+  /** T1s, drawn as the row under the root. */
+  leads: T[];
+  /** lead id -> its workers (T2/T3 whose parent is one of `leads`). */
+  workersByLead: Record<string, T[]>;
+  /** Everything the tree would not otherwise draw — extra roots, parentless workers, workers
+   *  whose parent is not a lead, unknown tiers. Rendered, never dropped. */
+  rest: T[];
+}
+
+export function partitionTopology<T extends TopologyAgent>(agents: T[]): TopologyPartition<T> {
+  const root = agents.find((a) => a.tier === 'T0');
+  const leads = agents.filter((a) => a.tier === 'T1');
+  const leadIds = new Set(leads.map((l) => l.id));
+
+  const workersByLead: Record<string, T[]> = {};
+  const drawn = new Set<string>();
+  if (root) drawn.add(root.id);
+  for (const l of leads) drawn.add(l.id);
+
+  for (const a of agents) {
+    if (drawn.has(a.id)) continue;
+    const isWorker = a.tier === 'T2' || a.tier === 'T3';
+    if (isWorker && a.parent && leadIds.has(a.parent)) {
+      (workersByLead[a.parent] ??= []).push(a);
+      drawn.add(a.id);
+    }
+  }
+
+  // By subtraction, deliberately: whatever the tree did not claim is rendered here.
+  const rest = agents.filter((a) => !drawn.has(a.id));
+  return { root, leads, workersByLead, rest };
+}

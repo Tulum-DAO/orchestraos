@@ -55,3 +55,70 @@ assert.equal(shortAgo('2026-09-26T12:00:00Z', T), '3d ago');
 assert.equal(shortAgo('2026-09-29T12:05:00Z', T), 'just now');
 
 console.log('topologyLines: all assertions passed');
+
+// ── partitionTopology: the tree must render every agent it is given ──────────────────────
+// review found the fleet's only DOWN agent invisible in Topology (2026-09-30): gm-g2 is also
+// tier T0, the old code used a singular find() for the root, and the orphan bucket only
+// collected T2/T3 — so it matched no bucket and vanished. Header said "showing 1 of 14" over
+// a graph of thirteen live boxes. Spec §2 says nothing important is hidden; §15 says any down
+// agent is findable in two seconds. These assert the invariant, not the symptom.
+import { partitionTopology } from './topologyLines.ts';
+
+function allRendered(agents, label) {
+  const p = partitionTopology(agents);
+  const seen = [
+    ...(p.root ? [p.root] : []),
+    ...p.leads,
+    ...Object.values(p.workersByLead).flat(),
+    ...p.rest,
+  ].map((a) => a.id);
+  assert.deepEqual([...seen].sort(), agents.map((a) => a.id).sort(),
+    `${label}: every agent must be rendered exactly once — got ${JSON.stringify(seen)}`);
+  assert.equal(new Set(seen).size, seen.length, `${label}: no agent may be rendered twice`);
+  return p;
+}
+
+// THE REGRESSION: a second T0 that is the only down agent.
+{
+  const p = allRendered([
+    { id: 'gm', tier: 'T0' },
+    { id: 'gm-g2', tier: 'T0' },          // retired predecessor, alive false, no parent
+    { id: 'build', tier: 'T1' },
+    { id: 'builder-1', tier: 'T2', parent: 'build' },
+  ], 'second T0');
+  assert.equal(p.root.id, 'gm');
+  assert.ok(p.rest.some((a) => a.id === 'gm-g2'), 'the extra T0 must land in rest, not nowhere');
+}
+
+// A worker whose parent is not a lead, and one with no parent at all.
+{
+  const p = allRendered([
+    { id: 'gm', tier: 'T0' },
+    { id: 'build', tier: 'T1' },
+    { id: 'orphan-a', tier: 'T2' },                        // no parent
+    { id: 'orphan-b', tier: 'T2', parent: 'nobody' },      // parent is not a lead
+    { id: 'orphan-c', tier: 'T2', parent: 'gm' },          // parent is the root, not a lead
+    { id: 'builder-1', tier: 'T2', parent: 'build' },
+  ], 'unparented workers');
+  assert.deepEqual(p.workersByLead.build.map((a) => a.id), ['builder-1']);
+  assert.deepEqual(p.rest.map((a) => a.id).sort(), ['orphan-a', 'orphan-b', 'orphan-c']);
+}
+
+// An unknown tier, and a missing tier — neither may disappear.
+allRendered([
+  { id: 'gm', tier: 'T0' },
+  { id: 'weird', tier: 'T9' },
+  { id: 'untyped' },
+], 'unknown tiers');
+
+// Degenerate shapes.
+allRendered([], 'empty');
+allRendered([{ id: 'solo', tier: 'T2', parent: 'gone' }], 'no root at all');
+{
+  const p = partitionTopology([]);
+  assert.equal(p.root, undefined);
+  assert.deepEqual(p.leads, []);
+  assert.deepEqual(p.rest, []);
+}
+
+console.log('partitionTopology: every-agent-rendered invariant holds');

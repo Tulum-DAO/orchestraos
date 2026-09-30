@@ -585,7 +585,12 @@ export default function Agents() {
         <div className="flex flex-col lg:flex-row gap-4 items-stretch">
           <div className="flex-1 min-w-0 rounded-xl border border-neutral-800 bg-neutral-900 p-4 overflow-x-auto">
             <TopologyDiagram
-              agents={agents}
+              // `sorted`, NOT `agents`: Cards and Table got the filtered array and Topology
+              // was handed the unfiltered one, so the status filter had NO effect on the
+              // graph at all — setting it to Down rendered all thirteen live boxes under a
+              // header reading "showing 1 of 14" (review, 2026-09-30). The graph is the thing
+              // this feature is about, and it was the one surface step 1 never reached.
+              agents={sorted}
               pairs={pairs}
               windowHours={windowHours}
               onSelectConnection={openConversation}
