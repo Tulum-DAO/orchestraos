@@ -1965,6 +1965,18 @@ def _notify_spawned(session, machine):
         pass
 
 
+_ROADMAP_SELECT = (
+    "SELECT COALESCE(r.title, r.project) AS roadmap,"
+    " COALESCE(rp.title, 'Phase ' || rp.phase_number) AS phase,"
+    " COALESCE(t.title, rt.task_id, rt.id) AS title,"
+    " rt.status AS status"
+    " FROM roadmap_tasks rt"
+    " JOIN roadmap_phases rp ON rt.phase_id=rp.id"
+    " JOIN roadmaps r ON rp.roadmap_id=r.id"
+    " LEFT JOIN tasks t ON rt.task_id=t.id"
+)
+
+
 def execute_tool(name, args, user_turns=None):
     """Execute a tool call with Mac→VPS fallback.
 
@@ -2610,6 +2622,10 @@ def execute_tool(name, args, user_turns=None):
         return f"Noted and saved: {note[:100]}"
 
     elif name == "query_roadmap":
+        # Columns per the writer (msg_store.py) and api/src/lib/db.ts, NOT the names this query
+        # used to guess at: roadmaps/roadmap_phases carry `title` (no `name`), a roadmap_task
+        # carries no title of its own — the task's title is in `tasks`, via task_id — and the
+        # phase order is `phase_number` (there is no sort_order on either table).
         project = args.get("project", "all")
         status_filter = args.get("filter", "all")
         try:
@@ -2618,17 +2634,18 @@ def execute_tool(name, args, user_turns=None):
             conn.row_factory = sqlite3.Row
             if project == "all":
                 rows = conn.execute(
-                    "SELECT r.name as roadmap, rp.name as phase, rt.title, rt.status FROM roadmap_tasks rt JOIN roadmap_phases rp ON rt.phase_id=rp.id JOIN roadmaps r ON rp.roadmap_id=r.id" +
+                    _ROADMAP_SELECT +
                     (" WHERE rt.status=?" if status_filter != "all" else "") +
-                    " ORDER BY r.name, rp.sort_order, rt.sort_order",
+                    " ORDER BY roadmap, rp.phase_number, rt.rowid",
                     [status_filter] if status_filter != "all" else []
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT r.name as roadmap, rp.name as phase, rt.title, rt.status FROM roadmap_tasks rt JOIN roadmap_phases rp ON rt.phase_id=rp.id JOIN roadmaps r ON rp.roadmap_id=r.id WHERE LOWER(r.name) LIKE ?" +
+                    _ROADMAP_SELECT +
+                    " WHERE (LOWER(COALESCE(r.title, '')) LIKE ? OR LOWER(r.project) LIKE ?)" +
                     (" AND rt.status=?" if status_filter != "all" else "") +
-                    " ORDER BY rp.sort_order, rt.sort_order",
-                    [f"%{project.lower()}%"] + ([status_filter] if status_filter != "all" else [])
+                    " ORDER BY rp.phase_number, rt.rowid",
+                    [f"%{project.lower()}%"] * 2 + ([status_filter] if status_filter != "all" else [])
                 ).fetchall()
             conn.close()
             if not rows:
