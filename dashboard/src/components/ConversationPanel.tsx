@@ -52,6 +52,11 @@ export function ConversationPanel({
   const firstPage = data?.pages[0];
   const totalInWindow = firstPage?.total_in_window ?? 0;
   const windowHours = firstPage?.window_hours ?? windowHoursProp;
+  // review, 2026-09-30: total_all_time was returned and never rendered, which left a header
+  // that could read "0 in the last 24h" above a body full of older messages. Both numbers are
+  // now shown and both are labelled — the windowed one first, because that is the one that
+  // matches the connection line.
+  const totalAllTime = firstPage?.total_all_time ?? 0;
   const loaded = data?.pages.flatMap((p) => p.messages) ?? [];
   const ordered = newestFirst ? loaded : [...loaded].reverse();
   const filtered = ordered.filter((m) => matchesTypeFilter(m.type, typeFilter));
@@ -67,7 +72,7 @@ export function ConversationPanel({
             <button onClick={() => onOpenAgent(b)} className="text-neutral-100 hover:underline break-words">{b}</button>
           </div>
           <p className="text-[11px] text-neutral-500 mt-0.5">
-            {totalInWindow} message{totalInWindow === 1 ? '' : 's'} in the last {windowHours}h
+            {totalInWindow} message{totalInWindow === 1 ? '' : 's'} in the last {windowHours}h{totalAllTime > totalInWindow ? ` · ${totalAllTime} total` : ''}
           </p>
         </div>
         <button onClick={onClose} className="p-1.5 text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800 rounded-lg transition-colors shrink-0" aria-label="Close panel">

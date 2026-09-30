@@ -59,6 +59,13 @@ export function recentMessages(dataDir: string, limit = 50): RecentMessage[] {
  * from the window. julianday() is format-agnostic, and at this table's size the
  * lost index is not worth a correctness hole.
  *
+ * Second known ceiling, measured by review 2026-09-30: SQLite's julianday() resolves to
+ * MILLISECONDS while created_at carries microseconds (a 100us delta compares as exactly 0).
+ * Two rows written inside one millisecond therefore compare equal, so the strict `<` on the
+ * pagination cursor can drop the second of such a pair from "load older". Unreachable today —
+ * zero same-millisecond pairs across all 894 rows — and left unfixed deliberately rather than
+ * carrying an untestable tie-break. Upgrade when it becomes reachable: tie-break on rowid.
+ *
  * Known ceiling: pairCounts' `last_at` is a plain max(created_at), so it IS a
  * lexicographic pick. If a DEFAULT-format row is ever the newest on a line, the
  * "last message" in the line tooltip reads slightly stale — counts and ordering

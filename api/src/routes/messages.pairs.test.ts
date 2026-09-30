@@ -156,3 +156,41 @@ test('parseAsof repairs the +-decodes-to-space case and refuses anything else', 
   assert.equal(parseAsof(''), null);
   assert.equal(parseAsof('2026-13-45T99:99:99Z'), null);
 });
+
+test('julianday, not string compare: a DEFAULT-format row lands in a SAME-DAY window', () => {
+  // review (2026-09-30) proved the earlier assertion for this was vacuous, and it was right:
+  // with a 24h window the cutoff falls on the PREVIOUS calendar day, so the day digit decides
+  // a string compare before ' ' vs 'T' can matter — swapping julianday() for `>=` on raw text
+  // left every test green. Re-derived independently in sqlite:
+  //   '2026-09-29 21:55:03' >= '2026-09-28T23:55:03Z'  -> 1   (cross-day, accidentally passes)
+  //   '2026-09-29 21:55:03' >= '2026-09-29T17:55:03Z'  -> 0   (same-day, the real failure)
+  // So the window here must be small enough to stay inside one day. Timestamps are ABSOLUTE
+  // and the moment is pinned with asof, so this does not quietly become cross-day again
+  // depending on what time of day the suite happens to run — which is how the first version
+  // of this test went wrong.
+  const data = mkdtempSync(join(tmpdir(), 'orch-fmt-'));
+  mkdirSync(join(data, 'state'));
+  const db = new Database(join(data, 'state', 'tasks.db'));
+  db.exec(`create table messages (id text primary key, conversation_id text, from_agent text,
+           to_agent text, type text, subject text, body text, priority text, status text,
+           created_at text, delivered_at text, acknowledged_at text, archived_at text)`);
+  const ins = db.prepare(`insert into messages
+    (id,from_agent,to_agent,type,subject,body,priority,status,created_at,archived_at)
+    values (?,?,?,?,?,?,'medium','pending',?,null)`);
+  // Exactly the format the column DEFAULT datetime('now') writes: space separator, no offset.
+  ins.run('d1', 'gm', 'review', 'task', 'default-fmt', 'x', '2026-06-15 10:00:00');
+  // An ISO control on the same day, so a failure points at the format and not at the window.
+  ins.run('d2', 'gm', 'review', 'task', 'iso', 'x', '2026-06-15T10:30:00+00:00');
+  db.close();
+
+  const asof = Date.parse('2026-06-15T12:00:00Z');     // window 06:00..12:00, same day
+  const rows = new Map(pairCounts(data, 6, asof).map((r) => [`${r.a}|${r.b}`, r]));
+  assert.equal(rows.get('gm|review')?.count, 2,
+    'both the DEFAULT-format row and the ISO row must be inside a same-day 6h window');
+
+  assert.equal(pairMessages(data, 'gm', 'review', 40, null, 6, asof).total_in_window, 2);
+
+  // And the upper bound must still exclude a same-day row that is in the future at that moment.
+  const early = Date.parse('2026-06-15T10:15:00Z');    // window 04:15..10:15 — d2 is later
+  assert.equal(pairMessages(data, 'gm', 'review', 40, null, 6, early).total_in_window, 1);
+});
