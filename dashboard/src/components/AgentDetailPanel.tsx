@@ -409,11 +409,16 @@ export function AgentDetailPanel({
           </div>
         </div>
 
-        {/* Live feed + message box — build-order step 8. key=agent.id remounts
+        {/* Live feed + message box — build-order step 8. The key remounts
             (fresh subscription + cleared feed) on agent switch instead of
-            resetting state inside the effect. */}
-        <DetailLiveFeed key={agent.id} agentId={agent.id} />
-        <MessageComposer key={agent.id} agentId={agent.id} disabled={isDown} />
+            resetting state inside the effect. The keys must be DISTINCT: these
+            are siblings, and when both carried the bare agent.id React hit a
+            duplicate-key collision and kept the stale DetailLiveFeed mounted,
+            so transcriptStream's es.close() disposer never ran. Six switches
+            leaked six EventSources and exhausted the browser's per-origin
+            connection pool — the whole page stopped fetching. */}
+        <DetailLiveFeed key={`feed-${agent.id}`} agentId={agent.id} />
+        <MessageComposer key={`composer-${agent.id}`} agentId={agent.id} disabled={isDown} />
 
         {/* Recent problems */}
         <div>
