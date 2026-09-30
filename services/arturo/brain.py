@@ -25,6 +25,7 @@ import logging
 import threading
 import os
 import re
+import unicodedata
 import subprocess
 import tempfile
 import uuid
@@ -244,6 +245,48 @@ def _looks_like_native_markup(text: str) -> bool:
     return bool(_INVOKE_OPEN_RE.search(text))
 
 
+def _is_unassigned(ch: str) -> bool:
+    """Unassigned or private-use codepoints: never text anyone meant to write."""
+    return unicodedata.category(ch) in ("Cn", "Co")
+
+
+def _script(ch: str) -> str:
+    """Latin, or the first word of the character's Unicode name ('CJK', 'CYRILLIC', ...)."""
+    if not ch.isalpha():
+        return ""
+    name = unicodedata.name(ch, "")
+    return "LATIN" if name.startswith("LATIN") else name.split(" ")[0]
+
+
+def clean_codex_text(text: str) -> str:
+    """A codex reply with a degenerate tail cut off, and no unassigned codepoints.
+
+    Seen on staging (2026-09-30), inside a schema-valid envelope: the answer, then a stray "}"
+    — the model closing JSON it was already inside — then glitch tokens and its own reasoning
+    ("…your day starting?}\U0005f7c2 恒一 Erotiske?… Actually schema should valid JSON only…").
+    Rare (0/12 replays), but shown and saved to the thread, where it derailed the next turn. So:
+    a "}" whose tail holds an unassigned codepoint, or switches a Latin answer into other
+    scripts, ends the reply there. Braces in ordinary text, and replies written in another
+    language, are left alone."""
+    if not text:
+        return text
+    at = 0
+    while True:
+        i = text.find("}", at)
+        if i < 0:
+            break
+        head, tail = text[:i], text[i + 1:]
+        head_letters = [c for c in head if c.isalpha()]
+        latin_head = bool(head_letters) and sum(_script(c) == "LATIN" for c in head_letters) >= 0.8 * len(head_letters)
+        foreign_tail = sum(1 for c in tail if _script(c) not in ("", "LATIN"))
+        if any(_is_unassigned(c) for c in tail) or (latin_head and foreign_tail >= 3):
+            log.warning(f"codex reply cut at a degenerate tail ({len(tail)} chars dropped)")
+            text = head
+            break
+        at = i + 1
+    return "".join(c for c in text if not _is_unassigned(c)).strip()
+
+
 def parse_cli_reply(text: str):
     text = (text or "").strip()
     env = _find_envelope(text) if "tool_calls" in text else None
@@ -268,7 +311,7 @@ def parse_cli_reply(text: str):
         # codex's schema always carries a "text" field for the no-call case; other runtimes
         # never emit one, so falling back to the raw string preserves today's behaviour for them.
         fallback = env.get("text")
-        return make_response(fallback if isinstance(fallback, str) else text, None, "stop")
+        return make_response(clean_codex_text(fallback) if isinstance(fallback, str) else text, None, "stop")
     return make_response(None, calls, "tool_calls")
 
 

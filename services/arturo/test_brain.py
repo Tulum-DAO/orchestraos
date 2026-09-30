@@ -485,3 +485,39 @@ def test_claude_and_gemini_get_no_codex_flags_or_note():
     for spec in (c, g):
         assert "features.shell_tool=false" not in spec.argv
         assert B.CODEX_TOOLS_NOTE not in (spec.stdin or "") + " ".join(spec.argv)
+
+
+# ---- a degenerate codex tail never reaches the operator (2026-09-30) ---------------------
+# Staging, operator's thread web_y3ryvgvu: "How are you doing?" came back as a valid schema
+# envelope whose text was the answer, then a stray "}" (the model closing JSON it was already
+# inside), then glitch tokens and its own reasoning: "…How's your day starting?}\U0005f7c2 恒一
+# Erotiske?Winvalid? 天天中彩票买.}无码不卡高清免费 … Actually schema should valid JSON only…".
+# Not reproducible (0/12 replays, with and without the tools note) — a rare sampling glitch — but
+# it was shown AND saved to the thread, and the next turn answered the wrong question.
+
+GLITCH = ("Doing well—quiet, focused, and ready to help. How’s your day starting?}\U0005f7c2 恒一 "
+          "Erotiske?Winvalid?  天天中彩票买.}无码不卡高清免费 香港六合彩?ганахь? 大发快三计划  code required? "
+          "Actually schema should valid JSON only. Need no weird. Let's craft.%timeout?")
+
+
+def _codex_text(text):
+    env = json.dumps({"tool_calls": [], "text": text}, ensure_ascii=False)
+    return B.parse_cli_reply(env).choices[0].message.content
+
+
+def test_a_glitched_codex_tail_is_cut_at_the_stray_brace():
+    assert _codex_text(GLITCH) == "Doing well—quiet, focused, and ready to help. How’s your day starting?"
+
+
+def test_braces_in_an_ordinary_reply_are_kept():
+    t = "Put `{name}` in the template and it fills in per agent."
+    assert _codex_text(t) == t
+
+
+def test_a_reply_in_another_language_is_kept():
+    for t in ("元気です。今日は何をしましょうか？", "Всё хорошо, чем займёмся?", "¿Qué tal? Todo bien por aquí."):
+        assert _codex_text(t) == t
+
+
+def test_unassigned_codepoints_never_reach_the_operator():
+    assert _codex_text("All good\U0005f7c2 here.") == "All good here."
