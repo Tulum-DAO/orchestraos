@@ -7,9 +7,11 @@
  * split-at-every-byte test pins.
  */
 import { buildTextBody, arturoText, type ArturoContext, type ArturoReply } from './arturo';
+import type { ToolCallEvent, ToolResultEvent } from './turnParts';
 
 export interface ArturoStreamEvent {
-  event: 'turn.start' | 'text.delta' | 'thinking.delta' | 'turn.end' | 'error' | string;
+  event: 'turn.start' | 'text.delta' | 'thinking.delta' | 'tool.call' | 'tool.result'
+    | 'turn.reset' | 'turn.end' | 'error' | string;
   data: any;
 }
 
@@ -97,8 +99,25 @@ export function reportTurnFailure(stage: string, detail: Record<string, unknown>
 export interface StreamCallbacks {
   onStart?: (data: any) => void;
   onDelta?: (text: string) => void;
+  /** A tool is about to run: open its card. */
+  onToolCall?: (call: ToolCallEvent) => void;
+  /** That tool finished: close its card (paired by call_id). */
+  onToolResult?: (result: ToolResultEvent) => void;
+  /** The whole-reply path took the turn over: clear what this turn has shown so far. */
+  onReset?: (data: any) => void;
   onEnd?: (data: any) => void;
   onError?: (data: any) => void;
+}
+
+/** What a finished streamed turn reports — the same facts /text returns. */
+export interface StreamOutcome {
+  ok: boolean;
+  reply_text?: string;
+  tools_called?: string[];
+  spawned?: string[];
+  operator?: any;
+  brain?: any;
+  error?: string;
 }
 
 /**
@@ -109,7 +128,7 @@ export async function arturoTextStream(
   body: Record<string, unknown>,
   cb: StreamCallbacks = {},
   signal?: AbortSignal,
-): Promise<{ ok: boolean; reply_text?: string; error?: string }> {
+): Promise<StreamOutcome> {
   let res: Response;
   // A deadline on the request itself, not only on its reads: the server sends turn.start the
   // moment it has the turn, so no response head within 20s is a stuck request, and without this
@@ -149,6 +168,9 @@ export async function arturoTextStream(
   const feed = parseSseChunks((e) => {
     if (e.event === 'turn.start') cb.onStart?.(e.data);
     else if (e.event === 'text.delta') cb.onDelta?.(e.data.text || '');
+    else if (e.event === 'tool.call') cb.onToolCall?.(e.data);
+    else if (e.event === 'tool.result') cb.onToolResult?.(e.data);
+    else if (e.event === 'turn.reset') cb.onReset?.(e.data);
     else if (e.event === 'turn.end') { final = e.data; cb.onEnd?.(e.data); }
     else if (e.event === 'error') { failed = e.data; cb.onError?.(e.data); }
   });
@@ -163,7 +185,12 @@ export async function arturoTextStream(
   }
   if (failed && !final) return { ok: false, error: failed.code || 'turn_failed' };
   if (!final) return { ok: false, error: 'incomplete' };
-  return { ok: true, reply_text: final.reply_text };
+  // Everything turn.end says the turn DID — onboarding advances on tools_called, spawned and
+  // operator, and a streamed turn used to report none of them.
+  return {
+    ok: true, reply_text: final.reply_text, tools_called: final.tools_called || [],
+    spawned: final.spawned || [], operator: final.operator, brain: final.brain,
+  };
 }
 
 
@@ -183,6 +210,10 @@ export async function arturoTurn(
     onSent?: () => void;
     brain?: { provider: string; model: string };
     onDelta?: (text: string) => void;
+    onToolCall?: (call: ToolCallEvent) => void;
+    onToolResult?: (result: ToolResultEvent) => void;
+    /** Clear what this turn has shown: the server's fallback is taking over, or ours is. */
+    onReset?: () => void;
     signal?: AbortSignal;
   } = {},
 ): Promise<ArturoReply> {
@@ -192,10 +223,21 @@ export async function arturoTurn(
     // turn.start is the server saying it has the turn — a stricter "Sent" than an upload event.
     onStart: () => { started = true; opts.onSent?.(); },
     onDelta: (t) => opts.onDelta?.(t),
+    onToolCall: (c) => opts.onToolCall?.(c),
+    onToolResult: (r) => opts.onToolResult?.(r),
+    onReset: () => opts.onReset?.(),
   }, opts.signal);
 
-  if (res.ok) return { ok: true, reply_text: res.reply_text || '', tools_called: [], spawned: [] } as ArturoReply;
+  if (res.ok) {
+    return {
+      ok: true, reply_text: res.reply_text || '', tools_called: res.tools_called || [],
+      spawned: res.spawned || [], ...(res.operator !== undefined ? { operator: res.operator } : {}),
+    } as ArturoReply;
+  }
   if (opts.signal?.aborted) return { ok: false, error: 'aborted' } as ArturoReply;
+  // The re-ask answers from the top: whatever the dead attempt showed (half a reply, tool
+  // cards) is cleared first, or it sits beside the answer.
+  opts.onReset?.();
   // Anything that failed BEFORE the first delta is safe to re-ask; a turn that failed after
   // partial text is re-asked too, and the caller clears what it had shown.
   const t0 = Date.now();

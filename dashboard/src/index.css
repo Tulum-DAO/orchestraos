@@ -151,6 +151,114 @@
     --sidebar-ring: oklch(0.556 0 0);
 }
 
+/* ── beautifului.dev design tokens (MIT, © Shane Levine — see NOTICE) ───────────
+ * Ported for Arturo's tool cards (components/arturo/ToolRun.tsx). Raw values are --bui-*, so they
+ * cannot clash with anything above; the @theme block below exposes them to Tailwind under names
+ * nothing in this dashboard used before (checked), except `accent`, which is ours — theirs is
+ * `bui-accent`. Same switch as ours: :root is light, .dark (and the Arturo shell) is dark. Keyframes only, no animate-*
+ * utility: Activity.tsx already has its own `animate-fade-in`. */
+:root {
+    --bui-page: oklch(98.5% .001 286.376);
+    --bui-canvas: oklch(96.1% .002 247.84);
+    --bui-surface: oklch(100% 0 0);
+    --bui-inset: oklch(97.9% .002 247.839);
+    --bui-field: oklch(96.1% .001 286.375);
+    --bui-hover: oklch(97% .002 247.839);
+    --bui-hover-2: oklch(93.3% .003 247.86);
+    --bui-ink: oklch(24.7% .006 258.361);
+    --bui-ink-2: oklch(50.6% .01 264.477);
+    --bui-ink-3: oklch(69.5% .009 264.505);
+    --bui-line: oklch(94.6% .003 264.542);
+    --bui-line-strong: oklch(91.2% .005 258.326);
+    --bui-line-soft: oklch(96.6% .002 264.542);
+    --bui-accent: oklch(62.6% .205 254.947);
+    --bui-accent-ink: oklch(55.6% .187 255.617);
+    --bui-accent-tint: oklch(96% .019 252.878);
+    --bui-green: oklch(60.3% .155 150.883);
+    --bui-green-tint: oklch(95.8% .017 159.118);
+    --bui-orange: oklch(68.9% .179 49.902);
+    --bui-orange-tint: oklch(96.4% .021 67.581);
+    --bui-red: oklch(62.1% .192 23.042);
+    --bui-red-tint: oklch(95.6% .017 17.462);
+    --bui-shadow-hairline: 0 0 0 1px var(--bui-line);
+    --bui-shadow-btn: 0 0 0 1px var(--bui-line-strong), 0 0 4px 0 #0000000a;
+    --bui-shadow-card: 0 0 0 1px var(--bui-line), 0 18px 47px 0 #00000008, 0 7.5px 19px 0 #00000005, 0 4px 10.5px 0 #00000005, 0 2.3px 5.8px 0 #00000003, 0 1.2px 3.1px 0 #00000003, 0 .5px 1.3px 0 #00000003;
+    --bui-shadow-raised: 0 0 0 1px var(--bui-line), 0 17.54px 23.39px 0 #0000000a, 0 9.4px 12.5px 0 #00000008, 0 5.25px 7px 0 #00000005, 0 2.79px 3.72px -2px #00000003, 0 1.16px 1.5px 0 #00000003;
+    --bui-shadow-overlay: 0 0 0 1px var(--bui-line), 0 25px 50px 0 #0000000d, 0 12px 24px 0 #0000000a, 0 6px 12px 0 #00000008, 0 3px 6px 0 #00000005, 0 1.5px 3px 0 #00000005;
+}
+
+/* The Arturo shell is always dark (arturo.css: black canvas, white text) whatever the app theme,
+ * so the dark values apply inside it too — light-theme ink on that canvas would be invisible. */
+.dark,
+.arturo-shell {
+    --bui-page: oklch(20.9% .004 264.477);
+    --bui-canvas: oklch(23.1% .004 264.487);
+    --bui-surface: oklch(26% .006 271.191);
+    --bui-inset: oklch(24.3% .004 264.492);
+    --bui-field: oklch(29.3% .006 271.223);
+    --bui-hover: oklch(28.9% .006 271.22);
+    --bui-hover-2: oklch(31.8% .007 274.747);
+    --bui-ink: oklch(96.4% .002 247.839);
+    --bui-ink-2: oklch(73.1% .008 260.731);
+    --bui-ink-3: oklch(54.1% .01 264.484);
+    --bui-line: oklch(30.8% .006 258.354);
+    --bui-line-strong: oklch(35.6% .007 264.474);
+    --bui-line-soft: oklch(27.8% .006 258.354);
+    --bui-accent: oklch(68% .173 253.301);
+    --bui-accent-ink: oklch(78.8% .113 248.33);
+    --bui-accent-tint: oklch(68% .173 253.301 / .16);
+    --bui-green: oklch(70.5% .154 153.814);
+    --bui-green-tint: oklch(70.5% .154 153.814 / .14);
+    --bui-orange: oklch(74.6% .156 55.642);
+    --bui-orange-tint: oklch(74.6% .156 55.642 / .14);
+    --bui-red: oklch(66.6% .18 21.433);
+    --bui-red-tint: oklch(66.6% .18 21.433 / .14);
+    --bui-shadow-btn: 0 0 0 1px oklch(100% 0 0 / .1), 0 1px 2px oklch(0% 0 0 / .3);
+    --bui-shadow-card: 0 0 0 1px oklch(100% 0 0 / .11), 0 1px 2px oklch(0% 0 0 / .2), 0 2px 6px oklch(0% 0 0 / .2);
+    --bui-shadow-raised: 0 0 0 1px oklch(100% 0 0 / .13), 0 2px 10px oklch(0% 0 0 / .22);
+    --bui-shadow-overlay: 0 0 0 1px oklch(100% 0 0 / .15), 0 8px 28px oklch(0% 0 0 / .34);
+}
+
+@theme inline {
+    --color-page: var(--bui-page);
+    --color-canvas: var(--bui-canvas);
+    --color-surface: var(--bui-surface);
+    --color-inset: var(--bui-inset);
+    --color-field: var(--bui-field);
+    --color-hover: var(--bui-hover);
+    --color-hover-2: var(--bui-hover-2);
+    --color-ink: var(--bui-ink);
+    --color-ink-2: var(--bui-ink-2);
+    --color-ink-3: var(--bui-ink-3);
+    --color-line: var(--bui-line);
+    --color-line-strong: var(--bui-line-strong);
+    --color-line-soft: var(--bui-line-soft);
+    --color-bui-accent: var(--bui-accent);
+    --color-bui-accent-ink: var(--bui-accent-ink);
+    --color-bui-accent-tint: var(--bui-accent-tint);
+    --color-green: var(--bui-green);
+    --color-green-tint: var(--bui-green-tint);
+    --color-orange: var(--bui-orange);
+    --color-orange-tint: var(--bui-orange-tint);
+    --color-red: var(--bui-red);
+    --color-red-tint: var(--bui-red-tint);
+    --radius-chip: 6px;
+    --radius-control: 8px;
+    --radius-card: 10px;
+    --radius-window: 14px;
+    --ease-out-strong: cubic-bezier(.23, 1, .32, 1);
+    --ease-in-out-strong: cubic-bezier(.77, 0, .175, 1);
+    --shadow-hairline: var(--bui-shadow-hairline);
+    --shadow-btn: var(--bui-shadow-btn);
+    --shadow-card: var(--bui-shadow-card);
+    --shadow-raised: var(--bui-shadow-raised);
+    --shadow-overlay: var(--bui-shadow-overlay);
+}
+
+@keyframes fade-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pop-in { from { opacity: 0; transform: scale(.95); } to { opacity: 1; transform: scale(1); } }
+
 /* Safe area for iPhone notch/Dynamic Island */
 .safe-top { padding-top: env(safe-area-inset-top); }
 .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
