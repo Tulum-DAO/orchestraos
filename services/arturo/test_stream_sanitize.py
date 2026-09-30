@@ -52,6 +52,11 @@ CORPUS = {
     "leading_ws": "   \n  Answer.",
     "empty": "",
     "only_tool": "```tool_code\nprint(default_api.x())\n```",
+    # a ticked name that is not a tool is prose; the dots inside the span are not sentence ends
+    "ticked_model": "I'm on Codex (`gpt-5.6-luna`) via your `codex` CLI. No API key is involved.",
+    "ticked_model_all": "I am running on Codex, model `gpt-5.6-luna`, via your `codex` CLI.",
+    "ticked_mixed": "I'll route it via `ask_gm`. You're on `codex` tonight. Want the list?",
+    "ticked_dotted_tool": "I will call `default_api.send_telegram` now. Sent.",
 }
 
 

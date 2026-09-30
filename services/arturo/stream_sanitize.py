@@ -23,7 +23,7 @@ Two devices:
       recognisable once the line ends;
     - trailing whitespace, because the batch collapses blank runs and strips both ends;
     - the leading region, because a thought block keeps only its LAST paragraph, and leading
-      sentences containing a backticked token are stripped until one arrives without any.
+      sentences naming a backticked tool are stripped until one arrives that names none.
       That last rule is why the first sentence of a reply streams as a unit: "Try this:"
       reads as prose right up until a code fence lands in the same sentence and the whole
       thing is dropped.
@@ -103,7 +103,7 @@ class StreamingSanitizer:
         text = _vg.strip_tool_code(raw)
         rest, idx = text, 0
         while True:
-            m = _vg._TICKED_SENTENCE_RE.match(rest)
+            m = _vg.leading_tool_sentence(rest)
             if not m:
                 break
             rest = rest[m.end():].lstrip()
@@ -111,8 +111,11 @@ class StreamingSanitizer:
         end = _SENTENCE_END_RE.search(rest)
         if not end:
             return False, idx          # sentence still open: a backtick may yet arrive
-        if "`" in rest[:end.end()]:
-            return False, idx          # complete but ticked — the loop above will eat it
+        if "`" in rest[:end.end()] and not _vg._TICKED_SENTENCE_RE.match(rest):
+            # A tick before the first stop means a span is open (`gpt-5.` is not a sentence
+            # end) or the sentence is not finished — its tokens are not known yet. Once it is
+            # whole and still here, it named no tool (the loop above would have eaten it).
+            return False, idx
         return True, idx
 
     def _stable_len(self):
