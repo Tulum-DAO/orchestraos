@@ -445,3 +445,43 @@ def test_runtime_failure_is_a_sentence_not_the_argv():
     assert "--system-prompt" not in out, "the argv leaked to the operator"
     assert "You are ARTURO" not in out, "the system prompt leaked to the operator"
     assert out.strip(), "a failing brain must still say something"
+
+
+# ---- codex: its own shell off, and told the listed tools are real (2026-09-30) -------------
+# Measured on staging with Arturo's exact 30k-char prompt ("check which agents are running"):
+# codex ran its OWN sandboxed shell (tmux ls — blocked by bwrap in the container) on every run,
+# and in 2 of 3 it emitted a correct Arturo tool call first, kept going, and ended on "I can't
+# access the live agent registry" — the last message is the one we read, so the call was lost.
+# With its shell off but no framing: 0/3 ("no agent-status tool is connected here"). With the
+# note: 5/5 tool calls, 6-11s instead of 15-20s; chat turns stayed text (3/3); follow-ups with a
+# TOOL RESULT answered from it (3/3).
+
+def test_codex_runs_with_its_own_shell_switched_off(tmp_path):
+    # `-c features.X=false`, not `--disable X`: --disable with a name the installed codex does
+    # not know is a hard error ("Unknown feature flag") and would fail every turn; -c ignores it.
+    for use_schema in (True, False):
+        argv = B.runtime_command("codex", "codex", "S", "P", scratch=tmp_path, use_schema=use_schema).argv
+        pairs = {argv[i + 1] for i, a in enumerate(argv) if a == "-c"}
+        assert {"features.shell_tool=false", "features.unified_exec=false"} <= pairs
+        assert "--disable" not in argv
+
+
+def test_codex_is_told_the_listed_tools_are_real_when_tools_ride_the_turn(tmp_path):
+    system = "SYS\n\n## Tools\nYou can call tools.\n\nAvailable tools (name — description):\n- list_agents — x"
+    spec = B.runtime_command("codex", "codex", system, "USER: hi\nASSISTANT:", scratch=tmp_path, use_schema=True)
+    assert spec.stdin.count(B.CODEX_TOOLS_NOTE) == 2
+    assert spec.stdin.index(B.CODEX_TOOLS_NOTE) < spec.stdin.index("Available tools (name")
+    assert spec.stdin.rstrip().endswith(B.CODEX_TOOLS_NOTE)
+
+
+def test_a_codex_turn_without_tools_gets_no_note(tmp_path):
+    spec = B.runtime_command("codex", "codex", "SYS", "USER: hi\nASSISTANT:", scratch=tmp_path, use_schema=False)
+    assert B.CODEX_TOOLS_NOTE not in spec.stdin
+
+
+def test_claude_and_gemini_get_no_codex_flags_or_note():
+    c = B.runtime_command("claude", "claude", "S", "P", use_schema=True)
+    g = B.runtime_command("gemini", "agy", "S", "P", use_schema=True)
+    for spec in (c, g):
+        assert "features.shell_tool=false" not in spec.argv
+        assert B.CODEX_TOOLS_NOTE not in (spec.stdin or "") + " ".join(spec.argv)
