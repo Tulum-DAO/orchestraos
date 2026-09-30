@@ -127,8 +127,26 @@ export function detectorCacheAgeMs(): number {
  */
 export const RELIC_SELF_STATES = new Set(['stopped', 'retired', 'dead', 'archived']);
 
+/**
+ * The relics that were DELIBERATELY decommissioned, as opposed to merely not
+ * running. Every lineage rotation leaves one: rotating `build` to generation 2
+ * writes a `build-g2` row with status `retired` and no tmux session, exactly as
+ * `gm-g2` was left behind earlier.
+ *
+ * These used to collapse into `offline`, which reads to every client as "should
+ * be running and isn't" — so the dashboard counted two decommissioned records as
+ * down agents, and the org chart could pick the retired T0 as its root. Down and
+ * retired are different facts and the API has to say which one it means.
+ */
+export const DECOMMISSIONED_SELF_STATES = new Set(['retired', 'archived']);
+
 export function classifyNoSession(alwaysOn: boolean, selfStatus: string):
-    { status: 'crashed' | 'offline'; activity: string } {
+    { status: 'crashed' | 'offline' | 'retired'; activity: string } {
+  // Checked before always_on: a retired seat is retired whether or not its row
+  // still claims always_on — the registry row outlives the decision to run it.
+  if (DECOMMISSIONED_SELF_STATES.has(selfStatus)) {
+    return { status: 'retired', activity: `Decommissioned (self-reported ${selfStatus})` };
+  }
   const relic = RELIC_SELF_STATES.has(selfStatus);
   if (alwaysOn && !relic) {
     return { status: 'crashed', activity: 'No tmux session' };
