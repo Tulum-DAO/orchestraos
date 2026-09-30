@@ -130,6 +130,34 @@ test('held: durable write itself fails -> never lie, 502 with state held', async
   assert.equal(calls.json.reason, 'durable_write_failed');
 });
 
+// The 502 error string used to be whatever msgStoreSend returned. On the real
+// failure path that is an execFileSync message, which carries the entire argv:
+// the msg_store.py path, --from/--to, and the mkdtemp body-file path. That is
+// server-side detail and belongs in the log, not in a browser response.
+// MUTATION: put `error: err` back as the raw write.error and this goes red.
+test('502: the client body carries no command line, local path or tmp dir', async () => {
+  const leaky =
+    "Command failed: python3 /Users/someone/orchestraos/msg_store.py send --from gm --to build " +
+    "--body-file /var/folders/xy/T/agent-send-Ab3d/body.txt\nsqlite3.OperationalError: database is locked";
+
+  for (const caps of [['send-states'], []]) {
+    const { res, calls } = fakeRes();
+    const d = deps({
+      gatewayInject: async () => ({ httpStatus: 409, ok: false, reason: 'busy', state: 'waiting' }),
+      msgStoreSend: async () => ({ sent: false, error: leaky }),
+    });
+    await handleAgentSend(d, req({ body: { text: 'x', client_caps: caps } }), res);
+
+    assert.equal(calls.status, 502, 'still a 502 — the status is not what leaked');
+    const wire = JSON.stringify(calls.json);
+    for (const secret of ['msg_store.py', '/Users/', '/var/folders/', 'body.txt', 'python3', '--body-file']) {
+      assert.ok(!wire.includes(secret), `502 body leaked ${secret}: ${wire}`);
+    }
+    // ...and it must still SAY something, or the UI renders an empty red box.
+    assert.ok(String(calls.json.error || '').length > 0, 'the client still needs a reason to show');
+  }
+});
+
 // ── D4: composer-hold -> 409 with payload echoed, never queued underneath ─
 
 test('409: composer has the operator\'s own unsubmitted text -> payload echoed, no durable write', async () => {

@@ -324,7 +324,13 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
 
   if (!write.sent) {
     // Never lie about delivery on a failed durable write either.
-    const err = write.error || 'durable write failed';
+    //
+    // The real error is an execFileSync message: it carries the whole argv —
+    // the msg_store.py path, --from/--to, and the mkdtemp body-file path. That
+    // is server-side detail and it goes to the log, not to the browser. The
+    // client gets a fixed string it can show verbatim.
+    console.error('[agent-send] durable write failed:', write.error || 'unknown error');
+    const err = 'Could not store the message — it was not delivered.';
     res.status(502).json(capable
       ? { state: 'held', reason: 'durable_write_failed', error: err }
       : { ok: false, error: err });
@@ -344,7 +350,10 @@ const router = Router();
 
 router.post('/:id/send', (req: Request, res: Response) => {
   handleAgentSend(defaultAgentSendDeps, req, res).catch((err) => {
-    res.status(500).json({ ok: false, error: err?.message || 'internal error' });
+    // Same rule as the 502 above: an unexpected throw's message routinely
+    // carries local paths (ENOENT /Users/...). Log it, don't ship it.
+    console.error('[agent-send] unhandled error:', err);
+    res.status(500).json({ ok: false, error: 'internal error' });
   });
 });
 
