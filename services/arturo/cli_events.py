@@ -79,6 +79,24 @@ def stream_command(runtime: str, cli: str, system: str, prompt: str, model: str 
     raise ValueError(f"no streaming command for runtime {runtime!r}")
 
 
+#: Runtimes whose CLI can take many turns over one process. Measured for claude only;
+#: agy advertises `--input-format stream-json` too but its turn shape is unverified, and codex
+#: has no such mode — both keep the one-shot path until they are measured.
+WARM_RUNTIMES = ("claude",)
+
+
+def warm_command(runtime: str, cli: str, system: str, model: str = "") -> list:
+    """argv for a long-lived process that takes one NDJSON user message per turn."""
+    if runtime != "claude":
+        raise ValueError(f"no warm session for runtime {runtime!r}")
+    argv = [cli, "-p", "--input-format", "stream-json", "--output-format", "stream-json",
+            "--verbose", "--include-partial-messages", "--no-session-persistence", "--tools", "",
+            "--strict-mcp-config", "--setting-sources", "", "--system-prompt", system]
+    if model:
+        argv.append(f"--model={model}")
+    return argv
+
+
 def _json_lines(lines):
     for line in lines:
         line = line.strip()

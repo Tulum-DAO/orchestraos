@@ -16,6 +16,7 @@ cannot clobber the live proxy's full-overwrite files (voice-memory / voice-live-
 """
 
 import json
+import atexit
 import os
 import re
 import hmac
@@ -212,6 +213,7 @@ def _record_spawned_this_turn(session_name):
 from services.arturo import thread_store as _thread_store   # G20 durable thread archive
 from services.arturo import vq6 as _vq6
 from services.arturo import text_stream as _text_stream   # Phase 2 /text/stream
+from services.arturo import warm_session as _warm_session   # one live CLI per conversation
 _VQ6 = _vq6.InflightRegistry()
 from services.arturo import voice_guards as _voice_guards   # VQ-9 re-engagement-filler suppression
 # F2 cross-request dedup (DEC-1788674600635445, congruence: AGY + in-process Claude). MODULE-LEVEL
@@ -4707,6 +4709,18 @@ def thread_detail_endpoint(conversation_id):
     return jsonify({"ok": True, "thread": thread})
 
 
+def _spawn_warm(argv, env=None):
+    return subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
+
+
+# One live CLI per conversation (warm_session.py). 10-minute staleness bound because the system
+# prompt carries live fleet state fixed at spawn; 5-minute idle eviction; at most 8 processes.
+_WARM_POOL = _warm_session.WarmPool(spawn=_spawn_warm, argv_for=lambda key: [],
+                                    idle_ttl_s=300.0, max_age_s=600.0, max_sessions=8)
+atexit.register(_WARM_POOL.close_all)
+
+
 def _record_text_turn(conversation_id, text, reply, brain=None):
     """The ONE place a text turn is persisted. /text and /text/stream both come through here,
     so a streamed turn and a whole one leave the same history and the same thread row."""
@@ -4777,6 +4791,15 @@ def text_stream_endpoint():
     def _fallback():
         return text_turn(text_in, conversation_id, brain=brain_req, context=page_ctx)
 
+    warm_key = (conversation_id, getattr(turn_brain, "runtime", ""),
+                getattr(turn_brain, "_model_flag", "") or "")
+
+    def _warm(argv, new_text):
+        env = dict(os.environ)
+        for key in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"):
+            env.pop(key, None)
+        return _WARM_POOL.turn(warm_key, new_text, argv=argv, env=env)
+
     def _generate():
         # with_heartbeat keeps the connection alive through a silent stretch — the tool-loop
         # fallback produces nothing while it runs, and every hop in front of us drops an idle
@@ -4784,7 +4807,8 @@ def text_stream_endpoint():
         turn = _text_stream.stream_turn(
             text=body_text, conversation_id=conversation_id, brain=turn_brain,
             brain_id=chosen_id, messages=messages, spawn=_spawn,
-            fallback=_fallback, record=_record_text_turn, tools=TOOLS)
+            fallback=_fallback, record=_record_text_turn, tools=TOOLS,
+            warm=_warm, discard=lambda: _WARM_POOL.discard(warm_key))
         try:
             for frame in _text_stream.with_heartbeat(turn, interval_s=10.0):
                 yield frame

@@ -28,7 +28,8 @@ import time
 import uuid
 
 from .brain import render_transcript, tool_protocol_block
-from .cli_events import stream_command, read_events, TextDelta, ThinkingDelta, TurnEnd, StreamError
+from .cli_events import (stream_command, warm_command, WARM_RUNTIMES, read_events,
+                         TextDelta, ThinkingDelta, TurnEnd, StreamError)
 from .stream_sanitize import PassClassifier, StreamingSanitizer, HOLD, PROSE
 
 
@@ -42,7 +43,7 @@ def _ev(name, **data):
 
 
 def stream_turn(text, conversation_id, brain, brain_id, messages, spawn, fallback, record,
-                tools=None, turn_id=None):
+                tools=None, turn_id=None, warm=None, discard=None):
     """Yield the turn's events. Pure over its injected deps so the tests never spawn a CLI.
 
     spawn(CommandSpec) -> iterator of stdout lines; fallback() -> (status, body) from the
@@ -65,13 +66,20 @@ def stream_turn(text, conversation_id, brain, brain_id, messages, spawn, fallbac
     block = tool_protocol_block(tools or [], None)
     if block:
         system = f"{system}\n\n{block}" if system else block
-    cmd = stream_command(brain.runtime, brain.cli, system, prompt,
-                         model=getattr(brain, "_model_flag", "") or "")
+    model_flag = getattr(brain, "_model_flag", "") or ""
+    if warm is not None and brain.runtime in WARM_RUNTIMES:
+        # A warm process already remembers the conversation, so it gets ONLY the new message.
+        # The history rides in the system prompt, and only when the process has to start.
+        history_prompt = render_transcript(messages[:-1])[1] if len(messages) > 1 else ""
+        seed = f"{system}\n\nThe conversation so far:\n{history_prompt}" if history_prompt.strip() else system
+        source = warm(warm_command(brain.runtime, brain.cli, seed, model_flag), messages[-1].get("content") or "")
+    else:
+        source = spawn(stream_command(brain.runtime, brain.cli, system, prompt, model=model_flag))
     classifier, sanitizer = PassClassifier(), StreamingSanitizer()
     verdict, held, failure = None, "", None
 
     try:
-        for event in read_events(brain.runtime, spawn(cmd)):
+        for event in read_events(brain.runtime, source):
             if isinstance(event, ThinkingDelta):
                 yield _ev("thinking.delta", turn_id=turn_id, text=event.text)
                 continue
@@ -110,6 +118,12 @@ def stream_turn(text, conversation_id, brain, brain_id, messages, spawn, fallbac
                 return
     except Exception as e:                      # a broken pipe mid-turn is a failed turn
         failure = StreamError("stream_failed", str(e)[:200])
+
+    # From here the warm process's memory no longer matches the conversation: it either failed,
+    # or it produced a tool envelope whose real answer the tool loop is about to write. Reusing
+    # it would continue a conversation that did not happen, so it is thrown away.
+    if discard is not None:
+        discard()
 
     if failure is not None:
         yield _ev("error", turn_id=turn_id, code=failure.code, message=failure.message)

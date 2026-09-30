@@ -216,3 +216,69 @@ def test_an_exception_inside_the_turn_still_reaches_the_client_as_an_error():
     frames = list(TS.with_heartbeat(boom(), interval_s=0.05))
     assert frames[-1].startswith("event: error")
     assert "brain exploded" in frames[-1]
+
+
+# ---- warm sessions through stream_turn -------------------------------------------------
+
+class WarmRecorder:
+    """Stands in for the pool: records what a warm turn was given."""
+
+    def __init__(self, lines):
+        self.lines = lines
+        self.calls = []
+
+    def __call__(self, argv, new_text):
+        self.calls.append((argv, new_text))
+        return iter(self.lines)
+
+
+def warm_events(lines, messages, discarded, fallback=None):
+    warm = WarmRecorder(lines)
+    evs = list(TS.stream_turn(
+        text="hi", conversation_id="c1", brain=FakeBrain(),
+        brain_id={"provider": "claude", "model": "claude-opus-5"},
+        messages=messages, spawn=lambda cmd: iter(["SHOULD NOT BE USED"]),
+        fallback=fallback or (lambda: (200, {"ok": True, "reply_text": "fb", "tools_called": ["t"], "spawned": []})),
+        record=lambda **kw: None, warm=warm, discard=lambda: discarded.append(True)))
+    return evs, warm
+
+
+def test_a_warm_turn_sends_ONLY_the_new_message():
+    msgs = [{"role": "system", "content": "SYS"},
+            {"role": "user", "content": "earlier question"},
+            {"role": "assistant", "content": "earlier answer"},
+            {"role": "user", "content": "the new one"}]
+    discarded = []
+    evs, warm = warm_events(CLAUDE_PROSE, msgs, discarded)
+    argv, sent = warm.calls[0]
+    assert sent == "the new one", "the process already remembers; the transcript would double it"
+    assert payloads(evs, "turn.end")[0]["reply_text"] == "On it, I'll text Shaw now."
+    assert discarded == [], "a clean prose turn keeps its session"
+
+
+def test_the_history_rides_in_the_system_prompt_for_a_process_that_has_to_start():
+    msgs = [{"role": "system", "content": "SYS"},
+            {"role": "user", "content": "earlier question"},
+            {"role": "assistant", "content": "earlier answer"},
+            {"role": "user", "content": "the new one"}]
+    _, warm = warm_events(CLAUDE_PROSE, msgs, [])
+    argv = warm.calls[0][0]
+    system = argv[argv.index("--system-prompt") + 1]
+    assert "earlier question" in system and "earlier answer" in system
+    assert "the new one" not in system, "the new message is sent as the turn, not baked in"
+    assert "--input-format" in argv and "stream-json" in argv
+
+
+def test_a_tool_envelope_DISCARDS_the_warm_session():
+    """The tool loop writes the real answer elsewhere, so the process's memory is now wrong."""
+    discarded = []
+    evs, _ = warm_events(CLAUDE_TOOL_ENVELOPE, [{"role": "user", "content": "do it"}], discarded)
+    assert discarded == [True]
+    assert payloads(evs, "turn.end")[0]["tools_called"] == ["t"]
+
+
+def test_a_failed_warm_turn_discards_the_session_too():
+    discarded = []
+    warm_events([json.dumps({"type": "result", "is_error": True, "result": "boom"}) + "\n"],
+                [{"role": "user", "content": "x"}], discarded)
+    assert discarded == [True]
