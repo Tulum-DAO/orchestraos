@@ -22,6 +22,8 @@ Three rules shape it:
 rather than on an upload event a streaming fetch does not have (§2.5 P3).
 """
 import json
+import queue
+import threading
 import time
 import uuid
 
@@ -131,3 +133,45 @@ def _whole_reply(turn_id, conversation_id, fallback, brain):
               tools_called=body.get("tools_called", []),
               spawned=body.get("spawned", []),
               brain=body.get("brain") or brain.describe())
+
+
+_SENTINEL = object()
+
+
+def with_heartbeat(events, interval_s=10.0):
+    """Yield SSE frames, filling any silence with `: ping` comments (spec §2.2).
+
+    A turn can legitimately produce nothing for a while — the tool loop runs with no output,
+    and a large model can take seconds before its first token. Every hop in front of us drops
+    an idle socket (the dashboard proxy at 30s), so silence reads as a dead connection and the
+    browser gets a 502 mid-turn. This was found live, not in review.
+
+    The turn runs in a worker thread so the ping can be emitted while the turn is blocked;
+    nothing about the turn itself becomes concurrent.
+    """
+    q: "queue.Queue" = queue.Queue()
+
+    def pump():
+        try:
+            for event in events:
+                q.put(("event", event))
+        except Exception as e:  # noqa: BLE001 — a dead turn must still tell the client why
+            q.put(("error", e))
+        finally:
+            q.put(("done", _SENTINEL))
+
+    worker = threading.Thread(target=pump, daemon=True)
+    worker.start()
+    while True:
+        try:
+            kind, payload = q.get(timeout=interval_s)
+        except queue.Empty:
+            yield ": ping\n\n"          # a comment: valid SSE, ignored by every client
+            continue
+        if kind == "event":
+            yield sse_frame(payload)
+        elif kind == "error":
+            yield sse_frame(_ev("error", code="stream_failed", message=str(payload)[:200]))
+            return
+        else:
+            return

@@ -4778,12 +4778,16 @@ def text_stream_endpoint():
         return text_turn(text_in, conversation_id, brain=brain_req, context=page_ctx)
 
     def _generate():
+        # with_heartbeat keeps the connection alive through a silent stretch — the tool-loop
+        # fallback produces nothing while it runs, and every hop in front of us drops an idle
+        # socket (the dashboard proxy at 30s), which reached the operator as a mid-turn 502.
+        turn = _text_stream.stream_turn(
+            text=body_text, conversation_id=conversation_id, brain=turn_brain,
+            brain_id=chosen_id, messages=messages, spawn=_spawn,
+            fallback=_fallback, record=_record_text_turn, tools=TOOLS)
         try:
-            for event in _text_stream.stream_turn(
-                    text=body_text, conversation_id=conversation_id, brain=turn_brain,
-                    brain_id=chosen_id, messages=messages, spawn=_spawn,
-                    fallback=_fallback, record=_record_text_turn, tools=TOOLS):
-                yield _text_stream.sse_frame(event)
+            for frame in _text_stream.with_heartbeat(turn, interval_s=10.0):
+                yield frame
         except GeneratorExit:
             raise
         except Exception as e:  # noqa: BLE001 — a dead stream must still say why

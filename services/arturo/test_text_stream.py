@@ -175,3 +175,44 @@ def test_every_event_is_serialisable_sse_with_a_named_event_and_json_data():
         assert frame.startswith(f"event: {e['event']}\n")
         assert frame.endswith("\n\n")
         json.loads(frame.split("data: ", 1)[1].strip())
+
+
+# ---- keep-alive (spec §2.2: a `: ping` comment every 15 s) ------------------------------
+# Found live: a turn that falls back to the tool loop sends NOTHING while the loop runs, and
+# the dashboard proxy drops a socket after 30s of silence — the browser saw a 502 mid-turn.
+# A stream that goes quiet has to say it is still there.
+
+def test_a_silent_stretch_emits_pings_until_the_next_real_frame():
+    import time as _t
+
+    def slow():
+        yield {"event": "turn.start", "data": {"turn_id": "t1"}}
+        _t.sleep(0.35)                      # the tool loop running, producing nothing
+        yield {"event": "turn.end", "data": {"reply_text": "done"}}
+
+    frames = list(TS.with_heartbeat(slow(), interval_s=0.1))
+    assert frames[0].startswith("event: turn.start")
+    assert frames[-1].startswith("event: turn.end")
+    pings = [f for f in frames if f.startswith(":")]
+    assert pings, "a silent stretch must be filled with keep-alive comments"
+    assert all(f.endswith("\n\n") for f in frames)
+
+
+def test_a_busy_stream_is_not_padded_with_pings():
+    def busy():
+        for i in range(5):
+            yield {"event": "text.delta", "data": {"text": f"chunk{i}"}}
+
+    frames = list(TS.with_heartbeat(busy(), interval_s=5))
+    assert not [f for f in frames if f.startswith(":")]
+    assert len(frames) == 5
+
+
+def test_an_exception_inside_the_turn_still_reaches_the_client_as_an_error():
+    def boom():
+        yield {"event": "turn.start", "data": {"turn_id": "t1"}}
+        raise RuntimeError("brain exploded")
+
+    frames = list(TS.with_heartbeat(boom(), interval_s=0.05))
+    assert frames[-1].startswith("event: error")
+    assert "brain exploded" in frames[-1]
