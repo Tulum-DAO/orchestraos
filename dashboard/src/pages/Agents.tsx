@@ -5,12 +5,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAgents } from '../hooks/useAgents';
 import { useSystem } from '../hooks/useSystem';
 import { useUser, canSeeAgent } from '../hooks/useUser';
-import { spawnAgent, killAgent, getAdaptiveAgents, fetchPairCounts, fetchRecentMessages } from '../lib/api';
+import { spawnAgent, killAgent, getAdaptiveAgents, fetchPairCounts, fetchRecentMessages, fetchProjects } from '../lib/api';
 import { AgentsSummaryStrip } from '../components/AgentsSummaryStrip';
 import { AgentDetailPanel } from '../components/AgentDetailPanel';
 import { ConversationPanel } from '../components/ConversationPanel';
 import { FleetTicker } from '../components/FleetTicker';
 import { TimeBar } from '../components/TimeBar';
+import { SearchResults } from '../components/SearchResults';
+import { searchFleet } from '../lib/agentSearch';
 import { useOrchestraStore } from '../stores/useOrchestraStore';
 import { newlyArrived, type TrafficMessage } from '../lib/fleetTraffic';
 import { StatusDot } from '../components/StatusDot';
@@ -22,7 +24,10 @@ import { GenChip } from '../components/GenChip';
 import NewAgentModal from '../components/NewAgentModal';
 
 const TIERS = ['For You', 'Recent', 'All', 'T0', 'T1', 'T2', 'T3'] as const;
-const STATUS_FILTERS = ['All', 'Active', 'Dead'] as const;
+// Spec §3 names these All / Active / Down. 'Dead' was the pre-existing label; review's
+// browser pass flagged the mismatch. The FILTER VALUE is what the predicate below compares,
+// so renaming the label means renaming the value — 'Down' is now the not-alive branch.
+const STATUS_FILTERS = ['All', 'Active', 'Down'] as const;
 const TIER_ORDER: Record<string, number> = { T0: 0, T1: 1, T2: 2, T3: 3 };
 
 type ViewMode = 'cards' | 'table' | 'topology';
@@ -50,6 +55,8 @@ export default function Agents() {
   // there, so it cannot be violated by a caller that forgets.
   const search = useOrchestraStore((st) => st.search);
   const setSearch = useOrchestraStore((st) => st.setSearch);
+  const highlight = useOrchestraStore((st) => st.highlight);
+  const setHighlight = useOrchestraStore((st) => st.setHighlight);
   const windowHours = useOrchestraStore((st) => st.windowHours);
   const setWindowHours = useOrchestraStore((st) => st.setWindowHours);
   const asof = useOrchestraStore((st) => st.asof);
@@ -112,6 +119,14 @@ export default function Agents() {
     return () => clearTimeout(t);
   }, [recentMessages]);
 
+  // Repos for search. Empty on this install (the projects knowledge file has no entries yet),
+  // which is an honest empty state rather than a reason to synthesise one.
+  const { data: projects } = useQuery({
+    queryKey: ['projects'],
+    queryFn: () => fetchProjects() as Promise<{ projects: { slug: string; name?: string; repo?: string | null; agents?: { id: string }[] }[] }>,
+    staleTime: 60_000,
+  });
+
   const { data: adaptiveScores } = useQuery({
     queryKey: ['adaptive-agents'],
     queryFn: () => getAdaptiveAgents(),
@@ -142,6 +157,14 @@ export default function Agents() {
   const agents = user?.allowed_agents === '*'
     ? allAgents
     : allAgents.filter((a: any) => canSeeAgent(user?.allowed_agents || '*', a.id));
+
+  // Step 10. Same `agents` array the rest of the page uses, so a search hit and a card can
+  // never describe different fleets. Repos come from /api/projects; prompts are derived from
+  // the agents' own system_prompt paths rather than from a new store (§16).
+  const searchResults = useMemo(
+    () => searchFleet(search, { agents, repos: projects?.projects ?? [] }),
+    [search, agents, projects],
+  );
 
   // Extract unique clients, types, and machines from tags
   const clients = useMemo(() => {
@@ -258,8 +281,15 @@ export default function Agents() {
   // Peers an agent actually exchanged messages with in the window, busiest first — `pairs`
   // already arrives ordered by count, so no second sort. This is what makes spec §5's
   // "connection count (click to list)" a list rather than a bare number.
-  const peersOf = (id: string): string[] =>
-    pairs.filter((p) => p.a === id || p.b === id).map((p) => (p.a === id ? p.b : p.a));
+  // `onGraph` distinguishes a peer that is drawn in the tree from one that is not (telegram,
+  // operator, the beats). Both are real correspondents; only the first is a node. Graph peers
+  // sort first so the list leads with what the diagram shows.
+  const graphIds = new Set<string>(agents.map((a: { id: string }) => a.id));
+  const peersOf = (id: string): { id: string; onGraph: boolean }[] =>
+    pairs
+      .filter((p) => p.a === id || p.b === id)
+      .map((p) => { const other = p.a === id ? p.b : p.a; return { id: other, onGraph: graphIds.has(other) }; })
+      .sort((x, y) => Number(y.onGraph) - Number(x.onGraph));
   const panelAgent = panelAgentId ? agents.find((a: { id: string }) => a.id === panelAgentId) : null;
 
   // Health summary
@@ -275,7 +305,7 @@ export default function Agents() {
           floating over another route's content. The opaque background matters: without it
           the cards scroll visibly through the numbers. */}
       <div className="sticky top-0 z-20 -mx-6 px-6 pt-1 pb-3 bg-neutral-950 border-b border-neutral-900 space-y-3">
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-start justify-between gap-3 sm:gap-4">
           <div className="min-w-0 flex-1">
             <AgentsSummaryStrip
               machineName={machineName}
@@ -292,6 +322,42 @@ export default function Agents() {
             <p className="text-sm text-neutral-500 mt-0.5">
               showing {sorted.length} of {agents.length}
             </p>
+            {search.trim() && (
+              <div className="mt-2">
+                <SearchResults
+                  results={searchResults}
+                  onPick={(hit) => {
+                    if (hit.kind === 'agent') {
+                      // §8: picking an agent selects it AND opens its panel.
+                      setHighlight(null);
+                      setSearch('');
+                      openAgentPanel(hit.id);
+                    } else {
+                      // §8: picking a repo or prompt HIGHLIGHTS the agents that use it. It
+                      // opens nothing — that is the difference between the two verbs, and
+                      // conflating them would make a repo pick look like an agent pick.
+                      closePanel();
+                      setSearch('');
+                      setHighlight({ label: hit.label, agentIds: hit.agentIds ?? [] });
+                    }
+                  }}
+                />
+              </div>
+            )}
+            {highlight && (
+              <div className="mt-2 flex items-center gap-2 text-xs">
+                <span className="px-2 py-0.5 rounded-lg border border-sky-800 bg-sky-950/40 text-sky-200">
+                  {highlight.label} · {highlight.agentIds.length} agent{highlight.agentIds.length === 1 ? '' : 's'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setHighlight(null)}
+                  className="text-neutral-500 hover:text-neutral-200 underline decoration-neutral-700"
+                >
+                  clear
+                </button>
+              </div>
+            )}
           </div>
           <button
             onClick={() => setShowNewAgent(true)}
@@ -517,7 +583,8 @@ export default function Agents() {
               onSelectConnection={openConversation}
               onSelectAgent={openAgentPanel}
               selectedAgentId={panelAgentId}
-              onClearSelection={closePanel}
+              onClearSelection={() => { closePanel(); setHighlight(null); }}
+              brightIds={highlight?.agentIds ?? null}
               dots={dots}
             />
             {/* Bottom live ticker (spec §3). The time scrubber that shares this row is

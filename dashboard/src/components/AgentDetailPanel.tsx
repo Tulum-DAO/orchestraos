@@ -20,9 +20,14 @@ export interface AgentDetailPanelProps {
     last_seen?: string; current_task?: string;
   };
   connectionCount: number;
-  /** Peer agent ids this agent has traffic with, busiest first. Optional: without it the
-   *  panel shows the count alone instead of an empty list that reads as "none". */
-  connections?: string[];
+  /** Peers this agent has traffic with, busiest first. `onGraph` says whether the peer is a
+   *  node in the topology tree — telegram, operator and the beats are real correspondents but
+   *  are not drawn, and review's browser pass flagged them leaking into a list that reads as
+   *  "connections in the graph". They are KEPT rather than filtered out (gm<->telegram is the
+   *  operator's own channel, and its conversation opens fine) and marked instead, because
+   *  hiding real traffic costs more than the inconsistency does. Optional: without it the
+   *  panel shows the count alone rather than an empty list that reads as "none". */
+  connections?: { id: string; onGraph: boolean }[];
   onOpenConversation: (otherAgentId: string) => void;
   onClose: () => void;
   recentErrors?: { at: string; text: string }[];
@@ -375,13 +380,20 @@ export function AgentDetailPanel({
                 <div className="flex flex-wrap gap-1 mt-1">
                   {connections.map((peer) => (
                     <button
-                      key={peer}
+                      key={peer.id}
                       type="button"
-                      onClick={() => onOpenConversation(peer)}
-                      title={`Open ${agent.id} ⇄ ${peer}`}
-                      className="px-1.5 py-0.5 rounded text-[11px] bg-neutral-800 text-neutral-300 hover:bg-neutral-700 hover:text-neutral-100 focus:outline-none focus:ring-1 focus:ring-sky-500 break-words"
+                      onClick={() => onOpenConversation(peer.id)}
+                      title={peer.onGraph
+                        ? `Open ${agent.id} ⇄ ${peer.id}`
+                        : `Open ${agent.id} ⇄ ${peer.id} — not a node in the graph`}
+                      className={clsx(
+                        'px-1.5 py-0.5 rounded text-[11px] focus:outline-none focus:ring-1 focus:ring-sky-500 break-words',
+                        peer.onGraph
+                          ? 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700 hover:text-neutral-100'
+                          : 'bg-neutral-900 text-neutral-500 border border-dashed border-neutral-700 hover:text-neutral-300',
+                      )}
                     >
-                      {peer}
+                      {peer.id}{peer.onGraph ? '' : ' ·'}
                     </button>
                   ))}
                 </div>

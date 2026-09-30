@@ -32,6 +32,12 @@ interface ViewState {
   closePanel: () => void;
   search: string;
   setSearch: (q: string) => void;
+  /** Agents highlighted by picking a repo or prompt in search (spec §8). Distinct from
+   *  `selectedAgentId`, which opens a panel — this highlights a SET and opens nothing, which
+   *  is what "highlights the agents that use it" actually asks for. `null` means no highlight
+   *  at all, deliberately different from an empty array (a repo with zero agents). */
+  highlight: { label: string; agentIds: string[] } | null;
+  setHighlight: (h: { label: string; agentIds: string[] } | null) => void;
 }
 
 interface OrchestraState extends ViewState {
@@ -57,6 +63,8 @@ export const useOrchestraStore = create<OrchestraState>((set) => ({
   closePanel: () => set({ selectedAgentId: null, selectedConnection: null }),
   search: '',
   setSearch: (q) => set({ search: q }),
+  highlight: null,
+  setHighlight: (h) => set({ highlight: h }),
   activity: [],
   addActivity: (event) => set((state) => ({ activity: [event, ...state.activity.slice(0, 499)] })),
   activeCall: null,

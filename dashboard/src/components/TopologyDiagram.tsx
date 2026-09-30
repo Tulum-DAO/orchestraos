@@ -39,6 +39,10 @@ interface TopologyDiagramProps {
   selectedAgentId?: string | null;
   /** Clicking empty space clears the selection (spec §4). */
   onClearSelection?: () => void;
+  /** Explicit set of agent ids to keep bright, overriding the selection-derived set. Used by
+   *  search: picking a repo or prompt highlights the agents that use it (spec §8) without
+   *  opening any panel. */
+  brightIds?: string[] | null;
   /** Messages that JUST arrived, one dot each, colour by type and direction by sender
    *  (spec §4). The page owns the poll-diff and the expiry; this component only draws what
    *  it is handed, so a dot can never appear without a real message behind it (spec §2). */
@@ -262,21 +266,14 @@ function Connection({
 
 export function TopologyDiagram({
   agents, pairs, windowHours = 24, onSelectConnection, onSelectAgent, selectedAgentId,
-  onClearSelection, dots,
+  onClearSelection, dots, brightIds,
 }: TopologyDiagramProps) {
-  const lookup = usePairLookup(pairs);
-  const bright = useBrightSet(selectedAgentId, pairs);
-  const dotsByPair = useDotsByPair(dots);
-  const isDim = (id: string) => bright !== null && !bright.has(id);
-  // A line stays bright only if the selected agent is one of its two ends.
-  const lineDim = (a: string, b: string) =>
-    bright !== null && a !== selectedAgentId && b !== selectedAgentId;
-  // Separate by tier
+  // Tier split first: the set of lines the tree will draw is what the thickness denominator
+  // has to be computed from, so it cannot wait until render.
   const gm = agents.find((a) => a.tier === 'T0');
   const pms = agents.filter((a) => a.tier === 'T1');
   const workers = agents.filter((a) => a.tier === 'T2' || a.tier === 'T3');
 
-  // Group workers by parent
   const workersByParent: Record<string, Agent[]> = {};
   for (const w of workers) {
     const parent = w.parent || '_unassigned';
@@ -284,6 +281,38 @@ export function TopologyDiagram({
     workersByParent[parent].push(w);
   }
 
+  // Derived entirely from `agents` inside the memo rather than from the locals above, so the
+  // dependency list is honest — the locals are rebuilt every render and listing them would
+  // defeat the memo while satisfying the linter, which is the wrong trade.
+  const drawnKeys = useMemo(() => {
+    const keys = new Set<string>();
+    const top = agents.find((a) => a.tier === 'T0');
+    const leads = agents.filter((a) => a.tier === 'T1');
+    const leadIds = new Set(leads.map((l) => l.id));
+    for (const lead of leads) {
+      if (top) keys.add(pairKey(top.id, lead.id));
+    }
+    for (const w of agents) {
+      if (w.tier !== 'T2' && w.tier !== 'T3') continue;
+      if (w.parent && leadIds.has(w.parent)) keys.add(pairKey(w.parent, w.id));
+    }
+    return keys;
+  }, [agents]);
+
+  const lookup = usePairLookup(pairs, drawnKeys);
+  const selectionBright = useBrightSet(selectedAgentId, pairs);
+  // An explicit highlight wins over the selection-derived set: the two are different questions
+  // ("who does this agent talk to" vs "who uses this repo") and answering both at once would
+  // brighten a union that means neither.
+  const bright = useMemo(
+    () => (brightIds ? new Set(brightIds) : selectionBright),
+    [brightIds, selectionBright],
+  );
+  const dotsByPair = useDotsByPair(dots);
+  const isDim = (id: string) => bright !== null && !bright.has(id);
+  // A line stays bright only if the selected agent is one of its two ends.
+  const lineDim = (a: string, b: string) =>
+    bright !== null && a !== selectedAgentId && b !== selectedAgentId;
   // PMs that have workers or exist
   const pmIds = new Set(pms.map((p) => p.id));
   // Workers with no matching PM parent
