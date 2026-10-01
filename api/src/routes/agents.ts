@@ -9,6 +9,7 @@ import { logInteraction } from '../services/learning.js';
 import { isTranscriptActive } from '../services/transcript-activity.js';
 import { getDetectorStates, detectorCacheAgeMs, classifyNoSession, type DetectorStatus } from '../services/agent-status.js';
 import { isCutoverActive, getCanonicalAgents, canonicalTmuxSession } from '../services/identity-store-reader.js';
+import { buildCanonicalIndex, supersededBy, type CanonicalIndex } from '../services/rotation-leftovers.js';
 import { applyIdentityPrecedence, resolveMachineAndLiveness, discoverUnregistered } from './agents-identity.js';
 import { loadConfig } from '../lib/config.js';
 import { readGatewayToken } from '../lib/gateway-token.js';
@@ -73,6 +74,10 @@ interface AgentEntry {
   tmux_alive: boolean;
   inbox_count: number;
   machine_status: string;
+  /** Set ONLY on a parked rotation leftover (DEC-1790826247484632): the canonical root that
+   *  supersedes this row. Absent on every other row, so a client that does not know the field
+   *  behaves exactly as before. */
+  superseded_by?: string;
   [key: string]: unknown;
 }
 
@@ -93,9 +98,14 @@ router.get('/', async (_req: Request, res: Response) => {
     // agent is in the registered set (no unregistered mint) and carries the CURRENT
     // live-head tmux_session. Fail-safe: if the DB is absent/unreadable the flat
     // registry is used unchanged. INERT: the DB is touched only when armed.
+    // DEC-1790826247484632: the same canonical read also answers "is this row a parked
+    // rotation leftover". Kept null outside cutover / on an unreadable DB, which means the
+    // leftover rule does not fire at all rather than degrade to name-plus-status.
+    let canonIndex: CanonicalIndex | null = null;
     if (isCutoverActive()) {
       try {
         const canon = getCanonicalAgents();
+        canonIndex = buildCanonicalIndex(canon);
         if (canon) {
           for (const [root, c] of Object.entries(canon)) {
             const existing = agentDefs[root] || {};
@@ -166,6 +176,18 @@ router.get('/', async (_req: Request, res: Response) => {
       // the state-file spread above must not clobber them (blank-name spawn
       // stubs blanked seats off the web dashboard; see agents-identity.ts).
       applyIdentityPrecedence(agent, def, id, tmuxSession, machine, unified?.tmux_alive ?? isLocalAlive);
+      // DEC-1790826247484632: flag a parked rotation leftover so the fleet view can undraw it.
+      // AFTER applyIdentityPrecedence, which owns `status`/`retired` — a leftover is NOT
+      // retired (the registry never said so) and `status` stays `parked`, so the evidence a
+      // reader needs to audit this survives in the payload. `def.status`, not `agent.status`:
+      // the state spread and the detector pass both overwrite the latter.
+      const superseded = supersededBy({
+        id,
+        defStatus: def.status as string | undefined,
+        alive: agent.alive as boolean,
+        index: canonIndex,
+      });
+      if (superseded) (agent as any).superseded_by = superseded;
       // Defense-in-depth: the /agents UI iterates several fields with
       // (field||[]).forEach / .includes / .map — that guards null but NOT a
       // wrong TYPE. A registry record with a string where an array is expected
