@@ -26,7 +26,7 @@ const VPS_API = "http://" + API_HOST + ":" + API_PORT;
 // x-forwarded-host preserves the address the BROWSER used. `host` below is rewritten to the
 // upstream, so without this the API cannot tell a same-origin request from a foreign one
 // and logs every request from this very dashboard as a blocked origin (2026-09-29).
-function proxyTo(base,req,res,timeoutMs){const u=base+req.url;const o=new URL(u);const fwdHost=req.headers["x-forwarded-host"]||req.headers.host;const fwdProto=req.headers["x-forwarded-proto"]||(req.socket&&req.socket.encrypted?"https":"http");const opts={hostname:o.hostname,port:o.port,path:o.pathname+(o.search||""),method:req.method,headers:{...req.headers,host:o.host,"x-forwarded-host":fwdHost,"x-forwarded-proto":fwdProto},timeout:timeoutMs||30000};const p=http.request(opts,(r)=>{res.writeHead(r.statusCode,r.headers);r.pipe(res);});p.on("error",(e)=>{res.writeHead(502,{"Content-Type":"application/json"});res.end(JSON.stringify({error:"upstream unreachable",detail:e.message}));});p.on("timeout",()=>{p.destroy();});req.pipe(p);}
+function proxyTo(base,req,res,timeoutMs){const u=base+req.url;const o=new URL(u);const fwdHost=req.headers["x-forwarded-host"]||req.headers.host;const fwdProto=req.headers["x-forwarded-proto"]||(req.socket&&req.socket.encrypted?"https":"http");const opts={hostname:o.hostname,port:o.port,path:o.pathname+(o.search||""),method:req.method,headers:{...req.headers,host:o.host,"x-forwarded-host":fwdHost,"x-forwarded-proto":fwdProto},timeout:timeoutMs||30000};const p=http.request(opts,(r)=>{const h={...r.headers};delete h["keep-alive"];delete h["connection"];/* hop-by-hop: they describe the API's connection to us, not ours to the browser (RFC 9110 7.6.1) */res.writeHead(r.statusCode,h);r.pipe(res);});p.on("error",(e)=>{res.writeHead(502,{"Content-Type":"application/json"});res.end(JSON.stringify({error:"upstream unreachable",detail:e.message}));});p.on("timeout",()=>{p.destroy();});req.pipe(p);}
 function proxyToLocal(req,res){proxyTo(VPS_API,req,res);}
 
 const server = http.createServer((req,res)=>{
@@ -151,4 +151,11 @@ wss.on("connection", (ws, req) => {
   });
 });
 
+// Idle keep-alive must outlive the proxy in front of us. Node closes an idle connection after 5s
+// by default; Tailscale Serve (and most reverse proxies) keep theirs far longer, so the first
+// request after a pause went out on a connection we had already closed. A GET is retried by the
+// front proxy; a POST is not, and came back 502 with an empty body — every Arturo message sent
+// after >5s of quiet (found on staging, 2026-09-30). headersTimeout must exceed keepAliveTimeout.
+server.keepAliveTimeout = Number(process.env.ORCHESTRA_KEEPALIVE_MS || 120000);
+server.headersTimeout = server.keepAliveTimeout + 5000;
 server.listen(PORT, process.env.ORCHESTRA_DASHBOARD_HOST || "127.0.0.1", () => console.log("Dashboard proxy on :" + PORT + " (ws+pty)"));

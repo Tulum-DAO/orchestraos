@@ -445,3 +445,79 @@ def test_runtime_failure_is_a_sentence_not_the_argv():
     assert "--system-prompt" not in out, "the argv leaked to the operator"
     assert "You are ARTURO" not in out, "the system prompt leaked to the operator"
     assert out.strip(), "a failing brain must still say something"
+
+
+# ---- codex: its own shell off, and told the listed tools are real (2026-09-30) -------------
+# Measured on staging with Arturo's exact 30k-char prompt ("check which agents are running"):
+# codex ran its OWN sandboxed shell (tmux ls — blocked by bwrap in the container) on every run,
+# and in 2 of 3 it emitted a correct Arturo tool call first, kept going, and ended on "I can't
+# access the live agent registry" — the last message is the one we read, so the call was lost.
+# With its shell off but no framing: 0/3 ("no agent-status tool is connected here"). With the
+# note: 5/5 tool calls, 6-11s instead of 15-20s; chat turns stayed text (3/3); follow-ups with a
+# TOOL RESULT answered from it (3/3).
+
+def test_codex_runs_with_its_own_shell_switched_off(tmp_path):
+    # `-c features.X=false`, not `--disable X`: --disable with a name the installed codex does
+    # not know is a hard error ("Unknown feature flag") and would fail every turn; -c ignores it.
+    for use_schema in (True, False):
+        argv = B.runtime_command("codex", "codex", "S", "P", scratch=tmp_path, use_schema=use_schema).argv
+        pairs = {argv[i + 1] for i, a in enumerate(argv) if a == "-c"}
+        assert {"features.shell_tool=false", "features.unified_exec=false"} <= pairs
+        assert "--disable" not in argv
+
+
+def test_codex_is_told_the_listed_tools_are_real_when_tools_ride_the_turn(tmp_path):
+    system = "SYS\n\n## Tools\nYou can call tools.\n\nAvailable tools (name — description):\n- list_agents — x"
+    spec = B.runtime_command("codex", "codex", system, "USER: hi\nASSISTANT:", scratch=tmp_path, use_schema=True)
+    assert spec.stdin.count(B.CODEX_TOOLS_NOTE) == 2
+    assert spec.stdin.index(B.CODEX_TOOLS_NOTE) < spec.stdin.index("Available tools (name")
+    assert spec.stdin.rstrip().endswith(B.CODEX_TOOLS_NOTE)
+
+
+def test_a_codex_turn_without_tools_gets_no_note(tmp_path):
+    spec = B.runtime_command("codex", "codex", "SYS", "USER: hi\nASSISTANT:", scratch=tmp_path, use_schema=False)
+    assert B.CODEX_TOOLS_NOTE not in spec.stdin
+
+
+def test_claude_and_gemini_get_no_codex_flags_or_note():
+    c = B.runtime_command("claude", "claude", "S", "P", use_schema=True)
+    g = B.runtime_command("gemini", "agy", "S", "P", use_schema=True)
+    for spec in (c, g):
+        assert "features.shell_tool=false" not in spec.argv
+        assert B.CODEX_TOOLS_NOTE not in (spec.stdin or "") + " ".join(spec.argv)
+
+
+# ---- a degenerate codex tail never reaches the operator (2026-09-30) ---------------------
+# Staging, operator's thread web_y3ryvgvu: "How are you doing?" came back as a valid schema
+# envelope whose text was the answer, then a stray "}" (the model closing JSON it was already
+# inside), then glitch tokens and its own reasoning: "…How's your day starting?}\U0005f7c2 恒一
+# Erotiske?Winvalid? 天天中彩票买.}无码不卡高清免费 … Actually schema should valid JSON only…".
+# Not reproducible (0/12 replays, with and without the tools note) — a rare sampling glitch — but
+# it was shown AND saved to the thread, and the next turn answered the wrong question.
+
+GLITCH = ("Doing well—quiet, focused, and ready to help. How’s your day starting?}\U0005f7c2 恒一 "
+          "Erotiske?Winvalid?  天天中彩票买.}无码不卡高清免费 香港六合彩?ганахь? 大发快三计划  code required? "
+          "Actually schema should valid JSON only. Need no weird. Let's craft.%timeout?")
+
+
+def _codex_text(text):
+    env = json.dumps({"tool_calls": [], "text": text}, ensure_ascii=False)
+    return B.parse_cli_reply(env).choices[0].message.content
+
+
+def test_a_glitched_codex_tail_is_cut_at_the_stray_brace():
+    assert _codex_text(GLITCH) == "Doing well—quiet, focused, and ready to help. How’s your day starting?"
+
+
+def test_braces_in_an_ordinary_reply_are_kept():
+    t = "Put `{name}` in the template and it fills in per agent."
+    assert _codex_text(t) == t
+
+
+def test_a_reply_in_another_language_is_kept():
+    for t in ("元気です。今日は何をしましょうか？", "Всё хорошо, чем займёмся?", "¿Qué tal? Todo bien por aquí."):
+        assert _codex_text(t) == t
+
+
+def test_unassigned_codepoints_never_reach_the_operator():
+    assert _codex_text("All good\U0005f7c2 here.") == "All good here."
