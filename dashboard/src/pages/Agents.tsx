@@ -599,6 +599,7 @@ export default function Agents() {
           bullet asks for full-screen, and full-width-stacked is that shape without a second
           modal implementation; a real sheet can replace it when someone uses this on a phone. */}
       {viewMode === 'topology' && (
+        <>
         <div className="flex flex-col lg:flex-row gap-4 items-stretch">
           <div className="flex-1 min-w-0 rounded-xl border border-neutral-800 bg-neutral-900 p-4 overflow-x-auto">
             <TopologyDiagram
@@ -617,30 +618,6 @@ export default function Agents() {
               brightIds={highlight?.agentIds ?? null}
               dots={dots}
             />
-            {/* Bottom live ticker (spec §3). The time scrubber that shares this row is
-                step 9 and is not built. */}
-            <div className="border-t border-neutral-800 mt-2">
-              <TimeBar
-                windowHours={windowHours}
-                onWindowChange={setWindowHours}
-                asof={asof}
-                onAsofChange={setAsof}
-              />
-              {asof ? (
-                // §12: never show stale as fresh. The ticker is a live feed by definition, so
-                // while a past moment is being viewed it says what it is instead of quietly
-                // rendering now's traffic under a scrubbed graph.
-                <div className="text-xs text-amber-300/80 py-2">
-                  Viewing a past moment — live ticker paused. Press Live to resume.
-                </div>
-              ) : (
-                <FleetTicker
-                  messages={recentMessages}
-                  freshIds={freshIds}
-                  onSelectConnection={openConversation}
-                />
-              )}
-            </div>
           </div>
           {(panelAgent || selectedConnection) && (
             <aside className="w-full lg:w-[380px] shrink-0 lg:max-h-[75vh]">
@@ -665,6 +642,47 @@ export default function Agents() {
             </aside>
           )}
         </div>
+        {/* The transport row — time window, moment scrubber, Live, and the ticker — is PINNED
+            to the bottom of the viewport, not left at the natural end of the graph card.
+            With 106 agents that end was 2685px down, so reaching the controls meant scrolling
+            past the entire fleet, and nothing on screen said they existed. A transport control
+            you have to go looking for is one nobody uses.
+
+            It sits OUTSIDE the graph card on purpose. `overflow-x-auto` makes that card a
+            scroll container on both axes (a `visible` axis computes to `auto` when the other
+            is not), so a sticky child would resolve against a container that never scrolls and
+            do nothing. Out here its scroll container is the page itself.
+
+            Bounding the card's height instead was tried and rejected: it still left the row
+            42px below the fold at 1600x1000 and 92px at 1280x800, because the height that
+            fits depends on the header above it, which wraps and changes with viewport width.
+            Sticky needs no such arithmetic.
+
+            `-mx-4 px-4` cancels the page gutter so the opaque background spans the full width
+            and the graph cannot be seen sliding underneath it. */}
+        <div className="sticky bottom-0 z-10 -mx-4 px-4 pb-1 bg-neutral-950 border-t border-neutral-800">
+          <TimeBar
+            windowHours={windowHours}
+            onWindowChange={setWindowHours}
+            asof={asof}
+            onAsofChange={setAsof}
+          />
+          {asof ? (
+            // §12: never show stale as fresh. The ticker is a live feed by definition, so
+            // while a past moment is being viewed it says what it is instead of quietly
+            // rendering now's traffic under a scrubbed graph.
+            <div className="text-xs text-amber-300/80 py-2">
+              Viewing a past moment — live ticker paused. Press Live to resume.
+            </div>
+          ) : (
+            <FleetTicker
+              messages={recentMessages}
+              freshIds={freshIds}
+              onSelectConnection={openConversation}
+            />
+          )}
+        </div>
+        </>
       )}
     </div>
   );
