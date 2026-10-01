@@ -192,6 +192,31 @@ _SPAWNED_THIS_TURN = _contextvars.ContextVar("arturo_spawned_this_turn", default
 # loop uses. ask_gm/deep_query/research call execute_tool("async_task", ...) inside a tool handler,
 # which the loop never sees — they bypassed the guard entirely (DEC-1790305211739337, peer finding).
 _TURN_DEDUP = _contextvars.ContextVar("arturo_turn_dedup", default=None)
+# Set ONLY around a streamed turn's whole-reply fallback: that fallback continues a turn whose
+# tools already ran in the stream, so it must share the stream's ledger — a fresh one re-ran
+# them (send_telegram twice). Everything else — voice, plain /text — gets a fresh ledger.
+_INHERIT_DEDUP = _contextvars.ContextVar("arturo_inherit_dedup", default=False)
+
+
+# Set ONLY by /text/stream around a turn it serves whole (codex, onboarding): the tool loop
+# reports each call and result here so the page can show the cards live (DEC-1790750869457756).
+# None everywhere else — voice and plain /text are unchanged.
+_TOOL_EVENTS = _contextvars.ContextVar("arturo_tool_events", default=None)
+
+# The prefixes a tool result opens with when it failed — the same set the async_task relay
+# already treats as an error.
+_TOOL_ERROR_PREFIXES = ("gm error", "gm timed out", "error", "blocked", "❌", "no response")
+
+
+def _tool_ok(result):
+    return not str(result or "").strip().lower().startswith(_TOOL_ERROR_PREFIXES)
+
+
+def _turn_ledger():
+    """The dedupe ledger for a tool loop that is starting: the stream's, when this loop is that
+    stream's fallback; otherwise a fresh one."""
+    inherited = _TURN_DEDUP.get() if _INHERIT_DEDUP.get() else None
+    return inherited if inherited is not None else _voice_guards.ToolDedupLedger()
 
 
 def _record_spawned_this_turn(session_name):
@@ -1940,6 +1965,18 @@ def _notify_spawned(session, machine):
         pass
 
 
+_ROADMAP_SELECT = (
+    "SELECT COALESCE(r.title, r.project) AS roadmap,"
+    " COALESCE(rp.title, 'Phase ' || rp.phase_number) AS phase,"
+    " COALESCE(t.title, rt.task_id, rt.id) AS title,"
+    " rt.status AS status"
+    " FROM roadmap_tasks rt"
+    " JOIN roadmap_phases rp ON rt.phase_id=rp.id"
+    " JOIN roadmaps r ON rp.roadmap_id=r.id"
+    " LEFT JOIN tasks t ON rt.task_id=t.id"
+)
+
+
 def execute_tool(name, args, user_turns=None):
     """Execute a tool call with Mac→VPS fallback.
 
@@ -2585,6 +2622,10 @@ def execute_tool(name, args, user_turns=None):
         return f"Noted and saved: {note[:100]}"
 
     elif name == "query_roadmap":
+        # Columns per the writer (msg_store.py) and api/src/lib/db.ts, NOT the names this query
+        # used to guess at: roadmaps/roadmap_phases carry `title` (no `name`), a roadmap_task
+        # carries no title of its own — the task's title is in `tasks`, via task_id — and the
+        # phase order is `phase_number` (there is no sort_order on either table).
         project = args.get("project", "all")
         status_filter = args.get("filter", "all")
         try:
@@ -2593,17 +2634,18 @@ def execute_tool(name, args, user_turns=None):
             conn.row_factory = sqlite3.Row
             if project == "all":
                 rows = conn.execute(
-                    "SELECT r.name as roadmap, rp.name as phase, rt.title, rt.status FROM roadmap_tasks rt JOIN roadmap_phases rp ON rt.phase_id=rp.id JOIN roadmaps r ON rp.roadmap_id=r.id" +
+                    _ROADMAP_SELECT +
                     (" WHERE rt.status=?" if status_filter != "all" else "") +
-                    " ORDER BY r.name, rp.sort_order, rt.sort_order",
+                    " ORDER BY roadmap, rp.phase_number, rt.rowid",
                     [status_filter] if status_filter != "all" else []
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT r.name as roadmap, rp.name as phase, rt.title, rt.status FROM roadmap_tasks rt JOIN roadmap_phases rp ON rt.phase_id=rp.id JOIN roadmaps r ON rp.roadmap_id=r.id WHERE LOWER(r.name) LIKE ?" +
+                    _ROADMAP_SELECT +
+                    " WHERE (LOWER(COALESCE(r.title, '')) LIKE ? OR LOWER(r.project) LIKE ?)" +
                     (" AND rt.status=?" if status_filter != "all" else "") +
-                    " ORDER BY rp.sort_order, rt.sort_order",
-                    [f"%{project.lower()}%"] + ([status_filter] if status_filter != "all" else [])
+                    " ORDER BY rp.phase_number, rt.rowid",
+                    [f"%{project.lower()}%"] * 2 + ([status_filter] if status_filter != "all" else [])
                 ).fetchall()
             conn.close()
             if not rows:
@@ -3913,7 +3955,11 @@ def chat_completions():
                 # duplicate-inject guard (gm msg_c74d3ae3): per-TURN ledger so a
                 # model repeating an identical SIDE-EFFECTING call across tool
                 # rounds executes it once (the operator watched 3x inject into v2's pane).
-                _dedup = _voice_guards.ToolDedupLedger()
+                _dedup = _turn_ledger()
+                # A whole turn served on /text/stream: tool cards come from these events, so the
+                # spoken-style filler and pacing lines are not emitted — in a non-stream turn they
+                # would be folded into the reply text ("One sec.") beside the cards.
+                _sink = _TOOL_EVENTS.get()
                 # Publish it for the turn so handler-level dispatches (_dispatch_guarded) share the
                 # same ledger rather than bypassing it. Set, never reset: the ContextVar is per
                 # request context, and generate() owns the turn.
@@ -3936,7 +3982,7 @@ def chat_completions():
                     _gap = time.time() - _last_round_end
                     # VQ-3 caps within THIS turn (_filler_emitted); VQ-3b adds a cross-turn cooldown
                     # (_filler_allowed) so rapid successive turns don't each emit their own filler.
-                    if _gap > FILLER_GATE_S and not _filler_emitted and _filler_allowed(time.time()):
+                    if _sink is None and _gap > FILLER_GATE_S and not _filler_emitted and _filler_allowed(time.time()):
                         log.info(f"Tool round {tool_round + 1}: {tool_names} (slow gap {_gap:.1f}s → filler)")
                         yield make_sse_chunk(_rnd.choice(_filler_pool))
                         _filler_emitted = True
@@ -3960,6 +4006,8 @@ def chat_completions():
                     for tc in tool_calls:
                         fn_name = tc.function.name
                         fn_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+                        # The card opens BEFORE the tool runs.
+                        _cid = _sink.call(fn_name, fn_args) if _sink is not None else None
                         # RESERVE, not check: this loop decides for EVERY tool_call in the round
                         # before the second loop records any result, so a check-then-record ledger
                         # let a same-round twin through. reserve() claims the key here
@@ -3968,26 +4016,29 @@ def chat_completions():
                         if _prior is not None:
                             log.warning(f"DUP-CALL SUPPRESSED: {fn_name} not re-executed this turn. "
                                         f"reason={_prior[:90]!r} args={_dedup_argsum(fn_args)}")
-                            workers_and_holders.append((tc, fn_name, fn_args, None, {"r": _prior}, True))
+                            workers_and_holders.append((tc, fn_name, fn_args, None, {"r": _prior}, True, _cid))
                         else:
                             _worker, _holder = _spawn_tool_worker(fn_name, fn_args,
                                                                   user_turns=_q0_user_turns)
-                            workers_and_holders.append((tc, fn_name, fn_args, _worker, _holder, False))
+                            workers_and_holders.append((tc, fn_name, fn_args, _worker, _holder, False, _cid))
 
-                    for tc, fn_name, fn_args, _worker, _holder, _suppressed in workers_and_holders:
+                    for tc, fn_name, fn_args, _worker, _holder, _suppressed, _cid in workers_and_holders:
                         while _worker is not None:
                             _worker.join(timeout=0.5)
                             if not _worker.is_alive():
                                 break
                             _hb_line = _turn_heartbeat.maybe_ping(time.time(), tool_name=fn_name, tool_args=fn_args)
-                            if _hb_line:
+                            if _hb_line and _sink is None:
                                 _filler_emitted = True   # VQ-3 cap: no round-start filler after a ping
                                 log.info(f"pacing-heartbeat during {fn_name}: {_hb_line!r}")
                                 yield make_sse_chunk(_hb_line + " ")
-                        if "e" in _holder:
-                            raise _holder["e"]
-                        if "r" not in _holder:      # AGY pass: abnormal worker death
-                            raise RuntimeError(f"tool worker died without result: {fn_name}")
+                        if "e" in _holder or "r" not in _holder:
+                            # Close the card before the turn fails, or it spins beside the error.
+                            if _sink is not None:
+                                _sink.result(_cid, fn_name, False, f"error: {_holder.get('e') or 'tool worker died'}")
+                            if "e" in _holder:
+                                raise _holder["e"]
+                            raise RuntimeError(f"tool worker died without result: {fn_name}")  # AGY pass
                         result = _holder["r"]
                         # Do NOT record a SUPPRESSED call. Its "result" IS the replay message, so
                         # recording it overwrites the stored first result with a message quoting
@@ -3998,6 +4049,8 @@ def chat_completions():
                         if not _suppressed:
                             _dedup.record(fn_name, fn_args, result)
                         log.info(f"Tool result ({fn_name}): {result[:200]}")
+                        if _sink is not None:
+                            _sink.result(_cid, fn_name, _tool_ok(result), result)
                         tool_results.append({
                             "role": "tool",
                             "tool_call_id": tc.id,
@@ -4863,7 +4916,15 @@ def text_stream_endpoint():
                 pass
 
     def _fallback():
-        return text_turn(text_in, conversation_id, brain=brain_req, context=page_ctx)
+        # The whole-reply path continues THIS turn, so it inherits the stream's ledger: a tool
+        # the stream already ran is not run again. Scoped to the call, reset in finally.
+        inherit_tok = _INHERIT_DEDUP.set(True)
+        ledger_tok = _TURN_DEDUP.set(_stream_ledger)
+        try:
+            return text_turn(text_in, conversation_id, brain=brain_req, context=page_ctx)
+        finally:
+            _TURN_DEDUP.reset(ledger_tok)
+            _INHERIT_DEDUP.reset(inherit_tok)
 
     warm_key = (conversation_id, getattr(turn_brain, "runtime", ""),
                 getattr(turn_brain, "_model_flag", "") or "")
@@ -4874,6 +4935,7 @@ def text_stream_endpoint():
     # send_telegram check reads real intent rather than failing closed.
     _user_turns = [t.get("content") for t in (history or []) if t.get("role") == "user"] + [text_in]
     _stream_ledger = _voice_guards.ToolDedupLedger()
+    _spawned = []
 
     def _run_tools(calls):
         # These ContextVars are per thread; the turn runs in with_heartbeat's worker, so they are
@@ -4882,6 +4944,11 @@ def text_stream_endpoint():
             _TURN_DEDUP.set(_stream_ledger)
         if _TOOLS_THIS_TURN.get() is None:
             _TOOLS_THIS_TURN.set([])
+        # spawn_agent appends a VERIFIED seat here. One list, made by the endpoint: the tools run
+        # in with_heartbeat's worker and turn.end is finished in the request thread, and a
+        # ContextVar set in one is invisible in the other.
+        if _SPAWNED_THIS_TURN.get() is None:
+            _SPAWNED_THIS_TURN.set(_spawned)
         results = []
         for call in calls:
             name, args = call["name"], call.get("arguments") or {}
@@ -4915,15 +4982,64 @@ def text_stream_endpoint():
         _record_text_turn(**kw, effective=effective)
         _WARM_POOL.sync(warm_key, _THREADS.turn_count(conversation_id))
 
+    from services.arturo import onboarding as _onb
+    from services.arturo import operator_store as _ops
+    # Found on text_in, the operator's message: the page-context line sits in front of it in
+    # body_text, pushing the marker off line 1.
+    _onboarding_step, _ = _onb.split_marker(text_in)
+
+    def _complete(event):
+        """turn.end reports what the turn DID, as /text does — the home page's onboarding steps
+        advance on tools_called, spawned and operator. A whole-reply turn.end already carries
+        text_turn's spawned; the stream's list is merged in after it, never written over it."""
+        if event.get("event") != "turn.end":
+            return event
+        data = dict(event.get("data") or {})
+        merged = []
+        for seat in list(data.get("spawned") or []) + _spawned:
+            if seat not in merged:
+                merged.append(seat)
+        data["spawned"] = merged
+        data.setdefault("tools_called", [])
+        if "operator" not in data:
+            try:
+                data["operator"] = _ops.public(ARTURO_STATE)
+            except Exception:  # noqa: BLE001 — the operator card is never worth a turn
+                data["operator"] = {}
+        return {**event, "data": data}
+
+    def _run_whole(sink):
+        """The whole turn, in whole_turn's worker thread, with its tool loop reporting each call
+        and result to `sink` — so a codex turn shows its cards live (DEC-1790750869457756)."""
+        tok = _TOOL_EVENTS.set(sink)
+        try:
+            return _fallback()
+        finally:
+            _TOOL_EVENTS.reset(tok)
+
     def _generate():
         # with_heartbeat keeps the connection alive through a silent stretch — the tool-loop
         # fallback produces nothing while it runs, and every hop in front of us drops an idle
         # socket (the dashboard proxy at 30s), which reached the operator as a mid-turn 502.
-        turn = _text_stream.stream_turn(
-            text=body_text, conversation_id=conversation_id, brain=turn_brain,
-            brain_id=chosen_id, messages=messages, spawn=_spawn,
-            fallback=_fallback, record=_record, tools=TOOLS,
-            warm=_warm, discard=lambda: _WARM_POOL.discard(warm_key), run_tools=_run_tools)
+        # Only Claude has a streaming tool loop (a warm session). Any other CLI runtime streamed
+        # the cold way reached for its OWN sandboxed tools instead of Arturo's — codex answered
+        # "I couldn't access the live session list from this environment" (staging, 2026-09-30) —
+        # and codex hands over whole messages anyway. So those turns run whole, through the tool
+        # loop, until they have a streaming loop of their own.
+        _no_stream_loop = (getattr(turn_brain, "kind", "") == "runtime"
+                           and getattr(turn_brain, "runtime", "") not in _cli_events.WARM_RUNTIMES)
+        if _onboarding_step or _no_stream_loop:
+            # Only text_turn knows the onboarding marker and its directive, so the step runs
+            # there, whole, and arrives as one reply.
+            turn = _text_stream.whole_turn(conversation_id, turn_brain, _fallback,
+                                           run_with_sink=_run_whole)
+        else:
+            turn = _text_stream.stream_turn(
+                text=body_text, conversation_id=conversation_id, brain=turn_brain,
+                brain_id=chosen_id, messages=messages, spawn=_spawn,
+                fallback=_fallback, record=_record, tools=TOOLS,
+                warm=_warm, discard=lambda: _WARM_POOL.discard(warm_key), run_tools=_run_tools)
+        turn = (_complete(e) for e in turn)
         try:
             for frame in _text_stream.with_heartbeat(turn, interval_s=10.0):
                 yield frame

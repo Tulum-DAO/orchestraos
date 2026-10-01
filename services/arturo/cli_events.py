@@ -23,7 +23,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Iterator, Optional
 
-from .brain import CommandSpec
+from .brain import CommandSpec, CODEX_NO_OWN_TOOLS
 
 
 @dataclass
@@ -72,7 +72,7 @@ def stream_command(runtime: str, cli: str, system: str, prompt: str, model: str 
         return CommandSpec(argv=argv, stdin=None)
     if runtime == "codex":
         argv = [cli, "exec", "--json", "--skip-git-repo-check", "--ephemeral",
-                "-s", "read-only", "--color", "never"]
+                "-s", "read-only", "--color", "never", *CODEX_NO_OWN_TOOLS]
         if model:
             argv.append(f"--model={model}")
         return CommandSpec(argv=argv, stdin=f"{system}\n\n{prompt}")

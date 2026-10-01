@@ -407,3 +407,83 @@ def test_a_model_that_never_stops_calling_tools_is_cut_off_and_falls_back():
     assert len(calls) <= TS.MAX_TOOL_ROUNDS
     assert discarded == [True]
     assert payloads(evs, "turn.end")[0]["reply_text"] == "done the slow way"
+
+
+# ---- interleaving: each tool call is its own card, paired with its result by id ----------
+# The client renders text, then a card per call, then more text — in the order it happened.
+# Results used to pair with calls only by position; two calls to the same tool in one pass
+# made "which card does this result close?" a guess.
+
+TWO_CALLS = [delta_line('{"tool_calls":[{"name":"list_agents","arguments":{"tier":1}},'
+                        '{"name":"list_agents","arguments":{"tier":2}}]}'), RESULT]
+
+
+def test_each_tool_call_and_its_result_share_a_call_id():
+    evs, _, _ = loop_events(
+        [TWO_CALLS, ANSWER_PASS],
+        lambda calls: [{"name": c["name"], "ok": True, "result": f"tier {c['arguments']['tier']}"}
+                       for c in calls])
+    calls, results = payloads(evs, "tool.call"), payloads(evs, "tool.result")
+    ids = [c["call_id"] for c in calls]
+    assert len(ids) == 2 and len(set(ids)) == 2, "two calls, two distinct ids"
+    assert [r["call_id"] for r in results] == ids
+    assert [r["summary"] for r in results] == ["tier 1", "tier 2"]
+
+
+def test_call_ids_stay_unique_across_rounds_of_one_turn():
+    evs, _, _ = loop_events(
+        [TOOL_PASS, TOOL_PASS, ANSWER_PASS],
+        lambda calls: [{"name": "list_agents", "ok": True, "result": "4"}])
+    ids = [c["call_id"] for c in payloads(evs, "tool.call")]
+    assert len(ids) == 2 and len(set(ids)) == 2
+
+
+def test_text_and_tool_events_arrive_in_the_order_they_happened():
+    mixed = [delta_line("Let me check. "),
+             delta_line('{"tool_calls":[{"name":"list_agents","arguments":{}}]}'), RESULT]
+    evs, _, _ = loop_events(
+        [mixed, ANSWER_PASS],
+        lambda calls: [{"name": "list_agents", "ok": True, "result": "4"}])
+    order = [e["event"] for e in evs if e["event"] in ("text.delta", "tool.call", "tool.result")]
+    first_call, first_result = order.index("tool.call"), order.index("tool.result")
+    assert "text.delta" in order[:first_call], "the prose before the call comes first"
+    assert first_call < first_result
+    assert "text.delta" in order[first_result:], "the answer comes after the result"
+
+
+# ---- reset: the whole reply must not repeat what the dead attempt already showed ---------
+
+def test_a_warm_loop_that_falls_back_after_showing_text_says_reset_first():
+    dying = [delta_line("Let me check. ")]          # the pass never reaches its result
+    evs, _, _ = loop_events([dying], lambda calls: [],
+                            fallback=lambda: (200, {"ok": True, "reply_text": "Four are running.",
+                                                    "tools_called": [], "spawned": []}))
+    names = [e["event"] for e in evs]
+    assert "turn.reset" in names
+    reset_at = names.index("turn.reset")
+    assert "text.delta" in names[:reset_at], "the partial text came first"
+    after = "".join(d["text"] for d in payloads(evs[reset_at:], "text.delta"))
+    assert after == "Four are running."
+
+
+def test_a_fallback_after_tool_rounds_says_reset_first():
+    evs, _, _ = loop_events([TOOL_PASS] * (TS.MAX_TOOL_ROUNDS + 1),
+                            lambda calls: [{"name": "list_agents", "ok": True, "result": "4"}],
+                            fallback=lambda: (200, {"ok": True, "reply_text": "Done.",
+                                                    "tools_called": [], "spawned": []}))
+    names = [e["event"] for e in evs]
+    assert names.index("turn.reset") > max(i for i, n in enumerate(names) if n == "tool.result")
+
+
+# ---- a stream that ends without the CLI's result line is half an answer, not an answer ----
+# read_events marks it TurnEnd(truncated=True). Both paths used to accept it as the reply:
+# the process died mid-sentence and the operator got the first half, recorded as complete.
+
+def test_a_cold_stream_cut_off_before_its_result_falls_back_and_records_nothing_partial():
+    recorded = []
+    evs = events(CLAUDE_PROSE[:1], record=lambda **kw: recorded.append(kw),
+                 fallback=lambda: (200, {"ok": True, "reply_text": "On it, I'll text Shaw now.",
+                                         "tools_called": [], "spawned": []}))
+    assert "turn.reset" in kinds(evs)
+    assert payloads(evs, "turn.end")[0]["reply_text"] == "On it, I'll text Shaw now."
+    assert recorded == [], "the whole-reply path records its own turn; the half never is"
