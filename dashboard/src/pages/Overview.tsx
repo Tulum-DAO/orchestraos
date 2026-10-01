@@ -315,7 +315,7 @@ export default function Overview() {
       </div>
 
       {/* Machine Status */}
-      <MachineStatusSection system={systemData} />
+      <MachineStatusSection system={systemData} agents={agents} />
 
       {/* Two-column layout */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -509,7 +509,29 @@ function countOf(v: unknown): number {
   return Array.isArray(v) ? v.length : typeof v === 'number' ? v : 0;
 }
 
-function MachineStatusSection({ system }: { system: any }) {
+// 2D Agents View spec §16: "live"/"alive" has ONE definition and it is
+// /api/agents' deduped `alive` field, never /api/system's machines.*.agents_alive.
+// The latter is a raw tmux SESSION count (getVpsTmuxSessions().size, or local
+// session-name membership) — no identity dedup, no rotation-awareness, no filter
+// for a non-agent pane — which is where the spec's "14 agents but 18 live" came
+// from: it was counting sessions. It stays on the card as an ops signal, labelled
+// for what it actually counts, and it no longer wears the word "alive".
+// The two sides spell the same machine differently and it is not cosmetic: /api/system
+// keys the cards `mac` and `vps`, while /api/agents rows carry machine 'vps' or 'local'
+// (checked live, 2026-09-29: 13 vps + 1 local, zero rows say 'mac'). Matching the card
+// key straight against the agent field would have made the Mac card read a permanent 0 —
+// the same silent-wrong-number failure this change exists to remove.
+const MACHINE_ALIASES: Record<string, string[]> = { mac: ['mac', 'local'], vps: ['vps'] };
+
+/** Only the two fields this section reads — the rest of an /api/agents row is not its business. */
+type MachineAgentRow = { machine?: string; alive?: boolean };
+
+function aliveOnMachine(agents: MachineAgentRow[], machineKey: string): number {
+  const names = MACHINE_ALIASES[machineKey] ?? [machineKey];
+  return agents.filter((a) => names.includes(String(a?.machine)) && a?.alive).length;
+}
+
+function MachineStatusSection({ system, agents = [] }: { system: any; agents?: MachineAgentRow[] }) {
   const machines = system?.machines;
   const sync = system?.sync;
   if (!machines) return null;
@@ -543,7 +565,8 @@ function MachineStatusSection({ system }: { system: any }) {
           </div>
           <div className="space-y-1 text-sm text-neutral-400">
             <p>{countOf(mac?.agents_hosted)} registered</p>
-            <p>{mac?.agents_alive ?? 0} alive</p>
+            <p>{aliveOnMachine(agents, 'mac')} alive</p>
+            <p className="text-xs text-neutral-600">{mac?.agents_alive ?? 0} tmux sessions</p>
             <p>Last heartbeat: {relativeTime(mac?.last_heartbeat)}</p>
             {mac?.consecutive_failures > 0 && (
               <p className="text-amber-400">{mac.consecutive_failures} consecutive failure{mac.consecutive_failures !== 1 ? 's' : ''}</p>
@@ -560,7 +583,8 @@ function MachineStatusSection({ system }: { system: any }) {
           </div>
           <div className="space-y-1 text-sm text-neutral-400">
             <p>{countOf(vps?.agents_hosted)} registered</p>
-            <p>{vps?.agents_alive ?? 0} alive</p>
+            <p>{aliveOnMachine(agents, 'vps')} alive</p>
+            <p className="text-xs text-neutral-600">{vps?.agents_alive ?? 0} tmux sessions</p>
             <p>Always on</p>
           </div>
         </div>

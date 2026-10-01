@@ -45,6 +45,54 @@ export const deleteTask = (project: string, phaseIdx: number, taskIdx: number): 
   fetch(`/api/roadmaps/${project}/phases/${phaseIdx}/tasks/${taskIdx}`, { method: 'DELETE' }).then(r => r.json());
 
 
+// 2D Agents View (spec §16): the ONLY two message helpers the view may use. Both hit the
+// canonical SQLite `messages` table. fetchPairCounts feeds every count and thickness on a
+// connection line; fetchPairMessages feeds the conversation panel, including "load older"
+// via the `before` cursor. Do not reach for /messages/thread/:conversationId or
+// /messages/conversations/:agentId from this view — they read JSONL, and disagreeing with
+// this table is exactly the "49 vs 40" bug the spec exists to kill.
+export interface PairCountRow { a: string; b: string; count: number; last_at: string | null }
+export const fetchPairCounts = (hours = 24, asof?: string | null) => {
+  const q = new URLSearchParams({ hours: String(hours) });
+  if (asof) q.set('asof', asof);   // omitted entirely means live
+  return get<{ window_hours: number; asof: string | null; pairs: PairCountRow[] }>(
+    `/messages/pair-counts?${q}`);
+};
+
+export interface PairMessage {
+  id: string; conversation_id: string | null; from_agent: string; to_agent: string;
+  type: string | null; subject: string | null; body: string | null; priority: string | null;
+  status: string | null; created_at: string | null;
+  delivered_at: string | null; acknowledged_at: string | null;
+}
+export interface PairPage {
+  a: string; b: string; total_in_window: number; total_all_time: number; window_hours: number;
+  /** Echo of the moment the page was computed at; null when live. */
+  asof: string | null;
+  messages: PairMessage[]; next_before: string | null; has_more: boolean;
+}
+export const fetchPairMessages = (
+  a: string, b: string,
+  opts: { limit?: number; before?: string | null; hours?: number; asof?: string | null } = {},
+) => {
+  const q = new URLSearchParams({ limit: String(opts.limit ?? 40), hours: String(opts.hours ?? 24) });
+  if (opts.before) q.set('before', opts.before);
+  if (opts.asof) q.set('asof', opts.asof);
+  return get<PairPage>(`/messages/pair/${encodeURIComponent(a)}/${encodeURIComponent(b)}?${q}`);
+};
+
+/** Latest seat-to-seat mail across the fleet, newest first. Same canonical `messages` table
+ *  as fetchPairCounts, so the ticker and the line counts describe the same traffic. Carries
+ *  direction and type, which the per-pair counts do not — that is what lets a travelling dot
+ *  mean something (spec §2: if a dot moves, a message is actually moving). */
+export interface RecentMessageRow {
+  id: string; conversation_id: string | null; from_agent: string; to_agent: string;
+  type: string | null; subject: string | null; priority: string | null; status: string | null;
+  created_at: string | null; delivered_at: string | null; acknowledged_at: string | null;
+}
+export const fetchRecentMessages = (limit = 50) =>
+  get<{ messages: RecentMessageRow[] }>(`/messages/recent?limit=${limit}`);
+
 export const fetchProjects = () => get('/projects');
 export const fetchProject = (slug: string) => get(`/projects/${slug}`);
 
@@ -104,7 +152,10 @@ export const getAdaptiveAgents = (userId: string = 'operator') =>
 
 export const spawnAgent = (id: string, task?: string) => post(`/agents/${id}/spawn`, task ? { task } : undefined);
 export const killAgent = (id: string) => post(`/agents/${id}/kill`);
-export const messageAgent = (id: string, message: string) => post(`/agents/${id}/message`, { message });
+// messageAgent() DELETED 2026-09-30. It posted to /api/agents/:id/message, which wrote a
+// file into queue/inbox/ that no live agent reads, and returned {sent:true} — so the UI
+// reported success while the operator's instruction vanished. Use sendToAgent() from
+// lib/agentSend.ts (POST /:id/send, msg_store-backed). The endpoint now 410s.
 
 export const getAgentOutput = (id: string, lines = 50) => get(`/agents/${id}/output?lines=${lines}`);
 export const injectToAgent = (id: string, text: string) => post(`/agents/${id}/inject`, { text });

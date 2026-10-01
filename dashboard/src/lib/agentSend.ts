@@ -80,21 +80,40 @@ export async function sendToAgent(
 
 // ── P3 helpers (queued bubble / held chip UI) ─────────────────────────────
 
+/** The server ACCEPTED the message only if it answered 2xx.
+ *
+ * This gate is load-bearing, not defensive dressing. When msg_store's durable
+ * write fails, agent-send.ts answers HTTP 502 with `state:'held'` — the state
+ * enum alone says "held", which every helper below used to read as accepted.
+ * The UI then rendered success and cleared the operator's typed text for a
+ * message that was never stored. A state is only meaningful on a 2xx. */
+function accepted(result: AgentSendResult): boolean {
+  return result.httpStatus >= 200 && result.httpStatus < 300;
+}
+
 /** True when the composer should render a "queued" bubble in the transcript
  * (the message left the composer but hasn't landed in the pane yet). */
 export function isQueued(result: AgentSendResult): boolean {
-  return result.state === 'queued';
+  return accepted(result) && result.state === 'queued';
 }
 
 /** True when the composer should render a "held" chip (blocked on a
  * menu/permission prompt, or gateway-side mid-turn hold). */
 export function isHeld(result: AgentSendResult): boolean {
-  return result.state === 'held';
+  return accepted(result) && result.state === 'held';
 }
 
 /** True when the send landed immediately (parser-confirmed submit). */
 export function isDelivered(result: AgentSendResult): boolean {
-  return result.state === 'delivered';
+  return accepted(result) && result.state === 'delivered';
+}
+
+/** True when the send did NOT land: a non-2xx answer (502 durable_write_failed,
+ * 500, 404, 401) or a network-level failure (httpStatus 0). Distinct from the
+ * 409 composer-hold, which is retryable with force and keeps its own UI. The
+ * caller must keep the typed text and show an error for this. */
+export function isFailed(result: AgentSendResult): boolean {
+  return !isComposerHold(result) && !accepted(result);
 }
 
 /** True on the D4 composer-hold 409 — the payload is echoed back on
@@ -110,6 +129,10 @@ export function describeSendState(result: AgentSendResult): string {
     return result.composer_text
       ? 'Composer has unsubmitted text — waiting'
       : (result.stranded ? 'Composer input stranded — waiting' : 'Composer busy — waiting');
+  }
+  if (isFailed(result)) {
+    return result.error
+      || (result.httpStatus ? `Send failed (HTTP ${result.httpStatus}) — not delivered` : 'Send failed — not delivered');
   }
   if (isHeld(result)) return result.reason || 'Held — will deliver at the next turn boundary';
   if (isQueued(result)) return result.reason || 'Queued — agent is busy';

@@ -6,7 +6,7 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "test": "ORCHESTRA_CONFIG=${ORCHESTRA_CONFIG:-../orchestra.example.toml} tsx --test src/routes/*.test.ts src/lib/*.test.ts",
+    "test": "ORCHESTRA_CONFIG=${ORCHESTRA_CONFIG:-../orchestra.example.toml} tsx --test \"src/**/*.test.ts\"",
     "stream-test": "tsx --test tests/transcript-stream.test.ts tests/transcript-stream-client.test.ts"
   },
   "dependencies": {

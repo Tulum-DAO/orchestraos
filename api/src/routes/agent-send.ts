@@ -48,11 +48,24 @@ import { getRegistry } from '../services/state-reader.js';
 import { loadConfig } from '../lib/config.js';
 import { actingAgent } from '../lib/principal.js';
 import { gatewayTokenFile } from '../lib/gateway-token.js';
+import { resolveMsgStorePath } from './messages.js';
 
 const HOME = process.env.HOME || homedir();
 const ORCHESTRA_DIR = process.env.ORCHESTRA_DIR || join(HOME, 'scripts/agent-orchestra');
 const UPLOADS_DIR = join(ORCHESTRA_DIR, 'state', 'uploads');
-const MSG_STORE = join(ORCHESTRA_DIR, 'msg_store.py');
+// msg_store.py is CODE, so it lives in the CHECKOUT, not the data dir. This was
+// join(ORCHESTRA_DIR, 'msg_store.py') — a path that has never existed — so the durable-first
+// fallback below shelled out to a missing file and returned
+// {state:'held', reason:'durable_write_failed'} at HTTP 502. That is the safety net for
+// exactly the case this route exists to handle (pane down or busy), and it could not write
+// anywhere: the message was genuinely gone while the response read as safely-queued, with a
+// raw Python traceback fragment in a client-facing JSON body. Found by test, 2026-09-30.
+//
+// Reusing messages.ts's resolveMsgStorePath() rather than computing a second answer here —
+// that helper exists because this exact mistake was already made and fixed once, and its own
+// comment says "Never the data dir (a fresh install has no code there)". Two sources for one
+// fact is how they drift apart. cwd stays ORCHESTRA_DIR: msg_store resolves its DB from there.
+export const MSG_STORE = resolveMsgStorePath(process.env, import.meta.url);
 // #85: this hard-coded the legacy path, bypassing the one reader that knows where `orchestra
 // init` actually writes the bearer. #84: the default dialled :9091 while a fresh orchestra.toml
 // ships [gateway] port = 8890, so the API dialled a port nothing listens on.
@@ -311,7 +324,13 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
 
   if (!write.sent) {
     // Never lie about delivery on a failed durable write either.
-    const err = write.error || 'durable write failed';
+    //
+    // The real error is an execFileSync message: it carries the whole argv —
+    // the msg_store.py path, --from/--to, and the mkdtemp body-file path. That
+    // is server-side detail and it goes to the log, not to the browser. The
+    // client gets a fixed string it can show verbatim.
+    console.error('[agent-send] durable write failed:', write.error || 'unknown error');
+    const err = 'Could not store the message — it was not delivered.';
     res.status(502).json(capable
       ? { state: 'held', reason: 'durable_write_failed', error: err }
       : { ok: false, error: err });
@@ -331,7 +350,10 @@ const router = Router();
 
 router.post('/:id/send', (req: Request, res: Response) => {
   handleAgentSend(defaultAgentSendDeps, req, res).catch((err) => {
-    res.status(500).json({ ok: false, error: err?.message || 'internal error' });
+    // Same rule as the 502 above: an unexpected throw's message routinely
+    // carries local paths (ENOENT /Users/...). Log it, don't ship it.
+    console.error('[agent-send] unhandled error:', err);
+    res.status(500).json({ ok: false, error: 'internal error' });
   });
 });
 
