@@ -88,6 +88,10 @@ export interface TopologyAgent {
    *  authoritative signal when present. isRetired() also still reads retired_at/status so it
    *  does not regress against an older API payload that predates this field. */
   retired?: boolean | null;
+  /** Set by the API on a parked rotation leftover (DEC-1790826247484632): the canonical root
+   *  that supersedes this row. Absent on every other row, and absent entirely from an older
+   *  payload — `isRotationPredecessor` still covers the live-successor case there. */
+  superseded_by?: string | null;
 }
 
 /**
@@ -131,13 +135,31 @@ export function isRotationPredecessor(
   return Boolean(base?.alive);
 }
 
+/**
+ * The THIRD kind of ghost (DEC-1790826247484632): a rotation leftover whose status is
+ * `parked`, which neither `isRetired` (the registry never marked it retired) nor
+ * `isRotationPredecessor` (it is not keyed on status, and the base may be dead too) can see.
+ * 154 such rows in the live fleet registry, none with a live session.
+ *
+ * The decision is the API's, not this module's: it takes the `canonical` table, which the
+ * browser cannot read, and five conditions — see api/src/services/rotation-leftovers.ts. Here
+ * we only read the field it sets. A leftover is deliberately NOT marked `retired` and keeps
+ * `status: 'parked'`, so the evidence stays in the payload for anyone auditing the count.
+ */
+export function isSupersededLeftover(agent: { superseded_by?: string | null }): boolean {
+  return Boolean(agent.superseded_by);
+}
+
 /** A row belongs in the fleet view (tree, Down filter, summary counts, header denominator)
- *  only if it is neither kind of ghost. The one predicate every surface should call. */
+ *  only if it is none of the three kinds of ghost. The one predicate every surface should
+ *  call — one filter point means the denominator cannot independently forget one of them. */
 export function isFleetMember(
-  agent: TopologyAgent & { retired?: boolean | null },
+  agent: TopologyAgent & { retired?: boolean | null; superseded_by?: string | null },
   allAgents: { id: string; alive?: boolean }[]
 ): boolean {
-  return !isRetired(agent) && !isRotationPredecessor(agent, allAgents);
+  return !isRetired(agent)
+    && !isRotationPredecessor(agent, allAgents)
+    && !isSupersededLeftover(agent);
 }
 
 export interface TopologyPartition<T extends TopologyAgent> {
