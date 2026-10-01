@@ -318,3 +318,20 @@ main {
 .snap-x-mobile > * {
   scroll-snap-align: start;
 }
+
+/* 2D Agents View step 7 — a message dot travelling along a connection line.
+   One-shot, not a loop: the dot is emitted for a specific message id that just arrived, so
+   it plays once and unmounts (spec §2 — if a dot moves, a message is actually moving).
+   Kept in CSS because Tailwind has no translate-along utility, and gated on
+   prefers-reduced-motion: with motion suppressed the dot still appears and still carries its
+   type colour, it simply does not travel — the information survives, only the animation goes. */
+@keyframes fleet-dot-down { from { top: 0; opacity: 0; } 15% { opacity: 1; } to { top: 100%; opacity: 0; } }
+@keyframes fleet-dot-up   { from { top: 100%; opacity: 0; } 15% { opacity: 1; } to { top: 0; opacity: 0; } }
+.fleet-dot { position: absolute; left: 50%; margin-left: -2px; width: 4px; height: 4px; border-radius: 9999px; }
+@media (prefers-reduced-motion: no-preference) {
+  .fleet-dot-down { animation: fleet-dot-down 900ms linear 1; }
+  .fleet-dot-up   { animation: fleet-dot-up   900ms linear 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fleet-dot-down, .fleet-dot-up { top: 50%; }
+}

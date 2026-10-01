@@ -76,6 +76,26 @@ export function applyIdentityPrecedence(
   agent.tmux_session = tmuxSession;
   agent.always_on = (def.always_on as boolean) || false;
 
+  // Retirement is a REGISTRY fact, so the same precedence law applies to it.
+  //
+  // Every lineage rotation leaves a `seat-gN` row behind: the registry marks it
+  // retired, but its state/<id>.json is the frozen spawn stub and still says
+  // 'spawning'. The route's `...def, ...state` spread lets that stub win, and
+  // the grace branch below then ages 'spawning' into 'offline' — so a seat that
+  // was deliberately decommissioned surfaced to every client as a down agent.
+  // That is the whole mechanism behind the org chart rooting at the retired
+  // gm-g2 and the header counting two phantom down agents; `build-g2` joined
+  // them the moment this seat rotated. Keyed off registry status, never off the
+  // `-gN` shape of an id, because the next ghost will not be a `-gN`.
+  const registryStatus = String(def.status || '').toLowerCase();
+  if (registryStatus === 'retired' || registryStatus === 'archived') {
+    agent.status = 'retired';
+    agent.retired = true;
+    agent.activity = `Decommissioned (registry: ${registryStatus})`;
+    return;
+  }
+  agent.retired = false;
+
   if (agent.status === 'spawning') {
     const t = Date.parse((agent.spawned_at as string) || '');
     if (Number.isNaN(t) || Date.now() - t > SPAWNING_GRACE_MS) {

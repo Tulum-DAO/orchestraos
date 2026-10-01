@@ -27,6 +27,8 @@ export interface OrchestraConfig {
   macTailscaleIp: string;
   macSshUser: string;
   vpsTailscaleIp: string;
+  /** `machines.vps_hostname` from orchestra.toml. Blank on a single-machine install. */
+  vpsHostname: string;
   remoteAuthHost: string;
   operatorId: string;
   runtimesEnabled: string[];
@@ -154,6 +156,7 @@ export function loadConfig(): OrchestraConfig {
     macTailscaleIp: (raw.machines && raw.machines.mac_tailscale_ip) || '',
     macSshUser: (raw.machines && raw.machines.mac_ssh_user) || '',
     vpsTailscaleIp: (raw.machines && raw.machines.vps_tailscale_ip) || '',
+    vpsHostname: (raw.machines && raw.machines.vps_hostname) || '',
     remoteAuthHost: (raw.machines && raw.machines.remote_auth_host) || '',
     operatorId: (raw.operator && raw.operator.id) || 'operator',
     showUnregisteredSessions: Boolean(raw.dashboard && raw.dashboard.show_unregistered_sessions),

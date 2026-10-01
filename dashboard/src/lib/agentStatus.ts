@@ -13,7 +13,7 @@
 
 export type LiveState =
   | 'working' | 'idle' | 'waiting' | 'stranded' | 'stalled'
-  | 'stopped' | 'crashed' | 'offline' | 'unknown';
+  | 'stopped' | 'crashed' | 'offline' | 'retired' | 'unknown';
 
 const STATE_ALIAS: Record<string, LiveState> = {
   // detector closed-enum aliases
@@ -52,5 +52,10 @@ export const STATE_STYLE: Record<LiveState, { label: string; dot: string; text: 
   stopped:  { label: 'stopped',          dot: 'bg-red-500',                 text: 'text-red-400' },
   crashed:  { label: 'crashed',          dot: 'bg-red-500',                 text: 'text-red-400' },
   offline:  { label: 'offline',          dot: 'bg-neutral-600',             text: 'text-neutral-500' },
+  // retired = intentionally decommissioned (the `seat-gN` row every lineage
+  // rotation leaves behind), NOT a down agent. Dimmer than offline so that on
+  // the rare surface which does show one it reads as an archived record rather
+  // than something to go fix. Default views filter these out entirely.
+  retired:  { label: 'retired',          dot: 'bg-neutral-700',             text: 'text-neutral-600' },
   unknown:  { label: '—',                dot: 'bg-neutral-600',             text: 'text-neutral-500' },
 };

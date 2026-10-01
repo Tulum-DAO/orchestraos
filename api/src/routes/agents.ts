@@ -6,6 +6,7 @@ import { getRegistry, getAllAgentStates, getInboxCounts } from '../services/stat
 import { getTmuxSessionNames } from '../services/tmux-monitor.js';
 import { getUnifiedAgentStatus, spawnAgent, killAgent, getMacStatus, getMacSessionsCache } from '../services/cross-machine.js';
 import { logInteraction } from '../services/learning.js';
+import { isTranscriptActive } from '../services/transcript-activity.js';
 import { getDetectorStates, detectorCacheAgeMs, classifyNoSession, type DetectorStatus } from '../services/agent-status.js';
 import { isCutoverActive, getCanonicalAgents, canonicalTmuxSession } from '../services/identity-store-reader.js';
 import { applyIdentityPrecedence, resolveMachineAndLiveness, discoverUnregistered } from './agents-identity.js';
@@ -29,6 +30,17 @@ function mergeDetector(agent: AgentEntry, d: DetectorStatus | undefined): void {
   agent.status = d.state;
   agent.status_source = 'detector';
   agent.activity = d.activity || '';
+  // Corroboration, not override: the detector wins whenever it sees work. It only gets
+  // second-guessed in the one direction it was provably wrong on 2026-09-29 — reporting
+  // idle for every seat at once, including seats mid-turn. A transcript being appended to
+  // right now is direct evidence of an open turn, so trust that over an idle verdict.
+  // status_source records which signal actually decided, so a wrong answer is traceable
+  // to its source rather than blamed on "the dashboard".
+  if (d.state === 'idle' && isTranscriptActive(agent.id)) {
+    agent.status = 'working';
+    agent.status_source = 'transcript';
+    agent.activity = 'Working (transcript active; detector reported idle)';
+  }
   agent.tool = d.tool || '';
   agent.context_pct = d.context_pct || '';
   agent.confidence = d.confidence;
@@ -426,31 +438,36 @@ router.post('/:id/kill', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/agents/:id/message — write to inbox
-router.post('/:id/message', (req: Request, res: Response) => {
-  try {
-    const { message } = req.body;
-    if (!message) { res.status(400).json({ error: 'message required' }); return; }
-    const inboxDir = join(process.env.ORCHESTRA_DIR!, 'queue', 'inbox', req.params.id as string);
-    if (!existsSync(inboxDir)) mkdirSync(inboxDir, { recursive: true });
-    const filename = `${Date.now()}_dashboard_shaw.json`;
-    const msg = {
-      id: `dash_${Date.now()}`,
-      type: 'task_request',
-      from: 'operator-dashboard',
-      to: req.params.id,
-      subject: message.slice(0, 100),
-      description: message,
-      body: message,
-      source: 'dashboard',
-      created: new Date().toISOString()
-    };
-    writeFileSync(join(inboxDir, filename), JSON.stringify(msg, null, 2));
-    res.json({ sent: true, file: filename });
-  } catch (err) {
-    res.status(500).json({ error: 'Message failed', detail: String(err) });
-  }
-});
+/**
+ * POST /api/agents/:id/message — GONE (410) since 2026-09-30.
+ *
+ * This wrote a JSON file into `queue/inbox/<agent>/` and answered `{sent:true}`. Nothing
+ * reads that directory — prompts/infrastructure.md says so outright ("DO NOT use
+ * queue/inbox/ — they are deprecated") — so every message sent through it was silently
+ * discarded while the UI reported success. Found by test during the 2D QA pass and
+ * reproduced twice, once through the UI and once by curl straight at this route. The
+ * operator could believe an instruction had reached an agent and have it vanish.
+ *
+ * It answers 410 rather than being deleted outright, deliberately. A deleted route 404s,
+ * which reads as a typo or a stale client; 410 with a pointer tells any surviving caller
+ * exactly what happened and what to use instead. The one thing this path must never do
+ * again is succeed.
+ *
+ * Durable replacement: POST /api/agents/:id/send (api/src/routes/agent-send.ts), which goes
+ * through msg_store. Client: sendToAgent() in dashboard/src/lib/agentSend.ts.
+ */
+export function handleDeprecatedMessage(req: Request, res: Response): void {
+  console.warn('[gone] POST /api/agents/:id/message — a caller is still using the dropped send path', {
+    agentId: req.params.id,
+    hasBody: Boolean(req.body?.message),
+  });
+  res.status(410).json({
+    error: 'This endpoint is gone: it wrote to queue/inbox/, which no agent reads.',
+    code: 'endpoint_gone',
+    use_instead: 'POST /api/agents/:id/send',
+  });
+}
+router.post('/:id/message', handleDeprecatedMessage);
 
 // GET /api/agents/:id/output — capture last N lines from agent's tmux pane
 router.get('/:id/output', (req: Request, res: Response) => {
