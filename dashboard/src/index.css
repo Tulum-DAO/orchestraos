@@ -270,6 +270,16 @@ html {
 body {
   touch-action: manipulation;
 }
+/* The app paints its own dark surfaces, but neither of these carried a background, so any
+   area the app did not cover rendered WHITE on a dark UI. Found via a phantom 1708px of
+   document scroll on the topology view (TimeBar.tsx): the blank strip past the end of the
+   page was white, not dark. That root cause is fixed, but rubber-band overscroll and any
+   future gap would expose the same flash, so the backstop belongs here rather than relying on
+   nothing ever overflowing again. neutral-950, matching the shell. */
+html,
+body {
+  background-color: #0a0a0a;
+}
 button {
   -webkit-touch-callout: none;
 }

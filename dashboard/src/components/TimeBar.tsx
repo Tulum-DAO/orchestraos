@@ -74,7 +74,13 @@ export function TimeBar({
         ))}
       </div>
 
-      <label className="flex items-center gap-2 flex-1 min-w-[180px]">
+      {/* `relative` is load-bearing, not decoration. Tailwind's `sr-only` is
+          `position:absolute; margin:-1px`, so with no positioned ancestor it resolves against
+          the INITIAL containing block and is laid out at document level, below the app's own
+          scroll container. The document then scrolled 1708px past the end of the page on the
+          topology view (html.scrollHeight 2708 vs body.scrollHeight 1000) into blank space,
+          because this bar renders only there. Cards and table measured 0 overscroll. */}
+      <label className="relative flex items-center gap-2 flex-1 min-w-[180px]">
         <span className="sr-only">Moment shown</span>
         <input
           type="range"
