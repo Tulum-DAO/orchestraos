@@ -8,7 +8,7 @@
  * assertion in this file and fails that one.
  */
 import assert from 'node:assert';
-import { lineWidthPx, pairKey, shortAgo, MAX_LINE_PX, isRetired, isRotationPredecessor, isFleetMember } from './topologyLines.ts';
+import { lineWidthPx, pairKey, shortAgo, MAX_LINE_PX, isRetired, isRotationPredecessor, isFleetMember, isSupersededLeftover } from './topologyLines.ts';
 
 // No traffic is 1px, never 0 — a line you cannot see is a line you cannot click.
 assert.equal(lineWidthPx(0, 150), 1);
@@ -359,4 +359,52 @@ console.log('isFleetMember: retired + rotation-predecessor + negative control al
     'an explicit parent still wins over reports_to');
 
   console.log('captured payload: workers attach via reports_to — "Not in the tree" is empty');
+}
+
+
+// ── Parked rotation leftovers (DEC-1790826247484632) ────────────────────────────────────
+//
+// The THIRD kind of ghost row. `isRetired` catches what the registry marked decommissioned;
+// `isRotationPredecessor` catches a `-genN` row whose base seat is alive. Neither sees a
+// leftover whose status is `parked` — 154 such rows in the live fleet registry, none of them
+// with a live session. The API decides (it needs the `canonical` table, which the browser
+// cannot read) and sets `superseded_by`; this module only reads the field.
+{
+  assert.equal(isSupersededLeftover({ superseded_by: 'devex-review' }), true);
+  assert.equal(isSupersededLeftover({}), false, 'absent field is not a leftover');
+  assert.equal(isSupersededLeftover({ superseded_by: null }), false);
+  assert.equal(isSupersededLeftover({ superseded_by: '' }), false, 'empty string is not a root');
+
+  const fleet = [
+    { id: 'gm', tier: 'T0', alive: true },
+    { id: 'devex-review', tier: 'T1', reports_to: 'gm', alive: true },
+    // the three kinds of ghost, one of each
+    { id: 'gm-g2', tier: 'T0', alive: false, retired: true },
+    { id: 'devex-review-gen3', tier: 'T1', alive: false },
+    { id: 'devex-review-gen7', tier: 'T1', alive: false, status: 'parked', superseded_by: 'devex-review' },
+  ];
+  const visible = fleet.filter((a) => isFleetMember(a, fleet)).map((a) => a.id);
+  assert.deepEqual(visible, ['gm', 'devex-review'],
+    'all three ghost kinds are excluded by the one predicate every surface calls');
+
+  // A leftover is NOT retired — the registry never said so — and its status stays `parked`,
+  // so the evidence survives in the payload for anyone auditing the count.
+  const leftover = fleet[4];
+  assert.equal(isRetired(leftover), false, 'superseded_by must not be read as retired');
+  assert.equal(leftover.status, 'parked');
+
+  // Older API payload with no `superseded_by`: isRotationPredecessor still carries the
+  // live-successor case, so the view never regresses to showing everything.
+  const legacy = fleet.map(({ superseded_by, ...rest }) => rest);
+  assert.ok(isRotationPredecessor(legacy[4], legacy),
+    'base is alive, so the pre-existing predicate still hides it without the new field');
+
+  // The safety property, stated as a test: a leftover whose base is GONE still goes, because
+  // the API only flags a row that is itself not alive — but a row the API did NOT flag and
+  // whose base is absent must stay visible rather than vanish.
+  const orphan = [{ id: 'close-crm-integration-gen1', tier: 'T2', alive: false, status: 'parked' }];
+  assert.ok(isFleetMember(orphan[0], orphan),
+    'unflagged row with no live base stays visible — never hide the only answering seat');
+
+  console.log('isSupersededLeftover: parked rotation leftovers undrawn, retired semantics intact');
 }
