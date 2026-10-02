@@ -179,3 +179,31 @@ def test_every_canonical_service_seat_declares_a_probe():
         f"reconcile proposes parking them: {missing}. Add a {{'port': N}} or "
         f"{{'pane_process': True}} entry to SERVICE_PROBES, matched by effect from the "
         f"seat's own tmux pane pid tree.")
+
+
+def test_no_two_service_seats_declare_the_same_port():
+    """A port probe asks 'is SOMETHING listening', not 'is THIS seat alive'.
+
+    cartesia-arturo-service declared port 5052, which is custom-llm's listener (pid tree,
+    2026-10-02). So a seat with no tmux session at all read 'online' for weeks off another
+    seat's process, and status_reconcile never proposed parking it — the one genuinely false
+    row left on the fleet view after the probe backfill.
+
+    Two seats sharing a port is always that bug: whichever one is dead inherits the other's
+    liveness.
+
+    HONEST SCOPE (review, 2026-10-02): this test would NOT have caught cartesia. There are no
+    duplicate ports in either tree today — cartesia's 5052 is unique precisely because
+    custom-llm is probed by its pane. It is a standing invariant against a future collision,
+    not the test that proved the cartesia fix. The thing that actually catches a stealable
+    probe is refusing to put a CONTESTED port in this table at all.
+    """
+    from collections import Counter
+    from scripts.identity_store import status_reconcile as sr
+
+    ports = Counter(p["port"] for p in sr.SERVICE_PROBES.values() if "port" in p)
+    shared = {port: sorted(s for s, p in sr.SERVICE_PROBES.items() if p.get("port") == port)
+              for port, n in ports.items() if n > 1}
+    assert shared == {}, (
+        f"service seats sharing a port probe: {shared}. The dead one will read live off the "
+        f"other's listener. Give one of them a {{'pane_process': True}} probe, or its own port.")
