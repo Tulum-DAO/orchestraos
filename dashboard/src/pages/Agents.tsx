@@ -73,6 +73,20 @@ export default function Agents() {
     loadAndMergeRecentAgents().then(setRecentAgents);
   }, []);
 
+  // Esc closes the drawer. There was no keyboard close before this: when the panel was a
+  // column beside the graph the close button was the only way out, which is tolerable for a
+  // column and not for something overlaying the page. Bound while a panel is open only, so
+  // Esc is free for everything else on this page.
+  const panelOpen = panelAgentId != null || selectedConnection != null;
+  useEffect(() => {
+    if (!panelOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { closePanel(); setHighlight(null); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [panelOpen, closePanel]);
+
   const { data: system } = useSystem();
   // Canonical per-pair message counts (spec §16): the ONE source for every count and
   // thickness on a connection line and for the strip's message/connection numbers.
@@ -594,11 +608,15 @@ export default function Agents() {
         </div>
       )}
 
-      {/* Topology view. Spec §3: the panel sits beside the graph and the graph stays visible.
-          Stacked full-width under lg rather than a true overlay sheet — §12's small-screen
-          bullet asks for full-screen, and full-width-stacked is that shape without a second
-          modal implementation; a real sheet can replace it when someone uses this on a phone. */}
+      {/* Topology view. The panel is a DRAWER over the graph, not a column beside it
+          (operator, 2026-10-01). Spec §3 said beside; taking a 380px column out of the row
+          reflowed the whole diagram on every click — nodes moved under the cursor, so the
+          thing you just clicked was no longer where you clicked it. The graph now never
+          reflows: opening and closing the drawer leaves every node exactly where it was.
+          This also gives §12's small-screen bullet the full-screen sheet it actually asked
+          for, since the drawer is full width below sm. */}
       {viewMode === 'topology' && (
+        <>
         <div className="flex flex-col lg:flex-row gap-4 items-stretch">
           <div className="flex-1 min-w-0 rounded-xl border border-neutral-800 bg-neutral-900 p-4 overflow-x-auto">
             <TopologyDiagram
@@ -617,33 +635,19 @@ export default function Agents() {
               brightIds={highlight?.agentIds ?? null}
               dots={dots}
             />
-            {/* Bottom live ticker (spec §3). The time scrubber that shares this row is
-                step 9 and is not built. */}
-            <div className="border-t border-neutral-800 mt-2">
-              <TimeBar
-                windowHours={windowHours}
-                onWindowChange={setWindowHours}
-                asof={asof}
-                onAsofChange={setAsof}
-              />
-              {asof ? (
-                // §12: never show stale as fresh. The ticker is a live feed by definition, so
-                // while a past moment is being viewed it says what it is instead of quietly
-                // rendering now's traffic under a scrubbed graph.
-                <div className="text-xs text-amber-300/80 py-2">
-                  Viewing a past moment — live ticker paused. Press Live to resume.
-                </div>
-              ) : (
-                <FleetTicker
-                  messages={recentMessages}
-                  freshIds={freshIds}
-                  onSelectConnection={openConversation}
-                />
-              )}
-            </div>
           </div>
           {(panelAgent || selectedConnection) && (
-            <aside className="w-full lg:w-[380px] shrink-0 lg:max-h-[75vh]">
+            // `fixed`, so it is out of the flex row's flow entirely and the graph keeps its
+            // full width. Esc closes it (there was no keyboard close before); the close
+            // buttons the panels already render still work. No backdrop on purpose — the
+            // point of this view is watching the graph, and dimming it to read one panel
+            // would defeat that. Not `inset-y-0`: it starts below the sticky page header so
+            // it cannot cover the search and the view toggle.
+            <aside
+              role="dialog"
+              aria-modal="false"
+              aria-label={selectedConnection ? 'Conversation' : 'Agent detail'}
+              className="drawer-in-right fixed right-0 top-0 bottom-0 z-30 w-full sm:w-[420px] overflow-y-auto overscroll-contain border-l border-neutral-800 bg-neutral-950 shadow-2xl shadow-black/60 p-4 pt-20 sm:pt-4">
               {selectedConnection ? (
                 <ConversationPanel
                   a={selectedConnection[0]}
@@ -665,6 +669,56 @@ export default function Agents() {
             </aside>
           )}
         </div>
+        {/* The transport row — time window, moment scrubber, Live, and the ticker — is PINNED
+            to the bottom of the viewport, not left at the natural end of the graph card.
+            With 106 agents that end was 2685px down, so reaching the controls meant scrolling
+            past the entire fleet, and nothing on screen said they existed. A transport control
+            you have to go looking for is one nobody uses.
+
+            It sits OUTSIDE the graph card on purpose. `overflow-x-auto` makes that card a
+            scroll container on both axes (a `visible` axis computes to `auto` when the other
+            is not), so a sticky child would resolve against a container that never scrolls and
+            do nothing. Out here its scroll container is the page itself.
+
+            Bounding the card's height instead was tried and rejected: it still left the row
+            42px below the fold at 1600x1000 and 92px at 1280x800, because the height that
+            fits depends on the header above it, which wraps and changes with viewport width.
+            Sticky needs no such arithmetic.
+
+            `-mx-4 px-4` cancels the page gutter so the opaque background spans the full width
+            and the graph cannot be seen sliding underneath it. */}
+        <div className={clsx(
+          'sticky bottom-0 -mx-4 px-4 pb-1 bg-neutral-950 border-t border-neutral-800',
+          // ABOVE the drawer (z-40 > its z-30), and padded clear of it while it is open.
+          // A 420px drawer at the right edge otherwise lands exactly on the Live button and
+          // the right half of the ticker — which would re-bury the controls this row was just
+          // pinned to keep reachable. Below sm the drawer is a full-width sheet, so there is
+          // nothing to pad around.
+          'z-40',
+          panelOpen && 'sm:pr-[436px]',
+        )}>
+          <TimeBar
+            windowHours={windowHours}
+            onWindowChange={setWindowHours}
+            asof={asof}
+            onAsofChange={setAsof}
+          />
+          {asof ? (
+            // §12: never show stale as fresh. The ticker is a live feed by definition, so
+            // while a past moment is being viewed it says what it is instead of quietly
+            // rendering now's traffic under a scrubbed graph.
+            <div className="text-xs text-amber-300/80 py-2">
+              Viewing a past moment — live ticker paused. Press Live to resume.
+            </div>
+          ) : (
+            <FleetTicker
+              messages={recentMessages}
+              freshIds={freshIds}
+              onSelectConnection={openConversation}
+            />
+          )}
+        </div>
+        </>
       )}
     </div>
   );
