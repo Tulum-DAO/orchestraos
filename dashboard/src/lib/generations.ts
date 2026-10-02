@@ -53,3 +53,26 @@ export function describeGenerationTiming(g: GenerationRow): string {
 export function generationKey(g: GenerationRow): string {
   return `${g.generation}-${g.promoted_at ?? g.spawned_at ?? g.retired_at ?? ''}`;
 }
+
+/**
+ * How many "sheets" a topology node stacks behind itself to show it is a lineage.
+ *
+ * Coarse on purpose. The graph answers "which lineages are deep"; the exact number is one
+ * click away in the drawer, so the deepest lineage on the fleet (gm, 55) still caps at two.
+ * Today that is 25 nodes at one sheet, 10 at two, and 71 drawn exactly as they are now.
+ *
+ * The threshold matches `hasGenerationHistory`, so a node can never stack for a lineage whose
+ * drawer section would then decline to render.
+ */
+export function lineageDepthTier(total: number | undefined): 0 | 1 | 2 {
+  if (!hasGenerationHistory(total)) return 0;
+  return (total as number) >= 5 ? 2 : 1;
+}
+
+/**
+ * The lineage half of a node's tooltip, or '' when there is no lineage. The stack is a shape,
+ * and a shape alone must not be the only carrier of the meaning.
+ */
+export function describeLineage(total: number | undefined): string {
+  return hasGenerationHistory(total) ? `${total} generations` : '';
+}

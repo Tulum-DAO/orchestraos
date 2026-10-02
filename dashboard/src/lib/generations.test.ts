@@ -8,6 +8,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   hasGenerationHistory,
+  lineageDepthTier,
+  describeLineage,
   formatGenerationWhen,
   describeGenerationTiming,
   type GenerationRow,
@@ -55,4 +57,27 @@ test('describeGenerationTiming prefers retirement, then promotion, then spawn', 
   assert.match(describeGenerationTiming(row({ spawned_at: '2026-09-30T02:00:00Z' })), /^promoted /);
   // Nothing usable at all is still a legible row, not a blank or an "Invalid Date".
   assert.equal(describeGenerationTiming(row()), 'promoted —');
+});
+
+test('lineageDepthTier maps a lineage to how many sheets the node stacks', () => {
+  // The graph's job is "which lineages are deep", not "how deep": the exact number is one
+  // click away in the drawer. So depth is encoded coarsely and 55 does not mean 55 sheets.
+  assert.equal(lineageDepthTier(undefined), 0, 'not a canonical root -> no stack');
+  assert.equal(lineageDepthTier(1), 0, 'never rotated -> looks exactly as it does today');
+  assert.equal(lineageDepthTier(2), 1);
+  assert.equal(lineageDepthTier(4), 1);
+  assert.equal(lineageDepthTier(5), 2);
+  assert.equal(lineageDepthTier(55), 2, 'deepest lineage on the fleet still caps at 2 sheets');
+  // Threshold agrees with the chip/section gate, so a node never stacks for a lineage the
+  // drawer would then refuse to show.
+  assert.equal(lineageDepthTier(1), 0);
+  assert.equal(hasGenerationHistory(2), lineageDepthTier(2) > 0);
+});
+
+test('describeLineage is the node tooltip suffix, and is silent when there is no lineage', () => {
+  // Shape alone must not be the only carrier of the meaning.
+  assert.equal(describeLineage(undefined), '');
+  assert.equal(describeLineage(1), '');
+  assert.equal(describeLineage(2), '2 generations');
+  assert.equal(describeLineage(55), '55 generations');
 });

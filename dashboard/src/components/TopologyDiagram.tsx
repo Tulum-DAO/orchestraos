@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { clsx } from 'clsx';
 import { StatusDot } from './StatusDot';
 import { TierBadge } from './TierBadge';
+import { lineageDepthTier, describeLineage } from '../lib/generations';
 import type { PairCountRow } from '../lib/api';
 import { lineWidthPx, pairKey, shortAgo, partitionTopology } from '../lib/topologyLines';
 import { dotColor, type TrafficMessage } from '../lib/fleetTraffic';
@@ -16,6 +17,10 @@ interface Agent {
   alive?: boolean;
   tmux_alive?: boolean;
   can_spawn?: string[];
+  /** How many generations this lineage has. Present on canonical roots when the identity DB
+   *  is readable, ABSENT (never 0) otherwise — so a node simply does not stack rather than
+   *  showing an error. 35 of 106 nodes carry it today. */
+  generations_total?: number;
   // The API already returned these; this component simply declared a narrower type and
   // dropped them, which is why the org chart could only ever show reachable-vs-dead while
   // the individual agent panes showed real activity. Item 5 of the operator's ask.
@@ -163,6 +168,18 @@ function AgentNode({
   agent, onSelect, selected, dimmed,
 }: { agent: Agent; onSelect?: (id: string) => void; selected?: boolean; dimmed?: boolean }) {
   const working = isWorking(agent);
+  // A lineage reads as a STACK: sheets peeking out from under the card. The silhouette is the
+  // one channel nothing else on this node claims — the dot is liveness, the border is status,
+  // sky+glow is working, the ring is selection and opacity is dimming — and it is drawn
+  // absolutely, so a stacked node is exactly as wide as a plain one and the graph never
+  // reflows. 35 of today's 106 nodes stack; the other 71 are untouched.
+  // The sheets must carry the card's OWN border colour: a stack reads as a stack only when
+  // the things behind look like the same card repeated. A neutral sheet under a red-bordered
+  // node read as a rendering artifact, and sat close enough to the connector line to look
+  // like part of it (measured on staging, first cut).
+  const nodeBorder = working ? 'border-sky-400/70' : getNodeBorder(agent);
+  const sheets = lineageDepthTier(agent.generations_total);
+  const lineage = describeLineage(agent.generations_total);
   // Agent-level only. The operator explicitly did NOT want skill/prompt execution detail,
   // so this shows the task a seat is on, never which tool or skill is running.
   const subtitle = working ? (agent.current_task || 'working').trim() : '';
@@ -180,8 +197,28 @@ function AgentNode({
         dimmed && 'opacity-30',
         getNodeOpacity(agent)
       )}
-      title={working ? (agent.activity || 'working') : (agent.status || (agent.alive ? 'idle' : 'stopped'))}
+      title={[
+        working ? (agent.activity || 'working') : (agent.status || (agent.alive ? 'idle' : 'stopped')),
+        lineage,
+      ].filter(Boolean).join(' · ')}
     >
+      {/* Below the card, never above it, because the top-right corner belongs to the working
+          pulse — the agents you most want to watch are exactly the ones that would collide.
+          Muted border, not an accent: these must not read as a hover or selection affordance. */}
+      {sheets > 0 && (
+        <>
+          <span aria-hidden className={clsx(
+            'pointer-events-none absolute left-2 -right-1 -bottom-1 h-2 rounded-b-md border border-t-0 bg-neutral-900 opacity-70',
+            nodeBorder,
+          )} />
+          {sheets > 1 && (
+            <span aria-hidden className={clsx(
+              'pointer-events-none absolute left-4 -right-2 -bottom-2 h-2 rounded-b-md border border-t-0 bg-neutral-900 opacity-45',
+              nodeBorder,
+            )} />
+          )}
+        </>
+      )}
       {working && (
         <span
           aria-hidden
