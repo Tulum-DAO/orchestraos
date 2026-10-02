@@ -82,9 +82,22 @@ export function AgentsSummaryStrip({
             <span className="whitespace-nowrap">busiest: {formatBusiest(busiest)}</span>
           )}
         </div>
-        {/* Full width on its own row when space is tight, right-aligned once there is room.
-            w-full basis means it drops to a new flex line instead of squeezing the numbers. */}
-        <div className="relative w-full sm:w-64 sm:ml-auto shrink-0">
+        {/* ALWAYS its own row, left-aligned under the numbers — never `ml-auto`.
+            Right-aligning it put it in the sibling "New agent" button's column while it still
+            belonged to this one structurally, so the two formed a staircase: the button pinned
+            to the title at y=52 with dead space beneath it, the search 40px lower and its right
+            edge 149px short of the button's. Measured at 1920/1440/1280 it read as the search
+            having shoved the button out of place, and at 1024/768 the gap grew to 66 and 90px.
+            They never actually overlapped — this is alignment, not collision (the 1280px
+            overlap noted above was a different bug, already fixed).
+            `basis-full` forces the new flex line deterministically at every width, rather than
+            letting it land beside the numbers whenever they happen to leave room; the search
+            results render in flow directly beneath it, so the two stay adjacent. */}
+        {/* Two elements, not one: `basis-full` on a flex item wins the sizing over `w-80`
+            (flex-basis beats width on the main axis), so a single div stretched to the full
+            1435px at 1920. The outer div owns the line break, the inner one the width. */}
+        <div className="basis-full w-full">
+        <div className="relative w-full sm:w-80">
           <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-500" />
           <input
             type="text"
@@ -93,6 +106,7 @@ export function AgentsSummaryStrip({
             placeholder="Search agents, repos, prompts"
             className="w-full pl-8 pr-3 py-1.5 text-sm rounded-lg bg-neutral-900 border border-neutral-800 text-neutral-100 placeholder:text-neutral-500 focus:outline-none focus:border-neutral-600"
           />
+        </div>
         </div>
       </div>
     </div>
