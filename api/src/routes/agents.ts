@@ -8,7 +8,7 @@ import { getUnifiedAgentStatus, spawnAgent, killAgent, getMacStatus, getMacSessi
 import { logInteraction } from '../services/learning.js';
 import { isTranscriptActive } from '../services/transcript-activity.js';
 import { getDetectorStates, detectorCacheAgeMs, classifyNoSession, type DetectorStatus } from '../services/agent-status.js';
-import { isCutoverActive, getCanonicalAgents, canonicalTmuxSession } from '../services/identity-store-reader.js';
+import { isCutoverActive, getCanonicalAgents, canonicalTmuxSession, getGenerationCounts, getGenerations } from '../services/identity-store-reader.js';
 import { buildCanonicalIndex, supersededBy, type CanonicalIndex } from '../services/rotation-leftovers.js';
 import { applyIdentityPrecedence, resolveMachineAndLiveness, discoverUnregistered } from './agents-identity.js';
 import { loadConfig } from '../lib/config.js';
@@ -375,6 +375,16 @@ router.get('/', async (_req: Request, res: Response) => {
     const _p = principal(_req);
     const visibleAgents = allAgents.filter((a) => canPrincipalSeeAgent(_p, a));
 
+    // How many generations each agent's lineage has, so the card can offer its history. One
+    // GROUP BY per poll; absent DB => no counts, and the card simply offers no history.
+    const genCounts = getGenerationCounts();
+    if (genCounts) {
+      for (const a of visibleAgents) {
+        const n = genCounts[a.id];
+        if (n) (a as any).generations_total = n;
+      }
+    }
+
     const visibleOnline = visibleAgents.filter((a) => a.tmux_alive).length;
 
     res.json({
@@ -389,6 +399,13 @@ router.get('/', async (_req: Request, res: Response) => {
   } catch (err) {
     res.status(500).json({ error: 'Failed to load agents', detail: String(err) });
   }
+});
+
+// Past generations of one agent, newest first, for the history list on its card. `:id` means
+// router.param('id') applies the same per-agent scope check as every other /:id route.
+router.get('/:id/generations', (req: Request, res: Response) => {
+  const rows = getGenerations(req.params.id as string);
+  res.json({ generations: rows ?? [] });
 });
 
 router.get('/:id', async (req: Request, res: Response) => {

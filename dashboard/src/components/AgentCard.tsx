@@ -5,6 +5,7 @@ import { MoreVertical, Play, Square, Terminal, Send, ChevronDown, ChevronUp, X, 
 import { StatusDot } from './StatusDot';
 import { AgentStatusDot } from './AgentStatusDot';
 import { TierBadge } from './TierBadge';
+import { GenerationHistory } from './GenerationHistory';
 import { normalizeAgentState, STATE_STYLE } from '../lib/agentStatus';
 import { getAgentOutput, injectToAgent, sendKeyToAgent } from '../lib/api';
 import { sendToAgent, isDelivered, isQueued, isHeld, describeSendState } from '../lib/agentSend';
@@ -362,6 +363,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
               {displayName}
             </Link>
             <GenChip generation={agent.generation} />
+            <GenerationHistory agentId={agent.id} total={agent.generations_total} />
             {agent.alive ? <AgentStatusDot status={agent.status} /> : <StatusDot status="stopped" />}
           </div>
         </div>
