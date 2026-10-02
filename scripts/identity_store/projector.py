@@ -505,14 +505,21 @@ def _build_faithful_registry(snap):
         elif gen["id"] not in canonical_gen_ids:
             # live, non-canonical generation -> provisional alias <root>-g<N>.
             key = f"{root}-g{gen['generation']}"
+            # Marked FIRST, and unconditionally. The `continue` below only declines to
+            # SYNTHESISE a document over one that already exists — but it used to skip the
+            # provisional marking with it, so an alias that already had a doc came back out
+            # of the projection without its _provisional entry. In the live file an alias
+            # appears in BOTH maps, so that silently dropped `_provisional/gm-g90`
+            # (operator, 2026-10-02). The marker describes the GENERATION's state, not
+            # whether we happened to write its document.
+            provisional[key] = {"lineage_root": root,
+                                "generation": gen["generation"]}
             if key in agents:
                 continue
             root_doc = docs["agent"].get(root)
             agents[key] = _alias_payload(
                 root, gen, lineages.get(root, {}),
                 root_doc[1] if root_doc is not None else None)
-            provisional[key] = {"lineage_root": root,
-                                "generation": gen["generation"]}
 
     registry["agents"] = agents
     registry["_provisional"] = provisional

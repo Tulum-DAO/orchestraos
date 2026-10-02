@@ -68,9 +68,24 @@ def find_reset_tail(conn, root: str):
 
 
 def plan(conn, root: str):
-    """What the repair would do to one root, as data. Empty list => nothing to repair."""
+    """What the repair would do to one root, as data. Empty list => nothing to repair.
+
+    REFUSES a lineage that already recovered past its own reset. Renumbering appends past
+    the all-time high-water mark, which is only right when the post-reset tail IS the live
+    end of the lineage (gm: ...87, then 1,2,3 with the head among them -> 88,89,90).
+
+    gemini-gm was the other shape and I got it wrong on the live fleet before this guard
+    existed: its rows in insertion order ran 10, 11, 1, 12 — the lineage had ALREADY
+    recovered to 12, so the anomaly sat in the MIDDLE. Appending moved that retired row to
+    13, which is exactly the number the next rotation mints, manufacturing the collision
+    the repair exists to prevent. There is no free integer between 11 and 12 either, so the
+    anomaly simply cannot be expressed as a renumber: it is reported and left alone.
+    """
     tail, high = find_reset_tail(conn, root)
     if not tail:
+        return []
+    head_id, _ = _head_generation(conn, root)
+    if head_id is not None and head_id not in {rid for rid, _ in tail}:
         return []
     taken = {g for (g,) in conn.execute(
         "SELECT generation FROM generations WHERE root=?", (root,))}
@@ -87,7 +102,18 @@ def plan(conn, root: str):
 def affected_roots(conn):
     roots = [r[0] for r in conn.execute(
         "SELECT DISTINCT root FROM generations WHERE root IS NOT NULL")]
-    return [r for r in roots if find_reset_tail(conn, r)[0]]
+    return [r for r in roots if plan(conn, r)]
+
+
+def recovered_roots(conn):
+    """Roots carrying a reset the repair REFUSES to renumber, because the lineage already
+    moved past it (the anomaly is mid-history, not the live end). Reported, never touched."""
+    out = []
+    for (root,) in conn.execute("SELECT DISTINCT root FROM generations WHERE root IS NOT NULL"):
+        tail, _ = find_reset_tail(conn, root)
+        if tail and not plan(conn, root):
+            out.append((root, [rid for rid, _ in tail]))
+    return out
 
 
 def _head_generation(conn, root: str):
@@ -134,6 +160,11 @@ def main() -> int:
     conn = sqlite3.connect(dbp)
     conn.row_factory = sqlite3.Row
     try:
+        for root, ids in recovered_roots(conn):
+            if args.root in (None, root):
+                print(f"{root}: reset detected at row(s) {ids} but NOT renumbered — the "
+                      f"lineage already recovered past it, so the anomaly is mid-history and "
+                      f"appending would collide with the next rotation's number. Left alone.")
         roots = [args.root] if args.root else affected_roots(conn)
         if not roots:
             print("no lineage carries a backwards generation reset — nothing to repair")

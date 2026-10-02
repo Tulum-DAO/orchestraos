@@ -128,3 +128,35 @@ def test_dry_run_writes_nothing(conn, tmp_path, monkeypatch, capsys):
     finally:
         c.close()
     assert json.loads((orch / "registry.json").read_text())["agents"][ROOT]["generation"] == 2
+
+
+def test_a_lineage_that_already_recovered_is_refused_not_renumbered(conn):
+    """The gemini-gm shape, and the bug this guard exists for.
+
+    Rows in insertion order ran 10, 11, 1, 12: the lineage had ALREADY recovered to 12, so
+    the anomaly (1) sits in the MIDDLE rather than at the live end. Appending past the
+    high-water mark moved that retired row to 13 — exactly the number the next rotation
+    mints — manufacturing the collision the repair exists to prevent. I did that to the live
+    fleet before this guard existed and had to revert it by hand.
+
+    There is no free integer between 11 and 12, so the anomaly cannot be expressed as a
+    renumber at all. It is reported and left alone.
+    """
+    for g in (10, 11):
+        _gen(conn, ROOT, g, sid=f"old-{g}")
+    anomaly = _gen(conn, ROOT, 1, sid="anomaly")          # the reset
+    recovered = _gen(conn, ROOT, 12, sid="recovered")     # lineage carried on past it
+    conn.execute("INSERT INTO canonical (root, generation_id, tmux_session, status) "
+                 "VALUES (?,?,?,?)", (ROOT, recovered, ROOT, "online"))
+    conn.commit()
+
+    # The reset is still DETECTED — silence would be its own bug.
+    assert [rid for rid, _ in rgr.find_reset_tail(conn, ROOT)[0]] == [anomaly]
+    # ...but refused, because the head is not in the tail.
+    assert rgr.plan(conn, ROOT) == []
+    assert ROOT not in rgr.affected_roots(conn)
+    assert rgr.recovered_roots(conn) == [(ROOT, [anomaly])]
+
+    # And above all: the number the next rotation will mint stays FREE.
+    taken = {g for (g,) in conn.execute("SELECT generation FROM generations WHERE root=?", (ROOT,))}
+    assert 13 not in taken

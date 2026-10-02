@@ -488,3 +488,51 @@ def test_generation_falls_back_to_the_registry_when_the_session_row_omits_it(con
     assert gen_of("has-gen") == 5
     assert gen_of("no-gen") == 12, "the registry's generation must survive the migration"
     assert gen_of("neither") == 1
+
+
+def test_a_provisional_alias_survives_the_migrate_project_roundtrip(conn, tmp_path):
+    """registry._provisional must come back out of the projection it went into.
+
+    LIVE DRIFT (operator, 2026-10-02, after gm's renumber): the only remaining M1 diff was
+    `registry.json/_provisional/gm-g90: missing in projection`.
+
+    The projector DERIVES _provisional from live non-canonical generation rows, keyed
+    `<root>-g<N>` — but the migration builds generation rows only from agent-sessions.json,
+    and a PRE-ALLOCATED SLOT has no session entry by definition (it names a seat that has
+    not run; see the `pending` flag in #151). So the slot's row never existed in the
+    migrated store, the projection could not derive the alias, and the roundtrip lost it.
+
+    A provisional alias IS a generation row with no session. Seeding it from _provisional
+    makes the roundtrip faithful and keeps the slot visible as what it is.
+    """
+    src = tmp_path / "src"
+    (src / "state" / "agents").mkdir(parents=True)
+    # A provisional alias appears in BOTH maps in the live file — `agents` carries its
+    # document and `_provisional` marks it as not-yet-promoted. The projection reproduces
+    # both, so a fixture with only one of them is not the shape this has to survive.
+    (src / "registry.json").write_text(json.dumps({
+        "agents": {
+            "seat": {"tier": "T0", "generation": 89},
+            "seat-g90": {"tier": "T0", "generation": 90, "lineage_root": "seat"},
+        },
+        "_provisional": {"seat-g90": {"lineage_root": "seat", "generation": 90}},
+    }))
+    (src / "state" / "agent-sessions.json").write_text(json.dumps({
+        "seat": {"session_id": "s-live", "model": "claude-x", "generation": 89},
+    }))
+    _migrate(conn, src)
+
+    rows = {r[0]: r[1] for r in conn.execute(
+        "SELECT generation, session_id FROM generations WHERE root='seat'")}
+    assert 89 in rows, "the live head still migrates as before"
+    assert 90 in rows, "the pre-allocated slot must exist as a generation row"
+    assert rows[90] is None, "a slot has no session — that is what makes it pending"
+
+    # The canonical pointer still names the LIVE head, never the slot.
+    assert conn.execute(
+        "SELECT g.generation FROM canonical c JOIN generations g ON g.id = c.generation_id "
+        "WHERE c.root='seat'").fetchone()[0] == 89
+
+    out = tmp_path / "faithful"
+    projector.project_faithful(conn, str(out))
+    assert migrate.diff_report(str(src), str(out)) == []

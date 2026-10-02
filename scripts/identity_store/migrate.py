@@ -22,6 +22,7 @@ does the semantic comparison; empty == zero drift.
 Read-only over the sources; writes only the (scratch) DB and the out_dir.
 """
 import json
+import sqlite3
 import os
 
 from scripts.identity_store import orchestra_db
@@ -118,6 +119,37 @@ def _populate_typed(conn, agents, sessions, state_by_agent, conflicts):
     return populated
 
 
+def _populate_provisional(conn, provisional):
+    """Seed a generation row for each PRE-ALLOCATED alias in registry._provisional.
+
+    A provisional alias is a generation that exists but has not run: rotation mints the row
+    for an incoming green before promoting it. It therefore has no agent-sessions entry by
+    definition, so _populate_typed (which walks sessions) never creates it — and the
+    projector, which DERIVES _provisional from live non-canonical generation rows, then
+    cannot reproduce the alias it was given. The roundtrip silently dropped it
+    (`_provisional/gm-g90: missing in projection`, 2026-10-02).
+
+    session_id stays NULL, which is exactly what marks it pending rather than history.
+    Never touches `canonical`: a slot is not a head.
+    """
+    for key, meta in (provisional or {}).items():
+        if not isinstance(meta, dict):
+            continue
+        root, gen = meta.get("lineage_root"), meta.get("generation")
+        if not root or not isinstance(gen, int):
+            continue
+        try:
+            if conn.execute("SELECT 1 FROM lineages WHERE root=?", (root,)).fetchone() is None:
+                continue        # an alias whose lineage was not migrated is not ours to invent
+            conn.execute(
+                "INSERT INTO generations (root, generation, session_id, model) "
+                "VALUES (?,?,?,?) ON CONFLICT(root, generation) DO NOTHING",
+                (root, gen, None, "unknown"))
+        except sqlite3.Error:
+            continue            # best-effort, exactly like _populate_typed
+    conn.commit()
+
+
 def migrate(conn, registry_path, sessions_path, agents_dir):
     """Import the three legacy files into the store. Returns a report dict."""
     with open(registry_path) as fh:
@@ -157,6 +189,7 @@ def migrate(conn, registry_path, sessions_path, agents_dir):
 
     conflicts = []
     populated = _populate_typed(conn, agents, sessions, state_by_agent, conflicts)
+    _populate_provisional(conn, registry.get("_provisional") or {})
     return {
         "source_records": conn.execute(
             "SELECT COUNT(*) FROM source_records").fetchone()[0],
