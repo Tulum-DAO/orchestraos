@@ -217,6 +217,21 @@ class PromoteInvariantError(Exception):
     g16->17, gm msg_0a37acf3). Raised inside execute_swap so the txn rolls back fully-Blue."""
 
 
+class GenerationRegressionError(Exception):
+    """The green's generation NUMBER is not ahead of the blue's, so committing would make a
+    lineage's clock run backwards.
+
+    Live defect (operator, 2026-10-02): gm ran 1..87 and then restarted at 1 — swap 194
+    recorded blue=997 (generation 87) -> green=1000 (generation 1). gemini-gm did the same
+    (11 -> 1). Two roots of 711, so a caller recomputing the number without seeing the
+    lineage, not a migration.
+
+    execute_swap had a compare-and-swap on the canonical POINTER but nothing on the NUMBER:
+    _resolve_or_insert_green inserts green["generation"] verbatim. Raised inside execute_swap
+    so the BEGIN IMMEDIATE txn rolls back fully-Blue, exactly like SwapCASError — a refused
+    swap is never a half-swap."""
+
+
 class SwapCASError(Exception):
     """P0.2 swap-CAS: canonical did NOT still point to the expected blue generation at
     swap time (a concurrent/stale/double swap moved it). Raised inside execute_swap so
@@ -258,6 +273,24 @@ def execute_swap(conn, root: str, green: dict, blue_generation_id=None,
 
     conn.execute("BEGIN IMMEDIATE")
     try:
+        # The generation number is the lineage's clock, and it must never run backwards.
+        # Checked FIRST, inside the txn, before a single row is written: the green row,
+        # canonical and blue's retirement all hang off this number being forward.
+        #
+        # Against the BLUE, not against MAX(generation): a promote may legitimately REUSE an
+        # existing higher row (a retired phantom already sitting at pred_gen+1), and that is
+        # forward motion even though the number is not new to the lineage.
+        if blue_generation_id is not None:
+            _blue = conn.execute("SELECT generation FROM generations WHERE id=?",
+                                 (blue_generation_id,)).fetchone()
+            _green_gen = green.get("generation")
+            if _blue is not None and _green_gen is not None and _green_gen <= _blue["generation"]:
+                raise GenerationRegressionError(
+                    f"swap REFUSED for {root!r}: green generation {_green_gen} is not ahead of "
+                    f"blue generation {_blue['generation']} (id={blue_generation_id}). A swap "
+                    f"may not renumber a lineage backwards or reuse the retiring generation's "
+                    f"own number; the caller must mint max(generation)+1. Txn rolls back "
+                    f"fully-Blue.")
         green_id = _resolve_or_insert_green(conn, root, green)
         _maybe_fail(1)
 
