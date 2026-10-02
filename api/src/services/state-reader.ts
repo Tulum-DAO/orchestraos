@@ -58,6 +58,26 @@ export function getRegistry(): Record<string, unknown> | null {
 }
 
 // ── Agent States ──────────────────────────────────────────────────────
+
+/**
+ * One agent's state, merged EXACTLY as getAllAgentStates merges it — state/<id>.json overlaid by
+ * state/agents/<id>.json — without reading every state file. Per-id routes need this to check
+ * scope on each request; scanning the directory per call would make every poll of /:id/output
+ * pay for the whole fleet.
+ *
+ * `id` arrives from a URL, so it is refused unless it is a plain file name: Express decodes
+ * %2F into '/', and `../../etc/passwd` must never reach path.join.
+ */
+export function getAgentState(id: string): Record<string, unknown> {
+  if (!id || id.includes('/') || id.includes('\\') || id.includes('..') || id.includes('\0')) return {};
+  const file = `${id}.json`;
+  const base = STATE_EXCLUDES.has(file)
+    ? null
+    : readJsonSafe<Record<string, unknown>>(path.join(ORCHESTRA_DIR, 'state', file));
+  const overlay = readJsonSafe<Record<string, unknown>>(path.join(ORCHESTRA_DIR, 'state', 'agents', file));
+  return { ...(base || {}), ...(overlay || {}) };
+}
+
 export function getAllAgentStates(): Record<string, Record<string, unknown>> {
   const dir = path.join(ORCHESTRA_DIR, 'state');
   const files = listJsonFiles(dir).filter((f) => !STATE_EXCLUDES.has(f));

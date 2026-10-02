@@ -15,6 +15,7 @@ import { loadConfig } from '../lib/config.js';
 import { readGatewayToken } from '../lib/gateway-token.js';
 import { resolveSpecialKey } from '../lib/special-keys.js';
 import { actingAgent, principal } from '../lib/principal.js';
+import { agentScopeParam, canPrincipalSeeAgent } from '../lib/agent-scope.js';
 
 function macSshTarget(): string {
   const cfg = loadConfig();
@@ -60,6 +61,10 @@ function mergeDetector(agent: AgentEntry, d: DetectorStatus | undefined): void {
 }
 
 const router = Router();
+// Every /:id route on this router is scoped to the caller's principal — the same rule GET /
+// applies (lib/agent-scope.ts). Registered as a param handler so a /:id route added later is
+// scoped without anyone remembering to; an out-of-scope id gets the same 404 as an unknown one.
+router.param('id', agentScopeParam);
 
 interface AgentEntry {
   id: string;
@@ -364,24 +369,11 @@ router.get('/', async (_req: Request, res: Response) => {
     // Server-side agent filtering by user permissions. Scope comes from the principal,
     // not raw headers: untrusted mode yields '*' (today's behaviour, unchanged), trusted
     // mode yields [] when the proxy asserted no scope — fail closed, not wide open.
+    // The rule lives in lib/agent-scope.ts and is shared with every /:id route, so the list and
+    // the per-agent routes cannot drift apart: before 2026-10-02 this was the ONLY place it was
+    // applied, and the 16 /:id routes beside it had no check at all.
     const _p = principal(_req);
-    const clientScope = _p?.clientScope || '';
-    const allowedAgents = _p?.allowedAgents ?? [];
-    let visibleAgents = allAgents;
-
-    if (clientScope) {
-      // Tag-based filtering: show all agents with client:<scope> tag
-      visibleAgents = allAgents.filter(a => {
-        const tags: string[] = (a as any).tags || [];
-        return tags.includes(`client:${clientScope}`);
-      });
-    } else if (allowedAgents !== '*') {
-      // Explicit agent list filtering (an empty list legitimately shows nothing).
-      const allowed = new Set(
-        (Array.isArray(allowedAgents) ? allowedAgents : String(allowedAgents).split(','))
-          .map(s => String(s).trim()).filter(Boolean));
-      visibleAgents = allAgents.filter(a => allowed.has(a.id));
-    }
+    const visibleAgents = allAgents.filter((a) => canPrincipalSeeAgent(_p, a));
 
     const visibleOnline = visibleAgents.filter((a) => a.tmux_alive).length;
 
