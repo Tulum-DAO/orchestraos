@@ -447,3 +447,44 @@ def test_M6_single_field_update_leaves_doc_intact(conn, tmp_path):
         if k == "status":
             continue
         assert a1_after[k] == v, f"M6: field {k!r} must remain intact"
+
+
+def test_generation_falls_back_to_the_registry_when_the_session_row_omits_it(conn, tmp_path):
+    """A seat whose agent-sessions entry carries no `generation` must not become generation 1.
+
+    LIVE DRIFT (operator, 2026-10-02): the M1 zero-drift test was red with 8 seats, every one
+    of the shape `registry generation: N != 1` — gemini-gm 12, pm-arkdata 4, stripe-assist 3.
+    The DB and registry.json AGREE on those numbers; it was the migration that lost them.
+    _populate_typed read `sessions[name]["generation"] or 1`, and for those 8 seats the
+    sessions row has no generation at all, so each was migrated as a brand-new lineage at 1
+    and the faithful projection then contradicted the registry it was built from.
+
+    registry.json is an authoritative source here, not a hint: it is the file the projection
+    is compared against. Falling back to it keeps the roundtrip faithful; falling back to 1
+    silently rewrites a seat's position in its own lineage.
+    """
+    src = tmp_path / "src"
+    (src / "state" / "agents").mkdir(parents=True)
+    (src / "registry.json").write_text(json.dumps({"agents": {
+        # sessions knows the generation -> used as before
+        "has-gen": {"tier": "T2", "generation": 5},
+        # sessions does NOT -> the registry's 12 must survive, not become 1
+        "no-gen": {"tier": "T2", "generation": 12},
+        # neither knows -> 1 remains the floor
+        "neither": {"tier": "T2"},
+    }}))
+    (src / "state" / "agent-sessions.json").write_text(json.dumps({
+        "has-gen": {"session_id": "s-has", "model": "claude-x", "generation": 5},
+        "no-gen": {"session_id": "s-no", "model": "claude-x"},
+        "neither": {"session_id": "s-nei", "model": "claude-x"},
+    }))
+    _migrate(conn, src)
+
+    def gen_of(root):
+        return conn.execute(
+            "SELECT g.generation FROM canonical c JOIN generations g ON g.id = c.generation_id "
+            "WHERE c.root = ?", (root,)).fetchone()[0]
+
+    assert gen_of("has-gen") == 5
+    assert gen_of("no-gen") == 12, "the registry's generation must survive the migration"
+    assert gen_of("neither") == 1

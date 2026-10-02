@@ -71,7 +71,13 @@ def _populate_typed(conn, agents, sessions, state_by_agent, conflicts):
                  adict.get("reports_to"), 1 if adict.get("always_on") else 0,
                  adict.get("purpose"), adict.get("machine") or "vps",
                  adict.get("cwd")))
-            generation = sess.get("generation") or 1
+            # registry.json is authoritative here, not a hint: it is the very file the
+            # faithful projection is diffed against. 8 live seats (gemini-gm 12,
+            # pm-arkdata 4, stripe-assist 3, ...) have no `generation` in their sessions
+            # row, and defaulting those to 1 migrated each as a brand-new lineage — the
+            # projection then contradicted the registry it was built from (M1 zero-drift,
+            # operator 2026-10-02). 1 stays the floor only when NEITHER source knows.
+            generation = sess.get("generation") or adict.get("generation") or 1
             sid = sess.get("session_id")
             model = sess.get("model") or "unknown"
             existing = conn.execute(

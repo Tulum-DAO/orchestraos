@@ -141,3 +141,41 @@ def test_live_requires_both_session_and_a_child_process(od):
                                      pane_has_child_fn=lambda t: False,
                                      list_clients_fn=lambda t: "")
     assert set(rep["to_parked"]) == {"husk"}
+
+
+def test_every_canonical_service_seat_declares_a_probe():
+    """A runtime='service' seat with no SERVICE_PROBES entry parks on EVERY reconcile.
+
+    service_is_live fail-closes to (False, 'service:no-probe'), which is right — a seat is
+    never guessed online. But the consequence is silent: nothing fails until someone runs
+    the fleet-status test, and then five healthy services (dashboard, combo-proxy,
+    custom-llm, recall-svc, telegram-router) are proposed for parking with the remedy
+    "run status_reconcile --apply" printed beside them (operator, 2026-10-02). Applying
+    that would have parked all five.
+
+    This closes the loop: adding a service seat without declaring how to probe it fails HERE,
+    naming the seat, instead of surfacing later as a phantom-parked live service.
+    """
+    import os
+    import sqlite3
+    import pytest
+    from scripts.identity_store import status_reconcile as sr
+
+    db = os.path.join(os.path.expanduser("~/scripts/agent-orchestra"), "state",
+                      "orchestra-registry.db")
+    if not os.path.exists(db):
+        pytest.skip("no live identity store present (hermetic CI)")
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        seats = [r[0] for r in conn.execute(
+            "SELECT c.root FROM canonical c JOIN generations g ON g.id = c.generation_id "
+            "LEFT JOIN lineages l ON l.root = c.root "
+            "WHERE l.runtime = 'service' AND g.retired_at IS NULL")]
+    finally:
+        conn.close()
+    missing = sorted(s for s in seats if s not in sr.SERVICE_PROBES)
+    assert missing == [], (
+        f"{len(missing)} canonical service seat(s) declare no liveness probe, so every "
+        f"reconcile proposes parking them: {missing}. Add a {{'port': N}} or "
+        f"{{'pane_process': True}} entry to SERVICE_PROBES, matched by effect from the "
+        f"seat's own tmux pane pid tree.")
