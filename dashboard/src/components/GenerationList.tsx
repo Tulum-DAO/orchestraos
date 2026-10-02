@@ -27,9 +27,12 @@ export function GenerationList({ rows }: { rows: GenerationRow[] | null }) {
       {rows.map((g) => (
         <div key={generationKey(g)} className="py-1.5 px-1 border-b border-neutral-800 last:border-0">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-neutral-200 font-medium">
+            {/* A pending slot is dimmed and says so. It is shown rather than hidden — a seat
+                waiting to be promoted is worth seeing — but it must not read as history. */}
+            <span className={g.pending ? 'text-neutral-500 font-medium' : 'text-neutral-200 font-medium'}>
               gen {g.generation}
               {g.current ? <span className="text-sky-300"> · current</span> : ''}
+              {g.pending ? <span className="text-neutral-600"> · pending</span> : ''}
             </span>
             {g.model && <span className="text-neutral-500 truncate max-w-[45%]" title={g.model}>{g.model}</span>}
           </div>
