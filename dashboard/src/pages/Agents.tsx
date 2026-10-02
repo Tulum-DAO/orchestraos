@@ -73,6 +73,20 @@ export default function Agents() {
     loadAndMergeRecentAgents().then(setRecentAgents);
   }, []);
 
+  // Esc closes the drawer. There was no keyboard close before this: when the panel was a
+  // column beside the graph the close button was the only way out, which is tolerable for a
+  // column and not for something overlaying the page. Bound while a panel is open only, so
+  // Esc is free for everything else on this page.
+  const panelOpen = panelAgentId != null || selectedConnection != null;
+  useEffect(() => {
+    if (!panelOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { closePanel(); setHighlight(null); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [panelOpen, closePanel]);
+
   const { data: system } = useSystem();
   // Canonical per-pair message counts (spec §16): the ONE source for every count and
   // thickness on a connection line and for the strip's message/connection numbers.
@@ -594,10 +608,13 @@ export default function Agents() {
         </div>
       )}
 
-      {/* Topology view. Spec §3: the panel sits beside the graph and the graph stays visible.
-          Stacked full-width under lg rather than a true overlay sheet — §12's small-screen
-          bullet asks for full-screen, and full-width-stacked is that shape without a second
-          modal implementation; a real sheet can replace it when someone uses this on a phone. */}
+      {/* Topology view. The panel is a DRAWER over the graph, not a column beside it
+          (operator, 2026-10-01). Spec §3 said beside; taking a 380px column out of the row
+          reflowed the whole diagram on every click — nodes moved under the cursor, so the
+          thing you just clicked was no longer where you clicked it. The graph now never
+          reflows: opening and closing the drawer leaves every node exactly where it was.
+          This also gives §12's small-screen bullet the full-screen sheet it actually asked
+          for, since the drawer is full width below sm. */}
       {viewMode === 'topology' && (
         <>
         <div className="flex flex-col lg:flex-row gap-4 items-stretch">
@@ -620,7 +637,17 @@ export default function Agents() {
             />
           </div>
           {(panelAgent || selectedConnection) && (
-            <aside className="w-full lg:w-[380px] shrink-0 lg:max-h-[75vh]">
+            // `fixed`, so it is out of the flex row's flow entirely and the graph keeps its
+            // full width. Esc closes it (there was no keyboard close before); the close
+            // buttons the panels already render still work. No backdrop on purpose — the
+            // point of this view is watching the graph, and dimming it to read one panel
+            // would defeat that. Not `inset-y-0`: it starts below the sticky page header so
+            // it cannot cover the search and the view toggle.
+            <aside
+              role="dialog"
+              aria-modal="false"
+              aria-label={selectedConnection ? 'Conversation' : 'Agent detail'}
+              className="drawer-in-right fixed right-0 top-0 bottom-0 z-30 w-full sm:w-[420px] overflow-y-auto overscroll-contain border-l border-neutral-800 bg-neutral-950 shadow-2xl shadow-black/60 p-4 pt-20 sm:pt-4">
               {selectedConnection ? (
                 <ConversationPanel
                   a={selectedConnection[0]}
@@ -660,7 +687,16 @@ export default function Agents() {
 
             `-mx-4 px-4` cancels the page gutter so the opaque background spans the full width
             and the graph cannot be seen sliding underneath it. */}
-        <div className="sticky bottom-0 z-10 -mx-4 px-4 pb-1 bg-neutral-950 border-t border-neutral-800">
+        <div className={clsx(
+          'sticky bottom-0 -mx-4 px-4 pb-1 bg-neutral-950 border-t border-neutral-800',
+          // ABOVE the drawer (z-40 > its z-30), and padded clear of it while it is open.
+          // A 420px drawer at the right edge otherwise lands exactly on the Live button and
+          // the right half of the ticker — which would re-bury the controls this row was just
+          // pinned to keep reachable. Below sm the drawer is a full-width sheet, so there is
+          // nothing to pad around.
+          'z-40',
+          panelOpen && 'sm:pr-[436px]',
+        )}>
           <TimeBar
             windowHours={windowHours}
             onWindowChange={setWindowHours}
