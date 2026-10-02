@@ -153,3 +153,57 @@ def test_red8_rotate_agent_null_both_refuses(orch, monkeypatch):
     monkeypatch.setattr(ra, "ORCHESTRA_DIR", orch, raising=False)
     with pytest.raises(Exception):
         ra.resolve_pred_generation_or_refuse(ROOT, {"generation": None})
+
+
+# --- an alias may not renumber its lineage backwards ------------------------
+#
+# LIVE DEFECT (operator, 2026-10-02). gm's generation counter ran 1..87 and then restarted at
+# 1; swap 194 recorded blue=997 (generation 87) -> green=1000 (generation 1). The registry
+# names the cause: the lineage is spelled gm-gen<N> with generation=N all the way to
+# gm-gen87, and then a successor appeared under a DIFFERENT convention --
+#
+#     gm-gen1   generation=1   lineage_root=None
+#     gm-g3     generation=1   lineage_root='gm-g3'      (self-referential)
+#
+# -- carrying generation=1. derive_successor_generation trusts alias.get("generation")
+# ABOVE the DB-resolved predecessor+1, so the alias's own index became the lineage's clock
+# and 87 years of history were orphaned behind a fresh "generation 1".
+#
+# An alias's self-declared generation is a HINT (it is just how the seat was named); the
+# lineage's position is a FACT, and it lives in the DB. The hint may not move the clock back.
+# An EXPLICIT generation= is an operator statement and still passes through, where the swap's
+# own guard (GenerationRegressionError) refuses it loudly rather than silently.
+
+def test_alias_generation_may_not_move_the_lineage_backwards(orch, monkeypatch):
+    _seed_db(orch, gen=87)
+    import scripts.promote_successor as ps
+    monkeypatch.setattr(ps, "ORCHESTRA_DIR", str(orch), raising=False)
+    # Exactly gm's case: a successor alias naming itself generation 1 behind a lineage at 87.
+    got = ps.derive_successor_generation(
+        ROOT, {"generation": None}, alias_value=1)
+    assert got == 88, "the alias's own index must not reset the lineage clock"
+
+
+def test_alias_generation_equal_to_the_predecessor_is_also_refused(orch, monkeypatch):
+    """Equal is not forward: it would promote a successor into the retiring generation."""
+    _seed_db(orch, gen=87)
+    import scripts.promote_successor as ps
+    monkeypatch.setattr(ps, "ORCHESTRA_DIR", str(orch), raising=False)
+    assert ps.derive_successor_generation(ROOT, {"generation": None}, alias_value=87) == 88
+
+
+def test_a_forward_alias_generation_is_still_honoured(orch, monkeypatch):
+    """The hint is only overridden when it regresses — a pre-registered forward alias stands."""
+    _seed_db(orch, gen=7)
+    import scripts.promote_successor as ps
+    monkeypatch.setattr(ps, "ORCHESTRA_DIR", str(orch), raising=False)
+    assert ps.derive_successor_generation(ROOT, {"generation": None}, alias_value=8) == 8
+    # Ahead of the lineage is legitimate too (a reserved slot), and is left alone.
+    assert ps.derive_successor_generation(ROOT, {"generation": None}, alias_value=12) == 12
+
+
+def test_alias_generation_stands_when_the_lineage_position_is_unknown(orch, monkeypatch):
+    """No DB row to compare against => nothing to regress against; the hint is all there is."""
+    import scripts.promote_successor as ps
+    monkeypatch.setattr(ps, "ORCHESTRA_DIR", str(orch), raising=False)
+    assert ps.derive_successor_generation(ROOT, {"generation": None}, alias_value=1) == 1
