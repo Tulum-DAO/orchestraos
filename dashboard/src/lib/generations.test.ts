@@ -44,6 +44,15 @@ test('formatGenerationWhen never renders Invalid Date', () => {
   assert.ok(!out.includes('Invalid'), `real timestamp should format, got ${out}`);
 });
 
+test('describeGenerationTiming never calls an unpromoted row "promoted"', () => {
+  // The bug the operator caught: a pre-allocated slot (spawned, never promoted) rendered as
+  // "promoted <spawn time>", which reads as a generation that ran. It did not.
+  assert.equal(describeGenerationTiming(row({ spawned_at: '2026-09-26T18:17:32Z', pending: true })).split(' ')[0], 'spawned');
+  assert.equal(describeGenerationTiming(row({ spawned_at: '2026-09-26T18:17:32Z' })).split(' ')[0], 'spawned');
+  // A row with nothing at all must not claim a promotion either.
+  assert.equal(describeGenerationTiming(row()), 'never ran');
+});
+
 test('describeGenerationTiming prefers retirement, then promotion, then spawn', () => {
   // A retired row is described by when it ENDED; a live one by when it started. Falling back
   // to spawned_at matters because 360 of 950 generation rows have no promoted_at.
@@ -52,7 +61,7 @@ test('describeGenerationTiming prefers retirement, then promotion, then spawn', 
     /^retired /,
   );
   assert.match(describeGenerationTiming(row({ promoted_at: '2026-09-30T06:53:36Z' })), /^promoted /);
-  assert.match(describeGenerationTiming(row({ spawned_at: '2026-09-30T02:00:00Z' })), /^promoted /);
+  assert.match(describeGenerationTiming(row({ spawned_at: '2026-09-30T02:00:00Z' })), /^spawned /);
   // Nothing usable at all is still a legible row, not a blank or an "Invalid Date".
-  assert.equal(describeGenerationTiming(row()), 'promoted —');
+  assert.equal(describeGenerationTiming(row()), 'never ran');
 });

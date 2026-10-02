@@ -90,7 +90,19 @@ export interface GenerationRow {
   retired_at: string | null;
   note: string | null;
   current?: boolean;          // this is the lineage's canonical head
+  /** A PRE-ALLOCATED SLOT: the row exists but the seat never ran — no promotion, no
+   *  retirement, and it is not the canonical head. Rotation mints these for an incoming
+   *  green before it is promoted. It is not history, and it is not counted as a generation. */
+  pending?: boolean;
 }
+
+/**
+ * What separates a real generation from a slot that was minted and never used. A row counts
+ * if it was ever promoted, or was retired, or is the lineage's current head — anything else
+ * names a seat that has not run. 84 rows fleet-wide are slots; counting them made gm read
+ * "55 generations" including a "gen 3" that never existed.
+ */
+const REAL_GENERATION = `(g.promoted_at IS NOT NULL OR g.retired_at IS NOT NULL OR g.id = c.generation_id)`;
 
 // Read-only, short-lived handle per call, same discipline as getCanonicalAgents: a long-lived
 // handle would pin the WAL. Both return null when the DB is absent or unreadable, and the
@@ -102,7 +114,13 @@ export function getGenerationCounts(orch: string = ORCHESTRA_DIR): Record<string
   try {
     db = new Database(dbPath(orch), { readonly: true, fileMustExist: true });
     db.pragma('busy_timeout = 5000');
-    const rows = db.prepare('SELECT root, COUNT(*) AS n FROM generations GROUP BY root').all() as { root: string; n: number }[];
+    // Joined to canonical so a live head always counts even if its promotion was not stamped.
+    const rows = db.prepare(
+      `SELECT g.root AS root, COUNT(*) AS n
+         FROM generations g LEFT JOIN canonical c ON c.root = g.root
+        WHERE ${REAL_GENERATION}
+        GROUP BY g.root`,
+    ).all() as { root: string; n: number }[];
     const out: Record<string, number> = {};
     for (const r of rows) out[r.root] = r.n;
     return out;
@@ -124,12 +142,15 @@ export function getGenerations(root: string, orch: string = ORCHESTRA_DIR): Gene
     // is not "current" and sorting by number would put a retired generation first.
     const rows = db.prepare(
       `SELECT g.generation, g.model, g.spawned_at, g.promoted_at, g.retired_at, g.note,
-              (g.id = c.generation_id) AS current
+              (g.id = c.generation_id) AS current,
+              (NOT ${REAL_GENERATION}) AS pending
        FROM generations g LEFT JOIN canonical c ON c.root = g.root
        WHERE g.root = ?
        ORDER BY current DESC, COALESCE(g.promoted_at, g.spawned_at) DESC, g.id DESC`,
-    ).all(root) as (Omit<GenerationRow, 'current'> & { current: number | null })[];
-    return rows.map((r) => ({ ...r, current: r.current === 1 }));
+    ).all(root) as (Omit<GenerationRow, 'current' | 'pending'> & {
+      current: number | null; pending: number | null;
+    })[];
+    return rows.map((r) => ({ ...r, current: r.current === 1, pending: r.pending === 1 }));
   } catch {
     return null;
   } finally {
