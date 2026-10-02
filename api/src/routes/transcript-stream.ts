@@ -23,8 +23,13 @@
 import { Router, type Request, type Response } from 'express';
 import { TranscriptTailer } from '../services/transcript-tail.js';
 import { resolveTranscriptPath } from './chat-transcript.js';
+import { agentScopeParam } from '../lib/agent-scope.js';
 
 const router = Router();
+// Every /:id route on this router is scoped to the caller's principal — the same rule GET /
+// applies (lib/agent-scope.ts). Registered as a param handler so a /:id route added later is
+// scoped without anyone remembering to; an out-of-scope id gets the same 404 as an unknown one.
+router.param('id', agentScopeParam);
 
 const TICK_MS = 1000;
 const HEARTBEAT_MS = 25000;
