@@ -25,7 +25,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { applyIdentityPrecedence, SPAWNING_GRACE_MS } from './agents-identity.js';
+import { applyIdentityPrecedence, SPAWNING_GRACE_MS, baseAgentId } from './agents-identity.js';
 
 /** Mirrors the route's `{...explicit, ...def, ...state}` construction. */
 function rowAfterSpread(
@@ -136,4 +136,26 @@ test('a retired record keeps its registry identity despite the early return', ()
   assert.equal(agent.tmux_session, 'build-g2');
   assert.equal(agent.always_on, true);
   assert.equal(agent.status, 'retired');
+});
+
+/**
+ * The lineage/history lookups key on a CANONICAL ROOT, but a discovery row's id carries a
+ * prefix (`unregistered:<session>`), and the mac gateway's rows carry `mac:`. Two lookups in
+ * agents.ts have to strip that prefix to hit a root: the client_description map, which already
+ * did it inline, and the generations_total count added in #147, which did NOT — so a prefixed
+ * row silently lost its history chip while the row beside it got a description. One helper,
+ * used by both, so they cannot drift apart again.
+ *
+ * Anchored at the START of the id on purpose: the inline `.replace('mac:', '')` it replaces was
+ * unanchored and non-global, so it would have eaten `mac:` from the middle of a session name.
+ */
+test('baseAgentId strips only a leading discovery prefix', () => {
+  assert.equal(baseAgentId('gm'), 'gm', 'a plain root is unchanged');
+  assert.equal(baseAgentId('unregistered:some-session'), 'some-session');
+  assert.equal(baseAgentId('mac:ios-watch-dev'), 'ios-watch-dev');
+  // Not a prefix -> left alone. An id is a lookup key, not prose to be rewritten.
+  assert.equal(baseAgentId('build-mac:2'), 'build-mac:2', 'mid-string match is not a prefix');
+  assert.equal(baseAgentId('agent-unregistered:x'), 'agent-unregistered:x');
+  // Only one prefix is stripped, and only from the front.
+  assert.equal(baseAgentId('mac:mac:x'), 'mac:x');
 });

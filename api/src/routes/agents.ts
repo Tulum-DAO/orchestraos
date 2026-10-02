@@ -10,7 +10,7 @@ import { isTranscriptActive } from '../services/transcript-activity.js';
 import { getDetectorStates, detectorCacheAgeMs, classifyNoSession, type DetectorStatus } from '../services/agent-status.js';
 import { isCutoverActive, getCanonicalAgents, canonicalTmuxSession, getGenerationCounts, getGenerations } from '../services/identity-store-reader.js';
 import { buildCanonicalIndex, supersededBy, type CanonicalIndex } from '../services/rotation-leftovers.js';
-import { applyIdentityPrecedence, resolveMachineAndLiveness, discoverUnregistered } from './agents-identity.js';
+import { applyIdentityPrecedence, resolveMachineAndLiveness, discoverUnregistered, baseAgentId } from './agents-identity.js';
 import { loadConfig } from '../lib/config.js';
 import { readGatewayToken } from '../lib/gateway-token.js';
 import { resolveSpecialKey } from '../lib/special-keys.js';
@@ -83,6 +83,9 @@ interface AgentEntry {
    *  supersedes this row. Absent on every other row, so a client that does not know the field
    *  behaves exactly as before. */
   superseded_by?: string;
+  /** How many generations this agent's lineage has, when the identity DB is readable. Absent
+   *  (never 0) when there is no DB or no history, so a client just offers no history list. */
+  generations_total?: number;
   [key: string]: unknown;
 }
 
@@ -360,7 +363,7 @@ router.get('/', async (_req: Request, res: Response) => {
     // Add plain English descriptions for client-facing views
     const descriptions = getAgentDescriptions();
     for (const agent of allAgents) {
-      const baseId = agent.id.replace('unregistered:', '').replace('mac:', '');
+      const baseId = baseAgentId(agent.id);
       if (descriptions[baseId]) {
         agent.client_description = descriptions[baseId];
       }
@@ -380,8 +383,11 @@ router.get('/', async (_req: Request, res: Response) => {
     const genCounts = getGenerationCounts();
     if (genCounts) {
       for (const a of visibleAgents) {
-        const n = genCounts[a.id];
-        if (n) (a as any).generations_total = n;
+        // Keyed on the canonical ROOT: `generations.root` never carries a discovery prefix,
+        // and applyIdentityPrecedence has already pinned `a.id` to the agentDefs key, so
+        // baseAgentId is the only remaining gap between the two.
+        const n = genCounts[baseAgentId(a.id)];
+        if (n) a.generations_total = n;
       }
     }
 
