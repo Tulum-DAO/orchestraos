@@ -80,3 +80,59 @@ export function canonicalTmuxSession(id: string, orch: string = ORCHESTRA_DIR): 
   const canon = getCanonicalAgents(orch);
   return canon?.[id]?.tmux_session ?? null;
 }
+
+/** One past (or current) generation of a lineage, for the Agents page's history list. */
+export interface GenerationRow {
+  generation: number;
+  model: string | null;
+  spawned_at: string | null;
+  promoted_at: string | null;
+  retired_at: string | null;
+  note: string | null;
+  current?: boolean;          // this is the lineage's canonical head
+}
+
+// Read-only, short-lived handle per call, same discipline as getCanonicalAgents: a long-lived
+// handle would pin the WAL. Both return null when the DB is absent or unreadable, and the
+// caller simply shows no history — never an error.
+
+/** Generation count per root, in one query. Used to badge cards that have a history. */
+export function getGenerationCounts(orch: string = ORCHESTRA_DIR): Record<string, number> | null {
+  let db: Database.Database | null = null;
+  try {
+    db = new Database(dbPath(orch), { readonly: true, fileMustExist: true });
+    db.pragma('busy_timeout = 5000');
+    const rows = db.prepare('SELECT root, COUNT(*) AS n FROM generations GROUP BY root').all() as { root: string; n: number }[];
+    const out: Record<string, number> = {};
+    for (const r of rows) out[r.root] = r.n;
+    return out;
+  } catch {
+    return null;
+  } finally {
+    try { db?.close(); } catch { /* best-effort */ }
+  }
+}
+
+/** Every generation of one root, newest first. */
+export function getGenerations(root: string, orch: string = ORCHESTRA_DIR): GenerationRow[] | null {
+  let db: Database.Database | null = null;
+  try {
+    db = new Database(dbPath(orch), { readonly: true, fileMustExist: true });
+    db.pragma('busy_timeout = 5000');
+    // "current" comes from canonical, and order is by TIME, not by generation number: numbers
+    // reset (gm's live head is generation 2 while its history runs to 87), so "highest number"
+    // is not "current" and sorting by number would put a retired generation first.
+    const rows = db.prepare(
+      `SELECT g.generation, g.model, g.spawned_at, g.promoted_at, g.retired_at, g.note,
+              (g.id = c.generation_id) AS current
+       FROM generations g LEFT JOIN canonical c ON c.root = g.root
+       WHERE g.root = ?
+       ORDER BY current DESC, COALESCE(g.promoted_at, g.spawned_at) DESC, g.id DESC`,
+    ).all(root) as (Omit<GenerationRow, 'current'> & { current: number | null })[];
+    return rows.map((r) => ({ ...r, current: r.current === 1 }));
+  } catch {
+    return null;
+  } finally {
+    try { db?.close(); } catch { /* best-effort */ }
+  }
+}
