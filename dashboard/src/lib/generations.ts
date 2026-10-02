@@ -16,6 +16,9 @@ export interface GenerationRow {
    *  generation number — numbers reset, so gm's live head is generation 2 while its history
    *  runs to 87. Never re-derive this client-side. */
   current?: boolean;
+  /** A pre-allocated slot: minted for an incoming green and never promoted, so it names a
+   *  seat that never ran. Server-stamped; not counted in `generations_total`. */
+  pending?: boolean;
 }
 
 /**
@@ -40,13 +43,18 @@ export function formatGenerationWhen(v: string | null | undefined): string {
 }
 
 /**
- * How a row describes itself in time. A retired generation is defined by when it ENDED; a
- * live one by when it started. Falls back to `spawned_at` because 360 of 950 generation rows
- * carry no `promoted_at`.
+ * How a row describes itself in time, saying only what actually happened to it: retired rows
+ * by when they ENDED, promoted rows by when they started, and a spawned-but-never-promoted
+ * row as `spawned` — never as `promoted`. Many rows carry no `promoted_at` at all, so the old
+ * fallback silently promoted them in the UI.
  */
 export function describeGenerationTiming(g: GenerationRow): string {
   if (g.retired_at) return `retired ${formatGenerationWhen(g.retired_at)}`;
-  return `promoted ${formatGenerationWhen(g.promoted_at ?? g.spawned_at)}`;
+  if (g.promoted_at) return `promoted ${formatGenerationWhen(g.promoted_at)}`;
+  // NOT "promoted <spawned_at>". A row that was spawned and never promoted is a seat that
+  // never ran, and calling it promoted is how gm's never-used slot read as a live gen 3.
+  if (g.spawned_at) return `spawned ${formatGenerationWhen(g.spawned_at)}`;
+  return 'never ran';
 }
 
 /** A stable React key. `generation` alone is not unique: numbers reset within a lineage. */
