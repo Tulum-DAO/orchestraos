@@ -1197,12 +1197,22 @@ def derive_successor_generation(canonical_id, pred, *, explicit=None,
     generation=, so this is the armed-path seam."""
     if isinstance(explicit, int):
         return explicit
-    if isinstance(alias_value, int):
-        return alias_value
     from scripts.gen_resolve import resolve_predecessor_generation
     pred_gen = resolve_predecessor_generation(
         canonical_id, pred.get("generation") if isinstance(pred, dict) else None,
         orchestra_dir=str(ORCHESTRA_DIR))
+    # An alias's own generation is a HINT -- it is just how the seat happened to be named --
+    # while the lineage's position is a FACT and lives in the DB. The hint may not move the
+    # clock BACKWARDS (gm, 2026-10-02): gm ran gm-gen1..gm-gen87 and then a successor appeared
+    # under a different convention carrying generation=1 (gm-gen1 with lineage_root=None, and
+    # gm-g3 with lineage_root pointing at ITSELF). Taken as authoritative, that alias index
+    # became the lineage clock and swap 194 committed 87 -> 1, orphaning the history behind a
+    # fresh "generation 1". Honoured when forward (a pre-registered or reserved alias) and
+    # when there is no DB position to compare against.
+    if isinstance(alias_value, int):
+        if isinstance(pred_gen, int) and alias_value <= pred_gen:
+            return pred_gen + 1
+        return alias_value
     return pred_gen + 1 if isinstance(pred_gen, int) else None
 
 
