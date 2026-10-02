@@ -103,3 +103,16 @@ export function applyIdentityPrecedence(
     }
   }
 }
+
+/**
+ * An agent id reduced to the canonical root it refers to, by stripping a leading discovery
+ * prefix: `unregistered:<session>` (foreign tmux sessions, above) or `mac:` (the mac gateway).
+ *
+ * Any lookup keyed on a ROOT — the client_description map, the generations/lineage tables —
+ * must go through this, or a prefixed row misses a hit the row beside it gets. Anchored and
+ * single-shot: an id is a lookup key, so `mac:` in the MIDDLE of a session name is part of the
+ * name, not a prefix to be removed.
+ */
+export function baseAgentId(id: string): string {
+  return id.replace(/^(?:unregistered|mac):/, '');
+}
