@@ -161,3 +161,75 @@ def test_swap_clears_stale_holder_of_green_sid(conn):
                         (green_id,)).fetchone()[0] == "green-sid"
     assert conn.execute("SELECT session_id FROM generations WHERE id=?",
                         (stale,)).fetchone()[0] is None
+
+
+# --- generation numbering is MONOTONIC within a lineage --------------------
+#
+# Live defect (operator, 2026-10-02): gm's generation counter ran 1..87 and then restarted
+# at 1. Swap 194 recorded it plainly — blue=997 (generation 87) -> green=1000 (generation 1).
+# gemini-gm did the same (11 -> 1). Two roots of 711, so a caller bug, not a migration.
+#
+# execute_swap carried a compare-and-swap on the canonical POINTER but nothing at all on the
+# generation NUMBER: _resolve_or_insert_green takes green["generation"] from the caller and
+# inserts it verbatim. A caller that recomputes the number from a lineage it cannot see
+# silently rewrites history, and the swap commits "successfully".
+#
+# The number is the lineage's clock. It must never go backwards.
+
+def test_swap_refuses_a_green_numbered_below_its_blue(conn):
+    """A green that renumbers the lineage backwards is refused, and nothing is written."""
+    conn.execute("INSERT INTO lineages (root, tier, runtime) VALUES (?,?,?)", (ROOT, "T2", "claude"))
+    blue_id = conn.execute(
+        "INSERT INTO generations (root, generation, session_id, model) VALUES (?,?,?,?)",
+        (ROOT, 87, "blue-sid", "model-blue")).lastrowid
+    conn.execute("INSERT INTO canonical (root, generation_id, tmux_session, status) VALUES (?,?,?,?)",
+                 (ROOT, blue_id, ROOT, "online"))
+    conn.execute("INSERT INTO runtime_state (generation_id, status, last_updated) VALUES (?,?,?)",
+                 (blue_id, "online", "t0"))
+    conn.commit()
+
+    with pytest.raises(orchestra_db.GenerationRegressionError):
+        orchestra_db.execute_swap(
+            conn, ROOT,
+            green={"generation": 1, "session_id": "green-sid", "model": "model-green"},
+            blue_generation_id=blue_id, now="t1")
+
+    # Fully-Blue, exactly as the CAS failure path leaves it: no green row, canonical unmoved,
+    # blue not retired. A refused swap must not be a half-swap.
+    assert conn.execute("SELECT COUNT(*) FROM generations WHERE root=? AND generation=1",
+                        (ROOT,)).fetchone()[0] == 0
+    assert _canonical(conn)["generation_id"] == blue_id
+    assert conn.execute("SELECT retired_at FROM generations WHERE id=?", (blue_id,)).fetchone()[0] is None
+
+
+def test_swap_still_allows_the_legitimate_reuse_of_an_existing_higher_row(conn):
+    """pred_gen+1 may ALREADY exist as a retired phantom — that reuse is not a regression."""
+    conn.execute("INSERT INTO lineages (root, tier, runtime) VALUES (?,?,?)", (ROOT, "T2", "claude"))
+    blue_id = conn.execute(
+        "INSERT INTO generations (root, generation, session_id, model) VALUES (?,?,?,?)",
+        (ROOT, 5, "blue-sid", "model-blue")).lastrowid
+    # A phantom at 6 left behind by an earlier aborted rotation.
+    conn.execute("INSERT INTO generations (root, generation, model, retired_at) VALUES (?,?,?,?)",
+                 (ROOT, 6, "model-old", "t-earlier"))
+    conn.execute("INSERT INTO canonical (root, generation_id, tmux_session, status) VALUES (?,?,?,?)",
+                 (ROOT, blue_id, ROOT, "online"))
+    conn.execute("INSERT INTO runtime_state (generation_id, status, last_updated) VALUES (?,?,?)",
+                 (blue_id, "online", "t0"))
+    conn.commit()
+
+    res = orchestra_db.execute_swap(
+        conn, ROOT,
+        green={"generation": 6, "session_id": "green-sid", "model": "model-green"},
+        blue_generation_id=blue_id, now="t1")
+    assert _canonical(conn)["generation_id"] == res["green_generation_id"]
+
+
+def test_swap_refuses_a_green_reusing_its_blues_own_number(conn):
+    """Equal is not forward either: it would point canonical at the generation being retired."""
+    blue_id = _seed_blue(conn)   # generation 1
+    with pytest.raises(orchestra_db.GenerationRegressionError):
+        orchestra_db.execute_swap(
+            conn, ROOT,
+            green={"generation": 1, "session_id": "green-sid", "model": "model-green"},
+            blue_generation_id=blue_id, now="t1")
+    assert conn.execute("SELECT retired_at FROM generations WHERE id=?", (blue_id,)).fetchone()[0] is None
