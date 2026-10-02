@@ -49,6 +49,7 @@ import { loadConfig } from '../lib/config.js';
 import { actingAgent } from '../lib/principal.js';
 import { gatewayTokenFile } from '../lib/gateway-token.js';
 import { resolveMsgStorePath } from './messages.js';
+import { agentScopeParam } from '../lib/agent-scope.js';
 
 const HOME = process.env.HOME || homedir();
 const ORCHESTRA_DIR = process.env.ORCHESTRA_DIR || join(HOME, 'scripts/agent-orchestra');
@@ -347,6 +348,10 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
 }
 
 const router = Router();
+// Every /:id route on this router is scoped to the caller's principal — the same rule GET /
+// applies (lib/agent-scope.ts). Registered as a param handler so a /:id route added later is
+// scoped without anyone remembering to; an out-of-scope id gets the same 404 as an unknown one.
+router.param('id', agentScopeParam);
 
 router.post('/:id/send', (req: Request, res: Response) => {
   handleAgentSend(defaultAgentSendDeps, req, res).catch((err) => {
