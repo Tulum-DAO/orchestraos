@@ -58,7 +58,11 @@ def _default_list_clients(tmux):
 # reason=service:no-probe (never guessed online). Fill by effect from `ss -ltnp` + panes.
 SERVICE_PROBES = {
     "proxy": {"port": 8091},                    # docker-proxy host-port 8091
-    "cartesia-arturo-service": {"port": 5052},  # python3 LISTEN 127.0.0.1:5052
+    # NOT port 5052: that listener is custom-llm's (verified by pid tree, 2026-10-02), so
+    # this seat read 'online' off ANOTHER seat's process for as long as the entry existed.
+    # The operator confirms cartesia is unused. A pane probe is the truthful one — it has no
+    # pane, so it parks, which is what the fleet calls a canonical row with no live process.
+    "cartesia-arturo-service": {"pane_process": True},
     "jarvis-service": {"port": 5060},           # python3 LISTEN 127.0.0.1:5060 (pane IS the proc)
     "jarvis-v2-mock": {"port": 5091},           # node LISTEN 127.0.0.1:5091
     "watch-gateway": {"port": 9091},            # python3 LISTEN 0.0.0.0:9091
@@ -76,7 +80,12 @@ SERVICE_PROBES = {
     # 2026-09-15 reclassification above:
     "dashboard": {"port": 8891},                # node dashboard-proxy.js LISTEN 127.0.0.1:8891
     "combo-proxy": {"port": 5053},              # node combo-proxy.js LISTEN 127.0.0.1:5053
-    "custom-llm": {"port": 5052},               # python3 custom-llm-proxy.py LISTEN 127.0.0.1:5052
+    # NOT a port probe. Port 5052 is CONTESTED (Shaw, 2026-09-29: gemini-pm-adaptiv bound it
+    # for a website). A port probe answers "something is listening", not "MY service is up",
+    # so a contested port is stealable: the seat reads online off whatever else is bound.
+    # Probed by its own pane child instead — unstealable. The live fleet reached this
+    # conclusion first; #154 regressed it to a port probe and this restores it.
+    "custom-llm": {"pane_process": True},       # python3 custom-llm-proxy.py, live pane child
     "recall-svc": {"port": 5074},               # python3 LISTEN 127.0.0.1:5074
     "telegram-router": {"pane_process": True},  # bash poll loop, no listener — live pane child
 }
