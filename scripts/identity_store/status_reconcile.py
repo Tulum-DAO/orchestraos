@@ -70,6 +70,15 @@ SERVICE_PROBES = {
     "arturo-proxy": {"port": 5071},             # python3 arturo-proxy.py LISTEN 127.0.0.1:5071
     "fable5-serve": {"port": 5174},             # node/vite dev LISTEN 127.0.0.1:5174
     "second-brain-svc": {"port": 7373},         # node server.js LISTEN 127.0.0.1:7373
+    # Five live services that had NO declared probe, so every reconcile proposed parking
+    # them (operator, 2026-10-02 — the red test named all five). Ports matched by effect
+    # from the `ss -ltnp` pid tree against each seat's own tmux pane, same method as the
+    # 2026-09-15 reclassification above:
+    "dashboard": {"port": 8891},                # node dashboard-proxy.js LISTEN 127.0.0.1:8891
+    "combo-proxy": {"port": 5053},              # node combo-proxy.js LISTEN 127.0.0.1:5053
+    "custom-llm": {"port": 5052},               # python3 custom-llm-proxy.py LISTEN 127.0.0.1:5052
+    "recall-svc": {"port": 5074},               # python3 LISTEN 127.0.0.1:5074
+    "telegram-router": {"pane_process": True},  # bash poll loop, no listener — live pane child
 }
 
 
