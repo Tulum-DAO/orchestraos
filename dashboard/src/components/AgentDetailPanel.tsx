@@ -3,6 +3,7 @@ import { clsx } from 'clsx';
 import { X, FileText, AlertTriangle, Link2, Copy, Check, ArrowDown, WifiOff, Send } from 'lucide-react';
 import { normalizeAgentState, STATE_STYLE } from '../lib/agentStatus';
 import { TierBadge } from './TierBadge';
+import { AgentGenerations } from './AgentGenerations';
 import { buildRenderList, toolSummary, fetchTranscript, type RenderNode } from '../lib/transcript';
 import { subscribeTranscriptStream } from '../lib/transcriptStream';
 import { isNearBottom } from '../lib/liveFeedScroll';
@@ -12,6 +13,10 @@ export interface AgentDetailPanelProps {
   agent: {
     id: string; tier?: string; role?: string; status?: string; alive?: boolean;
     session?: string; cwd?: string; machine?: string;
+    /** How many generations this lineage has. Stamped on every /api/agents row when the
+     *  identity DB is readable, and ABSENT (never 0) otherwise — so the Generations
+     *  section simply does not render rather than showing an error. */
+    generations_total?: number;
     /** Path to the seat's prompt file. The live /api/agents payload calls this
      *  `system_prompt` (e.g. "prompts/build.md") — there is no `prompt_file` field on any
      *  row, which is what an earlier version of this interface asked for and never got.
@@ -351,6 +356,10 @@ export function AgentDetailPanel({
               <span className="text-neutral-300 break-words">{value || '—'}</span>
             </div>
           ))}
+
+          {/* The lineage. This is the ONLY route to an agent's past generations from the
+              topology view — clicking a node opens this drawer. See AgentGenerations. */}
+          <AgentGenerations key={agent.id} agentId={agent.id} total={agent.generations_total} />
 
           {/* Prompt file — click to view (same source AgentCard uses for this) */}
           <div className="text-sm">
