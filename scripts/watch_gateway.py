@@ -3297,6 +3297,7 @@ _RED_ALERT_CHANNELS = ("ios", "watch")
 
 async def _red_alert_api(method: str, path: str, body=None):
     """Loopback hop to the API; returns (status, json). Patched in tests."""
+    import aiohttp   # module-local, like every other aiohttp user in this file
     async with aiohttp.ClientSession() as s:
         if method == "POST":
             async with s.post(f"{API_URL}{path}", json=body, timeout=aiohttp.ClientTimeout(total=150)) as r:

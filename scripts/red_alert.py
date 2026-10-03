@@ -64,7 +64,7 @@ CATALOGUE = {
         "detect": "pane process tree has a STAT containing 'T' (SIGTSTP/^Z), or the screen "
                   "shows 'Claude Code has been suspended'",
         "immediate_fix": {"action": "card_only",
-                          "how": "NO KILLS rule (the operator, 2026-09-18): the process is still present, so the "
+                          "how": "NO KILLS rule (2026-09-18): the process is still present, so the "
                                  "watchdog never touches it. Card + Telegram; a human resumes it (respawn-pane -k + "
                                  "`claude --resume <sid>` by hand — SIGCONT/tcsetpgrp did not stick on gm 04:31Z)"},
         "doc": "^Z from the harness bottom bar or a terminal; the CLI is stopped, not dead",
@@ -116,8 +116,26 @@ CATALOGUE = {
         "immediate_fix": {"action": "card_only",
                           "how": "one fleet-wide report + card + Telegram; resume is gm's roster-resume-all (each seat: "
                                  "new session + `claude --resume <sid>`). NEVER kill a pid whose argv starts with `tmux` — "
-                                 "the server keeps its first client's argv"},
+                                 "the server keeps its first client's argv (2026-09-18 04:53Z)"},
         "doc": "every pane vanished at once; transcripts intact; nothing else can run until a server exists",
+    },
+    "green_died": {
+        "severity": "error",
+        "detect": "a blue-green GREEN pane died while its root's bg_state still expects it "
+                  "(state not SOLO and the green is named in meta)",
+        "immediate_fix": {"action": "card_only",
+                          "how": "NEVER respawn a green — only the blue-green state machine may boot one; a "
+                                 "registry respawn manufactures an orphan pane. Blue keeps working; the next beat "
+                                 "boots a fresh green. Card so a human knows a green is failing repeatedly"},
+        "doc": "an ephemeral successor died (often correctly, e.g. hydrate SeamTimeout under load); not a seat crash",
+    },
+    "api_health_fail": {
+        "severity": "error",
+        "detect": "service-watchdog 'HEALTH FAIL: api-server port 8888 failed twice' (HTTP 000) — the API stopped answering",
+        "immediate_fix": {"action": "none_needed",
+                          "how": "service-watchdog restarts it; file the report with the watchdog-log timestamps, host memory, "
+                                 "kernel OOM check and the preserved API stderr (stderr was NOT preserved — fix #1)"},
+        "doc": "a service, not a seat: recurring restarts of the OrchestraOS API; every phone/watch chat + upload 502s while it is down",
     },
     "gateway_unreachable": {
         "severity": "error",
@@ -127,7 +145,7 @@ CATALOGUE = {
     },
 }
 
-# Screen rules match CLI-RENDERED lines only (a false positive seen 2026-09-18:
+# Screen rules match CLI-RENDERED lines only (gm, false positive 2026-09-18 07:13Z:
 # the old regex hit "...given the usage limit" in assistant prose). A "system line" is one the
 # harness prints, not the transcript body: a `⎿` result/notice line, a `⚠`/`✗` line, or anything at
 # or below the LAST composer prompt (❯) — the status region. Prose lines (`●`, indented text) never
@@ -326,6 +344,254 @@ def capture_evidence(seats: list[str], snapshot: str | None = None, lines: int =
     return ev
 
 
+_EXIT_CMD = re.compile(r"<command-name>\s*/(exit|quit)\s*</command-name>")
+# an assistant turn AFTER the /exit means the seat kept working (see exited_cleanly)
+_WORKED_AFTER = re.compile(r'"type"\s*:\s*"assistant"|"role"\s*:\s*"assistant"')
+_USER_REC = re.compile(r'"type"\s*:\s*"user"|"role"\s*:\s*"user"')
+# The CLI appends its own echo records AFTER a real /exit (see test_red_alert.py _EXIT_LINES:
+# a `<local-command-stdout>Goodbye!</local-command-stdout>` user record follows the /exit).
+# Those are plumbing, not a human using the seat again.
+#
+# The tag name is captured and BACK-REFERENCED, so an opening tag only pairs with its OWN
+# closing tag. An earlier version alternated open and close independently under re.S, which let
+# "<command-message>x</command-message> keep going <command-args>y</command-args>" match as a
+# single pair and swallow the real prompt between them.
+_UNRECOGNISED_CONTENT = "\x00unrecognised-user-content-shape"
+# The CLI's OWN OUTPUT echo, and nothing else. A command-name/command-message/command-args record
+# is a COMMAND -- if it is not /exit it is a human running /compact or /model, i.e. using the seat
+# again -- so only these two tags may be skipped as non-decisive.
+_ECHO_PAIR = re.compile(r'<(local-command-stdout|local-command-stderr)>.*?</\1>', re.S)
+_PLUMBING_PAIR = re.compile(
+    r'<(local-command-stdout|local-command-stderr|command-message|command-args|command-name)>'
+    r'.*?</\1>', re.S)
+
+
+def _user_prompt_text(rec: dict) -> str | None:
+    """The HUMAN-authored text of a user record, or None if it carries none.
+
+    None means "not decisive": a tool_result is a user-TYPE record in real Claude Code
+    transcripts (content is a list of blocks), but it is the harness talking to itself, not a
+    person using the seat. Returning None makes exited_cleanly skip it rather than read it as
+    either an exit or a resume.
+    """
+    msg = rec.get("message") if isinstance(rec.get("message"), dict) else rec
+    content = msg.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        understood = True
+        for b in content:
+            if not isinstance(b, dict):
+                understood = False            # a raw string in the block list: unknown shape
+                continue
+            if b.get("type") == "tool_result":
+                continue                      # harness plumbing, never human input
+            t = b.get("text")
+            if isinstance(t, str):
+                parts.append(t)
+            else:
+                understood = False            # a block type carrying no text we can read
+        if parts:
+            return "".join(parts)
+        # No text extracted. ONLY a non-empty list of pure tool_results is genuinely
+        # NON-DECISIVE. An EMPTY list proves nothing -- `understood` is vacuously True for it --
+        # and an unrecognised block shape must fail safe rather than be skipped.
+        if understood and content:
+            return None
+        return _UNRECOGNISED_CONTENT
+    # An UNRECOGNISED content shape (a bare dict, a list holding raw strings, a missing key) must
+    # never be SKIPPED: skipping lets an OLDER /exit excuse the death that followed. Return a
+    # sentinel carrying no plumbing tags and no exit marker, so _exit_verdict reads it as prose
+    # and reports a crash. Only str, list-of-tool_result and list-of-text occur across 126,798
+    # real user records today, so this guards a future shape -- and it fails safe by design.
+    return _UNRECOGNISED_CONTENT
+
+
+def _exit_verdict(text: str) -> bool | None:
+    """True = a real /exit record, False = a human prompt, None = pure CLI echo (skip).
+
+    A REAL /exit record is ENTIRELY command plumbing: `<command-name>/exit</command-name>` plus
+    `<command-message>`/`<command-args>`. A human prompt that merely MENTIONS the marker --
+    "fix the docs, <command-name>/exit</command-name> is quoted at line 73" -- leaves prose
+    behind once the plumbing pairs are removed, and must NOT excuse a crash. docs/RED_ALERT.md
+    itself quotes the marker, so a seat that greps its own documentation and then dies would
+    otherwise have its crash silently excused.
+    """
+    stripped = _PLUMBING_PAIR.sub("", text)
+    residue = stripped.strip()
+    if _EXIT_CMD.search(text) and not residue:
+        return True
+    if not residue:
+        # An empty residue has THREE causes and only ONE of them is skippable.
+        #  * The CLI's own output echo (local-command-stdout/stderr) -- skippable.
+        #  * Another COMMAND record: a command-name that is not /exit, or a bare command-args.
+        #    `/compact` and `/model` are a HUMAN USING THE SEAT AGAIN, so a stale /exit above must
+        #    NOT excuse the later death. An out-of-memory death during compaction leaves no
+        #    assistant turn after the /compact, which is exactly this arrangement.
+        #  * Nothing at all (empty or whitespace-only content) -- proves nothing.
+        # Earlier revisions skipped all three, and a test oracle of mine blessed it.
+        if _ECHO_PAIR.search(text) and not _ECHO_PAIR.sub("", text).strip():
+            return None                       # purely the CLI's own output echo
+        return False                          # another command, or nothing proven: report
+    return False                              # genuine human prose: the seat was used again
+
+
+def _record_kind(line: str) -> str | None:
+    """"assistant" / "user" / None for a transcript line. JSON first, regex as the fallback.
+
+    Only these two kinds are DECISIVE for exited_cleanly; everything else (system notices,
+    summaries, tool results) is skipped. Deciding by kind is what stops a quoted /exit marker
+    inside an assistant turn from reading as a real /exit.
+    """
+    try:
+        rec = json.loads(line)
+    except (ValueError, TypeError):
+        # Not JSON (a truncated tail line): fall back to regexes, assistant checked FIRST so a
+        # quoted marker on an assistant line cannot win.
+        if _WORKED_AFTER.search(line):
+            return "assistant"
+        if _USER_REC.search(line):
+            return "user"
+        return None
+    if not isinstance(rec, dict):
+        return None
+    kind = rec.get("type") or rec.get("role")
+    if kind in ("assistant", "user"):
+        return kind
+    msg = rec.get("message")
+    if isinstance(msg, dict) and msg.get("role") in ("assistant", "user"):
+        return msg["role"]
+    return None
+
+
+def _transcript_path(sid: str | None) -> str | None:
+    """The live jsonl for a sid, or None. Injected in tests."""
+    if not sid:
+        return None
+    try:
+        try:
+            import sid_invariants as SI          # flat: the dominant form inside scripts/
+        except ImportError:                      # pkg form, cf. rotation_gate_manual.py:620-622
+            from scripts import sid_invariants as SI
+        path = SI.find_transcript(sid)
+    except (ImportError, OSError, ValueError) as e:
+        # NARROWED: a bare `except Exception` here silently returned None for years, which made
+        # exited_cleanly always False on the CLI path. Log, never swallow blind.
+        print(f"[red-alert] _transcript_path({sid!r}) failed: {type(e).__name__}: {e}", file=sys.stderr)
+        path = None
+    return str(path) if path and os.path.exists(str(path)) else None
+
+
+
+
+
+def _tail_lines(path: str, count: int, *, budget: int = 4 << 20) -> list[str]:
+    """The last `count` lines, read from the END under a byte budget.
+
+    fh.readlines() pulled the WHOLE file into memory before slicing. Real transcripts reach tens
+    of MB (one live file is 43.8MB over 613 lines, ~71KB per line), and classify() runs per seat
+    per watchdog tick, so that allocated tens of MB per seat per tick.
+    """
+    with open(path, "rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        size = fh.tell()
+        read = min(size, budget)
+        start = size - read
+        if start == 0:
+            at_line_start = True
+        else:
+            # Drop a first line only when it is genuinely PARTIAL. If the budget lands exactly on
+            # a line boundary that line is COMPLETE, and discarding it can throw away the very
+            # /exit being looked for.
+            fh.seek(start - 1)
+            at_line_start = fh.read(1) == b"\n"
+        fh.seek(start)
+        blob = fh.read(read)
+    # errors="replace": a multi-byte character split at the seek boundary must not raise.
+    text = blob.decode("utf-8", errors="replace")
+    if not at_line_start:
+        _head, sep, rest = text.partition("\n")
+        # Drop the partial first line ONLY if something is left afterwards. When the budget lands
+        # inside a single enormous line, `rest` is empty (or just the trailing newline) and
+        # dropping it returned [], which made exited_cleanly report a crash against a clean
+        # shutdown. Keep the fragment instead -- a truncated line beats no line.
+        if sep and rest.strip():
+            text = rest
+        # No newline at all means ONE line exceeds the budget (a 40.47MB single line exists in a
+        # real transcript on this host). KEEP the fragment: returning [] made exited_cleanly
+        # report a crash against a seat that had shut down cleanly.
+    return text.splitlines(keepends=True)[-count:]
+
+
+def exited_cleanly(sid: str | None, *, tail: int = 400) -> bool:
+    """True when the LAST thing in this seat's transcript is a `/exit` (or `/quit`).
+
+    That means the pane was SHUT DOWN GRACEFULLY — which is not a crash, and is all this
+    function may claim. It does NOT mean the agent chose to leave: a transcript records the
+    ACTION, never the ACTOR, and the fleet's own reap path types the same keystrokes
+    (prune_failed_green -> spawn-agent.sh --kill -> `tmux send-keys "/exit" Enter` +
+    kill-session), so a self-retirement and a reaped green are byte-for-byte identical here.
+    That green was the second kind: it produced no assistant turn for ~14 minutes, hydrate blew
+    its 120s bound under a loadavg near 30, and the prune reaped the pane ~10s later (bg history
+    shows 'pruned-failed-green'). Either way RED ALERT stands down — a graceful shutdown is
+    rotation's business, not an incident.
+
+    If a caller ever needs to tell the two apart, this signal cannot carry it: look for an
+    assistant farewell turn before the /exit (self-retirement) versus none plus a
+    'pruned-failed-green' bg_state beside it (reaped).
+
+    Only the tail is read, and the last decisive line wins: an assistant turn after an /exit
+    means the seat kept working, so the death that followed is a real crash.
+    """
+    path = _transcript_path(sid)
+    if not path:
+        return False
+    try:
+        lines = _tail_lines(path, tail)
+    except OSError:
+        return False
+    # Walk BACKWARDS to the FIRST DECISIVE record; non-decisive records (system notices,
+    # summaries, tool results) are skipped rather than counted, which is why `tail` can be
+    # generous without changing the verdict.
+    #
+    # Decided by RECORD TYPE, not by which regex matches first. Three defects this replaces:
+    #   D1 the old loop tested _EXIT_CMD before _WORKED_AFTER *within one line*, so a single
+    #      record holding an assistant turn AND a quoted `<command-name>/exit</command-name>`
+    #      read as a clean exit. docs/RED_ALERT.md quotes that marker, so documenting it was
+    #      enough to trigger it.
+    #   D2 `tail` defaulted to 5 PHYSICAL lines, so a real /exit under six trailing system
+    #      records fell outside the window and reported a FALSE CRASH on a clean shutdown.
+    #   D3 a stale /exit followed by a resume read as a clean exit; a user record after the
+    #      /exit now counts as "used again", so the later death is a real crash.
+    for line in reversed(lines):
+        kind = _record_kind(line)
+        if kind == "assistant":
+            return False          # it kept working after any /exit above: real crash
+        if kind != "user":
+            continue
+        # Decide on the record's EXTRACTED CONTENT, never on the raw JSON line: a tool_result
+        # or a quoted marker anywhere in the line would otherwise read as a real /exit.
+        try:
+            rec = json.loads(line)
+        except (ValueError, TypeError):
+            rec = None
+        if not isinstance(rec, dict):
+            # Unparseable tail line: only an entirely-plumbing line may be treated as an exit.
+            verdict = _exit_verdict(line)
+            if verdict is None:
+                continue
+            return verdict
+        text = _user_prompt_text(rec)
+        if text is None:
+            continue              # tool_result-only / no human text: not decisive
+        verdict = _exit_verdict(text)
+        if verdict is None:
+            continue              # the CLI's own post-/exit echo
+        return verdict
+    return False
+
+
 # ---------------------------------------------------------------------------
 # classifier
 # ---------------------------------------------------------------------------
@@ -340,6 +606,8 @@ def classify(ev: dict, seat: str) -> dict | None:
         return hit("process_suspended", "ps STAT contains T")
     dead_flag = ev.get("pane_dead", {}).get(seat)
     if dead_flag or (dead_flag is None and procs == [] and seat in ev.get("process_state", {})):
+        if exited_cleanly(ev.get("sids", {}).get(seat)):
+            return None
         return hit("pane_dead", "pane dead / no process on tty")
     screen = ev.get("screen", {}).get(seat) or ""
     found = classify_screen(screen)
