@@ -192,7 +192,7 @@ def test_fleet_down_with_no_online_seats_is_nothing(store):
     assert W.fleet_down({"agents": {}}) is None
 
 
-# --- diagnosis spawn guard (the diagnosis seat found this itself) -------
+# --- diagnosis spawn guard (the diag seat's own finding on ) -------
 
 def test_spawn_diagnosis_refuses_unescalated_or_resolved(store, monkeypatch):
     monkeypatch.setattr(W.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not spawn")))
@@ -203,3 +203,225 @@ def test_spawn_diagnosis_refuses_unescalated_or_resolved(store, monkeypatch):
 def test_switch_provider_never_on_an_attached_pane_even_with_repair_now():
     d = W.decide(rep(cls="out_of_usage", card="apr_1", created_age=500), attached=True, answer="Repair now", now=1000.0, armed=True)
     assert d["action"] == "wait" and d["reason"] == "attached"
+
+
+# --- human-filed reports have NO pattern class (found from the phone, 2026-09-18) -----
+# Both crashes below were invisible to this suite because every fixture had a class.
+
+def test_post_card_survives_a_classless_human_report(store, monkeypatch):
+    """A report filed by a person (the Report button) has class=None; the card title and the
+    Telegram line must fall back to the severity wording instead of raising AttributeError."""
+    sent = {}
+
+    class _R:
+        returncode = 0
+        stdout = "apr_test123"
+        stderr = ""
+
+    def fake_run(argv, **kw):
+        sent.setdefault("argv", []).append(argv)
+        return _R()
+
+    monkeypatch.setattr(W.subprocess, "run", fake_run)
+    monkeypatch.setattr(W.RA, "update", lambda *a, **k: None)
+    r = {"id": "ra_human", "class": None, "severity": "bug", "seats": ["gm"], "symptom": "the sheet says it broke",
+         "_path": "/tmp/x.json", "evidence": {}}
+    card = W.post_card(r, {"pane_snapshot": {}, "screen": {}}, "gm")
+    assert card == "apr_test123"
+    question = sent["argv"][0][-1]
+    assert "bug" in question and "None" not in question
+
+
+def test_post_card_classless_falls_back_to_issue_when_severity_missing(store, monkeypatch):
+    monkeypatch.setattr(W.subprocess, "run", lambda argv, **kw: type("R", (), {"returncode": 0, "stdout": "apr_x", "stderr": ""})())
+    monkeypatch.setattr(W.RA, "update", lambda *a, **k: None)
+    r = {"id": "ra_h2", "class": None, "severity": None, "seats": ["gm"], "symptom": "s", "_path": "/tmp/x.json", "evidence": {}}
+    assert W.post_card(r, {}, "gm") == "apr_x"
+
+
+# --- greens are not seats (gm denial of a report on orchestra-builder-g49) ------------
+# A blue-green GREEN dying is often CORRECT (hydrate SeamTimeout under load -> the seam
+# raised, the green was torn down, blue kept working). Respawning one would manufacture an
+# orphan pane the fleet has a watcher for. Only the state machine may boot a green.
+
+def _bg(tmp_path, root, state, **meta):
+    import json
+    d = tmp_path / "wal"
+    d.mkdir(exist_ok=True)
+    (d / f"{root}.bg.json").write_text(json.dumps({"state": state, "root": root, "meta": meta}))
+    return str(d)
+
+
+def test_green_status_plain_seat(tmp_path):
+    assert W.green_status("gm", wal_dir=str(tmp_path)) == "not_green"
+    assert W.green_status("orchestra-builder", wal_dir=str(tmp_path)) == "not_green"
+
+
+def test_green_status_unexpected_green_when_root_is_solo(tmp_path):
+    wal = _bg(tmp_path, "orchestra-builder", "SOLO", green_pane_id=None)
+    assert W.green_status("orchestra-builder-g49", wal_dir=wal) == "unexpected_green"
+
+
+def test_green_status_active_green_when_root_is_mid_swap(tmp_path):
+    wal = _bg(tmp_path, "orchestra-builder", "PREWARMING", green_pane_id="%42", green_session_id="abc")
+    assert W.green_status("orchestra-builder-g49", wal_dir=wal) == "active_green"
+
+
+def test_green_status_missing_bg_file_is_unexpected(tmp_path):
+    assert W.green_status("nobody-g7", wal_dir=str(tmp_path)) == "unexpected_green"
+
+
+def test_tick_does_not_file_for_a_dead_unexpected_green(tmp_path, store, monkeypatch):
+    wal = _bg(tmp_path, "orchestra-builder", "SOLO")
+    monkeypatch.setattr(W, "WAL_DIR", wal)
+    filed = []
+    monkeypatch.setattr(W, "file_finding", lambda *a, **k: filed.append(a[0]))
+    monkeypatch.setattr(W, "tmux_sessions", lambda: {"orchestra-builder-g49"})
+    monkeypatch.setattr(W.RA, "capture_evidence", lambda seats, **k: {
+        "process_state": {seats[0]: []}, "pane_dead": {seats[0]: True}, "attached": {seats[0]: False},
+        "screen": {}, "registry_rows": {}, "sids": {}, "pane_snapshot": {}})
+    reg = {"agents": {"orchestra-builder-g49": {"status": "online", "runtime": "claude", "tmux_session": "orchestra-builder-g49"}}}
+    import json as _j
+    p = tmp_path / "reg.json"
+    p.write_text(_j.dumps(reg))
+    W.tick(registry_path=str(p))
+    assert filed == []
+
+
+def test_tick_files_card_only_for_a_dead_active_green(tmp_path, store, monkeypatch):
+    wal = _bg(tmp_path, "orchestra-builder", "VERIFY", green_pane_id="%42")
+    monkeypatch.setattr(W, "WAL_DIR", wal)
+    filed = []
+    monkeypatch.setattr(W, "file_finding", lambda seat, f, ev, **k: filed.append(f) or {"id": "ra_x", "status": "open", "seats": [seat], "class": f["class"], "card_id": None, "created_at": "2026-09-18T00:00:00+00:00", "evidence": {}, "repair_attempts": [], "symptom": "s", "_path": "p"})
+    monkeypatch.setattr(W, "handle", lambda *a, **k: None)
+    monkeypatch.setattr(W, "tmux_sessions", lambda: {"orchestra-builder-g49"})
+    monkeypatch.setattr(W.RA, "capture_evidence", lambda seats, **k: {
+        "process_state": {seats[0]: []}, "pane_dead": {seats[0]: True}, "attached": {seats[0]: False},
+        "screen": {}, "registry_rows": {}, "sids": {}, "pane_snapshot": {}})
+    import json as _j
+    p = tmp_path / "reg.json"
+    p.write_text(_j.dumps({"agents": {"orchestra-builder-g49": {"status": "online", "runtime": "claude", "tmux_session": "orchestra-builder-g49"}}}))
+    W.tick(registry_path=str(p))
+    assert filed and filed[0]["class"] == "green_died"
+    assert filed[0]["immediate_fix"]["action"] == "card_only"
+
+
+def test_respawn_refuses_any_green_even_if_asked():
+    ev = {"process_state": {"x-g9": []}, "registry_rows": {"x-g9": {"session_id": "abc", "runtime": "claude"}}, "pane_dead": {"x-g9": True}}
+    ok, detail = W.repair_respawn("x-g9", "x-g9", ev)
+    assert ok is False and "green" in detail.lower()
+
+
+# --- the queue is evidence this week: never auto-answer a card (2026-09-18) --------
+# the operator wants the pending queue INTACT — a saturated queue is what he is demonstrating, not
+# a defect in the surface. A healed report gets a CORRECTION on the card, never a close.
+
+def test_close_card_is_disabled_by_the_preserve_queue_flag(store, monkeypatch):
+    calls = []
+    monkeypatch.setattr(W.subprocess, "run", lambda argv, **kw: calls.append(argv) or type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+    monkeypatch.setattr(W, "PRESERVE_PENDING_QUEUE", True)
+    W.close_card("apr_x", "healed")
+    verbs = [argv[2] for argv in calls if len(argv) > 2]      # approval.py <verb>
+    assert "answer" not in verbs, "must not answer a card while the queue is preserved"
+    assert "patch" in verbs, "the correction must still be written onto the card"
+
+
+def test_close_card_answers_only_when_preservation_is_off(store, monkeypatch):
+    calls = []
+    monkeypatch.setattr(W.subprocess, "run", lambda argv, **kw: calls.append(argv) or type("R", (), {"returncode": 0, "stdout": "{}", "stderr": ""})())
+    monkeypatch.setattr(W, "PRESERVE_PENDING_QUEUE", False)
+    W.close_card("apr_x", "healed")
+    assert "answer" in [argv[2] for argv in calls if len(argv) > 2]
+
+
+def test_card_corrections_append_and_never_rewrite_the_ask(store, monkeypatch):
+    """A card in the live queue must still READ as the live ask (2026-09-18): a status note
+    goes at the END, never at the top, or a pending row looks closed on its face."""
+    captured = {}
+
+    def fake_run(argv, **kw):
+        if len(argv) > 2 and argv[2] == "patch":
+            captured["summary"] = argv[argv.index("--summary") + 1]
+        return type("R", (), {"returncode": 0, "stdout": '{"summary": "**What happened:** the original ask"}', "stderr": ""})()
+
+    monkeypatch.setattr(W.subprocess, "run", fake_run)
+    monkeypatch.setattr(W, "PRESERVE_PENDING_QUEUE", True)
+    W.close_card("apr_x", "the seat healed")
+    s = captured["summary"]
+    assert s.startswith("**What happened:** the original ask")
+    assert s.rstrip().endswith("the seat healed")
+
+
+# --- a correction that silently fails is worse than none (found 2026-09-18) -----------
+# approval.py patch only edits PENDING kind='human_task' rows. Every card this watchdog
+# raises is kind='menu', so note_card was a no-op on ALL of them while reporting success.
+
+def test_note_card_reports_failure_instead_of_pretending(store, monkeypatch):
+    monkeypatch.setattr(W, "read_card", lambda cid: {"summary": "orig", "kind": "menu"})
+    monkeypatch.setattr(W.subprocess, "run", lambda argv, **kw: type("R", (), {"returncode": 4, "stdout": "", "stderr": ""})())
+    assert W.note_card("apr_x", "text") is False
+
+
+def test_note_card_true_when_the_patch_applies(store, monkeypatch):
+    monkeypatch.setattr(W, "read_card", lambda cid: {"summary": "orig", "kind": "human_task"})
+    monkeypatch.setattr(W.subprocess, "run", lambda argv, **kw: type("R", (), {"returncode": 0, "stdout": "apr_x", "stderr": ""})())
+    assert W.note_card("apr_x", "text") is True
+
+
+def test_close_card_falls_back_to_a_durable_record_when_the_card_cannot_be_edited(store, monkeypatch):
+    """The correction must land SOMEWHERE readable: if the card refuses the edit, say so in the
+    log and mail it, never claim a correction that does not exist."""
+    monkeypatch.setattr(W, "PRESERVE_PENDING_QUEUE", True)
+    monkeypatch.setattr(W, "note_card", lambda cid, text: False)
+    mailed = []
+    monkeypatch.setattr(W, "mail_correction", lambda cid, text: mailed.append((cid, text)))
+    W.close_card("apr_x", "the seat healed")
+    assert mailed and mailed[0][0] == "apr_x"
+
+
+def test_nothing_in_the_watchdog_touches_dates_snooze_or_expiry_of_a_card():
+    """Preserve-the-queue, second ruling (2026-09-18): the past-due COMMITMENT cards stay as demo
+    material, so no re-dating, no snoozing and no date-pointed sweep. This watchdog must own no
+    such verb at all — 'helpfully escalate an overdue row' is the move that reads as hygiene.
+    """
+    import io
+    import tokenize
+    # CODE only — the rule is documented in this module's comments, and a grep over prose would
+    # trip on its own hold (same technique as test_red_alert_no_kills.code_only).
+    toks = list(tokenize.generate_tokens(io.StringIO(open(W.__file__).read()).readline))
+    src = "".join(
+        tok.string + " "
+        for tok in toks
+        if tok.type != tokenize.COMMENT and not (tok.type == tokenize.STRING and len(tok.string) > 40)
+    )
+    # Long strings are dropped above because a docstring legitimately EXPLAINS the no-snooze rule
+    # and would trip a naive grep. But that let a forbidden flag hide inside a long f-string, so
+    # flag-shaped tokens -- which prose never contains -- are scanned across EVERY string.
+    all_strings = "".join(t.string + " " for t in toks if t.type == tokenize.STRING)
+    for verb in ("--snoozed-until", "expire-sweep", "EXPIRE_PENDING", "due_ts", "--expires"):
+        assert verb not in all_strings, f"the watchdog must not touch {verb}"
+    assert "snooze" not in src, "the watchdog must not touch snooze"
+
+    # EXCLUSIVITY, not presence. The previous form iterated only the four verbs it already
+    # expected, so it could never notice a FIFTH: a newly added "dispose" or "retire" passed
+    # straight through it. Pull the verb POSITIONALLY instead -- the string literal immediately
+    # after "approval.py" in each argv list -- and assert the whole SET.
+    invoked = set()
+    for i, t in enumerate(toks):
+        if t.type == tokenize.STRING and t.string.strip('\'"') == "approval.py":
+            for nxt in toks[i + 1:]:
+                if nxt.type == tokenize.STRING:
+                    invoked.add(nxt.string.strip('\'"'))
+                    break
+    assert invoked == {"request", "patch", "get", "answer"}, (
+        f"the watchdog may invoke ONLY request/patch/get/answer on approval.py; found {invoked}")
+
+
+def test_a_none_needed_class_is_never_routed_to_repair():
+    """api_health_fail is catalogued action=none_needed and is NOT in CARD_ONLY, so it fell
+    through to the repair branch and recorded a failed repair attempt every tick until it
+    escalated. There is no repair called "none_needed" for anyone to perform."""
+    got = W.decide(rep(cls="api_health_fail", card="apr_1", created_age=999),
+                   attached=False, answer=None, now=1000.0, armed=True)
+    assert got["action"] == "wait", got
+    assert got.get("reason") == "none_needed", got

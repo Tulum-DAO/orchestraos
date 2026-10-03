@@ -45,8 +45,25 @@ HOLD_S = 1800           # "Wait" = 30 minutes
 MAX_ATTEMPTS = 2        # third failure never happens: escalate after two
 VERIFY_WAIT_S = 20      # seconds a respawned CLI gets before the by-effect check
 CARD_FROM = "red-alert-builder"
+# the operator wants the pending queue INTACT this week (2026-09-18): the saturated surface is the
+# demo material. Never answer/dispose/retire a card here; correct it in place and leave it pending.
+# SECOND RULING, same day: the 7 past-due COMMITMENT rows stay too, and due-date escalation must
+# NOT be wired at them before Saturday — a working escalation would resolve them and destroy the
+# demo. So preservation also forbids RE-DATING, SNOOZING and any sweep pointed at a date. Nothing
+# in this file may grow such a verb; test_nothing_in_the_watchdog_touches_dates_snooze_or_expiry
+# fails if one appears. "Helpfully escalate an overdue row" is exactly the move that reads as
+# hygiene and is not.
+PRESERVE_PENDING_QUEUE = os.environ.get("RED_ALERT_CLOSE_CARDS", "") != "1"
 CLI_RUNTIMES = ("claude", "gemini", "codex")
-CARD_ONLY = {"login_screen", "gateway_unreachable", "tmux_server_dead", "process_suspended"}
+CARD_ONLY = {"login_screen", "gateway_unreachable", "tmux_server_dead", "process_suspended", "green_died"}
+WAL_DIR = os.path.join(ORCH, "state", "wal")
+# NAMING-CONVENTION DEPENDENCY, not a defect: this claims ANY seat whose name ends in -g<N> as a
+# blue-green green, and a green is deliberately never reported and never respawned. A non-green
+# seat named with that suffix would therefore be silently exempt from RED ALERT. No such seat
+# exists today (the live WAL confirms the gm-g62 convention), but rename with this in mind.
+_GREEN_RE = re.compile(r"^(?P<root>.+)-g(?P<gen>\d+)$")
+# bg states in which a green is legitimately expected to exist
+_BG_ACTIVE = {"PREWARMING", "HYDRATING", "VERIFY", "VERIFYING", "READY", "SWAPPING", "PREWARMED", "ARMED"}
 MODEL_LADDER = ["claude-opus-5[1m]", "claude-sonnet-5[1m]", "gemini", "codex"]
 
 def log(msg: str) -> None:
@@ -73,6 +90,29 @@ def live_seats(registry: dict, *, tmux_sessions: set[str]) -> list[tuple[str, st
         if sess and sess in tmux_sessions:
             out.append((aid, sess))
     return out
+
+
+def green_status(seat: str, *, wal_dir: str | None = None) -> str:
+    """'not_green' | 'unexpected_green' | 'active_green'.
+
+    Operator ruling 2026-09-18: a GREEN is an ephemeral successor booted by the
+    blue-green beat. Its pane dying is usually CORRECT — the seam raised (hydrate SeamTimeout under
+    load), the green was torn down and the root went back to SOLO; blue never stopped. Respawning it
+    from the registry would manufacture an orphan pane. Only the state machine may boot a green.
+    """
+    m = _GREEN_RE.match(seat)
+    if not m:
+        return "not_green"
+    path = os.path.join(wal_dir or WAL_DIR, f"{m.group('root')}.bg.json")
+    try:
+        with open(path) as f:
+            bg = json.load(f)
+    except (OSError, ValueError):
+        return "unexpected_green"        # no state machine expecting it
+    state = str(bg.get("state") or "").upper()
+    meta = bg.get("meta") or {}
+    named = any(meta.get(k) for k in ("green_pane_id", "green_pane_pid", "green_session_id"))
+    return "active_green" if (state in _BG_ACTIVE and named) else "unexpected_green"
 
 
 def norm_answer(card: dict | None) -> str | None:
@@ -105,6 +145,12 @@ def decide(report: dict, *, attached: bool, answer: str | None, now: float, arme
         return {"action": "wait", "reason": "disarmed"}
     if cls in CARD_ONLY:
         return {"action": "wait", "reason": "card_only"}
+    if fix == "none_needed":
+        # A class whose catalogued immediate_fix is "none_needed" has nothing for the watchdog to
+        # do (api_health_fail: the service-watchdog restarts the API itself). Without this it fell
+        # through to the repair path and logged a FAILED repair attempt every tick until it
+        # escalated, because "none_needed" is not a repair anyone can perform.
+        return {"action": "wait", "reason": "none_needed"}
     hold_until = report.get("hold_until")
     if answer == "Wait":
         if hold_until and now < hold_until:
@@ -113,7 +159,7 @@ def decide(report: dict, *, attached: bool, answer: str | None, now: float, arme
             return {"action": "hold", "hold_until": now + HOLD_S}
         return {"action": "repair", "fix": fix, "reason": "hold expired"}
     if attached and fix == "switch_provider":
-        return {"action": "wait", "reason": "attached"}   # never /model on a pane a human is in 
+        return {"action": "wait", "reason": "attached"}   # never /model on a pane a human is in
     if answer == "Repair now":
         return {"action": "repair", "fix": fix, "reason": "answered"}
     if attached:
@@ -172,8 +218,12 @@ def _view(r: dict) -> dict:
 
 def post_card(r: dict, ev: dict, seat: str) -> str | None:
     cls, rid = r["class"], r["id"]
+    # A human-filed report (the phone's Report button) has no pattern class —
+    # class is None there, and .replace() on it crashed the whole report with a
+    # 500 before the card was ever posted. Fall back to the severity wording.
+    label = (cls or r.get("severity") or "issue").replace("_", " ")
     fix = RA.CATALOGUE.get(cls, {}).get("immediate_fix", {})
-    q = f"RED ALERT {rid}: {seat} — {cls.replace('_', ' ')}. Repair it?"
+    q = f"RED ALERT {rid}: {seat} — {label}. Repair it?"
     summary = (f"**What happened:** {r['symptom']}\n\n**What I will do if you don't answer in 2 minutes:** "
                f"{fix.get('action', '-')} — {fix.get('how', '')}\n\nReport: `{r['_path']}`\n"
                f"Snapshot: `{(ev.get('pane_snapshot') or {}).get(seat, '-')}`")
@@ -189,7 +239,7 @@ def post_card(r: dict, ev: dict, seat: str) -> str | None:
               watch={"card_at": time.time(), "hold_until": None})
     # mirrors — best effort, each by effect in its own log
     tg = subprocess.run([os.path.join(HERE, "tg-notify.sh"), "--from", "RED ALERT",
-                         f"🚨 {rid} {seat}: {cls.replace('_', ' ')}\n{r['symptom'][:300]}\nCard {card}: Repair now / Wait / Show me. "
+                         f"🚨 {rid} {seat}: {label}\n{r['symptom'][:300]}\nCard {card}: Repair now / Wait / Show me. "
                          f"No answer in 2 min → {fix.get('action')}."], capture_output=True, text=True, timeout=60)
     body = f"{q}\n\n{summary}\n\ncard={card}"
     bf = os.path.join(RA.log_dir(), f".{rid}-arturo.txt")
@@ -212,18 +262,60 @@ def read_card(card_id: str) -> dict | None:
 
 
 def close_card(card_id: str, text: str) -> None:
-    """A repaired seat must not leave a pending card on the operator's phone: self-answer it
-    (answered_by = the watchdog, provenance only) so the queue reflects reality."""
+    """Record the resolution on a card whose report healed.
+
+    PRESERVE_PENDING_QUEUE (2026-09-18, on the operator's own instruction): this week the pending
+    queue is EVIDENCE — he is demonstrating a saturated approvals surface, not asking for a
+    clean one. So a healed report never answers, disposes or retires its card; it writes the
+    correction ONTO the card and leaves the row pending. Set the flag False (or
+    RED_ALERT_CLOSE_CARDS=1) to restore ordinary hygiene once he says so."""
+    if PRESERVE_PENDING_QUEUE:
+        note = f"\n\n**Update — no longer needs an answer:** {text}"
+        if note_card(card_id, note):
+            log(f"CARD {card_id} left pending (queue preserved); correction written onto it")
+        else:
+            mail_correction(card_id, text)
+            log(f"CARD {card_id} left pending; card refused the edit, correction mailed to the manager seat instead")
+        return
     subprocess.run([sys.executable, os.path.join(HERE, "approval.py"), "answer", "--id", card_id, "--answer", "option",
                     "--option-n", "1", "--answer-text", text, "--surface", "agent_cli", "--answered-by", CARD_FROM],
                    capture_output=True, text=True, timeout=30)
 
 
-def note_card(card_id: str, text: str) -> None:
-    """Append to the card's summary (patch takes a whole summary; read-modify-write)."""
+def note_card(card_id: str, text: str) -> bool:
+    """Append to a card's summary. Returns whether the edit ACTUALLY applied.
+
+    approval.py patch only edits PENDING kind='human_task' rows, and every card this watchdog
+    raises is kind='menu' — so this was a silent no-op on all of them while the log claimed a
+    correction had been written (found 2026-09-18 against a real menu card). A correction that
+    silently fails is worse than no correction, hence the return value and the caller's fallback.
+
+    DO NOT "fix" this by making the store accept in-place edits of pending rows, and do not
+    re-date, snooze or expire a row either (2026-09-18, HELD indefinitely): a write path that mutates a pending card is the most dangerous thing that
+    could be added to that store, and its failure mode is not a crash — it is a card that silently
+    reads differently in front of an audience. The mail fallback is the intended behaviour and stays
+    even if the store ever gains that capability.
+    """
     card = read_card(card_id) or {}
-    subprocess.run([sys.executable, os.path.join(HERE, "approval.py"), "patch", "--id", card_id, "--from", CARD_FROM,
-                    "--summary", (card.get("summary") or "") + text], capture_output=True, text=True, timeout=30)
+    r = subprocess.run([sys.executable, os.path.join(HERE, "approval.py"), "patch", "--id", card_id, "--from", CARD_FROM,
+                        "--summary", (card.get("summary") or "") + text], capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        log(f"CARD {card_id}: patch refused (rc={r.returncode}; menu rows are not patchable) — correction NOT on the card")
+        return False
+    return True
+
+
+def mail_correction(card_id: str, text: str) -> None:
+    """The durable home for a correction the card itself will not take: a msg_store row to the manager seat,
+    who owns the surface and can re-raise or relay it. Never a new card (padding the queue is
+    exactly what the preserve-the-queue rule forbids)."""
+    bf = os.path.join(RA.log_dir(), f".correction-{card_id}.txt")
+    with open(bf, "w") as f:
+        f.write(f"Correction for card {card_id} (the row is kind='menu' and refuses an in-place edit; "
+                f"left PENDING per the preserve-the-queue rule):\n\n{text}")
+    subprocess.run([sys.executable, os.path.join(CODE_ROOT, "msg_store.py"), "send", "--from", CARD_FROM, "--to", "gm",
+                    "--type", "red_alert", "--subject", f"correction for {card_id} (card not editable)", "--body-file", bf],
+                   capture_output=True, text=True, timeout=60)
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +339,9 @@ def _healthy(seat: str) -> tuple[bool, dict]:
 def repair_respawn(seat: str, session: str, ev: dict) -> tuple[bool, str]:
     """HARD RULE (the operator, 2026-09-18): respawn ONLY a pane whose process is already
     gone — no -k, no signal of any kind. A suspended (STAT T) or otherwise present process is
-    a card to the operator, never a repair."""
+    a card to the operator, never a repair. A GREEN is never respawned at all (2026-09-18)."""
+    if _GREEN_RE.match(seat):
+        return False, f"{seat} is a blue-green green; only the state machine may boot one — refusing to respawn"
     procs = ev["process_state"].get(seat) or []
     if procs:
         return False, f"process still present ({len(procs)} pids, e.g. {procs[0].get('stat')}) — refusing to respawn (no kills rule); card only"
@@ -322,7 +416,7 @@ REPAIRS = {
 # ---------------------------------------------------------------------------
 def spawn_diagnosis(r: dict, *, force: bool = False) -> str:
     """Only after RA.escalate (an escalations[] row) unless force — a direct call on a resolved or
-    un-escalated report spawned a seat with nothing to diagnose."""
+    un-escalated report spawned a seat with nothing to diagnose (diag seat finding #2)."""
     rid = r["id"]
     if not force and (r.get("status") == "resolved" or not r.get("escalations")):
         log(f"DIAG {rid} refused: status={r.get('status')} escalations={len(r.get('escalations') or [])} (force=False)")
@@ -461,6 +555,15 @@ def tick(*, only: str | None = None, dry: bool = False, registry_path: str | Non
                         close_card(r["card_id"], "seat is healthy again (fixed by hand or cleared itself) — nothing to decide")
                     log(f"RESOLVED {r['id']} {seat} healthy by effect")
             continue
+        if f["class"] == "pane_dead":
+            gs = green_status(seat)
+            if gs == "unexpected_green":
+                log(f"SKIP {seat}: dead green, root not expecting it (bg SOLO/absent) — correct teardown, no report")
+                continue
+            if gs == "active_green":
+                f = {**f, "class": "green_died", "severity": RA.CATALOGUE["green_died"]["severity"],
+                     "immediate_fix": RA.CATALOGUE["green_died"]["immediate_fix"],
+                     "signal": f["signal"] + "; root's bg_state still expects this green"}
         findings += 1
         if dry:
             log(f"DRY {seat} {f['class']} attached={ev['attached'][seat]} ({f['signal']})")
