@@ -92,6 +92,9 @@ test('rejoins the Claude CLI /login OAuth URL and ignores the docs link above it
     '  Login',
     "  Browser didn't open? Use the url below to sign in (c to copy)",
     '',
+    // 9d1c250a-… is Claude Code's PUBLIC OAuth client_id (it appears in every user's
+    // login URL), not operator data. Kept verbatim because this fixture exists to test
+    // reassembly of a URL tmux wrapped mid-uuid.
     'https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e',
     '61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=https%3A%2',
     'F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=org%3Acreate_',

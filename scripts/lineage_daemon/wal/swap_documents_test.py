@@ -29,7 +29,7 @@ def _green(gen=3, sid="new-sid"):
 
 def _blue_record():
     return {"name": "identity-store-builder", "generation": 2,
-            "session_id": "0ed9c5d7", "status": "online", "tier": "T2"}
+            "session_id": "0aaaaaaa", "status": "online", "tier": "T2"}
 
 
 def _docs():
@@ -93,7 +93,7 @@ def test_no_session_id_leak_into_provisional_shape():
     docs = _docs()
     for f, k, key, r in docs:
         if key == "identity-store-builder" and "session_id" in r:
-            assert r["session_id"] == "new-sid"  # green, not blue 0ed9c5d7
+            assert r["session_id"] == "new-sid"  # green, not blue 0aaaaaaa
 
 
 # --- #15: per-runtime resume_command derivation for a provisional BG-capsule green ---
@@ -111,12 +111,12 @@ def _succ(docs, root, file="registry.json"):
 def test_gemini_green_without_resume_derives_agy_command():
     docs = build_swap_documents(
         root="demo-gemini-pred2", blue_generation=1,
-        green={"generation": 2, "session_id": "7c211378", "model": "gemini-3.7-flash",
+        green={"generation": 2, "session_id": "4aaaaaaa", "model": "gemini-3.7-flash",
                "runtime": "gemini"},
         blue_record={"name": "demo-gemini-pred2", "generation": 1, "tier": "T2",
                      "runtime": "gemini"},
         cwd="/home/testuser/agent-orchestra")
-    want = "agy --conversation 7c211378 --dangerously-skip-permissions"
+    want = "agy --conversation 4aaaaaaa --dangerously-skip-permissions"
     assert _succ(docs, "demo-gemini-pred2")["resume_command"] == want
     assert _succ(docs, "demo-gemini-pred2", "agent-sessions.json")["resume_command"] == want
 
@@ -157,7 +157,7 @@ def test_successor_carries_runtime_and_model_when_known():
     # not just the sid — else read_ctx/idle-gate/the NEXT rotation see runtime=None.
     docs = build_swap_documents(
         root="demo-gemini-pred2", blue_generation=1,
-        green={"generation": 2, "session_id": "7c211378", "model": "gemini-3.7-flash",
+        green={"generation": 2, "session_id": "4aaaaaaa", "model": "gemini-3.7-flash",
                "runtime": "gemini"},
         blue_record={"name": "demo-gemini-pred2", "generation": 1, "tier": "T2",
                      "runtime": "gemini"},

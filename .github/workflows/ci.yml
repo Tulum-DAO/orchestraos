@@ -29,6 +29,25 @@ jobs:
           done
           exit $missing
 
+  # Operator identifiers are a DIFFERENT question from credentials, and `secret-scan`
+  # cannot answer it: `.secrets.baseline` enables `is_potential_uuid`, a dashed uuid is
+  # under the entropy limit anyway, and a `claude --resume <sid>` line is reported under
+  # no configuration at all. PR #156 carried a real session id through a GREEN
+  # secret-scan. Separate job, separate name, so a green tick means what it says.
+  operator-identifier-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # --git-ls enumerates tracked files internally: `$(git ls-files)` word-splits on
+      # whitespace and lets a `-`-prefixed path be eaten as a flag. --min-files makes
+      # coverage ENFORCED rather than printed, because nobody reads logs on a green run.
+      - run: >-
+          python3 scripts/scan_operator_identifiers.py --git-ls --min-files 1200
+          --baseline scripts/operator_identifiers_baseline.json
+
   secret-scan:
     runs-on: ubuntu-latest
     steps:

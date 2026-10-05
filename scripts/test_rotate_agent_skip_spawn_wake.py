@@ -3,9 +3,8 @@ readback before grading (the skip-spawn wake fix).
 
 Live failure, a live rotation, 2026-09-17: the spawn died before the init inject
 (item 1), the driver retried with --skip-spawn against the already-open but never-woken pane. The
-skip-spawn path wrote the q-keyed scaffold at 01:10:07Z and graded it 3 s later
-(HOLD_GRADE 01:10:10Z, artifacts archived as .held-20260917T011010Z) — the successor had never
-been asked anything. the driver recovered by hand-waking the pane and re-running --skip-spawn, which
+skip-spawn path wrote the q-keyed scaffold and graded it 3 s later (artifacts archived as
+.held-<incident ts>) — the successor had never been asked anything. the driver recovered by hand-waking the pane and re-running --skip-spawn, which
 correctly preserved the successor-authored readback.
 
 Contract for --skip-spawn:

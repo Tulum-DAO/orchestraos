@@ -1,6 +1,6 @@
 """RED (gm msg_e7d7f734 finding 2, by effect 2026-09-16 01:30Z): after the autonomous codex swap,
 the flat registry projected `relational-intent-gen1` with session_id None / resume_command None
-while the DB generation row holds 01a08c8c + `codex --yolo resume 01a08c8c` (same class as the
+while the DB generation row holds 00000002 + `codex --yolo resume 00000002` (same class as the
 559b1512cc resume backfill, on the projection side). Cause: for a swap-retired archive the
 projector copies the persisted `<root>-gen<N>` document VERBATIM (status aside), and the BG
 swap path persisted that document from a flat doc that never carried the codex seat's sid.
@@ -13,7 +13,7 @@ sys.path.insert(0, ".")
 from scripts.identity_store import projector  # noqa: E402
 
 ROOT = "relational-intent"
-SID1 = "01a08c8c-c0ee-7e40-8e79-8ee7a56612f1"
+SID1 = "00000002-0000-7000-8000-000000000002"
 RESUME1 = f"codex --yolo resume {SID1}"
 
 
@@ -21,12 +21,12 @@ def _snap(archive_doc, session_doc=None):
     gens = [
         {"id": 564, "root": ROOT, "generation": 1, "session_id": SID1,
          "resume_command": RESUME1, "retired_at": "2026-09-16T01:30:46Z", "model": "m"},
-        {"id": 565, "root": ROOT, "generation": 2, "session_id": "01a0a4fe",
-         "resume_command": "codex --yolo resume 01a0a4fe", "retired_at": None, "model": "m"},
+        {"id": 565, "root": ROOT, "generation": 2, "session_id": "00000004",
+         "resume_command": "codex --yolo resume 00000004", "retired_at": None, "model": "m"},
     ]
     docs = {"meta": {},
-            "agent": {ROOT: (0, {"name": ROOT, "lineage_root": ROOT, "session_id": "01a0a4fe"})},
-            "session": {ROOT: (0, {"name": ROOT, "session_id": "01a0a4fe"})}}
+            "agent": {ROOT: (0, {"name": ROOT, "lineage_root": ROOT, "session_id": "00000004"})},
+            "session": {ROOT: (0, {"name": ROOT, "session_id": "00000004"})}}
     if archive_doc is not None:
         docs["agent"][f"{ROOT}-gen1"] = (1, archive_doc)
     if session_doc is not None:

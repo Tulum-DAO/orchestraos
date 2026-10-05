@@ -52,7 +52,7 @@ def _green():
 
 def _blue_record():
     return {"name": "identity-store-builder", "generation": 2,
-            "session_id": "0ed9c5d7", "status": "online", "tier": "T2"}
+            "session_id": "0aaaaaaa", "status": "online", "tier": "T2"}
 
 
 def _counts(db):

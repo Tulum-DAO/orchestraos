@@ -55,7 +55,7 @@ before(() => {
   dbp = path.join(orch, 'state', 'orchestra-registry.db');
   seedSchema(dbp);
   // motion-graphics: the real flap case — canonical online in the DB, real sid.
-  insertCanonical(dbp, 'motion-graphics', 1, '9c9442be', 'motion-graphics');
+  insertCanonical(dbp, 'motion-graphics', 1, '8aaaaaaa', 'motion-graphics');
 });
 
 after(() => {

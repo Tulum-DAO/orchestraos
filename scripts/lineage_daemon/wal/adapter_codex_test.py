@@ -23,7 +23,7 @@ from lineage_daemon.wal.adapter_codex import CodexWalAdapter
 from lineage_daemon.wal.store import WalStore
 
 
-SID = "01a01801-b232-7760-b6f0-c6ea1d6e9152"
+SID = "00000000-0000-7000-8000-000000000000"
 
 _ROLLOUT = "\n".join([
     '{"type":"session_meta","payload":{"id":"%s","timestamp":"2026-08-27T10:00:00Z","cwd":"/tmp/x"}}' % SID,

@@ -1,4 +1,4 @@
-cd ~/orchestra && claude --dangerously-skip-permissions --settings /tmp/claude-1001/-home-user-scripts-orchestra/8634ee99-543a-41fc-a785-c7abd2ca6538
+cd ~/orchestra && claude --dangerously-skip-permissions --settings /tmp/claude-1001/-home-user-scripts-orchestra/0000000d-0000-4000-8000-00000000000d
 /scratchpad/no-hooks-settings.json
 $  ▐▛███▛█ Claude Code v2.1.260
 ▝▜██████▀  Fable 5.1 with medium effort · Claude Max

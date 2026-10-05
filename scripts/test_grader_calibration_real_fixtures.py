@@ -41,8 +41,8 @@ _spec.loader.exec_module(RG)
 # produced them.
 LIVE = Path(os.environ.get("ORCHESTRA_DIR", str(ROOT))) / "state" / "agent-handoffs"
 PROJ = Path.home() / ".claude/projects" / ("-" + str(ROOT).strip("/").replace("/", "-"))
-GEN4_T = PROJ / "58ce7bcd-8b00-43d2-9a66-1987ec448eab.jsonl"   # gen3 (pred)
-GEN28_T = PROJ / "fae5463b-2a41-44cb-adfb-f3c45f4c2a82.jsonl"  # gen27 (pred)
+GEN4_T = PROJ / "00000008-0000-4000-8000-000000000008.jsonl"   # gen3 (pred)
+GEN28_T = PROJ / "00000010-0000-4000-8000-000000000010.jsonl"  # gen27 (pred)
 
 need = [LIVE / "all-model-parity-gen4.canary.json",
         LIVE / "all-model-parity-gen4.readback.md",

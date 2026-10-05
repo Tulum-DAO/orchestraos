@@ -19,7 +19,7 @@ from lineage_daemon.wal.store import WalStore
 def _ev(**over):
     base = dict(
         ts=1000.0, lineage_root="ios-watch-dev", generation=6,
-        sid="757ef800", runtime="claude", kind="tool_call",
+        sid="0000000c", runtime="claude", kind="tool_call",
         summary="Bash(ls)", body_ref="p.jsonl:42", source_path="p.jsonl",
         source_off=128, integrity="deadbeef",
     )

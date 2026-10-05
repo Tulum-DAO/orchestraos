@@ -19,7 +19,7 @@ from lineage_daemon.wal.real_seams import (  # noqa: E402
 
 def _blue_record():
     return {"name": "identity-store-builder", "generation": 2,
-            "session_id": "0ed9c5d7", "status": "online", "tier": "T2"}
+            "session_id": "0aaaaaaa", "status": "online", "tier": "T2"}
 
 
 def test_project_now_seam_resolves_a_real_callable_not_the_raise_path():

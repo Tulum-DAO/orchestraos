@@ -1,7 +1,7 @@
 """RED-first tests for the claude WAL adapter (spec §2.3 adapter_claude).
 
 Grounded on the REAL event shapes observed live on ios-watch-dev's
-757ef800-*.jsonl (2026-09-02): line-delimited JSON, types assistant
+0000000c-*.jsonl (2026-09-02): line-delimited JSON, types assistant
 (content[].thinking/text/tool_use + message.usage), user
 (content[].tool_result/text), system, file-history-snapshot, queue-operation;
 every line carries `timestamp` + `sessionId`.
@@ -21,7 +21,7 @@ from lineage_daemon.wal.adapter_claude import ClaudeWalAdapter
 
 
 def _line(**o):
-    o.setdefault("sessionId", "757ef800")
+    o.setdefault("sessionId", "0000000c")
     o.setdefault("timestamp", "2026-09-02T03:00:00.000Z")
     return json.dumps(o) + "\n"
 
@@ -98,8 +98,8 @@ def test_system_and_snapshot_to_marker(tmp_path):
     store, ad = _adapter(tmp_path)
     src = str(tmp_path / "s.jsonl")
     _write(src,
-           _line(type="system", subtype="hook", sessionId="757ef800"),
-           _line(type="file-history-snapshot", messageId="m1", sessionId="757ef800"))
+           _line(type="system", subtype="hook", sessionId="0000000c"),
+           _line(type="file-history-snapshot", messageId="m1", sessionId="0000000c"))
     ad.tail(src)
     kinds = [r["kind"] for r in store.events()]
     assert kinds == ["marker", "marker"]

@@ -1,0 +1,227 @@
+{
+  "_comment": "Accepted PRE-EXISTING operator-identifier occurrences. Keyed by file+value, never line number. This file is a WORKLIST, not a permission: burning it down is the follow-up. Nothing new may be added without a reason.",
+  "accepted": [
+    {
+      "key": "api/src/lib/cors-origin.test.ts::host-or-email::srv1397016",
+      "path": "api/src/lib/cors-origin.test.ts",
+      "reason": "pre-existing at gate introduction",
+      "rule": "host-or-email"
+    },
+    {
+      "key": "api/src/lib/cors-origin.test.ts::host-or-email::srv1397016",
+      "path": "api/src/lib/cors-origin.test.ts",
+      "reason": "pre-existing at gate introduction",
+      "rule": "host-or-email"
+    },
+    {
+      "key": "api/src/lib/cors-origin.test.ts::host-or-email::srv1397016",
+      "path": "api/src/lib/cors-origin.test.ts",
+      "reason": "pre-existing at gate introduction",
+      "rule": "host-or-email"
+    },
+    {
+      "key": "api/src/lib/cors-origin.test.ts::host-or-email::srv1397016",
+      "path": "api/src/lib/cors-origin.test.ts",
+      "reason": "pre-existing at gate introduction",
+      "rule": "host-or-email"
+    },
+    {
+      "key": "api/src/lib/cors-origin.test.ts::host-or-email::srv1397016",
+      "path": "api/src/lib/cors-origin.test.ts",
+      "reason": "pre-existing at gate introduction",
+      "rule": "host-or-email"
+    },
+    {
+      "key": "api/src/lib/cors-origin.test.ts::host-or-email::srv1397016",
+      "path": "api/src/lib/cors-origin.test.ts",
+      "reason": "pre-existing at gate introduction",
+      "rule": "host-or-email"
+    },
+    {
+      "key": "api/src/lib/cors-origin.test.ts::host-or-email::srv1397016",
+      "path": "api/src/lib/cors-origin.test.ts",
+      "reason": "pre-existing at gate introduction",
+      "rule": "host-or-email"
+    },
+    {
+      "key": "api/src/lib/cors-origin.test.ts::host-or-email::srv1397016",
+      "path": "api/src/lib/cors-origin.test.ts",
+      "reason": "pre-existing at gate introduction",
+      "rule": "host-or-email"
+    },
+    {
+      "key": "api/src/routes/pane-url.test.ts::session-id::9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+      "path": "api/src/routes/pane-url.test.ts",
+      "reason": "pre-existing at gate introduction",
+      "rule": "session-id"
+    },
+    {
+      "key": "docs/RELEASE_CHECKLIST.md::city-clock::11:00 Tulum",
+      "path": "docs/RELEASE_CHECKLIST.md",
+      "reason": "pre-existing at gate introduction",
+      "rule": "city-clock"
+    },
+    {
+      "key": "docs/RELEASE_CHECKLIST.md::home-path::/home/shaw",
+      "path": "docs/RELEASE_CHECKLIST.md",
+      "reason": "pre-existing at gate introduction",
+      "rule": "home-path"
+    },
+    {
+      "key": "docs/decks/4-decisions-reach-a-human.md::city-clock::20:03 Tulum",
+      "path": "docs/decks/4-decisions-reach-a-human.md",
+      "reason": "pre-existing at gate introduction",
+      "rule": "city-clock"
+    },
+    {
+      "key": "docs/decks/5-status-and-visibility.md::city-clock::03:00 Tulum",
+      "path": "docs/decks/5-status-and-visibility.md",
+      "reason": "pre-existing at gate introduction",
+      "rule": "city-clock"
+    },
+    {
+      "key": "docs/decks/6-memory.md::city-clock::20:15 Tulum",
+      "path": "docs/decks/6-memory.md",
+      "reason": "pre-existing at gate introduction",
+      "rule": "city-clock"
+    },
+    {
+      "key": "scripts/identity_store/projector.py::city-clock::13:05 Tulum",
+      "path": "scripts/identity_store/projector.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "city-clock"
+    },
+    {
+      "key": "scripts/identity_store/test_projector_archive_db_first_identity.py::session-id-prefix::559b1512cc",
+      "path": "scripts/identity_store/test_projector_archive_db_first_identity.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "session-id-prefix"
+    },
+    {
+      "key": "scripts/identity_store/test_projector_live_db_first_identity.py::city-clock::13:05 Tulum",
+      "path": "scripts/identity_store/test_projector_live_db_first_identity.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "city-clock"
+    },
+    {
+      "key": "scripts/identity_store/test_projector_live_db_first_identity.py::session-id-prefix::c9560b947c",
+      "path": "scripts/identity_store/test_projector_live_db_first_identity.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "session-id-prefix"
+    },
+    {
+      "key": "scripts/lineage_daemon/auto_grade_test.py::session-id-prefix::abcdef0123",
+      "path": "scripts/lineage_daemon/auto_grade_test.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "session-id-prefix"
+    },
+    {
+      "key": "scripts/lineage_daemon/auto_grade_test.py::session-id-prefix::abcdef0123",
+      "path": "scripts/lineage_daemon/auto_grade_test.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "session-id-prefix"
+    },
+    {
+      "key": "scripts/lineage_daemon/auto_grade_test.py::session-id-prefix::abcdef0123",
+      "path": "scripts/lineage_daemon/auto_grade_test.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "session-id-prefix"
+    },
+    {
+      "key": "scripts/lineage_daemon/auto_grade_test.py::session-id-prefix::abcdef0123",
+      "path": "scripts/lineage_daemon/auto_grade_test.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "session-id-prefix"
+    },
+    {
+      "key": "scripts/lineage_daemon/auto_grade_test.py::session-id-prefix::abcdef0123",
+      "path": "scripts/lineage_daemon/auto_grade_test.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "session-id-prefix"
+    },
+    {
+      "key": "scripts/lineage_daemon/complete_provider_completion_test.py::session-id-prefix::abc123def",
+      "path": "scripts/lineage_daemon/complete_provider_completion_test.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "session-id-prefix"
+    },
+    {
+      "key": "scripts/lineage_daemon/complete_provider_timing_test.py::session-id-prefix::abc123def",
+      "path": "scripts/lineage_daemon/complete_provider_timing_test.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "session-id-prefix"
+    },
+    {
+      "key": "scripts/lineage_daemon/wal/store_test.py::session-id-prefix::deadbeef",
+      "path": "scripts/lineage_daemon/wal/store_test.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "session-id-prefix"
+    },
+    {
+      "key": "scripts/promote_successor.py::session-id-prefix::62b7a2da5",
+      "path": "scripts/promote_successor.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "session-id-prefix"
+    },
+    {
+      "key": "scripts/promote_successor.py::session-id-prefix::4e20a7516",
+      "path": "scripts/promote_successor.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "session-id-prefix"
+    },
+    {
+      "key": "scripts/promote_successor.py::session-id-prefix::4e20a7516",
+      "path": "scripts/promote_successor.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "session-id-prefix"
+    },
+    {
+      "key": "scripts/promote_successor.py::session-id-prefix::f8642e5a5",
+      "path": "scripts/promote_successor.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "session-id-prefix"
+    },
+    {
+      "key": "scripts/promote_successor.py::session-id-prefix::4e20a7516",
+      "path": "scripts/promote_successor.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "session-id-prefix"
+    },
+    {
+      "key": "scripts/promote_successor.py::session-id-prefix::2d5b0698a",
+      "path": "scripts/promote_successor.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "session-id-prefix"
+    },
+    {
+      "key": "scripts/rotation_gate_manual_vouch_test.py::session-id-prefix::abcd1234",
+      "path": "scripts/rotation_gate_manual_vouch_test.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "session-id-prefix"
+    },
+    {
+      "key": "scripts/rotation_gate_manual_vouch_test.py::session-id-prefix::abcd1234",
+      "path": "scripts/rotation_gate_manual_vouch_test.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "session-id-prefix"
+    },
+    {
+      "key": "scripts/test_grader_calibration.py::session-id-prefix::deadbeef",
+      "path": "scripts/test_grader_calibration.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "session-id-prefix"
+    },
+    {
+      "key": "scripts/test_grader_calibration.py::session-id-prefix::deadbeef",
+      "path": "scripts/test_grader_calibration.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "session-id-prefix"
+    },
+    {
+      "key": "scripts/test_grader_calibration.py::session-id-prefix::ab12cd34ef",
+      "path": "scripts/test_grader_calibration.py",
+      "reason": "pre-existing at gate introduction",
+      "rule": "session-id-prefix"
+    }
+  ]
+}

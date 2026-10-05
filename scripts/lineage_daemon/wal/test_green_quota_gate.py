@@ -1,5 +1,5 @@
 """RED (gm msg_7b3ffa11 GO, by effect 2026-09-16 01:32Z): leg (ii) promoted a codex green whose
-workspace credits were depleted (rollout 01a0a4fe latest token_count.rate_limits: limit_id
+workspace credits were depleted (rollout 00000004 latest token_count.rate_limits: limit_id
 premium, credits.has_credits false, rate_limit_reached_type workspace_owner_credits_depleted).
 The readiness/swap gates had no vendor-quota check. Contract: GREEN_QUOTA_READERS[runtime]
 (data lookup, no runtime literals in control flow) -> {exhausted, kind, limit_id, reset_at} or

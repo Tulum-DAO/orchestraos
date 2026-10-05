@@ -50,7 +50,7 @@ def test_driver_uses_production_dispatch_symbols():
 
 def test_source_path_for_codex(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
-    sid = "01a0a300-261d-7ff2-a2e1-f697da67ec8d"
+    sid = "00000003-0000-7000-8000-000000000003"
     d = os.path.join(str(tmp_path), ".codex", "sessions", "2026", "09", "14")
     os.makedirs(d)
     p = os.path.join(d, f"rollout-2026-09-14T22-58-11-{sid}.jsonl")

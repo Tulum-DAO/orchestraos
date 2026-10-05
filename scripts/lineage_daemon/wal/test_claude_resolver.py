@@ -117,7 +117,7 @@ def test_transcript_scanner_gen_suffix_tolerant_and_boot_bounded(tmp_path):
 # ---- gm msg_1074aa87 (by effect on gm 01:00Z/01:15Z): a parked predecessor pane (gm-gen63 /
 # gm-gen64, rename-not-kill archives) still gets transcript appends, every candidate verifies
 # against the CANONICAL's process start, and newest-mtime wins -> the resolver returned a
-# RETIRED generation's sid (578dba5a, then 8ce0b6ba) while the canonical is 99a73817. The
+# RETIRED generation's sid (3aaaaaaa, then 6aaaaaaa) while the canonical is 7aaaaaaa. The
 # reconciler's foreign-generation gate failed closed, but re-alarmed every tick with a different
 # sid. Fix: sids the DB holds as RETIRED generations of the seat's root are never candidates.
 

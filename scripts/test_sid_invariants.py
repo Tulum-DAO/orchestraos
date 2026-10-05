@@ -210,23 +210,23 @@ def test_inv5_row_pointing_at_a_newer_stub_is_caught(world):
     """client-page-access, verbatim: the 3-line/3-second stub was NEWER than
     the 710-line/6-day head. Modernizing to the newest sid orphans six days
     of work and calls it a repair."""
-    head = _head(world, "-p-cpa", "e954c067", "client-page-access")
-    stub = _stub(world, "-p-cpa", "3ce2bfb6", "client-page-access")
+    head = _head(world, "-p-cpa", "9aaaaaaa", "client-page-access")
+    stub = _stub(world, "-p-cpa", "2aaaaaaa", "client-page-access")
     os.utime(head, (1, 1))                     # head is OLDER on disk
     assert os.path.getmtime(stub) > os.path.getmtime(head)
-    sessions = {"client-page-access": {"session_id": "3ce2bfb6",
+    sessions = {"client-page-access": {"session_id": "2aaaaaaa",
                                        "project_dir": str(world / "-p-cpa")}}
     r = _check(sessions, {}, world)
     assert r["counts"]["INV5"] == 1
     f = r["findings"]["INV5"][0]
-    assert f["row_points_at"] == "3ce2bfb6"
-    assert f["substantial_candidates"][0]["session_id"] == "e954c067"
+    assert f["row_points_at"] == "2aaaaaaa"
+    assert f["substantial_candidates"][0]["session_id"] == "9aaaaaaa"
 
 
 def test_inv5_row_pointing_at_the_head_is_clean(world):
-    _head(world, "-p-cpa", "e954c067", "client-page-access")
-    _stub(world, "-p-cpa", "3ce2bfb6", "client-page-access")
-    sessions = {"client-page-access": {"session_id": "e954c067",
+    _head(world, "-p-cpa", "9aaaaaaa", "client-page-access")
+    _stub(world, "-p-cpa", "2aaaaaaa", "client-page-access")
+    sessions = {"client-page-access": {"session_id": "9aaaaaaa",
                                        "project_dir": str(world / "-p-cpa")}}
     assert _check(sessions, {}, world)["counts"]["INV5"] == 0
 

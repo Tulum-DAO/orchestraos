@@ -27,7 +27,7 @@ def test_green_progress_registry_dispatch_failsoft():
 
 def test_green_progress_gemini_counts_conversation_steps(tmp_path, monkeypatch):
     """The gemini reader returns the green conversation db's step high-water (monotonic)."""
-    cid = "206f75be-cbcd-44c6-8c86-8f87ef3c7eff"
+    cid = "00000006-0000-4000-8000-000000000006"
     # green_progress_gemini expands "~/.gemini/antigravity-cli/conversations" then joins
     # "<cid>.db"; the monkeypatch points that conversations dir at tmp_path.
     db = tmp_path / f"{cid}.db"
