@@ -37,12 +37,11 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { Server as HttpServer, IncomingMessage } from 'http';
 import type { Socket } from 'net';
 
-const SESSION_SECRET = process.env.SESSION_SECRET || 'orchestraOS-session-2026';
-const JWT_SECRET = process.env.JWT_SECRET || 'orchestraOS-jwt-secret-2026';
 // Read fresh (not captured once at module-load) so tests can point this at a
 // fixture file via env without import-order games, and so a real deployment
 // that sets the env after other modules load still picks it up correctly.
-import { gatewayTokenFile } from '../lib/gateway-token.js';  // #85: shared reader
+import { gatewayTokenFile } from '../lib/gateway-token.js';
+import { sessionSecret, jwtSecret } from '../lib/shared-secret.js';  // #85: shared reader
 const GATEWAY_WS_URL = process.env.WATCH_GATEWAY_WS_URL || 'ws://127.0.0.1:8890';  // #84: match [gateway] default
 export const VOICE_LIVE_PATH = '/api/voice/live';
 
@@ -63,7 +62,7 @@ function verifyOrchestraSession(token: string | null): boolean {
   if (dot < 0) return false;
   const b64 = token.slice(0, dot);
   const sig = token.slice(dot + 1);
-  const expected = createHmac('sha256', SESSION_SECRET).update(b64).digest('base64url');
+  const expected = createHmac('sha256', sessionSecret()).update(b64).digest('base64url');
   if (sig !== expected) return false;
   try {
     const payload = JSON.parse(Buffer.from(b64, 'base64url').toString());
@@ -85,7 +84,7 @@ function verifyOrchestraToken(req: IncomingMessage): boolean {
   const parts = token.split('.');
   if (parts.length !== 3) return false;
   const [header, body, sig] = parts;
-  const expected = createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
+  const expected = createHmac('sha256', jwtSecret()).update(`${header}.${body}`).digest('base64url');
   if (sig !== expected) return false;
   try {
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString());

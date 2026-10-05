@@ -13,7 +13,11 @@ import { join } from 'path';
 import { WebSocket, WebSocketServer } from 'ws';
 import { setupVoiceLiveWebSocket, VOICE_LIVE_PATH, isAllowedOrigin } from './voice-live.js';
 
-const SESSION_SECRET = 'orchestraOS-session-2026';
+// This suite used to rely on voice-live.ts's `|| '<literal>'` fallback, which is exactly how a
+// published key stayed load-bearing: deleting the literal broke the tests, so nobody deleted it.
+// The secret is now injected, and read lazily by shared-secret.ts, so no fallback is needed.
+const SESSION_SECRET = 'test-only-session-secret-not-a-real-key';  // pragma: allowlist secret
+process.env.SESSION_SECRET = SESSION_SECRET;
 
 function sessionCookie(): string {
   const payload = JSON.stringify({ u: 'operator', r: 'admin', c: '', exp: Date.now() + 3600_000 });

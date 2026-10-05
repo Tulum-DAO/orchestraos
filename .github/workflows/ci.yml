@@ -116,6 +116,22 @@ jobs:
   # top-level `ordinal` that the codex fixtures never carried) and stayed red, unseen, for
   # every PR since. The test file's own header documented `npm run conformance`, a script
   # that did not exist either. Separate job, so the drift backstop cannot rot again.
+  # A fallback secret is not a default, it is a PUBLISHED key. `secret-scan` cannot catch this
+  # class: a value like `<project>-<thing>-<year>` reads as a label, carries no token prefix and
+  # sits far under every entropy threshold, so detect-secrets scored it zero while it signed
+  # admin session cookies in a public repo whose env var was never set in the live process.
+  # Entropy was never the signal; the SHAPE was. Separate job, separate name.
+  secret-fallback-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # --git-ls enumerates tracked files internally; --min-files makes coverage ENFORCED
+      # rather than printed, because nobody reads logs on a green run.
+      - run: python3 scripts/scan_secret_fallbacks.py --git-ls --min-files 300
+
   contract-ts:
     runs-on: ubuntu-latest
     defaults:
