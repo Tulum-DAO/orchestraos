@@ -11,7 +11,10 @@ The shape, and the reasoning behind each decision:
     usable — the same reason a password file holds hashes. Lookup is by hashing what the
     caller presented, which is also why it stays O(1) with no scan.
   * SCOPES ARE VERBS, not roles. Roles are a presentation choice that can be built on top;
-    what a route needs is a verb. Six: read, approve, message, inject, voice, admin.
+    what a route needs is a verb. Seven: read, approve, message, inject, ptt, voice, admin.
+  * `ptt` exists because `voice` was too coarse for a headset: it also reached the FLEET-WIDE
+    voice-vendor and voice-id writes, so a compromised headset could switch what every
+    conversation on the box uses. `ptt` is one turn of push-to-talk and nothing else.
   * `voice` is separate from `read` because every /arturo call SPENDS REAL PROVIDER MONEY.
     Reading state and buying tokens from a vendor are not the same permission.
   * `approve` is separate from everything because it ANSWERS ON THE OPERATOR'S BEHALF.
@@ -36,7 +39,7 @@ import time
 from pathlib import Path
 
 TOKEN_BYTES = 32
-VERBS = ("read", "approve", "message", "inject", "voice", "admin")
+VERBS = ("read", "approve", "message", "inject", "ptt", "voice", "admin")
 
 #: The one remaining all-powerful credential. The fleet token resolves to this so Shaw's
 #: phone and watch keep working unchanged; it is NAMED in listings rather than hidden, so
