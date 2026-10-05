@@ -81,6 +81,23 @@ make test-perf                 # perf-ratio tests live here; they assume a quiet
 pip install detect-secrets && detect-secrets-hook --baseline .secrets.baseline $(git ls-files)
 ```
 
+Running the full suite on a machine that also runs a live OrchestraOS fleet? Export
+`ORCH_GUARD_RUN=1` for that run:
+
+```bash
+ORCH_GUARD_RUN=1 make test
+```
+
+`_guard_prod_registry_unmutated` fails a test when the production `registry.json` changes while
+it runs — which is the right default, because a test that writes the production store is a real
+defect. But on a host with a live fleet that file is rewritten constantly by normal activity
+(measured: its hash changing within 16 seconds), so the guard ends up blaming whichever test
+happened to be in flight, as a teardown error. `ORCH_GUARD_RUN=1` is the fixture's own designed
+escape and skips only the comparison.
+
+CI does not need it and does not set it: there is no live fleet there, which is why CI has never
+seen this.
+
 ## Code of conduct
 
 This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md). Be kind; assume good
