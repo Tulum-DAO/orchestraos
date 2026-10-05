@@ -2710,6 +2710,117 @@ def _nav_to_confirm(*, read_fn, key_fn, settle_s, max_steps=24):
     return False, {"reason": "nav_unverified", "detail": "no confirm screen reached"}
 
 
+# --- ns SHAPE GUARD (pre-actuation) ----------------------------------------
+# `key_fn` below is `tmux send-keys` WITHOUT `-l`, so tmux INTERPRETS KEY NAMES:
+# "Escape", "C-c" and "q" are real keys, not text. The armed replay feeds every
+# element of a part's `ns` straight into it. The "is this a captured option"
+# check lives in `_validate_batch_answer`, which is reached only inside
+# `durable_first_batch_submit` and only AFTER the durable row lookup succeeds --
+# so `handle_agent_key`'s legacy `no_durable_row` leg, which calls
+# `menu_batch_submit` directly, validated NOTHING. Demonstrated 2026-10-05:
+# ns=["Escape","C-c"] sent both to the pane, i.e. an interrupt into an agent's turn.
+#
+# So the shape check belongs in the PRIMITIVE, not in one caller: an `ns` element
+# is a SINGLE option digit 1-9 (the `ALLOWED_AGENT_KEYS` alphabet). Anything else
+# is refused before a single key is pressed, in dry-run as well as armed -- a
+# dry-run that reports a plan for a malformed batch teaches a client its payload
+# is fine and fails only once armed.
+#
+# This is a SHAPE gate, not an identity gate: it cannot tell option 3 from a
+# captured option 3. `_validate_batch_answer` still does that on the durable path.
+_NS_SHAPE_RE = re.compile(r"\A\d{1,2}\Z")      # mirrors agent-status._MENU_OPT_RE's \d{1,2}
+
+
+def _normalize_ns(answers):
+    r"""(normalized_answers, bad) -- `bad` describes the first unusable `ns` element, or None.
+
+    TWO distinct refusals, because they are two different facts:
+
+    `bad_ns_shape` -- the element is not 1-2 ASCII digits. This is the SECURITY gate: it is
+    what stops "Escape", "C-c" and "q" from reaching `key_fn`, which is `send-keys` WITHOUT
+    `-l` and therefore interprets key NAMES.
+
+    The 2-digit case is NOT decided here, because it is FAMILY-DEPENDENT: see
+    `_digit_pressable_ns` below. This function is family-independent on purpose -- a key
+    NAME must never reach `key_fn` on either family, since `menu_submit_agy`'s sender is
+    equally non-literal.
+
+    Ints are accepted and normalized to str: the parser emits string `n`s, so an int `n`
+    would also miss `_part_current_checked`'s string set and be pressed TWICE by the
+    `want ^ have` delta.
+
+    SHAPE only -- it cannot tell option 3 from a CAPTURED option 3. Identity is enforced
+    per part against the freshly-read pane (see `_ns_on_part`) and, on the durable path,
+    by `_validate_batch_answer`.
+    """
+    out = []
+    for a in (answers or []):
+        if not isinstance(a, dict):
+            out.append(a)
+            continue
+        ns = a.get("ns")
+        if ns is None:
+            out.append(a)
+            continue
+        if not isinstance(ns, list):
+            return None, {"part": a.get("part"), "why": "ns must be a list",
+                          "reason": "bad_ns_shape"}
+        norm = []
+        for n in ns:
+            if isinstance(n, bool):          # bool is an int subclass; never an option
+                return None, {"part": a.get("part"), "n": n, "reason": "bad_ns_shape",
+                              "why": "not an option number"}
+            if isinstance(n, int):
+                n = str(n)
+            if not isinstance(n, str) or not _NS_SHAPE_RE.match(n):
+                return None, {"part": a.get("part"), "n": n, "reason": "bad_ns_shape",
+                              "why": "not an option number (1-2 digits)"}
+            norm.append(n)
+        b = dict(a)
+        b["ns"] = norm
+        out.append(b)
+    return out, None
+
+
+def _ns_on_part(want, menu):
+    """IDENTITY gate at replay time: every wanted `n` must be an option actually on the
+    part now on screen. The shape gate cannot do this, and `_validate_batch_answer` runs
+    only on the durable path -- so without this a caller reaching the primitive directly
+    could toggle a digit that is not an option of this part at all. Returns the offending
+    `n`, or None."""
+    on_part = set(_part_option_ns(menu) or [])
+    for n in sorted(want):
+        if n not in on_part:
+            return n
+    return None
+
+
+def _digit_pressable_ns(answers):
+    """The first `ns` element a DIGIT PRESS cannot select, or None.
+
+    FAMILY-DEPENDENT, which is why it is not in `_normalize_ns`. The Claude AUQ replay
+    selects an option by pressing its number, so option "10" -- a real captured option,
+    since the parser's `_MENU_OPT_RE` is two-digit-capable -- cannot be selected:
+    `key_fn("10")` would press `1` then `0`. The agy family does NOT press digits at all
+    (`menu_submit_agy` uses `_nav_cursor_to` + Space), so a 2-digit option is perfectly
+    selectable there and must NOT be refused.
+
+    I got this wrong twice in the same guard. First with a flat 1-9 alphabet, which called a
+    legitimate option 10 malformed -- a nine-option ceiling smuggled in as a safety fix.
+    Then by refusing 2-digit options for EVERY family before the agy dispatch, which broke
+    agy menus that the agy replay would have answered correctly. The lesson both times: a
+    refusal has to be justified by the mechanism that would actually run.
+    """
+    for a in (answers or []):
+        if not isinstance(a, dict):
+            continue
+        for n in (a.get("ns") or []):
+            if isinstance(n, str) and len(n) > 1:
+                return {"part": a.get("part"), "n": n,
+                        "why": "a 2-digit option cannot be selected by a digit press"}
+    return None
+
+
 def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=None,
                       type_fn=None, settle_s=0.8, max_parts=12, text_present_fn=None):
     """Generalized multi-part submit (DEC-1786866488 §C). ONE batch answers[]:
@@ -2728,6 +2839,11 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
     key_fn = key_fn or (lambda k: _tmux("send-keys", "-t", session, k).returncode == 0)
     type_fn = type_fn or (
         lambda txt: _tmux("send-keys", "-t", session, "-l", txt).returncode == 0)
+    # SHAPE-GATE FIRST: before the family probe, before the lock, before any read --
+    # a malformed ns must cost ZERO keypresses on either menu family.
+    answers, _bad_ns = _normalize_ns(answers)
+    if _bad_ns is not None:
+        return False, {"reason": _bad_ns.get("reason", "bad_ns_shape"), "detail": _bad_ns}
     by_part = {a["part"]: a for a in (answers or []) if isinstance(a, dict)}
 
     # F6: agy/Gemini menus use a DIFFERENT answer contract (space-toggle /
@@ -2741,6 +2857,12 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
             session, answers=answers, armed=armed, read_fn=read_fn,
             key_fn=key_fn, type_fn=type_fn, settle_s=settle_s,
             text_present_fn=text_present_fn)
+
+    # CLAUDE LEG ONLY -- past the agy dispatch above, so the digit-press constraint is
+    # applied only where a digit is actually pressed. Zero keys have been sent at this point.
+    _unpressable = _digit_pressable_ns(answers)
+    if _unpressable is not None:
+        return False, {"reason": "option_not_digit_pressable", "detail": _unpressable}
 
     def _run():
         menu = read_fn()
@@ -2760,6 +2882,19 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
                 step["free_text_n"] = _part_free_text_n(menu)  # None-ok in dry-run
             plan.append(step)
         if not armed:
+            # Identity for the part ACTUALLY on screen. A dry-run that returns a plan for a
+            # digit that is not an option teaches the client its payload is fine and fails
+            # only once armed -- the same trap the shape gate refuses in dry-run. Limited to
+            # the on-screen part by construction: a passive read exposes only that part's
+            # options, so checking another part here could only guess.
+            _cur_pi = menu.get("part_index") or 0
+            _cur_ans = by_part.get(_cur_pi) or {}
+            _cur_want = set(_cur_ans.get("ns") or [])
+            _cur_want.discard(_part_free_text_n(menu))
+            _off = _ns_on_part(_cur_want, menu)
+            if _off is not None:
+                return False, {"reason": "n_not_on_part", "part": _cur_pi, "n": _off,
+                               "phase": "dry_run_identity"}
             return True, {"would_submit": True, "dry_run": True, "plan": plan}
 
         # ARMED replay — IDENTITY-VERIFIED navigation (double-advance fix 2026-08-26).
@@ -2789,6 +2924,12 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
             ft_n = _part_free_text_n(menu)           # from the fresh current-part read
             want = set(ans.get("ns") or [])
             want.discard(ft_n)                       # free-text is injected, never toggled
+            # IDENTITY (not shape): refuse a digit that is not an option of THIS part,
+            # before anything is pressed for it.
+            _off = _ns_on_part(want, menu)
+            if _off is not None:
+                return False, {"reason": "n_not_on_part", "part": pi, "n": _off,
+                               "phase": f"identity{pi}"}
             # (1)-(4) FREE-TEXT FIRST: cursor-nav -> focus-verify -> type -> close +
             # positive close-proof, BEFORE any toggle digit (else the digit is typed
             # into an open field — the DEC-1787556508 hazard).
