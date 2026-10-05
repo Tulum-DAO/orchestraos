@@ -8,18 +8,21 @@
       "role": "user",
       "text": "You are codex-dev-1, a parity tester. Read your instructions.",
       "is_system": true,
+      "ts": "2026-08-27T10:00:01Z",
       "uuid": "step-2-msg"
     },
     {
       "kind": "text",
       "role": "user",
       "text": "Please check the status.",
+      "ts": "2026-08-27T10:00:02Z",
       "uuid": "step-3-msg"
     },
     {
       "kind": "thinking",
       "role": "assistant",
       "text": "I should run git status to check the repo state.",
+      "ts": "2026-08-27T10:00:03Z",
       "uuid": "step-4-think"
     },
     {
@@ -31,6 +34,7 @@
       },
       "summary": "git status",
       "id": "call_123",
+      "ts": "2026-08-27T10:00:04Z",
       "uuid": "step-5-call"
     },
     {
@@ -39,12 +43,14 @@
       "text": "On branch main\nnothing to commit, working tree clean",
       "tool_use_id": "call_123",
       "is_error": false,
+      "ts": "2026-08-27T10:00:05Z",
       "uuid": "step-6-result"
     },
     {
       "kind": "text",
       "role": "assistant",
       "text": "The tree is clean.",
+      "ts": "2026-08-27T10:00:06Z",
       "uuid": "step-7-msg"
     }
   ],
@@ -53,16 +59,19 @@
       "kind": "user",
       "text": "You are codex-dev-1, a parity tester. Read your instructions.",
       "is_system": true,
+      "ts": "2026-08-27T10:00:01Z",
       "key": "step-2-msg:0"
     },
     {
       "kind": "user",
       "text": "Please check the status.",
+      "ts": "2026-08-27T10:00:02Z",
       "key": "step-3-msg:1"
     },
     {
       "kind": "thinking",
       "text": "I should run git status to check the repo state.",
+      "ts": "2026-08-27T10:00:03Z",
       "key": "step-4-think:2"
     },
     {
@@ -74,11 +83,13 @@
       },
       "result": "On branch main\nnothing to commit, working tree clean",
       "is_error": false,
+      "ts": "2026-08-27T10:00:04Z",
       "key": "step-5-call:3"
     },
     {
       "kind": "assistant",
       "text": "The tree is clean.",
+      "ts": "2026-08-27T10:00:06Z",
       "key": "step-7-msg:5"
     }
   ]
