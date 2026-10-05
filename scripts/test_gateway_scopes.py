@@ -393,9 +393,13 @@ def test_the_FLEET_WIDE_voice_config_writes_require_admin_not_voice():
     Raised to `admin` rather than merely adding `ptt`, because this closes the hole for EVERY
     holder of `voice`, present and future. A narrow scope for one device would have left the
     fleet-wide switch reachable by the next device granted `voice`."""
-    for route in (("PUT", "/arturo/ptt/vendor"), ("PUT", "/arturo/ptt/voice"),
-                  ("POST", "/voice-call-ended")):
+    for route in (("PUT", "/arturo/ptt/vendor"), ("PUT", "/arturo/ptt/voice")):
         assert G.ROUTE_SCOPES[route] == "admin", route
+    # NOT /voice-call-ended: that is DEVICE call lifecycle, and admin-gating it stopped a device
+    # ending its OWN call. ipad-dev measured a device doing POST /voice-call-ended then
+    # /stream/end on every relay call. Grouping it with the config writes was the wrong axis —
+    # blast radius, not URL shape.
+    assert G.ROUTE_SCOPES[("POST", "/voice-call-ended")] == "ptt"
 
 
 def test_reading_the_active_vendor_stays_read():
