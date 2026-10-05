@@ -3,7 +3,11 @@ import sqlite3, json, os, random
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import sys; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from approval_config import DB_PATH, DEFAULT_OPTIONS, EXPIRY_HOURS
+# NOT `from approval_config import DB_PATH`: that binds once at THIS module's import and
+# re-freezes the very path we just made lazy. The module is imported and the value read
+# per call instead.
+import approval_config
+from approval_config import DEFAULT_OPTIONS, EXPIRY_HOURS
 
 def _now(): return datetime.now(tz=timezone.utc).isoformat()
 
@@ -106,7 +110,14 @@ def armed(migration_id):
 
 class ApprovalStore:
     def __init__(self, db_path=None):
-        self.db_path = str(db_path or DB_PATH)
+        # Resolved per construction, so a monkeypatched ORCHESTRA_DIR actually isolates.
+        self.db_path = str(db_path or approval_config.db_path())
+        # THE CONSTRUCTOR FENCE (gm ruling 2026-10-05). A conftest guard only protects suites
+        # that load that conftest; this one travels with the code, so it also covers a bare
+        # `pytest some_file.py` from another root, a doctest, or a script a test shells out to.
+        # Two independent fences, because this class has already recurred twice: a test wrote
+        # to the live ledger on 2026-09-25 and again on 2026-10-05.
+        approval_config.refuse_live_db_under_pytest(self.db_path)
     def _conn(self):
         c = sqlite3.connect(self.db_path, timeout=30)
         c.row_factory = sqlite3.Row
