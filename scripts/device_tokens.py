@@ -14,7 +14,21 @@ The shape, and the reasoning behind each decision:
     what a route needs is a verb. Seven: read, approve, message, inject, ptt, voice, admin.
   * `ptt` exists because `voice` was too coarse for a headset: it also reached the FLEET-WIDE
     voice-vendor and voice-id writes, so a compromised headset could switch what every
-    conversation on the box uses. `ptt` is one turn of push-to-talk and nothing else.
+    conversation on the box uses.
+
+    READ THIS BEFORE GRANTING `ptt`. The name is misleading and gm said so plainly: it reads as
+    "one turn of push-to-talk" and it is not. The relay routes it covers reach the FULL ARTURO
+    BRAIN, WITH TOOLS — including `gm_command` and `spawn_agent`. So `ptt` means "speak to
+    something that can act on the fleet", not "speak". It is comparable to `inject` in reach,
+    arrived at by voice instead of by keystroke.
+
+    It is granted to Shaw's own Quest deliberately (gm 2026-10-05, phone parity, repeatedly
+    asked for), but it is NOT a mild scope and must never be handed out as if it were. It is
+    excluded from HTTP_MINTABLE for exactly this reason: a credential that could mint itself
+    `ptt` could mint itself the ability to act.
+
+    The name is kept rather than changed because the live client gates on the string `ptt` and a
+    rename would break a paired headset for a cosmetic gain. The honest fix is this paragraph.
   * `voice` is separate from `read` because every /arturo call SPENDS REAL PROVIDER MONEY.
     Reading state and buying tokens from a vendor are not the same permission.
   * `approve` is separate from everything because it ANSWERS ON THE OPERATOR'S BEHALF.
