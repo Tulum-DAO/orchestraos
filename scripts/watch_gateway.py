@@ -140,23 +140,22 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("PUT", "/questionnaires/{id}/draft"): "approve",
     ("POST", "/questionnaires/{id}/submit"): "approve",
     ("POST", "/questionnaires/{id}/discard"): "approve",
-    # Classified `approve`, NOT `inject`, and this one is deliberate rather than convenient.
-    # It presses Right to page a multi-part AskUserQuestion — navigation only, never Enter and
-    # never a digit, so it cannot commit an answer. The capability it actually grants is
-    # "render an approval fully enough to answer it", and a device permitted to answer may
-    # also page the question. Calling it `inject` would mean a read+approve+message device
-    # could not hydrate a multi-part menu, i.e. multi-part approvals would break for exactly
-    # the device that is allowed to approve. The tension is real and is disclosed in the PR;
-    # if the ruling goes the other way this moves to `inject` and the headset needs a
-    # different hydration path.
-    ("POST", "/agent-menu-capture"): "approve",
-
     # --- message ---------------------------------------------------------------------
     ("POST", "/agent-message"): "message",
     ("POST", "/upload"): "message",
 
     # --- inject: PRESSES KEYS IN A LIVE PANE ------------------------------------------
     ("POST", "/agent-key"): "inject",
+    # It presses Right to page a multi-part AskUserQuestion. Navigation only — never Enter and
+    # never a digit, so it cannot commit an answer — which is why `approve` was arguable: the
+    # capability it serves is "render an approval fully enough to answer it".
+    # It is `inject` anyway, because it DOES press keys in a live pane, and the sole argument
+    # for the looser classification was that a read+approve+message device would otherwise be
+    # unable to hydrate a multi-part menu. quest-orchestra (the only consumer) reported that
+    # neither Quest app calls it and multi-part menus are not load-bearing there, so that cost
+    # is zero and the conservative reading wins. Were it ever needed, the honest fix is a
+    # hydration path that does not press keys, not a wider scope.
+    ("POST", "/agent-menu-capture"): "inject",
     ("POST", "/agent-interrupt"): "inject",
     ("POST", "/agent-suggest"): "inject",
 
@@ -4558,7 +4557,14 @@ async def handle_gateway_capabilities(request):
     _, principal = _resolved_principal(request)
     principal = principal or {}
     if principal:
-        body["scopes"] = list(principal.get("scopes") or [])
+        # EXPANDED, never the raw `*`. The legacy fleet bearer holds scope ['*'] internally,
+        # and a client that reads `scopes` as a list of verbs would conclude it may do NOTHING.
+        # quest-orchestra hit exactly that reading, so the wire format is always the concrete
+        # effective verbs and no client has to special-case a wildcard. `all_scopes` stays as
+        # the honest signal that this credential is the unscoped one.
+        raw = list(principal.get("scopes") or [])
+        body["scopes"] = list(_ALL_VERBS) if "*" in raw else raw
+        body["all_scopes"] = "*" in raw
         body["device"] = {"id": principal.get("id"), "label": principal.get("label")}
     body["verbs"] = list(_ALL_VERBS)
     try:

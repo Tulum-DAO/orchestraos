@@ -66,6 +66,10 @@ def test_the_dangerous_verbs_are_not_filed_under_read():
         assert G.ROUTE_SCOPES[route] == "voice", route
     for route in (("POST", "/approval-answers"), ("POST", "/approvals/{id}/discard")):
         assert G.ROUTE_SCOPES[route] == "approve", route
+    # It presses keys, so it is inject even though it cannot commit an answer. Pinned because
+    # the looser reading is tempting and only stayed wrong once its consumer confirmed nothing
+    # depends on it.
+    assert G.ROUTE_SCOPES[("POST", "/agent-menu-capture")] == "inject"
 
 
 # ---------------------------------------------------------------- required_scope
@@ -332,3 +336,38 @@ def test_an_unarmed_device_column_still_lets_the_answer_land(tmp_path, monkeypat
                        options=["a", "b"], op_key="k2")
     assert store.record_answer(rid, "a", "a", device="abc123:quest") is True
     assert store.get(rid)["status"] == "answered", "an unarmed provenance column must never block"
+
+
+# ---------------------------------------------------------------- capabilities wire format
+
+def test_capabilities_expands_the_wildcard_so_a_client_never_special_cases_it(monkeypatch, tmp_path):
+    """The fleet bearer holds ['*'] internally. A client reading `scopes` as a verb list would
+    conclude it may do NOTHING — quest-orchestra reported exactly that reading. The wire format
+    is therefore always the concrete effective verbs."""
+    import asyncio
+    monkeypatch.setattr(G, "gateway_token", lambda: "fleet-token-value")
+    monkeypatch.setattr(G, "_capability_providers", lambda: [{"id": "claude", "kind": "text"}])
+    monkeypatch.setattr(G, "_pending_count", lambda: 0)
+    req = _FakeRequest("GET", "/gateway/capabilities")
+    req["principal"] = {"id": "legacy", "label": "legacy-fleet-token", "scopes": ["*"]}
+    resp = asyncio.new_event_loop().run_until_complete(G.handle_gateway_capabilities(req))
+    body = json.loads(resp.body.decode())
+    assert "*" not in body["scopes"]
+    assert set(body["scopes"]) == set(VERBS)
+    assert body["all_scopes"] is True, "but it must still be identifiable as the unscoped one"
+
+
+def test_capabilities_reports_a_scoped_device_verbatim(monkeypatch, tmp_path):
+    import asyncio
+    monkeypatch.setattr(G, "gateway_token", lambda: "fleet-token-value")
+    monkeypatch.setattr(G, "_capability_providers", lambda: [])
+    monkeypatch.setattr(G, "_pending_count", lambda: 3)
+    req = _FakeRequest("GET", "/gateway/capabilities")
+    req["principal"] = {"id": "d1", "label": "quest-headset",
+                        "scopes": ["read", "approve", "message"]}
+    resp = asyncio.new_event_loop().run_until_complete(G.handle_gateway_capabilities(req))
+    body = json.loads(resp.body.decode())
+    assert body["scopes"] == ["read", "approve", "message"]
+    assert body["all_scopes"] is False
+    assert body["device"] == {"id": "d1", "label": "quest-headset"}
+    assert body["verbs"] == list(VERBS), "the full vocabulary, so a client can render unheld verbs"
