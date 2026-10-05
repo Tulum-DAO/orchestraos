@@ -85,9 +85,13 @@ class DeviceStore:
 
     # ---------------------------------------------------------------- writing
 
-    def mint(self, label: str, scopes) -> tuple[str, str]:
+    def mint(self, label: str, scopes, minted_by: str | None = None) -> tuple[str, str]:
         """Create a device and return (device_id, token). The token is returned ONCE and
-        never stored; only its hash is persisted."""
+        never stored; only its hash is persisted.
+
+        `minted_by` records WHICH credential issued this one (condition b). It is what makes
+        rotation mean rotation: rotating a credential must be able to revoke everything it
+        issued, or the old key outlives its own revocation through its children."""
         verbs = normalize_scopes(scopes)
         self.dir.mkdir(parents=True, exist_ok=True)
         token = secrets.token_urlsafe(TOKEN_BYTES)
@@ -97,6 +101,7 @@ class DeviceStore:
             "label": str(label or "").strip() or "unnamed-device",
             "scopes": list(verbs),
             "token_sha256": _hash(token),
+            "minted_by": str(minted_by) if minted_by else None,
             "created_at": time.time(),
             "last_seen_at": None,
             "revoked_at": None,
@@ -116,6 +121,41 @@ class DeviceStore:
         rec["revoked_at"] = time.time()
         self._write(rec)
         return True
+
+    def revoke_minted_by(self, minted_by: str) -> list[str]:
+        """Revoke every live device issued BY this credential. Returns the ids revoked.
+
+        This is what makes rotation honest (condition c). Rotating the fleet bearer without
+        this leaves its children working, so the credential everyone believes is dead still
+        has living descendants — the exact failure mode of "we rotated, we're fine"."""
+        revoked = []
+        for rec in list(self._all()):
+            if rec.get("revoked_at"):
+                continue
+            if str(rec.get("minted_by") or "") != str(minted_by):
+                continue
+            rec["revoked_at"] = time.time()
+            self._write(rec)
+            revoked.append(rec["id"])
+        return revoked
+
+    def revoke_label(self, label: str, *, minted_by: str | None = None) -> list[str]:
+        """Revoke every live device carrying this label. Returns the ids revoked.
+
+        Condition (e): an upgrade is idempotent per label, so re-upgrading 'quest-3' REPLACES
+        the previous quest-3 token rather than leaving a growing pile of live credentials
+        nobody is tracking. Accumulation is how a revocation list stops being read."""
+        revoked = []
+        want = str(label or "").strip()
+        for rec in list(self._all()):
+            if rec.get("revoked_at") or str(rec.get("label") or "").strip() != want:
+                continue
+            if minted_by is not None and str(rec.get("minted_by") or "") != str(minted_by):
+                continue
+            rec["revoked_at"] = time.time()
+            self._write(rec)
+            revoked.append(rec["id"])
+        return revoked
 
     def touch(self, device_id: str) -> None:
         """Best-effort last_seen. Never allowed to fail a request."""
@@ -197,3 +237,30 @@ def scopes_allow(scopes, needed: str | None) -> bool:
     if "*" in scopes:
         return True
     return needed in scopes
+
+
+#: Condition (a): what the FLEET BEARER may mint OVER HTTP. Everything else — inject, ptt,
+#: voice, admin — is mintable only by the VPS mint CLI, where a human is at a shell.
+#:
+#: `ptt` is excluded too, which is not an oversight: a credential that can mint itself speech is
+#: minting PROVIDER SPEND, and the whole reason the upgrade endpoint is safe to expose is that
+#: nothing it can issue costs money or presses keys.
+#:
+#: It is an ALLOWLIST, not a denylist, so a verb added later is NOT mintable until someone
+#: decides it is. A denylist would silently grant every future verb.
+HTTP_MINTABLE = ("read", "approve", "message")
+
+
+def http_mintable(scopes) -> tuple[bool, str]:
+    """(ok, reason). Used by the upgrade endpoint to refuse before anything is created."""
+    try:
+        verbs = normalize_scopes(scopes)
+    except ScopeError as e:
+        return False, str(e)
+    if "*" in verbs:
+        return False, "the unscoped '*' is never mintable over HTTP"
+    bad = [v for v in verbs if v not in HTTP_MINTABLE]
+    if bad:
+        return False, (f"{', '.join(bad)} cannot be minted over HTTP; only "
+                       f"{', '.join(HTTP_MINTABLE)} can. Use the mint CLI on the host.")
+    return True, ""

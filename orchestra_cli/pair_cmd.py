@@ -175,3 +175,49 @@ def run_devices(args, out=print):
     out(f"Note: the gateway's own bearer ({LEGACY_LABEL}) still works and has EVERY scope. "
         "It is not a device and cannot be revoked here.")
     return 0
+
+
+def run_rotate_fleet_token(args, out=print):
+    """Rotate the gateway's fleet bearer AND revoke everything it minted.
+
+    Condition (c), and the reason it is one command rather than two: a rotation that leaves the
+    old credential's children alive is theatre. The key everyone believes is dead keeps working
+    through the tokens it issued, and the people who decided to rotate think they are done.
+
+    So revocation happens FIRST. If writing the new secret fails afterwards, the worst outcome is
+    that some devices need re-pairing — strictly better than a rotation that reported success
+    while leaving descendants live.
+    """
+    import os
+    import secrets
+    from pathlib import Path
+
+    from scripts.device_tokens import DeviceStore
+
+    base = os.environ.get("ORCHESTRA_DIR") or str(Path.home() / ".orchestra")
+    devices = DeviceStore(Path(base) / "state" / "devices")
+    token_file = os.environ.get("WATCH_GATEWAY_TOKEN_FILE") or str(
+        Path(base) / "state" / "watch-gateway-token")
+
+    minter = getattr(args, "minted_by", None) or "legacy-fleet-token"
+    revoked = devices.revoke_minted_by(minter)
+    out(f"Revoked {len(revoked)} device token(s) minted by {minter}.")
+    for d in revoked:
+        out(f"  {d}")
+
+    if getattr(args, "revoke_only", False):
+        out("--revoke-only: the fleet bearer itself was NOT rotated.")
+        return 0
+
+    new = secrets.token_urlsafe(32)
+    path = Path(token_file)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(new + "\n")
+    out(f"Wrote a new fleet bearer to {token_file} (mode 0600). The value is NOT printed.")
+    out("")
+    out("Now RESTART the gateway so it reads the new secret, then re-pair each device that")
+    out("needs one. Every token the old bearer minted is already dead, so a device that still")
+    out("works is one you minted by hand on the host — check `orchestra devices`.")
+    return 0

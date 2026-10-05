@@ -52,7 +52,12 @@ def __getattr__(name):
     """PEP 562. `ORCHESTRA_DIR` and `DB_PATH` stay readable as module attributes for the ~13
     existing consumers, but resolve lazily now — so `approval_config.DB_PATH` honours a
     monkeypatched env. A `from approval_config import DB_PATH` still binds once at the
-    IMPORTER's import time, which is why approval_schema no longer does that."""
+    IMPORTER's import time, which is why approval_schema no longer does that.
+
+    GOTCHA worth knowing before you rely on the laziness: `monkeypatch.setattr(mod, "DB_PATH", x)`
+    writes a REAL module attribute, and on undo monkeypatch restores the value it read rather than
+    deleting the attribute — so after any such test, `DB_PATH` is concrete and shadows this
+    function for the rest of the session. Read `db_path()` when you need the resolved value."""
     if name == "ORCHESTRA_DIR":
         return orchestra_dir()
     if name == "DB_PATH":

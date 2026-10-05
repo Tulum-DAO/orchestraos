@@ -26,7 +26,11 @@ def test_orchestra_dir_env_override(monkeypatch):
     Asserting the live behaviour directly is what the test was always trying to say."""
     monkeypatch.setenv("ORCHESTRA_DIR", "/tmp/xyz-orch")
     import approval_config as c
-    assert str(c.DB_PATH) == "/tmp/xyz-orch/state/tasks.db"
+    # Asserted through the FUNCTION, not the module attribute. `DB_PATH` is served by a PEP 562
+    # `__getattr__`, and another suite does `monkeypatch.setattr(C, "DB_PATH", ...)` — on undo
+    # monkeypatch writes the value back as a REAL module attribute, which then shadows
+    # `__getattr__` for the rest of the session. So reading `c.DB_PATH` here is order-dependent
+    # through no fault of either test, while `db_path()` always resolves.
     assert str(c.db_path()) == "/tmp/xyz-orch/state/tasks.db"
     monkeypatch.delenv("ORCHESTRA_DIR", raising=False)
-    assert str(c.DB_PATH) == str(c.LIVE_DB_PATH), "with no override it falls back to the live tree"
+    assert str(c.db_path()) == str(c.LIVE_DB_PATH), "no override -> falls back to the live tree"
