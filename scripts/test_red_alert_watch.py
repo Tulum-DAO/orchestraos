@@ -425,3 +425,91 @@ def test_a_none_needed_class_is_never_routed_to_repair():
                    attached=False, answer=None, now=1000.0, armed=True)
     assert got["action"] == "wait", got
     assert got.get("reason") == "none_needed", got
+
+
+# --- #156 follow-up: the green skip must never fail OPEN --------------------------------
+# `green_status` collapsed three different situations into one skip: an ABSENT .bg.json (the
+# root really is SOLO, so a dead green is correct teardown), an UNREADABLE one, and a CORRUPT
+# one. Only the first is evidence. The other two are the ABSENCE of evidence, and #156's whole
+# thesis is that those must not be conflated -- a watchdog that files no report because it could
+# not read the state is a fail-open, and a missed green death is exactly the class it exists for.
+#
+# Separately, `_GREEN_RE` claimed any `*-g<N>` seat as a blue-green green on NAMING ALONE.
+# Measured against the live registry: of 5 seats matching that convention, 1 had no registered
+# root, so its pane death was being silently skipped. A convention is a hint, not evidence.
+
+def _bg_raw(tmp_path, root, body: str):
+    d = tmp_path / "wal"
+    d.mkdir(exist_ok=True)
+    (d / f"{root}.bg.json").write_text(body)
+    return str(d)
+
+
+def test_a_corrupt_bg_file_is_unknown_not_a_correct_teardown(tmp_path):
+    """A half-written .bg.json means we do not know. It must not read as SOLO."""
+    wal = _bg_raw(tmp_path, "orchestra-builder", '{"state": "VERIF')   # truncated mid-write
+    assert W.green_status("orchestra-builder-g49", wal_dir=wal) == "unknown_bg"
+
+
+def test_an_unreadable_bg_file_is_unknown_not_a_correct_teardown(tmp_path):
+    wal = _bg(tmp_path, "orchestra-builder", "VERIFY", green_pane_id="%42")
+    import os as _os
+    path = _os.path.join(wal, "orchestra-builder.bg.json")
+    _os.chmod(path, 0o000)
+    try:
+        if _os.access(path, _os.R_OK):          # running as root: the chmod proves nothing
+            import pytest as _pytest
+            _pytest.skip("cannot make a file unreadable as this user")
+        assert W.green_status("orchestra-builder-g49", wal_dir=wal) == "unknown_bg"
+    finally:
+        _os.chmod(path, 0o600)
+
+
+def test_an_absent_bg_file_is_still_a_correct_teardown(tmp_path):
+    """The operator ruling stands: root SOLO + dead green = correct, no report. Absence of the
+    file IS evidence, as long as the root is a real seat."""
+    assert W.green_status("orchestra-builder-g49", wal_dir=str(tmp_path),
+                          known_roots={"orchestra-builder"}) == "unexpected_green"
+
+
+def test_a_name_ending_in_gN_is_not_a_green_when_no_such_root_exists(tmp_path):
+    """Measured on the live registry: 1 of 5 convention-matching seats had no root. Treating it
+    as a green silently suppressed a real pane-death report."""
+    assert W.green_status("standalone-thing-g2", wal_dir=str(tmp_path),
+                          known_roots={"orchestra-builder", "gm"}) == "not_green"
+
+
+def test_a_real_green_is_still_recognised_when_roots_are_supplied(tmp_path):
+    wal = _bg(tmp_path, "orchestra-builder", "ARMED", green_session_id="abc")
+    assert W.green_status("orchestra-builder-g49", wal_dir=wal,
+                          known_roots={"orchestra-builder"}) == "active_green"
+
+
+def test_omitting_known_roots_keeps_the_old_naming_only_behaviour(tmp_path):
+    """Back-compat for any caller that cannot supply the roots: without them we cannot refute
+    the convention, so the old answer stands rather than a fabricated one."""
+    assert W.green_status("standalone-thing-g2", wal_dir=str(tmp_path)) == "unexpected_green"
+
+
+def test_tick_FILES_when_the_bg_state_cannot_be_read(tmp_path, store, monkeypatch):
+    """The actual fail-open: unreadable state used to produce NO report at all."""
+    wal = _bg_raw(tmp_path, "orchestra-builder", "{not json at all")
+    monkeypatch.setattr(W, "WAL_DIR", wal)
+    filed = []
+    monkeypatch.setattr(W, "file_finding", lambda seat, f, ev, **k: filed.append(f) or {
+        "id": "ra_x", "status": "open", "seats": [seat], "class": f["class"], "card_id": None,
+        "created_at": "2026-09-18T00:00:00+00:00", "evidence": {}, "repair_attempts": [],
+        "symptom": "s", "_path": "p"})
+    monkeypatch.setattr(W, "handle", lambda *a, **k: None)
+    monkeypatch.setattr(W, "tmux_sessions", lambda: {"orchestra-builder-g49"})
+    monkeypatch.setattr(W.RA, "capture_evidence", lambda seats, **k: {
+        "process_state": {seats[0]: []}, "pane_dead": {seats[0]: True}, "attached": {seats[0]: False},
+        "screen": {}, "registry_rows": {}, "sids": {}, "pane_snapshot": {}})
+    import json as _j
+    p = tmp_path / "reg.json"
+    p.write_text(_j.dumps({"agents": {
+        "orchestra-builder-g49": {"status": "online", "runtime": "claude",
+                                  "tmux_session": "orchestra-builder-g49"}}}))
+    W.tick(registry_path=str(p))
+    assert filed, "an unreadable bg state must FILE, never silently skip"
+    assert "could not be read" in filed[0]["signal"]

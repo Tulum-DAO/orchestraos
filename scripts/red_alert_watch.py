@@ -92,23 +92,48 @@ def live_seats(registry: dict, *, tmux_sessions: set[str]) -> list[tuple[str, st
     return out
 
 
-def green_status(seat: str, *, wal_dir: str | None = None) -> str:
-    """'not_green' | 'unexpected_green' | 'active_green'.
+def green_status(seat: str, *, wal_dir: str | None = None,
+                 known_roots: set[str] | frozenset[str] | None = None) -> str:
+    """'not_green' | 'unexpected_green' | 'active_green' | 'unknown_bg'.
 
     Operator ruling 2026-09-18: a GREEN is an ephemeral successor booted by the
     blue-green beat. Its pane dying is usually CORRECT — the seam raised (hydrate SeamTimeout under
     load), the green was torn down and the root went back to SOLO; blue never stopped. Respawning it
     from the registry would manufacture an orphan pane. Only the state machine may boot a green.
+
+    #156 follow-up — this used to FAIL OPEN in two ways, and both are closed here:
+
+    1. An ABSENT `.bg.json`, an UNREADABLE one and a CORRUPT one all returned
+       'unexpected_green', so the caller skipped and filed nothing. Only absence is evidence
+       (the root really is SOLO). The other two are the ABSENCE of evidence, and treating
+       "I could not read the state" as "the teardown was correct" is exactly the conflation
+       #156 forecloses everywhere else. They now return 'unknown_bg', which the caller must
+       REPORT, because a spurious report costs one card and a missed green death costs a seat.
+
+    2. `_GREEN_RE` claimed any `*-g<N>` seat as a green on NAMING ALONE. Measured against the
+       live registry: of 5 seats matching the convention, 1 had no registered root, so its
+       pane death was being silently skipped. A convention is a hint; the root's existence is
+       evidence. Pass `known_roots` and a name whose root is not a real seat is 'not_green',
+       i.e. an ordinary seat whose death gets reported like any other. Omitting `known_roots`
+       keeps the old naming-only answer, because without them the convention cannot be refuted
+       and inventing a verdict would be its own fabrication.
     """
     m = _GREEN_RE.match(seat)
     if not m:
         return "not_green"
-    path = os.path.join(wal_dir or WAL_DIR, f"{m.group('root')}.bg.json")
+    root = m.group("root")
+    path = os.path.join(wal_dir or WAL_DIR, f"{root}.bg.json")
     try:
         with open(path) as f:
             bg = json.load(f)
+    except FileNotFoundError:
+        # No state machine expecting it. If the root is not even a seat, the `-g<N>` was a
+        # naming coincidence and this is an ordinary seat, not a green to be skipped.
+        if known_roots is not None and root not in known_roots:
+            return "not_green"
+        return "unexpected_green"
     except (OSError, ValueError):
-        return "unexpected_green"        # no state machine expecting it
+        return "unknown_bg"              # unreadable or half-written: we do NOT know
     state = str(bg.get("state") or "").upper()
     meta = bg.get("meta") or {}
     named = any(meta.get(k) for k in ("green_pane_id", "green_pane_pid", "green_session_id"))
@@ -556,10 +581,19 @@ def tick(*, only: str | None = None, dry: bool = False, registry_path: str | Non
                     log(f"RESOLVED {r['id']} {seat} healthy by effect")
             continue
         if f["class"] == "pane_dead":
-            gs = green_status(seat)
+            # Supply the real roots so a `-g<N>` NAME cannot masquerade as a green (#156
+            # follow-up): one live seat matched the convention with no root behind it.
+            gs = green_status(seat, known_roots=set((reg.get("agents") or {}).keys()))
             if gs == "unexpected_green":
                 log(f"SKIP {seat}: dead green, root not expecting it (bg SOLO/absent) — correct teardown, no report")
                 continue
+            if gs == "unknown_bg":
+                # FAIL CLOSED. Previously this path skipped silently, so an unreadable or
+                # half-written .bg.json suppressed the report entirely. One card is cheaper
+                # than a lost seat.
+                log(f"REPORT {seat}: dead green but the root's bg state could not be read — refusing to assume a correct teardown")
+                f = {**f, "signal": f["signal"] + "; the root's bg_state could not be read (absent state is SOLO, "
+                                                  "but an UNREADABLE one is unknown), so this is NOT assumed to be a correct teardown"}
             if gs == "active_green":
                 f = {**f, "class": "green_died", "severity": RA.CATALOGUE["green_died"]["severity"],
                      "immediate_fix": RA.CATALOGUE["green_died"]["immediate_fix"],
