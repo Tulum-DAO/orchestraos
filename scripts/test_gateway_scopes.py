@@ -66,10 +66,10 @@ def test_the_dangerous_verbs_are_not_filed_under_read():
         assert G.ROUTE_SCOPES[route] == "voice", route
     for route in (("POST", "/approval-answers"), ("POST", "/approvals/{id}/discard")):
         assert G.ROUTE_SCOPES[route] == "approve", route
-    # `inject` per gm's final ruling (08:11Z), because it presses keys even though it cannot
-    # commit an answer. The menu-present guard is kept anyway — see test_menu_capture_guard.py —
-    # since an inject-scoped caller should not be able to key into a pane with no menu either.
-    assert G.ROUTE_SCOPES[("POST", "/agent-menu-capture")] == "inject"
+    # `approve`, FINAL per gm 08:34Z. Safe only because the walk refuses to press a key with no
+    # menu on screen (test_menu_capture_guard.py) — the scope and that guard are ONE decision.
+    # Also load-bearing: the headset hydrates multi-part menus through it at this scope.
+    assert G.ROUTE_SCOPES[("POST", "/agent-menu-capture")] == "approve"
 
 
 # ---------------------------------------------------------------- required_scope
