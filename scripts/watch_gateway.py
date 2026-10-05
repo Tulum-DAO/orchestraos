@@ -2740,13 +2740,10 @@ def _normalize_ns(answers):
     what stops "Escape", "C-c" and "q" from reaching `key_fn`, which is `send-keys` WITHOUT
     `-l` and therefore interprets key NAMES.
 
-    `option_not_digit_pressable` -- the element is a well-formed 2-digit option (the parser's
-    `_MENU_OPT_RE` is `\d{1,2}`, so option "10" IS a real captured option) but a digit
-    keypress cannot select it: `key_fn("10")` would send `1` then `0`, i.e. toggle option 1
-    and then press 0. Refused pre-actuation rather than silently mis-pressed. An earlier
-    draft of this guard used a flat 1-9 alphabet, which would have refused a legitimate
-    option 10 as if it were malformed -- a nine-option ceiling smuggled in as a safety fix.
-    Those menus need cursor navigation, which this replay does not implement.
+    The 2-digit case is NOT decided here, because it is FAMILY-DEPENDENT: see
+    `_digit_pressable_ns` below. This function is family-independent on purpose -- a key
+    NAME must never reach `key_fn` on either family, since `menu_submit_agy`'s sender is
+    equally non-literal.
 
     Ints are accepted and normalized to str: the parser emits string `n`s, so an int `n`
     would also miss `_part_current_checked`'s string set and be pressed TWICE by the
@@ -2778,10 +2775,6 @@ def _normalize_ns(answers):
             if not isinstance(n, str) or not _NS_SHAPE_RE.match(n):
                 return None, {"part": a.get("part"), "n": n, "reason": "bad_ns_shape",
                               "why": "not an option number (1-2 digits)"}
-            if len(n) > 1:
-                return None, {"part": a.get("part"), "n": n,
-                              "reason": "option_not_digit_pressable",
-                              "why": "a 2-digit option cannot be selected by a digit press"}
             norm.append(n)
         b = dict(a)
         b["ns"] = norm
@@ -2799,6 +2792,32 @@ def _ns_on_part(want, menu):
     for n in sorted(want):
         if n not in on_part:
             return n
+    return None
+
+
+def _digit_pressable_ns(answers):
+    """The first `ns` element a DIGIT PRESS cannot select, or None.
+
+    FAMILY-DEPENDENT, which is why it is not in `_normalize_ns`. The Claude AUQ replay
+    selects an option by pressing its number, so option "10" -- a real captured option,
+    since the parser's `_MENU_OPT_RE` is two-digit-capable -- cannot be selected:
+    `key_fn("10")` would press `1` then `0`. The agy family does NOT press digits at all
+    (`menu_submit_agy` uses `_nav_cursor_to` + Space), so a 2-digit option is perfectly
+    selectable there and must NOT be refused.
+
+    I got this wrong twice in the same guard. First with a flat 1-9 alphabet, which called a
+    legitimate option 10 malformed -- a nine-option ceiling smuggled in as a safety fix.
+    Then by refusing 2-digit options for EVERY family before the agy dispatch, which broke
+    agy menus that the agy replay would have answered correctly. The lesson both times: a
+    refusal has to be justified by the mechanism that would actually run.
+    """
+    for a in (answers or []):
+        if not isinstance(a, dict):
+            continue
+        for n in (a.get("ns") or []):
+            if isinstance(n, str) and len(n) > 1:
+                return {"part": a.get("part"), "n": n,
+                        "why": "a 2-digit option cannot be selected by a digit press"}
     return None
 
 
@@ -2839,6 +2858,12 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
             key_fn=key_fn, type_fn=type_fn, settle_s=settle_s,
             text_present_fn=text_present_fn)
 
+    # CLAUDE LEG ONLY -- past the agy dispatch above, so the digit-press constraint is
+    # applied only where a digit is actually pressed. Zero keys have been sent at this point.
+    _unpressable = _digit_pressable_ns(answers)
+    if _unpressable is not None:
+        return False, {"reason": "option_not_digit_pressable", "detail": _unpressable}
+
     def _run():
         menu = read_fn()
         if not isinstance(menu, dict):
@@ -2857,6 +2882,19 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
                 step["free_text_n"] = _part_free_text_n(menu)  # None-ok in dry-run
             plan.append(step)
         if not armed:
+            # Identity for the part ACTUALLY on screen. A dry-run that returns a plan for a
+            # digit that is not an option teaches the client its payload is fine and fails
+            # only once armed -- the same trap the shape gate refuses in dry-run. Limited to
+            # the on-screen part by construction: a passive read exposes only that part's
+            # options, so checking another part here could only guess.
+            _cur_pi = menu.get("part_index") or 0
+            _cur_ans = by_part.get(_cur_pi) or {}
+            _cur_want = set(_cur_ans.get("ns") or [])
+            _cur_want.discard(_part_free_text_n(menu))
+            _off = _ns_on_part(_cur_want, menu)
+            if _off is not None:
+                return False, {"reason": "n_not_on_part", "part": _cur_pi, "n": _off,
+                               "phase": "dry_run_identity"}
             return True, {"would_submit": True, "dry_run": True, "plan": plan}
 
         # ARMED replay — IDENTITY-VERIFIED navigation (double-advance fix 2026-08-26).

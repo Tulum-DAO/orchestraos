@@ -50,12 +50,13 @@ def test_an_interrupt_in_ns_presses_zero_keys():
     assert sent == [], f"keys were pressed for a malformed ns: {sent}"
 
 
-def test_a_two_digit_option_is_refused_as_UNPRESSABLE_not_as_malformed():
+def test_a_two_digit_option_is_refused_as_UNPRESSABLE_on_the_CLAUDE_family():
     """Option "10" IS a real captured option -- agent-status._MENU_OPT_RE is `\d{1,2}`.
     A digit press cannot select it (`send-keys 10` presses 1 then 0), so it is refused
     pre-actuation with its OWN reason. An earlier draft of this guard used a flat 1-9
     alphabet, which would have called a legitimate option 10 malformed and smuggled a
-    nine-option ceiling in as a safety fix."""
+    nine-option ceiling in as a safety fix. Note this refusal is family-SPECIFIC -- see the
+    agy control below, which must still proceed."""
     sent, key_fn = _spy()
     opts = [{"n": str(i), "label": f"opt{i}"} for i in range(1, 11)]
     ok, info = G.menu_batch_submit("seat", answers=[{"part": 0, "ns": ["10"]}],
@@ -66,13 +67,29 @@ def test_a_two_digit_option_is_refused_as_UNPRESSABLE_not_as_malformed():
     assert sent == [], f"keys were pressed for an unpressable option: {sent}"
 
 
-def test_zero_alone_is_refused():
-    """`0` is not an option number the parser ever emits (options start at 1)."""
+def test_zero_is_caught_by_IDENTITY_not_by_shape():
+    """`0` is shape-VALID (the shape rule mirrors the parser's two-digit-capable regex, which
+    matches "0"), so it is not a `bad_ns_shape`. It is refused because it is not an option of
+    this part. Naming the right gate matters: an earlier version of this test claimed the
+    shape gate caught it and asserted no reason at all, so it pinned nothing."""
     sent, key_fn = _spy()
     ok, info = G.menu_batch_submit("seat", answers=[{"part": 0, "ns": ["0"]}],
                                    armed=True, read_fn=lambda: _menu(), key_fn=key_fn,
                                    settle_s=0)
-    assert ok is False, info
+    assert ok is False
+    assert info.get("reason") == "n_not_on_part", info
+    assert sent == []
+
+
+def test_a_non_option_digit_is_refused_in_DRY_RUN_too():
+    """A dry-run that returns a plan for a digit that is not an option teaches the client its
+    payload is fine, and it then fails only once armed -- the same trap the shape gate
+    already refuses in dry-run."""
+    sent, key_fn = _spy()
+    ok, info = G.menu_batch_submit("seat", answers=[{"part": 0, "ns": ["7"]}],
+                                   armed=False, read_fn=lambda: _menu(), key_fn=key_fn,
+                                   settle_s=0)
+    assert ok is False and info.get("reason") == "n_not_on_part", info
     assert sent == []
 
 
@@ -127,3 +144,38 @@ def test_control_an_empty_ns_with_text_is_not_an_ns_shape_error():
                                    armed=False, read_fn=lambda: _menu(), key_fn=key_fn,
                                    settle_s=0)
     assert info.get("reason") != "bad_ns_shape", info
+
+
+def test_control_an_agy_two_digit_option_is_NOT_refused():
+    """THE CONTROL FOR THE FAMILY SPLIT. `menu_submit_agy` selects with `_nav_cursor_to` +
+    Space and never presses a digit, so a 2-digit option IS selectable there. An earlier
+    version of this guard applied the digit-press constraint before the agy dispatch and
+    refused this legitimate answer. Without this test that regression is invisible, because
+    every other test here uses a Claude-family menu.
+
+    Asserts only that we get PAST the pressability refusal -- the agy replay's own
+    navigation is not what this file is about.
+    """
+    opts = [{"n": str(i), "label": f"opt{i}"} for i in range(1, 12)]
+    agy = {"menu_family": "agy", "question": "Pick", "part_count": 1,
+           "parts": [{"index": 0, "question": "Pick", "options": opts}], "options": opts}
+    ok, info = G.menu_batch_submit("seat", answers=[{"part": 0, "ns": ["10"]}],
+                                   armed=False, read_fn=lambda: agy,
+                                   key_fn=lambda k: True, settle_s=0)
+    assert info.get("reason") != "option_not_digit_pressable", (
+        "a 2-digit agy option was refused as un-pressable, but agy never presses digits: "
+        f"{info}")
+
+
+def test_a_key_name_in_ns_is_still_refused_on_the_agy_family():
+    """The SHAPE gate must stay family-independent: `menu_submit_agy`'s sender is equally
+    non-literal, so a key name must never reach it either."""
+    sent, key_fn = _spy()
+    opts = [{"n": "1", "label": "a"}]
+    agy = {"menu_family": "agy", "question": "Pick", "part_count": 1,
+           "parts": [{"index": 0, "question": "Pick", "options": opts}], "options": opts}
+    ok, info = G.menu_batch_submit("seat", answers=[{"part": 0, "ns": ["C-c"]}],
+                                   armed=True, read_fn=lambda: agy, key_fn=key_fn,
+                                   settle_s=0)
+    assert ok is False and info.get("reason") == "bad_ns_shape", info
+    assert sent == [], f"a key name reached the agy pane: {sent}"
