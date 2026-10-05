@@ -2,8 +2,62 @@
 import os
 from pathlib import Path
 
-ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra")))
-DB_PATH = ORCHESTRA_DIR / "state" / "tasks.db"
+#: The LIVE operator tree. Kept as a constant so the pytest fence below can name the one path
+#: that a test must never open, independent of whatever ORCHESTRA_DIR happens to say.
+LIVE_ORCHESTRA_DIR = Path(os.path.expanduser("~/scripts/agent-orchestra"))
+
+
+def orchestra_dir() -> Path:
+    """Resolved ON EVERY CALL, not frozen at import.
+
+    `ORCHESTRA_DIR` used to be read once at import, which made `monkeypatch.setenv` inside a
+    test LOOK like isolation while the path stayed pinned to the live tree. A test then wrote
+    to the operator's live ledger (2026-10-05, and the same class on 2026-09-25). Lazy
+    resolution is what makes the env override actually mean something."""
+    return Path(os.environ.get("ORCHESTRA_DIR", str(LIVE_ORCHESTRA_DIR)))
+
+
+def db_path() -> Path:
+    return orchestra_dir() / "state" / "tasks.db"
+
+
+LIVE_DB_PATH = LIVE_ORCHESTRA_DIR / "state" / "tasks.db"
+
+
+def under_pytest() -> bool:
+    return bool(os.environ.get("PYTEST_CURRENT_TEST"))
+
+
+def refuse_live_db_under_pytest(path) -> None:
+    """Raise if a TEST is about to open the operator's live approvals DB.
+
+    A conftest guard only protects suites that load that conftest; this one travels with the
+    code, so it also covers a bare `pytest some_file.py` from another root, a doctest, or a
+    script a test shells out to. Two independent fences, because this class has now recurred."""
+    if not under_pytest():
+        return
+    try:
+        same = os.path.realpath(str(path)) == os.path.realpath(str(LIVE_DB_PATH))
+    except OSError:
+        return
+    if same:
+        raise RuntimeError(
+            f"a test tried to open the LIVE approvals DB ({LIVE_DB_PATH}).\n"
+            "Pass an explicit path: ApprovalStore(db_path=str(tmp_path / 'tasks.db')).\n"
+            "Note that setting ORCHESTRA_DIR works now too (the path resolves lazily), but an "
+            "explicit db_path is clearer and cannot be defeated by import order.")
+
+
+def __getattr__(name):
+    """PEP 562. `ORCHESTRA_DIR` and `DB_PATH` stay readable as module attributes for the ~13
+    existing consumers, but resolve lazily now — so `approval_config.DB_PATH` honours a
+    monkeypatched env. A `from approval_config import DB_PATH` still binds once at the
+    IMPORTER's import time, which is why approval_schema no longer does that."""
+    if name == "ORCHESTRA_DIR":
+        return orchestra_dir()
+    if name == "DB_PATH":
+        return db_path()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 NTFY_BASE = os.environ.get("NTFY_BASE", "http://localhost:9080")
 NTFY_APPROVALS_TOPIC = os.environ.get("NTFY_APPROVALS_TOPIC", "approvals")
@@ -21,7 +75,9 @@ WATCHDOG_MAX_ATTEMPTS = 3     # then escalate
 WATCHDOG_RETRY_BEAT_SECONDS = 55   # cheap-retry throttle (~one cron beat)
 ESCALATE_STUCK_MINUTES = 15        # wall-clock backstop (dead emitter / forever-busy)
 ESCALATE_REPEAT_MINUTES = 30       # re-escalate no more often than this
-CURSOR_FILE = ORCHESTRA_DIR / "state" / ".approval-listener-cursor"
+# Resolved at import, as before — only DB_PATH needed to become lazy for the test
+# fence, and widening that here would change behaviour nobody asked me to change.
+CURSOR_FILE = orchestra_dir() / "state" / ".approval-listener-cursor"
 
 # DEC-1786664626 Q4 (the operator-gated, card apr_10c0c829): whether a PENDING decision
 # still expires after EXPIRY_HOURS. Answered/acted decisions NEVER expire (F2) —

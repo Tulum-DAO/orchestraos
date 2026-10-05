@@ -18,11 +18,15 @@ def test_ntfy_token_missing_file_returns_empty(monkeypatch, tmp_path):
     assert c.ntfy_token() == ""   # OSError branch -> "" not a crash
 
 def test_orchestra_dir_env_override(monkeypatch):
-    # DB_PATH derives from ORCHESTRA_DIR; changing env + reimport should move it.
+    """DB_PATH derives from ORCHESTRA_DIR and must follow a change to it.
+
+    This no longer reloads the module. DB_PATH resolves LAZILY now, so the reload was both
+    unnecessary and actively harmful: `importlib.reload` mutates module state the whole session
+    shares, which made this test order-dependent (it failed once in a full run and passed alone).
+    Asserting the live behaviour directly is what the test was always trying to say."""
     monkeypatch.setenv("ORCHESTRA_DIR", "/tmp/xyz-orch")
     import approval_config as c
-    importlib.reload(c)
     assert str(c.DB_PATH) == "/tmp/xyz-orch/state/tasks.db"
-    # restore for other tests
+    assert str(c.db_path()) == "/tmp/xyz-orch/state/tasks.db"
     monkeypatch.delenv("ORCHESTRA_DIR", raising=False)
-    importlib.reload(c)
+    assert str(c.DB_PATH) == str(c.LIVE_DB_PATH), "with no override it falls back to the live tree"

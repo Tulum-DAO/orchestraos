@@ -140,25 +140,25 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("PUT", "/questionnaires/{id}/draft"): "approve",
     ("POST", "/questionnaires/{id}/submit"): "approve",
     ("POST", "/questionnaires/{id}/discard"): "approve",
-    # `approve`, ACCEPTED by gm 2026-10-05 on the condition below. It presses Right to page a
-    # multi-part AskUserQuestion: navigation only, never Enter and never a digit, so it cannot
-    # commit an answer. The capability it grants is "render an approval fully enough to answer
-    # it", and a device permitted to answer may also page the question.
-    #
-    # gm's CONDITION, and it was already satisfied — `menu_capture_walk` reads the pane BEFORE
-    # touching a key and presses ZERO keys unless a menu is actually there:
-    #   * no menu at all      -> reason 'menu_gone',        no key sent
-    #   * operator mid-walk   -> reason 'not_on_part_zero', no key sent
-    # So an approve-scoped device cannot send a keystroke into a pane that is idle or
-    # mid-composer. It was UNTESTED, which is how a guard quietly stops being one, so it is now
-    # pinned by test_menu_capture_guard.py.
-    ("POST", "/agent-menu-capture"): "approve",
     # --- message ---------------------------------------------------------------------
     ("POST", "/agent-message"): "message",
     ("POST", "/upload"): "message",
 
     # --- inject: PRESSES KEYS IN A LIVE PANE ------------------------------------------
     ("POST", "/agent-key"): "inject",
+    # It presses Right to page a multi-part AskUserQuestion: navigation only, never Enter and
+    # never a digit, so it cannot commit an answer — which is why `approve` was arguable. It is
+    # `inject` because it DOES press keys in a live pane, and the only argument for the looser
+    # reading was that a read+approve+message device could not otherwise hydrate a multi-part
+    # menu. quest-orchestra, the sole consumer, confirmed neither Quest app calls it, so that
+    # cost is zero. gm's final ruling (2026-10-05T08:11Z) accepts `inject` and treats the
+    # server-side-menu condition as moot.
+    #
+    # The guard that condition asked for is kept and still pinned by test_menu_capture_guard.py,
+    # because it is worth having on its own: an INJECT-scoped caller should not be able to press
+    # keys into a pane with no menu either. A narrower scope and a working guard are not
+    # alternatives.
+    ("POST", "/agent-menu-capture"): "inject",
     ("POST", "/agent-interrupt"): "inject",
     ("POST", "/agent-suggest"): "inject",
 
