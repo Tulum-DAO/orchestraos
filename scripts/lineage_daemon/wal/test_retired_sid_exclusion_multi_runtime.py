@@ -1,6 +1,6 @@
 """RED (gm msg_faf46471, by effect reconciler 01:45:36Z): after the relational-intent codex swap,
-resolve_codex_cid('relational-intent') returned 01a08c8c (RETIRED gen1) while canonical gen2
-is 01a0a4fe — the same rotated-root predecessor collision closed for claude in 4129e2ef06.
+resolve_codex_cid('relational-intent') returned 00000002 (RETIRED gen1) while canonical gen2
+is 00000004 — the same rotated-root predecessor collision closed for claude in 4129e2ef06.
 The codex and gemini resolvers pick the NEWEST-mtime store that declares 'You are <seat>'
 without consulting the DB. Fix: one runtime-neutral helper (root from seat, generations
 retired_at NOT NULL) applied in BOTH resolvers before their newest-first pick; a retired
@@ -14,8 +14,8 @@ sys.path.insert(0, "scripts")
 from lineage_daemon.wal import ctx_adapters as ca  # noqa: E402
 
 SEAT = "relational-intent"
-OLD = "01a08c8c-c0ee-7e40-8e79-8ee7a56612f1"
-NEW = "01a0a4fe-30f4-7d42-a175-4c8358982794"
+OLD = "00000002-0000-7000-8000-000000000002"
+NEW = "00000004-0000-7000-8000-000000000004"
 
 
 def _rollout(home, sid, mtime):
@@ -91,7 +91,7 @@ def test_runtime_neutral_helper_is_the_shared_default():
 # ---- gen-suffix tolerance (by effect right after 9e565ebff6): the promoted green's rollout
 # declares 'You are relational-intent-g2'; the codex/gemini regex rejected the -g2 suffix
 # (claude's candidate scan is gen-suffix tolerant), so with gen1 excluded the resolver walked
-# down to a Sep-10 ABANDONED rollout (01a08c8b, no generation) — which the reconciler would
+# down to a Sep-10 ABANDONED rollout (00000001, no generation) — which the reconciler would
 # have treated as a sid FIX. The seat's own -gN / -genN declaration IS the seat.
 
 def _rollout_decl(home, sid, mtime, decl):
@@ -110,7 +110,7 @@ def test_codex_gen_suffixed_declaration_resolves_for_the_seat(tmp_path, monkeypa
     monkeypatch.setenv("HOME", str(tmp_path))
     now = time.time()
     _rollout_decl(str(tmp_path), NEW, now, f"{SEAT}-g2")          # promoted green, newest
-    _rollout_decl(str(tmp_path), "01a08c8b-de55-7391-836b-431fc0b50ac4", now - 5 * 86400, SEAT)
+    _rollout_decl(str(tmp_path), "00000001-0000-7000-8000-000000000001", now - 5 * 86400, SEAT)
     assert ca.resolve_codex_cid(SEAT, retired_sids_fn=lambda s: set()) == NEW
 
 

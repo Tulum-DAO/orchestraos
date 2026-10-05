@@ -10,15 +10,15 @@ from scripts.lineage_daemon.enrich import (
 # --- live_sid: resume_command sid beats the clobber-prone session_id ---
 
 def test_live_sid_prefers_resume_command():
-    entry = {"session_id": "6dcadbe3-3739-4277-9abf-d0dfa457048f",
+    entry = {"session_id": "0000000a-0000-4000-8000-00000000000a",
              "resume_command": "/usr/bin/claude --resume "
-                               "24531952-6254-416a-a609-7eb9cbd2cc60 --model 'x'"}
-    assert live_sid(entry) == "24531952-6254-416a-a609-7eb9cbd2cc60"
+                               "00000007-0000-4000-8000-000000000007 --model 'x'"}
+    assert live_sid(entry) == "00000007-0000-4000-8000-000000000007"
 
 def test_live_sid_falls_back_to_session_id():
-    entry = {"session_id": "c19f0009-e2ab-45e9-9e77-ee30d4c4274a",
+    entry = {"session_id": "0000000f-0000-4000-8000-00000000000f",
              "resume_command": ""}
-    assert live_sid(entry) == "c19f0009-e2ab-45e9-9e77-ee30d4c4274a"
+    assert live_sid(entry) == "0000000f-0000-4000-8000-00000000000f"
 
 def test_live_sid_empty_when_neither():
     assert live_sid({}) == ""
@@ -97,7 +97,7 @@ def test_enrich_only_when_empty_skips_populated():
 def test_enrich_populates_pane_and_jsonl_for_empty():
     with tempfile.TemporaryDirectory() as root:
         cwd = "/home/testuser/agent-orchestra"
-        sid = "24531952-6254-416a-a609-7eb9cbd2cc60"
+        sid = "00000007-0000-4000-8000-000000000007"
         _write_jsonl(root, _project_dir(cwd), sid,
                      [{"input_tokens": 2, "cache_read_input_tokens": 690332}])
         meta = {"ob": {"cwd": cwd,
@@ -121,8 +121,8 @@ def test_enrich_does_not_mutate_input():
 
 def test_live_sid_prefers_conversation_command():
     entry = {"session_id": "stale-session-id",
-             "resume_command": "agy --conversation 139e5f3e-b919-441a-976f-7a470428735c --dangerously-skip-permissions"}
-    assert live_sid(entry) == "139e5f3e-b919-441a-976f-7a470428735c"
+             "resume_command": "agy --conversation 00000005-0000-4000-8000-000000000005 --dangerously-skip-permissions"}
+    assert live_sid(entry) == "00000005-0000-4000-8000-000000000005"
 
 
 def test_resolve_model_defaults_gemini():
@@ -132,7 +132,7 @@ def test_resolve_model_defaults_gemini():
 
 def test_jsonl_context_tokens_reads_gemini_brain_transcript():
     with tempfile.TemporaryDirectory() as b_root:
-        sid = "139e5f3e-b919-441a-976f-7a470428735c"
+        sid = "00000005-0000-4000-8000-000000000005"
         log_dir = os.path.join(b_root, sid, ".system_generated", "logs")
         os.makedirs(log_dir, exist_ok=True)
         trans_file = os.path.join(log_dir, "transcript.jsonl")
@@ -146,7 +146,7 @@ def test_jsonl_context_tokens_reads_gemini_brain_transcript():
 
 def test_enrich_populates_gemini_brain_tokens():
     with tempfile.TemporaryDirectory() as b_root:
-        sid = "139e5f3e-b919-441a-976f-7a470428735c"
+        sid = "00000005-0000-4000-8000-000000000005"
         log_dir = os.path.join(b_root, sid, ".system_generated", "logs")
         os.makedirs(log_dir, exist_ok=True)
         trans_file = os.path.join(log_dir, "transcript.jsonl")

@@ -95,7 +95,7 @@ def test_register_green_session_resolves_writes_db_and_sid(tmp_path):
     orch = str(tmp_path)
     os.makedirs(os.path.join(orch, "state", "wal"))
     alias = "demo-gemini-pred-g2"
-    cid = "206f75be-cbcd-44c6-8c86-8f87ef3c7eff"
+    cid = "00000006-0000-4000-8000-000000000006"
     calls = {"polls": 0, "update": None, "project": 0}
 
     def resolve_cid(seat):

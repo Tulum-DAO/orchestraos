@@ -1,6 +1,6 @@
 """RED (gm msg_816d4940, by effect 2026-09-16 13:05 Tulum): after identity_writer.swap_generation
-moved task-gm canonical to gen 2 (sid 70b7024d) and project_faithful ran, registry.json still read
-generation 1 / session_id None and agent-sessions.json still carried the OLD sid b43af7a4 — the
+moved task-gm canonical to gen 2 (sid 0000000b) and project_faithful ran, registry.json still read
+generation 1 / session_id None and agent-sessions.json still carried the OLD sid 0000000e — the
 LIVE canonical row is served from the persisted document verbatim. Rule (mirror of the archive
 rule c9560b947c): a live canonical row's session_id / generation / model / resume_command come
 from the canonical GENERATION row (DB-first); the document only fills gaps; a NULL/'unknown'
@@ -11,8 +11,8 @@ sys.path.insert(0, ".")
 from scripts.identity_store import projector  # noqa: E402
 
 ROOT = "task-gm"
-OLD_SID = "b43af7a4-2054-4a30-aada-174a517a84c3"
-NEW_SID = "70b7024d-5355-44bb-b2bf-b89c73c21eb8"
+OLD_SID = "0000000e-0000-4000-8000-00000000000e"
+NEW_SID = "0000000b-0000-4000-8000-00000000000b"
 RESUME2 = f"claude --resume {NEW_SID} --dangerously-skip-permissions"
 
 

@@ -2,7 +2,7 @@
 canonical generations promoted BEFORE the F2 fix.
 
 G7's live gen6 (all-model-parity) was promoted before F2 landed, so its TYPED
-generations.session_id is None RIGHT NOW while its real sid (854c06ef) lives only in
+generations.session_id is None RIGHT NOW while its real sid (5aaaaaaa) lives only in
 the document. The CURRENT live canonical gen therefore has no UNIQUE(session_id)
 protection. Backfill: for every CANONICAL, non-retired generation whose typed
 session_id IS NULL but whose live document carries a sid, attribute it (U8 take-over).
@@ -35,7 +35,7 @@ def conn(tmp_path):
     # the document carries the real sid (agent-sessions.json session doc)
     c.execute("INSERT INTO source_records (file, kind, key, ordinal, payload_json) "
               "VALUES ('agent-sessions.json','session',?,0,?)",
-              (ROOT, json.dumps({"session_id": "854c06ef", "generation": 6})))
+              (ROOT, json.dumps({"session_id": "5aaaaaaa", "generation": 6})))
     c.commit()
     yield c, g6
     c.close()
@@ -49,8 +49,8 @@ def _gen_sid(conn, root, generation):
 def test_backfill_attributes_gen6_typed_sid(conn):
     c, _ = conn
     res = orchestra_db.backfill_canonical_session_ids(c)
-    assert (ROOT, 6, "854c06ef") in res["attributed"]
-    assert _gen_sid(c, ROOT, 6) == "854c06ef", \
+    assert (ROOT, 6, "5aaaaaaa") in res["attributed"]
+    assert _gen_sid(c, ROOT, 6) == "5aaaaaaa", \
         "gen6's typed session_id must be backfilled from the document"
 
 
@@ -59,7 +59,7 @@ def test_backfill_restores_unique_protection(conn):
     orchestra_db.backfill_canonical_session_ids(c)
     with pytest.raises(sqlite3.IntegrityError):
         c.execute("INSERT INTO generations (root, generation, session_id, model) "
-                  "VALUES (?,99,'854c06ef','m')", (ROOT,))
+                  "VALUES (?,99,'5aaaaaaa','m')", (ROOT,))
 
 
 def test_backfill_is_idempotent(conn):
@@ -67,7 +67,7 @@ def test_backfill_is_idempotent(conn):
     orchestra_db.backfill_canonical_session_ids(c)
     second = orchestra_db.backfill_canonical_session_ids(c)
     assert second["attributed"] == [], "a second run attributes nothing (already backfilled)"
-    assert _gen_sid(c, ROOT, 6) == "854c06ef"
+    assert _gen_sid(c, ROOT, 6) == "5aaaaaaa"
 
 
 def test_backfill_idempotent_with_multi_gen_per_root_conflict(tmp_path):

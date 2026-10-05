@@ -859,7 +859,7 @@ def _successor_sid_verified(succ_sid: str | None, succ_alias: str) -> bool:
     """BUG 2b (fail-closed): a successor sid is promotable ONLY if it is a real sid
     whose transcript actually references THIS successor. Fail-closed: a missing sid,
     the 'unverifiable-sid' sentinel, no transcript, or a stale/dead transcript that
-    does NOT name the successor (the 37eb175b corpse class) => False, so the caller
+    does NOT name the successor (the 1aaaaaaa corpse class) => False, so the caller
     HOLDs and never points canonical at a corpse via the None->stale-fallback path.
     Accepts either an explicit lineage declaration OR the seat name appearing in the
     transcript head (how a live successor reads before it declares)."""
@@ -1109,7 +1109,7 @@ def execute_rotation(
     # If succ_sid is the 'unverifiable-sid' sentinel (extract_active_sid found no live
     # transcript), promoter.promote(session_id=None) falls back to the canonical seat's
     # STALE agent-sessions sid and accepts it via the operator-assertion hatch — pointing
-    # canonical at a corpse (the 37eb175b class). Require a verified live successor sid
+    # canonical at a corpse (the 1aaaaaaa class). Require a verified live successor sid
     # whose transcript references THIS successor; else HOLD and never call promote.
     if not _successor_sid_verified(succ_sid, succ_alias):
         log(f"HOLD_UNVERIFIABLE_SID: successor {succ_alias} sid {succ_sid!r} is not a "

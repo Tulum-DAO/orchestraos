@@ -124,7 +124,7 @@ def test_spawn_registers_green_sid_before_returning(tmp_path):
 
     def register_green_sid(green_alias):
         seen.append(green_alias)
-        return "206f75be-cbcd-44c6-8c86-8f87ef3c7eff"
+        return "00000006-0000-4000-8000-000000000006"
 
     try:
         out = spawn_green.spawn_green(
@@ -132,9 +132,9 @@ def test_spawn_registers_green_sid_before_returning(tmp_path):
             spawn_runner=_scratch_runner,
             register_green_sid_fn=register_green_sid)
         assert seen == [alias], "register_green_sid_fn must be called once with the alias"
-        assert out["green_sid"] == "206f75be-cbcd-44c6-8c86-8f87ef3c7eff"
+        assert out["green_sid"] == "00000006-0000-4000-8000-000000000006"
         assert BgStateStore(str(tmp_path), root).read_meta("green_session_id") == \
-            "206f75be-cbcd-44c6-8c86-8f87ef3c7eff"
+            "00000006-0000-4000-8000-000000000006"
     finally:
         _kill(alias)
 

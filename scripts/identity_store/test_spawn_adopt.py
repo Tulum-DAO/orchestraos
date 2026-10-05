@@ -291,7 +291,7 @@ def test_respawn_of_retired_canonical_carries_a_supplied_session_id(orch):
     r = _run(orch, ["task-y", "--runtime", "claude", "--model", "claude-opus-4-8[1m]", "--tier", "T2"])
     assert r.returncode == 0, r.stderr
     _retire_canonical(orch, "task-y")
-    sid = "5df4fb47-e0e3-42bb-8cb3-0a9b5788df37"
+    sid = "00000009-0000-4000-8000-000000000009"
     r2 = _run(orch, ["task-y", "--runtime", "claude", "--model", "claude-opus-4-8[1m]", "--tier", "T2",
                      "--session-id", sid])
     assert r2.returncode == 0, r2.stderr

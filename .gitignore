@@ -11,3 +11,8 @@ services/arturo/cartesia_deploy/.cartesia/
 /state/
 /logs/
 .venv/
+
+# Local agent working files (proposals, scratch). These carry operator paths and
+# identifier fragments, so a per-clone .git/info/exclude is not enough -- a fresh
+# clone or worktree would track them.
+.workspace/

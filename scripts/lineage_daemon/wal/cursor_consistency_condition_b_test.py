@@ -205,7 +205,7 @@ def _codex_user(text):
 
 def test_codex_contained_midloop_committed_lines_not_recaptured():
     with tempfile.TemporaryDirectory() as tmp:
-        sid = "01a01801-b232-7760-b6f0-c6ea1d6e9152"
+        sid = "00000000-0000-7000-8000-000000000000"
         m = _codex_meta(sid)
         u1 = _codex_user("one")
         u2 = _codex_user("two")

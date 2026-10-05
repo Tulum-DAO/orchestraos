@@ -17,7 +17,7 @@ def test_prune_failed_green_prunes_reaps_and_resets(tmp_path):
     st = BgStateStore(str(tmp_path), root)
     # seat had reached PREWARMING with a registered provisional + green markers
     st.write_state("PREWARMING", reason="ctx:prewarm")
-    st.write_meta("green_session_id", "206f75be-cbcd-44c6-8c86-8f87ef3c7eff")
+    st.write_meta("green_session_id", "00000006-0000-4000-8000-000000000006")
     st.write_meta("ingest_wake_sent", True)
     st.write_meta("verify_stall_beats", 6)
 

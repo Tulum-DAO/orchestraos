@@ -406,7 +406,7 @@ _LIVE_IDENTITY_FIELDS = ("session_id", "generation", "model", "resume_command")
 
 def _db_first_live_identity(doc, gen):
     """gm msg_816d4940 (by effect 2026-09-16 13:05 Tulum: after swap_generation moved task-gm
-    canonical to gen 2 / sid 70b7024d, registry.json still read generation 1 / session_id None
+    canonical to gen 2 / sid 0000000b, registry.json still read generation 1 / session_id None
     and agent-sessions.json the OLD sid — the live canonical row was the document verbatim).
     Mirror of the archive rule: identity fields on a LIVE canonical row come from the canonical
     generation row when it has them; the document only fills gaps; NULL/'unknown' never blank
@@ -424,7 +424,7 @@ def _db_first_live_identity(doc, gen):
 
 def _db_first_archive_identity(doc, gen):
     """gm msg_e7d7f734 (by effect: relational-intent-gen1 projected session_id None while the
-    generations row held 01a08c8c + its resume_command): identity fields on a swap-retired
+    generations row held 00000002 + its resume_command): identity fields on a swap-retired
     archive are DB-FIRST — the typed generation row's session_id / resume_command win when
     present; the persisted document only fills a gap (never blanked by a NULL row value)."""
     out = dict(doc)

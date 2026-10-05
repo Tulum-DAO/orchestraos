@@ -47,13 +47,13 @@ test('antigravity fixture -> exact v2 envelope', () => {
 
 test('codex fixture -> exact v2 envelope', () => {
   const { lines, expected } = loadFixture('codex-basic');
-  const env = normalizeTranscript(lines, 'fixture-codex', '01a01801-b232-7760-b6f0-c6ea1d6e9152');
+  const env = normalizeTranscript(lines, 'fixture-codex', '00000000-0000-7000-8000-000000000000');
   assert.deepStrictEqual(env, expected);
 });
 
 test('codex tool output array fixture -> exact v2 envelope', () => {
   const { lines, expected } = loadFixture('codex-tool-output-array');
-  const env = normalizeTranscript(lines, 'fixture-codex', '01a01801-b232-7760-b6f0-c6ea1d6e9152');
+  const env = normalizeTranscript(lines, 'fixture-codex', '00000000-0000-7000-8000-000000000000');
   assert.deepStrictEqual(env, expected);
 });
 

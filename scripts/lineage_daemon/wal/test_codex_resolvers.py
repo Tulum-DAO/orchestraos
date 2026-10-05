@@ -12,7 +12,7 @@ sys.path.insert(0, "scripts")
 from lineage_daemon.wal import ctx_adapters as ca  # noqa: E402
 from lineage_daemon.wal import green_liveness as gl  # noqa: E402
 
-_SID = "01a0a300-261d-7ff2-a2e1-f697da67ec8d"
+_SID = "00000003-0000-7000-8000-000000000003"
 
 
 def _write_rollout(home, seat, sid=_SID, task_starts=1, declare=True):

@@ -11,8 +11,8 @@ from lineage_daemon.wal.run_capture import resolve_seat
 def _reg(**over):
     a = {
         "cwd": "/home/testuser/repos/watch-approval-app",
-        "session_id": "757ef800-5ca4-4c04-91d9-48bbfce9f4a5",
-        "resume_command": ("claude --resume 757ef800-5ca4-4c04-91d9-48bbfce9f4a5"
+        "session_id": "0000000c-0000-4000-8000-00000000000c",
+        "resume_command": ("claude --resume 0000000c-0000-4000-8000-00000000000c"
                            " --dangerously-skip-permissions"),
         "generation": 6,
     }
@@ -31,14 +31,14 @@ def test_derives_transcript_path_from_cwd_and_sid():
     spec = resolve_seat(_reg(), "ios-watch-dev", home="/home/testuser")
     assert spec.source_path == (
         "/home/testuser/.claude/projects/-home-testuser-repos-watch-approval-app/"
-        "757ef800-5ca4-4c04-91d9-48bbfce9f4a5.jsonl")
+        "0000000c-0000-4000-8000-00000000000c.jsonl")
 
 
 def test_prefers_resume_sid_over_clobbered_session_id():
     reg = _reg(session_id="stale-clobbered-value",
-               resume_command="claude --resume 757ef800-5ca4-4c04-91d9-48bbfce9f4a5 --x")
+               resume_command="claude --resume 0000000c-0000-4000-8000-00000000000c --x")
     spec = resolve_seat(reg, "ios-watch-dev", home="/home/testuser")
-    assert spec.sid == "757ef800-5ca4-4c04-91d9-48bbfce9f4a5"
+    assert spec.sid == "0000000c-0000-4000-8000-00000000000c"
 
 
 def test_panes_dir_is_orchestra_relative():

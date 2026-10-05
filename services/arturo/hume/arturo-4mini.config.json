@@ -6,7 +6,7 @@
     "model_provider": "CUSTOM_LANGUAGE_MODEL",
     "model_resource": "https://YOUR-PUBLIC-HOST/arturo/v1/chat/completions"
   },
-  "voice": { "provider": "CUSTOM_VOICE", "id": "4bc24565-524c-469d-8b5d-3cffd384043a" },
+  "voice": { "provider": "CUSTOM_VOICE", "id": "YOUR-HUME-CUSTOM-VOICE-ID" },
   "event_messages": {
     "on_new_chat": { "enabled": true, "text": "Hey the operator, Arturo here, what do you need?" },
     "on_resume_chat": { "enabled": false },
