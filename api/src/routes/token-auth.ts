@@ -2,11 +2,11 @@ import { Router, type Request, type Response } from 'express';
 import { createHmac } from 'crypto';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { jwtSecret } from '../lib/shared-secret.js';
 
 const router = Router();
 const ORCHESTRA = process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
 const TENANTS_FILE = join(ORCHESTRA, 'state', 'tenants.json');
-const JWT_SECRET = process.env.JWT_SECRET || 'orchestraOS-jwt-secret-2026';
 const TOKEN_EXPIRY = 7 * 24 * 60 * 60;
 
 function base64urlObj(obj: object): string {
@@ -16,7 +16,7 @@ function base64urlObj(obj: object): string {
 function signJwt(payload: object): string {
   const header = base64urlObj({ alg: 'HS256', typ: 'JWT' });
   const body = base64urlObj(payload);
-  const sig = createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
+  const sig = createHmac('sha256', jwtSecret()).update(`${header}.${body}`).digest('base64url');
   return `${header}.${body}.${sig}`;
 }
 
@@ -25,7 +25,7 @@ function verifyJwt(token: string): any | null {
     const parts = token.split('.');
     if (parts.length !== 3) return null;
     const [header, body, sig] = parts;
-    const expected = createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
+    const expected = createHmac('sha256', jwtSecret()).update(`${header}.${body}`).digest('base64url');
     if (sig !== expected) return null;
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString());
     if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return null;
