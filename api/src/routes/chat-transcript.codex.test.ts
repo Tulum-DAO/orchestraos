@@ -304,3 +304,64 @@ test('a real operator message that merely mentions a tag is still operator speec
   ]);
   assert.notEqual(items[0].is_system, true);
 });
+
+// ---------------------------------------------------------------- ts is optional, and '' is not a ts
+
+test("a record with no timestamp omits ts entirely rather than emitting ''", () => {
+  // `ts` is OPTIONAL in transcript.v2.schema.json and documented as "ISO-8601 timestamp".
+  // The empty string is not one, so emitting it produces an envelope that technically violates
+  // the contract for a field we were free to leave out. The Claude path already behaves this way
+  // (it passes `o.timestamp` straight through, so an absent one becomes undefined and drops out
+  // of the JSON); the codex path coerced with `String(d.timestamp || '')` and was the outlier.
+  const line = JSON.stringify({
+    ordinal: 1, type: 'response_item',
+    payload: { id: 'i1', type: 'message', role: 'user', content: 'hello there' },
+  });
+  const items = parseCodexRollout([line]);
+  assert.equal(items.length, 1);
+  assert.ok(!('ts' in items[0]), `expected no ts key, got ${JSON.stringify(items[0])}`);
+});
+
+test('a record WITH a timestamp still carries it through unchanged', () => {
+  const items = parseCodexRollout([
+    rec(1, 'response_item',
+        { id: 'i1', type: 'message', role: 'user', content: 'hello there' },
+        '2026-09-24T08:40:15.000Z'),
+  ]);
+  assert.equal(items[0].ts, '2026-09-24T08:40:15.000Z');
+});
+
+test("an empty-string timestamp is treated as absent, not signed into the envelope", () => {
+  const line = JSON.stringify({
+    ordinal: 1, timestamp: '', type: 'response_item',
+    payload: { id: 'i1', type: 'message', role: 'user', content: 'hello there' },
+  });
+  const items = parseCodexRollout([line]);
+  assert.ok(!('ts' in items[0]));
+});
+
+test('a tool_use and tool_result with no timestamp also omit ts', () => {
+  const call = JSON.stringify({
+    ordinal: 1, type: 'response_item',
+    payload: { id: 'c1', type: 'custom_tool_call', call_id: 'call_1', name: 'exec_command',
+               input: '{"CommandLine":"ls"}' },
+  });
+  const out = JSON.stringify({
+    ordinal: 2, type: 'response_item',
+    payload: { id: 'o1', type: 'custom_tool_call_output', call_id: 'call_1', output: 'a\nb' },
+  });
+  const items = parseCodexRollout([call, out]);
+  assert.equal(items.length, 2);
+  for (const it of items) assert.ok(!('ts' in it), `${it.kind} leaked a ts key`);
+});
+
+test('a thinking item with no timestamp omits ts', () => {
+  const line = JSON.stringify({
+    ordinal: 1, type: 'response_item',
+    payload: { id: 'r1', type: 'reasoning',
+               summary: [{ type: 'summary_text', text: 'thinking about it' }] },
+  });
+  const items = parseCodexRollout([line]);
+  assert.equal(items.length, 1);
+  assert.ok(!('ts' in items[0]));
+});

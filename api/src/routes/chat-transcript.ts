@@ -224,14 +224,29 @@ function codexArgs(raw: any): Record<string, unknown> {
 
 /** Map a codex rollout to the SAME flat item grammar the Claude/Gemini paths emit, so enrichItems,
  *  capInput, toolSummary and buildRenderItems are all reused untouched. */
+/** Attach `ts` only when the record actually carried a timestamp.
+ *
+ *  `ts` is OPTIONAL in transcript.v2.schema.json and documented as "ISO-8601 timestamp", so `''`
+ *  is not a legal value for it -- and this path used to coerce a missing timestamp into exactly
+ *  that. The Claude path never had the bug: it passes `o.timestamp` straight through, so an absent
+ *  one is `undefined` and drops out of the JSON. This makes codex agree.
+ *
+ *  Assigning conditionally rather than setting `ts: undefined`: an own property holding
+ *  `undefined` is NOT the same as an absent property to `assert.deepStrictEqual`, which the
+ *  fixture-conformance suite compares with. */
+function withTs<T extends object>(it: T, ts: string | undefined): T {
+  if (ts) (it as any).ts = ts;
+  return it;
+}
+
 export function parseCodexRollout(lines: string[]): any[] {
-  const recs: { ordinal: number; ts: string; payload: any; type: string }[] = [];
+  const recs: { ordinal: number; ts: string | undefined; payload: any; type: string }[] = [];
   for (const line of lines) {
     if (!line.trim()) continue;
     try {
       const d = JSON.parse(line);
       if (!d || typeof d !== 'object') continue;
-      recs.push({ ordinal: Number(d.ordinal ?? 0), ts: String(d.timestamp || ''), payload: d.payload || {}, type: String(d.type || '') });
+      recs.push({ ordinal: Number(d.ordinal ?? 0), ts: d.timestamp ? String(d.timestamp) : undefined, payload: d.payload || {}, type: String(d.type || '') });
     } catch { /* torn final line while the seat is still writing — keep everything before it */ }
   }
   // Explicit ordinal order: the file can be appended by more than one writer
@@ -248,7 +263,7 @@ export function parseCodexRollout(lines: string[]): any[] {
         const text = codexText(p.content);
         if (!text) break;
         const role = p.role === 'assistant' ? 'assistant' : 'user';
-        const it: any = { kind: 'text', role, text, ts: r.ts, uuid };
+        const it: any = withTs({ kind: 'text', role, text, uuid }, r.ts);
         // The operator never typed the harness's own envelopes. Same rule as the Claude path
         // (sanitizeClaudeUserText, 55134d0): internals must not render as operator speech.
         // A developer-role message is the brief; codex also injects environment/context envelopes
@@ -259,7 +274,7 @@ export function parseCodexRollout(lines: string[]): any[] {
       }
       case 'agent_message': {
         const text = codexText(p.content ?? p.message);
-        if (text) items.push({ kind: 'text', role: 'assistant', text, ts: r.ts, uuid });
+        if (text) items.push(withTs({ kind: 'text', role: 'assistant', text, uuid }, r.ts));
         break;
       }
       case 'reasoning': {
@@ -269,29 +284,29 @@ export function parseCodexRollout(lines: string[]): any[] {
         const text = Array.isArray(p.summary)
           ? p.summary.map((s: any) => (s && typeof s.text === 'string' ? s.text : '')).join('\n').trim()
           : '';
-        if (text) items.push({ kind: 'thinking', role: 'assistant', text, ts: r.ts, uuid });
+        if (text) items.push(withTs({ kind: 'thinking', role: 'assistant', text, uuid }, r.ts));
         break;
       }
       case 'custom_tool_call':
       case 'function_call': {
-        items.push({
+        items.push(withTs({
           kind: 'tool_use', role: 'assistant',
           tool: String(p.name || ''),
           input: codexArgs(p.input ?? p.arguments),
           id: String(p.call_id || p.id || ''),     // pairs with tool_use_id below
-          ts: r.ts, uuid,
-        });
+          uuid,
+        }, r.ts));
         break;
       }
       case 'custom_tool_call_output':
       case 'function_call_output': {
-        items.push({
+        items.push(withTs({
           kind: 'tool_result', role: 'user',
           text: codexText(p.output),
           tool_use_id: String(p.call_id || ''),
           is_error: !!p.is_error,
-          ts: r.ts, uuid,
-        });
+          uuid,
+        }, r.ts));
         break;
       }
       default: break;                              // compacted/unknown: not conversation
@@ -728,14 +743,16 @@ function enrichItems(items: any[]): any[] {
       const { capped, truncated } = capInput(input);
       const out: any = { kind: it.kind, role: it.role, tool: it.tool, input: capped, summary };
       if (truncated) out.input_full = inputFullText(input);
-      out.id = it.id; out.ts = it.ts; out.uuid = it.uuid;
+      // Same reason as withTs(): an own `ts` holding undefined is not an absent `ts`.
+      out.id = it.id; out.uuid = it.uuid;
+      withTs(out, it.ts);
       return out;
     }
     if (it.kind === 'text' && it.role === 'user' && !firstUserSeen) {
       firstUserSeen = true;
       const text = (it.text || '').trim();
       if (text.length > 800 || /^You are\b/.test(text)) {
-        return { kind: it.kind, role: it.role, text: it.text, is_system: true, ts: it.ts, uuid: it.uuid };
+        return withTs({ kind: it.kind, role: it.role, text: it.text, is_system: true, uuid: it.uuid }, it.ts);
       }
     }
     return it;
