@@ -140,25 +140,28 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("PUT", "/questionnaires/{id}/draft"): "approve",
     ("POST", "/questionnaires/{id}/submit"): "approve",
     ("POST", "/questionnaires/{id}/discard"): "approve",
+    # `approve`. FINAL per gm 2026-10-05T08:34Z ("record it as the final state"), after three
+    # rulings as messages crossed: approve+condition (08:02), inject (08:11), then approve
+    # confirmed once the guard was shown to exist and be pinned (08:34).
+    #
+    # It presses Right to page a multi-part AskUserQuestion — navigation only, never Enter and
+    # never a digit, so it cannot commit an answer. The capability it grants is "render an
+    # approval fully enough to answer it", and a device allowed to answer may page the question.
+    #
+    # Safe at `approve` ONLY because menu_capture_walk refuses to press a key unless a menu is
+    # really on screen: `menu_gone` with no menu, `not_on_part_zero` when the operator is
+    # mid-navigation, zero keys in both. Pinned by test_menu_capture_guard.py. The two are ONE
+    # decision — remove the guard and this becomes a keystroke primitive for every approve device.
+    #
+    # It is also load-bearing: quest-orchestra hydrates multi-part menus through it on a
+    # read+approve+message headset, which is Shaw's top Quest priority.
+    ("POST", "/agent-menu-capture"): "approve",
     # --- message ---------------------------------------------------------------------
     ("POST", "/agent-message"): "message",
     ("POST", "/upload"): "message",
 
     # --- inject: PRESSES KEYS IN A LIVE PANE ------------------------------------------
     ("POST", "/agent-key"): "inject",
-    # It presses Right to page a multi-part AskUserQuestion: navigation only, never Enter and
-    # never a digit, so it cannot commit an answer — which is why `approve` was arguable. It is
-    # `inject` because it DOES press keys in a live pane, and the only argument for the looser
-    # reading was that a read+approve+message device could not otherwise hydrate a multi-part
-    # menu. quest-orchestra, the sole consumer, confirmed neither Quest app calls it, so that
-    # cost is zero. gm's final ruling (2026-10-05T08:11Z) accepts `inject` and treats the
-    # server-side-menu condition as moot.
-    #
-    # The guard that condition asked for is kept and still pinned by test_menu_capture_guard.py,
-    # because it is worth having on its own: an INJECT-scoped caller should not be able to press
-    # keys into a pane with no menu either. A narrower scope and a working guard are not
-    # alternatives.
-    ("POST", "/agent-menu-capture"): "inject",
     ("POST", "/agent-interrupt"): "inject",
     ("POST", "/agent-suggest"): "inject",
 
