@@ -51,3 +51,42 @@ def _restore_environ_between_tests():
     yield
     _os.environ.clear()
     _os.environ.update(saved)
+
+
+# --- the live DB is NOT a test fixture (incident 2026-10-05) ------------------------------
+# `approval_config.DB_PATH` is computed at IMPORT time from ORCHESTRA_DIR, defaulting to the
+# LIVE tree. So `monkeypatch.setenv("ORCHESTRA_DIR", tmp)` inside a test LOOKS like isolation
+# and is not — the path was frozen before the test body ran. A test that then does
+# `ApprovalStore()` with no db_path opens Shaw's live tasks.db.
+#
+# That is not hypothetical: it is exactly how a test in this repo ALTERed the live
+# approval_requests table (an operator-gated DDL) and inserted two junk rows into the live
+# ledger. The environ-isolation belt above cannot catch it, because nothing about the
+# environment is wrong by the time the test runs.
+#
+# So the live path is refused at the sqlite layer, where the mistake actually lands. A test
+# that wants a store passes `db_path=<tmp>`; there is no legitimate reason for a test to open
+# the operator's live ledger.
+import sqlite3 as _sqlite3
+
+_LIVE_DB = os.path.join(os.path.expanduser("~/scripts/agent-orchestra"), "state", "tasks.db")
+_real_connect = _sqlite3.connect
+
+
+def _guarded_connect(database, *a, **kw):
+    try:
+        target = os.path.abspath(str(database).split("file:")[-1].split("?")[0])
+    except Exception:            # noqa: BLE001 — a URI we cannot parse is not the live path
+        target = ""
+    if target == os.path.abspath(_LIVE_DB):
+        raise AssertionError(
+            "a test tried to open the LIVE approvals DB (" + _LIVE_DB + ").\n"
+            "DB_PATH is import-time, so monkeypatching ORCHESTRA_DIR does not isolate it.\n"
+            "Pass an explicit path instead:  ApprovalStore(db_path=str(tmp_path / 'tasks.db'))")
+    return _real_connect(database, *a, **kw)
+
+
+@_pytest.fixture(autouse=True)
+def _refuse_the_live_db(monkeypatch):
+    monkeypatch.setattr(_sqlite3, "connect", _guarded_connect)
+    yield
