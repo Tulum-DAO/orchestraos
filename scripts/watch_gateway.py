@@ -93,6 +93,7 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     # --- unauthenticated by necessity -------------------------------------------------
     ("GET", "/gateway/identity"): _PUBLIC,    # a phone probes this BEFORE it has a token
     ("POST", "/pair/exchange"): _PUBLIC,      # the caller has no token; that is what it wants
+
     ("GET", "/health"): _PUBLIC,              # liveness for the launcher/watchdog
 
     # --- read ------------------------------------------------------------------------
@@ -194,6 +195,14 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     # The matching GETs stay `read`: reading which vendor is active is harmless.
     ("POST", "/red-alert/report"): "admin",
     ("POST", "/telemetry"): "admin",
+    # The only route that MINTS a credential. `admin` so the TABLE states that it is privileged —
+    # I first wrote it as _PUBLIC "because the handler checks the principal", and
+    # test_the_only_public_routes_are_the_three_that_must_be caught it, correctly: a route whose
+    # requirement lives only in its handler is invisible to anyone reading the table, which is the
+    # authorization-by-copy-paste problem this middleware exists to end.
+    # The handler ALSO refuses any principal that is not the fleet bearer (condition d, no chains),
+    # so a device granted `admin` by hand still cannot mint. Two gates, stated in two places.
+    ("POST", "/device/upgrade"): "admin",
 }
 
 
@@ -4610,6 +4619,79 @@ def _pairing_dir():
     return _P(base) / "state" / "pairing"
 
 
+#: The id recorded as `minted_by` for anything the fleet bearer issues. A stable string rather
+#: than the token or its hash, so rotation can revoke by it without the old secret being stored.
+FLEET_MINTER_ID = "legacy-fleet-token"
+
+
+async def handle_device_upgrade(request):
+    """POST /device/upgrade {label, scopes[]} -> {device_id, token, scopes} — AUTHENTICATED.
+
+    Shaw does not want to retype a pairing code on a headset he is already wearing. So a caller
+    that ALREADY holds a credential can exchange it for a narrower, per-device one without a
+    second trip through the typed code.
+
+    This is the only route that MINTS a credential, so it is the one place where getting the
+    conditions wrong hands out power rather than merely leaking it. All five, and why:
+
+    (a) ONLY `read`, `approve`, `message` are mintable here (device_tokens.HTTP_MINTABLE), as an
+        ALLOWLIST so a verb added later is not mintable until someone decides it is. `inject`,
+        `ptt`, `voice` and `admin` are mintable only by the CLI on the host, where a human is at
+        a shell. Nothing this endpoint can issue presses a key or spends provider money.
+    (b) Every device records `minted_by`, so what a credential issued is answerable later.
+    (c) Rotating the fleet bearer revokes everything it minted — see `rotate_fleet_token` /
+        `device_admin.py --revoke-minted-by`. Without that, rotation is theatre: the key
+        everyone believes is dead keeps living through its children.
+    (d) NO CHAINS. Only the fleet bearer may upgrade; a device token is refused even when it
+        asks for a SUBSET of its own scopes. A chain means the real question is no longer "who
+        issued this" but "what is the transitive closure of everything that ever could have",
+        which nobody audits.
+    (e) IDEMPOTENT PER LABEL: re-upgrading `quest-3` revokes the previous quest-3 token in the
+        same call. Otherwise every re-pair leaves another live credential behind, and the
+        revocation list stops being something anyone reads.
+
+    Deliberately NOT a scope in the table: it is `_PUBLIC` in the route sense (no verb gates it)
+    because the PRINCIPAL identity is the gate, and a verb would be misleading — there is no
+    verb a device could hold that should let it mint. The refusal is explicit below.
+    """
+    from scripts.device_tokens import http_mintable
+
+    principal = request.get("principal") if hasattr(request, "get") else None
+    if not principal:
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+
+    # (d) no chains. Checked BEFORE anything is parsed, so a device token cannot even learn
+    # whether its requested scopes would have been acceptable.
+    if principal.get("id") != "legacy":
+        log.warning(f"device {principal.get('id')} tried to mint; refused (no chains)")
+        return _json({"ok": False, "error": "a device token may not mint another token"},
+                     status=403)
+
+    try:
+        data = await request.json()
+    except Exception:  # noqa: BLE001
+        data = {}
+    label = str((data or {}).get("label") or "").strip()
+    scopes = (data or {}).get("scopes")
+    if not label:
+        return _json({"ok": False, "error": "label required"}, status=400)
+    if not scopes:
+        return _json({"ok": False, "error": "scopes required; there is no default"}, status=400)
+
+    ok, why = http_mintable(scopes)
+    if not ok:
+        return _json({"ok": False, "error": why}, status=403)
+
+    store = _device_store()
+    replaced = store.revoke_label(label)            # (e)
+    device_id, token = store.mint(label, scopes, minted_by=FLEET_MINTER_ID)   # (b)
+    log.info(f"device/upgrade: minted {device_id} ({label}) "
+             f"replacing {len(replaced)} previous token(s)")   # never log the token
+    return _json({"ok": True, "device_id": device_id, "token": token,
+                  "scopes": list(store.resolve(token)["scopes"]),
+                  "replaced": replaced})
+
+
 async def handle_pair_exchange(request):
     """POST /pair/exchange {code} -> {base_url, token}.
 
@@ -5213,6 +5295,7 @@ def build_app():
     app.router.add_get("/gateway/identity", handle_gateway_identity)
     app.router.add_get("/gateway/capabilities", handle_gateway_capabilities)
     app.router.add_post("/pair/exchange", handle_pair_exchange)
+    app.router.add_post("/device/upgrade", handle_device_upgrade)
     app.router.add_post("/surface", handle_surface_post)
     app.router.add_get("/live", handle_gemini_live)
     app.router.add_post("/telemetry", handle_telemetry)

@@ -77,6 +77,13 @@ def parse_args(argv=None) -> argparse.Namespace:
     dv = sub.add_parser("devices", help="list paired devices and revoke one")
     dv.add_argument("--revoke", metavar="DEVICE_ID", default=None,
                     help="revoke this device id; its token stops working on the next request")
+
+    rt = sub.add_parser("rotate-gateway-token",
+                        help="rotate the fleet bearer AND revoke every token it minted")
+    rt.add_argument("--minted-by", dest="minted_by", default=None,
+                    help="which minter's children to revoke (default: legacy-fleet-token)")
+    rt.add_argument("--revoke-only", dest="revoke_only", action="store_true",
+                    help="revoke the minted tokens but do NOT rotate the bearer itself")
     sub.add_parser("down", help="stop the running supervisor and its children")
     ug = sub.add_parser("upgrade", help="git pull --ff-only + orchestra init --yes + orchestra doctor; seats untouched")
     ug.add_argument("--dry-run", action="store_true", help="show the incoming commits and contract-bearing paths, pull nothing")
@@ -202,10 +209,11 @@ def cmd_status(ns) -> int:
 def main(argv=None) -> int:
     ns = parse_args(argv)
     from .seats import cmd_rotate, cmd_spawn, cmd_agent
-    from .pair_cmd import run_pair, run_devices
+    from .pair_cmd import run_pair, run_devices, run_rotate_fleet_token
     return {"init": cmd_init, "doctor": cmd_doctor, "up": cmd_up, "down": cmd_down, "status": cmd_status,
             "spawn": cmd_spawn, "agent": cmd_agent, "rotate": cmd_rotate, "upgrade": cmd_upgrade,
-            "pair": run_pair, "devices": run_devices}[ns.command](ns)
+            "pair": run_pair, "devices": run_devices,
+            "rotate-gateway-token": run_rotate_fleet_token}[ns.command](ns)
 
 
 if __name__ == "__main__":
