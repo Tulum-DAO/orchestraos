@@ -34,6 +34,17 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PROVIDERS_PATH = resolvePath(__dirname, '../../../config/providers.json');
 
 const TTL_S = 300;
+/**
+ * How old a DISK-seeded catalog may be and still be served at boot.
+ *
+ * The 300s TTL decides when to REFRESH; this ceiling decides whether a persisted
+ * catalog is trustworthy at all. They are different questions: a 10-minute-old file is
+ * stale but certainly still true, while a week-old one may offer a model the provider has
+ * retired — and the proxy validates a saved pick against this catalog, so serving a
+ * long-dead entry turns a fast picker into a rejected model.
+ */
+export const DISK_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_RESPONSE_CACHE_PATH = resolvePath(__dirname, '../../../state/runtimes-available-cache.json');
 // The proxy validates an explicitly picked model against this file (union'd with
 // providers.json static ids). Offering a model in the picker and then refusing it is
 // the bug this closes, so a PROBED catalog is published where validation can see it.
@@ -350,6 +361,29 @@ export function probeAll(deps: ProbeDeps, opts: { withModels?: boolean } = {}): 
   return { providers: results, probed_at: deps.now(), ttl_s: TTL_S };
 }
 
+/** Persisted response cache. Separate from model-catalog-live.json, which holds only the
+ *  VALIDATION ids the proxy needs — not the labels, capabilities or auth state the picker
+ *  renders, so it cannot seed this response. */
+export interface CacheIO {
+  readCache: () => RuntimesAvailableResponse | null;
+  writeCache: (value: RuntimesAvailableResponse) => void;
+}
+
+export function defaultCacheIO(path: string = DEFAULT_RESPONSE_CACHE_PATH): CacheIO {
+  return {
+    readCache: () => {
+      if (!existsSync(path)) return null;
+      return JSON.parse(readFileSync(path, 'utf8')) as RuntimesAvailableResponse;
+    },
+    writeCache: (value) => {
+      mkdirSync(dirname(path), { recursive: true });
+      const tmp = `${path}.tmp`;
+      writeFileSync(tmp, `${JSON.stringify(value, null, 1)}\n`);
+      renameSync(tmp, path);
+    },
+  };
+}
+
 interface CacheEntry {
   value: RuntimesAvailableResponse;
   expiresAt: number;
@@ -360,15 +394,21 @@ interface CacheEntry {
  * mounts a single instance (module-level `router` below); tests construct
  * their own with fake deps so probes never touch the real filesystem/CLIs.
  */
-export function createRuntimesAvailableRouter(deps: ProbeDeps = makeDefaultDeps()): {
+export function createRuntimesAvailableRouter(
+  deps: ProbeDeps = makeDefaultDeps(),
+  io: CacheIO = defaultCacheIO(),
+): {
   router: Router;
   invalidate: () => void;
   getCached: () => RuntimesAvailableResponse;
+  /** Discard the cache and probe synchronously — what POST /refresh does. */
+  forceRefresh: () => RuntimesAvailableResponse;
   /** The cached value if it is still fresh, else null — never probes. */
   peek: () => RuntimesAvailableResponse | null;
 } {
   const router = Router();
   let cache: CacheEntry | null = null;
+  let refreshing = false;
 
   const invalidate = () => {
     cache = null;
@@ -377,11 +417,52 @@ export function createRuntimesAvailableRouter(deps: ProbeDeps = makeDefaultDeps(
   const getFresh = (): RuntimesAvailableResponse => {
     const value = probeAll(deps);
     cache = { value, expiresAt: deps.now() + TTL_S * 1000 };
+    // Best-effort: this is a cache. A write failure must never fail the request, and must
+    // never fail the probe that produced a perfectly good answer.
+    try {
+      io.writeCache(value);
+    } catch {
+      /* cache only */
+    }
     return value;
   };
 
+  // Seed from the last persisted catalog so a RESTART does not make the first caller wait
+  // on a multi-second probe. A read failure is not fatal: a corrupt file must degrade to a
+  // normal cold probe, never to a broken endpoint.
+  try {
+    const seed = io.readCache();
+    if (seed && typeof seed.probed_at === 'number'
+        && deps.now() - seed.probed_at < DISK_CACHE_MAX_AGE_MS) {
+      cache = { value: seed, expiresAt: seed.probed_at + TTL_S * 1000 };
+    }
+  } catch {
+    /* no seed; the first request probes as it always did */
+  }
+
+  /** Revalidate behind the response. Single-flight: five callers arriving on an expired
+   *  cache must not start five probes. A throwing probe leaves the stale value in place. */
+  const revalidate = () => {
+    if (refreshing) return;
+    refreshing = true;
+    setImmediate(() => {
+      try {
+        getFresh();
+      } catch {
+        /* keep serving the last good catalog */
+      } finally {
+        refreshing = false;
+      }
+    });
+  };
+
   const getCachedOrFresh = (): RuntimesAvailableResponse => {
-    if (cache && deps.now() < cache.expiresAt) return cache.value;
+    if (cache) {
+      // STALE-WHILE-REVALIDATE: an expired entry still answers instantly. Blocking here was
+      // the whole defect — every 300s, whoever opened the picker first paid the full probe.
+      if (deps.now() >= cache.expiresAt) revalidate();
+      return cache.value;
+    }
     return getFresh();
   };
 
@@ -389,7 +470,8 @@ export function createRuntimesAvailableRouter(deps: ProbeDeps = makeDefaultDeps(
     res.json(getCachedOrFresh());
   });
 
-  // Self-heal: force a full re-probe, discarding whatever the cache held.
+  // Self-heal: force a full re-probe, discarding whatever the cache held. This one STAYS
+  // blocking on purpose — an explicit refresh is a request for fresh truth, not for speed.
   router.post('/available/refresh', (_req: Request, res: Response) => {
     invalidate();
     res.json(getFresh());
@@ -397,7 +479,12 @@ export function createRuntimesAvailableRouter(deps: ProbeDeps = makeDefaultDeps(
 
   const peek = () => (cache && deps.now() < cache.expiresAt ? cache.value : null);
 
-  return { router, invalidate, getCached: getCachedOrFresh, peek };
+  const forceRefresh = () => {
+    invalidate();
+    return getFresh();
+  };
+
+  return { router, invalidate, getCached: getCachedOrFresh, forceRefresh, peek };
 }
 
 const production = createRuntimesAvailableRouter();
