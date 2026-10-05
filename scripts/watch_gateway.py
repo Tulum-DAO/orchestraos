@@ -165,21 +165,33 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("POST", "/agent-interrupt"): "inject",
     ("POST", "/agent-suggest"): "inject",
 
-    # --- voice: every call SPENDS REAL PROVIDER MONEY ---------------------------------
+    # --- ptt: ONE TURN of push-to-talk, and nothing else ------------------------------
+    # Split out of `voice` because `voice` was too coarse for a headset. It also reached the
+    # FLEET-WIDE vendor and voice-id writes below, so a device granted `voice` just to speak
+    # could switch what EVERY conversation on this box uses. Least privilege: a headset gets
+    # `ptt`, which buys a turn of speech and no configuration at all.
+
+    # --- voice: the richer surfaces; every call SPENDS REAL PROVIDER MONEY -------------
     ("GET", "/live"): "voice",
-    ("POST", "/arturo/ptt"): "voice",
+    ("POST", "/arturo/ptt"): "ptt",
     ("POST", "/arturo/text"): "voice",
     ("POST", "/arturo/text/stream"): "voice",
     ("POST", "/arturo/text/prewarm"): "voice",
     ("POST", "/arturo/transcribe"): "voice",
-    ("POST", "/arturo/ptt/stream/audio"): "voice",
-    ("GET", "/arturo/ptt/stream/events"): "voice",
-    ("POST", "/arturo/ptt/stream/end"): "voice",
-    ("PUT", "/arturo/ptt/vendor"): "voice",
-    ("PUT", "/arturo/ptt/voice"): "voice",
-    ("POST", "/voice-call-ended"): "voice",
+    ("POST", "/arturo/ptt/stream/audio"): "ptt",
+    ("GET", "/arturo/ptt/stream/events"): "ptt",
+    ("POST", "/arturo/ptt/stream/end"): "ptt",
+    ("PUT", "/arturo/ptt/vendor"): "admin",
+    ("PUT", "/arturo/ptt/voice"): "admin",
+    ("POST", "/voice-call-ended"): "admin",
 
-    # --- admin -----------------------------------------------------------------------
+    # --- admin: fleet-wide effect -----------------------------------------------------
+    # PUT /arturo/ptt/vendor and PUT /arturo/ptt/voice proxy to ONE loopback Arturo service and
+    # take effect on the NEXT conversation — they are process-level settings for the whole box,
+    # not per-caller preferences. That is administration of voice, not use of it, so holding
+    # `voice` must not grant it. Raised here rather than only adding `ptt`, because this closes
+    # the hole for EVERY holder of `voice`, present and future, not just the headset.
+    # The matching GETs stay `read`: reading which vendor is active is harmless.
     ("POST", "/red-alert/report"): "admin",
     ("POST", "/telemetry"): "admin",
 }

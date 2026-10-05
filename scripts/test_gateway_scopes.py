@@ -62,8 +62,11 @@ def test_the_dangerous_verbs_are_not_filed_under_read():
     as `read`, every paired device gets it, because `read` is in every sane default."""
     for route in (("POST", "/agent-key"), ("POST", "/agent-interrupt"), ("POST", "/agent-suggest")):
         assert G.ROUTE_SCOPES[route] == "inject", route
-    for route in (("POST", "/arturo/ptt"), ("POST", "/arturo/text"), ("GET", "/live")):
+    for route in (("POST", "/arturo/text"), ("GET", "/live")):
         assert G.ROUTE_SCOPES[route] == "voice", route
+    # PTT is its own verb now (narrower than voice), but it must never fall to `read` either —
+    # it spends provider credit per turn.
+    assert G.ROUTE_SCOPES[("POST", "/arturo/ptt")] == "ptt"
     for route in (("POST", "/approval-answers"), ("POST", "/approvals/{id}/discard")):
         assert G.ROUTE_SCOPES[route] == "approve", route
     # `approve`, FINAL per gm 08:34Z. Safe only because the walk refuses to press a key with no
@@ -371,3 +374,53 @@ def test_capabilities_reports_a_scoped_device_verbatim(monkeypatch, tmp_path):
     assert body["all_scopes"] is False
     assert body["device"] == {"id": "d1", "label": "quest-headset"}
     assert body["verbs"] == list(VERBS), "the full vocabulary, so a client can render unheld verbs"
+
+
+# ---------------------------------------------------------------- ptt is narrower than voice
+
+def test_push_to_talk_needs_only_ptt_not_voice():
+    """A headset should be able to speak one turn without holding the richer voice surfaces."""
+    for route in (("POST", "/arturo/ptt"), ("POST", "/arturo/ptt/stream/audio"),
+                  ("GET", "/arturo/ptt/stream/events"), ("POST", "/arturo/ptt/stream/end")):
+        assert G.ROUTE_SCOPES[route] == "ptt", route
+
+
+def test_the_FLEET_WIDE_voice_config_writes_require_admin_not_voice():
+    """PUT /arturo/ptt/vendor and PUT /arturo/ptt/voice proxy to ONE loopback Arturo service and
+    take effect on the NEXT conversation — they are process-level settings for the whole box.
+    That is administration of voice, not use of it.
+
+    Raised to `admin` rather than merely adding `ptt`, because this closes the hole for EVERY
+    holder of `voice`, present and future. A narrow scope for one device would have left the
+    fleet-wide switch reachable by the next device granted `voice`."""
+    for route in (("PUT", "/arturo/ptt/vendor"), ("PUT", "/arturo/ptt/voice"),
+                  ("POST", "/voice-call-ended")):
+        assert G.ROUTE_SCOPES[route] == "admin", route
+
+
+def test_reading_the_active_vendor_stays_read():
+    """Only the WRITES moved. Knowing which vendor is live is harmless, and a client that cannot
+    read it would have to guess what to display."""
+    for route in (("GET", "/arturo/ptt/vendor"), ("GET", "/arturo/ptt/voice"),
+                  ("GET", "/arturo/ptt/voices")):
+        assert G.ROUTE_SCOPES[route] == "read", route
+
+
+def test_a_ptt_device_cannot_reach_the_vendor_switch(monkeypatch, tmp_path):
+    """The point of the split, asserted end to end through the middleware."""
+    _, _, token = _with_store(monkeypatch, tmp_path, ["read", "approve", "message", "ptt"])
+    ok, reached_ok, _ = _call("POST", "/arturo/ptt", {"Authorization": f"Bearer {token}"})
+    assert reached_ok and ok.status == 200, "a ptt device must still be able to speak"
+    for route in (("PUT", "/arturo/ptt/vendor"), ("PUT", "/arturo/ptt/voice")):
+        deny, reached, _ = _call(*route, {"Authorization": f"Bearer {token}"})
+        assert deny.status == 403 and not reached, route
+
+
+def test_holding_voice_does_NOT_imply_ptt_and_vice_versa(monkeypatch, tmp_path):
+    """No implication between verbs, deliberately — an implication graph is a second policy
+    nobody reviews. So the transition is a RE-MINT, not a silent widening: a device granted only
+    `voice` loses PTT when this lands, which is why it ships with a coordinated re-mint."""
+    _, _, voice_only = _with_store(monkeypatch, tmp_path, ["voice"])
+    deny, reached, _ = _call("POST", "/arturo/ptt", {"Authorization": f"Bearer {voice_only}"})
+    assert deny.status == 403 and not reached
+    assert G.ROUTE_SCOPES[("GET", "/live")] == "voice", "the richer surface still needs voice"
