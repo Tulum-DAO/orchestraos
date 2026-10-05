@@ -64,15 +64,225 @@ def gateway_token() -> str:
         return ""
 
 
-def _authorized(request) -> bool:
-    """Constant-time bearer check. Refuses when no token is provisioned."""
-    expected = gateway_token()
-    if not expected:
-        return False
+# ---------------------------------------------------------------------------
+# Device-scoped authorization (gm ruling 2026-10-05).
+#
+# Before this, 48 handlers each called `_authorized(request)` against ONE fleet-wide bearer
+# and there was no middleware. Two consequences, and the second is the worse one:
+#   * every paired device held the full fleet token, so the Quest's "no inject" gate was a
+#     promise its own UI made rather than anything the server enforced;
+#   * a NEW route got full gateway power the moment its author copied that one line.
+#
+# So authorization moves to ONE middleware with an explicit route -> verb table, and the
+# table DEFAULTS TO DENY: a route with no entry is refused, not allowed. `test_every_route_
+# declares_a_scope` then makes adding a route without deciding its scope FAIL THE BUILD,
+# which is the part that actually keeps this honest a year from now.
+#
+# `_authorized()` is kept and re-pointed at the principal the middleware resolved, so all 48
+# call sites stay correct as defence in depth instead of being rewritten (and a device token
+# would otherwise 401 against them, since they compared only the fleet bearer).
+
+from scripts.device_tokens import VERBS as _ALL_VERBS
+
+_PUBLIC = None          # no bearer required
+
+#: (METHOD, canonical path) -> required verb, or _PUBLIC.
+#: Read the verbs as BLAST RADIUS, not as HTTP method: `read` means "cannot affect anything
+#: outside the caller's own view", which is why the two self-report writes live there.
+ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
+    # --- unauthenticated by necessity -------------------------------------------------
+    ("GET", "/gateway/identity"): _PUBLIC,    # a phone probes this BEFORE it has a token
+    ("POST", "/pair/exchange"): _PUBLIC,      # the caller has no token; that is what it wants
+    ("GET", "/health"): _PUBLIC,              # liveness for the launcher/watchdog
+
+    # --- read ------------------------------------------------------------------------
+    ("GET", "/gateway/capabilities"): "read",
+    ("GET", "/pending-approvals"): "read",
+    ("GET", "/history"): "read",
+    ("GET", "/approvals/{id}"): "read",
+    ("GET", "/agents"): "read",
+    ("GET", "/projects"): "read",
+    ("GET", "/people"): "read",
+    ("GET", "/people/{person_id}"): "read",
+    ("GET", "/pipeline"): "read",
+    ("GET", "/briefing"): "read",
+    ("GET", "/voice-memory"): "read",
+    ("GET", "/agent-screen"): "read",
+    ("GET", "/transcript"): "read",
+    ("GET", "/red-alert/reports"): "read",
+    ("GET", "/questionnaires"): "read",
+    ("GET", "/questionnaires/{id}"): "read",
+    ("GET", "/events"): "read",
+    ("GET", "/voice-call"): "read",
+    ("GET", "/active-voice-call"): "read",
+    ("GET", "/voice-calls"): "read",
+    ("GET", "/telemetry"): "read",
+    ("GET", "/telemetry/{id}"): "read",
+    ("GET", "/arturo/health"): "read",
+    ("GET", "/arturo/threads"): "read",
+    ("GET", "/arturo/threads/{conversation_id}"): "read",
+    ("GET", "/arturo/ptt/vendor"): "read",
+    ("GET", "/arturo/ptt/voices"): "read",
+    ("GET", "/arturo/ptt/voice"): "read",
+    # Self-report writes. They mutate ONLY the caller's own view hint: which surface this
+    # client is showing, and which agent the operator is looking at. No agent is touched, no
+    # approval answered, no provider money spent, and a paired device cannot function without
+    # them. NOTE the one real coupling: /presence feeds park-idle's view-protection, so a
+    # device can keep an agent from being parked while it claims to be watching it. That is a
+    # mild self-inflicted effect, not a fleet action, but it is the reason this is a judgement
+    # call rather than an obvious one.
+    ("POST", "/surface"): "read",
+    ("POST", "/presence"): "read",
+
+    # --- approve: answers ON THE OPERATOR'S BEHALF ------------------------------------
+    ("POST", "/approval-answers"): "approve",
+    ("POST", "/approvals/{id}/discard"): "approve",
+    ("PUT", "/questionnaires/{id}/draft"): "approve",
+    ("POST", "/questionnaires/{id}/submit"): "approve",
+    ("POST", "/questionnaires/{id}/discard"): "approve",
+    # Classified `approve`, NOT `inject`, and this one is deliberate rather than convenient.
+    # It presses Right to page a multi-part AskUserQuestion — navigation only, never Enter and
+    # never a digit, so it cannot commit an answer. The capability it actually grants is
+    # "render an approval fully enough to answer it", and a device permitted to answer may
+    # also page the question. Calling it `inject` would mean a read+approve+message device
+    # could not hydrate a multi-part menu, i.e. multi-part approvals would break for exactly
+    # the device that is allowed to approve. The tension is real and is disclosed in the PR;
+    # if the ruling goes the other way this moves to `inject` and the headset needs a
+    # different hydration path.
+    ("POST", "/agent-menu-capture"): "approve",
+
+    # --- message ---------------------------------------------------------------------
+    ("POST", "/agent-message"): "message",
+    ("POST", "/upload"): "message",
+
+    # --- inject: PRESSES KEYS IN A LIVE PANE ------------------------------------------
+    ("POST", "/agent-key"): "inject",
+    ("POST", "/agent-interrupt"): "inject",
+    ("POST", "/agent-suggest"): "inject",
+
+    # --- voice: every call SPENDS REAL PROVIDER MONEY ---------------------------------
+    ("GET", "/live"): "voice",
+    ("POST", "/arturo/ptt"): "voice",
+    ("POST", "/arturo/text"): "voice",
+    ("POST", "/arturo/text/stream"): "voice",
+    ("POST", "/arturo/text/prewarm"): "voice",
+    ("POST", "/arturo/transcribe"): "voice",
+    ("POST", "/arturo/ptt/stream/audio"): "voice",
+    ("GET", "/arturo/ptt/stream/events"): "voice",
+    ("POST", "/arturo/ptt/stream/end"): "voice",
+    ("PUT", "/arturo/ptt/vendor"): "voice",
+    ("PUT", "/arturo/ptt/voice"): "voice",
+    ("POST", "/voice-call-ended"): "voice",
+
+    # --- admin -----------------------------------------------------------------------
+    ("POST", "/red-alert/report"): "admin",
+    ("POST", "/telemetry"): "admin",
+}
+
+
+def _device_store():
+    from pathlib import Path as _P
+    from scripts.device_tokens import DeviceStore
+    base = os.environ.get("ORCHESTRA_DIR") or str(_P.home() / ".orchestra")
+    return DeviceStore(_P(base) / "state" / "devices")
+
+
+def resolve_principal(request) -> dict | None:
+    """Bearer -> {id, label, scopes}, or None.
+
+    The fleet token resolves to scope ['*'] so Shaw's phone and watch keep working UNCHANGED
+    until he migrates them — one branch here, not a special case per route. It is labelled
+    rather than hidden, because it is the one remaining all-powerful credential and nobody
+    should have to remember that."""
+    from scripts.device_tokens import ALL_SCOPES, LEGACY_LABEL
     got = request.headers.get("Authorization", "")
     if not got.startswith("Bearer "):
-        return False
-    return hmac.compare_digest(got[len("Bearer "):], expected)
+        return None
+    token = got[len("Bearer "):]
+    if not token:
+        return None
+    expected = gateway_token()
+    if expected and hmac.compare_digest(token, expected):
+        return {"id": "legacy", "label": LEGACY_LABEL, "scopes": list(ALL_SCOPES)}
+    try:
+        rec = _device_store().resolve(token)
+    except Exception as e:  # noqa: BLE001 — an unreadable store must not authenticate anyone
+        log.warning(f"device store unreadable, refusing: {e}")
+        return None
+    if not rec:
+        return None
+    try:
+        _device_store().touch(rec["id"])
+    except Exception:  # noqa: BLE001 — last_seen is bookkeeping, never a gate
+        pass
+    return {"id": rec["id"], "label": rec.get("label") or "", "scopes": list(rec.get("scopes") or [])}
+
+
+def required_scope(request):
+    """The verb this request needs. Raises KeyError when the route declares none, which the
+    middleware turns into a REFUSAL rather than a free pass."""
+    route = getattr(request.match_info, "route", None)
+    resource = getattr(route, "resource", None)
+    canonical = getattr(resource, "canonical", None)
+    if canonical is None:
+        return _PUBLIC          # unmatched: let aiohttp answer 404, do not invent a 403
+    return ROUTE_SCOPES[(request.method.upper(), canonical)]
+
+
+def scope_middleware_factory():
+    from aiohttp import web
+    from scripts.device_tokens import scopes_allow
+
+    @web.middleware
+    async def scope_middleware(request, handler):
+        try:
+            needed = required_scope(request)
+        except KeyError:
+            # DEFAULT DENY. A route nobody classified is not a route anybody may call.
+            log.warning(f"refusing {request.method} {request.path}: no scope declared for it")
+            return _json({"ok": False, "error": "route declares no scope"}, status=403)
+        principal = resolve_principal(request)
+        request["principal"] = principal
+        if needed is _PUBLIC:
+            return await handler(request)
+        if principal is None:
+            return _json({"ok": False, "error": "unauthorized"}, status=401)
+        if not scopes_allow(principal["scopes"], needed):
+            return _json({"ok": False, "error": "forbidden",
+                          "needed_scope": needed, "scopes": principal["scopes"]}, status=403)
+        return await handler(request)
+
+    return scope_middleware
+
+
+def _resolved_principal(request):
+    """(did_the_middleware_run, principal). Defensive because a handler is also called
+    directly by unit tests with a request DOUBLE that is not a Mapping — `"x" in request`
+    raises TypeError on those, and an authorization helper must not blow up on the shape of
+    its argument."""
+    try:
+        if "principal" in request:
+            return True, request["principal"]
+    except TypeError:
+        pass
+    return False, None
+
+
+def _authorized(request) -> bool:
+    """True when the caller authenticated AS ANY principal — the fleet bearer or a device.
+
+    The SCOPE decision belongs to the middleware, which has already run by the time a handler
+    asks this. Kept (rather than deleted from 48 handlers) as defence in depth: if a future
+    route is somehow reached without the middleware, this still refuses an anonymous caller.
+    It had to change, not just stay: it compared only the fleet bearer, so a legitimately
+    scoped device token would have failed every one of those 48 checks.
+
+    Falls back to a direct fleet-token comparison when no middleware ran, which keeps unit
+    tests that call a handler directly honest instead of silently unauthorized."""
+    resolved, principal = _resolved_principal(request)
+    if resolved:
+        return principal is not None
+    return resolve_principal(request) is not None
 
 
 def _json(obj, status=200):
@@ -546,8 +756,25 @@ def _gateway_answer_tags(body):
     return surface, "operator"
 
 
+def _answer_device(request) -> str | None:
+    """"<device_id>:<label>" for a device token, None for the fleet bearer.
+
+    Derived from the principal the middleware resolved — NEVER from the request body, for
+    exactly the reason `answered_by` is: a client that could name its own device could name
+    somebody else's, and the whole value of this field is that it is not the client's word.
+    None for the fleet bearer because that credential identifies no device, and inventing a
+    label for it would be a fabrication that reads like evidence."""
+    _, principal = _resolved_principal(request)
+    principal = principal or {}
+    dev_id = principal.get("id")
+    if not dev_id or dev_id == "legacy":
+        return None
+    label = (principal.get("label") or "").strip()
+    return f"{dev_id}:{label}" if label else str(dev_id)
+
+
 def apply_answer(store, rid, answer, *, text=None, option_n=None,
-                 answer_text=None, fire=True, surface=None, answered_by=None):
+                 answer_text=None, fire=True, surface=None, answered_by=None, device=None):
     """The ONE answer state machine, shared by EVERY transport (SPEC
     all-model-parity §5: validation lives in one place, consumed not
     re-implemented). `handle_answer` (the gateway /approval-answers HTTP
@@ -604,7 +831,8 @@ def apply_answer(store, rid, answer, *, text=None, option_n=None,
         if answer == "snooze":
             store.snooze(rid)
             return {"ok": True, "status": 200, "applied": False, "snoozed": True, "id": rid}
-        applied = store.record_answer(rid, answer, text, surface=surface, answered_by=answered_by)
+        applied = store.record_answer(rid, answer, text, surface=surface,
+                                      answered_by=answered_by, device=device)
         if applied and fire:
             try:
                 approval_resume.fire_resume(store.get(rid), store)
@@ -659,7 +887,8 @@ def apply_answer(store, rid, answer, *, text=None, option_n=None,
     # answered_by are provenance-only (audit/forensics) — record_answer never
     # branches on them; a missing tag defaults to surface='unknown' (back-compat).
     applied = store.record_answer(rid, answer, text, option_n=resolved_option_n,
-                                  surface=surface, answered_by=answered_by)  # id-bound + answer-once
+                                  surface=surface, answered_by=answered_by,
+                                  device=device)  # id-bound + answer-once
     resume_row = None
     if applied:
         row = store.get(rid)
@@ -733,7 +962,8 @@ async def handle_answer(request):
     result = apply_answer(store, data.get("id", ""), data.get("answer", ""),
                           text=data.get("text"), option_n=data.get("option_n"),
                           answer_text=data.get("answer_text"), fire=False,
-                          surface=surface, answered_by=answered_by)
+                          surface=surface, answered_by=answered_by,
+                          device=_answer_device(request))
     if not result["ok"]:
         return _json({"ok": False, "error": result["error"]}, status=result["status"])
     resume_row = result.get("resume_row")
@@ -2670,7 +2900,7 @@ def _validate_batch_answer(row, answers):
 
 def durable_first_batch_submit(session, answers, *, store, armed=False,
                                submit_fn=None, resume_fn=None,
-                               surface=None, answered_by=None):
+                               surface=None, answered_by=None, device=None):
     """condition-6 orchestrator. Persist the multi-part answer batch to the
     durable approval_requests row FIRST, THEN best-effort live-pane replay.
 
@@ -2736,7 +2966,8 @@ def durable_first_batch_submit(session, answers, *, store, armed=False,
     # 3) DURABLE-FIRST: persist the batch onto the row (answer-once). THIS is the
     #    no-loss point — everything after is best-effort delivery.
     applied = store.record_batch_answer(row["id"], answers,
-                                        surface=surface, answered_by=answered_by)
+                                        surface=surface, answered_by=answered_by,
+                                        device=device)
     if not applied:
         # a racing submit already persisted the batch -> already durable, not loss.
         return True, {"durable": True, "already": True, "delivered": False,
@@ -4103,10 +4334,19 @@ async def handle_agent_key(request):
             # mark row); when absent (store-but-mark off) it returns no_durable_row
             # and we FALL BACK to the legacy pane-only path — byte-identical to
             # today, a strict no-regression during the store-but-mark rollout.
+            _batch_surface, _batch_answered_by = _gateway_answer_tags({})
+            _batch_device = _answer_device(request)
+
             def _durable_submit():
                 st = ApprovalStore(); st.migrate()
                 dok, dinfo = durable_first_batch_submit(
-                    session, answers, store=st, armed=armed)
+                    session, answers, store=st, armed=armed,
+                    # A multi-part submit is no less an answer on the operator's behalf than
+                    # a single-part one, and it is the path the headset uses for a paged
+                    # AskUserQuestion — so "what did this device approve" must not have a
+                    # hole exactly there. This caller passed NO provenance at all before.
+                    surface=_batch_surface, answered_by=_batch_answered_by,
+                    device=_batch_device)
                 if not dok and dinfo.get("reason") == "no_durable_row":
                     # LEGACY pane-only path (no durable anchor yet). Preserves the
                     # pre-condition-6 behavior exactly, including the F6-polish-1
@@ -4312,6 +4552,15 @@ async def handle_gateway_capabilities(request):
     if not _authorized(request):
         return _json({"ok": False, "error": "unauthorized"}, status=401)
     body = {"surfaces": list(GATEWAY_SURFACES)}
+    # The CALLER's own scopes, so a client renders what it may do from server truth instead
+    # of hardcoding it or inferring it from the absence of an error. A device that holds only
+    # read+approve+message learns that here rather than by being refused later.
+    _, principal = _resolved_principal(request)
+    principal = principal or {}
+    if principal:
+        body["scopes"] = list(principal.get("scopes") or [])
+        body["device"] = {"id": principal.get("id"), "label": principal.get("label")}
+    body["verbs"] = list(_ALL_VERBS)
     try:
         body["providers"] = _capability_providers()
     except Exception as e:  # noqa: BLE001 — absent means unknown; never a fabricated []
@@ -4885,7 +5134,8 @@ def build_app():
     from aiohttp import web
     # client_max_size MUST cover uploads — aiohttp's default is 1MB and would
     # silently 413 every photo (SPEC_ios-attach §B.1). Cap + small overhead.
-    app = web.Application(client_max_size=UPLOAD_MAX_BYTES + 1024 * 1024)
+    app = web.Application(client_max_size=UPLOAD_MAX_BYTES + 1024 * 1024,
+                          middlewares=[scope_middleware_factory()])
     app.router.add_get("/pending-approvals", handle_pending)
     app.router.add_post("/approval-answers", handle_answer)
     app.router.add_get("/history", handle_history)

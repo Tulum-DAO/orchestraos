@@ -42,7 +42,12 @@ def _rewrite_data_dir(example_text: str, data_dir: Path) -> str:
     return "\n".join(out) + "\n"
 
 
-RULED_APPROVAL_MIGRATIONS = ("m20260825_answer_attribution", "m20260825_human_task")
+# A FRESH install arms every ruled migration: the DDL gate exists to stop an ALTER TABLE
+# firing on a LIVE tasks.db at the next consumer restart (the R2 lesson), not to leave a
+# new install half-migrated. A gated migration missing from this tuple ships as a
+# permanent "DDL PENDING" notice, which two tests assert never happens.
+RULED_APPROVAL_MIGRATIONS = ("m20260825_answer_attribution", "m20260825_human_task",
+                            "m20261005_answer_device")
 
 TASKS_DB_SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (

@@ -45,3 +45,102 @@ def test_a_missing_qr_still_produces_usable_output():
     assert "c" in out and "password" in out.lower()
     # and it tells the operator what to do instead of showing a QR
     assert "type" in out.lower() or "paste" in out.lower() or "enter" in out.lower()
+
+
+# --- pairing hands over a SCOPED device token, never the fleet bearer -------------------
+
+class _Args:
+    def __init__(self, **kw):
+        self.base_url = kw.pop("base_url", "https://box:8443")
+        self.scopes = kw.pop("scopes", None)
+        self.label = kw.pop("label", None)
+        self.revoke = kw.pop("revoke", None)
+        for k, v in kw.items():
+            setattr(self, k, v)
+
+
+def _lines(monkeypatch, tmp_path, args, fn=None):
+    from orchestra_cli.pair_cmd import run_devices, run_pair
+    monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path))
+    said = []
+    rc = (fn or run_pair)(args, out=said.append) if fn else run_pair(args, out=said.append,
+                                                                    clear_after_s=0)
+    return rc, "\n".join(said)
+
+
+def test_pairing_without_scopes_is_refused_and_explains_each_verb(monkeypatch, tmp_path):
+    """gm ruling: no silent default. Nobody inherits `approve` by accident."""
+    rc, said = _lines(monkeypatch, tmp_path, _Args(scopes=None))
+    assert rc == 2
+    assert "Refusing to pair without --scopes" in said
+    for verb in ("read", "approve", "message", "inject", "voice", "admin"):
+        assert verb in said
+    assert "ANSWER approvals" in said, "the operator must be told what `approve` really means"
+
+
+def test_pairing_with_a_bad_verb_is_refused(monkeypatch, tmp_path):
+    rc, said = _lines(monkeypatch, tmp_path, _Args(scopes="read,destroy"))
+    assert rc == 2 and "not a usable scope list" in said.lower()
+
+
+def test_pairing_mints_a_device_and_the_code_does_not_carry_the_fleet_token(monkeypatch, tmp_path):
+    """The QR/code payload must carry a CODE only — and the token it is redeemed for must be
+    the device's, not the gateway's own bearer."""
+    import json as _json
+    from pathlib import Path
+
+    fleet = tmp_path / "watch-gateway-token"
+    fleet.write_text("THE-FLEET-BEARER")        # pragma: allowlist secret
+    monkeypatch.setenv("WATCH_GATEWAY_TOKEN_FILE", str(fleet))
+
+    rc, said = _lines(monkeypatch, tmp_path, _Args(scopes="read,approve,message",
+                                                  label="quest-headset"))
+    assert rc == 0, said
+    assert "THE-FLEET-BEARER" not in said
+    assert "Minted device" in said and "quest-headset" in said
+    assert "read, approve, message" in said
+    assert "orchestra devices --revoke" in said, "the operator is told how to undo it"
+
+    devs = list((tmp_path / "state" / "devices").glob("*.json"))
+    assert len(devs) == 1
+    rec = _json.loads(devs[0].read_text())
+    assert rec["scopes"] == ["read", "approve", "message"]
+    assert "token_sha256" in rec and "token" not in rec
+
+
+def test_devices_listing_shows_scopes_and_names_the_unrevocable_fleet_bearer(monkeypatch, tmp_path):
+    from orchestra_cli.pair_cmd import run_devices
+    monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path))
+    _lines(monkeypatch, tmp_path, _Args(scopes="read", label="watch"))
+    said = []
+    rc = run_devices(_Args(), out=said.append)
+    body = "\n".join(said)
+    assert rc == 0
+    assert "watch" in body and "read" in body and "active" in body
+    assert "legacy-fleet-token" in body and "cannot be revoked here" in body
+
+
+def test_devices_revoke_works_and_says_so(monkeypatch, tmp_path):
+    import json as _json
+    from orchestra_cli.pair_cmd import run_devices
+    monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path))
+    _lines(monkeypatch, tmp_path, _Args(scopes="read", label="watch"))
+    dev_id = _json.loads(next((tmp_path / "state" / "devices").glob("*.json")).read_text())["id"]
+
+    said = []
+    assert run_devices(_Args(revoke=dev_id), out=said.append) == 0
+    assert "Revoked" in "\n".join(said)
+
+    said2 = []
+    assert run_devices(_Args(revoke=dev_id), out=said2.append) == 2      # already revoked
+    said3 = []
+    run_devices(_Args(), out=said3.append)
+    assert "REVOKED" in "\n".join(said3)
+
+
+def test_revoking_something_that_is_not_a_device_is_refused(monkeypatch, tmp_path):
+    from orchestra_cli.pair_cmd import run_devices
+    monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path))
+    said = []
+    assert run_devices(_Args(revoke="no-such-id"), out=said.append) == 2
+    assert "Nothing to revoke" in "\n".join(said)

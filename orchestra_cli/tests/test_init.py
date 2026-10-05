@@ -189,7 +189,13 @@ def test_init_schema_seed_arms_the_ruled_gated_migrations(tmp_path):
     I.run_init(root, data_dir=tmp_path / "data", run=runner)
     argv, cwd, env = [c for c in runner.calls_with_env if "ApprovalStore" in " ".join(c[0])][0]
     armed = set(env["APPROVAL_DDL_ARMED"].split(","))
-    assert armed == {"m20260825_answer_attribution", "m20260825_human_task"}
+    # m20261005_answer_device joins the ruled set on gm's ruling 2026-10-05 (d): device
+    # provenance on approval answers. The ruling REQUIRES persistence, and a provenance
+    # column that is never armed records nothing, so approving (d) is what arms it. Kept as
+    # an explicit literal rather than derived from init_cmd — deriving it would make this
+    # test agree with whatever the code says, which is the opposite of its job.
+    assert armed == {"m20260825_answer_attribution", "m20260825_human_task",
+                     "m20261005_answer_device"}
 
 
 def test_init_demo_seeds_three_fixture_seats_and_runs_the_card_seeder(tmp_path):
