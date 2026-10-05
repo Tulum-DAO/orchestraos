@@ -378,6 +378,14 @@ def _validate_option_answer(row, option_n, answer_text):
     if row.get("kind") != "menu":
         return "answer 'option' is only valid on menu rows"
     menu = _menu(row) or {}
+    # AMBIGUOUS CAPTURE (live incident 2026-10-05): the parser stamps
+    # `ambiguous_options` when a capture's option numbers are NOT unique, which proves it
+    # merged distinct option groups. Answering is a DIGIT, so on such a row the digit the
+    # operator saw is not the digit that fires. Refuse server-side, which protects every
+    # surface at once instead of requiring a guard in each client.
+    if menu.get("ambiguous_options"):
+        return ("this menu capture is ambiguous (duplicate option numbers) \u2014 "
+                "re-capture it before answering")
     opts = menu.get("options") or []
     if not isinstance(option_n, str) or not option_n.isdigit():
         return "option_n must be a stringified digit"
@@ -3038,6 +3046,8 @@ def _validate_batch_answer(row, answers):
     if not isinstance(row, dict) or row.get("kind") != "menu":
         return "not a menu row"
     menu = _menu(row) or {}
+    if menu.get("ambiguous_options"):      # see _validate_option_answer
+        return "ambiguous_options"
     parts = menu.get("parts")
     if not menu.get("walk_complete") or not isinstance(parts, list) or not parts:
         return "menu_not_hydrated"                      # can't validate a batch yet
