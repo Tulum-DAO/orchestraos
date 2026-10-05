@@ -142,7 +142,7 @@ def resolve_gemini_cid(seat, *, retired_sids_fn=None):
     return None
 
 
-def read_ctx_gemini(seat, **_):
+def read_ctx_gemini(seat, *, sid=None, **_):
     """Gemini adapter: NORMALIZE estimated_tokens / 1M window for `seat`. Identity is
     resolved robustly — first by the seat's registered session_id (cid) if agent-sessions
     maps it (finding #1), else by the seat's ``You are <seat>`` brain declaration
@@ -154,7 +154,20 @@ def read_ctx_gemini(seat, **_):
         reports = gemini_context.get_gemini_agents_status() or []
     except Exception:  # noqa: BLE001
         return (None, False)
-    cid = resolve_gemini_cid(seat)
+    # IDENTITY ORDER (the docstring above has always described this; the registered-sid
+    # branch was MISSING, so the fallback was doing all the work):
+    #   1. the REGISTERED session id handed in by the caller (`arm_hooks.arm_seat` resolves
+    #      it; the beat passes it too). This is the registry's own answer for which
+    #      conversation IS this seat right now.
+    #   2. else the `You are <seat>` brain-transcript declaration.
+    # Order matters, and not only for coverage. resolve_gemini_cid picks the NEWEST-by-mtime
+    # transcript declaring the seat, which is an EARLIER GENERATION's conversation whenever
+    # the current one has not re-declared. Live 2026-10-05: gemini-pm-adaptiv's registered
+    # sid 348ea3ec was surfaced at 190027 tokens while the scan returned a stale 0222a132,
+    # so the seat read (None, False) and could never arm -- and had that stale conversation
+    # matched a row, the seat would have reported ANOTHER generation's context, which the
+    # beat would act on. A ctx read for the wrong conversation is worse than no read.
+    cid = sid or resolve_gemini_cid(seat)
     for r in reports:
         if (cid is not None and r.get("conversation_id") == cid) or r.get("agent") == seat:
             frac = normalize_from_tokens(r.get("estimated_tokens"), GEMINI_USABLE_WINDOW)
