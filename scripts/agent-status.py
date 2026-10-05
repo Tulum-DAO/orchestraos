@@ -401,6 +401,17 @@ _CHECKBOX_RE = re.compile(r'^\[\s*([ xX✔✓*])\s*\]\s*')
 # nav arrows.
 _TAB_ARROW_L, _TAB_ARROW_R = '\u2190', '\u2192'          # ← →
 _TAB_MARKERS = '\u2610\u2611\u2612\u2714\u2713\u2717\u25cf\u2022 '  # ☐☑☒✔✓✗●•(space)
+# A TAB CHIP line: a bare checkbox GLYPH followed by a label, with no "N." marker.
+# It is a structural menu boundary, so options above it belong to a different part (or to
+# prose). Distinguishable from a multi-select OPTION because an option's checkbox is
+# BRACKET form (`[ ]` / `[x]`, see _CHECKBOX_RE) and sits AFTER the marker -- so a line
+# matching _MENU_OPT_RE is never treated as a chip (live incident 2026-10-05: the card
+# that merged a prose numbered list with the real options across one of these).
+_TAB_CHIP_RE = re.compile(r'^\s*[\u2610\u2611\u2612\u2714\u2713\u2717]\s+\S')
+
+
+def _is_tab_chip(line):
+    return bool(_TAB_CHIP_RE.match(line)) and not _MENU_OPT_RE.match(line)
 
 # §1.3 active-tab FOCUS: the FOCUSED tab is rendered with an ANSI background
 # highlight (real capture: "\x1b[38;5;16m\x1b[48;5;153m ☐ <tab> \x1b[39m\x1b[49m").
@@ -731,6 +742,14 @@ def parse_pending_menu(stripped: list[str], now: float | None = None,
                 if any(s.lower().startswith(h) for h in _FOOTER_HINTS):
                     gap_ok = False
                     break
+                # A tab chip ENDS the block. Without this, a non-blank, non-rule,
+                # non-footer line between two option groups was silently tolerated
+                # whenever the gap was within _MENU_OPT_MAX_GAP, which is how an agent's
+                # prose numbered list got merged into a live menu and produced duplicate
+                # option numbers on every surface.
+                if _is_tab_chip(g):
+                    gap_ok = False
+                    break
             if not gap_ok:
                 break
             block_top = k
@@ -930,6 +949,15 @@ def parse_pending_menu(stripped: list[str], now: float | None = None,
     # rely on digit-commit). Additive; absent on single-select/permission menus.
     if any('checked' in o for o in opts):
         result['checkbox'] = True
+    # AMBIGUITY STAMP (live incident 2026-10-05). Option numbers MUST be unique: a tap
+    # sends a DIGIT, so two options sharing an `n` means the digit the operator sees is not
+    # the digit that fires. A non-unique set is therefore proof the parse merged distinct
+    # option groups, whichever shape caused it. Stamped rather than silently served, so
+    # every surface refuses at once instead of each client needing its own guard -- and so
+    # a variant we have not seen still fails closed. Additive: absent on a sound capture.
+    _ns = [o.get('n') for o in opts]
+    if len(_ns) != len(set(_ns)):
+        result['ambiguous_options'] = True
     # Multi-tab structure (DEC-1786849794 COND-1): expose the Submit tab so the
     # gateway commits by navigating to it (Right-arrow) then Enter — NOT an
     # Enter-in-place, which only toggles the highlighted checkbox.
