@@ -182,9 +182,15 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("POST", "/arturo/ptt/stream/audio"): "ptt",
     ("GET", "/arturo/ptt/stream/events"): "ptt",
     ("POST", "/arturo/ptt/stream/end"): "ptt",
+    # DEVICE call lifecycle, not an admin op. gm msg_7d0c4b4c, with ipad-dev's by-effect proof: a
+    # device ends every relay call with POST /voice-call-ended then /stream/end. I first filed it
+    # `admin` alongside the fleet-wide voice CONFIG writes because all three are POST/PUT under the
+    # voice surface — the wrong axis. Vendor and voice-id are settings for the WHOLE BOX; ending a
+    # call is something the caller does to its OWN call. Blast radius, not URL shape.
+    ("POST", "/voice-call-ended"): "ptt",
     ("PUT", "/arturo/ptt/vendor"): "admin",
     ("PUT", "/arturo/ptt/voice"): "admin",
-    ("POST", "/voice-call-ended"): "admin",
+
 
     # --- admin: fleet-wide effect -----------------------------------------------------
     # PUT /arturo/ptt/vendor and PUT /arturo/ptt/voice proxy to ONE loopback Arturo service and
