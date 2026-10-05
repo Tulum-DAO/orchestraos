@@ -140,22 +140,25 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("PUT", "/questionnaires/{id}/draft"): "approve",
     ("POST", "/questionnaires/{id}/submit"): "approve",
     ("POST", "/questionnaires/{id}/discard"): "approve",
+    # `approve`, ACCEPTED by gm 2026-10-05 on the condition below. It presses Right to page a
+    # multi-part AskUserQuestion: navigation only, never Enter and never a digit, so it cannot
+    # commit an answer. The capability it grants is "render an approval fully enough to answer
+    # it", and a device permitted to answer may also page the question.
+    #
+    # gm's CONDITION, and it was already satisfied — `menu_capture_walk` reads the pane BEFORE
+    # touching a key and presses ZERO keys unless a menu is actually there:
+    #   * no menu at all      -> reason 'menu_gone',        no key sent
+    #   * operator mid-walk   -> reason 'not_on_part_zero', no key sent
+    # So an approve-scoped device cannot send a keystroke into a pane that is idle or
+    # mid-composer. It was UNTESTED, which is how a guard quietly stops being one, so it is now
+    # pinned by test_menu_capture_guard.py.
+    ("POST", "/agent-menu-capture"): "approve",
     # --- message ---------------------------------------------------------------------
     ("POST", "/agent-message"): "message",
     ("POST", "/upload"): "message",
 
     # --- inject: PRESSES KEYS IN A LIVE PANE ------------------------------------------
     ("POST", "/agent-key"): "inject",
-    # It presses Right to page a multi-part AskUserQuestion. Navigation only — never Enter and
-    # never a digit, so it cannot commit an answer — which is why `approve` was arguable: the
-    # capability it serves is "render an approval fully enough to answer it".
-    # It is `inject` anyway, because it DOES press keys in a live pane, and the sole argument
-    # for the looser classification was that a read+approve+message device would otherwise be
-    # unable to hydrate a multi-part menu. quest-orchestra (the only consumer) reported that
-    # neither Quest app calls it and multi-part menus are not load-bearing there, so that cost
-    # is zero and the conservative reading wins. Were it ever needed, the honest fix is a
-    # hydration path that does not press keys, not a wider scope.
-    ("POST", "/agent-menu-capture"): "inject",
     ("POST", "/agent-interrupt"): "inject",
     ("POST", "/agent-suggest"): "inject",
 

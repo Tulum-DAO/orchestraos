@@ -66,10 +66,11 @@ def test_the_dangerous_verbs_are_not_filed_under_read():
         assert G.ROUTE_SCOPES[route] == "voice", route
     for route in (("POST", "/approval-answers"), ("POST", "/approvals/{id}/discard")):
         assert G.ROUTE_SCOPES[route] == "approve", route
-    # It presses keys, so it is inject even though it cannot commit an answer. Pinned because
-    # the looser reading is tempting and only stayed wrong once its consumer confirmed nothing
-    # depends on it.
-    assert G.ROUTE_SCOPES[("POST", "/agent-menu-capture")] == "inject"
+    # `approve` per gm's ruling, which is safe ONLY because the walk refuses to press a key
+    # unless a menu is actually on screen — see test_menu_capture_guard.py. If that guard is
+    # ever removed, this classification becomes a keystroke primitive for approve-scoped
+    # devices, so the two are a pair.
+    assert G.ROUTE_SCOPES[("POST", "/agent-menu-capture")] == "approve"
 
 
 # ---------------------------------------------------------------- required_scope
