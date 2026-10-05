@@ -46,6 +46,16 @@ function fakeProvider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
   };
 }
 
+/**
+ * Inert cache IO. These tests mock the probes and must never touch the real filesystem
+ * (see the header), so they must not read or write the persisted response cache either —
+ * a seeded router answers from disk and never probes, which is precisely what the
+ * caching tests below are trying to observe.
+ */
+function noDisk() {
+  return { readCache: () => null, writeCache: () => {} };
+}
+
 function makeFakeDeps(opts: {
   providers: ProviderConfig[];
   installed: Record<string, boolean>;
@@ -151,7 +161,7 @@ test('GET /available caches within TTL (probeAuth called once for two GETs)', as
     publishLiveCatalog: () => {},
     now: () => 1000, // frozen clock => cache never expires between calls
   };
-  const { router } = createRuntimesAvailableRouter(deps);
+  const { router } = createRuntimesAvailableRouter(deps, noDisk());
   await withServer(router, async (base) => {
     const r1 = await fetch(`${base}/available`);
     const r2 = await fetch(`${base}/available`);
@@ -175,7 +185,7 @@ test('POST /available/refresh self-heals: forces re-probe even within TTL', asyn
     publishLiveCatalog: () => {},
     now: () => 1000,
   };
-  const { router } = createRuntimesAvailableRouter(deps);
+  const { router } = createRuntimesAvailableRouter(deps, noDisk());
   await withServer(router, async (base) => {
     const r1 = await fetch(`${base}/available`);
     const body1 = (await r1.json()) as { providers: { authed: boolean }[] };
@@ -318,7 +328,7 @@ test('getCached shares the route cache — a GET then a getCached is ONE probe',
     publishLiveCatalog: () => {},
     now: () => 1000,
   };
-  const { router, getCached } = createRuntimesAvailableRouter(deps);
+  const { router, getCached } = createRuntimesAvailableRouter(deps, noDisk());
   const app = express();
   app.use('/api/runtimes', router);
   const server = app.listen(0);
