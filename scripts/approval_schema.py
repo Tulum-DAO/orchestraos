@@ -74,6 +74,17 @@ GATED_MIGRATIONS: list = [
     {"id": "m20260825_human_task",
      "columns": [("block_task", "TEXT"), ("blocks_what", "TEXT"),
                  ("snoozed_until", "TEXT")]},
+    # Device provenance for device-scoped gateway tokens (gm ruling 2026-10-05 (d)).
+    # Pairing now mints a PER-DEVICE bearer instead of handing over the fleet token, so
+    # "the operator answered this" is no longer the whole truth: WHICH of his devices
+    # answered is now a real question, and a revoked device's past answers must stay
+    # attributable. One additive-nullable column, same shape and same reasoning as the
+    # R7d pair above, and like them it is provenance-only and NEVER branched on for
+    # authorization. UNARMED at merge => byte-identical live schema (the R2 lesson).
+    #   answer_device   "<device_id>:<label>" for a device token; NULL for the fleet
+    #                   bearer and for every legacy row
+    {"id": "m20261005_answer_device",
+     "columns": [("answer_device", "TEXT")]},
 ]
 
 def armed(migration_id):
@@ -352,7 +363,7 @@ class ApprovalStore:
         finally:
             c.close()
     def record_answer(self, rid, answer, answer_text, option_n=None,
-                      surface=None, answered_by=None):
+                      surface=None, answered_by=None, device=None):
         """Id-bound + answer-once: only a still-'pending' row accepts an answer.
         option_n (menu rows, answer=='option'): the captured option index the
         resume path will inject as a keypress.
@@ -368,25 +379,28 @@ class ApprovalStore:
         try:
             cols = {r[1] for r in
                     c.execute("PRAGMA table_info(approval_requests)").fetchall()}
-            have_attr = "answer_surface" in cols and "answered_by" in cols
-            if have_attr:
-                res = c.execute(
-                    "UPDATE approval_requests SET answer=?, answer_text=?, option_n=?, "
-                    "status='answered', answered_at=?, answer_surface=?, answered_by=? "
-                    "WHERE id=? AND status='pending'",
-                    [answer, answer_text, option_n, _now(),
-                     surface or "unknown", answered_by, rid])
-            else:
-                res = c.execute(
-                    "UPDATE approval_requests SET answer=?, answer_text=?, option_n=?, "
-                    "status='answered', answered_at=? "
-                    "WHERE id=? AND status='pending'",
-                    [answer, answer_text, option_n, _now(), rid])
+            # Each provenance column rides its own arming gate, so compose the SET clause
+            # from what actually exists rather than branching on every combination. Same
+            # fail-open rule as before: a column that is not armed yet never blocks an
+            # answer, it just records less.
+            sets = ["answer=?", "answer_text=?", "option_n=?",
+                    "status='answered'", "answered_at=?"]
+            vals = [answer, answer_text, option_n, _now()]
+            if "answer_surface" in cols and "answered_by" in cols:
+                sets += ["answer_surface=?", "answered_by=?"]
+                vals += [surface or "unknown", answered_by]
+            if "answer_device" in cols:
+                sets.append("answer_device=?")
+                vals.append(device)
+            res = c.execute(
+                f"UPDATE approval_requests SET {', '.join(sets)} "
+                "WHERE id=? AND status='pending'", vals + [rid])
             c.commit()
             return res.rowcount > 0
         finally:
             c.close()
-    def record_batch_answer(self, rid, answers, surface=None, answered_by=None):
+    def record_batch_answer(self, rid, answers, surface=None, answered_by=None,
+                            device=None):
         """§1.1(b) condition-6 (DEC-1787700374): DURABLE-FIRST multi-part SUBMIT.
         Persist a whole multi-part answer BATCH onto the pending menu row and
         transition it to 'answered' — BEFORE any live-pane replay — so a

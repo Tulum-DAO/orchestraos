@@ -82,13 +82,42 @@ def run_pair(args, settings=None, store=None, out=print, clear_after_s=60):
         out("I do not know this gateway's public address, so a phone could not reach it.")
         out("Re-run with:  orchestra pair --base-url https://<host>:<port>")
         return 2
-    token_file = os.environ.get("WATCH_GATEWAY_TOKEN_FILE") or str(
-        Path(os.environ.get("ORCHESTRA_DIR") or (Path.home() / ".orchestra")) / "watch-gateway-token")
-    try:
-        token = Path(token_file).read_text().strip()
-    except OSError:
-        out(f"No gateway token at {token_file} — start the gateway once (`orchestra up`) first.")
+    # A pairing used to hand over the FLEET bearer, so every paired device held full gateway
+    # power and any "this device cannot inject" rule was a promise the client made about itself.
+    # It now mints a PER-DEVICE token with an explicit verb scope, which the gateway enforces.
+    from scripts.device_tokens import DeviceStore, ScopeError, normalize_scopes
+
+    raw_scopes = getattr(args, "scopes", None)
+    if not raw_scopes:
+        out("Refusing to pair without --scopes: a device's power has to be a deliberate choice.")
+        out("")
+        out("  read     see approvals, agents, transcripts            (a viewer)")
+        out("  approve  ANSWER approvals and questionnaires            (acts as you)")
+        out("  message  send a message to an agent, upload a file")
+        out("  inject   press keys into a live agent pane")
+        out("  voice    talk to Arturo  (every call spends provider credit)")
+        out("  admin    file red-alert reports, post telemetry")
+        out("")
+        out("  A read-only phone:   orchestra pair --scopes read")
+        out("  A headset that approves:  orchestra pair --scopes read,approve,message")
         return 2
+    try:
+        verbs = normalize_scopes(raw_scopes)
+    except ScopeError as e:
+        out(f"Not a usable scope list: {e}")
+        return 2
+
+    base = os.environ.get("ORCHESTRA_DIR") or str(Path.home() / ".orchestra")
+    devices = DeviceStore(Path(base) / "state" / "devices")
+    label = (getattr(args, "label", None) or "paired-device").strip()
+    try:
+        device_id, token = devices.mint(label, verbs)
+    except OSError as e:
+        out(f"Could not write the device record: {e}")
+        return 2
+    out(f"Minted device {device_id} ({label}) with scopes: {', '.join(verbs)}")
+    out(f"Revoke it any time with:  orchestra devices --revoke {device_id}")
+    out("")
     if store is None:
         base = os.environ.get("ORCHESTRA_DIR") or str(Path.home() / ".orchestra")
         store = PairingStore(Path(base) / "state" / "pairing")
@@ -103,4 +132,46 @@ def run_pair(args, settings=None, store=None, out=print, clear_after_s=60):
             out("Pairing code hidden. Run `orchestra pair` again if you still need it.")
         except KeyboardInterrupt:
             os.system("clear")
+    return 0
+
+
+def run_devices(args, out=print):
+    """List paired devices, or revoke one.
+
+    A revoked device is KEPT rather than deleted, so an approval it answered in the past stays
+    attributable to it. The listing never carries token material, not even the hash."""
+    import os
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from scripts.device_tokens import DeviceStore, LEGACY_LABEL
+
+    base = os.environ.get("ORCHESTRA_DIR") or str(Path.home() / ".orchestra")
+    devices = DeviceStore(Path(base) / "state" / "devices")
+
+    revoke_id = getattr(args, "revoke", None)
+    if revoke_id:
+        if devices.revoke(revoke_id):
+            out(f"Revoked {revoke_id}. Its token stops working on the very next request.")
+            return 0
+        out(f"Nothing to revoke: {revoke_id} is not a device here, or was already revoked.")
+        return 2
+
+    rows = devices.list()
+    if not rows:
+        out("No paired devices yet. `orchestra pair --scopes read` mints one.")
+    else:
+        def when(ts):
+            if not ts:
+                return "never"
+            return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        out(f"{'DEVICE':18} {'LABEL':22} {'SCOPES':34} {'LAST SEEN':20} STATE")
+        for r in rows:
+            state = "REVOKED" if r.get("revoked_at") else "active"
+            out(f"{r['id']:18} {(r.get('label') or ''):22} "
+                f"{','.join(r.get('scopes') or []):34} {when(r.get('last_seen_at')):20} {state}")
+    # The one credential that is NOT in this list and outranks everything in it.
+    out("")
+    out(f"Note: the gateway's own bearer ({LEGACY_LABEL}) still works and has EVERY scope. "
+        "It is not a device and cannot be revoked here.")
     return 0

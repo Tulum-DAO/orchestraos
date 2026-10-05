@@ -65,6 +65,18 @@ def parse_args(argv=None) -> argparse.Namespace:
     pr = sub.add_parser("pair", help="show a short-lived, single-use code a phone can scan or type to connect")
     pr.add_argument("--base-url", dest="base_url", default=None,
                     help="the address a phone can reach this gateway on, e.g. https://host:8443")
+    # REQUIRED on purpose (no silent default): every device's power is a conscious choice at
+    # mint time, so nobody inherits `approve` — answering on the operator's behalf — by accident.
+    pr.add_argument("--scopes", default=None,
+                    help="REQUIRED. comma-separated verbs this device may use: "
+                         "read, approve, message, inject, voice, admin. "
+                         "A phone that only reads is --scopes read")
+    pr.add_argument("--label", default=None,
+                    help="what this device is, e.g. 'quest-headset' — shown in `orchestra devices`")
+
+    dv = sub.add_parser("devices", help="list paired devices and revoke one")
+    dv.add_argument("--revoke", metavar="DEVICE_ID", default=None,
+                    help="revoke this device id; its token stops working on the next request")
     sub.add_parser("down", help="stop the running supervisor and its children")
     ug = sub.add_parser("upgrade", help="git pull --ff-only + orchestra init --yes + orchestra doctor; seats untouched")
     ug.add_argument("--dry-run", action="store_true", help="show the incoming commits and contract-bearing paths, pull nothing")
@@ -190,10 +202,10 @@ def cmd_status(ns) -> int:
 def main(argv=None) -> int:
     ns = parse_args(argv)
     from .seats import cmd_rotate, cmd_spawn, cmd_agent
-    from .pair_cmd import run_pair
+    from .pair_cmd import run_pair, run_devices
     return {"init": cmd_init, "doctor": cmd_doctor, "up": cmd_up, "down": cmd_down, "status": cmd_status,
             "spawn": cmd_spawn, "agent": cmd_agent, "rotate": cmd_rotate, "upgrade": cmd_upgrade,
-            "pair": run_pair}[ns.command](ns)
+            "pair": run_pair, "devices": run_devices}[ns.command](ns)
 
 
 if __name__ == "__main__":
