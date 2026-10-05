@@ -110,6 +110,25 @@ jobs:
       # is no orchestra.toml. `npm test` points them at the example config.
       - run: npm test
 
+  # The TS contract tests ran NOWHERE. `python-tests (contract, contract)` is pytest, and
+  # neither contract/transcript/tests/conformance.test.ts nor codegen.test.ts was referenced
+  # by any job -- so conformance went red in #124 (looksLikeCodex started requiring a
+  # top-level `ordinal` that the codex fixtures never carried) and stayed red, unseen, for
+  # every PR since. The test file's own header documented `npm run conformance`, a script
+  # that did not exist either. Separate job, so the drift backstop cannot rot again.
+  contract-ts:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+      - run: npm run conformance
+
   dashboard-build:
     runs-on: ubuntu-latest
     defaults:
