@@ -7,6 +7,7 @@
  * identity again. `status: 'spawning'` is freshness-gated: past the grace
  * window it derives from liveness instead of lying until the file is deleted.
  */
+import { hierarchyFieldsFor } from './agentHierarchy.js';
 
 // A real spawn is interactive within a couple of minutes; 10 min is generous
 // for slow boots without letting a dead stub claim 'spawning' for days.
@@ -71,7 +72,17 @@ export function applyIdentityPrecedence(
 ): void {
   agent.id = id;
   agent.name = (def.name as string) || id;
-  agent.tier = (def.tier as string) || 'T2';
+  // tier AND reports_to, from the SAME helper the row builder used — re-asserted here for the
+  // very reason this function exists: the `...def, ...state` spreads run AFTER the row literal,
+  // so a raw registry value lands back on top of the normalised one. Without this, a def
+  // carrying `reports_to: ''` was normalised to undefined by the row builder and then had the
+  // empty string put straight back, so the ROUTE emitted the exact value the normalisation
+  // exists to prevent while the unit test on the helper stayed green. reports_to is an identity
+  // field and was simply missing from this law.
+  Object.assign(agent, hierarchyFieldsFor(def));
+  // An absent parent must not serialise at all; Object.assign would leave the key present
+  // with value undefined, which JSON.stringify drops but Object.keys and `in` do not.
+  if (agent.reports_to === undefined) delete agent.reports_to;
   agent.machine = machine;
   agent.tmux_session = tmuxSession;
   agent.always_on = (def.always_on as boolean) || false;

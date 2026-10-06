@@ -17,8 +17,7 @@ import { groupForRail, providersVary, PROVIDER_ABBR, PROVIDER_LABEL, type RailAg
 import { agentRowsFrom } from '../../lib/api';
 import { chipStateFor, ActivityDot } from '../RecentAgentChips';
 import { useFeedHealth } from '../../hooks/useFeedHealth';
-import { isDegraded } from '../../lib/feedLiveness';
-import { lastSeenLabel, type FeedVerdict } from '../../lib/feedLiveness';
+import { isDegraded, lastSeenLabel, type FeedVerdict } from '../../lib/feedLiveness';
 
 const SECTIONS: { key: keyof Omit<RailGroups, 'other'>; label: string; badge?: boolean }[] = [
   { key: 'needsYou', label: 'Needs you', badge: true },
@@ -90,12 +89,15 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
   // A row with no runtime is not a second value: 138 of 320 live rows carry none, and
   // counting "unknown" as variety would make the badge permanent by accident.
   const badgesVary = useMemo(
-    // NOT groups.other: it is collapsed behind "Not running" by default, and the badge's own
-    // rule is that it appears once two distinct runtimes are ON SCREEN. Counting the hidden
-    // bucket meant one retired codex seat among 299 offline rows printed "CL" on every visible
-    // row — the identical-column noise this function exists to prevent.
-    () => providersVary([...groups.needsYou, ...groups.working, ...groups.idle]),
-    [groups],
+    // ON SCREEN means on screen, which is why `other` is conditional rather than dropped.
+    // Counting it unconditionally made one retired codex seat among ~299 collapsed rows print
+    // "CL" on every visible row — the identical-column noise this rule exists to kill. But
+    // dropping it unconditionally is the INVERSE fault: expand "Not running" and two distinct
+    // runtimes are on screen with the disambiguating badge suppressed. The predicate has to
+    // follow the disclosure, not approximate it.
+    () => providersVary([...groups.needsYou, ...groups.working, ...groups.idle,
+      ...(showOther ? groups.other : [])]),
+    [groups, showOther],
   );
 
   // An empty rail and a BROKEN rail must not look the same: a failed feed says so, because
@@ -166,7 +168,12 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
           <button
             type="button"
             id="rail-other"
-            onClick={() => setShowOther((v) => !v)}
+            // stopPropagation for the same reason as the sidebar's "More": this rail renders
+            // inside <aside onClick={onNavigate}>, which on mobile closes the drawer. Without
+            // it, tapping "Not running" expanded the bucket and shut the drawer in one gesture.
+            // The "More" fix in this same commit left its twin standing — fixing one site of a
+            // class is not fixing the class.
+            onClick={(e) => { e.stopPropagation(); setShowOther((v) => !v); }}
             className="w-full flex items-center gap-2 px-2 py-1 text-[11px] uppercase tracking-wide text-neutral-500 hover:text-neutral-300"
             aria-expanded={showOther}
           >

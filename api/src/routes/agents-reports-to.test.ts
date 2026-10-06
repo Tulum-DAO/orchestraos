@@ -38,3 +38,38 @@ test('reports_to does not disturb tier', () => {
   assert.equal(rowFrom({ reports_to: 'gm' }).tier, 'T2', 'tier must still default');
   assert.equal(rowFrom({ tier: 'T0', reports_to: 'gm' }).tier, 'T0');
 });
+
+/**
+ * THE GAP THE HELPER TEST ABOVE DOES NOT COVER.
+ *
+ * The row builder spreads `...hierarchyFieldsFor(def)` and then, further down the SAME object
+ * literal, `...def, ...state`. So the raw registry value lands back on top of the normalised
+ * one and the route can emit the very `''` the helper exists to remove — with every test above
+ * still green, because they test the helper and the wire carries something else.
+ *
+ * applyIdentityPrecedence runs AFTER those spreads and is where identity is made to stick. It
+ * re-asserted name/tier/always_on and simply did not know about reports_to.
+ */
+import { applyIdentityPrecedence } from './agents-identity.js';
+
+const rowAfterSpreads = (def: Record<string, unknown>) => {
+  // The route's shape: normalised first, raw def last — exactly as agents.ts builds it.
+  const agent: Record<string, unknown> = { id: 'seat', ...rowFrom(def), ...def };
+  applyIdentityPrecedence(agent, def, 'seat', 'seat', 'vps', true);
+  return agent;
+};
+
+test('an empty reports_to cannot survive the raw def spread onto the wire', () => {
+  // Pre-fix this returned '' — the route emitted a parent named nothing.
+  const agent = rowAfterSpreads({ tier: 'T1', reports_to: '' });
+  assert.equal(agent.reports_to, undefined);
+  assert.equal('reports_to' in agent, false, 'absent must mean the key is gone, not undefined');
+  assert.equal('reports_to' in JSON.parse(JSON.stringify(agent)), false);
+});
+
+test('a real parent still reaches the wire, and tier still defaults', () => {
+  // The control: the rule above removes empty strings, not parents.
+  const agent = rowAfterSpreads({ reports_to: 'gm' });
+  assert.equal(agent.reports_to, 'gm');
+  assert.equal(agent.tier, 'T2');
+});
