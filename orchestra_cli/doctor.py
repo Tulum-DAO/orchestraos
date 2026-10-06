@@ -217,12 +217,11 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
         installed = [r for r in results if r["installed"]]
         pick = (installed or results)[0]
         if installed:
-            detail = (f"no agent CLI is logged in -- {pick['cli']} is installed and needs "
-                      f"one login ({len(results)} enabled, {len(installed)} installed)")
+            detail = (f"no agent CLI is authed; {pick['cli']} is installed "
+                      f"({len(installed)}/{len(results)} enabled)")
             remedy = f"Run `{pick['cli']}` once, complete its login, then re-run doctor"
         else:
-            detail = (f"no agent CLI is installed or logged in "
-                      f"({len(results)} enabled, none installed)")
+            detail = f"no agent CLI is installed ({len(results)} enabled, 0 installed)"
             remedy = (f"Install one agent CLI and log in -- e.g. the {pick['label']} CLI "
                       f"(`{pick['cli']}`); see docs/INSTALL.md")
         login_row = Check("runtime:login", MISSING, detail, remedy)
@@ -520,9 +519,17 @@ def exit_code(checks: list) -> int:
 
 
 def render_table(checks: list) -> str:
+    # An ADVISORY MISSING row is marked `MISSING*`. Without it the footer could read
+    # "1 required check(s) MISSING" above four red rows, which is the same "my install is
+    # broken" reading the consolidated login row exists to remove. RENDER-ONLY: `c.status`
+    # is untouched, so `--json` and every status assertion see the same values as before.
     rows = [("CHECK", "STATUS", "DETAIL", "REMEDY")]
+    advisory = False
     for c in checks:
-        rows.append((c.name, c.status, c.detail, c.remedy if c.status in (MISSING, WARN) else ""))
+        token = c.status
+        if c.status == MISSING and not c.required:
+            token, advisory = MISSING + "*", True
+        rows.append((c.name, token, c.detail, c.remedy if c.status in (MISSING, WARN) else ""))
     w0 = max(len(r[0]) for r in rows)
     w1 = max(len(r[1]) for r in rows)
     w2 = min(max(len(r[2]) for r in rows), 70)
@@ -535,6 +542,8 @@ def render_table(checks: list) -> str:
         out.append(line.rstrip())
     n_missing = sum(1 for c in checks if c.status == MISSING and c.required)
     out.append("")
+    if advisory:
+        out.append("  * advisory — a consequence of a required row above; clears when that one does.")
     out.append("doctor: " + ("all required checks OK" if n_missing == 0 else f"{n_missing} required check(s) MISSING"))
     return "\n".join(out)
 

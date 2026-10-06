@@ -525,3 +525,54 @@ def test_NEGATIVE_CONTROL_one_login_clears_the_row_entirely(tmp_path):
     checks = D.run_doctor(st, _probes(which=("tmux", "node", "npm", "claude")))
     assert "runtime:login" not in _by_name(checks)
     assert D.exit_code(checks) == 0
+
+
+# -- Clearing-reviewer residuals on the login row (DEC-1791257115439975, non-blocking but
+# they are what makes the row achieve its stated purpose).
+
+def test_ADVISORY_missing_rows_are_MARKED_so_the_table_matches_the_footer(tmp_path):
+    """Residual 1: the count said 1 while the table still showed 4 red rows, so a stranger
+    still saw a wall of failures. Advisory MISSING rows must be visually distinguished --
+    and the REQUIRED one must not be."""
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    checks = D.run_doctor(st, _probes(which=("tmux", "node", "npm"), cmd_out=""))
+    text = D.render_table(checks)
+    line = {l.split()[0]: l for l in text.splitlines() if l and not l.startswith(" ")}
+    assert "MISSING*" in line["runtime:claude"]      # advisory: clears with the login
+    assert "MISSING*" in line["runtime:any"]
+    assert "MISSING*" not in line["runtime:login"]   # the one thing to act on
+    assert "advisory" in text.lower()                # a legend explains the marker
+
+
+def test_the_login_row_DETAIL_is_not_truncated_by_the_70_char_cap(tmp_path):
+    """Residual 2: the tally was being cut off as '...needs one login …' in the common case."""
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    checks = D.run_doctor(st, _probes(which=("tmux", "node", "npm", "claude"),
+                                      cmd_out='{"loggedIn": false}'))
+    detail = _by_name(checks)["runtime:login"].detail
+    assert len(detail) <= 70, f"{len(detail)} chars, will be truncated: {detail}"
+    assert "…" not in D.render_table(checks).split("runtime:login")[1].split("->")[0]
+
+
+def test_the_login_row_does_not_assert_a_fact_it_cannot_know(tmp_path):
+    """Residual 3: 'not logged in' is wrong when the auth PROBE merely failed (authed is
+    tri-state). 'not authed' is true in every not-True case."""
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    checks = D.run_doctor(st, _probes(which=("tmux", "node", "npm", "claude"), cmd_out="not-json"))
+    detail = _by_name(checks)["runtime:login"].detail
+    assert "authed" in detail and "is logged in" not in detail
+
+
+def test_marker_is_RENDER_ONLY_json_and_status_data_are_untouched(tmp_path):
+    """The marker must not leak into the Check data: --json consumers and the status triple
+    stay exactly as before (the PRESERVED-CONTRACTS claim in the proposal)."""
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    checks = D.run_doctor(st, _probes(which=("tmux", "node", "npm"), cmd_out=""))
+    assert all(c.status in (D.OK, D.WARN, D.INFO, D.MISSING) for c in checks)
+    assert "*" not in _by_name(checks)["runtime:claude"].status
+    import json as _j
+    assert _j.loads(D.render_json(checks))["ok"] is False
