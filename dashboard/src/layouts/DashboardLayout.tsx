@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { CommandPalette } from '../components/CommandPalette';
 import { Outlet } from 'react-router-dom';
 import { Menu, X } from 'lucide-react';
 import { Sidebar } from '../components/Sidebar';
@@ -92,7 +93,11 @@ export function DashboardLayout() {
         />
       )}
 
-      {/* Arturo pill — always available on every non-home page (T4); replaces the legacy JarvisPanel */}
+      {/* Cmd-K. Mounted at the layout so it is available on every page, and it renders
+          nothing until it is opened. */}
+      <CommandPalette />
+
+            {/* Arturo pill — always available on every non-home page (T4); replaces the legacy JarvisPanel */}
       <ArturoPill />
     </div>
   );
