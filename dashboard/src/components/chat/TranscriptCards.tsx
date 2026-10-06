@@ -270,13 +270,14 @@ export function ToolCard({ block }: { block: ToolBlock }) {
  * Expanding shows the per-call ToolCards (and the thinking between them), each of which
  * expands again to its input and output: three levels instead of one card per call.
  */
-export function ToolGroupCard({ group }: { group: ToolGroupNode }) {
+export function ToolGroupCard({ group, interrupted = false }: { group: ToolGroupNode; interrupted?: boolean }) {
   const [open, setOpen] = useState(false);
   const tools = group.children.filter((c): c is ToolBlock => c.kind === 'tool');
-  const s = summarizeTurn(tools.map(fromToolBlock));
-  const lead = s.running > 0
-    ? 'Working'
-    : s.durationMs !== undefined ? `Worked for ${formatDuration(s.durationMs)}` : 'Worked';
+  const s = summarizeTurn(tools.map(fromToolBlock), { interrupted });
+  const dur = s.durationMs !== undefined ? formatDuration(s.durationMs) : '';
+  const lead = s.running > 0 ? 'Working'
+    : s.interrupted > 0 ? (dur ? `Stopped after ${dur}` : 'Stopped')
+    : (dur ? `Worked for ${dur}` : 'Worked');
   return (
     <div className="flex justify-start">
       <div className={`max-w-[92%] w-full rounded-lg border ${s.failed > 0 ? 'border-red-800/50' : 'border-neutral-800'} bg-neutral-900/30 overflow-hidden`}>
@@ -288,7 +289,7 @@ export function ToolGroupCard({ group }: { group: ToolGroupNode }) {
           <span className="text-[10px] text-neutral-500 w-3 leading-[17px] shrink-0">{open ? '▾' : '▸'}</span>
           {/* Wraps rather than truncating: on a phone the clipped tail was the "(1 failed)". */}
           <span className="text-[11px] leading-[17px] min-w-0 flex-1 break-words">
-            <span className={`font-medium ${s.running > 0 ? 'text-orange-300' : 'text-neutral-300'}`}>{lead}</span>
+            <span className={`font-medium ${s.running > 0 ? 'text-orange-300' : s.interrupted > 0 ? 'text-amber-400' : 'text-neutral-300'}`}>{lead}</span>
             {s.headline && <span className="text-neutral-500"> — {s.headline}</span>}
           </span>
           <span className="text-[10px] leading-[17px] text-neutral-600 shrink-0">
@@ -306,8 +307,10 @@ export function ToolGroupCard({ group }: { group: ToolGroupNode }) {
 }
 
 /** Like RenderNodeView, plus the folded tool group. */
-export function GroupedNodeView({ node }: { node: GroupedNode }) {
-  return node.kind === 'tool_group' ? <ToolGroupCard group={node} /> : <RenderNodeView node={node} />;
+export function GroupedNodeView({ node, interrupted }: { node: GroupedNode; interrupted?: boolean }) {
+  return node.kind === 'tool_group'
+    ? <ToolGroupCard group={node} interrupted={interrupted} />
+    : <RenderNodeView node={node} />;
 }
 
 /** Dispatch a RenderNode to the right primitive. */

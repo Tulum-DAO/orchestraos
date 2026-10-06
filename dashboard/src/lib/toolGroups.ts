@@ -29,21 +29,27 @@ export interface TurnSummary {
   headline: string;
   failed: number;
   running: number;
+  /** Calls that will never finish: the turn moved on, or the agent stopped. See isInterrupted. */
+  interrupted: number;
   /** Earliest start to latest result. Absent unless at least two instants parse. */
   durationMs?: number;
 }
 
 type Category = 'edit' | 'command' | 'read' | 'search' | 'other';
 
-// Claude Code, Codex and Gemini CLI names, plus Arturo's own tools. Lower-cased lookups.
+// Claude Code, Codex, Gemini CLI and Antigravity names, plus Arturo's own tools. Lower-cased
+// lookups. Antigravity's come from the API's own toolSummary table (api/src/routes/chat-transcript.ts).
 const CATEGORY: Record<string, Category> = {
   edit: 'edit', write: 'edit', multiedit: 'edit', notebookedit: 'edit',
   apply_patch: 'edit', write_file: 'edit', replace: 'edit', edit_file: 'edit', create_file: 'edit',
+  replace_file_content: 'edit', write_to_file: 'edit',
   bash: 'command', shell: 'command', run_shell_command: 'command', run_command: 'command',
   exec_command: 'command', exec: 'command',
   read: 'read', read_file: 'read', read_many_files: 'read', view: 'read', notebookread: 'read',
+  view_file: 'read',
   grep: 'search', glob: 'search', websearch: 'search', toolsearch: 'search', search: 'search',
   search_file_content: 'search', list_directory: 'search', google_web_search: 'search',
+  grep_search: 'search', find_by_name: 'search', search_web: 'search',
 };
 
 function categoryOf(tool: string): Category {
@@ -73,17 +79,21 @@ function spanMs(items: WorkItem[]): number | undefined {
   return Math.max(...times) - Math.min(...times);
 }
 
-export function summarizeTurn(items: WorkItem[]): TurnSummary {
+export function summarizeTurn(all: WorkItem[], opts: { interrupted?: boolean } = {}): TurnSummary {
+  // An interrupted turn's unfinished calls are neither done nor still going.
+  const interrupted = opts.interrupted ? all.filter((it) => it.status === 'running').length : 0;
+  const items = opts.interrupted ? all.filter((it) => it.status !== 'running') : all;
   const by = (cat: Category, status?: ToolStatus) =>
     items.filter((it) => categoryOf(it.tool) === cat && (!status || it.status === status));
 
   const failed = items.filter((it) => it.status === 'failed').length;
   const running = items.filter((it) => it.status === 'running').length;
-  const durationMs = spanMs(items);
+  const durationMs = spanMs(all);
 
   // Nothing succeeded and nothing is still going: claim nothing as done.
   if (failed > 0 && failed === items.length) {
-    return { headline: `${failed} failed`, failed, running, durationMs };
+    const tail = interrupted > 0 ? `, ${interrupted} interrupted` : '';
+    return { headline: `${failed} failed${tail}`, failed, running, interrupted, durationMs };
   }
 
   const clauses: string[] = [];
@@ -122,7 +132,9 @@ export function summarizeTurn(items: WorkItem[]): TurnSummary {
   const otherRunning = running - cmdRunning;
   if (otherRunning > 0) clauses.push(`running ${otherRunning}`);
 
-  return { headline: clauses.join(', '), failed, running, durationMs };
+  if (interrupted > 0) clauses.push(`${interrupted} interrupted`);
+
+  return { headline: clauses.join(', '), failed, running, interrupted, durationMs };
 }
 
 export function formatDuration(ms: number): string {
@@ -134,10 +146,27 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
+// States in which the agent is known NOT to be mid-turn. 'waiting' is deliberately absent: a
+// tool call blocked on a permission prompt is unfinished but very much alive. 'stalled' is a long
+// turn still working, and 'unknown' is no evidence at all.
+const STOPPED_STATES = new Set(['idle', 'stranded', 'stopped', 'crashed', 'offline', 'retired']);
+
+/**
+ * Whether a group's unfinished calls can never finish. Only on EVIDENCE: the chat has moved past
+ * the group, or the agent is in a known stopped state. Without evidence, claim nothing, so a
+ * session killed mid-call stops reading "Working" forever without a live call ever being
+ * mislabelled.
+ */
+export function isInterrupted({ isLast, state }: { isLast: boolean; state: string }): boolean {
+  if (!isLast) return true;
+  return STOPPED_STATES.has(state);
+}
+
 // ---- adapters ------------------------------------------------------------------------------
 
 export function fromToolBlock(b: ToolBlock): WorkItem {
-  const raw = b.input?.file_path ?? b.input?.path ?? b.input?.notebook_path;
+  const raw = b.input?.file_path ?? b.input?.path ?? b.input?.notebook_path
+    ?? b.input?.TargetFile ?? b.input?.AbsolutePath;
   const item: WorkItem = {
     tool: b.tool,
     status: b.isError ? 'failed' : b.result === undefined ? 'running' : 'ok',

@@ -12,7 +12,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { buildRenderList, fetchTranscript, type ChatItem } from '../../lib/transcript';
 import { subscribeTranscriptStream } from '../../lib/transcriptStream';
 import { GroupedNodeView } from './TranscriptCards';
-import { groupToolRuns } from '../../lib/toolGroups';
+import { groupToolRuns, isInterrupted } from '../../lib/toolGroups';
 import { normalizeAgentState, STATE_STYLE, type LiveState } from '../../lib/agentStatus';
 import OptionsMenuCard, { type PendingMenu } from './OptionsMenuCard';
 
@@ -140,7 +140,9 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
         ) : nodes.length === 0 ? (
           <span className="text-xs text-neutral-600">{err ? `No transcript (${err})` : 'No messages yet'}</span>
         ) : (
-          nodes.map((n) => <GroupedNodeView key={n.key} node={n} />)
+          nodes.map((n, i) => (
+            <GroupedNodeView key={n.key} node={n} interrupted={isInterrupted({ isLast: i === nodes.length - 1, state: st })} />
+          ))
         )}
 
         {/* live decision menu (detector pending_menu) — answerable below the last

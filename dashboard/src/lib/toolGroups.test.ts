@@ -10,7 +10,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  summarizeTurn, formatDuration, groupToolRuns, fromToolBlock, fromToolPart,
+  summarizeTurn, formatDuration, groupToolRuns, fromToolBlock, fromToolPart, isInterrupted,
   type WorkItem,
 } from './toolGroups.js';
 import { buildRenderList, type ChatItem, type RenderNode, type ToolBlock } from './transcript.js';
@@ -207,4 +207,109 @@ test('buildRenderList pairs the result TIME onto its call, not only its text', (
   assert.ok(node.kind === 'tool');
   assert.equal(node.ts, '2026-10-06T05:01:00Z');
   assert.equal(node.resultTs, '2026-10-06T05:01:08Z');
+});
+
+// ---- clearing review of #187 (REJECT): the tests did not hold the PR's own rules ---------
+// The reviewer broke the code ten new ways and nine survived all 27 tests. Each test below is
+// named for the sabotage it kills (S1..S11). "Never count a failure as done" and "running reads
+// as running" had only been tested for edits and commands.
+
+test('S6 a FAILED search is not counted as a search done', () => {
+  assert.equal(summarizeTurn([failed('Grep'), ok('Grep')]).headline, 'searched 1 time, 1 failed');
+});
+
+test('S8 a FAILED read is not counted as a file read', () => {
+  assert.equal(summarizeTurn([failed('Read', 'a'), ok('Read', 'b')]).headline, 'read 1 file, 1 failed');
+});
+
+test('S7 a FAILED unknown tool is not counted as a tool used', () => {
+  assert.equal(summarizeTurn([failed('mcp__x__go'), ok('mcp__x__go')]).headline, 'used 1 tool, 1 failed');
+});
+
+test('S9 a RUNNING edit is not counted as an edited file', () => {
+  assert.equal(summarizeTurn([ok('Edit', 'a'), { tool: 'Edit', path: 'b', status: 'running' }]).headline,
+    'edited 1 file, running 1');
+});
+
+test('S2 a running call outside the command clause is still reported', () => {
+  assert.equal(summarizeTurn([ok('Edit', 'a'), { tool: 'Read', path: 'r', status: 'running' }]).headline,
+    'edited 1 file, running 1');
+});
+
+test('S11 an Arturo call still in flight stays running through the adapter', () => {
+  const p: ToolPart = { kind: 'tool', callId: 'c', name: 'Bash', argsSummary: 'ls', status: 'running' };
+  assert.equal(fromToolPart(p).status, 'running');
+  const parts: ToolPart[] = [{ kind: 'tool', callId: '1', name: 'Edit', argsSummary: 'a', status: 'ok' }, p];
+  const blocks: ToolBlock[] = [
+    { kind: 'tool', tool: 'Edit', input: { file_path: 'a' }, result: 'ok', key: '1' },
+    { kind: 'tool', tool: 'Bash', input: { command: 'ls' }, key: '2' },
+  ];
+  assert.equal(summarizeTurn(parts.map(fromToolPart)).headline, 'edited 1 file, running 1 command');
+  assert.equal(summarizeTurn(blocks.map(fromToolBlock)).headline, summarizeTurn(parts.map(fromToolPart)).headline);
+});
+
+test('S3 a call that returned EMPTY output is finished, not running', () => {
+  const b: ToolBlock = { kind: 'tool', tool: 'Bash', input: {}, result: '', key: 'k' };
+  assert.equal(fromToolBlock(b).status, 'ok');
+});
+
+test('S5 a FAILED final call keeps its result time, so its runtime stays in "Worked for"', () => {
+  const items = [
+    { kind: 'tool_use', id: 'T1', tool: 'Bash', input: {}, ts: '2026-10-06T05:00:00Z', key: 'c1' },
+    { kind: 'tool_result', tool_use_id: 'T1', text: 'FAIL', is_error: true, ts: '2026-10-06T05:10:00Z', key: 'r1' },
+  ] as unknown as ChatItem[];
+  const [node] = buildRenderList(items);
+  assert.ok(node.kind === 'tool');
+  assert.equal(node.resultTs, '2026-10-06T05:10:00Z');
+  assert.equal(summarizeTurn([fromToolBlock(node)]).durationMs, 600_000);
+});
+
+test('S1 every key in a grouped list is unique, across several groups', () => {
+  const out = groupToolRuns([tool('t1'), tool('t2'), say('a'), tool('t3'), tool('t4'), say('b'), tool('t5'), tool('t6')]);
+  const keys = out.map((n) => n.key);
+  assert.equal(new Set(keys).size, keys.length, `duplicate keys: ${keys.join(',')}`);
+});
+
+test('S4 Codex exec_command is a command', () => {
+  assert.equal(summarizeTurn([ok('exec_command')]).headline, 'ran 1 command');
+});
+
+// ---- Antigravity (Gemini CLI) names: the API's own toolSummary table is the source ------
+
+test('Antigravity edit, read and search names map, with TargetFile/AbsolutePath as paths', () => {
+  const blk = (tool: string, input: Record<string, unknown>): ToolBlock => ({ kind: 'tool', tool, input, result: 'ok', key: tool });
+  assert.equal(fromToolBlock(blk('write_to_file', { TargetFile: 'b.md' })).path, 'b.md');
+  assert.equal(fromToolBlock(blk('view_file', { AbsolutePath: '/x/a.ts' })).path, '/x/a.ts');
+  const edits = [blk('view_file', { AbsolutePath: 'a' }), blk('replace_file_content', { TargetFile: 'a' }), blk('write_to_file', { TargetFile: 'b' })];
+  assert.equal(summarizeTurn(edits.map(fromToolBlock)).headline, 'edited 2 files');
+  const mixed = [blk('replace_file_content', { TargetFile: 'a' }), blk('write_to_file', { TargetFile: 'b' }), blk('run_command', { CommandLine: 'ls' })];
+  assert.equal(summarizeTurn(mixed.map(fromToolBlock)).headline, 'edited 2 files, ran 1 command');
+  assert.equal(summarizeTurn([ok('grep_search'), ok('find_by_name')]).headline, 'searched 2 times');
+});
+
+// ---- a call that will never finish must not read "Working" forever -----------------------
+
+test('an interrupted turn reports its unfinished calls as interrupted, not running', () => {
+  const s = summarizeTurn([ok('Edit', 'a'), { tool: 'Bash', status: 'running' }], { interrupted: true });
+  assert.equal(s.headline, 'edited 1 file, 1 interrupted');
+  assert.equal(s.running, 0);
+  assert.equal(s.interrupted, 1);
+});
+
+test('interrupted only changes calls that were still running', () => {
+  assert.equal(summarizeTurn([ok('Edit', 'a'), failed('Bash')], { interrupted: true }).headline,
+    'edited 1 file, ran 1 command (failed)');
+});
+
+test('isInterrupted: only on EVIDENCE -- later content, or a known stopped state', () => {
+  assert.equal(isInterrupted({ isLast: false, state: 'working' }), true);   // the turn moved on
+  assert.equal(isInterrupted({ isLast: true, state: 'idle' }), true);       // agent back at prompt
+  assert.equal(isInterrupted({ isLast: true, state: 'crashed' }), true);
+  assert.equal(isInterrupted({ isLast: true, state: 'working' }), false);
+  assert.equal(isInterrupted({ isLast: true, state: 'stalled' }), false);   // long turn, still working
+  assert.equal(isInterrupted({ isLast: true, state: 'unknown' }), false);   // no evidence, no claim
+});
+
+test('a call waiting on a PERMISSION prompt is not interrupted (state "waiting")', () => {
+  assert.equal(isInterrupted({ isLast: true, state: 'waiting' }), false);
 });
