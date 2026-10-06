@@ -1,7 +1,8 @@
 # RFC 0001 — Repository topology: one core, clients out, and the drift that matters more
 
 **Status:** proposed, awaiting the operator's decision
-**Author:** orchestraos-builder (gen 11)
+**Author:** orchestraos-builder (gen 11); §3 re-measured, §3.1 and the
+bidirectionality finding added by gen 12 on promotion
 **Decision owner:** Shaw, with gm
 **Related:** gm's structural card `apr_4c6576c1`
 
@@ -67,14 +68,19 @@ layout problem here.
 The public repo is roughly **half** of the running system, and **half of what it
 does share has drifted**:
 
-| measure | value |
-|---|---|
-| shared `.py` files (public ∩ live) | **549** |
-| …byte-identical | 277 (50%) |
-| …**diverged** | **272 (50%)** |
-| summed absolute line delta across diverged files | **8,325** |
-| `.py` files that exist **only live** | **504** |
-| `.py` total — live vs public | **1,053 vs 584** |
+**Re-measured independently by gen 12 on promotion (2026-10-06 02:5xZ).** Method:
+`git ls-files '*.py'` in each tree, md5 per shared path — stated because gen 11's walk
+included vendored packages and its totals were low. **Every number moved in the same
+direction: the drift is worse than first reported, and the 50/50 split is confirmed.**
+
+| measure | gen 11 | **gen 12 (tracked files)** |
+|---|---|---|
+| shared `.py` files (public ∩ live) | 549 | **666** |
+| …byte-identical | 277 (50%) | **320 (48%)** |
+| …**diverged** | 272 (50%) | **346 (51%)** |
+| summed absolute line delta across diverged files | 8,325 | **9,928** |
+| `.py` files that exist **only live** | 504 | **935** |
+| `.py` total — live vs public | 1,053 vs 584 | **1,601 vs 783** |
 
 Named examples, because the aggregate hides the shape:
 
@@ -88,6 +94,44 @@ Named examples, because the aggregate hides the shape:
 | `_complete_unobservable` | **does not exist** | exists |
 
 There is also a **third** tree: `orchestraos-staging`, 1,233 tracked files.
+
+### The drift is BIDIRECTIONAL — this changes what §6.1 can safely rule
+
+Gen 11 framed this as "live runs and is ahead; public is behind." **That is only half
+true, and the other half is load-bearing.** Measured per-symbol, public is *ahead* on some
+of the most important files:
+
+| file | public | live | public-only symbols |
+|---|---|---|---|
+| `services/arturo/arturo-proxy.py` | 5,146 | 4,163 | **40 more defs/classes** — an entire brain-dispatch layer (`_effective_brain`, `_dispatch_guarded`, `_brain_reply`, `_default_models`, `_BrainHttpError`) |
+| `scripts/watch_gateway.py` | 5,908 | 5,473 | `_identity_kwargs`, `_anchor_expect_questions`, `row_is_durable_with_parts`, `_digit_pressable_ns` |
+
+**Consequence: "declare live canonical and copy it down" would destroy real work**,
+including the provider-agnostic brain layer and the gate in §3.1 below. Neither tree
+dominates, so §6.1 cannot be settled by picking a winner — it needs a *merge*, file by
+file, with both directions reviewed. That is a materially bigger task than gen 11's
+framing implied, and it is the main reason this RFC does not propose doing it as
+ordinary builder work.
+
+### 3.1 — A THIRD incident, found during the gen 11→12 swap, and the worst of them
+
+**The #178 menu-identity gate is public-only. The live gateway does not have it.**
+
+`menu_batch_submit` exists in both trees (live `:2721`, public `:2840`), but
+`expect_questions` appears **14 times in public and 0 times in live** — the live signature
+carries no identity parameter at all. So on the gateway that actually serves Shaw's phone
+and watch, a batch anchored on durable row A can still be replayed into a *different* live
+menu B and, because option digits overlap, **silently answer an agent's new question with
+the operator's old intent.** No error, no mismatch signal.
+
+The fix is reviewed, CI-green and has six dedicated tests — in the tree that serves nobody.
+
+**Gen 11 wrote incident 1 ("a reviewer had to tell me I had fixed the wrong tree") into
+this very document, and then shipped #178 public-only without noticing it had done the
+same thing again.** That is the evidence that the drift is not self-correcting by
+discipline: the author who had just learned the lesson, and written it down, still missed
+it. Handed to `orchestra-builder` (file owner) as `msg_d0ccacc0`, live-first per gm's
+re-ruling.
 
 ### This has already cost real money, twice, today
 
@@ -175,7 +219,17 @@ guess:
 3. **What is `orchestraos-staging` for**, now that a third copy exists?
 
 ### 6.2 — Make the install path true for a stranger *(small, ~1 day)*
-Resolve the 7 host-coupled files so a clean VPS can complete `docs/INSTALL.md`
+**Gen 12 correction to the count and, more importantly, to the diagnosis.** The
+`.py`-only pattern gives 7, but the stated pattern (`tailscale` / absolute home path /
+hostname) over *all* 1,337 tracked files gives **24**. Inspecting them changes the finding:
+the `api/`, `services/config.py` and `orchestra-env.sh` sites are **already config-driven**
+(`raw.machines.mac_tailscale_ip || ''`), and two more are comments. So almost nothing is
+hard-coded — **the real problem is mandatory config with empty-string defaults.** A
+stranger's install does not fail loudly; it silently comes up with blank tailnet IPs. The
+work is therefore *defaults and a loud `doctor` finding*, not a de-hard-coding sweep, and
+that is a smaller and better-defined job than §6.2 originally described.
+
+Resolve the host-coupled files so a clean VPS can complete `docs/INSTALL.md`
 without editing source: move the host/tailnet assumptions behind config with
 documented defaults, and let `orchestra_cli doctor` report them as *findings*
 rather than hard-coding them. **Acceptance: a clean Ubuntu VM reaches "one
@@ -214,8 +268,12 @@ actively-changed file in the system and §6.1 must land first.
 ## 8. What I am asking for
 
 1. Confirm **topology stays as-is** (core + four client repos). No restructure.
-2. Rule on **§6.1** — which tree is canonical, and authorise the history
-   cleanup that lets the live tree push.
+2. Rule on **§6.1** — and note it is **not** "which tree wins": §3's bidirectionality
+   means it is a reviewed file-by-file merge, plus the history cleanup that lets the live
+   tree push. **This ask is already on your queue as card `apr_4c6576c1`** (gm, "clean the
+   repo history now, keep the off-box-backup stopgap, or reconcile into public first?") —
+   gen 12 deliberately did **not** file a second card; this RFC is the evidence for that
+   one.
 3. Authorise **§6.2** (the 7 files) as ordinary work. I can take this; it is
    small, testable, and squarely in the public repo.
 4. Defer **§6.4** explicitly, so it stops being an open question.
