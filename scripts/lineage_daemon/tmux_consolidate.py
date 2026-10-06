@@ -19,7 +19,7 @@ the reworked prompt-retire/promote flow uses it too for clean consolidation.
 def _tmux_has_session(name) -> bool:
     import subprocess
     try:
-        return subprocess.run(["tmux", "has-session", "-t", name],
+        return subprocess.run(["tmux", "has-session", "-t", f"={name}"],
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                               timeout=10).returncode == 0
     except Exception:  # noqa: BLE001 -- absent tmux / error => treat as not-present
@@ -27,9 +27,12 @@ def _tmux_has_session(name) -> bool:
 
 
 def _tmux_rename(old, new) -> bool:
+    """EXACT-match target ('='). A bare `-t old` resolves by PREFIX, so for a seat whose
+    `old` name is gone it renames a `<old>-g<N>` SIBLING onto `new` -- the destructive form
+    of this class. Exact-only: an absent `old` returns False and the caller fails closed."""
     import subprocess
     try:
-        return subprocess.run(["tmux", "rename-session", "-t", old, new],
+        return subprocess.run(["tmux", "rename-session", "-t", f"={old}", new],
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                               timeout=10).returncode == 0
     except Exception:  # noqa: BLE001

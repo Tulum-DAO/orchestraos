@@ -225,7 +225,13 @@ def test_retire_does_NOT_kill_when_promote_ALREADY_consolidated(monkeypatch):
     """If the canonical name is already held by the alias's own pane, promote has run and
     there is nothing to do. An EXACT but still-unconditional kill would destroy the
     just-promoted successor here, which is why exactness alone was not the fix."""
-    live = {"pm-x": "4242"}          # same pane pid as the alias resolves to
+    # ALREADY-CONSOLIDATED state: the successor has been renamed onto the canonical name,
+    # so the ALIAS NO LONGER EXISTS. An earlier version of this fake returned a pane pid for
+    # `pm-x-g2` unconditionally, even though `pm-x-g2` is absent from its own `live` dict --
+    # an UNFAITHFUL MOCK that made a dead code path look implemented. Real tmux: a renamed
+    # session stops answering to its old name (measured: `display-message -t =alias:0.0`
+    # returns EMPTY after the rename).
+    live = {"pm-x": "4242"}
     killed = []
     monkeypatch.setattr(
         "scripts.lineage_daemon.executors.plan_retire",
@@ -239,11 +245,16 @@ def test_retire_does_NOT_kill_when_promote_ALREADY_consolidated(monkeypatch):
         if "has-session" in cmd:
             rc = 0 if name in live else 1
         elif "display-message" in cmd:
-            # both the canonical name and the alias resolve to the SAME pane
-            out = "4242" if name in ("pm-x", "pm-x-g2") else ""
+            # honours `live`: an absent exact target yields rc 0 with EMPTY stdout
+            out = live.get(name, "")
         elif "kill-session" in cmd:
             if live.pop(name, None) is not None:
                 killed.append(name)
+            else:
+                rc = 1
+        elif "rename-session" in cmd:
+            if name in live:
+                live[cmd[-1]] = live.pop(name)
             else:
                 rc = 1
 
@@ -260,7 +271,7 @@ def test_retire_does_NOT_kill_when_promote_ALREADY_consolidated(monkeypatch):
                       {"ok": True, "report": {"predecessor_archived": "pm-x-gen1"}})
     assert killed == [], f"killed the already-promoted successor: {killed}"
     assert res.get("already") is True and res.get("consolidated") is True, res
-    assert live.get("pm-x") == "4242"
+    assert live == {"pm-x": "4242"}, f"the seat must be left intact: {live}"
 
 
 def test_retire_reports_a_FAILED_consolidation_instead_of_claiming_success(monkeypatch):

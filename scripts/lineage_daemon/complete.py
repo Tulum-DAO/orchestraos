@@ -781,26 +781,36 @@ def build_completion_provider(*, orchestra_dir=None, sessions_meta=None,
             def _tmux(*args):
                 return subprocess.run(["tmux", *args], capture_output=True, text=True)
 
-            holder_is_alias = False
-            if _tmux("has-session", "-t", f"={canary}").returncode == 0:
-                # The bare name exists. Is it already the alias (promote ran), or a stranger?
-                a = _tmux("display-message", "-p", "-t", f"={canary}:0.0", "#{pane_pid}")
-                b = _tmux("display-message", "-p", "-t", f"={alias}:0.0", "#{pane_pid}")
-                pa, pb = (a.stdout or "").strip(), (b.stdout or "").strip()
-                holder_is_alias = bool(pa) and pa == pb
-                if not holder_is_alias:
-                    _tmux("kill-session", "-t", f"={canary}")
+            canonical_held = _tmux("has-session", "-t", f"={canary}").returncode == 0
+            alias_present = _tmux("has-session", "-t", f"={alias}").returncode == 0
 
-            if holder_is_alias:
+            # ALREADY CONSOLIDATED -> no-op. The signal is ALIAS ABSENCE, not pane-pid
+            # equality between the two names. A renamed session STOPS ANSWERING TO ITS OLD
+            # NAME -- measured: after `rename-session -t =alias canonical`,
+            # `display-message -t =alias:0.0` returns EMPTY -- and two distinct live
+            # sessions never share a window-0 pane pid. So comparing the two names' pids is
+            # UNSATISFIABLE, which would leave this kill effectively unconditional whenever
+            # the canonical name exists. That is precisely the state exactness alone cannot
+            # save, because an exact kill of the canonical name here destroys the
+            # just-promoted successor and empties the seat.
+            if canonical_held and not alias_present:
                 res = {**res, "consolidated": True, "already": True}
-            elif _tmux("has-session", "-t", f"={alias}").returncode == 0:
-                rn = _tmux("rename-session", "-t", f"={alias}", canary)
-                res = {**res, "consolidated": rn.returncode == 0}
-                if rn.returncode != 0:
-                    res["consolidate_error"] = (rn.stderr or "").strip() or "rename failed"
             else:
-                res = {**res, "consolidated": False,
-                       "consolidate_error": f"neither {canary!r} nor alias {alias!r} present"}
+                # A STRANGER holds the canonical name while the alias still exists
+                # separately -> free the name, then rename. Exact-only, so the kill cannot
+                # reach a `<canary>-g<N>` sibling.
+                if canonical_held and alias_present:
+                    _tmux("kill-session", "-t", f"={canary}")
+                if alias_present:
+                    rn = _tmux("rename-session", "-t", f"={alias}", canary)
+                    res = {**res, "consolidated": rn.returncode == 0}
+                    if rn.returncode != 0:
+                        res["consolidate_error"] = ((rn.stderr or "").strip()
+                                                    or "rename failed")
+                else:
+                    res = {**res, "consolidated": False,
+                           "consolidate_error": (f"neither {canary!r} nor alias "
+                                                 f"{alias!r} present")}
 
         return res
 
@@ -893,7 +903,12 @@ def build_completion_provider(*, orchestra_dir=None, sessions_meta=None,
 
             try:
                 import subprocess
-                pane_target = f"{canary}:0"
+                # EXACT target ('='). This is a WRITE: a bare `-t <canary>:0` resolves by
+                # PREFIX, so mid-swap -- bare canonical name absent, `<canary>-g<N>` alive --
+                # it TYPES THE RESUME INTO THE GREEN'S PANE, i.e. into a session nobody
+                # chose. Strictly worse than a wrong read. Exact-only, so an absent target
+                # sends nothing rather than typing somewhere else.
+                pane_target = f"={canary}:0"
                 cmd = f"echo '[LINEAGE RESUME] Resuming task: {tgt}'\n"
                 subprocess.run(["tmux", "send-keys", "-t", pane_target, cmd], capture_output=True)
             except Exception:
