@@ -13,6 +13,7 @@ import ActionBar from './ActionBar';
 import WebTerminal from './WebTerminal';
 import TranscriptChatView from './chat/TranscriptChatView';
 import { useFeedHealth } from '../hooks/useFeedHealth';
+import { styleForAgentState } from '../lib/feedLiveness';
 import ChatInput from './chat/ChatInput';
 import AuthFlow from './AuthFlow';
 import { logAction, trackRecentAgent } from '../lib/user-actions';
@@ -447,22 +448,27 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
               same one truth the chips and the detail modal already share, so a
               third vocabulary cannot drift from them (the chip two-truths bug,
               d941183af/d97fb06fd, was exactly this shape). */}
-          {agent.alive && (
-            <span
-              className={clsx(
-                'flex items-center gap-1 text-[10px] font-medium',
-                STATE_STYLE[normalizeAgentState(agent.status)].text,
-              )}
-            >
-              <span
-                className={clsx(
-                  'w-1.5 h-1.5 rounded-full',
-                  STATE_STYLE[normalizeAgentState(agent.status)].dot,
-                )}
-              />
-              {STATE_STYLE[normalizeAgentState(agent.status)].label}
-            </span>
-          )}
+          {agent.alive && (() => {
+
+            // Through the SHARED function, not STATE_STYLE directly: with the feed dead this card
+
+            // said "idle · at prompt" in green for 45s during the live port proof.
+
+            const st = styleForAgentState(feed, STATE_STYLE[normalizeAgentState(agent.status)]);
+
+            return (
+
+              <span className={clsx('flex items-center gap-1 text-[10px] font-medium', st.text)}>
+
+                <span className={clsx('w-1.5 h-1.5 rounded-full', st.dot)} />
+
+                {st.label}
+
+              </span>
+
+            );
+
+          })()}
         </div>
         <p className={clsx('text-sm mt-0.5 leading-snug', truncatedTask ? 'text-neutral-300' : 'text-neutral-600')}>
           {/* was 'Idle' — which reads as a STATE and now sits next to a state

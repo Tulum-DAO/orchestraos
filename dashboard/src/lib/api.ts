@@ -6,8 +6,14 @@ function handleAuthError(res: Response, path: string) {
   }
 }
 
+/**
+ * A READ MUST NOT HANG FOREVER. Found by the LIVE port proof: with the API timing out rather than
+ * refusing, a GET never settles, react-query will not start a second fetch while one is in
+ * flight, and the dashboard stays wedged in STALE even after the API comes back — it only
+ * recovers on a manual reload. A bounded read means the next poll can always run.
+ */
 async function get<T = any>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`);
+  const res = await fetch(`${BASE}${path}`, { signal: AbortSignal.timeout(12_000) });
   if (!res.ok) { handleAuthError(res, path); throw new Error(`API ${path}: ${res.status}`); }
   return res.json();
 }

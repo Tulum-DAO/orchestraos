@@ -73,3 +73,18 @@ export function staleStyleFor(verdict: FeedVerdict): { dot: string; label: strin
       : `stale · ${lastSeenLabel(verdict.lastSeenAt)}`,
   };
 }
+
+/**
+ * The style for an agent's state, with the staleness override applied. EVERY surface that paints
+ * agent state calls this — chip, canonical dot, card, chat pill. Reading STATE_STYLE directly is
+ * how the P1 survived its own first fix: three surfaces had been taught the rule by their call
+ * sites and a fourth, inline in AgentCard, had not. Found by the LIVE port proof, where the
+ * /agents page still read "35 healthy" with the API dead for 45 seconds.
+ */
+export function styleForAgentState(
+  feed: FeedVerdict | undefined,
+  base: { label: string; dot: string; text: string },
+): { label: string; dot: string; text: string } {
+  const stale = feed && staleStyleFor(feed);
+  return stale ? { ...base, ...stale, text: 'text-neutral-400' } : base;
+}
