@@ -481,8 +481,62 @@ export function sanitizeClaudeUserText(text: string): string {
   return t.trim();
 }
 
+/**
+ * A message the operator sent WHILE THE AGENT WAS MID-TURN.
+ *
+ * Claude Code does not record one as a user turn. It writes
+ * `{type:'attachment', attachment:{type:'queued_command', prompt, origin, commandMode}}`,
+ * so a renderer that only reads user turns never shows it. Measured on quest-orchestra's
+ * transcript: 12 human prompts, and NOT ONE of them ever became a user turn — Shaw's
+ * "I don't see the most recent message that I sent you". He sends most of his messages
+ * mid-turn, so this hid a large share of what he says, on every surface.
+ *
+ * ONLY A HUMAN PROMPT IS ADMITTED, and that is an ALLOWLIST on purpose. The identical
+ * shape also carries the harness's own `task-notification` envelopes and the empty
+ * `queue-operation` rows; rendering those would put machine chatter in the conversation
+ * as OPERATOR SPEECH, which is the same lie as hiding his message, pointed the other way.
+ * A denylist would admit whatever `origin.kind` is added next.
+ */
+export function queuedCommandItems(o: any): any[] {
+  const a = o?.attachment;
+  if (!a || a.type !== 'queued_command') return [];
+  const originKind = a.origin?.kind;
+  // The legacy clause: builds predating `origin` label a human prompt only by commandMode.
+  const isHuman = originKind === 'human' || (originKind == null && a.commandMode === 'prompt');
+  if (!isHuman) return [];
+  const text = sanitizeClaudeUserText(String(a.prompt || ''));
+  if (!text) return [];
+  // `queued` flows through buildRenderItems to the client, which can say "sent while the
+  // agent was working" rather than presenting it as an ordinary turn.
+  return [{ kind: 'text', role: 'user', text, ts: o.timestamp, uuid: o.uuid, queued: true }];
+}
+
+/**
+ * Drop a queued message that the log ALSO recorded as a real user turn.
+ *
+ * Whether it does is not consistent and cannot be assumed either way: on one seat the same
+ * text appeared as a queue-operation row, as the attachment, AND as a user turn ~1300 lines
+ * later when the turn finally consumed it; on another, 12 of 12 never appeared at all. So
+ * rendering the attachment unconditionally double-shows some messages, and dropping it
+ * unconditionally loses others. The real turn wins where both exist, because it carries the
+ * harness's own content and position.
+ */
+export function dedupeQueuedCommands(items: any[]): any[] {
+  const realUserText = new Set<string>();
+  for (const it of items) {
+    if (it.kind === 'text' && it.role === 'user' && !it.queued) {
+      const t = (it.text || '').trim();
+      if (t) realUserText.add(t);
+    }
+  }
+  if (!realUserText.size) return items;
+  return items.filter((it) => !(it.queued && it.kind === 'text' && realUserText.has((it.text || '').trim())));
+}
+
 function normalizeClaudeEntry(o: any): any[] {
   const t = o?.type;
+  // A mid-turn message is an `attachment`, not a user turn — see queuedCommandItems.
+  if (t === 'attachment') return queuedCommandItems(o);
   if (t !== 'user' && t !== 'assistant') return [];
   if (o.isSidechain === true || o.isCompactSummary === true) return [];
   const msg = o.message || {};
@@ -854,6 +908,9 @@ export function normalizeTranscript(
       if (!line.trim()) continue;
       try { items.push(...normalizeClaudeEntry(JSON.parse(line))); } catch { /* skip bad line */ }
     }
+    // Whole-file pass: a queued message the log later recorded as a real user turn must
+    // show ONCE, and the real turn is the one that wins.
+    items = dedupeQueuedCommands(items);
   }
   let windowed = enrichItems(items).slice(-limit);
   // queued-native-render (P1): merge still-pending phone/watch held turns (B1) +
