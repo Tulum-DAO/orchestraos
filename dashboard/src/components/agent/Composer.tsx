@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { withTimeout, sendFailureNote } from '../../lib/composerSend';
 import { useLocation } from 'react-router-dom';
 import { useAgentSettings } from '../../stores/agentSettings';
 import { useModelSelection } from '../../stores/modelSelection';
@@ -52,12 +53,8 @@ export function Composer({ agentId = 'gm', seatName }: ComposerProps) {
     // and sends failed with nothing on screen explaining why). Returning ok:false keeps the
     // draft AND the attachment where the operator left them; throwing would too, but the note
     // would be a stack-shaped 'Error: Failed to fetch' instead of a sentence.
-    // A HUNG API never rejects on its own: the socket stays open and the promise never settles,
-    // so the composer spins forever and the operator learns nothing. Measured against a
-    // SIGSTOPped API. 15s is well past a slow-but-working send and well short of giving up on
-    // the person waiting.
-    const withTimeout = <T,>(pr: Promise<T>, ms = 15_000): Promise<T> =>
-      Promise.race([pr, new Promise<T>((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
+    // Timeout semantics live in lib/composerSend.ts, with their reasoning and their tests.
+    // The short version: a timeout is an UNKNOWN outcome, not a failure.
     try {
       const uploaded = attachments.length
         ? await withTimeout(Promise.all(attachments.map(uploadAttachment)))
@@ -69,10 +66,14 @@ export function Composer({ agentId = 'gm', seatName }: ComposerProps) {
         queued: isQueued(result),
         held: isHeld(result) || isComposerHold(result),
       };
-    } catch {
+    } catch (err) {
+      // Do NOT claim "nothing was sent" on a timeout. The race settles OUR promise; the
+      // request is still in flight and the server may well deliver it. Saying it failed is
+      // what makes the operator send again, which is how the agent gets the same
+      // instruction twice.
       return {
         ok: false,
-        note: "Can't reach the server — nothing was sent. Your message and photo are still here.",
+        note: sendFailureNote(err),
         queued: false,
         held: false,
       };

@@ -4,7 +4,7 @@ import { feedHealthOf } from './feedLiveness.ts';
 
 // The CONTRACT the status line must keep, asserted on the inputs that decide it. The component
 // is JSX; these pin the decisions it makes, which is where Shaw's "the page lies" bug lived.
-import { normalizeAgentState } from './agentStatus.ts';
+import { normalizeAgentState, offersResume } from './agentStatus.ts';
 
 const NOW = 1_700_000_000_000;
 const liveFeed = feedHealthOf({ dataUpdatedAt: NOW, hasData: true, now: NOW });
@@ -30,5 +30,30 @@ test('a stopped agent is not idle: the two mean opposite things to a sender', ()
   assert.notEqual(normalizeAgentState('stopped'), normalizeAgentState('idle'));
   for (const down of ['stopped', 'crashed', 'offline', 'retired']) {
     assert.notEqual(normalizeAgentState(down), 'idle', `${down} normalised to idle`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// offersResume — a retired seat must not be offered resurrection.
+// ---------------------------------------------------------------------------
+
+test('Resume is offered for the three states that mean something FAILED', () => {
+  for (const s of ['stopped', 'crashed', 'offline']) {
+    assert.equal(offersResume(s), true, `${s} should offer Resume`);
+  }
+});
+
+test('Resume is NOT offered for a RETIRED seat', () => {
+  // retired = the intentionally-decommissioned `seat-gN` row every lineage rotation leaves
+  // behind. Resuming it would put a generation somebody deliberately ended back on the fleet,
+  // which is a different act from restarting something that fell over.
+  assert.equal(offersResume('retired'), false);
+});
+
+test('Resume is NOT offered to a healthy or busy seat', () => {
+  // Positive control in the other direction: the rule must distinguish, not just exclude one
+  // value. A working agent is reachable and needs no restart.
+  for (const s of ['idle', 'working', 'thinking', 'waiting', 'stranded', 'stalled', undefined]) {
+    assert.equal(offersResume(s), false, `${s} should not offer Resume`);
   }
 });

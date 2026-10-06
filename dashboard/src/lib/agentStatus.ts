@@ -63,3 +63,16 @@ export const STATE_STYLE: Record<LiveState, { label: string; dot: string; text: 
   retired:  { label: 'retired',          dot: 'bg-neutral-700',             text: 'text-neutral-600' },
   unknown:  { label: '—',                dot: 'bg-neutral-600',             text: 'text-neutral-500' },
 };
+
+/**
+ * May the chat surface offer to RESUME a seat in this state?
+ *
+ * Only for states that mean something FAILED. `retired` is not a failure: it is the
+ * intentionally-decommissioned `seat-gN` row that every lineage rotation leaves behind, and
+ * resurrecting one is a different act from restarting something that fell over — it would
+ * put a generation somebody deliberately ended back on the fleet.
+ */
+export function offersResume(state?: string): boolean {
+  const st = normalizeAgentState(state);
+  return st === 'stopped' || st === 'crashed' || st === 'offline';
+}

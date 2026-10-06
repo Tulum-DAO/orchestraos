@@ -10,7 +10,7 @@
  * the two cannot disagree — that was the P1 and it is the same rule here.
  */
 import { Loader2, CircleSlash, HandMetal, WifiOff } from 'lucide-react';
-import { normalizeAgentState, type LiveState } from '../../lib/agentStatus';
+import { normalizeAgentState, type LiveState, offersResume } from '../../lib/agentStatus';
 import { lastSeenLabel, type FeedVerdict } from '../../lib/feedLiveness';
 
 export interface LiveStatusProps {
@@ -73,7 +73,11 @@ export function LiveStatusLine({ state, feed, stateAgeS, tool, onResume }: LiveS
       <div className={`${base} text-neutral-400`} role="status">
         <CircleSlash size={12} className="shrink-0" />
         <span>{why} — it will not see a message until it is running.</span>
-        {onResume && (
+        {/* NOT offered for a RETIRED seat. Retired means intentionally decommissioned — the
+            `seat-gN` row every lineage rotation leaves behind — so "Resume" there would
+            resurrect a generation somebody deliberately ended, which is a different act from
+            restarting something that fell over. The other three states are failures. */}
+        {onResume && offersResume(st) && (
           <button type="button" onClick={onResume}
             className="ml-auto px-2 py-0.5 rounded border border-neutral-700 text-neutral-200 hover:bg-neutral-800">
             Resume

@@ -14,6 +14,7 @@ import { useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { useAgents } from '../../hooks/useAgents';
 import { groupForRail, providersVary, PROVIDER_ABBR, PROVIDER_LABEL, type RailAgent, type RailGroups } from '../../lib/agentRail';
+import { agentRowsFrom } from '../../lib/api';
 import { chipStateFor, ActivityDot } from '../RecentAgentChips';
 import { useFeedHealth } from '../../hooks/useFeedHealth';
 import { lastSeenLabel, type FeedVerdict } from '../../lib/feedLiveness';
@@ -67,7 +68,9 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
   const [showOther, setShowOther] = useState(false);
 
   const groups = useMemo(() => {
-    const rows: RailAgent[] = (data?.agents ?? []).map((a: Record<string, unknown>) => ({
+    // Tolerates BOTH response shapes via the one shared helper — this file used to accept
+    // only `{agents:[...]}` and rendered three empty sections on a bare array.
+    const rows: RailAgent[] = (agentRowsFrom(data) ?? []).map((a: Record<string, unknown>) => ({
       id: String(a.id),
       name: a.name as string | undefined,
       status: a.status as string | undefined,

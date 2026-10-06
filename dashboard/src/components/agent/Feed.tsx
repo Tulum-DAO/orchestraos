@@ -1,4 +1,5 @@
 import TranscriptChatView from '../chat/TranscriptChatView';
+import { agentRowsFrom } from '../../lib/api';
 import { useAgents } from '../../hooks/useAgents';
 import { useFeedHealth } from '../../hooks/useFeedHealth';
 
@@ -15,7 +16,7 @@ interface FeedProps {
 export function Feed({ agentId = 'gm' }: FeedProps) {
   const { data } = useAgents();
   const feed = useFeedHealth();
-  const rows = (Array.isArray(data) ? data : (data as { agents?: unknown } | undefined)?.agents) as
+  const rows = agentRowsFrom(data) as
     | Array<{ id: string; status?: string; stranded?: unknown; pending_menu?: unknown }>
     | undefined;
   const row = Array.isArray(rows) ? rows.find((a) => a.id === agentId) : undefined;
