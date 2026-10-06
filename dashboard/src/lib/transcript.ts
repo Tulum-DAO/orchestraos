@@ -29,6 +29,8 @@ export interface ToolBlock {
   result?: string;
   isError?: boolean;
   ts?: string;
+  /** When the paired tool_result arrived; the call's own `ts` is when it STARTED. */
+  resultTs?: string;
   key: string;
 }
 
@@ -48,10 +50,10 @@ export type RenderNode =
  */
 export function buildRenderList(items: ChatItem[]): RenderNode[] {
   // index results by tool_use_id
-  const resultById = new Map<string, { text: string; isError: boolean }>();
+  const resultById = new Map<string, { text: string; isError: boolean; ts?: string }>();
   for (const it of items) {
     if (it.kind === 'tool_result' && it.tool_use_id) {
-      resultById.set(it.tool_use_id, { text: it.text, isError: !!it.is_error });
+      resultById.set(it.tool_use_id, { text: it.text, isError: !!it.is_error, ts: it.ts });
     }
   }
 
@@ -102,6 +104,7 @@ export function buildRenderList(items: ChatItem[]): RenderNode[] {
         result: paired?.text,
         isError: paired?.isError,
         ts: it.ts,
+        ...(paired?.ts ? { resultTs: paired.ts } : {}),
         key,
       });
       continue;

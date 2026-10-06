@@ -11,7 +11,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { buildRenderList, fetchTranscript, type ChatItem } from '../../lib/transcript';
 import { subscribeTranscriptStream } from '../../lib/transcriptStream';
-import { RenderNodeView } from './TranscriptCards';
+import { GroupedNodeView } from './TranscriptCards';
+import { groupToolRuns, isInterrupted } from '../../lib/toolGroups';
 import { normalizeAgentState, STATE_STYLE, type LiveState } from '../../lib/agentStatus';
 import OptionsMenuCard, { type PendingMenu } from './OptionsMenuCard';
 
@@ -102,7 +103,10 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
     };
   }, [agentId, fixtureItems]);
 
-  const nodes = useMemo(() => buildRenderList(items), [items]);
+  const flat = useMemo(() => buildRenderList(items), [items]);
+  // Folding consecutive tool calls (C3) means a new call can join an existing group without
+  // changing the number of rendered nodes, so autoscroll keys on the UNGROUPED count below.
+  const nodes = useMemo(() => groupToolRuns(flat), [flat]);
   const st = normalizeAgentState(state);
 
   // autoscroll if pinned to bottom
@@ -114,7 +118,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   useEffect(() => {
     const el = scrollRef.current;
     if (el && atBottom.current) el.scrollTop = el.scrollHeight;
-  }, [nodes.length]);
+  }, [flat.length]);
 
   return (
     <div className={compact ? 'space-y-2' : 'flex flex-col flex-1 min-h-0'}>
@@ -136,7 +140,9 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
         ) : nodes.length === 0 ? (
           <span className="text-xs text-neutral-600">{err ? `No transcript (${err})` : 'No messages yet'}</span>
         ) : (
-          nodes.map((n) => <RenderNodeView key={n.key} node={n} />)
+          nodes.map((n, i) => (
+            <GroupedNodeView key={n.key} node={n} interrupted={isInterrupted({ isLast: i === nodes.length - 1, state: st })} />
+          ))
         )}
 
         {/* live decision menu (detector pending_menu) — answerable below the last
