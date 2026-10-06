@@ -18,8 +18,17 @@
  *     durable write + {state:'held'} (explicitly blocked on a prompt).
  *   - any other non-composer busy/unreachable case -> durable write +
  *     {state:'queued'} (ordinary backlog, no visible blocker).
- * A mid-turn 'working' busy is auto-converted to a durable hold BY THE GATEWAY
- * ITSELF (accepts:['held'] on the /agent-message call) -> {state:'held'}.
+ * A MID-TURN 'working' SEAT IS NO LONGER HELD — it is INJECTED. Claude Code queues a
+ * message natively while a turn is running and surfaces it inside that turn, so holding one
+ * made a reachable agent unreachable from chat: the CLI sat there accepting the very message
+ * the dashboard refused to send. The gateway now gates on whether the composer ACCEPTS INPUT
+ * rather than on state (live gateway 6f993183d2; the web half is lib/composerGate.ts).
+ * Measured end-to-end 2026-10-06 against a seat that was mid-turn WITH a sub-agent running:
+ * {state:'delivered', attempts:1}, and it arrived inside that seat's running turn.
+ * `accepts:['held']` below is still correct and still load-bearing: the gateway holds for the
+ * cases where a keystroke would do damage or nothing at all — a menu or permission prompt on
+ * screen, or a pane that is not running. Control, same day: an offline seat answered
+ * {state:'queued'}, i.e. durable, NOT injected.
  *
  * D4 (composer-hold): when the pane has the operator's own unsubmitted typed text, or
  * a stranded_input state, this is NOT a queue-and-forget case — it is the
@@ -151,8 +160,9 @@ async function realGatewayInject(session: string, text: string): Promise<Gateway
     const resp = await fetch(`${GATEWAY_URL}/agent-message`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      // accepts:['held'] lets the gateway itself durable-hold a pure mid-turn
-      // 'working' busy (D1/D2) rather than 409-ing it back to us.
+      // accepts:['held'] lets the gateway durable-hold the cases it must — a menu or
+      // permission prompt on screen, or a pane that is not running — rather than 409-ing
+      // them back to us. It no longer holds a plain mid-turn 'working' seat: that injects.
       body: JSON.stringify({ session, text, accepts: ['held'] }),
       signal: AbortSignal.timeout(25000),
     });
@@ -287,7 +297,8 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
     return;
   }
 
-  // Gateway itself durable-held a pure mid-turn 'working' busy (accepts:['held']).
+  // Gateway durable-held it (accepts:['held']). NOT a plain mid-turn seat any more — those
+  // inject — but a pane that genuinely cannot take a keystroke right now.
   if (gw.ok && gw.held) {
     res.status(200).json(shape('held', { message_id: gw.message_id, reason: 'busy_working' }));
     return;
