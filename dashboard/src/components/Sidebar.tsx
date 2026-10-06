@@ -130,9 +130,15 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
     <aside className="w-60 border-r border-neutral-800 h-full max-h-screen flex flex-col bg-neutral-950 overflow-hidden" onClick={onNavigate}>
       <div className="p-5 border-b border-neutral-800 shrink-0">
         <h1 className="text-lg font-bold tracking-tight text-white">orchestraOS</h1>
-        <p className="text-xs text-neutral-500 mt-0.5">
-          {isAdmin ? 'agent command center' : `${username}'s workspace`}
-        </p>
+        {/* The subtitle appears only when it SAYS something. "agent command center" was a
+            tagline under the product's own name: constant on every screen, for every admin,
+            forever — so it carried no information and spent the top of the nav column, the
+            one place the agent rail is short of, to carry none. The operator variant is
+            different in kind: it names WHOSE workspace this is, which is a fact that varies
+            and can be got wrong, so it stays. Same rule as the runtime badge and the siren. */}
+        {!isAdmin && (
+          <p className="text-xs text-neutral-500 mt-0.5">{`${username}'s workspace`}</p>
+        )}
       </div>
       {/* ONE column, agents first (PLAN C7). The rail used to be a SECOND column beside this one
           on the agent page, which read as two menus; it now lives here and the page has none. */}
