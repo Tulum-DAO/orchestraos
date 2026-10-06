@@ -287,13 +287,32 @@ def execute_tmux_repin(canonical, alias, successor_sid, armed=False):
         return {"executed": False}
         
     try:
-        chk = subprocess.run(["tmux", "has-session", "-t", f"={canonical}"], capture_output=True)
-        if chk.returncode == 0:
-            subprocess.run(["tmux", "kill-session", "-t", f"={canonical}"], capture_output=True)
-            
-        chk_alias = subprocess.run(["tmux", "has-session", "-t", f"={alias}"], capture_output=True)
-        if chk_alias.returncode == 0:
-            subprocess.run(["tmux", "rename-session", "-t", f"={alias}", canonical], capture_output=True)
+        # CONDITIONAL kill, for the same reason as `complete.py`'s retire consolidation: an
+        # EXACT kill is not enough on its own. If the alias has ALREADY been renamed onto the
+        # canonical name, then the canonical name IS the promoted successor, and killing it
+        # destroys exactly what this repin exists to install. #180 fixed the targets here but
+        # left the unconditional shape standing; this closes it.
+        #
+        # ALIAS PRESENCE is the signal, NOT pane-pid equality between the two names: a renamed
+        # session stops answering to its old name (measured -- after `rename-session -t =alias
+        # canonical`, `display-message -t =alias:0.0` returns EMPTY and `has-session -t =alias`
+        # returns rc 1), and two distinct live sessions never share a window-0 pane pid, so a
+        # pid comparison is unsatisfiable and silently degrades to "always kill".
+        canonical_held = subprocess.run(
+            ["tmux", "has-session", "-t", f"={canonical}"], capture_output=True).returncode == 0
+        alias_present = subprocess.run(
+            ["tmux", "has-session", "-t", f"={alias}"], capture_output=True).returncode == 0
+
+        if canonical_held and not alias_present:
+            pass            # already repinned: the canonical name is the successor. NO-OP.
+        else:
+            if canonical_held and alias_present:
+                # a STRANGER holds the name while the alias still exists separately -> free it
+                subprocess.run(["tmux", "kill-session", "-t", f"={canonical}"],
+                               capture_output=True)
+            if alias_present:
+                subprocess.run(["tmux", "rename-session", "-t", f"={alias}", canonical],
+                               capture_output=True)
             
         # Verify repin
         verify_chk = subprocess.run(["tmux", "has-session", "-t", f"={canonical}"], capture_output=True)
