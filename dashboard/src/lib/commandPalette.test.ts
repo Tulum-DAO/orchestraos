@@ -104,8 +104,10 @@ test('an empty query offers everything, in order', () => {
 });
 
 test('all three tiers are ordered: prefix, then word-start, then substring', () => {
-  // Every one of these matches 'q'. Only the RANKING separates them, so the assertion fails
-  // if any tier is removed or reordered — unlike asserting the identity of a sole survivor.
+  // Every one of these matches 'q', so only the RANKING separates them — unlike asserting the
+  // identity of a sole survivor, which holds for any score() returning a positive number.
+  // Precisely: this goes RED if the PREFIX or the SUBSTRING tier is removed. Removing the
+  // WORD-START tier leaves this order unchanged; the test below is the one that covers it.
   const out = filterEntries(entries, 'q');
   assert.deepEqual(out.map((e) => e.id), ['quest-orchestra', 'deploy-q', 'sqa-runner']);
 });
@@ -164,6 +166,19 @@ test('WebTerminal actually carries the attribute the terminal refusal looks for'
   const src = readFileSync(new URL('../components/WebTerminal.tsx', import.meta.url), 'utf-8');
   assert.match(src, /data-terminal/,
     'WebTerminal lost data-terminal — the palette\'s terminal refusal is now dead code');
+});
+
+test('the component actually PASSES the platform to the chord test', async () => {
+  // Same class as the data-terminal pair below, and the same reason: isPaletteChord's isMac
+  // branch is proven against a fixture, which proves the RULE and not the WIRING. If
+  // CommandPalette stops passing isMac, every unit test here stays green while Ctrl-K silently
+  // starts eating kill-to-end-of-line on every Mac again. Pin it where it can break silently.
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../components/CommandPalette.tsx', import.meta.url), 'utf-8');
+  assert.match(src, /isMac:\s*IS_MAC/,
+    'CommandPalette stopped passing isMac — the Mac Ctrl-K refusal is now dead code');
+  assert.match(src, /navigator/,
+    'IS_MAC no longer derives from the platform at all');
 });
 
 test('the palette looks for that same attribute', async () => {
