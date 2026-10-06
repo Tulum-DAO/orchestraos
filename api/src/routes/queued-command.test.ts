@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { queuedCommandItems, dedupeQueuedCommands } from './chat-transcript.js';
+import { queuedCommandItems, dedupeQueuedCommands, dropQueuedCommandsCoveredByBatches } from './chat-transcript.js';
 
 /**
  * Mid-turn messages. Claude Code records a message sent while the agent is busy as
@@ -102,4 +102,58 @@ test('dedupe does not confuse an ASSISTANT echo for a real user turn', () => {
     { kind: 'text', role: 'assistant', text: 'ship it' },
   ];
   assert.equal(dedupeQueuedCommands(items).length, 2, 'an assistant repeating the words is not the operator saying them');
+});
+
+// ---------------------------------------------------------------------------
+// An agent message delivered mid-turn exists TWICE — as a msg_store batch and as
+// a queued_command the gateway typed into the pane.
+// ---------------------------------------------------------------------------
+
+test('a queued_command the batches already render is dropped', () => {
+  // Measured on quest-orchestra: 14 human-origin queued_commands, exactly ONE of them
+  // ('[HUMAN-TASK apr_...]') also a msg_store row. Without this it shows twice.
+  const text = '[HUMAN-TASK apr_e9884f83_31899096] Shaw completed: Allow USB debugging on the headset';
+  const items = [
+    { kind: 'queued_batch', count: 1, entries: [{ agent: 'approval-loop', sent_ts: 't', body: text }] },
+    { kind: 'text', role: 'user', text, queued: true },
+  ];
+  const out = dropQueuedCommandsCoveredByBatches(items);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].kind, 'queued_batch', 'the BATCH wins — it knows which agent sent it');
+});
+
+test('it matches even though the gateway WRAPS the body when it types it in', () => {
+  const body = 'Please review the rotation plan and confirm the arming band before the next beat';
+  const items = [
+    { kind: 'queued_batch', count: 1, entries: [{ agent: 'gm', sent_ts: 't', body }] },
+    { kind: 'text', role: 'user', queued: true, text: `[MSG from gm | high] (sent 0m ago) ${body} — Read /tmp/x.md and act on it.` },
+  ];
+  assert.equal(dropQueuedCommandsCoveredByBatches(items).length, 1);
+});
+
+test("SHAW's own message is NOT dropped — the control that matters most", () => {
+  // Dropping one of Shaw's messages because it shares an opening with an agent's is far
+  // worse than showing an agent's twice. This is the whole reason the change exists.
+  const items = [
+    { kind: 'queued_batch', count: 1, entries: [{ agent: 'gm', sent_ts: 't', body: 'rotate the fleet and report the arming band back to me' }] },
+    { kind: 'text', role: 'user', queued: true, text: "Switching to wall from tablet soft crashed the app, and the board never came back" },
+  ];
+  const out = dropQueuedCommandsCoveredByBatches(items);
+  assert.equal(out.length, 2, "Shaw's message was swallowed by an unrelated batch");
+});
+
+test('a SHORT queued message is never matched loosely', () => {
+  // Below the prefix floor a match is not distinctive, so the message is kept.
+  const items = [
+    { kind: 'queued_batch', count: 1, entries: [{ agent: 'gm', sent_ts: 't', body: 'ok' }] },
+    { kind: 'text', role: 'user', queued: true, text: 'ok' },
+  ];
+  assert.equal(dropQueuedCommandsCoveredByBatches(items).length, 2);
+});
+
+test('with no batches present nothing is dropped', () => {
+  // The SSE lane never merges batches, so every queued_command must survive there —
+  // otherwise the message is lost on that lane entirely.
+  const items = [{ kind: 'text', role: 'user', queued: true, text: 'a'.repeat(60) }];
+  assert.equal(dropQueuedCommandsCoveredByBatches(items).length, 1);
 });

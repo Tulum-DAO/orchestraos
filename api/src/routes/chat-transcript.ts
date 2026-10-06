@@ -512,6 +512,44 @@ export function queuedCommandItems(o: any): any[] {
 }
 
 /**
+ * Drop a queued_command the msg_store batches ALREADY render.
+ *
+ * An agent-to-agent message delivered mid-turn exists TWICE: the gateway types it into the
+ * pane, so Claude Code logs a `queued_command` for it, AND msg_store has the row, which
+ * `mergeQueuedItems` renders as a `queued_batch`. Measured on quest-orchestra: 14 human-origin
+ * queued_commands, and exactly ONE of them — a `[HUMAN-TASK apr_...]` row — is also a
+ * msg_store message. Without this it shows twice.
+ *
+ * The BATCH wins, because it carries attribution: it knows which agent sent it and when,
+ * while the queued_command has only the text the gateway typed.
+ *
+ * Matching is by containment on a substantial prefix, not equality, because the gateway WRAPS
+ * the body when it types it in. A short text is skipped rather than matched loosely — dropping
+ * one of Shaw's messages because it shares an opening with an agent's is far worse than
+ * showing an agent's twice.
+ */
+export function dropQueuedCommandsCoveredByBatches(items: any[]): any[] {
+  const bodies: string[] = [];
+  for (const it of items) {
+    if (it?.kind === 'queued_batch') {
+      for (const e of it.entries || []) {
+        const b = String(e?.body || '').trim();
+        if (b) bodies.push(b);
+      }
+    }
+  }
+  if (!bodies.length) return items;
+  const MIN = 40; // below this a prefix is not distinctive enough to act on
+  return items.filter((it) => {
+    if (!it?.queued || it.kind !== 'text') return true;
+    const t = String(it.text || '').trim();
+    if (t.length < MIN) return true;
+    const head = t.slice(0, MIN);
+    return !bodies.some((b) => b.includes(head) || t.includes(b.slice(0, MIN)));
+  });
+}
+
+/**
  * Drop a queued message that the log ALSO recorded as a real user turn.
  *
  * Whether it does is not consistent and cannot be assumed either way: on one seat the same
@@ -917,7 +955,12 @@ export function normalizeTranscript(
   // processed-batch divs (B2) from msg_store, interleaved by ts. POLL-ONLY —
   // the SSE tailer never sets includeQueued, so its monotonic-append delta stays
   // free of the ephemeral B1 synthetics (§3e/A1). Fail-open inside mergeQueuedItems.
-  if (includeQueued) windowed = mergeQueuedItems(windowed, agentId);
+  if (includeQueued) {
+    windowed = mergeQueuedItems(windowed, agentId);
+    // An agent message delivered mid-turn exists as BOTH a batch row and a queued_command.
+    // The batch wins: it knows who sent it.
+    windowed = dropQueuedCommandsCoveredByBatches(windowed);
+  }
   return {
     agent_id: agentId,
     session_id: sessionId,
