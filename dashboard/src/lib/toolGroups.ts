@@ -19,14 +19,17 @@ export interface WorkItem {
   /** The file the call touched, when the source knows it. Arturo's stream does not. */
   path?: string;
   status: ToolStatus;
+  /** When the call started. */
   ts?: string;
+  /** When its result came back, when the source knows it. */
+  endTs?: string;
 }
 
 export interface TurnSummary {
   headline: string;
   failed: number;
   running: number;
-  /** First-to-last timestamp span. Absent unless at least two timestamps parse. */
+  /** Earliest start to latest result. Absent unless at least two instants parse. */
   durationMs?: number;
 }
 
@@ -61,8 +64,10 @@ function distinctFiles(items: WorkItem[]): number {
 }
 
 function spanMs(items: WorkItem[]): number | undefined {
+  // Starts AND ends: ending at the last call's START would drop that call's own runtime.
   const times = items
-    .map((it) => (it.ts ? Date.parse(it.ts) : NaN))
+    .flatMap((it) => [it.ts, it.endTs])
+    .map((t) => (t ? Date.parse(t) : NaN))
     .filter((t) => !Number.isNaN(t));
   if (times.length < 2) return undefined;
   return Math.max(...times) - Math.min(...times);
@@ -139,6 +144,7 @@ export function fromToolBlock(b: ToolBlock): WorkItem {
   };
   if (typeof raw === 'string' && raw) item.path = raw;
   if (b.ts) item.ts = b.ts;
+  if (b.resultTs) item.endTs = b.resultTs;
   return item;
 }
 

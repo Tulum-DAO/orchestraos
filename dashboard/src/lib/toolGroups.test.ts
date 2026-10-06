@@ -13,7 +13,7 @@ import {
   summarizeTurn, formatDuration, groupToolRuns, fromToolBlock, fromToolPart,
   type WorkItem,
 } from './toolGroups.js';
-import type { RenderNode, ToolBlock } from './transcript.js';
+import { buildRenderList, type ChatItem, type RenderNode, type ToolBlock } from './transcript.js';
 import type { ToolPart } from './turnParts.js';
 
 const ok = (tool: string, path?: string, ts?: string): WorkItem => ({ tool, path, status: 'ok', ts });
@@ -173,4 +173,38 @@ test('the group key is stable and derived from its first child (React reconcilia
   const a = groupToolRuns([tool('t1'), tool('t2')]);
   const b = groupToolRuns([tool('t1'), tool('t2'), tool('t3')]);
   assert.equal(a[0].key, b[0].key);
+});
+
+// ---- duration runs to when the LAST RESULT came back, not when the last call started -----
+// Found by screenshot: a turn whose final call was an 8s test run read "Worked for 57s", not
+// 1m 8s, because only call-start times were known. A long final command (a 10-minute test
+// suite) would have vanished from "Worked for" entirely.
+
+test('duration ends at the last result, not the last call start', () => {
+  const s = summarizeTurn([
+    { tool: 'Read', status: 'ok', ts: '2026-10-06T05:00:00Z', endTs: '2026-10-06T05:00:01Z' },
+    { tool: 'Bash', status: 'ok', ts: '2026-10-06T05:01:00Z', endTs: '2026-10-06T05:01:08Z' },
+  ]);
+  assert.equal(s.durationMs, 68_000);
+});
+
+test('a lone call with a start and an end gives that call\'s duration', () => {
+  const s = summarizeTurn([{ tool: 'Bash', status: 'ok', ts: '2026-10-06T05:00:00Z', endTs: '2026-10-06T05:00:10Z' }]);
+  assert.equal(s.durationMs, 10_000);
+});
+
+test('the transcript adapter carries the result time as endTs', () => {
+  const b: ToolBlock = { kind: 'tool', tool: 'Bash', input: {}, result: 'ok', ts: 'a', resultTs: 'b', key: 'k' };
+  assert.equal(fromToolBlock(b).endTs, 'b');
+});
+
+test('buildRenderList pairs the result TIME onto its call, not only its text', () => {
+  const items = [
+    { kind: 'tool_use', id: 'T1', tool: 'Bash', input: { command: 'npm test' }, ts: '2026-10-06T05:01:00Z', key: 'c1' },
+    { kind: 'tool_result', tool_use_id: 'T1', text: 'PASS', is_error: false, ts: '2026-10-06T05:01:08Z', key: 'r1' },
+  ] as unknown as ChatItem[];
+  const [node] = buildRenderList(items);
+  assert.ok(node.kind === 'tool');
+  assert.equal(node.ts, '2026-10-06T05:01:00Z');
+  assert.equal(node.resultTs, '2026-10-06T05:01:08Z');
 });
