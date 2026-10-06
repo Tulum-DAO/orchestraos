@@ -306,6 +306,11 @@ export default function WebTerminal({ session, machine }: WebTerminalProps) {
   return (
     <div
       ref={containerRef}
+      // A TEXT SINK: every keystroke in here belongs to the terminal. The command palette
+      // looks for this attribute and refuses to open on Cmd-K while focus is inside, because
+      // a terminal that silently loses a keystroke to a UI overlay is a worse bug than having
+      // no palette. Without the attribute that refusal is dead code.
+      data-terminal="true"
       className="w-full h-full bg-black overscroll-contain"
       style={{ minHeight: '200px', padding: 0, margin: 0 }}
     />
