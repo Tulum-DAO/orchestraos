@@ -157,6 +157,13 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     # It is also load-bearing: quest-orchestra hydrates multi-part menus through it on a
     # read+approve+message headset, which is Shaw's top Quest priority.
     ("POST", "/agent-menu-capture"): "approve",
+    # Answer the in-agent menu ON SCREEN by its digit, without waiting for the menu bridge's
+    # card (Shaw 2026-10-05: "if we see the menu, tapping an option should just send it").
+    # Safe at `approve` for the same reason a card answer is: the gateway RE-READS the pane and
+    # presses only a single digit that is a direct option of the single-part, non-permission,
+    # non-ambiguous menu the device says it saw (exact options, question containment). Anything
+    # else presses ZERO keys. Pinned by test_menu_answer_live.py; one decision with menu_answer_live.
+    ("POST", "/menu-answer"): "approve",
     # --- message ---------------------------------------------------------------------
     ("POST", "/agent-message"): "message",
     ("POST", "/upload"): "message",
@@ -4651,6 +4658,135 @@ async def handle_agent_key(request):
     return _json({"ok": True, "sent": key})
 
 
+# ---------------------------------------------------------------------------
+# POST /menu-answer — answer a LIVE in-agent menu by digit, no card round-trip.
+#
+# The card path (/approval-answers) waits for menu_bridge to mint a row, which lags the
+# on-screen menu by seconds; a device that already SEES the menu (GET /agent-screen) had to
+# wait for it. This answers the pane directly, under `approve`, with the card path's own
+# sender (menu_resume_keypress: digit + Enter for Claude Code, verified resolved).
+#
+# The device's `expect` block is the thing CHECKED, never the source of truth: the gateway
+# re-reads the pane and refuses unless what is there is exactly what the device showed.
+# Every refusal presses ZERO keys. Deliberately narrower than a card answer:
+#   - single digit 1-9 only (shape gate before anything; never a key NAME — #173)
+#   - kind=='permission' refused: its only transport is /agent-key (menu_bridge_core)
+#   - ambiguous_options refused (#174: the digit seen is not the digit that fires)
+#   - multi-part / unhydrated refused: /menu-submit's job, not this route's
+#   - free_text and chat options refused: no text rides this route (v1); answer those on the card
+# ---------------------------------------------------------------------------
+_MENU_ANSWER_N_RE = re.compile(r"\A[1-9]\Z")
+
+
+def _norm_opts(opts):
+    out = []
+    for o in (opts or []):
+        if not isinstance(o, dict):
+            return None
+        out.append((str(o.get("n", "")), _q_norm(str(o.get("label", "")))))
+    return out
+
+
+def menu_answer_live(session, option_n, expect, *, read_fn=None, press_fn=None):
+    """(ok, info). Pure over read_fn/press_fn for hermetic tests.
+
+    read_fn() -> the live pending_menu (or None); press_fn(n, question) -> (ok, info) and is
+    called AT MOST once, only after every check below has passed."""
+    read_fn = read_fn or (lambda: _current_menu(session))
+    press_fn = press_fn or (lambda n, q: menu_resume_keypress(session, n, expect_question=q))
+
+    if isinstance(option_n, bool) or not isinstance(option_n, str) \
+            or not _MENU_ANSWER_N_RE.match(option_n):
+        return False, {"reason": "bad_option_n"}
+    if not isinstance(expect, dict):
+        return False, {"reason": "bad_expect"}
+    want_q = _q_norm(expect.get("question") if isinstance(expect.get("question"), str) else "")
+    want_opts = _norm_opts(expect.get("options"))
+    if not want_q or not want_opts:
+        return False, {"reason": "bad_expect"}
+
+    menu = read_fn()
+    if not isinstance(menu, dict) or not menu.get("options"):
+        return False, {"reason": "menu_gone"}
+    menu = stamp_input_kinds(dict(menu))
+    if menu.get("kind") == "permission":
+        return False, {"reason": "permission_menu"}
+    if menu.get("ambiguous_options"):
+        return False, {"reason": "ambiguous_options"}
+    parts = menu.get("parts") or []
+    if menu.get("needs_hydration") or (menu.get("part_count") or 1) > 1 or len(parts) > 1:
+        return False, {"reason": "multi_part"}
+
+    have_q = _q_norm(menu.get("question"))
+    if not have_q or not (have_q in want_q or want_q in have_q):
+        return False, {"reason": "menu_changed", "why": "question"}
+    if _norm_opts(menu.get("options")) != want_opts:
+        return False, {"reason": "menu_changed", "why": "options"}
+
+    opt = next((o for o in menu["options"] if o.get("n") == option_n), None)
+    if opt is None:
+        return False, {"reason": "option_not_on_menu"}
+    kind = opt.get("input_kind") or "direct"
+    if kind != "direct":
+        return False, {"reason": f"{kind}_option"}   # free_text_option | chat_option
+
+    ok, info = press_fn(option_n, menu.get("question"))
+    return ok, {**(info or {}), "sent": option_n} if ok else dict(info or {})
+
+
+MENU_ANSWER_AUDIT_PATH = os.environ.get(
+    "WATCH_GATEWAY_MENU_ANSWER_AUDIT",
+    str(Path(__file__).resolve().parent.parent / "logs" / "menu-answer-audit.jsonl"))
+
+
+async def handle_menu_answer(request):
+    """POST /menu-answer {session, option_n, expect:{question, options:[{n,label}]}}."""
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        return _json({"ok": False, "error": "bad json"}, status=400)
+    if not isinstance(data, dict):
+        return _json({"ok": False, "error": "bad json"}, status=400)
+    session = data.get("session")
+    if not isinstance(session, str) or session not in _tmux_session_names():
+        return _json({"ok": False, "error": "no such session"}, status=404)
+
+    import asyncio
+    import time as _time
+
+    def _run():
+        with _session_send_lock(session):     # no interleave with walk/suggest/key/answer
+            return menu_answer_live(session, data.get("option_n"), data.get("expect"))
+
+    ok, info = await asyncio.get_event_loop().run_in_executor(None, _run)
+    device = _answer_device(request)
+    try:
+        p = Path(MENU_ANSWER_AUDIT_PATH)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a") as f:
+            f.write(json.dumps({"ts": _time.time(), "session": session,
+                                "option_n": data.get("option_n"), "device": device,
+                                "ok": ok, "reason": info.get("reason")}) + "\n")
+    except OSError:
+        pass
+    if ok:
+        # The pane is answered; clear the bridge's card(s) for it so no surface offers a
+        # second answer to a menu that is gone (same call the verified batch submit makes).
+        try:
+            st = ApprovalStore(); st.migrate()
+            info["cards_resolved"] = st.resolve_pending_menus_for_session(session)
+        except Exception as e:  # noqa: BLE001 — the answer landed; card cleanup is best-effort
+            print(f"[watch_gateway] /menu-answer card resolve failed ({session}): {e}",
+                  file=sys.stderr)
+        return _json({"ok": True, **info})
+    code = {"bad_option_n": 400, "bad_expect": 400, "menu_gone": 409, "menu_changed": 409,
+            "unverified_submit": 502, "send_failed": 502, "no_session": 404}.get(
+                info.get("reason"), 422)
+    return _json({"ok": False, **info}, status=code)
+
+
 async def handle_agent_suggest(request):
     """POST /agent-suggest {session, suggestion_text} — accept the CLI ghost
     suggestion currently in `session`'s composer and submit it (spec §3b).
@@ -5422,6 +5558,7 @@ def build_app():
     app.router.add_post("/agent-key", handle_agent_key)
     app.router.add_post("/agent-suggest", handle_agent_suggest)
     app.router.add_post("/agent-menu-capture", handle_agent_menu_capture)
+    app.router.add_post("/menu-answer", handle_menu_answer)
     app.router.add_get("/agent-screen", handle_agent_screen)
     app.router.add_get("/transcript", handle_transcript)
     app.router.add_post("/upload", handle_upload)
