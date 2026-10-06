@@ -13,7 +13,7 @@
 import { useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { useAgents } from '../../hooks/useAgents';
-import { groupForRail, type RailAgent, type RailGroups } from '../../lib/agentRail';
+import { groupForRail, providersVary, PROVIDER_ABBR, PROVIDER_LABEL, type RailAgent, type RailGroups } from '../../lib/agentRail';
 import { chipStateFor, ActivityDot } from '../RecentAgentChips';
 import { useFeedHealth } from '../../hooks/useFeedHealth';
 import { lastSeenLabel, type FeedVerdict } from '../../lib/feedLiveness';
@@ -24,15 +24,11 @@ const SECTIONS: { key: keyof Omit<RailGroups, 'other'>; label: string; badge?: b
   { key: 'idle', label: 'Idle' },
 ];
 
-/** claude / codex / gemini / antigravity -> a two-letter badge. Unknown runtimes show nothing
- *  rather than a guess: 138 of 320 live rows carry no runtime at all. */
-const PROVIDER_ABBR: Record<string, string> = {
-  claude: 'CL', codex: 'CX', gemini: 'GM', antigravity: 'AG', service: 'SV',
-};
 
-function RailRow({ agent, active, onPick, feed }: { agent: RailAgent; active: boolean; onPick: (id: string) => void; feed: FeedVerdict }) {
+function RailRow({ agent, active, onPick, feed, showProvider }: { agent: RailAgent; active: boolean; onPick: (id: string) => void; feed: FeedVerdict; showProvider: boolean }) {
   const state = chipStateFor(agent.status, !!agent.has_pending_menu, feed);
-  const prov = agent.provider ? PROVIDER_ABBR[agent.provider.toLowerCase()] : undefined;
+  const provKey = agent.provider?.toLowerCase();
+  const prov = showProvider && provKey ? PROVIDER_ABBR[provKey] : undefined;
   const unread = agent.unread ?? 0;
   return (
     <button
@@ -49,7 +45,12 @@ function RailRow({ agent, active, onPick, feed }: { agent: RailAgent; active: bo
       <ActivityDot state={state} />
       <span className="truncate flex-1 min-w-0">{agent.name || agent.id}</span>
       {prov && (
-        <span className="shrink-0 text-[10px] font-medium text-neutral-500 tabular-nums">{prov}</span>
+        <span
+          className="shrink-0 text-[10px] font-medium text-neutral-500 tabular-nums"
+          title={`Runs on ${(provKey && PROVIDER_LABEL[provKey]) || agent.provider}`}
+        >
+          {prov}
+        </span>
       )}
       {unread > 0 && (
         <span className="shrink-0 min-w-4 px-1 rounded-full bg-neutral-700 text-[10px] text-neutral-200 text-center tabular-nums">
@@ -78,6 +79,16 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
     rows.sort((x, y) => (x.name || x.id).localeCompare(y.name || y.id));
     return groupForRail(rows);
   }, [data]);
+
+  // A column that prints the SAME two letters on every row tells the reader nothing and
+  // costs a column of width to do it. The badge earns its place only when it distinguishes
+  // one row from another, so it appears when at least two distinct runtimes are on screen.
+  // A row with no runtime is not a second value: 138 of 320 live rows carry none, and
+  // counting "unknown" as variety would make the badge permanent by accident.
+  const badgesVary = useMemo(
+    () => providersVary([...groups.needsYou, ...groups.working, ...groups.idle, ...groups.other]),
+    [groups],
+  );
 
   // An empty rail and a BROKEN rail must not look the same: a failed feed says so, because
   // "no agents need you" and "we could not ask" are different facts.
@@ -130,7 +141,7 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
             ) : (
               <div className="flex flex-col">
                 {rows.map((a) => (
-                  <RailRow key={a.id} agent={a} active={a.id === currentId} onPick={onPick} feed={feed} />
+                  <RailRow key={a.id} agent={a} active={a.id === currentId} onPick={onPick} feed={feed} showProvider={badgesVary} />
                 ))}
               </div>
             )}
@@ -154,7 +165,7 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
           {showOther && (
             <div className="flex flex-col">
               {groups.other.map((a) => (
-                <RailRow key={a.id} agent={a} active={a.id === currentId} onPick={onPick} feed={feed} />
+                <RailRow key={a.id} agent={a} active={a.id === currentId} onPick={onPick} feed={feed} showProvider={badgesVary} />
               ))}
             </div>
           )}

@@ -57,7 +57,13 @@ export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen, seat }: TopBarPr
         {onReportOpen && (
           <button
             onClick={onReportOpen}
-            className="p-2 text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
+            // NOT permanently red. This is an ACTION the operator can take, not a STATE of the
+            // system: nothing is wrong because the button exists. A red that is always on is
+            // the same defect as a badge that prints the same value on every row — it cannot
+            // distinguish anything, so it stops being read, and then a real alert has no
+            // colour left to use. It wears the alarm colour on hover and focus, at the moment
+            // it is actually about to be used.
+            className="p-2 text-foreground hover:text-red-400 hover:bg-red-500/10 focus-visible:text-red-400 rounded-lg transition-colors"
             aria-label="Report a problem"
             title="Report a crash, bug, improvement or suggestion"
           >

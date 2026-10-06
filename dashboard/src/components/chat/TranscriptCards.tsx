@@ -7,8 +7,9 @@
  * Assistant prose is rendered by <Markdown/>.
  */
 import { useState } from 'react';
+import { ChevronRight, ChevronDown, FileText, Check } from 'lucide-react';
 import Markdown from './Markdown';
-import { toolSummary, type ToolBlock, type RenderNode } from '../../lib/transcript';
+import { toolSummary, toolFilePath, displayPath, type ToolBlock, type RenderNode } from '../../lib/transcript';
 import {
   summarizeTurn, formatDuration, fromToolBlock,
   type GroupedNode, type ToolGroupNode,
@@ -18,6 +19,20 @@ import { hasVoiceCallMarker, parseVoiceSegments } from '../../lib/voiceCall';
 import VoiceCallCard from './VoiceCallCard';
 
 const RESULT_COLLAPSE_CHARS = 600;
+
+/**
+ * The disclosure control for every expandable card here.
+ *
+ * It was a text glyph (`▸` / `▾`) at `text-[10px]`, which renders about SIX PIXELS of
+ * actual ink and is both hard to see and far below any sane touch target. An icon at 14px
+ * is the smallest thing that reads as a control rather than as punctuation. It is
+ * `aria-hidden` because the control it belongs to always carries `aria-expanded`, so
+ * announcing it again would be noise.
+ */
+function Caret({ open }: { open: boolean }) {
+  const Icon = open ? ChevronDown : ChevronRight;
+  return <Icon size={14} aria-hidden className="shrink-0 text-neutral-500" />;
+}
 
 // A large paste embedded in a message → collapsible "Pasted text #n" card,
 // rendered AT its position in the message flow (pasted-text grammar, read end).
@@ -32,7 +47,7 @@ export function PastedCard({ n, lines, content }: { n: number; lines: number; co
         <span className="text-[11px] text-neutral-400">📋</span>
         <span className="text-[11px] font-medium text-neutral-300">Pasted text #{n}</span>
         <span className="text-[10px] text-neutral-500">· {lines} lines</span>
-        <span className="text-[10px] text-neutral-600 ml-auto">{open ? '▾' : '▸'}</span>
+        <span className="ml-auto"><Caret open={open} /></span>
       </button>
       {open && (
         <pre className="px-3 py-1.5 border-t border-neutral-800 bg-neutral-950 overflow-auto max-h-72 text-[11px] font-mono text-neutral-400 whitespace-pre-wrap break-words">
@@ -171,7 +186,7 @@ export function QueuedBatchCard({ count, entries }: { count: number; entries: { 
           <span className="text-[11px] font-semibold text-neutral-300">
             {count} queued message{count === 1 ? '' : 's'} processed
           </span>
-          <span className="text-[10px] text-neutral-600 ml-auto">{open ? '▾' : '▸'}</span>
+          <span className="ml-auto"><Caret open={open} /></span>
         </button>
         {open && (
           <div className="border-t border-neutral-800 divide-y divide-neutral-800/60">
@@ -211,7 +226,7 @@ export function ThinkingCard({ text }: { text: string }) {
           onClick={() => setOpen((o) => !o)}
           className="flex items-center gap-1.5 text-[11px] text-neutral-500 hover:text-neutral-300 italic"
         >
-          <span>{open ? '▾' : '▸'}</span>
+          <Caret open={open} />
           <span>💭 {open ? 'Thinking' : firstLine + '…'}</span>
         </button>
         {open && (
@@ -224,6 +239,37 @@ export function ThinkingCard({ text }: { text: string }) {
   );
 }
 
+/**
+ * The file a call acted on, as a thing you can take away rather than a truncated caption.
+ *
+ * The path was plain truncated text inside the summary: you could read a tail of it and do
+ * nothing with it. It now carries a file icon so a file-touching call is identifiable at a
+ * glance, shows the shortened path, and copies the FULL absolute path on click — the
+ * shortening is display-only, so what you copy is what the tool actually opened.
+ */
+function FilePathChip({ path }: { path: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation(); // the row behind this is the card's own disclosure
+        navigator.clipboard?.writeText(path).then(
+          () => { setCopied(true); setTimeout(() => setCopied(false), 1200); },
+          () => {},
+        );
+      }}
+      title={`${path} \u2014 click to copy`}
+      className="group/path inline-flex min-w-0 items-center gap-1 rounded px-1 -mx-1 text-[11px] font-mono text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200 transition-colors"
+    >
+      {copied
+        ? <Check size={12} aria-hidden className="shrink-0 text-green-400" />
+        : <FileText size={12} aria-hidden className="shrink-0 text-neutral-500 group-hover/path:text-neutral-300" />}
+      <span className="truncate">{copied ? 'Copied' : displayPath(path)}</span>
+    </button>
+  );
+}
+
 export function ToolCard({ block }: { block: ToolBlock }) {
   const summary = toolSummary(block.tool, block.input);
   const result = block.result || '';
@@ -231,24 +277,48 @@ export function ToolCard({ block }: { block: ToolBlock }) {
   const [open, setOpen] = useState(false); // input open
   const [resOpen, setResOpen] = useState(!resultLong && result.length > 0);
   const glyph = TOOL_GLYPH[block.tool] || '•';
+  const filePath = toolFilePath(block.tool, block.input);
 
   const inputStr = JSON.stringify(block.input, null, 2);
   const inputBig = inputStr.length > 200;
+  // A header that HOVERS and toggles state but reveals nothing is a dead click: the card
+  // looked expandable whenever the input was small, and answered a click with no change.
+  // Only the cards that can actually open get the affordance; the rest render as plain rows.
+  const expandable = inputBig || resultLong;
 
   return (
     <div className="flex justify-start">
       <div className={`w-full rounded-lg border ${block.isError ? 'border-red-800/60' : 'border-neutral-800'} bg-neutral-900/40 overflow-hidden`}>
-        {/* header */}
-        <button
-          onClick={() => setOpen((o) => !o)}
-          className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-neutral-800/40"
-        >
-          <span className="text-[11px] w-4 text-center text-neutral-400">{glyph}</span>
-          <span className="text-[11px] font-semibold text-neutral-300">{block.tool}</span>
-          <span className="text-[11px] font-mono text-neutral-500 truncate flex-1">{summary}</span>
-          {block.isError && <span className="text-[10px] text-red-400">error</span>}
-          {inputBig && <span className="text-[10px] text-neutral-600">{open ? '▾' : '▸'}</span>}
-        </button>
+        {/* header — the WHOLE row is the control, not the caret. */}
+        {expandable ? (
+          <button
+            onClick={() => {
+              // One click opens the card. When the input is small there is nothing to show
+              // above, so the same click opens the thing that IS there: the result.
+              if (inputBig) setOpen((o) => !o);
+              else setResOpen((o) => !o);
+            }}
+            aria-expanded={inputBig ? open : resOpen}
+            className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-neutral-800/40"
+          >
+            <span className="text-[11px] w-4 text-center text-neutral-400">{glyph}</span>
+            <span className="text-[11px] font-semibold text-neutral-300">{block.tool}</span>
+            {filePath
+              ? <span className="min-w-0 flex-1"><FilePathChip path={filePath} /></span>
+              : <span className="text-[11px] font-mono text-neutral-500 truncate flex-1">{summary}</span>}
+            {block.isError && <span className="text-[10px] text-red-400">error</span>}
+            <Caret open={inputBig ? open : resOpen} />
+          </button>
+        ) : (
+          <div className="w-full flex items-center gap-2 px-2.5 py-1.5">
+            <span className="text-[11px] w-4 text-center text-neutral-400">{glyph}</span>
+            <span className="text-[11px] font-semibold text-neutral-300">{block.tool}</span>
+            {filePath
+              ? <span className="min-w-0 flex-1"><FilePathChip path={filePath} /></span>
+              : <span className="text-[11px] font-mono text-neutral-500 truncate flex-1">{summary}</span>}
+            {block.isError && <span className="text-[10px] text-red-400">error</span>}
+          </div>
+        )}
 
         {/* expanded input */}
         {open && inputBig && (
@@ -263,18 +333,22 @@ export function ToolCard({ block }: { block: ToolBlock }) {
             {!resOpen ? (
               <button
                 onClick={() => setResOpen(true)}
-                className="w-full text-left px-3 py-1 text-[10px] text-neutral-500 hover:text-neutral-300"
+                aria-expanded={false}
+                className="w-full flex items-center gap-1 px-3 py-1 text-left text-[10px] text-neutral-500 hover:text-neutral-300"
               >
-                ▸ {block.isError ? 'Error output' : 'Result'} · {result.split('\n').length} lines
+                <Caret open={false} />
+                {block.isError ? 'Error output' : 'Result'} · {result.split('\n').length} lines
               </button>
             ) : (
               <div>
                 {resultLong && (
                   <button
                     onClick={() => setResOpen(false)}
-                    className="w-full text-left px-3 py-1 text-[10px] text-neutral-500 hover:text-neutral-300 border-b border-neutral-800/60"
+                    aria-expanded
+                    className="w-full flex items-center gap-1 px-3 py-1 text-left text-[10px] text-neutral-500 hover:text-neutral-300 border-b border-neutral-800/60"
                   >
-                    ▾ Collapse result
+                    <Caret open />
+                    Collapse result
                   </button>
                 )}
                 <pre className={`px-3 py-1.5 overflow-auto text-[11px] font-mono whitespace-pre ${block.isError ? 'text-red-300' : 'text-neutral-400'} ${resultLong ? 'max-h-72' : ''}`}>
@@ -315,7 +389,7 @@ export function ToolGroupCard({ group, interrupted = false }: { group: ToolGroup
           aria-expanded={open}
           className="w-full flex items-start gap-2 px-2.5 py-1.5 text-left hover:bg-neutral-800/40"
         >
-          <span className="text-[10px] text-neutral-500 w-3 leading-[17px] shrink-0">{open ? '▾' : '▸'}</span>
+          <span className="leading-[17px] shrink-0"><Caret open={open} /></span>
           {/* Wraps rather than truncating: on a phone the clipped tail was the "(1 failed)". */}
           <span className="text-[11px] leading-[17px] min-w-0 flex-1 break-words">
             <span className={`font-medium ${s.running > 0 ? 'text-orange-300' : s.interrupted > 0 ? 'text-amber-400' : 'text-neutral-300'}`}>{lead}</span>

@@ -75,3 +75,34 @@ export function groupForRail(agents: RailAgent[]): RailGroups {
 export function needsYouCount(agents: RailAgent[]): number {
   return groupForRail(agents).needsYou.length;
 }
+
+/** claude / codex / gemini / antigravity / service -> the two-letter rail badge. */
+export const PROVIDER_ABBR: Record<string, string> = {
+  claude: 'CL', codex: 'CX', gemini: 'GM', antigravity: 'AG', service: 'SV',
+};
+
+/** The badge is two letters with no legend anywhere, so it needs to say its own name. */
+export const PROVIDER_LABEL: Record<string, string> = {
+  claude: 'Claude', codex: 'Codex', gemini: 'Gemini', antigravity: 'Antigravity', service: 'Service',
+};
+
+/**
+ * Should the runtime badge be shown at all?
+ *
+ * A column that prints the SAME two letters on every row tells the reader nothing and spends
+ * a column of width saying it. The badge earns its place only when it distinguishes one row
+ * from another, so it appears once at least two DISTINCT known runtimes are on screen.
+ *
+ * A row with no runtime is not a second value. 138 of 320 live rows carry none, so counting
+ * "unknown" as variety would switch the badge on permanently by accident — which is the exact
+ * failure being fixed.
+ */
+export function providersVary(agents: RailAgent[]): boolean {
+  const seen = new Set<string>();
+  for (const a of agents) {
+    const p = a.provider?.toLowerCase();
+    if (p && PROVIDER_ABBR[p]) seen.add(p);
+    if (seen.size > 1) return true;
+  }
+  return false;
+}

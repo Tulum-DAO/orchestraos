@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sectionFor, groupForRail, needsYouCount, type RailAgent } from './agentRail.ts';
+import { sectionFor, groupForRail, needsYouCount, providersVary, type RailAgent } from './agentRail.ts';
 
 const a = (id: string, status?: string, extra: Partial<RailAgent> = {}): RailAgent =>
   ({ id, status, ...extra });
@@ -74,4 +74,41 @@ test('the needs-you badge counts people-blocked agents only', () => {
 
 test('an empty rail is empty, not a section of undefineds', () => {
   assert.deepEqual(groupForRail([]), { needsYou: [], working: [], idle: [], other: [] });
+});
+
+// ---------------------------------------------------------------------------
+// providersVary — the runtime badge must disappear when it distinguishes nothing.
+// ---------------------------------------------------------------------------
+
+test('the badge is HIDDEN when every row carries the same runtime', () => {
+  // The defect: a column printing "CL" on all 43 rows, spending width to say nothing.
+  const rows = ['a', 'b', 'c'].map((id) => a(id, 'idle', { provider: 'claude' }));
+  assert.equal(providersVary(rows), false);
+});
+
+test('the badge is SHOWN as soon as two distinct runtimes are on screen', () => {
+  const rows = [a('x', 'idle', { provider: 'claude' }), a('y', 'idle', { provider: 'codex' })];
+  assert.equal(providersVary(rows), true);
+});
+
+test('an UNKNOWN runtime is not a second value', () => {
+  // 138 of 320 live rows carry no runtime. If absence counted as variety the badge would be
+  // permanently on by accident — which is the exact bug this function exists to prevent.
+  assert.equal(providersVary([
+    a('x', 'idle', { provider: 'claude' }),
+    a('y', 'idle'),
+    a('z', 'idle', { provider: '' }),
+    a('w', 'idle', { provider: 'not-a-runtime' }),
+  ]), false);
+});
+
+test('runtime matching is case-insensitive, so CLAUDE and claude are ONE value', () => {
+  assert.equal(providersVary([
+    a('x', 'idle', { provider: 'Claude' }),
+    a('y', 'idle', { provider: 'CLAUDE' }),
+  ]), false);
+});
+
+test('an empty rail does not show the badge', () => {
+  assert.equal(providersVary([]), false);
 });
