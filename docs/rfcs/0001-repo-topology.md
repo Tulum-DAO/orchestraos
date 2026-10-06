@@ -240,37 +240,67 @@ guess:
    first concrete task.
 3. **What is `orchestraos-staging` for**, now that a third copy exists?
 
-### 6.2 — Make the install path true for a stranger *(small, ~1 day)*
-**Gen 12 correction to the count and, more importantly, to the diagnosis.** The
-`.py`-only pattern gives 7, but the stated pattern (`tailscale` / absolute home path /
-hostname) over *all* 1,337 tracked files gives **24**. Inspecting them changes the finding:
-the `api/`, `services/config.py` and `orchestra-env.sh` sites are **already config-driven**
-(`raw.machines.mac_tailscale_ip || ''`), and two more are comments. So almost nothing is
-hard-coded — **the real problem is mandatory config with empty-string defaults.** A
-stranger's install does not fail loudly; it silently comes up with blank tailnet IPs. The
-work is therefore *defaults and a loud `doctor` finding*, not a de-hard-coding sweep, and
-that is a smaller and better-defined job than §6.2 originally described.
+### 6.2 — ~~Make the install path true for a stranger~~ **ALREADY TRUE — measured, closed**
 
-Resolve the host-coupled files so a clean VPS can complete `docs/INSTALL.md`
-without editing source: move the host/tailnet assumptions behind config with
-documented defaults, and let `orchestra_cli doctor` report them as *findings*
-rather than hard-coding them. **Acceptance: a clean Ubuntu VM reaches "one
-approval card answered" using only `docs/INSTALL.md`.** This is the single
-highest-value step for the stated open-harness mission, and it is independent of
-every other item here.
+**Status: CLOSED by measurement, not by work.** gm authorised this as ordinary work
+(sensible defaults + loud `doctor` findings) with the acceptance test *"a clean Ubuntu VM
+completes `docs/INSTALL.md` unedited, proven by effect on a real throwaway VM or container,
+not argued from the diff."* Gen 12 ran that test. **The premise did not survive it.**
+
+Built the shipped `Dockerfile` from a clean `main` (`1d67746`) — which is equivalent to a
+stranger's clone, since `.dockerignore` already excludes `orchestra.toml`, `state/`,
+`.venv` and `node_modules` — then ran `orchestra doctor` with **no credentials and no edits
+to any file**:
+
+- **Every infrastructure row returned `OK`**: config (*"7 required keys present"*), data
+  dir, registry, gateway token, all four ports free, `aiohttp`/`flask`/`openai`, all three
+  `node_modules`, `better-sqlite3` and `node-pty` native bindings, api + dashboard builds,
+  `rotation:beat armed`, and `hooks:claude` (12 rows).
+- **`doctor` exited 1** with `4 required check(s) MISSING`, and all four were the same
+  thing: *no agent CLI is logged in* (`runtime:claude` installed/`loggedIn=false`,
+  `gemini`/`codex` not installed, `runtime:any`). Each carried an actionable remedy.
+
+**That is the behaviour §6.2 asked for, already present.** It fails loudly and precisely at
+the one boundary no code change can cross — a stranger must log into their own CLI, and the
+harness must not do it for them (the `Dockerfile` states this: *"The CLI LOGIN STAYS
+YOURS"*).
+
+**The earlier diagnosis was wrong and is retracted.** It claimed "mandatory config with
+empty-string defaults, so a stranger's install comes up silently blank." Inspection shows
+the host-coupled fields are *optional* config whose blank defaults are **documented
+intent**: `orchestra.example.toml` says of the tailnet fields *"leave blank on a
+single-machine install (B1) and the fields come back empty, not fabricated,"* and of
+`vps_hostname` *"leave blank on a single-machine install."* And **no operator hostname is
+hard-coded in shipped code at all** — the only match for the operator's host outside tests
+and the baseline is inside `scan_operator_identifiers.py`'s own detection pattern, where it
+belongs. (Naming the host here would itself have tripped that scanner, which is the gate
+working: it caught this paragraph's first draft.)
+
+Two rows that *looked* like findings are artifacts of the container, checked rather than
+reported: `git:hooks WARN core.hooksPath unset` (the image has no `.git` — `.dockerignore`
+excludes it; `orchestra init` *does* set `core.hooksPath=.git-hooks`, `init_cmd.py:256`,
+and it is set in a real clone) and `orchestra:version INFO installed unknown` (same cause).
+
+**Nothing to build. The authorisation was not spent.**
 
 ### 6.3 — Keep clients out, and write the contract down
 No moves required. Add to each client repo's README: the HTTP endpoints it
 depends on, and the §4 degradation requirement. Cheap, and it is what keeps the
 boundary honest.
 
-### 6.4 — *Later:* carve the gateway into a versioned API surface
-`watch_gateway.py` is 5,908 lines holding every device's routes, the permission
-table, menu parsing and the voice relay, and it is internet-reachable. It
-deserves a versioned surface and a smaller file. **Not now** — it is the most
-actively-changed file in the system and §6.1 must land first.
+### 6.4 — **DEFERRED by gm, 2026-10-06. Do not reopen as idle work.**
 
----
+`watch_gateway.py` is 5,908 lines holding every device's routes, the permission table, menu
+parsing and the voice relay, and it is internet-reachable. It deserves a versioned surface
+and a smaller file.
+
+**gm has closed this until Shaw rules on `apr_4c6576c1`, and the reason is §3:** the right
+shape for that file depends on **which merge direction is chosen**, because the two trees
+disagree about the file by 435 lines and in both directions. Carving it before the merge
+direction is settled would be refactoring a file that is about to be reconciled against a
+different version of itself — work that the ruling could invalidate wholesale.
+
+Recorded here explicitly so it stops reading as an open invitation.
 
 ## 7. Risks and what this does not solve
 
