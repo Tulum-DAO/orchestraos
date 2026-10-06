@@ -3,11 +3,16 @@
  *  - UserBubble       (a real user/the operator prompt; system spawn-prompt collapses)
  *  - ThinkingCard     (collapsed by default)
  *  - ToolCard         (tool_use + paired result, collapsible; long output scrolls)
+ *  - ToolGroupCard    (two or more consecutive calls folded to one line per turn)
  * Assistant prose is rendered by <Markdown/>.
  */
 import { useState } from 'react';
 import Markdown from './Markdown';
 import { toolSummary, type ToolBlock, type RenderNode } from '../../lib/transcript';
+import {
+  summarizeTurn, formatDuration, fromToolBlock,
+  type GroupedNode, type ToolGroupNode,
+} from '../../lib/toolGroups';
 import { parseMessageSegments, hasPasteMarkers } from '../../lib/pastedText';
 import { hasVoiceCallMarker, parseVoiceSegments } from '../../lib/voiceCall';
 import VoiceCallCard from './VoiceCallCard';
@@ -257,6 +262,49 @@ export function ToolCard({ block }: { block: ToolBlock }) {
       </div>
     </div>
   );
+}
+
+/**
+ * A turn's tool calls folded to ONE line (harness-UX plan, C3), e.g.
+ *   ▸ Worked for 1m 8s — edited 2 files, ran 3 commands
+ * Expanding shows the per-call ToolCards (and the thinking between them), each of which
+ * expands again to its input and output: three levels instead of one card per call.
+ */
+export function ToolGroupCard({ group }: { group: ToolGroupNode }) {
+  const [open, setOpen] = useState(false);
+  const tools = group.children.filter((c): c is ToolBlock => c.kind === 'tool');
+  const s = summarizeTurn(tools.map(fromToolBlock));
+  const lead = s.running > 0
+    ? 'Working'
+    : s.durationMs !== undefined ? `Worked for ${formatDuration(s.durationMs)}` : 'Worked';
+  return (
+    <div className="flex justify-start">
+      <div className={`max-w-[92%] w-full rounded-lg border ${s.failed > 0 ? 'border-red-800/50' : 'border-neutral-800'} bg-neutral-900/30 overflow-hidden`}>
+        <button
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-neutral-800/40"
+        >
+          <span className="text-[10px] text-neutral-500 w-3">{open ? '▾' : '▸'}</span>
+          <span className={`text-[11px] font-medium ${s.running > 0 ? 'text-orange-300' : 'text-neutral-300'}`}>{lead}</span>
+          {s.headline && <span className="text-[11px] text-neutral-500 truncate flex-1">— {s.headline}</span>}
+          <span className="text-[10px] text-neutral-600 ml-auto shrink-0">
+            {tools.length} call{tools.length === 1 ? '' : 's'}
+          </span>
+        </button>
+        {open && (
+          <div className="border-t border-neutral-800 p-1.5 space-y-1.5">
+            {group.children.map((c) => <RenderNodeView key={c.key} node={c} />)}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Like RenderNodeView, plus the folded tool group. */
+export function GroupedNodeView({ node }: { node: GroupedNode }) {
+  return node.kind === 'tool_group' ? <ToolGroupCard group={node} /> : <RenderNodeView node={node} />;
 }
 
 /** Dispatch a RenderNode to the right primitive. */

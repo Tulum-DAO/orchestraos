@@ -1,0 +1,197 @@
+/**
+ * toolGroups.ts — fold one turn's tool calls into a single line (harness-UX plan, C3).
+ *
+ *   ▸ Worked for 1m 8s — edited 2 files, ran 3 commands
+ *
+ * Expanding the line shows the per-call rows, and each row expands to its input and output, so
+ * a turn reads at three levels instead of one card per call. The summary rules follow T3 Code's
+ * work log: file changes and commands outrank reads, and a failure is never counted as a
+ * success.
+ *
+ * Seat transcripts (ToolBlock) and Arturo's live stream (ToolPart) carry different shapes, so
+ * both adapt into one neutral WorkItem and share ONE summarizer. Pure functions, no DOM.
+ */
+import type { RenderNode, ToolBlock } from './transcript';
+import type { ToolPart, ToolStatus } from './turnParts';
+
+export interface WorkItem {
+  tool: string;
+  /** The file the call touched, when the source knows it. Arturo's stream does not. */
+  path?: string;
+  status: ToolStatus;
+  ts?: string;
+}
+
+export interface TurnSummary {
+  headline: string;
+  failed: number;
+  running: number;
+  /** First-to-last timestamp span. Absent unless at least two timestamps parse. */
+  durationMs?: number;
+}
+
+type Category = 'edit' | 'command' | 'read' | 'search' | 'other';
+
+// Claude Code, Codex and Gemini CLI names, plus Arturo's own tools. Lower-cased lookups.
+const CATEGORY: Record<string, Category> = {
+  edit: 'edit', write: 'edit', multiedit: 'edit', notebookedit: 'edit',
+  apply_patch: 'edit', write_file: 'edit', replace: 'edit', edit_file: 'edit', create_file: 'edit',
+  bash: 'command', shell: 'command', run_shell_command: 'command', run_command: 'command',
+  exec_command: 'command', exec: 'command',
+  read: 'read', read_file: 'read', read_many_files: 'read', view: 'read', notebookread: 'read',
+  grep: 'search', glob: 'search', websearch: 'search', toolsearch: 'search', search: 'search',
+  search_file_content: 'search', list_directory: 'search', google_web_search: 'search',
+};
+
+function categoryOf(tool: string): Category {
+  return CATEGORY[tool.toLowerCase()] || 'other';
+}
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** Count distinct paths; a call with no known path counts as its own file. */
+function distinctFiles(items: WorkItem[]): number {
+  const seen = new Set<string>();
+  let unnamed = 0;
+  for (const it of items) {
+    if (it.path) seen.add(it.path);
+    else unnamed += 1;
+  }
+  return seen.size + unnamed;
+}
+
+function spanMs(items: WorkItem[]): number | undefined {
+  const times = items
+    .map((it) => (it.ts ? Date.parse(it.ts) : NaN))
+    .filter((t) => !Number.isNaN(t));
+  if (times.length < 2) return undefined;
+  return Math.max(...times) - Math.min(...times);
+}
+
+export function summarizeTurn(items: WorkItem[]): TurnSummary {
+  const by = (cat: Category, status?: ToolStatus) =>
+    items.filter((it) => categoryOf(it.tool) === cat && (!status || it.status === status));
+
+  const failed = items.filter((it) => it.status === 'failed').length;
+  const running = items.filter((it) => it.status === 'running').length;
+  const durationMs = spanMs(items);
+
+  // Nothing succeeded and nothing is still going: claim nothing as done.
+  if (failed > 0 && failed === items.length) {
+    return { headline: `${failed} failed`, failed, running, durationMs };
+  }
+
+  const clauses: string[] = [];
+
+  const edited = distinctFiles(by('edit', 'ok'));
+  if (edited > 0) clauses.push(`edited ${plural(edited, 'file', 'files')}`);
+
+  // Commands carry their own failures inline; a failed command is still a command that ran.
+  const cmdDone = by('command', 'ok').length + by('command', 'failed').length;
+  const cmdFailed = by('command', 'failed').length;
+  if (cmdDone > 0) {
+    let c = `ran ${plural(cmdDone, 'command', 'commands')}`;
+    if (cmdFailed > 0) c += cmdFailed === cmdDone && cmdDone === 1 ? ' (failed)' : ` (${cmdFailed} failed)`;
+    clauses.push(c);
+  }
+  const cmdRunning = by('command', 'running').length;
+  if (cmdRunning > 0) clauses.push(`running ${plural(cmdRunning, 'command', 'commands')}`);
+
+  // Reads and searches only matter when nothing outranks them.
+  if (clauses.length === 0) {
+    const read = distinctFiles(by('read', 'ok'));
+    if (read > 0) clauses.push(`read ${plural(read, 'file', 'files')}`);
+    const searched = by('search', 'ok').length;
+    if (searched > 0) clauses.push(`searched ${plural(searched, 'time', 'times')}`);
+  }
+  if (clauses.length === 0) {
+    const used = items.filter((it) => it.status === 'ok').length;
+    if (used > 0) clauses.push(`used ${plural(used, 'tool', 'tools')}`);
+  }
+
+  // Failures not already reported inside the command clause.
+  const otherFailed = failed - cmdFailed;
+  if (otherFailed > 0) clauses.push(`${otherFailed} failed`);
+
+  // Calls still in flight outside the command clause.
+  const otherRunning = running - cmdRunning;
+  if (otherRunning > 0) clauses.push(`running ${otherRunning}`);
+
+  return { headline: clauses.join(', '), failed, running, durationMs };
+}
+
+export function formatDuration(ms: number): string {
+  if (ms < 1000) return '<1s';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+// ---- adapters ------------------------------------------------------------------------------
+
+export function fromToolBlock(b: ToolBlock): WorkItem {
+  const raw = b.input?.file_path ?? b.input?.path ?? b.input?.notebook_path;
+  const item: WorkItem = {
+    tool: b.tool,
+    status: b.isError ? 'failed' : b.result === undefined ? 'running' : 'ok',
+  };
+  if (typeof raw === 'string' && raw) item.path = raw;
+  if (b.ts) item.ts = b.ts;
+  return item;
+}
+
+export function fromToolPart(p: ToolPart): WorkItem {
+  // argsSummary is display text, not a reliable path, so each call counts as its own file.
+  return { tool: p.name, status: p.status };
+}
+
+// ---- grouping ------------------------------------------------------------------------------
+
+export interface ToolGroupNode {
+  kind: 'tool_group';
+  /** Derived from the first child, so the group keeps its identity as the run grows. */
+  key: string;
+  /** Tool calls and the thinking between them, in transcript order. */
+  children: RenderNode[];
+}
+
+export type GroupedNode = RenderNode | ToolGroupNode;
+
+const MIN_GROUP_TOOLS = 2;
+
+/**
+ * Fold every run of two or more consecutive tool calls into one ToolGroupNode. Thinking that
+ * sits BETWEEN calls joins the group; thinking at either edge stays outside it, and a run with
+ * a single call is left exactly as it was. Nothing is dropped or reordered.
+ */
+export function groupToolRuns(nodes: RenderNode[]): GroupedNode[] {
+  const out: GroupedNode[] = [];
+  let i = 0;
+  while (i < nodes.length) {
+    const n = nodes[i];
+    if (n.kind !== 'tool' && n.kind !== 'thinking') {
+      out.push(n);
+      i += 1;
+      continue;
+    }
+    // A maximal run of tool/thinking nodes.
+    let j = i;
+    while (j < nodes.length && (nodes[j].kind === 'tool' || nodes[j].kind === 'thinking')) j += 1;
+    const run = nodes.slice(i, j);
+    const first = run.findIndex((x) => x.kind === 'tool');
+    const last = run.length - 1 - [...run].reverse().findIndex((x) => x.kind === 'tool');
+    const tools = first < 0 ? 0 : run.slice(first, last + 1).filter((x) => x.kind === 'tool').length;
+    if (tools >= MIN_GROUP_TOOLS) {
+      out.push(...run.slice(0, first));
+      const children = run.slice(first, last + 1);
+      out.push({ kind: 'tool_group', key: `group:${children[0].key}`, children });
+      out.push(...run.slice(last + 1));
+    } else {
+      out.push(...run);
+    }
+    i = j;
+  }
+  return out;
+}
