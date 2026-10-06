@@ -52,9 +52,17 @@ export function Composer({ agentId = 'gm', seatName }: ComposerProps) {
     // and sends failed with nothing on screen explaining why). Returning ok:false keeps the
     // draft AND the attachment where the operator left them; throwing would too, but the note
     // would be a stack-shaped 'Error: Failed to fetch' instead of a sentence.
+    // A HUNG API never rejects on its own: the socket stays open and the promise never settles,
+    // so the composer spins forever and the operator learns nothing. Measured against a
+    // SIGSTOPped API. 15s is well past a slow-but-working send and well short of giving up on
+    // the person waiting.
+    const withTimeout = <T,>(pr: Promise<T>, ms = 15_000): Promise<T> =>
+      Promise.race([pr, new Promise<T>((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
     try {
-      const uploaded = attachments.length ? await Promise.all(attachments.map(uploadAttachment)) : undefined;
-      const result = await sendToAgent(agentId, { text, attachments: uploaded }, { force });
+      const uploaded = attachments.length
+        ? await withTimeout(Promise.all(attachments.map(uploadAttachment)))
+        : undefined;
+      const result = await withTimeout(sendToAgent(agentId, { text, attachments: uploaded }, { force }));
       return {
         ok: isDelivered(result),
         note: describeSendState(result) || undefined,

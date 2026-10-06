@@ -88,7 +88,12 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
       </nav>
     );
   }
-  if (isLoading && !data) {
+  // "Loading" is only honest while a first answer is still PLAUSIBLY coming. With the API down
+  // at page load there is no error and no data, so this branch sat on "Loading agents…"
+  // INDEFINITELY — measured against a stopped API. An eternal spinner is the same lie as a stale
+  // colour: it says "wait" when the truth is "we cannot ask". After the threshold the verdict
+  // below takes over and says so.
+  if (isLoading && !data && feed.health !== 'disconnected') {
     return <nav className="w-full p-3 text-sm text-neutral-500" aria-label="Agents">Loading agents…</nav>;
   }
 
