@@ -148,10 +148,28 @@ def reap_tree(root_pid, *, timeout_s=10.0):
 # ---- fail-closed identity resolution (blue_generation_id -> pane pid) --------
 
 def _default_pane_pid_fn(session_name):
-    """tmux pane pid for window0/pane0 of a session (fleet layout)."""
+    """tmux pane pid for window0/pane0 of a session (fleet layout).
+
+    EXACT-match target ('='). `tmux -t foo:0.0` matches a session by PREFIX, so for a seat
+    whose bare root is ABSENT -- exactly the state a blue-green swap creates -- `-t root:0.0`
+    silently resolves to `root-g<N>` and this returns THE GREEN'S PID. Measured on live tmux:
+    with only `zzpidprobe-g9` present, the bare query for the absent `zzpidprobe` returned the
+    green's pid 1869870, while the '=' form returned nothing.
+
+    That misrecording is why a stuck swap can never unstick itself. `blue_pane_pid` is recorded
+    through this function at prewarm and is then the authority for two decisions: reaper's
+    `_reap_recorded` (whose never-reap-green guard refuses, so blue is never killed) and
+    bg_beat's `_complete_unobservable` (whose "blue is provably dead" test consults a pid that
+    is really the LIVE green, so it reads ALIVE forever and refuses forever). The same '='
+    fix was already applied to `bg_complete._RealTmux` and `real_seams._default_tmux`; this was
+    the remaining bare target, and it is the one feeding the recorded pid.
+
+    An absent session yields empty stdout -> ValueError -> None, i.e. fail-closed, which is the
+    correct answer for "there is no such pane" and strictly better than a confident wrong pid.
+    """
     try:
         r = subprocess.run(
-            ["tmux", "display-message", "-p", "-t", f"{session_name}:0.0",
+            ["tmux", "display-message", "-p", "-t", f"={session_name}:0.0",
              "#{pane_pid}"], capture_output=True, text=True, timeout=5)
         return int(r.stdout.strip()) if r.returncode == 0 else None
     except (ValueError, subprocess.SubprocessError, OSError):
