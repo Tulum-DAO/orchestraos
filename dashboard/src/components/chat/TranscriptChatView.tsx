@@ -117,6 +117,9 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   // changing the number of rendered nodes, so autoscroll keys on the UNGROUPED count below.
   const nodes = useMemo(() => groupToolRuns(flat), [flat]);
   const st = normalizeAgentState(state);
+  // No feed prop at all (the fixture harness) means "not fed from a live feed", which must not
+  // become "the feed is dead" — it renders as before. Only an ACTUAL non-live verdict suppresses.
+  const live = !feed || feed.health === 'live';
 
   // autoscroll if pinned to bottom
   const onScroll = () => {
@@ -157,12 +160,19 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
         {/* live decision menu (detector pending_menu) — answerable below the last
             message; menus render no transcript line so this IS how chat surfaces
             a decision-waiting agent (previously invisible/unanswerable in chat). */}
-        {pendingMenu && pendingMenu.options?.length > 0 && (
+        {/* A menu from a DEAD feed is the page's version of the P1's blue chip: it offers an
+            answer to a question that may no longer be on screen, and the answer cannot be
+            delivered anyway. Staleness outranks a pending menu here exactly as it does in
+            chipStateFor. */}
+        {live && pendingMenu && pendingMenu.options?.length > 0 && (
           <OptionsMenuCard agentId={agentId} menu={pendingMenu} />
         )}
 
-        {/* in-flight indicator when the agent is mid-turn (transcript not flushed yet) */}
-        {st === 'working' && (
+        {/* In-flight indicator when the agent is mid-turn (transcript not flushed yet).
+            THIS IS THE "FLASHING YELLOW" OF THE P1 — it pulsed amber for an hour off a cached
+            'working' while the API was down. It is a claim about RIGHT NOW, so it requires a
+            live feed, not just a remembered state. */}
+        {live && st === 'working' && (
           <div className="flex items-center gap-2 px-1 py-1">
             <div className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
             <span className="text-[11px] text-neutral-500 italic">agent is working…</span>
