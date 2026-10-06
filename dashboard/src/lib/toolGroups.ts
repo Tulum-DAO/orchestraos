@@ -58,15 +58,40 @@ function categoryOf(tool: string): Category {
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-/** Count distinct paths; a call with no known path counts as its own file. */
-function distinctFiles(items: WorkItem[]): number {
+/**
+ * Count a category's work in the two units it can be counted in.
+ *
+ * `files` is the DISTINCT KNOWN paths. `unnamed` is the calls whose path cannot be known —
+ * Codex's `apply_patch` carries its target inside the patch text, and `read_many_files` takes a
+ * list — and `calls` is the total. The old rule counted an unnamed call AS ITS OWN FILE, so two
+ * `apply_patch` calls editing one file read "edited 2 files": a false claim about the filesystem,
+ * made from a transcript that cannot support it.
+ *
+ * `calls` is the only one of the three that is ALWAYS exactly knowable, which is why the clause
+ * builder falls back to it the moment any path is missing. Not "do not over-claim" but DO NOT
+ * CLAIM IN A UNIT YOU CANNOT FILL.
+ */
+function countWork(items: WorkItem[]): { files: number; unnamed: number; calls: number } {
   const seen = new Set<string>();
   let unnamed = 0;
   for (const it of items) {
     if (it.path) seen.add(it.path);
     else unnamed += 1;
   }
-  return seen.size + unnamed;
+  return { files: seen.size, unnamed, calls: items.length };
+}
+
+/**
+ * One rule, two shapes: name FILES only when every call in the category named one, else report
+ * CALLS for the whole category. A mixed turn reports calls too — joining a file count to a call
+ * count ("edited 1 file, 2 more edits") misreports BOTH units, since for four calls over one known
+ * path it reads as 3 files (could be 1) and as 3 edits (there were 4).
+ */
+function workClause(items: WorkItem[], fileVerb: string, callNoun: string): string | undefined {
+  const { files, unnamed, calls } = countWork(items);
+  if (calls === 0) return undefined;
+  if (unnamed > 0) return `made ${plural(calls, callNoun, callNoun + 's')}`;
+  return `${fileVerb} ${plural(files, 'file', 'files')}`;
 }
 
 function spanMs(items: WorkItem[]): number | undefined {
@@ -98,8 +123,8 @@ export function summarizeTurn(all: WorkItem[], opts: { interrupted?: boolean } =
 
   const clauses: string[] = [];
 
-  const edited = distinctFiles(by('edit', 'ok'));
-  if (edited > 0) clauses.push(`edited ${plural(edited, 'file', 'files')}`);
+  const edited = workClause(by('edit', 'ok'), 'edited', 'edit');
+  if (edited) clauses.push(edited);
 
   // Commands carry their own failures inline; a failed command is still a command that ran.
   const cmdDone = by('command', 'ok').length + by('command', 'failed').length;
@@ -114,8 +139,8 @@ export function summarizeTurn(all: WorkItem[], opts: { interrupted?: boolean } =
 
   // Reads and searches only matter when nothing outranks them.
   if (clauses.length === 0) {
-    const read = distinctFiles(by('read', 'ok'));
-    if (read > 0) clauses.push(`read ${plural(read, 'file', 'files')}`);
+    const read = workClause(by('read', 'ok'), 'read', 'read');
+    if (read) clauses.push(read);
     const searched = by('search', 'ok').length;
     if (searched > 0) clauses.push(`searched ${plural(searched, 'time', 'times')}`);
   }
