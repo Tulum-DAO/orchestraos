@@ -2850,6 +2850,15 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
     by construction and `_ns_on_part` remains the only gate. A `None` default is therefore
     deliberate, not a hole.
 
+    THAT LAST SENTENCE IS A PRECONDITION, NOT AN ASIDE: the `None` default is safe only
+    where `_ns_on_part` EXISTS to cover the no-anchor leg. Do not carry this reassurance
+    into a tree that lacks it -- measured 2026-10-06, the live fleet copy of this file had
+    `menu_batch_submit` but none of `_ns_on_part` / `_normalize_ns` / `_digit_pressable_ns`,
+    so there the `None` default WAS closer to a hole than this paragraph implies. If you are
+    porting this function, port `_ns_on_part` with it or know that you have not yet bought
+    the guarantee described here. (orchestra-builder-g72 found this; the two trees diverge --
+    see docs/rfcs/0001-repo-topology.md.)
+
     WHY THE TWO CHECKS DIFFER. Per-part, the question is compared by normalized CONTAINMENT
     either direction (`_q_norm`, the `_menu_matches` semantics) -- never equality, which is
     the documented P0 that refused the operator's answer 6ms after his tap when a capture
