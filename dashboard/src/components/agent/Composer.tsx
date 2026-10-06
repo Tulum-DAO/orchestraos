@@ -48,14 +48,27 @@ export function Composer({ agentId = 'gm', seatName }: ComposerProps) {
     { text, attachments }: { text: string; attachments: File[] },
     { force }: { force: boolean }
   ) => {
-    const uploaded = attachments.length ? await Promise.all(attachments.map(uploadAttachment)) : undefined;
-    const result = await sendToAgent(agentId, { text, attachments: uploaded }, { force });
-    return {
-      ok: isDelivered(result),
-      note: describeSendState(result) || undefined,
-      queued: isQueued(result),
-      held: isHeld(result) || isComposerHold(result),
-    };
+    // AN UNREACHABLE API MUST SAY SO, not vanish (P1 2026-10-06: the API was down 15:33-16:33Z
+    // and sends failed with nothing on screen explaining why). Returning ok:false keeps the
+    // draft AND the attachment where the operator left them; throwing would too, but the note
+    // would be a stack-shaped 'Error: Failed to fetch' instead of a sentence.
+    try {
+      const uploaded = attachments.length ? await Promise.all(attachments.map(uploadAttachment)) : undefined;
+      const result = await sendToAgent(agentId, { text, attachments: uploaded }, { force });
+      return {
+        ok: isDelivered(result),
+        note: describeSendState(result) || undefined,
+        queued: isQueued(result),
+        held: isHeld(result) || isComposerHold(result),
+      };
+    } catch {
+      return {
+        ok: false,
+        note: "Can't reach the server — nothing was sent. Your message and photo are still here.",
+        queued: false,
+        held: false,
+      };
+    }
   };
 
   return (

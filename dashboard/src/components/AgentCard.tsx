@@ -12,6 +12,7 @@ import { sendToAgent, isDelivered, isQueued, isHeld, describeSendState } from '.
 import ActionBar from './ActionBar';
 import WebTerminal from './WebTerminal';
 import TranscriptChatView from './chat/TranscriptChatView';
+import { useFeedHealth } from '../hooks/useFeedHealth';
 import ChatInput from './chat/ChatInput';
 import AuthFlow from './AuthFlow';
 import { logAction, trackRecentAgent } from '../lib/user-actions';
@@ -54,6 +55,7 @@ interface AgentCardProps {
 }
 
 export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCardProps) {
+  const feed = useFeedHealth();
   const [confirmKill, setConfirmKill] = useState<'kill' | 'restart' | null>(null);
   const initial = (agent.name || '?')[0].toUpperCase();
   const color = PALETTE[hashName(agent.name || '') % PALETTE.length];
@@ -567,6 +569,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
             agentId={agent.id}
             compact
             state={agent.status || 'unknown'}
+            feed={feed}
             strandedText={typeof agent.stranded === 'string' ? agent.stranded : agent.stranded?.text}
             pendingMenu={agent.pending_menu}
           />
@@ -738,6 +741,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                 <TranscriptChatView
                   agentId={agent.id}
                   state={agent.status || 'unknown'}
+                  feed={feed}
                   strandedText={typeof agent.stranded === 'string' ? agent.stranded : agent.stranded?.text}
                   pendingMenu={agent.pending_menu}
                 />

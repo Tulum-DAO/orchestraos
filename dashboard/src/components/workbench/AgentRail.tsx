@@ -15,6 +15,8 @@ import clsx from 'clsx';
 import { useAgents } from '../../hooks/useAgents';
 import { groupForRail, type RailAgent, type RailGroups } from '../../lib/agentRail';
 import { chipStateFor, ActivityDot } from '../RecentAgentChips';
+import { useFeedHealth } from '../../hooks/useFeedHealth';
+import { lastSeenLabel, type FeedVerdict } from '../../lib/feedLiveness';
 
 const SECTIONS: { key: keyof Omit<RailGroups, 'other'>; label: string; badge?: boolean }[] = [
   { key: 'needsYou', label: 'Needs you', badge: true },
@@ -28,8 +30,8 @@ const PROVIDER_ABBR: Record<string, string> = {
   claude: 'CL', codex: 'CX', gemini: 'GM', antigravity: 'AG', service: 'SV',
 };
 
-function RailRow({ agent, active, onPick }: { agent: RailAgent; active: boolean; onPick: (id: string) => void }) {
-  const state = chipStateFor(agent.status, !!agent.has_pending_menu);
+function RailRow({ agent, active, onPick, feed }: { agent: RailAgent; active: boolean; onPick: (id: string) => void; feed: FeedVerdict }) {
+  const state = chipStateFor(agent.status, !!agent.has_pending_menu, feed);
   const prov = agent.provider ? PROVIDER_ABBR[agent.provider.toLowerCase()] : undefined;
   const unread = agent.unread ?? 0;
   return (
@@ -60,6 +62,7 @@ function RailRow({ agent, active, onPick }: { agent: RailAgent; active: boolean;
 
 export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (id: string) => void }) {
   const { data, isLoading, isError } = useAgents();
+  const feed = useFeedHealth();
   const [showOther, setShowOther] = useState(false);
 
   const groups = useMemo(() => {
@@ -91,6 +94,14 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
 
   return (
     <nav className="w-full flex flex-col gap-3 p-2 overflow-y-auto" aria-label="Agents">
+      {/* The whole column says it ONCE, so a reader does not have to infer an outage from every
+          row having gone grey. The sections below are the LAST thing we were told, not now. */}
+      {feed.health !== 'live' && (
+        <p className="mx-2 px-2 py-1.5 rounded border border-neutral-700 bg-neutral-900 text-[11px] text-neutral-400" role="status">
+          {feed.health === 'disconnected' ? 'Not connected to the fleet.' : 'Connection lost.'}{' '}
+          {feed.lastSeenAt ? `Showing what we last saw — ${lastSeenLabel(feed.lastSeenAt)}.` : 'No data has arrived yet.'}
+        </p>
+      )}
       {SECTIONS.map(({ key, label, badge }) => {
         const rows = groups[key];
         return (
@@ -114,7 +125,7 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
             ) : (
               <div className="flex flex-col">
                 {rows.map((a) => (
-                  <RailRow key={a.id} agent={a} active={a.id === currentId} onPick={onPick} />
+                  <RailRow key={a.id} agent={a} active={a.id === currentId} onPick={onPick} feed={feed} />
                 ))}
               </div>
             )}
@@ -138,7 +149,7 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
           {showOther && (
             <div className="flex flex-col">
               {groups.other.map((a) => (
-                <RailRow key={a.id} agent={a} active={a.id === currentId} onPick={onPick} />
+                <RailRow key={a.id} agent={a} active={a.id === currentId} onPick={onPick} feed={feed} />
               ))}
             </div>
           )}

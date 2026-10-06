@@ -17,7 +17,9 @@
 import clsx from 'clsx';
 import { useRecentAgents } from '../stores/recentAgents';
 import { normalizeAgentState, STATE_STYLE } from '../lib/agentStatus';
+import { staleStyleFor, type FeedVerdict } from '../lib/feedLiveness';
 import { useAgents } from '../hooks/useAgents';
+import { useFeedHealth } from '../hooks/useFeedHealth';
 
 // Round-2 fix (the operator field catch, investigator msg_918c2f95): the first fix
 // unified the DATA source but kept a second COLOR vocabulary — stranded/
@@ -40,7 +42,13 @@ export function ActivityDot({ state }: { state: ChipState }) {
 /// Detector status -> chip dot. Exported for parity checks: the ONLY mapping
 /// between /api/agents and the chip — and it delegates color to STATE_STYLE,
 /// so chip and detail CANNOT diverge per-state.
-export function chipStateFor(status: string | undefined, hasPendingMenu: boolean): ChipState {
+export function chipStateFor(status: string | undefined, hasPendingMenu: boolean,
+                             feed?: FeedVerdict): ChipState {
+  // STALENESS OUTRANKS EVERYTHING, including a pending menu (P1 2026-10-06: the API was down an
+  // hour and a cached menu flag held a chip BLUE — "decision waiting" — for an idle agent, while
+  // every send failed). A colour is a claim about NOW; if the feed is not live we cannot make it.
+  const stale = feed && staleStyleFor(feed);
+  if (stale) return stale;
   if (hasPendingMenu) return MENU_BLUE;        // blue = pending menu ONLY (msg_0c2bd052)
   const s = STATE_STYLE[normalizeAgentState(status)];
   return { dot: s.dot, label: s.label };
@@ -56,6 +64,7 @@ export function RecentAgentChips({ currentId }: { currentId: string }) {
   // form), so the alive-set must cover all three keys or terminal-driven live
   // agents get wrongly hidden.
   const { data: agentsData } = useAgents();
+  const feed = useFeedHealth();
   const aliveIds = new Set<string>();
   // ONE truth: detector status + has_pending_menu per chip, keyed by every id
   // form a chip might use (agent.id + tmux_session + unregistered: form) so
@@ -69,7 +78,7 @@ export function RecentAgentChips({ currentId }: { currentId: string }) {
   // row has claimed; an alive row always wins.
   const aliveKeyed = new Set<string>();
   for (const a of agentsData?.agents || []) {
-    const st = chipStateFor(a.status, !!a.has_pending_menu);
+    const st = chipStateFor(a.status, !!a.has_pending_menu, feed);
     const keys: string[] = [];
     if (a.id) keys.push(a.id);
     if (a.tmux_session) keys.push(a.tmux_session);

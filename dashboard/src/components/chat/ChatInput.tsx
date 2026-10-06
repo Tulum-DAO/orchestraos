@@ -185,6 +185,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     setSending(true);
     setResultOk(false);
     setResult(null);
+    let failed = false;
     try {
       // Expand any held large pastes into the fenced grammar at their position.
       let messageText = force ? busy!.attemptText : serializeForSend(text).trim();
@@ -197,9 +198,13 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
         // P3 state mapping. The internal inject/inbox path below is
         // untouched and only runs when onSend is absent.
         const attachments = !force && pendingImage ? [pendingImage] : [];
-        if (!force && pendingImage) clearImage();
+        // THE PHOTO IS NOT CLEARED UNTIL THE SEND SUCCEEDS (P1 2026-10-06: the API was down for
+        // an hour and every send failed; clearing here threw the attachment away on the way to a
+        // failure, so the operator lost it and had to re-pick it). Nothing is destroyed before
+        // the thing that could fail has not failed.
         const res = await onSend({ text: messageText, attachments }, { force });
         if (res.ok) {
+          if (!force && pendingImage) clearImage();
           setBusy(null);
           setResultOk(true);
           setResult(res.note || 'Sent');
@@ -220,6 +225,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
         } else {
           setResultOk(false);
           setResult(res.note || 'Failed');
+          failed = true;
         }
         return;
       }
@@ -277,9 +283,13 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     } catch (err: any) {
       setResultOk(false);
       setResult('Error: ' + (err.message || 'unknown'));
+      failed = true;
     } finally {
       setSending(false);
-      setTimeout(() => setResult(null), 3000);
+      // Only a SUCCESS notice is transient. A failure stays until the next attempt — it is the
+      // only thing telling the operator their message did not go, and it outlived a 3s timeout
+      // by about an hour during the P1.
+      if (!failed) setTimeout(() => setResult(null), 3000);
     }
   };
 

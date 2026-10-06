@@ -14,6 +14,7 @@ import { subscribeTranscriptStream } from '../../lib/transcriptStream';
 import { GroupedNodeView } from './TranscriptCards';
 import { groupToolRuns, isInterrupted } from '../../lib/toolGroups';
 import { normalizeAgentState, STATE_STYLE, type LiveState } from '../../lib/agentStatus';
+import { staleStyleFor, type FeedVerdict } from '../../lib/feedLiveness';
 import OptionsMenuCard, { type PendingMenu } from './OptionsMenuCard';
 
 export type { LiveState };
@@ -30,14 +31,22 @@ interface Props {
    *  an answerable OptionsCard below the transcript when present. */
   pendingMenu?: PendingMenu | null;
   compact?: boolean;
+  /** Feed health from the SHARED rule (lib/feedLiveness). When the feed is not live the pill
+   *  must not paint a live colour — that is the P1: a cached 'working' pulsed yellow on this
+   *  very pill for an hour while the API was down. Optional so the fixture harness, which has
+   *  no feed, renders unchanged. */
+  feed?: FeedVerdict;
 }
 
 // State vocabulary + colors live in lib/agentStatus (shared with the title dot +
 // aligned with the iOS app). The pill NEVER renders the raw status string — only
 // a fixed STATE_STYLE label — so any unrecognized value (incl. a self-reported
 // multi-KB blob) collapses to the neutral 'unknown' pill.
-function StatePill({ state }: { state: LiveState }) {
-  const s = STATE_STYLE[state] || STATE_STYLE.unknown;
+function StatePill({ state, feed }: { state: LiveState; feed?: FeedVerdict }) {
+  const stale = feed && staleStyleFor(feed);
+  const s = stale
+    ? { ...stale, text: 'text-neutral-400' }
+    : (STATE_STYLE[state] || STATE_STYLE.unknown);
   return (
     <span className={`inline-flex items-center gap-1.5 text-[11px] ${s.text}`}>
       <span className={`w-2 h-2 rounded-full ${s.dot}`} />
@@ -46,7 +55,7 @@ function StatePill({ state }: { state: LiveState }) {
   );
 }
 
-export default function TranscriptChatView({ agentId, fixtureItems, state = 'unknown', strandedText, pendingMenu, compact }: Props) {
+export default function TranscriptChatView({ agentId, fixtureItems, state = 'unknown', strandedText, pendingMenu, compact, feed }: Props) {
   const [items, setItems] = useState<ChatItem[]>(fixtureItems || []);
   const [loading, setLoading] = useState(!fixtureItems);
   const [err, setErr] = useState<string | null>(null);
@@ -163,7 +172,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
 
       {/* status bar: live state pill + optional unsent-draft chip */}
       <div className="flex items-center gap-3 px-3 py-1.5 border-t border-neutral-800/50">
-        <StatePill state={st} />
+        <StatePill state={st} feed={feed} />
         {strandedText && (
           <span className="text-[10px] text-yellow-500/90 truncate">
             ✎ unsent: "{strandedText.slice(0, 60)}"
