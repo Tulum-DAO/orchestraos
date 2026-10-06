@@ -28,6 +28,26 @@ export interface HotkeyContext {
   target?: { tagName?: string; isContentEditable?: boolean; closest?: (sel: string) => unknown };
   /** A modal dialog is open. Two focus traps fighting is worse than no palette. */
   modalOpen?: boolean;
+  /** Mac keyboard conventions apply. Changes WHICH modifier is the palette's. */
+  isMac?: boolean;
+}
+
+/**
+ * Is this the palette's chord at all?
+ *
+ * Split out from shouldOpenPalette because the component needs the same question in a second
+ * place — to CLOSE on the chord that opened it — and asking it there via shouldOpenPalette
+ * would drag in the overlay probe and the terminal refusal, neither of which applies once the
+ * palette already owns the screen.
+ *
+ * ON A MAC THE CHORD IS Cmd-K ONLY. Ctrl-K is Cocoa's kill-to-end-of-line, bound in every
+ * native text field; claiming it would silently eat a standard editing key and leave the
+ * operator's half-written message intact under a palette they did not ask for. Elsewhere
+ * Ctrl-K is unclaimed, so both modifiers are accepted.
+ */
+export function isPaletteChord(ev: HotkeyContext): boolean {
+  if ((ev.key || '').toLowerCase() !== 'k') return false;
+  return ev.isMac ? !!ev.metaKey : (!!ev.metaKey || !!ev.ctrlKey);
 }
 
 /**
@@ -46,9 +66,7 @@ export interface HotkeyContext {
  */
 export function shouldOpenPalette(ev: HotkeyContext): boolean {
   if (ev.modalOpen) return false;
-  const isK = (ev.key || '').toLowerCase() === 'k';
-  const mod = !!ev.metaKey || !!ev.ctrlKey;
-  if (!isK || !mod) return false;
+  if (!isPaletteChord(ev)) return false;
   // A terminal refuses even the modified combination: its keys are its own.
   if (ev.target?.closest && ev.target.closest('[data-terminal]')) return false;
   // NOTE there is deliberately NO text-sink check here. An earlier version had one and it was

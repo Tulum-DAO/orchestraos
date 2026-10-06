@@ -11,9 +11,22 @@ import { useNavigate } from 'react-router-dom';
 import { Search, CornerDownLeft } from 'lucide-react';
 import { useAgents } from '../hooks/useAgents';
 import {
-  shouldOpenPalette, filterEntries, pushRecent, pruneRecents,
+  shouldOpenPalette, isPaletteChord, filterEntries, pushRecent, pruneRecents,
   RECENTS_KEY, type PaletteEntry,
 } from '../lib/commandPalette';
+
+/**
+ * Mac or not, decided ONCE at module load.
+ *
+ * It only selects WHICH modifier is the palette's: Cmd-K everywhere, plus Ctrl-K only where
+ * Ctrl-K is not already Cocoa's kill-to-end-of-line. Getting it wrong costs a shortcut, never
+ * correctness, so a UA sniff is the right weight of tool here.
+ */
+const IS_MAC = typeof navigator !== 'undefined'
+  && /Mac|iPhone|iPad|iPod/.test(
+    (navigator as unknown as { userAgentData?: { platform?: string } }).userAgentData?.platform
+    || navigator.platform || navigator.userAgent || '',
+  );
 
 /** Pages the palette can jump to. Kept here, not imported from the Sidebar, so a nav
  *  reshuffle cannot silently change what the palette offers. */
@@ -127,10 +140,17 @@ export function CommandPalette() {
   // refuses rather than grabs: see shouldOpenPalette for every refusal and its reason.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (open) return;
+      const chord = { key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, isMac: IS_MAC };
+      if (open) {
+        // The chord that opened it also CLOSES it. Without this the keystroke falls through to
+        // the browser while the palette is still up — on Chrome, Ctrl-K focuses the omnibox and
+        // the operator is left typing into the address bar over an open palette.
+        if (isPaletteChord(chord)) { e.preventDefault(); close(); }
+        return;
+      }
       const modalOpen = blockingOverlayOpen();
       if (!shouldOpenPalette({
-        key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, modalOpen,
+        ...chord, modalOpen,
         target: e.target as unknown as { tagName?: string; isContentEditable?: boolean; closest?: (s: string) => unknown },
       })) return;
       // preventDefault ONLY on the combination we actually handle, so the browser keeps the rest.
@@ -141,7 +161,7 @@ export function CommandPalette() {
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [open]);
+  }, [open, close]);
 
   useEffect(() => { if (open) inputRef.current?.focus(); }, [open]);
 

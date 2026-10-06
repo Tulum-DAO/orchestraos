@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  shouldOpenPalette, filterEntries, pushRecent, pruneRecents, RECENTS_MAX,
+  shouldOpenPalette, isPaletteChord, filterEntries, pushRecent, pruneRecents, RECENTS_MAX,
   type PaletteEntry,
 } from './commandPalette.ts';
 
@@ -17,6 +17,27 @@ test('Cmd-K opens the palette from the page', () => {
 
 test('Ctrl-K opens it too, for people not on a Mac', () => {
   assert.equal(shouldOpenPalette({ key: 'k', ctrlKey: true, target: target('DIV') }), true);
+});
+
+test('ON A MAC, Ctrl-K is NOT the palette — it is kill-to-end-of-line', () => {
+  // Cocoa binds Ctrl-K in every native text field. Claiming it would silently eat a standard
+  // editing key: the operator's half-written message survives untouched under a palette they
+  // did not ask for. This is the one that goes RED on an unconditional `metaKey || ctrlKey`.
+  assert.equal(shouldOpenPalette({ key: 'k', ctrlKey: true, isMac: true, target: target('TEXTAREA') }), false);
+  assert.equal(shouldOpenPalette({ key: 'k', ctrlKey: true, isMac: true, target: target('DIV') }), false);
+  // The POSITIVE CONTROL: Cmd-K on the same Mac still opens it, so the rule above is a
+  // platform distinction and not the palette refusing everything.
+  assert.equal(shouldOpenPalette({ key: 'k', metaKey: true, isMac: true, target: target('TEXTAREA') }), true);
+});
+
+test('the chord is the chord, with none of the open-time refusals attached', () => {
+  // isPaletteChord answers the second question the component asks: close on the SAME keys.
+  // It must ignore modalOpen and the terminal, which apply only to opening.
+  assert.equal(isPaletteChord({ key: 'k', metaKey: true }), true);
+  assert.equal(isPaletteChord({ key: 'k', ctrlKey: true }), true);
+  assert.equal(isPaletteChord({ key: 'k', ctrlKey: true, isMac: true }), false);
+  assert.equal(isPaletteChord({ key: 'j', metaKey: true }), false);
+  assert.equal(isPaletteChord({ key: 'k' }), false);
 });
 
 test('Cmd-K opens it from INSIDE the composer', () => {
@@ -52,25 +73,48 @@ test('an unrelated combination does nothing', () => {
 
 /* ─── what it offers ───────────────────────────────────────────────────── */
 
+/**
+ * The fixtures are ADVERSARIAL BY ARRANGEMENT, because the obvious version of this list cannot
+ * fail. With one row per query the assertion `out[0].id === X` holds for ANY scoring function
+ * that returns a positive number, so it would pass with the ranking deleted.
+ *
+ * So for each ranked query there is a row that matches the SAME query the WEAKER way, and
+ * the weaker-matching row is placed BEFORE the stronger one on purpose, in BOTH pairs:
+ * `rebuilder-bot` before `orchestraos-builder` (word-start vs substring) and `deploy-q` before
+ * `quest-orchestra` (prefix vs word-start). Strip either tier and the two collapse to equal
+ * scores, the tie falls back to input order, and the expected ordering INVERTS. The tests
+ * below assert an ORDER, never an identity.
+ *
+ * Checked by deleting each tier in turn and watching the suite go red — the first draft of
+ * this fixture had the pair in the other order and did NOT catch a deleted prefix tier.
+ */
 const entries: PaletteEntry[] = [
   { kind: 'agent', id: 'gm', label: 'gm', to: '/agent/gm' },
+  { kind: 'agent', id: 'rebuilder-bot', label: 'rebuilder-bot', to: '/agent/rebuilder-bot' },
   { kind: 'agent', id: 'orchestraos-builder', label: 'orchestraos-builder', to: '/agent/orchestraos-builder' },
+  { kind: 'agent', id: 'deploy-q', label: 'deploy-q', to: '/agent/deploy-q' },
   { kind: 'agent', id: 'quest-orchestra', label: 'quest-orchestra', to: '/agent/quest-orchestra' },
+  { kind: 'agent', id: 'sqa-runner', label: 'sqa-runner', to: '/agent/sqa-runner' },
   { kind: 'page', id: 'approvals', label: 'Approvals', to: '/approvals' },
 ];
 
 test('an empty query offers everything, in order', () => {
-  assert.equal(filterEntries(entries, '').length, 4);
+  assert.equal(filterEntries(entries, '').length, entries.length);
+  assert.equal(filterEntries(entries, '')[0].id, 'gm');
 });
 
-test('a prefix outranks a substring', () => {
+test('all three tiers are ordered: prefix, then word-start, then substring', () => {
+  // Every one of these matches 'q'. Only the RANKING separates them, so the assertion fails
+  // if any tier is removed or reordered — unlike asserting the identity of a sole survivor.
   const out = filterEntries(entries, 'q');
-  assert.equal(out[0].id, 'quest-orchestra', 'the prefix match must come first');
+  assert.deepEqual(out.map((e) => e.id), ['quest-orchestra', 'deploy-q', 'sqa-runner']);
 });
 
-test('a word-start inside a hyphenated name matches', () => {
+test('a word-start inside a hyphenated name OUTRANKS a bare substring', () => {
+  // rebuilder-bot contains 'builder' and comes FIRST in input order. If the word-start tier
+  // were dropped, both would score as substrings and rebuilder-bot would win the tie.
   const out = filterEntries(entries, 'builder');
-  assert.equal(out[0].id, 'orchestraos-builder');
+  assert.deepEqual(out.map((e) => e.id), ['orchestraos-builder', 'rebuilder-bot']);
 });
 
 test('a query matching nothing offers nothing', () => {
