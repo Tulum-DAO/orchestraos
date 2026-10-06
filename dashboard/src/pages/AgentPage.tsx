@@ -41,6 +41,7 @@ export default function AgentPage() {
         onBrainOpen={() => setBrainOpen(true)}
         onReportOpen={() => setReportOpen(true)}
         seat={seat}
+        onAgentsOpen={() => setRailOpen(true)}
       />
 
       {/* Report sheet — RED ALERT front door (docs/RED_ALERT.md) */}
@@ -86,15 +87,7 @@ export default function AgentPage() {
       {/* Composer fixed at bottom */}
       <Composer agentId={agentId} seatName={id} />
 
-      {/* Rail handle, small screens only. Sits above the composer, never over it. */}
-      <button
-        type="button"
-        onClick={() => setRailOpen(true)}
-        className="lg:hidden fixed left-2 bottom-20 z-30 px-3 py-2 rounded-full bg-neutral-800/90 border border-neutral-700 text-xs text-neutral-200 shadow"
-        aria-label="Show agents"
-      >
-        Agents
-      </button>
+
     </div>
   );
 }
