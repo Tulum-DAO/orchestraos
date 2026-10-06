@@ -95,27 +95,40 @@ Named examples, because the aggregate hides the shape:
 
 There is also a **third** tree: `orchestraos-staging`, 1,233 tracked files.
 
-**A fourth copy is *running*, and it is not a tree — do not count it as one.** A second
-`watch_gateway.py` process (pid 156416, user `ubuntu`,
-`/home/orchestra/orchestraos/scripts/watch_gateway.py`) is live on this box holding **zero
-listening sockets**, while the real one (pid 3091545, the live tree) serves
-`127.0.0.1:9091` behind the Watch funnel. That path does not exist in the host namespace at
-all: `/proc/156416/cgroup` resolves it to
-`docker-f9dcdbc2c3a8…`, i.e. container `staging`, image **`orchestraos-demo:50e9a3f`** —
-and `50e9a3f` is the current HEAD of the `orchestraos-staging` worktree already counted
-above.
+**CORRECTED 2026-10-06 — a previous revision of this section was wrong, and wrong in the
+dangerous direction.** It said the second running copy was "a pinned build artifact, not an
+editable tree … it cannot drift … What it needs is stopping." All three claims were false.
 
-So it is a **pinned build artifact, not an editable tree**: nobody commits into it, it
-cannot drift, and it needs no reconciliation. Counting it in §3 would be a category error.
-What it needs is stopping — it is already on the operator's queue as gm's card
-`apr_464a0626` (leftover demo containers, one burning 3.5 cores).
+The second `watch_gateway.py` process (pid 156416, user `ubuntu`) runs inside the Docker
+container `staging` (image `orchestraos-demo:50e9a3f`). Measured:
 
-**The hazard is still real, stated precisely:** a stray running copy that serves nothing is
-exactly where a future "but I already fixed it" goes to die. Anyone diagnosing gateway
-behaviour must confirm *which pid holds the socket* before believing any file they are
-reading is the one in service. `ss -ltnp | grep <pid>` is the check; the file path in `ps`
-output is not. (Raised by `orchestra-builder-g72`, which found the second process; the
-container attribution is this seat's correction to its "three trees" reading.)
+- **It is in service.** The container maps `18891/tcp -> 127.0.0.1:18920`, and the
+  operator's staging dashboard on that port returns HTTP 200. It is **the operator's test
+  environment for this repository** — verified PR branches are deployed into it for
+  hands-on testing. Only its *gateway* holds no listening socket; that one fact was
+  over-generalised to the whole container.
+- **It drifts.** `docker diff staging` reports **11,950 changed paths in total**; **1,765**
+  of them are inside the repository checkout, and **1,535** are under the five code
+  directories `api/`, `dashboard/`, `scripts/`, `services/` and `orchestra_cli/` — because PR
+  files are copied into the running container to test them. (The filter is stated because a
+  bare count would be ambiguous; the first draft of this correction quoted only the
+  five-directory figure.) The image tag says what it was *built* from, not
+  what it *runs*.
+- **So it is a third edited tree**, and `orchestra-builder-g72`'s original "three trees, not
+  two" reading — which this section previously "corrected" — was right.
+
+**Consequence for §6.1:** the core does not exist in two copies but in **three live ones**
+(public `main`, the live fleet tree, and the staging container), plus the
+`orchestraos-staging` worktree it was built from. Any single-source-of-truth plan must account
+for all of them. **Do not stop the `staging` container as cleanup** — it is a working
+environment, not a leftover.
+
+**How the wrong version happened, kept as a warning:** the container was verified to *be* a
+container (cgroup) and its image tag was read; "cannot drift" was then *inferred* from "has a
+tag" without running `docker diff`, and "serves nothing" from one process within it. Two facts
+were proven and a third was concluded. The hazard the original note named is still real, and
+this is a live example of it: **confirm which process actually serves the URL, and diff the
+running filesystem, before believing any file you are reading is the one in service.**
 
 ### The drift is BIDIRECTIONAL — this changes what §6.1 can safely rule
 
