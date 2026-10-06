@@ -162,12 +162,28 @@ def read_ctx_gemini(seat, *, sid=None, **_):
     #   2. else the `You are <seat>` brain-transcript declaration.
     # Order matters, and not only for coverage. resolve_gemini_cid picks the NEWEST-by-mtime
     # transcript declaring the seat, which is an EARLIER GENERATION's conversation whenever
-    # the current one has not re-declared. Live 2026-10-05: gemini-pm-adaptiv's registered
-    # sid <registered sid> was surfaced at 190027 tokens while the scan returned a
-    # stale <stale sid>,
-    # so the seat read (None, False) and could never arm -- and had that stale conversation
-    # matched a row, the seat would have reported ANOTHER generation's context, which the
-    # beat would act on. A ctx read for the wrong conversation is worse than no read.
+    # the current one has not re-declared. Had a stale conversation matched a row, the seat
+    # would have reported ANOTHER generation's context and the beat would have acted on it.
+    # A ctx read for the wrong conversation is worse than no read, so registry-first is the
+    # right order on its own merits.
+    #
+    # CORRECTION (2026-10-06, measured by orchestra-builder-g72 and re-verified here against
+    # the live registry). An earlier version of this comment said gemini-pm-adaptiv's
+    # REGISTERED sid was the surfaced one and the transcript scan returned the stale value.
+    # THAT WAS BACKWARDS, and the real shape is worse for this seat:
+    #   * canonical/registry holds <registry sid>, which `gemini_context` DOES NOT SURFACE AT
+    #     ALL (absent from all 11 status reports).
+    #   * the surfaced conversation, at 190027 tokens, is a DIFFERENT id that the registry has
+    #     NO ROW FOR, and it reports agent='unknown' so the name-match branch cannot rescue it.
+    #   * `resolve_gemini_cid` returns THE SAME value as the registry.
+    # So both resolution paths AGREE and both are stale -- the worst shape for a sid-first
+    # fix, because it looks resolved and is wrong. This ordering is still correct and still
+    # required, but it CANNOT by itself arm a seat whose REGISTRY ENTRY is the stale side.
+    # That residue is the identity-freshness / ctx:unknown gap (canonical sid != live
+    # conversation, and the live conversation never re-declares `You are <seat>`), which
+    # needs a third resolution path keyed on the LIVE PANE, or an identity_reconciler that
+    # repoints canonical when a declared conversation goes dark. Tracked as Identity Layer
+    # v1; deliberately NOT papered over here.
     cid = sid or resolve_gemini_cid(seat)
     for r in reports:
         if (cid is not None and r.get("conversation_id") == cid) or r.get("agent") == seat:
