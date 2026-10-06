@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { withTimeout, sendFailureNote } from '../../lib/composerSend';
+import { delegatedWorkLabel, type ComposerGate } from '../../lib/composerGate';
 import { useLocation } from 'react-router-dom';
 import { useAgentSettings } from '../../stores/agentSettings';
 import { useModelSelection } from '../../stores/modelSelection';
@@ -20,6 +21,10 @@ interface ComposerProps {
   agentId?: string;
   /** When set, this is a seat's own page: the box says whom you are messaging, not "Ask Arturo". */
   seatName?: string;
+  /** What the composer may do right now — see lib/composerGate.ts. Absent = send normally. */
+  gate?: ComposerGate;
+  /** Delegated agents in flight, shown as an affordance. Never gates the send. */
+  subagents?: number;
 }
 
 async function uploadAttachment(file: File): Promise<SendAttachment> {
@@ -31,7 +36,7 @@ async function uploadAttachment(file: File): Promise<SendAttachment> {
   return { upload_id: data.filename };
 }
 
-export function Composer({ agentId = 'gm', seatName }: ComposerProps) {
+export function Composer({ agentId = 'gm', seatName, gate, subagents }: ComposerProps) {
   const settings = useAgentSettings();
   const location = useLocation();
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -96,8 +101,29 @@ export function Composer({ agentId = 'gm', seatName }: ComposerProps) {
             ChatInput's leading/trailing slots. They were previously an orphan caption plus a
             second control row under Send, so five controls read as three ragged rows.
             `items-end` on that row puts every one of them on Send's baseline. */}
+        {/* WHAT THE COMPOSER CAN DO RIGHT NOW, said plainly above the box.
+            A mid-turn seat is NOT refused: Claude Code queues natively, so the honest line is
+            "this will wait", not a disabled button. The blocked cases are the two where a
+            keystroke does damage (it answers a menu) or nothing at all (the pane is down). */}
+        {gate && gate.send === 'blocked' && (
+          <p className="px-1 pb-1 text-[11px] text-amber-300" role="status">{gate.reason}</p>
+        )}
+        {gate && gate.send === 'enabled' && gate.queued && (
+          <p className="px-1 pb-1 text-[11px] text-neutral-400" role="status">
+            {gate.reason}
+            {delegatedWorkLabel(subagents) && (
+              <span className="text-neutral-500"> · {delegatedWorkLabel(subagents)}</span>
+            )}
+          </p>
+        )}
+        {gate && gate.send === 'enabled' && !gate.queued && delegatedWorkLabel(subagents) && (
+          <p className="px-1 pb-1 text-[11px] text-neutral-500" role="status">
+            {delegatedWorkLabel(subagents)}
+          </p>
+        )}
         <ChatInput
           agentId={agentId}
+          disabled={gate?.send === 'blocked'}
           placeholder={seatName ? `Message ${seatName}` : `Ask ${settings.assistantName}`}
           draft={draft}
           onDraftChange={setDraft}

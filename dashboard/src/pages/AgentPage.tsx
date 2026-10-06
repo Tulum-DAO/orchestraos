@@ -11,6 +11,7 @@ import { useFeedHealth } from '../hooks/useFeedHealth';
 import { ReportSheet } from '../components/agent/ReportSheet';
 import { useAgentSettings } from '../stores/agentSettings';
 import { spawnAgent } from '../lib/api';
+import { composerGate } from '../lib/composerGate';
 import { useAgents } from '../hooks/useAgents';
 
 export default function AgentPage() {
@@ -78,7 +79,16 @@ export default function AgentPage() {
         tool={(seatRow as { tool?: string } | undefined)?.tool}
       />
 
-      <Composer agentId={agentId} seatName={id} />
+      <Composer
+        agentId={agentId}
+        seatName={id}
+        gate={composerGate({
+          state: (seatRow as { status?: string } | undefined)?.status,
+          pendingMenu: (seatRow as { pending_menu?: unknown } | undefined)?.pending_menu,
+          subagents: (seatRow as { subagents?: number } | undefined)?.subagents,
+        })}
+        subagents={(seatRow as { subagents?: number } | undefined)?.subagents}
+      />
 
 
     </div>
