@@ -69,6 +69,11 @@ router.param('id', agentScopeParam);
 interface AgentEntry {
   id: string;
   tier: string;
+  /** Who this seat reports to, for the hierarchy view (quest-orchestra, Shaw's Quest).
+   *  OPTIONAL on purpose: only ~20 of 35 live seats set it, and a standalone seat has no
+   *  parent to invent. A consumer treats absent as "unknown", never as "reports to nobody
+   *  in particular" — those are different claims. */
+  reports_to?: string;
   name: string;
   machine: string;
   tmux_session: string;
@@ -120,6 +125,7 @@ router.get('/', async (_req: Request, res: Response) => {
             agentDefs[root] = {
               name: root,
               tier: c.tier ?? undefined,
+              reports_to: (c as { reports_to?: string }).reports_to ?? undefined,
               machine: c.machine ?? undefined,
               runtime: c.runtime ?? undefined,
               cwd: c.cwd ?? undefined,
@@ -165,6 +171,7 @@ router.get('/', async (_req: Request, res: Response) => {
       const agent: AgentEntry = {
         id,
         tier: (def.tier as string) || 'T2',
+        reports_to: (def.reports_to as string | undefined) || undefined,
         name: (def.name as string) || id,
         machine,
         tmux_session: tmuxSession,
