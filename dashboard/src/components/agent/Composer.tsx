@@ -84,11 +84,10 @@ export function Composer({ agentId = 'gm', seatName }: ComposerProps) {
     // page-level bar it ran across the sidebar, cut the rail off ~145px from the bottom (so the
     // last agent rows could not be reached), and read as a global "talk to the system" box when
     // it is scoped to ONE agent.
-    // `sticky bottom-0` rather than plain flow: ArturoPill already measures bottom-docked
-    // fixed/sticky strips and lifts itself clear of them (--arturo-pill-bottom). When the
-    // composer stopped being `fixed` it stopped being SEEN by that detector, so the "Ask Arturo"
-    // pill sat on top of the composer. Declaring the dock reuses the existing mechanism instead
-    // of adding a second one that could disagree with it.
+    // `sticky bottom-0` keeps the composer pinned to the bottom of ITS OWN column while the
+    // transcript scrolls behind it. It no longer has anything to do with the Arturo pill: the
+    // pill is now pinned to one corner at the highest z-index and sits ON TOP of this bar by
+    // design (operator ruling 2026-10-06), rather than being lifted clear of it.
     <div className="shrink-0 sticky bottom-0 z-10 bg-background border-t border-border safe-bottom">
       {/* Capped and centred on the SAME column as the transcript, so the two share one edge. */}
       <div className="relative mx-auto w-full max-w-[860px] px-3">
