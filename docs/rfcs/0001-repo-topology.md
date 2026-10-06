@@ -95,6 +95,28 @@ Named examples, because the aggregate hides the shape:
 
 There is also a **third** tree: `orchestraos-staging`, 1,233 tracked files.
 
+**A fourth copy is *running*, and it is not a tree — do not count it as one.** A second
+`watch_gateway.py` process (pid 156416, user `ubuntu`,
+`/home/orchestra/orchestraos/scripts/watch_gateway.py`) is live on this box holding **zero
+listening sockets**, while the real one (pid 3091545, the live tree) serves
+`127.0.0.1:9091` behind the Watch funnel. That path does not exist in the host namespace at
+all: `/proc/156416/cgroup` resolves it to
+`docker-f9dcdbc2c3a8…`, i.e. container `staging`, image **`orchestraos-demo:50e9a3f`** —
+and `50e9a3f` is the current HEAD of the `orchestraos-staging` worktree already counted
+above.
+
+So it is a **pinned build artifact, not an editable tree**: nobody commits into it, it
+cannot drift, and it needs no reconciliation. Counting it in §3 would be a category error.
+What it needs is stopping — it is already on the operator's queue as gm's card
+`apr_464a0626` (leftover demo containers, one burning 3.5 cores).
+
+**The hazard is still real, stated precisely:** a stray running copy that serves nothing is
+exactly where a future "but I already fixed it" goes to die. Anyone diagnosing gateway
+behaviour must confirm *which pid holds the socket* before believing any file they are
+reading is the one in service. `ss -ltnp | grep <pid>` is the check; the file path in `ps`
+output is not. (Raised by `orchestra-builder-g72`, which found the second process; the
+container attribution is this seat's correction to its "three trees" reading.)
+
 ### The drift is BIDIRECTIONAL — this changes what §6.1 can safely rule
 
 Gen 11 framed this as "live runs and is ahead; public is behind." **That is only half
