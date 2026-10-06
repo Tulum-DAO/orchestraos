@@ -332,8 +332,12 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           ))}
         </div>
       )}
-      <div className="flex gap-2">
-        <div className="flex-1 flex items-end gap-1">
+      {/* ONE ROW (Shaw: "the composer is a junk drawer" — five controls across three rows, the
+          paperclip outside the input, the model picker an orphan caption, mic and phone on a
+          different baseline). Attach and the delivery mode live INSIDE the input shell; Send is
+          the only thing outside it. */}
+      <div className="flex items-end gap-2">
+        <div className="flex-1 flex items-end gap-1 bg-neutral-950 border border-neutral-800 rounded-lg px-1.5 focus-within:border-neutral-600 transition-colors">
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={!attachSupported}
@@ -365,7 +369,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
             placeholder={placeholder || 'Message your agent...'}
             rows={2}
             disabled={disabled}
-            className="flex-1 bg-neutral-950 border border-neutral-800 rounded-lg px-3 py-2 text-sm text-neutral-300 placeholder-neutral-600 resize-none focus:outline-none focus:border-neutral-600 disabled:opacity-50"
+            className="flex-1 bg-transparent px-1 py-2 text-sm text-neutral-300 placeholder-neutral-600 resize-none focus:outline-none disabled:opacity-50"
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
@@ -373,31 +377,39 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
               }
             }}
           />
-        </div>
-        <div className="flex flex-col gap-1 self-end">
-          <button
-            onClick={() => handleSend()}
-            disabled={!canSend}
-            className={clsx(
-              'flex items-center gap-1 px-4 py-2 min-h-[44px] rounded-lg text-sm font-medium transition-colors',
-              !canSend
-                ? 'bg-neutral-800 text-neutral-600 cursor-not-allowed'
-                : 'bg-blue-500/15 text-blue-400 hover:bg-blue-500/25'
-            )}
-          >
-            <Send size={14} />
-            {sending ? '...' : injectMode ? 'Inject' : 'Send'}
-          </button>
+          {/* The delivery mode is a REAL control, not debug output — it chooses between typing
+              into the agent's terminal now and queuing to its inbox. It read as a leaked badge
+              because it was an unlabelled amber chip under the button, so it now sits inside the
+              input, says what it does, and never competes with the primary action. */}
           <button
             onClick={() => setInjectMode(!injectMode)}
+            title={injectMode
+              ? 'Delivering NOW, straight into the agent\u2019s terminal. Click to queue to its inbox instead.'
+              : 'Queuing to the agent\u2019s INBOX, read at its next turn. Click to deliver now instead.'}
             className={clsx(
-              'text-[10px] px-1.5 py-0.5 rounded transition-colors text-center',
-              injectMode ? 'text-amber-400 bg-amber-500/10' : 'text-neutral-600 hover:text-neutral-400'
+              'shrink-0 self-end mb-2 text-[10px] px-1.5 py-0.5 rounded border transition-colors',
+              injectMode
+                ? 'text-neutral-300 border-neutral-700 hover:bg-neutral-800'
+                : 'text-neutral-400 border-neutral-800 hover:bg-neutral-800'
             )}
           >
-            {injectMode ? 'inject' : 'inbox'}
+            {injectMode ? 'now' : 'inbox'}
           </button>
         </div>
+        {/* "Send" is what a person does. "Inject" is plumbing. */}
+        <button
+          onClick={() => handleSend()}
+          disabled={!canSend}
+          className={clsx(
+            'shrink-0 flex items-center gap-1 px-4 py-2 min-h-[44px] rounded-lg text-sm font-medium transition-colors',
+            !canSend
+              ? 'bg-neutral-800 text-neutral-600 cursor-not-allowed'
+              : 'bg-blue-500/15 text-blue-400 hover:bg-blue-500/25'
+          )}
+        >
+          <Send size={14} />
+          {sending ? '…' : 'Send'}
+        </button>
       </div>
       {busy && (
         <div className="mt-1.5 rounded-lg border border-amber-700/50 bg-amber-500/5 px-2.5 py-1.5">

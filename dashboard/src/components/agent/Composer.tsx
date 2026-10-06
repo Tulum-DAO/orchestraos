@@ -80,13 +80,22 @@ export function Composer({ agentId = 'gm', seatName }: ComposerProps) {
   };
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 bg-background border-t border-border safe-bottom">
-      {/* Composer wrapper with ChatInput extension */}
-      <div className="relative">
+    // NOT `fixed`: the composer belongs to the chat column, not to the window. As a fixed
+    // page-level bar it ran across the sidebar, cut the rail off ~145px from the bottom (so the
+    // last agent rows could not be reached), and read as a global "talk to the system" box when
+    // it is scoped to ONE agent.
+    // `sticky bottom-0` rather than plain flow: ArturoPill already measures bottom-docked
+    // fixed/sticky strips and lifts itself clear of them (--arturo-pill-bottom). When the
+    // composer stopped being `fixed` it stopped being SEEN by that detector, so the "Ask Arturo"
+    // pill sat on top of the composer. Declaring the dock reuses the existing mechanism instead
+    // of adding a second one that could disagree with it.
+    <div className="shrink-0 sticky bottom-0 z-10 bg-background border-t border-border safe-bottom">
+      {/* Capped and centred on the SAME column as the transcript, so the two share one edge. */}
+      <div className="relative mx-auto w-full max-w-[860px] px-3">
         {/* Right gutter reserved so ChatInput's own Inject/Send + mode-toggle
             column (which is part of its normal flex layout) doesn't sit
             under the voice/call cluster overlaid below. */}
-        <div className="pr-28">
+        <div>
           <ChatInput
             agentId={agentId}
             placeholder={seatName ? `Message ${seatName}` : `Ask ${settings.assistantName}`}
@@ -96,11 +105,19 @@ export function Composer({ agentId = 'gm', seatName }: ComposerProps) {
           />
         </div>
 
-        {/* Extended features overlaid on ChatInput — only the cluster itself
-            is clickable, the rest of this layer must not eat clicks meant
-            for ChatInput underneath. */}
-        <div className="absolute inset-0 pointer-events-none">
-          <div className="absolute right-2 bottom-2 flex items-center gap-2 pointer-events-auto">
+        {/* ONE row of secondary controls, on the composer's own baseline and inside its column.
+            They were previously an absolutely-positioned voice cluster OVER the input plus an
+            orphan caption below it, which is why five controls read as three ragged rows. */}
+        <div className="flex items-center gap-3 px-1 pb-1">
+          <button
+            type="button"
+            onClick={() => setSheetOpen(true)}
+            className="text-[10px] text-foreground/60 hover:text-foreground transition-colors"
+            title="Choose the model this agent runs"
+          >
+            {modelLabel ?? 'Choose a model'}
+          </button>
+          <div className="ml-auto flex items-center gap-2">
             <VoiceControls
               route={location.pathname}
               focusedEntity={null}
@@ -111,15 +128,6 @@ export function Composer({ agentId = 'gm', seatName }: ComposerProps) {
             />
           </div>
         </div>
-
-        {/* AgentChip -> ModelSelectorSheet (B2) */}
-        <button
-          type="button"
-          onClick={() => setSheetOpen(true)}
-          className="text-[10px] text-foreground/60 hover:text-foreground px-4 py-1 transition-colors"
-        >
-          {modelLabel ?? 'Choose a model'}
-        </button>
         <ModelSelectorSheet open={sheetOpen} onClose={() => setSheetOpen(false)} />
       </div>
     </div>

@@ -37,17 +37,17 @@ export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen, seat }: TopBarPr
         </div>
       )}
 
-      <button
-        onClick={cycleTheme}
-        className="p-2 text-foreground hover:bg-muted rounded-lg transition-colors"
-        aria-label="Toggle theme"
-      >
-        {theme === 'light' && <Sun size={24} />}
-        {theme === 'dark' && <Moon size={24} />}
-        {theme === 'system' && <Monitor size={24} />}
-      </button>
 
       <div className="flex items-center gap-1">
+        <button
+          onClick={cycleTheme}
+          className="p-2 text-foreground hover:bg-muted rounded-lg transition-colors"
+          aria-label="Toggle theme"
+        >
+          {theme === 'light' && <Sun size={24} />}
+          {theme === 'dark' && <Moon size={24} />}
+          {theme === 'system' && <Monitor size={24} />}
+        </button>
         {/* Report button — the front door of the RED ALERT / ticket system (the operator 2026-09-18) */}
         {onReportOpen && (
           <button

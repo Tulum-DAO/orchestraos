@@ -26,6 +26,7 @@ export function Feed({ agentId = 'gm' }: FeedProps) {
       strandedText={typeof row?.stranded === 'string' ? row.stranded : (row?.stranded as { text?: string } | undefined)?.text}
       pendingMenu={(row?.pending_menu as never) ?? null}
       feed={feed}
+      hideStatusBar
     />
   );
 }

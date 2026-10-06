@@ -36,6 +36,9 @@ interface Props {
    *  very pill for an hour while the API was down. Optional so the fixture harness, which has
    *  no feed, renders unchanged. */
   feed?: FeedVerdict;
+  /** The agent page carries its own LiveStatusLine above the composer, so it suppresses this
+   *  bar. Two renderings of one fact is how the sidebar and the page came to disagree. */
+  hideStatusBar?: boolean;
 }
 
 // State vocabulary + colors live in lib/agentStatus (shared with the title dot +
@@ -55,7 +58,7 @@ function StatePill({ state, feed }: { state: LiveState; feed?: FeedVerdict }) {
   );
 }
 
-export default function TranscriptChatView({ agentId, fixtureItems, state = 'unknown', strandedText, pendingMenu, compact, feed }: Props) {
+export default function TranscriptChatView({ agentId, fixtureItems, state = 'unknown', strandedText, pendingMenu, compact, feed, hideStatusBar }: Props) {
   const [items, setItems] = useState<ChatItem[]>(fixtureItems || []);
   const [loading, setLoading] = useState(!fixtureItems);
   const [err, setErr] = useState<string | null>(null);
@@ -141,9 +144,15 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
         className={
           compact
             ? 'bg-neutral-950 rounded-lg p-3 max-h-96 overflow-y-auto space-y-2.5'
-            : 'flex-1 overflow-y-auto p-4 space-y-2.5 min-h-0 overscroll-y-contain'
+            // CAPPED AND CENTRED (Shaw: prose ran ~1460px wide and the input ~1660px — unreadable,
+            // and the right edges of tool cards and user bubbles were 130px apart because each
+            // sized itself to a different container). ONE column, one pair of edges, shared with
+            // the composer. `justify-end` anchors the conversation to the BOTTOM like every chat
+            // app, closing the ~400px dead gap between the last message and the composer.
+            : 'flex-1 overflow-y-auto min-h-0 overscroll-y-contain flex flex-col justify-end'
         }
       >
+        <div className={compact ? undefined : "w-full max-w-[860px] mx-auto px-4 py-4 space-y-2.5"}>
         {loading ? (
           <div className="flex items-center gap-2 px-1 py-2">
             <div className="w-2 h-2 bg-neutral-500 rounded-full animate-pulse" />
@@ -172,15 +181,20 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
             THIS IS THE "FLASHING YELLOW" OF THE P1 — it pulsed amber for an hour off a cached
             'working' while the API was down. It is a claim about RIGHT NOW, so it requires a
             live feed, not just a remembered state. */}
-        {live && st === 'working' && (
+        {live && st === 'working' && !hideStatusBar && (
           <div className="flex items-center gap-2 px-1 py-1">
             <div className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
             <span className="text-[11px] text-neutral-500 italic">agent is working…</span>
           </div>
         )}
+        </div>
       </div>
 
-      {/* status bar: live state pill + optional unsent-draft chip */}
+      {/* Status bar. The AGENT PAGE now carries a LiveStatusLine above its composer, so this
+          bar is the compact/embedded surface's version of it (AgentCard). Two renderings of one
+          fact is how the sidebar and the page came to disagree; they share lib/feedLiveness so
+          they cannot say different things, and the page does not show both. */}
+      {!hideStatusBar && (
       <div className="flex items-center gap-3 px-3 py-1.5 border-t border-neutral-800/50">
         <StatePill state={st} feed={feed} />
         {strandedText && (
@@ -189,6 +203,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
           </span>
         )}
       </div>
+      )}
     </div>
   );
 }

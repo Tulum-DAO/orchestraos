@@ -103,7 +103,31 @@ export function relativeAgo(ts?: string): string {
   return `${Math.round(hr / 24)}d ago`;
 }
 
-export function UserBubble({ text, isSystem, queued }: { text: string; isSystem?: boolean; queued?: boolean }) {
+
+/**
+ * When a message happened. Shaw: "No timestamps anywhere. You can't tell whether 'Hello? Are you
+ * still there?' was sent 5 seconds or 5 hours ago, and that is the one question this page has to
+ * answer." Clock time for anything older than a minute, "just now" under it, and the full local
+ * datetime on hover. Absent ts renders NOTHING rather than a guessed time.
+ */
+export function MessageTime({ ts, align = 'left' }: { ts?: string; align?: 'left' | 'right' }) {
+  if (!ts) return null;
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return null;
+  const ageS = (Date.now() - d.getTime()) / 1000;
+  const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const label = ageS < 60 ? 'just now' : hhmm;
+  return (
+    <span
+      className={`block mt-0.5 text-[10px] text-neutral-600 ${align === 'right' ? 'text-right' : 'text-left'}`}
+      title={d.toLocaleString()}
+    >
+      {label}
+    </span>
+  );
+}
+
+export function UserBubble({ text, isSystem, queued, ts }: { text: string; isSystem?: boolean; queued?: boolean; ts?: string }) {
   const [open, setOpen] = useState(false);
   if (isSystem) {
     return (
@@ -127,6 +151,7 @@ export function UserBubble({ text, isSystem, queued }: { text: string; isSystem?
           queued
         </span>
       )}
+      <MessageTime ts={ts} align="right" />
     </div>
   );
 }
@@ -137,7 +162,7 @@ export function QueuedBatchCard({ count, entries }: { count: number; entries: { 
   const [open, setOpen] = useState(false);
   return (
     <div className="flex justify-start">
-      <div className="max-w-[92%] w-full rounded-lg border border-neutral-800 bg-neutral-900/40 overflow-hidden">
+      <div className="w-full rounded-lg border border-neutral-800 bg-neutral-900/40 overflow-hidden">
         <button
           onClick={() => setOpen((o) => !o)}
           className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-neutral-800/40"
@@ -181,7 +206,7 @@ export function ThinkingCard({ text }: { text: string }) {
   const firstLine = text.split('\n').find((l) => l.trim())?.slice(0, 80) || 'Thinking';
   return (
     <div className="flex justify-start">
-      <div className="max-w-[90%] w-full">
+      <div className="w-full">
         <button
           onClick={() => setOpen((o) => !o)}
           className="flex items-center gap-1.5 text-[11px] text-neutral-500 hover:text-neutral-300 italic"
@@ -212,7 +237,7 @@ export function ToolCard({ block }: { block: ToolBlock }) {
 
   return (
     <div className="flex justify-start">
-      <div className={`max-w-[92%] w-full rounded-lg border ${block.isError ? 'border-red-800/60' : 'border-neutral-800'} bg-neutral-900/40 overflow-hidden`}>
+      <div className={`w-full rounded-lg border ${block.isError ? 'border-red-800/60' : 'border-neutral-800'} bg-neutral-900/40 overflow-hidden`}>
         {/* header */}
         <button
           onClick={() => setOpen((o) => !o)}
@@ -280,7 +305,11 @@ export function ToolGroupCard({ group, interrupted = false }: { group: ToolGroup
     : (dur ? `Worked for ${dur}` : 'Worked');
   return (
     <div className="flex justify-start">
-      <div className={`max-w-[92%] w-full rounded-lg border ${s.failed > 0 ? 'border-red-800/50' : 'border-neutral-800'} bg-neutral-900/30 overflow-hidden`}>
+      {/* RED MEANS THE TURN FAILED, not "a call inside a successful run failed" (Shaw: a run that
+          ended in "tests pass" wore a red border because one command failed on the way, while
+          "Stopped after 9s" — the actual problem — was a calm yellow). A partial failure is
+          already named in the headline; the border is reserved for a turn that got nowhere. */}
+      <div className={`w-full rounded-lg border ${s.failed > 0 && s.failed === tools.length ? 'border-red-800/50' : 'border-neutral-800'} bg-neutral-900/30 overflow-hidden`}>
         <button
           onClick={() => setOpen((o) => !o)}
           aria-expanded={open}
@@ -339,7 +368,7 @@ export function RenderNodeView({ node }: { node: RenderNode }) {
       }
       return hasPasteMarkers(node.text)
         ? <MessageGroup text={node.text} sender="user" />
-        : <UserBubble text={node.text} queued={node.queued} />;
+        : <UserBubble text={node.text} queued={node.queued} ts={node.ts} />;
     }
     case 'queued_batch':
       return <QueuedBatchCard count={node.count} entries={node.entries} />;
@@ -348,8 +377,9 @@ export function RenderNodeView({ node }: { node: RenderNode }) {
         ? <MessageGroup text={node.text} sender="assistant" />
         : (
           <div className="flex justify-start">
-            <div className="max-w-[92%] w-full">
+            <div className="w-full">
               <Markdown text={node.text} />
+              <MessageTime ts={node.ts} />
             </div>
           </div>
         );
