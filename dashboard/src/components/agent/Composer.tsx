@@ -91,42 +91,39 @@ export function Composer({ agentId = 'gm', seatName }: ComposerProps) {
     <div className="shrink-0 sticky bottom-0 z-10 bg-background border-t border-border safe-bottom">
       {/* Capped and centred on the SAME column as the transcript, so the two share one edge. */}
       <div className="relative mx-auto w-full max-w-[860px] px-3">
-        {/* Right gutter reserved so ChatInput's own Inject/Send + mode-toggle
-            column (which is part of its normal flex layout) doesn't sit
-            under the voice/call cluster overlaid below. */}
-        <div>
-          <ChatInput
-            agentId={agentId}
-            placeholder={seatName ? `Message ${seatName}` : `Ask ${settings.assistantName}`}
-            draft={draft}
-            onDraftChange={setDraft}
-            onSend={handleSend}
-          />
-        </div>
-
-        {/* ONE row of secondary controls, on the composer's own baseline and inside its column.
-            They were previously an absolutely-positioned voice cluster OVER the input plus an
-            orphan caption below it, which is why five controls read as three ragged rows. */}
-        <div className="flex items-center gap-3 px-1 pb-1">
-          <button
-            type="button"
-            onClick={() => setSheetOpen(true)}
-            className="text-[10px] text-foreground/60 hover:text-foreground transition-colors"
-            title="Choose the model this agent runs"
-          >
-            {modelLabel ?? 'Choose a model'}
-          </button>
-          <div className="ml-auto flex items-center gap-2">
-            <VoiceControls
-              route={location.pathname}
-              focusedEntity={null}
-              onPartial={setDraft}
-              onFinal={setDraft}
-              onCallEnded={(marker) => setDraft((d) => (d ? d + '\n' : '') + marker)}
-              showCallButton={draft.trim() === ''}
-            />
-          </div>
-        </div>
+        {/* ONE row. The model picker and the voice controls ride the SEND ROW itself via
+            ChatInput's leading/trailing slots. They were previously an orphan caption plus a
+            second control row under Send, so five controls read as three ragged rows.
+            `items-end` on that row puts every one of them on Send's baseline. */}
+        <ChatInput
+          agentId={agentId}
+          placeholder={seatName ? `Message ${seatName}` : `Ask ${settings.assistantName}`}
+          draft={draft}
+          onDraftChange={setDraft}
+          onSend={handleSend}
+          leading={
+            <button
+              type="button"
+              onClick={() => setSheetOpen(true)}
+              className="shrink-0 self-end mb-3 max-w-[120px] truncate text-[10px] text-foreground/60 hover:text-foreground transition-colors"
+              title="Choose the model this agent runs"
+            >
+              {modelLabel ?? 'Choose a model'}
+            </button>
+          }
+          trailing={
+            <div className="shrink-0 self-end flex items-center gap-2">
+              <VoiceControls
+                route={location.pathname}
+                focusedEntity={null}
+                onPartial={setDraft}
+                onFinal={setDraft}
+                onCallEnded={(marker) => setDraft((d) => (d ? d + '\n' : '') + marker)}
+                showCallButton={draft.trim() === ''}
+              />
+            </div>
+          }
+        />
         <ModelSelectorSheet open={sheetOpen} onClose={() => setSheetOpen(false)} />
       </div>
     </div>

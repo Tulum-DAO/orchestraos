@@ -21,10 +21,15 @@ export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen, seat }: TopBarPr
   };
 
   return (
-    <div className="sticky top-0 z-20 flex items-center justify-between px-4 py-3 border-b bg-background border-border safe-top">
+    // `justify-between` across THREE children is what put the theme toggle in the middle of the
+    // bar with nothing either side of it. The bar now has exactly two groups — the seat identity
+    // on the left and every control on the right — so nothing floats unanchored.
+    <div className="sticky top-0 z-20 flex items-center gap-2 px-4 py-3 border-b bg-background border-border safe-top">
+      {/* The desktop sidebar is permanently visible (DashboardLayout renders it at md+), so this
+          drawer trigger is a SECOND nav entry there. It is the mobile affordance only. */}
       <button
         onClick={onMenuOpen}
-        className="p-2 text-foreground hover:bg-muted rounded-lg transition-colors"
+        className="md:hidden p-2 text-foreground hover:bg-muted rounded-lg transition-colors"
         aria-label="Open menu"
       >
         <Menu size={24} />
@@ -38,7 +43,7 @@ export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen, seat }: TopBarPr
       )}
 
 
-      <div className="flex items-center gap-1">
+      <div className="ml-auto flex items-center gap-1">
         <button
           onClick={cycleTheme}
           className="p-2 text-foreground hover:bg-muted rounded-lg transition-colors"

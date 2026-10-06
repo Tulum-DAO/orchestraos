@@ -1,7 +1,7 @@
 /**
  * ChatInput — text input with send button, inject/inbox toggle, and file upload.
  */
-import { useState, useRef } from 'react';
+import { useState, useRef, type ReactNode } from 'react';
 import { clsx } from 'clsx';
 import { Send, Paperclip, X, ClipboardList } from 'lucide-react';
 import { injectAgentVerified, type InjectResult } from '../../lib/api';
@@ -49,6 +49,12 @@ interface Props {
     payload: { text: string; attachments: File[] },
     opts: { force: boolean }
   ) => Promise<{ ok: boolean; note?: string; queued?: boolean; held?: boolean }>;
+  /** Rendered on the SEND ROW, before the input. Secondary controls belong on this baseline
+      rather than stacked underneath it — a second row of controls under Send reads as a
+      junk drawer, which is the defect these two slots exist to prevent. */
+  leading?: ReactNode;
+  /** Rendered on the SEND ROW, between the input and Send. */
+  trailing?: ReactNode;
 }
 
 async function uploadImage(file: File): Promise<string> {
@@ -60,7 +66,7 @@ async function uploadImage(file: File): Promise<string> {
   return data.path;
 }
 
-export default function ChatInput({ agentId, disabled, placeholder, attachSupported = true, draft, onDraftChange, onSend }: Props) {
+export default function ChatInput({ agentId, disabled, placeholder, attachSupported = true, draft, onDraftChange, onSend, leading, trailing }: Props) {
   const [internalText, setInternalText] = useState('');
   // Single accessor pair every read/clear/paste/send path goes through, so
   // there is exactly one send path regardless of controlled vs internal
@@ -337,6 +343,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           different baseline). Attach and the delivery mode live INSIDE the input shell; Send is
           the only thing outside it. */}
       <div className="flex items-end gap-2">
+        {leading}
         <div className="flex-1 flex items-end gap-1 bg-neutral-950 border border-neutral-800 rounded-lg px-1.5 focus-within:border-neutral-600 transition-colors">
           <button
             onClick={() => fileInputRef.current?.click()}
@@ -396,6 +403,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
             {injectMode ? 'now' : 'inbox'}
           </button>
         </div>
+        {trailing}
         {/* "Send" is what a person does. "Inject" is plumbing. */}
         <button
           onClick={() => handleSend()}
