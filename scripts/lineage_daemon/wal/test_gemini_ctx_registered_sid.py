@@ -5,14 +5,25 @@ Why this blocks the whole programme. A seat can only be blue-green ARMED if
 fail-closed by design. An unarmed seat does not auto-rotate, so every unarmed live seat is
 a seat a human has to ask to rotate. That is the cost of this bug.
 
-MEASURED on the live fleet 2026-10-05: `gemini-pm-adaptiv` was LIVE and UNARMED, refused
-`read_ctx-not-fresh`. Its context was being surfaced the whole time — `gemini_context`
-reported conversation `<registered sid>` at 190027 tokens — and the registry had that
-same `<registered sid>`
-registered as the seat's session id. But `read_ctx_gemini(seat, **_)` SWALLOWED the `sid`
-kwarg that `arm_hooks.arm_seat` deliberately resolves and passes, and instead keyed only on
-`resolve_gemini_cid(seat)`, which scans brain transcripts for a `You are <seat>`
-declaration and returned a STALE conversation (`<stale sid>`) matching no live row.
+THE BUG ITSELF: `read_ctx_gemini(seat, **_)` SWALLOWED the `sid` kwarg that
+`arm_hooks.arm_seat` deliberately resolves and passes, and keyed only on
+`resolve_gemini_cid(seat)`, which scans brain transcripts for a `You are <seat>` declaration
+and so answers with an EARLIER GENERATION's conversation whenever the current one has not
+re-declared. Registry-first is the documented order and was simply never implemented.
+
+CORRECTION (2026-10-06). An earlier version of this docstring said `gemini-pm-adaptiv`'s
+REGISTERED sid was the surfaced conversation and the transcript scan returned the stale one.
+THAT WAS BACKWARDS. Measured by orchestra-builder-g72 and re-verified here against the live
+registry, the real shape is worse for that seat: canonical holds a sid that `gemini_context`
+does not surface at all, the one conversation that IS surfaced (190027 tokens) has no registry
+row and reports agent='unknown' so the name-match branch cannot rescue it, and
+`resolve_gemini_cid` returns the SAME stale value as the registry. Both paths agree and both
+are stale — the worst shape for a sid-first fix, because it looks resolved and is wrong.
+
+So the ordering these tests pin is still correct and still required, but it does NOT on its own
+arm a seat whose REGISTRY ENTRY is the stale side. That residue is the identity-freshness /
+ctx:unknown gap and is tracked as Identity Layer v1, not papered over here. The tests below use
+synthetic ids and assert the ORDERING property, which is what they were always really pinning.
 
 The adapter's own docstring already described the correct behaviour — "first by the seat's
 registered session_id (cid) if agent-sessions maps it (finding #1), else by the seat's
