@@ -30,13 +30,6 @@ export interface HotkeyContext {
   modalOpen?: boolean;
 }
 
-/** Does this element swallow keystrokes as TEXT? */
-function isTextSink(t: HotkeyContext['target']): boolean {
-  if (!t) return false;
-  const tag = (t.tagName || '').toLowerCase();
-  return tag === 'input' || tag === 'textarea' || !!t.isContentEditable;
-}
-
 /**
  * Should this keystroke open the palette?
  *
@@ -58,7 +51,11 @@ export function shouldOpenPalette(ev: HotkeyContext): boolean {
   if (!isK || !mod) return false;
   // A terminal refuses even the modified combination: its keys are its own.
   if (ev.target?.closest && ev.target.closest('[data-terminal]')) return false;
-  if (isTextSink(ev.target) && !mod) return false;
+  // NOTE there is deliberately NO text-sink check here. An earlier version had one and it was
+  // UNREACHABLE — the `!mod` return above already covers every case it claimed to — so it
+  // documented a protection it did not provide. Nothing needs it: no bare-letter shortcut is
+  // bound, so a keystroke in a text input can only reach this far WITH the modifier held, and
+  // Cmd-K from inside the composer is a case we deliberately want to work.
   return true;
 }
 

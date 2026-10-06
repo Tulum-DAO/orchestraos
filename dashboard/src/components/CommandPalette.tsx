@@ -53,7 +53,14 @@ function writeRecents(ids: string[]) {
  * applied inconsistently across four components.
  */
 function blockingOverlayOpen(): boolean {
-  const els = document.querySelectorAll<HTMLElement>('[aria-modal="true"], .fixed.inset-0');
+  // EXCLUDE OUR OWN BACKDROP. It is `.fixed.inset-0` too, so without this the palette reports
+  // itself as a blocking overlay. The `if (open) return` in the hotkey handler masks that
+  // today, but a helper that is wrong whenever the thing it guards is open is a trap for the
+  // next caller — found in review, fixed at the source rather than left leaning on a guard
+  // somewhere else.
+  const els = document.querySelectorAll<HTMLElement>(
+    '[aria-modal="true"]:not([data-command-palette]), .fixed.inset-0:not([data-command-palette])',
+  );
   for (const el of els) {
     const r = el.getBoundingClientRect();
     if (r.width >= window.innerWidth * 0.9 && r.height >= window.innerHeight * 0.9) return true;
@@ -152,6 +159,7 @@ export function CommandPalette() {
 
   return (
     <div
+      data-command-palette
       className="fixed inset-0 z-[100] flex items-start justify-center bg-black/50 p-4 pt-[12vh]"
       onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}
     >
@@ -159,6 +167,7 @@ export function CommandPalette() {
         ref={panelRef}
         role="dialog"
         aria-modal="true"
+        data-command-palette
         aria-label="Go to"
         className="w-full max-w-[560px] overflow-hidden rounded-xl border border-neutral-700 bg-neutral-900 shadow-2xl"
         onKeyDown={(e) => {
