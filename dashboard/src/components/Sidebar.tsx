@@ -1,4 +1,5 @@
-import { NavLink } from 'react-router-dom';
+import { useState } from 'react';
+import { NavLink, useNavigate, useMatch } from 'react-router-dom';
 import {
   LayoutDashboard,
   Bot,
@@ -17,11 +18,26 @@ import {
   Inbox,
   MessagesSquare,
   Sparkle,
+  ChevronRight,
+  ChevronDown,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import type { LucideIcon } from 'lucide-react';
 import { useUser } from '../hooks/useUser';
 import { ASSISTANT_V2_ENABLED } from '../lib/assistant/config';
+import { AgentRail } from './workbench/AgentRail';
+
+// The agents are the work; the pages are where you go occasionally. "More" remembers whether you
+// opened it, so anyone who lives in Tasks or Analytics keeps them visible after one click and the
+// default never has to be re-litigated. Reading localStorage can THROW (private windows, blocked
+// site data), so it is wrapped — a storage failure must not take the whole nav down with it.
+const MORE_KEY = 'orchestra.sidebar.moreOpen';
+function readMoreOpen(): boolean {
+  try { return localStorage.getItem(MORE_KEY) === '1'; } catch { return false; }
+}
+function writeMoreOpen(v: boolean): void {
+  try { localStorage.setItem(MORE_KEY, v ? '1' : '0'); } catch { /* not worth failing the nav for */ }
+}
 
 interface NavItem {
   to: string;
@@ -104,6 +120,9 @@ interface SidebarProps {
 
 export function Sidebar({ onNavigate }: SidebarProps = {}) {
   const { data: user } = useUser();
+  const navigate = useNavigate();
+  const agentMatch = useMatch('/agent/:id');
+  const [moreOpen, setMoreOpen] = useState(readMoreOpen);
   const username = user?.username || 'operator';
   const isAdmin = !user || user.role === 'admin';
 
@@ -115,18 +134,40 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
           {isAdmin ? 'agent command center' : `${username}'s workspace`}
         </p>
       </div>
-      <nav className="flex-1 p-3 space-y-0.5 overflow-y-auto min-h-0">
-        {assistantNav.length > 0 && <NavItems items={assistantNav} />}
-        <NavItems items={coreNav} />
-        <SectionHeader label="Operations" />
-        <NavItems items={operationsNav} />
-        <SectionHeader label="Intelligence" />
-        <NavItems items={intelligenceNav} />
-        <SectionHeader label="Projects" />
-        <NavItems items={projectsNav} />
-        <SectionHeader label="Comms" />
-        <NavItems items={commsNav} />
-      </nav>
+      {/* ONE column, agents first (PLAN C7). The rail used to be a SECOND column beside this one
+          on the agent page, which read as two menus; it now lives here and the page has none. */}
+      <div className="flex-1 flex flex-col min-h-0 overflow-y-auto">
+        <AgentRail
+          currentId={agentMatch?.params.id}
+          onPick={(next) => { navigate(`/agent/${next}`); onNavigate?.(); }}
+        />
+
+        <nav className="p-3 space-y-0.5 border-t border-neutral-800">
+          <button
+            type="button"
+            onClick={() => { const v = !moreOpen; setMoreOpen(v); writeMoreOpen(v); }}
+            aria-expanded={moreOpen}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200 transition-colors"
+          >
+            {moreOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            More
+          </button>
+          {moreOpen && (
+            <>
+              {assistantNav.length > 0 && <NavItems items={assistantNav} />}
+              <NavItems items={coreNav} />
+              <SectionHeader label="Operations" />
+              <NavItems items={operationsNav} />
+              <SectionHeader label="Intelligence" />
+              <NavItems items={intelligenceNav} />
+              <SectionHeader label="Projects" />
+              <NavItems items={projectsNav} />
+              <SectionHeader label="Comms" />
+              <NavItems items={commsNav} />
+            </>
+          )}
+        </nav>
+      </div>
 
       {/* User card */}
       <div className="p-3 border-t border-neutral-800 shrink-0">
