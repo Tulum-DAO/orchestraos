@@ -283,17 +283,20 @@ export function ToolGroupCard({ group }: { group: ToolGroupNode }) {
         <button
           onClick={() => setOpen((o) => !o)}
           aria-expanded={open}
-          className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-neutral-800/40"
+          className="w-full flex items-start gap-2 px-2.5 py-1.5 text-left hover:bg-neutral-800/40"
         >
-          <span className="text-[10px] text-neutral-500 w-3">{open ? '▾' : '▸'}</span>
-          <span className={`text-[11px] font-medium ${s.running > 0 ? 'text-orange-300' : 'text-neutral-300'}`}>{lead}</span>
-          {s.headline && <span className="text-[11px] text-neutral-500 truncate flex-1">— {s.headline}</span>}
-          <span className="text-[10px] text-neutral-600 ml-auto shrink-0">
+          <span className="text-[10px] text-neutral-500 w-3 leading-[17px] shrink-0">{open ? '▾' : '▸'}</span>
+          {/* Wraps rather than truncating: on a phone the clipped tail was the "(1 failed)". */}
+          <span className="text-[11px] leading-[17px] min-w-0 flex-1 break-words">
+            <span className={`font-medium ${s.running > 0 ? 'text-orange-300' : 'text-neutral-300'}`}>{lead}</span>
+            {s.headline && <span className="text-neutral-500"> — {s.headline}</span>}
+          </span>
+          <span className="text-[10px] leading-[17px] text-neutral-600 shrink-0">
             {tools.length} call{tools.length === 1 ? '' : 's'}
           </span>
         </button>
         {open && (
-          <div className="border-t border-neutral-800 p-1.5 space-y-1.5">
+          <div className="border-t border-neutral-800 p-1.5 space-y-1.5 [&>div>div]:max-w-full">
             {group.children.map((c) => <RenderNodeView key={c.key} node={c} />)}
           </div>
         )}
