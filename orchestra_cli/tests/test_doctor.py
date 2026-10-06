@@ -542,7 +542,8 @@ def test_ADVISORY_missing_rows_are_MARKED_so_the_table_matches_the_footer(tmp_pa
     assert "MISSING*" in line["runtime:claude"]      # advisory: clears with the login
     assert "MISSING*" in line["runtime:any"]
     assert "MISSING*" not in line["runtime:login"]   # the one thing to act on
-    assert "advisory" in text.lower()                # a legend explains the marker
+    assert "clears when the required row(s) are resolved" in text  # the legend itself,
+    #                          not this test's name leaking in through tmp_path
 
 
 def test_the_login_row_DETAIL_is_not_truncated_by_the_70_char_cap(tmp_path):
@@ -572,6 +573,8 @@ def test_marker_is_RENDER_ONLY_json_and_status_data_are_untouched(tmp_path):
     root = _repo(tmp_path)
     st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
     checks = D.run_doctor(st, _probes(which=("tmux", "node", "npm"), cmd_out=""))
+    D.render_table(checks)   # the mutation this guards against happens HERE; without this
+    #                          line the control cannot fail and proves nothing
     assert all(c.status in (D.OK, D.WARN, D.INFO, D.MISSING) for c in checks)
     assert "*" not in _by_name(checks)["runtime:claude"].status
     import json as _j

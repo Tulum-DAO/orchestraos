@@ -217,11 +217,12 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
         installed = [r for r in results if r["installed"]]
         pick = (installed or results)[0]
         if installed:
-            detail = (f"no agent CLI is authed; {pick['cli']} is installed "
-                      f"({len(installed)}/{len(results)} enabled)")
+            detail = (f"no agent CLI is authed; {len(installed)} of {len(results)} "
+                      f"enabled installed: {pick['cli']}")
             remedy = f"Run `{pick['cli']}` once, complete its login, then re-run doctor"
         else:
-            detail = f"no agent CLI is installed ({len(results)} enabled, 0 installed)"
+            detail = (f"no agent CLI is installed or authed "
+                      f"({len(results)} enabled, 0 installed)")
             remedy = (f"Install one agent CLI and log in -- e.g. the {pick['label']} CLI "
                       f"(`{pick['cli']}`); see docs/INSTALL.md")
         login_row = Check("runtime:login", MISSING, detail, remedy)
@@ -543,7 +544,7 @@ def render_table(checks: list) -> str:
     n_missing = sum(1 for c in checks if c.status == MISSING and c.required)
     out.append("")
     if advisory:
-        out.append("  * advisory — a consequence of a required row above; clears when that one does.")
+        out.append("  * advisory — not counted below; clears when the required row(s) are resolved.")
     out.append("doctor: " + ("all required checks OK" if n_missing == 0 else f"{n_missing} required check(s) MISSING"))
     return "\n".join(out)
 
