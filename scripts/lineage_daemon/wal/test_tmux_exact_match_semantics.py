@@ -7,6 +7,8 @@ via pre-existing `except ValueError` / `len(parts)==2` guards rather than by des
 
 `tmux -L <socket>` runs a separate server, so nothing here can touch a fleet seat.
 """
+import os
+import pathlib
 import shutil
 import subprocess
 import uuid
@@ -23,8 +25,21 @@ def tm():
     def run(*args):
         return subprocess.run(["tmux", "-L", sock, *args],
                               capture_output=True, text=True, timeout=10)
-    yield run
-    subprocess.run(["tmux", "-L", sock, "kill-server"], capture_output=True)
+    try:
+        yield run
+    finally:
+        # kill-server ends the server but LEAVES THE SOCKET FILE, so the first version of
+        # this fixture littered 7 stale sockets in /tmp/tmux-<uid>/ per run (83 found after
+        # a dozen runs -- all dead, so not a resource leak, but still litter I created).
+        # Unlink it too. In `finally` so a failing assertion cannot skip the cleanup.
+        subprocess.run(["tmux", "-L", sock, "kill-server"], capture_output=True)
+        for base in (os.environ.get("TMUX_TMPDIR"), "/tmp"):
+            if not base:
+                continue
+            try:
+                pathlib.Path(base, f"tmux-{os.getuid()}", sock).unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _new(run, name):

@@ -225,3 +225,101 @@ def test_list_panes_targets_keep_the_trailing_colon(monkeypatch):
             assert ':"' in line or ':0.0"' in line or ':\\"' in line, (
                 f"list-panes '=' target without a window separator — the '=' does not bind "
                 f"and the prefix match survives: {line.strip()}")
+
+
+# --- the residuals #180 left standing, closed here ---------------------------------
+# #180 made every target exact but left TWO things open, both reported by its reviewer:
+#   (a) `execute_tmux_repin` kept the UNCONDITIONAL kill-then-rename shape, so in the
+#       already-repinned state an EXACT kill destroys the promoted successor. Exactness
+#       alone is not the fix; conditionality is.
+#   (b) the `send-keys` and `tmux_consolidate` fixes had NO PIN, so nothing stopped them
+#       regressing.
+
+def _tmux_sim(live, killed=None, exact_only=True):
+    """A faithful tmux fake: ONE name per session, exact-vs-prefix honoured, and an absent
+    exact target answers rc 1 for has-session / EMPTY for display-message -- the shapes
+    measured on a private socket in test_tmux_exact_match_semantics.py."""
+    killed = killed if killed is not None else []
+
+    def run(argv, *a, **kw):
+        target = argv[argv.index("-t") + 1] if "-t" in argv else ""
+        exact = target.startswith("=")
+        name = (target[1:] if exact else target).split(":")[0]
+        out, rc = "", 0
+        if not exact and not exact_only:
+            hits = [s for s in live if s == name] or [s for s in live if s.startswith(name)]
+            name = hits[0] if len(hits) == 1 else name
+        if "has-session" in argv:
+            rc = 0 if name in live else 1
+        elif "display-message" in argv:
+            out = live.get(name, "")
+        elif "kill-session" in argv:
+            if live.pop(name, None) is not None:
+                killed.append(name)
+            else:
+                rc = 1
+        elif "rename-session" in argv:
+            if name in live:
+                live[argv[-1]] = live.pop(name)
+            else:
+                rc = 1
+
+        class R:
+            returncode = rc
+            stdout = out
+            stderr = ""
+        return R()
+    return run, killed
+
+
+def test_repin_does_NOT_kill_an_ALREADY_REPINNED_successor(monkeypatch):
+    """(a) The canonical name is already held by the successor and the alias is gone. An
+    EXACT but UNCONDITIONAL kill destroys the thing being installed."""
+    live = {"canonical": "4242"}            # alias already renamed onto the canonical name
+    run, killed = _tmux_sim(live)
+    monkeypatch.setattr(executors.subprocess, "run", run)
+    try:
+        executors.execute_tmux_repin("canonical", "canonical-g5", "sid-x", armed=True)
+    except Exception:
+        pass
+    assert killed == [], f"killed the already-repinned successor: {killed}"
+    assert live == {"canonical": "4242"}, f"the seat must be left intact: {live}"
+
+
+def test_control_repin_STILL_kills_a_stranger_holding_the_canonical_name(monkeypatch):
+    """CONTROL: the kill must still happen when the name is held by something that is NOT
+    the alias, or the rename target stays occupied. Without this, a change that simply
+    disabled the kill would pass the test above."""
+    live = {"canonical": "999", "canonical-g5": "4242"}
+    run, killed = _tmux_sim(live)
+    monkeypatch.setattr(executors.subprocess, "run", run)
+    try:
+        executors.execute_tmux_repin("canonical", "canonical-g5", "sid-x", armed=True)
+    except Exception:
+        pass
+    assert killed == ["canonical"], f"the stranger must be killed: {killed}"
+    assert live.get("canonical") == "4242", f"the successor should hold the name now: {live}"
+
+
+def test_the_auto_resume_send_keys_target_is_exact():
+    """(b) A WRITE. A bare target mid-swap types the resume into the GREEN's pane, i.e. into
+    a session nobody chose. The target is bound to a VARIABLE, so a line-wise grep for
+    `"-t"` misses it -- this asserts the binding itself."""
+    import inspect as _inspect
+
+    from lineage_daemon import complete as _complete
+    src = _inspect.getsource(_complete)
+    assert 'pane_target = f"={canary}:0"' in src, (
+        "the auto-resume send-keys target is no longer exact-bound; a bare "
+        '`f"{canary}:0"` types the resume into a prefix-matched pane')
+
+
+def test_tmux_consolidate_targets_are_exact():
+    """(b) The REAL DEFAULT consolidation seam. Its rename is the destructive form: with
+    `old` gone, a bare `-t old` renames a `<old>-g<N>` SIBLING onto `new`."""
+    import inspect as _inspect
+
+    from lineage_daemon import tmux_consolidate as _tc
+    src = _inspect.getsource(_tc)
+    for frag in ('"has-session", "-t", f"={name}"', '"rename-session", "-t", f"={old}"'):
+        assert frag in src, f"tmux_consolidate lost its exact target: expected {frag}"
