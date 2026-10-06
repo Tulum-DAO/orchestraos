@@ -11,7 +11,7 @@
  */
 import { Loader2, CircleSlash, HandMetal, WifiOff } from 'lucide-react';
 import { normalizeAgentState, type LiveState, offersResume } from '../../lib/agentStatus';
-import { lastSeenLabel, type FeedVerdict } from '../../lib/feedLiveness';
+import { lastSeenLabel, isDegraded, type FeedVerdict } from '../../lib/feedLiveness';
 
 export interface LiveStatusProps {
   state?: string;
@@ -32,7 +32,7 @@ function elapsed(s?: number): string {
 
 export function LiveStatusLine({ state, feed, stateAgeS, tool, onResume }: LiveStatusProps) {
   // DISCONNECTED OUTRANKS EVERY AGENT STATE: with no live feed we cannot claim what it is doing.
-  if (feed && feed.health !== 'live') {
+  if (feed && isDegraded(feed)) {
     return (
       <div className="w-full max-w-[860px] mx-auto flex items-center gap-2 px-3 py-1.5 text-[11px] text-neutral-400" role="status">
         <WifiOff size={12} className="shrink-0" />

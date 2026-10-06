@@ -218,6 +218,15 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           setPastes([]);
           pasteIdRef.current = 1;
         } else if (res.queued || res.held) {
+          // QUEUED/HELD IS AS DELIVERED AS IT GETS, so the photo clears here too. It does not
+          // share the failure branch's reason for being kept: the upload and the send both
+          // HAPPENED and the attachment reached the server — it is waiting, not lost.
+          //
+          // Leaving it attached was actively harmful rather than merely confusing. The retry
+          // affordance below re-sends with force: true, and `!force && pendingImage` drops the
+          // attachment on a forced send — so the thumbnail sat in the composer implying it had
+          // not been sent, and the one gesture offered for sending it carried text only.
+          if (!force && pendingImage) clearImage();
           // Reuse the existing busy/queued affordance below (reason/state/
           // activity/attemptText — same shape the 409 branch already fills).
           setBusy({

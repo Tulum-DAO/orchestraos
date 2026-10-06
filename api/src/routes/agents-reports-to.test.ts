@@ -11,11 +11,11 @@ import assert from 'node:assert/strict';
  * one of them is true for the ~15 of 35 live seats that set nothing.
  */
 
-// The shape the route builds, mirrored so the precedence can be asserted without a server.
-const rowFrom = (def: Record<string, unknown>) => ({
-  tier: (def.tier as string) || 'T2',
-  reports_to: (def.reports_to as string | undefined) || undefined,
-});
+// THE REAL FUNCTION THE ROUTE CALLS — not a mirror of it. The previous version of this file
+// re-implemented the two lines under test and asserted against the copy, so deleting
+// `reports_to` from the route left all three tests green. It pinned nothing: it asserted that
+// JS `||` and JSON.stringify work.
+import { hierarchyFieldsFor as rowFrom } from './agentHierarchy.js';
 
 test('a seat with a parent carries it', () => {
   assert.equal(rowFrom({ tier: 'T1', reports_to: 'gm' }).reports_to, 'gm');

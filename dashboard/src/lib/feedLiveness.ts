@@ -11,7 +11,15 @@
  * disagree again. Pure, so the thresholds are pinned by tests rather than by hope.
  */
 
-export type FeedHealth = 'live' | 'stale' | 'disconnected';
+/**
+ * CONNECTING is not a degraded state, it is the ABSENCE of an answer yet.
+ *
+ * Collapsing it into `disconnected` is what made a healthy cold load announce an outage: the
+ * first paint of every page had no data, so the one verdict said "Not connected to the fleet"
+ * for the whole of the first fetch. "We have not asked yet" and "we asked and cannot reach it"
+ * are different claims and only the second is an alarm.
+ */
+export type FeedHealth = 'connecting' | 'live' | 'stale' | 'disconnected';
 
 /** The feed refetches every 10s. Three missed beats is not a blip. */
 export const STALE_AFTER_MS = 30_000;
@@ -25,6 +33,8 @@ export interface FeedState {
   hasData?: boolean;
   /** Whether the most recent fetch failed. */
   isError?: boolean;
+  /** Whether a fetch is in flight right now. Distinguishes "not asked yet" from "cannot reach". */
+  isFetching?: boolean;
   now?: number;
 }
 
@@ -44,8 +54,13 @@ export interface FeedVerdict {
  * An error NEVER reads live, even when the data is seconds old: a failing fetch means the next
  * answer is unknown, and "live" is a claim about now, not about then.
  */
-export function feedHealthOf({ dataUpdatedAt = 0, hasData = false, isError = false, now = Date.now() }: FeedState): FeedVerdict {
-  if (!hasData || !dataUpdatedAt) return { health: 'disconnected' };
+export function feedHealthOf({ dataUpdatedAt = 0, hasData = false, isError = false, isFetching = false, now = Date.now() }: FeedState): FeedVerdict {
+  // Never heard anything: CONNECTING only while a fetch is actually in flight and has not yet
+  // failed. The moment it errors, or stops being in flight without data, it is disconnected —
+  // so this can never become the eternal spinner the old branch was written to prevent.
+  if (!hasData || !dataUpdatedAt) {
+    return { health: isFetching && !isError ? 'connecting' : 'disconnected' };
+  }
   const ageMs = Math.max(0, now - dataUpdatedAt);
   if (ageMs >= DISCONNECTED_AFTER_MS) return { health: 'disconnected', ageMs, lastSeenAt: dataUpdatedAt };
   if (isError || ageMs >= STALE_AFTER_MS) return { health: 'stale', ageMs, lastSeenAt: dataUpdatedAt };
@@ -60,12 +75,26 @@ export function lastSeenLabel(lastSeenAt?: number): string {
 }
 
 /**
+ * Is the feed in a state the operator must be WARNED about?
+ *
+ * Every surface asks this rather than `health !== 'live'`, which silently included `connecting`
+ * and so painted an alarm on first paint. The one rule lives here so a chip and a page header
+ * cannot disagree — the same reason feedHealthOf itself is shared.
+ */
+export function isDegraded(verdict: FeedVerdict): boolean {
+  return verdict.health === 'stale' || verdict.health === 'disconnected';
+}
+
+/**
  * The dot + label a surface must render when the feed is not live. GREY and NEVER pulsing: the
  * pulse is what made a dead feed read as an agent mid-turn. The label says when we last heard,
  * so "nothing is happening" and "we stopped being able to ask" are distinguishable at a glance.
  */
 export function staleStyleFor(verdict: FeedVerdict): { dot: string; label: string } | undefined {
-  if (verdict.health === 'live') return undefined;
+  // CONNECTING overrides nothing: there is no stale colour to correct when no colour has been
+  // painted yet, and greying the fleet for the length of the first fetch is the same false
+  // alarm as the banner.
+  if (!isDegraded(verdict)) return undefined;
   return {
     dot: 'bg-neutral-600',
     label: verdict.health === 'disconnected'

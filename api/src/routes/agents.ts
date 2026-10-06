@@ -10,6 +10,7 @@ import { isTranscriptActive } from '../services/transcript-activity.js';
 import { getDetectorStates, detectorCacheAgeMs, classifyNoSession, type DetectorStatus } from '../services/agent-status.js';
 import { isCutoverActive, getCanonicalAgents, canonicalTmuxSession, getGenerationCounts, getGenerations } from '../services/identity-store-reader.js';
 import { buildCanonicalIndex, supersededBy, type CanonicalIndex } from '../services/rotation-leftovers.js';
+import { hierarchyFieldsFor } from './agentHierarchy.js';
 import { applyIdentityPrecedence, resolveMachineAndLiveness, discoverUnregistered, baseAgentId } from './agents-identity.js';
 import { loadConfig } from '../lib/config.js';
 import { readGatewayToken } from '../lib/gateway-token.js';
@@ -170,8 +171,7 @@ router.get('/', async (_req: Request, res: Response) => {
         resolveMachineAndLiveness(def.machine as string | undefined, tmuxSession, localSessions as Set<string>);
       const agent: AgentEntry = {
         id,
-        tier: (def.tier as string) || 'T2',
-        reports_to: (def.reports_to as string | undefined) || undefined,
+        ...hierarchyFieldsFor(def),
         name: (def.name as string) || id,
         machine,
         tmux_session: tmuxSession,

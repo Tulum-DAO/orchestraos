@@ -17,6 +17,7 @@ import { groupForRail, providersVary, PROVIDER_ABBR, PROVIDER_LABEL, type RailAg
 import { agentRowsFrom } from '../../lib/api';
 import { chipStateFor, ActivityDot } from '../RecentAgentChips';
 import { useFeedHealth } from '../../hooks/useFeedHealth';
+import { isDegraded } from '../../lib/feedLiveness';
 import { lastSeenLabel, type FeedVerdict } from '../../lib/feedLiveness';
 
 const SECTIONS: { key: keyof Omit<RailGroups, 'other'>; label: string; badge?: boolean }[] = [
@@ -63,7 +64,7 @@ function RailRow({ agent, active, onPick, feed, showProvider }: { agent: RailAge
 }
 
 export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (id: string) => void }) {
-  const { data, isLoading, isError } = useAgents();
+  const { data, isError } = useAgents();
   const feed = useFeedHealth();
   const [showOther, setShowOther] = useState(false);
 
@@ -89,7 +90,11 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
   // A row with no runtime is not a second value: 138 of 320 live rows carry none, and
   // counting "unknown" as variety would make the badge permanent by accident.
   const badgesVary = useMemo(
-    () => providersVary([...groups.needsYou, ...groups.working, ...groups.idle, ...groups.other]),
+    // NOT groups.other: it is collapsed behind "Not running" by default, and the badge's own
+    // rule is that it appears once two distinct runtimes are ON SCREEN. Counting the hidden
+    // bucket meant one retired codex seat among 299 offline rows printed "CL" on every visible
+    // row — the identical-column noise this function exists to prevent.
+    () => providersVary([...groups.needsYou, ...groups.working, ...groups.idle]),
     [groups],
   );
 
@@ -102,12 +107,16 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
       </nav>
     );
   }
-  // "Loading" is only honest while a first answer is still PLAUSIBLY coming. With the API down
-  // at page load there is no error and no data, so this branch sat on "Loading agents…"
-  // INDEFINITELY — measured against a stopped API. An eternal spinner is the same lie as a stale
-  // colour: it says "wait" when the truth is "we cannot ask". After the threshold the verdict
-  // below takes over and says so.
-  if (isLoading && !data && feed.health !== 'disconnected') {
+  // "Loading" is only honest while a first answer is still PLAUSIBLY coming, which is exactly
+  // what CONNECTING means: never heard, a fetch in flight, no error yet. The moment that fetch
+  // fails or stops the verdict turns disconnected and the banner below takes over, so this
+  // cannot become the eternal spinner it replaced.
+  //
+  // It used to read `isLoading && !data && feed.health !== 'disconnected'`, which could NEVER be
+  // true: feedHealthOf returned `disconnected` for any !hasData, so the third clause contradicted
+  // the second. Every cold page load fell through and announced "Not connected to the fleet" for
+  // the length of the first fetch — a healthy fleet reported as an outage.
+  if (feed.health === 'connecting') {
     return <nav className="w-full p-3 text-sm text-neutral-500" aria-label="Agents">Loading agents…</nav>;
   }
 
@@ -115,7 +124,7 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
     <nav className="w-full flex flex-col gap-3 p-2 overflow-y-auto" aria-label="Agents">
       {/* The whole column says it ONCE, so a reader does not have to infer an outage from every
           row having gone grey. The sections below are the LAST thing we were told, not now. */}
-      {feed.health !== 'live' && (
+      {isDegraded(feed) && (
         <p className="mx-2 px-2 py-1.5 rounded border border-neutral-700 bg-neutral-900 text-[11px] text-neutral-400" role="status">
           {feed.health === 'disconnected' ? 'Not connected to the fleet.' : 'Connection lost.'}{' '}
           {feed.lastSeenAt ? `Showing what we last saw — ${lastSeenLabel(feed.lastSeenAt)}.` : 'No data has arrived yet.'}

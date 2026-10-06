@@ -151,7 +151,11 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
         <nav className="p-3 space-y-0.5 border-t border-neutral-800">
           <button
             type="button"
-            onClick={() => { const v = !moreOpen; setMoreOpen(v); writeMoreOpen(v); }}
+            // stopPropagation because the <aside> above carries onClick={onNavigate}, which on
+            // mobile CLOSES the drawer. Without it, tapping More expanded the section and shut
+            // the drawer in the same gesture: the operator never saw Tasks/Analytics/Comms and
+            // the control read as broken. Expanding is not navigating.
+            onClick={(e) => { e.stopPropagation(); const v = !moreOpen; setMoreOpen(v); writeMoreOpen(v); }}
             aria-expanded={moreOpen}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200 transition-colors"
           >

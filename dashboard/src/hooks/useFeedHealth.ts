@@ -23,8 +23,8 @@ function subscribe(fn: () => void) {
 }
 
 export function useFeedHealth(): FeedVerdict {
-  const { data, dataUpdatedAt, isError } = useAgents();
+  const { data, dataUpdatedAt, isError, isFetching } = useAgents();
   const [, tick] = useState(0);
   useEffect(() => subscribe(() => tick((n) => n + 1)), []);
-  return feedHealthOf({ dataUpdatedAt, hasData: !!data, isError });
+  return feedHealthOf({ dataUpdatedAt, hasData: !!data, isError, isFetching });
 }

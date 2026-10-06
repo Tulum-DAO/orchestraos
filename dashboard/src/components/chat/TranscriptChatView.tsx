@@ -14,7 +14,7 @@ import { subscribeTranscriptStream } from '../../lib/transcriptStream';
 import { GroupedNodeView } from './TranscriptCards';
 import { groupToolRuns, isInterrupted } from '../../lib/toolGroups';
 import { normalizeAgentState, STATE_STYLE, type LiveState } from '../../lib/agentStatus';
-import { staleStyleFor, type FeedVerdict } from '../../lib/feedLiveness';
+import { staleStyleFor, isDegraded, type FeedVerdict } from '../../lib/feedLiveness';
 import OptionsMenuCard, { type PendingMenu } from './OptionsMenuCard';
 
 export type { LiveState };
@@ -122,7 +122,8 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   const st = normalizeAgentState(state);
   // No feed prop at all (the fixture harness) means "not fed from a live feed", which must not
   // become "the feed is dead" — it renders as before. Only an ACTUAL non-live verdict suppresses.
-  const live = !feed || feed.health === 'live';
+  // CONNECTING is not 'not live' — on first paint nothing has been contradicted yet.
+  const live = !feed || !isDegraded(feed);
 
   // autoscroll if pinned to bottom
   const onScroll = () => {

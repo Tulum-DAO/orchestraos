@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { feedHealthOf, staleStyleFor, lastSeenLabel, STALE_AFTER_MS, DISCONNECTED_AFTER_MS } from './feedLiveness.ts';
+import { feedHealthOf, staleStyleFor, isDegraded, lastSeenLabel, STALE_AFTER_MS, DISCONNECTED_AFTER_MS } from './feedLiveness.ts';
 
 const NOW = 1_700_000_000_000;
 const at = (ageMs: number, extra = {}) =>
@@ -29,11 +29,41 @@ test('an ERROR never reads live, even over seconds-old data', () => {
   assert.notEqual(at(1_000, { isError: true }).health, 'disconnected');
 });
 
-test('never-fetched is disconnected, and is not confused with stale', () => {
+test('never-fetched with nothing in flight is disconnected, and is not confused with stale', () => {
   assert.deepEqual(feedHealthOf({ hasData: false, now: NOW }), { health: 'disconnected' });
   assert.deepEqual(feedHealthOf({ hasData: true, dataUpdatedAt: 0, now: NOW }), { health: 'disconnected' });
   assert.equal(feedHealthOf({ hasData: false, now: NOW }).lastSeenAt, undefined);
   assert.equal(staleStyleFor(feedHealthOf({ hasData: false, now: NOW }))?.label, 'disconnected');
+});
+
+test('THE COLD LOAD: a first fetch in flight is CONNECTING, not an outage', () => {
+  // The defect this replaces: feedHealthOf returned `disconnected` for ANY !hasData, so the
+  // rail's `isLoading && !data && health !== 'disconnected'` guard contradicted itself and
+  // could never be true. Every cold page load fell through to the banner and told the operator
+  // "Not connected to the fleet" while the fleet was healthy and the first fetch was in flight.
+  assert.equal(feedHealthOf({ hasData: false, isFetching: true, now: NOW }).health, 'connecting');
+  // And it paints NOTHING: no grey override, no alarm.
+  assert.equal(staleStyleFor(feedHealthOf({ hasData: false, isFetching: true, now: NOW })), undefined);
+  assert.equal(isDegraded(feedHealthOf({ hasData: false, isFetching: true, now: NOW })), false);
+});
+
+test('CONNECTING cannot become the eternal spinner it replaced', () => {
+  // The branch it replaces existed to stop "Loading…" showing forever against a stopped API.
+  // Connecting is therefore conditioned on a fetch being in flight AND not having failed, so
+  // every way of ceasing to be in-flight-and-healthy lands back on disconnected.
+  assert.equal(feedHealthOf({ hasData: false, isFetching: false, now: NOW }).health, 'disconnected');
+  assert.equal(feedHealthOf({ hasData: false, isFetching: true, isError: true, now: NOW }).health, 'disconnected');
+  // The CONTROL: disconnected is still degraded, so the alarm still fires when it is real.
+  assert.equal(isDegraded(feedHealthOf({ hasData: false, isFetching: false, now: NOW })), true);
+  assert.equal(staleStyleFor(feedHealthOf({ hasData: false, now: NOW }))?.label, 'disconnected');
+});
+
+test('isDegraded is the warn predicate, and it is NOT `!== live`', () => {
+  // `health !== 'live'` is what silently swept connecting in. Every surface asks isDegraded.
+  assert.equal(isDegraded({ health: 'live' }), false);
+  assert.equal(isDegraded({ health: 'connecting' }), false);
+  assert.equal(isDegraded({ health: 'stale' }), true);
+  assert.equal(isDegraded({ health: 'disconnected' }), true);
 });
 
 test('a NOT-LIVE surface never keeps the cached colour or the pulse', () => {
