@@ -347,7 +347,7 @@ def _claude_proc_info(seat):
     """Live default (a): the seat's tmux pane -> its `claude` descendant process, with cmdline,
     cwd, and process start epoch. None if no live claude process. Read-only."""
     import subprocess as _sp, os as _os
-    r = _sp.run(["tmux", "list-panes", "-t", seat, "-F", "#{pane_pid}"],
+    r = _sp.run(["tmux", "list-panes", "-t", f"={seat}:", "-F", "#{pane_pid}"],
                 capture_output=True, text=True)
     if r.returncode != 0 or not r.stdout.split():
         return None

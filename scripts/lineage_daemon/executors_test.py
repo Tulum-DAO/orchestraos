@@ -159,7 +159,11 @@ def test_plan_verify_edge_unarmed_cmd():
 def test_plan_repin_canonical_steps():
     r = executors.plan_repin_canonical("cand-g3", "cand", 3, armed=False,
                                        orchestra_dir=FAKE)
-    assert r["rename"]["cmd"] == ["tmux", "rename-session", "-t", "cand-g3", "cand"]
+    # EXACT-match target ('='). The old assertion pinned a BARE target, which tmux resolves
+    # by PREFIX -- `cand-g3` prefix-matches `cand-g30..g39`, so the rename could take the
+    # wrong session's name. Only the target string changed; the rename subject and the new
+    # name are the same, and `executed` is still gated below.
+    assert r["rename"]["cmd"] == ["tmux", "rename-session", "-t", "=cand-g3", "cand"]
     assert r["rename"]["executed"] is False
     reg = json.loads(r["registry_repin"]["cmd"][4])
     assert reg["name"] == "cand" and reg["tmux_session"] == "cand"

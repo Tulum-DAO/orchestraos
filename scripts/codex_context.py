@@ -34,7 +34,7 @@ def _pane_pid(session_name: str) -> int | None:
     """tmux pane pid for window 0 pane 0 of the session (fleet layout)."""
     try:
         r = subprocess.run(
-            ["tmux", "display-message", "-p", "-t", f"{session_name}:0.0",
+            ["tmux", "display-message", "-p", "-t", f"={session_name}:0.0",
              "#{pane_pid}"],
             capture_output=True, text=True, timeout=5)
         return int(r.stdout.strip()) if r.returncode == 0 else None

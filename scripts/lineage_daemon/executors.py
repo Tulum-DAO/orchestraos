@@ -189,7 +189,7 @@ def plan_repin_canonical(successor_id, canonical, generation,
     od = orchestra_dir or ORCHESTRA_DIR
     canonical_fields = {"name": canonical, "tmux_session": canonical,
                         "generation": generation, "succeeded_by": None}
-    rename_cmd = ["tmux", "rename-session", "-t", successor_id, canonical]
+    rename_cmd = ["tmux", "rename-session", "-t", f"={successor_id}", canonical]
     registry_cmd = ["python3", od + "/scripts/registry-update.py",
                     canonical, "--json", json.dumps(canonical_fields)]
     sessions_cmd = ["python3", od + "/scripts/sessions-update.py",
@@ -249,7 +249,7 @@ def plan_retire(agent_id, armed=False, orchestra_dir=None) -> dict:
         except OSError:
             pass
 
-    tmux_cmd = ["tmux", "has-session", "-t", agent_id]
+    tmux_cmd = ["tmux", "has-session", "-t", f"={agent_id}"]
     tmux_p = subprocess.run(tmux_cmd, capture_output=True)
     tmux_alive = (tmux_p.returncode == 0)
 
@@ -287,16 +287,16 @@ def execute_tmux_repin(canonical, alias, successor_sid, armed=False):
         return {"executed": False}
         
     try:
-        chk = subprocess.run(["tmux", "has-session", "-t", canonical], capture_output=True)
+        chk = subprocess.run(["tmux", "has-session", "-t", f"={canonical}"], capture_output=True)
         if chk.returncode == 0:
-            subprocess.run(["tmux", "kill-session", "-t", canonical], capture_output=True)
+            subprocess.run(["tmux", "kill-session", "-t", f"={canonical}"], capture_output=True)
             
-        chk_alias = subprocess.run(["tmux", "has-session", "-t", alias], capture_output=True)
+        chk_alias = subprocess.run(["tmux", "has-session", "-t", f"={alias}"], capture_output=True)
         if chk_alias.returncode == 0:
-            subprocess.run(["tmux", "rename-session", "-t", alias, canonical], capture_output=True)
+            subprocess.run(["tmux", "rename-session", "-t", f"={alias}", canonical], capture_output=True)
             
         # Verify repin
-        verify_chk = subprocess.run(["tmux", "has-session", "-t", canonical], capture_output=True)
+        verify_chk = subprocess.run(["tmux", "has-session", "-t", f"={canonical}"], capture_output=True)
         verified = (verify_chk.returncode == 0)
         
         # Get pane active session ID (we'll just use tmux display-message or assume it matches if we can't extract it easily, 

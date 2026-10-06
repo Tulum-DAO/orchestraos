@@ -146,10 +146,13 @@ class _RealTmux:
         return subprocess.run(["tmux", *args], capture_output=True, text=True)
 
     def session_exists(self, name):
-        return self._run(["has-session", "-t", name]).returncode == 0
+        """EXACT-match existence. `tmux -t foo` matches by PREFIX, so a bare target answers
+        True for 'seat' whenever 'seat-g4' exists -- which is the normal mid-swap state and
+        made the commit-time rename silently skip. tmux's '=' forces an exact name match."""
+        return self._run(["has-session", "-t", f"={name}"]).returncode == 0
 
     def pane_pid(self, name):
-        r = self._run(["display-message", "-p", "-t", f"{name}:0.0", "#{pane_pid}"])
+        r = self._run(["display-message", "-p", "-t", f"={name}:0.0", "#{pane_pid}"])
         if r.returncode != 0:
             return None
         try:
@@ -168,16 +171,18 @@ class _RealTmux:
         return None
 
     def kill_session(self, name):
-        self._run(["kill-session", "-t", name])   # idempotent: ignore 'no such session'
+        # '=' EXACT: a bare target prefix-matches, so kill_session('seat') could reach
+        # 'seat-g4' -- the GREEN. Exact-only, still idempotent ('no such session' ignored).
+        self._run(["kill-session", "-t", f"={name}"])
 
     def rename_session(self, old, new):
-        r = self._run(["rename-session", "-t", old, new])
+        r = self._run(["rename-session", "-t", f"={old}", new])
         if r.returncode != 0:
             raise RuntimeError(
                 f"tmux rename-session {old!r}->{new!r} failed: {r.stderr.strip()}")
 
     def is_attached(self, name):
-        r = self._run(["list-clients", "-t", name, "-F", "#{client_name}"])
+        r = self._run(["list-clients", "-t", f"={name}", "-F", "#{client_name}"])
         return r.returncode == 0 and bool(r.stdout.strip())
 
 

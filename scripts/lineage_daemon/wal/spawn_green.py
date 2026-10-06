@@ -126,7 +126,7 @@ def _default_spawn_runner(orchestra_dir, timeout_s):
 
 def _tmux_has_session(session):
     try:
-        r = subprocess.run(["tmux", "has-session", "-t", session],
+        r = subprocess.run(["tmux", "has-session", "-t", f"={session}"],
                            capture_output=True, text=True, timeout=5)
         return r.returncode == 0
     except (subprocess.SubprocessError, OSError):
@@ -136,7 +136,7 @@ def _tmux_has_session(session):
 def _tmux_pane_pid(session):
     try:
         r = subprocess.run(
-            ["tmux", "display-message", "-p", "-t", f"{session}:0.0",
+            ["tmux", "display-message", "-p", "-t", f"={session}:0.0",
              "#{pane_pid}"], capture_output=True, text=True, timeout=5)
         return int(r.stdout.strip()) if r.returncode == 0 else None
     except (ValueError, subprocess.SubprocessError, OSError):
@@ -146,7 +146,7 @@ def _tmux_pane_pid(session):
 def _tmux_pane_id(session):
     try:
         r = subprocess.run(
-            ["tmux", "display-message", "-p", "-t", f"{session}:0.0",
+            ["tmux", "display-message", "-p", "-t", f"={session}:0.0",
              "#{pane_id}"], capture_output=True, text=True, timeout=5)
         return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
     except (subprocess.SubprocessError, OSError):

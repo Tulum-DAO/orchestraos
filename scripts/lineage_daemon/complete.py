@@ -760,9 +760,47 @@ def build_completion_provider(*, orchestra_dir=None, sessions_meta=None,
             res = _ex.plan_retire(target, armed=(not dry), orchestra_dir=od)
 
         if alias and (not dry):
+            # CONSOLIDATE the alias onto the canonical name. Three defects were fixed here
+            # together, because `=` alone is NOT sufficient at this site:
+            #
+            # (a) BARE (prefix-matching) targets. `tmux -t NAME` resolves by PREFIX, and the
+            #     normal mid-swap state is "bare canary ABSENT, `<canary>-g<N>` present", so
+            #     `kill-session -t canary` could destroy the SUCCESSOR this retire is
+            #     consolidating. Now `=`-exact.
+            # (b) THE KILL WAS UNCONDITIONAL. Exactness does not save it: once `_promote` has
+            #     already renamed alias -> canary, an EXACT kill of `canary` destroys the
+            #     just-promoted successor. So the kill now fires ONLY when the name is held by
+            #     something that is NOT the alias we are about to rename -- identity first,
+            #     kill second.
+            # (c) BOTH RETURN CODES WERE DISCARDED and `_retire` returned `res` (which is
+            #     `{"retired": True}` on the fallback path) regardless, so a failed
+            #     consolidation reported retirement SUCCESS. The rename outcome is now
+            #     recorded on `res` so a caller can see it failed.
             import subprocess
-            subprocess.run(["tmux", "kill-session", "-t", canary], capture_output=True)
-            subprocess.run(["tmux", "rename-session", "-t", alias, canary], capture_output=True)
+
+            def _tmux(*args):
+                return subprocess.run(["tmux", *args], capture_output=True, text=True)
+
+            holder_is_alias = False
+            if _tmux("has-session", "-t", f"={canary}").returncode == 0:
+                # The bare name exists. Is it already the alias (promote ran), or a stranger?
+                a = _tmux("display-message", "-p", "-t", f"={canary}:0.0", "#{pane_pid}")
+                b = _tmux("display-message", "-p", "-t", f"={alias}:0.0", "#{pane_pid}")
+                pa, pb = (a.stdout or "").strip(), (b.stdout or "").strip()
+                holder_is_alias = bool(pa) and pa == pb
+                if not holder_is_alias:
+                    _tmux("kill-session", "-t", f"={canary}")
+
+            if holder_is_alias:
+                res = {**res, "consolidated": True, "already": True}
+            elif _tmux("has-session", "-t", f"={alias}").returncode == 0:
+                rn = _tmux("rename-session", "-t", f"={alias}", canary)
+                res = {**res, "consolidated": rn.returncode == 0}
+                if rn.returncode != 0:
+                    res["consolidate_error"] = (rn.stderr or "").strip() or "rename failed"
+            else:
+                res = {**res, "consolidated": False,
+                       "consolidate_error": f"neither {canary!r} nor alias {alias!r} present"}
 
         return res
 
