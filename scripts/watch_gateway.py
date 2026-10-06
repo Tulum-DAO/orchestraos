@@ -41,6 +41,7 @@ from questionnaire_schema import QuestionnaireStore
 import approval_resume
 import questionnaire_resume
 import logging
+import inspect
 # Module logger for the voice-lane endcall/fallback paths (fixes the `log` NameError:
 # 4 log.{info,warning,error} calls in the 2840-2892 endcall region referenced an
 # undefined `log`, so the Arturo finalize FALLBACK path crashed instead of logging —
@@ -2837,7 +2838,29 @@ def _digit_pressable_ns(answers):
 
 
 def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=None,
-                      type_fn=None, settle_s=0.8, max_parts=12, text_present_fn=None):
+                      type_fn=None, settle_s=0.8, max_parts=12, text_present_fn=None,
+                      expect_questions=None):
+    """IDENTITY (expect_questions): {part_index: question} from the DURABLE ANCHOR the
+    answer was drafted against. When supplied, the replay proves it is answering that menu
+    before it presses anything for a part, and proves the tab bar has not changed before the
+    submit Enter.
+
+    Why it is opt-in rather than always-on: `/agent-key`'s legacy `no_durable_row` leg has
+    NO anchor, so it has no stored questions to check against. There identity is pane-derived
+    by construction and `_ns_on_part` remains the only gate. A `None` default is therefore
+    deliberate, not a hole.
+
+    WHY THE TWO CHECKS DIFFER. Per-part, the question is compared by normalized CONTAINMENT
+    either direction (`_q_norm`, the `_menu_matches` semantics) -- never equality, which is
+    the documented P0 that refused the operator's answer 6ms after his tap when a capture
+    format changed. At the CONFIRM screen the question cannot be used at all: that screen
+    parses as "Ready to submit your answers?", never the part question, so a question check
+    there would mismatch on EVERY healthy submit and divert all of them to the durable
+    fallback -- a guard that fires on every success is an outage, not a guard. The confirm
+    screen DOES render `tabs` and `part_count`, and `_parse_tab_header` strips every state
+    marker from each label (focus is an ANSI attribute absent from the stripped pane), so
+    toggling cannot move the tuple. Structure is what is compared there.
+    """
     """Generalized multi-part submit (DEC-1786866488 §C). ONE batch answers[]:
     [{part, ns:[...], text?}, …]. Replays deterministically: per part apply the
     DELTA digit toggles vs the on-screen `checked` state, Right to the next part,
@@ -2883,6 +2906,12 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
         menu = read_fn()
         if not isinstance(menu, dict):
             return False, {"reason": "menu_gone"}
+        # Baseline STRUCTURE for the confirm-time assertion, taken at the part-0 identity
+        # read. None when the shape carries no tab bar (agy family, single-part): the
+        # comparison then degenerates to None == None and the per-part question gate is
+        # what covers that case.
+        base_tabs = tuple(menu.get("tabs") or ()) or None
+        base_part_count = menu.get("part_count")
         n_parts = menu.get("part_count") or len(by_part) or 1
         plan = []
         for pi in range(min(n_parts, max_parts)):
@@ -2934,6 +2963,20 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
             menu = read_fn()
             if not isinstance(menu, dict):
                 return False, {"reason": "menu_gone", "phase": f"part{pi}"}
+            # PER-PART IDENTITY, before anything is pressed for this part. `_nav_to_part`
+            # verifies `part_index` ALONE, so the pane can flip between one part's toggles
+            # and the next; checking only before the first toggle leaves the rest of the
+            # replay unguarded, and overlapping option digits make that a WRONG ANSWER
+            # rather than a failed one.
+            if expect_questions:
+                _want_q = expect_questions.get(pi)
+                if _want_q:
+                    _a, _b = _q_norm(menu.get("question")), _q_norm(_want_q)
+                    if not _a or not (_a in _b or _b in _a):
+                        return False, {"reason": "menu_changed", "part": pi,
+                                       "phase": f"identity{pi}",
+                                       "detail": "the pane is not the menu this answer "
+                                                 "was drafted against"}
             ans = by_part.get(pi) or {}
             text = ans.get("text")
             ft_n = _part_free_text_n(menu)           # from the fresh current-part read
@@ -2990,6 +3033,15 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
             return False, {**info, "phase": "nav_confirm"}
 
         _cmenu = read_fn()
+        # STRUCTURAL IDENTITY before the Enter. See the docstring for why this cannot be a
+        # question comparison. Only asserted when the baseline HAD a tab bar.
+        if expect_questions and isinstance(_cmenu, dict) and base_tabs is not None:
+            _now_tabs = tuple(_cmenu.get("tabs") or ()) or None
+            _now_pc = _cmenu.get("part_count")
+            if _now_tabs != base_tabs or _now_pc != base_part_count:
+                return False, {"reason": "menu_changed", "phase": "confirm_structure",
+                               "detail": "the tab bar or part count changed between the "
+                                         "answer's first part and the submit screen"}
         if isinstance(_cmenu, dict):
             _ts = _cmenu.get("tab_state")
             if isinstance(_ts, list) and _ts:
@@ -3093,6 +3145,58 @@ def _validate_batch_answer(row, answers):
     return None
 
 
+def _identity_kwargs(submit_fn, expect_questions):
+    """{'expect_questions': ...} when `submit_fn` can accept it, else {}.
+
+    Decided by INSPECTING the callable, never by catching TypeError from the call. The
+    seam is caller-injectable and an older test seam may predate the kwarg, but
+    `try: submit_fn(..., expect_questions=x) except TypeError: submit_fn(...)` is the wrong
+    way to tolerate that: a TypeError raised from INSIDE submit_fn -- after it may already
+    have pressed keys into the pane -- is indistinguishable at the call site from one raised
+    by argument binding. That retry would press a SECOND time and silently drop the identity
+    gate this whole change exists to apply, which is the one failure it must not have.
+    Inspection happens before the call, so nothing in the body can reach it.
+
+    An unintrospectable callable (C builtin, exotic mock) yields {} -- the pre-identity
+    behaviour -- rather than an exception.
+    """
+    if not expect_questions:
+        return {}
+    try:
+        params = inspect.signature(submit_fn).parameters
+    except (TypeError, ValueError):
+        return {}
+    if ("expect_questions" in params
+            or any(q.kind is inspect.Parameter.VAR_KEYWORD for q in params.values())):
+        return {"expect_questions": expect_questions}
+    return {}
+
+
+def row_is_durable_with_parts(row):
+    """True when an anchor row DOES carry multi-part structure, so absent per-part questions
+    are a gap rather than the legacy no-anchor shape that never had them."""
+    try:
+        menu = _menu(row) or {}
+        return bool(menu.get("parts")) or (menu.get("part_count") or 1) > 1
+    except Exception:  # noqa: BLE001 — an unreadable row is not worth a crash on a log line
+        return False
+
+
+def _anchor_expect_questions(row):
+    """{part_index: question} from the anchor's HYDRATED parts[], for the replay's identity
+    gate. A hydrated part's `question` is literally that screen's own parsed question, so a
+    live read of part i yields the same string (modulo width rewrap and word-boundary
+    truncation, which normalized containment absorbs). Empty dict when the row carries no
+    per-part questions -- the caller then passes nothing and the replay behaves as before
+    rather than blocking on absent evidence."""
+    menu = _menu(row) or {}
+    out = {}
+    for p in (menu.get("parts") or []):
+        if isinstance(p, dict) and isinstance(p.get("index"), int) and p.get("question"):
+            out[p["index"]] = p["question"]
+    return out
+
+
 def durable_first_batch_submit(session, answers, *, store, armed=False,
                                submit_fn=None, resume_fn=None,
                                surface=None, answered_by=None, device=None):
@@ -3172,7 +3276,27 @@ def durable_first_batch_submit(session, answers, *, store, armed=False,
     # 4) best-effort live-pane replay (the preferred delivery when the menu is
     #    still up). The answer is ALREADY durable, so any failure below is a
     #    delivery problem, never answer loss.
-    ok, sinfo = submit_fn(session, answers=answers, armed=True)
+    # IDENTITY: prove the pane is still the menu this row's answer was drafted against,
+    # per part and again at the confirm screen. The anchor is the authority here -- the row
+    # is what the operator answered, so a pane that has moved on is a DELIVERY problem, and
+    # falling through to step 5 (answer already durable + resume fallback) is the correct
+    # destination rather than a refusal.
+    _eq = _anchor_expect_questions(row)
+    # Decide whether the seam ACCEPTS the kwarg by INSPECTING IT, never by catching a
+    # TypeError from the call. A TypeError raised from INSIDE submit_fn -- after it may
+    # already have pressed keys -- is indistinguishable at the call site from one raised by
+    # argument binding, so an `except TypeError: retry without expect_questions` would press
+    # a second time AND silently drop the identity gate this function exists to apply.
+    # That is the one failure this gate must not have. Inspection happens before the call,
+    # so nothing in the body can reach it.
+    _kw = _identity_kwargs(submit_fn, _eq)
+    if not _eq and row_is_durable_with_parts(row):
+        # A durable anchor that carries parts but no per-part questions would turn the gate
+        # OFF silently. Delivery still proceeds (the answer is already durable, and refusing
+        # here would be an outage, not a guard), but it must not be INVISIBLE.
+        print(f"[watch_gateway] batch replay identity gate OFF for row {row.get('id')}: "
+              f"durable anchor carries parts but no per-part questions", file=sys.stderr)
+    ok, sinfo = submit_fn(session, answers=answers, armed=True, **_kw)
     if ok and not sinfo.get("dry_run"):
         # delivered live. Resolve any stale mirror dupes for the session (the row
         # we persisted is 'answered', not 'pending', so the resolver skips it).
