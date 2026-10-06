@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { toolFilePath, displayPath } from './transcript.ts';
+import { toolFilePath, shortPath } from './transcript.ts';
 
 // The path shown in a tool row used to be display-only text inside the summary string: you
 // could read a truncated tail of it and could not get the real path back out. These pin the
@@ -48,6 +48,6 @@ test('the path is returned UNSHORTENED, and shortening is display-only', () => {
   // the `~`-abbreviated thing on screen.
   const full = '/home/someone/repos/p/a.ts';
   assert.equal(toolFilePath('Read', { file_path: full }), full);
-  assert.equal(displayPath(full), '~/repos/p/a.ts');
-  assert.notEqual(displayPath(full), full);
+  assert.equal(shortPath(full), '~/repos/p/a.ts');
+  assert.notEqual(shortPath(full), full);
 });

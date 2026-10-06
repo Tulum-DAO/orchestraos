@@ -189,11 +189,7 @@ export function toolFilePath(tool: string, input: Record<string, unknown>): stri
   return raw;
 }
 
-export function displayPath(p: string): string {
-  return shortPath(p);
-}
-
-function shortPath(p: string): string {
+export function shortPath(p: string): string {
   if (!p) return '';
   return p.replace(/^\/home\/[^/]+\//, '~/').replace(/^\/Users\/[^/]+\//, '~/');
 }

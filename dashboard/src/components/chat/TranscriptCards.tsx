@@ -9,7 +9,7 @@
 import { useState } from 'react';
 import { ChevronRight, ChevronDown, FileText, Check } from 'lucide-react';
 import Markdown from './Markdown';
-import { toolSummary, toolFilePath, displayPath, type ToolBlock, type RenderNode } from '../../lib/transcript';
+import { toolSummary, toolFilePath, shortPath, type ToolBlock, type RenderNode } from '../../lib/transcript';
 import {
   summarizeTurn, formatDuration, fromToolBlock,
   type GroupedNode, type ToolGroupNode,
@@ -265,7 +265,7 @@ function FilePathChip({ path }: { path: string }) {
       {copied
         ? <Check size={12} aria-hidden className="shrink-0 text-green-400" />
         : <FileText size={12} aria-hidden className="shrink-0 text-neutral-500 group-hover/path:text-neutral-300" />}
-      <span className="truncate">{copied ? 'Copied' : displayPath(path)}</span>
+      <span className="truncate">{copied ? 'Copied' : shortPath(path)}</span>
     </button>
   );
 }
