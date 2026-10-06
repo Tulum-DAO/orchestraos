@@ -107,9 +107,12 @@ container `staging` (image `orchestraos-demo:50e9a3f`). Measured:
   environment for this repository** — verified PR branches are deployed into it for
   hands-on testing. Only its *gateway* holds no listening socket; that one fact was
   over-generalised to the whole container.
-- **It drifts.** `docker diff staging` reports **1,535 changed paths** under `api/`,
-  `dashboard/`, `scripts/`, `services/` and `orchestra_cli/`, because PR files are copied
-  into the running container to test them. The image tag says what it was *built* from, not
+- **It drifts.** `docker diff staging` reports **11,950 changed paths in total**; **1,765**
+  of them are inside the repository checkout, and **1,535** are under the five code
+  directories `api/`, `dashboard/`, `scripts/`, `services/` and `orchestra_cli/` — because PR
+  files are copied into the running container to test them. (The filter is stated because a
+  bare count would be ambiguous; the first draft of this correction quoted only the
+  five-directory figure.) The image tag says what it was *built* from, not
   what it *runs*.
 - **So it is a third edited tree**, and `orchestra-builder-g72`'s original "three trees, not
   two" reading — which this section previously "corrected" — was right.
