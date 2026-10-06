@@ -163,7 +163,8 @@ def read_ctx_gemini(seat, *, sid=None, **_):
     # Order matters, and not only for coverage. resolve_gemini_cid picks the NEWEST-by-mtime
     # transcript declaring the seat, which is an EARLIER GENERATION's conversation whenever
     # the current one has not re-declared. Live 2026-10-05: gemini-pm-adaptiv's registered
-    # sid 348ea3ec was surfaced at 190027 tokens while the scan returned a stale 0222a132,
+    # sid <registered sid> was surfaced at 190027 tokens while the scan returned a
+    # stale <stale sid>,
     # so the seat read (None, False) and could never arm -- and had that stale conversation
     # matched a row, the seat would have reported ANOTHER generation's context, which the
     # beat would act on. A ctx read for the wrong conversation is worse than no read.
