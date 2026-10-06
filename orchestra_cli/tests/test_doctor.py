@@ -460,3 +460,122 @@ def test_dashboard_https_note_only_off_loopback(tmp_path):
     st2 = type(st2)(**{**st2.__dict__, "dashboard_host": "0.0.0.0"})
     c = _by_name(D.run_doctor(st2, _probes()))["dashboard:https"]
     assert c.status == D.INFO and "HTTPS" in c.detail
+
+
+# -- gm acceptance, 2026-10-06: ONE leading login row instead of N required MISSING rows.
+# A stranger on a fresh install read "4 required check(s) MISSING" as a broken install when
+# all it needed was one login. The GATE MUST NOT WEAKEN: doctor still exits non-zero until
+# some agent CLI is authed, and the per-runtime detail must stay visible.
+
+def test_no_authed_runtime_yields_exactly_ONE_required_missing(tmp_path):
+    """Criterion 2: one row to act on, not four. The per-runtime rows stop being REQUIRED
+    (they are consequences of the same single fact) while keeping their MISSING status."""
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    checks = D.run_doctor(st, _probes(which=("tmux", "node", "npm"), cmd_out=""))
+    required_missing = [c.name for c in checks if c.required and c.status == D.MISSING]
+    assert required_missing == ["runtime:login"], required_missing
+
+
+def test_the_login_row_names_the_single_command_for_an_INSTALLED_cli(tmp_path):
+    """Criterion 2: 'here is the single command for the one you have installed.' claude is
+    installed but not logged in; codex is not installed. The remedy must name `claude`."""
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    checks = D.run_doctor(st, _probes(which=("tmux", "node", "npm", "claude"),
+                                      cmd_out='{"loggedIn": false}'))
+    row = _by_name(checks)["runtime:login"]
+    assert row.status == D.MISSING and row.required is True
+    assert "claude" in row.remedy and "codex" not in row.remedy
+
+
+def test_the_login_row_LEADS_the_runtime_rows(tmp_path):
+    """Criterion 2: 'ONE LEADING row.' It must print before the per-runtime detail."""
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    checks = D.run_doctor(st, _probes(which=("tmux", "node", "npm"), cmd_out=""))
+    names = [c.name for c in checks]
+    assert names.index("runtime:login") < names.index("runtime:claude")
+
+
+def test_per_runtime_detail_is_STILL_PRESENT_nothing_hidden(tmp_path):
+    """Criterion 3: nothing is hidden -- the rows and their details survive."""
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    names = _by_name(D.run_doctor(st, _probes(which=("tmux", "node", "npm"), cmd_out="")))
+    assert names["runtime:claude"].status == D.MISSING
+    assert "not installed" in names["runtime:claude"].detail
+    assert names["runtime:codex"].status == D.MISSING
+    assert names["runtime:any"].status == D.MISSING
+
+
+def test_POSITIVE_CONTROL_the_gate_still_fails_with_no_login(tmp_path):
+    """Criterion 1: DO NOT WEAKEN THE GATE. Fewer required rows must not mean exit 0."""
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    checks = D.run_doctor(st, _probes(which=("tmux", "node", "npm"), cmd_out=""))
+    assert D.exit_code(checks) != 0
+
+
+def test_NEGATIVE_CONTROL_one_login_clears_the_row_entirely(tmp_path):
+    """The row must be absent once any CLI is authed -- a row that never goes away is noise,
+    and one that is always present cannot signal anything."""
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    checks = D.run_doctor(st, _probes(which=("tmux", "node", "npm", "claude")))
+    assert "runtime:login" not in _by_name(checks)
+    assert D.exit_code(checks) == 0
+
+
+# -- Clearing-reviewer residuals on the login row (DEC-1791257115439975, non-blocking but
+# they are what makes the row achieve its stated purpose).
+
+def test_ADVISORY_missing_rows_are_MARKED_so_the_table_matches_the_footer(tmp_path):
+    """Residual 1: the count said 1 while the table still showed 4 red rows, so a stranger
+    still saw a wall of failures. Advisory MISSING rows must be visually distinguished --
+    and the REQUIRED one must not be."""
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    checks = D.run_doctor(st, _probes(which=("tmux", "node", "npm"), cmd_out=""))
+    text = D.render_table(checks)
+    line = {l.split()[0]: l for l in text.splitlines() if l and not l.startswith(" ")}
+    assert "MISSING*" in line["runtime:claude"]      # advisory: clears with the login
+    assert "MISSING*" in line["runtime:any"]
+    assert "MISSING*" not in line["runtime:login"]   # the one thing to act on
+    assert "clears when the required row(s) are resolved" in text  # the legend itself,
+    #                          not this test's name leaking in through tmp_path
+
+
+def test_the_login_row_DETAIL_is_not_truncated_by_the_70_char_cap(tmp_path):
+    """Residual 2: the tally was being cut off as '...needs one login …' in the common case."""
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    checks = D.run_doctor(st, _probes(which=("tmux", "node", "npm", "claude"),
+                                      cmd_out='{"loggedIn": false}'))
+    detail = _by_name(checks)["runtime:login"].detail
+    assert len(detail) <= 70, f"{len(detail)} chars, will be truncated: {detail}"
+    assert "…" not in D.render_table(checks).split("runtime:login")[1].split("->")[0]
+
+
+def test_the_login_row_does_not_assert_a_fact_it_cannot_know(tmp_path):
+    """Residual 3: 'not logged in' is wrong when the auth PROBE merely failed (authed is
+    tri-state). 'not authed' is true in every not-True case."""
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    checks = D.run_doctor(st, _probes(which=("tmux", "node", "npm", "claude"), cmd_out="not-json"))
+    detail = _by_name(checks)["runtime:login"].detail
+    assert "authed" in detail and "is logged in" not in detail
+
+
+def test_marker_is_RENDER_ONLY_json_and_status_data_are_untouched(tmp_path):
+    """The marker must not leak into the Check data: --json consumers and the status triple
+    stay exactly as before (the PRESERVED-CONTRACTS claim in the proposal)."""
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    checks = D.run_doctor(st, _probes(which=("tmux", "node", "npm"), cmd_out=""))
+    D.render_table(checks)   # the mutation this guards against happens HERE; without this
+    #                          line the control cannot fail and proves nothing
+    assert all(c.status in (D.OK, D.WARN, D.INFO, D.MISSING) for c in checks)
+    assert "*" not in _by_name(checks)["runtime:claude"].status
+    import json as _j
+    assert _j.loads(D.render_json(checks))["ok"] is False

@@ -205,6 +205,28 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
                             now_ms=probes.now_ms, expand_home=os.path.expanduser)
         results = RP.probe_all(RP.load_providers(providers_path), st.runtimes_enabled, deps)
     any_authed = any(r["authed"] is True for r in results)
+    # ONE LEADING LOGIN ROW (gm acceptance 2026-10-06). With nothing authed, every enabled
+    # runtime reports MISSING and so does `runtime:any`, so a stranger on a fresh install
+    # reads "4 required check(s) MISSING" as a broken install when all it needs is ONE
+    # login. Collapse the ASK into a single required row and demote the per-runtime rows to
+    # advisory -- they are consequences of the same one fact, and they KEEP their MISSING
+    # status and detail, so nothing is hidden. The GATE DOES NOT MOVE: this row is required
+    # and MISSING, so `exit_code` is still non-zero until some CLI is authed.
+    login_row = None
+    if results and not any_authed:
+        installed = [r for r in results if r["installed"]]
+        pick = (installed or results)[0]
+        if installed:
+            detail = (f"no agent CLI is authed; {len(installed)} of {len(results)} "
+                      f"enabled installed: {pick['cli']}")
+            remedy = f"Run `{pick['cli']}` once, complete its login, then re-run doctor"
+        else:
+            detail = (f"no agent CLI is installed or authed "
+                      f"({len(results)} enabled, 0 installed)")
+            remedy = (f"Install one agent CLI and log in -- e.g. the {pick['label']} CLI "
+                      f"(`{pick['cli']}`); see docs/INSTALL.md")
+        login_row = Check("runtime:login", MISSING, detail, remedy)
+        checks.append(login_row)
     for r in results:
         if r["authed"] is True:
             checks.append(Check(f"runtime:{r['id']}", OK, f"{r['cli']} installed + authed"))
@@ -216,7 +238,9 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
         else:
             detail = f"{r['cli']} installed, auth: {r['auth_reason'] or r['authed']}"
             remedy = f"Log in: run `{r['cli']}` once and complete its auth/login flow, then re-run doctor"
-        checks.append(Check(f"runtime:{r['id']}", status, detail, remedy, required=(status == MISSING)))
+        # required only when it is the sole signal; the login row above owns the gate.
+        checks.append(Check(f"runtime:{r['id']}", status, detail, remedy,
+                            required=(status == MISSING and login_row is None)))
     # Claude Code hooks installed into the user's settings (item: seats act on mail with no keypress)
     try:
         import sys as _sys
@@ -271,7 +295,7 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
             checks.append(Check("arturo:brain", WARN, f"selection unavailable: {e}"))
     checks.append(Check("runtime:any", OK if any_authed else MISSING,
                         ", ".join(r["id"] for r in results if r["authed"] is True) or "no enabled runtime is installed AND authed",
-                        RUNTIME_ANY_REMEDY))
+                        RUNTIME_ANY_REMEDY, required=(login_row is None)))
 
     # -- ports
     sup = probes.supervisor_state(st.data_dir) or {}
@@ -496,9 +520,17 @@ def exit_code(checks: list) -> int:
 
 
 def render_table(checks: list) -> str:
+    # An ADVISORY MISSING row is marked `MISSING*`. Without it the footer could read
+    # "1 required check(s) MISSING" above four red rows, which is the same "my install is
+    # broken" reading the consolidated login row exists to remove. RENDER-ONLY: `c.status`
+    # is untouched, so `--json` and every status assertion see the same values as before.
     rows = [("CHECK", "STATUS", "DETAIL", "REMEDY")]
+    advisory = False
     for c in checks:
-        rows.append((c.name, c.status, c.detail, c.remedy if c.status in (MISSING, WARN) else ""))
+        token = c.status
+        if c.status == MISSING and not c.required:
+            token, advisory = MISSING + "*", True
+        rows.append((c.name, token, c.detail, c.remedy if c.status in (MISSING, WARN) else ""))
     w0 = max(len(r[0]) for r in rows)
     w1 = max(len(r[1]) for r in rows)
     w2 = min(max(len(r[2]) for r in rows), 70)
@@ -511,6 +543,8 @@ def render_table(checks: list) -> str:
         out.append(line.rstrip())
     n_missing = sum(1 for c in checks if c.status == MISSING and c.required)
     out.append("")
+    if advisory:
+        out.append("  * advisory — not counted below; clears when the required row(s) are resolved.")
     out.append("doctor: " + ("all required checks OK" if n_missing == 0 else f"{n_missing} required check(s) MISSING"))
     return "\n".join(out)
 
