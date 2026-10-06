@@ -285,6 +285,11 @@ test('Antigravity edit, read and search names map, with TargetFile/AbsolutePath 
   const mixed = [blk('replace_file_content', { TargetFile: 'a' }), blk('write_to_file', { TargetFile: 'b' }), blk('run_command', { CommandLine: 'ls' })];
   assert.equal(summarizeTurn(mixed.map(fromToolBlock)).headline, 'edited 2 files, ran 1 command');
   assert.equal(summarizeTurn([ok('grep_search'), ok('find_by_name')]).headline, 'searched 2 times');
+  // view_file's CATEGORY, not just its path: the `edits` assertion above cannot see it,
+  // because the two real edits produce 'edited 2 files' on their own.
+  assert.equal(summarizeTurn([ok('view_file'), ok('view_file')]).headline, 'read 2 files');
+  // search_web appeared in no assertion at all.
+  assert.equal(summarizeTurn([ok('search_web'), ok('search_web')]).headline, 'searched 2 times');
 });
 
 // ---- a call that will never finish must not read "Working" forever -----------------------
