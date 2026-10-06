@@ -56,7 +56,7 @@ def _default_session_pane(green_alias):
     import subprocess
     try:
         r = subprocess.run(
-            ["tmux", "display-message", "-p", "-t", f"{green_alias}:0.0",
+            ["tmux", "display-message", "-p", "-t", f"={green_alias}:0.0",
              "#{pane_id} #{pane_pid}"], capture_output=True, text=True, timeout=5)
         if r.returncode != 0:
             return None
