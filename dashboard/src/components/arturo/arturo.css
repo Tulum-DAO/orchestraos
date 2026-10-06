@@ -117,11 +117,14 @@
    previous build (fixed bottom-6 right-6), which sits out of the way of page content and
    of the composer on pages that have one. */
 .arturo-pill{
-  position:fixed; right:16px; left:auto; z-index:55;   /* above the focused-agent overlay (z-50,
-     chat + dev mode) so Arturo stays reachable there; still BELOW the auth flow (60) and the
-     prompt modal (70), which are real modals the pill must not float over. */
-  /* --arturo-pill-bottom is set at runtime to clear a page's own bottom dock (see ArturoPill). */
-  bottom:calc(var(--arturo-pill-bottom, 20px) + env(safe-area-inset-bottom));
+  /* ONE SPOT, ALWAYS (operator ruling 2026-10-06): bottom-right, never displaced by a page's own
+     bottom bar. It used to LIFT itself clear of any bottom dock, so its position moved from page
+     to page and jumped when a composer appeared. A control you reach for by muscle memory must
+     not move; it sits ON TOP of the bar instead. z-index 75 puts it above the focused-agent
+     overlay (50), the auth flow (60) and the prompt modal (70) — the operator asked for the
+     highest, and a modal that must not be covered should raise itself above this. */
+  position:fixed; right:16px; left:auto; z-index:75;
+  bottom:calc(20px + env(safe-area-inset-bottom));
   display:flex; align-items:center; gap:8px; background:rgba(40,40,42,0.78); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
   border:1px solid rgba(255,255,255,0.10); border-radius:999px; padding:11px 20px 11px 18px; box-shadow:0 8px 24px rgba(0,0,0,0.35); color:#fff; font-size:15px; font-weight:500;
 }
@@ -130,7 +133,10 @@
    page and, being inset:0, swallowed every click on it. The pane is non-modal now. */
 .arturo-pill-panel{
   position:fixed; right:16px; left:auto; width:min(380px, calc(100vw - 32px));
-  bottom:calc(var(--arturo-pill-bottom, 20px) + env(safe-area-inset-bottom)); z-index:56;
+  /* Same corner and the same stacking as the pill that opens it: the variable it used to read
+     is no longer written by anyone, and a panel that opened somewhere other than its own button
+     is its own small lie. */
+  bottom:calc(20px + env(safe-area-inset-bottom)); z-index:76;
   display:flex; flex-direction:column; max-height:min(60vh, 560px);
   background:#1c1c1c; border:1px solid rgba(255,255,255,0.08); border-radius:22px; padding:10px 12px;
   box-shadow:0 8px 34px rgba(0,0,0,0.55); color:#fff;

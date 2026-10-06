@@ -238,30 +238,11 @@ export function ArturoPill() {
    *  the two call buttons — and a pill pinned to bottom:20px lands right on top of them
    *  (measured: 4 controls covered). Measured at runtime rather than keyed to routes, so a
    *  page that grows a dock later is handled without touching this file. */
-  useEffect(() => {
-    const place = () => {
-      const vh = window.innerHeight;
-      let clear = 0;
-      for (const el of Array.from(document.querySelectorAll<HTMLElement>('div,footer,form,section'))) {
-        if (el.closest('.arturo-pill-panel') || el.classList.contains('arturo-pill')) continue;
-        const cs = getComputedStyle(el);
-        if (cs.position !== 'fixed' && cs.position !== 'sticky') continue;
-        const r = el.getBoundingClientRect();
-        if (r.height === 0 || r.width < window.innerWidth * 0.4) continue;
-        // A DOCK is a strip. A full-screen overlay (the focused-agent view is fixed inset-0)
-        // is not, and treating it as one computed a clearance of the whole viewport and threw
-        // the pill off the top of the screen entirely.
-        if (r.height > vh * 0.45) continue;
-        if (vh - r.bottom > 12) continue;           // not docked to the bottom
-        clear = Math.max(clear, Math.round(vh - r.top));
-      }
-      document.documentElement.style.setProperty('--arturo-pill-bottom', clear ? `${clear + 12}px` : '');
-    };
-    place();
-    window.addEventListener('resize', place);
-    const t = window.setInterval(place, 1000);     // docks appear after their data loads
-    return () => { window.removeEventListener('resize', place); window.clearInterval(t); };
-  }, [location.pathname]);
+  // NO RUNTIME DISPLACEMENT (operator ruling 2026-10-06). This used to measure every
+  // bottom-docked strip on the page and lift the pill clear of it, which meant the pill
+  // sat in a different place on every page and JUMPED when a composer appeared. Shaw asked
+  // for one spot, always, at the highest z-index: it now sits ON TOP of a bottom bar rather
+  // than above it, and the corner is fixed in arturo.css.
 
   function toggleContextCard() {
     if (ctxOn) dismissContext(convId); else restoreContext(convId);

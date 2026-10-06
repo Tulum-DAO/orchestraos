@@ -14,6 +14,7 @@ import { subscribeTranscriptStream } from '../../lib/transcriptStream';
 import { GroupedNodeView } from './TranscriptCards';
 import { groupToolRuns, isInterrupted } from '../../lib/toolGroups';
 import { normalizeAgentState, STATE_STYLE, type LiveState } from '../../lib/agentStatus';
+import { staleStyleFor, isDegraded, type FeedVerdict } from '../../lib/feedLiveness';
 import OptionsMenuCard, { type PendingMenu } from './OptionsMenuCard';
 
 export type { LiveState };
@@ -30,14 +31,25 @@ interface Props {
    *  an answerable OptionsCard below the transcript when present. */
   pendingMenu?: PendingMenu | null;
   compact?: boolean;
+  /** Feed health from the SHARED rule (lib/feedLiveness). When the feed is not live the pill
+   *  must not paint a live colour — that is the P1: a cached 'working' pulsed yellow on this
+   *  very pill for an hour while the API was down. Optional so the fixture harness, which has
+   *  no feed, renders unchanged. */
+  feed?: FeedVerdict;
+  /** The agent page carries its own LiveStatusLine above the composer, so it suppresses this
+   *  bar. Two renderings of one fact is how the sidebar and the page came to disagree. */
+  hideStatusBar?: boolean;
 }
 
 // State vocabulary + colors live in lib/agentStatus (shared with the title dot +
 // aligned with the iOS app). The pill NEVER renders the raw status string — only
 // a fixed STATE_STYLE label — so any unrecognized value (incl. a self-reported
 // multi-KB blob) collapses to the neutral 'unknown' pill.
-function StatePill({ state }: { state: LiveState }) {
-  const s = STATE_STYLE[state] || STATE_STYLE.unknown;
+function StatePill({ state, feed }: { state: LiveState; feed?: FeedVerdict }) {
+  const stale = feed && staleStyleFor(feed);
+  const s = stale
+    ? { ...stale, text: 'text-neutral-400' }
+    : (STATE_STYLE[state] || STATE_STYLE.unknown);
   return (
     <span className={`inline-flex items-center gap-1.5 text-[11px] ${s.text}`}>
       <span className={`w-2 h-2 rounded-full ${s.dot}`} />
@@ -46,7 +58,7 @@ function StatePill({ state }: { state: LiveState }) {
   );
 }
 
-export default function TranscriptChatView({ agentId, fixtureItems, state = 'unknown', strandedText, pendingMenu, compact }: Props) {
+export default function TranscriptChatView({ agentId, fixtureItems, state = 'unknown', strandedText, pendingMenu, compact, feed, hideStatusBar }: Props) {
   const [items, setItems] = useState<ChatItem[]>(fixtureItems || []);
   const [loading, setLoading] = useState(!fixtureItems);
   const [err, setErr] = useState<string | null>(null);
@@ -108,6 +120,10 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   // changing the number of rendered nodes, so autoscroll keys on the UNGROUPED count below.
   const nodes = useMemo(() => groupToolRuns(flat), [flat]);
   const st = normalizeAgentState(state);
+  // No feed prop at all (the fixture harness) means "not fed from a live feed", which must not
+  // become "the feed is dead" — it renders as before. Only an ACTUAL non-live verdict suppresses.
+  // CONNECTING is not 'not live' — on first paint nothing has been contradicted yet.
+  const live = !feed || !isDegraded(feed);
 
   // autoscroll if pinned to bottom
   const onScroll = () => {
@@ -129,9 +145,15 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
         className={
           compact
             ? 'bg-neutral-950 rounded-lg p-3 max-h-96 overflow-y-auto space-y-2.5'
-            : 'flex-1 overflow-y-auto p-4 space-y-2.5 min-h-0 overscroll-y-contain'
+            // CAPPED AND CENTRED (Shaw: prose ran ~1460px wide and the input ~1660px — unreadable,
+            // and the right edges of tool cards and user bubbles were 130px apart because each
+            // sized itself to a different container). ONE column, one pair of edges, shared with
+            // the composer. `justify-end` anchors the conversation to the BOTTOM like every chat
+            // app, closing the ~400px dead gap between the last message and the composer.
+            : 'flex-1 overflow-y-auto min-h-0 overscroll-y-contain flex flex-col justify-end'
         }
       >
+        <div className={compact ? undefined : "w-full max-w-[860px] mx-auto px-4 py-4 space-y-2.5"}>
         {loading ? (
           <div className="flex items-center gap-2 px-1 py-2">
             <div className="w-2 h-2 bg-neutral-500 rounded-full animate-pulse" />
@@ -148,28 +170,41 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
         {/* live decision menu (detector pending_menu) — answerable below the last
             message; menus render no transcript line so this IS how chat surfaces
             a decision-waiting agent (previously invisible/unanswerable in chat). */}
-        {pendingMenu && pendingMenu.options?.length > 0 && (
+        {/* A menu from a DEAD feed is the page's version of the P1's blue chip: it offers an
+            answer to a question that may no longer be on screen, and the answer cannot be
+            delivered anyway. Staleness outranks a pending menu here exactly as it does in
+            chipStateFor. */}
+        {live && pendingMenu && pendingMenu.options?.length > 0 && (
           <OptionsMenuCard agentId={agentId} menu={pendingMenu} />
         )}
 
-        {/* in-flight indicator when the agent is mid-turn (transcript not flushed yet) */}
-        {st === 'working' && (
+        {/* In-flight indicator when the agent is mid-turn (transcript not flushed yet).
+            THIS IS THE "FLASHING YELLOW" OF THE P1 — it pulsed amber for an hour off a cached
+            'working' while the API was down. It is a claim about RIGHT NOW, so it requires a
+            live feed, not just a remembered state. */}
+        {live && st === 'working' && !hideStatusBar && (
           <div className="flex items-center gap-2 px-1 py-1">
             <div className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
             <span className="text-[11px] text-neutral-500 italic">agent is working…</span>
           </div>
         )}
+        </div>
       </div>
 
-      {/* status bar: live state pill + optional unsent-draft chip */}
+      {/* Status bar. The AGENT PAGE now carries a LiveStatusLine above its composer, so this
+          bar is the compact/embedded surface's version of it (AgentCard). Two renderings of one
+          fact is how the sidebar and the page came to disagree; they share lib/feedLiveness so
+          they cannot say different things, and the page does not show both. */}
+      {!hideStatusBar && (
       <div className="flex items-center gap-3 px-3 py-1.5 border-t border-neutral-800/50">
-        <StatePill state={st} />
+        <StatePill state={st} feed={feed} />
         {strandedText && (
           <span className="text-[10px] text-yellow-500/90 truncate">
             ✎ unsent: "{strandedText.slice(0, 60)}"
           </span>
         )}
       </div>
+      )}
     </div>
   );
 }

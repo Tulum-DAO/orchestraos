@@ -64,7 +64,11 @@ export default function CoachingToast() {
 
   return (
     <div
-      className={`mx-4 mt-2 transition-all duration-300 ease-out overflow-hidden ${
+      // The desktop notification bell is `fixed top-4 right-4` (DashboardLayout), so it floats
+      // OVER anything in flow at the top-right. This banner's Right/Wrong buttons sit exactly
+      // there, and the bell's unread badge was clipping "Wrong". Reserve the corner the bell
+      // owns rather than racing it on z-index: two live controls must not share a hit area.
+      className={`mx-4 mt-2 md:mr-16 transition-all duration-300 ease-out overflow-hidden ${
         visible ? 'max-h-32 opacity-100 translate-y-0' : 'max-h-0 opacity-0 -translate-y-2'
       }`}
     >

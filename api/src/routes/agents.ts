@@ -10,6 +10,7 @@ import { isTranscriptActive } from '../services/transcript-activity.js';
 import { getDetectorStates, detectorCacheAgeMs, classifyNoSession, type DetectorStatus } from '../services/agent-status.js';
 import { isCutoverActive, getCanonicalAgents, canonicalTmuxSession, getGenerationCounts, getGenerations } from '../services/identity-store-reader.js';
 import { buildCanonicalIndex, supersededBy, type CanonicalIndex } from '../services/rotation-leftovers.js';
+import { hierarchyFieldsFor } from './agentHierarchy.js';
 import { applyIdentityPrecedence, resolveMachineAndLiveness, discoverUnregistered, baseAgentId } from './agents-identity.js';
 import { loadConfig } from '../lib/config.js';
 import { readGatewayToken } from '../lib/gateway-token.js';
@@ -69,6 +70,11 @@ router.param('id', agentScopeParam);
 interface AgentEntry {
   id: string;
   tier: string;
+  /** Who this seat reports to, for the hierarchy view (quest-orchestra, Shaw's Quest).
+   *  OPTIONAL on purpose: only ~20 of 35 live seats set it, and a standalone seat has no
+   *  parent to invent. A consumer treats absent as "unknown", never as "reports to nobody
+   *  in particular" — those are different claims. */
+  reports_to?: string;
   name: string;
   machine: string;
   tmux_session: string;
@@ -120,6 +126,7 @@ router.get('/', async (_req: Request, res: Response) => {
             agentDefs[root] = {
               name: root,
               tier: c.tier ?? undefined,
+              reports_to: (c as { reports_to?: string }).reports_to ?? undefined,
               machine: c.machine ?? undefined,
               runtime: c.runtime ?? undefined,
               cwd: c.cwd ?? undefined,
@@ -164,7 +171,7 @@ router.get('/', async (_req: Request, res: Response) => {
         resolveMachineAndLiveness(def.machine as string | undefined, tmuxSession, localSessions as Set<string>);
       const agent: AgentEntry = {
         id,
-        tier: (def.tier as string) || 'T2',
+        ...hierarchyFieldsFor(def),
         name: (def.name as string) || id,
         machine,
         tmux_session: tmuxSession,

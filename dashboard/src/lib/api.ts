@@ -6,8 +6,14 @@ function handleAuthError(res: Response, path: string) {
   }
 }
 
+/**
+ * A READ MUST NOT HANG FOREVER. Found by the LIVE port proof: with the API timing out rather than
+ * refusing, a GET never settles, react-query will not start a second fetch while one is in
+ * flight, and the dashboard stays wedged in STALE even after the API comes back — it only
+ * recovers on a manual reload. A bounded read means the next poll can always run.
+ */
 async function get<T = any>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`);
+  const res = await fetch(`${BASE}${path}`, { signal: AbortSignal.timeout(12_000) });
   if (!res.ok) { handleAuthError(res, path); throw new Error(`API ${path}: ${res.status}`); }
   return res.json();
 }
@@ -256,4 +262,22 @@ export function connectActivitySSE(onEvent: (e: any) => void): EventSource {
   const source = new EventSource(`${BASE}/activity`);
   source.onmessage = (e) => { try { onEvent(JSON.parse(e.data)); } catch {} };
   return source;
+}
+
+/**
+ * The rows out of a `/api/agents` response, whichever shape it arrived in.
+ *
+ * The endpoint is served two ways in this fleet — a bare array, and `{ agents: [...] }` —
+ * and three call sites each decided for themselves which to tolerate. Feed and AgentPage
+ * accepted both; AgentRail accepted only the wrapped one and rendered three EMPTY SECTIONS
+ * on the other, with no error. "Empty" and "broken" then look identical, which is the one
+ * thing that file's own comments say must never happen.
+ *
+ * One helper so the three cannot drift apart again. An unrecognised shape yields `undefined`
+ * — NOT `[]` — so a caller can still tell "no agents" from "we could not read the answer".
+ */
+export function agentRowsFrom(data: unknown): Array<Record<string, unknown>> | undefined {
+  if (Array.isArray(data)) return data as Array<Record<string, unknown>>;
+  const wrapped = (data as { agents?: unknown } | null | undefined)?.agents;
+  return Array.isArray(wrapped) ? (wrapped as Array<Record<string, unknown>>) : undefined;
 }

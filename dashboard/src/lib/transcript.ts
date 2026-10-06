@@ -160,7 +160,36 @@ export function toolSummary(tool: string, input: Record<string, unknown>): strin
   }
 }
 
-function shortPath(p: string): string {
+/**
+ * The absolute file path a tool call acts on, or null when the call is not about one file.
+ *
+ * `toolSummary` folds the path into a display string, which loses it: the result is
+ * shortened for display and cannot be copied back. This returns the path UNSHORTENED so a
+ * caller can show `shortPath()` and still hand over the real thing.
+ */
+export function toolFilePath(tool: string, input: Record<string, unknown>): string | null {
+  const s = (v: unknown) => (typeof v === 'string' ? v : '');
+  let raw = '';
+  switch (tool) {
+    case 'Read':
+    case 'view_file':
+      raw = s(input.AbsolutePath || input.file_path || input.path); break;
+    case 'Edit':
+    case 'replace_file_content':
+    case 'Write':
+    case 'write_to_file':
+      raw = s(input.TargetFile || input.file_path); break;
+    case 'NotebookEdit':
+      raw = s(input.notebook_path); break;
+    default:
+      return null;
+  }
+  // A directory or a glob is not a file; neither is an empty slot.
+  if (!raw || raw.endsWith('/') || /[*?]/.test(raw)) return null;
+  return raw;
+}
+
+export function shortPath(p: string): string {
   if (!p) return '';
   return p.replace(/^\/home\/[^/]+\//, '~/').replace(/^\/Users\/[^/]+\//, '~/');
 }

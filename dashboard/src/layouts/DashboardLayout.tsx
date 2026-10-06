@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import { Menu, X } from 'lucide-react';
 import { Sidebar } from '../components/Sidebar';
+import { useMatch } from 'react-router-dom';
 import { VoiceCallBubble } from '../components/VoiceCallModal';
 import NotificationBell from '../components/NotificationBell';
 import { ArturoPill } from '../components/arturo/ArturoPill';
@@ -11,6 +12,13 @@ import { initAutoDiscovery } from '../lib/telemetry';
 
 export function DashboardLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // A CHAT ROUTE OWNS ITS OWN VERTICAL SPACE. Shaw: the composer bar spanned the full window and
+  // cut the sidebar off at the bottom, because it was laid out at the PAGE level rather than
+  // inside the chat column. The root cause is here: <main> scrolled and padded every route the
+  // same way, so a page with its own header/transcript/composer column had no height to fill and
+  // escaped with `fixed`. Chat routes now get a FLEX COLUMN with no padding and no page scroll —
+  // the transcript scrolls inside it, and the composer is a child of the column, not of the page.
+  const isChatRoute = !!useMatch('/agent/:id') || !!useMatch('/agent');
   const activeCall = useOrchestraStore((s) => s.activeCall);
   const endCall = useOrchestraStore((s) => s.endCall);
 
@@ -43,7 +51,7 @@ export function DashboardLayout() {
       </div>
 
       {/* Main content */}
-      <main className="flex-1 overflow-y-auto safe-top safe-bottom">
+      <main className={`flex-1 min-w-0 flex flex-col safe-top safe-bottom ${isChatRoute ? 'overflow-hidden' : 'overflow-y-auto'}`}>
         {/* Mobile header with hamburger */}
         <div className="sticky top-0 z-20 flex items-center gap-3 border-b border-neutral-800 bg-neutral-950/90 backdrop-blur px-4 py-3 md:hidden">
           <button
@@ -59,9 +67,15 @@ export function DashboardLayout() {
           </div>
         </div>
         <CoachingToast />
-        <div className="p-4 md:p-6">
-          <Outlet />
-        </div>
+        {isChatRoute ? (
+          <div className="flex-1 min-h-0 flex flex-col">
+            <Outlet />
+          </div>
+        ) : (
+          <div className="p-4 md:p-6">
+            <Outlet />
+          </div>
+        )}
       </main>
 
       {/* Desktop notification bell — fixed top-right */}

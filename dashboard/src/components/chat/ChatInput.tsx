@@ -1,7 +1,7 @@
 /**
  * ChatInput — text input with send button, inject/inbox toggle, and file upload.
  */
-import { useState, useRef } from 'react';
+import { useState, useRef, type ReactNode } from 'react';
 import { clsx } from 'clsx';
 import { Send, Paperclip, X, ClipboardList } from 'lucide-react';
 import { injectAgentVerified, type InjectResult } from '../../lib/api';
@@ -49,6 +49,12 @@ interface Props {
     payload: { text: string; attachments: File[] },
     opts: { force: boolean }
   ) => Promise<{ ok: boolean; note?: string; queued?: boolean; held?: boolean }>;
+  /** Rendered on the SEND ROW, before the input. Secondary controls belong on this baseline
+      rather than stacked underneath it — a second row of controls under Send reads as a
+      junk drawer, which is the defect these two slots exist to prevent. */
+  leading?: ReactNode;
+  /** Rendered on the SEND ROW, between the input and Send. */
+  trailing?: ReactNode;
 }
 
 async function uploadImage(file: File): Promise<string> {
@@ -60,7 +66,7 @@ async function uploadImage(file: File): Promise<string> {
   return data.path;
 }
 
-export default function ChatInput({ agentId, disabled, placeholder, attachSupported = true, draft, onDraftChange, onSend }: Props) {
+export default function ChatInput({ agentId, disabled, placeholder, attachSupported = true, draft, onDraftChange, onSend, leading, trailing }: Props) {
   const [internalText, setInternalText] = useState('');
   // Single accessor pair every read/clear/paste/send path goes through, so
   // there is exactly one send path regardless of controlled vs internal
@@ -185,6 +191,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     setSending(true);
     setResultOk(false);
     setResult(null);
+    let failed = false;
     try {
       // Expand any held large pastes into the fenced grammar at their position.
       let messageText = force ? busy!.attemptText : serializeForSend(text).trim();
@@ -197,9 +204,13 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
         // P3 state mapping. The internal inject/inbox path below is
         // untouched and only runs when onSend is absent.
         const attachments = !force && pendingImage ? [pendingImage] : [];
-        if (!force && pendingImage) clearImage();
+        // THE PHOTO IS NOT CLEARED UNTIL THE SEND SUCCEEDS (P1 2026-10-06: the API was down for
+        // an hour and every send failed; clearing here threw the attachment away on the way to a
+        // failure, so the operator lost it and had to re-pick it). Nothing is destroyed before
+        // the thing that could fail has not failed.
         const res = await onSend({ text: messageText, attachments }, { force });
         if (res.ok) {
+          if (!force && pendingImage) clearImage();
           setBusy(null);
           setResultOk(true);
           setResult(res.note || 'Sent');
@@ -207,6 +218,15 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           setPastes([]);
           pasteIdRef.current = 1;
         } else if (res.queued || res.held) {
+          // QUEUED/HELD IS AS DELIVERED AS IT GETS, so the photo clears here too. It does not
+          // share the failure branch's reason for being kept: the upload and the send both
+          // HAPPENED and the attachment reached the server — it is waiting, not lost.
+          //
+          // Leaving it attached was actively harmful rather than merely confusing. The retry
+          // affordance below re-sends with force: true, and `!force && pendingImage` drops the
+          // attachment on a forced send — so the thumbnail sat in the composer implying it had
+          // not been sent, and the one gesture offered for sending it carried text only.
+          if (!force && pendingImage) clearImage();
           // Reuse the existing busy/queued affordance below (reason/state/
           // activity/attemptText — same shape the 409 branch already fills).
           setBusy({
@@ -220,6 +240,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
         } else {
           setResultOk(false);
           setResult(res.note || 'Failed');
+          failed = true;
         }
         return;
       }
@@ -277,9 +298,13 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     } catch (err: any) {
       setResultOk(false);
       setResult('Error: ' + (err.message || 'unknown'));
+      failed = true;
     } finally {
       setSending(false);
-      setTimeout(() => setResult(null), 3000);
+      // Only a SUCCESS notice is transient. A failure stays until the next attempt — it is the
+      // only thing telling the operator their message did not go, and it outlived a 3s timeout
+      // by about an hour during the P1.
+      if (!failed) setTimeout(() => setResult(null), 3000);
     }
   };
 
@@ -322,8 +347,13 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           ))}
         </div>
       )}
-      <div className="flex gap-2">
-        <div className="flex-1 flex items-end gap-1">
+      {/* ONE ROW (Shaw: "the composer is a junk drawer" — five controls across three rows, the
+          paperclip outside the input, the model picker an orphan caption, mic and phone on a
+          different baseline). Attach and the delivery mode live INSIDE the input shell; Send is
+          the only thing outside it. */}
+      <div className="flex items-end gap-2">
+        {leading}
+        <div className="flex-1 flex items-end gap-1 bg-neutral-950 border border-neutral-800 rounded-lg px-1.5 focus-within:border-neutral-600 transition-colors">
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={!attachSupported}
@@ -355,7 +385,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
             placeholder={placeholder || 'Message your agent...'}
             rows={2}
             disabled={disabled}
-            className="flex-1 bg-neutral-950 border border-neutral-800 rounded-lg px-3 py-2 text-sm text-neutral-300 placeholder-neutral-600 resize-none focus:outline-none focus:border-neutral-600 disabled:opacity-50"
+            className="flex-1 bg-transparent px-1 py-2 text-sm text-neutral-300 placeholder-neutral-600 resize-none focus:outline-none disabled:opacity-50"
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
@@ -363,31 +393,40 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
               }
             }}
           />
-        </div>
-        <div className="flex flex-col gap-1 self-end">
-          <button
-            onClick={() => handleSend()}
-            disabled={!canSend}
-            className={clsx(
-              'flex items-center gap-1 px-4 py-2 min-h-[44px] rounded-lg text-sm font-medium transition-colors',
-              !canSend
-                ? 'bg-neutral-800 text-neutral-600 cursor-not-allowed'
-                : 'bg-blue-500/15 text-blue-400 hover:bg-blue-500/25'
-            )}
-          >
-            <Send size={14} />
-            {sending ? '...' : injectMode ? 'Inject' : 'Send'}
-          </button>
+          {/* The delivery mode is a REAL control, not debug output — it chooses between typing
+              into the agent's terminal now and queuing to its inbox. It read as a leaked badge
+              because it was an unlabelled amber chip under the button, so it now sits inside the
+              input, says what it does, and never competes with the primary action. */}
           <button
             onClick={() => setInjectMode(!injectMode)}
+            title={injectMode
+              ? 'Delivering NOW, straight into the agent\u2019s terminal. Click to queue to its inbox instead.'
+              : 'Queuing to the agent\u2019s INBOX, read at its next turn. Click to deliver now instead.'}
             className={clsx(
-              'text-[10px] px-1.5 py-0.5 rounded transition-colors text-center',
-              injectMode ? 'text-amber-400 bg-amber-500/10' : 'text-neutral-600 hover:text-neutral-400'
+              'shrink-0 self-end mb-2 text-[10px] px-1.5 py-0.5 rounded border transition-colors',
+              injectMode
+                ? 'text-neutral-300 border-neutral-700 hover:bg-neutral-800'
+                : 'text-neutral-400 border-neutral-800 hover:bg-neutral-800'
             )}
           >
-            {injectMode ? 'inject' : 'inbox'}
+            {injectMode ? 'now' : 'inbox'}
           </button>
         </div>
+        {trailing}
+        {/* "Send" is what a person does. "Inject" is plumbing. */}
+        <button
+          onClick={() => handleSend()}
+          disabled={!canSend}
+          className={clsx(
+            'shrink-0 flex items-center gap-1 px-4 py-2 min-h-[44px] rounded-lg text-sm font-medium transition-colors',
+            !canSend
+              ? 'bg-neutral-800 text-neutral-600 cursor-not-allowed'
+              : 'bg-blue-500/15 text-blue-400 hover:bg-blue-500/25'
+          )}
+        >
+          <Send size={14} />
+          {sending ? '…' : 'Send'}
+        </button>
       </div>
       {busy && (
         <div className="mt-1.5 rounded-lg border border-amber-700/50 bg-amber-500/5 px-2.5 py-1.5">

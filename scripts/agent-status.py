@@ -120,6 +120,17 @@ _SPINNER_LINE_RE = re.compile(
 _SUFFIX_RE = re.compile(
     r'\((\d+[hms][\s\dhms]*)(?:[^)]*?[·,]\s*[↓⬇]?\s*([\d.]+k?)\s*tokens)?[^)]*\)')
 _SPINNER_COLOR_RE = re.compile(r'\033\[38;5;(?:174|180|216)m')
+# The status line's running-subagent counter, e.g. "... · ← 1 agent" / "← 3 agents".
+# This is a SEPARATE FACT from the parent's own state: a seat can be at its prompt with
+# delegated work still in flight, and a seat mid-turn can have none. It is reported as its
+# own field for exactly that reason -- folding it into `state` would destroy the distinction
+# the operator needs, which is "busy" vs "busy, but able to take a message".
+_SUBAGENT_RE = re.compile(r'←\s*(\d+)\s+agents?\b')
+# The counter lives in the BOTTOM status line, never in transcript text. Scanning the whole
+# screen would match the literal string quoted in a message -- this seat's own pane contained
+# "← 1 agent" inside a sentence while the counter said the same thing two lines lower, so a
+# whole-screen scan is self-confusing by construction. Anchor on the status line's own marker.
+_STATUS_LINE_RE = re.compile(r'bypass permissions|shift\+tab to cycle|to see subagents')
 
 
 def strip_ansi(text: str) -> str:
@@ -1048,6 +1059,29 @@ def _codex_context_pct(session_name: str) -> str:
         return ""
 
 
+def count_subagents(stripped_lines: list[str]) -> int:
+    """How many delegated agents this seat currently has in flight, from the status line.
+
+    Zero is also the answer when the counter is absent, which is the common case: the
+    status line only renders it while at least one is running.
+
+    Deliberately NOT a state. A seat with a running subagent may be at its own prompt and
+    perfectly able to take a message -- which is the whole reason this is counted separately
+    from `state` rather than folded into it.
+    """
+    for line in reversed(stripped_lines[-6:]):
+        if not _STATUS_LINE_RE.search(line):
+            continue
+        m = _SUBAGENT_RE.search(line)
+        if m:
+            try:
+                return int(m.group(1))
+            except ValueError:
+                return 0
+        return 0
+    return 0
+
+
 def parse_status(raw: str) -> dict:
     """Parse ANSI tmux output (visible screen) into a screen-tier state.
 
@@ -1059,6 +1093,7 @@ def parse_status(raw: str) -> dict:
         'state': 'unknown', 'activity': '', 'elapsed': '', 'tokens': '',
         'tool': '', 'model': '', 'project': '', 'context_pct': '',
         'composer_text': '', 'composer_ghost': '', 'pending_menu': None,
+        'subagents': 0,
         'is_noise': []
     }
 
@@ -1119,6 +1154,11 @@ def parse_status(raw: str) -> dict:
         result['project'] = pm.group(1)
     raw_lines = raw.split('\n')
     stripped = [strip_ansi(l) for l in raw_lines]
+
+    # Delegated work in flight. Reported ALONGSIDE state, never folded into it: a seat with a
+    # running subagent is frequently sitting at its own prompt, able to take a message, and
+    # collapsing that into "working" is what made it unreachable from chat.
+    result['subagents'] = count_subagents(stripped)
 
     # context %: COLOR-AGNOSTIC + BOTTOM-CHROME-SCOPED. The meter's % renders in
     # a DIFFERENT SGR color by fill tier — green(\033[32m) low (gm, ob-v2),
