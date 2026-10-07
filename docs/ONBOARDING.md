@@ -41,7 +41,9 @@ orchestra up --detach && orchestra status
 
 Confirm the `gateway` row has a live pid. Note the host you'll reach it at —
 a Tailscale hostname, a LAN IP, or `127.0.0.1` if the phone and the gateway are
-on the same machine (rare outside a demo). This doc uses
+on the same machine (rare outside a demo). The iOS app needs an **https**
+address with a trusted certificate (see step 4), so if you'll pair a phone,
+plan on the Tailscale hostname. This doc uses
 `your-gateway.example.net` as a placeholder everywhere; substitute your real
 host, never share it outside people you're actually pairing.
 
@@ -85,6 +87,35 @@ First launch shows a pairing screen, not the approvals list:
 - **Scan** — point the camera at the terminal QR from step 2.
 - **Type it in** — enter the gateway URL and the code by hand (the same
   values the dashboard used), if scanning isn't practical.
+
+**The app only connects over https, with a certificate the phone trusts.**
+A plain `http://` address (a LAN IP, `localhost`) is refused on the pairing
+screen, and the app tells you so. The simplest way to get a trusted https
+address, whether the gateway runs on a VPS or on a Mac, is Tailscale on both
+the gateway machine and the phone. On the gateway machine, first see what
+Tailscale already serves, because `tailscale serve` on a port that is taken
+silently REPLACES whatever was there:
+
+```bash
+tailscale serve status
+```
+
+Then pick an https port that is not in that list (8445 here) and serve the
+gateway on it. The proxy target is the plain-HTTP address your gateway listens
+on. `8890` below is the default (`[gateway] port` in `orchestra.toml`); if you
+changed it, use the port that `orchestra status` prints on the `gateway` row:
+
+```bash
+tailscale serve --bg --https=8445 http://127.0.0.1:8890
+```
+
+Your gateway URL is then `https://<machine>.<tailnet>.ts.net:8445`. Use that
+address in step 2 (`orchestra pair`) so the QR carries it. Keep it tailnet
+only: do not add `--funnel` (or `tailscale funnel`). The phone reaches it
+over Tailscale; the gateway does not need to be on the public internet.
+
+A reverse proxy with a real certificate (Caddy, nginx + Let's Encrypt) works
+too; a self-signed certificate does not.
 
 Either way, the app exchanges the code for its own token and stores both in
 Keychain. It does not ask again unless you revoke that device from Settings
