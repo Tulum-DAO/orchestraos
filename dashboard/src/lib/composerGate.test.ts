@@ -82,7 +82,7 @@ test('delegatedWorkLabel says nothing when there is nothing to say', () => {
 test('every form of the stranded class gets the unsent-text words', () => {
   // The gateway sends "stranded" for BOTH stranded_input and queued_input; the detector words
   // reach the web too. All four must land on the same sentence.
-  for (const s of ['stranded', 'stranded_input', 'queued', 'queued_input', ' Stranded ']) {
+  for (const s of ['stranded', 'stranded_input', 'queued_input', ' Stranded ']) {
     assert.equal(refusalCopy(s), "There's unsent text in this agent's input box — send or clear it first.", s);
   }
 });
@@ -124,4 +124,15 @@ test('the refusal HEADLINE puts the state words first and falls back to the gate
   assert.equal(refusalHeadline({ state: 'crashed', activity: 'No tmux session' }), 'No tmux session');
   assert.equal(refusalHeadline({ state: 'crashed' }), 'crashed');
   assert.equal(refusalHeadline({}), 'agent busy');
+});
+
+test('a SUCCESSFUL queued/held send keeps its own note, never the unsent-text words', () => {
+  // ChatInput fills the same panel for a success, with state 'queued' or 'held' (review of #197).
+  // Telling Shaw to clear a draft that does not exist, for a message that DID reach the server,
+  // is the exact kind of false copy this change exists to remove.
+  assert.equal(refusalHeadline({ state: 'queued', activity: 'Queued — agent is busy' }), 'Queued — agent is busy');
+  assert.equal(refusalHeadline({ state: 'held', activity: 'Held — will deliver at the next turn boundary' }),
+    'Held — will deliver at the next turn boundary');
+  assert.equal(refusalCopy('queued'), null);
+  assert.equal(refusalCopy('held'), null);
 });

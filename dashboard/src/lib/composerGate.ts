@@ -27,7 +27,10 @@ export type ComposerGate =
   | { send: 'blocked'; reason: string };
 
 
-const STRANDED_WORDS = new Set(['stranded', 'stranded_input', 'queued', 'queued_input']);
+// NOT the bare word 'queued': ChatInput reuses its refusal panel for a SUCCESSFUL queued/held send
+// and sets state 'queued'/'held' there (review of #197). The gateway never sends bare 'queued'
+// (it maps queued_input -> 'stranded'), so only the detector's own word belongs here.
+const STRANDED_WORDS = new Set(['stranded', 'stranded_input', 'queued_input']);
 
 /** The words for a gateway refusal, from its `state`; null means "no state-specific words". */
 export function refusalCopy(state?: string): string | null {
