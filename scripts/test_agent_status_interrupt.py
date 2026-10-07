@@ -105,7 +105,7 @@ import time as _time
 
 
 def _wire(A, monkeypatch, tmp_path, tail_entries, hook_state="working", hook_age=0.0,
-          screen="", hook_event="PreToolUse"):
+          screen="", hook_event="PreToolUse", hook_cwd=None, hook_extra=None):
     home = tmp_path / "home"
     cwd = "/home/user/repos/demo"
     slug = A._project_slug(cwd)
@@ -123,18 +123,26 @@ def _wire(A, monkeypatch, tmp_path, tail_entries, hook_state="working", hook_age
     monkeypatch.setattr(A, "get_pane_id", lambda s: "%9")
     monkeypatch.setattr(os.path, "expanduser", lambda p: str(home) if p == "~" else p)
     with open(os.path.join(str(tmp_path), "9.json"), "w") as f:
-        json.dump({"event": hook_event, "state": hook_state,
-                   "ts": _time.time() - hook_age, "tool": "Bash",
-                   "cwd": cwd, "session_id": sid}, f)
+        ev = {"event": hook_event, "state": hook_state,
+              "ts": _time.time() - hook_age, "tool": "Bash",
+              "cwd": hook_cwd or cwd, "session_id": sid}
+        ev.update({k: (v.format(proj=str(proj), sid=sid) if isinstance(v, str) else v)
+                   for k, v in (hook_extra or {}).items()})
+        json.dump(ev, f)
     return A.get_agent_status("esc-sess")
 
 
 def test_END_TO_END_a_terminal_Esc_reads_IDLE_not_working(A, monkeypatch, tmp_path):
     # Shaw's exact case: Esc pressed in the terminal, no Stop hook fired, hook still says
     # 'working' and is fresh. Before the fix this reported working/"Active turn"/hook.
+    # gm's review (msg_253ccd85 B): the first version drove an EMPTY screen, which parses as
+    # 'unknown' (not idle), and asserted only "!= working". It now drives the REAL idle screen
+    # and asserts idle exactly. A parsed idle screen also never reaches the deriver/live-state
+    # path, which makes these hermetic.
     st = _wire(A, monkeypatch, tmp_path,
-               [_assistant(), _user_text("[Request interrupted by user]")])
-    assert st["state"] != "working", "an interrupted seat must not report an active turn"
+               [_assistant(), _user_text("[Request interrupted by user]")],
+               screen=_post_esc_screen())
+    assert st["state"] == "idle", st
     assert "Active turn" not in (st["activity"] or "")
     assert st["confidence"] != "hook"
 
@@ -143,7 +151,7 @@ def test_END_TO_END_POSITIVE_CONTROL_a_real_live_turn_is_still_rescued(A, monkey
     # The control that proves the branch above is a DISTINCTION and not a blanket off-switch:
     # same stale-screen situation, transcript NOT interrupted -> F2 must still promote.
     st = _wire(A, monkeypatch, tmp_path,
-               [_user_text("do a thing"), _assistant()])
+               [_user_text("do a thing"), _assistant()], screen=_post_esc_screen())
     assert st["state"] == "working", "F2 must still rescue a genuinely live turn"
     assert st["confidence"] == "hook"
 
@@ -151,7 +159,7 @@ def test_END_TO_END_POSITIVE_CONTROL_a_real_live_turn_is_still_rescued(A, monkey
 def test_END_TO_END_it_self_clears_when_the_operator_replies(A, monkeypatch, tmp_path):
     st = _wire(A, monkeypatch, tmp_path,
                [_assistant(), _user_text("[Request interrupted by user]"),
-                _user_text("reply ready")])
+                _user_text("reply ready")], screen=_post_esc_screen())
     assert st["state"] == "working", "a fresh submit after an interrupt is a live turn again"
 
 
@@ -228,3 +236,45 @@ def test_END_TO_END_Esc_on_AUQ_self_clears_when_the_operator_replies(A, monkeypa
                hook_state="waiting_permission", hook_age=5.0, screen=_post_esc_screen(),
                hook_event="Notification")
     assert st["state"] == "waiting_permission", "a new submit ends the interrupt; the hook stands"
+
+
+# ---- the seat has cd'd away (review of PR #196) --------------------------------------------
+# The hook's cwd is where it FIRED and follows every `cd`; the transcript lives under the
+# directory the session STARTED in. Measured by effect on the scratch seat: after `cd sub` the
+# hook reported cwd=.../sub while transcript_path stayed on the start directory, and the
+# patched detector without this read stayed on waiting_permission.
+_DRIFTED = "/home/user/repos/demo/sub"
+
+
+def test_END_TO_END_Esc_on_AUQ_after_a_cd_reads_IDLE_via_the_hooks_transcript_path(
+        A, monkeypatch, tmp_path):
+    st = _wire(A, monkeypatch, tmp_path, _ESC_ON_AUQ_TAIL, hook_state="waiting_permission",
+               hook_age=5.0, screen=_post_esc_screen(), hook_event="Notification",
+               hook_cwd=_DRIFTED, hook_extra={"transcript_path": "{proj}/{sid}.jsonl"})
+    assert st["state"] == "idle", st
+
+
+def test_after_a_cd_WITHOUT_transcript_path_the_rebuild_misses_and_fails_closed(
+        A, monkeypatch, tmp_path):
+    # The old event shape, kept honest: no transcript_path + drifted cwd -> the rebuilt path does
+    # not exist -> fail closed to the hook (today's behaviour), never a false idle.
+    st = _wire(A, monkeypatch, tmp_path, _ESC_ON_AUQ_TAIL, hook_state="waiting_permission",
+               hook_age=5.0, screen=_post_esc_screen(), hook_event="Notification",
+               hook_cwd=_DRIFTED)
+    assert st["state"] == "waiting_permission", st
+
+
+def test_the_hook_RECORDS_the_CLIs_transcript_path(tmp_path):
+    # The real hook script, run the way the CLI runs it: payload on stdin, pane from TMUX_PANE.
+    import subprocess
+    import sys
+    hook = os.path.join(_HERE, "../hooks/state-event-hook.py")
+    payload = {"hook_event_name": "PreToolUse", "session_id": "s1", "cwd": _DRIFTED,
+               "transcript_path": "/home/user/.claude/projects/-home-user-repos-demo/s1.jsonl",
+               "tool_name": "Bash"}
+    env = dict(os.environ, TMUX_PANE="%77", ORCH_EVENTS_DIR=str(tmp_path))
+    subprocess.run([sys.executable, hook], input=json.dumps(payload), text=True, env=env,
+                   check=True, timeout=10)
+    ev = json.loads((tmp_path / "77.json").read_text())
+    assert ev["transcript_path"] == payload["transcript_path"]
+    assert ev["cwd"] == _DRIFTED

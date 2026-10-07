@@ -1310,6 +1310,18 @@ def _transcript_path(cwd: str | None, sid: str | None, home: str | None = None) 
 _TRANSCRIPT_TAIL_BYTES = 262144
 
 
+def _hook_transcript_path(hook: dict) -> str | None:
+    """The transcript a hook event belongs to. Prefers the path the CLI itself reported
+    (state-event-hook records it). The cwd rebuild is only a fallback for events written before
+    that field existed: cwd follows every `cd`, but the projects folder is named after the
+    directory the session STARTED in, so after a `cd` the rebuild points at a file that is not
+    there and every transcript check silently fails closed (review of PR #196, 2026-10-07)."""
+    tp = hook.get('transcript_path')
+    if isinstance(tp, str) and tp:
+        return tp
+    return _transcript_path(hook.get('cwd'), hook.get('session_id'))
+
+
 # The CLI's own marker for a user interrupt, written as a `user` entry whose single text
 # block is exactly this (measured across the live transcripts: 187 plain + 90 "for tool use").
 # NOT scraped off the screen on purpose: the pane's "Interrupted" lines are dominated by
@@ -1381,34 +1393,6 @@ def _transcript_tail_is_interrupted(path: str | None) -> bool:
         if isinstance(content, str) and content.strip():
             return bool(_INTERRUPT_MARKER.search(content))
     return False
-
-
-# The Claude status bar's bare model form, e.g. "⬆ /gsd:update │ Opus 5.5 │ orchestraos ███".
-# quest-orchestra 2026-10-07: Shaw switched two seats to Opus 5.5 with /model and the Quest
-# window bar kept showing the OLD model, because the regex above only matches a name ENDING in
-# "context)" — the "(1M context)" variant. Measured on orchestraos-builder's own pane: the bar
-# read "Opus 5.5", agent-status returned model '' and /agents served the remembered old value.
-# The raw bytes also render the name as TWO separate dim spans ("Opus", reset, "5.5"), so no
-# single-span regex over `raw` could have matched it; this reads the ANSI-stripped line.
-#
-# ANCHORED on the bar's own `│` separators AND restricted to the BOTTOM lines, because model
-# names appear in conversation text all the time (this seat's own transcript discusses "Opus
-# 5.5" by name). A body line has to look like `│ Opus 5.5 │` AND sit in the chrome to count.
-# The family list is a parsing anchor, not a display table: it decides WHERE the name is, and
-# the string returned is exactly what the bar printed.
-_BAR_MODEL_RE = re.compile(
-    r'│\s*((?:Opus|Sonnet|Haiku|Fable|Claude)\s+\d[\d.]*(?:\s*\([^)│]*\))?)\s*│')
-_BAR_LINES = 8
-
-
-def _status_bar_model(raw: str) -> str | None:
-    """The model the Claude status bar names, from the bottom chrome only, or None."""
-    lines = [strip_ansi(l) for l in (raw or '').split('\n')]
-    for line in reversed(lines[-_BAR_LINES:]):
-        m = _BAR_MODEL_RE.search(line)
-        if m:
-            return m.group(1).strip()
-    return None
 
 
 def _read_hook_event(session: str) -> dict | None:
@@ -1576,7 +1560,7 @@ def get_agent_status(session: str) -> dict:
         elif (((hstate == 'working' and hook_age < HOOK_WORKING_TTL_S)
                or (hstate == 'waiting_permission' and hook_age < HOOK_WAITING_TTL_S))
               and _transcript_tail_is_interrupted(
-                  _transcript_path(hook.get('cwd'), hook.get('session_id')))):
+                  _hook_transcript_path(hook))):
             # THE USER PRESSED Esc. Esc fires no Stop hook, so without this the stale
             # 'working' event below re-asserts an active turn over an idle screen for the
             # full 300 s TTL — which is why Shaw could not send a photo after interrupting

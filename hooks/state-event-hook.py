@@ -59,6 +59,10 @@ def main() -> None:
         "pane": pane,
         "session_id": data.get("session_id"),
         "cwd": data.get("cwd"),
+        # The CLI's own transcript location. cwd is where the hook FIRED, and it follows every
+        # `cd`; the transcript lives under the directory the session STARTED in. Measured
+        # 2026-10-07: 3 of 31 fresh seats had cd'd away, so a path rebuilt from cwd missed.
+        "transcript_path": data.get("transcript_path"),
         "event": event,
         "tool": data.get("tool_name") or "",
         "ts": time.time(),
