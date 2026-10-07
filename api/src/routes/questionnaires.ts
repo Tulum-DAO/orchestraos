@@ -116,6 +116,11 @@ router.get('/:id/response', (req: Request, res: Response) => {
 
 // POST /api/questionnaires/:id/submit — Server-side submission
 // Handles full lifecycle: save feedback, update index, notify creating agent
+// Code lives in the CHECKOUT, not the data dir (5c3636c): under Docker / a separate data dir /
+// `orchestra init --demo`, <ORCHESTRA_DIR>/msg_store.py does not exist and the creator would never
+// be notified, silently (review of #195). Exported so a test pins it.
+export const MSG_STORE = join(CODE_ROOT, 'msg_store.py');
+
 router.post('/:id/submit', (req: Request, res: Response) => {
   // All of the logic, and every guard, lives in submitQuestionnaire (tested end to end there).
   const r = submitQuestionnaire({
@@ -124,7 +129,7 @@ router.post('/:id/submit', (req: Request, res: Response) => {
     readJson,
     writeFile: (path, data) => writeFileSync(path, data),
     ensureDir: (dir) => { if (!existsSync(dir)) mkdirSync(dir, { recursive: true }); },
-    send: (argv) => { execFileSync('python3', [join(ORCHESTRA, 'msg_store.py'), ...argv],
+    send: (argv) => { execFileSync('python3', [MSG_STORE, ...argv],
       { encoding: 'utf-8', timeout: 10000, cwd: ORCHESTRA }); },
     now: () => Date.now(),
   }, String(req.params.id), req.body);

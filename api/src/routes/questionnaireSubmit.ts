@@ -14,7 +14,7 @@
  * The client's value is kept only as `unverified_submitted_by`, never as identity.
  */
 import { join } from 'path';
-import { SAFE_QID, containedPath } from './feedbackPath.js';
+import { SAFE_QID, containedPath, cleanSubmittedBy } from './feedbackPath.js';
 
 export interface SubmitDeps {
   orchestraDir: string;
@@ -59,9 +59,10 @@ export function submitQuestionnaire(deps: SubmitDeps, qId: string, body: any): S
     submitted_by: deps.sender,
     submitted_at: new Date(ts).toISOString(),
   };
-  if (typeof submitted_by === 'string' && submitted_by && submitted_by !== deps.sender) {
-    feedbackData.unverified_submitted_by = submitted_by.slice(0, 200);
-  }
+  // The claim is kept for attribution, bounded exactly as /api/learning/feedback bounds it
+  // (cleanSubmittedBy: a short single-line string), and never used as identity.
+  const claimed = cleanSubmittedBy(submitted_by, '');
+  if (claimed && claimed !== deps.sender) feedbackData.unverified_submitted_by = claimed;
   deps.writeFile(fullPath, JSON.stringify(feedbackData, null, 2));
 
   questionnaires[qIndex].status = 'completed';

@@ -119,3 +119,23 @@ test('ROUTE: POST /api/questionnaires/..%2F..%2Fpwn/submit is a 400 and writes n
     assert.ok(existsSync(join(orch, 'state', 'feedback', readdirSync(join(orch, 'state', 'feedback'))[0])));
   } finally { server.close(); }
 });
+
+test('the completion message is sent with the CHECKOUT msg_store, not one in the data dir', async () => {
+  // Review of #195: the refactor looked in ORCHESTRA_DIR, which differs from the checkout under Docker /
+  // --demo, so the send failed silently and the creator was never told. The route test above cannot see
+  // that (its temp data dir has no msg_store.py, and a failed send is only logged).
+  process.env.ORCHESTRA_DIR = mkdtempSync(join(tmpdir(), 'qsub-data-'));
+  if (!process.env.ORCHESTRA_CONFIG) {
+    process.env.ORCHESTRA_CONFIG = join(new URL('../../..', import.meta.url).pathname, 'orchestra.example.toml');
+  }
+  const { MSG_STORE } = await import(`./questionnaires.js?t=${Date.now()}`);
+  assert.ok(!MSG_STORE.startsWith(process.env.ORCHESTRA_DIR!), MSG_STORE);
+  assert.ok(existsSync(MSG_STORE), `msg_store.py must exist where the route will run it: ${MSG_STORE}`);
+});
+
+test('an unverified claim is bounded like the learning route: control chars or junk are dropped', () => {
+  const { deps } = setup();
+  submitQuestionnaire(deps, 'qnr_ok_1', { answers: { q: 1 }, submitted_by: 'kai\nFAKE HEADER' });
+  const stored = JSON.parse(readFileSync(join(deps.orchestraDir, 'state', 'feedback', 'qnr_ok_1_1791350000000.json'), 'utf-8'));
+  assert.equal(stored.unverified_submitted_by, undefined);
+});
