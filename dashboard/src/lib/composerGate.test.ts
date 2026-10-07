@@ -187,3 +187,10 @@ test('a forced retry sends the box as it is NOW, not the stale refused attempt',
   assert.equal(retryText(true, '', 'fixd typo'), 'fixd typo', 'empty box -> the refused attempt');
   assert.equal(retryText(false, 'hello', 'old'), 'hello');
 });
+
+test('a forced retry KEEPS the attachment markers of the refused attempt on the edited text', () => {
+  assert.equal(retryText(true, 'fixed typo', '[IMAGE: /up/a.png] fixd typo'), '[IMAGE: /up/a.png] fixed typo');
+  assert.equal(retryText(true, 'x', '[IMAGE: /up/a.png] [FILE: /up/b.pdf] y'), '[IMAGE: /up/a.png] [FILE: /up/b.pdf] x');
+  assert.equal(retryText(true, 'x', 'no markers here'), 'x');
+  assert.equal(retryText(true, '', '[IMAGE: /up/a.png] y'), '[IMAGE: /up/a.png] y');
+});

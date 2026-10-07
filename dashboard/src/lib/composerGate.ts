@@ -76,7 +76,12 @@ export function clearsComposer(r: { ok?: boolean; queued?: boolean; held?: boole
  *  edited it after the refusal) and falls back to the refused attempt only when the box is empty. */
 export function retryText(force: boolean, boxText: string, attemptText?: string): string {
   if (!force) return boxText;
-  return boxText || attemptText || '';
+  if (!boxText) return attemptText || '';
+  // The inject path uploads a photo up front, and from then on it exists ONLY as a leading
+  // `[IMAGE: path]` / `[FILE: path]` marker inside attemptText (pendingImage is already cleared).
+  // Carry those markers onto the edited text, or the screenshot silently disappears (#198 review).
+  const markers = (attemptText || '').match(/^(?:\[(?:IMAGE|FILE): [^\]]+\]\s*)+/);
+  return markers ? `${markers[0].trim()} ${boxText}` : boxText;
 }
 
 /** States where nothing is listening, so a message would go nowhere. */
