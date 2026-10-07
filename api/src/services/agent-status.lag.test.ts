@@ -43,12 +43,16 @@ test('an event that lands DURING a scan triggers a re-scan, instead of waiting o
   await sleep(200);
   writeFileSync(stateFile, 'idle');
   writeFileSync(join(panes, '1.json'), '{"state":"idle"}');   // the Stop event, mid-scan
-  await sleep(1300);                      // scan #2 done: it still says "working"
-
-  // 3. the next poll must see that scan #2 missed an event, and re-scan
-  await m.getDetectorStates();
-  await sleep(1300);
-  const st = (await m.getDetectorStates()).get('s1')?.state;
+  // 3. keep polling (as the web does) until idle, with a deadline well inside the 15 s TTL. The
+  //    old code stays "working" until the TTL, so it fails deterministically; the fix gets there
+  //    one scan later. No fixed sleeps: a loaded CI box only makes this slower, not flaky.
+  const deadline = Date.now() + 6000;
+  let st: string | undefined;
+  while (Date.now() < deadline) {
+    st = (await m.getDetectorStates()).get('s1')?.state;
+    if (st === 'idle') break;
+    await sleep(200);
+  }
   assert.equal(st, 'idle', 'the mid-scan Stop event must not wait out the 15 s TTL');
 });
 

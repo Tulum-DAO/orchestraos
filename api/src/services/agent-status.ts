@@ -75,14 +75,11 @@ function newestEventMtimeMs(): number {
   }
 }
 
-// at = when the scan FINISHED (TTL age); eventMtime = newest pane event seen BEFORE it started.
-// Exactly the gateway's pair: stamping `at` at the START made a >15 s scan stale the moment it
-// finished, so a slow host re-scanned back to back (review of #199).
-// THE LAG BUG (gm msg_190daa19 item 2, measured 2026-10-07): `at` used to be stamped when the
-// 3.8-8.4 s scan FINISHED, and staleness was `newestEvent > at`. A Stop/UserPromptSubmit landing
-// DURING the scan is older than that finish stamp, so it never busted the cache and the web sat on
-// the pre-event status until the 15 s TTL. The gateway (watch_gateway.py _refresh_agents_cache) has
-// always snapshotted the event mtime BEFORE scanning and re-scans on ANY change; this mirrors it.
+// The gateway's pair (watch_gateway.py _refresh_agents_cache): eventMtime = the newest pane event
+// seen BEFORE the scan started; at = when the scan FINISHED (for the TTL).
+// THE LAG BUG this replaces (gm msg_190daa19 item 2): staleness was `newestEvent > at`, with `at`
+// stamped at FINISH, so a Stop/UserPromptSubmit landing DURING the 3.8-8.4 s scan was "older" than
+// the snapshot and ignored until the 15 s TTL. Now ANY event the scan did not see re-scans.
 let cache: { at: number; eventMtime: number; data: Map<string, DetectorStatus> } =
   { at: 0, eventMtime: -1, data: new Map() };
 let refreshing = false;
