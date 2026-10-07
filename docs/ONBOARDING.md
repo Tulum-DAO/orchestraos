@@ -4,11 +4,16 @@ For someone who already has a gateway running and wants to reach it from a
 phone and from a browser, on their own network, with no baked-in token. Two
 client surfaces, one pairing flow.
 
-> **Not built yet.** Every step below — `orchestra pair`, the handshake, both
-> client connect flows — describes what you will do once this lands Saturday
-> morning; none of it is on `main` right now, and none of the commands below
-> will work if you try them tonight. Check `orchestra pair --help` first if
-> you're reading this after Saturday morning to confirm it has landed.
+> **What works today, step by step** (updated 2026-10-07):
+>
+> | Step | Status |
+> |---|---|
+> | 1. Run your gateway | Works on `main`. |
+> | 2. `orchestra pair` | Works on `main`: prints the code and QR; the gateway serves `POST /pair/exchange`. |
+> | 3. Connect the web dashboard | **Not on `main`.** The connect screen described below was proposed (PR #23) and closed unmerged; this section describes the intended flow. |
+> | 4. Connect the iOS app | **Not released yet.** The pairing screen is being built and the app is headed for the App Store; this section describes that build. |
+>
+> Run `orchestra pair --help` to confirm the command on your install.
 
 ## Before anything else: log in
 
