@@ -5,6 +5,16 @@
 import { Router, type Request, type Response } from 'express';
 import { queryDb, execDb } from '../lib/db.js';
 import { actingAgent, tenantScope } from '../lib/principal.js';
+import { tenantFilter, sortColumn } from '../lib/sqlScope.js';
+import { inboxDirFor, isSafeAgentId } from '../lib/agentPaths.js';
+
+// ORDER BY cannot take a bound parameter: the column comes from this closed set (the real columns
+// of `tasks`); an unknown one is a 400. It used to be req.query.sort, raw. See lib/sqlScope.ts.
+const SORTABLE = new Set(['id','tenant_id','title','description','status','priority','project_id',
+  'phase_id','parent_id','north_star_id','cohort_id','assigned_to','created_by','source','routed_to',
+  'agents_spawned','client','tags','due_date','blocked_by','created_at','updated_at','started_at',
+  'completed_at','time_spent_ms','tokens_used','deployment_state','message_id','conversation_id',
+  'roadmap_phase_id','pipeline_id','stage']);
 
 const router = Router();
 
@@ -48,8 +58,8 @@ function enrichTask(t: any): any {
 
 router.get('/', (req: Request, res: Response) => {
   const scope = getTenantScope(req);
-  const tw = scope.isAdmin ? '' : ' AND tenant_id = ?';
-  const twParams = scope.isAdmin ? [] : [scope.clientScope || scope.username];
+  const tf = tenantFilter(scope, 'tenant_id');   // bound, never interpolated — lib/sqlScope.ts
+  const tw = tf.sql; const twParams = tf.params;
   const conds: string[] = ['1=1' + tw]; const params: any[] = [...twParams];
 
   if (req.query.status) { const s = (req.query.status as string).split(','); conds.push(`status IN (${s.map(()=>'?').join(',')})`); params.push(...s); }
@@ -63,7 +73,8 @@ router.get('/', (req: Request, res: Response) => {
   if (req.query.cohort) { conds.push('cohort_id = ?'); params.push(req.query.cohort); }
   if (req.query.search) { conds.push('(title LIKE ? OR description LIKE ?)'); params.push(`%${req.query.search}%`, `%${req.query.search}%`); }
 
-  const sort = (req.query.sort as string) || 'created_at';
+  const sort = sortColumn(req.query.sort, SORTABLE, 'created_at');
+  if (!sort) { res.status(400).json({ error: 'unknown sort column' }); return; }
   const dir = (req.query.dir as string) === 'asc' ? 'ASC' : 'DESC';
   const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
   const offset = parseInt(req.query.offset as string) || 0;
@@ -90,6 +101,13 @@ router.post('/', (req: Request, res: Response) => {
   const scope = getTenantScope(req);
   let task = { ...req.body };
   if (!task.title) { res.status(400).json({ error: 'title required' }); return; }
+  // created_by and assigned_to (copied into routed_to) later become a DIRECTORY NAME under
+  // queue/inbox; refuse anything that is not one safe path segment. See lib/agentPaths.ts.
+  for (const f of ['created_by', 'assigned_to'] as const) {
+    if (task[f] !== undefined && task[f] !== null && task[f] !== '' && !isSafeAgentId(task[f])) {
+      res.status(400).json({ error: `${f} must match ^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$` }); return;
+    }
+  }
   if (task.parent_id) {
     const parent = queryDb('SELECT parent_id FROM tasks WHERE id = ?', [task.parent_id]);
     if (parent.length && parent[0].parent_id) { res.status(400).json({ error: 'Max 2 levels' }); return; }
@@ -118,6 +136,10 @@ router.patch('/:id', (req: Request, res: Response) => {
   const existing = queryDb('SELECT * FROM tasks WHERE id = ?', [req.params.id]);
   if (!existing.length) { res.status(404).json({ error: 'Not found' }); return; }
   const task = existing[0]; const u = req.body;
+  // routed_to becomes a DIRECTORY NAME under queue/inbox on cohort completion; see lib/agentPaths.ts.
+  if (u && u.routed_to !== undefined && u.routed_to !== null && u.routed_to !== '' && !isSafeAgentId(u.routed_to)) {
+    res.status(400).json({ error: 'routed_to must match ^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$' }); return;
+  }
   const sets: string[] = []; const params: any[] = [];
   const allowed = ['title','description','status','priority','type','project_id','phase_id','assigned_to','routed_to','client','tags','due_date','blocked_by','deployment_state','north_star_id','cohort_id','tokens_used','time_spent_ms'];
 
@@ -142,7 +164,7 @@ router.patch('/:id', (req: Request, res: Response) => {
       const { mkdirSync: mkd, writeFileSync: wf, existsSync: ex } = require('fs');
       const { join: jn } = require('path');
       const oDir = process.env.ORCHESTRA_DIR || jn(process.env.HOME, 'scripts/agent-orchestra');
-      const inboxDir = jn(oDir, 'queue', 'inbox', task.created_by);
+      const inboxDir = inboxDirFor(oDir, task.created_by);   // throws on an unsafe id (caught below)
       if (!ex(inboxDir)) mkd(inboxDir, { recursive: true });
       wf(jn(inboxDir, `${Date.now()}_task_completed.json`), JSON.stringify({
         type: 'task_completed', task_id: task.id, title: task.title,
@@ -164,7 +186,7 @@ router.patch('/:id', (req: Request, res: Response) => {
         const { join: jn } = require('path');
         const oDir = process.env.ORCHESTRA_DIR || jn(process.env.HOME, 'scripts/agent-orchestra');
         for (const ct of cohortTasks) {
-          const inboxDir = jn(oDir, 'queue', 'inbox', ct.routed_to);
+          const inboxDir = inboxDirFor(oDir, ct.routed_to);   // throws on an unsafe id (caught below)
           if (!ex(inboxDir)) mkd(inboxDir, { recursive: true });
           wf(jn(inboxDir, `${Date.now()}_cohort_completed.json`), JSON.stringify({
             type: 'cohort_completed', cohort_id: task.cohort_id,

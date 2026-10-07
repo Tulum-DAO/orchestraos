@@ -7,6 +7,12 @@ import { queryDb, execDb } from '../lib/db.js';
 import { goalsOpenForPerson, openGoalsForPerson } from '../services/goals-ledger.js';
 import { loadConfig } from '../lib/config.js';
 import { actingAgent, tenantScope } from '../lib/principal.js';
+import { tenantFilter, sortColumn } from '../lib/sqlScope.js';
+
+// ORDER BY column must come from a closed set (the real columns of `people`); unknown -> 400.
+const PEOPLE_SORTABLE = new Set(['id','tenant_id','name','aliases','title','company','email','phone',
+  'linkedin','facebook','instagram','website','relationship','source','context','goals','beliefs',
+  'environment','situation','pipeline_id','stage_id','company_slugs','resolved','created_at','updated_at']);
 
 const router = Router();
 
@@ -32,9 +38,9 @@ function nanoid(prefix: string): string {
 
 router.get('/', (req: Request, res: Response) => {
   const scope = getTenantScope(req);
-  const tw = scope.isAdmin ? '' : ` AND p.tenant_id = '${scope.clientScope || scope.username}'`;
-  const conds: string[] = ['1=1' + tw];
-  const params: any[] = [];
+  const tf = tenantFilter(scope, 'p.tenant_id');   // bound, never interpolated — lib/sqlScope.ts
+  const conds: string[] = ['1=1' + tf.sql];
+  const params: any[] = [...tf.params];
 
   if (req.query.relationship) { conds.push('p.relationship = ?'); params.push(req.query.relationship); }
   if (req.query.project) { conds.push("p.id IN (SELECT person_id FROM person_projects WHERE project_id = ?)"); params.push(req.query.project); }
@@ -44,7 +50,8 @@ router.get('/', (req: Request, res: Response) => {
     params.push(s, s, s, s);
   }
 
-  const sort = (req.query.sort as string) || 'name';
+  const sort = sortColumn(req.query.sort, PEOPLE_SORTABLE, 'name');
+  if (!sort) { res.status(400).json({ error: 'unknown sort column' }); return; }
   const dir = (req.query.dir as string) === 'desc' ? 'DESC' : 'ASC';
   const w = conds.join(' AND ');
 
@@ -254,9 +261,9 @@ router.post('/:id/activity', (req: Request, res: Response) => {
 // GET /api/people/pipelines — list all pipelines with stages + person counts
 router.get('/pipelines/all', (req: Request, res: Response) => {
   const scope = getTenantScope(req);
-  const tw = scope.isAdmin ? '' : ` AND tenant_id = '${scope.clientScope || scope.username}'`;
+  const tf = tenantFilter(scope, 'tenant_id');   // bound, never interpolated — lib/sqlScope.ts
 
-  const pipelines = queryDb(`SELECT * FROM pipelines WHERE 1=1${tw} ORDER BY sort_order`);
+  const pipelines = queryDb(`SELECT * FROM pipelines WHERE 1=1${tf.sql} ORDER BY sort_order`, tf.params);
   for (const p of pipelines) {
     p.stages = queryDb('SELECT * FROM pipeline_stages WHERE pipeline_id = ? ORDER BY sort_order', [p.id]);
     // Count people per stage

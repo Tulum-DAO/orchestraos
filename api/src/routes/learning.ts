@@ -102,8 +102,16 @@ router.get('/proposals/:id/onepager', (req: Request, res: Response) => {
   res.send(proposals[0].onepager_html);
 });
 
+// The proposal id reaches the python bridge ONLY as an argv value (sys.argv[1]), never inside the
+// script text. It used to be interpolated into the python source (`proposal_id = "${...}"`), so an id
+// containing a double quote closed the string literal and the rest ran as python, as the API user
+// (found by orchestra-builder in the live tree, 2026-10-07; ported from live 9e2f55443e). The id
+// check is the second, redundant guard.
+const SAFE_PROPOSAL_ID = /^[A-Za-z0-9_-]{1,128}$/;
+
 // POST /api/learning/proposals/:id/approve — the operator approves a proposal
 router.post('/proposals/:id/approve', (req: Request, res: Response) => {
+  if (!SAFE_PROPOSAL_ID.test(String(req.params.id))) { res.status(400).json({ error: 'bad proposal id' }); return; }
   try {
     const script = `
 import sqlite3, json, sys
@@ -112,7 +120,7 @@ from datetime import datetime, timezone
 db = sqlite3.connect("${DB_PATH}", timeout=5)
 db.execute("PRAGMA journal_mode=WAL")
 now = datetime.now(timezone.utc).isoformat()
-proposal_id = "${req.params.id}"
+proposal_id = sys.argv[1]
 
 # Get the proposal
 p = db.execute("SELECT * FROM proposals WHERE proposal_id = ?", (proposal_id,)).fetchone()
@@ -136,7 +144,7 @@ db.commit()
 db.close()
 print(json.dumps({"approved": True, "rule_id": rule_id}))
 `;
-    const result = execFileSync('python3', ['-c', script], { timeout: 5000, encoding: 'utf-8' });
+    const result = execFileSync('python3', ['-c', script, String(req.params.id)], { timeout: 5000, encoding: 'utf-8' });
     res.json(JSON.parse(result.trim()));
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to approve', detail: err.message });
@@ -145,19 +153,20 @@ print(json.dumps({"approved": True, "rule_id": rule_id}))
 
 // POST /api/learning/proposals/:id/reject — the operator rejects a proposal
 router.post('/proposals/:id/reject', (req: Request, res: Response) => {
+  if (!SAFE_PROPOSAL_ID.test(String(req.params.id))) { res.status(400).json({ error: 'bad proposal id' }); return; }
   try {
     const script = `
-import sqlite3, json
+import sqlite3, json, sys
 from datetime import datetime, timezone
 db = sqlite3.connect("${DB_PATH}", timeout=5)
 now = datetime.now(timezone.utc).isoformat()
 db.execute("UPDATE proposals SET status = 'rejected', shaw_decision = 'rejected', shaw_timestamp = ?, updated_at = ? WHERE proposal_id = ?",
-    (now, now, "${req.params.id}"))
+    (now, now, sys.argv[1]))
 db.commit()
 db.close()
 print(json.dumps({"rejected": True}))
 `;
-    const result = execFileSync('python3', ['-c', script], { timeout: 5000, encoding: 'utf-8' });
+    const result = execFileSync('python3', ['-c', script, String(req.params.id)], { timeout: 5000, encoding: 'utf-8' });
     res.json(JSON.parse(result.trim()));
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to reject', detail: err.message });

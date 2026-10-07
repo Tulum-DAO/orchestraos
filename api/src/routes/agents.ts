@@ -3,6 +3,10 @@ import { writeFileSync, mkdirSync, existsSync, appendFileSync, readdirSync, read
 import { join } from 'path';
 import { execFileSync } from 'child_process';
 import { getRegistry, getAllAgentStates, getInboxCounts } from '../services/state-reader.js';
+import { registeredAgent, promptPathFor, inboxDirFor, isSafeAgentId } from '../lib/agentPaths.js';
+
+// The prompt routes' own root, unchanged from before (they never used state-reader's data dir).
+const PROMPT_ORCH = () => process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
 import { getTmuxSessionNames } from '../services/tmux-monitor.js';
 import { getUnifiedAgentStatus, spawnAgent, killAgent, getMacStatus, getMacSessionsCache } from '../services/cross-machine.js';
 import { logInteraction } from '../services/learning.js';
@@ -860,10 +864,14 @@ router.post('/:id/agent-key', async (req: Request, res: Response) => {
 
 // GET /api/agents/:id/prompt — read agent's system prompt file
 router.get('/:id/prompt', (req: Request, res: Response) => {
-  const registry = getRegistry() as any;
-  const agent = registry?.agents?.[String(req.params.id)];
-  const promptPath = agent?.system_prompt || `prompts/${req.params.id}.md`;
-  const fullPath = join(process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra'), promptPath);
+  // Registered agents only, path contained (lib/agentPaths.ts): GET used to read ANY .md via ..%2F.
+  const id = String(req.params.id);
+  const agent = registeredAgent(getRegistry(), id);
+  if (!agent) { res.status(404).json({ error: 'unknown agent' }); return; }
+  let fullPath: string;
+  try { fullPath = promptPathFor(PROMPT_ORCH(), id, agent); }
+  catch { res.status(400).json({ error: 'bad prompt path' }); return; }
+  const promptPath = agent.system_prompt || `prompts/${id}.md`;
   try {
     const content = readFileSync(fullPath, 'utf-8');
     res.json({ content, path: promptPath });
@@ -874,15 +882,20 @@ router.get('/:id/prompt', (req: Request, res: Response) => {
 
 // PUT /api/agents/:id/prompt — update agent's system prompt file
 router.put('/:id/prompt', (req: Request, res: Response) => {
-  const registry = getRegistry() as any;
-  const agent = registry?.agents?.[String(req.params.id)];
+  // gm msg_c146a84e: an UNREGISTERED id must NOT create a prompt file at all. That path, plus ..%2F
+  // in the id, was an arbitrary .md write: fleet-wide prompt injection. Registered + contained only.
+  const id = String(req.params.id);
+  const agent = registeredAgent(getRegistry(), id);
+  if (!agent) { res.status(404).json({ error: 'unknown agent' }); return; }
   // Block edits to T0 and always_on agents
-  if (agent?.tier === 'T0' || agent?.always_on) {
+  if (agent.tier === 'T0' || agent.always_on) {
     res.status(403).json({ error: 'This agent\'s prompt is protected' });
     return;
   }
-  const promptPath = agent?.system_prompt || `prompts/${req.params.id}.md`;
-  const fullPath = join(process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra'), promptPath);
+  let fullPath: string;
+  try { fullPath = promptPathFor(PROMPT_ORCH(), id, agent); }
+  catch { res.status(400).json({ error: 'bad prompt path' }); return; }
+  const promptPath = agent.system_prompt || `prompts/${id}.md`;
   try {
     const { content } = req.body;
     if (typeof content !== 'string') { res.status(400).json({ error: 'content required' }); return; }
@@ -901,7 +914,9 @@ router.post('/:id/task', (req: Request, res: Response) => {
     const validPriorities = ['low', 'normal', 'high'];
     const prio = validPriorities.includes(priority) ? priority : 'normal';
     const agentId = req.params.id as string;
-    const inboxDir = join(process.env.ORCHESTRA_DIR!, 'queue', 'inbox', agentId);
+    // Registered agents only, inbox path contained (lib/agentPaths.ts): ..%2F used to mkdir + write anywhere.
+    if (!registeredAgent(getRegistry(), agentId)) { res.status(404).json({ error: 'unknown agent' }); return; }
+    const inboxDir = inboxDirFor(process.env.ORCHESTRA_DIR!, agentId);
     if (!existsSync(inboxDir)) mkdirSync(inboxDir, { recursive: true });
     const filename = `${Date.now()}_task_dashboard.json`;
     const msg = {
@@ -929,9 +944,12 @@ router.get('/:id/messages', (req: Request, res: Response) => {
     const agentId = req.params.id as string;
     const orchestraDir = process.env.ORCHESTRA_DIR!;
     const messages: Record<string, unknown>[] = [];
+    // Reads every *.json under queue/inbox/<id>: a raw id listed and read any directory's JSON. Safe id
+    // + containment, no registry check: a retired agent's inbox and outbox are legitimate history.
+    if (!isSafeAgentId(agentId)) { res.status(400).json({ error: 'bad agent id' }); return; }
 
     // Read inbox messages
-    const inboxDir = join(orchestraDir, 'queue', 'inbox', agentId);
+    const inboxDir = inboxDirFor(orchestraDir, agentId);
     if (existsSync(inboxDir)) {
       const inboxFiles = readdirSync(inboxDir).filter(f => f.endsWith('.json'));
       for (const file of inboxFiles) {
