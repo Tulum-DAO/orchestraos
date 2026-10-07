@@ -3240,7 +3240,7 @@ def _already_or_answered_elsewhere(stored_row, answers):
 def durable_first_batch_submit(session, answers, *, store, armed=False,
                                submit_fn=None, resume_fn=None,
                                surface=None, answered_by=None, device=None,
-                               expect_row_id=None):
+                               expect_row_id=None, require_identity_gate=False):
     """condition-6 orchestrator. Persist the multi-part answer batch to the
     durable approval_requests row FIRST, THEN best-effort live-pane replay.
 
@@ -3306,6 +3306,13 @@ def durable_first_batch_submit(session, answers, *, store, armed=False,
         # Else honest failure — the client keeps its draft
         # (multipart-menu-client-dev C1-C3), NEVER a pane-only lossy submit.
         return False, {"reason": "no_durable_row", "session": session}
+
+    # A caller that must never replay without the identity gate (a DEVICE: /menu-submit) refuses
+    # here, on the SAME lookup the batch is persisted against: a card with parts but no per-part
+    # questions would otherwise replay with the gate OFF (logged below, for operator callers).
+    if require_identity_gate and row_is_durable_with_parts(row) and not _anchor_expect_questions(row):
+        return False, {"reason": "identity_gate_unavailable", "family": "no_part_questions",
+                       "id": row.get("id")}
 
     # 2) validate the batch against the hydrated parts[] BEFORE any write.
     err = _validate_batch_answer(row, answers)
@@ -5088,14 +5095,10 @@ async def handle_menu_submit(request):
             cur = _current_menu(session)
             if _is_gemini_session(session) or (isinstance(cur, dict) and cur.get("menu_family") == "agy"):
                 return False, {"reason": "identity_gate_unavailable", "family": "agy"}
-            # A card with parts but no per-part questions would run the replay with the identity
-            # gate OFF (the orchestrator only logs it there, because an operator call must not
-            # become an outage). A DEVICE tap is exactly the caller the gate exists for: refuse.
-            if row_is_durable_with_parts(row) and not _anchor_expect_questions(row):
-                return False, {"reason": "identity_gate_unavailable", "family": "no_part_questions"}
         return durable_first_batch_submit(session, answers, store=st, armed=armed,
                                           surface=surface, answered_by=answered_by,
-                                          device=device, expect_row_id=card_id)
+                                          device=device, expect_row_id=card_id,
+                                          require_identity_gate=True)
 
     ok, info = await asyncio.get_event_loop().run_in_executor(None, _run)
     try:

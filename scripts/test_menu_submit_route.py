@@ -410,3 +410,37 @@ def test_protected_session_is_403_and_presses_nothing(spy, monkeypatch):
     monkeypatch.setenv("MENU_MULTIPART_SUBMIT_ARMED", "1")
     status, body = _post({"session": "gm", "answers": ANSWERS, "confirm": True, "card_id": "apr_1"})
     assert status == 403 and spy == []
+
+
+def test_racing_persist_of_the_SAME_batch_is_already(replay, env):
+    env.record_batch_answer = lambda rid, answers, **kw: False      # a duplicate tap won the race
+    env.get = lambda rid: _answered(rid, ANSWERS)
+    status, body = _post({"session": "gm", "answers": ANSWERS, "confirm": True, "card_id": "apr_1"})
+    assert status == 200 and body["already"] is True and replay == []
+
+
+def test_batches_differing_only_in_text_are_not_the_same_answer(env):
+    with_text = [{"part": 0, "ns": ["1"]}, {"part": 1, "ns": ["2", "3"], "text": "and D"}]
+    env.row, env.latest = None, _answered("apr_1", with_text)
+    ok, info = G.durable_first_batch_submit("gm", ANSWERS, store=env, armed=True, expect_row_id="apr_1",
+                                            submit_fn=lambda *a, **k: (True, {}),
+                                            resume_fn=lambda *a, **k: None)
+    assert ok is False and info["reason"] == "answered_elsewhere"
+
+
+def test_the_gate_check_runs_on_the_orchestrators_own_lookup(replay, env):
+    # The handler's lookup sees a hydrated card; a re-walk lands before the orchestrator's lookup
+    # and leaves the SAME card without part questions. The refusal must still hold.
+    bare = {"walk_complete": True, "part_count": 2, "parts": [
+        {"index": 0, "select": "single", "options": MENU["parts"][0]["options"]},
+        {"index": 1, "select": "multi", "options": MENU["parts"][1]["options"]}]}
+    calls = {"n": 0}
+    real = env.pending_menu_row_for_session
+
+    def lookup(session):
+        calls["n"] += 1
+        return real(session) if calls["n"] == 1 else {**_row("apr_1"), "menu": json.dumps(bare)}
+    env.pending_menu_row_for_session = lookup
+    status, body = _post({"session": "gm", "answers": ANSWERS, "confirm": True, "card_id": "apr_1"})
+    assert status == 409 and body["reason"] == "identity_gate_unavailable"
+    assert replay == [] and env.recorded == []
