@@ -101,7 +101,9 @@ tailscale serve status
 ```
 
 Then pick an https port that is not in that list (8445 here) and serve the
-gateway on it:
+gateway on it. The proxy target is the plain-HTTP address your gateway listens
+on. `8890` below is the default (`[gateway] port` in `orchestra.toml`); if you
+changed it, use the port that `orchestra status` prints on the `gateway` row:
 
 ```bash
 tailscale serve --bg --https=8445 http://127.0.0.1:8890
