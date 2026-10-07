@@ -4705,8 +4705,11 @@ async def handle_agent_key(request):
         # multi-part surface must NOT inherit the single-part MENU_SUBMIT_ARMED.
         if isinstance(answers, list):
             armed = _menu_multipart_armed()
-            if armed and any(isinstance(a, dict) and isinstance(a.get("text"), str) and a["text"].strip()
-                             for a in answers) and not _menu_submit_text_armed():
+            # Clean FIRST, so the text arm counts exactly what the replay would type.
+            answers, bad = _clean_batch_answers(answers)
+            if bad is not None:
+                return _json({"ok": False, "multipart": True, "error": bad}, status=400)
+            if armed and any(a.get("text") for a in answers) and not _menu_submit_text_armed():
                 return _json({"ok": False, "multipart": True, "armed": True,
                               "reason": "free_text_not_armed"}, status=409)
             # A BATCH MUST NAME THE MENU IT ANSWERS: without a card the gateway cannot tell menu A
@@ -4733,9 +4736,13 @@ async def handle_agent_key(request):
             _batch_device = _answer_device(request)
 
             def _durable_submit():
+                if armed:
+                    agy = _agy_identity_refusal(session)
+                    if agy is not None:
+                        return "durable", False, agy
                 st = ApprovalStore(); st.migrate()
                 dok, dinfo = durable_first_batch_submit(
-                    session, answers, store=st, armed=armed,
+                    session, answers, store=st, armed=armed, require_identity_gate=armed,
                     # A multi-part submit is no less an answer on the operator's behalf than
                     # a single-part one, and it is the path the headset uses for a paged
                     # AskUserQuestion — so "what did this device approve" must not have a
@@ -5006,6 +5013,51 @@ def _free_text_option_without_text(row, answers):
     return None
 
 
+def _clean_batch_answers(answers):
+    """(clean, None) or (None, error). The ONE shape every multi-part submit replays: answers[] of
+    {part: distinct int, ns: [digit strings], text?: non-blank str <= ANSWER_TEXT_MAX}. The arm
+    gates read `text` from THIS result, so a value they would not count (whitespace, a non-string)
+    can never reach the replay that types it; ints in ns become strings because the validator
+    compares str(n) while the replay presses the RAW value."""
+    if not isinstance(answers, list) or not answers or not all(isinstance(a, dict) for a in answers):
+        return None, "answers[] of objects required"
+    seen_parts = set()
+    clean = []
+    for a in answers:
+        t = a.get("text")
+        if t is not None and (not isinstance(t, str) or len(t) > ANSWER_TEXT_MAX):
+            return None, f"text must be a string of <= {ANSWER_TEXT_MAX} chars"
+        pi = a.get("part")
+        if not isinstance(pi, int) or isinstance(pi, bool) or pi in seen_parts:
+            return None, "each answer needs a distinct integer part"
+        seen_parts.add(pi)
+        ns = a.get("ns") or []
+        if not isinstance(ns, list):
+            return None, f"part {pi}: ns must be a list"
+        norm = []
+        for n in ns:
+            if isinstance(n, int) and not isinstance(n, bool):
+                n = str(n)
+            if not isinstance(n, str) or not n.isdigit():
+                return None, f"part {pi}: ns entries must be option numbers"
+            norm.append(n)
+        c = {"part": pi, "ns": norm}
+        if t and t.strip():            # whitespace-only is no answer: never typed into a pane
+            c["text"] = t
+        clean.append(c)
+    return clean, None
+
+
+def _agy_identity_refusal(session):
+    """menu_submit_agy takes no expect_questions, so on an agy pane the identity gate would be
+    OFF. Either signal refuses: the RUNTIME (no pane read, so a missed menu read cannot pass it)
+    or the menu family the replay itself will probe."""
+    cur = _current_menu(session)
+    if _is_gemini_session(session) or (isinstance(cur, dict) and cur.get("menu_family") == "agy"):
+        return {"reason": "identity_gate_unavailable", "family": "agy"}
+    return None
+
+
 def _menu_submit_text_armed() -> bool:
     return os.environ.get("MENU_MULTIPART_TEXT_ARMED") == "1"
 
@@ -5051,38 +5103,9 @@ async def handle_menu_submit(request):
     refusal = _protected_refusal(request, session)
     if refusal is not None:
         return _json(refusal, status=403)
-    answers = data.get("answers")
-    if not isinstance(answers, list) or not answers or not all(isinstance(a, dict) for a in answers):
-        return _json({"ok": False, "error": "answers[] of objects required"}, status=400)
-    seen_parts = set()
-    clean = []
-    for a in answers:
-        t = a.get("text")
-        if t is not None and (not isinstance(t, str) or len(t) > ANSWER_TEXT_MAX):
-            return _json({"ok": False, "error": f"text must be a string of <= {ANSWER_TEXT_MAX} chars"},
-                         status=400)
-        pi = a.get("part")
-        if not isinstance(pi, int) or isinstance(pi, bool) or pi in seen_parts:
-            return _json({"ok": False, "error": "each answer needs a distinct integer part"}, status=400)
-        seen_parts.add(pi)
-        ns = a.get("ns") or []
-        if not isinstance(ns, list):
-            return _json({"ok": False, "error": f"part {pi}: ns must be a list"}, status=400)
-        norm = []
-        for n in ns:
-            # The validator compares str(n) but the replay compares and presses RAW values, so an
-            # int that validates could raise mid-replay after the batch is already persisted.
-            if isinstance(n, int) and not isinstance(n, bool):
-                n = str(n)
-            if not isinstance(n, str) or not n.isdigit():
-                return _json({"ok": False, "error": f"part {pi}: ns entries must be option numbers"},
-                             status=400)
-            norm.append(n)
-        c = {"part": pi, "ns": norm}
-        if t and t.strip():            # whitespace-only is no answer: never typed into a pane
-            c["text"] = t
-        clean.append(c)
-    answers = clean
+    answers, bad = _clean_batch_answers(data.get("answers"))
+    if bad is not None:
+        return _json({"ok": False, "error": bad}, status=400)
     card_id = data.get("card_id")
     if card_id is not None and not isinstance(card_id, str):
         return _json({"ok": False, "error": "card_id must be a string"}, status=400)
@@ -5118,12 +5141,9 @@ async def handle_menu_submit(request):
             return False, {"reason": "batch_validation",
                            "detail": f"part {bad}: the own-words option needs text"}
         if armed:
-            # menu_submit_agy takes no expect_questions: the identity gate would be OFF. Either
-            # signal refuses: the RUNTIME (no pane read, so a missed menu read cannot pass it) or
-            # the menu family the replay itself will probe.
-            cur = _current_menu(session)
-            if _is_gemini_session(session) or (isinstance(cur, dict) and cur.get("menu_family") == "agy"):
-                return False, {"reason": "identity_gate_unavailable", "family": "agy"}
+            agy = _agy_identity_refusal(session)
+            if agy is not None:
+                return False, agy
         return durable_first_batch_submit(session, answers, store=st, armed=armed,
                                           surface=surface, answered_by=answered_by,
                                           device=device, expect_row_id=card_id,

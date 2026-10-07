@@ -546,3 +546,36 @@ def test_agent_key_with_the_right_card_still_submits_through_the_identity_gate(r
     status, body = _agent_key({"answers": ANSWERS, "card_id": "apr_1"})
     assert status == 200 and env.recorded[0]["id"] == "apr_1"
     assert replay[0]["expect_questions"] == {0: "Lock the API down now?", 1: "Which dashboards keep access?"}
+
+
+# ---- review leg on ebe1da6: /agent-key's armed batch gets /menu-submit's guards ------------------
+
+def test_agent_key_armed_on_an_agy_pane_is_refused_and_presses_nothing(replay, env, monkeypatch):
+    monkeypatch.setattr(G, "_is_gemini_session", lambda session: True)
+    status, body = _agent_key({"answers": ANSWERS, "card_id": "apr_1"})
+    assert status == 409 and body["reason"] == "identity_gate_unavailable"
+    assert replay == [] and env.recorded == []
+
+
+def test_agent_key_armed_card_without_part_questions_is_refused(replay, env):
+    bare = {"walk_complete": True, "part_count": 2, "parts": [
+        {"index": 0, "select": "single", "options": MENU["parts"][0]["options"]},
+        {"index": 1, "select": "multi", "options": MENU["parts"][1]["options"]}]}
+    env.row = {**_row("apr_1"), "menu": json.dumps(bare)}
+    status, body = _agent_key({"answers": ANSWERS, "card_id": "apr_1"})
+    assert status == 409 and body["reason"] == "identity_gate_unavailable"
+    assert replay == [] and env.recorded == []
+
+
+def test_agent_key_whitespace_text_is_dropped_never_typed(replay, env):
+    # The text arm is off; whitespace passed the old gate and the replay would have typed it.
+    status, _ = _agent_key({"answers": [{"part": 0, "ns": ["1"]}, {"part": 1, "ns": ["2"], "text": "   "}],
+                            "card_id": "apr_1"})
+    assert status == 200 and all("text" not in a for a in replay[0]["answers"])
+
+
+@pytest.mark.parametrize("text", [123, ["x"], "x" * (G.ANSWER_TEXT_MAX + 1)])
+def test_agent_key_text_that_is_not_a_short_string_is_400_before_anything(text, replay, env):
+    status, _ = _agent_key({"answers": [{"part": 0, "ns": ["1"]}, {"part": 1, "ns": ["2"], "text": text}],
+                            "card_id": "apr_1"})
+    assert status == 400 and replay == [] and env.recorded == []
