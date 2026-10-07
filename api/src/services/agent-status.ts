@@ -75,12 +75,26 @@ function newestEventMtimeMs(): number {
   }
 }
 
-let cache: { at: number; data: Map<string, DetectorStatus> } = { at: 0, data: new Map() };
+// at = when the scan STARTED; eventMtime = newest pane event seen BEFORE it started.
+// THE LAG BUG (gm msg_190daa19 item 2, measured 2026-10-07): `at` used to be stamped when the
+// 3.8-8.4 s scan FINISHED, and staleness was `newestEvent > at`. A Stop/UserPromptSubmit landing
+// DURING the scan is older than that finish stamp, so it never busted the cache and the web sat on
+// the pre-event status until the 15 s TTL. The gateway (watch_gateway.py _refresh_agents_cache) has
+// always snapshotted the event mtime BEFORE scanning and re-scans on ANY change; this mirrors it.
+let cache: { at: number; eventMtime: number; data: Map<string, DetectorStatus> } =
+  { at: 0, eventMtime: -1, data: new Map() };
 let refreshing = false;
+
+/** Exported for tests: is the snapshot stale at `now` given the newest event mtime? */
+export function isStale(c: { at: number; eventMtime: number }, now: number, newestEvent: number): boolean {
+  return (now - c.at > CACHE_TTL_MS) || newestEvent !== c.eventMtime;
+}
 
 function refresh(): Promise<void> {
   if (refreshing) return Promise.resolve();
   refreshing = true;
+  const startedAt = Date.now();
+  const eventsBefore = newestEventMtimeMs();
   return new Promise((resolve) => {
     execFile('python3', [DETECTOR, '--all'], { timeout: SCAN_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 },
       (err, stdout) => {
@@ -90,7 +104,7 @@ function refresh(): Promise<void> {
             const list = Array.isArray(arr) ? arr : [arr];
             const map = new Map<string, DetectorStatus>();
             for (const s of list) if (s && s.session) map.set(s.session, s);
-            cache = { at: Date.now(), data: map };
+            cache = { at: startedAt, eventMtime: eventsBefore, data: map };
           }
         } catch { /* keep previous snapshot */ }
         refreshing = false;
@@ -102,8 +116,8 @@ function refresh(): Promise<void> {
 /** Snapshot of detector states keyed by tmux session. Never blocks longer
  *  than raceMs: serves the (possibly stale) snapshot and refreshes behind. */
 export async function getDetectorStates(raceMs = 250): Promise<Map<string, DetectorStatus>> {
-  const stale = (Date.now() - cache.at > CACHE_TTL_MS)
-    || (newestEventMtimeMs() > cache.at);   // event-driven bust: a working/idle event since the last scan
+  // event-driven bust: ANY pane event the last scan did not see (mirrors the gateway)
+  const stale = isStale(cache, Date.now(), newestEventMtimeMs());
   if (stale) {
     const p = refresh();
     if (cache.data.size === 0) {

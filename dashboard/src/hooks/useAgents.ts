@@ -4,7 +4,9 @@ export function useAgents() {
   return useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
-    refetchInterval: 10_000, // Auto-refresh every 10s — heartbeat-backed, no SSH delay
-    staleTime: 5_000, // Consider data stale after 5s
+    // 3 s, like the Quest's /agents poll (gm msg_5f6f2483). Each poll is a cached read; a
+    // detector scan only runs when a pane event has actually happened since the last one.
+    refetchInterval: 3_000,
+    staleTime: 2_000,
   });
 }
