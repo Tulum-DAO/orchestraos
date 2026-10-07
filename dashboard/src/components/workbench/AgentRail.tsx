@@ -123,7 +123,7 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
   }
 
   return (
-    <nav className="w-full flex flex-col gap-3 p-2 overflow-y-auto" aria-label="Agents">
+    <nav className="w-full flex flex-col gap-3 p-2 shrink-0" aria-label="Agents">
       {/* The whole column says it ONCE, so a reader does not have to infer an outage from every
           row having gone grey. The sections below are the LAST thing we were told, not now. */}
       {isDegraded(feed) && (
