@@ -4741,6 +4741,12 @@ async def handle_agent_key(request):
                     if agy is not None:
                         return "durable", False, agy
                 st = ApprovalStore(); st.migrate()
+                # The replay never toggles the own-words option (it is typed), so picking it with
+                # no text would persist a batch whose part gets no key at all.
+                _ft_bad = _free_text_option_without_text(st.pending_menu_row_for_session(session), answers)
+                if _ft_bad is not None:
+                    return "durable", False, {"reason": "batch_validation",
+                                              "detail": f"part {_ft_bad}: the own-words option needs text"}
                 dok, dinfo = durable_first_batch_submit(
                     session, answers, store=st, armed=armed, require_identity_gate=armed,
                     # A multi-part submit is no less an answer on the operator's behalf than

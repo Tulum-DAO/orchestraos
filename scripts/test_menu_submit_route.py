@@ -579,3 +579,12 @@ def test_agent_key_text_that_is_not_a_short_string_is_400_before_anything(text, 
     status, _ = _agent_key({"answers": [{"part": 0, "ns": ["1"]}, {"part": 1, "ns": ["2"], "text": text}],
                             "card_id": "apr_1"})
     assert status == 400 and replay == [] and env.recorded == []
+
+
+def test_agent_key_own_words_option_with_blank_text_is_422_and_presses_nothing(replay, env):
+    # part 0's option 3 is its own-words row; "   " is dropped by cleaning, so it would persist
+    # a batch whose part 0 gets no key.
+    status, body = _agent_key({"answers": [{"part": 0, "ns": ["3"], "text": "   "}, {"part": 1, "ns": ["2"]}],
+                               "card_id": "apr_1"})
+    assert status == 422 and body["reason"] == "batch_validation"
+    assert replay == [] and env.recorded == []
