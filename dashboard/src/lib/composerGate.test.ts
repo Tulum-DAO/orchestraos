@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { composerGate, delegatedWorkLabel, refusalCopy, refusalHeadline, sendPanelHeadline, shouldSendPhoto, clearsComposer, STATE_COPY } from './composerGate.ts';
+import { composerGate, delegatedWorkLabel, refusalCopy, refusalHeadline, sendPanelHeadline, shouldSendPhoto, clearsComposer, retryText, STATE_COPY } from './composerGate.ts';
 
 // THE BUG (Shaw, 2026-10-06): a seat running a sub-agent read `working`, so chat refused to
 // send — while its CLI was accepting and queueing the same message. Measured live: 17 seats
@@ -180,4 +180,10 @@ test('the composer clears when the message REACHED the server, and keeps it othe
   assert.equal(clearsComposer({ ok: false, held: true }), true, 'held reached the server');
   assert.equal(clearsComposer({ ok: false, refused: true }), false, 'a refusal keeps the text');
   assert.equal(clearsComposer({ ok: false }), false, 'a failure keeps the text');
+});
+
+test('a forced retry sends the box as it is NOW, not the stale refused attempt', () => {
+  assert.equal(retryText(true, 'fixed typo', 'fixd typo'), 'fixed typo');
+  assert.equal(retryText(true, '', 'fixd typo'), 'fixd typo', 'empty box -> the refused attempt');
+  assert.equal(retryText(false, 'hello', 'old'), 'hello');
 });

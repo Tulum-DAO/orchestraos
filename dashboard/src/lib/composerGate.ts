@@ -72,6 +72,13 @@ export function clearsComposer(r: { ok?: boolean; queued?: boolean; held?: boole
   return !!(r.ok || r.queued || r.held);
 }
 
+/** The text a send carries. A forced retry prefers the box's CURRENT text (the operator may have
+ *  edited it after the refusal) and falls back to the refused attempt only when the box is empty. */
+export function retryText(force: boolean, boxText: string, attemptText?: string): string {
+  if (!force) return boxText;
+  return boxText || attemptText || '';
+}
+
 /** States where nothing is listening, so a message would go nowhere. */
 const NOT_RUNNING = new Set(['stopped', 'crashed', 'offline', 'retired']);
 

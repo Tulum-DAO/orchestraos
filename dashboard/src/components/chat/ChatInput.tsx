@@ -6,7 +6,7 @@ import { clsx } from 'clsx';
 import { Send, Paperclip, X, ClipboardList } from 'lucide-react';
 import { injectAgentVerified, type InjectResult } from '../../lib/api';
 import { sendToAgent, isDelivered, isQueued, isHeld, describeSendState } from '../../lib/agentSend';
-import { sendPanelHeadline, shouldSendPhoto, clearsComposer } from '../../lib/composerGate';
+import { sendPanelHeadline, shouldSendPhoto, clearsComposer, retryText } from '../../lib/composerGate';
 import { logAction } from '../../lib/user-actions';
 import { isLargePaste, fencePaste } from '../../lib/pastedText';
 
@@ -196,7 +196,9 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     let failed = false;
     try {
       // Expand any held large pastes into the fenced grammar at their position.
-      let messageText = force ? busy!.attemptText : serializeForSend(text).trim();
+      // A forced retry sends what is in the box NOW: the operator may have fixed the text after the
+      // refusal, and re-sending the stale attemptText silently discarded that edit (review of #198).
+      let messageText = retryText(force, serializeForSend(text).trim(), busy?.attemptText);
 
       if (onSend) {
         // B1 send-bridge seam: the caller (e.g. Composer.tsx's sendToAgent
@@ -465,7 +467,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           </div>
           {busy.composer_text && (
             <div className="text-[10px] text-neutral-500 mt-0.5 truncate">
-              would overwrite typed draft: "{busy.composer_text}"
+              the agent's box already holds: "{busy.composer_text}" — sending now submits it together with yours
             </div>
           )}
           {busy.stranded?.text && (
@@ -482,7 +484,8 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
                 disabled={sending}
                 className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 disabled:opacity-50"
               >
-                {busy.composer_text ? 'Overwrite draft & send' : 'Send anyway'}
+                {/* the gateway's force APPENDS to the box and submits; it never clears it (review of #198) */}
+                {busy.composer_text ? 'Send together with the draft' : 'Send anyway'}
               </button>
             ) : (
               <span className="text-[10px] text-neutral-600">retry when the agent finishes its turn</span>
