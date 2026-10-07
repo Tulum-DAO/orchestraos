@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { writeFileSync, mkdirSync, existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { isSafeName, containedPath } from '../lib/agentPaths.js';
+import { isSafeSlug, containedPath } from '../lib/agentPaths.js';
 import { loadConfig } from '../lib/config.js';
 
 const router = Router();
@@ -86,7 +86,7 @@ router.post('/webhook', async (req: Request, res: Response) => {
 router.get('/records/:slug', (req: Request, res: Response) => {
   try {
     const slug = req.params.slug as string;
-    if (!isSafeName(slug)) { res.status(400).json({ error: 'bad client slug' }); return; }
+    if (!isSafeSlug(slug)) { res.status(400).json({ error: 'bad client slug' }); return; }
     const sigDir = join(containedPath(STATE_DIR, slug), 'signatures');
     if (!existsSync(sigDir)) {
       res.json({ records: [], total: 0 });

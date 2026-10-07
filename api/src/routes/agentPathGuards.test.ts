@@ -44,12 +44,13 @@ test('registeredAgent: only a SAFE id that the registry holds', () => {
 });
 
 // ---- the routes, end to end -------------------------------------------------------------------
+/** Every path under dir, with each FILE's content: "changes nothing" must also catch an overwrite. */
 function tree(dir: string): string[] {
   const out: string[] = [];
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, e.name);
-    out.push(p);
-    if (e.isDirectory()) out.push(...tree(p));
+    if (e.isDirectory()) { out.push(p + '/'); out.push(...tree(p)); }
+    else out.push(p + ' = ' + readFileSync(p, 'utf-8'));
   }
   return out.sort();
 }
@@ -118,7 +119,8 @@ test('ROUTES: traversal and unknown ids are refused and write NOTHING; registere
 test('SWEEP: user ids, skill names, conversation logs, client slugs, agent inbox reads and the transcript id', async () => {
   const root = mkdtempSync(join(tmpdir(), 'sweep-'));
   const orch = join(root, 'orch');
-  for (const d of ['prompts', 'skills', 'state/messages', 'state/clients/acme/signatures', 'state/users', 'queue/inbox/pm-x']) {
+  for (const d of ['prompts', 'skills', 'state/messages', 'state/clients/acme/signatures', 'state/clients/-acme/signatures',
+                   'state/users', 'queue/inbox/pm-x', 'queue/inbox/retired-seat', 'state/machine-heartbeats']) {
     mkdirSync(join(orch, d), { recursive: true });
   }
   writeFileSync(join(orch, 'registry.json'), JSON.stringify({ agents: {
@@ -137,6 +139,10 @@ test('SWEEP: user ids, skill names, conversation logs, client slugs, agent inbox
   writeFileSync(join(orch, 'state', 'messages', 'pm-x.jsonl'), JSON.stringify({ conversation_id: 'c1', from_agent: 'gm', body: 'hi' }) + '\n');
   writeFileSync(join(orch, 'state', 'clients', 'acme', 'signatures', 'a.json'), JSON.stringify({ who: 'acme-signer' }));
   writeFileSync(join(orch, 'queue', 'inbox', 'pm-x', 'm.json'), JSON.stringify({ body: 'inbox-ok' }));
+  writeFileSync(join(orch, 'queue', 'inbox', 'retired-seat', 'm.json'), JSON.stringify({ body: 'retired-history' }));
+  writeFileSync(join(orch, 'state', 'clients', '-acme', 'signatures', 'b.json'), JSON.stringify({ who: 'dash-signer' }));
+  mkdirSync(join(orch, 'state', 'users', 'shaw'), { recursive: true });
+  writeFileSync(join(orch, 'state', 'users', 'shaw', 'assumptions.json'), JSON.stringify({ patterns: { x: { can_assume: true } } }));
 
   process.env.ORCHESTRA_DIR = orch;
   if (!process.env.ORCHESTRA_CONFIG) {
@@ -151,6 +157,7 @@ test('SWEEP: user ids, skill names, conversation logs, client slugs, agent inbox
   a.use('/api/skills', (await import(`./skills.js?s=${t}`)).default);
   a.use('/api/messages', (await import(`./messages.js?s=${t}`)).default);
   a.use('/api/signing', (await import(`./signing.js?s=${t}`)).default);
+  a.use('/api/machines', (await import(`./machines.js?s=${t}`)).default);
   const server = a.listen(0);
   const base = `http://127.0.0.1:${(server.address() as any).port}`;
   const call = (method: string, path: string, body?: unknown) => fetch(base + path, {
@@ -167,7 +174,9 @@ test('SWEEP: user ids, skill names, conversation logs, client slugs, agent inbox
       ['GET', '/api/messages/conversations/..%2FSECRET'],
       ['GET', '/api/signing/records/..%2Fevil'],
       ['GET', '/api/agents/..%2Floot/messages'],
-      ['GET', '/api/agents/not-registered/messages'],
+      ['POST', '/api/machines/..%2F..%2F..%2Fregistry/heartbeat', { timestamp: 't', sessions: [] }],  // overwrote registry.json
+      ['GET', '/api/machines/..%2F..%2Fregistry'],                         // read registry.json back
+      ['DELETE', '/api/adaptive/shaw/assumptions/__proto__'],
     ];
     for (const [m, p, b] of refused) {
       const r = await call(m, p, b);
@@ -188,6 +197,13 @@ test('SWEEP: user ids, skill names, conversation logs, client slugs, agent inbox
     assert.equal(sig.total, 1);
     const msgs = await (await call('GET', '/api/agents/pm-x/messages')).text();
     assert.ok(msgs.includes('inbox-ok'));
+    // a RETIRED (unregistered) agent's history still reads: safe id + containment, no registry check
+    assert.ok((await (await call('GET', '/api/agents/retired-seat/messages')).text()).includes('retired-history'));
+    assert.equal(({} as any).can_assume, undefined, '__proto__ must not reach Object.prototype');
+    const dash = await (await call('GET', '/api/signing/records/-acme')).json();
+    assert.equal(dash.total, 1, 'a webhook slug with a leading dash still reads');
+    assert.equal((await call('POST', '/api/machines/vps/heartbeat', { timestamp: new Date().toISOString(), sessions: [] })).status, 200);
+    assert.equal((await call('GET', '/api/machines/vps')).status, 200);
     assert.equal((await call('PATCH', '/api/adaptive/shaw/profile', { theme: 'dark' })).status, 200);
     assert.ok(existsSync(join(orch, 'state', 'users', 'shaw', 'profile.json')));
   } finally { server.close(); }
@@ -210,4 +226,32 @@ test('adaptive userDir containment holds even without the param guard (defence i
   assert.throws(() => containedPath('/o/state/users', '../../x'), UnsafeAgentPath);
   assert.throws(() => containedPath('/o/state/users', '..'), UnsafeAgentPath);
   assert.equal(containedPath('/o/state/users', 'shaw'), '/o/state/users/shaw');
+});
+
+test('agent-send: only server-generated upload ids become [FILE:] markers', async () => {
+  const { SAFE_UPLOAD_ID, badUploadId, buildMessageText } = await import('./agent-send.js');
+  for (const ok of ['1788683381_m7bo6n.mp4', '1788683412_2w175n.jpg']) assert.ok(SAFE_UPLOAD_ID.test(ok), ok);
+  for (const bad of ['../../.ssh/id_ed25519', '/etc/passwd', '1_a.b/../x', 'x.png', '1788683381_m7bo6n']) {
+    assert.ok(!SAFE_UPLOAD_ID.test(bad), bad);
+  }
+  assert.equal(badUploadId([{ upload_id: '1788683381_m7bo6n.mp4' }, { upload_id: '../../.ssh/id_ed25519' }]), '../../.ssh/id_ed25519');
+  assert.equal(badUploadId([{ upload_id: '1788683381_m7bo6n.mp4' }]), null);
+  assert.ok(!buildMessageText('hi', [{ upload_id: '../../.ssh/id_ed25519' }]).includes('.ssh'));
+});
+
+test('agent-send handler: a bad upload_id is refused 400 before anything is injected or mailed', async () => {
+  const { handleAgentSend } = await import('./agent-send.js');
+  const calls: string[] = [];
+  const deps = {
+    agentExists: () => true,
+    resolveSession: (id: string) => id,
+    gatewayInject: async (_s: string, text: string) => { calls.push('inject:' + text); return { ok: true } as any; },
+    msgStoreSend: async () => { calls.push('mail'); return { ok: true } as any; },
+  };
+  let status = 0; let body: any = null;
+  const res: any = { status(c: number) { status = c; return res; }, json(b: any) { body = b; return res; } };
+  const req: any = { params: { id: 'pm-x' }, headers: {}, body: { text: 'look', attachments: [{ upload_id: '../../.ssh/id_ed25519' }] } };
+  await handleAgentSend(deps as any, req, res);
+  assert.equal(status, 400, JSON.stringify(body));
+  assert.deepEqual(calls, []);
 });

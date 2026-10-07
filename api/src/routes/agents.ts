@@ -3,7 +3,7 @@ import { writeFileSync, mkdirSync, existsSync, appendFileSync, readdirSync, read
 import { join } from 'path';
 import { execFileSync } from 'child_process';
 import { getRegistry, getAllAgentStates, getInboxCounts } from '../services/state-reader.js';
-import { registeredAgent, promptPathFor, inboxDirFor } from '../lib/agentPaths.js';
+import { registeredAgent, promptPathFor, inboxDirFor, isSafeAgentId } from '../lib/agentPaths.js';
 
 // The prompt routes' own root, unchanged from before (they never used state-reader's data dir).
 const PROMPT_ORCH = () => process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
@@ -944,8 +944,9 @@ router.get('/:id/messages', (req: Request, res: Response) => {
     const agentId = req.params.id as string;
     const orchestraDir = process.env.ORCHESTRA_DIR!;
     const messages: Record<string, unknown>[] = [];
-    // Reads every *.json under queue/inbox/<id>: a raw id listed and read any directory's JSON.
-    if (!registeredAgent(getRegistry(), agentId)) { res.status(404).json({ error: 'unknown agent' }); return; }
+    // Reads every *.json under queue/inbox/<id>: a raw id listed and read any directory's JSON. Safe id
+    // + containment, no registry check: a retired agent's inbox and outbox are legitimate history.
+    if (!isSafeAgentId(agentId)) { res.status(400).json({ error: 'bad agent id' }); return; }
 
     // Read inbox messages
     const inboxDir = inboxDirFor(orchestraDir, agentId);

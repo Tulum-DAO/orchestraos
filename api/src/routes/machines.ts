@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
+import { isSafeName, containedPath } from '../lib/agentPaths.js';
 
 const router = Router();
 const ORCHESTRA = process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
@@ -26,7 +27,8 @@ export interface MachineHeartbeat {
 
 function readHeartbeat(machineId: string): MachineHeartbeat | null {
   try {
-    return JSON.parse(readFileSync(join(HEARTBEAT_DIR, `${machineId}.json`), 'utf-8'));
+    if (!isSafeName(machineId)) return null;
+    return JSON.parse(readFileSync(containedPath(HEARTBEAT_DIR, `${machineId}.json`), 'utf-8'));
   } catch { return null; }
 }
 
@@ -124,6 +126,8 @@ router.get('/:id', (req: Request, res: Response) => {
 router.post('/:id/heartbeat', (req: Request, res: Response) => {
   const machineId = req.params.id;
   const heartbeat: MachineHeartbeat = req.body;
+  // A raw id (%2F decoded) wrote <any>.json, e.g. ..%2F..%2Fregistry overwrote registry.json.
+  if (!isSafeName(machineId)) { res.status(400).json({ error: 'bad machine id' }); return; }
 
   // Validate
   if (!heartbeat.timestamp || !heartbeat.sessions) {
@@ -133,7 +137,7 @@ router.post('/:id/heartbeat', (req: Request, res: Response) => {
 
   // Write to disk
   writeFileSync(
-    join(HEARTBEAT_DIR, `${machineId}.json`),
+    containedPath(HEARTBEAT_DIR, `${machineId}.json`),
     JSON.stringify(heartbeat, null, 2)
   );
 

@@ -241,13 +241,13 @@ test('buildMessageText: no attachments -> plain trimmed text', () => {
 });
 
 test('buildMessageText: image attachment gets an [IMAGE: path] marker prefix', () => {
-  const out = buildMessageText('caption', [{ upload_id: '123-abc.png' }]);
-  assert.match(out, /^\[IMAGE: .*123-abc\.png\] caption$/);
+  const out = buildMessageText('caption', [{ upload_id: '1788683412_2w175n.png' }]);
+  assert.match(out, /^\[IMAGE: .*1788683412_2w175n\.png\] caption$/);
 });
 
 test('buildMessageText: non-image attachment gets [FILE: path]', () => {
-  const out = buildMessageText('', [{ upload_id: '123-abc.pdf' }]);
-  assert.match(out, /^\[FILE: .*123-abc\.pdf\]$/);
+  const out = buildMessageText('', [{ upload_id: '1788683412_2w175n.pdf' }]);
+  assert.match(out, /^\[FILE: .*1788683412_2w175n\.pdf\]$/);
 });
 
 test('MSG_STORE resolves to the CODE checkout, never the data dir', () => {

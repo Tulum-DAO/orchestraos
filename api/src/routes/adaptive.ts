@@ -219,7 +219,8 @@ router.delete('/:userId/assumptions/:key', (req: Request, res: Response) => {
     const assumptionsPath = join(userDir(userId as string), 'assumptions.json');
     const data = readJSON(assumptionsPath);
     const k = key as string;
-    if (data?.patterns?.[k]) {
+    // own keys only: a :key of __proto__ reached Object.prototype through data.patterns[k].
+    if (data?.patterns && Object.prototype.hasOwnProperty.call(data.patterns, k) && data.patterns[k]) {
       data.patterns[k].can_assume = false;
       data.patterns[k].assumed_action = null;
       data.patterns[k].confirmed_count = 0;

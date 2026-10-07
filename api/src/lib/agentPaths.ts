@@ -31,6 +31,14 @@ export function containedPath(base: string, rel: string): string {
  *  WITHOUT a registry check, because these are not agents (gm msg_78d009fc scoping). */
 export const SAFE_NAME = SAFE_AGENT_ID;
 
+/** Client slugs: the webhook derives them from company names and can produce a leading '-'
+ *  ("(Acme)" -> "-acme"). No dots and no separators, so still no way out of the base dir. */
+export const SAFE_SLUG = /^[A-Za-z0-9_-]{1,128}$/;
+
+export function isSafeSlug(slug: unknown): slug is string {
+  return typeof slug === 'string' && SAFE_SLUG.test(slug);
+}
+
 export function isSafeName(name: unknown): name is string {
   return typeof name === 'string' && SAFE_NAME.test(name);
 }

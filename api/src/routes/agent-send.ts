@@ -239,11 +239,22 @@ export function clientWantsSendStates(req: Request): boolean {
 /** Prepends `[IMAGE: path]` / `[FILE: path]` markers — the SAME grammar
  * ChatInput.tsx already uses for its paperclip upload (extends, doesn't
  * fork). upload_id is the server-generated filename uploads.ts returns. */
+/** The filename uploads.ts generates: `<unix-seconds>_<base36>.<ext>`. Anything else is refused:
+ *  an upload_id like ../../.ssh/id_ed25519 became a [FILE: <abs path>] marker the agent then read. */
+export const SAFE_UPLOAD_ID = /^[0-9]{1,12}_[a-z0-9]{1,16}\.[a-z0-9]{1,8}$/i;
+
+export function badUploadId(attachments: Attachment[] | undefined): string | null {
+  for (const a of attachments || []) {
+    if (a && a.upload_id && !SAFE_UPLOAD_ID.test(String(a.upload_id))) return String(a.upload_id);
+  }
+  return null;
+}
+
 export function buildMessageText(text: string, attachments: Attachment[] | undefined): string {
   const trimmed = (text || '').trim();
   if (!attachments || attachments.length === 0) return trimmed;
   const markers = attachments
-    .filter((a) => a && a.upload_id)
+    .filter((a) => a && a.upload_id && SAFE_UPLOAD_ID.test(String(a.upload_id)))
     .map((a) => {
       const ext = (a.upload_id.split('.').pop() || '').toLowerCase();
       const tag = IMAGE_EXTS.has(ext) ? 'IMAGE' : 'FILE';
@@ -264,6 +275,12 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
 
   if (!agentId || (!text && !(body.attachments && body.attachments.length))) {
     const err = 'agent id and (text or attachments) required';
+    res.status(400).json(capable ? { error: err } : { ok: false, error: err });
+    return;
+  }
+
+  if (badUploadId(body.attachments) !== null) {
+    const err = 'bad upload_id';
     res.status(400).json(capable ? { error: err } : { ok: false, error: err });
     return;
   }
