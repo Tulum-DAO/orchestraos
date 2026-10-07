@@ -6,7 +6,7 @@ import { clsx } from 'clsx';
 import { Send, Paperclip, X, ClipboardList } from 'lucide-react';
 import { injectAgentVerified, type InjectResult } from '../../lib/api';
 import { sendToAgent, isDelivered, isQueued, isHeld, describeSendState } from '../../lib/agentSend';
-import { sendPanelHeadline } from '../../lib/composerGate';
+import { sendPanelHeadline, shouldSendPhoto } from '../../lib/composerGate';
 import { logAction } from '../../lib/user-actions';
 import { isLargePaste, fencePaste } from '../../lib/pastedText';
 
@@ -49,7 +49,8 @@ interface Props {
   onSend?: (
     payload: { text: string; attachments: File[] },
     opts: { force: boolean }
-  ) => Promise<{ ok: boolean; note?: string; queued?: boolean; held?: boolean; refused?: boolean }>;
+  ) => Promise<{ ok: boolean; note?: string; queued?: boolean; held?: boolean; refused?: boolean;
+    composer_text?: string; stranded?: { text?: string; age_s?: number } }>;
   /** Rendered on the SEND ROW, before the input. Secondary controls belong on this baseline
       rather than stacked underneath it — a second row of controls under Send reads as a
       junk drawer, which is the defect these two slots exist to prevent. */
@@ -204,14 +205,18 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
         // inline [IMAGE:]/[FILE:] marker) and let onSend do the upload and
         // P3 state mapping. The internal inject/inbox path below is
         // untouched and only runs when onSend is absent.
-        const attachments = !force && pendingImage ? [pendingImage] : [];
+        // A forced retry normally carries text only (the photo of a queued/held send was already
+        // uploaded and cleared). A forced retry of a REFUSED send must carry the photo the refusal
+        // kept, or the operator's screenshot is silently dropped (review of #198).
+        const sendPhoto = shouldSendPhoto(!!pendingImage, force, busy?.state);
+        const attachments = sendPhoto ? [pendingImage!] : [];
         // THE PHOTO IS NOT CLEARED UNTIL THE SEND SUCCEEDS (P1 2026-10-06: the API was down for
         // an hour and every send failed; clearing here threw the attachment away on the way to a
         // failure, so the operator lost it and had to re-pick it). Nothing is destroyed before
         // the thing that could fail has not failed.
         const res = await onSend({ text: messageText, attachments }, { force });
         if (res.ok) {
-          if (!force && pendingImage) clearImage();
+          if (sendPhoto) clearImage();
           setBusy(null);
           setResultOk(true);
           setResult(res.note || 'Sent');
@@ -226,6 +231,10 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
             state: 'stranded',
             activity: res.note,
             attemptText: messageText,
+            // SHOW the agent's draft before offering to overwrite it (review of #198): without
+            // these the panel said "Send anyway" and a force-send destroyed text nobody had seen.
+            composer_text: res.composer_text,
+            stranded: res.stranded,
           });
           setResultOk(false);
           setResult(null);
@@ -238,7 +247,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           // affordance below re-sends with force: true, and `!force && pendingImage` drops the
           // attachment on a forced send — so the thumbnail sat in the composer implying it had
           // not been sent, and the one gesture offered for sending it carried text only.
-          if (!force && pendingImage) clearImage();
+          if (sendPhoto) clearImage();
           // Reuse the existing busy/queued affordance below (reason/state/
           // activity/attemptText — same shape the 409 branch already fills).
           setBusy({

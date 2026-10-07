@@ -73,6 +73,9 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents }: Composer
         // A composer-hold is a REFUSAL (409, nothing delivered: text already sits in the agent's
         // box), not a hold. Folding it into `held` made the panel call it a success (review of #198).
         refused: isComposerHold(result),
+        // carried so the panel can SHOW the draft it would overwrite
+        composer_text: result.composer_text,
+        stranded: result.stranded,
       };
     } catch (err) {
       // Do NOT claim "nothing was sent" on a timeout. The race settles OUR promise; the

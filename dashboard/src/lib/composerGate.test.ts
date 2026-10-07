@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { composerGate, delegatedWorkLabel, refusalCopy, refusalHeadline, sendPanelHeadline, STATE_COPY } from './composerGate.ts';
+import { composerGate, delegatedWorkLabel, refusalCopy, refusalHeadline, sendPanelHeadline, shouldSendPhoto, STATE_COPY } from './composerGate.ts';
 
 // THE BUG (Shaw, 2026-10-06): a seat running a sub-agent read `working`, so chat refused to
 // send — while its CLI was accepting and queueing the same message. Measured live: 17 seats
@@ -161,4 +161,12 @@ test('POSITIVE CONTROL: a real refusal still says "Not delivered" with the state
     "Not delivered — There's unsent text in this agent's input box — send or clear it first.");
   assert.equal(sendPanelHeadline({ state: 'crashed', activity: 'No tmux session' }),
     'Not delivered — No tmux session');
+});
+
+test('the photo: sent normally; dropped on a forced retry of a queued/held send; KEPT on a forced retry of a refusal', () => {
+  assert.equal(shouldSendPhoto(true, false, undefined), true);
+  assert.equal(shouldSendPhoto(true, true, 'queued'), false, 'already uploaded with the queued send');
+  assert.equal(shouldSendPhoto(true, true, 'held'), false, 'already uploaded with the held send');
+  assert.equal(shouldSendPhoto(true, true, 'stranded'), true, 'the refusal kept it; the retry must carry it');
+  assert.equal(shouldSendPhoto(false, true, 'stranded'), false);
 });

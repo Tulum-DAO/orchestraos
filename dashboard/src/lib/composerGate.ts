@@ -56,6 +56,13 @@ export function sendPanelHeadline(r: { state?: string; activity?: string }): str
   return 'Not delivered — ' + refusalHeadline(r);
 }
 
+/** Does this send carry the pending photo? A forced retry normally carries text only (the photo of
+ *  a queued/held send was already uploaded and cleared). A forced retry of a REFUSED send (panel
+ *  state 'stranded') must carry the photo the refusal kept, or it is silently dropped (#198 review). */
+export function shouldSendPhoto(hasPhoto: boolean, force: boolean, panelState?: string): boolean {
+  return hasPhoto && (!force || panelState === 'stranded');
+}
+
 /** States where nothing is listening, so a message would go nowhere. */
 const NOT_RUNNING = new Set(['stopped', 'crashed', 'offline', 'retired']);
 
