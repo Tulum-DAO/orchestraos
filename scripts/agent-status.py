@@ -1387,12 +1387,23 @@ def _transcript_tail_is_interrupted(path: str | None) -> bool:
                 return False
             texts = [b.get('text') or '' for b in content
                      if isinstance(b, dict) and b.get('type') == 'text']
+            # ANY real user entry decides (review of PR #196): a photo-only reply has no text
+            # block, and skipping it would land on the OLDER marker and call a live turn
+            # interrupted. False is the safe direction, since it can never mask a turn.
             if not texts:
-                continue
-            return bool(_INTERRUPT_MARKER.search(texts[0]))
+                return False
+            return _is_interrupt_marker(texts[0])
         if isinstance(content, str) and content.strip():
-            return bool(_INTERRUPT_MARKER.search(content))
+            return _is_interrupt_marker(content)
     return False
+
+
+def _is_interrupt_marker(text: str) -> bool:
+    """The block IS the marker, not merely contains it. Measured over 1169 transcripts (14 d):
+    all 138 real markers are an exact full match ('[Request interrupted by user]' x76,
+    '... for tool use]' x62). The single non-exact hit was a task-notification QUOTING the
+    marker in gm's own transcript, which .search() would have read as an interrupt."""
+    return bool(_INTERRUPT_MARKER.fullmatch((text or '').strip()))
 
 
 def _read_hook_event(session: str) -> dict | None:

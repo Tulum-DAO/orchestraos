@@ -278,3 +278,26 @@ def test_the_hook_RECORDS_the_CLIs_transcript_path(tmp_path):
     ev = json.loads((tmp_path / "77.json").read_text())
     assert ev["transcript_path"] == payload["transcript_path"]
     assert ev["cwd"] == _DRIFTED
+
+
+# ---- second review of PR #196 ----------------------------------------------------------------
+def test_a_PHOTO_ONLY_reply_after_the_interrupt_is_a_new_turn(A, tmp_path):
+    # Shaw's exact workflow: Esc, then send just a photo. No text block; it must still decide.
+    photo = {"type": "user", "message": {"content": [
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": ""}}]}}
+    p = _jsonl(tmp_path, _assistant(), _user_text("[Request interrupted by user]"), photo)
+    assert A._transcript_tail_is_interrupted(p) is False
+
+
+def test_a_message_QUOTING_the_marker_is_not_an_interrupt(A, tmp_path):
+    # The real non-exact hit in the corpus: a task-notification whose text carries the marker.
+    quoted = ("<task-notification> <summary>log: [Request interrupted by user for tool use] "
+              "seen at 04:15</summary></task-notification>")
+    p = _jsonl(tmp_path, _assistant(), _user_text(quoted))
+    assert A._transcript_tail_is_interrupted(p) is False
+
+
+def test_both_REAL_marker_forms_still_match_exactly(A, tmp_path):
+    for m in ("[Request interrupted by user]", "[Request interrupted by user for tool use]",
+              "  [Request interrupted by user]\n"):
+        assert A._transcript_tail_is_interrupted(_jsonl(tmp_path, _assistant(), _user_text(m)))
