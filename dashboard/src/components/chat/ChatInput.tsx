@@ -34,7 +34,7 @@ interface Props {
    * `onDraftChange` are supplied, the textarea is controlled by the caller
    * (e.g. Composer.tsx binding it to VoiceControls' onPartial/onFinal)
    * instead of the internal `text` state. Omitted by every other caller
-   * (qa-harness.tsx, AgentCard.tsx, ChatView.tsx) — behavior for them is
+   * (qa-harness.tsx, AgentCard.tsx) — behavior for them is
    * byte-for-byte unchanged.
    */
   draft?: string;

@@ -2,7 +2,7 @@
  * Claude Code Protocol Translator
  *
  * Stateful parser that converts raw tmux terminal output from Claude Code
- * sessions into structured events for the ChatView to render.
+ * sessions into structured events (consumed by the chat cards and the assistant timeline).
  *
  * This is a state machine, NOT an LLM. It uses regex pattern matching on
  * known Claude Code output formats.
