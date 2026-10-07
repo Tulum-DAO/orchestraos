@@ -3,6 +3,7 @@
  * Reads from state/learning.db (SQLite via Python bridge).
  */
 
+import { feedbackFilename, containedPath, cleanSubmittedBy, BadFeedbackInput } from './feedbackPath.js';
 import { Router, type Request, type Response } from 'express';
 import { execFileSync } from 'child_process';
 import { join } from 'path';
@@ -205,14 +206,27 @@ router.post('/feedback', (req: Request, res: Response) => {
   try {
     const { questionnaire_id, answers, submitted_by, submitted_at } = req.body;
     if (!answers) { res.status(400).json({ error: 'answers required' }); return; }
+    // ONE cleaned value for every place it lands: the stored file AND the creator's inbox note
+    // (review of #195: the note carried the raw value, the very junk cleanSubmittedBy bounds).
+    const who = cleanSubmittedBy(submitted_by, loadConfig().operatorId);
 
     const feedbackDir = join(process.env.ORCHESTRA_DIR!, 'state', 'feedback');
     if (!existsSync(feedbackDir)) { mkdirSync(feedbackDir, { recursive: true }); }
 
-    const filename = `${questionnaire_id || 'q'}_${Date.now()}.json`;
+    // The id becomes part of a FILE PATH, so it is validated before anything is written, and the
+    // final path must resolve inside feedbackDir. See feedbackPath.ts for the hole this closes.
+    let filename: string;
+    let target: string;
+    try {
+      filename = feedbackFilename(questionnaire_id, Date.now());
+      target = containedPath(feedbackDir, filename);
+    } catch (e) {
+      if (e instanceof BadFeedbackInput) { res.status(400).json({ error: e.message }); return; }
+      throw e;
+    }
     writeFeedbackFile(
-      join(feedbackDir, filename),
-      JSON.stringify({ questionnaire_id, answers, submitted_by: submitted_by || loadConfig().operatorId, submitted_at: submitted_at || new Date().toISOString() }, null, 2)
+      target,
+      JSON.stringify({ questionnaire_id, answers, submitted_by: who, submitted_at: submitted_at || new Date().toISOString() }, null, 2)
     );
 
     // Auto-mark questionnaire as completed + notify creator
@@ -237,7 +251,7 @@ router.post('/feedback', (req: Request, res: Response) => {
                 type: 'questionnaire_completed',
                 questionnaire_id,
                 title: q.title,
-                submitted_by: submitted_by || loadConfig().operatorId,
+                submitted_by: who,
                 response_file: `state/feedback/${filename}`,
                 timestamp: new Date().toISOString(),
               }, null, 2));
