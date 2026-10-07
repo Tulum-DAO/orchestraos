@@ -148,7 +148,12 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
           onPick={(next) => { navigate(`/agent/${next}`); onNavigate?.(); }}
         />
 
-        <nav className="p-3 space-y-0.5 border-t border-neutral-800">
+        {/* shrink-0 on BOTH children, because the parent is the single scroll container.
+            Without it, expanding "More" grew this nav inside a `flex flex-col` and flex took
+            the space back out of the rail — which carries overflow-y-auto, so its min-height
+            collapsed and the agents list became a ~16px strip at 1440x900 (harness-ux-planner,
+            shots 03/03b on public main 056474f). Neither child shrinks now; the column scrolls. */}
+        <nav className="p-3 space-y-0.5 border-t border-neutral-800 shrink-0">
           <button
             type="button"
             // stopPropagation because the <aside> above carries onClick={onNavigate}, which on
