@@ -147,8 +147,11 @@ test('a RETIRED seat is blocked with its own words, not the generic not-running 
 });
 
 test('a SUCCESSFUL queued or held send NEVER renders "Not delivered"', () => {
-  const queued = sendPanelHeadline({ state: 'queued', activity: 'Queued — agent is busy' });
-  assert.equal(queued, 'Queued — it will read this when its turn ends');
+  // gm msg_d8732aa5: a DURABLE queued result promises no turn; a mid-turn hold does (via describeSendState)
+  const queued = sendPanelHeadline({ state: 'queued', activity: 'pane busy (busy) — durable-first per B1/D1' });
+  assert.equal(queued, 'Saved to its inbox — it will be delivered when the agent can take it');
+  assert.equal(sendPanelHeadline({ state: 'held', activity: 'Queued — it will read this when its turn ends' }),
+    'Queued — it will read this when its turn ends');
   const held = sendPanelHeadline({ state: 'held', activity: 'agent pane is showing a menu/permission prompt' });
   assert.equal(held, 'agent pane is showing a menu/permission prompt');
   for (const h of [queued, held, sendPanelHeadline({ state: 'held' })]) {

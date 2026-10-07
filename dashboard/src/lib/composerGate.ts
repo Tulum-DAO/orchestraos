@@ -51,7 +51,9 @@ export function refusalHeadline(r: { state?: string; activity?: string }): strin
 /** The whole headline of ChatInput's send panel. That panel is reused for a SUCCESSFUL
  *  queued/held send (state 'queued'/'held'), which must never read "Not delivered" (gm msg_fbc3b9d0). */
 export function sendPanelHeadline(r: { state?: string; activity?: string }): string {
-  if (r.state === 'queued') return STATE_COPY.queuedOk;
+  // panel 'queued' = the server's durable state; the mid-turn hold arrives as 'held' with
+  // describeSendState's busy_working words already in activity (gm msg_d8732aa5).
+  if (r.state === 'queued') return STATE_COPY.queuedDurable;
   if (r.state === 'held') return r.activity || 'Held — will deliver at the next turn boundary';
   return 'Not delivered — ' + refusalHeadline(r);
 }
