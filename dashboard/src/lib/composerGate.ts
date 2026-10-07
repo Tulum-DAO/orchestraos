@@ -63,6 +63,13 @@ export function shouldSendPhoto(hasPhoto: boolean, force: boolean, panelState?: 
   return hasPhoto && (!force || panelState === 'stranded');
 }
 
+/** Did the message REACH the server, so the composer text should clear? Delivered, queued and held
+ *  all did; a refusal (composer-hold) or a failure did not, and must keep the operator's text. */
+export function clearsComposer(r: { ok?: boolean; queued?: boolean; held?: boolean; refused?: boolean }): boolean {
+  if (r.refused) return false;
+  return !!(r.ok || r.queued || r.held);
+}
+
 /** States where nothing is listening, so a message would go nowhere. */
 const NOT_RUNNING = new Set(['stopped', 'crashed', 'offline', 'retired']);
 

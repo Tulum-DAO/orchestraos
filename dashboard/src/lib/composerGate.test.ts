@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { composerGate, delegatedWorkLabel, refusalCopy, refusalHeadline, sendPanelHeadline, shouldSendPhoto, STATE_COPY } from './composerGate.ts';
+import { composerGate, delegatedWorkLabel, refusalCopy, refusalHeadline, sendPanelHeadline, shouldSendPhoto, clearsComposer, STATE_COPY } from './composerGate.ts';
 
 // THE BUG (Shaw, 2026-10-06): a seat running a sub-agent read `working`, so chat refused to
 // send — while its CLI was accepting and queueing the same message. Measured live: 17 seats
@@ -169,4 +169,12 @@ test('the photo: sent normally; dropped on a forced retry of a queued/held send;
   assert.equal(shouldSendPhoto(true, true, 'held'), false, 'already uploaded with the held send');
   assert.equal(shouldSendPhoto(true, true, 'stranded'), true, 'the refusal kept it; the retry must carry it');
   assert.equal(shouldSendPhoto(false, true, 'stranded'), false);
+});
+
+test('the composer clears when the message REACHED the server, and keeps it otherwise', () => {
+  assert.equal(clearsComposer({ ok: true }), true);
+  assert.equal(clearsComposer({ ok: false, queued: true }), true, 'queued reached the server');
+  assert.equal(clearsComposer({ ok: false, held: true }), true, 'held reached the server');
+  assert.equal(clearsComposer({ ok: false, refused: true }), false, 'a refusal keeps the text');
+  assert.equal(clearsComposer({ ok: false }), false, 'a failure keeps the text');
 });

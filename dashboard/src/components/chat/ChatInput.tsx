@@ -6,7 +6,7 @@ import { clsx } from 'clsx';
 import { Send, Paperclip, X, ClipboardList } from 'lucide-react';
 import { injectAgentVerified, type InjectResult } from '../../lib/api';
 import { sendToAgent, isDelivered, isQueued, isHeld, describeSendState } from '../../lib/agentSend';
-import { sendPanelHeadline, shouldSendPhoto } from '../../lib/composerGate';
+import { sendPanelHeadline, shouldSendPhoto, clearsComposer } from '../../lib/composerGate';
 import { logAction } from '../../lib/user-actions';
 import { isLargePaste, fencePaste } from '../../lib/pastedText';
 
@@ -248,6 +248,14 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           // attachment on a forced send — so the thumbnail sat in the composer implying it had
           // not been sent, and the one gesture offered for sending it carried text only.
           if (sendPhoto) clearImage();
+          // ...and so does the TEXT. It reached the server; leaving it in the box invited the same
+          // instruction to be sent twice, now that the panel rightly offers no "Send anyway"
+          // after a send that already landed (review of #198).
+          if (clearsComposer(res)) {
+            setText('');
+            setPastes([]);
+            pasteIdRef.current = 1;
+          }
           // Reuse the existing busy/queued affordance below (reason/state/
           // activity/attemptText — same shape the 409 branch already fills).
           setBusy({
