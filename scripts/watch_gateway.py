@@ -165,6 +165,12 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     # non-ambiguous menu the device says it saw (exact options, question containment). Anything
     # else presses ZERO keys. Pinned by test_menu_answer_live.py; one decision with menu_answer_live.
     ("POST", "/menu-answer"): "approve",
+    # The MULTI-PART counterpart of /menu-answer. Calls the same durable_first_batch_submit as
+    # /agent-key's batch leg, under the SAME MENU_MULTIPART_SUBMIT_ARMED, but ONLY on the durable
+    # path: the identity gate binds the replay to the anchor the answer was drafted against, and
+    # there is NO pane-only fallback (that leg has no anchor, so no identity gate). Own-words text
+    # is a separate arm (MENU_MULTIPART_TEXT_ARMED).
+    ("POST", "/menu-submit"): "approve",
     # --- message ---------------------------------------------------------------------
     ("POST", "/agent-message"): "message",
     ("POST", "/upload"): "message",
@@ -3206,9 +3212,35 @@ def _anchor_expect_questions(row):
     return out
 
 
+def _batch_key(answers):
+    """Order-insensitive comparable form of a batch: {part: (sorted ns, stripped text)}."""
+    out = {}
+    for a in answers or []:
+        if isinstance(a, dict):
+            out[a.get("part")] = (sorted(str(n) for n in (a.get("ns") or [])),
+                                  (a.get("text") or "").strip())
+    return out
+
+
+def _already_or_answered_elsewhere(stored_row, answers):
+    """A card-bound retry of a card that already holds a batch. `already` only when the stored
+    batch IS this one; otherwise someone else answered the card first, and reporting success
+    would show the device its own draft as sent. Returns the stored answers so it can say so."""
+    try:
+        stored = json.loads((stored_row or {}).get("answer_text") or "null")
+    except (TypeError, ValueError):
+        stored = None
+    if isinstance(stored, list) and _batch_key(stored) == _batch_key(answers):
+        return True, {"durable": True, "already": True, "delivered": False,
+                      "id": stored_row.get("id")}
+    return False, {"reason": "answered_elsewhere", "id": (stored_row or {}).get("id"),
+                   "answers": stored if isinstance(stored, list) else None}
+
+
 def durable_first_batch_submit(session, answers, *, store, armed=False,
                                submit_fn=None, resume_fn=None,
-                               surface=None, answered_by=None, device=None):
+                               surface=None, answered_by=None, device=None,
+                               expect_row_id=None, require_identity_gate=False):
     """condition-6 orchestrator. Persist the multi-part answer batch to the
     durable approval_requests row FIRST, THEN best-effort live-pane replay.
 
@@ -3254,6 +3286,15 @@ def durable_first_batch_submit(session, answers, *, store, armed=False,
 
     # 1) locate the durable anchor (store-but-mark row, condition-1 hydrated).
     row = store.pending_menu_row_for_session(session)
+    # expect_row_id (/menu-submit's card_id): checked on THIS lookup, the one the batch is persisted
+    # and identity-gated against, so a newer row written between a caller's own check and here can
+    # never receive an answer drafted for the older card.
+    if expect_row_id is not None and (row or {}).get("id") != expect_row_id:
+        latest = store.latest_menu_row_for_session(session) if row is None else None
+        if latest is not None and latest.get("id") == expect_row_id and latest.get("answer") == "batch":
+            return _already_or_answered_elsewhere(latest, answers)
+        return False, {"reason": "card_mismatch", "card_id": expect_row_id,
+                       "anchor_id": (row or {}).get("id")}
     if row is None:
         # No pending anchor: either already answered (idempotent client retry) or
         # never bridged. If the newest menu row for this session is already a
@@ -3265,6 +3306,13 @@ def durable_first_batch_submit(session, answers, *, store, armed=False,
         # Else honest failure — the client keeps its draft
         # (multipart-menu-client-dev C1-C3), NEVER a pane-only lossy submit.
         return False, {"reason": "no_durable_row", "session": session}
+
+    # A caller that must never replay without the identity gate (a DEVICE: /menu-submit) refuses
+    # here, on the SAME lookup the batch is persisted against: a card with parts but no per-part
+    # questions would otherwise replay with the gate OFF (logged below, for operator callers).
+    if require_identity_gate and row_is_durable_with_parts(row) and not _anchor_expect_questions(row):
+        return False, {"reason": "identity_gate_unavailable", "family": "no_part_questions",
+                       "id": row.get("id")}
 
     # 2) validate the batch against the hydrated parts[] BEFORE any write.
     err = _validate_batch_answer(row, answers)
@@ -3278,6 +3326,8 @@ def durable_first_batch_submit(session, answers, *, store, armed=False,
                                         device=device)
     if not applied:
         # a racing submit already persisted the batch -> already durable, not loss.
+        if expect_row_id is not None:
+            return _already_or_answered_elsewhere(store.get(row["id"]) or row, answers)
         return True, {"durable": True, "already": True, "delivered": False,
                       "id": row["id"]}
     row = store.get(row["id"])                           # refresh (now 'answered')
@@ -4654,7 +4704,27 @@ async def handle_agent_key(request):
         # gated by its OWN arm flag (MENU_MULTIPART_SUBMIT_ARMED) — a moved
         # multi-part surface must NOT inherit the single-part MENU_SUBMIT_ARMED.
         if isinstance(answers, list):
-            armed = os.environ.get("MENU_MULTIPART_SUBMIT_ARMED") == "1"
+            armed = _menu_multipart_armed()
+            # Clean FIRST, so the text arm counts exactly what the replay would type.
+            answers, bad = _clean_batch_answers(answers)
+            if bad is not None:
+                return _json({"ok": False, "multipart": True, "error": bad}, status=400)
+            if armed and any(a.get("text") for a in answers) and not _menu_submit_text_armed():
+                return _json({"ok": False, "multipart": True, "armed": True,
+                              "reason": "free_text_not_armed"}, status=409)
+            # A BATCH MUST NAME THE MENU IT ANSWERS: without a card the gateway cannot tell menu A
+            # from the menu that opened after it, so a retry after a false failure can press A's
+            # digits into menu B. The legacy leg has no identity gate at all, and the durable leg
+            # takes identity from the CURRENT anchor. Armed + no card_id -> 409; with one, it is
+            # bound exactly as /menu-submit binds it (expect_row_id).
+            card_id = data.get("card_id")
+            if card_id is not None and not isinstance(card_id, str):
+                return _json({"ok": False, "error": "card_id must be a string"}, status=400)
+            if armed and not card_id:
+                return _json({"ok": False, "multipart": True, "armed": True,
+                              "reason": "use_menu_submit",
+                              "detail": "a multi-part answer must name its card: send card_id, "
+                                        "or use POST /menu-submit"}, status=409)
             # condition-6 (DEC-1787700374): DURABLE-FIRST multi-part submit —
             # persist the batch onto the durable approval_requests row BEFORE the
             # live-pane replay, so a `menu_gone` can never evaporate the operator's answers
@@ -4666,16 +4736,26 @@ async def handle_agent_key(request):
             _batch_device = _answer_device(request)
 
             def _durable_submit():
+                if armed:
+                    agy = _agy_identity_refusal(session)
+                    if agy is not None:
+                        return "durable", False, agy
                 st = ApprovalStore(); st.migrate()
+                # The replay never toggles the own-words option (it is typed), so picking it with
+                # no text would persist a batch whose part gets no key at all.
+                _ft_bad = _free_text_option_without_text(st.pending_menu_row_for_session(session), answers)
+                if _ft_bad is not None:
+                    return "durable", False, {"reason": "batch_validation",
+                                              "detail": f"part {_ft_bad}: the own-words option needs text"}
                 dok, dinfo = durable_first_batch_submit(
-                    session, answers, store=st, armed=armed,
+                    session, answers, store=st, armed=armed, require_identity_gate=armed,
                     # A multi-part submit is no less an answer on the operator's behalf than
                     # a single-part one, and it is the path the headset uses for a paged
                     # AskUserQuestion — so "what did this device approve" must not have a
                     # hole exactly there. This caller passed NO provenance at all before.
                     surface=_batch_surface, answered_by=_batch_answered_by,
-                    device=_batch_device)
-                if not dok and dinfo.get("reason") == "no_durable_row":
+                    device=_batch_device, expect_row_id=card_id or None)
+                if not dok and dinfo.get("reason") == "no_durable_row" and not (armed or card_id):
                     # LEGACY pane-only path (no durable anchor yet). Preserves the
                     # pre-condition-6 behavior exactly, including the F6-polish-1
                     # mirror-resolve on a verified armed submit.
@@ -4920,6 +5000,178 @@ async def handle_menu_answer(request):
     return _json({"ok": False, **info}, status=code)
 
 
+def _free_text_option_without_text(row, answers):
+    """The part index whose ns picks its own-words option with no text, else None. The replay
+    DROPS that option (it is typed, never toggled), so the part would get no key at all while
+    the batch is already persisted. Needs the hydrated anchor; without one, nothing to check."""
+    menu = _menu(row) if isinstance(row, dict) else None
+    parts = (menu or {}).get("parts")
+    if not isinstance(parts, list):
+        return None
+    by_index = {p.get("index"): p for p in parts if isinstance(p, dict)}
+    for a in answers:
+        part = by_index.get(a.get("part"))
+        if part is None or a.get("text"):
+            continue
+        ft = _part_free_text_n({"parts": [part]})
+        if ft is not None and str(ft) in [str(n) for n in a.get("ns") or []]:
+            return a.get("part")
+    return None
+
+
+def _clean_batch_answers(answers):
+    """(clean, None) or (None, error). The ONE shape every multi-part submit replays: answers[] of
+    {part: distinct int, ns: [digit strings], text?: non-blank str <= ANSWER_TEXT_MAX}. The arm
+    gates read `text` from THIS result, so a value they would not count (whitespace, a non-string)
+    can never reach the replay that types it; ints in ns become strings because the validator
+    compares str(n) while the replay presses the RAW value."""
+    if not isinstance(answers, list) or not answers or not all(isinstance(a, dict) for a in answers):
+        return None, "answers[] of objects required"
+    seen_parts = set()
+    clean = []
+    for a in answers:
+        t = a.get("text")
+        if t is not None and (not isinstance(t, str) or len(t) > ANSWER_TEXT_MAX):
+            return None, f"text must be a string of <= {ANSWER_TEXT_MAX} chars"
+        pi = a.get("part")
+        if not isinstance(pi, int) or isinstance(pi, bool) or pi in seen_parts:
+            return None, "each answer needs a distinct integer part"
+        seen_parts.add(pi)
+        ns = a.get("ns") or []
+        if not isinstance(ns, list):
+            return None, f"part {pi}: ns must be a list"
+        norm = []
+        for n in ns:
+            if isinstance(n, int) and not isinstance(n, bool):
+                n = str(n)
+            if not isinstance(n, str) or not n.isdigit():
+                return None, f"part {pi}: ns entries must be option numbers"
+            norm.append(n)
+        c = {"part": pi, "ns": norm}
+        if t and t.strip():            # whitespace-only is no answer: never typed into a pane
+            c["text"] = t
+        clean.append(c)
+    return clean, None
+
+
+def _agy_identity_refusal(session):
+    """menu_submit_agy takes no expect_questions, so on an agy pane the identity gate would be
+    OFF. Either signal refuses: the RUNTIME (no pane read, so a missed menu read cannot pass it)
+    or the menu family the replay itself will probe."""
+    cur = _current_menu(session)
+    if _is_gemini_session(session) or (isinstance(cur, dict) and cur.get("menu_family") == "agy"):
+        return {"reason": "identity_gate_unavailable", "family": "agy"}
+    return None
+
+
+def _menu_submit_text_armed() -> bool:
+    return os.environ.get("MENU_MULTIPART_TEXT_ARMED") == "1"
+
+
+def _menu_multipart_armed() -> bool:
+    """Multi-part submits press keys unless the operator opts out (MENU_MULTIPART_SUBMIT_ARMED=0).
+
+    ON by default because the armed paths are now the SAFE ones: every armed batch must name its
+    card (/menu-submit card_required, /agent-key use_menu_submit), is bound to it on the
+    orchestrator's own lookup, replays only with the identity gate, and never takes the
+    identity-less pane-only leg. Unarmed, an app's answer is a dry run that reaches no agent,
+    which on a default install is the failure that matters. Own-words text stays a separate,
+    default-OFF arm (MENU_MULTIPART_TEXT_ARMED)."""
+    return os.environ.get("MENU_MULTIPART_SUBMIT_ARMED", "1") != "0"
+
+
+async def handle_menu_submit(request):
+    """POST /menu-submit {session, answers:[{part, ns:[..], text?}], confirm, card_id?}
+
+    Approve-scoped multi-part submit. Same orchestrator, arm and identity gate as /agent-key's
+    batch leg (durable_first_batch_submit, MENU_MULTIPART_SUBMIT_ARMED, expect_questions from
+    the durable anchor). Deliberate differences, because a DEVICE is calling, not an operator:
+      - NO legacy pane-only fallback: no durable anchor -> 409 no_durable_row. That leg has no
+        identity gate, so it could replay the operator's old answer into a different, newer menu.
+      - card_id (optional) must equal the anchor row's id -> else 409 card_mismatch: the tap is
+        bound to the card the device drew.
+      - armed + any own-words text -> 409 free_text_not_armed unless MENU_MULTIPART_TEXT_ARMED=1
+        (option-only arm first while free-text replay is still WIP). Unarmed it is a dry-run, so
+        text is allowed there: the plan shows what would be typed.
+    Unarmed = the pure dry-run durable_first_batch_submit already returns (would_submit + plan,
+    nothing persisted, nothing pressed)."""
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        return _json({"ok": False, "error": "bad json"}, status=400)
+    if not isinstance(data, dict):
+        return _json({"ok": False, "error": "bad json"}, status=400)
+    session = data.get("session")
+    if not isinstance(session, str) or session not in _tmux_session_names():
+        return _json({"ok": False, "error": "no such session"}, status=404)
+    refusal = _protected_refusal(request, session)
+    if refusal is not None:
+        return _json(refusal, status=403)
+    answers, bad = _clean_batch_answers(data.get("answers"))
+    if bad is not None:
+        return _json({"ok": False, "error": bad}, status=400)
+    card_id = data.get("card_id")
+    if card_id is not None and not isinstance(card_id, str):
+        return _json({"ok": False, "error": "card_id must be a string"}, status=400)
+    if data.get("confirm") is not True:
+        return _json({"ok": False, "needs_confirm": True,
+                      "confirm_text": f"Submit answers to {session}?"}, status=428)
+
+    armed = _menu_multipart_armed()
+    if armed and any(a.get("text") for a in answers) and not _menu_submit_text_armed():
+        return _json({"ok": False, "multipart": True, "armed": True,
+                      "reason": "free_text_not_armed"}, status=409)
+    # Armed, the answer must name its card: with no card_id the identity comes
+    # from whatever anchor is CURRENT, so a retry after the next menu was bridged would answer it.
+    if armed and not card_id:
+        return _json({"ok": False, "multipart": True, "armed": True,
+                      "reason": "card_required"}, status=409)
+
+    import asyncio
+    import time as _time
+    surface, answered_by = _gateway_answer_tags(data)
+    device = _answer_device(request)
+
+    def _run():
+        st = ApprovalStore(); st.migrate()
+        row = st.pending_menu_row_for_session(session)
+        if card_id is not None and not armed and (row or {}).get("id") != card_id:
+            # Unarmed the orchestrator never looks the anchor up; check here so the dry-run
+            # tells the device the truth. Armed, the orchestrator checks on its OWN lookup.
+            return False, {"reason": "card_mismatch", "card_id": card_id,
+                           "anchor_id": (row or {}).get("id")}
+        bad = _free_text_option_without_text(row, answers)
+        if bad is not None:
+            return False, {"reason": "batch_validation",
+                           "detail": f"part {bad}: the own-words option needs text"}
+        if armed:
+            agy = _agy_identity_refusal(session)
+            if agy is not None:
+                return False, agy
+        return durable_first_batch_submit(session, answers, store=st, armed=armed,
+                                          surface=surface, answered_by=answered_by,
+                                          device=device, expect_row_id=card_id,
+                                          require_identity_gate=True)
+
+    ok, info = await asyncio.get_event_loop().run_in_executor(None, _run)
+    try:
+        p = Path(MENU_ANSWER_AUDIT_PATH)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a") as f:
+            f.write(json.dumps({"ts": _time.time(), "route": "menu-submit", "session": session,
+                                "card_id": card_id, "parts": [a.get("part") for a in answers],
+                                "armed": armed, "device": device, "ok": ok,
+                                "reason": info.get("reason")}) + "\n")
+    except OSError:
+        pass
+    if ok:
+        return _json({"ok": True, "armed": armed, "multipart": True, **info})
+    code = {"batch_validation": 422}.get(info.get("reason"), 409)
+    return _json({"ok": False, "armed": armed, "multipart": True, **info}, status=code)
+
+
 async def handle_agent_suggest(request):
     """POST /agent-suggest {session, suggestion_text} — accept the CLI ghost
     suggestion currently in `session`'s composer and submit it (spec §3b).
@@ -5025,6 +5277,10 @@ async def handle_gateway_capabilities(request):
         body["all_scopes"] = "*" in raw
         body["device"] = {"id": principal.get("id"), "label": principal.get("label")}
     body["verbs"] = list(_ALL_VERBS)
+    # Additive feature flags: a client shows a control only when its route exists here.
+    body["features"] = ["menu_submit"]
+    body["menu_submit"] = {"armed": _menu_multipart_armed(),
+                           "text_armed": _menu_submit_text_armed()}
     try:
         body["providers"] = _capability_providers()
     except Exception as e:  # noqa: BLE001 — absent means unknown; never a fabricated []
@@ -5692,6 +5948,7 @@ def build_app():
     app.router.add_post("/agent-suggest", handle_agent_suggest)
     app.router.add_post("/agent-menu-capture", handle_agent_menu_capture)
     app.router.add_post("/menu-answer", handle_menu_answer)
+    app.router.add_post("/menu-submit", handle_menu_submit)
     app.router.add_get("/agent-screen", handle_agent_screen)
     app.router.add_get("/transcript", handle_transcript)
     app.router.add_post("/upload", handle_upload)
