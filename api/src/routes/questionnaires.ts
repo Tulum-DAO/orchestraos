@@ -9,6 +9,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { join, dirname } from 'path';
 import { loadConfig } from '../lib/config.js';
+import { submitQuestionnaire } from './questionnaireSubmit.js';
 
 const router = Router();
 const ORCHESTRA = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
@@ -116,62 +117,18 @@ router.get('/:id/response', (req: Request, res: Response) => {
 // POST /api/questionnaires/:id/submit — Server-side submission
 // Handles full lifecycle: save feedback, update index, notify creating agent
 router.post('/:id/submit', (req: Request, res: Response) => {
-  const qId = String(req.params.id);
-  const { answers, responses, submitted_by } = req.body;
-  const payload = answers || responses;
-
-  if (!payload) {
-    res.status(400).json({ error: 'answers or responses required' });
-    return;
-  }
-
-  const indexFile = join(ORCHESTRA, 'state', 'questionnaires', 'index.json');
-  const questionnaires = readJson(indexFile) || [];
-  const qIndex = questionnaires.findIndex((q: any) => q.id === qId);
-
-  const ts = Date.now();
-  const feedbackDir = join(ORCHESTRA, 'state', 'feedback');
-  if (!existsSync(feedbackDir)) mkdirSync(feedbackDir, { recursive: true });
-  const feedbackFile = `state/feedback/${qId}_${ts}.json`;
-  const feedbackData = {
-    questionnaire_id: qId,
-    answers: payload,
-    submitted_by: submitted_by || loadConfig().operatorId,
-    submitted_at: new Date().toISOString(),
-  };
-  writeFileSync(join(ORCHESTRA, feedbackFile), JSON.stringify(feedbackData, null, 2));
-
-  if (qIndex >= 0) {
-    questionnaires[qIndex].status = 'completed';
-    questionnaires[qIndex].response_file = feedbackFile;
-    questionnaires[qIndex].completed_at = new Date().toISOString();
-    writeFileSync(indexFile, JSON.stringify(questionnaires, null, 2));
-  }
-
-  const createdBy = qIndex >= 0 ? questionnaires[qIndex].created_by : null;
-  const title = qIndex >= 0 ? questionnaires[qIndex].title : qId;
-  if (createdBy) {
-    try {
-      const msgStore = join(CODE_ROOT, 'msg_store.py');   // code lives in the checkout, not the data dir
-      execFileSync('python3', [
-        msgStore, 'send',
-        '--from', submitted_by || loadConfig().operatorId,
-        '--to', createdBy,
-        '--type', 'questionnaire_completed',
-        '--subject', `Questionnaire completed: ${title}`,
-        '--body', JSON.stringify(feedbackData),
-      ], { encoding: 'utf-8', timeout: 10000, cwd: ORCHESTRA });
-    } catch (err: any) {
-      console.error(`[questionnaires] Failed to notify ${createdBy}:`, err.message);
-    }
-  }
-
-  res.json({
-    submitted: true,
-    questionnaire_id: qId,
-    feedback_file: feedbackFile,
-    notified_agent: createdBy || null,
-  });
+  // All of the logic, and every guard, lives in submitQuestionnaire (tested end to end there).
+  const r = submitQuestionnaire({
+    orchestraDir: ORCHESTRA,
+    sender: loadConfig().operatorId,
+    readJson,
+    writeFile: (path, data) => writeFileSync(path, data),
+    ensureDir: (dir) => { if (!existsSync(dir)) mkdirSync(dir, { recursive: true }); },
+    send: (argv) => { execFileSync('python3', [join(ORCHESTRA, 'msg_store.py'), ...argv],
+      { encoding: 'utf-8', timeout: 10000, cwd: ORCHESTRA }); },
+    now: () => Date.now(),
+  }, String(req.params.id), req.body);
+  res.status(r.status).json(r.body);
 });
 
 export default router;
