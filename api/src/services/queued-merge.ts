@@ -29,6 +29,7 @@
  * (normalizeTranscript(..., includeQueued=true)); the SSE tailer never enables
  * it, so its ephemeral B1 synthetics never enter the monotonic-append delta.
  */
+import { boundQueuedBatches, earliestTurnMs } from './queued-bound.js';
 import Database, { type Database as DB } from 'better-sqlite3';
 import { join } from 'path';
 import { loadConfig } from '../lib/config.js';
@@ -131,11 +132,17 @@ function interleaveByTs(items: any[]): any[] {
  * Return a NEW array = items + synthetic B1/B2 nodes, stable-sorted by ts.
  * Fail-open: on any error, returns the original items unchanged.
  */
+
 export function mergeQueuedItems(items: any[], agentId: string): any[] {
   if (!agentId) return items;
   const db = conn();
   if (!db) return items;
-  const synthetic = [...b1QueuedTurns(db, agentId), ...b2Batches(db, agentId)];
+  // B1 (still-pending held turns) is CURRENT STATE and is never bounded: it is the only thing
+  // on screen for an agent that has not started a turn yet, and dropping it would hide a
+  // message the operator just sent. Only B2, which is history, is bounded.
+  const pending = b1QueuedTurns(db, agentId);
+  const batches = boundQueuedBatches(b2Batches(db, agentId), earliestTurnMs(items));
+  const synthetic = [...pending, ...batches];
   if (!synthetic.length) return items;
   return interleaveByTs(items.concat(synthetic));
 }
