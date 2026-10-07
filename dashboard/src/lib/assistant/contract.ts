@@ -120,13 +120,13 @@ export interface ToolCallDecisionEvent {
   overridable: boolean;
 }
 
-/** Terminal event for a call that actually EXECUTED. Maps to ToolCallCard. */
+/** Terminal event for a call that actually EXECUTED. Rendered by AssistantToolCall. */
 export interface ToolCallResultEvent {
   type: 'tool_call_result';
   messageId: string;
   toolCallId: string;
   ok: boolean;
-  /** Maps directly to ToolCallCard.results. */
+  /** Rendered as AssistantToolCall's expandable results list. */
   results: string[];
   expandable?: string;
 }
