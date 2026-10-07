@@ -3,6 +3,8 @@ import { readdirSync, readFileSync, existsSync, writeFileSync, mkdirSync } from 
 import { join } from 'path';
 import { execFileSync } from 'child_process';
 import { loadConfig } from '../lib/config.js';
+import { getRegistry } from '../services/state-reader.js';
+import { registeredAgent, inboxDirFor } from '../lib/agentPaths.js';
 
 const router = Router();
 const ORCHESTRA = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
@@ -36,6 +38,12 @@ router.post('/', (req: Request, res: Response) => {
   const client = urlToClient(pageUrl);
   const targetAgent = agentId || client?.pmAgent || 'gm';
   const clientSlug = client?.slug || 'unknown';
+  // The target names a DIRECTORY (queue/inbox/<agent>) and comes from the request body, so it must be
+  // a registered agent before ANYTHING is written: unknown -> 404, no mkdir (gm msg_c146a84e).
+  if (!registeredAgent(getRegistry(), targetAgent)) {
+    res.status(404).json({ error: 'unknown agent' });
+    return;
+  }
 
   const feedbackDir = join(ORCHESTRA, 'state', 'feedback');
   mkdirSync(feedbackDir, { recursive: true });
@@ -53,7 +61,7 @@ router.post('/', (req: Request, res: Response) => {
     ], { encoding: 'utf-8', timeout: 10000, cwd: ORCHESTRA });
   } catch (err: any) { console.error('Failed to route feedback:', err.message); }
 
-  const inboxDir = join(ORCHESTRA, 'queue', 'inbox', targetAgent);
+  const inboxDir = inboxDirFor(ORCHESTRA, targetAgent);
   mkdirSync(inboxDir, { recursive: true });
   writeFileSync(join(inboxDir, `inspect-${ts}.json`), JSON.stringify({
     type: 'inspect-feedback', from: 'client-feedback', to: targetAgent,
