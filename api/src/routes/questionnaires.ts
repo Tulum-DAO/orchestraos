@@ -3,6 +3,7 @@
  * Lists, serves, and tracks questionnaires in the dashboard.
  */
 
+import { injectSavedAnswers } from './questionnaireInject.js';
 import { fileURLToPath } from 'url';
 import { Router, type Request, type Response } from 'express';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
@@ -71,25 +72,8 @@ router.get('/:id/html', (req: Request, res: Response) => {
     if (existsSync(responsePath)) {
       const response = readJson(responsePath);
       if (response?.answers) {
-        const inject = `<script>
-(function() {
-  const saved = ${JSON.stringify(response.answers)};
-  Object.entries(saved).forEach(function(entry) {
-    const qid = entry[0];
-    const data = entry[1];
-    if (data.value) {
-      const radio = document.querySelector('input[name="' + qid + '"][value="' + data.value + '"]');
-      if (radio) { radio.checked = true; radio.dispatchEvent(new Event('change', {bubbles:true})); }
-    }
-    if (data.notes) {
-      const ta = document.querySelector('textarea[data-other="' + qid + '"]');
-      if (ta) ta.value = data.notes;
-    }
-  });
-  if (typeof updateProgress === 'function') updateProgress();
-})();
-</script>`;
-        html = html.replace('</body>', inject + '</body>');
+        // P0c1: escaping AND insertion both live in questionnaireInject.ts — see the two holes there.
+        html = injectSavedAnswers(html, response.answers);
       }
     }
   }
