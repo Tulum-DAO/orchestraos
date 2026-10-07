@@ -3212,6 +3212,31 @@ def _anchor_expect_questions(row):
     return out
 
 
+def _batch_key(answers):
+    """Order-insensitive comparable form of a batch: {part: (sorted ns, stripped text)}."""
+    out = {}
+    for a in answers or []:
+        if isinstance(a, dict):
+            out[a.get("part")] = (sorted(str(n) for n in (a.get("ns") or [])),
+                                  (a.get("text") or "").strip())
+    return out
+
+
+def _already_or_answered_elsewhere(stored_row, answers):
+    """A card-bound retry of a card that already holds a batch. `already` only when the stored
+    batch IS this one; otherwise someone else answered the card first, and reporting success
+    would show the device its own draft as sent. Returns the stored answers so it can say so."""
+    try:
+        stored = json.loads((stored_row or {}).get("answer_text") or "null")
+    except (TypeError, ValueError):
+        stored = None
+    if isinstance(stored, list) and _batch_key(stored) == _batch_key(answers):
+        return True, {"durable": True, "already": True, "delivered": False,
+                      "id": stored_row.get("id")}
+    return False, {"reason": "answered_elsewhere", "id": (stored_row or {}).get("id"),
+                   "answers": stored if isinstance(stored, list) else None}
+
+
 def durable_first_batch_submit(session, answers, *, store, armed=False,
                                submit_fn=None, resume_fn=None,
                                surface=None, answered_by=None, device=None,
@@ -3267,7 +3292,7 @@ def durable_first_batch_submit(session, answers, *, store, armed=False,
     if expect_row_id is not None and (row or {}).get("id") != expect_row_id:
         latest = store.latest_menu_row_for_session(session) if row is None else None
         if latest is not None and latest.get("id") == expect_row_id and latest.get("answer") == "batch":
-            return True, {"durable": True, "already": True, "delivered": False, "id": latest["id"]}
+            return _already_or_answered_elsewhere(latest, answers)
         return False, {"reason": "card_mismatch", "card_id": expect_row_id,
                        "anchor_id": (row or {}).get("id")}
     if row is None:
@@ -3294,6 +3319,8 @@ def durable_first_batch_submit(session, answers, *, store, armed=False,
                                         device=device)
     if not applied:
         # a racing submit already persisted the batch -> already durable, not loss.
+        if expect_row_id is not None:
+            return _already_or_answered_elsewhere(store.get(row["id"]) or row, answers)
         return True, {"durable": True, "already": True, "delivered": False,
                       "id": row["id"]}
     row = store.get(row["id"])                           # refresh (now 'answered')
@@ -5061,6 +5088,11 @@ async def handle_menu_submit(request):
             cur = _current_menu(session)
             if _is_gemini_session(session) or (isinstance(cur, dict) and cur.get("menu_family") == "agy"):
                 return False, {"reason": "identity_gate_unavailable", "family": "agy"}
+            # A card with parts but no per-part questions would run the replay with the identity
+            # gate OFF (the orchestrator only logs it there, because an operator call must not
+            # become an outage). A DEVICE tap is exactly the caller the gate exists for: refuse.
+            if row_is_durable_with_parts(row) and not _anchor_expect_questions(row):
+                return False, {"reason": "identity_gate_unavailable", "family": "no_part_questions"}
         return durable_first_batch_submit(session, answers, store=st, armed=armed,
                                           surface=surface, answered_by=answered_by,
                                           device=device, expect_row_id=card_id)

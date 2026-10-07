@@ -261,7 +261,7 @@ def test_armed_card_race_a_newer_row_between_checks_receives_nothing(replay, env
 
 def test_armed_card_already_answered_is_idempotent(replay, env):
     env.row = None
-    env.latest = {**_row("apr_1"), "answer": "batch"}
+    env.latest = {**_row("apr_1"), "answer": "batch", "answer_text": json.dumps(ANSWERS)}
     status, body = _post({"session": "gm", "answers": ANSWERS, "confirm": True, "card_id": "apr_1"})
     assert status == 200 and body["already"] is True and replay == []
 
@@ -353,3 +353,60 @@ def test_menu_submit_retry_after_the_menu_changed_presses_nothing(replay, env):
 def test_menu_submit_unarmed_dry_run_needs_no_card(spy):
     status, body = _post({"session": "gm", "answers": ANSWERS, "confirm": True})
     assert status == 200 and spy[-1]["armed"] is False
+
+
+# ---- review leg: identity gate must not silently switch off; a retry must not claim another's answer ----
+
+def test_armed_card_with_parts_but_no_part_questions_is_refused_and_presses_nothing(replay, env):
+    # With no per-part questions the replay's identity gate is OFF; from a device that is the
+    # stale-tap path (card A still pending, menu B on screen), so refuse before persisting.
+    bare = {"walk_complete": True, "part_count": 2, "parts": [
+        {"index": 0, "select": "single", "options": MENU["parts"][0]["options"]},
+        {"index": 1, "select": "multi", "options": MENU["parts"][1]["options"]}]}
+    env.row = {**_row("apr_1"), "menu": json.dumps(bare)}
+    status, body = _post({"session": "gm", "answers": ANSWERS, "confirm": True, "card_id": "apr_1"})
+    assert status == 409 and body["reason"] == "identity_gate_unavailable"
+    assert replay == [] and env.recorded == []
+
+
+def _answered(rid, answers):
+    return {**_row(rid), "status": "answered", "answer": "batch", "answer_text": json.dumps(answers)}
+
+
+def test_retry_of_a_card_answered_DIFFERENTLY_elsewhere_is_not_reported_as_sent(replay, env):
+    other = [{"part": 0, "ns": ["2"]}, {"part": 1, "ns": ["1"]}]
+    env.row, env.latest = None, _answered("apr_1", other)
+    status, body = _post({"session": "gm", "answers": ANSWERS, "confirm": True, "card_id": "apr_1"})
+    assert status == 409 and body["reason"] == "answered_elsewhere" and body["answers"] == other
+    assert replay == [] and env.recorded == []
+
+
+def test_retry_of_the_SAME_answers_is_already_whatever_the_ns_order_or_type(replay, env):
+    env.row, env.latest = None, _answered("apr_1", [{"part": 1, "ns": [3, 2]}, {"part": 0, "ns": [1]}])
+    status, body = _post({"session": "gm", "answers": ANSWERS, "confirm": True, "card_id": "apr_1"})
+    assert status == 200 and body["already"] is True and replay == []
+
+
+def test_racing_persist_by_someone_else_is_answered_elsewhere_not_already(replay, env):
+    other = [{"part": 0, "ns": ["2"]}, {"part": 1, "ns": ["1"]}]
+    env.record_batch_answer = lambda rid, answers, **kw: False      # lost the answer-once race
+    env.get = lambda rid: _answered(rid, other)
+    status, body = _post({"session": "gm", "answers": ANSWERS, "confirm": True, "card_id": "apr_1"})
+    assert status == 409 and body["reason"] == "answered_elsewhere" and replay == []
+
+
+def test_orchestrator_without_a_card_keeps_the_old_already_semantics(env):
+    # /agent-key's batch leg passes no expect_row_id: its answer-once retry stays `already`.
+    other = [{"part": 0, "ns": ["2"]}, {"part": 1, "ns": ["1"]}]
+    env.row, env.latest = None, _answered("apr_1", other)
+    ok, info = G.durable_first_batch_submit("gm", ANSWERS, store=env, armed=True,
+                                            submit_fn=lambda *a, **k: (True, {}),
+                                            resume_fn=lambda *a, **k: None)
+    assert ok is True and info["already"] is True
+
+
+def test_protected_session_is_403_and_presses_nothing(spy, monkeypatch):
+    monkeypatch.setattr(G, "_protected_refusal", lambda request, session: {"ok": False, "error": "protected"})
+    monkeypatch.setenv("MENU_MULTIPART_SUBMIT_ARMED", "1")
+    status, body = _post({"session": "gm", "answers": ANSWERS, "confirm": True, "card_id": "apr_1"})
+    assert status == 403 and spy == []
