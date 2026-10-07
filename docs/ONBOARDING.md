@@ -92,18 +92,28 @@ First launch shows a pairing screen, not the approvals list:
 A plain `http://` address (a LAN IP, `localhost`) is refused on the pairing
 screen, and the app tells you so. The simplest way to get a trusted https
 address, whether the gateway runs on a VPS or on a Mac, is Tailscale on both
-the gateway machine and the phone, then on the gateway machine:
+the gateway machine and the phone. On the gateway machine, first see what
+Tailscale already serves, because `tailscale serve` on a port that is taken
+silently REPLACES whatever was there:
 
 ```bash
-tailscale serve --bg --https=443 http://127.0.0.1:8890
+tailscale serve status
 ```
 
-Your gateway URL is then `https://<machine>.<tailnet>.ts.net` (no port: https
-on 443 forwards to the gateway on 8890, so nothing collides with a gateway or
-a container already listening on 8890). Use that
-address in step 2 (`orchestra pair`) so the QR carries it. A reverse proxy
-with a real certificate (Caddy, nginx + Let's Encrypt) works too; a
-self-signed certificate does not.
+Then pick an https port that is not in that list (8445 here) and serve the
+gateway on it:
+
+```bash
+tailscale serve --bg --https=8445 http://127.0.0.1:8890
+```
+
+Your gateway URL is then `https://<machine>.<tailnet>.ts.net:8445`. Use that
+address in step 2 (`orchestra pair`) so the QR carries it. Keep it tailnet
+only: do not add `--funnel` (or `tailscale funnel`). The phone reaches it
+over Tailscale; the gateway does not need to be on the public internet.
+
+A reverse proxy with a real certificate (Caddy, nginx + Let's Encrypt) works
+too; a self-signed certificate does not.
 
 Either way, the app exchanges the code for its own token and stores both in
 Keychain. It does not ask again unless you revoke that device from Settings
