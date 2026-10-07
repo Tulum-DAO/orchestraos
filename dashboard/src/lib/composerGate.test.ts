@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { composerGate, delegatedWorkLabel } from './composerGate.ts';
+import { composerGate, delegatedWorkLabel, refusalCopy, refusalHeadline, STATE_COPY } from './composerGate.ts';
 
 // THE BUG (Shaw, 2026-10-06): a seat running a sub-agent read `working`, so chat refused to
 // send — while its CLI was accepting and queueing the same message. Measured live: 17 seats
@@ -73,4 +73,55 @@ test('delegatedWorkLabel says nothing when there is nothing to say', () => {
   assert.equal(delegatedWorkLabel(undefined), null);
   assert.equal(delegatedWorkLabel(1), '1 agent running');
   assert.equal(delegatedWorkLabel(3), '3 agents running');
+});
+
+// ---- THE WORDS, per state (gm msg_a855ebca, 2026-10-07) ---------------------------------------
+// Shaw saw "the agent is busy" for a seat that was not busy: it held a draft, or waited on a
+// prompt. The wire keeps reason:"busy"; every surface picks its words from `state`, verbatim.
+
+test('every form of the stranded class gets the unsent-text words', () => {
+  // The gateway sends "stranded" for BOTH stranded_input and queued_input; the detector words
+  // reach the web too. All four must land on the same sentence.
+  for (const s of ['stranded', 'stranded_input', 'queued', 'queued_input', ' Stranded ']) {
+    assert.equal(refusalCopy(s), "There's unsent text in this agent's input box — send or clear it first.", s);
+  }
+});
+
+test('waiting / waiting_permission get the prompt-or-permission words', () => {
+  for (const s of ['waiting', 'waiting_permission']) {
+    assert.equal(refusalCopy(s), 'Waiting on a prompt or permission in this agent', s);
+  }
+});
+
+test('POSITIVE CONTROL: states with no refusal words return null, so the caller falls back', () => {
+  for (const s of ['working', 'thinking', 'idle', 'stalled', 'unknown', '', undefined]) {
+    assert.equal(refusalCopy(s), null, String(s));
+  }
+});
+
+test('the gate and the refusal say the SAME words for a waiting seat', () => {
+  const g = composerGate({ state: 'waiting' });
+  assert.equal((g as { reason: string }).reason, refusalCopy('waiting'));
+});
+
+test('stalled gets the agreed stalled words, NOT the working "ends this turn" promise', () => {
+  const g = composerGate({ state: 'stalled' });
+  assert.equal(g.send, 'enabled');
+  assert.equal((g as { reason: string }).reason, STATE_COPY.stalledBefore);
+  assert.equal(STATE_COPY.stalledBefore,
+    "Will be queued — the agent hasn't moved in a while, so your message may wait until it does.");
+  // control: working keeps its own words
+  assert.match((composerGate({ state: 'working' }) as { reason: string }).reason, /when this turn ends/);
+});
+
+test('the refusal HEADLINE puts the state words first and falls back to the gateway text', () => {
+  // Shaw's exact Esc case through the web: 409 with state "waiting" and the detector activity.
+  assert.equal(refusalHeadline({ state: 'waiting', activity: 'Waiting for permission approval' }),
+    'Waiting on a prompt or permission in this agent');
+  assert.equal(refusalHeadline({ state: 'stranded', activity: "Unsubmitted input (0s): 'x'" }),
+    "There's unsent text in this agent's input box — send or clear it first.");
+  // fallbacks unchanged for states with no words of their own
+  assert.equal(refusalHeadline({ state: 'crashed', activity: 'No tmux session' }), 'No tmux session');
+  assert.equal(refusalHeadline({ state: 'crashed' }), 'crashed');
+  assert.equal(refusalHeadline({}), 'agent busy');
 });
