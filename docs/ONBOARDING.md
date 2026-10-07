@@ -41,7 +41,9 @@ orchestra up --detach && orchestra status
 
 Confirm the `gateway` row has a live pid. Note the host you'll reach it at —
 a Tailscale hostname, a LAN IP, or `127.0.0.1` if the phone and the gateway are
-on the same machine (rare outside a demo). This doc uses
+on the same machine (rare outside a demo). The iOS app needs an **https**
+address with a trusted certificate (see step 4), so if you'll pair a phone,
+plan on the Tailscale hostname. This doc uses
 `your-gateway.example.net` as a placeholder everywhere; substitute your real
 host, never share it outside people you're actually pairing.
 
@@ -85,6 +87,23 @@ First launch shows a pairing screen, not the approvals list:
 - **Scan** — point the camera at the terminal QR from step 2.
 - **Type it in** — enter the gateway URL and the code by hand (the same
   values the dashboard used), if scanning isn't practical.
+
+**The app only connects over https, with a certificate the phone trusts.**
+A plain `http://` address (a LAN IP, `localhost`) is refused on the pairing
+screen, and the app tells you so. The simplest way to get a trusted https
+address, whether the gateway runs on a VPS or on a Mac, is Tailscale on both
+the gateway machine and the phone, then on the gateway machine:
+
+```bash
+tailscale serve --bg --https=443 http://127.0.0.1:8890
+```
+
+Your gateway URL is then `https://<machine>.<tailnet>.ts.net` (no port: https
+on 443 forwards to the gateway on 8890, so nothing collides with a gateway or
+a container already listening on 8890). Use that
+address in step 2 (`orchestra pair`) so the QR carries it. A reverse proxy
+with a real certificate (Caddy, nginx + Let's Encrypt) works too; a
+self-signed certificate does not.
 
 Either way, the app exchanges the code for its own token and stores both in
 Keychain. It does not ask again unless you revoke that device from Settings
