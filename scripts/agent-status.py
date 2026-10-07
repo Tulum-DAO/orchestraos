@@ -1291,6 +1291,126 @@ def parse_status(raw: str) -> dict:
 # Tier 0 — hook events; Tier 3 — persisted state machine
 # ---------------------------------------------------------------------------
 
+def _project_slug(cwd: str) -> str:
+    """Claude Code's ~/.claude/projects/<slug>: EVERY non-alphanumeric char -> '-'.
+    Same ONE rule as lineage_daemon.wal.ctx_adapters.claude_project_slug (gm
+    msg_a8ab076a); copied, not imported, so this script stays dependency-free."""
+    return re.sub(r'[^A-Za-z0-9]', '-', cwd or '')
+
+
+def _transcript_path(cwd: str | None, sid: str | None, home: str | None = None) -> str | None:
+    """Live transcript for a pane from the hook event's own cwd + session_id
+    (state-event-hook.py writes both), or None when either is missing."""
+    if not cwd or not sid:
+        return None
+    root = home or os.path.expanduser('~')
+    return os.path.join(root, '.claude', 'projects', _project_slug(cwd), f'{sid}.jsonl')
+
+
+_TRANSCRIPT_TAIL_BYTES = 262144
+
+
+# The CLI's own marker for a user interrupt, written as a `user` entry whose single text
+# block is exactly this (measured across the live transcripts: 187 plain + 90 "for tool use").
+# NOT scraped off the screen on purpose: the pane's "Interrupted" lines are dominated by
+# pytest output ("Interrupted: 1 error during collection", 236 occurrences), so a screen grep
+# would read a seat running tests as a seat whose turn was interrupted.
+_INTERRUPT_MARKER = re.compile(r'\[Request interrupted by user[^\]]*\]')
+
+
+def _transcript_tail_is_interrupted(path: str | None) -> bool:
+    """True iff the newest conversational entry is the CLI's USER-INTERRUPT marker.
+
+    Shaw's field report (2026-10-07, via quest-orchestra): after he hits Esc the seat keeps
+    reporting 'working', so chat-mode will not take a photo until it goes idle and he has to
+    interrupt and then type 'reply ready' every time.
+
+    CAUSE: Esc never fires the CLI Stop hook, so the pane's last hook event stays 'working'
+    and the F2 hook-override below re-asserts 'working' over an idle screen for the whole
+    HOOK_WORKING_TTL_S (300 s). mark_turn_interrupted() already records the end when the
+    interrupt arrives through the APP, but it has exactly one caller (the gateway's interrupt
+    route) and a bare terminal Esc reaches nothing.
+
+    The transcript is the authoritative witness. The tail read and skip rules are the live
+    tree's _transcript_tail_is_queued's (same fail-closed contract); that function is not in
+    this repo yet, so this one stands alone.
+
+    The NEWEST real user entry DECIDES, so this SELF-CLEARS: once Shaw types anything the new
+    submit is the newest user entry, carries no marker, and the seat reads working again.
+    A tool_result tail means a turn is mid-flight -> False. Any read/parse failure -> False,
+    which leaves today's behaviour exactly as it is: a live turn can never be masked."""
+    if not path:
+        return False
+    try:
+        with open(path, 'rb') as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - _TRANSCRIPT_TAIL_BYTES))
+            chunk = fh.read().decode('utf-8', 'replace')
+    except OSError:
+        return False
+    lines = chunk.split('\n')
+    if size > _TRANSCRIPT_TAIL_BYTES:
+        lines = lines[1:]           # first line may be a partial record
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(d, dict):
+            continue
+        t = d.get('type')
+        if t == 'assistant':
+            return False
+        if t != 'user':
+            continue
+        if d.get('isMeta') or d.get('isSidechain'):
+            continue
+        content = (d.get('message') or {}).get('content')
+        if isinstance(content, list):
+            if any(isinstance(b, dict) and b.get('type') == 'tool_result' for b in content):
+                return False
+            texts = [b.get('text') or '' for b in content
+                     if isinstance(b, dict) and b.get('type') == 'text']
+            if not texts:
+                continue
+            return bool(_INTERRUPT_MARKER.search(texts[0]))
+        if isinstance(content, str) and content.strip():
+            return bool(_INTERRUPT_MARKER.search(content))
+    return False
+
+
+# The Claude status bar's bare model form, e.g. "⬆ /gsd:update │ Opus 5.5 │ orchestraos ███".
+# quest-orchestra 2026-10-07: Shaw switched two seats to Opus 5.5 with /model and the Quest
+# window bar kept showing the OLD model, because the regex above only matches a name ENDING in
+# "context)" — the "(1M context)" variant. Measured on orchestraos-builder's own pane: the bar
+# read "Opus 5.5", agent-status returned model '' and /agents served the remembered old value.
+# The raw bytes also render the name as TWO separate dim spans ("Opus", reset, "5.5"), so no
+# single-span regex over `raw` could have matched it; this reads the ANSI-stripped line.
+#
+# ANCHORED on the bar's own `│` separators AND restricted to the BOTTOM lines, because model
+# names appear in conversation text all the time (this seat's own transcript discusses "Opus
+# 5.5" by name). A body line has to look like `│ Opus 5.5 │` AND sit in the chrome to count.
+# The family list is a parsing anchor, not a display table: it decides WHERE the name is, and
+# the string returned is exactly what the bar printed.
+_BAR_MODEL_RE = re.compile(
+    r'│\s*((?:Opus|Sonnet|Haiku|Fable|Claude)\s+\d[\d.]*(?:\s*\([^)│]*\))?)\s*│')
+_BAR_LINES = 8
+
+
+def _status_bar_model(raw: str) -> str | None:
+    """The model the Claude status bar names, from the bottom chrome only, or None."""
+    lines = [strip_ansi(l) for l in (raw or '').split('\n')]
+    for line in reversed(lines[-_BAR_LINES:]):
+        m = _BAR_MODEL_RE.search(line)
+        if m:
+            return m.group(1).strip()
+    return None
+
+
 def _read_hook_event(session: str) -> dict | None:
     pane = get_pane_id(session)
     if not pane:
@@ -1453,6 +1573,22 @@ def get_agent_status(session: str) -> dict:
         if state in ('thinking', 'working', 'waiting_permission'):
             if hstate == 'working' and state in ('thinking', 'working'):
                 confidence = 'screen+hook'
+        elif (((hstate == 'working' and hook_age < HOOK_WORKING_TTL_S)
+               or (hstate == 'waiting_permission' and hook_age < HOOK_WAITING_TTL_S))
+              and _transcript_tail_is_interrupted(
+                  _transcript_path(hook.get('cwd'), hook.get('session_id')))):
+            # THE USER PRESSED Esc. Esc fires no Stop hook, so without this the stale
+            # 'working' event below re-asserts an active turn over an idle screen for the
+            # full 300 s TTL — which is why Shaw could not send a photo after interrupting
+            # and had to type 'reply ready' every time. The transcript says the turn ended;
+            # the hook simply never heard. Leave the screen's own verdict (idle) standing.
+            # SAME CLASS, SECOND HOOK STATE (Shaw P0, gm msg_cad79aff, 2026-10-07): Esc on an
+            # AskUserQuestion menu. The menu fired a Notification hook ('waiting_permission'),
+            # Esc fires nothing, and the waiting override below held an idle, empty-composer
+            # seat for HOOK_WAITING_TTL_S (900 s) -> the gateway's 409 "busy". Measured on a
+            # scratch seat, v2.1.284. A permission prompt raised AFTER the interrupt needs an
+            # assistant tool_use after the marker, which makes the tail read not-interrupted.
+            pass
         elif hstate == 'working' and hook_age < HOOK_WORKING_TTL_S:
             # Screen missed an active turn (suffix-less spinner, redraw race,
             # theme drift…) but hooks saw prompt-submit/tool-use with no Stop
