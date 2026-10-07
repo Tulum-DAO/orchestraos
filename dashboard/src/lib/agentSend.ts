@@ -12,6 +12,8 @@
  * composer wires this in directly; see the wiring note in /tmp/gm-build-b1.md.
  */
 
+import { STATE_COPY } from './stateCopy.ts';
+
 export type SendState = 'delivered' | 'queued' | 'held';
 
 export interface SendAttachment { upload_id: string }
@@ -125,11 +127,9 @@ export function isComposerHold(result: AgentSendResult): boolean {
 
 /** Human-readable one-liner for a held/queued/composer-hold chip. */
 export function describeSendState(result: AgentSendResult): string {
-  if (isComposerHold(result)) {
-    return result.composer_text
-      ? 'Composer has unsubmitted text — waiting'
-      : (result.stranded ? 'Composer input stranded — waiting' : 'Composer busy — waiting');
-  }
+  // A composer-hold 409 only ever means text is sitting in the agent's input box (the server
+  // returns it for composer_text or stranded, nothing else). Same words as every surface.
+  if (isComposerHold(result)) return STATE_COPY.stranded;
   if (isFailed(result)) {
     return result.error
       || (result.httpStatus ? `Send failed (HTTP ${result.httpStatus}) — not delivered` : 'Send failed — not delivered');

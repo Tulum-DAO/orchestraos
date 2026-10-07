@@ -17,11 +17,36 @@
  * `working` is NOT one of those. It never was: the agent is at a prompt that queues.
  */
 import { normalizeAgentState } from './agentStatus';
+import { STATE_COPY } from './stateCopy.ts';
+
+export { STATE_COPY };
 
 export type ComposerGate =
   | { send: 'enabled'; queued: false }
   | { send: 'enabled'; queued: true; reason: string }
   | { send: 'blocked'; reason: string };
+
+
+// NOT the bare word 'queued': ChatInput reuses its refusal panel for a SUCCESSFUL queued/held send
+// and sets state 'queued'/'held' there (review of #197). The gateway never sends bare 'queued'
+// (it maps queued_input -> 'stranded'), so only the detector's own word belongs here.
+const STRANDED_WORDS = new Set(['stranded', 'stranded_input', 'queued_input']);
+
+/** The words for a gateway refusal, from its `state`; null means "no state-specific words". */
+export function refusalCopy(state?: string): string | null {
+  // Match the RAW words: the gateway maps stranded_input AND queued_input to "stranded", and
+  // not every tree's normalizeAgentState knows "stranded"/"queued" (it would fall to unknown).
+  const raw = (state || '').trim().toLowerCase();
+  if (STRANDED_WORDS.has(raw)) return STATE_COPY.stranded;
+  if (normalizeAgentState(state) === 'waiting') return STATE_COPY.waiting;
+  return null;
+}
+
+/** The "Not delivered — …" headline for a refused send: the state's words first, then whatever
+ *  the gateway said. Lives here, not in the component, so the wiring is testable. */
+export function refusalHeadline(r: { state?: string; activity?: string }): string {
+  return refusalCopy(r.state) || r.activity || r.state || 'agent busy';
+}
 
 /** States where nothing is listening, so a message would go nowhere. */
 const NOT_RUNNING = new Set(['stopped', 'crashed', 'offline', 'retired']);
@@ -39,7 +64,7 @@ export function composerGate(args: {
     return { send: 'blocked', reason: 'Answer the question on screen first — a message now would be read as your choice.' };
   }
   if (st === 'waiting') {
-    return { send: 'blocked', reason: 'It is waiting on a permission prompt — answer that first.' };
+    return { send: 'blocked', reason: STATE_COPY.waiting };
   }
   if (NOT_RUNNING.has(st)) {
     return { send: 'blocked', reason: 'It is not running — a message would go nowhere.' };
@@ -47,8 +72,13 @@ export function composerGate(args: {
 
   // Mid-turn is FINE. The CLI queues it and consumes it when the turn ends; say so plainly
   // rather than refusing, which is the bug this function exists to fix.
-  if (st === 'working' || st === 'stalled') {
+  if (st === 'working') {
     return { send: 'enabled', queued: true, reason: 'Will be queued — the agent is busy and will read it when this turn ends.' };
+  }
+  // stalled is a live prompt that queues too, but it is NOT "will read it when this turn ends":
+  // nothing has moved for ten minutes. The agreed words say so.
+  if (st === 'stalled') {
+    return { send: 'enabled', queued: true, reason: STATE_COPY.stalledBefore };
   }
 
   // idle, stranded, unknown: send normally. `unknown` sends rather than blocks, because

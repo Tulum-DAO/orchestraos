@@ -83,7 +83,7 @@ function mockFetch(status, jsonBody) {
   assert.strictEqual(isComposerHold(result), true);
   assert.strictEqual(isDelivered(result), false);
   assert.deepStrictEqual(result.payload, payload);
-  assert.strictEqual(describeSendState(result), 'Composer has unsubmitted text — waiting');
+  assert.strictEqual(describeSendState(result), "There's unsent text in this agent's input box — send or clear it first.");
   console.log('PASS: 409 composer-hold echoes payload for retry');
 }
 
