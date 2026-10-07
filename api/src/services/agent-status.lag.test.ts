@@ -10,7 +10,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -57,4 +57,27 @@ test('isStale: TTL, a changed event mtime, and a quiet window', async () => {
   assert.equal(isStale({ at: 1000, eventMtime: 900 }, 2000, 900), false, 'quiet + fresh');
   assert.equal(isStale({ at: 1000, eventMtime: 900 }, 2000, 1500), true, 'event the scan did not see');
   assert.equal(isStale({ at: 1000, eventMtime: 900 }, 1000 + 15_001, 900), true, 'TTL');
+});
+
+test('a scan SLOWER than the TTL is fresh when it finishes: no back-to-back re-scan', async () => {
+  // Review of #199: with `at` stamped at scan START, a scan longer than the TTL was stale the
+  // moment it finished, so every poll on a slow host started another full-fleet scan.
+  const root = mkdtempSync(join(tmpdir(), 'lag-ttl-'));
+  mkdirSync(join(root, 'scripts'), { recursive: true });
+  mkdirSync(join(root, 'state', 'agent-events', 'panes'), { recursive: true });
+  const counter = join(root, 'runs');
+  writeFileSync(join(root, 'scripts', 'agent-status.py'),
+    `import json,time\nopen(${JSON.stringify(counter)},'a').write('x')\ntime.sleep(1.0)\n` +
+    `print(json.dumps([{"session":"s1","state":"idle","activity":""}]))\n`);
+  process.env.ORCHESTRA_DIR = root;
+  process.env.ORCHESTRA_SCRIPTS_DIR = join(root, 'scripts');
+  process.env.AGENT_STATUS_TTL_MS = '500';          // the scan (1 s) is SLOWER than the TTL
+  const m = await import(`./agent-status.js?ttl=${Date.now()}`);
+  await m.getDetectorStates(3000);                   // cold call AWAITS scan #1 (~1 s) to completion
+  const runs = () => { try { return readFileSync(counter, 'utf-8').length; } catch { return 0; } };
+  const before = runs();
+  await m.getDetectorStates();                       // polled straight after it finished
+  await sleep(200);
+  assert.equal(runs(), before, 'a just-finished scan must not be stale on arrival');
+  delete process.env.AGENT_STATUS_TTL_MS;
 });

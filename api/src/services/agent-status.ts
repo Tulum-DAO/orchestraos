@@ -48,7 +48,7 @@ export function resolveDetectorPath(env: Record<string, string | undefined>, mod
   return join(here, '..', '..', '..', 'scripts', 'agent-status.py');
 }
 const DETECTOR = resolveDetectorPath(process.env, import.meta.url);
-const CACHE_TTL_MS = 15_000;    // matches the iOS gateway cache
+const CACHE_TTL_MS = Number(process.env.AGENT_STATUS_TTL_MS) || 15_000;    // matches the iOS gateway cache; env override is for tests
 const SCAN_TIMEOUT_MS = 120_000;
 
 // Event-driven freshness: state-event-hook.py writes a Tier-0 status event
@@ -75,7 +75,9 @@ function newestEventMtimeMs(): number {
   }
 }
 
-// at = when the scan STARTED; eventMtime = newest pane event seen BEFORE it started.
+// at = when the scan FINISHED (TTL age); eventMtime = newest pane event seen BEFORE it started.
+// Exactly the gateway's pair: stamping `at` at the START made a >15 s scan stale the moment it
+// finished, so a slow host re-scanned back to back (review of #199).
 // THE LAG BUG (gm msg_190daa19 item 2, measured 2026-10-07): `at` used to be stamped when the
 // 3.8-8.4 s scan FINISHED, and staleness was `newestEvent > at`. A Stop/UserPromptSubmit landing
 // DURING the scan is older than that finish stamp, so it never busted the cache and the web sat on
@@ -93,7 +95,6 @@ export function isStale(c: { at: number; eventMtime: number }, now: number, newe
 function refresh(): Promise<void> {
   if (refreshing) return Promise.resolve();
   refreshing = true;
-  const startedAt = Date.now();
   const eventsBefore = newestEventMtimeMs();
   return new Promise((resolve) => {
     execFile('python3', [DETECTOR, '--all'], { timeout: SCAN_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 },
@@ -104,7 +105,7 @@ function refresh(): Promise<void> {
             const list = Array.isArray(arr) ? arr : [arr];
             const map = new Map<string, DetectorStatus>();
             for (const s of list) if (s && s.session) map.set(s.session, s);
-            cache = { at: startedAt, eventMtime: eventsBefore, data: map };
+            cache = { at: Date.now(), eventMtime: eventsBefore, data: map };
           }
         } catch { /* keep previous snapshot */ }
         refreshing = false;
