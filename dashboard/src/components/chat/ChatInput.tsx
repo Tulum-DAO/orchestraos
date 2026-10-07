@@ -49,7 +49,7 @@ interface Props {
   onSend?: (
     payload: { text: string; attachments: File[] },
     opts: { force: boolean }
-  ) => Promise<{ ok: boolean; note?: string; queued?: boolean; held?: boolean }>;
+  ) => Promise<{ ok: boolean; note?: string; queued?: boolean; held?: boolean; refused?: boolean }>;
   /** Rendered on the SEND ROW, before the input. Secondary controls belong on this baseline
       rather than stacked underneath it — a second row of controls under Send reads as a
       junk drawer, which is the defect these two slots exist to prevent. */
@@ -218,6 +218,17 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           setText('');
           setPastes([]);
           pasteIdRef.current = 1;
+        } else if (res.refused) {
+          // NOT delivered: the agent's input box already holds text. Keep the photo (nothing was
+          // sent) and offer the explicit overwrite through the same panel as a gateway 409.
+          setBusy({
+            reason: res.note,
+            state: 'stranded',
+            activity: res.note,
+            attemptText: messageText,
+          });
+          setResultOk(false);
+          setResult(null);
         } else if (res.queued || res.held) {
           // QUEUED/HELD IS AS DELIVERED AS IT GETS, so the photo clears here too. It does not
           // share the failure branch's reason for being kept: the upload and the send both
@@ -446,7 +457,9 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
             </div>
           )}
           <div className="flex items-center gap-2 mt-1">
-            {busy.activity !== 'Active turn' ? (
+            {/* A queued/held send already REACHED the server: offering "Send anyway" would send the
+                same instruction twice (review of #198). Only a real refusal gets the force path. */}
+            {busy.state === 'queued' || busy.state === 'held' ? null : busy.activity !== 'Active turn' ? (
               <button
                 onClick={() => handleSend(true)}
                 disabled={sending}
