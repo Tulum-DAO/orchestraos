@@ -6,7 +6,7 @@ import { clsx } from 'clsx';
 import { Send, Paperclip, X, ClipboardList } from 'lucide-react';
 import { injectAgentVerified, type InjectResult } from '../../lib/api';
 import { sendToAgent, isDelivered, isQueued, isHeld, describeSendState } from '../../lib/agentSend';
-import { refusalHeadline } from '../../lib/composerGate';
+import { sendPanelHeadline } from '../../lib/composerGate';
 import { logAction } from '../../lib/user-actions';
 import { isLargePaste, fencePaste } from '../../lib/pastedText';
 
@@ -432,7 +432,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
       {busy && (
         <div className="mt-1.5 rounded-lg border border-amber-700/50 bg-amber-500/5 px-2.5 py-1.5">
           <div className="text-[11px] text-amber-300">
-            Not delivered — {refusalHeadline(busy)}
+            {sendPanelHeadline(busy)}
             {busy.state ? <span className="text-neutral-500"> ({busy.state})</span> : null}
           </div>
           {busy.composer_text && (

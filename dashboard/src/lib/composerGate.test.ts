@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { composerGate, delegatedWorkLabel, refusalCopy, refusalHeadline, STATE_COPY } from './composerGate.ts';
+import { composerGate, delegatedWorkLabel, refusalCopy, refusalHeadline, sendPanelHeadline, STATE_COPY } from './composerGate.ts';
 
 // THE BUG (Shaw, 2026-10-06): a seat running a sub-agent read `working`, so chat refused to
 // send — while its CLI was accepting and queueing the same message. Measured live: 17 seats
@@ -135,4 +135,30 @@ test('a SUCCESSFUL queued/held send keeps its own note, never the unsent-text wo
     'Held — will deliver at the next turn boundary');
   assert.equal(refusalCopy('queued'), null);
   assert.equal(refusalCopy('held'), null);
+});
+
+// ---- gm msg_fbc3b9d0 -------------------------------------------------------------------------
+test('a RETIRED seat is blocked with its own words, not the generic not-running ones', () => {
+  const g = composerGate({ state: 'retired' });
+  assert.equal(g.send, 'blocked');
+  assert.equal((g as { reason: string }).reason, 'This agent is retired — a message would go nowhere');
+  // control: a merely stopped seat keeps the generic words
+  assert.match((composerGate({ state: 'stopped' }) as { reason: string }).reason, /not running/);
+});
+
+test('a SUCCESSFUL queued or held send NEVER renders "Not delivered"', () => {
+  const queued = sendPanelHeadline({ state: 'queued', activity: 'Queued — agent is busy' });
+  assert.equal(queued, 'Queued — it will read this when its turn ends');
+  const held = sendPanelHeadline({ state: 'held', activity: 'agent pane is showing a menu/permission prompt' });
+  assert.equal(held, 'agent pane is showing a menu/permission prompt');
+  for (const h of [queued, held, sendPanelHeadline({ state: 'held' })]) {
+    assert.doesNotMatch(h, /Not delivered/);
+  }
+});
+
+test('POSITIVE CONTROL: a real refusal still says "Not delivered" with the state words', () => {
+  assert.equal(sendPanelHeadline({ state: 'stranded', activity: 'x' }),
+    "Not delivered — There's unsent text in this agent's input box — send or clear it first.");
+  assert.equal(sendPanelHeadline({ state: 'crashed', activity: 'No tmux session' }),
+    'Not delivered — No tmux session');
 });

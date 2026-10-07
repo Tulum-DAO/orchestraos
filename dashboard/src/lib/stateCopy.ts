@@ -10,6 +10,10 @@ export const STATE_COPY = {
   waiting: 'Waiting on a prompt or permission in this agent',
   stalledBefore: "Will be queued — the agent hasn't moved in a while, so your message may wait until it does.",
   stalledAfter: "Queued — the agent hasn't moved in a while, so your message may wait until it does.",
+  // gm msg_fbc3b9d0: a retired seat is decommissioned on purpose, not merely "not running".
+  retired: 'This agent is retired — a message would go nowhere',
+  // A SUCCESSFUL queued send. It must never read as "Not delivered".
+  queuedOk: 'Queued — it will read this when its turn ends',
 } as const;
 
 // Dependency-free on purpose: agentSend.ts imports this, and its tests run under plain

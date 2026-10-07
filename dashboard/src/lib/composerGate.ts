@@ -48,6 +48,14 @@ export function refusalHeadline(r: { state?: string; activity?: string }): strin
   return refusalCopy(r.state) || r.activity || r.state || 'agent busy';
 }
 
+/** The whole headline of ChatInput's send panel. That panel is reused for a SUCCESSFUL
+ *  queued/held send (state 'queued'/'held'), which must never read "Not delivered" (gm msg_fbc3b9d0). */
+export function sendPanelHeadline(r: { state?: string; activity?: string }): string {
+  if (r.state === 'queued') return STATE_COPY.queuedOk;
+  if (r.state === 'held') return r.activity || 'Held — will deliver at the next turn boundary';
+  return 'Not delivered — ' + refusalHeadline(r);
+}
+
 /** States where nothing is listening, so a message would go nowhere. */
 const NOT_RUNNING = new Set(['stopped', 'crashed', 'offline', 'retired']);
 
@@ -65,6 +73,9 @@ export function composerGate(args: {
   }
   if (st === 'waiting') {
     return { send: 'blocked', reason: STATE_COPY.waiting };
+  }
+  if (st === 'retired') {
+    return { send: 'blocked', reason: STATE_COPY.retired };
   }
   if (NOT_RUNNING.has(st)) {
     return { send: 'blocked', reason: 'It is not running — a message would go nowhere.' };
