@@ -122,6 +122,19 @@ def test_capabilities_survives_a_provider_probe_that_throws(gw, monkeypatch):
     assert "surfaces" in _body(r)
 
 
+def test_capabilities_features_is_a_flat_list_of_strings_naming_menu_submit(gw):
+    """Shipped apps parse `features` as [String] and answer cards only when "menu_submit" is
+    in it. The SHAPE is frozen into store builds: an object or nested list would leave those
+    builds unable to ever see the feature. Additive only — append, never reshape."""
+    import asyncio
+    r = asyncio.run(gw.handle_gateway_capabilities(_Req({"Authorization": "Bearer test-token"})))
+    features = _body(r)["features"]
+    assert isinstance(features, list) and all(isinstance(f, str) for f in features)
+    assert "menu_submit" in features
+    src = (ROOT / "scripts" / "watch_gateway.py").read_text()
+    assert 'app.router.add_post("/menu-submit", handle_menu_submit)' in src
+
+
 # --- /health must not have been touched --------------------------------------------------------
 
 def test_health_route_still_registered_and_separate(gw):

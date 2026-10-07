@@ -100,9 +100,16 @@ Neither client trusts a plain 200 OK. Two calls, in order:
   table.
 - `GET /gateway/capabilities` — **behind your paired token**, tells the client
   what this gateway actually offers: `{"providers":[...],"surfaces":[...],
-  "pending":N}`. The client renders whatever's in the list — it never assumes
-  a fixed set, so a gateway can add a provider or a surface later without an
-  app update.
+  "pending":N,"features":[...]}`. The client renders whatever's in the list — it
+  never assumes a fixed set, so a gateway can add a provider or a surface later
+  without an app update. `features` is a flat list of strings naming optional
+  routes. The app answers approval cards through `POST /menu-submit`; a
+  gateway whose `features` lacks `"menu_submit"` (or has no `features` at all)
+  predates that route and can't take answers from the app — update it, or
+  answer in the dashboard. The route is a dry run (it reports what it would
+  press and presses nothing) until the gateway runs with
+  `MENU_MULTIPART_SUBMIT_ARMED=1`; `menu_submit.armed` in the same response
+  tells the app which one it's talking to.
 
 This is a deliberately different pair of endpoints from `/health` (that one's
 for `orchestra doctor` and the supervisor — don't confuse the two if you're
