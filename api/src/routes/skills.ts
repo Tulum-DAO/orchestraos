@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
+import { isSafeName, containedPath } from '../lib/agentPaths.js';
 
 const router = Router();
 const ORCHESTRA = process.env.ORCHESTRA_DIR!;
@@ -97,8 +98,11 @@ router.get('/workflows', (_req: Request, res: Response) => {
 router.get('/workflows/:name', (req: Request, res: Response) => {
   const skillsDir = join(ORCHESTRA, 'skills');
   const name = req.params.name as string;
-  const filename = name.endsWith('.md') ? name : `${name}.md`;
-  const filepath = join(skillsDir, filename);
+  const base = name.endsWith('.md') ? name.slice(0, -3) : name;
+  // A raw name read ANY .md on the box (%2F is decoded in params).
+  if (!isSafeName(base)) { res.status(400).json({ error: 'bad skill name' }); return; }
+  const filename = `${base}.md`;
+  const filepath = containedPath(skillsDir, filename);
   if (!existsSync(filepath)) { res.status(404).json({ error: 'Skill not found' }); return; }
   const content = readFileSync(filepath, 'utf-8');
   res.json({ file: filename, content });

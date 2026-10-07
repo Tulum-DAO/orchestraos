@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { execFileSync } from 'child_process';
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
+import { isSafeAgentId, containedPath } from '../lib/agentPaths.js';
 import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
 import { loadConfig } from '../lib/config.js';
@@ -323,9 +324,12 @@ router.get('/thread/:conversationId', (req: Request, res: Response) => {
 // GET /api/messages/conversations/:agentId — list all conversations for an agent
 router.get('/conversations/:agentId', (req: Request, res: Response) => {
   const { agentId } = req.params;
+  // A raw id read ANY .jsonl (transcripts included). No registry check on purpose: the log of a
+  // RETIRED agent is legitimate history to read.
+  if (!isSafeAgentId(agentId)) { res.status(400).json({ error: 'bad agent id' }); return; }
 
   // Read agent's message log and aggregate by conversation
-  const logFile = join(ORCHESTRA, 'state', 'messages', `${agentId}.jsonl`);
+  const logFile = containedPath(join(ORCHESTRA, 'state', 'messages'), `${agentId}.jsonl`);
   try {
     if (!existsSync(logFile)) { res.json({ agent_id: agentId, conversations: [], total: 0 }); return; }
     const lines = readFileSync(logFile, 'utf-8').trim().split('\n');

@@ -12,6 +12,7 @@
 import { Router, type Request, type Response } from 'express';
 import { readFileSync, existsSync, readdirSync, statSync, openSync, readSync, closeSync, readlinkSync } from 'fs';
 import { join } from 'path';
+import { isSafeAgentId } from '../lib/agentPaths.js';
 import { execFileSync } from 'child_process';
 import { mergeQueuedItems } from '../services/queued-merge.js';
 import { homedir } from 'os';
@@ -319,6 +320,9 @@ export function parseCodexRollout(lines: string[]): any[] {
 // Exported for the F1 streaming lane (transcript-stream.ts) — same resolution,
 // same file, so poll and stream can never disagree on WHICH transcript.
 export function resolveTranscriptPath(agentId: string): { path: string | null; sid: string | null } {
+  // The id becomes state/agents/<id>.json and a tmux target. A raw one read any .json for its
+  // session_id. Safe ids only; no registry check, so a scratch tmux seat still resolves.
+  if (!isSafeAgentId(agentId)) return { path: null, sid: null };
   const sessions = loadAgentSessions();
   const e = sessions[agentId] || {};
   const tmuxSession = String(e.tmux_session || agentId);

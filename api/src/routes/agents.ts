@@ -944,9 +944,11 @@ router.get('/:id/messages', (req: Request, res: Response) => {
     const agentId = req.params.id as string;
     const orchestraDir = process.env.ORCHESTRA_DIR!;
     const messages: Record<string, unknown>[] = [];
+    // Reads every *.json under queue/inbox/<id>: a raw id listed and read any directory's JSON.
+    if (!registeredAgent(getRegistry(), agentId)) { res.status(404).json({ error: 'unknown agent' }); return; }
 
     // Read inbox messages
-    const inboxDir = join(orchestraDir, 'queue', 'inbox', agentId);
+    const inboxDir = inboxDirFor(orchestraDir, agentId);
     if (existsSync(inboxDir)) {
       const inboxFiles = readdirSync(inboxDir).filter(f => f.endsWith('.json'));
       for (const file of inboxFiles) {

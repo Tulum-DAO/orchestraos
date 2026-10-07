@@ -1,10 +1,18 @@
 import { Router, type Request, type Response } from 'express';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from 'fs';
 import { join } from 'path';
+import { isSafeName, containedPath } from '../lib/agentPaths.js';
 import { scoreAgents } from '../services/scoring.js';
 import { runDetectors } from '../services/detectors.js';
 
 const router = Router();
+
+// Every :userId route builds state/users/<userId>/... (PATCH profile mkdirs and writes there). Express
+// decodes %2F in params, so a raw id walked out of state/users. Refuse before any handler runs.
+router.param('userId', (req, res, next, value) => {
+  if (!isSafeName(value)) { res.status(400).json({ error: 'bad userId' }); return; }
+  next();
+});
 const ORCHESTRA = process.env.ORCHESTRA_DIR!;
 
 const DEFAULT_PROFILE = {
@@ -26,7 +34,8 @@ const DEFAULT_PROFILE = {
 };
 
 function userDir(userId: string) {
-  return join(ORCHESTRA, 'state', 'users', userId);
+  // containedPath throws on an escape; the router.param guard has already refused it with a 400.
+  return containedPath(join(ORCHESTRA, 'state', 'users'), userId);
 }
 
 function ensureUserDir(userId: string) {

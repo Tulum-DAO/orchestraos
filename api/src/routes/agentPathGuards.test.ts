@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from 'fs';
-import { tmpdir } from 'os';
+import { tmpdir, homedir } from 'os';
 import { join } from 'path';
 import { SAFE_AGENT_ID, containedPath, promptPathFor, inboxDirFor, registeredAgent, UnsafeAgentPath } from '../lib/agentPaths.js';
 
@@ -112,4 +112,102 @@ test('ROUTES: traversal and unknown ids are refused and write NOTHING; registere
     assert.equal((await call('POST', '/api/inspect-feedback', { content: 'c', element: { tagName: 'div' }, agentId: 'gm' })).status, 200);
     assert.ok(existsSync(join(orch, 'queue', 'inbox', 'gm')));
   } finally { server.close(); }
+});
+
+// ---- the sweep's remaining routes (gm msg_78d009fc: ALL of them, reads too) -------------------
+test('SWEEP: user ids, skill names, conversation logs, client slugs, agent inbox reads and the transcript id', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'sweep-'));
+  const orch = join(root, 'orch');
+  for (const d of ['prompts', 'skills', 'state/messages', 'state/clients/acme/signatures', 'state/users', 'queue/inbox/pm-x']) {
+    mkdirSync(join(orch, d), { recursive: true });
+  }
+  writeFileSync(join(orch, 'registry.json'), JSON.stringify({ agents: {
+    'pm-x': { tier: 'T2', system_prompt: 'prompts/pm-x.md', tmux_session: 'pm-x' },
+    gm: { tier: 'T2', tmux_session: 'gm' },
+  } }));
+  // SECRETS outside every base dir: a refused read must never return them.
+  writeFileSync(join(orch, 'SECRET.md'), 'SECRET-MD');
+  writeFileSync(join(orch, 'state', 'SECRET.jsonl'), JSON.stringify({ conversation_id: 'c', body: 'SECRET-JSONL' }) + '\n');
+  mkdirSync(join(orch, 'queue', 'loot'), { recursive: true });
+  writeFileSync(join(orch, 'queue', 'loot', 'x.json'), JSON.stringify({ body: 'SECRET-INBOX' }));
+  mkdirSync(join(orch, 'state', 'evil', 'signatures'), { recursive: true });
+  writeFileSync(join(orch, 'state', 'evil', 'signatures', 's.json'), JSON.stringify({ who: 'SECRET-SIG' }));
+  // legit fixtures (positive controls)
+  writeFileSync(join(orch, 'skills', 'deploy.md'), 'how to deploy');
+  writeFileSync(join(orch, 'state', 'messages', 'pm-x.jsonl'), JSON.stringify({ conversation_id: 'c1', from_agent: 'gm', body: 'hi' }) + '\n');
+  writeFileSync(join(orch, 'state', 'clients', 'acme', 'signatures', 'a.json'), JSON.stringify({ who: 'acme-signer' }));
+  writeFileSync(join(orch, 'queue', 'inbox', 'pm-x', 'm.json'), JSON.stringify({ body: 'inbox-ok' }));
+
+  process.env.ORCHESTRA_DIR = orch;
+  if (!process.env.ORCHESTRA_CONFIG) {
+    process.env.ORCHESTRA_CONFIG = join(new URL('../../..', import.meta.url).pathname, 'orchestra.example.toml');
+  }
+  const t = Date.now();
+  const express = (await import('express')).default;
+  const a = express();
+  a.use(express.json());
+  a.use('/api/agents', (await import(`./agents.js?s=${t}`)).default);
+  a.use('/api/adaptive', (await import(`./adaptive.js?s=${t}`)).default);
+  a.use('/api/skills', (await import(`./skills.js?s=${t}`)).default);
+  a.use('/api/messages', (await import(`./messages.js?s=${t}`)).default);
+  a.use('/api/signing', (await import(`./signing.js?s=${t}`)).default);
+  const server = a.listen(0);
+  const base = `http://127.0.0.1:${(server.address() as any).port}`;
+  const call = (method: string, path: string, body?: unknown) => fetch(base + path, {
+    method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined,
+  });
+  try {
+    const before = tree(root);
+    const refused: [string, string, unknown?][] = [
+      ['PATCH', '/api/adaptive/..%2F..%2F..%2Fpwn/profile', { theme: 'x' }],      // mkdir + write
+      ['POST', '/api/adaptive/..%2F..%2Fpwn/event', { type: 'x' }],
+      ['GET', '/api/adaptive/..%2F..%2F..%2F/profile'],
+      ['GET', '/api/skills/workflows/..%2FSECRET'],
+      ['GET', '/api/skills/workflows/..%2FSECRET.md'],
+      ['GET', '/api/messages/conversations/..%2FSECRET'],
+      ['GET', '/api/signing/records/..%2Fevil'],
+      ['GET', '/api/agents/..%2Floot/messages'],
+      ['GET', '/api/agents/not-registered/messages'],
+    ];
+    for (const [m, p, b] of refused) {
+      const r = await call(m, p, b);
+      const text = await r.text();
+      assert.ok(r.status === 400 || r.status === 404, `${m} ${p} -> ${r.status} ${text.slice(0, 120)}`);
+      assert.ok(!text.includes('SECRET'), `${m} ${p} leaked: ${text.slice(0, 120)}`);
+    }
+    assert.deepEqual(tree(root), before, 'a refused request must not create or change anything');
+
+    // POSITIVE CONTROLS
+    assert.equal(JSON.parse(await (await call('GET', '/api/skills/workflows/deploy')).text()).content, 'how to deploy');
+    assert.equal((await call('GET', '/api/skills/workflows/deploy.md')).status, 200);
+    const conv = await (await call('GET', '/api/messages/conversations/pm-x')).json();
+    assert.equal(conv.total, 1);
+    // Also pins a pre-existing defect fixed here: this handler called require('fs') in an ES module,
+    // so the route answered 500 on every request in both trees.
+    const sig = await (await call('GET', '/api/signing/records/acme')).json();
+    assert.equal(sig.total, 1);
+    const msgs = await (await call('GET', '/api/agents/pm-x/messages')).text();
+    assert.ok(msgs.includes('inbox-ok'));
+    assert.equal((await call('PATCH', '/api/adaptive/shaw/profile', { theme: 'dark' })).status, 200);
+    assert.ok(existsSync(join(orch, 'state', 'users', 'shaw', 'profile.json')));
+  } finally { server.close(); }
+
+  // TRANSCRIPT: '../evil' read state/evil.json (outside state/agents) and followed its session_id.
+  // The fixture makes that RESOLVE when unguarded: the session_id walks from the Gemini brain dir to
+  // a planted transcript, so deleting the guard returns a path and this assertion goes red.
+  const { resolveTranscriptPath } = await import(`./chat-transcript.js?s=${t}`);
+  const { relative } = await import('path');
+  const brain = join(process.env.HOME || homedir(), '.gemini', 'antigravity-cli', 'brain');   // = chat-transcript GEMINI_BRAIN
+  mkdirSync(join(orch, 'loot', '.system_generated', 'logs'), { recursive: true });
+  writeFileSync(join(orch, 'loot', '.system_generated', 'logs', 'transcript.jsonl'), '{"SECRET":1}\n');
+  writeFileSync(join(orch, 'state', 'evil.json'), JSON.stringify({ session_id: relative(brain, join(orch, 'loot')) }));
+  assert.deepEqual(resolveTranscriptPath('../evil'), { path: null, sid: null });
+  assert.deepEqual(resolveTranscriptPath('..'), { path: null, sid: null });
+});
+
+test('adaptive userDir containment holds even without the param guard (defence in depth)', () => {
+  // The router.param guard refuses first, so the end-to-end test cannot reach this layer; pin it here.
+  assert.throws(() => containedPath('/o/state/users', '../../x'), UnsafeAgentPath);
+  assert.throws(() => containedPath('/o/state/users', '..'), UnsafeAgentPath);
+  assert.equal(containedPath('/o/state/users', 'shaw'), '/o/state/users/shaw');
 });

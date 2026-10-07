@@ -27,6 +27,14 @@ export function containedPath(base: string, rel: string): string {
   return full;
 }
 
+/** Non-agent path names (user ids, skill names, client slugs): the same strict alphabet. Applied
+ *  WITHOUT a registry check, because these are not agents (gm msg_78d009fc scoping). */
+export const SAFE_NAME = SAFE_AGENT_ID;
+
+export function isSafeName(name: unknown): name is string {
+  return typeof name === 'string' && SAFE_NAME.test(name);
+}
+
 export function isSafeAgentId(id: unknown): id is string {
   return typeof id === 'string' && SAFE_AGENT_ID.test(id);
 }
