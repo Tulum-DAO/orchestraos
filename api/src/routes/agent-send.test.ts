@@ -285,3 +285,16 @@ test('MSG_STORE resolves to the CODE checkout, never the data dir', () => {
     `MSG_STORE must not point into the data dir: ${MSG_STORE}`);
   assert.ok(MSG_STORE.endsWith('/msg_store.py'), MSG_STORE);
 });
+
+// ── force (review of #198): the 409 composer-hold promises a force retry; it must reach the gateway
+test('force: an explicit force:true reaches the gateway; absent or truthy-but-not-true does not', async () => {
+  const seen: (boolean | undefined)[] = [];
+  const d = deps({ gatewayInject: async (_s: string, _t: string, force?: boolean) => {
+    seen.push(force); return { httpStatus: 200, ok: true, delivered: true, attempts: 1 };
+  } });
+  for (const body of [{ text: 'hi', force: true }, { text: 'hi' }, { text: 'hi', force: 'yes' }]) {
+    const { res } = fakeRes();
+    await handleAgentSend(d, req({ body: { ...body, client_caps: ['send-states'] } }), res);
+  }
+  assert.deepEqual(seen, [true, false, false]);
+});

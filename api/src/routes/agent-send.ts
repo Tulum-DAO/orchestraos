@@ -101,6 +101,9 @@ export interface SendBody {
   text?: string;
   attachments?: Attachment[];
   client_caps?: string[];
+  /** The human override for a composer-hold 409 ("Overwrite draft & send"). Passed to the gateway,
+   *  whose force skips ONLY the composer gates, never the active-turn gate. */
+  force?: boolean;
 }
 
 export interface GatewayInjectResult {
@@ -133,7 +136,7 @@ export interface AgentSendDeps {
   resolveSession(agentId: string): string;
   /** Calls watch_gateway.py POST /agent-message. Never throws — network/auth
    * failures come back as {unreachable:true}. */
-  gatewayInject(session: string, text: string): Promise<GatewayInjectResult>;
+  gatewayInject(session: string, text: string, force?: boolean): Promise<GatewayInjectResult>;
   /** Durable-first fallback: python3 msg_store.py send --body-file <tmp>. */
   msgStoreSend(params: { fromAgent: string; toAgent: string; body: string; reason: string }): Promise<MsgStoreSendResult>;
 }
@@ -152,7 +155,7 @@ function realResolveSession(agentId: string): string {
   return agentId;
 }
 
-async function realGatewayInject(session: string, text: string): Promise<GatewayInjectResult> {
+async function realGatewayInject(session: string, text: string, force = false): Promise<GatewayInjectResult> {
   let token = '';
   try { token = readFileSync(GATEWAY_TOKEN_FILE, 'utf-8').trim(); } catch { /* no token provisioned */ }
   if (!token) return { httpStatus: 0, ok: false, unreachable: true, error: 'gateway token unavailable' };
@@ -163,7 +166,8 @@ async function realGatewayInject(session: string, text: string): Promise<Gateway
       // accepts:['held'] lets the gateway durable-hold the cases it must — a menu or
       // permission prompt on screen, or a pane that is not running — rather than 409-ing
       // them back to us. It no longer holds a plain mid-turn 'working' seat: that injects.
-      body: JSON.stringify({ session, text, accepts: ['held'] }),
+      body: JSON.stringify(force ? { session, text, accepts: ['held'], force: true }
+                                 : { session, text, accepts: ['held'] }),
       signal: AbortSignal.timeout(25000),
     });
     const body: any = await resp.json().catch(() => ({}));
@@ -303,7 +307,10 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
   const session = deps.resolveSession(agentId);
   const messageText = buildMessageText(text, body.attachments);
 
-  const gw = await deps.gatewayInject(session, messageText);
+  // force: the route's own contract (header: "a client can re-POST with force:true") was never
+  // honoured. It was dropped here, so "Overwrite draft & send" got the same 409 forever (review of #198).
+  // Only an explicit boolean true counts.
+  const gw = await deps.gatewayInject(session, messageText, body.force === true);
 
   const shape = (state: SendState, extra: Record<string, unknown> = {}) =>
     capable ? { state, ...extra } : { ok: state === 'delivered' || state === 'queued' || state === 'held', ...extra };
