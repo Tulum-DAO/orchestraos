@@ -149,8 +149,17 @@ router.post('/send-login', (_req: Request, res: Response) => {
  * Send Enter (or a specific key) to select an option in the login flow.
  * Body: { key?: string } — defaults to Enter (selects highlighted option)
  */
+// tmux key names the login menu can need, or one digit. Anything else is refused BEFORE vpsExec: `key`
+// used to be pasted into a `bash -c` string, so a body key of  '; id; '  ran as the API user
+// (found 2026-10-07 in a review leg of the path-guard sweep). Every caller sends no key (Enter).
+export const SELECT_OPTION_KEY = /^(?:[0-9]|Enter|Up|Down|Left|Right|Escape|Tab|Space)$/;
+
 router.post('/select-option', (req: Request, res: Response) => {
   const { key } = req.body || {};
+  if (key !== undefined && key !== null && key !== '' && !(typeof key === 'string' && SELECT_OPTION_KEY.test(key))) {
+    res.status(400).json({ error: 'bad key' });
+    return;
+  }
   try {
     vpsExec(`tmux send-keys -t gm '${key || ''}' Enter`);
     res.json({ sent: true });

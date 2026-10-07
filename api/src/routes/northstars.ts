@@ -6,6 +6,7 @@ import { Router, type Request, type Response } from 'express';
 import { queryDb, execDb } from '../lib/db.js';
 import { loadConfig } from '../lib/config.js';
 import { actingAgent, tenantScope } from '../lib/principal.js';
+import { tenantFilter } from '../lib/sqlScope.js';
 
 const router = Router();
 
@@ -25,15 +26,15 @@ function nanoid(prefix: string): string {
 // GET /api/north-stars — list all (scoped by tenant)
 router.get('/', (req: Request, res: Response) => {
   const scope = getTenantScope(req);
-  const tenantWhere = scope.isAdmin ? '' : ` AND ns.tenant_id = '${scope.clientScope || scope.username}'`;
+  const tf = tenantFilter(scope, 'ns.tenant_id');   // bound, never interpolated — lib/sqlScope.ts
 
   const scopeFilter = req.query.scope as string;
   const project = req.query.project as string;
   const client = req.query.client as string;
   const status = req.query.status as string;
 
-  const conds: string[] = ['1=1' + tenantWhere];
-  const params: any[] = [];
+  const conds: string[] = ['1=1' + tf.sql];
+  const params: any[] = [...tf.params];
 
   if (scopeFilter) { conds.push('ns.scope = ?'); params.push(scopeFilter); }
   if (project) { conds.push('ns.project_id = ?'); params.push(project); }

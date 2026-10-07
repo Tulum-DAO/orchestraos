@@ -59,9 +59,12 @@ print(json.dumps([dict(r) for r in rows], default=str))
   }
 }
 
-function execDb(script: string): any {
+// Request values reach python ONLY as argv (sys.argv[1..]), never inside the script text: the proposal
+// id and the free-text reason used to be pasted into the source, the same class as learning.ts's
+// approve/reject (fixed there first).
+function execDb(script: string, args: string[] = []): any {
   try {
-    const result = execFileSync('python3', ['-c', script], {
+    const result = execFileSync('python3', ['-c', script, ...args], {
       timeout: 5000,
       encoding: 'utf-8',
     });
@@ -492,8 +495,8 @@ router.post('/:id/approve', (req: Request, res: Response) => {
         `db = sqlite3.connect("${DB_PATH}", timeout=5)\n` +
         `db.execute("PRAGMA journal_mode=WAL")\n` +
         `now = datetime.now(timezone.utc).isoformat()\n` +
-        `proposal_id = "${id}"\n` +
-        `reason = """${(reason || '').replace(/"/g, '\\"')}"""\n` +
+        `proposal_id = sys.argv[1]\n` +
+        `reason = sys.argv[2]\n` +
         `p = db.execute("SELECT * FROM proposals WHERE proposal_id = ?", (proposal_id,)).fetchone()\n` +
         `if not p:\n` +
         `    print(json.dumps({"error": "not found"}))\n` +
@@ -504,7 +507,8 @@ router.post('/:id/approve', (req: Request, res: Response) => {
         `db.execute("UPDATE proposals SET status = 'applied', applied_at = ? WHERE proposal_id = ?", (now, proposal_id))\n` +
         `db.commit()\n` +
         `db.close()\n` +
-        `print(json.dumps({"approved": True, "rule_id": rule_id, "id": proposal_id}))`
+        `print(json.dumps({"approved": True, "rule_id": rule_id, "id": proposal_id}))`,
+      [String(id), String(reason || '')]
     );
 
     if (result?.error && result.error !== 'not found') {
@@ -552,17 +556,18 @@ router.post('/:id/deny', (req: Request, res: Response) => {
 
   if (proposals.length) {
     const result = execDb(
-      `import sqlite3, json\n` +
+      `import sqlite3, json, sys\n` +
         `from datetime import datetime, timezone\n` +
         `db = sqlite3.connect("${DB_PATH}", timeout=5)\n` +
         `db.execute("PRAGMA journal_mode=WAL")\n` +
         `now = datetime.now(timezone.utc).isoformat()\n` +
-        `proposal_id = "${id}"\n` +
-        `reason = """${reason.replace(/"/g, '\\"')}"""\n` +
+        `proposal_id = sys.argv[1]\n` +
+        `reason = sys.argv[2]\n` +
         `db.execute("UPDATE proposals SET status = 'rejected', shaw_decision = 'rejected', shaw_timestamp = ?, rejection_reason = ?, updated_at = ? WHERE proposal_id = ?", (now, reason, now, proposal_id))\n` +
         `db.commit()\n` +
         `db.close()\n` +
-        `print(json.dumps({"rejected": True, "id": proposal_id}))`
+        `print(json.dumps({"rejected": True, "id": proposal_id}))`,
+      [String(id), String(reason)]
     );
 
     if (result?.error) {
