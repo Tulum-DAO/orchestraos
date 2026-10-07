@@ -65,6 +65,13 @@ export function shouldSendPhoto(hasPhoto: boolean, force: boolean, panelState?: 
   return hasPhoto && (!force || panelState === 'stranded');
 }
 
+/** Is there anything for a forced retry to send? The refused attempt's text, or, for a REFUSED
+ *  photo-only send, the photo the refusal kept (attemptText is '' then, and requiring it made
+ *  "Send anyway" do nothing for a screenshot sent on its own — review of #198). */
+export function canForceRetry(attemptText: string | undefined, panelState: string | undefined, hasPhoto: boolean): boolean {
+  return !!attemptText || (panelState === 'stranded' && hasPhoto);
+}
+
 /** Did the message REACH the server, so the composer text should clear? Delivered, queued and held
  *  all did; a refusal (composer-hold) or a failure did not, and must keep the operator's text. */
 export function clearsComposer(r: { ok?: boolean; queued?: boolean; held?: boolean; refused?: boolean }): boolean {

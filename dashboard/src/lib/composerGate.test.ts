@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { composerGate, delegatedWorkLabel, refusalCopy, refusalHeadline, sendPanelHeadline, shouldSendPhoto, clearsComposer, retryText, STATE_COPY } from './composerGate.ts';
+import { composerGate, delegatedWorkLabel, refusalCopy, refusalHeadline, sendPanelHeadline, shouldSendPhoto, clearsComposer, retryText, canForceRetry, STATE_COPY } from './composerGate.ts';
 
 // THE BUG (Shaw, 2026-10-06): a seat running a sub-agent read `working`, so chat refused to
 // send — while its CLI was accepting and queueing the same message. Measured live: 17 seats
@@ -193,4 +193,12 @@ test('a forced retry KEEPS the attachment markers of the refused attempt on the 
   assert.equal(retryText(true, 'x', '[IMAGE: /up/a.png] [FILE: /up/b.pdf] y'), '[IMAGE: /up/a.png] [FILE: /up/b.pdf] x');
   assert.equal(retryText(true, 'x', 'no markers here'), 'x');
   assert.equal(retryText(true, '', '[IMAGE: /up/a.png] y'), '[IMAGE: /up/a.png] y');
+});
+
+test('a forced retry of a refused photo-only send is allowed; an empty retry is not', () => {
+  assert.equal(canForceRetry('', 'stranded', true), true, 'refused screenshot with no text must still be re-sendable');
+  assert.equal(canForceRetry(undefined, 'stranded', true), true);
+  assert.equal(canForceRetry('', 'stranded', false), false, 'nothing to send');
+  assert.equal(canForceRetry('', 'queued', true), false, 'a queued photo was already uploaded');
+  assert.equal(canForceRetry('hello', 'queued', false), true);
 });

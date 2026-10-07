@@ -6,7 +6,7 @@ import { clsx } from 'clsx';
 import { Send, Paperclip, X, ClipboardList } from 'lucide-react';
 import { injectAgentVerified, type InjectResult } from '../../lib/api';
 import { sendToAgent, isDelivered, isQueued, isHeld, describeSendState } from '../../lib/agentSend';
-import { sendPanelHeadline, shouldSendPhoto, clearsComposer, retryText } from '../../lib/composerGate';
+import { sendPanelHeadline, shouldSendPhoto, clearsComposer, retryText, canForceRetry } from '../../lib/composerGate';
 import { logAction } from '../../lib/user-actions';
 import { isLargePaste, fencePaste } from '../../lib/pastedText';
 
@@ -188,7 +188,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     // On a normal send we compose from the input; on a force retry we reuse the
     // text the gateway just refused (retained in busy.attemptText).
     if (!force && !text.trim() && !pendingImage) return;
-    if (force && !busy?.attemptText) return;
+    if (force && !canForceRetry(busy?.attemptText, busy?.state, !!pendingImage)) return;
     logAction(injectMode ? 'chat.inject' : 'chat.message', agentId, text.trim().slice(0, 100));
     setSending(true);
     setResultOk(false);
