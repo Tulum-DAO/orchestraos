@@ -4704,7 +4704,24 @@ async def handle_agent_key(request):
         # gated by its OWN arm flag (MENU_MULTIPART_SUBMIT_ARMED) — a moved
         # multi-part surface must NOT inherit the single-part MENU_SUBMIT_ARMED.
         if isinstance(answers, list):
-            armed = os.environ.get("MENU_MULTIPART_SUBMIT_ARMED") == "1"
+            armed = _menu_multipart_armed()
+            if armed and any(isinstance(a, dict) and isinstance(a.get("text"), str) and a["text"].strip()
+                             for a in answers) and not _menu_submit_text_armed():
+                return _json({"ok": False, "multipart": True, "armed": True,
+                              "reason": "free_text_not_armed"}, status=409)
+            # A BATCH MUST NAME THE MENU IT ANSWERS: without a card the gateway cannot tell menu A
+            # from the menu that opened after it, so a retry after a false failure can press A's
+            # digits into menu B. The legacy leg has no identity gate at all, and the durable leg
+            # takes identity from the CURRENT anchor. Armed + no card_id -> 409; with one, it is
+            # bound exactly as /menu-submit binds it (expect_row_id).
+            card_id = data.get("card_id")
+            if card_id is not None and not isinstance(card_id, str):
+                return _json({"ok": False, "error": "card_id must be a string"}, status=400)
+            if armed and not card_id:
+                return _json({"ok": False, "multipart": True, "armed": True,
+                              "reason": "use_menu_submit",
+                              "detail": "a multi-part answer must name its card: send card_id, "
+                                        "or use POST /menu-submit"}, status=409)
             # condition-6 (DEC-1787700374): DURABLE-FIRST multi-part submit —
             # persist the batch onto the durable approval_requests row BEFORE the
             # live-pane replay, so a `menu_gone` can never evaporate the operator's answers
@@ -4724,8 +4741,8 @@ async def handle_agent_key(request):
                     # AskUserQuestion — so "what did this device approve" must not have a
                     # hole exactly there. This caller passed NO provenance at all before.
                     surface=_batch_surface, answered_by=_batch_answered_by,
-                    device=_batch_device)
-                if not dok and dinfo.get("reason") == "no_durable_row":
+                    device=_batch_device, expect_row_id=card_id or None)
+                if not dok and dinfo.get("reason") == "no_durable_row" and not (armed or card_id):
                     # LEGACY pane-only path (no durable anchor yet). Preserves the
                     # pre-condition-6 behavior exactly, including the F6-polish-1
                     # mirror-resolve on a verified armed submit.
@@ -4993,6 +5010,18 @@ def _menu_submit_text_armed() -> bool:
     return os.environ.get("MENU_MULTIPART_TEXT_ARMED") == "1"
 
 
+def _menu_multipart_armed() -> bool:
+    """Multi-part submits press keys unless the operator opts out (MENU_MULTIPART_SUBMIT_ARMED=0).
+
+    ON by default because the armed paths are now the SAFE ones: every armed batch must name its
+    card (/menu-submit card_required, /agent-key use_menu_submit), is bound to it on the
+    orchestrator's own lookup, replays only with the identity gate, and never takes the
+    identity-less pane-only leg. Unarmed, an app's answer is a dry run that reaches no agent,
+    which on a default install is the failure that matters. Own-words text stays a separate,
+    default-OFF arm (MENU_MULTIPART_TEXT_ARMED)."""
+    return os.environ.get("MENU_MULTIPART_SUBMIT_ARMED", "1") != "0"
+
+
 async def handle_menu_submit(request):
     """POST /menu-submit {session, answers:[{part, ns:[..], text?}], confirm, card_id?}
 
@@ -5061,7 +5090,7 @@ async def handle_menu_submit(request):
         return _json({"ok": False, "needs_confirm": True,
                       "confirm_text": f"Submit answers to {session}?"}, status=428)
 
-    armed = os.environ.get("MENU_MULTIPART_SUBMIT_ARMED") == "1"
+    armed = _menu_multipart_armed()
     if armed and any(a.get("text") for a in answers) and not _menu_submit_text_armed():
         return _json({"ok": False, "multipart": True, "armed": True,
                       "reason": "free_text_not_armed"}, status=409)
@@ -5224,7 +5253,7 @@ async def handle_gateway_capabilities(request):
     body["verbs"] = list(_ALL_VERBS)
     # Additive feature flags: a client shows a control only when its route exists here.
     body["features"] = ["menu_submit"]
-    body["menu_submit"] = {"armed": os.environ.get("MENU_MULTIPART_SUBMIT_ARMED") == "1",
+    body["menu_submit"] = {"armed": _menu_multipart_armed(),
                            "text_armed": _menu_submit_text_armed()}
     try:
         body["providers"] = _capability_providers()

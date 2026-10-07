@@ -71,7 +71,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(G, "gateway_token", lambda: "secret_tok")
     monkeypatch.setattr(G, "_tmux_session_names", lambda: ["gm"])
     monkeypatch.setattr(G, "MENU_ANSWER_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
-    monkeypatch.delenv("MENU_MULTIPART_SUBMIT_ARMED", raising=False)
+    monkeypatch.setenv("MENU_MULTIPART_SUBMIT_ARMED", "0")      # tests opt IN to the (default) arm
     monkeypatch.delenv("MENU_MULTIPART_TEXT_ARMED", raising=False)
     monkeypatch.setattr(G, "_current_menu", lambda session: {"menu_family": "claude", **MENU})
     monkeypatch.setattr(G, "_is_gemini_session", lambda session: False)
@@ -444,3 +444,105 @@ def test_the_gate_check_runs_on_the_orchestrators_own_lookup(replay, env):
     status, body = _post({"session": "gm", "answers": ANSWERS, "confirm": True, "card_id": "apr_1"})
     assert status == 409 and body["reason"] == "identity_gate_unavailable"
     assert replay == [] and env.recorded == []
+
+
+# ---- the arm is ON by default; =0 opts out ----------------------------------------------------
+
+def test_unset_arm_means_armed_and_zero_opts_out(monkeypatch):
+    monkeypatch.delenv("MENU_MULTIPART_SUBMIT_ARMED", raising=False)
+    assert G._menu_multipart_armed() is True
+    monkeypatch.setenv("MENU_MULTIPART_SUBMIT_ARMED", "1")
+    assert G._menu_multipart_armed() is True
+    monkeypatch.setenv("MENU_MULTIPART_SUBMIT_ARMED", "0")
+    assert G._menu_multipart_armed() is False
+
+
+def test_default_install_menu_submit_without_a_card_is_card_required_not_a_dry_run(spy, monkeypatch):
+    # An unarmed default answered a device with a dry-run 200 that reached no agent.
+    monkeypatch.delenv("MENU_MULTIPART_SUBMIT_ARMED", raising=False)
+    status, body = _post({"session": "gm", "answers": ANSWERS, "confirm": True})
+    assert status == 409 and body["reason"] == "card_required" and spy == []
+
+
+def test_default_install_capabilities_say_armed_and_text_not_armed(monkeypatch):
+    monkeypatch.delenv("MENU_MULTIPART_SUBMIT_ARMED", raising=False)
+    monkeypatch.setattr(G, "_capability_providers", lambda: [], raising=False)
+    monkeypatch.setattr(G, "_pending_count", lambda: 0, raising=False)
+    body = json.loads(_run(G.handle_gateway_capabilities(_Req({}))).text)
+    assert body["menu_submit"] == {"armed": True, "text_armed": False}
+
+
+# ---- /agent-key's batch leg: same card binding, same text arm, no identity-less leg when armed --
+
+def _agent_key(payload):
+    resp = _run(G.handle_agent_key(_Req({"session": "gm", "key": "submit", "confirm": True, **payload})))
+    return resp.status, json.loads(resp.text)
+
+
+def test_agent_key_armed_batch_without_a_card_is_refused_and_presses_nothing(monkeypatch):
+    calls = []
+    monkeypatch.setattr(G, "durable_first_batch_submit", lambda *a, **k: calls.append(k) or (True, {}))
+    monkeypatch.setattr(G, "menu_batch_submit", lambda *a, **k: calls.append(("legacy", k)) or (True, {}))
+    monkeypatch.setenv("MENU_MULTIPART_SUBMIT_ARMED", "1")
+    status, body = _agent_key({"answers": ANSWERS})
+    assert status == 409 and body["reason"] == "use_menu_submit" and calls == []
+    status, body = _agent_key({"answers": ANSWERS, "card_id": 7})
+    assert status == 400 and calls == []
+
+
+def test_agent_key_armed_own_words_text_needs_its_own_arm(monkeypatch):
+    calls = []
+    monkeypatch.setattr(G, "durable_first_batch_submit", lambda *a, **k: calls.append(k) or (True, {}))
+    monkeypatch.setenv("MENU_MULTIPART_SUBMIT_ARMED", "1")
+    with_text = [{"part": 0, "ns": ["1"]}, {"part": 1, "ns": ["4"], "text": "D"}]
+    status, body = _agent_key({"answers": with_text, "card_id": "apr_1"})
+    assert status == 409 and body["reason"] == "free_text_not_armed" and calls == []
+    monkeypatch.setenv("MENU_MULTIPART_TEXT_ARMED", "1")
+    status, _ = _agent_key({"answers": with_text, "card_id": "apr_1"})
+    assert status == 200 and len(calls) == 1
+
+
+def test_agent_key_armed_batch_binds_the_card_and_never_falls_to_the_legacy_leg(monkeypatch):
+    seen, legacy = [], []
+    monkeypatch.setattr(G, "durable_first_batch_submit",
+                        lambda *a, **k: seen.append(k.get("expect_row_id")) or (False, {"reason": "no_durable_row"}))
+    monkeypatch.setattr(G, "menu_batch_submit", lambda *a, **k: legacy.append(1) or (True, {}))
+    monkeypatch.setenv("MENU_MULTIPART_SUBMIT_ARMED", "1")
+    status, _ = _agent_key({"answers": ANSWERS, "card_id": "apr_A"})
+    assert seen == ["apr_A"], "the card must be bound as expect_row_id"
+    assert legacy == [], "armed: the identity-less pane-only leg must never run"
+    assert status == 409
+
+
+def test_agent_key_opted_out_batch_dry_run_is_unchanged(monkeypatch):
+    legacy = []
+    monkeypatch.setattr(G, "durable_first_batch_submit", lambda *a, **k: (False, {"reason": "no_durable_row"}))
+    monkeypatch.setattr(G, "menu_batch_submit",
+                        lambda *a, **k: legacy.append(k.get("armed")) or (True, {"dry_run": True}))
+    status, _ = _agent_key({"answers": ANSWERS})          # env fixture: MENU_MULTIPART_SUBMIT_ARMED=0
+    assert status == 200 and legacy == [False]
+
+
+def test_agent_key_retry_after_the_menu_changed_presses_nothing(replay, env):
+    env.row = _row("apr_B")                  # the NEXT menu is now the pending anchor
+    env.latest = _row("apr_B")
+    status, body = _agent_key({"answers": ANSWERS})
+    assert status == 409 and body["reason"] == "use_menu_submit"
+    status, body = _agent_key({"answers": ANSWERS, "card_id": "apr_A"})
+    assert status == 409 and body["reason"] == "card_mismatch" and body["anchor_id"] == "apr_B"
+    assert replay == [] and env.recorded == []
+
+
+def test_agent_key_with_no_anchor_at_all_presses_nothing_when_armed(replay, env):
+    env.row = None
+    env.latest = None
+    for payload in ({"answers": ANSWERS}, {"answers": ANSWERS, "card_id": "apr_A"}):
+        status, _ = _agent_key(payload)
+        assert status == 409
+    assert replay == [] and env.recorded == []
+
+
+def test_agent_key_with_the_right_card_still_submits_through_the_identity_gate(replay, env):
+    status, body = _agent_key({"answers": ANSWERS, "card_id": "apr_1"})
+    assert status == 200 and env.recorded[0]["id"] == "apr_1"
+    assert replay[0]["expect_questions"] == {0: "Lock the API down now?", 1: "Which dashboards keep access?"}

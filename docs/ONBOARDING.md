@@ -106,10 +106,13 @@ Neither client trusts a plain 200 OK. Two calls, in order:
   routes. The app answers approval cards through `POST /menu-submit`; a
   gateway whose `features` lacks `"menu_submit"` (or has no `features` at all)
   predates that route and can't take answers from the app — update it, or
-  answer in the dashboard. The route is a dry run (it reports what it would
-  press and presses nothing) until the gateway runs with
-  `MENU_MULTIPART_SUBMIT_ARMED=1`; `menu_submit.armed` in the same response
-  tells the app which one it's talking to.
+  answer in the dashboard. Answers are delivered by default; every answer must
+  name the card it was drafted for, so it can never land in a different
+  menu. To turn delivery off, run the gateway with
+  `MENU_MULTIPART_SUBMIT_ARMED=0`: the route then reports what it would press
+  and presses nothing, and `menu_submit.armed: false` in the same response
+  tells the app so. Answers typed in your own words stay off unless
+  `MENU_MULTIPART_TEXT_ARMED=1`.
 
 This is a deliberately different pair of endpoints from `/health` (that one's
 for `orchestra doctor` and the supervisor — don't confuse the two if you're
