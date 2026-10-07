@@ -3218,7 +3218,7 @@ def _batch_key(answers):
     for a in answers or []:
         if isinstance(a, dict):
             out[a.get("part")] = (sorted(str(n) for n in (a.get("ns") or [])),
-                                  (a.get("text") or "").strip())
+                                  str(a.get("text") or "").strip())
     return out
 
 
@@ -3310,9 +3310,15 @@ def durable_first_batch_submit(session, answers, *, store, armed=False,
     # A caller that must never replay without the identity gate (a DEVICE: /menu-submit) refuses
     # here, on the SAME lookup the batch is persisted against: a card with parts but no per-part
     # questions would otherwise replay with the gate OFF (logged below, for operator callers).
-    if require_identity_gate and row_is_durable_with_parts(row) and not _anchor_expect_questions(row):
-        return False, {"reason": "identity_gate_unavailable", "family": "no_part_questions",
-                       "id": row.get("id")}
+    if require_identity_gate and row_is_durable_with_parts(row):
+        # The replay checks identity per part ONLY where the anchor has that part's question, so
+        # one answered part without a question is pressed ungated even when its siblings have one.
+        _have_q = _anchor_expect_questions(row)
+        _missing = sorted(a.get("part") for a in answers
+                          if isinstance(a, dict) and a.get("part") not in _have_q)
+        if _missing:
+            return False, {"reason": "identity_gate_unavailable", "family": "no_part_questions",
+                           "parts": _missing, "id": row.get("id")}
 
     # 2) validate the batch against the hydrated parts[] BEFORE any write.
     err = _validate_batch_answer(row, answers)

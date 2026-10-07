@@ -588,3 +588,18 @@ def test_agent_key_own_words_option_with_blank_text_is_422_and_presses_nothing(r
                                "card_id": "apr_1"})
     assert status == 422 and body["reason"] == "batch_validation"
     assert replay == [] and env.recorded == []
+
+
+def test_a_MIXED_card_one_part_without_a_question_is_refused(replay, env):
+    # Part 0 has its question, part 1 does not: the replay would gate part 0 and press part 1 blind.
+    mixed = {"walk_complete": True, "part_count": 2, "parts": [
+        MENU["parts"][0],
+        {"index": 1, "question": "", "select": "multi", "options": MENU["parts"][1]["options"]}]}
+    env.row = {**_row("apr_1"), "menu": json.dumps(mixed)}
+    status, body = _post({"session": "gm", "answers": ANSWERS, "confirm": True, "card_id": "apr_1"})
+    assert status == 409 and body["reason"] == "identity_gate_unavailable" and body["parts"] == [1]
+    assert replay == [] and env.recorded == []
+
+
+def test_batch_key_tolerates_a_non_string_text():
+    assert G._batch_key([{"part": 0, "ns": ["1"], "text": 5}]) == {0: (["1"], "5")}
