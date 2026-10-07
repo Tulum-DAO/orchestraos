@@ -151,7 +151,7 @@ function mockFetch(status, jsonBody) {
   //   AgentCard.tsx:315          accepted = isDelivered || isQueued || isHeld
   //   ChatInput.tsx:266          isDelivered || isQueued || isHeld
   //   AgentDetailPanel.tsx:227   !isDelivered && !isQueued && !isHeld  -> error branch
-  //   Composer.tsx:54-57         {ok, queued, held} -> ChatInput's onSend seam
+  //   Composer.tsx                {ok, queued, held, refused} -> ChatInput's onSend seam
   assert.strictEqual(isDelivered(result) || isQueued(result) || isHeld(result), false,
     'AgentCard/ChatInput would clear the input on this');
   assert.strictEqual(!isDelivered(result) && !isQueued(result) && !isHeld(result), true,
@@ -159,9 +159,10 @@ function mockFetch(status, jsonBody) {
   const composerSeam = {
     ok: isDelivered(result),
     queued: isQueued(result),
-    held: isHeld(result) || isComposerHold(result),
+    held: isHeld(result),
+    refused: isComposerHold(result),
   };
-  assert.deepStrictEqual(composerSeam, { ok: false, queued: false, held: false },
+  assert.deepStrictEqual(composerSeam, { ok: false, queued: false, held: false, refused: false },
     'ChatInput onSend seam must fall through to Failed, not the busy/held affordance');
 
   console.log('PASS: 502 durable_write_failed is a failure at every call site, not a hold');
@@ -174,7 +175,9 @@ function mockFetch(status, jsonBody) {
   const result = await sendToAgent('gm', { text: 'hi' });
   assert.strictEqual(isHeld(result), true);
   assert.strictEqual(isFailed(result), false);
-  assert.strictEqual(describeSendState(result), 'busy_working');
+  // busy_working is the server's CODE for "mid-turn, the CLI queues it". The panel used to show
+  // the raw code; it is exactly the case gm's queued words are true for.
+  assert.strictEqual(describeSendState(result), 'Queued — it will read this when its turn ends');
   console.log('PASS: a 200 hold is still accepted — the gate is on status, not on state');
 }
 

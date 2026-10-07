@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { composerGate, delegatedWorkLabel, refusalCopy, refusalHeadline, STATE_COPY } from './composerGate.ts';
+import { composerGate, delegatedWorkLabel, refusalCopy, refusalHeadline, sendPanelHeadline, shouldSendPhoto, clearsComposer, retryText, canForceRetry, STATE_COPY } from './composerGate.ts';
 
 // THE BUG (Shaw, 2026-10-06): a seat running a sub-agent read `working`, so chat refused to
 // send — while its CLI was accepting and queueing the same message. Measured live: 17 seats
@@ -135,4 +135,70 @@ test('a SUCCESSFUL queued/held send keeps its own note, never the unsent-text wo
     'Held — will deliver at the next turn boundary');
   assert.equal(refusalCopy('queued'), null);
   assert.equal(refusalCopy('held'), null);
+});
+
+// ---- gm msg_fbc3b9d0 -------------------------------------------------------------------------
+test('a RETIRED seat is blocked with its own words, not the generic not-running ones', () => {
+  const g = composerGate({ state: 'retired' });
+  assert.equal(g.send, 'blocked');
+  assert.equal((g as { reason: string }).reason, 'This agent is retired — a message would go nowhere');
+  // control: a merely stopped seat keeps the generic words
+  assert.match((composerGate({ state: 'stopped' }) as { reason: string }).reason, /not running/);
+});
+
+test('a SUCCESSFUL queued or held send NEVER renders "Not delivered"', () => {
+  // gm msg_d8732aa5: a DURABLE queued result promises no turn; a mid-turn hold does (via describeSendState)
+  const queued = sendPanelHeadline({ state: 'queued', activity: 'pane busy (busy) — durable-first per B1/D1' });
+  assert.equal(queued, 'Saved to its inbox — it will be delivered when the agent can take it');
+  assert.equal(sendPanelHeadline({ state: 'held', activity: 'Queued — it will read this when its turn ends' }),
+    'Queued — it will read this when its turn ends');
+  const held = sendPanelHeadline({ state: 'held', activity: 'agent pane is showing a menu/permission prompt' });
+  assert.equal(held, 'agent pane is showing a menu/permission prompt');
+  for (const h of [queued, held, sendPanelHeadline({ state: 'held' })]) {
+    assert.doesNotMatch(h, /Not delivered/);
+  }
+});
+
+test('POSITIVE CONTROL: a real refusal still says "Not delivered" with the state words', () => {
+  assert.equal(sendPanelHeadline({ state: 'stranded', activity: 'x' }),
+    "Not delivered — There's unsent text in this agent's input box — send or clear it first.");
+  assert.equal(sendPanelHeadline({ state: 'crashed', activity: 'No tmux session' }),
+    'Not delivered — No tmux session');
+});
+
+test('the photo: sent normally; dropped on a forced retry of a queued/held send; KEPT on a forced retry of a refusal', () => {
+  assert.equal(shouldSendPhoto(true, false, undefined), true);
+  assert.equal(shouldSendPhoto(true, true, 'queued'), false, 'already uploaded with the queued send');
+  assert.equal(shouldSendPhoto(true, true, 'held'), false, 'already uploaded with the held send');
+  assert.equal(shouldSendPhoto(true, true, 'stranded'), true, 'the refusal kept it; the retry must carry it');
+  assert.equal(shouldSendPhoto(false, true, 'stranded'), false);
+});
+
+test('the composer clears when the message REACHED the server, and keeps it otherwise', () => {
+  assert.equal(clearsComposer({ ok: true }), true);
+  assert.equal(clearsComposer({ ok: false, queued: true }), true, 'queued reached the server');
+  assert.equal(clearsComposer({ ok: false, held: true }), true, 'held reached the server');
+  assert.equal(clearsComposer({ ok: false, refused: true }), false, 'a refusal keeps the text');
+  assert.equal(clearsComposer({ ok: false }), false, 'a failure keeps the text');
+});
+
+test('a forced retry sends the box as it is NOW, not the stale refused attempt', () => {
+  assert.equal(retryText(true, 'fixed typo', 'fixd typo'), 'fixed typo');
+  assert.equal(retryText(true, '', 'fixd typo'), 'fixd typo', 'empty box -> the refused attempt');
+  assert.equal(retryText(false, 'hello', 'old'), 'hello');
+});
+
+test('a forced retry KEEPS the attachment markers of the refused attempt on the edited text', () => {
+  assert.equal(retryText(true, 'fixed typo', '[IMAGE: /up/a.png] fixd typo'), '[IMAGE: /up/a.png] fixed typo');
+  assert.equal(retryText(true, 'x', '[IMAGE: /up/a.png] [FILE: /up/b.pdf] y'), '[IMAGE: /up/a.png] [FILE: /up/b.pdf] x');
+  assert.equal(retryText(true, 'x', 'no markers here'), 'x');
+  assert.equal(retryText(true, '', '[IMAGE: /up/a.png] y'), '[IMAGE: /up/a.png] y');
+});
+
+test('a forced retry of a refused photo-only send is allowed; an empty retry is not', () => {
+  assert.equal(canForceRetry('', 'stranded', true), true, 'refused screenshot with no text must still be re-sendable');
+  assert.equal(canForceRetry(undefined, 'stranded', true), true);
+  assert.equal(canForceRetry('', 'stranded', false), false, 'nothing to send');
+  assert.equal(canForceRetry('', 'queued', true), false, 'a queued photo was already uploaded');
+  assert.equal(canForceRetry('hello', 'queued', false), true);
 });

@@ -48,6 +48,49 @@ export function refusalHeadline(r: { state?: string; activity?: string }): strin
   return refusalCopy(r.state) || r.activity || r.state || 'agent busy';
 }
 
+/** The whole headline of ChatInput's send panel. That panel is reused for a SUCCESSFUL
+ *  queued/held send (state 'queued'/'held'), which must never read "Not delivered" (gm msg_fbc3b9d0). */
+export function sendPanelHeadline(r: { state?: string; activity?: string }): string {
+  // panel 'queued' = the server's durable state; the mid-turn hold arrives as 'held' with
+  // describeSendState's busy_working words already in activity (gm msg_d8732aa5).
+  if (r.state === 'queued') return STATE_COPY.queuedDurable;
+  if (r.state === 'held') return r.activity || 'Held — will deliver at the next turn boundary';
+  return 'Not delivered — ' + refusalHeadline(r);
+}
+
+/** Does this send carry the pending photo? A forced retry normally carries text only (the photo of
+ *  a queued/held send was already uploaded and cleared). A forced retry of a REFUSED send (panel
+ *  state 'stranded') must carry the photo the refusal kept, or it is silently dropped (#198 review). */
+export function shouldSendPhoto(hasPhoto: boolean, force: boolean, panelState?: string): boolean {
+  return hasPhoto && (!force || panelState === 'stranded');
+}
+
+/** Is there anything for a forced retry to send? The refused attempt's text, or, for a REFUSED
+ *  photo-only send, the photo the refusal kept (attemptText is '' then, and requiring it made
+ *  "Send anyway" do nothing for a screenshot sent on its own — review of #198). */
+export function canForceRetry(attemptText: string | undefined, panelState: string | undefined, hasPhoto: boolean): boolean {
+  return !!attemptText || (panelState === 'stranded' && hasPhoto);
+}
+
+/** Did the message REACH the server, so the composer text should clear? Delivered, queued and held
+ *  all did; a refusal (composer-hold) or a failure did not, and must keep the operator's text. */
+export function clearsComposer(r: { ok?: boolean; queued?: boolean; held?: boolean; refused?: boolean }): boolean {
+  if (r.refused) return false;
+  return !!(r.ok || r.queued || r.held);
+}
+
+/** The text a send carries. A forced retry prefers the box's CURRENT text (the operator may have
+ *  edited it after the refusal) and falls back to the refused attempt only when the box is empty. */
+export function retryText(force: boolean, boxText: string, attemptText?: string): string {
+  if (!force) return boxText;
+  if (!boxText) return attemptText || '';
+  // The inject path uploads a photo up front, and from then on it exists ONLY as a leading
+  // `[IMAGE: path]` / `[FILE: path]` marker inside attemptText (pendingImage is already cleared).
+  // Carry those markers onto the edited text, or the screenshot silently disappears (#198 review).
+  const markers = (attemptText || '').match(/^(?:\[(?:IMAGE|FILE): [^\]]+\]\s*)+/);
+  return markers ? `${markers[0].trim()} ${boxText}` : boxText;
+}
+
 /** States where nothing is listening, so a message would go nowhere. */
 const NOT_RUNNING = new Set(['stopped', 'crashed', 'offline', 'retired']);
 
@@ -65,6 +108,9 @@ export function composerGate(args: {
   }
   if (st === 'waiting') {
     return { send: 'blocked', reason: STATE_COPY.waiting };
+  }
+  if (st === 'retired') {
+    return { send: 'blocked', reason: STATE_COPY.retired };
   }
   if (NOT_RUNNING.has(st)) {
     return { send: 'blocked', reason: 'It is not running — a message would go nowhere.' };

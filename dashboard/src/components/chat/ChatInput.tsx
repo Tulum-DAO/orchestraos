@@ -6,7 +6,7 @@ import { clsx } from 'clsx';
 import { Send, Paperclip, X, ClipboardList } from 'lucide-react';
 import { injectAgentVerified, type InjectResult } from '../../lib/api';
 import { sendToAgent, isDelivered, isQueued, isHeld, describeSendState } from '../../lib/agentSend';
-import { refusalHeadline } from '../../lib/composerGate';
+import { sendPanelHeadline, shouldSendPhoto, clearsComposer, retryText, canForceRetry } from '../../lib/composerGate';
 import { logAction } from '../../lib/user-actions';
 import { isLargePaste, fencePaste } from '../../lib/pastedText';
 
@@ -49,7 +49,8 @@ interface Props {
   onSend?: (
     payload: { text: string; attachments: File[] },
     opts: { force: boolean }
-  ) => Promise<{ ok: boolean; note?: string; queued?: boolean; held?: boolean }>;
+  ) => Promise<{ ok: boolean; note?: string; queued?: boolean; held?: boolean; refused?: boolean;
+    composer_text?: string; stranded?: { text?: string; age_s?: number } }>;
   /** Rendered on the SEND ROW, before the input. Secondary controls belong on this baseline
       rather than stacked underneath it — a second row of controls under Send reads as a
       junk drawer, which is the defect these two slots exist to prevent. */
@@ -187,7 +188,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     // On a normal send we compose from the input; on a force retry we reuse the
     // text the gateway just refused (retained in busy.attemptText).
     if (!force && !text.trim() && !pendingImage) return;
-    if (force && !busy?.attemptText) return;
+    if (force && !canForceRetry(busy?.attemptText, busy?.state, !!pendingImage)) return;
     logAction(injectMode ? 'chat.inject' : 'chat.message', agentId, text.trim().slice(0, 100));
     setSending(true);
     setResultOk(false);
@@ -195,7 +196,9 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     let failed = false;
     try {
       // Expand any held large pastes into the fenced grammar at their position.
-      let messageText = force ? busy!.attemptText : serializeForSend(text).trim();
+      // A forced retry sends what is in the box NOW: the operator may have fixed the text after the
+      // refusal, and re-sending the stale attemptText silently discarded that edit (review of #198).
+      let messageText = retryText(force, serializeForSend(text).trim(), busy?.attemptText);
 
       if (onSend) {
         // B1 send-bridge seam: the caller (e.g. Composer.tsx's sendToAgent
@@ -204,20 +207,39 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
         // inline [IMAGE:]/[FILE:] marker) and let onSend do the upload and
         // P3 state mapping. The internal inject/inbox path below is
         // untouched and only runs when onSend is absent.
-        const attachments = !force && pendingImage ? [pendingImage] : [];
+        // A forced retry normally carries text only (the photo of a queued/held send was already
+        // uploaded and cleared). A forced retry of a REFUSED send must carry the photo the refusal
+        // kept, or the operator's screenshot is silently dropped (review of #198).
+        const sendPhoto = shouldSendPhoto(!!pendingImage, force, busy?.state);
+        const attachments = sendPhoto ? [pendingImage!] : [];
         // THE PHOTO IS NOT CLEARED UNTIL THE SEND SUCCEEDS (P1 2026-10-06: the API was down for
         // an hour and every send failed; clearing here threw the attachment away on the way to a
         // failure, so the operator lost it and had to re-pick it). Nothing is destroyed before
         // the thing that could fail has not failed.
         const res = await onSend({ text: messageText, attachments }, { force });
         if (res.ok) {
-          if (!force && pendingImage) clearImage();
+          if (sendPhoto) clearImage();
           setBusy(null);
           setResultOk(true);
           setResult(res.note || 'Sent');
           setText('');
           setPastes([]);
           pasteIdRef.current = 1;
+        } else if (res.refused) {
+          // NOT delivered: the agent's input box already holds text. Keep the photo (nothing was
+          // sent) and offer the explicit overwrite through the same panel as a gateway 409.
+          setBusy({
+            reason: res.note,
+            state: 'stranded',
+            activity: res.note,
+            attemptText: messageText,
+            // SHOW the agent's draft before offering to overwrite it (review of #198): without
+            // these the panel said "Send anyway" and a force-send destroyed text nobody had seen.
+            composer_text: res.composer_text,
+            stranded: res.stranded,
+          });
+          setResultOk(false);
+          setResult(null);
         } else if (res.queued || res.held) {
           // QUEUED/HELD IS AS DELIVERED AS IT GETS, so the photo clears here too. It does not
           // share the failure branch's reason for being kept: the upload and the send both
@@ -227,7 +249,15 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           // affordance below re-sends with force: true, and `!force && pendingImage` drops the
           // attachment on a forced send — so the thumbnail sat in the composer implying it had
           // not been sent, and the one gesture offered for sending it carried text only.
-          if (!force && pendingImage) clearImage();
+          if (sendPhoto) clearImage();
+          // ...and so does the TEXT. It reached the server; leaving it in the box invited the same
+          // instruction to be sent twice, now that the panel rightly offers no "Send anyway"
+          // after a send that already landed (review of #198).
+          if (clearsComposer(res)) {
+            setText('');
+            setPastes([]);
+            pasteIdRef.current = 1;
+          }
           // Reuse the existing busy/queued affordance below (reason/state/
           // activity/attemptText — same shape the 409 branch already fills).
           setBusy({
@@ -432,12 +462,12 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
       {busy && (
         <div className="mt-1.5 rounded-lg border border-amber-700/50 bg-amber-500/5 px-2.5 py-1.5">
           <div className="text-[11px] text-amber-300">
-            Not delivered — {refusalHeadline(busy)}
+            {sendPanelHeadline(busy)}
             {busy.state ? <span className="text-neutral-500"> ({busy.state})</span> : null}
           </div>
           {busy.composer_text && (
             <div className="text-[10px] text-neutral-500 mt-0.5 truncate">
-              would overwrite typed draft: "{busy.composer_text}"
+              the agent's box already holds: "{busy.composer_text}" — sending now submits it together with yours
             </div>
           )}
           {busy.stranded?.text && (
@@ -446,13 +476,16 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
             </div>
           )}
           <div className="flex items-center gap-2 mt-1">
-            {busy.activity !== 'Active turn' ? (
+            {/* A queued/held send already REACHED the server: offering "Send anyway" would send the
+                same instruction twice (review of #198). Only a real refusal gets the force path. */}
+            {busy.state === 'queued' || busy.state === 'held' ? null : busy.activity !== 'Active turn' ? (
               <button
                 onClick={() => handleSend(true)}
                 disabled={sending}
                 className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 disabled:opacity-50"
               >
-                {busy.composer_text ? 'Overwrite draft & send' : 'Send anyway'}
+                {/* the gateway's force APPENDS to the box and submits; it never clears it (review of #198) */}
+                {busy.composer_text ? 'Send together with the draft' : 'Send anyway'}
               </button>
             ) : (
               <span className="text-[10px] text-neutral-600">retry when the agent finishes its turn</span>

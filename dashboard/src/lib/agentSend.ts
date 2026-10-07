@@ -134,7 +134,12 @@ export function describeSendState(result: AgentSendResult): string {
     return result.error
       || (result.httpStatus ? `Send failed (HTTP ${result.httpStatus}) — not delivered` : 'Send failed — not delivered');
   }
-  if (isHeld(result)) return result.reason || 'Held — will deliver at the next turn boundary';
+  // 'busy_working' is a server CODE (agent-send.ts: mid-turn, the CLI queues natively), not a
+  // sentence; it used to reach the panel verbatim. It is the case the queued words are true for.
+  if (isHeld(result)) {
+    if (result.reason === 'busy_working') return STATE_COPY.queuedOk;
+    return result.reason || 'Held — will deliver at the next turn boundary';
+  }
   if (isQueued(result)) return result.reason || 'Queued — agent is busy';
   if (result.error) return result.error;
   return '';
