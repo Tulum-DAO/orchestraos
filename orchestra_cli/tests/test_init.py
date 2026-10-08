@@ -503,3 +503,54 @@ def test_init_skip_model_fetch_env_defers_to_up(tmp_path, monkeypatch):
     by = {s.step: s for s in report}
     assert by["pip:speech"].did and not by["stt:model"].did and "deferred" in by["stt:model"].detail
     assert not [c for c in r.calls if any("local_stt" in a for a in c[0])]
+
+
+# --- upgrade must not keep serving a stale build (U1: #208's API fix missing until rebuilt) ---
+
+def _age(p: Path, seconds: float):
+    t = p.stat().st_mtime - seconds
+    os.utime(p, (t, t))
+
+
+def test_init_rebuilds_a_build_whose_source_is_newer(tmp_path):
+    """`orchestra upgrade` = pull + init. init used to skip a build whose artifact existed,
+    so an upgraded install kept the old api/dist (measured: a pre-#208 terminal, 101 to a
+    foreign origin). A source file newer than the artifact must trigger a rebuild."""
+    root = _repo(tmp_path)
+    data = tmp_path / "data"
+    I.run_init(root, data_dir=data, run=Runner())
+    _age(root / "api" / "dist" / "server.js", 60)
+    (root / "api" / "src").mkdir()
+    (root / "api" / "src" / "server.ts").write_text("// pulled\n")   # newer than dist
+    _age(root / "dashboard" / "package.json", 120)                    # dashboard untouched
+    runner = Runner()
+    report = {r.step: r for r in I.run_init(root, data_dir=data, run=runner)}
+    assert report["build:api"].did and "rebuilt" in report["build:api"].detail
+    assert report["build:dashboard"].did is False
+    builds = [c for c in runner.calls if c[0][:3] == ("npm", "run", "build")]
+    assert len(builds) == 1 and Path(builds[0][1]).name == "api"
+
+
+def test_init_reinstalls_deps_when_the_lockfile_is_newer(tmp_path):
+    root = _repo(tmp_path)
+    data = tmp_path / "data"
+    I.run_init(root, data_dir=data, run=Runner())
+    stamp = root / "api" / "node_modules" / ".package-lock.json"
+    stamp.write_text("{}")
+    _age(stamp, 60)
+    (root / "api" / "package-lock.json").write_text("{}")             # pulled a dependency change
+    report = {r.step: r for r in I.run_init(root, data_dir=data, run=Runner())}
+    assert report["npm:api"].did is True
+    assert report["npm:dashboard"].did is False
+
+
+def test_init_does_not_rebuild_a_current_build(tmp_path):
+    root = _repo(tmp_path)
+    data = tmp_path / "data"
+    I.run_init(root, data_dir=data, run=Runner())
+    (root / "api" / "src").mkdir()
+    (root / "api" / "src" / "server.ts").write_text("// old\n")
+    _age(root / "api" / "src" / "server.ts", 60)                      # older than dist
+    runner = Runner()
+    report = {r.step: r for r in I.run_init(root, data_dir=data, run=runner)}
+    assert report["build:api"].did is False and "up to date" in report["build:api"].detail

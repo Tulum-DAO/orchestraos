@@ -180,6 +180,42 @@ def _git_init_data_dir(data_dir: Path, run: Callable) -> bool:
     return True
 
 
+# A build that exists is not a build that is current. `orchestra upgrade` pulls new source
+# and re-runs init, and init used to skip any build whose artifact existed, so an upgraded
+# install kept serving the OLD api/dist. Measured 2026-10-08: an install upgraded across
+# #208 still accepted a foreign-origin /ws/terminal WebSocket (101) until rebuilt. Rebuild
+# whenever any build input is newer than the artifact (git pull sets the changed files'
+# mtime to the pull time, so this also covers a manual `git pull` + `orchestra init`).
+_BUILD_INPUTS = ("src", "public", "index.html", "package.json", "package-lock.json",
+                 "tsconfig.json", "vite.config.ts", "vite.config.js")
+
+
+def _newest_mtime(paths) -> float:
+    newest = 0.0
+    for p in paths:
+        if not p.exists():
+            continue
+        if p.is_file():
+            newest = max(newest, p.stat().st_mtime)
+            continue
+        for f in p.rglob("*"):
+            if f.is_file():
+                newest = max(newest, f.stat().st_mtime)
+    return newest
+
+
+def _build_stale(pkg_dir: Path, artifact: Path) -> bool:
+    if not artifact.exists():
+        return False                                     # missing is a first build, not stale
+    return _newest_mtime(pkg_dir / n for n in _BUILD_INPUTS) > artifact.stat().st_mtime
+
+
+def _deps_stale(pkg_dir: Path) -> bool:
+    """package-lock.json changed since the last install (npm stamps node_modules/.package-lock.json)."""
+    lock, stamp = pkg_dir / "package-lock.json", pkg_dir / "node_modules" / ".package-lock.json"
+    return lock.exists() and stamp.exists() and lock.stat().st_mtime > stamp.stat().st_mtime
+
+
 def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable = default_run,
              skip_npm: bool = False, skip_venv: bool = False, skip_build: bool = False,
              config_path: Optional[Path] = None, demo: bool = False,
@@ -430,7 +466,7 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
         if skip_npm:
             report.append(Step(f"npm:{label}", False, "skipped (--no-npm)"))
             continue
-        if (d / "node_modules").exists():
+        if (d / "node_modules").exists() and not _deps_stale(d):
             report.append(Step(f"npm:{label}", False, "node_modules present"))
             continue
         rc = run(["npm", "install", "--no-audit", "--no-fund"], cwd=d)
@@ -445,11 +481,13 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
         if skip_build or skip_npm:
             report.append(Step(f"build:{label}", False, "skipped"))
             continue
-        if (d / artifact).exists():
-            report.append(Step(f"build:{label}", False, f"{artifact} present (delete it to rebuild)"))
+        stale = _build_stale(d, d / artifact)
+        if (d / artifact).exists() and not stale:
+            report.append(Step(f"build:{label}", False, f"{artifact} up to date"))
             continue
         rc = run(["npm", "run", "build"], cwd=d)
-        report.append(Step(f"build:{label}", rc == 0, "built" if rc == 0 else f"npm run build failed rc={rc}"))
+        why = "rebuilt (source newer than " + artifact + ")" if stale else "built"
+        report.append(Step(f"build:{label}", rc == 0, why if rc == 0 else f"npm run build failed rc={rc}"))
 
     # 9. Claude Code hooks -> the user's settings.json (merge, never clobber; idempotent).
     # Without them a seat only acts on mail when someone presses Enter: the idle-inbox
