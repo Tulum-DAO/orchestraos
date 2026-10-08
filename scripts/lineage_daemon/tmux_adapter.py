@@ -70,9 +70,21 @@ class Tmux:
         return panes
 
     def pipe_pane(self, session, sink):
-        """Attach pipe-pane for one session to `sink`. Refuses an unsafe session
-        name (command-injection defense — reused from pipe_pane) BEFORE running
-        anything; the sink is shell-quoted by attach_command."""
+        """Attach pipe-pane for one session to `sink`, ONLY if the pane has no pipe yet.
+        Returns True when it attached, False when it left an existing pipe alone.
+
+        An existing pipe is either ours (still flowing to the sink from an earlier
+        telemetryd run) or somebody else's (an operator's own logger). Either way it
+        must not be closed or replaced. `pipe-pane -o` would toggle it off, and a plain
+        `pipe-pane` would replace it. Refuses an unsafe session name (command-injection
+        defense, reused from pipe_pane) BEFORE running anything; the sink is
+        shell-quoted by attach_command."""
         if not isinstance(session, str) or not _SAFE_SESSION.match(session):
             raise UnsafeSessionName(f"unsafe session name: {session!r}")
+        rc, out = self._run(["tmux", "display-message", "-p", "-t", session, "#{pane_pipe}"])
+        if rc != 0:
+            raise RuntimeError(f"cannot read pane_pipe for {session!r} (rc={rc})")
+        if out.strip() == "1":
+            return False
         self._run(attach_command(session, sink))
+        return True

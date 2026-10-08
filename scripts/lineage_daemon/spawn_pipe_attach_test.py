@@ -42,8 +42,10 @@ def test_attach_builds_injection_safe_argv(tmp_path):
     r = Runner()
     ok = attach("gm", runner=r, sink_dir=str(tmp_path), is_live=_LIVE)
     assert ok is True
-    argv = r.calls[0]
-    assert argv[0:5] == ["tmux", "pipe-pane", "-o", "-t", "gm"]
+    assert r.calls[0] == ["tmux", "display-message", "-p", "-t", "gm", "#{pane_pipe}"]
+    argv = r.calls[1]
+    assert argv[0:4] == ["tmux", "pipe-pane", "-t", "gm"]
+    assert "-o" not in argv
     assert argv[-1].startswith("cat >> ")
     assert argv[-1].rstrip().endswith("gm.pipe'") or "gm.pipe" in argv[-1]
 
@@ -81,3 +83,15 @@ def test_spawn_agent_sh_wires_the_attach_fail_soft():
     assert '"$tmux_name"' in call                        # the validated session name
     # fail-soft: the invocation must not abort the spawn on failure
     assert "||" in call or "||" in lines[attach_i + 1]
+
+
+def test_attach_leaves_an_already_piped_pane_alone(tmp_path):
+    """spawn attach + the daemon sweep's first attach used to TOGGLE the pipe off
+    (`pipe-pane -o`). An existing pipe is now left as it is, and that counts as attached."""
+    class Piped(Runner):
+        def __call__(self, argv):
+            self.calls.append(list(argv))
+            return (0, "1\n")
+    r = Piped()
+    assert attach("gm", runner=r, sink_dir=str(tmp_path), is_live=_LIVE) is True
+    assert len(r.calls) == 1 and r.calls[0][1] == "display-message"

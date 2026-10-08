@@ -19,6 +19,7 @@ if _SCRIPTS not in sys.path:
 
 from lineage_daemon.realtime.pipe_pane import (        # noqa: E402
     SINK_DIR, UnsafeSessionName, attach_command, sink_path)
+from lineage_daemon.tmux_adapter import Tmux                 # noqa: E402
 
 # spawn-time attach is gated on telemetryd being live: attaching pipe-pane with
 # no consumer grows the sink file unbounded. status.json freshness IS the
@@ -56,7 +57,10 @@ def attach(session, *, runner=_default_runner, sink_dir=SINK_DIR, is_live=None):
         return False                          # refuse; execute nothing
     try:
         os.makedirs(sink_dir, exist_ok=True)
-        runner(attach_command(session, sink))
+        # Through the adapter, which attaches ONLY to an unpiped pane: a bare
+        # `pipe-pane -o` here, followed by the daemon sweep's own first attach,
+        # toggled every freshly spawned seat's pipe back OFF (pipe_pane.attach_command).
+        Tmux(runner=runner).pipe_pane(session, sink)
         return True
     except Exception:
         return False                          # wedged/failed tmux never blocks spawn

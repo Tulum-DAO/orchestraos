@@ -127,3 +127,9 @@ def test_sweep_never_propagates_and_returns_summary():
     sweep = AttachSweep(tmux)
     r = sweep.sweep()
     assert set(r.keys()) >= {"attached", "errors", "pruned"}
+
+
+def test_attach_command_never_toggles():
+    """`pipe-pane -o` is a TOGGLE: on an already-piped pane it CLOSES the pipe (measured,
+    tmux 3.4). The attach must never carry it; the adapter checks #{pane_pipe} first."""
+    assert "-o" not in attach_command("gm", sink_path("gm"))
