@@ -118,7 +118,14 @@ def _refuse_if_no_runtime_authed(st: S.Settings) -> int | None:
     return 2
 
 
+def _apply_verbose(ns) -> None:
+    """--verbose: spawn-agent.sh prints its debugging detail (vlog). child_env copies os.environ."""
+    if getattr(ns, "verbose", False):
+        os.environ["ORCHESTRA_SPAWN_VERBOSE"] = "1"
+
+
 def cmd_spawn(ns) -> int:
+    _apply_verbose(ns)
     st = S.load_settings()
     if not st.config_exists:
         print(f"no config at {st.config_path} — run `orchestra init` first", file=sys.stderr); return 2
@@ -421,6 +428,7 @@ def _starter_plan(project: str) -> list[dict]:
 
 def cmd_starter(ns) -> int:
     import argparse
+    _apply_verbose(ns)
     st = S.load_settings()
     if not st.config_exists:
         print(f"no config at {st.config_path} — run `orchestra init` first", file=sys.stderr); return 2

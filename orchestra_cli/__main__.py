@@ -51,6 +51,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     stp.add_argument("--project", default="first-project",
                      help="names the PM and worker pm-<project> / dev-<project> (default first-project)")
     stp.add_argument("--runtime", choices=["claude", "gemini", "codex"], help="default: first of [runtimes] enabled")
+    stp.add_argument("--verbose", action="store_true", help="show spawn detail (model-banner checks, generated settings paths)")
     sp = sub.add_parser("spawn", help="register + launch a seat in tmux (`--gm` = the General Manager)")
     sp.add_argument("seat")
     sp.add_argument("--gm", action="store_true", help="spawn as the General Manager (prompts/gm.md, tier T0, always-on)")
@@ -59,6 +60,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     sp.add_argument("--model", help="model id for the runtime (default per runtime)")
     sp.add_argument("--tier", help="T0 (the always-on manager), T1 (coordinator) or T2 (worker); default T2, T0 with --gm")
     sp.add_argument("--prompt", help="role prompt path relative to the checkout (default prompts/<seat>.md)")
+    sp.add_argument("--verbose", action="store_true", help="show spawn detail (model-banner checks, generated settings paths)")
 
     ro = sub.add_parser("rotate", help="rotate a seat: spawn a successor, it answers the baton's canary, strict grade, promote")
     ro.add_argument("seat")
