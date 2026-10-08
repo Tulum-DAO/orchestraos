@@ -3,7 +3,7 @@
  *   node --experimental-strip-types dashboard/src/lib/arturo.test.mjs
  */
 import assert from 'node:assert';
-import { isStarting, waitForArturo, contextLine, contextFromLocation, brainLabel, slugify, firstStep, stepAfterRuntime, onboardingTurn } from './arturo.ts';
+import { isStarting, waitForArturo, contextLine, contextFromLocation, brainLabel, slugify, firstStep, stepAfterRuntime, onboardingTurn, teamStepDone } from './arturo.ts';
 
 // --- isStarting: boot-window errors are "starting", real errors are not ------------------
 assert.equal(isStarting({ ok: false, error: 'HTTP 502' }), true);
@@ -67,7 +67,15 @@ assert.equal(firstStep(true), 'done');
 assert.equal(firstStep(false), 'runtime');          // a brain must exist before it is asked to listen (even when a name is cached)
 assert.equal(stepAfterRuntime(null, true), 'name');       // server knows no name -> ask (via the brain)
 assert.equal(stepAfterRuntime('Shaw', true), 'voice');    // known name -> never asked twice
-assert.equal(stepAfterRuntime('Shaw', false), 'first');
+assert.equal(stepAfterRuntime('Shaw', false), 'team');
+// The team step ends on what the SERVER sees after the turn, never on a tool's name.
+assert.equal(teamStepDone({ state: 'present' }), true);
+assert.equal(teamStepDone({ state: 'other_manager', manager: 'boss' }), true);   // nothing it may create
+assert.equal(teamStepDone({ state: 'unknown' }), true);                          // could not check: explain, never offer
+assert.equal(teamStepDone({ state: 'absent' }), false);                          // still to ask
+assert.equal(teamStepDone({ state: 'incomplete' }), false);                      // a partial start can be asked again
+assert.equal(teamStepDone(undefined), false);                                    // an older server sends no state
+assert.equal(onboardingTurn('team', 'Introduce my team.'), '[Onboarding: step=team]\nIntroduce my team.');
 assert.equal(onboardingTurn('name', 'hi my name is Shaw nice to meet you'), '[Onboarding: step=name]\nhi my name is Shaw nice to meet you');
 console.log('arturo.test.mjs: onboarding helpers ok');
 

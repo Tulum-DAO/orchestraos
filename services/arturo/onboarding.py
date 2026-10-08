@@ -35,55 +35,100 @@ def split_marker(text: str):
     return m.group(1).lower(), text[m.end():]
 
 
-HIERARCHY_TIERS = (
-    "Seats come in three tiers: T2 workers do the jobs, T1 coordinators run a lane of workers, and T0 is "
-    "the single always-on manager that runs the whole fleet for you."
+DEFAULT_PROJECT = "first-project"
+
+TEAM_SHAPE = (
+    "The starter team is three agents in three tiers. gm is the T0 manager: the one agent the operator talks "
+    "to about everything; it is always on, keeps track of every project, hands work to the project managers "
+    "and reports back, so the operator does not have to manage each agent. pm-<project> is a T1 project "
+    "manager: it runs one project and the workers on it, and reports to gm. dev-<project> is a T2 worker: it "
+    "does the actual jobs its project manager gives it. More projects mean more project managers and workers "
+    "under the same gm."
+)
+
+# The words a tool result uses for each seat (arturo-proxy.py seat_seen). Repeated here so the brain is
+# told what each one means instead of guessing.
+SEEN_WORDS = {
+    "running": "running",
+    "stopped": "a session is open but no agent is running in it",
+    "no session": "not started",
+    "unknown": "could not tell",
+}
+
+_TEAM_RULES = (
+    " Rules for this turn: keep it to at most six short sentences, in plain words. Describe a seat ONLY as a "
+    "fact in this instruction or what the tool says it sees; a seat the tool did not report as running is not "
+    "running, whatever else you believe. If the operator tells you something different from what you were "
+    "given, their screen is the fact: say what you were given and that the two disagree. Never tell the "
+    "operator to run `tmux attach`, and never run it yourself: they talk to gm by picking it in the Agents "
+    "list. Do not list features and do not pitch."
 )
 
 
-def _hierarchy(ctx) -> str:
-    """Generated per turn, because whether to OFFER a manager depends on whether one exists — a fact
-    only the server holds. Three states, never two: known-absent offers, known-present names it, and
-    UNKNOWN (an unreadable registry) explains without offering, because "could not check" is not "no"."""
+def _seat_line(seats) -> str:
+    return "; ".join(f"{s.get('name')} ({s.get('tier')}): {SEEN_WORDS.get(s.get('seen'), 'could not tell')}"
+                     for s in (seats or []))
+
+
+def _team(ctx) -> str:
+    """Generated per turn from the server's view of the starter team (arturo-proxy.py
+    starter_team_state). Five states, never two: only absent and incomplete may create anything."""
     ctx = ctx or {}
-    seat = str(ctx.get("seat") or "").strip()
-    manager, known = ctx.get("manager"), bool(ctx.get("manager_known"))
-    head = (
-        "ONBOARDING, step 'hierarchy': the operator has just watched their first seat come up"
-        + (f" ({seat})" if seat else "")
-        + ". Explain the shape of the system in at most three short sentences, about 60 words, in their "
-        "terms. Use these facts and no others: " + HIERARCHY_TIERS + " "
-        + (f"Name their new seat {seat} as the T2 worker they already have. " if seat else "")
-    )
-    if manager:
-        tail = (
-            f"A manager already exists on this install: {manager}. Say so in one clause and DO NOT OFFER "
-            "to create another — there is one per install. Ask no question; close by saying they can ask "
-            "you for status any time."
+    state = ctx.get("state")
+    head = ("ONBOARDING, step 'team': you are leading this operator's first run. Explain the team in their "
+            "terms using these facts and no others: " + TEAM_SHAPE + " ")
+    if state == "absent":
+        body = (
+            "This install has no team yet. Explain the three tiers and what gm does, then ask exactly ONE "
+            "question: what to call their first project, in a word or two, or whether to use the default name "
+            f"'{DEFAULT_PROJECT}'. Say plainly that this starts three agents on the runtime they are logged "
+            "in to, and that gm is always on, which means it keeps costing tokens whether or not it is asked "
+            "anything. When they answer with a name or accept the default, call create_starter_team with "
+            "project set to that name in lowercase letters, digits and dashes (for example 'website'), or "
+            f"'{DEFAULT_PROJECT}'. If they decline, accept it in one clause, say they can ask you to set up "
+            "their team any time, and do not ask again. After the tool runs, report each seat exactly as "
+            "what the tool says it sees, and if every seat is running tell them to open gm from the Agents "
+            "list to give it work."
         )
-    elif known:
-        tail = (
-            "They have no manager yet. Ask exactly ONE question: whether to create it now. Say plainly "
-            "that it is always on, which means it keeps costing tokens whether or not it is asked "
-            "anything. If they say yes, call spawn_agent with kind='manager' and session_name='gm'. If "
-            "they say no, accept it in one clause and do not ask again."
+    elif state == "incomplete":
+        project = ctx.get("project")
+        seen = _seat_line(ctx.get("seats"))
+        body = (
+            "This install has started a team but it is not complete. What is seen on each seat right now: "
+            + (seen or "no seats") + ". Explain the three tiers and what gm does, say what is missing in "
+            "one sentence, and ask exactly ONE question: whether to finish setting it up. "
+            + (f"If they say yes, call create_starter_team with project='{project}'. " if project else
+               f"Ask what to call the project as part of that one question (default '{DEFAULT_PROJECT}'); if "
+               "they say yes, call create_starter_team with that name. ")
+            + "It starts only what is missing and restarts a seat whose agent stopped; seats already running "
+            "are left alone. If they decline, accept it in one clause. After the tool runs, report each seat "
+            "exactly as what the tool says it sees."
+        )
+    elif state == "present":
+        body = (
+            "Their team is already up. What is seen on each seat right now: " + _seat_line(ctx.get("seats"))
+            + ". Explain the three tiers and what gm does, naming their seats, and say they can open gm from "
+            "the Agents list to give it work. Ask no question. Do not call create_starter_team: there is "
+            "nothing to create."
+        )
+    elif state == "other_manager":
+        body = (
+            f"This install already has a manager named {ctx.get('manager')}, set up some other way. Explain the "
+            "three tiers, say their manager plays the gm role, and that project managers and workers can be "
+            "added under it later. Ask no question. Do not call create_starter_team: it would create a second "
+            "manager, and there is one per install."
         )
     else:
-        tail = (
-            "Whether a manager already exists could not be checked on this install, so DO NOT OFFER to "
-            "create one — an unchecked registry is not an empty one. Say a manager can be added later "
-            "from the Agents page. Ask no question."
+        body = (
+            "Whether this install already has a team could not be checked, and an unchecked registry is not an "
+            "empty one. Explain the three tiers and what gm does, and say they can ask you to set up the team "
+            "once the Agents page loads. Ask no question. Do not call create_starter_team."
         )
-    return head + tail + (
-        " Answer from the facts in this instruction ONLY: do not call any tool, do not look the fleet up, "
-        "and do not report how many seats exist or which machines are online — that is not what this turn "
-        "is for. Do not list features, do not pitch, do not mention tiers you were not given, and do not "
-        "exceed one question."
-    )
+    return head + body + _TEAM_RULES
 
 
 def directive(step, ctx=None) -> str:
-    """ctx is only read by steps that need a server-side fact (hierarchy). The one-arg call still works."""
-    if (step or "").lower() == "hierarchy":
-        return _hierarchy(ctx)
+    """ctx is only read by steps that need a server-side fact (team). The one-arg call still works."""
+    if (step or "").lower() == "team":
+        return _team(ctx)
     return DIRECTIVES.get(step or "", "")

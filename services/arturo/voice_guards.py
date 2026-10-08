@@ -526,7 +526,7 @@ def tg_send_appropriate(message, recent_user_turns, lookback=5):
 SIDE_EFFECTING_TOOLS = frozenset({
     "inject_message", "send_telegram", "spawn_agent", "kill_agent",
     "agent_message", "async_task", "run_command", "remember_note",
-    "answer_menu", "focus_entity",
+    "answer_menu", "focus_entity", "create_starter_team",
 })
 
 
@@ -541,6 +541,7 @@ def is_side_effecting(tool_name: str) -> bool:
 _IDENTITY_FIELDS = {
     "spawn_agent": ("session_name", "machine"),
     "kill_agent": ("session_name",),
+    "create_starter_team": ("project",),
 }
 
 # Omitted args must be normalised to the DEFAULT THE HANDLER APPLIES before hashing, or one call
@@ -548,6 +549,7 @@ _IDENTITY_FIELDS = {
 # (arturo-proxy.py: args.get("machine", "vps")).
 _ARG_DEFAULTS = {
     "spawn_agent": {"machine": "vps"},
+    "create_starter_team": {"project": "first-project"},
 }
 
 # An opposing lifecycle call invalidates the identity: spawn X -> kill X -> spawn X in one turn is

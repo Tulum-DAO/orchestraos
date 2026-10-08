@@ -12,7 +12,11 @@
 export interface ArturoBrain { kind: 'api' | 'runtime' | 'none'; runtime?: string; cli?: string; model: string; reason?: string; provider?: string }
 export interface ArturoStt { server: boolean; backend: 'local-whisper' | 'none'; state: 'ready' | 'warming' | 'not-installed' | 'off' | 'error'; reason?: string; install?: string; model?: string }
 export interface ArturoHealth { operator?: OperatorFacts; ok: boolean; status?: number; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; stt?: ArturoStt; error?: string }
-export interface ArturoReply { operator?: OperatorFacts; ok: boolean; status?: number; reply_text?: string; conversation_id?: string; brain?: ArturoBrain; tools_called?: string[]; spawned?: string[]; error?: string; detail?: unknown; provider?: string; model?: string; reason?: string; field?: string }
+/** The starter team as the server sees it after a 'team' onboarding turn (services/arturo
+ *  starter_team_state). Only `state` is read here; the seats are for the brain. */
+export type TeamState = { state: 'absent' | 'incomplete' | 'present' | 'other_manager' | 'unknown'; seats?: { name: string; tier: string; seen: string }[]; project?: string; manager?: string };
+
+export interface ArturoReply { team?: TeamState; operator?: OperatorFacts; ok: boolean; status?: number; reply_text?: string; conversation_id?: string; brain?: ArturoBrain; tools_called?: string[]; spawned?: string[]; error?: string; detail?: unknown; provider?: string; model?: string; reason?: string; field?: string }
 export interface ArturoContext { route: string; entityKind?: string; entityId?: string; hint?: string }
 export interface RuntimeRow { id: string; label?: string; cli?: string; installed: boolean; authed: boolean | 'unverified'; auth_reason?: string | null }
 
@@ -142,14 +146,21 @@ export function firstStep(onboarded: boolean): 'runtime' | 'done' {
 }
 
 /** After a successful runtime probe: ask the name only if the SERVER does not know it. */
-export function stepAfterRuntime(operatorName?: string | null, textOnly?: boolean): 'name' | 'voice' | 'first' {
+export function stepAfterRuntime(operatorName?: string | null, textOnly?: boolean): 'name' | 'voice' | 'team' {
   if (!operatorName) return 'name';
-  return textOnly ? 'voice' : 'first';
+  return textOnly ? 'voice' : 'team';
+}
+
+/** The team step ends on what the SERVER sees after the turn, never on the reply's wording: the team
+ *  is running, or there is nothing this step may create (another manager, or an unreadable registry).
+ *  absent / incomplete keep the step open, so a failed or partial start can be asked for again. */
+export function teamStepDone(team?: TeamState): boolean {
+  return !!team && (team.state === 'present' || team.state === 'other_manager' || team.state === 'unknown');
 }
 
 /** The onboarding turn a surface sends: a first-line marker the proxy strips and turns into the
  *  step directive (services/arturo/onboarding.py). No parsing happens on this side, ever. */
-export function onboardingTurn(step: 'name' | 'hierarchy', text: string): string {
+export function onboardingTurn(step: 'name' | 'team', text: string): string {
   return `[Onboarding: step=${step}]\n${text}`;
 }
 

@@ -1411,6 +1411,23 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "create_starter_team",
+            "description": "Set up the operator's starter team with `orchestra starter`: gm (the T0 manager, always on) -> pm-<project> (T1 project manager) -> dev-<project> (T2 worker). Starts only what is missing and leaves running seats alone. Use it when the operator asks for their team or agrees during onboarding, never to do a job. The result says what is seen on each seat; report exactly that.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "The first project's name: lowercase letters, digits and dashes, e.g. 'website'. Default 'first-project'.",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "inject_message",
             "description": "Send a message/task to a running agent's tmux session. Works on both Mac and VPS agents.",
             "parameters": {
@@ -1799,15 +1816,6 @@ def commission_plan(session, task, runtime=None, repo_root=None, model=None):
     return _CommissionPlan(argv, env, session, task)
 
 
-def _last_spawned_seat():
-    """The seat the operator just watched come up, so the hierarchy turn can name it. Best effort:
-    an unnameable seat only costs the directive one clause, never the step."""
-    try:
-        return (load_voice_memory().get("spawned_sessions") or [])[-1]["name"]
-    except Exception:
-        return ""
-
-
 def existing_manager():
     """(manager seat name | None, known). THREE states, never two — the same discipline
     registration_status keeps: an unreadable registry is "could not check", NOT "there is none".
@@ -1831,6 +1839,120 @@ def manager_plan(session, repo_root=None):
     root = Path(repo_root or _REPO_ROOT)
     env = {"ORCHESTRA_DIR": str(ORCHESTRA_DIR), "PARENT_AGENT_ID": "arturo"}
     return _CommissionPlan([str(root / "bin" / "orchestra"), "spawn", session, "--gm"], env, session, "")
+
+
+# --- The starter team (onboarding step 'team', live new-user test finding #12) ----------------
+# gm (T0) -> pm-<project> (T1) -> dev-<project> (T2), made by `orchestra starter` and nothing else.
+# What a seat IS comes from the registry; whether it RUNS comes from the same status detector the
+# dashboard reads (scripts/agent-status.py). A tmux session alone is not a running agent: finding #10
+# was a gm session holding a nested tmux client and no claude, which list_agents called RUNNING.
+
+_PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")   # the CLI's own rule (orchestra_cli/seats.py)
+_RUNNING_STATES = {"working", "thinking", "idle", "waiting_permission", "stranded_input", "stalled"}
+
+
+def starter_plan(project, repo_root=None):
+    root = Path(repo_root or _REPO_ROOT)
+    env = {"ORCHESTRA_DIR": str(ORCHESTRA_DIR), "PARENT_AGENT_ID": "arturo"}
+    return _CommissionPlan([str(root / "bin" / "orchestra"), "starter", "--project", project], env, "gm", "")
+
+
+def _tmux_session_exists(name):
+    try:
+        return subprocess.run(["tmux", "has-session", "-t", f"={name}"], capture_output=True, timeout=3).returncode == 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _detector_state(name):
+    env = dict(os.environ)
+    env.setdefault("ORCH_DIR", str(ORCHESTRA_DIR))
+    try:
+        r = subprocess.run([_sys.executable, str(_REPO_ROOT / "scripts" / "agent-status.py"), name],
+                           capture_output=True, text=True, timeout=20, env=env)
+        return str(json.loads(r.stdout).get("state") or "unknown")
+    except Exception:  # noqa: BLE001 — a detector that could not answer is "could not tell", never "running"
+        return "unknown"
+
+
+def seat_seen(name):
+    """What is on a seat's pane right now: running | stopped (a session, no agent in it) |
+    no session | unknown."""
+    if not _tmux_session_exists(name):
+        return "no session"
+    state = _detector_state(name)
+    if state in _RUNNING_STATES:
+        return "running"
+    return "stopped" if state == "stopped" else "unknown"
+
+
+def starter_team_state(seen=None):
+    """The starter team as the server sees it. FIVE states, never two: absent (no manager yet; a
+    missing registry file is a fresh install, known-empty), incomplete, present, other_manager (a T0 not
+    named gm: `orchestra starter` would add a second one), unknown (the registry could not be read)."""
+    seen = seen or seat_seen
+    try:
+        reg = json.loads((Path(ORCHESTRA_DIR) / "registry.json").read_text())
+    except FileNotFoundError:
+        return {"state": "absent"}
+    except Exception:  # noqa: BLE001 — unreadable is not empty
+        return {"state": "unknown"}
+    agents = reg.get("agents") or {}
+    managers = sorted(n for n, r in agents.items() if str((r or {}).get("tier") or "").upper() == "T0")
+    if not managers:
+        return {"state": "absent"}
+    if "gm" not in managers:
+        return {"state": "other_manager", "manager": managers[0]}
+    seats = [{"name": "gm", "tier": "T0"}]
+    pms = sorted(n for n, r in agents.items()
+                 if str((r or {}).get("tier") or "").upper() == "T1" and (r or {}).get("reports_to") == "gm")
+    project = None
+    if pms:
+        pm = pms[0]
+        seats.append({"name": pm, "tier": "T1"})
+        project = pm[3:] if pm.startswith("pm-") else None
+        devs = sorted(n for n, r in agents.items()
+                      if str((r or {}).get("tier") or "").upper() == "T2" and (r or {}).get("reports_to") == pm)
+        if devs:
+            seats.append({"name": devs[0], "tier": "T2"})
+    for s in seats:
+        s["seen"] = seen(s["name"])
+    complete = len(seats) == 3 and all(s["seen"] == "running" for s in seats)
+    out = {"state": "present" if complete else "incomplete", "seats": seats}
+    if project and _PROJECT_RE.match(project):
+        out["project"] = project
+    return out
+
+
+def create_starter_team(project):
+    """The create_starter_team tool: refuse what `orchestra starter` must not do, run it, then report
+    each seat as SEEN, whatever the CLI printed."""
+    from services.arturo import onboarding as _onb
+    project = (project or "").strip() or _onb.DEFAULT_PROJECT
+    if not _PROJECT_RE.match(project):
+        return (f"I did not start anything: '{project}' cannot be a project name. Use lowercase letters, "
+                f"digits and dashes, starting with a letter or digit, at most 40 (for example 'website').")
+    who, known = existing_manager()
+    if not known:
+        return ("I could not read the registry to check whether a team already exists, so I did not start "
+                "anything; an unchecked registry is not an empty one.")
+    if who and who != "gm":
+        return (f"This install already has a manager, {who}, so I did not start the starter team: it would "
+                f"add a second manager, and there is one per install.")
+    plan = starter_plan(project)
+    log.info(f"STARTER TEAM: {' '.join(plan.argv[1:])}")
+    ok, out = _run_commission(plan, 600)
+    lines = []
+    for name, tier in (("gm", "T0"), (f"pm-{project}", "T1"), (f"dev-{project}", "T2")):
+        s = seat_seen(name)
+        lines.append(f"{name} ({tier}): {_onb.SEEN_WORDS.get(s, 'could not tell')}")
+        if s == "running":
+            record_spawned_session(name)
+            _record_spawned_this_turn(name)
+    seen = "What I see on each seat now: " + "; ".join(lines) + "."
+    if not ok:
+        return f"FAILED: orchestra starter stopped: {out[-400:]} {seen}"
+    return f"orchestra starter finished for project '{project}'. {seen}"
 
 
 def registration_status(name):
@@ -2102,6 +2224,9 @@ def execute_tool(name, args, user_turns=None):
                 focus_path=ARTURO_STATE / "focus.json", observe=observe)
         except Exception as e:
             return f"Couldn't resolve what you're referring to: {e}"
+
+    if name == "create_starter_team":
+        return create_starter_team(args.get("project"))
 
     if name == "spawn_agent":
         session = args.get("session_name", "voice-agent")
@@ -2943,7 +3068,7 @@ ASYNC TASK: Use async_task ONLY for genuine long-running BACKGROUND work. It run
   For FAST VPS-only operations (list_agents, get_agent_output, inject_message, kill_agent on VPS), call directly — they complete in <2s.
   TELEGRAM DISCIPLINE (hard rule): send the operator AT MOST ONE text per request. NEVER call send_telegram repeatedly, NEVER re-send the same/near-identical message, NEVER replay "[Forwarded to GM]" texts. If you already said you'd text him, do NOT text again to confirm. One request → at most one text.
 
-AGENT TOOLS: spawn_agent, inject_message, get_agent_output, list_agents, kill_agent — manage tmux + claude sessions.
+AGENT TOOLS: spawn_agent, inject_message, get_agent_output, list_agents, kill_agent — manage tmux + claude sessions. create_starter_team sets up the gm -> project manager -> worker team when the operator asks for it.
   MACHINE RULE: Default is VPS. ONLY set machine="mac" when the operator EXPLICITLY says "on my Mac" or "on the Mac". When spawning on Mac, ALWAYS use async_task since SSH may be slow.
   AGENT LOOKUP RULE: When the operator mentions an agent by name or description, ALWAYS call list_agents FIRST to get the real session names. NEVER guess session names.
   ROUTING RULE: If a specific agent session exists for a task, use inject_message ONLY to talk to that agent. Only use gm_command for questions that need the GM's cross-project judgment, codebase access, or multi-step reasoning. NEVER send the same task to BOTH gm_command AND inject_message — that causes duplicate work.
@@ -3673,7 +3798,7 @@ def chat_completions():
     # ...except from the in-process caller (the /text route replaying through here via the Flask
     # test client), whose system message is a PER-TURN DELTA, not a frozen context: the onboarding
     # step's directive. Dropping it indiscriminately is why every onboarding directive — 'name' as
-    # well as 'hierarchy' — never reached the model (DEC-1790166878384418). The trust gate is the
+    # well as the old 'hierarchy' — never reached the model (DEC-1790166878384418). The trust gate is the
     # same per-process nonce check_auth() uses; an EL-shaped caller still loses its system message.
     _carried = ""
     if hmac.compare_digest(request.headers.get("X-Arturo-Internal", ""), _INTERNAL_NONCE):
@@ -4690,13 +4815,11 @@ def text_turn(text, conversation_id, brain=None, context=None):
     # message on top of it; building a second copy here would send ~16 KB twice per onboarding turn
     # and admit two copies that can disagree. test_onboarding_seam.py pins this.
     context = ""
-    # The hierarchy step needs one fact only the server holds: whether a manager already exists.
-    # It is passed as CONTEXT, never through the marker — the marker regex is anchored to the step
-    # name, so appended context would fail to match and leak into the brain message and the archive.
-    _ctx = None
-    if step == "hierarchy":
-        _who, _known = existing_manager()
-        _ctx = {"manager": _who, "manager_known": _known, "seat": (_SPAWNED_THIS_TURN.get() or [None])[0] or _last_spawned_seat()}
+    # The team step's whole branch (offer, finish, name the seats, or explain only) hangs on what exists
+    # and what is running, which only the server can see. It is passed as CONTEXT, never through the
+    # marker — the marker regex is anchored to the step name, so appended context would fail to match
+    # and leak into the brain message and the archive.
+    _ctx = starter_team_state() if step == "team" else None
     _dir = _onb.directive(step, _ctx)
     if _dir:
         context = f"{context}\n\n{_dir}".strip() if context else _dir
@@ -4734,10 +4857,15 @@ def text_turn(text, conversation_id, brain=None, context=None):
     _record_text_turn(conversation_id=conversation_id, text=text, reply=reply, brain=chosen_id,
                       effective=effective)
     from services.arturo import operator_store as _ops
-    return 200, {"ok": True, "reply_text": reply, "conversation_id": conversation_id,
-                 "brain": (chosen or _turn_brain()).describe(), "tools_called": tools_called,
-                 "spawned": spawned,
-                 "operator": _ops.public(ARTURO_STATE)}
+    body = {"ok": True, "reply_text": reply, "conversation_id": conversation_id,
+            "brain": (chosen or _turn_brain()).describe(), "tools_called": tools_called,
+            "spawned": spawned,
+            "operator": _ops.public(ARTURO_STATE)}
+    if step == "team":
+        # Re-read AFTER the turn, so the home page finishes the step on what is now running, never on
+        # the tool's name or the reply's wording.
+        body["team"] = starter_team_state()
+    return 200, body
 
 
 def _loopback_only():

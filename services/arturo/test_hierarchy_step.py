@@ -1,4 +1,6 @@
-"""Onboarding step 'hierarchy' (DEC-1790097700552573, both peers APPROVE on v2).
+"""The manager seat (DEC-1790097700552573, both peers APPROVE on v2): first offered by the onboarding
+step 'hierarchy', which the team step (test_team_step.py) has since replaced. The server-side rules
+below still hold for spawn_agent kind='manager' and for create_starter_team.
 
 The operator must learn the tiers exist and be able to say yes to a manager. The rules the peers
 made binding: the T0 check is SERVER-side with three states (never two), a refusal never records a
@@ -22,32 +24,12 @@ def _registry(tmp_path, agents):
 
 
 # ---- the directive ------------------------------------------------------------------------
-def test_directive_offers_the_manager_when_none_exists():
-    from services.arturo import onboarding as onb
-    d = onb.directive("hierarchy", {"manager": None, "manager_known": True, "seat": "scout"})
-    assert "T0" in d and "T1" in d and "T2" in d
-    assert "scout" in d                       # names the seat they just created
-    assert "always on" in d.lower()           # the honest cost sentence
-    assert "one question" in d.lower()
-
-
-def test_directive_does_not_offer_a_second_manager():
-    from services.arturo import onboarding as onb
-    d = onb.directive("hierarchy", {"manager": "gm", "manager_known": True, "seat": "scout"})
-    assert "gm" in d
-    assert "do not offer" in d.lower()
-
-
-def test_an_unreadable_registry_is_a_third_state_explain_and_do_not_offer():
-    from services.arturo import onboarding as onb
-    d = onb.directive("hierarchy", {"manager": None, "manager_known": False, "seat": "scout"})
-    assert "do not offer" in d.lower()        # unknown is NOT "no manager"
-
-
+# The 'hierarchy' directive itself is gone: the home page's team step (test_team_step.py) replaced it.
 def test_an_unknown_step_still_carries_no_directive():
     from services.arturo import onboarding as onb
     assert onb.directive("nope", {"manager": None}) == ""
     assert onb.directive("name") != ""        # the old one-arg call still works
+    assert onb.directive("hierarchy", {"manager": None}) == ""   # retired with the dashboard step
 
 
 # ---- the server-side manager lookup -------------------------------------------------------
