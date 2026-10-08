@@ -525,3 +525,42 @@ def test_capabilities_advertise_push_with_delivery_none_by_default(data_dir, mon
 def test_delivery_never_claims_a_channel_it_was_not_given(data_dir, monkeypatch, env, want):
     monkeypatch.setenv("ORCHESTRA_PUSH_DELIVERY", env)
     assert _capabilities(monkeypatch)["push"]["delivery"] == want
+
+
+def test_a_token_someone_else_holds_always_answers_owned_never_its_rev(data_dir, devices):
+    """No oracle: stale_rev vs owned would let a device binary-search when the owner last
+    registered."""
+    a, b = _device(devices, "a"), _device(devices, "b")
+    _put(a, _reg(rev=NOW_MS - 1000))
+    for rev in (1, NOW_MS - 1000, NOW_MS):
+        assert _body(_put(b, _reg(rev=rev)))["reason"] == "owned", rev
+
+
+def test_a_corrupt_retired_file_is_moved_aside_not_overwritten(data_dir):
+    store = G._push_store()
+    store.retired_path.parent.mkdir(parents=True, exist_ok=True)
+    store.retired_path.write_text("{corrupt")
+    assert store.retired_fingerprints() == set()
+    assert list(store.retired_path.parent.glob("push-tokens.retired-bearers.json.corrupt-*"))
+
+
+def test_a_retire_failure_never_aborts_the_rotation(data_dir, monkeypatch):
+    from orchestra_cli.pair_cmd import run_rotate_fleet_token
+    token_file = data_dir / "state" / "watch-gateway-token"
+    token_file.parent.mkdir(parents=True, exist_ok=True)
+    token_file.write_text(FLEET_BEARER + "\n")
+    monkeypatch.setenv("WATCH_GATEWAY_TOKEN_FILE", str(token_file))
+
+    def boom(self, bearer):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(P.PushTokenStore, "retire_bearer", boom)
+
+    class _Args:
+        minted_by = None
+        revoke_only = False
+
+    said = []
+    assert run_rotate_fleet_token(_Args(), out=said.append) == 0
+    assert token_file.read_text().strip() != FLEET_BEARER, "the bearer still rotated"
+    assert any("could not record" in s for s in said)

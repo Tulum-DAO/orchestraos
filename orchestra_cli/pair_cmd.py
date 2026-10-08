@@ -225,7 +225,12 @@ def run_rotate_fleet_token(args, out=print):
         old = ""
     if old:
         from scripts.push_tokens import PushTokenStore
-        PushTokenStore(Path(base) / "state" / "push-tokens.json").retire_bearer(old)
+        try:
+            PushTokenStore(Path(base) / "state" / "push-tokens.json").retire_bearer(old)
+        except OSError as e:
+            # Push bookkeeping must never abort a security rotation. Without the record the
+            # old bearer's push tokens are merely unknown: never sent to, never pruned.
+            out(f"Warning: could not record the old bearer for push cleanup ({e}); continuing.")
 
     new = secrets.token_urlsafe(32)
     path = Path(token_file)

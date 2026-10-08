@@ -213,13 +213,25 @@ class PushTokenStore:
 
     def retired_fingerprints(self) -> set:
         try:
-            got = json.loads(self.retired_path.read_text())
+            raw = self.retired_path.read_text()
         except FileNotFoundError:
             return set()
-        except (OSError, ValueError):
-            log.warning(f"push tokens: {self.retired_path} unreadable; no bearer counts as retired")
+        except OSError as e:
+            log.warning(f"push tokens: {self.retired_path} unreadable ({e}); no bearer counts as retired")
             return set()
-        return {str(x) for x in got} if isinstance(got, list) else set()
+        try:
+            got = json.loads(raw)
+            if not isinstance(got, list):
+                raise ValueError("not a list")
+        except ValueError as e:
+            aside = self.retired_path.with_name(f"{self.retired_path.name}.corrupt-{int(time.time())}")
+            try:
+                os.replace(self.retired_path, aside)
+            except OSError:
+                pass
+            log.warning(f"push tokens: {self.retired_path} was unreadable ({e}); moved to {aside}")
+            return set()
+        return {str(x) for x in got}
 
     # ------------------------------------------------------------------ operations
 
@@ -240,13 +252,12 @@ class PushTokenStore:
                     return "forgotten"      # a Forget at or after this rev (rule 2)
             elif cur:
                 owner, stored = cur.get("principal"), _stored_rev(cur)
-                if rev < stored:
-                    return "stale_rev"      # a delayed older request
-                if owner != principal_id:
-                    if rev == stored:
-                        return "stale_rev"  # a takeover needs a strictly newer rev
-                    if not _is_legacy(owner) and classify(owner) != DEAD:
-                        return "owned"      # someone else's token (rule 3)
+                # Ownership first: a caller who can't take the token over learns only "owned",
+                # never how its rev compares (which would date the owner's last registration).
+                if owner != principal_id and not _is_legacy(owner) and classify(owner) != DEAD:
+                    return "owned"          # someone else's token (rule 3)
+                if rev < stored or (owner != principal_id and rev == stored):
+                    return "stale_rev"      # older, or a takeover without a newer rev
             data[fields["token"]] = {**fields, "principal": principal_id, "updated_at": now}
             self._enforce_cap(data, principal_id)
             self._save(data)

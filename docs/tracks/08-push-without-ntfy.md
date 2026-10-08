@@ -35,7 +35,8 @@ What is built:
   APNs topic (the watch app has its own) and must be on an allowlist
   (`ORCHESTRA_PUSH_BUNDLE_IDS`, default the published app's two); `env` picks the APNs host
   (TestFlight and App Store builds register production tokens, Xcode builds sandbox ones).
-- **`rev` orders everything; the client must grow it on EVERY PUT and DELETE** (ms since epoch).
+- **`rev` orders everything; the client must grow it on EVERY PUT and DELETE**: send
+  `max(last_rev + 1, now_ms)`, so a clock set backwards still moves forward.
   An APNs token belongs to the app install, not the pairing, so Forget-then-pair-again keeps
   the same token. A PUT at or below the stored rev changes nothing (`registered: false`, with
   `reason: "stale_rev"`); a DELETE below it changes nothing (`removed: false`); a DELETE is
