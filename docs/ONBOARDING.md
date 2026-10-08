@@ -118,7 +118,8 @@ decision: it briefly stops your agents' services, so choose a moment that suits 
 
 **Before you run it**, because the code disappears from the screen after 60 seconds:
 
-- **[PERSON ONLY]** Have the app installed, open and showing its pairing screen (steps 4 and 5
+- **[PERSON ONLY]** Have the app installed, open and showing its pairing screen (on iPhone:
+  the gear, then **Connect your gateway**; steps 4 and 5
   say how to get each app; there is no public download yet).
 - **[PERSON ONLY]** Have Tailscale on that device, signed in to the same Tailscale account as
   the server. On an iPhone: the **Tailscale** app from the App Store, open it and sign in. On a
@@ -224,22 +225,37 @@ through.
 you a test build, you can't connect an iPhone yet: stop here. **[PERSON ONLY]** Installing and
 opening it is yours.
 
-Have the app open on its pairing screen, and Tailscale on the iPhone (see step 2, "Before
-you run it"), before you run `orchestra pair`.
+**Finding the pairing screen.** The app does not open on it by itself. With nothing paired, it
+opens on the Approvals list with the banner *Gateway not configured on this build. Approvals
+will appear once the token is set.* That is expected: it only means the app is not paired yet.
+**[PERSON ONLY]** Tap the gear (Settings), then **Connect your gateway**. Have that screen
+open, and Tailscale on the iPhone (see step 2, "Before you run it"), before you run
+`orchestra pair`.
 
 **Getting the code onto the iPhone.** `orchestra pair` prints the code in your computer's
 terminal, not on the phone. Either install `segno` first (step 2) and tap **Scan** on the QR, or,
 if your computer is a Mac signed in to the same Apple ID as the iPhone, copy the code on the Mac
 and paste on the iPhone (Universal Clipboard). Never message or email the code to yourself.
 
-First launch shows a pairing screen, not the approvals list. It says *On the machine running
-your OrchestraOS gateway, run `orchestra pair`, then paste the code it prints here — or scan
-its QR.*
+The **Connect your gateway** screen says *On the machine running your OrchestraOS gateway, run
+`orchestra pair`, then paste the code it prints here — or scan its QR.*
 
 1. **[PERSON ONLY]** Paste exactly what `orchestra pair` printed into the **PAIRING CODE** box
    (placeholder *paste the code from orchestra pair*), or tap **Scan** and point the camera at
    its QR.
 2. **[PERSON ONLY]** Tap **Pair**. There is no address to type: the code carries it.
+
+**When it works**, the screen stays open, the code box empties, and a green check line appears
+under the fields: *Connected to <your server> · gateway v1 · no cards yet — they appear here
+when an agent needs a decision.* (If cards are already waiting, it ends with *· 1 card waiting*
+or similar instead.) A red **Forget this gateway** button appears at the bottom, and back in
+Settings the row now reads **Change gateway**. To check from the server, `orchestra devices`
+lists your device with a LAST SEEN time.
+
+If the line says *Paired, but this device couldn't save it. That code is now used up — run
+`orchestra pair` again and retry.* or *That is an OrchestraOS gateway, but it didn't accept this
+token. Run `orchestra pair` on the server and use the new code.*, it did not work: run
+`orchestra pair` again and use the new code.
 
 If what you pasted is not a pairing code at all, the app says *That isn’t a pairing code. Paste
 exactly what `orchestra pair` printed.* Copy the whole code again, from the first character
