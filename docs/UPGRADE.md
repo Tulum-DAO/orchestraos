@@ -54,7 +54,8 @@ orchestra down && orchestra up --detach
 
 **If you upgraded between #208 and #218 (2026-10-08):** back then `init` did not rebuild an
 existing API build, so your API may still lack the web terminal origin check from #208.
-Run `orchestra upgrade` once more (or `rm -rf api/dist && orchestra init --yes`), then the
+Run `orchestra upgrade` once more (or `rm -rf api/dist && orchestra init --yes`, which removes only the API's build output inside
+your checkout; `init` rebuilds it straight away), then the
 restart above. From #218 on, a plain upgrade rebuilds correctly.
 
 `orchestra upgrade` never restarts anything itself. Spawned seats keep the code they were
