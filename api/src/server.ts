@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { queryDb } from './lib/db.js';
 import express from 'express';
 import cors from 'cors';
-import { createServer } from 'http';
+import { createServer, type IncomingMessage } from 'http';
 import { join } from 'path';
 import { WebSocketServer } from 'ws';
 
@@ -54,6 +54,7 @@ import { loadConfig } from './lib/config.js';
 import { principal } from './lib/principal.js';
 import { accessLog } from './lib/access-log.js';
 import { originDecision, publicOrigins } from './lib/cors-origin.js';
+import { wsOriginDecision } from './lib/ws-origin.js';
 
 const app = express();
 
@@ -233,8 +234,22 @@ initStatusStream();
 const PORT = process.env.PORT || process.env.ORCHESTRA_API_PORT || loadConfig().apiPort;
 const server = createServer(app);
 
-// WebSocket terminal server on /ws/terminal
-const wss = new WebSocketServer({ server, path: '/ws/terminal' });
+// WebSocket terminal server on /ws/terminal. It is a shell into a seat's pane and browsers do
+// not apply the same-origin policy to WebSockets, so every handshake passes lib/ws-origin.ts.
+const wss = new WebSocketServer({ server, path: '/ws/terminal', verifyClient: (info: { req: IncomingMessage }) => {
+  const req = info.req;
+  const d = wsOriginDecision({
+    origin: req.headers.origin,
+    hostHeader: req.headers.host,
+    forwardedHost: String(req.headers['x-forwarded-host'] || '') || undefined,
+    peerAddress: req.socket.remoteAddress,
+    port: Number(process.env.ORCHESTRA_DASHBOARD_PORT || loadConfig().dashboardPort),
+    dashboardHost: process.env.ORCHESTRA_DASHBOARD_HOST || loadConfig().dashboardHost,
+    extraHosts: process.env.ORCHESTRA_DASHBOARD_ALLOWED_HOSTS || '',
+  });
+  if (!d.allow) console.warn(`[ws] refused /ws/terminal from origin ${req.headers.origin} (${d.reason})`);
+  return d.allow;
+} });
 setupTerminalWebSocket(wss);
 setupVoiceLiveWebSocket(server);
 

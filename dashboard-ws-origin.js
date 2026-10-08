@@ -11,7 +11,7 @@
 //     sent to. Exact match; a suffix test would let evil-<host> pass for <host>.
 //  2. A HOST WE SERVE: that address is one the dashboard is meant to be reached at. Rule 1
 //     alone falls to DNS rebinding: an attacker's name that resolves to 127.0.0.1 makes
-//     Origin and Host agree. So the host must be loopback (on our port), the configured
+//     Origin and Host agree. So the host must be loopback (any port), the configured
 //     [dashboard] host, a Tailscale MagicDNS name (*.ts.net; tailnet names cannot be made
 //     to resolve to the victim's loopback), or listed in ORCHESTRA_DASHBOARD_ALLOWED_HOSTS.
 //
@@ -48,6 +48,8 @@ function allowedHosts(port, dashboardHost, extra) {
   return set;
 }
 
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
 function isLoopbackPeer(addr) {
   return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
 }
@@ -65,6 +67,9 @@ function wsOriginDecision({ origin, hostHeader, forwardedHost, peerAddress, port
   const addressedAs = (fwd || hostHeader || "").trim().toLowerCase();
   if (!addressedAs || addressedAs !== originAuthority) return { allow: false, reason: "cross-origin" };
 
+  // Loopback on ANY port: a loopback name cannot be rebound, and a relay or ssh -L tunnel
+  // usually listens on a different local port than the dashboard (INSTALL.md's 18891).
+  if (LOOPBACK.has(hostOnly(addressedAs))) return { allow: true, reason: "same-origin-loopback" };
   const hosts = allowedHosts(port, dashboardHost, extraHosts);
   if (hosts.has(addressedAs) || hosts.has(hostOnly(addressedAs))) return { allow: true, reason: "same-origin" };
   if (hostOnly(addressedAs).endsWith(".ts.net")) return { allow: true, reason: "same-origin-tailnet" };

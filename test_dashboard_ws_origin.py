@@ -14,25 +14,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent
 PORT = 8891
+# The cases are SHARED with the API (api/src/lib/ws-origin.test.ts), so the two checks cannot drift.
 
 CASES = [
-    # (name, inputs, expected allow)
-    ("no origin (curl, a local script)", {"hostHeader": "127.0.0.1:8891"}, True),
-    ("dashboard on loopback", {"origin": "http://127.0.0.1:8891", "hostHeader": "127.0.0.1:8891"}, True),
-    ("dashboard as localhost", {"origin": "http://localhost:8891", "hostHeader": "localhost:8891"}, True),
-    ("ssh -L tunnel", {"origin": "http://127.0.0.1:8891", "hostHeader": "127.0.0.1:8891", "peerAddress": "127.0.0.1"}, True),
-    ("tailscale serve on 443", {"origin": "https://box.tail1234.ts.net", "hostHeader": "box.tail1234.ts.net", "peerAddress": "127.0.0.1"}, True),
-    ("tailscale serve on a free port", {"origin": "https://box.tail1234.ts.net:8445", "hostHeader": "box.tail1234.ts.net:8445", "peerAddress": "127.0.0.1"}, True),
-    ("listed in ORCHESTRA_DASHBOARD_ALLOWED_HOSTS", {"origin": "https://dash.example.org", "hostHeader": "dash.example.org", "extraHosts": "dash.example.org"}, True),
-    # attacks
-    ("foreign page vs loopback", {"origin": "https://evil.example", "hostHeader": "127.0.0.1:8891"}, False),
-    ("foreign page vs tailnet name", {"origin": "https://evil.example", "hostHeader": "box.tail1234.ts.net", "peerAddress": "127.0.0.1"}, False),
-    ("DNS rebinding: attacker name resolving to 127.0.0.1", {"origin": "http://rebind.evil.example:8891", "hostHeader": "rebind.evil.example:8891"}, False),
-    ("suffix trick", {"origin": "http://evil-127.0.0.1:8891", "hostHeader": "127.0.0.1:8891"}, False),
-    ("loopback origin on another port", {"origin": "http://127.0.0.1:5173", "hostHeader": "127.0.0.1:8891"}, False),
-    ("forged X-Forwarded-Host from a non-loopback peer", {"origin": "https://evil.example", "hostHeader": "127.0.0.1:8891", "forwardedHost": "evil.example", "peerAddress": "100.64.0.9"}, False),
-    ("malformed origin", {"origin": "not a url", "hostHeader": "127.0.0.1:8891"}, False),
-    ("null origin (sandboxed iframe, file://)", {"origin": "null", "hostHeader": "127.0.0.1:8891"}, False),
+    (c["name"], c["in"], c["allow"])
+    for c in json.loads((ROOT / "contract" / "ws-origin-cases.json").read_text())["cases"]
 ]
 
 
