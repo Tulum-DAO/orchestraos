@@ -1054,9 +1054,11 @@ Rules:
 - First run `tmux ls` and ask me which worker seat is mine: `dev-first-project`, or
   `dev-<name>` if Arturo named my project. Use that name everywhere the section says
   `dev-first-project`.
-- We are done when `python3 scripts/approval.py get <card id>` shows `"status": "resumed"`
-  and `tmux capture-pane -p -t <my worker seat> | tail -20` shows the decision. Show me
-  both outputs; don't just tell me it worked.
+- Answering the card is my decision: I answer it in the dashboard myself. Never give me the
+  approve command, or run it, unless I ask you to.
+- We are done when `tmux capture-pane -p -t <my worker seat> | tail -20` shows the decision
+  in the seat's screen. Show me that output; don't just tell me it worked. (`"status":
+  "resumed"` comes a little later, once the seat acknowledges it; that is not needed here.)
 ```
 
 From a shell (or let the seat run it: a seat that requests the card itself puts its OWN name
@@ -1065,7 +1067,7 @@ after `--from`; a seat that names a different seat there is refused):
 ```bash
 cd ~/orchestraos                     # run from the orchestraos folder
 source scripts/orchestra-env.sh      # already done in §3 if you are in the same shell; harmless to repeat
-python3 scripts/approval.py request "Ship the first change?" --from dev-first-project --worker-kind pane --options approve,deny
+python3 scripts/approval.py request "Reply OK to this test card?" --from dev-first-project --worker-kind pane --options approve,deny
 # -> prints the card id, e.g. apr_1a2b3c4d_567
 ```
 
@@ -1074,25 +1076,34 @@ signal ... fail-open`, because you ran it from a plain shell, not a seat) and on
 ntfy push (no push is set up on the minimum path). Both are normal; the card is created.
 
 The card appears under Approvals in the dashboard (`GET /api/approvals` through the
-proxy lists it under `pending`); answer it there, or from a shell. This uses the default
-dashboard port 8891; if the `dashboard` row of `orchestra status` shows another port, put that
-one in instead:
+proxy lists it under `pending`). **[PERSON ONLY]** Answering it is your decision: open
+**Approvals** in the dashboard and answer it there.
+
+(From a shell instead, only if you choose to: first read the port on the `dashboard` row of
+`orchestra status` (8891 unless you moved it), then run this with that port:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8891/api/approvals/<card id>/approve
 ```
 
+)
+
 What happens next, and how to see it:
 
 1. The answer is recorded in `<data>/state/tasks.db` (`python3 scripts/approval.py get <card id>`
    prints JSON with `"status": "answered"`).
-2. Within a minute the `approval_resume` beat (see the `orchestra up` table) delivers it:
-   because the card came `--from dev-first-project --worker-kind pane` (or your own `dev-<name>`),
-   the decision is typed into that seat's tmux pane as a message and a durable row is written for the seat
-   (`python3 msg_store.py inbox --agent dev-first-project`). `approval.py get` then shows
-   `"status": "resumed"`; `tmux capture-pane -p -t dev-first-project | tail -20` shows the delivered
-   decision; `<data>/logs/approval_resume.log` has the delivery line.
-3. `GET /api/approvals` keeps the card out of `pending` from the moment it is answered.
+2. The answer is delivered at once: because the card came `--from dev-first-project
+   --worker-kind pane` (or your own `dev-<name>`), the decision is typed into that seat's tmux
+   pane as a message, and a durable row is written for the seat
+   (`python3 msg_store.py inbox --agent dev-first-project`).
+   `tmux capture-pane -p -t dev-first-project | tail -20` shows it, and
+   `<data>/logs/approval_resume.log` has the delivery line. If the seat was busy, the
+   `approval_resume` beat (see the `orchestra up` table) tries again about every minute.
+3. The message ends by asking the seat to acknowledge it (`approval.py ack ...`). When the seat
+   does, `approval.py get` shows `"status": "resumed"`. If it stays `"answered"`, the seat
+   hasn't acknowledged yet: wait (an unacknowledged answer is typed in again after 5 minutes,
+   up to 3 times), or ask the seat to acknowledge it.
+4. `GET /api/approvals` keeps the card out of `pending` from the moment it is answered.
 
 A card requested from an ambient shell behaves exactly like one a seat requested for
 itself: the seat named in `--from` is the one that receives the answer.
