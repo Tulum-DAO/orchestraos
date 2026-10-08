@@ -54,6 +54,21 @@ that step and walks you through it, and stops at the [PERSON ONLY] steps.
 
 ## 1. Open a terminal
 
+**Hand this to your agent** (Claude, ChatGPT, Codex, Gemini or any other), if you'd rather
+have it guide you through this section. Copy the whole box:
+
+```text
+Help me with one step of installing OrchestraOS. Read this section and do it with me:
+https://github.com/Tulum-DAO/orchestraos/blob/main/docs/FROM_SCRATCH.md#1-open-a-terminal
+Rules:
+- If you can run commands on my computer, run them yourself and show me every output.
+  If you can't, give me one command at a time and wait for me to paste back what it printed.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, passwords, approving a
+  device) and let me do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset or wipe anything.
+- We are done when `whoami` in my terminal prints my username. Show me that output; don't just tell me it worked.
+```
+
 - **Mac**: press `Cmd+Space`, type `Terminal`, press Enter. The prompt ends in `%`, for
   example `yourname@Your-MacBook ~ %`.
 - **Windows 10 or 11**: click **Start**, type `Terminal` (Windows 11) or `PowerShell`
