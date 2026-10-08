@@ -554,3 +554,63 @@ def test_init_does_not_rebuild_a_current_build(tmp_path):
     runner = Runner()
     report = {r.step: r for r in I.run_init(root, data_dir=data, run=runner)}
     assert report["build:api"].did is False and "up to date" in report["build:api"].detail
+
+
+# ---- an interrupted npm install is not an install (pm playbook test, 2026-10-08) ----
+# init treated "node_modules exists" as installed. An AI agent's 2-minute tool timeout, or a dropped
+# ssh, kills init mid `npm install`: node_modules exists, half-filled, and the next init said
+# "node_modules present", skipped npm and built (or served) from a broken tree.
+
+class KilledNpm(Runner):
+    """npm install starts filling node_modules, then dies (the agent's tool timeout)."""
+    def __call__(self, argv, cwd=None, env=None):
+        if list(argv)[:2] == ["npm", "install"]:
+            self.calls.append((tuple(argv), str(cwd)))
+            (Path(cwd) / "node_modules").mkdir(exist_ok=True)
+            (Path(cwd) / "node_modules" / "half-unpacked").mkdir(exist_ok=True)
+            return -9
+        return super().__call__(argv, cwd=cwd, env=env)
+
+
+def test_a_killed_npm_install_is_reinstalled_by_the_next_init(tmp_path):
+    root = _repo(tmp_path)
+    data = tmp_path / "data"
+    first = {r.step: r for r in I.run_init(root, data_dir=data, run=KilledNpm())}
+    assert "failed" in first["npm:api"].detail
+    assert (root / "api" / "node_modules").is_dir()                     # left behind, half-filled
+    runner = Runner()
+    report = {r.step: r for r in I.run_init(root, data_dir=data, run=runner)}
+    for label in ("root", "api", "dashboard"):
+        assert report[f"npm:{label}"].did is True, (label, report[f"npm:{label}"].detail)
+    assert "present" not in report["npm:api"].detail
+
+
+def test_node_modules_without_a_completion_stamp_is_reinstalled(tmp_path):
+    root = _repo(tmp_path)
+    data = tmp_path / "data"
+    (root / "api" / "node_modules").mkdir()                             # e.g. an older, killed run
+    report = {r.step: r for r in I.run_init(root, data_dir=data, run=Runner())}
+    assert report["npm:api"].did is True
+
+
+def test_a_completed_install_is_skipped_next_time(tmp_path):
+    root = _repo(tmp_path)
+    data = tmp_path / "data"
+    I.run_init(root, data_dir=data, run=Runner())
+    runner = Runner()
+    report = {r.step: r for r in I.run_init(root, data_dir=data, run=runner)}
+    for label in ("root", "api", "dashboard"):
+        assert report[f"npm:{label}"].did is False and "installed" in report[f"npm:{label}"].detail
+    assert not [c for c in runner.calls if c[0][:2] == ("npm", "install")]
+
+
+def test_a_changed_lockfile_reinstalls_even_with_an_older_mtime(tmp_path):
+    """Content, not mtime: a checkout or an rsync can give the new lockfile an OLD mtime."""
+    root = _repo(tmp_path)
+    data = tmp_path / "data"
+    (root / "api" / "package-lock.json").write_text('{"v": 1}')
+    I.run_init(root, data_dir=data, run=Runner())
+    (root / "api" / "package-lock.json").write_text('{"v": 2}')
+    _age(root / "api" / "package-lock.json", 3600)
+    report = {r.step: r for r in I.run_init(root, data_dir=data, run=Runner())}
+    assert report["npm:api"].did is True

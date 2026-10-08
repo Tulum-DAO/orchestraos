@@ -210,10 +210,36 @@ def _build_stale(pkg_dir: Path, artifact: Path) -> bool:
     return _newest_mtime(pkg_dir / n for n in _BUILD_INPUTS) > artifact.stat().st_mtime
 
 
-def _deps_stale(pkg_dir: Path) -> bool:
-    """package-lock.json changed since the last install (npm stamps node_modules/.package-lock.json)."""
-    lock, stamp = pkg_dir / "package-lock.json", pkg_dir / "node_modules" / ".package-lock.json"
-    return lock.exists() and stamp.exists() and lock.stat().st_mtime > stamp.stat().st_mtime
+# Written into node_modules ONLY after `npm install` exits 0, holding a hash of the lockfile it
+# installed. "node_modules exists" is not an install: an AI agent's 2-minute tool timeout or a
+# dropped ssh kills init mid-install, and the next init skipped npm and built from a half-filled
+# tree (pm playbook test, 2026-10-08). Content, not mtime: a checkout can give a new lockfile an
+# old mtime.
+_NPM_STAMP = ".orchestra-npm-ok"
+
+
+def _deps_fingerprint(pkg_dir: Path) -> str:
+    import hashlib
+    for name in ("package-lock.json", "package.json"):
+        f = pkg_dir / name
+        if f.exists():
+            return f"{name}:{hashlib.sha256(f.read_bytes()).hexdigest()}"
+    return "none"
+
+
+def _deps_installed(pkg_dir: Path) -> bool:
+    stamp = pkg_dir / "node_modules" / _NPM_STAMP
+    try:
+        return stamp.read_text().strip() == _deps_fingerprint(pkg_dir)
+    except OSError:
+        return False
+
+
+def _stamp_deps(pkg_dir: Path) -> None:
+    try:
+        (pkg_dir / "node_modules" / _NPM_STAMP).write_text(_deps_fingerprint(pkg_dir) + "\n")
+    except OSError:
+        pass                                          # no stamp = reinstall next time; never fatal
 
 
 def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable = default_run,
@@ -466,10 +492,12 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
         if skip_npm:
             report.append(Step(f"npm:{label}", False, "skipped (--no-npm)"))
             continue
-        if (d / "node_modules").exists() and not _deps_stale(d):
-            report.append(Step(f"npm:{label}", False, "node_modules present"))
+        if _deps_installed(d):
+            report.append(Step(f"npm:{label}", False, "installed (lockfile unchanged)"))
             continue
         rc = run(["npm", "install", "--no-audit", "--no-fund"], cwd=d)
+        if rc == 0:
+            _stamp_deps(d)
         report.append(Step(f"npm:{label}", rc == 0, "npm install" if rc == 0 else f"npm install failed rc={rc}"))
 
     # 8. builds (api tsc -> dist/server.js, dashboard vite -> dist/index.html)
