@@ -550,7 +550,11 @@ spawn_agent() {
     # Build composite system prompt: FOUNDATION_STATIC (cached) + role prompt
     local static_prompt="$SCRIPT_DIR/prompts/FOUNDATION_STATIC.md"
     local role_prompt="$SCRIPT_DIR/$prompt_file"
-    local combined_prompt="/tmp/agent-prompt-${agent_id}.md"
+    # In THIS install's state dir, mode 0600: the seat follows this file with permission prompts
+    # skipped, so it must not sit at a /tmp path another install (or user) on the host can write.
+    local combined_prompt="$STATE_DIR/prompts/${agent_id}.md"
+    local has_role_prompt="false"
+    (umask 077; mkdir -p "$STATE_DIR/prompts"; : > "$combined_prompt")
 
     if [[ -f "$static_prompt" ]]; then
         cat "$static_prompt" > "$combined_prompt"
@@ -558,15 +562,18 @@ spawn_agent() {
         echo "# --- ROLE-SPECIFIC PROMPT ---" >> "$combined_prompt"
         if [[ -f "$role_prompt" ]]; then
             cat "$role_prompt" >> "$combined_prompt"
+            has_role_prompt="true"
         else
             warn "Role prompt not found: $role_prompt — using FOUNDATION_STATIC only"
         fi
     elif [[ -f "$role_prompt" ]]; then
         # Fallback: no static foundation, use role prompt alone
         warn "prompts/FOUNDATION_STATIC.md not found (it ships with OrchestraOS; is the checkout complete?) — using the role prompt only"
-        cp "$role_prompt" "$combined_prompt"
+        cat "$role_prompt" > "$combined_prompt"
+        has_role_prompt="true"
     else
         warn "No system prompts found — proceeding without system prompt"
+        rm -f "$combined_prompt"
         combined_prompt=""
     fi
 
@@ -600,7 +607,11 @@ spawn_agent() {
     # line, never handed to the seat: nothing referenced it, so every seat ran without its role
     # prompt unless its task text happened to say "read your prompt".
     if [[ -n "$full_prompt" && -f "$full_prompt" ]]; then
-        init_prompt+=" FIRST, read $full_prompt: it is your role prompt (the rules every seat follows, then your own role). Follow it for the whole session."
+        if [[ "$has_role_prompt" == "true" ]]; then
+            init_prompt+=" Start by reading $full_prompt: your role prompt (the rules every seat follows, then your own role). Follow it for the whole session; where your role part differs from the shared rules, your role part wins."
+        else
+            init_prompt+=" Start by reading $full_prompt: the rules every seat follows (this seat has no role prompt of its own). Follow it for the whole session."
+        fi
     fi
 
     # Inject reincarnation protocol
@@ -631,7 +642,7 @@ spawn_agent() {
     local memory_dir="$ORCHESTRA_DIR/memory/${memory_root}"
     mkdir -p "$memory_dir"
     [[ -f "$memory_dir/MEMORY.md" ]] || printf '# %s memory index\n' "$memory_root" > "$memory_dir/MEMORY.md"
-    init_prompt+=" Your memory directory is $memory_dir — read $memory_dir/MEMORY.md now, before anything else; it indexes one-fact files that survive restarts and rotations. The convention (index + one-fact files + baton) is the Memory section of $SCRIPT_DIR/prompts/_agent-protocol.md — follow it."
+    init_prompt+=" Your memory directory is $memory_dir — read $memory_dir/MEMORY.md next, right after your role prompt; it indexes one-fact files that survive restarts and rotations. The convention (index + one-fact files + baton) is the Memory section of $SCRIPT_DIR/prompts/_agent-protocol.md — follow it."
 
     # Inject tier-appropriate memory payload via token enforcer
     local memory_payload=""
@@ -708,7 +719,7 @@ spawn_agent() {
     if [[ -n "$task" ]]; then
         init_prompt+=" YOUR TASK: ${task}"
     else
-        init_prompt+=" Check your inbox at ~/scripts/agent-orchestra/queue/inbox/${agent_id}/ for pending tasks."
+        init_prompt+=" Check your messages for pending tasks: python3 $SCRIPT_DIR/msg_store.py inbox --agent ${agent_id}"
     fi
 
     # --- Fail-closed identity gate under the identity-store cutover ---------
@@ -946,6 +957,7 @@ case "${1:-}" in
         echo "       spawn-agent.sh --kill <id>   Kill an agent"
         echo "       spawn-agent.sh --kill-all    Kill all agents"
         echo "       spawn-agent.sh --dispatch <id>  Preview runtime dispatch (no spawn)"
+        echo "       spawn-agent.sh <id> [--task TEXT] [--resume SID] [--verbose]   --verbose shows spawn detail"
         ;;
     *)
         agent_id="$1"

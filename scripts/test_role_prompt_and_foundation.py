@@ -53,28 +53,39 @@ def sandbox_spawn():
         "name": seat, "tmux_session": seat, "tier": "T2", "runtime": "claude", "machine": "vps",
         "cwd": str(d), "system_prompt": "prompts/gm.md"}}}))
     env = {k: v for k, v in os.environ.items() if k not in ("TMUX", "ORCHESTRA_SPAWN_VERBOSE")}
+    # CLAUDE_CONFIG_DIR too: spawn pre-trusts the cwd by writing <config dir>/.claude.json, and
+    # without it that write lands in the LIVE ~/.claude.json (review of the first version).
     env.update(PATH=f"{d / 'bin'}{os.pathsep}{env.get('PATH', '')}", ORCHESTRA_DIR=str(d / "data"),
-               ORCH_DIR=str(d / "data"), AGENT_RUNTIME="claude")
+               ORCH_DIR=str(d / "data"), AGENT_RUNTIME="claude", CLAUDE_CONFIG_DIR=str(d / "claude"))
+    (d / "claude").mkdir()
     assert shutil.which("tmux", path=env["PATH"]) == str(d / "bin" / "tmux")     # FENCE
 
     def spawn(*extra):
         return subprocess.run(["bash", str(ROOT / "spawn-agent.sh"), seat, *extra], env=env,
                               cwd=str(ROOT), capture_output=True, text=True, timeout=120)
     try:
-        yield seat, spawn
+        yield seat, spawn, d
     finally:
         subprocess.run([real, "-S", f"{d}/s", "kill-server"], capture_output=True, timeout=10)
         shutil.rmtree(d, ignore_errors=True)
-        for p in (f"/tmp/agent-init-{seat}.md", f"/tmp/agent-prompt-{seat}.md"):
+        for p in (f"/tmp/agent-init-{seat}.md", f"/tmp/agent-perms-{seat}.settings.json"):
             Path(p).unlink(missing_ok=True)
 
 
 def test_the_seat_is_told_to_read_its_role_prompt_first(sandbox_spawn):
-    seat, spawn = sandbox_spawn
+    seat, spawn, d = sandbox_spawn
+    live_cfg = Path.home() / ".claude.json"
+    before = live_cfg.read_bytes() if live_cfg.exists() else None
     out = spawn()
     init = Path(f"/tmp/agent-init-{seat}.md").read_text()
-    combined = Path(f"/tmp/agent-prompt-{seat}.md")
-    assert f"FIRST, read {combined}" in init, out.stdout + out.stderr
+    combined = d / "data" / "state" / "prompts" / f"{seat}.md"
+    assert f"Start by reading {combined}" in init, out.stdout + out.stderr
+    assert oct(combined.stat().st_mode & 0o777) == "0o600"
+    assert not Path(f"/tmp/agent-prompt-{seat}.md").exists()
+    # the cwd trust went to the sandbox config, and the live one is untouched by this spawn
+    assert str(d) in (d / "claude" / ".claude.json").read_text()
+    if before is not None:
+        assert str(d) not in live_cfg.read_text()
     text = combined.read_text()
     # the foundation first, then the seat's own role prompt (here prompts/gm.md)
     assert text.startswith(FOUNDATION.read_text().splitlines()[0])
@@ -84,7 +95,7 @@ def test_the_seat_is_told_to_read_its_role_prompt_first(sandbox_spawn):
 
 
 def test_a_default_spawn_is_quiet_and_verbose_shows_the_detail(sandbox_spawn):
-    seat, spawn = sandbox_spawn
+    seat, spawn, _ = sandbox_spawn
     quiet = spawn()
     noisy_markers = ("[1m]-verify: could not read", "cannot be confirmed from this banner", "Perms: project-local")
     assert not any(m in quiet.stdout + quiet.stderr for m in noisy_markers), quiet.stdout

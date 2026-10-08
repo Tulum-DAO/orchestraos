@@ -52,11 +52,11 @@ sits idle: it is alive and waiting, not broken.
 A seat's system prompt is `prompts/<seat>.md`. `agent create` writes one from a template; edit
 that file to change what the seat is for. Two prompts are always injected alongside it:
 
-- `prompts/FOUNDATION_STATIC.md` — shared foundation, prepended when present.
+- `prompts/FOUNDATION_STATIC.md` — the rules every seat follows, prepended to the role prompt.
 - `prompts/infrastructure.md` — how to send mail, reach the gateway, find the data dir.
 
-> **Fresh installs:** `FOUNDATION_STATIC.md` is not shipped in this repo. `spawn-agent.sh` warns
-> and uses the role prompt alone. That is a working spawn, not a failure — see issue #121.
+`spawn-agent.sh` joins the two into `$ORCHESTRA_DIR/state/prompts/<seat>.md` (mode 0600), and the
+seat's first instruction is to read it.
 
 ## 4. Where a seat's things live
 
