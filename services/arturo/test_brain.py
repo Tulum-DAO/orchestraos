@@ -521,3 +521,75 @@ def test_a_reply_in_another_language_is_kept():
 
 def test_unassigned_codepoints_never_reach_the_operator():
     assert _codex_text("All good\U0005f7c2 here.") == "All good here."
+
+
+# ---- a broken JSON envelope never reaches the operator ----------------------------------
+# Operator report, 2026-10-08 (fresh install, CLI brain): Arturo printed its own tool-call
+# envelope as chat text, and the two calls in it never ran. The envelope was one "}" short:
+# the second call's object was never closed before "]}". json.loads refused it, so
+# _find_envelope found nothing and the whole string fell through as the assistant's prose.
+
+_SHORT_ONE_BRACE = ('{"tool_calls":[{"name":"list_agents","arguments":{}},'
+                    '{"name":"remember_note","arguments":{"note":"the gm seat shows a red dot",'
+                    '"category":"project"}]}')
+
+
+def test_envelope_missing_an_object_close_still_runs_its_calls():
+    with pytest.raises(ValueError):
+        json.loads(_SHORT_ONE_BRACE)            # the shape really is invalid JSON
+    r = B.parse_cli_reply(_SHORT_ONE_BRACE)
+    msg = r.choices[0].message
+    assert msg.content is None, "the envelope must never be handed back as text"
+    assert [c.function.name for c in msg.tool_calls] == ["list_agents", "remember_note"]
+    assert json.loads(msg.tool_calls[1].function.arguments) == {
+        "note": "the gm seat shows a red dot", "category": "project"}
+
+
+def test_envelope_cut_off_mid_string_is_suppressed_not_printed():
+    """Truncated inside an argument: the call's intent is not recoverable, so nothing runs —
+    and the operator still never sees the JSON."""
+    cut = '{"tool_calls":[{"name":"remember_note","arguments":{"note":"half a no'
+    msg = B.parse_cli_reply(cut).choices[0].message
+    assert msg.tool_calls is None
+    assert "tool_calls" not in (msg.content or "")
+    assert (msg.content or "").strip(), "suppressing the envelope must still say something"
+
+
+def test_prose_before_a_broken_envelope_is_kept():
+    msg = B.parse_cli_reply('Acknowledged.\n{"tool_calls":[{"name":"list_agents","arguments":{"x":"cu').choices[0].message
+    assert msg.tool_calls is None
+    assert msg.content == "Acknowledged."
+
+
+def test_a_wrong_closer_is_not_guessed_into_a_call():
+    """Only a missing object close is repaired. A '}' where a list should close could mean
+    anything, so it is not reshaped into a call that might carry the wrong arguments."""
+    odd = '{"tool_calls":[{"name":"list_agents","arguments":{}}}'
+    msg = B.parse_cli_reply(odd).choices[0].message
+    assert msg.tool_calls is None
+    assert "tool_calls" not in (msg.content or "")
+
+
+def test_braces_inside_strings_do_not_confuse_the_repair():
+    s = ('{"tool_calls":[{"name":"remember_note","arguments":{"note":"a ] and a } and a \\" quote",'
+         '"category":"project"}]}')
+    msg = B.parse_cli_reply(s).choices[0].message
+    assert [c.function.name for c in msg.tool_calls] == ["remember_note"]
+    assert json.loads(msg.tool_calls[0].function.arguments)["note"] == 'a ] and a } and a " quote'
+
+
+def test_runtime_brain_toolless_turn_never_prints_an_envelope():
+    """A turn offered no tools can run none, but a model can still answer in the protocol it
+    saw on an earlier turn. Its envelope must not become the reply."""
+    b = B.RuntimeBrain("claude", "claude", model="",
+                       runner=lambda spec, timeout: 'On it.\n{"tool_calls":[{"name":"list_agents","arguments":{}}]}')
+    msg = b.complete([{"role": "user", "content": "hi"}]).choices[0].message
+    assert msg.tool_calls is None
+    assert msg.content == "On it."
+
+
+def test_runtime_brain_stream_never_streams_an_envelope():
+    b = B.RuntimeBrain("claude", "claude", model="",
+                       runner=lambda spec, timeout: 'Acknowledged.\n{"tool_calls":[{"name":"list_agents","arguments":{}}]}')
+    chunks = list(b.complete([{"role": "user", "content": "hi"}], stream=True))
+    assert "".join(c.choices[0].delta.content for c in chunks) == "Acknowledged."
