@@ -5,13 +5,13 @@ commands into a server. You need a Mac, a credit card and an email address, and 
 need to be able to copy and paste. Nothing else is assumed.
 
 By the end of this page you will have your own server on the internet and you will
-be logged in to it from your Mac. Then `docs/INSTALL.md` takes over and installs
+be logged in to it from your Mac. Then [docs/INSTALL.md](INSTALL.md) takes over and installs
 OrchestraOS on it. This page takes about 20 minutes.
 
 **What it costs.** The server is about $24 a month, charged by the hour while it
 exists; delete it and the charges stop (step 3 says how). To run agents you also need
 a paid plan for one AI command-line tool; Claude Pro is about $20 a month.
-`docs/COSTS.md` has the details and the cheaper options.
+[docs/COSTS.md](COSTS.md) has the details and the cheaper options.
 
 ## Words you will meet
 
@@ -111,7 +111,7 @@ server; other providers are at the end of this step.
    **Droplets** list. Its row shows the **IP address**: four numbers with dots, like
    `203.0.113.25`. Copy it; you need it in the next step. Wherever the docs say
    "your server address", this is what they mean (until Tailscale gives the server a
-   second, private address in `docs/INSTALL.md`).
+   second, private address in [docs/INSTALL.md](INSTALL.md)).
 
 **To stop paying later:** open the droplet and choose **Destroy**. Turning it off is
 not enough; a droplet is charged while it exists.
@@ -119,7 +119,7 @@ not enough; a droplet is charged while it exists.
 **Other providers.** Any company that rents Ubuntu 24.04 servers and lets you add an
 ssh key works: Hetzner (cheaper; may ask for identity verification), Vultr, Linode,
 and others. Pick Ubuntu 24.04, at least 2 CPUs and 4 GB of memory, and choose your
-`my-mac` key when you create the server. `docs/COSTS.md` compares prices.
+`my-mac` key when you create the server. [docs/COSTS.md](COSTS.md) compares prices.
 
 ## 4. Log in to your server for the first time
 
@@ -159,6 +159,6 @@ new prompt that ends in `#`, like `root@orchestra:~#`. You are now on the server
 
 ## 5. Next: install OrchestraOS
 
-Stay logged in, and continue with `docs/INSTALL.md` at **§0, "Run as a normal user,
+Stay logged in, and continue with [docs/INSTALL.md](INSTALL.md) at **§0, "Run as a normal user,
 not root"**. You are root right now, so that step applies to you: it creates your own
 account on the server, which is what OrchestraOS runs as.

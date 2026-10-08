@@ -5,7 +5,7 @@ phone and from a browser, on their own network, with no baked-in token. Two
 client surfaces, one pairing flow.
 
 Just want the web dashboard in your browser? That needs no pairing:
-`docs/INSTALL.md` §2, "Open the dashboard in your browser, over Tailscale https".
+[docs/INSTALL.md](INSTALL.md) §2, "Open the dashboard in your browser, over Tailscale https".
 This page is about the gateway (8890), which the phone app talks to.
 
 > **What works today, step by step** (updated 2026-10-07):
@@ -23,10 +23,10 @@ This page is about the gateway (8890), which the phone app talks to.
 ## Before anything else: log in
 
 Do this before you do anything below — install and log in to one agent CLI
-(Claude Code, Gemini (Antigravity `agy` CLI), or Codex). `docs/INSTALL.md` §0 has the exact
+(Claude Code, Gemini (Antigravity `agy` CLI), or Codex). [docs/INSTALL.md](INSTALL.md) §0 has the exact
 commands. If you have no subscription to any of them, Google's free tier is the
 likely zero-cost path, but note the harness uses the Antigravity `agy` CLI, and the
-free-tier figures in `docs/COSTS.md` are Gemini CLI's, **unverified against `agy`**.
+free-tier figures in [docs/COSTS.md](COSTS.md) are Gemini CLI's, **unverified against `agy`**.
 
 Two things people get wrong here, stated up front so you don't have to guess
 mid-flow:
@@ -140,7 +140,7 @@ or run `orchestra upgrade` first.
 A plain `http://` address (a LAN IP, `localhost`) is refused on the pairing
 screen, and the app tells you so. The simplest way to get a trusted https
 address, whether the gateway runs on a VPS or on a Mac, is Tailscale on both
-the gateway machine and the phone (`docs/INSTALL.md` §0 sets it up). On the gateway machine, first see what
+the gateway machine and the phone ([docs/INSTALL.md](INSTALL.md) §0 sets it up). On the gateway machine, first see what
 Tailscale already serves, because `tailscale serve` on a port that is taken
 silently REPLACES whatever was there:
 
@@ -172,11 +172,11 @@ or its pairing genuinely expires.
 ## 5. Connect the Mac app
 
 The Mac app connects to your **gateway** (8890), the same way the iOS app does. It is not
-the dashboard: the dashboard (8891) needs no app, just a browser (`docs/INSTALL.md` §2).
+the dashboard: the dashboard (8891) needs no app, just a browser ([docs/INSTALL.md](INSTALL.md) §2).
 
 Before you start:
 
-- **Tailscale on the Mac**, signed in to the same account as the server (`docs/INSTALL.md`
+- **Tailscale on the Mac**, signed in to the same account as the server ([docs/INSTALL.md](INSTALL.md)
   §0, "Tailscale on the VPS and on your own device").
 - **The gateway on an https address.** The Mac app refuses plain `http://`. On the server,
   follow step 4 above: run `tailscale serve status` first, then serve the gateway on a free
@@ -283,7 +283,7 @@ Connected to your-gateway.example.net · gateway v1 · no cards yet — they app
 
 That whole line is the success state on a fresh pairing with zero agents and
 zero cards — it is not a placeholder or an error, even though nothing else on
-the screen has happened yet. Fire one approval card (`docs/GATE.md` step 5) to
+the screen has happened yet. Fire one approval card ([docs/GATE.md](GATE.md) step 5) to
 see the surface actually render something.
 
 ## Notes for anyone building against this
@@ -297,7 +297,7 @@ see the surface actually render something.
   `/gateway/capabilities` is additive-only — treat any key your client
   doesn't recognize as "ignore it," never as an error, and treat an absent
   block (e.g. no `providers`) as "unknown," never as "none available."
-- See `docs/tracks/01-device-pairing.md` for the fuller device-pairing design
+- See [docs/tracks/01-device-pairing.md](tracks/01-device-pairing.md) for the fuller device-pairing design
   this onboarding flow is built on; if the two documents disagree on a route
   name or a response shape, this page (written against the frozen contract)
   is the one to trust, and the track doc needs an update.

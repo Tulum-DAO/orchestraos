@@ -1,11 +1,11 @@
 # The seven-step gate
 
 Everyone completes these seven steps before picking a track or adding a feature —
-see `docs/tracks/README.md` and `docs/HACKATHON_ISSUES.md`. Each step below is
+see [docs/tracks/README.md](tracks/README.md) and [docs/HACKATHON_ISSUES.md](HACKATHON_ISSUES.md). Each step below is
 command → expected output → what to check if it doesn't match. Copy-paste
 versions of the same steps (to hand to your own agent instead of typing commands
-yourself) are in `docs/PROMPTS.md`. The short summary version lives in
-`docs/BEGINNERS_GUIDE.md`; this page is the operational reference.
+yourself) are in [docs/PROMPTS.md](PROMPTS.md). The short summary version lives in
+[docs/BEGINNERS_GUIDE.md](BEGINNERS_GUIDE.md); this page is the operational reference.
 
 Do the steps in order — each one depends on state the last one created (a data
 dir, a running supervisor, a spawned seat).
@@ -15,9 +15,9 @@ seat, and `orchestra spawn` refuses (`refusing to spawn: no enabled runtime is i
 logged in`, exit 2) until one CLI is logged in. Ten seconds of logging in now saves that. You need one of Claude
 Code, Gemini CLI, or Codex already installed and authenticated — `orchestra
 doctor` in step 1 checks this and tells you what's missing, but you can't pass
-it without having done this first. See `docs/INSTALL.md` §0 for the exact
-per-CLI install + login commands, or `docs/BEGINNERS_GUIDE.md` if you've never
-used a terminal before. `docs/COSTS.md` covers what each CLI plan costs and the
+it without having done this first. See [docs/INSTALL.md](INSTALL.md) §0 for the exact
+per-CLI install + login commands, or [docs/BEGINNERS_GUIDE.md](BEGINNERS_GUIDE.md) if you've never
+used a terminal before. [docs/COSTS.md](COSTS.md) covers what each CLI plan costs and the
 possible no-cost path (Google's free tier; its figures are unverified against the
 `agy` CLI the harness uses).
 
@@ -45,7 +45,7 @@ orchestra up --detach && orchestra status
 
 Expected: `orchestra status` shows every supervised process (`gateway`, `api`,
 `dashboard`, `router`, the beats) with a live pid. Open the dashboard at the
-Tailscale https address from `docs/INSTALL.md` §2 ("Open the dashboard in your
+Tailscale https address from [docs/INSTALL.md](INSTALL.md) §2 ("Open the dashboard in your
 browser"; `tailscale serve status` prints it), or `http://127.0.0.1:8891` on the
 machine itself — it loads with an empty Agents list. Inside a Docker container the services
 bind `127.0.0.1` by design, so check with `curl -s 127.0.0.1:8891/api/agents` from
@@ -56,7 +56,7 @@ the internet).
 **If it fails, look here:** `orchestra doctor`'s failing row names the exact
 fix (a missing CLI, a bad port, an unauthed runtime) — read its remedy line
 before anything else. If `orchestra up` won't start, `<data>/logs/<name>.log`
-per `docs/INSTALL.md`'s process table has the real error; the supervisor's own
+per [docs/INSTALL.md](INSTALL.md)'s process table has the real error; the supervisor's own
 stdout only says which child failed.
 
 ## 2. Always-on agent spawned, answers questions in terminal
@@ -208,7 +208,7 @@ question precisely so this cannot happen on a fresh seat. Plain `HOLD_GRADE` mea
 did not clear the strict grader; with `--synthesize` on a seat this young the
 usual cause is a predecessor transcript too thin to anchor against — ask `hello`
 to do a little real work first, then retry. The handoff document and the successor's readback
-are both real files (see `docs/ARCHITECTURE.md`'s Vocabulary section for
+are both real files (see [docs/ARCHITECTURE.md](ARCHITECTURE.md)'s Vocabulary section for
 where) — read them; a failed promotion almost always shows up as a readback
 answer that doesn't match an anchor in the predecessor's transcript, which
 `rotate_agent.py`'s own output names.
@@ -233,8 +233,8 @@ its `-gN`/`-genN` generation suffix stripped), indexed by `MEMORY.md`.
 `spawn-agent.sh` seeds that directory and `MEMORY.md` at spawn time and puts
 the path in the new generation's boot prompt with a read-first instruction —
 that boot-prompt line, not the handoff document, is what makes the successor
-actually read it. See `docs/ARCHITECTURE.md`'s Memory section and
-`docs/MEMORY.md` (full walkthrough) for the exact shape.
+actually read it. See [docs/ARCHITECTURE.md](ARCHITECTURE.md)'s Memory section and
+[docs/MEMORY.md](MEMORY.md) (full walkthrough) for the exact shape.
 
 **If it fails, look here:** if the new generation doesn't know, the fact
 either wasn't written to disk (check the memory directory directly) or the
@@ -247,8 +247,8 @@ memory; a fact that only exists there will not survive.
 ## Done
 
 All seven green means you've exercised most of the files any track's doc
-will send you to. Pick a track (`docs/tracks/README.md`) or a
-`good-first-issue` (`docs/HACKATHON_ISSUES.md`).
+will send you to. Pick a track ([docs/tracks/README.md](tracks/README.md)) or a
+`good-first-issue` ([docs/HACKATHON_ISSUES.md](HACKATHON_ISSUES.md)).
 
 **Stuck on any step above?** The in-app **Report** button (dashboard top bar)
 files a structured report of what actually broke — use it before describing

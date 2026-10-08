@@ -1,6 +1,6 @@
 # Reference install — the operator's full setup
 
-`docs/INSTALL.md` is the **minimum path**: one machine, one CLI, one supervisor process,
+[docs/INSTALL.md](INSTALL.md) is the **minimum path**: one machine, one CLI, one supervisor process,
 no push, no voice. This page is the **reference install**: the setup the harness runs on
 every day. Do the minimum path first; every section below is a knob you *add* to it, and
 each one says why it exists and what breaks if you leave it out. Hosts and ids are
@@ -27,7 +27,7 @@ placeholders — `<vps>`, `<laptop>`, `<tailnet>`, `<chat-id>` — fill in your 
 
 Only the VPS runs seats. The laptop is a client (browser, phone, and the
 "resume auth on the other machine" helper). The browser reaches the dashboard over
-Tailscale https (`tailscale serve`, tailnet only; `docs/INSTALL.md` §2). `[machines]` in `orchestra.toml` records the
+Tailscale https (`tailscale serve`, tailnet only; [docs/INSTALL.md](INSTALL.md) §2). `[machines]` in `orchestra.toml` records the
 two Tailscale addresses; leave it blank on a single machine.
 
 ```toml
