@@ -8,7 +8,7 @@ import { registeredAgent, promptPathFor, inboxDirFor, isSafeAgentId } from '../l
 // The prompt routes' own root, unchanged from before (they never used state-reader's data dir).
 const PROMPT_ORCH = () => process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
 import { getTmuxSessionNames } from '../services/tmux-monitor.js';
-import { getUnifiedAgentStatus, spawnAgent, killAgent, getMacStatus, getMacSessionsCache } from '../services/cross-machine.js';
+import { getUnifiedAgentStatus, spawnAgent, killAgent, getMacStatus, getMacSessionsCache, isThisHost } from '../services/cross-machine.js';
 import { logInteraction } from '../services/learning.js';
 import { isTranscriptActive } from '../services/transcript-activity.js';
 import { getDetectorStates, detectorCacheAgeMs, classifyNoSession, type DetectorStatus } from '../services/agent-status.js';
@@ -186,7 +186,7 @@ router.get('/', async (_req: Request, res: Response) => {
         tmux_alive: unified?.tmux_alive ?? isLocalAlive,
         alive: unified?.tmux_alive ?? isLocalAlive,
         inbox_count: inboxCounts[id] || 0,
-        machine_status: unified?.machine_status ?? (machine === 'vps' ? 'online' : 'unknown'),
+        machine_status: unified?.machine_status ?? (isThisHost(machine) ? 'online' : 'unknown'),
         // Spread remaining def and state fields
         ...def,
         ...state,
@@ -361,7 +361,9 @@ router.get('/', async (_req: Request, res: Response) => {
             // Session exists but holds no claude process (service pane or
             // shell) — same semantics as the detector/gateway: stopped.
             agent.status = 'stopped';
-            agent.activity = 'No claude process running';
+            // Say what IS true: the session is up (so never Spawn a second one; open it). An
+            // operator read "red dot + Spawn" as a dead gm while `tmux ls` showed it attached.
+            agent.activity = 'Session up, CLI not detected';
           }
         }
       }
@@ -451,7 +453,7 @@ router.get('/:id', async (req: Request, res: Response) => {
 
     // Same canonical detector truth as the fleet list (cached; non-blocking).
     try {
-      if (((def.machine as string) || 'vps') === 'vps') {
+      if (isThisHost(def.machine as string | undefined) || getTmuxSessionNames().has(tmuxSession)) {
         const detector = await getDetectorStates();
         mergeDetector(agent, detector.get(tmuxSession));
       }
@@ -849,8 +851,8 @@ router.post('/:id/agent-key', async (req: Request, res: Response) => {
 
   // Menus are answered through the VPS gateway only (it holds the detector +
   // policy). Mac agents have no gateway seam for keys yet.
-  if (machine !== 'vps') {
-    res.status(400).json({ error: 'agent-key only supported for VPS agents' });
+  if (!isThisHost(machine)) {
+    res.status(400).json({ error: 'agent-key only supported for agents on this host' });
     return;
   }
 
