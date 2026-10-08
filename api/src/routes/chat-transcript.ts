@@ -18,6 +18,7 @@ import { mergeQueuedItems } from '../services/queued-merge.js';
 import { homedir } from 'os';
 import Database from 'better-sqlite3';
 import { agentScopeParam } from '../lib/agent-scope.js';
+import { expandChipDodge } from '../lib/chipDodge.js';
 
 const router = Router();
 // Every /:id route on this router is scoped to the caller's principal — the same rule GET /
@@ -261,9 +262,10 @@ export function parseCodexRollout(lines: string[]): any[] {
     const uuid = String(p.id || `${r.ordinal}`);
     switch (p.type) {
       case 'message': {
-        const text = codexText(p.content);
-        if (!text) break;
         const role = p.role === 'assistant' ? 'assistant' : 'user';
+        // The gateway chip-dodges long messages for every runtime, not just claude.
+        const text = role === 'user' ? expandChipDodge(codexText(p.content)) : codexText(p.content);
+        if (!text) break;
         const it: any = withTs({ kind: 'text', role, text, uuid }, r.ts);
         // The operator never typed the harness's own envelopes. Same rule as the Claude path
         // (sanitizeClaudeUserText, 55134d0): internals must not render as operator speech.
@@ -468,7 +470,8 @@ function cleanArgs(args: any): Record<string, unknown> {
  * already skips empty text.
  */
 export function sanitizeClaudeUserText(text: string): string {
-  let t = String(text ?? '');
+  // A long message reached the pane as a one-line chip-dodge banner; show what was typed.
+  let t = expandChipDodge(String(text ?? ''));
   t = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '');
   t = t.replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/g, '');
   t = t.replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, '');
@@ -668,7 +671,7 @@ function normalizeAntigravity(lines: string[]): any[] {
     if (t === 'CHECKPOINT' || t === 'CONVERSATION_HISTORY') continue;
 
     if (t === 'USER_INPUT') {
-      let text = (o.content || '').trim();
+      let text = expandChipDodge((o.content || '').trim());
       if (text.includes('</CONTEXT_SUMMARY>')) {
         const parts = text.split('</CONTEXT_SUMMARY>');
         text = parts[parts.length - 1].trim();
