@@ -1939,7 +1939,9 @@ def starter_team_state(seen=None):
     return out
 
 
-# ---- consent: the operator's yes is enforced HERE, not only in the prompt (review #268 blocker) ----
+# ---- consent: WHEN the tool may run is enforced HERE, not only in the prompt (review #268 blocker) ----
+# Code guarantees the tool runs only on the one operator turn right after Arturo's offer; whether that
+# turn said yes is still the brain's reading of it.
 # An offer belongs to one conversation and is good for exactly ONE operator turn: it is taken off the
 # book when that turn begins (_begin_team_turn), and put back only when Arturo makes the offer again.
 # Arturo makes it when a team-step turn ends with nothing running (the directive asks the question),
@@ -1974,6 +1976,9 @@ def _begin_team_turn(conversation_id, step):
 
 def decline_starter_team():
     turn = _TEAM_TURN.get()
+    if turn is not None and turn.get("opener"):
+        # The page's "Introduce my team." is not the operator's no, any more than it is their yes.
+        return "Not recorded: the operator has not answered yet. Ask them the one question."
     if turn is not None:
         turn["declined"] = True
     return "Noted: no team for now. The operator can ask for it any time."
@@ -2060,19 +2065,27 @@ def create_starter_team(project):
     if not _PROJECT_RE.match(project):
         return (f"I did not start anything: '{project}' cannot be a project name. Use lowercase letters, "
                 f"digits and dashes, starting with a letter or digit, at most 40 (for example 'website').")
+    if state["state"] == "starting":
+        # Checked before the offer: a "Still setting up" turn puts no offer back, and the next call
+        # must hear that the run is going, not be told to ask again.
+        return "Already setting up the team; it can take a few minutes. " + _seen_report(project)
     if not turn.get("offered"):
         _offer_team(turn.get("conversation_id"))
         return (f"NOT STARTED: the operator has not said yes yet. Ask them now, in one question: this starts "
                 f"gm (the manager, always on, which keeps costing tokens), pm-{project} and dev-{project}. "
                 f"Start it only after they say yes.")
-    if state["state"] == "starting" or not _STARTER_LOCK.acquire(blocking=False):
+    if not _STARTER_LOCK.acquire(blocking=False):
         return "Already setting up the team; it can take a few minutes. " + _seen_report(project)
     turn["offered"] = False                      # spent: a second call in this turn asks again
     plan = starter_plan(project)
     log.info(f"STARTER TEAM: {' '.join(plan.argv[1:])}")
     done = {}
-    worker = _threading.Thread(target=_run_starter, args=(plan, done), daemon=True)
-    worker.start()
+    try:
+        worker = _threading.Thread(target=_run_starter, args=(plan, done), daemon=True)
+        worker.start()
+    except Exception as e:  # noqa: BLE001 — a run that never started must not leave the lock held
+        _STARTER_LOCK.release()
+        return f"FAILED: could not start orchestra starter: {e} " + _seen_report(project)
     worker.join(_STARTER_WAIT_S)
     if "result" not in done:
         return (f"Still setting up the team for project '{project}' (orchestra starter is running; it can "
@@ -4961,7 +4974,7 @@ def text_turn(text, conversation_id, brain=None, context=None):
     messages = _ptt.build_messages(context, history, text, current_brain=effective)
     brain_tok = _BRAIN_THIS_TURN.set(chosen) if chosen is not None else None
     fail_tok = _brain.TURN_FAILURE.set(None)
-    # The operator's yes, as code: a stream that fell back here already took the offer off the book,
+    # The offer, as code: a stream that fell back here already took the offer off the book,
     # so its record is inherited, never taken twice.
     team_turn = _TEAM_TURN.get()
     team_tok = None

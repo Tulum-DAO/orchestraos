@@ -55,9 +55,9 @@ SEEN_WORDS = {
     "unknown": "could not tell",
 }
 
-# How an answer to the one question is handled. The yes is checked in CODE too (arturo-proxy.py
-# _begin_team_turn): the tool refuses on the page's own opener and on any turn that did not follow an
-# offer, so these words are the brain's half of the rule, not the whole of it.
+# How an answer to the one question is handled. Code limits WHEN the tool can run (arturo-proxy.py
+# _begin_team_turn): only on the one operator turn right after Arturo's offer, never on the page's own
+# opener. Whether that turn said yes is still the brain's reading, which is what these words are for.
 _ANSWER_RULES = (
     " If they say no or not now, call decline_starter_team and accept it in one clause, saying they can "
     "ask you for their team any time. If they ask something else, answer it briefly and then repeat the "

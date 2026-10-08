@@ -502,3 +502,41 @@ def test_the_stream_fallback_passes_the_team_state_through():
     events = list(ts._whole_reply("t1", "c1", lambda: (200, body), brain=None))
     end = [e for e in events if e["event"] == "turn.end"][-1]
     assert end["data"]["team"] == {"state": "present"}
+
+
+# ---- delta review of 24140d3 (orchestraos-builder) -----------------------------------------------
+def test_a_decline_on_the_opener_is_ignored(P):
+    # the page's "Introduce my team." is not the operator's no either
+    with _turn(P, opener=True, cid="web_r1"):
+        out = P.execute_tool("decline_starter_team", {})
+        assert P._TEAM_TURN.get()["declined"] is False
+    assert "not" in out.lower()
+
+
+def test_a_call_while_a_run_is_in_progress_says_so_even_without_an_offer(P, tmp_path, monkeypatch):
+    # after a "Still setting up" turn there is no new offer; the next call must not say "NOT STARTED"
+    monkeypatch.setattr(P, "ORCHESTRA_DIR", _registry(tmp_path, {}))
+    monkeypatch.setattr(P, "starter_running", lambda: True)
+    monkeypatch.setattr(P, "_run_commission", _no_run)
+    monkeypatch.setattr(P, "seat_seen", lambda n: "no session")
+    with _turn(P, offered=False, cid="web_r2"):
+        out = P.create_starter_team("website")
+    assert out.startswith("Already setting up")
+
+
+def test_a_thread_that_cannot_start_releases_the_lock(P, tmp_path, monkeypatch):
+    monkeypatch.setattr(P, "ORCHESTRA_DIR", _registry(tmp_path, {}))
+    monkeypatch.setattr(P, "seat_seen", lambda n: "no session")
+
+    class _NoThread:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            raise RuntimeError("can't start new thread")
+    monkeypatch.setattr(P._threading, "Thread", _NoThread)
+    with _turn(P, cid="web_r3"):
+        out = P.create_starter_team("website")
+    assert out.startswith("FAILED")
+    assert not P._STARTER_LOCK.locked()
+    assert P.starter_team_state(seen=lambda n: "no session")["state"] == "absent"
