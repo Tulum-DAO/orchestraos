@@ -23,10 +23,19 @@ import hashlib
 _NON_BRIDGE_STATES = frozenset({"stranded_input"})
 
 
-def menu_op_key(source_session: str, question: str) -> str:
-    """Deterministic dedup key for a menu, derived from session + question."""
+def menu_identity(question: str, context: str = "") -> str:
+    """The text a menu's identity is keyed on: its question plus, when the detector captured
+    one, its CONTEXT (what the prompt is about: a permission prompt's command, a menu's
+    preamble). Without the context, two "Do you want to proceed?" prompts for different
+    commands share one identity, so a stale tap meant for one could answer the other. With
+    no context the identity is exactly the old question-only one."""
+    return question if not context else question + "\n\u00a7context\u00a7\n" + context
+
+
+def menu_op_key(source_session: str, question: str, context: str = "") -> str:
+    """Deterministic dedup key for a menu: session + question + context (menu_identity)."""
     digest = hashlib.sha256(
-        (source_session + "|" + question).encode()
+        (source_session + "|" + menu_identity(question, context)).encode()
     ).hexdigest()[:16]
     return f"menu:{source_session}:{digest}"
 

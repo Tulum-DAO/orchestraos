@@ -530,7 +530,7 @@ def _stamp_instance(session, menu, ledger=None, now=None, answered_signal=False,
     stable-enough id and the feed never breaks."""
     import time as _time
     q = (menu or {}).get("question") or ""
-    digest = hashlib.sha256((session + "|" + q).encode()).hexdigest()[:16]
+    digest = _perm_digest(session, q, (menu or {}).get("context") or "")
     try:
         now = _time.time() if now is None else now
         own = ledger is None
@@ -545,7 +545,15 @@ def _stamp_instance(session, menu, ledger=None, now=None, answered_signal=False,
         return 1, digest
 
 
-def _mark_instance_answered(session, question):
+def _perm_digest(session, question, context=""):
+    """The permission prompt's content key: session + question + CONTEXT (the command it asks
+    about). Without the context, two "Do you want to proceed?" prompts for different commands
+    shared one digest, hence one card id. menu_bridge_core.menu_identity is the one rule."""
+    from menu_bridge_core import menu_identity
+    return hashlib.sha256((session + "|" + menu_identity(question, context)).encode()).hexdigest()[:16]
+
+
+def _mark_instance_answered(session, question, context=""):
     """Record that the current (session,question) permission prompt was ANSWERED.
     An answer is a CONFIRMED dismissal, so we flip phase->gone IMMEDIATELY (not
     just set a flag): the next same-question prompt then bumps instance_n on its
@@ -553,7 +561,7 @@ def _mark_instance_answered(session, question):
     in the <1s gap. Called from handle_agent_key on a successful digit send.
     Best-effort / fail-open — the answer path never fails on this."""
     try:
-        digest = hashlib.sha256((session + "|" + question).encode()).hexdigest()[:16]
+        digest = _perm_digest(session, question, context)
         led = _load_instance_ledger()
         import time as _time
         e = led.get(f"{session}|{digest}")
@@ -2256,7 +2264,7 @@ def permission_respond(session, text, *, armed=False, read_fn=None, key_fn=None,
             return False, {"reason": "send_failed", "phase": 3}
         _time.sleep(0.8 if attempt == 1 else 1.6)
         if gone_fn():
-            _mark_instance_answered(session, question)   # instance-ledger parity
+            _mark_instance_answered(session, question, menu.get("context") or "")   # ledger parity
             return True, {"armed": True, "option_n": option_n, "attempts": attempt}
     return False, {"reason": "unverified_submit", "phase": 3}
 
@@ -5053,7 +5061,7 @@ async def handle_agent_key(request):
     # prompt bumps instance_n PROMPTLY (closes the <1s poll-gap hole that a
     # scan-only reset would miss). Permission-only; best-effort, never fatal.
     if menu.get("kind") == "permission":
-        _mark_instance_answered(session, menu.get("question") or "")
+        _mark_instance_answered(session, menu.get("question") or "", menu.get("context") or "")
     return _json({"ok": True, "sent": key})
 
 
