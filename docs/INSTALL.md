@@ -259,7 +259,9 @@ on your tailnet can open.
 types into your seats' terminals on the server. Anyone who can open it can run
 commands as your user. So: never `--funnel` (that publishes it to the whole internet),
 never `[dashboard] host = "0.0.0.0"` on a VPS, and share your tailnet only with people
-you would give a shell to.
+you would give a shell to. The web terminal also refuses on purpose to connect when the
+dashboard is opened by a raw IP address (e.g. `http://203.0.113.5:8891`), so a
+`0.0.0.0` bind gets you a dashboard whose terminal does not work.
 
 First see what Tailscale already serves on this machine. `tailscale serve` on an https
 port that is already taken silently replaces whatever was there:
@@ -290,6 +292,15 @@ point at it.
 
 `tailscale serve` keeps this setting across reboots. `tailscale serve --https=443 off`
 removes it.
+
+The web terminal only accepts connections from the address the dashboard was opened at,
+and it knows three kinds: loopback (`127.0.0.1`), the `[dashboard] host` you set, and
+Tailscale names (`*.ts.net`). If you put the dashboard behind your own reverse proxy or
+domain instead, list that name in `ORCHESTRA_DASHBOARD_ALLOWED_HOSTS` (comma-separated)
+in the shell that runs `orchestra up`, then restart it, e.g.
+`export ORCHESTRA_DASHBOARD_ALLOWED_HOSTS=dash.example.org`. Otherwise the dashboard loads
+but its terminal fails to connect, and `<data>/logs/dashboard.log` shows
+`[ws] refused ... (host-not-served)`.
 
 No Tailscale? From your laptop, `ssh -L 8891:127.0.0.1:8891 <user>@<server>` and then
 open `http://127.0.0.1:8891` while that ssh session stays open.
