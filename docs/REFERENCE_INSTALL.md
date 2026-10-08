@@ -158,9 +158,10 @@ exits non-zero on failure. Track T6 moves this under `plugins/`.
 
 `services/arturo` is Arturo, typed chat and voice alike (`[arturo] enabled = true`, `:5071`);
 `enabled = false` turns off Arturo entirely, typed chat included. With no key, Arturo answers
-typed chat through a logged-in agent CLI (doctor's `arturo:brain` row says which). Voice needs
-keys in the environment of `services/arturo/run.sh`: a Gemini API key, and an ElevenLabs or
-Cartesia key for speech. The run script's `ARTURO_*` switches (stream relay, partials,
+typed chat through a logged-in agent CLI (doctor's `arturo:brain` row says which). Voice keys go
+in the environment of `services/arturo/run.sh`, and which one depends on where you talk: **Live
+voice mode** in the browser needs only `GEMINI_API_KEY`; the phone app's call uses its own voice
+key (`ELEVENLABS_API_KEY`, or `CARTESIA_API_KEY`). Dictation in the browser needs no key. The run script's `ARTURO_*` switches (stream relay, partials,
 speaking flip, semantic and facts recall, gm injection) default to the reference values;
 leave them unless you are working on the voice lane.
 
