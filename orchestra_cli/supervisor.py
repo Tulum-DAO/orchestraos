@@ -198,6 +198,31 @@ def read_status(data_dir: Path, pid_alive: Callable[[int], bool] = _pid_alive) -
             "updated": state.get("updated")}
 
 
+def wait_until_up(data_dir: Path, child, started_after: float, timeout_s: float = 20.0,
+                  poll_s: float = 0.2, clock: Callable[[], float] = time.time,
+                  sleep: Callable[[float], None] = time.sleep) -> tuple[bool, str]:
+    """Wait for a detached supervisor to be UP, so `up --detach && status` never reads a
+    half-started install as "not running" (measured on a clean box: 3/3 runs failed that way,
+    then "running" 4 s later).
+
+    UP means: the pidfile names THIS child (not a stale pid from an earlier run) and the
+    state file was written after we launched it, i.e. its first tick ran and the children
+    are started. Returns (ok, reason); not ok when the child exits first or time runs out.
+    """
+    data_dir = Path(data_dir)
+    deadline = clock() + timeout_s
+    while True:
+        rc = child.poll()
+        if rc is not None:
+            return False, f"exited rc={rc}"
+        st = read_status(data_dir)
+        if st["pid"] == child.pid and (st["updated"] or 0) >= started_after:
+            return True, "up"
+        if clock() >= deadline:
+            return False, f"not up after {timeout_s:.0f}s"
+        sleep(poll_s)
+
+
 def stop_running(data_dir: Path, wait_s: float = STOP_GRACE_S + 5) -> bool:
     st = read_status(data_dir)
     if not st["running"]:

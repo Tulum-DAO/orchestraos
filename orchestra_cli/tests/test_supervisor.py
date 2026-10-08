@@ -1,5 +1,6 @@
 """RED-first: process table + supervisor loop, driven by fake spawns and a fake clock."""
 import json
+import os
 import signal
 from pathlib import Path
 
@@ -249,3 +250,78 @@ def test_up_prints_one_update_notice_when_behind_and_never_blocks(tmp_path, monk
     assert M.update_notice(tmp_path) == ""
     monkeypatch.setattr(V, "status", lambda root, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
     assert M.update_notice(tmp_path) == ""              # a broken probe never blocks up
+
+
+# --- up --detach waits until the supervisor is UP (clean-box race: status said "not running") ---
+
+class _FakeChild:
+    def __init__(self, pid, rc=None):
+        self.pid, self.rc = pid, rc
+
+    def poll(self):
+        return self.rc
+
+
+def _write(data_dir, pid=None, updated=None):
+    st = data_dir / "state"
+    st.mkdir(parents=True, exist_ok=True)
+    if pid is not None:
+        (st / "supervisor.pid").write_text(str(pid))
+    if updated is not None:
+        (st / "supervisor.json").write_text(json.dumps({"pid": pid, "updated": updated, "children": {}}))
+
+
+def _clock(start=1000.0):
+    t = {"now": start}
+    return (lambda: t["now"]), (lambda dt: t.__setitem__("now", t["now"] + dt))
+
+
+def test_wait_until_up_true_once_pidfile_is_this_child_and_state_is_fresh(tmp_path):
+    from orchestra_cli import supervisor as SV
+    _write(tmp_path, pid=os.getpid(), updated=1001.0)
+    clock, sleep = _clock()
+    child = _FakeChild(os.getpid())
+    assert SV.wait_until_up(tmp_path, child, started_after=1000.0, clock=clock, sleep=sleep) == (True, "up")
+
+
+def test_wait_until_up_ignores_a_stale_pidfile_from_an_earlier_run(tmp_path):
+    from orchestra_cli import supervisor as SV
+    _write(tmp_path, pid=os.getpid(), updated=1001.0)   # a LIVE pid, but not our child's
+    clock, sleep = _clock()
+    ok, why = SV.wait_until_up(tmp_path, _FakeChild(os.getpid() + 999999), started_after=1000.0,
+                               timeout_s=2, clock=clock, sleep=sleep)
+    assert not ok and "not up" in why
+
+
+def test_wait_until_up_ignores_state_written_before_launch(tmp_path):
+    from orchestra_cli import supervisor as SV
+    _write(tmp_path, pid=os.getpid(), updated=999.0)    # an old run's last snapshot
+    clock, sleep = _clock()
+    ok, why = SV.wait_until_up(tmp_path, _FakeChild(os.getpid()), started_after=1000.0,
+                               timeout_s=2, clock=clock, sleep=sleep)
+    assert not ok and "not up" in why
+
+
+def test_wait_until_up_reports_a_child_that_exits_first(tmp_path):
+    from orchestra_cli import supervisor as SV
+    clock, sleep = _clock()
+    ok, why = SV.wait_until_up(tmp_path, _FakeChild(4242, rc=2), started_after=1000.0,
+                               clock=clock, sleep=sleep)
+    assert (ok, why) == (False, "exited rc=2")
+
+
+def test_wait_until_up_waits_through_the_race_window(tmp_path):
+    """The measured race: pidfile written, first state not yet. It must WAIT, not report."""
+    from orchestra_cli import supervisor as SV
+    _write(tmp_path, pid=os.getpid())                   # pidfile only
+    t = {"now": 1000.0, "polls": 0}
+
+    def sleep(dt):
+        t["now"] += dt
+        t["polls"] += 1
+        if t["polls"] == 5:                              # first tick lands a second later
+            _write(tmp_path, pid=os.getpid(), updated=t["now"])
+
+    ok, why = SV.wait_until_up(tmp_path, _FakeChild(os.getpid()), started_after=1000.0,
+                               clock=lambda: t["now"], sleep=sleep)
+    assert (ok, why) == (True, "up") and t["polls"] == 5
