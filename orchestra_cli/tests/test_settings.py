@@ -181,3 +181,101 @@ def test_orch_api_url_brackets_an_ipv6_api_host(tmp_path):
                     config_exists=True, raw={}, data_dir=tmp_path / "data",
                     api_host="::1", api_port=18888)
     assert S.child_env(st, base={})["ORCH_API_URL"] == "http://[::1]:18888"
+
+
+def test_child_env_drops_the_installer_sessions_identity_and_keeps_config(tmp_path):
+    """An AI agent that runs `orchestra up` (the install playbook) exports its own Claude Code
+    session: CLAUDECODE, the session id, a messaging socket + TOKEN. The supervisor must not pass
+    them on: if it starts the tmux server, every seat's `claude` thinks it is nested and carries
+    that token. Operator configuration with a CLAUDE_/ANTHROPIC_ name must survive."""
+    st = S.Settings(repo_root=tmp_path / "repo", config_path=tmp_path / "orchestra.toml",
+                    config_exists=True, raw={}, data_dir=tmp_path / "data")
+    base = {k: "x" for k in S.INSTALLER_SESSION_ENV}
+    keep = {"CLAUDE_CONFIG_DIR": "/c", "ANTHROPIC_API_KEY": "k", "CLAUDE_CODE_USE_BEDROCK": "1",
+            "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1", "PATH": "/usr/bin"}
+    env = S.child_env(st, base={**base, **keep})
+    assert not [k for k in S.INSTALLER_SESSION_ENV if k in env]
+    for k, v in keep.items():
+        assert env[k] == v, k
+
+
+def test_spawn_agent_unsets_the_same_list():
+    """spawn-agent.sh can be run directly (by a seat, or by the installer agent). Its
+    INSTALLER_SESSION_ENV array must name exactly the Python list, so the two never drift, and the
+    unset must come before anything else runs."""
+    src = (Path(__file__).resolve().parents[2] / "spawn-agent.sh").read_text()
+    lines = [l for l in src.splitlines() if l.startswith("INSTALLER_SESSION_ENV=(")]
+    assert len(lines) == 1, "one INSTALLER_SESSION_ENV array near the top of spawn-agent.sh"
+    assert tuple(lines[0][len("INSTALLER_SESSION_ENV=("):].rstrip(")").split()) == S.INSTALLER_SESSION_ENV
+    assert src.index('unset "${INSTALLER_SESSION_ENV[@]}"') < src.index("SCRIPT_DIR=")
+    # and the launch line strips them from the CLI too (a running tmux server's env reaches the pane)
+    assert 'launch_cmd="$_scrub $launch_cmd"' in src
+
+
+def test_spawn_agent_really_unsets_them(tmp_path):
+    """By effect: source only the head of spawn-agent.sh (through the unset) in a shell that has
+    the installer's session, then print what is left."""
+    import subprocess
+    src = (Path(__file__).resolve().parents[2] / "spawn-agent.sh").read_text().splitlines()
+    head = "\n".join(src[: next(i for i, l in enumerate(src) if l.startswith('unset "${INSTALLER_SESSION_ENV')) + 1])
+    script = tmp_path / "head.sh"
+    script.write_text(head + "\nenv\n")
+    env = {"PATH": "/usr/bin:/bin", "CLAUDE_CONFIG_DIR": "/c", **{k: "x" for k in S.INSTALLER_SESSION_ENV}}
+    out = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True, timeout=10).stdout
+    names = {l.split("=", 1)[0] for l in out.splitlines() if "=" in l}
+    assert not names & set(S.INSTALLER_SESSION_ENV)
+    assert "CLAUDE_CONFIG_DIR" in names
+
+
+def test_the_launch_line_strips_the_session_even_from_a_contaminated_pane(tmp_path):
+    """By effect: build the launch prefix exactly as spawn-agent.sh does and run it in a shell
+    that HAS the installer's session (a pane on an already-running, contaminated tmux server)."""
+    import subprocess
+    src = (Path(__file__).resolve().parents[2] / "spawn-agent.sh").read_text()
+    arr = next(l for l in src.splitlines() if l.startswith("INSTALLER_SESSION_ENV=("))
+    script = tmp_path / "launch.sh"
+    script.write_text(arr + '\n_scrub="env"; for _v in "${INSTALLER_SESSION_ENV[@]}"; do _scrub+=" -u $_v"; done\n'
+                      'eval "$_scrub ORCHESTRA_DIR=/d env"\n')
+    env = {"PATH": "/usr/bin:/bin", "CLAUDE_CONFIG_DIR": "/c", **{k: "x" for k in S.INSTALLER_SESSION_ENV}}
+    out = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True, timeout=10).stdout
+    names = {l.split("=", 1)[0] for l in out.splitlines() if "=" in l}
+    assert not names & set(S.INSTALLER_SESSION_ENV)
+    assert {"CLAUDE_CONFIG_DIR", "ORCHESTRA_DIR"} <= names
+
+
+def test_a_contaminated_running_tmux_server_does_not_reach_the_seat(tmp_path):
+    """pm-tulumdao's by-effect ask: a tmux server STARTED with the installer's session (an older
+    install, or the installer agent's own shell) hands that env to every new pane. The seat's
+    launch line, built as spawn-agent.sh builds it, must still start the CLI without it."""
+    import shutil
+    import subprocess
+    import time
+    if not shutil.which("tmux"):
+        import pytest
+        pytest.skip("tmux not installed")
+    src = (Path(__file__).resolve().parents[2] / "spawn-agent.sh").read_text()
+    arr = next(l for l in src.splitlines() if l.startswith("INSTALLER_SESSION_ENV=("))
+    sock = Path("/tmp") / f"envscrub-{os.getpid()}"            # short: unix socket path limit
+    sock.mkdir(exist_ok=True)
+    out = tmp_path / "seat-env.txt"
+    dirty = {"PATH": os.environ["PATH"], "TMUX_TMPDIR": str(sock), "HOME": str(tmp_path),
+             "CLAUDE_CONFIG_DIR": "/c", **{k: "x" for k in S.INSTALLER_SESSION_ENV}}
+    tm = lambda *a: subprocess.run(["tmux", "-f", "/dev/null", *a], env=dirty,
+                                   capture_output=True, text=True, timeout=10)
+    try:
+        assert tm("new-session", "-d", "-s", "seat", "-x", "120", "-y", "20", "bash --norc").returncode == 0
+        # what the pane shell inherited: the contaminated server env (the precondition)
+        launch = (arr + '; _scrub="env"; for _v in "${INSTALLER_SESSION_ENV[@]}"; do _scrub+=" -u $_v"; done; '
+                  f'echo "PANE_HAS=$CLAUDECODE" > {out}.pane; eval "$_scrub env" > {out}')
+        tm("send-keys", "-t", "=seat:", launch, "Enter")
+        for _ in range(50):
+            if out.exists() and out.stat().st_size:
+                break
+            time.sleep(0.1)
+        assert (Path(f"{out}.pane")).read_text().strip() == "PANE_HAS=x", "precondition: the pane is contaminated"
+        names = {l.split("=", 1)[0] for l in out.read_text().splitlines() if "=" in l}
+        assert not names & set(S.INSTALLER_SESSION_ENV)
+        assert "CLAUDE_CONFIG_DIR" in names
+    finally:
+        tm("kill-server")
+        shutil.rmtree(sock, ignore_errors=True)

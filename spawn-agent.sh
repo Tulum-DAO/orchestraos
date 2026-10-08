@@ -11,6 +11,14 @@
 #   spawn-agent.sh --kill-all                    # Kill all agents
 
 set -euo pipefail
+# The calling agent-CLI session's identity (an agent that runs spawn-agent.sh, or the installer
+# agent behind `orchestra up`), never configuration: a seat must not inherit it, or its `claude`
+# thinks it is nested and carries that session's messaging token. Same list as
+# orchestra_cli/settings.py INSTALLER_SESSION_ENV (a test keeps them equal). Unset here, and again
+# with `env -u` on the launch line below, because a tmux server that is ALREADY running hands its
+# own (possibly contaminated) environment to every new pane.
+INSTALLER_SESSION_ENV=(CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ATTENDED CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN CLAUDE_CODE_EXECPATH CLAUDE_CODE_SSE_PORT CLAUDE_PID CLAUDE_EFFORT CODEX_SANDBOX CODEX_SANDBOX_NETWORK_DISABLED CODEX_THREAD_ID GEMINI_CLI)
+unset "${INSTALLER_SESSION_ENV[@]}"
 
 # Timezone: fleet runs on the operator's Eastern time (VPS system clock is UTC).
 # Every spawned agent inherits ET so `date`/naive datetime read local, not UTC.
@@ -806,6 +814,11 @@ spawn_agent() {
     [[ -n "${ORCHESTRA_CONFIG:-}" ]] && _orch_prefix="$_orch_prefix $(printf 'ORCHESTRA_CONFIG=%q' "$ORCHESTRA_CONFIG")"
     [[ -n "${CLAUDE_CONFIG_DIR:-}" ]] && _orch_prefix="$_orch_prefix $(printf 'CLAUDE_CONFIG_DIR=%q' "$CLAUDE_CONFIG_DIR")"
     launch_cmd="$_orch_prefix $launch_cmd"
+    # The pane's shell got the tmux SERVER's environment, which may still carry an installer
+    # agent's session (a server started before this fix, or by hand): strip it from the CLI itself.
+    local _scrub="env" _v
+    for _v in "${INSTALLER_SESSION_ENV[@]}"; do _scrub+=" -u $_v"; done
+    launch_cmd="$_scrub $launch_cmd"
     if [[ -n "$resume_sid" && "$runtime" != "claude" ]]; then
         err "$agent_id: --resume is claude-only (runtime=$runtime has no resume adapter here)"
         tmux kill-session -t "$tmux_name" 2>/dev/null || true
