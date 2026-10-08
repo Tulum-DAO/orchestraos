@@ -410,6 +410,8 @@ Rules:
 - In the `sed` line, use the agent CLI I logged in to in section 0 (claude, gemini or
   codex). Ask me which one if you don't know; don't guess.
 - `orchestra init --yes` takes about five minutes. Wait for it to finish; don't stop it.
+  Its `--yes` adds OrchestraOS's hook rows to `~/.claude/settings.json`; that is expected
+  and is not an overwrite.
 - We are done when `orchestra doctor` ends with `doctor: all required checks OK`. Show me
   that output; don't just tell me it worked.
 ```
@@ -455,7 +457,9 @@ already existed then. On a clean machine it did not, so without them a bare `orc
 later one; `./bin/orchestra` from the checkout always works too.
 
 The `sed` line sets the `enabled = [...]` line **under `[runtimes]`** to the one CLI you logged in
-to. Use `["gemini"]` or `["codex"]` if that is your CLI. `orchestra.toml` has other `enabled =`
+to. It must run inside the `orchestraos` folder (if you reconnected, run `cd ~/orchestraos`
+first). Use `["gemini"]` or `["codex"]` if that is your CLI. For Gemini the command you ran is
+`agy`, but the value here is still `"gemini"`. `orchestra.toml` has other `enabled =`
 lines (`[arturo]`, `[telemetry]`, `[plugins.*]`); leave those alone. To edit by hand instead:
 `$EDITOR orchestra.toml`, find `[runtimes]`, and change the `enabled` line just below it.
 
@@ -508,8 +512,8 @@ Rules:
   the output. Use an https port that is not in that list; never replace or turn off an
   entry that is already there. Never use `--funnel`, and never change `[dashboard] host`.
 - We are done when `orchestra status` prints `supervisor: running pid ...`, and my browser
-  shows the dashboard at the https address `tailscale serve status` printed. Ask me to
-  confirm what I see; don't just tell me it worked.
+  shows the dashboard at the https address whose entry proxies to `http://127.0.0.1:8891`
+  in `tailscale serve status`. Ask me to confirm what I see; don't just tell me it worked.
 ```
 
 ```bash
@@ -517,7 +521,8 @@ orchestra up --detach && orchestra status   # starts everything in the backgroun
 ```
 
 You should see: `supervisor started in background (pid …)`, then `supervisor: running pid …`,
-then one line per part (`gateway`, `api`, `dashboard`, the beats) with its status. It keeps
+then one line per part (`gateway`, `api`, `dashboard`, the beats) with its status. If it
+says `supervisor already running` instead (you ran it before), run `orchestra status` on its own. It keeps
 running after you log out. `orchestra down` stops it. (`orchestra up` without `--detach` runs
 in the foreground instead, and `Ctrl-C` stops it.)
 
@@ -566,29 +571,56 @@ port that is already taken silently replaces whatever was there:
 tailscale serve status        # on a fresh VPS: "No serve config"
 ```
 
+Each entry starts with an `https://` line. An entry shown with no `:port` after the name (for
+example `https://x.ts.net (tailnet only)`) is using port 443, so if you see one, 443 is taken.
+
 Pick an https port that is not in that list. On a fresh VPS nothing is, so use 443,
 which gives an address with no port number in it. The target is the dashboard's plain
 http address (`[dashboard] port`, default 8891; `orchestra status` prints it):
 
 ```bash
 tailscale serve --bg --https=443 http://127.0.0.1:8891
-tailscale serve status        # prints the address, e.g. https://<vps>.<tailnet>.ts.net
 ```
 
-If 443 was taken, use another free port, e.g. `--https=8446`; the address then ends
-in `:8446`. The first time, Tailscale may answer that serve or https certificates
+If 443 was taken, use another free port instead, for example 8446 (the address then ends
+in `:8446`):
+
+```bash
+tailscale serve --bg --https=8446 http://127.0.0.1:8891
+```
+
+The first time, Tailscale may answer that serve or https certificates
 are not enabled on your tailnet and print an admin link. **[PERSON ONLY]** Open it, sign in
 if asked, enable them, and run the command again.
 
+Then find your dashboard's address:
+
+```bash
+tailscale serve status
+```
+
+Each entry is an `https://` line followed by a `|-- / proxy ...` line. Your dashboard's
+address is the `https://` line just above `|-- / proxy http://127.0.0.1:8891`, for example:
+
+```text
+https://<vps>.<tailnet>.ts.net (tailnet only)
+|-- / proxy http://127.0.0.1:8891
+```
+
+Ignore every other entry; they belong to other things on this server.
+
 Open that address in a browser on your laptop or phone (it must be signed in to
-Tailscale). The dashboard loads, with an empty Agents list until step 3. Step 4 walks you
+Tailscale). The dashboard opens on its chat page, with **Arturo** at the top. To see your
+agents, tap the gear button at the top left, then **Agents** (or add `/agents` to the
+address). That page's heading is **Agents**, and it stays empty until step 3. Step 4 walks you
 through this again once your team is running. The first
 visit can take a few seconds while the certificate is issued. Optional: put the
 address in `orchestra.toml` as `[public] host` so links in the UI and notifications
 point at it.
 
-`tailscale serve` keeps this setting across reboots. `tailscale serve --https=443 off`
-removes it.
+`tailscale serve` keeps this setting across reboots. `tailscale serve --https=<the port you
+used> off` removes only your dashboard's entry. Never turn off a port you didn't add: it may
+belong to another app on this server.
 
 The web terminal only accepts connections from the address the dashboard was opened at,
 and it knows three kinds: loopback (`127.0.0.1`), the `[dashboard] host` you set, and
