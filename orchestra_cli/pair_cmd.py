@@ -105,6 +105,7 @@ def run_pair(args, settings=None, store=None, out=print, clear_after_s=60):
         out("  voice    talk to Arturo from this device, typed or spoken  (every turn spends provider credit)")
         out("  ptt      push-to-talk to Arturo from a headset or Watch  (lookups and seat messages only)")
         out("  admin    file red-alert reports, post telemetry")
+        out("  usage    nothing yet: reserved for reading usage later, so a device paired now needs no re-pair")
         out("")
         out("  A read-only phone:   orchestra pair --scopes read")
         out("  A headset that approves:  orchestra pair --scopes read,approve,message")
