@@ -333,6 +333,7 @@ Mail a seat and watch it act with no keypress (the shipped hooks + the router be
 `orchestra up`; see docs/HOOKS.md):
 
 ```bash
+source scripts/orchestra-env.sh      # once per shell: tells msg_store.py and the scripts where your data dir is
 echo "hello" > note.txt
 python3 msg_store.py send --from you --to gm --subject hi --body-file note.txt
 ```
@@ -363,7 +364,7 @@ host" below.
 From a shell (or let the seat run it):
 
 ```bash
-source scripts/orchestra-env.sh
+source scripts/orchestra-env.sh      # already done in §3 if you are in the same shell; harmless to repeat
 python3 scripts/approval.py request "Ship the hello change?" --from hello --worker-kind pane --options approve,deny
 # -> prints the card id, e.g. apr_1a2b3c4d_567
 ```

@@ -134,6 +134,7 @@ sent the bot `/start` yet.
 
 ```bash
 orchestra spawn hello-2 --task "Say hello, then park."
+source scripts/orchestra-env.sh   # from the checkout, once per shell: points msg_store.py at your data dir
 python3 msg_store.py send --from hello --to hello-2 --type task --subject test --body-file <(echo "hi from hello")
 python3 msg_store.py inbox --agent hello-2
 ```
@@ -143,11 +144,14 @@ Expected: the `inbox` call shows the row you just sent (`subject: test`,
 
 **If it fails, look here:** `msg_store.py send` always writes the row — if
 `inbox` doesn't show it, you queried the wrong `--agent` name (must match
-`to_agent` exactly) or the wrong data dir (`echo $ORCHESTRA_DIR`).
+`to_agent` exactly) or the wrong data dir (`echo $ORCHESTRA_DIR`; empty means you skipped
+the `source` line). `sqlite3.OperationalError: unable to open database file` on `send`
+means the same thing: run `source scripts/orchestra-env.sh` and try again.
 
 ## 5. One approval card answered from Telegram or dashboard
 
 ```bash
+source scripts/orchestra-env.sh   # skip if already done in this shell (step 4)
 python3 scripts/approval.py request "Ship the hello change?" --from hello --worker-kind pane --options approve,deny
 ```
 
