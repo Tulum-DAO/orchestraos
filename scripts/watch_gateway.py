@@ -791,9 +791,9 @@ async def handle_pending(request):
     # /agent-menu-capture. This makes store-but-mark safe WITHOUT an atomic
     # server/client deploy. The detail endpoint serves through the SAME seam.
     out = gate_menu_rows_for_client(out, request)
-    # R8 (§3.1): the queue is PRIORITY-SORTED server-side, ties -> oldest first.
-    # The ONE ordering brain — the app renders server order (triageRank retired).
-    out.sort(key=lambda r: (-r["priority_score"], r["created_at"]))
+    # R8 (§3.1): the queue is PRIORITY-SORTED server-side; the ONE ordering brain, since the
+    # watch renders server order as-is. Ties -> NEWEST first (see _sort_queue).
+    _sort_queue(out)
     return _json({"ok": True, "pending": out})
 
 
@@ -5650,6 +5650,21 @@ _RISK_SCORE = {"high": 40, "medium": 30, "low": 20}
 _REVERSIBILITY_SCORE = {"irreversible": 15, "hard": 8}
 
 
+def _sort_queue(rows):
+    """Order a queue in place: priority_score descending, ties NEWEST first.
+
+    Ties were oldest-first until 2026-10-08. The phone app (build 258) orders equal-score
+    cards newest-first, as the operator approved, while the watch renders this server
+    order as-is, so the two surfaces disagreed on ties (P4: watch and phone in tandem).
+    Ties are rare by construction: the age term above is continuous, so two rows tie only
+    when posted within about two minutes of each other with equal grades, or when both are
+    older than 90 hours. Two stable sorts, because created_at is an ISO string and cannot
+    be negated."""
+    rows.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+    rows.sort(key=lambda r: -(r.get("priority_score") or 0))
+    return rows
+
+
 def _priority_score(row):
     """Server-side priority_score (spec §3.1, R8) shared by ALL kinds — the ONE
     brain replacing the app's client-side triageRank:
@@ -5657,7 +5672,7 @@ def _priority_score(row):
       + reversibility{irreversible:+15,hard:+8}
       + kind{menu:+5,questionnaire:+5}   (a parked agent is blocked-waiting)
       + min(15, age_hours/6)             (slow age boost — old items surface, never expire)
-    Ties -> oldest first (the sort key, not the score)."""
+    Ties -> newest first (the sort key in _sort_queue, not the score)."""
     from datetime import datetime as _dt, timezone as _tz
     score = int(row.get("urgency") or 0) * 30
     score += _RISK_SCORE.get(row.get("risk_level"), 10)
@@ -5761,7 +5776,7 @@ async def handle_questionnaires(request):
     rows = store.list_pending()
     for r in rows:
         r["priority_score"] = _priority_score({**r, "kind": "questionnaire"})
-    rows.sort(key=lambda r: (-r["priority_score"], r["created_at"]))
+    _sort_queue(rows)
     out = [{"id": r["id"], "title": r["title"], "from_agent": r["from_agent"],
             "question_count": r["question_count"], "answered_count": r["answered_count"],
             "draft_rev": r["draft_rev"], "created_at": r["created_at"],
