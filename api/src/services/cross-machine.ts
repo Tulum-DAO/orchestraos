@@ -28,6 +28,17 @@ function getRegistryMachines(): Record<string, MachineConfig> {
 }
 
 // Resolve machine config: check registry machines first, then agent-level ssh_user/ssh_host
+/**
+ * Is a seat with this machine label on THIS host? `orchestra` registers every seat as
+ * machine "local" (orchestra_cli/seats.py); the reference fleet calls its own host "vps".
+ * Both, and no label at all, mean here. Testing only 'vps' sent every public install's seats
+ * down the remote branches: never alive, spawn/kill/inject/capture failing with
+ * "Unknown machine: local" (operator report 2026-10-08, cross-machine.thishost.test.ts).
+ */
+export function isThisHost(machine?: string): boolean {
+  return !machine || machine === 'vps' || machine === 'local';
+}
+
 function resolveMachine(machineId: string, agentDef?: any): MachineConfig | null {
   const machines = getRegistryMachines();
 
@@ -140,7 +151,9 @@ export async function getUnifiedAgentStatus(registry: any): Promise<Record<strin
     let tmux_alive: boolean;
     let machine_status: MachineStatus;
 
-    if (machine === 'vps') {
+    // A session up HERE is alive whatever the label says (liveness-pre-union rule,
+    // agents-identity.ts resolveMachineAndLiveness): the label is a label, not evidence.
+    if (isThisHost(machine) || localSessions.has(session)) {
       tmux_alive = localSessions.has(session);
       machine_status = 'online';
     } else if (heartbeatSessions[machine] && heartbeatSessions[machine].size > 0) {
@@ -173,7 +186,7 @@ export function spawnAgent(agentId: string, registry: any, task?: string): Promi
   const spawnScript = join(ORCHESTRA, 'spawn-agent.sh');
   const args = task ? [agentId, '--task', task] : [agentId];
 
-  if (machine === 'vps') {
+  if (isThisHost(machine)) {
     return new Promise((resolve) => {
       execFile('bash', [spawnScript, ...args], { timeout: 30000, cwd: ORCHESTRA }, (err, stdout, stderr) => {
         resolve({ success: !err, output: stdout || stderr || (err?.message || '') });
@@ -207,7 +220,7 @@ export function killAgent(agentId: string, registry: any): Promise<{ success: bo
   const machine = agent.machine || 'vps';
   const session = agent.tmux_session || agentId;
 
-  if (machine === 'vps') {
+  if (isThisHost(machine)) {
     return new Promise((resolve) => {
       execFile('tmux', ['kill-session', '-t', session], { timeout: 5000 }, (err, stdout, stderr) => {
         resolve({ success: !err, output: stdout || stderr || 'killed' });
@@ -235,7 +248,7 @@ export function injectToRemoteAgent(agentId: string, text: string, registry: any
   const machine = agent.machine || 'vps';
   const session = agent.tmux_session || agentId;
 
-  if (machine === 'vps') {
+  if (isThisHost(machine)) {
     return new Promise((resolve) => {
       // Escape single quotes in the text
       const escaped = text.replace(/'/g, "'\\''");
@@ -266,7 +279,7 @@ export function captureRemoteOutput(agentId: string, lines: number, registry: an
   const machine = agent.machine || 'vps';
   const session = agent.tmux_session || agentId;
 
-  if (machine === 'vps') {
+  if (isThisHost(machine)) {
     return new Promise((resolve) => {
       execFile('tmux', ['capture-pane', '-t', session, '-p', '-S', `-${lines}`], { timeout: 5000 }, (err, stdout) => {
         resolve({ success: !err, output: stdout || '' });

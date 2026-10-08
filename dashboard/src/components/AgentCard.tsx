@@ -470,6 +470,12 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
 
           })()}
         </div>
+        {/* Session up, CLI not on its screen: say what IS there (the API's pane_command), so a
+            red dot never reads as "dead, spawn another" (operator report 2026-10-08: gm's pane
+            was running a nested tmux client). */}
+        {agent.alive && agent.pane_command && normalizeAgentState(agent.status) === 'stopped' && (
+          <p className="text-xs mt-0.5 text-red-300" role="status">{agent.activity}</p>
+        )}
         <p className={clsx('text-sm mt-0.5 leading-snug', truncatedTask ? 'text-neutral-300' : 'text-neutral-600')}>
           {/* was 'Idle' — which reads as a STATE and now sits next to a state
               badge that can say "working", so an active agent with no recorded
