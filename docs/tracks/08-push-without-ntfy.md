@@ -21,6 +21,34 @@ the intended default for a single-operator install (the card is durable in the
 ledger the instant it is filed, and the app polls), and an APNs push must deep-link
 into the app rather than inherit ntfy's dead-end button pattern.
 
+## Decided (2026-10-08): the token route
+
+The registration route below changed shape after the iOS and watch builders reviewed it.
+What is built:
+
+- `PUT /push/token {token, platform: iphone|ipad|watch, bundle_id, env: sandbox|production, rev}`
+  and `DELETE /push/token {token, rev}`, in `scripts/watch_gateway.py`, stored by
+  `scripts/push_tokens.py` in `<data dir>/state/push-tokens.json` (0600).
+- **Bound to the caller's bearer, not a device id in the path.** The shared fleet bearer has
+  no device id, and a caller-bound route can't touch another device's tokens.
+- **No defaults.** `platform` tells devices apart under a shared bearer; `bundle_id` is the
+  APNs topic (the watch app has its own) and must be on an allowlist
+  (`ORCHESTRA_PUSH_BUNDLE_IDS`, default the published app's two); `env` picks the APNs host
+  (TestFlight and App Store builds register production tokens, Xcode builds sandbox ones).
+- **A stale Forget can't unregister a re-paired device.** An APNs token belongs to the app
+  install, not the pairing, so Forget-then-pair-again keeps the same token. `rev` is the
+  client's monotonic counter; a DELETE applies only when its rev is at least the stored one.
+- **Tokens die with their device.** A sender reads `push_targets()`, which skips and prunes
+  tokens whose device was revoked or deleted, on every revoke path.
+- `GET /gateway/capabilities` lists `"push"` in `features` and
+  `push: {delivery: "direct"|"relay"|"none", bundle_ids}`; delivery comes from
+  `ORCHESTRA_PUSH_DELIVERY` and is `"none"` unless set. The app registers only when delivery
+  isn't `none`, and keeps polling regardless.
+
+Still to build: the sender (payload with `aps.category` chosen per card, burst coalescing,
+one alert per person when a phone and its watch both hold tokens) and the relay for App Store
+installs, which can't hold the app owner's APNs key.
+
 ## Design
 
 A `notify` backend abstraction for push specifically (distinct from the channel

@@ -25,6 +25,8 @@ Routes:
   GET  /pipeline          -> deals by stage from client.json
   GET  /briefing          -> deltas for the Arturo briefing (?since= ISO ts)
   GET  /health            -> {ok, pending}
+  PUT  /push/token        -> the app registers its APNs token (bound to the caller)
+  DELETE /push/token      -> Forget (rev-guarded; see push_tokens.py)
 
 P1 endpoints (spec docs/orchestraos-full-spec.md §7.2) are ALL additive +
 read-only; the v1 watch contract above is frozen.
@@ -135,6 +137,10 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     # call rather than an obvious one.
     ("POST", "/surface"): "read",
     ("POST", "/presence"): "read",
+    # Push registration is a self-report too: it changes only what THIS caller is sent. A device
+    # can register or forget its own tokens and nobody else's (push_tokens.PushTokenStore).
+    ("PUT", "/push/token"): "read",
+    ("DELETE", "/push/token"): "read",
 
     # --- approve: answers ON THE OPERATOR'S BEHALF ------------------------------------
     ("POST", "/approval-answers"): "approve",
@@ -4458,6 +4464,102 @@ async def handle_voice_calls(request):
     return _json({"ok": True, "calls": out})
 
 
+# --- Push registration (iPhone / iPad / Watch) --------------------------------------------
+# The app registers its APNs token here; whatever sends pushes reads the store's live() list.
+# `push.delivery` in /gateway/capabilities tells the app whether registering is worth it, and
+# the app keeps polling either way: a dropped push is silent, so push is never the only channel.
+
+PUSH_DELIVERIES = ("direct", "relay", "none")
+
+
+def _push_delivery() -> str:
+    """How this install delivers pushes: "direct" (it holds an APNs key for the app's topics),
+    "relay" (it forwards through a push relay) or "none". Set by ORCHESTRA_PUSH_DELIVERY; an
+    unset or unknown value is "none", so an install never claims a channel it was not given."""
+    got = (os.environ.get("ORCHESTRA_PUSH_DELIVERY") or "").strip().lower()
+    return got if got in PUSH_DELIVERIES else "none"
+
+
+def _push_bundle_ids():
+    from scripts.push_tokens import allowed_bundle_ids
+    return allowed_bundle_ids()
+
+
+def _push_store():
+    from pathlib import Path as _P
+    from scripts.push_tokens import PushTokenStore
+    base = os.environ.get("ORCHESTRA_DIR") or str(_P.home() / ".orchestra")
+    return PushTokenStore(_P(base) / "state" / "push-tokens.json")
+
+
+def _push_principal_id(request):
+    _, principal = _resolved_principal(request)
+    if principal is None:
+        principal = resolve_principal(request)
+    return (principal or {}).get("id")
+
+
+async def handle_push_token_put(request):
+    """PUT /push/token {token, platform, bundle_id, env, rev} -> {ok, registered, delivery}.
+
+    Bound to the CALLER: the token is filed under its principal, never under an id from the
+    body. Idempotent. `registered: false` means a newer rev for this token is already on file
+    (a delayed request lost a race with a later one) and nothing changed."""
+    from scripts.push_tokens import PushTokenError, validate_registration
+    pid = _push_principal_id(request)
+    if not pid:
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        return _json({"ok": False, "error": "bad json"}, status=400)
+    try:
+        fields = validate_registration(data)
+    except PushTokenError as e:
+        return _json({"ok": False, "error": str(e)}, status=400)
+    try:
+        stored = _push_store().register(pid, fields)
+    except OSError as e:
+        log.warning(f"push/token: store write failed: {e}")
+        return _json({"ok": False, "error": "could not store the token"}, status=500)
+    return _json({"ok": True, "registered": stored, "delivery": _push_delivery()})
+
+
+async def handle_push_token_delete(request):
+    """DELETE /push/token {token, rev} -> {ok, removed}. Forget.
+
+    Removes only the caller's own token, and only when `rev` is at least the stored one: an
+    APNs token survives Forget-then-pair-again (it belongs to the app install), so a late
+    Forget must not unregister the device that re-paired since. Idempotent: an unknown token,
+    someone else's token or a stale rev is `removed: false`, not an error."""
+    from scripts.push_tokens import PushTokenError
+    pid = _push_principal_id(request)
+    if not pid:
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        return _json({"ok": False, "error": "bad json"}, status=400)
+    if not isinstance(data, dict):
+        return _json({"ok": False, "error": "body must be a JSON object"}, status=400)
+    try:
+        removed = _push_store().remove(pid, data.get("token"), data.get("rev"))
+    except PushTokenError as e:
+        return _json({"ok": False, "error": str(e)}, status=400)
+    except OSError as e:
+        log.warning(f"push/token: store write failed: {e}")
+        return _json({"ok": False, "error": "could not update the store"}, status=500)
+    return _json({"ok": True, "removed": removed})
+
+
+def push_targets() -> list[dict]:
+    """The live push tokens, for a sender. A token whose device was revoked or deleted is
+    pruned here, which is what makes tokens die with their device on EVERY revoke path."""
+    store = _device_store()
+    live_ids = {r["id"] for r in store.list() if not r.get("revoked_at")}
+    return _push_store().live(lambda device_id: device_id in live_ids)
+
+
 async def handle_presence(request):
     """POST /presence {viewing: "<agent>"|null} — the app reports which agent
     the operator is looking at RIGHT NOW (web detail view / iOS foregrounded agent), or
@@ -5295,7 +5397,8 @@ async def handle_gateway_capabilities(request):
         body["device"] = {"id": principal.get("id"), "label": principal.get("label")}
     body["verbs"] = list(_ALL_VERBS)
     # Additive feature flags: a client shows a control only when its route exists here.
-    body["features"] = ["menu_submit"]
+    body["features"] = ["menu_submit", "push"]
+    body["push"] = {"delivery": _push_delivery(), "bundle_ids": list(_push_bundle_ids())}
     body["menu_submit"] = {"armed": _menu_multipart_armed(),
                            "text_armed": _menu_submit_text_armed()}
     try:
@@ -5976,6 +6079,8 @@ def build_app():
     app.router.add_post("/agent-message", handle_agent_message)
     app.router.add_post("/agent-interrupt", handle_agent_interrupt)
     app.router.add_post("/presence", handle_presence)
+    app.router.add_put("/push/token", handle_push_token_put)
+    app.router.add_delete("/push/token", handle_push_token_delete)
     app.router.add_post("/agent-key", handle_agent_key)
     app.router.add_post("/agent-suggest", handle_agent_suggest)
     app.router.add_post("/agent-menu-capture", handle_agent_menu_capture)
