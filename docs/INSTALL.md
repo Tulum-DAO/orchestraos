@@ -48,7 +48,7 @@ server is ready, the provider shows its public IP address. Log in from your own
 computer:
 
 ```bash
-ssh root@<server ip>        # some providers give you a named user instead of root; use that
+ssh root@<server ip>        # the IP address your provider shows (FROM_SCRATCH.md step 3); some providers give a named user instead of root
 ```
 
 You only need the public IP until Tailscale is set up below. The dashboard is never
@@ -121,7 +121,8 @@ it, and click its icon in the menu bar at the top right of the screen to log in.
 phone: the **Tailscale** app from the App Store or Google Play. Run `tailscale status` on
 the VPS again: your device is now listed too.
 
-Check: from your laptop, `ping <the VPS's 100.x.y.z address>` answers. From now on
+Check: on the VPS, `tailscale ip -4` prints its tailnet address (it starts with `100.`).
+From your laptop, `ping <that address>` answers (`Ctrl-C` stops it). From now on
 you can `ssh <your user>@<that address>` instead of the public IP.
 
 ### Packages
@@ -132,7 +133,16 @@ sudo apt update && sudo apt install -y git tmux python3 python3-venv build-essen
 # without them the install used to finish green with the terminal dead. `orchestra doctor` now shows a red
 # `terminal:node-pty` row in that state; remedy: `npm rebuild node-pty` after installing the toolchain.
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs
+node -v                      # checks that Node is installed
 ```
+
+What these do: the first line installs the tools OrchestraOS needs (git, tmux, Python and
+a compiler); the `curl` line installs Node.js 22, which runs the dashboard and Claude Code.
+
+You should see: each of the two long lines prints hundreds of lines and takes a minute or
+two. They end with lines like `No VM guests are running outdated hypervisor (qemu)
+binaries on this host.` If a coloured box asks which services to restart, press Enter.
+`node -v` then prints a version starting with `v22`, for example `v22.23.3`.
 
 Then install ONE agent CLI, pinned (next section), and log in to it (the section
 after).
@@ -150,6 +160,10 @@ sudo npm install -g @anthropic-ai/claude-code@2.1.276
 echo 'export DISABLE_AUTOUPDATER=1' >> ~/.bashrc && export DISABLE_AUTOUPDATER=1   # every seat's shell inherits it
 claude --version                 # must print 2.1.276
 ```
+
+You should see: the install prints `added 2 packages in 6s` (the time varies). It may also
+print a few `npm notice` lines saying a newer npm is available; ignore them, and do not
+update npm. The `echo` line prints nothing. `claude --version` prints `2.1.276 (Claude Code)`.
 
 Why `sudo`: the Node above is a system-wide install, so global npm packages go to
 `/usr/lib/node_modules`, which is owned by root. Without `sudo` the install fails with
@@ -174,15 +188,44 @@ an npm package; the reference fleet runs agy 1.2.6 and codex-cli 0.153.4).
 This is the only step that needs a person: you sign in with your own account. Use
 your own login; never copy someone else's credentials onto the server.
 
-On the VPS, run the CLI once by itself. On a server with no browser it prints a
-sign-in URL instead of opening one:
+**You need a paid plan.** For Claude Code that is a Claude **Pro** or **Max** subscription
+(claude.com/pricing; `docs/COSTS.md` compares the options). Buy it first, with the same
+email you will sign in with.
 
-1. Copy the URL into the browser on your laptop or phone and sign in.
-2. If the page shows a code, paste it back into the terminal and press Enter.
-3. Answer the first-run questions (theme, and whether you trust the folder), then
-   type `/exit`.
+On the server, start Claude Code once:
 
-Then check that the login stuck:
+```bash
+claude
+```
+
+It shows a few screens. The server has no browser, so you sign in from your Mac:
+
+1. **`Choose the text style that looks best with your terminal`**: a list of themes, with
+   one marked `❯`. Press Enter to keep it (you can change it later with `/theme`).
+2. **`Select login method:`** The first option is selected:
+   `1. Claude account with subscription · Pro, Max, Team, or Enterprise`. Press Enter.
+3. **`Browser didn't open? Use the url below to sign in`**, then a very long link that wraps
+   over several lines, then `Paste code here if prompted >`. With the mouse, select the
+   whole link, from `https://` to its last character on the last line, copy it (`Cmd+C`),
+   and open it in your Mac's browser. Sign in, and click to authorize Claude Code.
+4. The browser then shows a **code**. Copy it, go back to Terminal, paste it (`Cmd+V`) after
+   `Paste code here if prompted >`, and press Enter.
+5. A few more screens follow (a login confirmation and some notes). Press Enter on each.
+   If it asks whether you trust the files in this folder, choose the option that says yes.
+6. You are now in Claude Code's own prompt. Type `/exit` and press Enter to leave it.
+   Your login is saved.
+
+Check that the login stuck:
+
+```bash
+claude auth status
+```
+
+You should see: a few lines of text that include `"loggedIn": true` and a
+`"subscriptionType"` naming your plan. `"loggedIn": false` means the login did not
+finish: run `claude` again.
+
+For the other CLIs:
 
 | runtime | binary | run once | check |
 |---|---|---|---|
@@ -190,7 +233,8 @@ Then check that the login stuck:
 | gemini | `agy`    | `agy` | `~/.gemini/antigravity-cli/antigravity-oauth-token` exists |
 | codex  | `codex`  | `codex login` | `~/.codex/auth.json` has a `tokens` key |
 
-Do this before step 1. `orchestra spawn` (step 3) checks first: with no enabled CLI
+Do this before step 1. (You can log in later, but until you do, `orchestra doctor` reports
+`runtime:login` as `MISSING`.) `orchestra spawn` (step 3) checks first: with no enabled CLI
 installed and logged in, it refuses with `refusing to spawn: no enabled runtime is
 installed AND logged in` and exits 2. The low-level `./spawn-agent.sh` does not check:
 a seat it launches against a CLI you have not logged in to retries, prints
@@ -213,8 +257,26 @@ sed -i '/^\[runtimes\]/,/^\[/ s/^enabled = .*/enabled = ["claude"]/' orchestra.t
 orchestra doctor             # every row OK (WARN/INFO rows are advisory); exit code 0
 ```
 
-Not logged in to the CLI yet? Then `runtime:login` is the one `MISSING` row and `doctor`
-exits 1. Log in (§0, "Log in to the agent CLI") and run it again.
+What these do: `git clone` downloads OrchestraOS into a folder called `orchestraos` and
+`cd` moves you into it; `make install` and the two PATH lines make the `orchestra` command
+available; `orchestra init --yes` sets everything up; the `sed` line tells OrchestraOS which
+agent CLI you use; `orchestra doctor` checks the result.
+
+You should see:
+
+- `git clone`: progress lines ending with `Resolving deltas: 100% (...), done.`
+- `make install`: `installed /home/<you>/.local/bin/orchestra`, then a `NOTE` that
+  `orchestra` is not on your PATH yet. The two PATH lines right after it fix that; they
+  print nothing.
+- `orchestra init --yes`: about five minutes of output, ending with a table whose rows
+  say `did` (or `skipped` on a re-run), then `next:     orchestra doctor && orchestra up`.
+- `sed`: nothing.
+- `orchestra doctor`: a table with one row per check (`CHECK`, `STATUS`, `DETAIL`), ending
+  with `doctor: all required checks OK`. `WARN` and `INFO` rows are advice, not failures.
+
+Not logged in to the CLI yet? Then `runtime:login` is the one `MISSING` row (a few rows
+marked `MISSING*` go away with it) and the last line is `doctor: 1 required check(s)
+MISSING`. Log in (§0, "Log in to the agent CLI") and run `orchestra doctor` again.
 
 The two PATH lines matter: `~/.local/bin` only joins your PATH at **login**, and only if it
 already existed then. On a clean machine it did not, so without them a bare `orchestra` right after
@@ -249,10 +311,13 @@ rows in doctor become INFO and `orchestra up` skips it.
 ## 2. Up
 
 ```bash
-orchestra up                 # foreground; Ctrl-C stops everything
-# or
-orchestra up --detach && orchestra status   # --detach returns once the supervisor is up (or says why it did not start)
+orchestra up --detach && orchestra status   # starts everything in the background, then shows what is running
 ```
+
+You should see: `supervisor started in background (pid …)`, then `supervisor: running pid …`,
+then one line per part (`gateway`, `api`, `dashboard`, the beats) with its status. It keeps
+running after you log out. `orchestra down` stops it. (`orchestra up` without `--detach` runs
+in the foreground instead, and `Ctrl-C` stops it.)
 
 One supervisor process runs, restarts (with backoff) and logs each child under
 `<data>/logs/<name>.log`:
@@ -342,9 +407,18 @@ new) and launches it in tmux with the install env carried into the pane.
 ```bash
 orchestra spawn gm --gm                  # the General Manager: prompts/gm.md, tier T0, always-on
 orchestra spawn hello --task "Say hello, then park."   # a worker seat (prompts/hello.md if present)
-orchestra agent create dev-x --template dev --parent pm-y --set PROJECT=demo   # one verb: fill the role template (refuses an unfilled {TOKEN}), record the parent, validate runtime/model, spawn, verify ALIVE
+orchestra agent create dev-x --template dev --parent pm-y --set PROJECT=demo   # advanced, skip on a first install: fill the role template (refuses an unfilled {TOKEN}), record the parent, validate runtime/model, spawn, verify ALIVE
 tmux attach -t gm                        # talk to it; detach with Ctrl-B D
 ```
+
+On a first install, the first two lines are all you need.
+
+**Talking to a seat.** Each seat runs in its own terminal session on the server, kept alive by
+tmux, so it keeps working when you close Terminal on your Mac. `tmux attach -t gm` shows you
+the `gm` seat's screen: type to it like a chat and press Enter. To leave without stopping it,
+**detach**: press `Ctrl-B`, let go, then press `D`. You are back at your own prompt, and the
+seat keeps running. (Closing the Terminal window also leaves it running.) `tmux ls` lists the
+sessions. You can also talk to seats from the dashboard in your browser.
 
 The new seat appears in the dashboard's Agents list in your browser within about 15 seconds.
 
