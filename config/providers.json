@@ -32,6 +32,7 @@
      "list_path": "response.response.models",
      "id_key": "value",
      "label_key": "displayName",
+     "description_key": "description",
      "timeout_ms": 30000,
      "resolved_key": "resolvedModel",
      "default_id": "default"
