@@ -8,7 +8,7 @@ Just want the web dashboard in your browser? That needs no pairing:
 [docs/INSTALL.md](INSTALL.md) §2, "Open the dashboard in your browser, over Tailscale https".
 This page is about the gateway (8890), which the phone app talks to.
 
-> **What works today, step by step** (updated 2026-10-07):
+> **What works today, step by step** (updated 2026-10-08):
 >
 > | Step | Status |
 > |---|---|
@@ -52,6 +52,18 @@ address with a trusted certificate (see step 4), so if you'll pair a phone,
 plan on the Tailscale hostname. This doc uses
 `your-gateway.example.net` as a placeholder everywhere; substitute your real
 host, never share it outside people you're actually pairing.
+
+**The apps need OrchestraOS on your server at `main` `cdcd701` (#259, 2026-10-08) or newer.**
+On an older checkout, a long or multi-line message you send from the app comes back in your
+transcript as a one-line `[LONG-MSG chip-dodge] ...` note with a server file path, instead of
+your own words and photos. To check, run this on the server, inside your OrchestraOS checkout:
+
+```bash
+git merge-base --is-ancestor cdcd701 HEAD && echo "up to date"
+```
+
+It prints `up to date` if you are. If it prints nothing, or an error, run `orchestra upgrade`
+and then the restart in [docs/UPGRADE.md](UPGRADE.md).
 
 ## 2. Run `orchestra pair`
 
