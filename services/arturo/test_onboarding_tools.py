@@ -229,15 +229,17 @@ def test_no_public_address_means_no_code(P, pairing, monkeypatch):
     assert "tailscale serve --bg --https=8445 http://127.0.0.1:8890" in out and "orchestra pair" in out
 
 
-def test_a_default_install_pairs_on_the_address_tailscale_already_serves(P, pairing, monkeypatch):
+def test_a_default_install_pairs_on_the_address_tailscale_already_serves(P, pairing, monkeypatch, caplog):
     # pm-tulumdao: nothing sets ORCHESTRA_PUBLIC_URL on a default install, so Arturo could never pair
     from scripts import public_url
     monkeypatch.delenv("ORCHESTRA_PUBLIC_URL")
     monkeypatch.setenv("ORCHESTRA_GATEWAY_PORT", "8890")
     seen = []
     monkeypatch.setattr(public_url, "detect", lambda port, run=None: (seen.append(port), ["https://box.tn.ts.net:8445"])[1])
+    caplog.set_level(logging.INFO)
     out, card = _pair(P)
     assert out.startswith("A pairing code") and seen == [8890]
+    assert "PAIR URL: from tailscale" in caplog.text                     # which source won is logged
     import base64
     raw = json.loads(base64.urlsafe_b64decode(card["code"][5:] + "=" * (-len(card["code"][5:]) % 4)))
     assert raw["base_url"] == "https://box.tn.ts.net:8445"

@@ -163,8 +163,8 @@ def test_a_non_fleet_turn_cannot_reach_the_background_either(P, tripwires):
     assert out.startswith("NOT RUN") and tripwires == []
 
 
-# ---- M1: an offer or a devices card is the onboarding's ----------------------------------------------
-@pytest.mark.parametrize("purpose", ["starter_team", "devices"])
+# ---- M1: the starter-team offer is the onboarding's; a devices card is any dashboard turn's ---------------
+@pytest.mark.parametrize("purpose", ["starter_team"])
 def test_off_the_onboarding_a_purpose_card_is_a_plain_card(P, monkeypatch, purpose):
     monkeypatch.setattr(P, "starter_team_state", lambda seen=None: {"state": "absent"})
     P._TEAM_OFFERS.clear(); P._DEVICE_CARDS.clear()
@@ -688,3 +688,57 @@ def test_a_secret_others_can_read_is_no_secret(tmp_path):
     assert arturo_stamp.read(tmp_path) == "" and arturo_stamp.verify(tmp_path, secret) is False
     arturo_stamp.path(tmp_path).chmod(0o600)
     assert arturo_stamp.verify(tmp_path, secret) is True
+
+
+# ---- pairing after the first run (orchestraos-builder msg_6945e9a6: M1 relaxed for devices cards only) ---
+def test_a_dashboard_turn_off_the_onboarding_may_show_a_devices_card(P):
+    P._DEVICE_CARDS.clear()
+    tok = P._TEAM_TURN.set(_record(P, "web_after", None, "fleet"))
+    try:
+        P.execute_tool("ask_choices", {"options": ["iPhone", "Mac"], "multi": True, "purpose": "devices"})
+        card = P._TEAM_TURN.get()["choices"]
+    finally:
+        P._TEAM_TURN.reset(tok)
+    assert card["purpose"] == "devices" and "web_after" in P._DEVICE_CARDS
+    assert _record(P, "web_after", None, "fleet")["devices_answer"] is True
+
+
+@pytest.mark.parametrize("step", [None, "onboarding"])
+@pytest.mark.parametrize("principal", ["device:dev_voice", None, "FLEET"])
+def test_a_non_dashboard_turn_still_cannot_arm_a_devices_card(P, step, principal):
+    P._DEVICE_CARDS.clear()
+    tok = P._TEAM_TURN.set(_record(P, "web_dev", step, principal))
+    try:
+        P.execute_tool("ask_choices", {"options": ["iPhone", "Mac"], "multi": True, "purpose": "devices"})
+        card = P._TEAM_TURN.get()["choices"]
+    finally:
+        P._TEAM_TURN.reset(tok)
+    assert card["purpose"] == "other" and P._DEVICE_CARDS == {}
+    assert _record(P, "web_dev", None, "fleet")["devices_answer"] is False
+
+
+def test_pairing_after_onboarding_works_end_to_end_on_dashboard_turns(P, pairing, monkeypatch, fleet_stamp):
+    # the first run is over; three ordinary dashboard turns through /text: card -> answer -> pair
+    (P.ARTURO_STATE).mkdir(parents=True, exist_ok=True)
+    (P.ARTURO_STATE / "onboarding.json").write_text("{}")
+    monkeypatch.setattr(P, "starter_team_state", lambda seen=None: {"state": "present", "seats": []})
+    h = fleet_stamp(P)
+    script = iter([
+        ("ask_choices", {"options": list(onb.DEVICES), "multi": True, "purpose": "devices"}),
+        ("set_operator_fact", {"field": "devices", "value": "iPhone"}),
+        ("pair_device", {"device": "iPhone"}),
+    ])
+    results = []
+
+    def brain(messages, cid):
+        name, args = next(script)
+        results.append(P.execute_tool(name, args))
+        return "ok", [name], []
+    monkeypatch.setattr(P, "_brain_reply", brain)
+    bodies = []
+    with P.app.test_client() as c:
+        for text in ("pair my iphone", "iPhone", "go ahead"):
+            bodies.append(c.post("/text", json={"text": text, "conversation_id": "web_e2e"}, headers=h).get_json())
+    assert bodies[0]["choices"]["purpose"] == "devices"
+    assert results[1].startswith("Recorded") and P._answered_devices() == ["iPhone"]
+    assert results[2].startswith("A pairing code") and bodies[2]["pair_card"]["code"].startswith("orc1_")

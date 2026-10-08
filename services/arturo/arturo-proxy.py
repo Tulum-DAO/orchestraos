@@ -1462,7 +1462,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "pair_device",
-            "description": "Make a pairing code for one of the operator's devices (iPhone, iPad or Mac, one they told you they have and have the app for). The code goes to them in a card; you never see it, so never repeat or invent one. The result gives a device id for check_paired.",
+            "description": "Make a pairing code for one of the operator's devices (iPhone, iPad or Mac, one they told you they have and have the app for). The code goes to them in a card; you never see it, so never repeat or invent one. The result gives a device id for check_paired. It pairs only a device they picked on a devices card in the last 10 minutes: if they have not (for example, they ask after the first run), show one first with ask_choices(purpose='devices', multi=true) and pair on the turn after their answer.",
             "parameters": {
                 "type": "object",
                 "properties": {"device": {"type": "string", "enum": ["iPhone", "iPad", "Mac"]}},
@@ -2195,10 +2195,14 @@ def ask_choices(options, multi=False, purpose="other", exclusive=None):
         return "NOT SHOWN: a card needs 2 to 8 short, different options."
     purpose = purpose if purpose in _CHOICE_PURPOSES else "other"
     note = ""
-    if purpose != "other" and not (turn.get("onboarding") and _is_fleet(turn)):
-        # An offer or a devices card is the onboarding's, opened on the operator's own (dashboard)
-        # onboarding turn. Anywhere else a card could make someone's next words a consent.
-        note = f" (shown as a plain card: {purpose} cards belong to the dashboard's onboarding)"
+    # A card that arms a consent opens only on the operator's own (dashboard) turn: anywhere else it
+    # could make someone's next words a consent. The starter-team offer is the onboarding's alone; a
+    # devices card may be shown on any dashboard turn, so "pair my iPhone" works after the first run
+    # (orchestraos-builder, msg_6945e9a6). The answer is still the server's record, bound and expiring.
+    allowed = _is_fleet(turn) and (purpose == "devices" or turn.get("onboarding"))
+    if purpose != "other" and not allowed:
+        where = "the dashboard's onboarding" if purpose == "starter_team" else "the dashboard's Arturo chat"
+        note = f" (shown as a plain card: {purpose} cards belong to {where})"
         purpose = "other"
     card = {"options": clean, "multi": bool(multi), "purpose": purpose}
     if multi:
@@ -2342,6 +2346,7 @@ def pair_device(device):
         return ("NOT PAIRED: " + found.problem + " Tell the operator this in plain words; they can also "
                 "pair from their own terminal with `orchestra pair` (" + _onb.ONBOARDING_GUIDE + ").")
     base_url = found.url
+    log.info(f"PAIR URL: from {found.source}")             # which source won (the address is not secret)
     label = f"{match.lower()} (arturo)"
     devices, store = _pair_stores()
     # One live code per device: replace only ARTURO's previous code for it that was NEVER USED. A device

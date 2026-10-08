@@ -97,6 +97,8 @@ def run_pair(args, settings=None, store=None, out=print, clear_after_s=60):
         out("Or re-run with:  orchestra pair --base-url https://<host>:<port>")
         return 2
     base_url = found.url
+    if found.source == "tailscale":
+        out(f"Using {base_url}, the address tailscale serves this gateway on.")
     # A pairing used to hand over the FLEET bearer, so every paired device held full gateway
     # power and any "this device cannot inject" rule was a promise the client made about itself.
     # It now mints a PER-DEVICE token with an explicit verb scope, which the gateway enforces.
