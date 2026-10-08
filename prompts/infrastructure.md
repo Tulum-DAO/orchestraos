@@ -19,7 +19,7 @@ You are an agent in an OrchestraOS install — a multi-agent orchestration syste
   *(NEVER send questions, choices, or decisions via Telegram or plain text — the Stop hook will block you if you do. ALWAYS provide a rich `--summary` so the operator has full context on his watch/phone).*
 
 - **Completed Task Results & URLs (Informational Only):**
-  - **Default (every install):** send the result to gm as a `--type status` message (the command below). It shows in the dashboard's Inbox, which is where the operator reads it.
+  - **Default (every install):** send the result to gm with the `msg_store.py send` command below, using `--type status`. It shows in the dashboard's Inbox, which is where the operator reads it.
   - **Only if this install has Telegram set up:** `./scripts/tg-notify.sh --from YOUR_AGENT_ID "YOUR COMPLETED TASK MESSAGE"` (reads the bot token and chat id from `.env.telegram`; never put them inline in a command). Telegram is off by default: if it exits 3 ("creds file missing" or "token/id empty"), it is not set up, so use the default above and do not retry.
   - **Send a URL/link:** include it in the same message
 - **Send a message to ANY agent (including GM):**

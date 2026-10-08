@@ -122,8 +122,9 @@ model_is_1m() {
 
 # shellcheck source=scripts/spawn_model_verify.sh
 source "$SCRIPT_DIR/scripts/spawn_model_verify.sh"
-# shellcheck source=scripts/spawn_guards.sh
+# shellcheck source=scripts/tmux_session_defaults.sh
 source "$SCRIPT_DIR/scripts/tmux_session_defaults.sh"   # mouse on per seat session (wheel scrolls, never recalls history)
+# shellcheck source=scripts/spawn_guards.sh
 source "$SCRIPT_DIR/scripts/spawn_guards.sh"   # issue #92: FATAL guards (model/runtime, injection)
 
 # Post-spawn model verify (by effect): capture the TUI status line and confirm the

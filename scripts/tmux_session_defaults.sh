@@ -11,13 +11,30 @@
 # sessions are left alone. Selecting text inside a seat then needs Shift-drag (Linux, Windows
 # Terminal) or Option-drag (macOS Terminal and iTerm2); docs/INSTALL.md §3 says so.
 #
+# The cost of mouse on, and its guard: a scroll-up puts the pane in tmux's scroll mode
+# (copy-mode), which it leaves only when scrolled back to the bottom. While a pane is in that
+# mode, `send-keys` text is swallowed with no error, and most of the injectors (approval
+# resume, nudges, Arturo, the dashboard send) do not check for it. A pane can only ENTER the
+# mode from an attached client. So a client-detached hook leaves the mode: an unattended pane,
+# which is exactly when injectors type into it, is never stuck in it. That covers ssh detach,
+# a closed terminal window and a closed web-terminal tab. While someone is attached and
+# scrolled up, they are looking at it; that case predates this file (prefix-[ and the web
+# terminal's own wheel handling) and wants a shared injector guard.
+#
 # Fail-soft: an option that cannot be set must never block a spawn or a recovery.
 orch_tmux_session_defaults() {
-    local session="$1"
+    local session="${1:-}"
     [[ -n "$session" ]] || return 0
     # "=NAME:" is an EXACT session match. tmux 3.4 refuses a bare "=NAME" for set-option
     # ("no such session"), which the fail-soft below would have hidden: the option would just
     # never be set. A plain "NAME" would prefix-match a neighbour (seat-x -> seat-xy).
     tmux set-option -t "=$session:" mouse on >/dev/null 2>&1 || true
+    # `send-keys -X cancel` leaves scroll mode, and is a harmless "not in a mode" otherwise
+    # (no keystroke reaches the app). The target is quoted for tmux's own command parser.
+    # Only for names tmux's command parser cannot misread (seat names are not validated
+    # upstream); mouse is still set above for any name.
+    if [[ "$session" =~ ^[A-Za-z0-9_-]+$ ]]; then
+        tmux set-hook -t "=$session:" client-detached "send-keys -t '=$session:' -X cancel" >/dev/null 2>&1 || true
+    fi
     return 0
 }
