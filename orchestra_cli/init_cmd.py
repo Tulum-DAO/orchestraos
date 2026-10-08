@@ -484,6 +484,7 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
                                    else "faster-whisper model download failed (offline?) — it retries in the background at `orchestra up`"))
 
     # 7. npm installs (root = dashboard-proxy deps, api, dashboard)
+    reinstalled = set()
     for label, sub in (("root", ""), ("api", "api"), ("dashboard", "dashboard")):
         d = repo_root / sub if sub else repo_root
         if not (d / "package.json").exists():
@@ -498,6 +499,7 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
         rc = run(["npm", "install", "--no-audit", "--no-fund"], cwd=d)
         if rc == 0:
             _stamp_deps(d)
+            reinstalled.add(label)
         report.append(Step(f"npm:{label}", rc == 0, "npm install" if rc == 0 else f"npm install failed rc={rc}"))
 
     # 8. builds (api tsc -> dist/server.js, dashboard vite -> dist/index.html)
@@ -509,12 +511,19 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
         if skip_build or skip_npm:
             report.append(Step(f"build:{label}", False, "skipped"))
             continue
-        stale = _build_stale(d, d / artifact)
+        # A build made against a half-filled node_modules can still write dist/ (tsc emits on
+        # type errors), so fresh deps mean a fresh build, whatever the mtimes say.
+        stale = _build_stale(d, d / artifact) or label in reinstalled
         if (d / artifact).exists() and not stale:
             report.append(Step(f"build:{label}", False, f"{artifact} up to date"))
             continue
         rc = run(["npm", "run", "build"], cwd=d)
-        why = "rebuilt (source newer than " + artifact + ")" if stale else "built"
+        if not (d / artifact).exists():
+            why = "built"
+        elif label in reinstalled:
+            why = "rebuilt (dependencies reinstalled)"
+        else:
+            why = "rebuilt (source newer than " + artifact + ")"
         report.append(Step(f"build:{label}", rc == 0, why if rc == 0 else f"npm run build failed rc={rc}"))
 
     # 9. Claude Code hooks -> the user's settings.json (merge, never clobber; idempotent).

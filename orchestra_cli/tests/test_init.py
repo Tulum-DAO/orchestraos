@@ -535,9 +535,6 @@ def test_init_reinstalls_deps_when_the_lockfile_is_newer(tmp_path):
     root = _repo(tmp_path)
     data = tmp_path / "data"
     I.run_init(root, data_dir=data, run=Runner())
-    stamp = root / "api" / "node_modules" / ".package-lock.json"
-    stamp.write_text("{}")
-    _age(stamp, 60)
     (root / "api" / "package-lock.json").write_text("{}")             # pulled a dependency change
     report = {r.step: r for r in I.run_init(root, data_dir=data, run=Runner())}
     assert report["npm:api"].did is True
@@ -614,3 +611,26 @@ def test_a_changed_lockfile_reinstalls_even_with_an_older_mtime(tmp_path):
     _age(root / "api" / "package-lock.json", 3600)
     report = {r.step: r for r in I.run_init(root, data_dir=data, run=Runner())}
     assert report["npm:api"].did is True
+
+
+def test_reinstalled_deps_force_a_rebuild(tmp_path):
+    """A build made against a half-filled node_modules can still write dist/ (tsc emits on type
+    errors). After a reinstall, that dist must not be kept as "up to date" (review of #277)."""
+    root = _repo(tmp_path)
+    data = tmp_path / "data"
+    I.run_init(root, data_dir=data, run=KilledNpm())                  # deps half-filled, build ran
+    (root / "api" / "dist").mkdir(exist_ok=True)
+    (root / "api" / "dist" / "server.js").write_text("// built against broken deps")
+    runner = Runner()
+    report = {r.step: r for r in I.run_init(root, data_dir=data, run=runner)}
+    assert report["npm:api"].did is True
+    assert report["build:api"].did is True and "dependencies reinstalled" in report["build:api"].detail
+
+
+def test_doctor_calls_a_half_filled_node_modules_not_installed(tmp_path):
+    from orchestra_cli import doctor as D
+    root = _repo(tmp_path)
+    (root / "api" / "node_modules").mkdir()
+    assert I._deps_installed(root / "api") is False
+    I._stamp_deps(root / "api")
+    assert I._deps_installed(root / "api") is True

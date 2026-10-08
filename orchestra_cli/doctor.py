@@ -420,9 +420,14 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
         d = root / sub if sub else root
         if not (d / "package.json").exists():
             continue
-        nm = (d / "node_modules").exists()
-        checks.append(Check(f"{label}:node_modules", OK if nm else MISSING, str(d / "node_modules"),
-                            f"Run `orchestra init` or `cd {d} && npm install`"))
+        # The same rule init uses: installed = init's completion stamp matches the lockfile. A
+        # node_modules left half-filled by a killed install exists but is not installed.
+        from .init_cmd import _deps_installed
+        ok = _deps_installed(d)
+        detail = str(d / "node_modules") if ok else (
+            f"{d / 'node_modules'} is incomplete or out of date (interrupted or older install)"
+            if (d / "node_modules").exists() else str(d / "node_modules"))
+        checks.append(Check(f"{label}:node_modules", OK if ok else MISSING, detail, "Run `orchestra init`"))
     # better-sqlite3 is a native addon: an `npm ci` that skipped the prebuild leaves
     # node_modules present but no better_sqlite3.node, and the api crash-loops under the
     # supervisor ("Could not locate the bindings file", misread by its recovery path as a
