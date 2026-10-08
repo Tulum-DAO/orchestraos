@@ -553,7 +553,7 @@ One command starts three agents ("seats"), one at each level, each reporting to 
 |---|---|---|
 | `gm` | T0, the manager | the one you talk to; always on; hands work down |
 | `pm-first-project` | T1, a project manager | runs one project for gm; reports to `gm` |
-| `dev-first-project` | T2, a worker | does the hands-on work; reports to `pm-first-project` |
+| `dev-first-project` | T2, a worker | does the hands-on work, in its own folder (`~/.orchestra/projects/first-project/`); reports to `pm-first-project` |
 
 ```bash
 orchestra starter

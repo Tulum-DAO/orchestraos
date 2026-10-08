@@ -308,3 +308,26 @@ def test_starter_corrects_a_starter_seat_registered_with_the_wrong_tier(repo_wit
     reg = json.loads((tmp_path / "data" / "registry.json").read_text())["agents"]
     assert reg["gm"]["tier"] == "T0" and reg["gm"]["always_on"] is True
     assert "gm tier T2 -> T0" in capsys.readouterr().out
+
+
+# ---- starter follow-ups (orchestraos-builder review of #243) ----
+
+@pytest.mark.parametrize("bad", ["my project", "a.b", "Site", "x/y", "", "-lead"])
+def test_starter_refuses_a_project_name_tmux_would_mangle(repo_with_templates, tmp_path, monkeypatch, capsys, bad):
+    calls = _starter_env(monkeypatch)
+    assert M.main(["starter", f"--project={bad}"]) == 2
+    assert calls == [] and "lowercase letters, digits and dashes" in capsys.readouterr().err
+
+
+def test_starter_worker_works_in_its_own_project_dir_not_the_harness_checkout(repo_with_templates, tmp_path, monkeypatch):
+    spawned = set()
+    calls = _starter_env(monkeypatch)
+    monkeypatch.setattr(SE, "_run", lambda argv, env=None, cwd=None: (calls.append(argv), spawned.add(argv[1]))[0] or 0)
+    monkeypatch.setattr(SE, "_pane_alive", lambda name: name in spawned)
+    assert M.main(["starter"]) == 0
+    proj = tmp_path / "data" / "projects" / "first-project"
+    reg = json.loads((tmp_path / "data" / "registry.json").read_text())["agents"]
+    assert proj.is_dir()
+    assert reg["dev-first-project"]["cwd"] == str(proj)
+    assert reg["gm"]["cwd"] == str(repo_with_templates)               # gm and the PM stay in the checkout
+    assert f"cwd {proj}" in (repo_with_templates / "prompts" / "dev-first-project.md").read_text()

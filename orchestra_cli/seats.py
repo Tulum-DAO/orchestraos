@@ -42,7 +42,7 @@ def _registry(st: S.Settings) -> tuple[Path, dict]:
 
 
 def register_seat(st: S.Settings, seat: str, *, gm: bool, runtime: str | None, model: str | None,
-                  tier: str | None, prompt: str | None) -> dict:
+                  tier: str | None, prompt: str | None, cwd: str | None = None) -> dict:
     """Idempotent: an existing row is kept verbatim (only missing fields are filled)."""
     p, reg = _registry(st)
     row = dict(reg["agents"].get(seat) or {})
@@ -56,7 +56,7 @@ def register_seat(st: S.Settings, seat: str, *, gm: bool, runtime: str | None, m
     # T0 = the always-on manager seat, T1 = coordinators, T2 = workers (docs/REFERENCE_INSTALL.md).
     row.setdefault("tier", tier or ("T0" if gm else "T2"))
     row.setdefault("machine", "local")
-    row.setdefault("cwd", str(st.repo_root))
+    row.setdefault("cwd", cwd or str(st.repo_root))
     row.setdefault("tmux_session", seat)
     row.setdefault("system_prompt", prompt or default_prompt)
     row.setdefault("always_on", bool(gm))
@@ -207,7 +207,8 @@ def cmd_agent_create(ns) -> int:
         tpl = st.repo_root / tpl_rel
         if not tpl.exists():
             print(f"agent create refused: no template at {tpl} (kinds: {', '.join(_TEMPLATE_KINDS)} or a path)", file=sys.stderr); return 2
-        values = {"DEV_NAME": name, "PM_NAME": name, "YOUR_ID": name, "CWD": str(st.repo_root)}
+        values = {"DEV_NAME": name, "PM_NAME": name, "YOUR_ID": name,
+                  "CWD": getattr(ns, "cwd", None) or str(st.repo_root)}
         if ns.parent:
             values["PARENT_PM"] = ns.parent
         for kv in ns.set or []:
@@ -229,7 +230,8 @@ def cmd_agent_create(ns) -> int:
     refused = _refuse_if_no_runtime_authed(st)
     if refused is not None:
         return refused
-    row = register_seat(st, name, gm=False, runtime=runtime, model=ns.model, tier=ns.tier, prompt=prompt_rel)
+    row = register_seat(st, name, gm=False, runtime=runtime, model=ns.model, tier=ns.tier, prompt=prompt_rel,
+                        cwd=getattr(ns, "cwd", None))
     if ns.parent and row.get("reports_to") != ns.parent:
         p, reg = _registry(st); reg["agents"][name]["reports_to"] = ns.parent; row["reports_to"] = ns.parent
         tmp = p.with_suffix(".json.tmp"); tmp.write_text(json.dumps(reg, indent=2) + "\n"); os.replace(tmp, p)
@@ -403,6 +405,9 @@ STARTER_DEV_TASK = ("You are the starter worker, reporting to your project manag
                     "ready, then park until it gives you work.")
 
 
+_PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+
+
 def _starter_plan(project: str) -> list[dict]:
     pm, dev = f"pm-{project}", f"dev-{project}"
     return [
@@ -419,6 +424,11 @@ def cmd_starter(ns) -> int:
     st = S.load_settings()
     if not st.config_exists:
         print(f"no config at {st.config_path} — run `orchestra init` first", file=sys.stderr); return 2
+    if not _PROJECT_RE.match(ns.project or ""):
+        # tmux rewrites "." and refuses some characters, so the seat names must stay plain
+        print(f"--project {ns.project!r}: use lowercase letters, digits and dashes only "
+              f"(start with a letter or digit, at most 40), e.g. --project website", file=sys.stderr)
+        return 2
     refused = _refuse_if_no_runtime_authed(st)
     if refused is not None:
         return refused
@@ -448,9 +458,15 @@ def cmd_starter(ns) -> int:
                     reg["agents"][name]["reports_to"] = seat["parent"]
                     tmp = p.with_suffix(".json.tmp"); tmp.write_text(json.dumps(reg, indent=2) + "\n"); os.replace(tmp, p)
         else:
+            cwd = None
+            if seat["tier"] == "T2":
+                # the first worker works in its own project folder, not inside the harness checkout
+                proj = st.data_dir / "projects" / ns.project
+                proj.mkdir(parents=True, exist_ok=True)
+                cwd = str(proj)
             rc = cmd_agent_create(argparse.Namespace(name=name, tier=seat["tier"], runtime=ns.runtime, model=None,
                                                      parent=seat["parent"], template=seat["template"],
-                                                     set=seat["set"], task=seat["task"]))
+                                                     set=seat["set"], task=seat["task"], cwd=cwd))
         if rc != 0:
             print(f"starter stopped at {name}: fix the error above, then run `orchestra starter` again "
                   f"(seats already running are skipped)", file=sys.stderr)
