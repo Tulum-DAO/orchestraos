@@ -1,5 +1,5 @@
 /**
- * handsFree.ts — the hands-free conversation (the live call where Arturo talks back), as ONE
+ * handsFree.ts — Live voice mode (the live call where Arturo talks back), as ONE
  * controller that the home composer and the "Ask Arturo" pill both drive. It was the pill's own
  * code; the home's button had no call behind it at all.
  *

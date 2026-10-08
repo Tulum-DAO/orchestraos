@@ -171,11 +171,11 @@ export function toggleChoice(options: string[], picked: string[], option: string
 
 /** What the voice controls are called (the operator, 2026-10-08: say what each one is, and never ask
  *  them to approve what they already have). Dictation is theirs as soon as the browser grants the mic;
- *  OrchestraOS asks nothing. Hands-free conversation (Arturo talks back, live) is the one thing that
+ *  OrchestraOS asks nothing. Live voice mode (Arturo talks back, live) is the one thing that
  *  needs the server's voice key. The old one-word label named neither, so it is gone. */
 export const DICTATE_TITLE = "Dictate (uses your browser's mic permission)";
 /** A working name (the operator may rename it): change it here and every label follows. */
-export const HANDS_FREE = 'Hands-free conversation';
+export const HANDS_FREE = 'Live voice mode';
 export function handsFreeTitle(keyPresent: boolean): string {
   return keyPresent
     ? `${HANDS_FREE}: talk, and Arturo talks back (uses GEMINI_API_KEY on your server)`

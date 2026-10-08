@@ -64,10 +64,11 @@ def test_dictation_is_what_they_have_and_hands_free_is_what_needs_a_key():
     fact = onb.VOICE_FACT
     assert fact in _pb(voice_mode="text-only")
     assert "dictation already works" in fact and "browser's own mic permission" in fact
-    assert "hands-free conversation" in fact and "ELEVENLABS_API_KEY" in fact
+    assert "Live voice mode" in fact and "GEMINI_API_KEY" in fact          # the operator's name for the call
     assert "Never offer it, ask about it or call it a mode" in fact
     low = _pb(voice_mode="text-only").lower()
-    assert "voice mode" not in low and "conversation mode" not in low
+    import re
+    assert not re.search(r"(?<!live )voice mode", low) and "conversation mode" not in low
 
 
 def test_the_playbook_tells_the_brain_it_never_sees_a_code():

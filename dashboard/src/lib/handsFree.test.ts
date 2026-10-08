@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { HandsFreeCall, isInCall } from './handsFree.ts';
 import type { VoiceSessionCallbacks, VoiceSessionStartOptions } from './voiceSession.ts';
 
-// pm-tulumdao (2026-10-08): the home composer's "Hands-free conversation" button had no call behind it.
+// pm-tulumdao (2026-10-08): the home composer's live-call button ("Live voice mode") had no call behind it.
 // A label that does nothing is the same dishonesty the relabel removes. Both surfaces now drive this.
 
 function fake(outcome: 'opens' | 'refused') {
