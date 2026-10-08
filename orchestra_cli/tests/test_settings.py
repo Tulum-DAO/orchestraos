@@ -200,14 +200,16 @@ def test_child_env_drops_the_installer_sessions_identity_and_keeps_config(tmp_pa
 
 
 def test_spawn_agent_unsets_the_same_list():
-    """spawn-agent.sh can be run directly (by a seat, or by the installer agent). Its `unset` line
-    must name exactly INSTALLER_SESSION_ENV, so the two can never drift."""
-    import re
+    """spawn-agent.sh can be run directly (by a seat, or by the installer agent). Its
+    INSTALLER_SESSION_ENV array must name exactly the Python list, so the two never drift, and the
+    unset must come before anything else runs."""
     src = (Path(__file__).resolve().parents[2] / "spawn-agent.sh").read_text()
-    lines = [l for l in src.splitlines() if l.startswith("unset CLAUDECODE ")]
-    assert len(lines) == 1, "one unset line near the top of spawn-agent.sh"
-    assert tuple(lines[0].split()[1:]) == S.INSTALLER_SESSION_ENV
-    assert src.index(lines[0]) < src.index("SCRIPT_DIR="), "before anything else runs"
+    lines = [l for l in src.splitlines() if l.startswith("INSTALLER_SESSION_ENV=(")]
+    assert len(lines) == 1, "one INSTALLER_SESSION_ENV array near the top of spawn-agent.sh"
+    assert tuple(lines[0][len("INSTALLER_SESSION_ENV=("):].rstrip(")").split()) == S.INSTALLER_SESSION_ENV
+    assert src.index('unset "${INSTALLER_SESSION_ENV[@]}"') < src.index("SCRIPT_DIR=")
+    # and the launch line strips them from the CLI too (a running tmux server's env reaches the pane)
+    assert 'launch_cmd="$_scrub $launch_cmd"' in src
 
 
 def test_spawn_agent_really_unsets_them(tmp_path):
@@ -215,7 +217,7 @@ def test_spawn_agent_really_unsets_them(tmp_path):
     the installer's session, then print what is left."""
     import subprocess
     src = (Path(__file__).resolve().parents[2] / "spawn-agent.sh").read_text().splitlines()
-    head = "\n".join(src[: next(i for i, l in enumerate(src) if l.startswith("unset CLAUDECODE ")) + 1])
+    head = "\n".join(src[: next(i for i, l in enumerate(src) if l.startswith('unset "${INSTALLER_SESSION_ENV')) + 1])
     script = tmp_path / "head.sh"
     script.write_text(head + "\nenv\n")
     env = {"PATH": "/usr/bin:/bin", "CLAUDE_CONFIG_DIR": "/c", **{k: "x" for k in S.INSTALLER_SESSION_ENV}}
@@ -223,3 +225,19 @@ def test_spawn_agent_really_unsets_them(tmp_path):
     names = {l.split("=", 1)[0] for l in out.splitlines() if "=" in l}
     assert not names & set(S.INSTALLER_SESSION_ENV)
     assert "CLAUDE_CONFIG_DIR" in names
+
+
+def test_the_launch_line_strips_the_session_even_from_a_contaminated_pane(tmp_path):
+    """By effect: build the launch prefix exactly as spawn-agent.sh does and run it in a shell
+    that HAS the installer's session (a pane on an already-running, contaminated tmux server)."""
+    import subprocess
+    src = (Path(__file__).resolve().parents[2] / "spawn-agent.sh").read_text()
+    arr = next(l for l in src.splitlines() if l.startswith("INSTALLER_SESSION_ENV=("))
+    script = tmp_path / "launch.sh"
+    script.write_text(arr + '\n_scrub="env"; for _v in "${INSTALLER_SESSION_ENV[@]}"; do _scrub+=" -u $_v"; done\n'
+                      'eval "$_scrub ORCHESTRA_DIR=/d env"\n')
+    env = {"PATH": "/usr/bin:/bin", "CLAUDE_CONFIG_DIR": "/c", **{k: "x" for k in S.INSTALLER_SESSION_ENV}}
+    out = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True, timeout=10).stdout
+    names = {l.split("=", 1)[0] for l in out.splitlines() if "=" in l}
+    assert not names & set(S.INSTALLER_SESSION_ENV)
+    assert {"CLAUDE_CONFIG_DIR", "ORCHESTRA_DIR"} <= names
