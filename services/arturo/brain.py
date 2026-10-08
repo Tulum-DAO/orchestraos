@@ -287,9 +287,79 @@ def clean_codex_text(text: str) -> str:
     return "".join(c for c in text if not _is_unassigned(c)).strip()
 
 
+# The opener of a protocol envelope. Text from here on is the model calling tools, never prose.
+_ENVELOPE_OPEN_RE = re.compile(r'\{\s*"tool_calls"\s*:')
+_CLOSER = {"{": "}", "[": "]"}
+_FENCE_OPEN_TAIL_RE = re.compile(r"```[A-Za-z]*\s*$")
+
+
+def _repair_envelope(s: str) -> Optional[dict]:
+    """The envelope starting at s[0] with MISSING object closes put back, or None.
+
+    Operator report 2026-10-08: a claude brain emitted a two-call envelope one "}" short (the
+    second call's object never closed before "]}"); json.loads refused it and the operator got
+    the raw JSON as Arturo's reply. Only that kind of slip is repaired: a "]" reached while an
+    object is still open closes the object(s) first. Nothing is ever appended at the end: an
+    envelope that stops early is a CUT-OFF reply (a CLI at its output limit), and closing it
+    would run calls the model never finished — kill_agent with no arguments, a half-written
+    send_telegram. Those, and a "}" where a list should close, are not guessed at."""
+    out, stack, in_str, esc = [], [], False, False
+    for ch in s:
+        if in_str:
+            out.append(ch)
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch == "]":
+            while stack and stack[-1] == "{":
+                out.append(_CLOSER[stack.pop()])
+            if not stack:
+                return None
+            stack.pop()
+        elif ch == "}":
+            if not stack or stack[-1] != "{":
+                return None
+            stack.pop()
+        out.append(ch)
+        if not stack:
+            break
+    if in_str or stack:
+        return None
+    try:
+        obj = json.loads("".join(out))
+    except Exception:  # noqa: BLE001
+        return None
+    return obj if isinstance(obj, dict) and isinstance(obj.get("tool_calls"), list) else None
+
+
+def without_envelope(text: str) -> str:
+    """For a reply that cannot run tools: the prose before any envelope, or the fallback
+    sentence when there is none. The envelope itself is never shown."""
+    m = _ENVELOPE_OPEN_RE.search(text or "")
+    if not m:
+        return text
+    # A fenced envelope leaves its opening fence behind; it is not prose either.
+    prose = _FENCE_OPEN_TAIL_RE.sub("", text[:m.start()]).strip()
+    return prose or NATIVE_MARKUP_FALLBACK
+
+
 def parse_cli_reply(text: str):
     text = (text or "").strip()
     env = _find_envelope(text) if "tool_calls" in text else None
+    if env is None:
+        m = _ENVELOPE_OPEN_RE.search(text)
+        if m:
+            env = _repair_envelope(text[m.start():])
+            if env is None:
+                return make_response(without_envelope(text), None, "stop")
     if env is None:
         # No JSON envelope. Before treating this as prose, check whether it is the CLI's own
         # tool-call syntax: honour the intent when it names a tool, and NEVER print the markup.
@@ -688,8 +758,8 @@ class RuntimeBrain(Brain):
                         f"keeps happening.")
             tools = None
         if stream:
-            return (make_chunk(c) for c in _chunked(text.strip()))
-        return parse_cli_reply(text) if tools else make_response(text.strip(), None, "stop")
+            return (make_chunk(c) for c in _chunked(without_envelope(text.strip())))
+        return parse_cli_reply(text) if tools else make_response(without_envelope(text.strip()), None, "stop")
 
     def describe(self):
         return {"kind": "runtime", "runtime": self.runtime, "cli": self.cli, "model": self.model}
