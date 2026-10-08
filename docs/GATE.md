@@ -40,7 +40,7 @@ Expected: `orchestra doctor` prints one line per check, every required row `OK`
 (a `WARN`/`INFO` row is advisory, not blocking), exit code `0`.
 
 ```bash
-orchestra up --detach && sleep 5 && orchestra status
+orchestra up --detach && orchestra status
 ```
 
 Expected: `orchestra status` shows every supervised process (`gateway`, `api`,
