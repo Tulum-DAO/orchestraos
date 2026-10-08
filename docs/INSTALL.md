@@ -60,6 +60,11 @@ opened on it.
 
 ## 0. Prerequisites
 
+**How to run the command boxes in this guide:** paste **one line at a time**, press Enter, and
+wait for it to finish before the next. Some commands stop to ask a question or a password; a
+line pasted while they wait becomes the answer. Every line in a box is meant to be run, in
+order. Optional commands are never mixed in; they sit in their own section.
+
 ### Run as a normal user, not root
 
 **Hand this to your agent** (Claude, ChatGPT, Codex, Gemini or any other), if you'd rather
@@ -90,9 +95,16 @@ Every seat would fail at launch.
 If `whoami` prints `root`, create a normal user with sudo once, give it your ssh key, and log
 back in as that user. Everything after this point runs as that user.
 
+As root, once (the name "orchestra" is only an example). `adduser` stops to ask questions, so
+run it on its own and answer them before pasting anything else:
+
 ```bash
-# as root, once (the name "orchestra" is only an example)
 adduser orchestra                       # choose a password; the other questions can be left blank
+```
+
+Then the rest, one line at a time:
+
+```bash
 usermod -aG sudo orchestra
 mkdir -p /home/orchestra/.ssh
 cp ~/.ssh/authorized_keys /home/orchestra/.ssh/
@@ -157,7 +169,15 @@ On the VPS, as your normal user:
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh   # downloads and installs Tailscale; ends with "Installation complete!"
+```
+
+```bash
 sudo tailscale up                       # [PERSON ONLY] prints a login URL: open it in your browser and sign in
+```
+
+Wait until you have signed in and this command has finished, then:
+
+```bash
 sudo tailscale set --operator=$USER     # lets your user run `tailscale serve` without sudo (step 2); prints nothing
 tailscale status                        # the VPS is listed, with a 100.x.y.z address
 ```
@@ -533,11 +553,8 @@ new) and launches it in tmux with the install env carried into the pane.
 ```bash
 orchestra spawn gm --gm                  # the General Manager: prompts/gm.md, tier T0, always-on
 orchestra spawn hello --task "Say hello, then park."   # a worker seat (prompts/hello.md if present)
-orchestra agent create dev-x --template dev --parent pm-y --set PROJECT=demo   # advanced, skip on a first install: fill the role template (refuses an unfilled {TOKEN}), record the parent, validate runtime/model, spawn, verify ALIVE
 tmux attach -t gm                        # talk to it; detach with Ctrl-B D
 ```
-
-On a first install, the first two lines are all you need.
 
 **Talking to a seat.** Each seat runs in its own terminal session on the server, kept alive by
 tmux, so it keeps working when you close the terminal on your own computer. `tmux attach -t gm` shows you
@@ -581,6 +598,16 @@ The `hello` row appears immediately; `alive`/`state` follow within ~15 s from th
 status detector. Only registered seats are listed — tmux is host-global, see "Sharing a
 host" below.
 
+### Advanced: create a seat from a role template (skip on a first install)
+
+`orchestra agent create` fills a role template (it refuses an unfilled `{TOKEN}`), records the
+seat's parent, checks the runtime and model, spawns it and checks it is alive. The parent should
+be a seat that already exists. For example, with an existing `gm`:
+
+```bash
+orchestra agent create dev-x --template dev --parent gm --set PROJECT=demo
+```
+
 ## 4. Answer one approval card from the dashboard
 
 From a shell (or let the seat run it):
@@ -621,14 +648,24 @@ itself: the seat named in `--from` is the one that receives the answer.
 
 A seat near its context ceiling banks a handoff (its prompt knows the format:
 `<data>/docs/HANDOFF_<seat>-next.md` with a `## canary_questions` block anchored in its own
-state). Then:
+state). First check, which changes nothing:
 
 ```bash
 orchestra rotate gm --dry-run            # preconditions only
-orchestra rotate gm                      # spawn successor -> it authors a readback -> strict grade -> promote
-orchestra rotate hello --synthesize      # a seat that never banked: minimal baton (sid, ports, last mail ids)
-orchestra rotate gm --resume             # a held attempt whose successor pane is still up
 ```
+
+Then rotate:
+
+```bash
+orchestra rotate gm                      # spawn successor -> it authors a readback -> strict grade -> promote
+```
+
+Two other forms, each for one situation only. Run one only if its situation applies:
+
+- `orchestra rotate <seat> --synthesize`: the seat never banked a handoff; a minimal baton is
+  made for it (sid, ports, last mail ids).
+- `orchestra rotate <seat> --resume`: an earlier attempt is held and its successor pane is
+  still up.
 
 What "lossless" means here: the successor answers the canary questions from the handoff and
 the repo alone; a generic readback HOLDs (predecessor keeps the seat, nothing is renamed). On

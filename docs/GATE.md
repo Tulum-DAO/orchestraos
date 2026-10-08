@@ -151,7 +151,7 @@ means the same thing: run `source scripts/orchestra-env.sh` and try again.
 ## 5. One approval card answered from Telegram or dashboard
 
 ```bash
-source scripts/orchestra-env.sh   # skip if already done in this shell (step 4)
+source scripts/orchestra-env.sh   # already done in step 4 if this is the same shell; harmless to repeat
 python3 scripts/approval.py request "Ship the hello change?" --from hello --worker-kind pane --options approve,deny
 ```
 
