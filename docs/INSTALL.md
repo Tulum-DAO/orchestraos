@@ -559,9 +559,15 @@ One command starts three agents ("seats"), one at each level, each reporting to 
 orchestra starter
 ```
 
-You should see three lines, one per seat as it comes up, then `starter team up: gm (T0) ->
-pm-first-project (T1) -> dev-first-project (T2)`. It takes a minute or two. The project manager
-and the worker say they are ready and then wait (they use no work until you give them some).
+You should see some output for each of the three seats as it starts, ending with
+`starter team up: gm (T0) -> pm-first-project (T1) -> dev-first-project (T2)`. It takes a
+minute or two. The three seats run on your AI plan. The project manager and the worker say they
+are ready and then wait; they do almost nothing until you give them work.
+
+If it stops instead: `refusing to spawn: no enabled runtime is installed AND logged in` means
+the agent CLI login in §0 was skipped; do that, then run `orchestra starter` again.
+`starter stopped at <name>: ...` names the seat that did not start; fix the error printed above
+it and run `orchestra starter` again (seats already running are skipped).
 Want a real name instead of `first-project`? `orchestra starter --project website` names them
 `pm-website` and `dev-website`. Running `orchestra starter` again is safe: seats that are already
 running are skipped, and one that stopped is started again.
