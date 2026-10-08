@@ -547,6 +547,25 @@ open `http://127.0.0.1:8891` while that ssh session stays open.
 
 ## 3. Your starter team
 
+**Hand this to your agent** (Claude, ChatGPT, Codex, Gemini or any other), if you'd rather
+have it guide you through this section. Copy the whole box:
+
+```text
+Help me with one step of installing OrchestraOS. Read this section and do it with me:
+https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md#3-your-starter-team
+The commands in this section run on my server; I log in to it with ssh (ask me for the
+address and user if you need them).
+Rules:
+- If you can run commands on my computer, run them yourself and show me every output.
+  If you can't, give me one command at a time and wait for me to paste back what it printed.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, any password or
+  passphrase prompt including sudo's, approving a device or an admin prompt) and let me
+  do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset, overwrite or wipe anything. If a command asks
+  `Overwrite (y/n)?`, the answer is n.
+- We are done when `orchestra starter` ends with `starter team up: gm (T0) -> pm-first-project (T1) -> dev-first-project (T2)`. Show me that output; don't just tell me it worked.
+```
+
 One command starts three agents ("seats"), one at each level, each reporting to the one above:
 
 | seat | tier | what it does |
