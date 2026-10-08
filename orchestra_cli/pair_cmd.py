@@ -55,10 +55,10 @@ def build_pair_output(payload, qr=None, ttl_s=600):
     lines.append("")
     if qr:
         lines.append(qr)
-        lines.append("Scan this with the OrchestraOS app, or type the line below into it by hand:")
+        lines.append("Scan this with the OrchestraOS app, or paste the code below into its pairing box:")
     else:
         lines.append("No QR encoder is installed on this machine, so here is the code itself.")
-        lines.append("Type or paste this line into the OrchestraOS app:")
+        lines.append("Copy this code and paste it into the OrchestraOS app's pairing box:")
     lines.append("")
     lines.append(payload)
     lines.append("")
@@ -75,11 +75,18 @@ def run_pair(args, settings=None, store=None, out=print, clear_after_s=60):
     import time
     from pathlib import Path
 
-    from scripts.pairing import PairingStore
+    from scripts.pairing import PairingStore, pair_token
 
     base_url = getattr(args, "base_url", None) or os.environ.get("ORCHESTRA_PUBLIC_URL") or ""
     if not base_url:
         out("I do not know this gateway's public address, so a phone could not reach it.")
+        out("Re-run with:  orchestra pair --base-url https://<host>:<port>")
+        return 2
+    from scripts.pairing import valid_base_url
+    if not valid_base_url(base_url):
+        # The app refuses a token whose address is not https with a host, so minting one would
+        # print a code that cannot pair anything.
+        out(f"{base_url!r} is not an https address the app can reach.")
         out("Re-run with:  orchestra pair --base-url https://<host>:<port>")
         return 2
     # A pairing used to hand over the FLEET bearer, so every paired device held full gateway
@@ -123,7 +130,7 @@ def run_pair(args, settings=None, store=None, out=print, clear_after_s=60):
         store = PairingStore(Path(base) / "state" / "pairing")
     store.sweep()
     code = store.mint(base_url=base_url, token=token)
-    payload = store.qr_payload(code, base_url=base_url)
+    payload = pair_token(code, base_url=base_url)
     out(build_pair_output(payload, qr=qr_text_or_none(payload, default_encoder()), ttl_s=store.ttl_s))
     if clear_after_s:
         try:
