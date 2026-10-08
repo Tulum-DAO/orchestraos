@@ -391,6 +391,29 @@ seat's terminal.
 
 ## 1. Clone, init, doctor
 
+**Hand this to your agent** (Claude, ChatGPT, Codex, Gemini or any other), if you'd rather
+have it guide you through this section. Copy the whole box:
+
+```text
+Help me with one step of installing OrchestraOS. Read this section and do it with me:
+https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md#1-clone-init-doctor
+The commands in this section run on my server, as my normal user (not root); I log in to
+it with ssh (ask me for the address and user if you need them).
+Rules:
+- If you can run commands on my computer, run them yourself and show me every output.
+  If you can't, give me one command at a time and wait for me to paste back what it printed.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, any password or
+  passphrase prompt including sudo's, approving a device or an admin prompt) and let me
+  do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset, overwrite or wipe anything. If a command asks
+  `Overwrite (y/n)?`, the answer is n.
+- In the `sed` line, use the agent CLI I logged in to in section 0 (claude, gemini or
+  codex). Ask me which one if you don't know; don't guess.
+- `orchestra init --yes` takes about five minutes. Wait for it to finish; don't stop it.
+- We are done when `orchestra doctor` ends with `doctor: all required checks OK`. Show me
+  that output; don't just tell me it worked.
+```
+
 ```bash
 git clone https://github.com/Tulum-DAO/orchestraos.git orchestraos && cd orchestraos
 make install                 # symlinks bin/orchestra into ~/.local/bin
@@ -464,6 +487,31 @@ rows in doctor become INFO and `orchestra up` skips it.
 
 ## 2. Up
 
+**Hand this to your agent** (Claude, ChatGPT, Codex, Gemini or any other), if you'd rather
+have it guide you through this section. Copy the whole box:
+
+```text
+Help me with one step of installing OrchestraOS. Read this section and do it with me:
+https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md#2-up
+The commands in this section run on my server, as my normal user (not root); I log in to
+it with ssh (ask me for the address and user if you need them). The last part happens in
+the browser on my own computer.
+Rules:
+- If you can run commands on my computer, run them yourself and show me every output.
+  If you can't, give me one command at a time and wait for me to paste back what it printed.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, any password or
+  passphrase prompt including sudo's, approving a device or an admin prompt) and let me
+  do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset, overwrite or wipe anything. If a command asks
+  `Overwrite (y/n)?`, the answer is n.
+- Before any `tailscale serve --https=...` command, run `tailscale serve status` and show me
+  the output. Use an https port that is not in that list; never replace or turn off an
+  entry that is already there. Never use `--funnel`, and never change `[dashboard] host`.
+- We are done when `orchestra status` prints `supervisor: running pid ...`, and my browser
+  shows the dashboard at the https address `tailscale serve status` printed. Ask me to
+  confirm what I see; don't just tell me it worked.
+```
+
 ```bash
 orchestra up --detach && orchestra status   # starts everything in the background, then shows what is running
 ```
@@ -529,8 +577,8 @@ tailscale serve status        # prints the address, e.g. https://<vps>.<tailnet>
 
 If 443 was taken, use another free port, e.g. `--https=8446`; the address then ends
 in `:8446`. The first time, Tailscale may answer that serve or https certificates
-are not enabled on your tailnet and print an admin link: open it, enable them, and
-run the command again.
+are not enabled on your tailnet and print an admin link. **[PERSON ONLY]** Open it, sign in
+if asked, enable them, and run the command again.
 
 Open that address in a browser on your laptop or phone (it must be signed in to
 Tailscale). The dashboard loads, with an empty Agents list until step 3. Step 4 walks you
