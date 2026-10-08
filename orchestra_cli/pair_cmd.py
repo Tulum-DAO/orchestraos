@@ -82,6 +82,13 @@ def run_pair(args, settings=None, store=None, out=print, clear_after_s=60):
         out("I do not know this gateway's public address, so a phone could not reach it.")
         out("Re-run with:  orchestra pair --base-url https://<host>:<port>")
         return 2
+    from scripts.pairing import valid_base_url
+    if not valid_base_url(base_url):
+        # The app refuses a token whose address is not https with a host, so minting one would
+        # print a code that cannot pair anything.
+        out(f"{base_url!r} is not an https address the app can reach.")
+        out("Re-run with:  orchestra pair --base-url https://<host>:<port>")
+        return 2
     # A pairing used to hand over the FLEET bearer, so every paired device held full gateway
     # power and any "this device cannot inject" rule was a promise the client made about itself.
     # It now mints a PER-DEVICE token with an explicit verb scope, which the gateway enforces.

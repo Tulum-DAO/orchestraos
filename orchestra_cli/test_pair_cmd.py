@@ -1,6 +1,8 @@
 """RED-first for `orchestra pair` — the terminal half of onboarding."""
 import json
 
+import pytest
+
 from orchestra_cli.pair_cmd import build_pair_output, qr_text_or_none
 
 
@@ -158,3 +160,12 @@ def test_pair_prints_the_one_token_not_the_json_line(monkeypatch, tmp_path):
     from scripts.pairing import parse_pair_input
     got = parse_pair_input(toks[0])
     assert got["base_url"] and got["code"]
+
+
+@pytest.mark.parametrize("url", ["box.tail1234.ts.net:8445", "http://box:8445", "https://"])
+def test_pair_refuses_an_address_the_app_would_reject(monkeypatch, tmp_path, url):
+    """A token whose address is not https-with-a-host parses as a bare code in every client,
+    and its inner code is never shown. So refuse to mint it at all."""
+    rc, said = _lines(monkeypatch, tmp_path, _Args(scopes="read", base_url=url))
+    assert rc == 2 and "orc1_" not in said and "--base-url https://" in said
+    assert not list((tmp_path / "state" / "devices").glob("*.json")), "no device minted"

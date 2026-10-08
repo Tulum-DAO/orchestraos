@@ -84,8 +84,10 @@ cuts one off (its token stops working on its next request).
 
 This prints the pairing code: one long word starting with `orc1_`. Copy all of it and
 paste it into the app's pairing box. It carries your server's address too, so there is
-nothing else to type. (An older app that also shows an address field: type your
-server's `https://` address there, then paste the code.) On a stock install the code is
+nothing else to type. If the code wraps over two lines in your terminal, copy both lines;
+the app ignores the line break. (An older app that also shows an address field: type your
+server's `https://` address there, then paste the code. That needs a gateway started after
+you updated OrchestraOS, so run `orchestra down && orchestra up --detach` once after updating.) On a stock install the code is
 all you get: the terminal says
 `No QR encoder is installed on this machine`. To also get a scannable QR code drawn as
 text (works over a bare ssh session), install the `segno` package into the install's
@@ -224,7 +226,7 @@ see the surface actually render something.
 
 ## Notes for anyone building against this
 
-- The pairing exchange (`orchestra pair` → scan/type → `POST /pair/exchange
+- The pairing exchange (`orchestra pair` → scan/paste the `orc1_` token → the app decodes it → `POST /pair/exchange
   {code}` → `{base_url, token}`) is the primary path. If that route isn't
   live yet on your checkout, `orchestra pair`'s own output will say so —
   don't assume the shape above without checking.

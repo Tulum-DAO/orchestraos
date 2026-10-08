@@ -84,7 +84,7 @@ def test_payload_round_trips_through_the_qr_string(store):
 # the compact JSON above, base64url'd behind a version prefix. Clients strip, decode, and reuse
 # their legacy JSON branch.
 
-from scripts.pairing import PAIR_TOKEN_PREFIX, pair_token, parse_pair_input
+from scripts.pairing import PAIR_TOKEN_PREFIX, pair_token, parse_pair_input, valid_base_url
 
 
 def test_the_token_is_one_paste_safe_word(store):
@@ -119,15 +119,37 @@ def test_a_bare_legacy_code_parses_with_no_address():
 
 
 @pytest.mark.parametrize("bad", [
-    "orc1_!!!",                                   # not base64
     "orc1_" + "e30",                              # {} : no code
     "orc1_" + "eyJjb2RlIjoiYyIsImJhc2VfdXJsIjoiaHR0cDovL2JveCJ9",   # http://, not https  # pragma: allowlist secret
     "orc1_" + "WyJhIl0",                          # ["a"] : not an object
+    "orc1_abcde",                                 # length % 4 == 1 : not base64
 ])
 def test_an_undecodable_token_falls_through_to_a_bare_code(bad):
-    """Spec: a broken orc1_ never errors; it is tried as a bare code (which the gateway then
+    """A broken orc1_ never errors; it is tried as a bare code (which the gateway then
     refuses like any wrong code). A token_urlsafe code may itself begin with orc1_."""
     assert parse_pair_input(bad) == {"code": bad, "base_url": None}
+
+
+@pytest.mark.parametrize("junk", ["abc def", "orc1_abc!def", "c\u00f3digo",
+                                  '{"code":"c","base_url":"http://box"}', "orc1_" + "A" * 5000])
+def test_what_cannot_be_a_code_is_none(junk):
+    assert parse_pair_input(junk) is None
+
+
+def test_a_token_wrapped_by_the_terminal_still_parses():
+    tok = pair_token("abcDEF-123_x", base_url="https://box.tail1234.ts.net:8443")
+    wrapped = tok[:40] + "\n" + tok[40:80] + "\r\n  " + tok[80:]
+    assert parse_pair_input(wrapped) == {"code": "abcDEF-123_x",
+                                         "base_url": "https://box.tail1234.ts.net:8443"}
+
+
+@pytest.mark.parametrize("url,ok", [
+    ("https://box:8443", True), ("https://box.tail1234.ts.net", True), ("HTTPS://box", True),
+    ("http://box:8443", False), ("box.tail1234.ts.net:8445", False), ("https://", False),
+    ("https://:443", False), ("https://box:99999", False), ("", False),
+])
+def test_valid_base_url(url, ok):
+    assert valid_base_url(url) is ok
 
 
 def test_empty_input_is_none():
@@ -145,12 +167,11 @@ def test_redeem_accepts_the_whole_token_or_json_line(store):
 
 
 def test_the_client_fixture_is_generated_from_this_module():
-    """Mac and iOS tests read contract/pair-token-cases.json. It must be what this module
-    produces TODAY, or the clients are tested against a guess again."""
+    """Mac and iOS tests read contract/pair-token-cases.json. It must be byte-for-byte what
+    scripts/gen_pair_token_cases.py writes TODAY, or the clients are tested against a guess."""
     from pathlib import Path
-    fx = json.loads((Path(__file__).resolve().parent.parent / "contract" / "pair-token-cases.json").read_text())
-    assert fx["prefix"] == PAIR_TOKEN_PREFIX
-    for case in fx["cases"]:
-        if case.get("produced_by") == "pair_token":
-            assert pair_token(case["code"], case["base_url"]) == case["input"]
-        assert parse_pair_input(case["input"]) == case["expect"], case["name"]
+    from scripts.gen_pair_token_cases import OUT, render
+    assert OUT.read_text() == render(), "run: python3 scripts/gen_pair_token_cases.py"
+    fx = json.loads(OUT.read_text())
+    produced = [c for c in fx["cases"] if c.get("produced_by") == "pair_token"]
+    assert produced and all(pair_token(c["code"], c["base_url"]) == c["input"] for c in produced)
