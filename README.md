@@ -6,8 +6,8 @@ OrchestraOS, published by Tulum DAO: an open harness for running a fleet of codi
 
 ## Start here
 
-- **Never used a server or Terminal?** → [From scratch](docs/FROM_SCRATCH.md): from your Mac
-  to logged in on your own server, about 20 minutes. It then hands you to the install guide.
+- **Never used a server or Terminal?** → [From scratch](docs/FROM_SCRATCH.md): from your
+  computer (Mac, Windows or Linux) to logged in on your own server, about 20 minutes. It then hands you to the install guide.
 - **Have a server and a terminal open?** → [Install guide](docs/INSTALL.md), about an hour.
 - The same guides, easier to read: [tulumdao.com/docs](https://tulumdao.com/docs/).
 
@@ -30,7 +30,7 @@ orchestra init --yes            # set everything up (about 5 minutes)
 
 | You are... | Start here | First thing you do |
 |---|---|---|
-| **New to servers and Terminal** (you have a Mac and a card) | [From scratch](docs/FROM_SCRATCH.md) | Open Terminal and make an ssh key; it then walks you through renting a server and logging in, and hands you to the install guide. About 20 minutes. |
+| **New to servers and Terminal** (any computer; you will rent a server) | [From scratch](docs/FROM_SCRATCH.md) | Open a terminal and make an ssh key; it then walks you through renting a server and logging in, and hands you to the install guide. About 20 minutes. |
 | **Have a fresh Ubuntu server (VPS)** | [Install guide](docs/INSTALL.md) | Log in, create a normal user (seats refuse to run as root), set up Tailscale, then `git clone https://github.com/Tulum-DAO/orchestraos.git`. About an hour. |
 | **Want to try it on your laptop, no server** | [Docker / dev container](docs/INSTALL.md#dev-container--docker-no-vps) | `docker build -t orchestraos .` from a clone of this repo, then log in to your agent CLI inside the container. |
 | **Want the full operator setup** (VPS + Mac, push, Telegram, voice) | [Reference install](docs/REFERENCE_INSTALL.md) | Do the install guide first; this adds to it. |

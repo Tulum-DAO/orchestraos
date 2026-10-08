@@ -1,69 +1,81 @@
-# From scratch: from your Mac to your own server
+# From scratch: from your computer to your own server
 
 This page is for you if you have never rented a server, made an ssh key, or typed
-commands into a server. You need a Mac, a credit card and an email address, and you
-need to be able to copy and paste. Nothing else is assumed.
+commands into a server. You need a computer (Mac, Windows or Linux) with an internet
+connection, and an email address. You need to be able to copy and paste. Nothing else is
+assumed.
 
-By the end of this page you will have your own server on the internet and you will
-be logged in to it from your Mac. Then [docs/INSTALL.md](INSTALL.md) takes over and installs
-OrchestraOS on it. This page takes about 20 minutes.
+By the end of this page you will have your own server on the internet, and you will be
+logged in to it from your computer. Then [docs/INSTALL.md](INSTALL.md) takes over and
+installs OrchestraOS on it. This page takes about 20 minutes.
 
-**What it costs.** The server is about $24 a month, charged by the hour while it
-exists; delete it and the charges stop (step 3 says how). To run agents you also need
-a paid plan for one AI command-line tool; Claude Pro is about $20 a month.
-[docs/COSTS.md](COSTS.md) has the details and the cheaper options.
+Most steps are the same on every computer. Where they differ, you get **Mac**, **Windows**
+and **Linux** lines: follow the one for your computer.
 
 ## Words you will meet
 
-- **Terminal**: a Mac app where you type commands instead of clicking. Each command
-  is one line of text; you press Enter to run it, and the Terminal prints the result.
+- **Terminal**: an app where you type commands instead of clicking. Each command is one
+  line of text; you press Enter to run it, and the terminal prints the result. Every
+  computer has one (step 1 shows where).
 - **Server** or **VPS** (virtual private server): a computer you rent in a data
-  centre. It stays on all the time, so your agents keep working when your Mac is asleep.
+  centre. It stays on all the time, so your agents keep working when your own computer
+  is asleep or off.
 - **IP address**: the server's address on the internet, four numbers with dots, like
   `203.0.113.25`. (That one is an example; yours will be different.)
-- **ssh**: how you log in to the server from your Mac's Terminal. Once logged in, the
-  commands you type run on the server, not on your Mac.
-- **ssh key**: a pair of files on your Mac that let you log in without a password.
+- **ssh**: how you log in to the server from your terminal. Once logged in, the commands
+  you type run on the server, not on your computer.
+- **ssh key**: a pair of files on your computer that let you log in without a password.
   The **public** half (ends in `.pub`) is safe to give to the server company. The
-  **private** half never leaves your Mac and is never shared with anyone.
+  **private** half never leaves your computer and is never shared with anyone.
 - **root**: the all-powerful administrator account on the server.
 
 ## How to read the boxes on this page
 
-Each grey box holds commands. Copy **one line at a time**, paste it into Terminal
-(`Cmd+V`), and press Enter. Text after a `#` is a note for you; the computer ignores
-it, so it is fine to paste it too. Under each box, **"You should see"** tells you what
-success looks like. If you see something else, stop and check the "If it goes wrong"
-notes before you continue.
+Each grey box holds commands. Copy **one line at a time**, paste it into your terminal,
+and press Enter. Text after a `#` is a note for you; the computer ignores it, so it is
+fine to paste it too. Under each box, **"You should see"** tells you what success looks
+like. If you see something else, stop and check the "If it goes wrong" notes before you
+continue.
 
-## 1. Open Terminal
+**Copy and paste in a terminal:**
 
-Press `Cmd+Space`, type `Terminal`, and press Enter. A window opens with a line that
-ends in `%`, for example `yourname@Your-MacBook ~ %`. That line is the **prompt**: the
-Terminal is waiting for you to type.
+- **Mac** (Terminal): `Cmd+C` and `Cmd+V`.
+- **Windows** (Windows Terminal or PowerShell): `Ctrl+C` copies selected text and `Ctrl+V`
+  pastes. In the older PowerShell window, right-click pastes.
+- **Linux**: `Ctrl+Shift+C` and `Ctrl+Shift+V`.
 
-Try your first command:
+## 1. Open a terminal
+
+- **Mac**: press `Cmd+Space`, type `Terminal`, press Enter. The prompt ends in `%`, for
+  example `yourname@Your-MacBook ~ %`.
+- **Windows 10 or 11**: click **Start**, type `Terminal` (Windows 11) or `PowerShell`
+  (Windows 10), press Enter. The prompt looks like `PS C:\Users\yourname>`.
+- **Linux**: open your **Terminal** app. The prompt usually ends in `$`.
+
+That line is the **prompt**: the terminal is waiting for you to type. Try your first
+command:
 
 ```bash
 whoami
 ```
 
-You should see: your Mac username, on one line, and then the prompt again.
+You should see: your username on this computer (on Windows, `computername\yourname`), and
+then the prompt again.
 
-## 2. Make an ssh key on your Mac
+## 2. Make an ssh key
 
 First check whether you already have one:
 
-```bash
-ls ~/.ssh/id_ed25519.pub
-```
+- **Mac or Linux**: `ls ~/.ssh/id_ed25519.pub`
+- **Windows**: `dir $env:USERPROFILE\.ssh\id_ed25519.pub`
 
-- If you see `/Users/yourname/.ssh/id_ed25519.pub`, you already have a key. Skip to
-  "Copy the public half" below.
-- If you see `No such file or directory`, make one:
+If it prints the file's name (Windows lists it with a date and size), you already have a
+key: skip to "Show the public half" below. If it says `No such file or directory` (Mac or
+Linux) or `Cannot find path` (Windows), make one. The command is the same on every
+computer:
 
 ```bash
-ssh-keygen -t ed25519 -C "my-mac"
+ssh-keygen -t ed25519 -C "my-computer"
 ```
 
 It asks three questions. Answer them like this:
@@ -73,38 +85,50 @@ It asks three questions. Answer them like this:
    Nothing appears on screen while you type it; that is normal.
 3. `Enter same passphrase again`: the same again.
 
-You should see: `Your identification has been saved in /Users/yourname/.ssh/id_ed25519`,
-then `Your public key has been saved in /Users/yourname/.ssh/id_ed25519.pub`, then a
-small box of random characters. That is your key pair.
+You should see: `Your identification has been saved in ...id_ed25519`, then
+`Your public key has been saved in ...id_ed25519.pub`, then a small box of random
+characters. That is your key pair.
 
-**Copy the public half** to your clipboard:
+**On Windows, if it says `ssh-keygen` is not recognized:** ssh is built into Windows 10
+(version 1809 or later) and Windows 11, but it can be switched off. Click **Start**, type
+`Optional features`, open it, and check that **OpenSSH Client** is in the list. If it is
+not, add it, then close and reopen your terminal.
 
-```bash
-pbcopy < ~/.ssh/id_ed25519.pub
-```
+**Show the public half**, so you can copy it:
 
-You should see: nothing, just the prompt again. The key is now on your clipboard.
-If you paste it somewhere (a note, an email draft) it is one long line that starts
-with `ssh-ed25519 AAAA` and ends with `my-mac`.
+- **Mac or Linux**: `cat ~/.ssh/id_ed25519.pub`
+- **Windows**: `type $env:USERPROFILE\.ssh\id_ed25519.pub`
+
+You should see: one long line that starts with `ssh-ed25519 AAAA` and ends with
+`my-computer`. Select the whole line and copy it. (On a Mac, `pbcopy < ~/.ssh/id_ed25519.pub`
+copies it for you; on Windows, `Get-Content $env:USERPROFILE\.ssh\id_ed25519.pub | Set-Clipboard`
+does the same.)
 
 ## 3. Rent a server
 
-We recommend **DigitalOcean** for a first server: sign-up needs only a card and an
-email, and its screens are simple. The install itself works on any Ubuntu 24.04
-server; other providers are at the end of this step.
+This is the step where you pay. A server is rented by the hour from a hosting company,
+and you pay that company directly, not OrchestraOS. The size these docs use costs about
+$24 a month at DigitalOcean, charged only while the server exists; delete it and the
+charges stop. [docs/COSTS.md](COSTS.md) compares providers and prices.
 
-1. **Sign up** at digitalocean.com and add your card. Confirm your email if asked.
-2. **Give it your public key.** Go to **Settings**, then the **Security** tab, and
-   click **Add SSH Key**. Paste (`Cmd+V`) into **Public Key**. Type `my-mac` as the
-   **Key Name**. Click **Add SSH Key**.
+We suggest **DigitalOcean** for a first server: its screens are simple, and it takes a
+card, PayPal, Google Pay or Apple Pay. (PayPal makes a small temporary $5 charge to check
+the account.) The install works on any Ubuntu 24.04 server; other providers are at the
+end of this step.
+
+1. **Sign up** at digitalocean.com and add a payment method (card, PayPal, Google Pay or
+   Apple Pay). Confirm your email if asked.
+2. **Give it your public key.** Go to **Settings**, then the **Security** tab, and click
+   **Add SSH Key**. Paste the line you copied in step 2 into **Public Key**. Type
+   `my-computer` as the **Key Name**. Click **Add SSH Key**.
 3. **Create the server.** Click the green **Create** button at the top, then
    **Droplets** ("Droplet" is DigitalOcean's word for a server). Fill in the page from
    top to bottom:
    - **Choose Region**: the one nearest to you.
    - **Choose an image**: the **OS** tab, **Ubuntu**, version **24.04 (LTS) x64**.
    - **Choose Size**: **Shared CPU**, **Basic**, then the plan with **4 GB** memory and
-     **2 CPUs** (about $24/month). Smaller plans are not enough for agents.
-   - **Choose Authentication Method**: **SSH key**, and tick `my-mac`.
+     **2 CPUs**. Smaller plans are not enough for agents.
+   - **Choose Authentication Method**: **SSH key**, and tick `my-computer`.
    - **Hostname**: `orchestra` (lowercase letters only, no spaces).
    - Click **Create Droplet**.
 4. **Find its address.** After about a minute the server appears in your
@@ -119,11 +143,12 @@ not enough; a droplet is charged while it exists.
 **Other providers.** Any company that rents Ubuntu 24.04 servers and lets you add an
 ssh key works: Hetzner (cheaper; may ask for identity verification), Vultr, Linode,
 and others. Pick Ubuntu 24.04, at least 2 CPUs and 4 GB of memory, and choose your
-`my-mac` key when you create the server. [docs/COSTS.md](COSTS.md) compares prices.
+`my-computer` key when you create the server.
 
 ## 4. Log in to your server for the first time
 
-In Terminal, type `ssh root@` followed by your server's address:
+In your terminal, type `ssh root@` followed by your server's address. It is the same on
+every computer:
 
 ```bash
 ssh root@203.0.113.25        # use YOUR address from step 3
@@ -144,21 +169,23 @@ You should see: a welcome text that starts with `Welcome to Ubuntu 24.04`, and t
 new prompt that ends in `#`, like `root@orchestra:~#`. You are now on the server:
 
 - the `#` at the end means you are **root**;
-- every command you type in this window now runs on the server, not on your Mac;
-- `exit` logs you out and brings back your Mac's `%` prompt;
-- `Cmd+T` opens a new Terminal tab that is on your Mac again.
+- every command you type in this window now runs on the server, not on your computer;
+- from here on, every command in the docs is the same whatever computer you started on;
+- `exit` logs you out and brings back your own computer's prompt;
+- a new terminal tab or window is on your own computer again.
 
 **If it goes wrong:**
 
 - `Permission denied (publickey)`: the server does not have your key. In step 3 you
-  must tick `my-mac` under **Choose Authentication Method** when creating the server.
+  must tick `my-computer` under **Choose Authentication Method** when creating the server.
   The simplest fix is to destroy that droplet and create a new one with the key ticked.
 - `Connection timed out` or `Operation timed out`: check the address, and give a brand
   new server another minute to start.
 - `Could not resolve hostname`: there is a typo in the address.
+- **Windows:** `ssh` is not recognized: see the OpenSSH Client note in step 2.
 
 ## 5. Next: install OrchestraOS
 
-Stay logged in, and continue with [docs/INSTALL.md](INSTALL.md) at **§0, "Run as a normal user,
-not root"**. You are root right now, so that step applies to you: it creates your own
-account on the server, which is what OrchestraOS runs as.
+Stay logged in, and continue with [docs/INSTALL.md](INSTALL.md) at **§0, "Run as a normal
+user, not root"**. You are root right now, so that step applies to you: it creates your
+own account on the server, which is what OrchestraOS runs as.
