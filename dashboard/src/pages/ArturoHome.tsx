@@ -350,6 +350,12 @@ export default function ArturoHome() {
       // Kept only when tools ran: a turn of text alone renders exactly as it always has.
       parts: hasToolParts(parts) ? parts : undefined });
     if (r.operator?.name && r.operator.name !== name) { setName(r.operator.name); lsSet(LS_NAME, r.operator.name); }
+    // A device the server saw connect (check_paired): its card drops the code and says "paired".
+    const nowPaired = r.paired || [];
+    if (nowPaired.length) {
+      setTurns((t) => t.map((x) => x.pairCard && nowPaired.includes(x.pairCard.device_id)
+        ? { ...x, pairCard: { ...x.pairCard, code: '', paired: true } } : x));
+    }
     // By EFFECT: onboarding ends when the server says so (finish_onboarding wrote its flag), never on
     // a reply's wording.
     if (isOnboarding && r.onboarding?.done) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }

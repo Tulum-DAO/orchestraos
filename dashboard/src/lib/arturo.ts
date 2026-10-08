@@ -16,9 +16,11 @@ export interface ArturoHealth { onboarded?: boolean; operator?: OperatorFacts; o
  *  `note` is the server's own line (the starter team's cost), never the model's. */
 export type ChoiceCard = { options: string[]; multi: boolean; purpose: 'starter_team' | 'devices' | 'other'; note?: string };
 /** A pairing code card (pair_device). The brain never sees `code`; it is shown here and nowhere else. */
-export type PairCard = { device: string; device_id: string; code: string; expires_in_s: number; where: string; powers: string; revoke: string };
+export type PairCard = { device: string; device_id: string; code: string; expires_in_s: number; where: string; powers: string; revoke: string;
+  /** Page-only: set when a later turn's check_paired saw this device connect. The code is then dropped. */
+  paired?: boolean };
 
-export interface ArturoReply { choices?: ChoiceCard; pair_card?: PairCard; onboarding?: { done: boolean }; operator?: OperatorFacts; ok: boolean; status?: number; reply_text?: string; conversation_id?: string; brain?: ArturoBrain; tools_called?: string[]; spawned?: string[]; error?: string; detail?: unknown; provider?: string; model?: string; reason?: string; field?: string }
+export interface ArturoReply { choices?: ChoiceCard; pair_card?: PairCard; paired?: string[]; onboarding?: { done: boolean }; operator?: OperatorFacts; ok: boolean; status?: number; reply_text?: string; conversation_id?: string; brain?: ArturoBrain; tools_called?: string[]; spawned?: string[]; error?: string; detail?: unknown; provider?: string; model?: string; reason?: string; field?: string }
 export interface ArturoContext { route: string; entityKind?: string; entityId?: string; hint?: string }
 export interface RuntimeRow { id: string; label?: string; cli?: string; installed: boolean; authed: boolean | 'unverified'; auth_reason?: string | null }
 

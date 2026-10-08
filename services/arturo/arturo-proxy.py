@@ -2140,7 +2140,12 @@ def pair_device(device):
                 "(ORCHESTRA_PUBLIC_URL). Say so; the guide covers it: " + _onb.ONBOARDING_GUIDE)
     label = f"{match.lower()} (arturo)"
     devices = DeviceStore(Path(ORCHESTRA_DIR) / "state" / "devices")
-    devices.revoke_label(label, minted_by=_PAIR_MINTER)       # one live code per device; never a CLI-minted one
+    # One live code per device: replace only ARTURO's previous code for it that was NEVER USED. A device
+    # that has reached the gateway is the operator's to revoke (orchestra devices --revoke), never ours.
+    for rec in devices.list():
+        if (rec.get("minted_by") == _PAIR_MINTER and str(rec.get("label") or "").strip() == label
+                and not rec.get("revoked_at") and not rec.get("last_seen_at")):
+            devices.revoke(rec["id"])
     device_id, token = devices.mint(label, list(_PAIR_SCOPES), minted_by=_PAIR_MINTER)
     store = PairingStore(Path(ORCHESTRA_DIR) / "state" / "pairing")
     store.sweep()
@@ -2168,6 +2173,9 @@ def check_paired(device_id):
         return f"Device {device_id} was revoked (a newer code replaced it, or it was removed)."
     seen, made = rec.get("last_seen_at"), rec.get("created_at") or 0
     if seen and seen >= made:
+        turn = _TEAM_TURN.get()
+        if turn is not None:
+            turn.setdefault("paired", []).append(rec["id"])     # the page swaps that card's code for "paired"
         return f"Connected: device {device_id} ({rec.get('label')}) has reached the gateway."
     return f"Not yet: device {device_id} has not reached the gateway since its code was made."
 
@@ -5235,6 +5243,8 @@ def _turn_extras(team_turn, onboarding_turn):
         out["choices"] = team_turn["choices"]
     if team_turn.get("pair_card"):
         out["pair_card"] = team_turn["pair_card"]
+    if team_turn.get("paired"):
+        out["paired"] = list(team_turn["paired"])
     if onboarding_turn:
         out["onboarding"] = {"done": onboarded()}
     return out

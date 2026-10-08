@@ -256,7 +256,8 @@
 .decision-note{ padding:12px 16px; font-size:13.5px; color:var(--grey2); border-bottom:1px solid var(--hair); }
 /* The pairing code card (PairCodeCard). */
 .pair-card{ box-sizing:border-box; width:100%; max-width:360px; background:var(--card); border-radius:18px; border:1px solid var(--hair); margin-top:4px; padding:14px 16px; display:flex; flex-direction:column; gap:8px; color:#fff; }
-.pair-card.expired{ color:var(--grey2); font-size:14px; }
+.pair-card.expired, .pair-card.done{ color:var(--grey2); font-size:14px; }
+.pair-card.done{ color:#fff; }
 .pair-head{ font-size:15px; font-weight:600; display:flex; justify-content:space-between; gap:8px; }
 .pair-ttl{ color:var(--grey2); font-variant-numeric:tabular-nums; font-weight:500; }
 .pair-code{ box-sizing:border-box; display:block; font-size:12.5px; line-height:1.35; word-break:break-all; background:var(--card2); border-radius:10px; padding:10px 12px; user-select:all; }

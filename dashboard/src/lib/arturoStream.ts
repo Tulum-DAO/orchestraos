@@ -121,6 +121,7 @@ export interface StreamOutcome {
    *  turn whether onboarding is now done. */
   choices?: any;
   pair_card?: any;
+  paired?: any;
   onboarding?: any;
   error?: string;
 }
@@ -195,7 +196,7 @@ export async function arturoTextStream(
   return {
     ok: true, reply_text: final.reply_text, tools_called: final.tools_called || [],
     spawned: final.spawned || [], operator: final.operator, brain: final.brain,
-    choices: final.choices, pair_card: final.pair_card, onboarding: final.onboarding,
+    choices: final.choices, pair_card: final.pair_card, paired: final.paired, onboarding: final.onboarding,
   };
 }
 
@@ -240,6 +241,7 @@ export async function arturoTurn(
       spawned: res.spawned || [], ...(res.operator !== undefined ? { operator: res.operator } : {}),
       ...(res.choices !== undefined ? { choices: res.choices } : {}),
       ...(res.pair_card !== undefined ? { pair_card: res.pair_card } : {}),
+      ...(res.paired !== undefined ? { paired: res.paired } : {}),
       ...(res.onboarding !== undefined ? { onboarding: res.onboarding } : {}),
     } as ArturoReply;
   }

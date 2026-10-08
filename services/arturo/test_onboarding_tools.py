@@ -226,8 +226,11 @@ def test_check_paired_reports_by_effect(P, pairing):
     assert P.execute_tool("check_paired", {"device_id": dev}).startswith("Not yet")
     pairing.touch(dev)
     assert P.execute_tool("check_paired", {"device_id": dev}).startswith("Connected")
-    _pair(P)                                                    # a newer code revokes the old record
-    assert "revoked" in P.execute_tool("check_paired", {"device_id": dev})
+    _pair(P)                                                    # a newer code leaves a CONNECTED device alone
+    assert P.execute_tool("check_paired", {"device_id": dev}).startswith("Connected")
+    _, unused = _pair(P)
+    _pair(P)                                                    # ...and replaces an unused one
+    assert "revoked" in P.execute_tool("check_paired", {"device_id": unused["device_id"]})
 
 
 def _text_with_pair(P, monkeypatch, path, headers):
@@ -265,3 +268,46 @@ def test_the_stream_fallback_keeps_the_principal(P, pairing, monkeypatch):
     data = r.get_data(as_text=True)            # the turn runs as the stream is read
     assert results and results[0].startswith("A pairing code")
     assert '"pair_card"' in data
+
+
+# ---- pm-tulumdao leak paths (after the v3 design) ---------------------------------------------
+def test_a_new_code_never_revokes_a_device_that_is_in_use(P, pairing):
+    # revoking is the operator's own act; Arturo only replaces ITS OWN code that was never used
+    _, first = _pair(P)
+    pairing.touch(first["device_id"])                     # the iPhone paired and is talking
+    _, second = _pair(P)
+    rows = {r["id"]: r for r in pairing.list()}
+    assert not rows[first["device_id"]]["revoked_at"] and not rows[second["device_id"]]["revoked_at"]
+
+
+def test_the_code_is_nowhere_but_the_card(P, pairing, monkeypatch, caplog, tmp_path):
+    # not in the log, the thread store, the journal, the operator store, or anything else Arturo writes
+    caplog.set_level(logging.DEBUG)
+    results, r = _text_with_pair(P, monkeypatch, "/text", {"X-Arturo-Principal": "fleet"})
+    code = r.get_json()["pair_card"]["code"]
+    raw = json.loads(__import__("base64").urlsafe_b64decode(code[5:] + "=" * (-len(code[5:]) % 4)))["code"]
+    assert "orc1_" not in caplog.text and raw not in caplog.text
+    assert "orc1_" not in results[0] and raw not in results[0]
+    import pathlib
+    for f in pathlib.Path(P.ARTURO_STATE).rglob("*"):
+        if f.is_file():
+            body = f.read_text(errors="ignore")
+            assert "orc1_" not in body and raw not in body, f
+
+
+def test_a_connected_device_is_reported_so_the_card_drops_the_code(P, pairing, monkeypatch):
+    _, card = _pair(P)
+    pairing.touch(card["device_id"])
+    tok = _turn(P)
+    try:
+        P.execute_tool("check_paired", {"device_id": card["device_id"]})
+        extras = P._turn_extras(P._TEAM_TURN.get(), True)
+    finally:
+        P._TEAM_TURN.reset(tok)
+    assert extras["paired"] == [card["device_id"]]
+
+
+def test_voice_never_gets_a_code_to_speak(P, pairing):
+    # /v1/chat/completions and /ptt run tools with no turn record: no code exists, so TTS has none
+    out = P.execute_tool("pair_device", {"device": "iPhone"})
+    assert out.startswith("NOT PAIRED") and "orc1_" not in out
