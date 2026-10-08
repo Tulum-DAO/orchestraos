@@ -3,7 +3,7 @@
  *   node --experimental-strip-types dashboard/src/lib/arturo.test.mjs
  */
 import assert from 'node:assert';
-import { isStarting, waitForArturo, contextLine, contextFromLocation, brainLabel, slugify, firstStep, stepAfterRuntime, onboardingTurn, teamStepDone } from './arturo.ts';
+import { isStarting, waitForArturo, contextLine, contextFromLocation, brainLabel, slugify, firstStep, stepAfterRuntime, onboardingTurn, teamStepDone, toggleChoice, devicesAnswer, DEVICE_OPTIONS, DEVICE_ONLY_HERE } from './arturo.ts';
 
 // --- isStarting: boot-window errors are "starting", real errors are not ------------------
 assert.equal(isStarting({ ok: false, error: 'HTTP 502' }), true);
@@ -77,6 +77,19 @@ assert.equal(teamStepDone({ state: 'incomplete' }), false);                     
 assert.equal(teamStepDone({ state: 'starting' }), false);                        // still running: ask again in a minute
 assert.equal(teamStepDone({ state: 'absent', declined: true }), true);           // an explicit no ends it
 assert.equal(onboardingTurn('team_open', 'Introduce my team.'), '[Onboarding: step=team_open]\nIntroduce my team.');
+// The devices card: multi-select, in the card's order, with "Just this computer" exclusive.
+{
+  const O = DEVICE_OPTIONS, X = DEVICE_ONLY_HERE;
+  let p = toggleChoice(O, [], 'Apple Watch', X);
+  p = toggleChoice(O, p, 'iPhone', X);
+  assert.deepEqual(p, ['iPhone', 'Apple Watch']);                 // card order, not tap order
+  assert.deepEqual(toggleChoice(O, p, 'iPhone', X), ['Apple Watch']);   // a second tap un-picks
+  assert.deepEqual(toggleChoice(O, p, X, X), [X]);                 // the exclusive one clears the rest
+  assert.deepEqual(toggleChoice(O, [X], 'Mac', X), ['Mac']);       // and any other clears it
+  assert.deepEqual(toggleChoice(O, [X], X, X), []);
+  assert.equal(devicesAnswer(['iPhone', 'Apple Watch']), 'My devices: iPhone, Apple Watch');
+  assert.equal(onboardingTurn('devices', 'My devices: Mac'), '[Onboarding: step=devices]\nMy devices: Mac');
+}
 assert.equal(teamStepDone(undefined), false);                                    // an older server sends no state
 assert.equal(onboardingTurn('team', 'Introduce my team.'), '[Onboarding: step=team]\nIntroduce my team.');
 assert.equal(onboardingTurn('name', 'hi my name is Shaw nice to meet you'), '[Onboarding: step=name]\nhi my name is Shaw nice to meet you');

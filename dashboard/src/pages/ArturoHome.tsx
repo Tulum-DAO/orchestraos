@@ -8,8 +8,9 @@
  * Onboarding is Arturo's FIRST THREAD, not a form: runtime detect (catalog probe +
  * /api/arturo/health) → name (a BRAIN turn: the brain extracts it with set_operator_fact —
  * nothing here parses a reply) → optional voice → the team: Arturo explains gm (T0) → project manager (T1)
- * → worker (T2) and what gm does, and sets the team up with `orchestra starter` when the operator says yes,
- * all through the conversation. The step ends on what the SERVER sees running, then it is ordinary chat.
+ * → worker (T2) and what gm does, and sets the team up with `orchestra starter` when the operator says yes
+ * → which devices they have (a multi-select card; Arturo answers each from fixed facts), all through
+ * the conversation. The team step ends on what the SERVER sees running; after devices it is ordinary chat.
  * The operator's name is SERVER state (/api/arturo/health .operator.name); localStorage only
  * caches it for the first paint.
  *
@@ -27,6 +28,7 @@ import { arturoTurn, arturoPrewarm } from '../lib/arturoStream';
 import { brainFromThread, describeTurnError, toWireBrain } from '../lib/arturoBrain';
 import { arturoHealth, arturoText, runtimesAvailable, brainLabel, greeting, newConversationId,
   isStarting, waitForArturo, STARTING_TEXT, firstStep, stepAfterRuntime, onboardingTurn, teamStepDone, sendStateLabel,
+  devicesAnswer, DEVICE_OPTIONS, DEVICE_ONLY_HERE,
   type ArturoHealth, type RuntimeRow, type SendState } from '../lib/arturo';
 import { listThreads, loadThread, type ThreadSummary } from '../lib/arturoThreads';
 import WebTerminal from '../components/WebTerminal';
@@ -34,6 +36,7 @@ import { installCommand } from '../lib/providerConnect';
 import { uploadAttachment, attachmentPreamble, describeAttachment, type Attachment } from '../lib/arturoUpload';
 import { useDictation } from '../components/arturo/useDictation.ts';
 import SpawnedAgentCard from '../components/arturo/SpawnedAgentCard';
+import ChoicesCard from '../components/arturo/ChoicesCard';
 import ToolRun from '../components/arturo/ToolRun';
 import { applyTextDelta, applyToolCall, applyToolResult, groupParts, hasToolParts, type TurnPart } from '../lib/turnParts';
 import { Brain, Settings } from 'lucide-react';
@@ -41,8 +44,11 @@ import { Brain, Settings } from 'lucide-react';
 type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[]; spawned?: string[]; pending?: boolean; streaming?: boolean; state?: SendState;
   /** A streamed turn that ran tools, in the order it happened: text, tool cards, more text. */
   parts?: TurnPart[];
-  decision?: { options: string[]; onPick: (v: string) => void } };
-type Step = 'name' | 'runtime' | 'voice' | 'team' | 'done';
+  decision?: { options: string[]; onPick: (v: string) => void };
+  /** A multi-select card: tap any number of options, then Continue. */
+  choices?: { options: string[]; exclusive?: string; onSubmit: (picked: string[]) => void } };
+type Step = 'name' | 'runtime' | 'voice' | 'team' | 'devices' | 'done';
+
 
 const LS_NAME = 'orchestra.arturo.name';
 const LS_ONBOARDED = 'orchestra.arturo.onboarded';
@@ -187,6 +193,12 @@ export default function ArturoHome() {
     // client opens it with a synthetic prompt. The directive, and the facts it branches on (is there a
     // team, is each seat running), live server-side.
     if (step === 'team') void openTeam();
+    // Asked AFTER the team: who you are, then your team, then where you will reach it.
+    if (step === 'devices') {
+      say('Which devices do you have? Pick all that apply, and I will tell you how to reach your team on each.', {
+        choices: { options: DEVICE_OPTIONS, exclusive: DEVICE_ONLY_HERE, onSubmit: (picked: string[]) => { void sendDevices(devicesAnswer(picked)); } },
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
@@ -203,7 +215,27 @@ export default function ArturoHome() {
     patch(id, { pending: false, text: r.ok ? (r.reply_text || '(no reply)') : 'I could not introduce your team just now. Send me anything and I will try again.', tools: r.tools_called, spawned: r.spawned });
     // Nothing to ask (the team is up, another manager exists, or the server could not check): done.
     // A failed opener is NOT done: the step stays, so the operator's next message gets the intro.
-    if (r.ok && teamStepDone(r.team)) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }
+    if (r.ok && teamStepDone(r.team)) setStep('devices');
+  }
+
+  /** The devices answer, from the card or typed. A marked turn, so the proxy attaches the facts the
+   *  brain may use for each device; the brain records them with set_operator_fact. */
+  async function sendDevices(answer: string) {
+    if (busy) return;                      // one answer at a time: a card tap plus a quick typed line is two turns
+    setBusy(true);
+    setTurns((t) => t.map((x) => x.choices ? { ...x, choices: undefined } : x));
+    user(answer, 'sent');
+    const id = say('', { pending: true });
+    const r = await arturoText(onboardingTurn('devices', answer), convId.current);
+    setBusy(false);
+    // By EFFECT, and THIS turn's effect: the fact was written now (a devices turn can write no other
+    // field). Devices already on file from another browser must not close the step on a reply that
+    // recorded nothing, such as an off-topic question. Otherwise the card comes back.
+    const recorded = r.ok && (r.tools_called || []).includes('set_operator_fact') && !!r.operator?.devices;
+    patch(id, { pending: false, tools: r.tools_called,
+      text: r.ok ? (r.reply_text || '(no reply)') : 'I could not answer that just now.',
+      ...(recorded ? {} : { choices: { options: DEVICE_OPTIONS, exclusive: DEVICE_ONLY_HERE, onSubmit: (picked: string[]) => { void sendDevices(devicesAnswer(picked)); } } }) });
+    if (recorded) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }
   }
 
   async function runtimeStep(fresh = false) {
@@ -290,6 +322,8 @@ export default function ArturoHome() {
     if (dictating) stopDictation();      // the sent text is final; don't re-append into the empty box
     clearDictNote();
     setDraft('');
+    // A typed answer to the devices card goes the card's way: the same marked turn, then done.
+    if (step === 'devices') { void sendDevices(text); return; }
     const uid = user(text, 'sending');   // the bubble appears NOW; the box is already empty
     const isName = step === 'name';
     const isTeam = step === 'team';
@@ -371,7 +405,7 @@ export default function ArturoHome() {
     // By EFFECT: the server re-reads the team after the turn, so the step ends when it is RUNNING or
     // the operator said no (the server records an explicit decline), never on a tool's name or on a
     // reply with no tool call: "how much does gm cost?" is a question, not a no.
-    if (isTeam && teamStepDone(r.team)) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }
+    if (isTeam && teamStepDone(r.team)) setStep('devices');
   }
 
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -430,6 +464,7 @@ export default function ArturoHome() {
               : <div className="txt">{renderText(t.text)}</div>}
             {!hasToolParts(t.parts) && t.tools && t.tools.length > 0 && <div className="tools">ran {t.tools.join(', ')}</div>}
             <SpawnedAgentCard ids={t.spawned} />
+            {t.choices && <ChoicesCard options={t.choices.options} exclusive={t.choices.exclusive} onSubmit={t.choices.onSubmit} />}
             {t.decision && (
               <div className="decision-card">
                 {t.decision.options.map((o) => (
