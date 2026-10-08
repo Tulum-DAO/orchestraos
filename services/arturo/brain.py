@@ -290,6 +290,7 @@ def clean_codex_text(text: str) -> str:
 # The opener of a protocol envelope. Text from here on is the model calling tools, never prose.
 _ENVELOPE_OPEN_RE = re.compile(r'\{\s*"tool_calls"\s*:')
 _CLOSER = {"{": "}", "[": "]"}
+_FENCE_OPEN_TAIL_RE = re.compile(r"```[A-Za-z]*\s*$")
 
 
 def _repair_envelope(s: str) -> Optional[dict]:
@@ -298,9 +299,10 @@ def _repair_envelope(s: str) -> Optional[dict]:
     Operator report 2026-10-08: a claude brain emitted a two-call envelope one "}" short (the
     second call's object never closed before "]}"); json.loads refused it and the operator got
     the raw JSON as Arturo's reply. Only that kind of slip is repaired: a "]" reached while an
-    object is still open closes the object(s) first, and closers missing at the end are
-    appended. Anything else — a "}" where a list should close, or text cut off inside a string —
-    is not guessed at, because a guessed shape could run a call with the wrong arguments."""
+    object is still open closes the object(s) first. Nothing is ever appended at the end: an
+    envelope that stops early is a CUT-OFF reply (a CLI at its output limit), and closing it
+    would run calls the model never finished — kill_agent with no arguments, a half-written
+    send_telegram. Those, and a "}" where a list should close, are not guessed at."""
     out, stack, in_str, esc = [], [], False, False
     for ch in s:
         if in_str:
@@ -329,9 +331,8 @@ def _repair_envelope(s: str) -> Optional[dict]:
         out.append(ch)
         if not stack:
             break
-    if in_str:
+    if in_str or stack:
         return None
-    out.extend(_CLOSER[c] for c in reversed(stack))
     try:
         obj = json.loads("".join(out))
     except Exception:  # noqa: BLE001
@@ -345,7 +346,9 @@ def without_envelope(text: str) -> str:
     m = _ENVELOPE_OPEN_RE.search(text or "")
     if not m:
         return text
-    return text[:m.start()].strip() or NATIVE_MARKUP_FALLBACK
+    # A fenced envelope leaves its opening fence behind; it is not prose either.
+    prose = _FENCE_OPEN_TAIL_RE.sub("", text[:m.start()]).strip()
+    return prose or NATIVE_MARKUP_FALLBACK
 
 
 def parse_cli_reply(text: str):

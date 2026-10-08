@@ -593,3 +593,22 @@ def test_runtime_brain_stream_never_streams_an_envelope():
                        runner=lambda spec, timeout: 'Acknowledged.\n{"tool_calls":[{"name":"list_agents","arguments":{}}]}')
     chunks = list(b.complete([{"role": "user", "content": "hi"}], stream=True))
     assert "".join(c.choices[0].delta.content for c in chunks) == "Acknowledged."
+
+
+@pytest.mark.parametrize("cut", [
+    '{"tool_calls":[{"name":"get_agent_output","arguments":{"session":"gm","lines":20',
+    '{"tool_calls":[{"name":"list_agents","arguments":{}},{"name":"kill_agent"',
+    '{"tool_calls":[{"name":"send_telegram","arguments":{"text":"Deploy finished"',
+    '{"tool_calls":[{"name":"list_agents","arguments":{}}',
+])
+def test_a_cut_off_envelope_never_runs_anything(cut):
+    """A reply that stops early (a CLI at its output limit) must not be closed and run: the
+    last call's arguments may be unfinished. Review finding on the first version of the repair."""
+    msg = B.parse_cli_reply(cut).choices[0].message
+    assert msg.tool_calls is None
+    assert "tool_calls" not in (msg.content or "")
+
+
+def test_a_fenced_broken_envelope_leaves_no_fence_behind():
+    msg = B.parse_cli_reply('Sure.\n```json\n{"tool_calls":[{"name":"list_agents","arguments":{"x":"cu').choices[0].message
+    assert msg.content == "Sure."
