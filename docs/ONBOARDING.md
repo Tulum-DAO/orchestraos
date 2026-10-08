@@ -126,6 +126,10 @@ its QR.*
    *paste the code from orchestra pair*), or tap **Scan** and point the camera at its QR.
 2. Tap **Pair**. There is no address to type: the code carries it.
 
+If what you pasted is not a pairing code at all, the app says *That isn’t a pairing code. Paste
+exactly what `orchestra pair` printed.* Copy the whole code again, from the first character
+to the last, and paste it.
+
 The address field is under **Advanced: gateway address and token**. You only need it for an
 older OrchestraOS that prints a code with no address in it; the screen tells you, and opens
 **Advanced** by itself, when that happens.
@@ -206,9 +210,11 @@ On the Mac, open the app. Its first window is **Connect this Mac**, with the lin
 When it works, the connect window goes away and the app's main window opens. To check from
 the server: `orchestra devices` lists `my-mac` with the scopes you gave it.
 
-**If it does not work**, a sentence appears under the button, for example *That pairing code
-didn't work. Codes are single-use and expire quickly — run orchestra pair again for a fresh
-one.* Run `orchestra pair` again and paste the new code. Each code works once and expires after
+**If it does not work**, a sentence appears under the button. *That isn’t a pairing code. Paste
+exactly what `orchestra pair` printed.* means the paste was not a code: copy the whole code again.
+*That pairing code didn't work. Codes are single-use and expire quickly — run orchestra pair
+again for a fresh one.* means the code was used or expired: run `orchestra pair` again and paste
+the new code. Each code works once and expires after
 about 10 minutes. Also check that Tailscale on the Mac is connected, and that the address
 under the box ends in the https port you served the gateway on (8445 above), not 8891.
 

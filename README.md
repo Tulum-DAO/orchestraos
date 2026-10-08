@@ -34,7 +34,7 @@ orchestra init --yes            # set everything up (about 5 minutes)
 | **Have a fresh Ubuntu server (VPS)** | [Install guide](docs/INSTALL.md) | Log in, create a normal user (seats refuse to run as root), set up Tailscale, then `git clone https://github.com/Tulum-DAO/orchestraos.git`. About an hour. |
 | **Want to try it on your laptop, no server** | [Docker / dev container](docs/INSTALL.md#dev-container--docker-no-vps) | `docker build -t orchestraos .` from a clone of this repo, then log in to your agent CLI inside the container. |
 | **Want the full operator setup** (VPS + Mac, push, Telegram, voice) | [Reference install](docs/REFERENCE_INSTALL.md) | Do the install guide first; this adds to it. |
-| **Already running it, want the phone or Mac app** (both in testing, not yet public) | [Onboarding](docs/ONBOARDING.md) | On the server: `orchestra pair --base-url <your https gateway address> --scopes read,approve`, then paste the `orc1_` code it prints into the app. |
+| **Already running it, want the phone or Mac app** (both in testing, not yet public) | [Onboarding](docs/ONBOARDING.md) | On the server: `orchestra pair --base-url <your https gateway address> --scopes read,approve,message`, then paste the `orc1_` code it prints into the app. |
 | **Deciding what it costs** | [Costs](docs/COSTS.md) | A small VPS is about $24 a month; you also need one agent CLI plan (Claude Pro, or ChatGPT Plus for Codex; Google's free tier is unverified with `agy`). |
 
 Every path needs one agent CLI (Claude Code, Codex, or Gemini through Google's Antigravity
