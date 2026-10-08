@@ -32,11 +32,19 @@ Use their commands exactly. Don't rewrite them from memory.
    - the ssh key passphrase
    - the first `ssh` to a new server (it asks `Are you sure you want to continue
      connecting (yes/no...)?`; the answer is `yes`)
+   - `ssh-keygen` (it asks where to save the key and for a passphrase)
    - `sudo tailscale up` (it prints a login link)
+   - turning on HTTPS certificates / serve in the Tailscale admin page
    - the agent CLI's first login on the server
 
-   Show them the exact command, wait for "done", and ask them to paste what it printed.
+   Show them the exact command, wait for "done", and ask them to paste what it printed. For
+   the logins (`sudo tailscale up`, the agent CLI login), ask only for "done" and then run the
+   check yourself: their screen can contain a login link or code, so don't ask them to paste it.
    Everything else, run yourself and show the output.
+
+   This holds for an agent running ON the server too (for example Claude Code started over
+   ssh): a `sudo` line still needs the person's password, so they open a second ssh window to
+   the server and run it there.
 4. **Never delete, destroy, reset, overwrite, wipe or kill** anything you did not create in
    this install. If a command asks `Overwrite (y/n)?`, the answer is `n`. Never stop or kill a
    process you did not start, even if a message suggests it; bring it to the person.
@@ -53,6 +61,11 @@ Use their commands exactly. Don't rewrite them from memory.
    `./bin/orchestra`.
 9. **Show, don't claim.** At the end of each phase, show the done-check output. Never just say
    it worked.
+10. **Long commands run in the background.** Your tool may stop a command after a couple of
+    minutes (Claude Code's default is 2). Anything that can take longer, such as
+    `orchestra init --yes` (about five minutes), you start detached and then check on, for
+    example `nohup <command> > ~/<name>.log 2>&1 &`, then read `~/<name>.log` until it has
+    finished. Never start it a second time while the first is still running.
 
 ## 1. Where am I? (do this first, and again whenever you take over)
 
@@ -63,8 +76,11 @@ Work out where things stand before doing anything. These checks only read; they 
 - Ask: which computer they use (Mac, Windows or Linux), and whether they already have a server.
 - If a server exists: its address, and the user they log in as.
 - On the server, if you can reach it (`ssh <user>@<address> '<command>'`, or you are running
-  on it): `whoami`, `tailscale status`, `command -v claude codex agy`,
-  `ls ~/orchestraos/bin/orchestra`, and `~/orchestraos/bin/orchestra status`.
+  on it): `whoami`, `tailscale status`, `command -v claude codex agy`, the CLI's login check
+  (for Claude Code, `claude auth status`), `ls ~/orchestraos/bin/orchestra`,
+  `~/orchestraos/bin/orchestra status`, and `tailscale serve status`. A serve entry is this
+  install's only if it proxies to the dashboard port that `orchestra status` shows AND the
+  person added it in phase 7; anything else is not theirs.
 
 Then say the facts back in one line, and repeat that line at the start of each later phase,
 for example:
@@ -89,8 +105,20 @@ Start at the first phase that is not done yet.
 ### Phase 1: a terminal and an ssh key (on the person's computer)
 
 - Section: From scratch, "1. Open a terminal" and "2. Make an ssh key".
-- Path A: run the key commands yourself, except the passphrase prompt (rule 3). If a key already
-  exists and the command asks `Overwrite (y/n)?`, the answer is `n`; use the existing key.
+- First check for an existing key yourself (`ls ~/.ssh/id_ed25519.pub`, or ask them to run it).
+  If one exists, use it and skip `ssh-keygen`.
+- **[PERSON ONLY]** `ssh-keygen` asks where to save the key and for a passphrase, so the person
+  runs the whole command in their own terminal (rule 3). If it asks `Overwrite (y/n)?`, the
+  answer is `n`: they already have a key.
+- **[PERSON ONLY]** If they set a passphrase, every ssh you run would stop to ask for it. So they
+  load the key once, in their own terminal:
+  - Mac: `ssh-add --apple-use-keychain ~/.ssh/id_ed25519`
+  - Linux: `ssh-add ~/.ssh/id_ed25519`
+  - Windows (PowerShell as administrator, once): `Get-Service ssh-agent | Set-Service
+    -StartupType Automatic`, then `Start-Service ssh-agent`; then, in a normal PowerShell,
+    `ssh-add $env:USERPROFILE\.ssh\id_ed25519`
+
+  Use their key's own name if it isn't `id_ed25519`.
 - Done when: the public key file exists (`ls ~/.ssh/id_ed25519.pub`, or the name of their
   existing key) and they have its contents ready to paste into the provider.
 
@@ -110,15 +138,20 @@ Start at the first phase that is not done yet.
 - `adduser` asks for a new password: the person runs it in their own ssh session. The other lines
   of that section (`usermod`, `mkdir`, `cp`, `chown`, `chmod`) run as root and ask nothing; in
   Path A you may run them over `ssh root@<address> '<line>'`.
+- Then the person types `exit` to leave the root session, and logs in again as the new user:
+  `ssh <user>@<address>`. From here on, every command and every ssh window is the new user,
+  never root. (As root, the next phases would set things up for root instead.)
 - Done when: `ssh <user>@<address> whoami` prints the new user's name. For Path A, also check
   that it works without a password prompt:
-  `ssh -o BatchMode=yes <user>@<address> whoami`.
+  `ssh -o BatchMode=yes <user>@<address> whoami`. If that fails with `Permission denied` or a
+  passphrase question, the key isn't loaded: go back to the `ssh-add` step in phase 1.
 
 ### Phase 4: Tailscale on the server AND on the person's own device
 
 - Section: Install guide, "Tailscale on the VPS and on your own device".
 - On the server: the install line, `sudo tailscale up` and `sudo tailscale set --operator=$USER`
-  all use `sudo`, so the person runs them in their own ssh session (rule 3). **[PERSON ONLY]**
+  all use `sudo`, so the person runs them in their own ssh session, logged in as the new user,
+  not root (`whoami` must print the new user; otherwise `$USER` is root) (rule 3). **[PERSON ONLY]**
   `sudo tailscale up` prints a login link: they open it and sign in.
 - **[PERSON ONLY]** On their own computer (and phone, if they want): Tailscale, signed in to the
   SAME account. On Windows the installer asks for admin approval; that is theirs too.
@@ -135,7 +168,7 @@ Start at the first phase that is not done yet.
 - Sections: Install guide, "Packages", "Pin the agent CLI version", and "Log in to the agent CLI
   (the one step only you can do)".
 - Every line in "Packages" and "Pin the agent CLI version" uses `sudo`, so the person runs them
-  in their own ssh session (rule 3). Run the checks yourself afterwards (`git --version`,
+  in their own ssh session, as the new user, not root (rule 3). Run the checks yourself afterwards (`git --version`,
   `node --version`, `claude --version` or the CLI they chose).
 - **[PERSON ONLY]** The agent CLI login: the person runs `claude` (or their CLI) in their own ssh
   session and signs in through their own browser, as that section describes. It needs a paid
@@ -148,22 +181,29 @@ Start at the first phase that is not done yet.
 You have taken the person as far as a chat can. Now the agent on their server carries on. Tell
 them, word for word:
 
-1. In your ssh session to the server, run `claude` (or the agent CLI you installed).
-2. Paste this into it:
+1. In your ssh session to the server (as the new user), start a tmux session, so that a dropped
+   connection or a sleeping laptop doesn't stop the agent: `tmux new -s install`.
+2. In it, run `claude` (or the agent CLI you installed).
+3. Paste this into it, as one message, with your one-line summary at the end:
 
    > Read https://raw.githubusercontent.com/Tulum-DAO/orchestraos/main/docs/AGENT_INSTALL.md
    > and continue the install. You are running ON the server now. Start with "1. Where am I?".
+   > What's done so far: <the one-line summary from "1. Where am I?">
 
-3. Answer its questions there. It will tell you when your dashboard is ready.
+4. Answer its questions there. It may also ask your permission before it runs a command; that is
+   the agent CLI's own safety check. It will tell you when your dashboard is ready. If the
+   connection drops, ssh in again and run `tmux attach -t install`.
 
-Then give them the one-line summary from "1. Where am I?" to paste in as well, so the server's
-agent knows what is already done.
+Give them the summary line filled in, ready to paste.
 
 ### Phase 6: clone, init, doctor (on the server)
 
 - Section: Install guide, "1. Clone, init, doctor".
 - Nothing here asks a question, so in Path A you run it all yourself. `orchestra init --yes`
-  takes about five minutes; wait for it, don't stop it. Its `--yes` adding hook rows to
+  takes about five minutes, longer than your tool's command limit (rule 10). Run it detached
+  from the `orchestraos` folder and check on it, for example
+  `ssh <user>@<address> 'cd ~/orchestraos && nohup ./bin/orchestra init --yes > ~/init.log 2>&1 &'`,
+  then read `~/init.log` until it ends with the `next:` line. Its `--yes` adding hook rows to
   `~/.claude/settings.json` is expected, not an overwrite.
 - In the `[runtimes]` `sed` line, use the CLI from phase 5. Ask if you don't know.
 - If `orchestra doctor` shows a `port:<name> MISSING ... in use` row, another program owns that
@@ -180,9 +220,15 @@ agent knows what is already done.
   `dashboard` row of `orchestra status` shows the new port. Never touch that other entry.
 - `orchestra up --detach`, then `orchestra status`. If it says `supervisor already running`,
   run `orchestra status` on its own; never `orchestra down` (rule 7).
+- Before adding the entry, check that HTTPS certificates are on for their tailnet:
+  `tailscale status --json` lists the server's name under `CertDomains` when they are. If it is
+  empty or missing, **[PERSON ONLY]** have the person turn on HTTPS (and MagicDNS, if asked) in
+  their Tailscale admin page first (rule 3); otherwise `tailscale serve` stops and waits for it.
 - Then `tailscale serve status` again, pick a free https port, and add the entry pointing at the
-  dashboard port from `orchestra status` (rules 5 and 6). **[PERSON ONLY]** If Tailscale prints
-  an admin link to turn on HTTPS certificates, the person opens it and turns them on.
+  dashboard port from `orchestra status` (rules 5 and 6). Wrap it so it can't hang, for example
+  `timeout 90 tailscale serve --bg --https=<port> http://127.0.0.1:<dashboard port>`, and show
+  its output. **[PERSON ONLY]** If it prints an admin link, hand it to the person, wait for
+  "done", and run the same command again.
 - Done when: `tailscale serve status` shows the entry you just added, proxying to the dashboard's
   port.
 
@@ -192,8 +238,9 @@ Give the person exactly one thing:
 
 > Open your dashboard: https://<the address of the entry you just added>
 
-It works in a browser on any of their devices that is on their Tailscale network. The first visit
-can take a few seconds while the certificate is issued. Then add one line:
+Ask them to open it on their own computer (any device on their Tailscale network works) and tell
+you that the dashboard loads. The first visit can take a few seconds while the certificate is
+issued. Once they confirm, add one line:
 
 > Arturo takes it from there.
 
