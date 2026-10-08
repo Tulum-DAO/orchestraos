@@ -16,7 +16,7 @@ This page is about the gateway (8890), which the phone app talks to.
 > | 2. `orchestra pair` | Works on `main`: prints the code and QR; the gateway serves `POST /pair/exchange`. |
 > | 3. Connect the web dashboard | **Not on `main`.** The connect screen described below was proposed (PR #23) and closed unmerged; this section describes the intended flow. |
 > | 4. Connect the iOS app | **Not released yet.** The pairing screen is being built and the app is headed for the App Store; this section describes that build. |
-> | 5. Connect the Mac app | **Not released yet.** It is in testing, with no public download; this section describes the build under test. |
+> | 5. Connect the Mac app | **Not released yet.** It is in testing, with no public download; this section describes the build under test (it accepts the whole line `orchestra pair` prints). |
 >
 > Run `orchestra pair --help` to confirm the command on your install.
 
@@ -116,9 +116,14 @@ through.
 
 First launch shows a pairing screen, not the approvals list:
 
-- **Scan** — point the camera at the terminal QR from step 2.
-- **Type it in** — enter the gateway URL and the code by hand (the same
-  values the dashboard used), if scanning isn't practical.
+- **Type it in**: the line `orchestra pair` printed looks like
+  `{"code":"<code>","base_url":"https://<host>:<port>"}`. Type the `base_url` value into
+  the address field, and the `code` value (the text inside the quotes after `"code":`,
+  without the quotes) into the code field.
+
+Today the iOS app does **not** accept that whole line, or a scan of the QR made from it: it
+refuses it as a bad code. Use "type it in" above until an app update says otherwise. (The
+Mac app, step 5, does accept the whole line.)
 
 **The app only connects over https, with a certificate the phone trusts.**
 A plain `http://` address (a LAN IP, `localhost`) is refused on the pairing
