@@ -342,7 +342,7 @@ router.get('/', async (_req: Request, res: Response) => {
           // The machine label is a label, not evidence (liveness-pre-union rule): a session
           // that is live on THIS host gets the detector's verdict whatever its row says —
           // on a single-machine install rows may carry machine=mac (B1 finding 4 follow-up).
-          if (agent.machine !== 'vps' && !localSessions.has(agent.tmux_session)) continue;
+          if (!isThisHost(agent.machine) && !localSessions.has(agent.tmux_session)) continue;
           const d = detector.get(agent.tmux_session);
           if (d) { mergeDetector(agent, d); continue; }
           if (agent.unregistered) continue;
