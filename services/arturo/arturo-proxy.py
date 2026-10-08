@@ -1076,6 +1076,17 @@ def mac_is_reachable():
     return ok and out == "ok"
 
 
+def _shell_path(path):
+    """A path as ONE shell word: quoted, with a leading ~ or ~/ kept expandable as "$HOME"."""
+    import shlex
+    path = str(path)
+    if path == "~":
+        return '"$HOME"'
+    if path.startswith("~/"):
+        return '"$HOME"/' + shlex.quote(path[2:])
+    return shlex.quote(path)
+
+
 def run_local(cmd, timeout=15):
     """Run a command locally on VPS. Returns (success, output)."""
     try:
@@ -2827,13 +2838,18 @@ def execute_tool(name, args, user_turns=None):
 
     elif name == "read_file":
         path = args.get("path", "")
-        lines = min(args.get("lines", 50), 200)
+        try:
+            lines = max(1, min(int(args.get("lines", 50)), 200))
+        except (TypeError, ValueError):
+            lines = 50
         machine = args.get("machine", "vps")
         if not path:
             return "No path provided."
 
-        # Expand ~ for the target machine
-        cmd = f"head -n {lines} {path} 2>/dev/null || echo 'FILE_NOT_FOUND'"
+        # The path is a WORD in a shell command (run_local is shell=True; the Mac leg is ssh), so it
+        # is quoted: unquoted, a path like `x; cat <secret>` ran as a command. ~ still expands on the
+        # target machine.
+        cmd = f"head -n {lines} {_shell_path(path)} 2>/dev/null || echo 'FILE_NOT_FOUND'"
         if machine == "mac":
             ok, out = ssh_mac(cmd, timeout=10)
         else:
