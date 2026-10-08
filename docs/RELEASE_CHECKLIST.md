@@ -373,5 +373,8 @@ everyone else's — `main` is protected now.
 
 ## Rollback
 
+**A maintainer's decision; an agent must never run these on its own.** Making the repo private
+cuts off everyone using it, and deleting a release cannot be undone.
+
 `gh repo edit $R --visibility private` puts it back. The tag and release stay; delete the
 release (`gh release delete v0.1.0-hackathon`) only if the SHA was wrong.
