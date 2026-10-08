@@ -18,6 +18,7 @@ bearer for the operator's entire gateway:
 Codes live as one file each under the data dir, so the CLI that mints and the gateway that
 redeems share them without a database or a running process between them.
 """
+import base64
 import json
 import os
 import secrets
@@ -26,6 +27,7 @@ from pathlib import Path
 
 DEFAULT_TTL_S = 600          # ten minutes, per the contract
 CODE_BYTES = 12              # ~19 chars of urlsafe base64: unguessable inside the window
+PAIR_TOKEN_PREFIX = "orc1_"  # versions the one-paste token; a client tells it from a bare code
 
 
 class PairingStore:
@@ -58,7 +60,10 @@ class PairingStore:
     def redeem(self, code):
         """Exchange a code for {base_url, token}, or None. Destroys the code either way it
         was valid — spent, expired and never-existed all return None."""
-        path = self._path(code)
+        # An app released before pair_token existed sends whatever was pasted, so the whole
+        # token or JSON line can arrive here as the "code". Unwrap it.
+        parsed = parse_pair_input(code)
+        path = self._path(parsed["code"]) if parsed else None
         if path is None:
             return None
         try:
@@ -104,3 +109,53 @@ class PairingStore:
         """What the QR encodes — and exactly what the phone posts back. The token is NOT in
         here: it is what the code is exchanged FOR."""
         return json.dumps({"code": code, "base_url": base_url}, separators=(",", ":"))
+
+
+def pair_token(code, base_url):
+    """The ONE string the operator pastes (and the QR carries): the qr_payload JSON,
+    base64url'd without padding behind PAIR_TOKEN_PREFIX. One word, nothing a keyboard
+    autocorrects, and it still tells the app WHERE the gateway is, so there is no address to type.
+    contract/pair-token-cases.json is generated from this function and parse_pair_input."""
+    raw = json.dumps({"code": code, "base_url": base_url}, separators=(",", ":")).encode()
+    return PAIR_TOKEN_PREFIX + base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _pair_json(text):
+    try:
+        obj = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    code, base_url = obj.get("code"), obj.get("base_url")
+    if not (isinstance(code, str) and code and isinstance(base_url, str)
+            and base_url.lower().startswith("https://") and len(base_url) > len("https://")):
+        return None
+    return {"code": code, "base_url": base_url}
+
+
+def parse_pair_input(text):
+    """Reference parser for whatever lands in the app's pairing box; the Mac and iOS parsers
+    follow the same order. Returns {code, base_url} (base_url None for a bare code), or None
+    for empty input.
+      1. an orc1_ token -> decode -> the JSON branch; if that fails, fall through to bare
+         (a token_urlsafe code can itself begin with orc1_);
+      2. the legacy compact JSON line that released CLIs print;
+      3. anything else is a bare code, and the address comes from the app's address field."""
+    s = str(text or "").strip()
+    if not s:
+        return None
+    if s.startswith(PAIR_TOKEN_PREFIX):
+        body = s[len(PAIR_TOKEN_PREFIX):]
+        try:
+            raw = base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            raw = None
+        got = _pair_json(raw) if raw else None
+        if got:
+            return got
+    elif s.startswith("{"):
+        got = _pair_json(s)
+        if got:
+            return got
+    return {"code": s, "base_url": None}

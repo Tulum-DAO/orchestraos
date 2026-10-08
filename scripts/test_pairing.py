@@ -77,3 +77,80 @@ def test_payload_round_trips_through_the_qr_string(store):
     assert parsed["code"] == code
     assert parsed["base_url"] == "https://box:8443"
     assert "token" not in parsed          # the token is EXCHANGED for, never carried in the QR
+
+
+# --- one bare token to paste (Shaw 2026-10-08: "a bare code that users can paste directly into
+# the pairing box"). The phone still needs WHERE and the CODE, so the token carries both: it is
+# the compact JSON above, base64url'd behind a version prefix. Clients strip, decode, and reuse
+# their legacy JSON branch.
+
+from scripts.pairing import PAIR_TOKEN_PREFIX, pair_token, parse_pair_input
+
+
+def test_the_token_is_one_paste_safe_word(store):
+    code = store.mint(base_url="https://box.tail1234.ts.net:8443", token="t")
+    tok = pair_token(code, base_url="https://box.tail1234.ts.net:8443")
+    assert tok.startswith(PAIR_TOKEN_PREFIX) and PAIR_TOKEN_PREFIX == "orc1_"
+    body = tok[len(PAIR_TOKEN_PREFIX):]
+    # nothing a keyboard autocorrects or a paste splits: urlsafe alphabet, no padding, no spaces
+    assert body and all(ch.isalnum() or ch in "-_" for ch in body)
+    assert "=" not in tok and "{" not in tok and "token" not in tok
+
+
+def test_the_token_round_trips_to_the_qr_json(store):
+    code = store.mint(base_url="https://box:8443", token="t")
+    got = parse_pair_input(pair_token(code, base_url="https://box:8443"))
+    assert got == {"code": code, "base_url": "https://box:8443"}
+
+
+@pytest.mark.parametrize("wrap", [lambda s: s, lambda s: "  " + s + "\n", lambda s: s + "\r\n"])
+def test_a_pasted_token_survives_surrounding_whitespace(store, wrap):
+    tok = pair_token("abcDEF-123_x", base_url="https://box:8443")
+    assert parse_pair_input(wrap(tok)) == {"code": "abcDEF-123_x", "base_url": "https://box:8443"}
+
+
+def test_the_legacy_json_line_still_parses(store):
+    line = store.qr_payload("abc", base_url="https://box:8443")
+    assert parse_pair_input(line) == {"code": "abc", "base_url": "https://box:8443"}
+
+
+def test_a_bare_legacy_code_parses_with_no_address():
+    assert parse_pair_input("abcDEF-123_x") == {"code": "abcDEF-123_x", "base_url": None}
+
+
+@pytest.mark.parametrize("bad", [
+    "orc1_!!!",                                   # not base64
+    "orc1_" + "e30",                              # {} : no code
+    "orc1_" + "eyJjb2RlIjoiYyIsImJhc2VfdXJsIjoiaHR0cDovL2JveCJ9",   # http://, not https  # pragma: allowlist secret
+    "orc1_" + "WyJhIl0",                          # ["a"] : not an object
+])
+def test_an_undecodable_token_falls_through_to_a_bare_code(bad):
+    """Spec: a broken orc1_ never errors; it is tried as a bare code (which the gateway then
+    refuses like any wrong code). A token_urlsafe code may itself begin with orc1_."""
+    assert parse_pair_input(bad) == {"code": bad, "base_url": None}
+
+
+def test_empty_input_is_none():
+    assert parse_pair_input("   ") is None
+
+
+def test_redeem_accepts_the_whole_token_or_json_line(store):
+    """An app released before the token existed sends whatever was pasted as the code. The
+    gateway unwraps it, so the new CLI still pairs an old app whose address was typed in."""
+    c1 = store.mint(base_url="https://box:8443", token="t1")
+    assert store.redeem(pair_token(c1, "https://box:8443"))["token"] == "t1"
+    c2 = store.mint(base_url="https://box:8443", token="t2")
+    assert store.redeem(store.qr_payload(c2, "https://box:8443"))["token"] == "t2"
+    assert store.redeem(pair_token(c1, "https://box:8443")) is None    # still single-use
+
+
+def test_the_client_fixture_is_generated_from_this_module():
+    """Mac and iOS tests read contract/pair-token-cases.json. It must be what this module
+    produces TODAY, or the clients are tested against a guess again."""
+    from pathlib import Path
+    fx = json.loads((Path(__file__).resolve().parent.parent / "contract" / "pair-token-cases.json").read_text())
+    assert fx["prefix"] == PAIR_TOKEN_PREFIX
+    for case in fx["cases"]:
+        if case.get("produced_by") == "pair_token":
+            assert pair_token(case["code"], case["base_url"]) == case["input"]
+        assert parse_pair_input(case["input"]) == case["expect"], case["name"]

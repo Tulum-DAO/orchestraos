@@ -82,8 +82,11 @@ orchestra pair --base-url https://<machine>.<tailnet>.ts.net:8445 --scopes read,
 `orchestra devices` lists paired devices; `orchestra devices --revoke <device id>`
 cuts one off (its token stops working on its next request).
 
-This prints the pairing code as one line to type or paste into the app (`{"code":...,
-"base_url":...}`). On a stock install that line is all you get: the terminal says
+This prints the pairing code: one long word starting with `orc1_`. Copy all of it and
+paste it into the app's pairing box. It carries your server's address too, so there is
+nothing else to type. (An older app that also shows an address field: type your
+server's `https://` address there, then paste the code.) On a stock install the code is
+all you get: the terminal says
 `No QR encoder is installed on this machine`. To also get a scannable QR code drawn as
 text (works over a bare ssh session), install the `segno` package into the install's
 Python once, from your checkout: `.venv/bin/pip install segno`. The code is

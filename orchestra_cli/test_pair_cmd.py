@@ -144,3 +144,17 @@ def test_revoking_something_that_is_not_a_device_is_refused(monkeypatch, tmp_pat
     said = []
     assert run_devices(_Args(revoke="no-such-id"), out=said.append) == 2
     assert "Nothing to revoke" in "\n".join(said)
+
+
+def test_pair_prints_the_one_token_not_the_json_line(monkeypatch, tmp_path):
+    """Shaw 2026-10-08: one bare code to paste. The screen shows the orc1_ token on a line by
+    itself, and the JSON line no longer appears."""
+    rc, said = _lines(monkeypatch, tmp_path, _Args(scopes="read", label="phone"))
+    assert rc == 0, said
+    lines = said.splitlines()
+    toks = [l for l in lines if l.startswith("orc1_")]
+    assert len(toks) == 1 and " " not in toks[0], said
+    assert '"code"' not in said
+    from scripts.pairing import parse_pair_input
+    got = parse_pair_input(toks[0])
+    assert got["base_url"] and got["code"]

@@ -55,10 +55,10 @@ def build_pair_output(payload, qr=None, ttl_s=600):
     lines.append("")
     if qr:
         lines.append(qr)
-        lines.append("Scan this with the OrchestraOS app, or type the line below into it by hand:")
+        lines.append("Scan this with the OrchestraOS app, or paste the code below into its pairing box:")
     else:
         lines.append("No QR encoder is installed on this machine, so here is the code itself.")
-        lines.append("Type or paste this line into the OrchestraOS app:")
+        lines.append("Copy this code and paste it into the OrchestraOS app's pairing box:")
     lines.append("")
     lines.append(payload)
     lines.append("")
@@ -75,7 +75,7 @@ def run_pair(args, settings=None, store=None, out=print, clear_after_s=60):
     import time
     from pathlib import Path
 
-    from scripts.pairing import PairingStore
+    from scripts.pairing import PairingStore, pair_token
 
     base_url = getattr(args, "base_url", None) or os.environ.get("ORCHESTRA_PUBLIC_URL") or ""
     if not base_url:
@@ -123,7 +123,7 @@ def run_pair(args, settings=None, store=None, out=print, clear_after_s=60):
         store = PairingStore(Path(base) / "state" / "pairing")
     store.sweep()
     code = store.mint(base_url=base_url, token=token)
-    payload = store.qr_payload(code, base_url=base_url)
+    payload = pair_token(code, base_url=base_url)
     out(build_pair_output(payload, qr=qr_text_or_none(payload, default_encoder()), ttl_s=store.ttl_s))
     if clear_after_s:
         try:
