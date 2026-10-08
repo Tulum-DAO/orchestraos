@@ -15,7 +15,7 @@ OrchestraOS, published by Tulum DAO: an open harness for running a fleet of codi
 - **Arturo.** The assistant. The main page, the new-chat page, and a button that is available on every other page and knows what you are looking at. Text today; voice through your own keys.
 - **Runtime catalog.** Probes which CLIs are installed and authenticated and offers their models, so the harness runs on whatever subscription you already have.
 
-**Before you start — log in first, before you clone.** You need one agent CLI already installed and **logged in** — Claude Code, Gemini (Antigravity `agy` CLI), or Codex, your choice. See `docs/INSTALL.md` §0 for the exact commands, `docs/COSTS.md` for what each plan costs (including a no-cost option), and `docs/BEGINNERS_GUIDE.md` if this is your first time in a terminal at all. Do the login before anything else: a seat spawned against a CLI you have not logged in to does not tell you that — it retries, prints `Injection FAILED`, and exits, while the CLI's own sign-in screen waits unread in the seat's terminal.
+**Before you start — log in first, before you clone.** You need one agent CLI already installed and **logged in** — Claude Code, Gemini (Antigravity `agy` CLI), or Codex, your choice. See `docs/INSTALL.md` §0 for the exact commands, `docs/COSTS.md` for what each plan costs (including a no-cost option), and `docs/BEGINNERS_GUIDE.md` if this is your first time in a terminal at all. Do the login before anything else: until one CLI is logged in, `orchestra spawn` refuses to start a seat.
 
 ## Two ways to run it
 
@@ -29,7 +29,7 @@ OrchestraOS, published by Tulum DAO: an open harness for running a fleet of codi
 - `docs/GATE.md` — the seven-step gate everyone completes first: command, expected output, and what to check if it fails, for each step.
 - `docs/ONBOARDING.md` — connecting your own phone and browser to your gateway (no baked-in token): pairing, the handshake, what each failure means.
 - `docs/PROMPTS.md` — copy-paste prompts for the same seven steps, plus the tracks.
-- `docs/UPGRADE.md` — **updating:** `orchestra upgrade` pulls the newest release, re-runs `init`, re-checks `doctor`; running seats keep their code until their next spawn or rotation. `orchestra doctor` and `orchestra up` tell you when a newer release exists.
+- `docs/UPGRADE.md` — **updating:** `orchestra upgrade` pulls the newest release, re-runs `init`, re-checks `doctor`; then rebuild and restart by hand (the doc has the two lines; `upgrade` does not rebuild the API or dashboard yet); running seats keep their code until their next spawn or rotation. `orchestra doctor` and `orchestra up` tell you when a newer release exists.
 - `docs/COSTS.md` — what a VPS and a CLI plan actually cost, and the zero-key path.
 - `docs/tracks/README.md` — the thirteen hackathon tracks, one doc each.
 - `docs/ARCHITECTURE.md` — the map. Read before touching rotation or approvals.

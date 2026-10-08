@@ -11,15 +11,15 @@ Do the steps in order — each one depends on state the last one created (a data
 dir, a running supervisor, a spawned seat).
 
 **Before you clone anything: log in to one agent CLI — do this first, not after.** Step 2 spawns a
-seat, and a seat spawned against a CLI you have not logged in to does not say so: it retries, prints
-`Injection FAILED`, and exits 1 while the agent's own login screen sits unread in the tmux pane. Ten
-seconds of logging in now saves that. You need one of Claude
+seat, and `orchestra spawn` refuses (`refusing to spawn: no enabled runtime is installed AND
+logged in`, exit 2) until one CLI is logged in. Ten seconds of logging in now saves that. You need one of Claude
 Code, Gemini CLI, or Codex already installed and authenticated — `orchestra
 doctor` in step 1 checks this and tells you what's missing, but you can't pass
 it without having done this first. See `docs/INSTALL.md` §0 for the exact
 per-CLI install + login commands, or `docs/BEGINNERS_GUIDE.md` if you've never
 used a terminal before. `docs/COSTS.md` covers what each CLI plan costs and the
-no-cost path (Gemini CLI's free tier).
+possible no-cost path (Google's free tier; its figures are unverified against the
+`agy` CLI the harness uses).
 
 ## 1. Install, doctor green, dashboard open
 
@@ -40,7 +40,7 @@ Expected: `orchestra doctor` prints one line per check, every required row `OK`
 (a `WARN`/`INFO` row is advisory, not blocking), exit code `0`.
 
 ```bash
-orchestra up --detach && orchestra status
+orchestra up --detach && sleep 5 && orchestra status
 ```
 
 Expected: `orchestra status` shows every supervised process (`gateway`, `api`,
@@ -134,6 +134,7 @@ sent the bot `/start` yet.
 
 ```bash
 orchestra spawn hello-2 --task "Say hello, then park."
+source scripts/orchestra-env.sh   # from the checkout, once per shell: points msg_store.py at your data dir
 python3 msg_store.py send --from hello --to hello-2 --type task --subject test --body-file <(echo "hi from hello")
 python3 msg_store.py inbox --agent hello-2
 ```
@@ -143,11 +144,14 @@ Expected: the `inbox` call shows the row you just sent (`subject: test`,
 
 **If it fails, look here:** `msg_store.py send` always writes the row — if
 `inbox` doesn't show it, you queried the wrong `--agent` name (must match
-`to_agent` exactly) or the wrong data dir (`echo $ORCHESTRA_DIR`).
+`to_agent` exactly) or the wrong data dir (`echo $ORCHESTRA_DIR`; empty means you skipped
+the `source` line). `sqlite3.OperationalError: unable to open database file` on `send`
+means the same thing: run `source scripts/orchestra-env.sh` and try again.
 
 ## 5. One approval card answered from Telegram or dashboard
 
 ```bash
+source scripts/orchestra-env.sh   # skip if already done in this shell (step 4)
 python3 scripts/approval.py request "Ship the hello change?" --from hello --worker-kind pane --options approve,deny
 ```
 
@@ -230,7 +234,7 @@ its `-gN`/`-genN` generation suffix stripped), indexed by `MEMORY.md`.
 the path in the new generation's boot prompt with a read-first instruction —
 that boot-prompt line, not the handoff document, is what makes the successor
 actually read it. See `docs/ARCHITECTURE.md`'s Memory section and
-`docs/MEMORY.md` (full walkthrough, once it lands) for the exact shape.
+`docs/MEMORY.md` (full walkthrough) for the exact shape.
 
 **If it fails, look here:** if the new generation doesn't know, the fact
 either wasn't written to disk (check the memory directory directly) or the
@@ -248,5 +252,5 @@ will send you to. Pick a track (`docs/tracks/README.md`) or a
 
 **Stuck on any step above?** The in-app **Report** button (dashboard top bar)
 files a structured report of what actually broke — use it before describing
-the problem from memory. The GitHub Discussions "Start here" post has this
-same path pinned. In person: the room, out loud, any time.
+the problem from memory. Then open an issue on the GitHub repo with what you ran
+and what it printed.
