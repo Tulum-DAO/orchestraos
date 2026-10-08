@@ -37,6 +37,17 @@ orch_tmux_session_defaults() {
     # upstream); mouse is still set above for any name.
     if [[ "$session" =~ ^[A-Za-z0-9_-]+$ ]]; then
         tmux set-hook -t "=$session:" client-detached "send-keys -t '=$session:' -X cancel" >/dev/null 2>&1 || true
+        # A seat must never attach a tmux client inside its own screen (operator finding #10,
+        # 2026-10-08): gm's pane ran a nested `tmux attach` (tmux refuses one while TMUX is set;
+        # it gets through with TMUX unset, which is tmux's own error hint), its CLI went off
+        # screen, and the dashboard showed a dead gm offering Spawn. A client whose tty is one
+        # of this server's own panes can only be such a nested client, so it is detached at
+        # once, and the attaching pane gets back whatever ran the attach. Clients from outside
+        # (an ssh terminal, the web terminal's pty) have their own ttys and are left alone.
+        # ##{pane_tty} survives the hook's format expansion as #{pane_tty} for list-panes.
+        tmux set-hook -t "=$session:" client-attached \
+            "run-shell \"tmux list-panes -a -F '##{pane_tty}' | grep -qxF '#{client_tty}' && tmux detach-client -t '#{client_tty}' || true\"" \
+            >/dev/null 2>&1 || true
     fi
     return 0
 }
