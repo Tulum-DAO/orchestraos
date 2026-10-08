@@ -5,7 +5,7 @@ phone and from a browser, on their own network, with no baked-in token. Two
 client surfaces, one pairing flow.
 
 Just want the web dashboard in your browser? That needs no pairing:
-`docs/INSTALL.md` §2, "Open the dashboard in your browser, over Tailscale https".
+[docs/INSTALL.md](INSTALL.md) §2, "Open the dashboard in your browser, over Tailscale https".
 This page is about the gateway (8890), which the phone app talks to.
 
 > **What works today, step by step** (updated 2026-10-07):
@@ -23,10 +23,10 @@ This page is about the gateway (8890), which the phone app talks to.
 ## Before anything else: log in
 
 Do this before you do anything below — install and log in to one agent CLI
-(Claude Code, Gemini (Antigravity `agy` CLI), or Codex). `docs/INSTALL.md` §0 has the exact
+(Claude Code, Gemini (Antigravity `agy` CLI), or Codex). [docs/INSTALL.md](INSTALL.md) §0 has the exact
 commands. If you have no subscription to any of them, Google's free tier is the
 likely zero-cost path, but note the harness uses the Antigravity `agy` CLI, and the
-free-tier figures in `docs/COSTS.md` are Gemini CLI's, **unverified against `agy`**.
+free-tier figures in [docs/COSTS.md](COSTS.md) are Gemini CLI's, **unverified against `agy`**.
 
 Two things people get wrong here, stated up front so you don't have to guess
 mid-flow:
@@ -126,6 +126,10 @@ its QR.*
    *paste the code from orchestra pair*), or tap **Scan** and point the camera at its QR.
 2. Tap **Pair**. There is no address to type: the code carries it.
 
+If what you pasted is not a pairing code at all, the app says *That isn’t a pairing code. Paste
+exactly what `orchestra pair` printed.* Copy the whole code again, from the first character
+to the last, and paste it.
+
 The address field is under **Advanced: gateway address and token**. You only need it for an
 older OrchestraOS that prints a code with no address in it; the screen tells you, and opens
 **Advanced** by itself, when that happens.
@@ -140,7 +144,7 @@ or run `orchestra upgrade` first.
 A plain `http://` address (a LAN IP, `localhost`) is refused on the pairing
 screen, and the app tells you so. The simplest way to get a trusted https
 address, whether the gateway runs on a VPS or on a Mac, is Tailscale on both
-the gateway machine and the phone (`docs/INSTALL.md` §0 sets it up). On the gateway machine, first see what
+the gateway machine and the phone ([docs/INSTALL.md](INSTALL.md) §0 sets it up). On the gateway machine, first see what
 Tailscale already serves, because `tailscale serve` on a port that is taken
 silently REPLACES whatever was there:
 
@@ -172,11 +176,11 @@ or its pairing genuinely expires.
 ## 5. Connect the Mac app
 
 The Mac app connects to your **gateway** (8890), the same way the iOS app does. It is not
-the dashboard: the dashboard (8891) needs no app, just a browser (`docs/INSTALL.md` §2).
+the dashboard: the dashboard (8891) needs no app, just a browser ([docs/INSTALL.md](INSTALL.md) §2).
 
 Before you start:
 
-- **Tailscale on the Mac**, signed in to the same account as the server (`docs/INSTALL.md`
+- **Tailscale on the Mac**, signed in to the same account as the server ([docs/INSTALL.md](INSTALL.md)
   §0, "Tailscale on the VPS and on your own device").
 - **The gateway on an https address.** The Mac app refuses plain `http://`. On the server,
   follow step 4 above: run `tailscale serve status` first, then serve the gateway on a free
@@ -206,9 +210,11 @@ On the Mac, open the app. Its first window is **Connect this Mac**, with the lin
 When it works, the connect window goes away and the app's main window opens. To check from
 the server: `orchestra devices` lists `my-mac` with the scopes you gave it.
 
-**If it does not work**, a sentence appears under the button, for example *That pairing code
-didn't work. Codes are single-use and expire quickly — run orchestra pair again for a fresh
-one.* Run `orchestra pair` again and paste the new code. Each code works once and expires after
+**If it does not work**, a sentence appears under the button. *That isn’t a pairing code. Paste
+exactly what `orchestra pair` printed.* means the paste was not a code: copy the whole code again.
+*That pairing code didn't work. Codes are single-use and expire quickly — run orchestra pair
+again for a fresh one.* means the code was used or expired: run `orchestra pair` again and paste
+the new code. Each code works once and expires after
 about 10 minutes. Also check that Tailscale on the Mac is connected, and that the address
 under the box ends in the https port you served the gateway on (8445 above), not 8891.
 
@@ -283,7 +289,7 @@ Connected to your-gateway.example.net · gateway v1 · no cards yet — they app
 
 That whole line is the success state on a fresh pairing with zero agents and
 zero cards — it is not a placeholder or an error, even though nothing else on
-the screen has happened yet. Fire one approval card (`docs/GATE.md` step 5) to
+the screen has happened yet. Fire one approval card ([docs/GATE.md](GATE.md) step 5) to
 see the surface actually render something.
 
 ## Notes for anyone building against this
@@ -297,7 +303,7 @@ see the surface actually render something.
   `/gateway/capabilities` is additive-only — treat any key your client
   doesn't recognize as "ignore it," never as an error, and treat an absent
   block (e.g. no `providers`) as "unknown," never as "none available."
-- See `docs/tracks/01-device-pairing.md` for the fuller device-pairing design
+- See [docs/tracks/01-device-pairing.md](tracks/01-device-pairing.md) for the fuller device-pairing design
   this onboarding flow is built on; if the two documents disagree on a route
   name or a response shape, this page (written against the frozen contract)
   is the one to trust, and the track doc needs an update.

@@ -1,7 +1,7 @@
 # Install — the minimum path
 
 > **Never rented a server, made an ssh key, or used Terminal?** Start with
-> `docs/FROM_SCRATCH.md`. It takes you from your Mac to logged in on your own server
+> [docs/FROM_SCRATCH.md](FROM_SCRATCH.md). It takes you from your Mac to logged in on your own server
 > in about 20 minutes, then sends you back here to §0.
 
 One machine, one CLI (claude OR gemini OR codex), no voice, no Telegram.
@@ -21,12 +21,12 @@ The path, in order:
 | 3. Spawn one seat | the VPS or the dashboard | one live seat |
 | 4. Answer one card | the dashboard | the seat receives your answer |
 
-Connecting the iOS app to your gateway (pairing) is `docs/ONBOARDING.md`, a
+Connecting the iOS app to your gateway (pairing) is [docs/ONBOARDING.md](ONBOARDING.md), a
 separate short walkthrough after this one.
 
 ## Get a VPS
 
-(First time? `docs/FROM_SCRATCH.md` walks through this whole section step by step,
+(First time? [docs/FROM_SCRATCH.md](FROM_SCRATCH.md) walks through this whole section step by step,
 with one recommended provider.)
 
 Any provider that sells a Linux virtual server works; nothing here is tied to one.
@@ -43,7 +43,7 @@ Choose:
   server. If you have none, run `ssh-keygen -t ed25519` on your own computer
   and paste the contents of `~/.ssh/id_ed25519.pub`.
 
-`docs/COSTS.md` has current prices for a few providers, and a no-cost path. When the
+[docs/COSTS.md](COSTS.md) has current prices for a few providers, and a no-cost path. When the
 server is ready, the provider shows its public IP address. Log in from your own
 computer:
 
@@ -189,7 +189,7 @@ This is the only step that needs a person: you sign in with your own account. Us
 your own login; never copy someone else's credentials onto the server.
 
 **You need a paid plan.** For Claude Code that is a Claude **Pro** or **Max** subscription
-(claude.com/pricing; `docs/COSTS.md` compares the options). Buy it first, with the same
+(claude.com/pricing; [docs/COSTS.md](COSTS.md) compares the options). Buy it first, with the same
 email you will sign in with.
 
 On the server, start Claude Code once:

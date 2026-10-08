@@ -35,11 +35,11 @@ account with, or Claude if you have none:
 - **Claude Code:** `sudo npm install -g @anthropic-ai/claude-code` (needs Node.js
   installed first — if `npm` prints "command not found", install Node.js from
   nodejs.org, then retry). On the server that will run your agents, use the
-  pinned version in `docs/INSTALL.md` §0 instead.
+  pinned version in [docs/INSTALL.md](INSTALL.md) §0 instead.
 - **Gemini (Antigravity `agy` CLI):** this harness detects Google's Antigravity `agy`
   binary, not `@google/gemini-cli` — installing `gemini` will not be recognised. A
   validated `agy` install recipe lands after the launch; the free-tier figures in
-  `docs/COSTS.md` are unverified against `agy`.
+  [docs/COSTS.md](COSTS.md) are unverified against `agy`.
 - **Codex (OpenAI):** `sudo npm install -g @openai/codex`, or see OpenAI's install
   docs — bundled with a ChatGPT Plus subscription.
 
@@ -49,7 +49,7 @@ Run the CLI's name by itself (`claude`, or `agy`, or `codex login`). It opens
 a login page in your browser, you sign in with the account for whichever
 company you picked, and the terminal shows you are logged in. You do this once;
 after that the CLI remembers you. On a server with no browser, it prints the
-login link instead: open it on your own computer (`docs/INSTALL.md` §0, "Log in
+login link instead: open it on your own computer ([docs/INSTALL.md](INSTALL.md) §0, "Log in
 to the agent CLI").
 
 ## Run one command
@@ -69,8 +69,8 @@ runs commands, writes things) and tells you what it did.
 
 This repo's harness runs agents that stay alive continuously — not just for one
 question, but as a standing presence you message like a coworker. First,
-`docs/FROM_SCRATCH.md` gets you a server and logs you in to it from your Mac. Then follow
-`docs/INSTALL.md` from §0 through spawning one seat (§3): it walks you from
+[docs/FROM_SCRATCH.md](FROM_SCRATCH.md) gets you a server and logs you in to it from your Mac. Then follow
+[docs/INSTALL.md](INSTALL.md) from §0 through spawning one seat (§3): it walks you from
 renting a small server (a VPS) and connecting it to your own devices with
 Tailscale, to the harness running, the dashboard open in your browser, and one
 always-on agent live in its own terminal window. If a command's output does not match what the doc says it
@@ -89,9 +89,9 @@ Remember that my favorite color is blue. Write it to your memory files.
 
 Later (even after restarting it), ask "what's my favorite color?" — it should
 answer correctly by reading back what it wrote, not by guessing. This is the
-same mechanism the full harness uses to survive `docs/ARCHITECTURE.md`'s
+same mechanism the full harness uses to survive [docs/ARCHITECTURE.md](ARCHITECTURE.md)'s
 rotations — an agent replacing itself without forgetting anything. The exact
-files and paths this writes to are in `docs/MEMORY.md` (it's
+files and paths this writes to are in [docs/MEMORY.md](MEMORY.md) (it's
 not the same file as the handoff document a retiring generation writes — that
 one carries where it stopped, not what it remembers).
 
@@ -100,30 +100,30 @@ one carries where it stopped, not what it remembers).
 Everyone who wants to build on the harness — picking a track, adding a feature —
 completes these seven steps first. They are cumulative: each one builds on the
 last, and together they touch most of the files any track's doc will send you
-to, so you will recognize them when you get there. `docs/GATE.md` has the full
+to, so you will recognize them when you get there. [docs/GATE.md](GATE.md) has the full
 version of each step below — the exact command, what it should print, and
 where to look if it doesn't.
 
-1. **Install, doctor green, dashboard open.** `docs/INSTALL.md` from the top
+1. **Install, doctor green, dashboard open.** [docs/INSTALL.md](INSTALL.md) from the top
    through §2: a VPS with Tailscale, `orchestra init --yes`, `orchestra doctor` (every
    row OK once your CLI is logged in; before that, `runtime:login` is the one missing
    row), `orchestra up`, the dashboard open in your browser over Tailscale.
-2. **Always-on agent spawned, answers questions in terminal.** `docs/INSTALL.md`
+2. **Always-on agent spawned, answers questions in terminal.** [docs/INSTALL.md](INSTALL.md)
    §3: spawn one seat, confirm it is alive, ask it something in its own tmux
    pane and get a real answer.
-3. **Telegram bot connected, agent answers from phone.** See `docs/PROMPTS.md`'s
+3. **Telegram bot connected, agent answers from phone.** See [docs/PROMPTS.md](PROMPTS.md)'s
    "Connect Telegram" prompt — set up the bot token as an environment variable
    (never paste it into a file or a chat), send yourself a message from your
    phone, get a reply.
-4. **Two seats exchange a message, both visible in Inbox.** `docs/PROMPTS.md`'s
+4. **Two seats exchange a message, both visible in Inbox.** [docs/PROMPTS.md](PROMPTS.md)'s
    "Two-seat message" prompt: spawn a second seat, send one message between
    them, see it land in both the dashboard's Inbox and the command line.
 5. **One approval card answered from Telegram or dashboard.**
-   `docs/INSTALL.md` §4 / `docs/PROMPTS.md`'s "Answer a card" prompt: fire a
+   [docs/INSTALL.md](INSTALL.md) §4 / [docs/PROMPTS.md](PROMPTS.md)'s "Answer a card" prompt: fire a
    card, answer it from your phone or the dashboard, watch the decision land
    back in the agent's terminal.
 6. **Manual rotation of the always-on agent completed, nothing lost.**
-   `docs/PROMPTS.md`'s "Rotate" prompt: trigger one rotation by hand, read the
+   [docs/PROMPTS.md](PROMPTS.md)'s "Rotate" prompt: trigger one rotation by hand, read the
    handoff document the old version wrote and the new version's proof it
    understood it.
 7. **One fact written, restart, agent recalls it.** The "Save one command"
@@ -131,7 +131,7 @@ where to look if it doesn't.
    conversation — confirm the memory survives.
 
 Once you have done all seven, you understand the whole loop well enough to pick
-a track. See `docs/tracks/README.md` for the list, or `docs/HACKATHON_ISSUES.md`
+a track. See [docs/tracks/README.md](tracks/README.md) for the list, or [docs/HACKATHON_ISSUES.md](HACKATHON_ISSUES.md)
 for something smaller (`good-first-issue`) if you would rather land something in
 an hour than a weekend.
 

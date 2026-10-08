@@ -4,9 +4,29 @@
 
 OrchestraOS, published by Tulum DAO: an open harness for running a fleet of coding agents as a team — agents that message each other, remember across restarts, rotate themselves before they run out of context, and put every real decision in front of the human on their phone.
 
+## Start here
+
+- **Never used a server or Terminal?** → [From scratch](docs/FROM_SCRATCH.md): from your Mac
+  to logged in on your own server, about 20 minutes. It then hands you to the install guide.
+- **Have a server and a terminal open?** → [Install guide](docs/INSTALL.md), about an hour.
+- The same guides, easier to read: [tulumdao.com/docs](https://tulumdao.com/docs/).
+
+On an Ubuntu 24.04 server, the install begins like this (the
+[install guide](docs/INSTALL.md) explains each step and what you should see):
+
+```bash
+ssh root@<your server ip>       # log in to your server from your own computer
+adduser orchestra && usermod -aG sudo orchestra   # make a normal user: agents refuse to run as root
+# log back in as that user (install guide §0), set up Tailscale, the packages and one agent CLI, then:
+git clone https://github.com/Tulum-DAO/orchestraos.git && cd orchestraos   # download OrchestraOS
+make install                    # install the `orchestra` command
+export PATH="$HOME/.local/bin:$PATH"   # make it findable in this terminal (the guide makes it permanent)
+orchestra init --yes            # set everything up (about 5 minutes)
+```
+
 **This is not a finished product.** It runs one operator's fleet today, every day, and that setup is the reference install. We are opening it so people who want this to exist can build it with us. The first hackathon, Build-a-thon, ran on 2026-09-19 and 20; its tracks are still open ([docs/tracks/README.md](docs/tracks/README.md)).
 
-## Install: pick your path
+## All install paths
 
 | You are... | Start here | First thing you do |
 |---|---|---|
@@ -14,7 +34,7 @@ OrchestraOS, published by Tulum DAO: an open harness for running a fleet of codi
 | **Have a fresh Ubuntu server (VPS)** | [Install guide](docs/INSTALL.md) | Log in, create a normal user (seats refuse to run as root), set up Tailscale, then `git clone https://github.com/Tulum-DAO/orchestraos.git`. About an hour. |
 | **Want to try it on your laptop, no server** | [Docker / dev container](docs/INSTALL.md#dev-container--docker-no-vps) | `docker build -t orchestraos .` from a clone of this repo, then log in to your agent CLI inside the container. |
 | **Want the full operator setup** (VPS + Mac, push, Telegram, voice) | [Reference install](docs/REFERENCE_INSTALL.md) | Do the install guide first; this adds to it. |
-| **Already running it, want the phone or Mac app** (both in testing, not yet public) | [Onboarding](docs/ONBOARDING.md) | On the server: `orchestra pair --base-url <your https gateway address> --scopes read,approve`, then paste the `orc1_` code it prints into the app. |
+| **Already running it, want the phone or Mac app** (both in testing, not yet public) | [Onboarding](docs/ONBOARDING.md) | On the server: `orchestra pair --base-url <your https gateway address> --scopes read,approve,message`, then paste the `orc1_` code it prints into the app. |
 | **Deciding what it costs** | [Costs](docs/COSTS.md) | A small VPS is about $24 a month; you also need one agent CLI plan (Claude Pro, or ChatGPT Plus for Codex; Google's free tier is unverified with `agy`). |
 
 Every path needs one agent CLI (Claude Code, Codex, or Gemini through Google's Antigravity

@@ -11,14 +11,14 @@ default `~/.orchestra`), completely separate from the **checkout** (the git
 clone you're pulling into): `registry.json`, `state/` (sqlite, sessions, the
 gateway token), `logs/`, `queue/`. Pulling new code into the checkout never
 touches the data dir directly — a code change only affects a running seat once
-something restarts and reads the new code. See `docs/INSTALL.md`'s "Where
+something restarts and reads the new code. See [docs/INSTALL.md](INSTALL.md)'s "Where
 things live" section for the full split.
 
 That means the actual risk isn't "losing" a seat — the registry entry and its
 memory directory survive a `git pull` untouched. The risk is a **contract
 change**: new code that reads or writes `registry.json`, `msg_store.py`'s
 schema, or the approvals tables in an incompatible way, running against state
-written by the old code. `docs/ARCHITECTURE.md`'s Invariants section names
+written by the old code. [docs/ARCHITECTURE.md](ARCHITECTURE.md)'s Invariants section names
 the contracts other things depend on — check changes there specifically.
 
 ## `orchestra upgrade`
@@ -94,7 +94,7 @@ session they were spawned with. A seat only picks up harness-side code changes
 (a changed `spawn-agent.sh`, a changed rotation beat behavior) the next time
 it's respawned or rotated. If a change specifically requires every seat to
 restart (rare — the commit message should say so), rotate each one by hand
-(`docs/GATE.md` step 6) rather than killing panes directly.
+([docs/GATE.md](GATE.md) step 6) rather than killing panes directly.
 
 ## If something breaks after upgrading
 

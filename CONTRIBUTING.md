@@ -5,7 +5,7 @@ at the bottom is what a reviewer actually checks.
 
 ## Before you start
 
-- Get a working install first: `docs/INSTALL.md` (about an hour from nothing to a VPS with the
+- Get a working install first: [docs/INSTALL.md](docs/INSTALL.md) (about an hour from nothing to a VPS with the
   dashboard in your browser, or minutes in the dev container). Every change is proven against a running install,
   not only against tests.
 - Pick an issue (the `good-first-issue` and `track` labels mark good starting points) or
