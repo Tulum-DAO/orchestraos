@@ -22,7 +22,8 @@ _SRC = (Path(__file__).parent / "arturo-proxy.py").read_text()
 ALL_TOOLS = sorted(set(re.findall(r'"name": "([a-z_]+)"', _SRC)) | set(re.findall(r'name == "([a-z_]+)"', _SRC)))
 NON_FLEET = [None, {"principal": "device:dev_voice"}, {"principal": ""}, {"principal": "FLEET"},
              {"principal": None}]
-ALLOWED = {"knowledge", "list_agents", "query_roadmap", "read_agent_conversation", "client_briefing", "ask_choices"}
+ALLOWED = {"knowledge", "list_agents", "query_roadmap", "read_agent_conversation", "client_briefing", "ask_choices",
+           "agent_message"}
 
 
 def _record(P, cid=None, step=None, principal=None):
@@ -366,3 +367,125 @@ def test_the_brain_may_name_the_exclusive_option_but_only_one_on_the_card(P):
     assert _card(P, {"options": ["a", "b", "neither"], "multi": True, "exclusive": "neither"})["exclusive"] == "neither"
     assert "exclusive" not in _card(P, {"options": ["a", "b"], "multi": True, "exclusive": "c"})
     assert "exclusive" not in _card(P, {"options": ["a", "None"], "multi": False, "exclusive": "None"})
+
+
+# ---- bind level: a non-fleet turn is never even shown the rest ----------------------------------------
+def _names(tools):
+    return {t["function"]["name"] for t in tools}
+
+
+@pytest.mark.parametrize("turn", NON_FLEET, ids=["no-record", "device", "empty", "FLEET", "none"])
+def test_a_non_fleet_turn_is_offered_only_the_allowlist(P, turn):
+    rec = None if turn is None else _record(P, principal=turn.get("principal"))
+    tok = P._TEAM_TURN.set(rec) if rec is not None else None
+    try:
+        offered = _names(P._bound_tools())
+    finally:
+        if tok is not None:
+            P._TEAM_TURN.reset(tok)
+    assert offered and offered <= ALLOWED
+    assert "run_command" not in offered and "inject_message" not in offered
+
+
+def test_a_fleet_turn_is_offered_every_tool(P):
+    assert P._bound_tools(_record(P, principal="fleet")) == P.TOOLS
+
+
+def test_a_voice_call_asking_for_a_command_is_offered_none_and_runs_none(P, monkeypatch, tmp_path):
+    # by effect, through /v1/chat/completions: the brain is offered no shell, and a call it makes anyway
+    # (a model may name a tool it was not given) is refused
+    monkeypatch.setenv("ARTURO_VOICE_CALLS_DIR", str(tmp_path / "vc"))
+    monkeypatch.setattr(P, "BEARER_TOKEN", "test-bearer")
+    monkeypatch.setattr(P._REQ_GUARD, "is_duplicate", lambda *a, **k: False)
+    ran, offered, results = [], [], []
+    monkeypatch.setattr(P, "run_local", lambda cmd, timeout=15: (ran.append(cmd), (True, "ok"))[1])
+    from types import SimpleNamespace as NS
+
+    def complete(**kw):
+        offered.append(_names(kw.get("tools") or []))
+        if len(offered) == 1:
+            call = NS(id="c1", type="function", function=NS(name="run_command", arguments='{"command": "id"}'))
+            return P._brain.make_response(None, [call])
+        results.extend(m.get("content") for m in kw["messages"] if m.get("role") == "tool")
+        return P._brain.make_response("done", None, "stop")
+    monkeypatch.setattr(P.brain, "complete", complete)
+    body = {"messages": [{"role": "user", "content": "run id on the server for me please right now"}]}
+    with P.app.test_client() as c:
+        r = c.post("/v1/chat/completions?custom_session_id=CALLG1", json=body,
+                   headers={"Authorization": "Bearer test-bearer"}, environ_base={"REMOTE_ADDR": "127.0.0.1"})
+        r.get_data()
+    assert offered and all(o <= ALLOWED for o in offered)
+    assert ran == []
+    assert results and all("NOT RUN" in (x or "") for x in results)
+
+
+# ---- seat messaging off the dashboard: Arturo's own, and marked unverified ------------------------------
+@pytest.fixture()
+def outbox(P, monkeypatch):
+    import sys
+    import types
+    sent = []
+
+    class _Store:
+        def send(self, **kw):
+            sent.append(kw)
+            return "msg_test"
+    monkeypatch.setitem(sys.modules, "msg_store", types.SimpleNamespace(MessageStore=_Store))
+    return sent
+
+
+def _msg(P, rec):
+    tok = P._TEAM_TURN.set(rec) if rec is not None else None
+    try:
+        return P.execute_tool("agent_message", {"from_agent": "gm", "to_agent": "dev-x", "subject": "s", "body": "do it"})
+    finally:
+        if tok is not None:
+            P._TEAM_TURN.reset(tok)
+
+
+def test_a_device_turns_message_is_arturos_and_says_unverified(P, outbox):
+    _msg(P, _record(P, "web_x", None, "device:dev_voice"))
+    assert outbox[0]["from_agent"] == "arturo"
+    assert outbox[0]["body"] == "do it\n\n(via device:dev_voice, unverified caller)"
+
+
+def test_a_voice_calls_message_names_the_call(P, outbox):
+    tok = P._CALLER_CONV.set("conv_abc")
+    try:
+        _msg(P, None)
+    finally:
+        P._CALLER_CONV.reset(tok)
+    assert outbox[0]["from_agent"] == "arturo"
+    assert outbox[0]["body"].endswith("(via voice call conv_abc, unverified caller)")
+
+
+def test_an_unstamped_text_turns_message_is_marked_too(P, outbox):
+    _msg(P, _record(P, "web_y", None, None))
+    assert outbox[0]["from_agent"] == "arturo" and "unverified caller" in outbox[0]["body"]
+
+
+def test_a_dashboard_turns_message_is_unchanged(P, outbox):
+    _msg(P, _record(P, "web_z", None, "fleet"))
+    assert outbox[0]["from_agent"] == "gm" and outbox[0]["body"] == "do it"
+
+
+@pytest.mark.parametrize("tool,args", [("agent_message", {"to_agent": "dev-x", "subject": "s"}),
+                                       ("read_agent_conversation", {"agent_id": "dev-x"})])
+def test_the_seat_message_tools_reach_the_store(P, monkeypatch, tool, args):
+    # they named `sys`, which this module imports only as `_sys`: every call failed with a NameError
+    import sys
+    import types
+
+    class _Store:
+        def send(self, **kw):
+            return "msg_ok"
+
+        def inbox(self, agent, tenant_id=None):
+            return []
+    monkeypatch.setitem(sys.modules, "msg_store", types.SimpleNamespace(MessageStore=_Store))
+    tok = P._TEAM_TURN.set(_record(P, principal="fleet"))
+    try:
+        out = P.execute_tool(tool, args)
+    finally:
+        P._TEAM_TURN.reset(tok)
+    assert "not defined" not in out and not out.startswith("Failed")

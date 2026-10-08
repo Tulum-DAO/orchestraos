@@ -2065,13 +2065,40 @@ _DEVICES_ANSWER_ALLOWED = frozenset({
 # and every turn with NO record or no stamp (voice /v1/chat/completions, /ptt, a raw loopback call,
 # prewarm). Only reads that touch no file, run no shell and change nothing; a tool added later is
 # refused until it is listed here.
+# agent_message stays: a seat can still be told something, but the message is Arturo's, never sent as
+# another seat, and says the caller was not verified (_unverified_via).
 _NON_FLEET_ALLOWED = frozenset({
     "knowledge", "list_agents", "query_roadmap", "read_agent_conversation", "client_briefing", "ask_choices",
+    "agent_message",
 })
+# The voice call a /v1/chat/completions turn belongs to (set per request; that path has no turn record).
+_CALLER_CONV = _contextvars.ContextVar("arturo_caller_conv", default=None)
+
+
+def _is_fleet(turn):
+    return turn is not None and turn.get("principal") == "fleet"
+
+
+def _bound_tools(turn=None, use_current=True):
+    """The tools a turn is OFFERED. A non-fleet turn is never shown the rest; execute_tool refuses them
+    as well."""
+    if use_current and turn is None:
+        turn = _TEAM_TURN.get()
+    if _is_fleet(turn):
+        return TOOLS
+    return [t for t in TOOLS if t["function"]["name"] in _NON_FLEET_ALLOWED]
+
+
+def _unverified_via(turn):
+    if turn is not None and turn.get("principal"):
+        return f"via {turn['principal']}, unverified caller"
+    if turn is not None:
+        return f"via an unstamped text turn {turn.get('conversation_id') or ''}, unverified caller".replace("  ", " ")
+    return f"via voice call {_CALLER_CONV.get() or 'unknown'}, unverified caller"
 
 
 def _non_fleet_refusal(name, turn):
-    if turn is not None and turn.get("principal") == "fleet":
+    if _is_fleet(turn):
         return None
     if name in _NON_FLEET_ALLOWED:
         return None
@@ -2967,12 +2994,12 @@ def execute_tool(name, args, user_turns=None):
         # Get hierarchy data for richer context
         hierarchy_agents = []
         try:
-            sys.path.insert(0, str(ORCHESTRA_DIR))
+            _sys.path.insert(0, str(ORCHESTRA_DIR))
             from msg_store import MessageStore
             _store = MessageStore()
             hierarchy_agents = _store.hierarchy_list(tenant_id="operator")
             # Also check readiness for running agents
-            sys.path.insert(0, str(ORCHESTRA_DIR / "lib"))
+            _sys.path.insert(0, str(ORCHESTRA_DIR / "lib"))
             from agent_readiness import check_agent_ready as _check_ready
         except Exception:
             _check_ready = None
@@ -3347,11 +3374,15 @@ def execute_tool(name, args, user_turns=None):
         to_agent = args.get("to_agent", "")
         subject = args.get("subject", "")
         body = args.get("body", "")
+        if not _is_fleet(_turn):
+            # Off the dashboard the caller is not verified: the message is Arturo's and says so.
+            from_agent = "arturo"
+            body = f"{body}\n\n({_unverified_via(_turn)})" if body else f"({_unverified_via(_turn)})"
         priority = args.get("priority", "medium")
         if not to_agent or not subject:
             return "to_agent and subject are required."
         try:
-            sys.path.insert(0, str(ORCHESTRA_DIR))
+            _sys.path.insert(0, str(ORCHESTRA_DIR))
             from msg_store import MessageStore
             store = MessageStore()
             msg_id = store.send(
@@ -3369,7 +3400,7 @@ def execute_tool(name, args, user_turns=None):
         if not agent_id:
             return "agent_id is required."
         try:
-            sys.path.insert(0, str(ORCHESTRA_DIR))
+            _sys.path.insert(0, str(ORCHESTRA_DIR))
             from msg_store import MessageStore
             store = MessageStore()
             if conversation_id:
@@ -4134,6 +4165,7 @@ def chat_completions():
     # detect THIS call's live generation. Absent on legacy/probe traffic → fall back as before
     # (Hume: the query param, Task 8).
     _conv_id = _clm_conversation_id(data, metadata, request.args)
+    _CALLER_CONV.set(_conv_id)
 
     global _current_channel, _apology_count
     _current_channel = calling_channel
@@ -4396,10 +4428,10 @@ def chat_completions():
     voice_pass1 = calling_channel == "voice"
     if voice_pass1:
         VOICE_SLOW_TOOLS = {"async_task"}
-        active_tools = [t for t in TOOLS if t["function"]["name"] not in VOICE_SLOW_TOOLS]
+        active_tools = [t for t in _bound_tools() if t["function"]["name"] not in VOICE_SLOW_TOOLS]
         log.info(f"Voice pass 1: {len(active_tools)} tools (async_task held back)")
     else:
-        active_tools = TOOLS
+        active_tools = _bound_tools()
 
     def generate():
         _gen_t0 = time.time()
@@ -5667,7 +5699,7 @@ def text_stream_endpoint():
             turn = _text_stream.stream_turn(
                 text=body_text, conversation_id=conversation_id, brain=turn_brain,
                 brain_id=chosen_id, messages=messages, spawn=_spawn,
-                fallback=_fallback, record=_record, tools=TOOLS,
+                fallback=_fallback, record=_record, tools=_bound_tools(_team_turn, use_current=False),
                 warm=_warm, discard=lambda: _WARM_POOL.discard(warm_key), run_tools=_run_tools)
         turn = (_complete(e) for e in turn)
         try:
