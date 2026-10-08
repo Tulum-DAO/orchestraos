@@ -16,6 +16,7 @@ This page is about the gateway (8890), which the phone app talks to.
 > | 2. `orchestra pair` | Works on `main`: prints the code and QR; the gateway serves `POST /pair/exchange`. |
 > | 3. Connect the web dashboard | **Not on `main`.** The connect screen described below was proposed (PR #23) and closed unmerged; this section describes the intended flow. |
 > | 4. Connect the iOS app | **Not released yet.** The pairing screen is being built and the app is headed for the App Store; this section describes that build. |
+> | 5. Connect the Mac app | **Not released yet.** It is in testing, with no public download; this section describes the build under test. |
 >
 > Run `orchestra pair --help` to confirm the command on your install.
 
@@ -151,6 +152,50 @@ too; a self-signed certificate does not.
 Either way, the app exchanges the code for its own token and stores both in
 Keychain. It does not ask again unless you revoke that device from Settings
 or its pairing genuinely expires.
+
+## 5. Connect the Mac app
+
+The Mac app connects to your **gateway** (8890), the same way the iOS app does. It is not
+the dashboard: the dashboard (8891) needs no app, just a browser (`docs/INSTALL.md` §2).
+
+Before you start:
+
+- **Tailscale on the Mac**, signed in to the same account as the server (`docs/INSTALL.md`
+  §0, "Tailscale on the VPS and on your own device").
+- **The gateway on an https address.** The Mac app refuses plain `http://`. On the server,
+  follow step 4 above: run `tailscale serve status` first, then serve the gateway on a free
+  https port, for example `tailscale serve --bg --https=8445 http://127.0.0.1:8890`. That
+  gives you `https://<machine>.<tailnet>.ts.net:8445`.
+
+On the server, make a pairing code for the Mac:
+
+```bash
+orchestra pair --base-url https://<machine>.<tailnet>.ts.net:8445 --scopes read,approve,message --label my-mac
+```
+
+`read,approve,message` lets the Mac see your cards, answer them, and message your agents
+(step 2 explains each scope). You should see `Minted device … (my-mac) with scopes: read,
+approve, message`, and then one line that starts with `{"code":` and contains a
+`"base_url"`. That line is what you paste.
+
+On the Mac, open the app. Its first window is **Connect this Mac**, with two fields,
+**Gateway address** and **Pairing code**:
+
+1. Select the whole `{"code": ... }` line in Terminal, from the `{` to the `}`, and copy it
+   (`Cmd+C`).
+2. Paste it into **Pairing code**. The app reads both values from it and fills in
+   **Gateway address** for you.
+3. Press **Pair** (or Return).
+
+To check from the server: `orchestra devices` lists `my-mac` with the scopes you gave it.
+
+**If it says the code didn't work:** run `orchestra pair` again for a fresh code, and paste the
+new line. Each code works once and expires after about 10 minutes. Also check that
+**Gateway address** ends in the https port you served the gateway on (8445 above), not 8891,
+and that Tailscale on the Mac is connected.
+
+Do not screenshare or post the `orchestra pair` output: until it is used, the line is a
+password for your server.
 
 ## The handshake, if you're curious what "connected" actually checks
 
