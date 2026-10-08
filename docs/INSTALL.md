@@ -313,7 +313,8 @@ your own login; never copy someone else's credentials onto the server.
 (claude.com/pricing; [docs/COSTS.md](COSTS.md) compares the options). Buy it first, with the same
 email you will sign in with. On Claude's website it takes only a credit or debit card; if you
 subscribe in the Claude iPhone or Android app instead, the App Store or Google Play handles
-payment ("Paid plan billing FAQs", support.claude.com).
+payment ("Paid plan billing FAQs", support.claude.com); check which payment methods your store
+accepts.
 
 On the server, start Claude Code once:
 

@@ -144,7 +144,7 @@ not, add it, then close and reopen your terminal.
 - **Windows**: `type $env:USERPROFILE\.ssh\id_ed25519.pub`
 
 You should see: one long line that starts with `ssh-ed25519 AAAA` and ends with
-`my-computer`. Select the whole line and copy it. (On a Mac, `pbcopy < ~/.ssh/id_ed25519.pub`
+`my-computer` (or whatever name your existing key has). Select the whole line and copy it. (On a Mac, `pbcopy < ~/.ssh/id_ed25519.pub`
 copies it for you; on Windows, `Get-Content $env:USERPROFILE\.ssh\id_ed25519.pub | Set-Clipboard`
 does the same.)
 
@@ -172,7 +172,8 @@ This is the step where you pay. A server is rented by the hour from a hosting co
 and you pay that company directly, not OrchestraOS. The size these docs use costs about
 $24 a month at DigitalOcean, billed by the hour while the server exists. You will also need a paid plan for one AI tool to run your agents (Claude
 Pro is about $20 a month; Claude's website takes only a credit or debit card, while buying it
-in the Claude iPhone or Android app uses your App Store or Google Play payment);
+in the Claude iPhone or Android app uses your App Store or Google Play payment; check which
+payment methods your store accepts);
 [docs/INSTALL.md](INSTALL.md) covers it when you get there.
 [docs/COSTS.md](COSTS.md) compares providers and prices.
 
@@ -248,7 +249,8 @@ Type `yes` and press Enter. This happens once per server and is normal. **[PERSO
 set a passphrase in step 2, type it when asked.
 
 You should see: a welcome text that starts with `Welcome to Ubuntu 24.04`, and then a
-new prompt that ends in `#`, like `root@orchestra:~#`. You are now on the server:
+new prompt that ends in `#`, like `root@orchestra:~#`. You are now on the server. Check it
+with `whoami`: it prints `root`.
 
 - the `#` at the end means you are **root**;
 - every command you type in this window now runs on the server, not on your computer;
