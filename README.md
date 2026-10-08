@@ -4,29 +4,9 @@
 
 OrchestraOS, published by Tulum DAO: an open harness for running a fleet of coding agents as a team — agents that message each other, remember across restarts, rotate themselves before they run out of context, and put every real decision in front of the human on their phone.
 
-## Start here
-
-- **Never used a server or Terminal?** → [From scratch](docs/FROM_SCRATCH.md): from your Mac
-  to logged in on your own server, about 20 minutes. It then hands you to the install guide.
-- **Have a server and a terminal open?** → [Install guide](docs/INSTALL.md), about an hour.
-- The same guides, easier to read: [tulumdao.com/docs](https://tulumdao.com/docs/).
-
-On an Ubuntu 24.04 server, the install begins like this (the
-[install guide](docs/INSTALL.md) explains each step and what you should see):
-
-```bash
-ssh root@<your server ip>       # log in to your server from your own computer
-adduser orchestra && usermod -aG sudo orchestra   # make a normal user: agents refuse to run as root
-# log back in as that user (install guide §0), set up Tailscale, the packages and one agent CLI, then:
-git clone https://github.com/Tulum-DAO/orchestraos.git && cd orchestraos   # download OrchestraOS
-make install                    # install the `orchestra` command
-export PATH="$HOME/.local/bin:$PATH"   # make it findable in this terminal (the guide makes it permanent)
-orchestra init --yes            # set everything up (about 5 minutes)
-```
-
 **This is not a finished product.** It runs one operator's fleet today, every day, and that setup is the reference install. We are opening it so people who want this to exist can build it with us. The first hackathon, Build-a-thon, ran on 2026-09-19 and 20; its tracks are still open ([docs/tracks/README.md](docs/tracks/README.md)).
 
-## All install paths
+## Install: pick your path
 
 | You are... | Start here | First thing you do |
 |---|---|---|
