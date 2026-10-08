@@ -35,12 +35,23 @@ What is built:
   APNs topic (the watch app has its own) and must be on an allowlist
   (`ORCHESTRA_PUSH_BUNDLE_IDS`, default the published app's two); `env` picks the APNs host
   (TestFlight and App Store builds register production tokens, Xcode builds sandbox ones).
-- **A stale Forget can't unregister a re-paired device.** An APNs token belongs to the app
-  install, not the pairing, so Forget-then-pair-again keeps the same token. `rev` is the
-  client's monotonic counter; a DELETE applies only when its rev is at least the stored one.
-- **Tokens die with their device.** A sender reads `push_targets()`, which skips and prunes
-  tokens whose device was revoked or deleted, on every revoke path.
-- `GET /gateway/capabilities` lists `"push"` in `features` and
+- **`rev` orders everything; the client must grow it on EVERY PUT and DELETE** (ms since epoch).
+  An APNs token belongs to the app install, not the pairing, so Forget-then-pair-again keeps
+  the same token. A PUT at or below the stored rev changes nothing (`registered: false`); a
+  DELETE below it changes nothing (`removed: false`); a DELETE is remembered for 30 days, so a
+  delayed older PUT can't bring a forgotten device back. rev is at most 2^53.
+- **A token belongs to its owner.** Another device can take it over only when the owner is
+  revoked, or when the owner is the shared fleet bearer (a phone moving onto its own token),
+  and only with a strictly newer rev.
+- **Tokens die with their owner, on positive evidence only.** A sender reads `push_targets()`:
+  it sends only to owners it can confirm are alive, prunes owners it can confirm are dead (a
+  revoked device, or a rotated fleet bearer, since fleet tokens are filed under a fingerprint
+  of the bearer), and skips without pruning any owner it can't read. Missing data never
+  deletes a token.
+- **Bounded:** 8 tokens per device, 16 for the fleet bearer (phone, iPad and watch in two
+  envs); the oldest is evicted. Tokens are stored lowercase. A corrupt store file is moved
+  aside, never overwritten.
+- `GET /gateway/capabilities` lists `"push"` in `features` whenever the route exists, and
   `push: {delivery: "direct"|"relay"|"none", bundle_ids}`; delivery comes from
   `ORCHESTRA_PUSH_DELIVERY` and is `"none"` unless set. The app registers only when delivery
   isn't `none`, and keeps polling regardless.

@@ -4492,19 +4492,59 @@ def _push_store():
     return PushTokenStore(_P(base) / "state" / "push-tokens.json")
 
 
+def _legacy_push_principal() -> str | None:
+    """The fleet bearer's push principal: "legacy:" + a short fingerprint of the CURRENT bearer.
+    Rotating the bearer changes it, so tokens registered under the old one count as dead
+    (push_tokens rule 4) and a lost phone stops receiving pushes. None if no bearer is set."""
+    tok = gateway_token()
+    if not tok:
+        return None
+    return "legacy:" + hashlib.sha256(tok.encode("utf-8")).hexdigest()[:16]
+
+
 def _push_principal_id(request):
     _, principal = _resolved_principal(request)
     if principal is None:
         principal = resolve_principal(request)
-    return (principal or {}).get("id")
+    pid = (principal or {}).get("id")
+    if pid == "legacy":
+        return _legacy_push_principal()
+    return pid
+
+
+_DEVICE_ID_RE = re.compile(r"^[0-9a-f]{8,64}$")
+
+
+def _push_owner_state(principal_id) -> str:
+    """ALIVE / DEAD / UNKNOWN for a push token's owner, on POSITIVE evidence only.
+    DEAD means we read the record and it says revoked (or the fleet bearer was rotated).
+    Anything we could not read is UNKNOWN: not sent to, and never pruned."""
+    from scripts.push_tokens import ALIVE, DEAD, UNKNOWN, LEGACY_PREFIX
+    pid = str(principal_id or "")
+    if pid.startswith(LEGACY_PREFIX):
+        current = _legacy_push_principal()
+        if current is None:
+            return UNKNOWN
+        return ALIVE if pid == current else DEAD
+    if not _DEVICE_ID_RE.match(pid):
+        return UNKNOWN
+    try:
+        rec = json.loads((_device_store().dir / f"{pid}.json").read_text())
+    except (OSError, ValueError):
+        return UNKNOWN
+    if not isinstance(rec, dict):
+        return UNKNOWN
+    return DEAD if rec.get("revoked_at") else ALIVE
 
 
 async def handle_push_token_put(request):
     """PUT /push/token {token, platform, bundle_id, env, rev} -> {ok, registered, delivery}.
 
     Bound to the CALLER: the token is filed under its principal, never under an id from the
-    body. Idempotent. `registered: false` means a newer rev for this token is already on file
-    (a delayed request lost a race with a later one) and nothing changed."""
+    body. `rev` must grow on every PUT and DELETE (ms since epoch). `registered: false` means
+    nothing changed: a newer rev or a Forget at/after this rev is on file, or the token
+    belongs to another device that is still paired."""
+    import asyncio
     from scripts.push_tokens import PushTokenError, validate_registration
     pid = _push_principal_id(request)
     if not pid:
@@ -4518,7 +4558,7 @@ async def handle_push_token_put(request):
     except PushTokenError as e:
         return _json({"ok": False, "error": str(e)}, status=400)
     try:
-        stored = _push_store().register(pid, fields)
+        stored = await asyncio.to_thread(_push_store().register, pid, fields, _push_owner_state)
     except OSError as e:
         log.warning(f"push/token: store write failed: {e}")
         return _json({"ok": False, "error": "could not store the token"}, status=500)
@@ -4530,8 +4570,10 @@ async def handle_push_token_delete(request):
 
     Removes only the caller's own token, and only when `rev` is at least the stored one: an
     APNs token survives Forget-then-pair-again (it belongs to the app install), so a late
-    Forget must not unregister the device that re-paired since. Idempotent: an unknown token,
-    someone else's token or a stale rev is `removed: false`, not an error."""
+    Forget must not unregister the device that re-paired since. The Forget is remembered, so a
+    delayed older PUT cannot bring the token back. Idempotent: an unknown token, someone
+    else's token or a stale rev is `removed: false`, not an error."""
+    import asyncio
     from scripts.push_tokens import PushTokenError
     pid = _push_principal_id(request)
     if not pid:
@@ -4543,7 +4585,7 @@ async def handle_push_token_delete(request):
     if not isinstance(data, dict):
         return _json({"ok": False, "error": "body must be a JSON object"}, status=400)
     try:
-        removed = _push_store().remove(pid, data.get("token"), data.get("rev"))
+        removed = await asyncio.to_thread(_push_store().remove, pid, data.get("token"), data.get("rev"))
     except PushTokenError as e:
         return _json({"ok": False, "error": str(e)}, status=400)
     except OSError as e:
@@ -4553,11 +4595,10 @@ async def handle_push_token_delete(request):
 
 
 def push_targets() -> list[dict]:
-    """The live push tokens, for a sender. A token whose device was revoked or deleted is
-    pruned here, which is what makes tokens die with their device on EVERY revoke path."""
-    store = _device_store()
-    live_ids = {r["id"] for r in store.list() if not r.get("revoked_at")}
-    return _push_store().live(lambda device_id: device_id in live_ids)
+    """The push tokens to send to, for a sender: owners positively alive. Tokens of a revoked
+    device or a rotated fleet bearer are pruned; an owner we cannot read is skipped, never
+    pruned (push_tokens rule 4)."""
+    return _push_store().live(_push_owner_state)
 
 
 async def handle_presence(request):
