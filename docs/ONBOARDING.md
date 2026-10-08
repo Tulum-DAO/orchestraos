@@ -122,7 +122,7 @@ problem described above, until you do.
 **Before you run it**, because the code disappears from the screen after 60 seconds:
 
 - **[PERSON ONLY]** Have the app installed, open and showing its pairing screen (on iPhone:
-  the gear, then **Connect your gateway**; steps 4 and 5
+  the gear at the top right of the Arturo tab, then **Connect your gateway**; steps 4 and 5
   say how to get each app; there is no public download yet).
 - **[PERSON ONLY]** Have Tailscale on that device, signed in to the same Tailscale account as
   the server. On an iPhone: the **Tailscale** app from the App Store, open it and sign in. On a
@@ -231,12 +231,15 @@ through.
 you a test build, you can't connect an iPhone yet: stop here. **[PERSON ONLY]** Installing and
 opening it is yours.
 
-**Finding the pairing screen.** The app does not open on it by itself. With nothing paired, it
-opens on the Approvals list with the banner *Gateway not configured on this build. Approvals
-will appear once the token is set.* That is expected: it only means the app is not paired yet.
-**[PERSON ONLY]** Tap the gear (Settings), then **Connect your gateway**. Have that screen
-open, and Tailscale on the iPhone (see step 2, "Before you run it"), before you run
-`orchestra pair`.
+**Finding the pairing screen.** The app does not open on it by itself: it opens on the
+**Arturo** tab, which shows no pairing prompt (with nothing paired it may say it couldn't reach
+its memory; that is expected). **[PERSON ONLY]** Tap the gear at the top right of the Arturo tab
+(to the right of the brain icon), then, under **GATEWAY**, tap **Connect your gateway**. On an
+iPad, use **Settings** in the sidebar instead. Have that screen open, and Tailscale on the
+iPhone (see step 2, "Before you run it"), before you run `orchestra pair`.
+
+If you switch to the **Approvals** tab before pairing, it shows *Gateway not configured on this
+build. Approvals will appear once the token is set.* That only means the app is not paired yet.
 
 **Getting the code onto the iPhone.** `orchestra pair` prints the code in your computer's
 terminal, not on the phone. Either install `segno` first (step 2) and tap **Scan** on the QR, or,
@@ -255,7 +258,8 @@ The **Connect your gateway** screen says *On the machine running your OrchestraO
 under the fields: *Connected to <your server> · gateway v1 · no cards yet — they appear here
 when an agent needs a decision.* (If cards are already waiting, it ends with *· 1 card waiting*
 or similar instead.) A red **Forget this gateway** button appears at the bottom, and back in
-Settings the row now reads **Change gateway**. To check from the server, `orchestra devices`
+Settings, under **GATEWAY**, Status shows **Connected**, Token shows **Configured**, and the row
+now reads **Change gateway**. To check from the server, `orchestra devices`
 lists your device with a LAST SEEN time.
 
 If the line says *Paired, but this device couldn't save it. That code is now used up — run
