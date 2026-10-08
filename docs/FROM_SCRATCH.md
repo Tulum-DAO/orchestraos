@@ -178,8 +178,8 @@ new prompt that ends in `#`, like `root@orchestra:~#`. You are now on the server
   must tick `my-computer` under **Choose Authentication Method** when creating the server.
   To add it now, without starting over: in DigitalOcean, click your droplet's name, then
   **Web Console** at the top of its page. A terminal on the server opens in your browser.
-  There, type `echo '`, paste your public key line from step 2, type `' >> ~/.ssh/authorized_keys`
-  and press Enter. (`>>` adds the key; it does not remove anything.) Then try `ssh` again
+  There, type `mkdir -p ~/.ssh && echo '`, paste your public key line from step 2, type
+  `' >> ~/.ssh/authorized_keys` and press Enter. (`>>` adds the key; it does not remove anything.) Then try `ssh` again
   from your own terminal.
 - `Connection timed out` or `Operation timed out`: check the address, and give a brand
   new server another minute to start.
