@@ -531,8 +531,9 @@ spawn_agent() {
         exit 1
     fi
 
-    # Check if already running
-    if tmux has-session -t "$tmux_name" 2>/dev/null; then
+    # Check if already running. A session whose CLI has exited (a bare shell, or a nested tmux
+    # client over one) is cleared and relaunched below instead (clear_dead_session, finding #10).
+    if tmux has-session -t "$tmux_name" 2>/dev/null && ! clear_dead_session "$tmux_name"; then
         warn "Agent $agent_id already running in tmux session '$tmux_name'"
         if [[ -n "$task" ]]; then
             log "Sending task to existing session..."
