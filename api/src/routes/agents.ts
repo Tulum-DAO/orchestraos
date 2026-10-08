@@ -7,7 +7,7 @@ import { registeredAgent, promptPathFor, inboxDirFor, isSafeAgentId } from '../l
 
 // The prompt routes' own root, unchanged from before (they never used state-reader's data dir).
 const PROMPT_ORCH = () => process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
-import { getTmuxSessionNames } from '../services/tmux-monitor.js';
+import { getTmuxSessionNames, paneCommand } from '../services/tmux-monitor.js';
 import { getUnifiedAgentStatus, spawnAgent, killAgent, getMacStatus, getMacSessionsCache, isThisHost } from '../services/cross-machine.js';
 import { logInteraction } from '../services/learning.js';
 import { isTranscriptActive } from '../services/transcript-activity.js';
@@ -363,7 +363,11 @@ router.get('/', async (_req: Request, res: Response) => {
             agent.status = 'stopped';
             // Say what IS true: the session is up (so never Spawn a second one; open it). An
             // operator read "red dot + Spawn" as a dead gm while `tmux ls` showed it attached.
-            agent.activity = 'Session up, CLI not detected';
+            const cmd = paneCommand(agent.tmux_session);
+            agent.pane_command = cmd;
+            agent.activity = cmd
+              ? `Session up, but its screen is running ${cmd}, not the agent CLI`
+              : 'Session up, CLI not detected';
           }
         }
       }

@@ -69,3 +69,10 @@ test('capture on a machine:"local" seat reads the local pane, not SSH', async ()
   const r = await cm.captureRemoteOutput('gm', 5, { agents: { gm: { machine: 'local', tmux_session: 'gm' } } });
   assert.equal(r.success, true, r.output);
 });
+
+test('paneCommand names what a session\'s screen is running, exact name only', async () => {
+  const { paneCommand } = await import('./tmux-monitor.js');
+  assert.equal(paneCommand('gm'), 'sleep');
+  assert.equal(paneCommand('g'), null, 'a prefix must not resolve to gm');
+  assert.equal(paneCommand('no-such-seat'), null);
+});
