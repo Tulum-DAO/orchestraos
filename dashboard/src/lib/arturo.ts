@@ -169,6 +169,18 @@ export function toggleChoice(options: string[], picked: string[], option: string
   return options.filter((o) => next.has(o));
 }
 
+/** What the voice controls are called (the operator, 2026-10-08: say what each one is, and never ask
+ *  them to approve what they already have). Dictation is theirs as soon as the browser grants the mic;
+ *  OrchestraOS asks nothing. Hands-free conversation (Arturo talks back, live) is the one thing that
+ *  needs the server's voice key. The old one-word label named neither, so it is gone. */
+export const DICTATE_TITLE = "Dictate (uses your browser's mic permission)";
+export const HANDS_FREE = 'Hands-free conversation';
+export function handsFreeTitle(keyPresent: boolean): string {
+  return keyPresent
+    ? 'Hands-free conversation: talk, and Arturo talks back (uses the voice key on your server)'
+    : 'Hands-free conversation needs a voice key on your server (ELEVENLABS_API_KEY or CARTESIA_API_KEY)';
+}
+
 /** Onboarding ends by EFFECT: only when the server's reply says so (finish_onboarding wrote its flag),
  *  never on a failed turn and never on the reply's wording. */
 export function onboardingDone(r: Pick<ArturoReply, 'ok' | 'onboarding'> | null | undefined): boolean {

@@ -102,7 +102,7 @@ def run_pair(args, settings=None, store=None, out=print, clear_after_s=60):
         out("  approve  ANSWER approvals and questionnaires            (acts as you)")
         out("  message  send a message to an agent, upload a file")
         out("  inject   press keys into a live agent pane")
-        out("  voice    talk to Arturo  (every call spends provider credit)")
+        out("  voice    talk to Arturo from this device, typed or spoken  (every turn spends provider credit)")
         out("  admin    file red-alert reports, post telemetry")
         out("")
         out("  A read-only phone:   orchestra pair --scopes read")

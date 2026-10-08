@@ -39,6 +39,14 @@ def split_marker(text: str):
 
 # ---- fixed facts: the brain words them, it does not invent them ----------------------------------
 ONBOARDING_GUIDE = "https://github.com/Tulum-DAO/orchestraos/blob/main/docs/ONBOARDING.md"
+# Only in text-only mode. Dictation is theirs already (the browser's mic permission is its only gate), so
+# it is never offered or asked for; hands-free conversation is the one thing that needs a key. The word
+# "voice mode" names neither, and is not used.
+VOICE_FACT = ("Talking: dictation already works for them: the mic button turns their speech into text, "
+              "with only their browser's own mic permission. Never offer it, ask about it or call it a "
+              "mode. What is not on yet is hands-free conversation, where they talk and you talk back "
+              "live: that needs a voice key on their server (ELEVENLABS_API_KEY or CARTESIA_API_KEY) and "
+              "Arturo restarted. Mention it once, briefly, as something they can turn on later.")
 DEFAULT_PROJECT = "first-project"
 
 TEAM_SHAPE = (
@@ -132,9 +140,7 @@ def playbook(ctx=None) -> str:
         _team_fact(ctx.get("team")),
     ]
     if ctx.get("voice_mode") == "text-only":
-        known.append("Voice: they can already talk to you with the mic; for you to talk BACK, an ElevenLabs or "
-                     "Cartesia key has to be added to the server's environment (ELEVENLABS_API_KEY or "
-                     "CARTESIA_API_KEY) and Arturo restarted. Mention it once, briefly.")
+        known.append(VOICE_FACT)
     if ctx.get("opener"):
         known.append("This turn is the page opening for the first time, not the operator speaking: greet them, "
                      "say in one sentence who you are, and start on the first missing goal.")
