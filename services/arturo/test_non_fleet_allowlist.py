@@ -498,11 +498,11 @@ _FWD = [{}, {"X-Forwarded-For": "203.0.113.9"}, {"X-Forwarded-Host": "box.ts.net
 
 @pytest.mark.parametrize("path", ["/text", "/text/stream"])
 @pytest.mark.parametrize("extra", _FWD, ids=["loopback", "xff", "xfh", "funnel", "forwarded"])
-@pytest.mark.parametrize("secret", ["none", "wrong"])
-def test_a_fleet_stamp_without_this_installs_secret_is_not_fleet(P, monkeypatch, fleet_stamp, path, extra, secret):
+@pytest.mark.parametrize("presented", ["none", "reversed"])
+def test_a_fleet_stamp_without_this_installs_secret_is_not_fleet(P, monkeypatch, fleet_stamp, path, extra, presented):
     good = fleet_stamp(P)                                    # the install HAS a secret; the caller lacks it
     h = {"X-Arturo-Principal": "fleet", **extra}
-    if secret == "wrong":
+    if presented == "reversed":
         h["X-Arturo-Stamp"] = good["X-Arturo-Stamp"][::-1]
     ran, results = _text_running(P, monkeypatch, path, h)
     assert ran == [] and results and results[0].startswith("NOT RUN")
