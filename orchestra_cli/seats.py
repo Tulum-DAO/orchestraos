@@ -156,20 +156,19 @@ def cmd_spawn(ns) -> int:
 
 
 def _pane_alive(tmux_session: str) -> bool:
-    """ALIVE = the session exists AND its pane runs a child process (the agent CLI), not a bare
-    shell left behind by a CLI that exited (issue #93: two 'spawned successfully' seats were dead)."""
+    """ALIVE = the session exists AND an agent CLI runs in its pane's process tree (issue #93:
+    two 'spawned successfully' seats were dead). Not "any child of the pane shell": operator
+    finding #10 (2026-10-08) was a gm whose pane ran a nested `tmux attach` over a shell, which
+    that rule counted as a live gm, so starter skipped it. scripts/pane_cli.py answers from the
+    process tree with the detector's own runtime rule; a nested client the CLI itself launched
+    still has the CLI above it."""
     if not _tmux_has_session(tmux_session):
         return False
-    try:
-        out = subprocess.run(["tmux", "list-panes", "-t", f"={tmux_session}", "-F", "#{pane_pid}"],
-                             capture_output=True, text=True, timeout=5)
-        pid = (out.stdout.split() or [""])[0]
-        if not pid:
-            return False
-        kids = subprocess.run(["pgrep", "-P", pid], capture_output=True, text=True, timeout=5)
-        return bool(kids.stdout.strip())
-    except (OSError, subprocess.SubprocessError):
-        return False
+    scripts = str(Path(__file__).resolve().parent.parent / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import pane_cli
+    return pane_cli.pane_state(tmux_session)["runtime"] is not None
 
 
 _TEMPLATE_KINDS = {"dev": "prompts/_dev-template.md", "pm": "prompts/_pm-template.md",

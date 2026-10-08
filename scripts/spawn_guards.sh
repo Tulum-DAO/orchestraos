@@ -47,3 +47,20 @@ inject_or_fail() {
     err "$session: NOT spawned successfully — the seat launched but its instructions could not be injected; pane left running for inspection (tmux attach -t $session), exit 1"
     return 1
 }
+
+# clear_dead_session <tmux_name>
+# Returns 0 after KILLING the session when it is safe to relaunch into its place: the session
+# exists, no agent CLI is anywhere in its pane's process tree, and the screen shows only the
+# shell the CLI exited to (or a nested tmux client over that shell). Returns 1 otherwise, and
+# the caller keeps today's "already running" path. Operator finding #10 (2026-10-08): the
+# has-session check alone said "already running" for a seat whose CLI was gone, so neither
+# `orchestra starter` nor the dashboard's Resume could ever bring it back. A live CLI, a
+# nested client the CLI itself launched, or anything else on screen (an editor, a build the
+# operator is running) is never touched. The rule lives in scripts/pane_cli.py.
+clear_dead_session() {
+    local name="$1"
+    python3 "$SCRIPT_DIR/scripts/pane_cli.py" --relaunchable "$name" >/dev/null 2>&1 || return 1
+    echo "[spawn] session '$name' exists but its agent CLI has exited; relaunching it" >&2
+    tmux kill-session -t "=$name" 2>/dev/null || return 1
+    return 0
+}
