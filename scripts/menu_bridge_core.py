@@ -10,6 +10,7 @@ ApprovalStore wiring is a separate later step handled by the parent operator.
 """
 
 import hashlib
+import re
 
 # pending_menu PRESENCE is the authoritative signal — the detector only emits it
 # when real native-menu chrome is on screen. The coarse `state` label is NOT
@@ -28,7 +29,12 @@ def menu_identity(question: str, context: str = "") -> str:
     one, its CONTEXT (what the prompt is about: a permission prompt's command, a menu's
     preamble). Without the context, two "Do you want to proceed?" prompts for different
     commands share one identity, so a stale tap meant for one could answer the other. With
-    no context the identity is exactly the old question-only one."""
+    no context the identity is exactly the old question-only one.
+
+    ALL whitespace is removed from the context before it keys anything: the TUI re-wraps a long
+    command when the pane width changes (a phone or a Mac attaching), breaking paths and URLs
+    mid-token, and the same prompt must keep the same identity."""
+    context = re.sub(r"\s+", "", context or "")
     return question if not context else question + "\n\u00a7context\u00a7\n" + context
 
 

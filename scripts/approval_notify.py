@@ -638,7 +638,9 @@ def _scan_permission_prompts():
                 menu = st.get("pending_menu") if isinstance(st, dict) else None
                 if isinstance(menu, dict) and menu.get("kind") == "permission":
                     q = menu.get("question") or ""
-                    digest = hashlib.sha256((sess + "|" + q).encode()).hexdigest()[:16]
+                    from menu_bridge_core import menu_identity   # the gateway's _perm_digest rule
+                    digest = hashlib.sha256(
+                        (sess + "|" + menu_identity(q, menu.get("context") or "")).encode()).hexdigest()[:16]
                     n = _read_instance_n(ledger, sess, digest)
                     out[f"menu:{sess}:{digest}:{n}"] = {"agent": sess, "question": q}
             except Exception as e:  # noqa: BLE001 — one bad session never sinks the scan

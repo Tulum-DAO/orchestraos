@@ -121,3 +121,74 @@ def test_the_SAME_command_still_reuses_its_row_as_before(store):
     assert _create(store, "Bash command\n" + CMD_A) == a
     store.record_answer(a, "1", "Yes")
     assert _create(store, "Bash command\n" + CMD_A) == a, "re-card guard unchanged for the same prompt"
+
+
+# ---------------------------------------------------------------- review round 1 (each reproduced)
+
+def test_a_permission_card_id_is_STABLE_across_sweeps_while_the_same_prompt_is_on_screen(S, monkeypatch, tmp_path):
+    """The reap step compared the ledger against keys built with the OLD digest, so the live
+    prompt looked absent, went 'gone' after the grace, and instance_n bumped every few sweeps."""
+    import time as _t
+    menu = S.parse_pending_menu(_pane())
+
+    class _AS:
+        def get_agent_status(self, sess):
+            return {"pending_menu": menu}
+
+    monkeypatch.setattr(G, "_PERM_INSTANCE_LEDGER", str(tmp_path / "ledger.json"), raising=False)
+    monkeypatch.setattr(G, "_agent_status", lambda: _AS())
+    monkeypatch.setattr(G, "_tmux_session_names", lambda: ["sessA"])
+    monkeypatch.setitem(G._agents_cache, "data", None)
+    clock = {"t": _t.time()}
+    monkeypatch.setattr(_t, "time", lambda: clock["t"])
+    ids = []
+    for _ in range(8):
+        ids.append(G._perm_pseudo_rows()[0]["id"])
+        clock["t"] += 2.0
+    assert len(set(ids)) == 1, ids
+
+
+@pytest.mark.parametrize("width", [60, 80, 100, 120, 200])
+def test_the_same_prompt_keeps_its_key_when_the_pane_rewraps(S, width):
+    long_cmd = "curl -s https://example.com/a/very/long/path/that/wraps/" + "x" * 150 + " -o /tmp/out.html"
+    def wrapped(w):
+        lines = []
+        for ln in _pane(long_cmd):
+            if long_cmd in ln:
+                body = ln.strip()
+                lines += ["   " + body[i:i + w] for i in range(0, len(body), w)]
+            else:
+                lines.append(ln)
+        return lines
+    base = S.parse_pending_menu(wrapped(300))
+    m = S.parse_pending_menu(wrapped(width))
+    # The CONTEXT part of the identity is width-proof. (The question's "[Tool]" suffix comes from
+    # _menu_tool, which reads the last 20 screen lines; that older fragility is tracked separately.)
+    assert core.menu_identity("q", m["context"]) == core.menu_identity("q", base["context"])
+
+
+def test_the_backstop_push_scan_uses_the_gateways_digest(S):
+    import scripts.approval_notify as N
+    import hashlib
+    menu = S.parse_pending_menu(_pane())
+    want = G._perm_digest("sessA", menu["question"], menu["context"])
+    got = hashlib.sha256(("sessA|" + core.menu_identity(menu["question"], menu["context"])).encode()).hexdigest()[:16]
+    assert got == want
+    src = pathlib.Path(N.__file__).read_text()
+    assert "menu_identity(q, menu.get(\"context\")" in src, "the notify scan keys on the same rule"
+
+
+def test_tab_bars_and_tick_glyphs_never_enter_the_context(S):
+    lines = ["─" * 60, "←  ☐ Approach  ☐ Scope  ✔ Submit  →", "", "Which approach?",
+             "❯ 1. Fast", "  2. Safe", "", "Enter to select · ↑/↓ to navigate · Esc to cancel"]
+    ticked = [ln.replace("☐ Approach", "☒ Approach") for ln in lines]
+    a, b = S.parse_pending_menu(lines), S.parse_pending_menu(ticked)
+    if a is not None and b is not None:
+        assert a.get("context") == b.get("context")
+        assert "Submit" not in (a.get("context") or "")
+
+
+def test_is_session_carded_cannot_be_called_without_the_context():
+    import menu_bridge as mb
+    with pytest.raises(TypeError):
+        mb.is_session_carded(None, "s", "q?")

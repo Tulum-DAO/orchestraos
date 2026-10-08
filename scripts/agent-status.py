@@ -648,8 +648,7 @@ def _menu_question(lines: list[str], first_opt_idx: int | None) -> str:
     return q
 
 
-_CONTEXT_MAX_LINES = 40
-_CONTEXT_MAX_CHARS = 2000
+_CONTEXT_MAX_LINES = 120
 
 
 def _menu_context(lines: list[str], first_opt_idx: int | None) -> str:
@@ -657,7 +656,9 @@ def _menu_context(lines: list[str], first_opt_idx: int | None) -> str:
     (a permission prompt's tool label, command, description; a menu's preamble). Identity, not
     display: two "Do you want to proceed?" prompts for DIFFERENT commands must not look like the
     same prompt, or a stale tap meant for one approves the other. Whitespace-normalised and
-    bounded; box borders stripped; the question block itself and the options are excluded.
+    bounded; box borders, tab bars and tick glyphs stripped; the question block and the options
+    are excluded. Identity keys remove all whitespace (menu_bridge_core.menu_identity), so a
+    re-wrap at another pane width keeps the same key.
     Empty when there is no frame within reach (the identity then falls back to the question)."""
     if first_opt_idx is None:
         return ""
@@ -676,13 +677,16 @@ def _menu_context(lines: list[str], first_opt_idx: int | None) -> str:
         s = lines[j].strip()
         if _RULE_RE.match(s) or (s and set(s) <= set('╌─━ ')) or s.startswith(('╭', '┌')):
             break                         # the widget frame: above it is scrollback
+        if _is_tab_chip(s) or s.startswith('←') or s.endswith('→'):
+            continue                      # a multi-part tab bar: its ☐/☒ state changes as parts are answered
         s = re.sub(r'^[│┃╎╏┆┇┊┋|]\s*|\s*[│┃╎╏┆┇┊┋|]$', '', s)
+        s = re.sub(r'[☐☑☒✔✓✗]', '', s)  # tick glyphs flip while the same prompt is on screen
         s = re.sub(r'\s+', ' ', s).strip()
         if s:
             block.insert(0, s)
     else:
         return ""                         # no frame within reach: don't guess at scrollback
-    return "\n".join(block)[:_CONTEXT_MAX_CHARS]
+    return "\n".join(block)
 
 
 def _menu_tool(lines: list[str]) -> str:

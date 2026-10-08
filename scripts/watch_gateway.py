@@ -650,7 +650,7 @@ def _perm_pseudo_rows():
                     # remember (session|digest) so the reap step below can mark
                     # every OTHER tracked prompt on a scanned session absent.
                     q = menu.get("question") or ""
-                    present_keys.add(f"{sess}|{hashlib.sha256((sess+'|'+q).encode()).hexdigest()[:16]}")
+                    present_keys.add(f"{sess}|{_perm_digest(sess, q, menu.get('context') or '')}")
             except Exception as e:  # noqa: BLE001 — one bad session never sinks the scan
                 print(f"[watch_gateway] perm pseudo-row skip {sess}: {e}", file=sys.stderr)
     except Exception as e:  # noqa: BLE001 — detector hiccup never breaks the feed

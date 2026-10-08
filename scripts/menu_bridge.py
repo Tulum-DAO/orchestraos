@@ -423,7 +423,7 @@ def ledger_pending_op_keys(store, db_path=None):
         c.close()
 
 
-def is_session_carded(store, session, question, db_path=None, context="") -> bool:
+def is_session_carded(store, session, question, *, context, db_path=None) -> bool:
     """True iff a pending menu card ALREADY exists for this exact (session,
     question) — the perm-card lane seam  signature, not session-only). v2's pulse G1 hook calls
     this BEFORE its gm-escalate: carded -> card is primary, DON'T escalate;
