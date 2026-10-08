@@ -442,24 +442,48 @@ agent CLI you use; `orchestra doctor` checks the result.
 
 You should see:
 
-- `git clone`: progress lines ending with `Resolving deltas: 100% (...), done.`
+- `git clone`: progress lines ending with `Resolving deltas: 100% (...), done.` If it says the
+  folder `orchestraos` already exists instead (you ran it before), run `cd ~/orchestraos` and
+  continue with the next line.
 - `make install`: `installed /home/<you>/.local/bin/orchestra`, then a `NOTE` that
   `orchestra` is not on your PATH yet. The two PATH lines right after it fix that; they
   print nothing.
 - `orchestra init --yes`: about five minutes of output, ending with a table whose rows
-  say `did` (or `skipped` on a re-run), then `next:     orchestra doctor && orchestra up`.
+  say `did` (or `skipped` on a re-run), then three lines: `data dir:` (where OrchestraOS keeps
+  its state), `config:` (your `orchestra.toml`) and `next:     orchestra doctor && orchestra up`.
+  A step that failed shows `skipped` with `failed rc=<number>` in its row; bring that row to
+  whoever is helping you.
 - `sed`: nothing.
 - `orchestra doctor`: a table with one row per check (`CHECK`, `STATUS`, `DETAIL`, `REMEDY`),
   ending with `doctor: all required checks OK`. `WARN` and `INFO` rows are advice, not
   failures. A failing row ends with `-> ...`, a suggested fix: read it, and if an agent is
   helping you, it brings the suggestion to you rather than acting on it alone.
 
-**A port is already taken** (`port:<name> MISSING :<port> in use by pid N`, where `<name>` is
-`api`, `gateway`, `dashboard` or `arturo`): another program on this server already uses that
-port. Don't stop that program, even though the remedy mentions it; you may need it. Instead,
-open `orchestra.toml`, find the `[<name>]` section, change its `port` to a free number (for
-example 18891 for the dashboard), and run `orchestra doctor` again. If you changed the
-`[dashboard]` port, use that number in §2's `tailscale serve` command instead of 8891.
+**A port is already taken** (`port:<name> MISSING :<port> in use by pid N`, or `in use by an
+unknown process`, where `<name>` is `api`, `gateway`, `dashboard` or `arturo`): another program
+on this server already uses that port. Don't stop that program, even though the remedy
+mentions it; you may need it. Instead, give OrchestraOS a different port. Run only the line for
+the row that failed, inside the `orchestraos` folder:
+
+```bash
+sed -i '/^\[dashboard\]/,/^\[/ s/^port = .*/port = 18891/' orchestra.toml   # port:dashboard
+```
+
+```bash
+sed -i '/^\[gateway\]/,/^\[/ s/^port = .*/port = 18890/' orchestra.toml     # port:gateway
+```
+
+```bash
+sed -i '/^\[arturo\]/,/^\[/ s/^port = .*/port = 15071/' orchestra.toml      # port:arturo
+```
+
+Then run `orchestra doctor` again. If you changed the `[dashboard]` port, use 18891 in §2's
+`tailscale serve` command instead of 8891.
+
+**If the taken port is `api` (8888):** changing `[api] port` is not fully supported yet (a few
+parts still expect 8888). If you can, move the other program to a different port instead; if
+you can't, stop here and ask for help (the dashboard's **Report** button, or an issue on the
+GitHub repo). Don't change `[api] port` on your own.
 
 Not logged in to the CLI yet? Then `runtime:login` is the one `MISSING` row (a few rows
 marked `MISSING*` go away with it) and the last line is `doctor: 1 required check(s)
@@ -475,7 +499,8 @@ to. It must run inside the `orchestraos` folder (if you reconnected, run `cd ~/o
 first). Use `["gemini"]` or `["codex"]` if that is your CLI. For Gemini the command you ran is
 `agy`, but the value here is still `"gemini"`. `orchestra.toml` has other `enabled =`
 lines (`[arturo]`, `[telemetry]`, `[plugins.*]`); leave those alone. To edit by hand instead:
-`$EDITOR orchestra.toml`, find `[runtimes]`, and change the `enabled` line just below it.
+`nano orchestra.toml`, find `[runtimes]`, and change the `enabled` line just below it (save with
+`Ctrl-O` then Enter; exit with `Ctrl-X`).
 
 **Your timezone (recommended).** Agents show times in UTC unless you tell them where you are.
 In `orchestra.toml`, under `[operator]`, set `timezone` to your IANA zone name, for example
@@ -569,8 +594,9 @@ One supervisor process runs, restarts (with backoff) and logs each child under
 No crontab is installed. `orchestra up --dry-run` prints this table without
 starting anything. `orchestra down` stops it; `orchestra status` shows pids.
 
-Smoke check: `curl -s http://127.0.0.1:8888/api/health` → `{"status":"ok", "db":{"open":true}, ...}`
-(`orchestra doctor` runs the same probe as `api:health` while the supervisor is up).
+Smoke check: run `orchestra doctor` and look for its `api:health` row (it probes the API on
+your own `[api] port`). Or, on the default port 8888 only:
+`curl -s http://127.0.0.1:8888/api/health` → `{"status":"ok", "db":{"open":true}, ...}`.
 
 ### Open the dashboard in your browser, over Tailscale https
 
