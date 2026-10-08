@@ -356,7 +356,7 @@ router.post('/', (req: Request, res: Response) => {
         const taskPrompt = `You have a new task (${taskId}): ${description}` +
           (client ? `. Client: ${client}.` : '') +
           (inboxMsg.context_files ? ` Read these files first: ${inboxMsg.context_files.join(', ')}` : '') +
-          `. Priority: ${(task as any).priority}. Start immediately and update task status when done via: curl -X PATCH http://localhost:8888/api/tasks/${taskId} -H "Content-Type: application/json" -d '{"status":"completed"}'`;
+          `. Priority: ${(task as any).priority}. Start immediately and update task status when done via: curl -X PATCH ${apiBaseForSeats()}/api/tasks/${taskId} -H "Content-Type: application/json" -d '{"status":"completed"}'`;
         execFile('tmux', ['send-keys', '-t', routeTo, taskPrompt, 'Enter'], { timeout: 5000 }, () => {});
 
         // Mark task as in_progress
@@ -438,3 +438,13 @@ router.delete('/:id', (req: Request, res: Response) => {
 });
 
 export default router;
+
+/**
+ * The API base a seat's own shell can reach: the configured [api] port (child_env exports
+ * ORCHESTRA_API_PORT and PORT), never a literal. With a changed port the old literal 8888 told
+ * every seat to PATCH whatever other app owned 8888 (pm doc test, 2026-10-08).
+ */
+export function apiBaseForSeats(env: Record<string, string | undefined> = process.env): string {
+  return `http://127.0.0.1:${env.ORCHESTRA_API_PORT || env.PORT || '8888'}`;
+}
+

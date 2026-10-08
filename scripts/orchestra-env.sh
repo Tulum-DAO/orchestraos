@@ -56,6 +56,10 @@ pairs = {
     "ORCHESTRA_SCRIPTS_DIR": root + "/scripts",
     "ORCHESTRA_API_HOST": api.get("host", ""),
     "ORCHESTRA_API_PORT": str(api.get("port", "")),
+    # the gateway's loopback URL for the API (watch_gateway.py API_URL); mirrors child_env
+    "ORCH_API_URL": "http://%s:%s" % (
+        "127.0.0.1" if api.get("host", "") in ("", "0.0.0.0", "::", "[::]") else api.get("host"),
+        api.get("port", 8888)),
     "ORCHESTRA_ARTURO_PORT": str(arturo.get("port", "")),
     "ORCHESTRA_ARTURO_BRAIN": str(arturo.get("brain", "")),
     "ORCHESTRA_ARTURO_RUNTIME_MODEL": str(arturo.get("runtime_model", "")),
