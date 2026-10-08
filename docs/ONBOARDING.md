@@ -16,7 +16,7 @@ This page is about the gateway (8890), which the phone app talks to.
 > | 2. `orchestra pair` | Works on `main`: prints the code and QR; the gateway serves `POST /pair/exchange`. |
 > | 3. Connect the web dashboard | **Not on `main`.** The connect screen described below was proposed (PR #23) and closed unmerged; this section describes the intended flow. |
 > | 4. Connect the iOS app | **Not released yet.** The pairing screen is being built and the app is headed for the App Store; this section describes that build. |
-> | 5. Connect the Mac app | **Not released yet.** It is in testing, with no public download; this section describes the build under test (it accepts the whole line `orchestra pair` prints). |
+> | 5. Connect the Mac app | **Not released yet.** It is in testing, with no public download; this section describes the build under test (it accepts the code `orchestra pair` prints, as is). |
 >
 > Run `orchestra pair --help` to confirm the command on your install.
 
@@ -123,7 +123,7 @@ First launch shows a pairing screen, not the approvals list:
 
 Today the iOS app does **not** accept that whole line, or a scan of the QR made from it: it
 refuses it as a bad code. Use "type it in" above until an app update says otherwise. (The
-Mac app, step 5, does accept the whole line.)
+Mac app, step 5, accepts it as is.)
 
 **The app only connects over https, with a certificate the phone trusts.**
 A plain `http://` address (a LAN IP, `localhost`) is refused on the pairing
@@ -180,26 +180,32 @@ orchestra pair --base-url https://<machine>.<tailnet>.ts.net:8445 --scopes read,
 
 `read,approve,message` lets the Mac see your cards, answer them, and message your agents
 (step 2 explains each scope). You should see `Minted device … (my-mac) with scopes: read,
-approve, message`, and then one line that starts with `{"code":` and contains a
-`"base_url"`. That line is what you paste.
+approve, message`, and then the code to paste: one line. Depending on your version it
+starts with `orc1_` or with `{"code":`. Either works in the Mac app.
 
-On the Mac, open the app. Its first window is **Connect this Mac**, with two fields,
-**Gateway address** and **Pairing code**:
+On the Mac, open the app. Its first window is **Connect this Mac**, with the line *Run
+`orchestra pair` on the gateway machine and paste the code it prints.*
 
-1. Select the whole `{"code": ... }` line in Terminal, from the `{` to the `}`, and copy it
-   (`Cmd+C`).
-2. Paste it into **Pairing code** (the box that says *Paste the line orchestra pair
-   printed*). The app reads both values from it and fills in **Gateway address** for you.
+1. In Terminal, select the whole code line and copy it (`Cmd+C`).
+2. Paste it into **Pairing code** (the box that says *Paste the code orchestra pair
+   printed*). The gateway address fills itself in, and appears under the box as
+   `Gateway: <address>`.
 3. Press **Pair** (or Return).
 
-To check from the server: `orchestra devices` lists `my-mac` with the scopes you gave it.
+When it works, the connect window goes away and the app's main window opens. To check from
+the server: `orchestra devices` lists `my-mac` with the scopes you gave it.
 
-**If it says the code didn't work:** run `orchestra pair` again for a fresh code, and paste the
-new line. Each code works once and expires after about 10 minutes. Also check that
-**Gateway address** ends in the https port you served the gateway on (8445 above), not 8891,
-and that Tailscale on the Mac is connected.
+**If it does not work**, a sentence appears under the button, for example *That pairing code
+didn't work. Codes are single-use and expire quickly — run orchestra pair again for a fresh
+one.* Run `orchestra pair` again and paste the new code. Each code works once and expires after
+about 10 minutes. Also check that Tailscale on the Mac is connected, and that the address
+under the box ends in the https port you served the gateway on (8445 above), not 8891.
 
-Do not screenshare or post the `orchestra pair` output: until it is used, the line is a
+You only need **Advanced** (click the row) for an old-style code that carries no address. It
+holds a **Gateway address** field, and it opens by itself when it is needed: type the https
+gateway address there.
+
+Do not screenshare or post the `orchestra pair` output: until it is used, the code is a
 password for your server.
 
 ## The handshake, if you're curious what "connected" actually checks
