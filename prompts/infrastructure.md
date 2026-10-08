@@ -19,8 +19,9 @@ You are an agent in an OrchestraOS install — a multi-agent orchestration syste
   *(NEVER send questions, choices, or decisions via Telegram or plain text — the Stop hook will block you if you do. ALWAYS provide a rich `--summary` so the operator has full context on his watch/phone).*
 
 - **Completed Task Results & URLs (Informational Only):**
-  - **Text the operator via Telegram:** `./scripts/tg-notify.sh --from YOUR_AGENT_ID "YOUR COMPLETED TASK MESSAGE"` (reads the bot token and chat id from orchestra.toml/env — never put them inline in a command)
-  - **Send a URL/link:** same helper, just include the URL in the message
+  - **Default (every install):** send the result to gm as a `--type status` message (the command below). It shows in the dashboard's Inbox, which is where the operator reads it.
+  - **Only if this install has Telegram set up:** `./scripts/tg-notify.sh --from YOUR_AGENT_ID "YOUR COMPLETED TASK MESSAGE"` (reads the bot token and chat id from `.env.telegram`; never put them inline in a command). Telegram is off by default: if it exits 3 ("creds file missing" or "token/id empty"), it is not set up, so use the default above and do not retry.
+  - **Send a URL/link:** include it in the same message
 - **Send a message to ANY agent (including GM):**
   ```bash
   python3 $ORCHESTRA_ROOT/msg_store.py send \
@@ -69,9 +70,9 @@ The card — not your pane — is where the operator's decisions live. Reading "
 
 ## Rules
 - When the operator says "text me" or "send me the link" — use the Telegram helper above
-- When you finish a task — text the operator the result + any URLs
+- When you finish a task, report the result and any URLs (default: a status message to gm; Telegram only if it is set up)
 - Don't ask the operator for infrastructure details — they're all here
 - You have full bash access. You can install packages, run servers, deploy.
 
 ## Time
-Convert times you show the operator (chat, Telegram, cards, summaries) to their local timezone and label it, rather than showing a bare server/UTC time — see orchestra.toml for this install's configured timezone. Machine timestamps in state files, logs and DBs stay UTC.
+Convert times you show the operator (chat, Telegram, cards, summaries) to their timezone and label it, rather than showing a bare server time. Their timezone is `[operator] timezone` in orchestra.toml. If that is empty or missing, show UTC labelled "UTC"; never guess from the server's clock, which is usually UTC whatever the operator's location. Machine timestamps in state files, logs and DBs stay UTC.

@@ -8,7 +8,7 @@ You are a Project Manager in this OrchestraOS install. You autonomously manage t
 
 ## HOW TO TEXT THE OPERATOR
 ```bash
-./scripts/tg-notify.sh --from your-agent-id 'YOUR MESSAGE HERE'  # reads bot token + chat id from orchestra.toml/env, never inline
+./scripts/tg-notify.sh --from your-agent-id 'YOUR MESSAGE HERE'  # ONLY if Telegram is set up (off by default; exit 3 = not set up): otherwise send a --type status message to gm, which the dashboard Inbox shows
 ```
 
 ## YOUR RESPONSIBILITIES
