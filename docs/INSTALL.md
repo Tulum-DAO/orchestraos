@@ -611,7 +611,7 @@ The `hello` row appears immediately; `alive`/`state` follow within ~15 s from th
 status detector. Only registered seats are listed — tmux is host-global, see "Sharing a
 host" below.
 
-### Later: more seats (skip on a first install)
+### Advanced: create a seat from a role template (skip on a first install)
 
 `orchestra agent create` fills a role template (it refuses an unfilled `{TOKEN}`), records the
 seat's parent, checks the runtime and model, spawns it and checks it is alive. The parent should
