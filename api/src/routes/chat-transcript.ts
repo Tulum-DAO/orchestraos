@@ -18,6 +18,7 @@ import { mergeQueuedItems } from '../services/queued-merge.js';
 import { homedir } from 'os';
 import Database from 'better-sqlite3';
 import { agentScopeParam } from '../lib/agent-scope.js';
+import { expandChipDodge } from '../lib/chipDodge.js';
 
 const router = Router();
 // Every /:id route on this router is scoped to the caller's principal — the same rule GET /
@@ -468,7 +469,8 @@ function cleanArgs(args: any): Record<string, unknown> {
  * already skips empty text.
  */
 export function sanitizeClaudeUserText(text: string): string {
-  let t = String(text ?? '');
+  // A long message reached the pane as a one-line chip-dodge banner; show what was typed.
+  let t = expandChipDodge(String(text ?? ''));
   t = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '');
   t = t.replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/g, '');
   t = t.replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, '');
