@@ -26,7 +26,8 @@ placeholders — `<vps>`, `<laptop>`, `<tailnet>`, `<chat-id>` — fill in your 
 ```
 
 Only the VPS runs seats. The laptop is a client (browser, phone, and the
-"resume auth on the other machine" helper). `[machines]` in `orchestra.toml` records the
+"resume auth on the other machine" helper). The browser reaches the dashboard over
+Tailscale https (`tailscale serve`, tailnet only; `docs/INSTALL.md` §2). `[machines]` in `orchestra.toml` records the
 two Tailscale addresses; leave it blank on a single machine.
 
 ```toml

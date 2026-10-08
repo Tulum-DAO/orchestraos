@@ -14,8 +14,11 @@ not assume a clean box.
 
 ```
 Run `orchestra doctor` first and show me every row before changing anything.
-Then run `orchestra init` (idempotent — safe to re-run), open orchestra.toml
-and set [runtimes] enabled to whichever CLI I'm logged into right now, then
+Then run `orchestra init --yes` (idempotent — safe to re-run; --yes lets it add
+its hook rows to ~/.claude/settings.json, which a non-interactive run otherwise
+skips — show me the rows it added), open orchestra.toml and set the `enabled`
+line under [runtimes] (not the other `enabled` lines) to whichever CLI I'm
+logged into right now, then
 run `orchestra doctor` again and confirm every required row is OK. Show me
 the exit code.
 ```

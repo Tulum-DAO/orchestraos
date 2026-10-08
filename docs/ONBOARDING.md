@@ -4,6 +4,10 @@ For someone who already has a gateway running and wants to reach it from a
 phone and from a browser, on their own network, with no baked-in token. Two
 client surfaces, one pairing flow.
 
+Just want the web dashboard in your browser? That needs no pairing:
+`docs/INSTALL.md` §2, "Open the dashboard in your browser, over Tailscale https".
+This page is about the gateway (8890), which the phone app talks to.
+
 > **What works today, step by step** (updated 2026-10-07):
 >
 > | Step | Status |
@@ -18,7 +22,7 @@ client surfaces, one pairing flow.
 ## Before anything else: log in
 
 Do this before you do anything below — install and log in to one agent CLI
-(Claude Code, Gemini CLI, or Codex). `docs/INSTALL.md` §0 has the exact
+(Claude Code, Gemini (Antigravity `agy` CLI), or Codex). `docs/INSTALL.md` §0 has the exact
 commands. If you have no subscription to any of them, Gemini CLI's free tier
 needs no credit card — that's the zero-cost path onto this whole doc.
 
@@ -92,7 +96,7 @@ First launch shows a pairing screen, not the approvals list:
 A plain `http://` address (a LAN IP, `localhost`) is refused on the pairing
 screen, and the app tells you so. The simplest way to get a trusted https
 address, whether the gateway runs on a VPS or on a Mac, is Tailscale on both
-the gateway machine and the phone. On the gateway machine, first see what
+the gateway machine and the phone (`docs/INSTALL.md` §0 sets it up). On the gateway machine, first see what
 Tailscale already serves, because `tailscale serve` on a port that is taken
 silently REPLACES whatever was there:
 

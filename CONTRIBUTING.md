@@ -5,10 +5,10 @@ at the bottom is what a reviewer actually checks.
 
 ## Before you start
 
-- Get a working install first: `docs/INSTALL.md` (the minimum path takes a few minutes on a
-  clean machine or in the dev container). Every change is proven against a running install,
+- Get a working install first: `docs/INSTALL.md` (about an hour from nothing to a VPS with the
+  dashboard in your browser, or minutes in the dev container). Every change is proven against a running install,
   not only against tests.
-- Pick an issue (the `good-first-issue` and `track` labels are seeded for the hackathon) or
+- Pick an issue (the `good-first-issue` and `track` labels mark good starting points) or
   open one describing what you want to change and why. Big changes: open the issue first.
 
 ## Fork, branch, PR
@@ -18,8 +18,8 @@ at the bottom is what a reviewer actually checks.
 3. Commit early with clear messages. Each commit must be **signed off** (DCO, below).
 4. Push and open a pull request against `main`. Fill the PR template — the
    "Proven by effect" section is required, not decorative.
-5. CI must be green (tests per package, secret scan, DCO check). A maintainer reviews within
-   the hackathon review window; expect questions, and expect to be asked for a by-effect line.
+5. CI must be green (tests per package, secret scan, DCO check). A maintainer reviews it;
+   expect questions, and expect to be asked for a by-effect line.
 
 ## Developer Certificate of Origin (DCO)
 
