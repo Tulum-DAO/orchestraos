@@ -26,6 +26,7 @@ have it guide you through this page. Copy the whole box:
 ```text
 Help me connect my phone or Mac app to my own OrchestraOS server. Read this page and do it
 with me: https://github.com/Tulum-DAO/orchestraos/blob/main/docs/ONBOARDING.md
+If you can't open that link, ask me to paste the page to you; don't guess commands.
 The commands on this page run on my server; I log in to it with ssh (ask me for the
 address and user if you need them). Some steps happen in the app on my phone or Mac.
 Rules:
@@ -33,7 +34,8 @@ Rules:
   If you can't, give me one command at a time and wait for me to paste back what it printed.
   Exception: never ask me to paste what `orchestra pair` printed. I only tell you whether I
   saw `Minted device ... with scopes: ...`; the `orc1_` code stays with me, because it is
-  a password for my server.
+  a password for my server. If there was no `Minted device` line, I paste you the output
+  instead: it holds no code.
 - Stop at every step marked [PERSON ONLY] (paying, signing in, any password or
   passphrase prompt including sudo's, approving a device or an admin prompt) and let me
   do it myself. Never do those for me, and never ask for my passwords.
@@ -49,6 +51,11 @@ Rules:
   anywhere; let me run `orchestra pair` in my own terminal instead.
 - Never revoke a device (`orchestra devices --revoke`) unless I ask you to.
 - Skip step 3 (the web dashboard connect screen): it is not on `main` yet.
+- If `orchestra up` says `supervisor already running`, run `orchestra status` on its own.
+  Never run `orchestra down`.
+- Before every `orchestra pair`, make sure I have the app installed, open and on its pairing
+  screen, with Tailscale on that device: the code disappears from the screen after 60
+  seconds.
 - We are done when the app has left its pairing screen (I tell you what I see), and
   `orchestra devices` on the server lists my device with the scopes I chose AND a LAST
   SEEN time, not `never`. A row appears as soon as `orchestra pair` runs, so the row alone
@@ -80,7 +87,9 @@ mid-flow:
 orchestra up --detach && orchestra status
 ```
 
-Confirm the `gateway` row has a live pid. Note the host you'll reach it at —
+If it says `supervisor already running` (your team is already up), run `orchestra status` on
+its own; there is no need to run `orchestra down`. Confirm the `gateway` row has a live pid.
+Note the host you'll reach it at —
 a Tailscale hostname, a LAN IP, or `127.0.0.1` if the phone and the gateway are
 on the same machine (rare outside a demo). The iOS app needs an **https**
 address with a trusted certificate (see step 4), so if you'll pair a phone,
@@ -102,6 +111,16 @@ It prints `up to date` if you are. If it prints nothing, or an error, run `orche
 and then the restart in [docs/UPGRADE.md](UPGRADE.md).
 
 ## 2. Run `orchestra pair`
+
+**Before you run it**, because the code disappears from the screen after 60 seconds:
+
+- **[PERSON ONLY]** Have the app installed, open and showing its pairing screen (steps 4 and 5
+  say how to get each app; there is no public download yet).
+- **[PERSON ONLY]** Have Tailscale on that device, signed in to the same Tailscale account as
+  the server. On an iPhone: the **Tailscale** app from the App Store, open it and sign in. On a
+  Mac: see step 5.
+- If you want a QR code to scan instead of copying the code, install `segno` first, once, on
+  the server: `cd ~/orchestraos`, then `.venv/bin/pip install segno`.
 
 `orchestra pair` needs two things it will not guess:
 
@@ -146,19 +165,32 @@ nothing else to type. (An older app that also shows an address field: type your
 server's `https://` address there, then paste the code. That needs a gateway started after
 you updated OrchestraOS, so run `orchestra down && orchestra up --detach` once after updating.) On a stock install the code is
 all you get: the terminal says
-`No QR encoder is installed on this machine`. To also get a scannable QR code drawn as
-text (works over a bare ssh session), install the `segno` package into the install's
-Python once, from your checkout (`cd ~/orchestraos` first): `.venv/bin/pip install segno`.
+`No QR encoder is installed on this machine`. With `segno` installed (see "Before you run
+it" above), it also draws a QR code you can scan, which works over a plain ssh session.
 The code is **short-lived and single-use**: it expires the moment it's exchanged, or after
 about 10 minutes, whichever comes first. The command also waits 60 seconds and then clears the
 screen (`Pairing code hidden`), so the code does not sit in your scrollback; if you weren't
-fast enough, run it again. Running `orchestra pair` again always
-mints a fresh one; an old code left on screen goes stale on its own.
+fast enough, run it again. Running `orchestra pair` again mints a fresh code; it does NOT
+cancel the old one, which stays usable until it is used or its 10 minutes run out.
 
 **Do not screenshare this terminal while the code is visible.** The code is
 effectively a password for your gateway for the few minutes it's live — anyone
-who has it before you use it can pair their own device to your server. Run
-`orchestra pair` again to invalidate an old code if you think someone saw it.
+who has it before you use it can pair their own device to your server. Running `orchestra pair`
+again does **not** cancel it. If you think someone saw a code, cut off the device it belongs to:
+its id is in the `Minted device <id> ...` line printed just above the code. Revoking is your own
+decision **[PERSON ONLY]**:
+
+```bash
+orchestra devices --revoke <device id>
+```
+
+That device's token stops working on its next request, even if someone uses the code first.
+Then run `orchestra pair` again for your own device. Afterwards, check `orchestra devices` for
+any device you didn't pair.
+
+Leftover `never` rows from a retry can simply be left alone: they never connected. Removing
+one with `orchestra devices --revoke <device id>` is your choice, not something to do for tidiness
+alone.
 
 ## 3. Connect the web dashboard
 
@@ -180,6 +212,9 @@ through.
 **Getting the app:** it is not on the App Store yet and has no public download. If nobody gave
 you a test build, you can't connect an iPhone yet: stop here. **[PERSON ONLY]** Installing and
 opening it is yours.
+
+Have the app open on its pairing screen, and Tailscale on the iPhone (see step 2, "Before
+you run it"), before you run `orchestra pair`.
 
 **Getting the code onto the iPhone.** `orchestra pair` prints the code in your computer's
 terminal, not on the phone. Either install `segno` first (step 2) and tap **Scan** on the QR, or,
@@ -254,14 +289,20 @@ the dashboard: the dashboard (8891) needs no app, just a browser ([docs/INSTALL.
 
 Before you start:
 
-- **Tailscale on the Mac**, signed in to the same account as the server ([docs/INSTALL.md](INSTALL.md)
-  §0, "Tailscale on the VPS and on your own device").
+- **[PERSON ONLY]** **Tailscale on the Mac**, installed and signed in to the same account as
+  the server ([docs/INSTALL.md](INSTALL.md) §0, "Tailscale on the VPS and on your own device").
 - **The gateway on an https address.** The Mac app refuses plain `http://`. On the server,
   follow step 4 above: run `tailscale serve status` first, then serve the gateway on a free
   https port, for example `tailscale serve --bg --https=8445 http://127.0.0.1:8890`. That
   gives you `https://<machine>.<tailnet>.ts.net:8445`.
 
-On the server, make a pairing code for the Mac:
+**Getting the app:** it has no public download yet. If nobody gave you a test build, you can't
+connect a Mac yet: stop here. **[PERSON ONLY]** Installing and opening it is yours.
+
+On the Mac, open the app. Its first window is **Connect this Mac**, with the line *Run
+`orchestra pair` on the gateway machine and paste the code it prints.* Leave it on that window.
+
+Then, on the server, make a pairing code for the Mac (it stays on screen for 60 seconds):
 
 ```bash
 orchestra pair --base-url https://<machine>.<tailnet>.ts.net:8445 --scopes read,approve --label my-mac
@@ -269,14 +310,8 @@ orchestra pair --base-url https://<machine>.<tailnet>.ts.net:8445 --scopes read,
 
 `read,approve` lets the Mac see your cards and answer them (step 2 explains each scope). To
 also message your agents from it, use `--scopes read,approve,message` instead. You should see
-`Minted device … (my-mac) with scopes: read, approve`, and then the code to paste: one long word starting with `orc1_`. (An older
-OrchestraOS prints a `{"code":…}` line instead; the Mac app takes that too.)
-
-**Getting the app:** it has no public download yet. If nobody gave you a test build, you can't
-connect a Mac yet: stop here. **[PERSON ONLY]** Installing and opening it is yours.
-
-On the Mac, open the app. Its first window is **Connect this Mac**, with the line *Run
-`orchestra pair` on the gateway machine and paste the code it prints.*
+`Minted device … (my-mac) with scopes: read, approve`, and then the code to paste: one long
+word starting with `orc1_`. (An older OrchestraOS prints a `{"code":…}` line instead; the Mac app takes that too.)
 
 1. **[PERSON ONLY]** In Terminal, select the whole code and copy it (`Cmd+C`).
 2. **[PERSON ONLY]** Paste it into **Pairing code** (the box that says *Paste the code orchestra pair
