@@ -8,8 +8,18 @@ import assert from 'node:assert/strict';
 import { apiBaseForSeats } from './tasks.js';
 
 test('a configured api port reaches the seat prompt', () => {
-  assert.equal(apiBaseForSeats({ ORCHESTRA_API_PORT: '18888' }), 'http://127.0.0.1:18888');
-  assert.equal(apiBaseForSeats({ PORT: '18889' }), 'http://127.0.0.1:18889');
-  assert.equal(apiBaseForSeats({ ORCHESTRA_API_PORT: '', PORT: '' }), 'http://127.0.0.1:8888');
-  assert.equal(apiBaseForSeats({}), 'http://127.0.0.1:8888');
+  const cfg = () => 8888;
+  assert.equal(apiBaseForSeats({ ORCHESTRA_API_PORT: '18888' }, cfg), 'http://127.0.0.1:18888');
+  assert.equal(apiBaseForSeats({ PORT: '18889' }, cfg), 'http://127.0.0.1:18889');
+  assert.equal(apiBaseForSeats({}, cfg), 'http://127.0.0.1:8888');
+  assert.equal(apiBaseForSeats({}, () => 18890), 'http://127.0.0.1:18890', 'the toml port, not a literal');
+});
+
+test("server.ts's precedence: PORT before ORCHESTRA_API_PORT", () => {
+  assert.equal(apiBaseForSeats({ PORT: '1', ORCHESTRA_API_PORT: '2' }, () => 3), 'http://127.0.0.1:1');
+});
+
+test('ORCH_API_URL wins: it carries a configured [api] host', () => {
+  assert.equal(apiBaseForSeats({ ORCH_API_URL: 'http://100.64.0.5:18888/', PORT: '1' }, () => 3),
+               'http://100.64.0.5:18888');
 });

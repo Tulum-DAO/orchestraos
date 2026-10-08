@@ -174,3 +174,10 @@ def test_orch_api_url_is_connectable_when_the_api_listens_on_all_interfaces(tmp_
                         config_exists=True, raw={}, data_dir=tmp_path / "data",
                         api_host=bind, api_port=18888)
         assert S.child_env(st, base={})["ORCH_API_URL"] == "http://127.0.0.1:18888", bind
+
+
+def test_orch_api_url_brackets_an_ipv6_api_host(tmp_path):
+    st = S.Settings(repo_root=tmp_path / "repo", config_path=tmp_path / "orchestra.toml",
+                    config_exists=True, raw={}, data_dir=tmp_path / "data",
+                    api_host="::1", api_port=18888)
+    assert S.child_env(st, base={})["ORCH_API_URL"] == "http://[::1]:18888"

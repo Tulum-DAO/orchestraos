@@ -33,7 +33,7 @@ def _consts(tmp_path, **env):
 def test_defaults_are_unchanged(tmp_path):
     c = _consts(tmp_path)
     assert c["API_URL"] == "http://127.0.0.1:8888"
-    assert c["API_ORIGIN"] == "http://127.0.0.1:8891"
+    assert c["API_ORIGIN"] == c["API_URL"]       # People passthrough calls the API directly
     assert c["ARTURO_PTT_URL"] == "http://127.0.0.1:5071/ptt"
     assert c["ARTURO_FINALIZE_URL"] == "http://127.0.0.1:5071/finalize-call"
 
@@ -42,7 +42,7 @@ def test_configured_ports_reach_every_loopback_upstream(tmp_path):
     c = _consts(tmp_path, ORCHESTRA_API_PORT="18888", ORCHESTRA_DASHBOARD_PORT="18891",
                 ORCHESTRA_ARTURO_PORT="15071")
     assert c["API_URL"] == "http://127.0.0.1:18888"
-    assert c["API_ORIGIN"] == "http://127.0.0.1:18891"
+    assert c["API_ORIGIN"] == "http://127.0.0.1:18888"   # the API, not the dashboard hop
     for k, v in c.items():
         if k.startswith("ARTURO_"):
             assert v.startswith("http://127.0.0.1:15071"), (k, v)
@@ -80,3 +80,4 @@ def test_orchestra_env_sh_exports_the_same_api_url_as_child_env(tmp_path):
     assert _sourced(tmp_path, "[api]\nport = 18888\n") == "http://127.0.0.1:18888"
     assert _sourced(tmp_path, "[api]\nhost = \"0.0.0.0\"\nport = 18888\n") == "http://127.0.0.1:18888"
     assert _sourced(tmp_path, "[data]\ndir = \"/tmp\"\n") == "http://127.0.0.1:8888"
+    assert _sourced(tmp_path, "[api]\nhost = \"::1\"\nport = 18888\n") == "http://[::1]:18888"

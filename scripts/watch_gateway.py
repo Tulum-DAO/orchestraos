@@ -1464,7 +1464,11 @@ def _loopback(port_env, default):
     return f"http://127.0.0.1:{os.environ.get(port_env) or default}"
 
 
-API_ORIGIN = _loopback("ORCHESTRA_DASHBOARD_PORT", 8891)
+# The Node API, from the configured [api] host/port (child_env ORCH_API_URL). The People
+# passthrough calls it directly; it used to go through the dashboard proxy on a literal 8891,
+# an extra hop that broke with a moved [dashboard] port or a dashboard that was down.
+API_URL = os.environ.get("ORCH_API_URL") or _loopback("ORCHESTRA_API_PORT", 8888)
+API_ORIGIN = API_URL
 _PERSON_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 _PEOPLE_QUERY_KEYS = ("relationship", "project", "search", "sort", "company_slug")
 
@@ -3828,7 +3832,7 @@ async def handle_agent_screen(request):
     return _json(out)
 
 
-API_URL = os.environ.get("ORCH_API_URL") or _loopback("ORCHESTRA_API_PORT", 8888)
+# API_URL is defined with the People passthrough above (one definition, one source).
 
 # ---------------------------------------------------------------------------
 # P3: /upload — bearer-gated streaming proxy to the API's /api/uploads

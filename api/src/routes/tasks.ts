@@ -440,11 +440,13 @@ router.delete('/:id', (req: Request, res: Response) => {
 export default router;
 
 /**
- * The API base a seat's own shell can reach: the configured [api] port (child_env exports
- * ORCHESTRA_API_PORT and PORT), never a literal. With a changed port the old literal 8888 told
- * every seat to PATCH whatever other app owned 8888 (pm doc test, 2026-10-08).
+ * The API base a seat's own shell can reach: ORCH_API_URL (child_env; it honours [api] host and
+ * port), else the port the server itself listens on, in server.ts's order (PORT >
+ * ORCHESTRA_API_PORT > [api] port in orchestra.toml). Never a literal: with a changed port the
+ * old 8888 told every seat to PATCH whatever other app owned 8888 (pm doc test, 2026-10-08).
  */
-export function apiBaseForSeats(env: Record<string, string | undefined> = process.env): string {
-  return `http://127.0.0.1:${env.ORCHESTRA_API_PORT || env.PORT || '8888'}`;
+export function apiBaseForSeats(env: Record<string, string | undefined> = process.env,
+                                configPort: () => number | string = () => loadConfig().apiPort): string {
+  if (env.ORCH_API_URL) return env.ORCH_API_URL.replace(/\/+$/, '');
+  return `http://127.0.0.1:${env.PORT || env.ORCHESTRA_API_PORT || configPort()}`;
 }
-

@@ -178,7 +178,10 @@ def load_settings(repo_root: Path | None = None, config_path: Path | None = None
 
 def _connectable(host: str) -> str:
     """A host a local client can dial: a wildcard (or empty) bind means loopback."""
-    return "127.0.0.1" if host in ("", "0.0.0.0", "::", "[::]") else host
+    if host in ("", "0.0.0.0", "::", "[::]"):
+        return "127.0.0.1"
+    # an IPv6 literal needs brackets in a URL: http://[::1]:8888, not http://::1:8888
+    return f"[{host}]" if ":" in host and not host.startswith("[") else host
 
 
 def child_env(st: Settings, base: dict | None = None) -> dict:
