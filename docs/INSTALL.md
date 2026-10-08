@@ -122,8 +122,9 @@ On your own computer and/or phone: install Tailscale and sign in **with the same
 - **Windows:** the installer from tailscale.com/download; after installing, click the
   Tailscale icon in the taskbar's notification area (bottom right) to log in.
 - **Linux:** the commands at tailscale.com/download, then `sudo tailscale up`.
-- **Phone:** the **Tailscale** app from the App Store or Google Play. Run `tailscale status` on
-the VPS again: your device is now listed too.
+- **Phone:** the **Tailscale** app from the App Store or Google Play.
+
+Run `tailscale status` on the VPS again: your device is now listed too.
 
 Check: on the VPS, `tailscale ip -4` prints its tailnet address (it starts with `100.`).
 From your laptop, `ping <that address>` answers (`Ctrl-C` stops it). From now on
