@@ -1,0 +1,25 @@
+{
+  "_doc": "Shared cases for the WebSocket origin check. The dashboard (dashboard-ws-origin.js) and the API (api/src/lib/ws-origin.ts) both run every case, so the two implementations cannot drift. Defaults for each case: port 8891, dashboardHost 127.0.0.1, extraHosts empty.",
+  "cases": [
+    {"name": "no origin (curl, a local script)", "in": {"hostHeader": "127.0.0.1:8891"}, "allow": true},
+    {"name": "dashboard on loopback", "in": {"origin": "http://127.0.0.1:8891", "hostHeader": "127.0.0.1:8891"}, "allow": true},
+    {"name": "dashboard as localhost", "in": {"origin": "http://localhost:8891", "hostHeader": "localhost:8891"}, "allow": true},
+    {"name": "ipv6 loopback", "in": {"origin": "http://[::1]:8891", "hostHeader": "[::1]:8891"}, "allow": true},
+    {"name": "ssh -L tunnel on another local port", "in": {"origin": "http://127.0.0.1:9000", "hostHeader": "127.0.0.1:9000", "peerAddress": "127.0.0.1"}, "allow": true},
+    {"name": "docker relay on 18891 (INSTALL.md)", "in": {"origin": "http://127.0.0.1:18891", "hostHeader": "127.0.0.1:18891"}, "allow": true},
+    {"name": "tailscale serve on 443", "in": {"origin": "https://box.tail1234.ts.net", "hostHeader": "box.tail1234.ts.net", "peerAddress": "127.0.0.1"}, "allow": true},
+    {"name": "tailscale serve on a free port", "in": {"origin": "https://box.tail1234.ts.net:8445", "hostHeader": "box.tail1234.ts.net:8445", "peerAddress": "127.0.0.1"}, "allow": true},
+    {"name": "listed in ORCHESTRA_DASHBOARD_ALLOWED_HOSTS", "in": {"origin": "https://dash.example.org", "hostHeader": "dash.example.org", "extraHosts": "dash.example.org"}, "allow": true},
+    {"name": "foreign page vs loopback", "in": {"origin": "https://evil.example", "hostHeader": "127.0.0.1:8891"}, "allow": false},
+    {"name": "foreign page vs tailnet name", "in": {"origin": "https://evil.example", "hostHeader": "box.tail1234.ts.net", "peerAddress": "127.0.0.1"}, "allow": false},
+    {"name": "another ts.net host", "in": {"origin": "https://other.tail9999.ts.net", "hostHeader": "box.tail1234.ts.net", "peerAddress": "127.0.0.1"}, "allow": false},
+    {"name": "DNS rebinding: attacker name resolving to 127.0.0.1", "in": {"origin": "http://rebind.evil.example:8891", "hostHeader": "rebind.evil.example:8891"}, "allow": false},
+    {"name": "trailing-dot ts.net", "in": {"origin": "https://box.ts.net.", "hostHeader": "box.ts.net."}, "allow": false},
+    {"name": "suffix trick", "in": {"origin": "http://evil-127.0.0.1:8891", "hostHeader": "127.0.0.1:8891"}, "allow": false},
+    {"name": "loopback origin on another port than the one addressed", "in": {"origin": "http://127.0.0.1:5173", "hostHeader": "127.0.0.1:8891"}, "allow": false},
+    {"name": "forged X-Forwarded-Host from a non-loopback peer", "in": {"origin": "https://evil.example", "hostHeader": "127.0.0.1:8891", "forwardedHost": "evil.example", "peerAddress": "100.64.0.9"}, "allow": false},
+    {"name": "raw LAN IP with host 0.0.0.0, not allowlisted", "in": {"origin": "http://192.168.1.5:8891", "hostHeader": "192.168.1.5:8891", "dashboardHost": "0.0.0.0"}, "allow": false},
+    {"name": "malformed origin", "in": {"origin": "not a url", "hostHeader": "127.0.0.1:8891"}, "allow": false},
+    {"name": "null origin (sandboxed iframe, file://)", "in": {"origin": "null", "hostHeader": "127.0.0.1:8891"}, "allow": false}
+  ]
+}
