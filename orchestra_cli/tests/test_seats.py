@@ -6,6 +6,7 @@ and verifies the tmux session by effect. rotate refuses without a banked handoff
 --synthesize, then runs scripts/rotate_agent.py under the same env.
 """
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -381,3 +382,17 @@ def test_starter_releases_the_lock_when_it_is_done(repo_with_templates, tmp_path
     monkeypatch.delenv("ORCHESTRA_STARTER_LOCK_HELD", raising=False)
     assert M.main(["starter"]) == 0
     _hold_starter_lock(tmp_path).close()          # free again: this would raise if still held
+
+
+def test_the_held_flag_never_reaches_the_seats_it_spawns(repo_with_templates, tmp_path, monkeypatch):
+    """Review of #274: child_env copies os.environ, so the flag would ride into spawn-agent.sh and,
+    if that spawn starts the tmux server, into every later seat's pane, which would then skip
+    the lock when it ran `orchestra starter` itself."""
+    spawned, envs = set(), []
+    calls = _starter_env(monkeypatch, alive=lambda name: name in spawned)
+    monkeypatch.setattr(SE, "_run", lambda argv, env=None, cwd=None:
+                        (calls.append(argv), envs.append(env or {}), spawned.add(argv[1]))[0] or 0)
+    monkeypatch.setenv("ORCHESTRA_STARTER_LOCK_HELD", "1")
+    assert M.main(["starter"]) == 0
+    assert envs and all("ORCHESTRA_STARTER_LOCK_HELD" not in e for e in envs)
+    assert "ORCHESTRA_STARTER_LOCK_HELD" not in os.environ

@@ -459,7 +459,9 @@ def _starter_lock(st):
     then ran `orchestra starter` raced it, two writers on registry.json (pm doc test, 2026-10-08).
     Returns the open file (held), False when another run holds it, or None when the lock is
     already held for us: Arturo runs this CLI as its child with ORCHESTRA_STARTER_LOCK_HELD=1."""
-    if os.environ.get("ORCHESTRA_STARTER_LOCK_HELD") == "1":
+    if os.environ.pop("ORCHESTRA_STARTER_LOCK_HELD", None) == "1":
+        # Popped, not just read: child_env copies os.environ, and if this run starts the tmux
+        # server, the server keeps the flag and every later seat would skip the lock.
         return None
     import fcntl
     path = st.data_dir / "state" / "starter.lock"
