@@ -11,6 +11,11 @@
 #   spawn-agent.sh --kill-all                    # Kill all agents
 
 set -euo pipefail
+# The calling Claude Code session's identity (an agent that runs spawn-agent.sh, or the installer
+# agent behind `orchestra up`), never configuration: a seat must not inherit it, or its `claude`
+# thinks it is nested and carries that session's messaging token. Same list as
+# orchestra_cli/settings.py INSTALLER_SESSION_ENV (a test keeps them equal).
+unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ATTENDED CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN CLAUDE_CODE_EXECPATH CLAUDE_CODE_SSE_PORT CLAUDE_PID
 
 # Timezone: fleet runs on the operator's Eastern time (VPS system clock is UTC).
 # Every spawned agent inherits ET so `date`/naive datetime read local, not UTC.

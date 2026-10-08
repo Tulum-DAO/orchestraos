@@ -181,3 +181,45 @@ def test_orch_api_url_brackets_an_ipv6_api_host(tmp_path):
                     config_exists=True, raw={}, data_dir=tmp_path / "data",
                     api_host="::1", api_port=18888)
     assert S.child_env(st, base={})["ORCH_API_URL"] == "http://[::1]:18888"
+
+
+def test_child_env_drops_the_installer_sessions_identity_and_keeps_config(tmp_path):
+    """An AI agent that runs `orchestra up` (the install playbook) exports its own Claude Code
+    session: CLAUDECODE, the session id, a messaging socket + TOKEN. The supervisor must not pass
+    them on: if it starts the tmux server, every seat's `claude` thinks it is nested and carries
+    that token. Operator configuration with a CLAUDE_/ANTHROPIC_ name must survive."""
+    st = S.Settings(repo_root=tmp_path / "repo", config_path=tmp_path / "orchestra.toml",
+                    config_exists=True, raw={}, data_dir=tmp_path / "data")
+    base = {k: "x" for k in S.INSTALLER_SESSION_ENV}
+    keep = {"CLAUDE_CONFIG_DIR": "/c", "ANTHROPIC_API_KEY": "k", "CLAUDE_CODE_USE_BEDROCK": "1",
+            "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1", "PATH": "/usr/bin"}
+    env = S.child_env(st, base={**base, **keep})
+    assert not [k for k in S.INSTALLER_SESSION_ENV if k in env]
+    for k, v in keep.items():
+        assert env[k] == v, k
+
+
+def test_spawn_agent_unsets_the_same_list():
+    """spawn-agent.sh can be run directly (by a seat, or by the installer agent). Its `unset` line
+    must name exactly INSTALLER_SESSION_ENV, so the two can never drift."""
+    import re
+    src = (Path(__file__).resolve().parents[2] / "spawn-agent.sh").read_text()
+    lines = [l for l in src.splitlines() if l.startswith("unset CLAUDECODE ")]
+    assert len(lines) == 1, "one unset line near the top of spawn-agent.sh"
+    assert tuple(lines[0].split()[1:]) == S.INSTALLER_SESSION_ENV
+    assert src.index(lines[0]) < src.index("SCRIPT_DIR="), "before anything else runs"
+
+
+def test_spawn_agent_really_unsets_them(tmp_path):
+    """By effect: source only the head of spawn-agent.sh (through the unset) in a shell that has
+    the installer's session, then print what is left."""
+    import subprocess
+    src = (Path(__file__).resolve().parents[2] / "spawn-agent.sh").read_text().splitlines()
+    head = "\n".join(src[: next(i for i, l in enumerate(src) if l.startswith("unset CLAUDECODE ")) + 1])
+    script = tmp_path / "head.sh"
+    script.write_text(head + "\nenv\n")
+    env = {"PATH": "/usr/bin:/bin", "CLAUDE_CONFIG_DIR": "/c", **{k: "x" for k in S.INSTALLER_SESSION_ENV}}
+    out = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True, timeout=10).stdout
+    names = {l.split("=", 1)[0] for l in out.splitlines() if "=" in l}
+    assert not names & set(S.INSTALLER_SESSION_ENV)
+    assert "CLAUDE_CONFIG_DIR" in names

@@ -184,6 +184,19 @@ def _connectable(host: str) -> str:
     return f"[{host}]" if ":" in host and not host.startswith("[") else host
 
 
+# Variables that identify the Claude Code SESSION that ran `orchestra` (an AI agent running the
+# install playbook), never configuration. Inherited by the supervisor, they reach every seat when it
+# starts the tmux server: each seat's `claude` then believes it is nested inside that session and
+# carries its messaging token (a credential). A denylist, not a CLAUDE_* prefix: CLAUDE_CONFIG_DIR,
+# the Bedrock/Vertex switches and ANTHROPIC_API_KEY are the operator's own settings. Kept equal to
+# the `unset` line at the top of spawn-agent.sh by orchestra_cli/tests/test_settings.py.
+INSTALLER_SESSION_ENV = (
+    "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_EXECPATH", "CLAUDE_CODE_SSE_PORT", "CLAUDE_PID",
+)
+
+
 def child_env(st: Settings, base: dict | None = None) -> dict:
     """The environment every supervised process (and every beat) receives.
 
@@ -193,6 +206,8 @@ def child_env(st: Settings, base: dict | None = None) -> dict:
     Secrets are never read from the toml (bot tokens etc. come from the caller's env).
     """
     env = dict(os.environ if base is None else base)
+    for k in INSTALLER_SESSION_ENV:
+        env.pop(k, None)
     data = str(st.data_dir)
     root = str(st.repo_root)
     py_path = [root, str(st.repo_root / "scripts")]
