@@ -66,18 +66,19 @@ def test_directive_reaches_the_model_not_just_the_assembled_message(tmp_path):
     message, so the directive never reached the brain."""
     mod = _load_proxy()
     seen = _wire(mod, tmp_path)
-    code, body = mod.text_turn("[Onboarding: step=hierarchy]\nExplain how seats are organised here.", "seam1")
+    mod.starter_team_state = lambda seen=None: {"state": "absent"}
+    code, body = mod.text_turn("[Onboarding: step=team]\nIntroduce my team.", "seam1")
     assert code == 200 and body["ok"]
     system = seen["system"]
     # The facts the directive carries must be in front of the model.
-    assert "T1 coordinators" in system, "the hierarchy directive never reached the brain"
-    assert "do not call any tool" in system, "the no-tool clause never reached the brain"
+    assert "T1 project manager" in system, "the team directive never reached the brain"
+    assert "create_starter_team" in system, "the tool clause never reached the brain"
     # And the handler's own freshly built context is still there.
     assert "BASECTX" in system, "the handler's live context was lost"
 
 
 def test_name_step_directive_also_reaches_the_model(tmp_path):
-    """The drop was never hierarchy-specific: EVERY onboarding directive died at this seam.
+    """The drop was never specific to one step: EVERY onboarding directive died at this seam.
     Operator-name onboarding is brain-driven, so its directive must arrive too."""
     mod = _load_proxy()
     seen = _wire(mod, tmp_path)
@@ -110,10 +111,11 @@ def test_text_turn_sends_the_directive_only_not_a_second_context(tmp_path):
         return real_build_messages(system_context, history, user_text, **kw)
 
     mod._ptt = types.SimpleNamespace(build_messages=spy)
-    mod.text_turn("[Onboarding: step=hierarchy]\nExplain how seats are organised here.", "seam4")
+    mod.starter_team_state = lambda seen=None: {"state": "absent"}
+    mod.text_turn("[Onboarding: step=team]\nIntroduce my team.", "seam4")
     assert "BASECTX" not in captured["system_context"], \
         "text_turn sent a full context again — the handler already builds it; this doubles context"
-    assert "T1 coordinators" in captured["system_context"]
+    assert "T1 project manager" in captured["system_context"]
 
 
 def test_untrusted_caller_system_message_is_still_dropped(tmp_path):

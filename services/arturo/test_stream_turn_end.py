@@ -1,10 +1,10 @@
 """RED-first: a streamed turn reports what it DID, the way /text does (DEC-1790747010535469).
 
 The home page decides onboarding by effect: the name step advances when `set_operator_fact`
-is in tools_called, the hierarchy step when a manager is in `spawned`. /text returns both,
+is in tools_called, a spawn step when a seat is in `spawned`. /text returns both,
 plus `operator`. A streamed turn returned none of them, and the stream endpoint never applied
 the onboarding marker at all — so onboarding over streaming could not advance its name step
-and read every hierarchy answer as "declined".
+and read every answer to a spawn offer as "declined".
 """
 import json
 import types
@@ -73,7 +73,7 @@ def test_the_marker_is_found_on_the_message_even_with_page_context(P, monkeypatc
     monkeypatch.setattr(P._text_stream, "stream_turn",
                         lambda **kw: (_ for _ in ()).throw(AssertionError("an onboarding turn must not stream")))
     with P.app.test_client() as c:
-        r = c.post("/text/stream", json={"text": "[Onboarding: step=hierarchy]\nno thanks",
+        r = c.post("/text/stream", json={"text": "[Onboarding: step=team]\nno thanks",
                                          "conversation_id": "c3", "context": {"route": "/arturo"}})
         _turn_end(_events(r))
 

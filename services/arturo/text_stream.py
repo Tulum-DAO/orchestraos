@@ -390,6 +390,7 @@ def _whole_reply(turn_id, conversation_id, fallback, brain):
               tools_called=body.get("tools_called", []),
               spawned=body.get("spawned", []),
               **({"operator": body["operator"]} if "operator" in body else {}),
+              **({"team": body["team"]} if "team" in body else {}),
               brain=body.get("brain") or brain.describe())
 
 

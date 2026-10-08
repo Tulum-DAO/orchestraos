@@ -117,6 +117,8 @@ export interface StreamOutcome {
   spawned?: string[];
   operator?: any;
   brain?: any;
+  /** Only on a 'team' onboarding turn: the starter team as the server sees it after the turn. */
+  team?: any;
   error?: string;
 }
 
@@ -189,7 +191,7 @@ export async function arturoTextStream(
   // operator, and a streamed turn used to report none of them.
   return {
     ok: true, reply_text: final.reply_text, tools_called: final.tools_called || [],
-    spawned: final.spawned || [], operator: final.operator, brain: final.brain,
+    spawned: final.spawned || [], operator: final.operator, brain: final.brain, team: final.team,
   };
 }
 
@@ -232,6 +234,7 @@ export async function arturoTurn(
     return {
       ok: true, reply_text: res.reply_text || '', tools_called: res.tools_called || [],
       spawned: res.spawned || [], ...(res.operator !== undefined ? { operator: res.operator } : {}),
+      ...(res.team !== undefined ? { team: res.team } : {}),
     } as ArturoReply;
   }
   if (opts.signal?.aborted) return { ok: false, error: 'aborted' } as ArturoReply;

@@ -7,8 +7,9 @@
  *
  * Onboarding is Arturo's FIRST THREAD, not a form: runtime detect (catalog probe +
  * /api/arturo/health) → name (a BRAIN turn: the brain extracts it with set_operator_fact —
- * nothing here parses a reply) → optional voice → "what should your first agent do?" → spawn, all
- * through the conversation. Once a seat exists (spawn_agent ran) the thread is ordinary chat.
+ * nothing here parses a reply) → optional voice → the team: Arturo explains gm (T0) → project manager (T1)
+ * → worker (T2) and what gm does, and sets the team up with `orchestra starter` when the operator says yes,
+ * all through the conversation. The step ends on what the SERVER sees running, then it is ordinary chat.
  * The operator's name is SERVER state (/api/arturo/health .operator.name); localStorage only
  * caches it for the first paint.
  *
@@ -25,7 +26,7 @@ import { useArturoBrain } from '../stores/arturoBrain';
 import { arturoTurn, arturoPrewarm } from '../lib/arturoStream';
 import { brainFromThread, describeTurnError, toWireBrain } from '../lib/arturoBrain';
 import { arturoHealth, arturoText, runtimesAvailable, brainLabel, greeting, newConversationId,
-  isStarting, waitForArturo, STARTING_TEXT, firstStep, stepAfterRuntime, onboardingTurn, sendStateLabel,
+  isStarting, waitForArturo, STARTING_TEXT, firstStep, stepAfterRuntime, onboardingTurn, teamStepDone, sendStateLabel,
   type ArturoHealth, type RuntimeRow, type SendState } from '../lib/arturo';
 import { listThreads, loadThread, type ThreadSummary } from '../lib/arturoThreads';
 import WebTerminal from '../components/WebTerminal';
@@ -41,7 +42,7 @@ type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[
   /** A streamed turn that ran tools, in the order it happened: text, tool cards, more text. */
   parts?: TurnPart[];
   decision?: { options: string[]; onPick: (v: string) => void } };
-type Step = 'name' | 'runtime' | 'voice' | 'first' | 'hierarchy' | 'done';
+type Step = 'name' | 'runtime' | 'voice' | 'team' | 'done';
 
 const LS_NAME = 'orchestra.arturo.name';
 const LS_ONBOARDED = 'orchestra.arturo.onboarded';
@@ -182,26 +183,27 @@ export default function ArturoHome() {
       if (turns.length === 0) say("Hi, I'm Arturo — the voice and text front door of this OrchestraOS. One moment while I check what I can think with.");
       void runtimeStep();
     }
-    if (step === 'first') say(`What should your first agent do? Describe the job in a sentence — I'll spawn a seat on the runtime you're logged in to and hand it the task.`);
-    // The hierarchy step is the brain's to speak, but a marker-only turn is rejected as empty, so
-    // the client opens it with a synthetic prompt the same way `first` does. The directive (and the
-    // fact of whether a manager already exists) lives server-side.
-    if (step === 'hierarchy') void openHierarchy();
+    // The team step is the brain's to speak, but a marker-only turn is rejected as empty, so the
+    // client opens it with a synthetic prompt. The directive, and the facts it branches on (is there a
+    // team, is each seat running), live server-side.
+    if (step === 'team') void openTeam();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
-  /** Opens the hierarchy step: the brain explains the tiers and asks the one question. Sent as a
-   *  marked turn so the proxy attaches the step directive (and the server-side "is there already a
-   *  manager" fact) to THIS turn only. */
-  async function openHierarchy() {
+  /** Opens the team step: Arturo explains the tiers and gm's job, then asks its one question, or
+   *  names a team that is already up. Sent as a marked turn so the proxy attaches the step directive
+   *  and the server's view of the team to THIS turn only. */
+  async function openTeam() {
     const id = say('', { pending: true });
-    // A MINIMAL trigger on purpose: the directive server-side already says exactly what to say and
-    // ask. The first cut asked "and what I have so far", which invited a status answer — the brain
-    // called list_agents and reported the fleet instead of walking the operator through the tiers
-    // (caught on the box; every unit test passed).
-    const r = await arturoText(onboardingTurn('hierarchy', 'Explain how seats are organised here.'), convId.current);
-    patch(id, { pending: false, text: r.ok ? (r.reply_text || '(no reply)') : 'I could not explain that just now — ask me any time.', tools: r.tools_called, spawned: r.spawned });
-    if (!r.ok) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }
+    // A MINIMAL trigger on purpose, as the old hierarchy opener learned: anything that reads like a
+    // status question invites list_agents instead of the walk-through the directive asks for.
+    // 'team_open', not 'team': these are the PAGE's words, so the server never lets this turn start
+    // the team, however the brain reads them. The offer it makes is answered by the operator's turn.
+    const r = await arturoText(onboardingTurn('team_open', 'Introduce my team.'), convId.current);
+    patch(id, { pending: false, text: r.ok ? (r.reply_text || '(no reply)') : 'I could not introduce your team just now. Send me anything and I will try again.', tools: r.tools_called, spawned: r.spawned });
+    // Nothing to ask (the team is up, another manager exists, or the server could not check): done.
+    // A failed opener is NOT done: the step stays, so the operator's next message gets the intro.
+    if (r.ok && teamStepDone(r.team)) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }
   }
 
   async function runtimeStep(fresh = false) {
@@ -268,14 +270,14 @@ export default function ArturoHome() {
   /** The voice card. The mic already dictates with no key (on-device or the local STT); what
    *  needs a vendor key is Arturo talking BACK. Say exactly that. */
   function voiceStep() {
-    if (health?.mode !== 'text-only') { setStep('first'); return; }
+    if (health?.mode !== 'text-only') { setStep('team'); return; }
     setStep('voice');
     say('You can already talk to me with the mic. Want me to talk back too (that needs a voice key), or is text fine for today?', {
       decision: { options: ['Text is fine', 'I will add a voice key'], onPick: (v) => {
         user(v);
         if (v.startsWith('Text')) say('Text it is. You can add ELEVENLABS_API_KEY later and restart Arturo — nothing else changes.');
         else say('Put ELEVENLABS_API_KEY (or CARTESIA_API_KEY) in the environment `orchestra up` runs under, restart, and /health will say mode: voice.');
-        setStep('first');
+        setStep('team');
       } },
     });
   }
@@ -290,14 +292,11 @@ export default function ArturoHome() {
     setDraft('');
     const uid = user(text, 'sending');   // the bubble appears NOW; the box is already empty
     const isName = step === 'name';
-    const isFirst = step === 'first';
-    const isHierarchy = step === 'hierarchy';
-    // The name step is a BRAIN turn: the marker makes the proxy add the step's directive, the
-    // brain understands the reply (dictated or typed, any phrasing, any language) and records
-    // the name with set_operator_fact — or asks again in its own words. Nothing is parsed here.
-    const body = isFirst
-      ? `Commission a new agent on this machine for this task: ${text}. Pick a short seat name yourself, use the spawn_agent tool, then tell me the seat name in one sentence.`
-      : text;
+    const isTeam = step === 'team';
+    // The name and team steps are BRAIN turns: the marker makes the proxy add the step's directive,
+    // the brain understands the reply (dictated or typed, any phrasing, any language) and acts on it
+    // with a tool — or asks again in its own words. Nothing is parsed here.
+    const body = text;
     setBusy(true);
     const id = say('', { pending: true });
     // The path rides in front of the message: Arturo runs on this machine with tool
@@ -307,7 +306,7 @@ export default function ArturoHome() {
     // The onboarding marker is applied LAST so it is always line 1 — the proxy anchors on it
     // (a file attached during the name step must not push it down; peer review DEC-1790048447550594).
     const sent = isName ? onboardingTurn('name', withFiles)
-      : isHierarchy ? onboardingTurn('hierarchy', withFiles) : withFiles;
+      : isTeam ? onboardingTurn('team', withFiles) : withFiles;
     setAttachments([]);
     const onSent = () => patch(uid, { state: 'sent' });
     const turnBrain = toWireBrain(brainChoice);
@@ -369,21 +368,10 @@ export default function ArturoHome() {
       if (got) { setName(got); lsSet(LS_NAME, got); voiceStep(); }
       return;
     }
-    // By EFFECT, never by tool name: `spawned` is recorded only after the seat is verified up,
-    // while tools_called is appended at invocation and so fires on a FAILED spawn too.
-    if (isFirst && (r.spawned || []).length > 0) setStep('hierarchy');
-    if (isHierarchy) {
-      // Advance when a manager was VERIFIED up, or when they declined — but a decline is only
-      // legible when there IS a brain: a NullBrain turn also returns 200 with no tool call.
-      const madeManager = (r.spawned || []).length > 0;
-      const declined = (r.tools_called || []).length === 0 && health?.brain?.kind !== 'none';
-      if (madeManager || declined) {
-        lsSet(LS_ONBOARDED, '1'); setStep('done');
-        say(madeManager
-          ? 'Your manager is up. From here on, this thread is the front door: ask for status, commission more agents, or open the drawer for the rest of the OS.'
-          : 'Understood — no manager for now. From here on, this thread is the front door: ask for status, commission more agents, or open the drawer for the rest of the OS.');
-      }
-    }
+    // By EFFECT: the server re-reads the team after the turn, so the step ends when it is RUNNING or
+    // the operator said no (the server records an explicit decline), never on a tool's name or on a
+    // reply with no tool call: "how much does gm cost?" is a question, not a no.
+    if (isTeam && teamStepDone(r.team)) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }
   }
 
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
