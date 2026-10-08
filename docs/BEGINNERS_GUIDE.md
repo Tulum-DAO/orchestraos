@@ -108,22 +108,22 @@ where to look if it doesn't.
    through §2: a VPS with Tailscale, `orchestra init --yes`, `orchestra doctor` (every
    row OK once your CLI is logged in; before that, `runtime:login` is the one missing
    row), `orchestra up`, the dashboard open in your browser over Tailscale.
-2. **Always-on agent spawned, answers questions in terminal.** [docs/INSTALL.md](INSTALL.md)
-   §3: spawn one seat, confirm it is alive, ask it something in its own tmux
-   pane and get a real answer.
+2. **Starter team running, gm answers questions in terminal.** [docs/INSTALL.md](INSTALL.md)
+   §3: `orchestra starter` starts gm, a project manager and a worker; confirm all three
+   are alive, ask gm something in its own tmux pane and get a real answer.
 3. **Telegram bot connected, agent answers from phone.** See [docs/PROMPTS.md](PROMPTS.md)'s
    "Connect Telegram" prompt — set up the bot token as an environment variable
    (never paste it into a file or a chat), send yourself a message from your
    phone, get a reply.
 4. **Two seats exchange a message, both visible in Inbox.** [docs/PROMPTS.md](PROMPTS.md)'s
-   "Two-seat message" prompt: spawn a second seat, send one message between
-   them, see it land in both the dashboard's Inbox and the command line.
+   "Two-seat message" prompt: send one message from the project manager to the
+   worker, see it land in both the dashboard's Inbox and the command line.
 5. **One approval card answered from Telegram or dashboard.**
    [docs/INSTALL.md](INSTALL.md) §5 / [docs/PROMPTS.md](PROMPTS.md)'s "Answer a card" prompt: fire a
    card, answer it from your phone or the dashboard, watch the decision land
    back in the agent's terminal.
-6. **Manual rotation of the always-on agent completed, nothing lost.**
-   [docs/PROMPTS.md](PROMPTS.md)'s "Rotate" prompt: trigger one rotation by hand, read the
+6. **Manual rotation of a seat completed, nothing lost.**
+   [docs/PROMPTS.md](PROMPTS.md)'s "Rotate" prompt: rotate the worker once by hand, read the
    handoff document the old version wrote and the new version's proof it
    understood it.
 7. **One fact written, restart, agent recalls it.** The "Save one command"
