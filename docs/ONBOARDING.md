@@ -60,7 +60,8 @@ Rules:
   screen, with Tailscale on that device: the code disappears from the screen after 60
   seconds.
 - We are done when the app shows it is connected (I tell you what I see: on a Mac the
-  connect window closes; on an iPhone a green "Connected to ..." line appears), AND
+  window switches from "Connect this Mac" to the app's main screen; on an iPhone a green
+  "Connected to ..." line appears), AND
   `orchestra devices` on the server lists my device with the scopes I chose AND a LAST
   SEEN time, not `never`. A row appears as soon as `orchestra pair` runs, so the row alone
   proves nothing. Show me that output; don't just tell me it worked.
@@ -343,8 +344,9 @@ Before you start:
 **Getting the app:** it has no public download yet. If nobody gave you a test build, you can't
 connect a Mac yet: stop here. **[PERSON ONLY]** Installing and opening it is yours.
 
-On the Mac, open the app. Its first window is **Connect this Mac**, with the line *Run
-`orchestra pair` on the gateway machine and paste the code it prints.* Leave it on that window.
+On the Mac, open the app. It has one window, titled **OrchestraOS**, which first shows **Connect
+this Mac**, with the line *Run `orchestra pair` on the gateway machine and paste the code it
+prints.* Leave it on that screen.
 
 Then, on the server, make a pairing code for the Mac (it stays on screen for 60 seconds):
 
@@ -363,7 +365,8 @@ word starting with `orc1_`. (An older OrchestraOS prints a `{"code":…}` line i
    `Gateway: <address>`.
 3. **[PERSON ONLY]** Press **Pair** (or Return).
 
-When it works, the connect window goes away and the app's main window opens. To check from
+When it works, the same window switches from **Connect this Mac** straight to the app's main
+screen. There is no success message; that switch is the sign it worked. To check from
 the server: `orchestra devices` lists `my-mac` with the scopes you gave it and a LAST SEEN time
 (not `never`).
 
@@ -371,7 +374,10 @@ the server: `orchestra devices` lists `my-mac` with the scopes you gave it and a
 exactly what `orchestra pair` printed.* means the paste was not a code: copy the whole code again.
 *That pairing code didn't work. Codes are single-use and expire quickly — run orchestra pair
 again for a fresh one.* means the code was used or expired: run `orchestra pair` again and paste
-the new code. Each code works once and expires after
+the new code. The same goes for *Paired, but this Mac couldn't save it (keychain status ...).
+That code is now used up — run `orchestra pair` again and retry.* and for *That is an
+OrchestraOS gateway, but it didn't accept this token. Run `orchestra pair` on the server and
+use the new code.* Each code works once and expires after
 about 10 minutes. Also check that Tailscale on the Mac is connected, and that the address
 under the box ends in the https port you served the gateway on (8445 above), not 8891.
 
