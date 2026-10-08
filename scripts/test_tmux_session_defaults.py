@@ -168,3 +168,53 @@ def test_every_seat_session_site_applies_the_defaults():
         for i in sites:
             window = "\n".join(lines[i + 1:i + 7])
             assert 'orch_tmux_session_defaults "$tmux_name"' in window, f"{rel}:{i + 1}"
+
+
+def _clients(run):
+    return set(run("list-clients", "-F", "#{client_tty}", check=False).stdout.split())
+
+
+def _wait(pred, secs=5.0):
+    end = time.time() + secs
+    while time.time() < end:
+        if pred():
+            return True
+        time.sleep(0.1)
+    return pred()
+
+
+def test_a_client_attached_from_inside_a_seat_pane_is_detached(private_tmux):
+    """Operator finding #10, 2026-10-08: gm's pane ran a nested `tmux attach` (list-panes:
+    "gm tmux"), so its CLI was off screen, the detector found none, and the dashboard showed
+    a dead gm with a Spawn button. A client whose tty is one of this server's own panes is
+    a seat attaching to a seat: the seat's client-attached hook detaches it at once. A client
+    from outside (the operator's ssh terminal, the web terminal) is left alone."""
+    env, run = private_tmux
+    assert _helper(env, "seat-x").stdout.strip() == "rc=0"
+    outer = None
+    if shutil.which("script"):
+        outer = subprocess.Popen(["script", "-qfc", "tmux attach -t =seat-x:", "/dev/null"],
+                                 env={**env, "TERM": "xterm"}, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        assert _wait(lambda: len(_clients(run)) == 1), "the outer client never attached"
+    try:
+        run("new-session", "-d", "-s", "seat-n", "-x", "80", "-y", "20",
+            "env -u TMUX tmux attach -t =seat-x:; sleep 600")
+        inner_tty = run("display-message", "-p", "-t", "=seat-n:", "#{pane_tty}").stdout.strip()
+        assert _wait(lambda: run("display-message", "-p", "-t", "=seat-n:",
+                                 "#{pane_current_command}").stdout.strip() == "sleep"), \
+            "the nested client was never detached"
+        assert inner_tty not in _clients(run)
+        if outer is not None:
+            assert len(_clients(run)) == 1, "the outside client must stay attached"
+    finally:
+        if outer is not None:
+            outer.kill()
+
+
+def test_the_attach_guard_is_per_seat_not_global(private_tmux):
+    env, run = private_tmux
+    _helper(env, "seat-x")
+    # show-hooks lists every hook NAME, set or not; a set hook prints as name[index].
+    assert "client-attached[" in run("show-hooks", "-t", "=seat-x:").stdout
+    assert "client-attached[" not in run("show-hooks", "-g").stdout

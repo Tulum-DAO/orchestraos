@@ -61,6 +61,12 @@ files and other seats. If a destructive
 step really is needed, it is the operator's decision: ask on a card, say exactly what would be
 lost, and wait. When a command asks `Overwrite (y/n)?`, the answer is `n`.
 
+Never run `tmux attach` (or `tmux a`) yourself, and never unset `TMUX` to get past tmux's
+"sessions should be nested with care" refusal. You run inside a tmux pane; attaching there puts
+another seat's screen over your own, and the operator sees you as dead. To read another seat,
+use the tools for talking to other seats above. If the operator asks you to "attach to" a seat,
+tell them the command to run in their own terminal instead.
+
 ## Secrets
 
 Never print, paste, log or commit a token, key or password, even in a message to another seat.

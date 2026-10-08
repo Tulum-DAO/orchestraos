@@ -156,3 +156,28 @@ def test_rotation_experimental_runtimes_default_empty_and_exported(tmp_path):
     (root / "orchestra.toml").write_text('[data]\ndir = "x"\n[rotation]\nexperimental_runtimes = ["gemini", "Codex"]\n')
     st = S.load_settings(root)
     assert S.child_env(st, {})["ORCHESTRA_ROTATION_EXPERIMENTAL_RUNTIMES"] == "gemini,codex"
+
+
+def test_child_env_points_the_gateway_at_the_configured_api_port(tmp_path):
+    """A changed [api] port (the docs advise it when 8888 is taken) was ignored by the gateway:
+    watch_gateway.py reads ORCH_API_URL, which child_env never set, so /upload and red-alert
+    forwarding went to whatever other app owned 8888 (pm doc test, 2026-10-08)."""
+    st = S.Settings(repo_root=tmp_path / "repo", config_path=tmp_path / "orchestra.toml",
+                    config_exists=True, raw={}, data_dir=tmp_path / "data", api_port=18888)
+    env = S.child_env(st, base={"PATH": "/usr/bin"})
+    assert env["ORCH_API_URL"] == "http://127.0.0.1:18888"
+
+
+def test_orch_api_url_is_connectable_when_the_api_listens_on_all_interfaces(tmp_path):
+    for bind in ("0.0.0.0", "::", ""):
+        st = S.Settings(repo_root=tmp_path / "repo", config_path=tmp_path / "orchestra.toml",
+                        config_exists=True, raw={}, data_dir=tmp_path / "data",
+                        api_host=bind, api_port=18888)
+        assert S.child_env(st, base={})["ORCH_API_URL"] == "http://127.0.0.1:18888", bind
+
+
+def test_orch_api_url_brackets_an_ipv6_api_host(tmp_path):
+    st = S.Settings(repo_root=tmp_path / "repo", config_path=tmp_path / "orchestra.toml",
+                    config_exists=True, raw={}, data_dir=tmp_path / "data",
+                    api_host="::1", api_port=18888)
+    assert S.child_env(st, base={})["ORCH_API_URL"] == "http://[::1]:18888"

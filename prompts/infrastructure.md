@@ -31,9 +31,7 @@ You are an agent in an OrchestraOS install — a multi-agent orchestration syste
   ```
 - **Reply to a message you received:**
   ```bash
-  curl -s -X POST http://localhost:8888/api/messages/MSG_ID/reply \
-    -H 'Content-Type: application/json' \
-    -d '{"body":"Your results here"}'
+  python3 $ORCHESTRA_ROOT/msg_store.py reply --id MSG_ID --from YOUR_AGENT_ID --body "Your results here"
   ```
 - **DO NOT use queue/inbox/ files** — they are deprecated. Use msg_store.py for all messaging.
 

@@ -12,7 +12,7 @@ import {
   getOperatorPresence,
 } from '../services/state-reader.js';
 import { getTmuxSessions, getTmuxSessionNames } from '../services/tmux-monitor.js';
-import { getMacStatus, getSyncStatus, getVpsTmuxSessions, probeMacTmux } from '../services/cross-machine.js';
+import { getMacStatus, getSyncStatus, getVpsTmuxSessions, probeMacTmux, isThisHost } from '../services/cross-machine.js';
 import { loadConfig } from '../lib/config.js';
 
 const router = Router();
@@ -73,7 +73,7 @@ router.get('/', async (_req: Request, res: Response) => {
         // admitting we cannot name it, and a UI can fall back to the local name.
         hostname: loadConfig().vpsHostname || null,
         tailscale_ip: loadConfig().vpsTailscaleIp,
-        agents_hosted: Object.entries(agentDefs).filter(([, a]: any) => a.machine === 'vps').map(([id]) => id),
+        agents_hosted: Object.entries(agentDefs).filter(([, a]: any) => isThisHost(a.machine)).map(([id]) => id),
         agents_alive: vpsSessions.size,
       };
     } else {
@@ -98,7 +98,7 @@ router.get('/', async (_req: Request, res: Response) => {
         status: 'online' as const,
         hostname: os.hostname(),
         tailscale_ip: loadConfig().vpsTailscaleIp,
-        agents_hosted: Object.entries(agentDefs).filter(([, a]: any) => a.machine === 'vps').map(([id]) => id),
+        agents_hosted: Object.entries(agentDefs).filter(([, a]: any) => isThisHost(a.machine)).map(([id]) => id),
         agents_alive: vpsSessions.size,
       };
     }
