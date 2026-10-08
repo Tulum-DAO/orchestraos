@@ -38,8 +38,8 @@ agent running it for you also verifies the tmux sessions and the API rows.
 
 ```
 Start the starter team per docs/GATE.md §2: `orchestra starter` (runtime = whatever
-I have authed). It must end with `starter team up: gm (T0) -> pm-first-project (T1)
--> dev-first-project (T2)`. Do NOT use scripts/registry-update.py + spawn-agent.sh:
+I have authed). It must print `starter team up: gm (T0) -> pm-first-project (T1)
+-> dev-first-project (T2)` (followed by a `talk to gm:` line). Do NOT use scripts/registry-update.py + spawn-agent.sh:
 that older recipe registers a seat with no lineage, and step 6's rotation refuses
 it. Show me that output, `tmux ls` listing all three sessions, and GET /api/agents
 (through the dashboard proxy) listing gm, pm-first-project and dev-first-project.

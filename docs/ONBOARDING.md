@@ -8,6 +8,10 @@ Just want the web dashboard in your browser? That needs no pairing:
 [docs/INSTALL.md](INSTALL.md) §2, "Open the dashboard in your browser, over Tailscale https".
 This page is about the gateway (8890), which the phone app talks to.
 
+In the dashboard, Arturo may ask which devices you have (iPhone, iPad, Apple Watch, Mac, Android
+phone, or just this computer). Answering is optional and only tells it what you use; Arturo never
+pairs a device. Pairing is this page.
+
 > **What works today, step by step** (updated 2026-10-08):
 >
 > | Step | Status |
@@ -112,17 +116,38 @@ your own words and photos. To check, run this on the server, inside your Orchest
 git merge-base --is-ancestor cdcd701 HEAD && echo "up to date"
 ```
 
-It prints `up to date` if you are. If it prints nothing, or an error, run `orchestra upgrade`
-and then the restart in [docs/UPGRADE.md](UPGRADE.md). If `orchestra upgrade` stops with a
-message about uncommitted changes, don't discard anything: stop, and bring that message to
-whoever is helping you (or open an issue at https://github.com/Tulum-DAO/orchestraos/issues).
+It prints `up to date` if your files are new enough.
 
-**Pairing needs the restarted server.** Updating the files is not enough: the running gateway
-keeps its old code until it restarts, and an old gateway can refuse the app's token or be
-unable to take the app's answers to cards. The same goes if you updated earlier and haven't
-restarted since. **[PERSON ONLY]** The restart is your decision: it briefly stops your
-agents' services, so choose a moment that suits you. If you'd rather not restart now, stop
-here and come back to this page when you have.
+**Pairing needs an up-to-date server that has been restarted since its last update.** The
+running gateway keeps its old code until it restarts, and an old gateway refuses the app's
+token or can't take the app's answers to cards. So you need a restart if the check printed
+nothing or an error, or if you updated earlier and haven't restarted since. If you're not
+sure whether you restarted, treat it as not restarted.
+
+**[PERSON ONLY] Decide first:** the update and the restart go together, and the restart briefly
+stops your agents' services, so choose a moment that suits you. If you'd rather not do it now,
+stop here, before updating anything, and come back to this page when you have time. When
+you're ready, and only if the check didn't print `up to date`, update the files:
+
+```bash
+orchestra upgrade
+```
+
+If it stops with a message about uncommitted changes, don't discard anything: stop, and bring
+that message to whoever is helping you (or open an issue at
+https://github.com/Tulum-DAO/orchestraos/issues). It ends by running `orchestra doctor`; if a
+row there says `MISSING`, stop and bring that row too, rather than guessing a fix. Then
+restart (also if you only needed the restart):
+
+```bash
+orchestra down && orchestra up --detach
+```
+
+```bash
+orchestra status
+```
+
+Confirm the `gateway` row has a live pid again.
 
 ## 2. Run `orchestra pair`
 
@@ -184,10 +209,11 @@ decision.) On a stock install the code is
 all you get: the terminal says
 `No QR encoder is installed on this machine`. With `segno` installed (see "Before you run
 it" above), it also draws a QR code you can scan, which works over a plain ssh session.
-The code is **short-lived and single-use**: it expires the moment it's exchanged, or after
-about 10 minutes, whichever comes first. The command also waits 60 seconds and then clears the
-screen (`Pairing code hidden`), so the code does not sit in your scrollback; if you weren't
-fast enough, run it again. Running `orchestra pair` again mints a fresh code; it does NOT
+Two different timers apply. The code itself is **short-lived and single-use**: it stops working
+the moment an app uses it, or after about 10 minutes, whichever comes first. Separately, the
+command shows it for only 60 seconds and then clears the screen (`Pairing code hidden`), so the
+code does not sit in your scrollback; the code still works after that, until its 10 minutes
+are up. If you weren't fast enough, run it again. Running `orchestra pair` again mints a fresh code; it does NOT
 cancel the old one, which stays usable until it is used or its 10 minutes run out.
 
 **Do not screenshare this terminal while the code is visible.** The code is
@@ -213,7 +239,9 @@ Then run `orchestra pair` again for your own device. Using a code never adds a r
 so a stolen code would show up under YOUR label, with a LAST SEEN time your own app didn't
 cause; that is what to look for in `orchestra devices` afterwards.
 
-Leftover `never` rows from a retry can simply be left alone: they never connected. Removing
+Leftover `never` rows from a retry can simply be left alone once 10 minutes have passed: by
+then their codes have expired and they never connected. (Until then, a `never` row's code is
+still live.) Removing
 one with `orchestra devices --revoke <device id>` is your choice, not something to do for tidiness
 alone.
 
@@ -271,7 +299,9 @@ lists your device with a LAST SEEN time.
 If the line says *Paired, but this device couldn't save it. That code is now used up — run
 `orchestra pair` again and retry.* or *That is an OrchestraOS gateway, but it didn't accept this
 token. Run `orchestra pair` on the server and use the new code.*, it did not work: run
-`orchestra pair` again and use the new code.
+`orchestra pair` again and use the new code. If the "didn't accept this token" line comes back
+again, your gateway is probably running old code: do the restart in step 1 first (if you
+updated but haven't restarted, or aren't sure), then pair again.
 
 If what you pasted is not a pairing code at all, the app says *That isn’t a pairing code. Paste
 exactly what `orchestra pair` printed.* Copy the whole code again, from the first character
@@ -377,7 +407,8 @@ again for a fresh one.* means the code was used or expired: run `orchestra pair`
 the new code. The same goes for *Paired, but this Mac couldn't save it (keychain status ...).
 That code is now used up — run `orchestra pair` again and retry.* and for *That is an
 OrchestraOS gateway, but it didn't accept this token. Run `orchestra pair` on the server and
-use the new code.* Each code works once and expires after
+use the new code.* If "didn't accept this token" comes back again, do the restart in step 1
+first (your gateway is probably running old code), then pair again. Each code works once and expires after
 about 10 minutes. Also check that Tailscale on the Mac is connected, and that the address
 under the box ends in the https port you served the gateway on (8445 above), not 8891.
 

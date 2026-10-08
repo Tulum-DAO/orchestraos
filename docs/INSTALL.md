@@ -554,11 +554,47 @@ Rules:
 - Before any `tailscale serve --https=...` command, run `tailscale serve status` and show me
   the output. Use an https port that is not in that list; never replace or turn off an
   entry that is already there. Never use `--funnel`, and never change `[dashboard] host`.
+- Before `orchestra up`, run `tailscale serve status`. If an entry I didn't add already
+  proxies to `http://127.0.0.1:8891`, do the section's "leftover entry" step first.
+- Before any `tailscale serve --https=...` command, read the `dashboard` row of
+  `orchestra status` and use that port in the command.
 - We are done when `orchestra status` prints `supervisor: running pid ...`, and my browser
-  shows the dashboard at the https address whose entry proxies to
-  `http://127.0.0.1:<my [dashboard] port, default 8891>` in `tailscale serve status`. Ask
+  shows the dashboard at the https address of the entry we just added in this section. Ask
   me to confirm what I see; don't just tell me it worked.
 ```
+
+**First, check for a leftover entry.** Your server may already have a `tailscale serve` entry
+that someone set up earlier, pointing at the dashboard's port. Look before you start
+anything:
+
+```bash
+tailscale serve status
+```
+
+Each entry is an `https://` line with a `|-- / proxy ...` line under it. If an entry you did
+NOT add already proxies to `http://127.0.0.1:8891`, treat port 8891 as taken, even if
+`orchestra doctor` says it is free. Otherwise your dashboard, including its web terminal, would
+appear behind somebody else's address on your Tailscale network. Move your dashboard to another
+port before you start it. First go to the `orchestraos` folder (the change only works there):
+
+```bash
+cd ~/orchestraos
+```
+
+```bash
+sed -i '/^\[dashboard\]/,/^\[/ s/^port = .*/port = 18891/' orchestra.toml
+```
+
+It prints nothing when it works. If it says `can't read orchestra.toml`, you are not in the
+`orchestraos` folder: run the `cd` line, then the `sed` line again. After `orchestra up` below,
+check that the `dashboard` row of `orchestra status` shows `:18891`. If it still shows `:8891`,
+stop and bring that to whoever is helping you; whether to restart is your decision
+**[PERSON ONLY]**.
+
+Never remove or change that other entry; it may belong to another app. If `tailscale serve
+status` prints `No serve config`, or nothing proxies to 8891, carry on.
+
+Then start everything:
 
 ```bash
 orchestra up --detach && orchestra status   # starts everything in the background, then shows what is running
@@ -625,7 +661,9 @@ example `https://x.ts.net (tailnet only)`) is using port 443, so if you see one,
 
 Pick an https port that is not in that list. On a fresh VPS nothing is, so use 443,
 which gives an address with no port number in it. The target is the dashboard's plain
-http address (`[dashboard] port`, default 8891; `orchestra status` prints it):
+http address. Read its port on the `dashboard` row of `orchestra status`: `:8891`, unless you
+moved it (for example to `:18891` in §1 or in the leftover-entry step above). The commands
+below use 8891; put your own port there if it is different.
 
 ```bash
 tailscale serve --bg --https=443 http://127.0.0.1:8891
@@ -637,9 +675,6 @@ in `:8446`):
 ```bash
 tailscale serve --bg --https=8446 http://127.0.0.1:8891
 ```
-
-If you changed the dashboard's port in §1 (`orchestra status` then shows `dashboard` on
-`:18891`), use `http://127.0.0.1:18891` instead of `http://127.0.0.1:8891` in these commands.
 
 The first time, Tailscale may answer that serve or https certificates
 are not enabled on your tailnet and print an admin link. **[PERSON ONLY]** Open it, sign in
@@ -653,20 +688,25 @@ tailscale serve status
 ```
 
 Each entry is an `https://` line followed by a `|-- / proxy ...` line. Your dashboard's
-address is the `https://` line just above `|-- / proxy http://127.0.0.1:8891` (or your own
-`[dashboard] port`, if you changed it in §1), for example:
+address is the entry you just added: the `https://` line for the https port you chose, with
+`|-- / proxy http://127.0.0.1:<your dashboard port>` under it, for example:
 
 ```text
 https://<vps>.<tailnet>.ts.net (tailnet only)
 |-- / proxy http://127.0.0.1:8891
 ```
 
-Ignore every other entry; they belong to other things on this server.
+Ignore every other entry, even one that also proxies to the same port: an entry you didn't add
+in this section is not yours.
 
 Open that address in a browser on your laptop or phone (it must be signed in to
 Tailscale). The dashboard opens on its chat page, with **Arturo** at the top. Arturo
 greets you and may start asking you first-run questions; you don't need to answer them to
-continue. To see your agents, tap the gear button at the top left, then **Agents** (or add `/agents` to the
+continue. If you do answer, Arturo may offer to set up your team: that runs the same
+`orchestra starter` as §3, so either way is fine (§3 says what to do if Arturo already did it). Arturo
+may also ask which devices you have (iPhone, iPad, Apple Watch, Mac, Android phone, or just this
+computer). Answering is optional; it only notes what you use and says what works today. Arturo
+never pairs a device: pairing a phone or Mac is [docs/ONBOARDING.md](ONBOARDING.md). To see your agents, tap the gear button at the top left, then **Agents** (or add `/agents` to the
 address). That page's heading is **Agents**, and it stays empty until step 3. Step 4 walks you
 through this again once your team is running. The first
 visit can take a few seconds while the certificate is issued. Optional: put the
@@ -697,6 +737,7 @@ have it guide you through this section. Copy the whole box:
 ```text
 Help me with one step of installing OrchestraOS. Read this section and do it with me:
 https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md#3-your-starter-team
+If you can't open that link, ask me to paste the section to you; don't guess commands.
 The commands in this section run on my server; I log in to it with ssh (ask me for the
 address and user if you need them).
 Rules:
@@ -707,7 +748,12 @@ Rules:
   do it myself. Never do those for me, and never ask for my passwords.
 - Never delete, destroy, reset, overwrite or wipe anything. If a command asks
   `Overwrite (y/n)?`, the answer is n.
-- We are done when `orchestra starter` ends with `starter team up: gm (T0) -> pm-first-project (T1) -> dev-first-project (T2)`. Show me that output; don't just tell me it worked.
+- If I said yes to Arturo in section 2, first ask me whether Arturo has said the team is up;
+  wait until it has. Then run `tmux ls` and follow the section's
+  "If you already said yes to Arturo" paragraph: use my project name, never add a second one.
+- We are done when `orchestra starter` prints `starter team up: gm (T0) -> pm-first-project (T1) -> dev-first-project (T2)`
+  (its very last line is `talk to gm: ...`)
+  (or `pm-<name>` and `dev-<name>` with the name I gave Arturo). Show me that output; don't just tell me it worked.
 ```
 
 One command starts three agents ("seats"), one at each level, each reporting to the one above:
@@ -722,10 +768,30 @@ One command starts three agents ("seats"), one at each level, each reporting to 
 orchestra starter
 ```
 
-You should see some output for each of the three seats as it starts, ending with
-`starter team up: gm (T0) -> pm-first-project (T1) -> dev-first-project (T2)`. It takes a
+You should see some output for each of the three seats as it starts, then
+`starter team up: gm (T0) -> pm-first-project (T1) -> dev-first-project (T2)` and a last line
+`talk to gm:   tmux attach -t gm ...`. It takes a
 minute or two. The three seats run on your AI plan. The project manager and the worker say they
 are ready and then wait; they do almost nothing until you give them work.
+
+**If you already said yes to Arturo in §2,** your team may already be running. Arturo runs this
+same `orchestra starter` with the project name you gave it. Wait until Arturo tells you the team
+is up before you run anything in this section. Run `tmux ls`: if you see `gm`,
+`pm-<name>` and `dev-<name>`, your team is up. If `<name>` is not `first-project`, run
+`orchestra starter --project <name>` with that same name instead of the plain command, or skip
+this command. The plain one would add a second project, `pm-first-project` and
+`dev-first-project`. Run with the same name, it changes nothing and prints, for each seat:
+
+```text
+gm (T0) already running — skipped
+pm-<name> (T1) already running — skipped
+dev-<name> (T2) already running — skipped
+
+starter team up: gm (T0) -> pm-<name> (T1) -> dev-<name> (T2)
+talk to gm:   tmux attach -t gm      (detach: Ctrl-B then D)
+```
+
+That is fine: it only means Arturo did this step for you.
 
 If it stops instead: `refusing to spawn: no enabled runtime is installed AND logged in` means
 the agent CLI login in §0 was skipped; do that, then run `orchestra starter` again.
@@ -786,6 +852,7 @@ Mail a seat and watch it act with no keypress (the shipped hooks + the router be
 `orchestra up`; see docs/HOOKS.md):
 
 ```bash
+cd ~/orchestraos                     # these commands run from the orchestraos folder
 source scripts/orchestra-env.sh      # once per shell: tells msg_store.py and the scripts where your data dir is
 echo "hello" > note.txt
 python3 msg_store.py send --from you --to gm --subject hi --body-file note.txt
@@ -802,7 +869,9 @@ show registered and live seats.
   acceptance for `cwd` (`scripts/ensure_cwd_trusted.py`; honors `CLAUDE_CONFIG_DIR`), so the
   seat does not stop at a first-run dialog. If you see one anyway, answer it once in `tmux attach`, run at your server's prompt (see §3).
 
-Verify through the dashboard proxy (the same list the UI shows):
+Verify through the dashboard proxy (the same list the UI shows). This uses the default
+dashboard port 8891; if the `dashboard` row of `orchestra status` shows another port, put that
+one in instead:
 
 ```bash
 curl -s http://127.0.0.1:8891/api/agents | python3 -m json.tool | grep -E '"id"|"alive"|"state"'
@@ -834,6 +903,7 @@ have it guide you through this section. Copy the whole box:
 ```text
 Help me with one step of installing OrchestraOS. Read this section and do it with me:
 https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md#4-see-your-team-from-your-own-computer
+If you can't open that link, ask me to paste the section to you; don't guess commands.
 Some commands run on my server (I log in to it with ssh; ask me for the address and user if
 you need them), and one part happens on my own computer.
 Rules:
@@ -851,9 +921,11 @@ Rules:
   instead (or ask me to paste section 2).
 - First run `orchestra status` on the server and read the port on the `dashboard` row (8891
   unless I changed it). The dashboard's address is the serve entry that proxies to THAT
-  port; another app may also use 8891.
+  port and that I added in section 2; an entry I never set up is not mine, even if it
+  proxies to the same port.
 - We are done when my browser shows the dashboard's Agents page with gm, pm-first-project
-  and dev-first-project. Ask me to confirm what I see; don't just tell me it worked.
+  and dev-first-project (or pm-<name> and dev-<name>, if Arturo set up my team with another
+  name). Ask me to confirm what I see; don't just tell me it worked.
 ```
 
 ### 1. Put your computer on your Tailscale network
@@ -892,30 +964,36 @@ On the server, first check which port your dashboard uses:
 orchestra status
 ```
 
-Read the port on the `dashboard` row: `:8891`, unless you changed it in §1 (for example
+Read the port on the `dashboard` row: `:8891`, unless you moved it in §1 or in §2's
+leftover-entry step (for example
 `:18891`). Then:
 
 ```bash
 tailscale serve status
 ```
 
-Your dashboard is the `https://` line just above `|-- / proxy http://127.0.0.1:<that port>`.
-Ignore every other entry, including one that proxies to a port your dashboard does not use:
-another app on this server may use 8891 too. If no entry proxies to your dashboard's port,
-you skipped that part of §2, or it stopped at the link to turn on HTTPS certificates. Use
+Your dashboard is the `https://` line just above `|-- / proxy http://127.0.0.1:<that port>`,
+the entry you added in §2. An entry you never set up in §2 is not yours, even if it proxies to
+the same port: ignore it, and every other entry. If no entry of yours proxies to your
+dashboard's port, you skipped that part of §2, or it stopped at the link to turn on HTTPS
+certificates (a **[PERSON ONLY]** step there). Use
 §2's **Hand this to your agent** box (or §2, "Open the dashboard in your browser, over
 Tailscale https", by hand). It checks which ports are already taken before you pick one, so
 you don't replace another app's address.
 
 ### 3. Open it and see your team
 
-On your own computer, open that address in your browser and go to **Agents**.
+On your own computer, open that address in your browser. It opens on Arturo's chat page; tap
+the gear button at the top left, then **Agents** (or add `/agents` to the address).
 
 You should see three agents, each marked alive, with its tier on the card:
 
 - `gm`, **T0**: the one you talk to.
 - `pm-first-project`, **T1**: reports to gm.
 - `dev-first-project`, **T2**: reports to the project manager.
+
+(If Arturo set up your team with another project name, you see `pm-<name>` and `dev-<name>`
+instead.)
 
 Click an agent to open its page: its screen, what it is doing, and a box to type to it. Typing
 there is the same as typing into `tmux attach` on the server, so type your messages there, never
@@ -931,17 +1009,27 @@ Tailscale issues the https certificate.
   `tailscale status`): the first visit waits for the https certificate. Wait a minute and
   reload. If it still fails, bring the exact error text your browser shows to whoever is
   helping you.
+- **The only entry for your dashboard's port is one you didn't add, or HTTPS is not turned on
+  yet:** that entry is not yours. Use §2's **Hand this to your agent** box (or ask to have §2
+  pasted to you), which adds your own entry and includes the **[PERSON ONLY]** step to turn on
+  HTTPS certificates.
 - **It works on your computer but not your phone:** the phone needs the Tailscale app, signed
   in to the same account.
 - **The Agents page is empty or the agents show as not alive:** wait 15 seconds and reload. If
-  they stay that way, run `orchestra starter` on the server again; agents that are running are
-  skipped.
+  they stay that way, run `orchestra starter` on the server again (with `--project <name>` if
+  Arturo set up your team with another name); agents that are running are skipped.
 
 ## 5. Answer one approval card from the dashboard
+
+The card goes to your worker seat: `dev-first-project`, or `dev-<name>` if Arturo set up your
+team with another project name (`tmux ls` shows it). The commands in this section use
+`dev-first-project`; if yours is different, put your own seat's name in its place, or the card
+goes to a seat that doesn't exist and is never delivered.
 
 From a shell (or let the seat run it):
 
 ```bash
+cd ~/orchestraos                     # run from the orchestraos folder
 source scripts/orchestra-env.sh      # already done in §3 if you are in the same shell; harmless to repeat
 python3 scripts/approval.py request "Ship the first change?" --from dev-first-project --worker-kind pane --options approve,deny
 # -> prints the card id, e.g. apr_1a2b3c4d_567
@@ -952,7 +1040,9 @@ signal ... fail-open`, because you ran it from a plain shell, not a seat) and on
 ntfy push (no push is set up on the minimum path). Both are normal; the card is created.
 
 The card appears under Approvals in the dashboard (`GET /api/approvals` through the
-proxy lists it under `pending`); answer it there, or from a shell:
+proxy lists it under `pending`); answer it there, or from a shell. This uses the default
+dashboard port 8891; if the `dashboard` row of `orchestra status` shows another port, put that
+one in instead:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8891/api/approvals/<card id>/approve
@@ -963,8 +1053,8 @@ What happens next, and how to see it:
 1. The answer is recorded in `<data>/state/tasks.db` (`python3 scripts/approval.py get <card id>`
    shows `status: answered`).
 2. Within a minute the `approval_resume` beat (see the `orchestra up` table) delivers it:
-   because the card came `--from dev-first-project --worker-kind pane`, the decision is typed into the
-   `dev-first-project` tmux pane as a message and a durable row is written for the seat
+   because the card came `--from dev-first-project --worker-kind pane` (or your own `dev-<name>`),
+   the decision is typed into that seat's tmux pane as a message and a durable row is written for the seat
    (`python3 msg_store.py inbox --agent dev-first-project`). `approval.py get` then shows
    `status: resumed`; `tmux capture-pane -p -t dev-first-project | tail -20` shows the delivered
    decision; `<data>/logs/approval_resume.log` has the delivery line.
