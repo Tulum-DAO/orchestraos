@@ -106,7 +106,7 @@ assert.equal(onboardingDone(null), false);
 // --- voice controls say what each one is (the operator, 2026-10-08) --------------------------------------
 {
   assert.match(DICTATE_TITLE, /browser's mic permission/);                       // what they already have
-  assert.equal(HANDS_FREE, 'Hands-free conversation');
+  assert.equal(HANDS_FREE, 'Live voice mode');                                 // the operator's name (apr_4e479200)
   assert.match(handsFreeTitle(true), /talks back/);
   assert.match(handsFreeTitle(false), /needs a voice key/);
   assert.match(handsFreeTitle(false), /GEMINI_API_KEY/);                       // the key the browser call uses
@@ -114,13 +114,21 @@ assert.equal(onboardingDone(null), false);
   assert.equal(handsFreeReady({ live: false, voice: true }), false);          // an ElevenLabs key alone cannot start it
   assert.equal(handsFreeReady({ voice: true }), true);                        // an older server: any key
   assert.equal(handsFreeReady(null), false);
-  // "Voice mode" named neither dictation nor the call: it is gone from every screen
+  // A bare "Voice mode" named neither dictation nor the call, and dictation is never a mode or something to
+  // approve. The operator's own name for the call, "Live voice mode", is fine.
+  const BANNED = /(?<!live )voice mode|conversation mode|dictation mode/i;
+  assert.equal(BANNED.test('aria-label="Voice mode"'), true);                   // sabotage: the old label fails
+  assert.equal(BANNED.test('Turn on dictation mode'), true);
+  // the browser's own permission prompt IS the gate, so telling them to allow the mic there is fine
+  assert.equal(BANNED.test('microphone permission was denied — allow the mic for this site and tap again'), false);
+  assert.equal(BANNED.test('Live voice mode'), false);                          // ...and Shaw's name passes
+  assert.equal(BANNED.test(HANDS_FREE), false);
   const { readdirSync, readFileSync, statSync } = await import('node:fs');
   const { join } = await import('node:path');
   const root = new URL('..', import.meta.url).pathname;
   const hits = [];
   const walk = (d) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p);
-    else if (/\.(tsx|ts)$/.test(f) && !/\.test\./.test(f) && /voice mode|conversation mode/i.test(readFileSync(p, 'utf8'))) hits.push(p); } };
+    else if (/\.(tsx|ts)$/.test(f) && !/\.test\./.test(f) && BANNED.test(readFileSync(p, 'utf8'))) hits.push(p); } };
   walk(root);
   assert.deepEqual(hits, []);
 }

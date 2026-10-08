@@ -85,7 +85,7 @@ export function ArturoPill() {
   const [focus, setFocus] = useState(getArturoFocus);
   useEffect(() => subscribeArturoFocus(() => setFocus(getArturoFocus())), []);
 
-  // ── hands-free conversation, IN THIS PANE ──────────────────────────────────
+  // ── Live voice mode, IN THIS PANE ──────────────────────────────────
   // The shared call (hooks/useHandsFreeCall → lib/handsFree → lib/voiceSession → /api/voice/live →
   // gateway /live → Gemini Live), the same one the home composer drives. Arturo's words arrive as
   // transcript frames; YOUR words are captioned on-device by the browser. Both render live below the
@@ -318,7 +318,7 @@ export function ArturoPill() {
                 <Focus size={12} />
                 <span className="cc-label"><b>{contextCardLabel(ctx)}</b></span>
                 <button className="cc-x" onClick={toggleContextCard}
-                        aria-label="Stop focusing on this page"><X size={12} /></button>
+                        aria-label="Stop focusing on this page" title="Stop focusing on this page"><X size={12} /></button>
               </span>
             ) : (
               <button className="arturo-context-chip off" onClick={toggleContextCard}

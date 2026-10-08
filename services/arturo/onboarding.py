@@ -40,11 +40,11 @@ def split_marker(text: str):
 # ---- fixed facts: the brain words them, it does not invent them ----------------------------------
 ONBOARDING_GUIDE = "https://github.com/Tulum-DAO/orchestraos/blob/main/docs/ONBOARDING.md"
 # Only in text-only mode. Dictation is theirs already (the browser's mic permission is its only gate), so
-# it is never offered or asked for; hands-free conversation is the one thing that needs a key. The word
-# "voice mode" names neither, and is not used.
+# it is never offered or asked for; Live voice mode (the operator's name for the live call) is the one
+# thing that needs a key. A bare "voice mode" names neither, and is not used.
 VOICE_FACT = ("Talking: dictation already works for them: the mic button turns their speech into text, "
               "with only their browser's own mic permission. Never offer it, ask about it or call it a "
-              "mode. What is not on yet is hands-free conversation, where they talk and you talk back "
+              "mode. What is not on yet is Live voice mode, where they talk and you talk back "
               "live: in the browser it needs GEMINI_API_KEY on their server (the phone app's call uses its "
               "own voice key, such as ELEVENLABS_API_KEY) and Arturo restarted. Mention it once, briefly, "
               "as something they can turn on later.")

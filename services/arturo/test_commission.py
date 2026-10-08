@@ -132,7 +132,7 @@ def test_health_reports_brain_and_mode(mod):
 
 @pytest.mark.parametrize("keys,live", [(["GEMINI_API_KEY"], True), (["ELEVENLABS_API_KEY"], False), ([], False)])
 def test_health_says_whether_the_browser_call_can_start(mod, monkeypatch, keys, live):
-    # the browser's hands-free conversation runs on Gemini Live: an ElevenLabs key alone cannot start it
+    # the browser's Live voice mode runs on Gemini Live: an ElevenLabs key alone cannot start it
     monkeypatch.setattr(mod, "VOICE_VENDORS_PRESENT", keys)
     j = mod.app.test_client().get("/health").get_json()
     assert j["live"] is live and j["voice"] is bool(keys)

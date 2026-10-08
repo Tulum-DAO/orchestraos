@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { HandsFreeCall, isInCall } from '../lib/handsFree';
 import { VoiceSession, type VoiceSessionStartOptions, type VoiceSessionState } from '../lib/voiceSession';
 
-/** The hands-free conversation for a composer: one HandsFreeCall (lib/handsFree.ts) plus the live
+/** Live voice mode for a composer: one HandsFreeCall (lib/handsFree.ts) plus the live
  *  captions as React state. The home composer and the "Ask Arturo" pill both use it. */
 export function useHandsFreeCall(ev: {
   onFinal?: (text: string, role: 'user' | 'arturo') => void;
