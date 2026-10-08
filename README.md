@@ -79,7 +79,7 @@ Already installed? [Upgrading](docs/UPGRADE.md): `orchestra upgrade`, then
 - **Inter-agent messaging.** A durable message store with inboxes, acks, threads, and a router that parks mail for busy seats instead of losing it.
 - **Memory.** A shared facts store with freshness, per-seat memory directories that survive rotation, and a recall hook that feeds the assistant.
 - **Approvals surface.** Every decision an agent needs from the human is a card: approve or deny, a menu, a questionnaire, or a "waiting on you" block. Cards render on a web dashboard and an iOS and watch app, and the human's answer resumes the agent that asked.
-- **Arturo.** The assistant. The main page, the new-chat page, and a button that is available on every other page and knows what you are looking at. Text today; voice through your own keys.
+- **Arturo.** The assistant. The main page, the new-chat page, and a button that is available on every other page and knows what you are looking at. Type or dictate today; **Live voice mode** in the browser with a `GEMINI_API_KEY` (the phone app's call uses its own voice key).
 - **Runtime catalog.** Probes which CLIs are installed and authenticated and offers their models, so the harness runs on whatever subscription you already have.
 
 ## More docs

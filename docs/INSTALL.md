@@ -8,7 +8,7 @@
 > copy it into the AI you already use. Steps marked **[PERSON ONLY]** (paying, signing in,
 > passwords, approving a device) are yours to do; the agent stops there.
 
-One machine, one CLI (claude OR gemini OR codex), no voice, no Telegram.
+One machine, one CLI (claude OR gemini OR codex), no voice key, no Telegram.
 Starting from nothing, you end with: a VPS, Tailscale on it and on your own
 laptop or phone, `orchestra up` running, the dashboard open in your browser over
 https, an agent CLI logged in, and one seat spawned. Budget about an hour the
