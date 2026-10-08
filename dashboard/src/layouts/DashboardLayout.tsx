@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { CommandPalette } from '../components/CommandPalette';
 import { Outlet } from 'react-router-dom';
+import { RouteErrorBoundary } from '../components/RouteErrorBoundary';
 import { Menu, X } from 'lucide-react';
 import { Sidebar } from '../components/Sidebar';
 import { useMatch } from 'react-router-dom';
@@ -19,7 +20,12 @@ export function DashboardLayout() {
   // same way, so a page with its own header/transcript/composer column had no height to fill and
   // escaped with `fixed`. Chat routes now get a FLEX COLUMN with no padding and no page scroll —
   // the transcript scrolls inside it, and the composer is a child of the column, not of the page.
-  const isChatRoute = !!useMatch('/agent/:id') || !!useMatch('/agent');
+  // Both hooks run on EVERY render. `useMatch(a) || useMatch(b)` skipped the second hook on an
+  // agent page, so the hook count changed when leaving it: React threw ("change in the order of
+  // Hooks"), unmounted the whole tree, and every page after it was black until a reload.
+  const onAgentWithId = useMatch('/agent/:id');
+  const onAgentBare = useMatch('/agent');
+  const isChatRoute = !!onAgentWithId || !!onAgentBare;
   const activeCall = useOrchestraStore((s) => s.activeCall);
   const endCall = useOrchestraStore((s) => s.endCall);
 
@@ -70,11 +76,11 @@ export function DashboardLayout() {
         <CoachingToast />
         {isChatRoute ? (
           <div className="flex-1 min-h-0 flex flex-col">
-            <Outlet />
+            <RouteErrorBoundary label="page"><Outlet /></RouteErrorBoundary>
           </div>
         ) : (
           <div className="p-4 md:p-6">
-            <Outlet />
+            <RouteErrorBoundary label="page"><Outlet /></RouteErrorBoundary>
           </div>
         )}
       </main>

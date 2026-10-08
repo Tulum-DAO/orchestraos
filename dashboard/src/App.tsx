@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { DashboardLayout } from './layouts/DashboardLayout';
+import { RouteErrorBoundary } from './components/RouteErrorBoundary';
 import Overview from './pages/Overview';
 import Agents from './pages/Agents';
 import Tasks from './pages/Tasks';
@@ -49,6 +50,7 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
+        <RouteErrorBoundary label="app">
         <Routes>
           {/* Arturo home is the MAIN page — its own phone shell, no dashboard chrome (T4) */}
           <Route index element={<ArturoHome />} />
@@ -77,6 +79,7 @@ export default function App() {
             <Route path="*" element={<NotFound />} />
           </Route>
         </Routes>
+        </RouteErrorBoundary>
       </BrowserRouter>
     </QueryClientProvider>
   );
