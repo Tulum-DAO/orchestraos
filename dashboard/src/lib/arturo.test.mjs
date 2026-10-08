@@ -3,7 +3,7 @@
  *   node --experimental-strip-types dashboard/src/lib/arturo.test.mjs
  */
 import assert from 'node:assert';
-import { isStarting, waitForArturo, contextLine, contextFromLocation, brainLabel, slugify, firstStep, onboardingTurn, toggleChoice, onboardingDone, isPageOpener, ONBOARDING_OPENER } from './arturo.ts';
+import { isStarting, waitForArturo, contextLine, contextFromLocation, brainLabel, slugify, firstStep, onboardingTurn, toggleChoice, onboardingDone, DICTATE_TITLE, HANDS_FREE, handsFreeTitle, isPageOpener, ONBOARDING_OPENER } from './arturo.ts';
 
 // --- isStarting: boot-window errors are "starting", real errors are not ------------------
 assert.equal(isStarting({ ok: false, error: 'HTTP 502' }), true);
@@ -102,3 +102,21 @@ assert.equal(onboardingDone({ ok: true }), false);                              
 assert.equal(onboardingDone({ ok: false, onboarding: { done: true } }), false);     // a failed turn never ends it
 assert.equal(onboardingDone({ ok: true, onboarding: { done: 'yes' } }), false);     // only the boolean
 assert.equal(onboardingDone(null), false);
+
+// --- voice controls say what each one is (the operator, 2026-10-08) --------------------------------------
+{
+  assert.match(DICTATE_TITLE, /browser's mic permission/);                       // what they already have
+  assert.equal(HANDS_FREE, 'Hands-free conversation');
+  assert.match(handsFreeTitle(true), /talks back/);
+  assert.match(handsFreeTitle(false), /needs a voice key/);
+  assert.match(handsFreeTitle(false), /ELEVENLABS_API_KEY/);
+  // "Voice mode" named neither dictation nor the call: it is gone from every screen
+  const { readdirSync, readFileSync, statSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const root = new URL('..', import.meta.url).pathname;
+  const hits = [];
+  const walk = (d) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p);
+    else if (/\.(tsx|ts)$/.test(f) && !/\.test\./.test(f) && /voice mode|conversation mode/i.test(readFileSync(p, 'utf8'))) hits.push(p); } };
+  walk(root);
+  assert.deepEqual(hits, []);
+}

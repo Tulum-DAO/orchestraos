@@ -27,7 +27,8 @@ import { useArturoBrain } from '../stores/arturoBrain';
 import { arturoTurn, arturoPrewarm } from '../lib/arturoStream';
 import { brainFromThread, describeTurnError, toWireBrain } from '../lib/arturoBrain';
 import { arturoHealth, arturoText, runtimesAvailable, brainLabel, greeting, newConversationId,
-  isStarting, waitForArturo, STARTING_TEXT, firstStep, onboardingTurn, onboardingDone, isPageOpener, ONBOARDING_OPENER, sendStateLabel,
+  isStarting, waitForArturo, STARTING_TEXT, firstStep, onboardingTurn, onboardingDone, isPageOpener,
+  DICTATE_TITLE, HANDS_FREE, handsFreeTitle, ONBOARDING_OPENER, sendStateLabel,
   type ChoiceCard, type PairCard,
   type ArturoHealth, type RuntimeRow, type SendState } from '../lib/arturo';
 import { listThreads, loadThread, type ThreadSummary } from '../lib/arturoThreads';
@@ -112,7 +113,8 @@ export default function ArturoHome() {
   const [uploading, setUploading] = useState(false);
   // Zero-key dictation (item B): the Mic button transcribes on-device into the draft. Shared
   // hook with the "Ask Arturo" pill so every composer has the same buttons. Separate from the
-  // AudioLines "Voice mode" button, which is the ElevenLabs/Hume CALL path (needs a vendor key).
+  // AudioLines "Hands-free conversation" button, the live call where Arturo talks back (needs a voice key).
+  // Dictation needs nothing from OrchestraOS: the browser's own mic permission is its only gate.
   const { mode: dictMode, dictating, note: dictNote, toggle: toggleDictation, stop: stopDictation, clearNote: clearDictNote } =
     useDictation(draft, setDraft, () => taRef.current?.focus());
   const fileInput = useRef<HTMLInputElement>(null);
@@ -499,12 +501,13 @@ export default function ArturoHome() {
           <div className="cluster">
             <button className={dictMode === 'idle' ? 'circle-btn' : `circle-btn ${dictMode}`}
                     aria-label={dictMode === 'listening' ? 'Stop dictation' : dictMode === 'recording' ? 'Stop recording' : dictMode === 'transcribing' ? 'Transcribing' : 'Dictate'}
-                    aria-pressed={dictating} title={dictMode === 'transcribing' ? 'Transcribing on the server…' : 'Dictate'}
+                    aria-pressed={dictating} title={dictMode === 'transcribing' ? 'Transcribing on the server…' : DICTATE_TITLE}
                     onClick={toggleDictation} disabled={dictMode === 'transcribing'}><Mic size={16} /></button>
             {draft.trim() ? (
               <button className="circle-btn white" aria-label="Send" onClick={() => void send()} disabled={busy}><ArrowUp size={18} /></button>
             ) : (
-              <button className="circle-btn white" aria-label="Voice mode" disabled={!health?.voice}><AudioLines size={16} /></button>
+              <button className="circle-btn white" aria-label={HANDS_FREE} title={handsFreeTitle(!!health?.voice)}
+                      disabled={!health?.voice}><AudioLines size={16} /></button>
             )}
           </div>
         </div>
