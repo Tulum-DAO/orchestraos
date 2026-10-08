@@ -60,3 +60,34 @@ def test_shell_path_quoting(P):
     assert P._shell_path("~") == '"$HOME"'
     assert P._shell_path("~/a b") == "\"$HOME\"/'a b'"
     assert P._shell_path("/etc/x; id") == "'/etc/x; id'"
+
+
+# ---- review of 26f7c0b + gm ruling ----
+
+def test_a_path_with_a_nul_or_line_break_is_refused(P, tmp_path):
+    for bad in ("a\nb", "a\rb", "a\x00b"):
+        assert "Refused" in _read(P, bad)
+
+
+def test_a_dash_leading_path_is_a_file_not_an_option(P, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "--help").write_text("i am a file\n")
+    assert "i am a file" in _read(P, "--help")
+
+
+@pytest.mark.parametrize("tool", ["get_agent_output", "kill_agent", "inject_message", "spawn_agent"])
+def test_a_seat_name_with_shell_syntax_never_reaches_a_command(P, tool, tmp_path, monkeypatch):
+    """session_name is pasted into tmux command strings (capture, kill, has-session, inject),
+    run through a shell locally and over ssh. Refused at the tool entry, before any of them."""
+    ran = []
+    monkeypatch.setattr(P, "run_local", lambda cmd, timeout=15: ran.append(cmd) or (True, ""))
+    monkeypatch.setattr(P, "ssh_mac", lambda cmd, timeout=10, **k: ran.append(cmd) or (True, ""))
+    marker = tmp_path / "PWNED"
+    out = P.execute_tool(tool, {"session_name": f"x; touch {marker}", "message": "hi", "machine": "vps"})
+    assert "not a seat name" in out
+    assert ran == [] and not marker.exists()
+
+
+def test_ordinary_seat_names_pass_the_check(P):
+    for ok in ("gm", "dev-first-project", "pm_ops", "ios-watch-dev"):
+        assert P._SEAT_NAME_RE.match(ok)
