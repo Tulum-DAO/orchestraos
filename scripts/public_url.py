@@ -58,8 +58,10 @@ def detect(gateway_port, run=subprocess.run, timeout=SERVE_TIMEOUT_S) -> list[st
 
 
 def how_to_fix(gateway_port) -> str:
-    return (f"Run the tailscale serve step from docs/ONBOARDING.md (step 4) on the server, for example "
-            f"`tailscale serve --bg --https=8445 http://127.0.0.1:{gateway_port}`, then try again. Or set "
+    return (f"Run the tailscale serve step from docs/ONBOARDING.md (step 4) on the server: serve the gateway "
+            f"on an https port nothing else serves, for example "
+            f"`tailscale serve --bg --https=8445 http://127.0.0.1:{gateway_port}` (8445 is only an example; "
+            f"step 4 shows how to check which ports are taken), then try again. Or set "
             f"public_url under [gateway] in orchestra.toml to the https address your devices use.")
 
 
