@@ -39,6 +39,7 @@ class _Store:
     def __init__(self, row=None, latest=None):
         self.row, self.latest = row, latest
         self.recorded = []
+        self.acked = []
         self.on_lookup = None          # hook: runs on the orchestrator's own lookup (race tests)
 
     def migrate(self):
@@ -60,6 +61,10 @@ class _Store:
 
     def get(self, rid):
         return {**(self.row or {}), "status": "answered"}
+
+    def ack(self, rid):
+        self.acked.append(rid)
+        return True
 
 
 def _run(coro):
@@ -603,3 +608,27 @@ def test_a_MIXED_card_one_part_without_a_question_is_refused(replay, env):
 
 def test_batch_key_tolerates_a_non_string_text():
     assert G._batch_key([{"part": 0, "ns": ["1"], "text": 5}]) == {0: (["1"], "5")}
+
+
+# ---- a LIVE-delivered replay is terminal (no second delivery by approval_resume) ----
+
+def test_a_live_delivered_replay_acks_its_row(env):
+    """Delivered live = terminal, the same self-ack approval_resume does after a keypress.
+    Left 'answered', approval_resume would pick the row up again (a multi-part menu has no
+    option_n) and re-deliver the answer as a digest inject plus a queued approval_resolved:
+    one answer reaching the pane three times."""
+    ok, info = G.durable_first_batch_submit("gm", ANSWERS, store=env, armed=True, expect_row_id="apr_1",
+                                            submit_fn=lambda *a, **k: (True, {}),
+                                            resume_fn=lambda *a, **k: None)
+    assert ok is True and info["delivered"] is True
+    assert env.acked == ["apr_1"]
+
+
+def test_a_replay_that_did_not_deliver_stays_answered_for_the_fallback(env):
+    """The other side: if the live replay did not deliver, the row must stay 'answered' so the
+    durable fallback still delivers it. Acking here would lose the answer."""
+    ok, info = G.durable_first_batch_submit("gm", ANSWERS, store=env, armed=True, expect_row_id="apr_1",
+                                            submit_fn=lambda *a, **k: (False, {"reason": "menu_gone"}),
+                                            resume_fn=lambda *a, **k: {})
+    assert ok is True and info["delivered"] is False
+    assert env.acked == []
