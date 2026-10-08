@@ -1086,23 +1086,28 @@ proxy lists it under `pending`). **[PERSON ONLY]** Answering it is your decision
 curl -s -X POST http://127.0.0.1:8891/api/approvals/<card id>/approve
 ```
 
-)
+It prints `{"status":"approved","id":"apr_..."}`.)
 
 What happens next, and how to see it:
 
 1. The answer is recorded in `<data>/state/tasks.db` (`python3 scripts/approval.py get <card id>`
-   prints JSON with `"status": "answered"`).
+   prints JSON with `"status": "answered"`, or `"resumed"` if the seat already acknowledged it).
 2. The answer is delivered at once: because the card came `--from dev-first-project
    --worker-kind pane` (or your own `dev-<name>`), the decision is typed into that seat's tmux
    pane as a message, and a durable row is written for the seat
    (`python3 msg_store.py inbox --agent dev-first-project`).
-   `tmux capture-pane -p -t dev-first-project | tail -20` shows it, and
-   `<data>/logs/approval_resume.log` has the delivery line. If the seat was busy, the
-   `approval_resume` beat (see the `orchestra up` table) tries again about every minute.
+   `tmux capture-pane -p -t dev-first-project | tail -20` shows it, and each delivery result
+   is a line in `~/orchestraos/logs/answer-telemetry.jsonl` (`delivery_confirmed` or
+   `delivery_failed`). If the seat was busy, the `approval_resume` beat (see the `orchestra up`
+   table) tries again about every minute.
 3. The message ends by asking the seat to acknowledge it (`approval.py ack ...`). When the seat
    does, `approval.py get` shows `"status": "resumed"`. If it stays `"answered"`, the seat
-   hasn't acknowledged yet: wait (an unacknowledged answer is typed in again after 5 minutes,
-   up to 3 times), or ask the seat to acknowledge it.
+   hasn't acknowledged yet. The answer is typed in every 5 minutes, 3 times in all (the first
+   delivery counts as the first time). After the third, nothing more is typed in and the card
+   stays `"answered"`; the alert goes to phone push (ntfy), which a minimum install doesn't have.
+   To finish it, ask the seat yourself: open its page in the dashboard (or, from your own ssh
+   session, `tmux attach -t dev-first-project`) and ask it to run the
+   `approval.py ack <card id> --from dev-first-project` line shown in its screen.
 4. `GET /api/approvals` keeps the card out of `pending` from the moment it is answered.
 
 A card requested from an ambient shell behaves exactly like one a seat requested for

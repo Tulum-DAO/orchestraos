@@ -179,6 +179,9 @@ python3 scripts/approval.py request "Reply OK to this test card?" --from dev-fir
 Expected: prints a card id (`apr_...`). It appears under Approvals in the
 dashboard, and — once step 3 is done — as a push on your phone.
 
+This uses the default dashboard port 8891; if the `dashboard` row of `orchestra status` shows
+another port, put that one in instead:
+
 ```bash
 curl -s -X POST http://127.0.0.1:8891/api/approvals/<card id>/approve
 python3 scripts/approval.py get <card id>
@@ -189,10 +192,12 @@ shows the decision typed into the `dev-first-project` pane, ending with a reques
 `approval.py ack ...`. Once the seat acknowledges it, `approval.py get` shows
 `"status": "resumed"`.
 
-**If it fails, look here:** `<data>/logs/approval_resume.log` has the delivery attempt. A card
-still at `"status": "answered"` with the decision visible in the pane means the seat hasn't
-acknowledged yet: wait (an unacknowledged answer is typed in again after 5 minutes, up to 3
-times) or ask the seat to run the ack. With nothing in the pane, the seat was busy: the
+**If it fails, look here:** each delivery result is a line in
+`logs/answer-telemetry.jsonl` in the checkout (`delivery_confirmed` or `delivery_failed`). A
+card still at `"status": "answered"` with the decision visible in the pane means the seat hasn't
+acknowledged yet. The answer is typed in every 5 minutes, 3 times in all (the first delivery
+counts); after that nothing more is typed and the alert goes to ntfy, so ask the seat to run the
+`approval.py ack <card id> --from dev-first-project` line shown in its pane. With nothing in the pane, the seat was busy: the
 `approval_resume` beat retries about every minute.
 
 ## 6. Manual rotation of a seat completed, nothing lost
