@@ -80,7 +80,7 @@ Two changes, both additive:
 4. `orchestra spawn gm --gm` — confirm the three parked rows deliver in send order
    (`msg_store.py inbox --agent gm` shows them, oldest first) via the ordinary
    Stop-hook-digest / router-beat paths, with no special drain code involved.
-   `orchestra rotate <seat>` (also landed, `docs/INSTALL.md` §5) is the same-shape
+   `orchestra rotate <seat>` (also landed, `docs/INSTALL.md` §6) is the same-shape
    command if you need to rotate `gm` afterward.
 5. Confirm the router's dead-letter path never fires for a target with zero
    registry rows: send a commission, wait past whatever retry window would
