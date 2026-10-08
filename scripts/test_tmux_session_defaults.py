@@ -120,8 +120,9 @@ def test_a_pane_left_scrolled_up_by_a_detached_client_still_takes_injected_text(
     run("set-option", "-t", "=seat-x:", "mouse", "on")
     if with_defaults:
         assert _helper(env, "seat-x").stdout.strip() == "rc=0"
+    # CI runners have no TERM, and tmux attach then fails ("open terminal failed").
     client = subprocess.Popen(["script", "-qc", "tmux attach -t =seat-x", "/dev/null"],
-                              env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                              env={**env, "TERM": "xterm-256color"}, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                               stderr=subprocess.DEVNULL)
     try:
         for _ in range(50):
