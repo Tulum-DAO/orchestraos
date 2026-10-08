@@ -15,7 +15,7 @@ OrchestraOS, published by Tulum DAO: an open harness for running a fleet of codi
 - **Arturo.** The assistant. The main page, the new-chat page, and a button that is available on every other page and knows what you are looking at. Text today; voice through your own keys.
 - **Runtime catalog.** Probes which CLIs are installed and authenticated and offers their models, so the harness runs on whatever subscription you already have.
 
-**Before you start — log in first, before you clone.** You need one agent CLI already installed and **logged in** — Claude Code, Gemini (Antigravity `agy` CLI), or Codex, your choice. See `docs/INSTALL.md` §0 for the exact commands, `docs/COSTS.md` for what each plan costs (including a no-cost option), and `docs/BEGINNERS_GUIDE.md` if this is your first time in a terminal at all. Do the login before anything else: a seat spawned against a CLI you have not logged in to does not tell you that — it retries, prints `Injection FAILED`, and exits, while the CLI's own sign-in screen waits unread in the seat's terminal.
+**Before you start — log in first, before you clone.** You need one agent CLI already installed and **logged in** — Claude Code, Gemini (Antigravity `agy` CLI), or Codex, your choice. See `docs/INSTALL.md` §0 for the exact commands, `docs/COSTS.md` for what each plan costs (including a no-cost option), and `docs/BEGINNERS_GUIDE.md` if this is your first time in a terminal at all. Do the login before anything else: until one CLI is logged in, `orchestra spawn` refuses to start a seat.
 
 ## Two ways to run it
 

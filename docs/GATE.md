@@ -11,9 +11,8 @@ Do the steps in order — each one depends on state the last one created (a data
 dir, a running supervisor, a spawned seat).
 
 **Before you clone anything: log in to one agent CLI — do this first, not after.** Step 2 spawns a
-seat, and a seat spawned against a CLI you have not logged in to does not say so: it retries, prints
-`Injection FAILED`, and exits 1 while the agent's own login screen sits unread in the tmux pane. Ten
-seconds of logging in now saves that. You need one of Claude
+seat, and `orchestra spawn` refuses (`refusing to spawn: no enabled runtime is installed AND
+logged in`, exit 2) until one CLI is logged in. Ten seconds of logging in now saves that. You need one of Claude
 Code, Gemini CLI, or Codex already installed and authenticated — `orchestra
 doctor` in step 1 checks this and tells you what's missing, but you can't pass
 it without having done this first. See `docs/INSTALL.md` §0 for the exact
@@ -40,7 +39,7 @@ Expected: `orchestra doctor` prints one line per check, every required row `OK`
 (a `WARN`/`INFO` row is advisory, not blocking), exit code `0`.
 
 ```bash
-orchestra up --detach && orchestra status
+orchestra up --detach && sleep 5 && orchestra status
 ```
 
 Expected: `orchestra status` shows every supervised process (`gateway`, `api`,

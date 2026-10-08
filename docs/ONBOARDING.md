@@ -40,7 +40,7 @@ mid-flow:
 ## 1. Run your gateway
 
 ```bash
-orchestra up --detach && orchestra status
+orchestra up --detach && sleep 5 && orchestra status
 ```
 
 Confirm the `gateway` row has a live pid. Note the host you'll reach it at —

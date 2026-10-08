@@ -30,7 +30,8 @@ Choose:
   servers, not yours. What uses memory is the agent CLIs: each Claude Code seat
   takes roughly 400 MB (median of 27 seats on the reference install). 4 GB holds
   the services and a handful of seats; take 8 GB if you plan on more than five.
-  We have not tested below 4 GB.
+  On a 2 GB box, `orchestra init` and `orchestra up` have been seen to work (a clean
+  run, 2026-10-08); seats were not tested there, so treat 2 GB as a trial, not a plan.
 - **ssh key login.** Most providers ask for your public key when you create the
   server. If you have none, run `ssh-keygen -t ed25519` on your own computer
   and paste the contents of `~/.ssh/id_ed25519.pub`.
@@ -167,9 +168,12 @@ Then check that the login stuck:
 | gemini | `agy`    | `agy` | `~/.gemini/antigravity-cli/antigravity-oauth-token` exists |
 | codex  | `codex`  | `codex login` | `~/.codex/auth.json` has a `tokens` key |
 
-Do this before step 1. A seat spawned against a CLI you have not logged in to does not
-tell you so: it retries, prints `Injection FAILED`, and exits, while the CLI's own
-sign-in screen waits unread in the seat's terminal.
+Do this before step 1. `orchestra spawn` (step 3) checks first: with no enabled CLI
+installed and logged in, it refuses with `refusing to spawn: no enabled runtime is
+installed AND logged in` and exits 2. The low-level `./spawn-agent.sh` does not check:
+a seat it launches against a CLI you have not logged in to retries, prints
+`Injection FAILED`, and exits, while the CLI's own sign-in screen waits unread in the
+seat's terminal.
 
 ## 1. Clone, init, doctor
 
@@ -186,6 +190,9 @@ orchestra init --yes         # data dir (~/.orchestra), orchestra.toml, .venv + 
 sed -i '/^\[runtimes\]/,/^\[/ s/^enabled = .*/enabled = ["claude"]/' orchestra.toml   # the CLI you logged in to
 orchestra doctor             # every row OK (WARN/INFO rows are advisory); exit code 0
 ```
+
+Not logged in to the CLI yet? Then `runtime:login` is the one `MISSING` row and `doctor`
+exits 1. Log in (§0, "Log in to the agent CLI") and run it again.
 
 The two PATH lines matter: `~/.local/bin` only joins your PATH at **login**, and only if it
 already existed then. On a clean machine it did not, so without them a bare `orchestra` right after
@@ -222,7 +229,7 @@ rows in doctor become INFO and `orchestra up` skips it.
 ```bash
 orchestra up                 # foreground; Ctrl-C stops everything
 # or
-orchestra up --detach && orchestra status
+orchestra up --detach && sleep 5 && orchestra status   # status can say "not running" for the first few seconds
 ```
 
 One supervisor process runs, restarts (with backoff) and logs each child under
@@ -237,7 +244,7 @@ One supervisor process runs, restarts (with backoff) and logs each child under
 | bus_beat | event-bus drain | every `bus_beat_interval_seconds` (60) |
 | boundary_delivery | turn-boundary delivery, armed | every 60 s (`boundary_delivery_armed`) |
 | cron_beat | autonomous blue-green rotation beat — ON by default | every `cron_beat_interval_seconds` (900) |
-| router | `message-router.py --cron` delivery backstop | `[router] interval_seconds` (60) |
+| router | `scripts/message-router.py --cron` delivery backstop | `[router] interval_seconds` (60) |
 | approval_resume | `approval_resume.py` — delivers an answered card to its seat (pane inject + msg_store row) | every 60 s |
 | telemetryd | `lineage_daemon.telemetryd` — works out which seats are working or idle, for the Agents page and the router. Local only: it reads the seats' terminal output and `/proc` and writes a status file under `<data>/realtime`; nothing is sent anywhere | `[telemetry] enabled` (on) |
 | menu_bridge | `scripts/menu_bridge.py` — turns a question menu inside a seat into a decision card, and types your answer back | every 60 s (`[menus] bridge_enabled`) |
@@ -326,6 +333,7 @@ Mail a seat and watch it act with no keypress (the shipped hooks + the router be
 `orchestra up`; see docs/HOOKS.md):
 
 ```bash
+echo "hello" > note.txt
 python3 msg_store.py send --from you --to gm --subject hi --body-file note.txt
 ```
 
@@ -359,6 +367,10 @@ source scripts/orchestra-env.sh
 python3 scripts/approval.py request "Ship the hello change?" --from hello --worker-kind pane --options approve,deny
 # -> prints the card id, e.g. apr_1a2b3c4d_567
 ```
+
+On a minimum install it also prints two warnings: an `authorship-guard` note (`no caller
+signal ... fail-open`, because you ran it from a plain shell, not a seat) and one about
+ntfy push (no push is set up on the minimum path). Both are normal; the card is created.
 
 The card appears under Approvals in the dashboard (`GET /api/approvals` through the
 proxy lists it under `pending`); answer it there, or from a shell:
@@ -473,9 +485,14 @@ Every service (`gateway`, `api`, `dashboard`, `arturo`) binds `127.0.0.1` by def
 release image 2026-09-19: inside the container the dashboard answered 200, the published host
 port answered nothing. Until the bind is configurable (post-release), publish through a small
 in-container relay that listens on `0.0.0.0` and forwards to `127.0.0.1:8891`, and point your
-`ssh -L` / browser at the relay's port. A one-file Python relay is in `scripts/build-demo-box.sh`
-of the operator's reference install; any TCP forwarder (`socat TCP-LISTEN:18891,fork,reuseaddr
-TCP:127.0.0.1:8891`) does the same job.
+`ssh -L` / browser at the relay's port. Inside the container:
+
+```bash
+sudo apt install -y socat
+socat TCP-LISTEN:18891,fork,reuseaddr TCP:127.0.0.1:8891 &
+```
+
+Then publish `-p 8891:18891` instead of `-p 8891:8891`; any TCP forwarder does the same job.
 
 ## Reference install (the operator's own setup: VPS + Mac over Tailscale, ntfy, Telegram, voice)
 
