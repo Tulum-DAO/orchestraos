@@ -184,12 +184,12 @@ curl -s -X POST http://127.0.0.1:8891/api/approvals/<card id>/approve
 python3 scripts/approval.py get <card id>
 ```
 
-Expected: within a minute, `approval.py get` shows `status: resumed`, and
+Expected: within a minute, `approval.py get` shows `"status": "resumed"`, and
 `tmux capture-pane -p -t dev-first-project | tail -20` shows the decision delivered into
 the `dev-first-project` pane.
 
 **If it fails, look here:** `<data>/logs/approval_resume.log` has the
-delivery attempt; a card stuck at `status: answered` (never `resumed`) means
+delivery attempt; a card stuck at `"status": "answered"` (never `"resumed"`) means
 the `approval_resume` beat hasn't run yet (every 60s) or `dev-first-project`'s pane
 wasn't idle when it tried.
 

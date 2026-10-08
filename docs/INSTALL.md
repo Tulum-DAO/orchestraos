@@ -748,9 +748,13 @@ Rules:
   do it myself. Never do those for me, and never ask for my passwords.
 - Never delete, destroy, reset, overwrite or wipe anything. If a command asks
   `Overwrite (y/n)?`, the answer is n.
+- Never stop or kill a process you did not start, even if a message suggests it. Bring it
+  to me instead.
 - If I said yes to Arturo in section 2, first ask me whether Arturo has said the team is up;
   wait until it has. Then run `tmux ls` and follow the section's
   "If you already said yes to Arturo" paragraph: use my project name, never add a second one.
+  If Arturo says a seat is up but `tmux ls` doesn't show it, don't wait: run
+  `orchestra starter --project <my project name>` yourself (seats already running are skipped).
 - We are done when `orchestra starter` prints `starter team up: gm (T0) -> pm-first-project (T1) -> dev-first-project (T2)`
   (its very last line is `talk to gm: ...`)
   (or `pm-<name>` and `dev-<name>` with the name I gave Arturo). Show me that output; don't just tell me it worked.
@@ -877,7 +881,8 @@ one in instead:
 curl -s http://127.0.0.1:8891/api/agents | python3 -m json.tool | grep -E '"id"|"alive"|"state"'
 ```
 
-The `gm`, `pm-first-project` and `dev-first-project` rows appear immediately; `alive`/`state` follow within ~15 s from the
+The `gm`, `pm-first-project` and `dev-first-project` rows (or `pm-<name>` and `dev-<name>`)
+appear immediately; `alive`/`state` follow within ~15 s from the
 status detector. Only registered seats are listed — tmux is host-global, see "Sharing a
 host" below.
 
@@ -1026,7 +1031,36 @@ team with another project name (`tmux ls` shows it). The commands in this sectio
 `dev-first-project`; if yours is different, put your own seat's name in its place, or the card
 goes to a seat that doesn't exist and is never delivered.
 
-From a shell (or let the seat run it):
+**Hand this to your agent** (Claude, ChatGPT, Codex, Gemini or any other), if you'd rather
+have it guide you through this section. Copy the whole box:
+
+```text
+Help me with one step of installing OrchestraOS. Read this section and do it with me:
+https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md#5-answer-one-approval-card-from-the-dashboard
+If you can't open that link, ask me to paste the section to you; don't guess commands.
+The commands in this section run on my server; I log in to it with ssh (ask me for the
+address and user if you need them). Answering the card can happen in my browser.
+Rules:
+- If you can run commands on my computer, run them yourself and show me every output.
+  If you can't, give me one command at a time and wait for me to paste back what it printed.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, any password or
+  passphrase prompt including sudo's, approving a device or an admin prompt) and let me
+  do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset, overwrite or wipe anything. If a command asks
+  `Overwrite (y/n)?`, the answer is n.
+- Never stop or kill a process you did not start, even if a message suggests it. Bring it
+  to me instead.
+- Run the commands from the `orchestraos` folder (`cd ~/orchestraos` first).
+- First run `tmux ls` and ask me which worker seat is mine: `dev-first-project`, or
+  `dev-<name>` if Arturo named my project. Use that name everywhere the section says
+  `dev-first-project`.
+- We are done when `python3 scripts/approval.py get <card id>` shows `"status": "resumed"`
+  and `tmux capture-pane -p -t <my worker seat> | tail -20` shows the decision. Show me
+  both outputs; don't just tell me it worked.
+```
+
+From a shell (or let the seat run it: a seat that requests the card itself puts its OWN name
+after `--from`; a seat that names a different seat there is refused):
 
 ```bash
 cd ~/orchestraos                     # run from the orchestraos folder
@@ -1051,12 +1085,12 @@ curl -s -X POST http://127.0.0.1:8891/api/approvals/<card id>/approve
 What happens next, and how to see it:
 
 1. The answer is recorded in `<data>/state/tasks.db` (`python3 scripts/approval.py get <card id>`
-   shows `status: answered`).
+   prints JSON with `"status": "answered"`).
 2. Within a minute the `approval_resume` beat (see the `orchestra up` table) delivers it:
    because the card came `--from dev-first-project --worker-kind pane` (or your own `dev-<name>`),
    the decision is typed into that seat's tmux pane as a message and a durable row is written for the seat
    (`python3 msg_store.py inbox --agent dev-first-project`). `approval.py get` then shows
-   `status: resumed`; `tmux capture-pane -p -t dev-first-project | tail -20` shows the delivered
+   `"status": "resumed"`; `tmux capture-pane -p -t dev-first-project | tail -20` shows the delivered
    decision; `<data>/logs/approval_resume.log` has the delivery line.
 3. `GET /api/approvals` keeps the card out of `pending` from the moment it is answered.
 
