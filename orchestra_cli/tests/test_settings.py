@@ -279,3 +279,15 @@ def test_a_contaminated_running_tmux_server_does_not_reach_the_seat(tmp_path):
     finally:
         tm("kill-server")
         shutil.rmtree(sock, ignore_errors=True)
+
+
+def test_child_env_hands_arturo_the_configured_public_url_and_the_operators_env_wins(tmp_path):
+    """Arturo's in-chat pairing needs the https address devices use (scripts/public_url.py order:
+    ORCHESTRA_PUBLIC_URL, then [gateway] public_url)."""
+    st = S.Settings(repo_root=tmp_path / "repo", config_path=tmp_path / "orchestra.toml", config_exists=True,
+                    raw={"gateway": {"public_url": "https://box.tn.ts.net:8445"}}, data_dir=tmp_path / "data")
+    assert S.child_env(st, base={})["ORCHESTRA_PUBLIC_URL"] == "https://box.tn.ts.net:8445"
+    mine = S.child_env(st, base={"ORCHESTRA_PUBLIC_URL": "https://mine.ts.net:9"})
+    assert mine["ORCHESTRA_PUBLIC_URL"] == "https://mine.ts.net:9"
+    st.raw = {}
+    assert "ORCHESTRA_PUBLIC_URL" not in S.child_env(st, base={})

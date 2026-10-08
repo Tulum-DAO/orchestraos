@@ -169,3 +169,25 @@ def test_pair_refuses_an_address_the_app_would_reject(monkeypatch, tmp_path, url
     rc, said = _lines(monkeypatch, tmp_path, _Args(scopes="read", base_url=url))
     assert rc == 2 and "orc1_" not in said and "--base-url https://" in said
     assert not list((tmp_path / "state" / "devices").glob("*.json")), "no device minted"
+
+
+# --- the address: one resolver with Arturo (scripts/public_url.py) -------------------------------
+
+def test_pair_with_no_address_uses_what_tailscale_serves(monkeypatch, tmp_path):
+    from scripts import public_url
+    monkeypatch.delenv("ORCHESTRA_PUBLIC_URL", raising=False)
+    monkeypatch.setattr(public_url, "detect", lambda port, run=None: ["https://box.tn.ts.net:8445"])
+    rc, said = _lines(monkeypatch, tmp_path, _Args(scopes="read", base_url=None, label="phone"))
+    assert rc == 0
+    from scripts.pairing import parse_pair_input
+    tok = next(w for w in said.split() if w.startswith("orc1_"))
+    assert parse_pair_input(tok)["base_url"] == "https://box.tn.ts.net:8445"
+
+
+def test_pair_with_no_address_anywhere_says_what_to_run(monkeypatch, tmp_path):
+    from scripts import public_url
+    monkeypatch.delenv("ORCHESTRA_PUBLIC_URL", raising=False)
+    monkeypatch.setattr(public_url, "detect", lambda port, run=None: [])
+    rc, said = _lines(monkeypatch, tmp_path, _Args(scopes="read", base_url=None))
+    assert rc == 2 and "tailscale serve" in said and "--base-url https://" in said and "orc1_" not in said
+    assert not list((tmp_path / "state" / "devices").glob("*.json")), "no device minted"

@@ -2332,12 +2332,16 @@ def pair_device(device):
         return (f"NOT PAIRED: {match} is not among the devices the operator picked on a devices card in "
                 f"the last {_DEVICES_ANSWER_TTL_S // 60} minutes. Show them one (ask_choices purpose='devices') "
                 f"during the onboarding.")
-    base_url = (os.environ.get("ORCHESTRA_PUBLIC_URL") or "").strip()
     _sys.path.insert(0, str(_REPO_ROOT)) if str(_REPO_ROOT) not in _sys.path else None
-    from scripts.pairing import pair_token, valid_base_url
-    if not base_url or not valid_base_url(base_url):
-        return ("NOT PAIRED: this server does not know the https address a device can reach it on "
-                "(ORCHESTRA_PUBLIC_URL). Say so; the guide covers it: " + _onb.ONBOARDING_GUIDE)
+    from scripts.pairing import pair_token
+    from scripts import public_url as _public_url
+    # The same answer `orchestra pair` uses: ORCHESTRA_PUBLIC_URL (set from [gateway] public_url by
+    # `orchestra up`), else the address `tailscale serve` already serves the gateway on.
+    found = _public_url.resolve(gateway_port=int(os.environ.get("ORCHESTRA_GATEWAY_PORT") or 8890))
+    if not found.url:
+        return ("NOT PAIRED: " + found.problem + " Tell the operator this in plain words; they can also "
+                "pair from their own terminal with `orchestra pair` (" + _onb.ONBOARDING_GUIDE + ").")
+    base_url = found.url
     label = f"{match.lower()} (arturo)"
     devices, store = _pair_stores()
     # One live code per device: replace only ARTURO's previous code for it that was NEVER USED. A device

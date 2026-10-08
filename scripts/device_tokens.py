@@ -16,11 +16,12 @@ The shape, and the reasoning behind each decision:
     voice-vendor and voice-id writes, so a compromised headset could switch what every
     conversation on the box uses.
 
-    READ THIS BEFORE GRANTING `ptt`. The name is misleading and gm said so plainly: it reads as
-    "one turn of push-to-talk" and it is not. The relay routes it covers reach the FULL ARTURO
-    BRAIN, WITH TOOLS — including `gm_command` and `spawn_agent`. So `ptt` means "speak to
-    something that can act on the fleet", not "speak". It is comparable to `inject` in reach,
-    arrived at by voice instead of by keystroke.
+    READ THIS BEFORE GRANTING `ptt`. It reads as "one turn of push-to-talk", and today that is
+    roughly what it is: since #278 a push-to-talk turn is a non-fleet turn, so the brain it reaches
+    can only look things up and message agents (attributed to Arturo, marked unverified); it cannot
+    run commands, spawn, inject or text anyone (arturo-proxy.py _NON_FLEET_ALLOWED). Still treat it
+    as a STRONG grant: messaging an agent is acting on the fleet, and a later release may give a
+    verified caller its tools back, which would put `ptt` close to `inject` in reach again.
 
     It is granted to Shaw's own Quest deliberately (gm 2026-10-05, phone parity, repeatedly
     asked for), but it is NOT a mild scope and must never be handed out as if it were. It is
