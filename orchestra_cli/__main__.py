@@ -46,6 +46,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     ac.add_argument("--template", help="dev | pm | qa (prompts/_<kind>-template.md) or a path relative to the checkout")
     ac.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="fill a template {KEY}; repeatable")
     ac.add_argument("--task", help="first instruction injected into the seat")
+    stp = sub.add_parser("starter", help="the default first-install team: gm (T0) -> a project manager (T1) -> a worker (T2)")
+    stp.add_argument("--project", default="first-project",
+                     help="names the PM and worker pm-<project> / dev-<project> (default first-project)")
+    stp.add_argument("--runtime", choices=["claude", "gemini", "codex"], help="default: first of [runtimes] enabled")
     sp = sub.add_parser("spawn", help="register + launch a seat in tmux (`--gm` = the General Manager)")
     sp.add_argument("seat")
     sp.add_argument("--gm", action="store_true", help="spawn as the General Manager (prompts/gm.md, tier T0, always-on)")
@@ -217,10 +221,10 @@ def cmd_status(ns) -> int:
 
 def main(argv=None) -> int:
     ns = parse_args(argv)
-    from .seats import cmd_rotate, cmd_spawn, cmd_agent
+    from .seats import cmd_rotate, cmd_spawn, cmd_agent, cmd_starter
     from .pair_cmd import run_pair, run_devices, run_rotate_fleet_token
     return {"init": cmd_init, "doctor": cmd_doctor, "up": cmd_up, "down": cmd_down, "status": cmd_status,
-            "spawn": cmd_spawn, "agent": cmd_agent, "rotate": cmd_rotate, "upgrade": cmd_upgrade,
+            "spawn": cmd_spawn, "starter": cmd_starter, "agent": cmd_agent, "rotate": cmd_rotate, "upgrade": cmd_upgrade,
             "pair": run_pair, "devices": run_devices,
             "rotate-gateway-token": run_rotate_fleet_token}[ns.command](ns)
 

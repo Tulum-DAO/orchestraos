@@ -215,3 +215,96 @@ def test_agent_create_fails_by_effect_when_the_seat_is_not_alive(repo_with_templ
     monkeypatch.setattr(SE, "_pane_alive", lambda name: False)     # session exists, CLI died
     rc = M.main(["agent", "create", "dev-dead", "--template", "dev", "--set", "PROJECT=demo", "--parent", "gm"])
     assert rc == 1 and "not alive" in capsys.readouterr().err
+
+
+# ---- `orchestra starter`: the first-install default team (Shaw, 2026-10-08) ----
+# "give them a gm, a project manager, and a worker under that project manager. That way they
+# have one t0, one t1, and one t2 agent from the start" — then: "MAKE THAT THE DEFAULT".
+
+def _starter_env(monkeypatch, alive=lambda name: True):
+    calls = []
+    monkeypatch.setattr(SE, "_run", lambda argv, env=None, cwd=None: calls.append(argv) or 0)
+    monkeypatch.setattr(SE, "_tmux_has_session", lambda name: True)
+    monkeypatch.setattr(SE, "_pane_alive", alive)
+    monkeypatch.setattr(SE, "_refuse_if_no_runtime_authed", lambda st: None)
+    return calls
+
+
+def test_parse_starter():
+    ns = M.parse_args(["starter"])
+    assert ns.command == "starter" and ns.project == "first-project"
+    assert M.parse_args(["starter", "--project", "website"]).project == "website"
+
+
+def test_starter_creates_one_seat_per_tier_linked_gm_pm_worker(repo_with_templates, tmp_path, monkeypatch):
+    spawned = set()
+    calls = _starter_env(monkeypatch, alive=lambda name: name in spawned)
+    real_run = SE._run
+    monkeypatch.setattr(SE, "_run", lambda argv, env=None, cwd=None: (calls.append(argv), spawned.add(argv[1]))[0] or 0)
+    rc = M.main(["starter"])
+    assert rc == 0
+    reg = json.loads((tmp_path / "data" / "registry.json").read_text())["agents"]
+    gm, pm, dev = reg["gm"], reg["pm-first-project"], reg["dev-first-project"]
+    assert (gm["tier"], pm["tier"], dev["tier"]) == ("T0", "T1", "T2")
+    assert gm["always_on"] is True
+    assert pm["reports_to"] == "gm" and dev["reports_to"] == "pm-first-project"
+    assert [c[1] for c in calls] == ["gm", "pm-first-project", "dev-first-project"]   # top-down
+    for name in ("pm-first-project", "dev-first-project"):
+        assert "{" not in (repo_with_templates / "prompts" / f"{name}.md").read_text()  # every token filled
+    assert "Parent: pm-first-project" in (repo_with_templates / "prompts" / "dev-first-project.md").read_text()
+
+
+def test_starter_is_idempotent_when_the_team_is_already_alive(repo_with_templates, tmp_path, monkeypatch, capsys):
+    calls = _starter_env(monkeypatch, alive=lambda name: False)
+    spawned = set()
+    monkeypatch.setattr(SE, "_run", lambda argv, env=None, cwd=None: (calls.append(argv), spawned.add(argv[1]))[0] or 0)
+    monkeypatch.setattr(SE, "_pane_alive", lambda name: name in spawned)
+    assert M.main(["starter"]) == 0
+    calls.clear()
+    assert M.main(["starter"]) == 0
+    assert calls == []                                        # nothing re-spawned
+    assert "already running" in capsys.readouterr().out
+
+
+def test_starter_relaunches_a_registered_seat_that_died_without_rewriting_its_prompt(repo_with_templates, tmp_path, monkeypatch):
+    spawned = set()
+    calls = _starter_env(monkeypatch)
+    monkeypatch.setattr(SE, "_run", lambda argv, env=None, cwd=None: (calls.append(argv), spawned.add(argv[1]))[0] or 0)
+    monkeypatch.setattr(SE, "_pane_alive", lambda name: name in spawned)
+    assert M.main(["starter"]) == 0
+    spawned.discard("dev-first-project"); calls.clear()        # the worker's CLI exited
+    assert M.main(["starter"]) == 0
+    assert [c[1] for c in calls] == ["dev-first-project"]
+
+
+def test_starter_project_names_the_pm_and_worker(repo_with_templates, tmp_path, monkeypatch):
+    spawned = set()
+    calls = _starter_env(monkeypatch)
+    monkeypatch.setattr(SE, "_run", lambda argv, env=None, cwd=None: (calls.append(argv), spawned.add(argv[1]))[0] or 0)
+    monkeypatch.setattr(SE, "_pane_alive", lambda name: name in spawned)
+    assert M.main(["starter", "--project", "website"]) == 0
+    reg = json.loads((tmp_path / "data" / "registry.json").read_text())["agents"]
+    assert reg["pm-website"]["tier"] == "T1" and reg["dev-website"]["reports_to"] == "pm-website"
+
+
+def test_starter_stops_at_the_first_seat_that_fails(repo_with_templates, tmp_path, monkeypatch, capsys):
+    _starter_env(monkeypatch, alive=lambda name: False)     # nothing ever comes alive
+    rc = M.main(["starter"])
+    assert rc != 0
+    reg = json.loads((tmp_path / "data" / "registry.json").read_text())["agents"]
+    assert "pm-first-project" not in reg                     # did not build on a dead gm
+
+
+def test_starter_corrects_a_starter_seat_registered_with_the_wrong_tier(repo_with_templates, tmp_path, monkeypatch, capsys):
+    """register_seat keeps an existing row verbatim, so a gm row written as T2 (e.g. by
+    `orchestra spawn gm` without --gm) stayed T2 forever. The starter team owns these tiers."""
+    (tmp_path / "data" / "registry.json").write_text(json.dumps(
+        {"agents": {"gm": {"name": "gm", "tier": "T2", "tmux_session": "gm", "runtime": "claude"}}}))
+    spawned = {"gm"}
+    calls = _starter_env(monkeypatch)
+    monkeypatch.setattr(SE, "_run", lambda argv, env=None, cwd=None: (calls.append(argv), spawned.add(argv[1]))[0] or 0)
+    monkeypatch.setattr(SE, "_pane_alive", lambda name: name in spawned)
+    assert M.main(["starter"]) == 0
+    reg = json.loads((tmp_path / "data" / "registry.json").read_text())["agents"]
+    assert reg["gm"]["tier"] == "T0" and reg["gm"]["always_on"] is True
+    assert "gm tier T2 -> T0" in capsys.readouterr().out

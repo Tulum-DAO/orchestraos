@@ -42,6 +42,8 @@ git clone https://github.com/Tulum-DAO/orchestraos.git && cd orchestraos   # dow
 make install                    # install the `orchestra` command
 export PATH="$HOME/.local/bin:$PATH"   # make it findable in this terminal (the guide makes it permanent)
 orchestra init --yes            # set everything up (about 5 minutes)
+orchestra up --detach           # start OrchestraOS
+orchestra starter               # your team: gm (T0) -> a project manager (T1) -> a worker (T2)
 ```
 
 **This is not a finished product.** It runs one operator's fleet today, every day, and that setup is the reference install. We are opening it so people who want this to exist can build it with us. The first hackathon, Build-a-thon, ran on 2026-09-19 and 20; its tracks are still open ([docs/tracks/README.md](docs/tracks/README.md)).
