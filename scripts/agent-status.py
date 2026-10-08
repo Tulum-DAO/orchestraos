@@ -608,7 +608,8 @@ def _menu_question(lines: list[str], first_opt_idx: int | None) -> str:
     rule / option line bounds the block; join in reading order. Head-priority
     cap (the head carries prefixes/labels): 600 chars with a visible '…'.
     NOTE: question text feeds menu_op_key — menus parked ACROSS a deploy of
-    this change may re-card once (dedup key shifts); accepted, one-time."""
+    this change may re-card once (dedup key shifts); accepted, one-time. The same
+    holds for _menu_context, which feeds the key too."""
     if first_opt_idx is None:
         first_opt_idx = len(lines)
     block: list[str] = []
@@ -645,6 +646,47 @@ def _menu_question(lines: list[str], first_opt_idx: int | None) -> str:
     if len(q) > 600:
         q = q[:600] + '…'
     return q
+
+
+_CONTEXT_MAX_LINES = 120
+
+
+def _menu_context(lines: list[str], first_opt_idx: int | None, kind: str = "") -> str:
+    """What the prompt is ABOUT: the block between the widget's top frame and the question
+    (a permission prompt's tool label, command, description; a menu's preamble). Identity, not
+    display: two "Do you want to proceed?" prompts for DIFFERENT commands must not look like the
+    same prompt, or a stale tap meant for one approves the other. Whitespace-normalised and
+    bounded; box borders, tab bars and tick glyphs stripped; the question block and the options
+    are excluded. Identity keys remove all whitespace (menu_bridge_core.menu_identity), so a
+    re-wrap at another pane width keeps the same key.
+    Empty when there is no frame within reach (the identity then falls back to the question)."""
+    if first_opt_idx is None:
+        return ""
+    i = first_opt_idx - 1
+    # skip option lines and the blanks between options and the question
+    while i >= 0 and (not lines[i].strip() or _MENU_OPT_RE.match(lines[i].strip())):
+        i -= 1
+    # skip the question block (contiguous prose) itself
+    while i >= 0 and lines[i].strip():
+        s = lines[i].strip()
+        if _RULE_RE.match(s) or set(s) <= set('╌─━ '):
+            return ""                     # the frame sits right above the question: no context
+        i -= 1
+    block: list[str] = []
+    for j in range(i, max(-1, i - _CONTEXT_MAX_LINES), -1):
+        s = lines[j].strip()
+        if _RULE_RE.match(s) or (s and set(s) <= set('╌─━ ')) or s.startswith(('╭', '┌')):
+            break                         # the widget frame: above it is scrollback
+        if kind != 'permission' and (_is_tab_chip(s) or (s.startswith('←') and s.endswith('→'))):
+            continue                      # a multi-part tab bar: its ☐/☒ state changes as parts are answered
+        s = re.sub(r'^[│┃╎╏┆┇┊┋|]\s*|\s*[│┃╎╏┆┇┊┋|]$', '', s)
+        s = re.sub(r'[☐☑☒✔✓✗]', '', s)  # tick glyphs flip while the same prompt is on screen
+        s = re.sub(r'\s+', ' ', s).strip()
+        if s:
+            block.insert(0, s)
+    else:
+        return ""                         # no frame within reach: don't guess at scrollback
+    return "\n".join(block)
 
 
 def _menu_tool(lines: list[str]) -> str:
@@ -919,6 +961,11 @@ def parse_pending_menu(stripped: list[str], now: float | None = None,
 
     result = {'kind': kind, 'question': _truncate_on_word_boundary(question or ''), 'options': opts,
               'selected_n': selected, 'chrome': chrome, 'captured_at': round(now, 3)}
+    # Identity context (what the prompt is about). Additive: absent when empty, so every
+    # consumer that ignores it is unchanged.
+    _ctx = _menu_context(lines, first_idx, kind)
+    if _ctx:
+        result['context'] = _ctx
     # menu_family (F6, 2026-08-24): the ANSWER contract differs by agent runtime.
     # agy/Gemini's native multi-select uses SPACE to toggle + ENTER to submit (no
     # Submit tab / confirm chain) and a "Write-in..." free-text row that opens on

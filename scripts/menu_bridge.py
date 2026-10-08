@@ -161,7 +161,7 @@ def bridge_one(store, source_session, capture, first_seen_ts, now, state,
     # menu dict; we stamp in place before persisting.
     from watch_gateway import stamp_input_kinds
     stamp_input_kinds(payload)
-    op_key = core.menu_op_key(source_session, capture["question"])
+    op_key = core.menu_op_key(source_session, capture["question"], capture.get("context") or "")
     rid = store.create(
         from_agent=source_session,
         question=capture["question"],
@@ -423,14 +423,14 @@ def ledger_pending_op_keys(store, db_path=None):
         c.close()
 
 
-def is_session_carded(store, session, question, db_path=None) -> bool:
+def is_session_carded(store, session, question, *, context, db_path=None) -> bool:
     """True iff a pending menu card ALREADY exists for this exact (session,
     question) — the perm-card lane seam  signature, not session-only). v2's pulse G1 hook calls
     this BEFORE its gm-escalate: carded -> card is primary, DON'T escalate;
     absent -> escalate gm as the fallback. Exact op_key match (menu_op_key =
     SHA-256 of session+question) so sequential prompts in one session don't
     false-suppress each other's escalation."""
-    op_key = core.menu_op_key(session, question)
+    op_key = core.menu_op_key(session, question, context)
     return op_key in ledger_pending_op_keys(store, db_path=db_path)
 
 
@@ -518,7 +518,7 @@ def run_cron_cycle(store, sessions_status, now, debounce_s=DEBOUNCE_S,
         capture = status.get("pending_menu")
         if capture is None:
             continue
-        op_key = core.menu_op_key(session, capture["question"])
+        op_key = core.menu_op_key(session, capture["question"], capture.get("context") or "")
         currently_present.add(op_key)
         # Single gate: bridge_one -> should_bridge decides on pending_menu
         # presence (the authoritative signal; a real parked menu is state=
@@ -605,7 +605,7 @@ def _would_surface(fleet, skip=None):
             continue
         if core.should_bridge(status.get("state"), cap, 0.0, 0.0, debounce_s=0.0):
             out.append({"session": session,
-                        "op_key": core.menu_op_key(session, cap["question"]),
+                        "op_key": core.menu_op_key(session, cap["question"], cap.get("context") or ""),
                         "question": cap["question"]})
     return out
 
@@ -670,7 +670,7 @@ def run_cycle(store, sessions_status, seen_state, now, debounce_s=DEBOUNCE_S):
         capture = status.get("pending_menu")
         if capture is None:
             continue
-        op_key = core.menu_op_key(session, capture["question"])
+        op_key = core.menu_op_key(session, capture["question"], capture.get("context") or "")
         currently_present.add(op_key)
         # first-seen anchor: record on first sighting, keep it stable afterward.
         if op_key not in first_seen:
@@ -822,7 +822,7 @@ def main(argv=None, store=None, seen_state=None, now=None):
             # (a real parked menu is state='working'); only a live composer
             # (stranded_input) is excluded.
             if core.should_bridge(status.get("state"), cap, 0.0, 0.0, debounce_s=0.0):
-                would.append(core.menu_op_key(session, cap["question"]))
+                would.append(core.menu_op_key(session, cap["question"], cap.get("context") or ""))
                 print(f"  WOULD bridge: {session} :: {cap['question']!r}")
         if not would:
             print("  (nothing eligible)")

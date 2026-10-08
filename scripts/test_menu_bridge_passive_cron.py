@@ -141,11 +141,11 @@ def test_is_session_carded_true_when_op_key_present(monkeypatch):
     core = importlib.import_module("menu_bridge_core")
     ok = core.menu_op_key("worker-7", "Do you want to proceed?")
     monkeypatch.setattr(mb, "ledger_pending_op_keys", lambda store, db_path=None: {ok})
-    assert mb.is_session_carded(_FakeStore(), "worker-7", "Do you want to proceed?") is True
+    assert mb.is_session_carded(_FakeStore(), "worker-7", "Do you want to proceed?", context="") is True
 
 def test_is_session_carded_false_when_absent(monkeypatch):
     monkeypatch.setattr(mb, "ledger_pending_op_keys", lambda store, db_path=None: set())
-    assert mb.is_session_carded(_FakeStore(), "worker-7", "Do you want to proceed?") is False
+    assert mb.is_session_carded(_FakeStore(), "worker-7", "Do you want to proceed?", context="") is False
 
 def test_is_session_carded_distinct_per_question(monkeypatch):
     # exact (session,question): a card for question A must NOT suppress escalation
@@ -154,5 +154,5 @@ def test_is_session_carded_distinct_per_question(monkeypatch):
     core = importlib.import_module("menu_bridge_core")
     ok_a = core.menu_op_key("worker-7", "Question A?")
     monkeypatch.setattr(mb, "ledger_pending_op_keys", lambda store, db_path=None: {ok_a})
-    assert mb.is_session_carded(_FakeStore(), "worker-7", "Question A?") is True
-    assert mb.is_session_carded(_FakeStore(), "worker-7", "Question B?") is False
+    assert mb.is_session_carded(_FakeStore(), "worker-7", "Question A?", context="") is True
+    assert mb.is_session_carded(_FakeStore(), "worker-7", "Question B?", context="") is False

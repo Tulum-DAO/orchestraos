@@ -10,6 +10,7 @@ ApprovalStore wiring is a separate later step handled by the parent operator.
 """
 
 import hashlib
+import re
 
 # pending_menu PRESENCE is the authoritative signal — the detector only emits it
 # when real native-menu chrome is on screen. The coarse `state` label is NOT
@@ -23,10 +24,24 @@ import hashlib
 _NON_BRIDGE_STATES = frozenset({"stranded_input"})
 
 
-def menu_op_key(source_session: str, question: str) -> str:
-    """Deterministic dedup key for a menu, derived from session + question."""
+def menu_identity(question: str, context: str = "") -> str:
+    """The text a menu's identity is keyed on: its question plus, when the detector captured
+    one, its CONTEXT (what the prompt is about: a permission prompt's command, a menu's
+    preamble). Without the context, two "Do you want to proceed?" prompts for different
+    commands share one identity, so a stale tap meant for one could answer the other. With
+    no context the identity is exactly the old question-only one.
+
+    ALL whitespace is removed from the context before it keys anything: the TUI re-wraps a long
+    command when the pane width changes (a phone or a Mac attaching), breaking paths and URLs
+    mid-token, and the same prompt must keep the same identity."""
+    context = re.sub(r"\s+", "", context or "")
+    return question if not context else question + "\n\u00a7context\u00a7\n" + context
+
+
+def menu_op_key(source_session: str, question: str, context: str = "") -> str:
+    """Deterministic dedup key for a menu: session + question + context (menu_identity)."""
     digest = hashlib.sha256(
-        (source_session + "|" + question).encode()
+        (source_session + "|" + menu_identity(question, context)).encode()
     ).hexdigest()[:16]
     return f"menu:{source_session}:{digest}"
 
