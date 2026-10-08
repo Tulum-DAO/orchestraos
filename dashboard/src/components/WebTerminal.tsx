@@ -40,6 +40,10 @@ export default function WebTerminal({ session, machine }: WebTerminalProps) {
     const fontSize = screenW < 768 ? 11 : 13;
     const term = new Terminal({
       cursorBlink: true,
+      // Seats run tmux with mouse on, which turns on mouse reporting, so a plain drag goes
+      // to tmux. Option-drag (macOS) must still select in the browser; Shift-drag does
+      // elsewhere by default.
+      macOptionClickForcesSelection: true,
       fontSize,
       fontFamily: "'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, Monaco, 'Courier New', monospace",
       theme: {

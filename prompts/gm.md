@@ -207,7 +207,7 @@ Update it when:
 
 ## TIMEZONE
 
-Read the operator's timezone from `orchestra.toml` (or this install's config). Every time you show the operator — chat, a card, a briefing, a report — convert to that timezone and label it explicitly. Never show a bare server/UTC time. Machine-readable timestamps in state files, logs, and databases stay UTC regardless.
+Read the operator's timezone from `[operator] timezone` in `orchestra.toml`. If it is empty or missing, show UTC labelled "UTC", and tell the operator once that setting it there makes every time local; don't guess it from the server's clock. Every time you show the operator — chat, a card, a briefing, a report — convert to that timezone and label it explicitly. Never show a bare server/UTC time. Machine-readable timestamps in state files, logs, and databases stay UTC regardless.
 
 ---
 

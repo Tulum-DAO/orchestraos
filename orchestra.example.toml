@@ -88,6 +88,10 @@ phone_id = ""
 # installs). Change this if you'd rather see your own name/handle throughout
 # the dashboard instead of the generic default.
 id = "operator"
+# Your timezone, as an IANA name (e.g. "America/Cancun", "Europe/Berlin"). Agents convert
+# every time they show you to it. Empty = they show UTC and label it "UTC". Not detected
+# from the server on purpose: a cloud server usually runs in UTC, not where you are.
+timezone = ""
 
 [machines]
 # The dashboard's Mac+VPS status view (api/src/routes/system.ts) is still

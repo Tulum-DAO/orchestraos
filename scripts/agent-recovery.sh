@@ -15,6 +15,7 @@ set -uo pipefail
 
 BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_DIR="${ORCHESTRA_DIR:-$(cd "$BIN_DIR/.." && pwd)}"
+source "$BIN_DIR/tmux_session_defaults.sh"   # mouse on per seat session, same as spawn-agent.sh
 STATE_DIR="$SCRIPT_DIR/state"
 SESSION_INDEX="$STATE_DIR/agent-sessions.json"
 HANDOFF_DIR="$STATE_DIR/agent-handoffs"
@@ -466,6 +467,7 @@ while IFS='|' read -r agent_id tmux_name session_id cwd conv_path; do
 
         log "AUTO-RECOVER: $agent_id (tmux=$tmux_name, session=$session_id, runtime=$runtime)"
         tmux new-session -d -s "$tmux_name" -c "$cwd" 2>/dev/null
+        orch_tmux_session_defaults "$tmux_name"
         sleep 1
         if [ "$runtime" = "gemini" ]; then
             tmux send-keys -t "$tmux_name" "agy --conversation $session_id --dangerously-skip-permissions" Enter
@@ -544,6 +546,7 @@ while IFS='|' read -r agent_id tmux_name session_id cwd conv_path; do
         SKIPPED=$((SKIPPED + 1))
         continue
     fi
+    orch_tmux_session_defaults "$tmux_name"
 
     sleep 1
     if [ "$runtime" = "gemini" ]; then
