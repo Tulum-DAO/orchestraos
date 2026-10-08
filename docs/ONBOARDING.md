@@ -52,7 +52,10 @@ Rules:
 - Never revoke a device (`orchestra devices --revoke`) unless I ask you to.
 - Skip step 3 (the web dashboard connect screen): it is not on `main` yet.
 - If `orchestra up` says `supervisor already running`, run `orchestra status` on its own.
-  Never run `orchestra down`.
+  Never run `orchestra down` on your own. The one exception is a restart the page marks as
+  my decision ([PERSON ONLY]): ask me first, and run it only once I say yes.
+- The device id (in `Minted device <id> ...` and in `orchestra devices`) is not secret; I may
+  paste it, or the whole `Minted device ...` line, which holds no code.
 - Before every `orchestra pair`, make sure I have the app installed, open and on its pairing
   screen, with Tailscale on that device: the code disappears from the screen after 60
   seconds.
@@ -108,7 +111,8 @@ git merge-base --is-ancestor cdcd701 HEAD && echo "up to date"
 ```
 
 It prints `up to date` if you are. If it prints nothing, or an error, run `orchestra upgrade`
-and then the restart in [docs/UPGRADE.md](UPGRADE.md).
+and then the restart in [docs/UPGRADE.md](UPGRADE.md). **[PERSON ONLY]** The restart is your
+decision: it briefly stops your agents' services, so choose a moment that suits you.
 
 ## 2. Run `orchestra pair`
 
@@ -157,13 +161,15 @@ the gateway's own bearer (`legacy-fleet-token`) has every scope: that is the ser
 key, not a paired device, and it is not something to revoke here.
 `orchestra devices --revoke <device id>` cuts one off (its token stops working on its next
 request). Revoking is your decision: an agent should not revoke a device on its own.
-Re-pairing with a new code undoes it.
+A revoked device can't come back; pair again to get a new one.
 
 This prints the pairing code: one long word starting with `orc1_`. Copy all of it and
 paste it into the app's pairing box. It carries your server's address too, so there is
 nothing else to type. (An older app that also shows an address field: type your
 server's `https://` address there, then paste the code. That needs a gateway started after
-you updated OrchestraOS, so run `orchestra down && orchestra up --detach` once after updating.) On a stock install the code is
+you updated OrchestraOS, so after updating, restart once with
+`orchestra down && orchestra up --detach`; **[PERSON ONLY]** when to restart is your
+decision.) On a stock install the code is
 all you get: the terminal says
 `No QR encoder is installed on this machine`. With `segno` installed (see "Before you run
 it" above), it also draws a QR code you can scan, which works over a plain ssh session.
@@ -177,7 +183,11 @@ cancel the old one, which stays usable until it is used or its 10 minutes run ou
 effectively a password for your gateway for the few minutes it's live — anyone
 who has it before you use it can pair their own device to your server. Running `orchestra pair`
 again does **not** cancel it. If you think someone saw a code, cut off the device it belongs to:
-its id is in the `Minted device <id> ...` line printed just above the code. Revoking is your own
+its id is in the `Minted device <id> ...` line printed just above the code. If the screen has
+already cleared, run `orchestra devices`: it lists the newest first, and the newest row with
+your label and LAST SEEN `never` is the one. The device id is not secret. If your own app
+already paired with that code (its row shows a LAST SEEN time), the code is spent and nobody
+else can use it: don't revoke, or you'll cut off your own app. Otherwise, revoking is your own
 decision **[PERSON ONLY]**:
 
 ```bash
@@ -185,8 +195,9 @@ orchestra devices --revoke <device id>
 ```
 
 That device's token stops working on its next request, even if someone uses the code first.
-Then run `orchestra pair` again for your own device. Afterwards, check `orchestra devices` for
-any device you didn't pair.
+Then run `orchestra pair` again for your own device. Using a code never adds a row of its own,
+so a stolen code would show up under YOUR label, with a LAST SEEN time your own app didn't
+cause; that is what to look for in `orchestra devices` afterwards.
 
 Leftover `never` rows from a retry can simply be left alone: they never connected. Removing
 one with `orchestra devices --revoke <device id>` is your choice, not something to do for tidiness
