@@ -241,3 +241,41 @@ def test_the_launch_line_strips_the_session_even_from_a_contaminated_pane(tmp_pa
     names = {l.split("=", 1)[0] for l in out.splitlines() if "=" in l}
     assert not names & set(S.INSTALLER_SESSION_ENV)
     assert {"CLAUDE_CONFIG_DIR", "ORCHESTRA_DIR"} <= names
+
+
+def test_a_contaminated_running_tmux_server_does_not_reach_the_seat(tmp_path):
+    """pm-tulumdao's by-effect ask: a tmux server STARTED with the installer's session (an older
+    install, or the installer agent's own shell) hands that env to every new pane. The seat's
+    launch line, built as spawn-agent.sh builds it, must still start the CLI without it."""
+    import shutil
+    import subprocess
+    import time
+    if not shutil.which("tmux"):
+        import pytest
+        pytest.skip("tmux not installed")
+    src = (Path(__file__).resolve().parents[2] / "spawn-agent.sh").read_text()
+    arr = next(l for l in src.splitlines() if l.startswith("INSTALLER_SESSION_ENV=("))
+    sock = Path("/tmp") / f"envscrub-{os.getpid()}"            # short: unix socket path limit
+    sock.mkdir(exist_ok=True)
+    out = tmp_path / "seat-env.txt"
+    dirty = {"PATH": os.environ["PATH"], "TMUX_TMPDIR": str(sock), "HOME": str(tmp_path),
+             "CLAUDE_CONFIG_DIR": "/c", **{k: "x" for k in S.INSTALLER_SESSION_ENV}}
+    tm = lambda *a: subprocess.run(["tmux", "-f", "/dev/null", *a], env=dirty,
+                                   capture_output=True, text=True, timeout=10)
+    try:
+        assert tm("new-session", "-d", "-s", "seat", "-x", "120", "-y", "20", "bash --norc").returncode == 0
+        # what the pane shell inherited: the contaminated server env (the precondition)
+        launch = (arr + '; _scrub="env"; for _v in "${INSTALLER_SESSION_ENV[@]}"; do _scrub+=" -u $_v"; done; '
+                  f'echo "PANE_HAS=$CLAUDECODE" > {out}.pane; eval "$_scrub env" > {out}')
+        tm("send-keys", "-t", "=seat:", launch, "Enter")
+        for _ in range(50):
+            if out.exists() and out.stat().st_size:
+                break
+            time.sleep(0.1)
+        assert (Path(f"{out}.pane")).read_text().strip() == "PANE_HAS=x", "precondition: the pane is contaminated"
+        names = {l.split("=", 1)[0] for l in out.read_text().splitlines() if "=" in l}
+        assert not names & set(S.INSTALLER_SESSION_ENV)
+        assert "CLAUDE_CONFIG_DIR" in names
+    finally:
+        tm("kill-server")
+        shutil.rmtree(sock, ignore_errors=True)
