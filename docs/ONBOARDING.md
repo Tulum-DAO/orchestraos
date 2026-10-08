@@ -188,8 +188,8 @@ On the Mac, open the app. Its first window is **Connect this Mac**, with two fie
 
 1. Select the whole `{"code": ... }` line in Terminal, from the `{` to the `}`, and copy it
    (`Cmd+C`).
-2. Paste it into **Pairing code**. The app reads both values from it and fills in
-   **Gateway address** for you.
+2. Paste it into **Pairing code** (the box that says *Paste the line orchestra pair
+   printed*). The app reads both values from it and fills in **Gateway address** for you.
 3. Press **Pair** (or Return).
 
 To check from the server: `orchestra devices` lists `my-mac` with the scopes you gave it.
