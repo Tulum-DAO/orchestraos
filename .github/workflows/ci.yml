@@ -145,6 +145,20 @@ jobs:
       - run: npm ci
       - run: npm run conformance
 
+  # The push relay (a Cloudflare Worker) has no dependencies; node:sqlite stands in for D1 and
+  # openssl builds a synthetic App Attest chain, both present on the runner.
+  push-relay:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/push-relay
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm test
+
   dashboard-build:
     runs-on: ubuntu-latest
     defaults:
