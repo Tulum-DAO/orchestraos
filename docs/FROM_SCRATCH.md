@@ -118,10 +118,12 @@ ssh-keygen -t ed25519 -C "my-computer"
 
 It asks three questions. Answer them like this:
 
-1. `Enter file in which to save the key`: press Enter (keep the suggested place).
+1. `Enter file in which to save the key`: press Enter (keep the suggested place). If it then
+   asks `Overwrite (y/n)?`, you already have a key: type `n`, press Enter, and skip to "Show
+   the public half" below. Never answer `y`: that replaces your existing key for good.
 2. **[PERSON ONLY]** `Enter passphrase`: press Enter for no passphrase, or type one you will remember.
    Nothing appears on screen while you type it; that is normal.
-3. `Enter same passphrase again`: the same again.
+3. **[PERSON ONLY]** `Enter same passphrase again`: the same again.
 
 You should see: `Your identification has been saved in ...id_ed25519`, then
 `Your public key has been saved in ...id_ed25519.pub`, then a small box of random
@@ -156,7 +158,8 @@ Rules:
 - Stop at every step marked [PERSON ONLY] (paying, signing in, passwords, approving a
   device) and let me do it myself. Never do those for me, and never ask for my passwords.
 - Never delete, destroy, reset or wipe anything.
-- We are done when I have my new server's IP address (four numbers with dots). Show me that output; don't just tell me it worked.
+- We are done when I tell you my new server's IP address (four numbers with dots), which
+  I read off the provider's website.
 ```
 
 This is the step where you pay. A server is rented by the hour from a hosting company,
@@ -185,7 +188,7 @@ end of this step.
    - **Choose Authentication Method**: **SSH key**, and tick `my-computer`.
    - **Hostname**: `orchestra` (lowercase letters only, no spaces).
    - Click **Create Droplet**.
-4. **Find its address.** After about a minute the server appears in your
+4. **[PERSON ONLY]** **Find its address.** After about a minute the server appears in your
    **Droplets** list. Its row shows the **IP address**: four numbers with dots, like
    `203.0.113.25`. Copy it; you need it in the next step. Wherever the docs say
    "your server address", this is what they mean (until Tailscale gives the server a

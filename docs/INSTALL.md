@@ -105,6 +105,10 @@ type), then `Full Name []:`, `Room Number []:` and a few more (press Enter for e
 then `Is the information correct? [Y/n]` (press Enter). The other lines print nothing
 when they work. `exit` logs you out of the server.
 
+Not sure whether you log in with a key or a password? As root, run `ls ~/.ssh/authorized_keys`:
+if it prints that path, you use a key and the lines above work; if it says `No such file or
+directory`, you use a password, so read on.
+
 Logged in as root with a password rather than a key? Then `/root/.ssh/authorized_keys` does
 not exist and the `cp` line fails. Run only `adduser` and `usermod`, `exit`, and then, from your
 own computer, `ssh-copy-id orchestra@<server ip>` (it asks for the new user's password once).
