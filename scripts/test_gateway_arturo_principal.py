@@ -11,6 +11,14 @@ import aiohttp
 import pytest
 
 import scripts.watch_gateway as G
+from scripts import arturo_stamp
+
+
+@pytest.fixture(autouse=True)
+def _data_dir(tmp_path, monkeypatch):
+    # the stamp secret is made in the data dir: never the real ~/.orchestra from a test
+    monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path / "data"))
+    return tmp_path / "data"
 
 
 class _Req(dict):
@@ -88,3 +96,27 @@ def test_text_forwards_the_stamp(monkeypatch, principal, stamp):
     asyncio.run(G.handle_arturo_text(_Req(principal)))
     assert seen["headers"]["X-Arturo-Principal"] == stamp
     assert seen["headers"]["Content-Type"] == "application/json"
+
+
+def test_fleet_travels_with_this_installs_secret(_data_dir):
+    h = G._arturo_upstream_headers(_Req({"id": "legacy"}))
+    assert h[arturo_stamp.HEADER] == arturo_stamp.read(_data_dir) and h[arturo_stamp.HEADER]
+    assert oct(arturo_stamp.path(_data_dir).stat().st_mode & 0o777) == "0o600"
+
+
+def test_a_device_never_carries_the_secret():
+    h = G._arturo_upstream_headers(_Req({"id": "dev_ab12", "scopes": ["voice"]}))
+    assert arturo_stamp.HEADER not in h
+
+
+def test_a_client_cannot_pass_its_own_secret_through(monkeypatch):
+    seen = _capture_upstream(monkeypatch)
+    req = _Req({"id": "dev_voice", "scopes": ["voice"]},
+               client_headers={"X-Arturo-Principal": "fleet", arturo_stamp.HEADER: "guess"})
+    asyncio.run(G.handle_arturo_text(req))
+    assert arturo_stamp.HEADER not in seen["headers"]
+
+
+def test_the_secret_is_made_once_and_kept(_data_dir):
+    first = arturo_stamp.ensure(_data_dir)
+    assert first and arturo_stamp.ensure(_data_dir) == first

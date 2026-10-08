@@ -2013,10 +2013,11 @@ def _onb_step_of(text):
     return _onb.split_marker(text)[0]
 
 
-def _offer_team(conversation_id):
+def _offer_team(conversation_id, principal):
+    """An offer belongs to the caller who was shown it: only that principal's next turn answers it."""
     if conversation_id:
         with _TEAM_OFFERS_LOCK:
-            _TEAM_OFFERS[conversation_id] = time.time()
+            _TEAM_OFFERS[conversation_id] = (time.time(), principal)
 
 
 def _begin_team_turn(conversation_id, step, principal=None):
@@ -2025,15 +2026,17 @@ def _begin_team_turn(conversation_id, step, principal=None):
     from services.arturo import onboarding as _onb
     now = time.time()
     with _TEAM_OFFERS_LOCK:
-        for book, when in ((_TEAM_OFFERS, lambda v: v), (_DEVICE_CARDS, lambda v: v[0])):
-            for k in [k for k, v in book.items() if now - when(v) >= _TEAM_OFFER_TTL_S]:
+        for book in (_TEAM_OFFERS, _DEVICE_CARDS):
+            for k in [k for k, v in book.items() if now - v[0] >= _TEAM_OFFER_TTL_S]:
                 del book[k]
         made = _TEAM_OFFERS.pop(conversation_id, None) if conversation_id else None
         card = _DEVICE_CARDS.pop(conversation_id, None) if conversation_id else None
-    answering = card is not None and now - card[0] < _TEAM_OFFER_TTL_S
+    # Consent is bound to the principal that was shown the card, and only a dashboard turn can give it.
+    fleet = principal == "fleet"
+    answering = fleet and card is not None and now - card[0] < _TEAM_OFFER_TTL_S and card[2] == principal
     return {"conversation_id": conversation_id, "step": step, "principal": principal,
             "onboarding": step in _onb.ONBOARDING_STEPS, "opener": step == "onboarding_open",
-            "offered": made is not None and now - made < _TEAM_OFFER_TTL_S,
+            "offered": fleet and made is not None and now - made[0] < _TEAM_OFFER_TTL_S and made[1] == principal,
             "devices_answer": answering, "devices_options": card[1] if answering else (),
             "declined": False, "choices": None, "pair_card": None, "finished": False}
 
@@ -2073,6 +2076,31 @@ _NON_FLEET_ALLOWED = frozenset({
 })
 # The voice call a /v1/chat/completions turn belongs to (set per request; that path has no turn record).
 _CALLER_CONV = _contextvars.ContextVar("arturo_caller_conv", default=None)
+
+
+def _stamped_principal(req):
+    """Who the gateway says is calling. "fleet" only with this install's stamp secret
+    (scripts/arturo_stamp.py), and never on a request that came through a proxy or the Funnel: a
+    forwarded request is not the gateway's own hop. Anything else is at most a non-fleet label."""
+    names = {k.lower() for k in req.headers.keys()}
+    if "forwarded" in names or "tailscale-funnel-request" in names or any(n.startswith("x-forwarded-") for n in names):
+        return None
+    principal = (req.headers.get("X-Arturo-Principal") or "").strip()
+    if principal == "fleet":
+        _sys.path.insert(0, str(_REPO_ROOT)) if str(_REPO_ROOT) not in _sys.path else None
+        from scripts import arturo_stamp
+        return "fleet" if arturo_stamp.verify(ORCHESTRA_DIR, req.headers.get(arturo_stamp.HEADER)) else None
+    return principal or None
+
+
+# Said instead of a promise when the background run was refused (a non-fleet turn): never "I'll text you"
+# for a text that will not come.
+_NOT_FROM_HERE = ("I can't do that from a voice call. Ask me in the Arturo chat on your dashboard and "
+                  "I'll do it there.")
+
+
+def _promise_or_refusal(result, promise):
+    return _NOT_FROM_HERE if str(result or "").startswith("NOT RUN") else promise
 
 
 def _is_fleet(turn):
@@ -2128,10 +2156,10 @@ def ask_choices(options, multi=False, purpose="other", exclusive=None):
         return "NOT SHOWN: a card needs 2 to 8 short, different options."
     purpose = purpose if purpose in _CHOICE_PURPOSES else "other"
     note = ""
-    if purpose != "other" and not turn.get("onboarding"):
-        # An offer or a devices card is the onboarding's, opened on the operator's onboarding turn. Off
-        # it, a card the brain chose to show could make the operator's next words a consent.
-        note = f" (shown as a plain card: {purpose} cards belong to the onboarding)"
+    if purpose != "other" and not (turn.get("onboarding") and _is_fleet(turn)):
+        # An offer or a devices card is the onboarding's, opened on the operator's own (dashboard)
+        # onboarding turn. Anywhere else a card could make someone's next words a consent.
+        note = f" (shown as a plain card: {purpose} cards belong to the dashboard's onboarding)"
         purpose = "other"
     card = {"options": clean, "multi": bool(multi), "purpose": purpose}
     if multi:
@@ -2145,14 +2173,14 @@ def ask_choices(options, multi=False, purpose="other", exclusive=None):
     if purpose == "starter_team":
         state = starter_team_state()["state"]
         if state in ("absent", "incomplete"):
-            _offer_team(turn.get("conversation_id"))
+            _offer_team(turn.get("conversation_id"), turn.get("principal"))
             card["note"] = _onb.TEAM_COST        # the server's words, never the model's
         else:
             card["purpose"] = "other"
             note = f" (no team offer recorded: the team is {state})"
     elif purpose == "devices" and turn.get("conversation_id"):
         with _TEAM_OFFERS_LOCK:
-            _DEVICE_CARDS[turn["conversation_id"]] = (time.time(), tuple(clean))
+            _DEVICE_CARDS[turn["conversation_id"]] = (time.time(), tuple(clean), turn.get("principal"))
     turn["choices"] = card
     return f"Card shown with: {', '.join(clean)}{note}. Wait for their answer."
 
@@ -2181,6 +2209,10 @@ _PAIR_SCOPES = ("read", "approve", "message")
 _PAIR_POWERS = "see your agents and approvals, answer approvals as you, and send messages to agents"
 
 
+# The operator's answer to a devices card is consent to pair those devices for a few minutes, not for good.
+_DEVICES_ANSWER_TTL_S = 600
+
+
 def _devices_answer_path():
     return Path(ARTURO_STATE) / "devices-answer.json"
 
@@ -2190,19 +2222,25 @@ def _record_devices_answer(value, options):
     card the server showed AND in what was recorded on the turn right after it. pair_device reads this,
     never the operator facts, which the brain can write on any turn."""
     from services.arturo import onboarding as _onb
-    said = {d.strip().lower() for d in str(value or "").split(",")}
+    said = {d.strip().lower() for d in re.split(r",|\band\b|&|/", str(value or ""))}
     shown = {str(o).strip().lower() for o in options}
     picked = [d for d in _onb.DEVICES if d.lower() in said and d.lower() in shown]
     p = _devices_answer_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"devices": picked, "answered_at": time.time()}) + "\n")
+    now = time.time()
+    p.write_text(json.dumps({"devices": picked, "answered_at": now,
+                             "expires_at": now + _DEVICES_ANSWER_TTL_S}) + "\n")
     return picked
 
 
 def _answered_devices():
+    """The devices on the operator's latest devices answer, while it is fresh; [] once it expired."""
     try:
-        return [str(d) for d in json.loads(_devices_answer_path().read_text()).get("devices") or []]
-    except (OSError, ValueError, AttributeError):
+        rec = json.loads(_devices_answer_path().read_text())
+        if float(rec.get("expires_at") or 0) <= time.time():
+            return []
+        return [str(d) for d in rec.get("devices") or []]
+    except (OSError, ValueError, AttributeError, TypeError):
         return []
 
 
@@ -2252,8 +2290,9 @@ def pair_device(device):
     if match not in _answered_devices():
         # Consent is the operator's answer to a devices card, recorded by the server; a devices fact the
         # brain wrote is not one.
-        return (f"NOT PAIRED: {match} is not among the devices the operator picked on a devices card. "
-                f"Show them one (ask_choices purpose='devices') during the onboarding.")
+        return (f"NOT PAIRED: {match} is not among the devices the operator picked on a devices card in "
+                f"the last {_DEVICES_ANSWER_TTL_S // 60} minutes. Show them one (ask_choices purpose='devices') "
+                f"during the onboarding.")
     base_url = (os.environ.get("ORCHESTRA_PUBLIC_URL") or "").strip()
     _sys.path.insert(0, str(_REPO_ROOT)) if str(_REPO_ROOT) not in _sys.path else None
     from scripts.pairing import pair_token, valid_base_url
@@ -2392,7 +2431,7 @@ def create_starter_team(project):
             # The same rule as a starter_team card (M1): an offer is the onboarding's.
             return ("NOT STARTED: the starter team is offered during the onboarding. Outside it, the operator "
                     "runs `orchestra starter --project <name>` themselves.")
-        _offer_team(turn.get("conversation_id"))
+        _offer_team(turn.get("conversation_id"), turn.get("principal"))
         return (f"NOT STARTED: the operator has not said yes yet. Ask them now, in one question: this starts "
                 f"gm (the manager, always on, which keeps costing tokens), pm-{project} and dev-{project}. "
                 f"Start it only after they say yes.")
@@ -4544,8 +4583,9 @@ def chat_completions():
                             "tool_args": original_args,
                             "summary": f"GM query: {original_args.get('prompt', '')[:80]}"
                         })
-                        yield make_sse_chunk("On it, I'll text you when it's done. ")
-                        _log_voice_turn(user_msg=_user_msg, assistant_msg="On it, I'll text you when it's done.",
+                        _said = _promise_or_refusal(async_result, "On it, I'll text you when it's done.")
+                        yield make_sse_chunk(_said + " ")
+                        _log_voice_turn(user_msg=_user_msg, assistant_msg=_said,
                                         tool_calls=[{"name": "async_task(gm_command)", "args": str(original_args)[:200]}],
                                         tool_results=[{"id": "guardrail", "result": async_result[:200]}],
                                         finish_reason="guardrail_async")
@@ -4819,8 +4859,10 @@ def chat_completions():
                         "tool_args": {"prompt": _user_msg},
                         "summary": f"Deep dive: {_user_msg[:80]}"
                     })
-                    yield make_sse_chunk("That's a deeper one — let me think it through and I'll text you the answer. ")
-                    _log_voice_turn(user_msg=_user_msg, assistant_msg="Escalated to GM via async",
+                    _said = _promise_or_refusal(
+                        async_result, "That's a deeper one — let me think it through and I'll text you the answer.")
+                    yield make_sse_chunk(_said + " ")
+                    _log_voice_turn(user_msg=_user_msg, assistant_msg=_said if _said == _NOT_FROM_HERE else "Escalated to GM via async",
                                     tool_calls=[{"name": "pass2_escalation", "args": _user_msg[:200]}],
                                     tool_results=[], finish_reason="voice_pass2")
                 else:
@@ -5537,7 +5579,7 @@ def text_stream_endpoint():
     # Taken once for the whole turn, whichever path ends up running it (stream, or text_turn behind
     # the fallback), and published to the threads that run its tools.
     _team_turn = _begin_team_turn(conversation_id, _onb_step_of(text_in),
-                                  request.headers.get("X-Arturo-Principal"))
+                                  _stamped_principal(request))
     version = _THREADS.turn_count(conversation_id)          # before the history: see prewarm
     history = _conversation_history(conversation_id)
     effective = _effective_brain(turn_brain)
@@ -5725,7 +5767,7 @@ def text_endpoint():
     data = request.get_json(silent=True) or {}
     code, result = text_turn(data.get("text"), data.get("conversation_id"),
                              brain=data.get("brain"), context=data.get("context"),
-                             principal=request.headers.get("X-Arturo-Principal"))
+                             principal=_stamped_principal(request))
     return jsonify(result), code
 
 

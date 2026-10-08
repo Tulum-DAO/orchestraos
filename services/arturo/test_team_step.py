@@ -268,22 +268,22 @@ def test_voice_and_other_turns_without_a_conversation_never_start_it(P, tmp_path
 
 def test_an_offer_is_good_for_exactly_the_next_turn(P):
     P._TEAM_OFFERS.clear()
-    P._offer_team("web_o1")
-    assert P._begin_team_turn("web_o1", "team")["offered"] is True
-    assert P._begin_team_turn("web_o1", "team")["offered"] is False     # taken: a later turn has none
-    assert P._begin_team_turn("web_other", "team")["offered"] is False  # never another conversation's
+    P._offer_team("web_o1", "fleet")
+    assert P._begin_team_turn("web_o1", "team", "fleet")["offered"] is True
+    assert P._begin_team_turn("web_o1", "team", "fleet")["offered"] is False     # taken: a later turn has none
+    assert P._begin_team_turn("web_other", "team", "fleet")["offered"] is False  # never another conversation's
 
 
 def test_an_expired_offer_is_not_a_yes(P, monkeypatch):
     P._TEAM_OFFERS.clear()
-    P._offer_team("web_o2")
+    P._offer_team("web_o2", "fleet")
     monkeypatch.setattr(P.time, "time", lambda: 10 ** 12)
-    assert P._begin_team_turn("web_o2", "team")["offered"] is False
+    assert P._begin_team_turn("web_o2", "team", "fleet")["offered"] is False
 
 
 def test_the_opener_turn_is_marked_as_the_opener(P):
-    assert P._begin_team_turn("web_o3", "onboarding_open")["opener"] is True
-    assert P._begin_team_turn("web_o3", "onboarding")["opener"] is False
+    assert P._begin_team_turn("web_o3", "onboarding_open", "fleet")["opener"] is True
+    assert P._begin_team_turn("web_o3", "onboarding", "fleet")["opener"] is False
 
 
 def test_an_offer_is_spent_by_the_run_it_allowed(P, tmp_path, monkeypatch):
