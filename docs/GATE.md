@@ -8,10 +8,10 @@ yourself) are in [docs/PROMPTS.md](PROMPTS.md). The short summary version lives 
 [docs/BEGINNERS_GUIDE.md](BEGINNERS_GUIDE.md); this page is the operational reference.
 
 Do the steps in order — each one depends on state the last one created (a data
-dir, a running supervisor, a spawned seat).
+dir, a running supervisor, a running starter team).
 
-**Before you clone anything: log in to one agent CLI — do this first, not after.** Step 2 spawns a
-seat, and `orchestra spawn` refuses (`refusing to spawn: no enabled runtime is installed AND
+**Before you clone anything: log in to one agent CLI — do this first, not after.** Step 2 starts your
+starter team, and `orchestra starter` refuses (`refusing to spawn: no enabled runtime is installed AND
 logged in`, exit 2) until one CLI is logged in. Ten seconds of logging in now saves that. You need one of Claude
 Code, Gemini CLI, or Codex already installed and authenticated — `orchestra
 doctor` in step 1 checks this and tells you what's missing, but you can't pass
@@ -59,37 +59,51 @@ before anything else. If `orchestra up` won't start, `<data>/logs/<name>.log`
 per [docs/INSTALL.md](INSTALL.md)'s process table has the real error; the supervisor's own
 stdout only says which child failed.
 
-## 2. Always-on agent spawned, answers questions in terminal
+## 2. Starter team running, gm answers questions in terminal
 
 ```bash
-orchestra spawn hello --task "Say hello, then park."
-tmux attach -t hello
+orchestra starter
 ```
 
-`orchestra spawn` registers the seat in the registry **and** seeds its lineage in the
-identity store (generation 1), which step 6's rotation requires. Do not use the older
-two-command recipe (`scripts/registry-update.py` + `./spawn-agent.sh`) here: it
-registers the seat but seeds no lineage, and `orchestra rotate` will refuse it with
-"no authoritative generation ... seed the seat via the identity store".
+This is the same starter team as [docs/INSTALL.md](INSTALL.md) §3; if you did that step,
+running it again is safe (seats already running are skipped). It starts three seats, each
+reporting to the one above: `gm` (T0, the manager you talk to), `pm-first-project` (T1, a
+project manager) and `dev-first-project` (T2, a worker). Every seat it starts is registered in
+the registry **and** has its lineage seeded in the identity store (generation 1), which step
+6's rotation requires. Do not use the older two-command recipe
+(`scripts/registry-update.py` + `./spawn-agent.sh`) here: it registers the seat but seeds no
+lineage, and `orchestra rotate` will refuse it with "no authoritative generation ... seed the
+seat via the identity store".
 
-Expected: the tmux pane shows the CLI's normal interactive UI, having already
-said hello per the task. Type a question directly into the pane (e.g. "what
-files are in this folder?") and get a real, current answer — not a canned one.
-Detach with `Ctrl-B D`.
+Expected: it ends with
+`starter team up: gm (T0) -> pm-first-project (T1) -> dev-first-project (T2)`.
+
+```bash
+tmux attach -t gm
+```
+
+Expected: the tmux pane shows the CLI's normal interactive UI. Type a question directly into
+the pane (e.g. "what files are in this folder?") and get a real, current answer, not a
+canned one. Detach with `Ctrl-B D`.
 
 ```bash
 curl -s http://127.0.0.1:8891/api/agents | python3 -m json.tool | grep -E '"id"|"alive"'
 ```
 
-Expected: `hello` appears with `"alive": true` within about 15 seconds of
-spawning (the status detector polls).
+Expected: `gm`, `pm-first-project` and `dev-first-project` appear with `"alive": true` within
+about 15 seconds (the status detector polls).
 
-**If it fails, look here:** `./spawn-agent.sh --list` shows registered seats,
-`--running` the live ones — if `hello` isn't in either, `orchestra spawn`'s own
-output names the failing step. If `tmux attach`
-shows a workspace-trust prompt instead of the CLI, answer it once by hand — the
-spawner tries to pre-seed it (`scripts/ensure_cwd_trusted.py`) but a fresh CLI
-version can add a new prompt shape.
+**If it fails, look here:** `refusing to spawn: no enabled runtime is installed AND logged in`
+means no agent CLI is logged in yet (see the top of this page). `starter stopped at <name>: ...`
+names the seat that did not start; fix the error printed above it and run `orchestra starter`
+again. `./spawn-agent.sh --list` shows registered seats, `--running` the live ones. If
+`tmux attach` shows a workspace-trust prompt instead of the CLI, answer it once by hand. The
+spawner tries to pre-seed it (`scripts/ensure_cwd_trusted.py`), but a fresh CLI version can add
+a new prompt shape.
+
+**A single seat instead (optional install check).** `orchestra spawn hello --task "Say hello,
+then park."` starts one seat on its own, which is useful when you are debugging the spawner
+itself. The steps below use the starter team, so you do not need it.
 
 ## 3. Telegram bot connected, agent answers from phone
 
@@ -115,8 +129,8 @@ orchestra down && orchestra up --detach    # starts the `telegram` service (plug
 ```
 
 On your phone, open the bot and send `/start` — it replies with your chat id and
-remembers it. Then text it a question, e.g. `what seats are running?`. The gm seat
-(`orchestra spawn gm --gm` if you haven't) gets it in its inbox as
+remembers it. Then text it a question, e.g. `what seats are running?`. The `gm` seat
+(started in step 2) gets it in its inbox as
 `from_agent=telegram` and answers with `python3 plugins/telegram/tg_send.py "<text>"`.
 Full setup and the what-happens table: `plugins/telegram/README.md`.
 
@@ -132,15 +146,17 @@ sent the bot `/start` yet.
 
 ## 4. Two seats exchange a message, both visible in Inbox
 
+Both seats are already running from step 2. Send a message from the project manager to the
+worker:
+
 ```bash
-orchestra spawn hello-2 --task "Say hello, then park."
 source scripts/orchestra-env.sh   # from the checkout, once per shell: points msg_store.py at your data dir
-python3 msg_store.py send --from hello --to hello-2 --type task --subject test --body-file <(echo "hi from hello")
-python3 msg_store.py inbox --agent hello-2
+python3 msg_store.py send --from pm-first-project --to dev-first-project --type task --subject test --body-file <(echo "hi from your project manager")
+python3 msg_store.py inbox --agent dev-first-project
 ```
 
 Expected: the `inbox` call shows the row you just sent (`subject: test`,
-`from_agent: hello`). The dashboard's Inbox view lists the same row.
+`from_agent: pm-first-project`). The dashboard's Inbox view lists the same row.
 
 **If it fails, look here:** `msg_store.py send` always writes the row — if
 `inbox` doesn't show it, you queried the wrong `--agent` name (must match
@@ -152,7 +168,7 @@ means the same thing: run `source scripts/orchestra-env.sh` and try again.
 
 ```bash
 source scripts/orchestra-env.sh   # already done in step 4 if this is the same shell; harmless to repeat
-python3 scripts/approval.py request "Ship the hello change?" --from hello --worker-kind pane --options approve,deny
+python3 scripts/approval.py request "Ship the first change?" --from dev-first-project --worker-kind pane --options approve,deny
 ```
 
 Expected: prints a card id (`apr_...`). It appears under Approvals in the
@@ -164,40 +180,44 @@ python3 scripts/approval.py get <card id>
 ```
 
 Expected: within a minute, `approval.py get` shows `status: resumed`, and
-`tmux capture-pane -p -t hello | tail -20` shows the decision delivered into
-the `hello` pane.
+`tmux capture-pane -p -t dev-first-project | tail -20` shows the decision delivered into
+the `dev-first-project` pane.
 
 **If it fails, look here:** `<data>/logs/approval_resume.log` has the
 delivery attempt; a card stuck at `status: answered` (never `resumed`) means
-the `approval_resume` beat hasn't run yet (every 60s) or `hello`'s pane
+the `approval_resume` beat hasn't run yet (every 60s) or `dev-first-project`'s pane
 wasn't idle when it tried.
 
-## 6. Manual rotation of the always-on agent completed, nothing lost
+## 6. Manual rotation of a seat completed, nothing lost
+
+This rotates the worker, `dev-first-project`, not `gm`: a first rotation is safest on the seat
+with the least to lose. ([docs/INSTALL.md](INSTALL.md) §6 shows the same command for `gm`.)
 
 ```bash
-orchestra rotate hello --synthesize
+orchestra rotate dev-first-project --synthesize
 ```
 
 `--synthesize` writes a minimal handoff for a seat that has not banked one (a real
-seat banks its own baton with canary questions; `hello` has nothing to hand over yet).
+seat banks its own baton with canary questions; `dev-first-project` has nothing to hand over yet).
 The successor then only has to prove it can read its own seat.
 
-**Give `hello` at least one real turn first** (the step 2 question is enough; a
-second such as "write a file notes.txt in your data dir with the word ROTPROOF" gives
-step 7 something to recall). The grader grounds the successor's answer in the
+**Give `dev-first-project` at least one real turn first.** Open it with
+`tmux attach -t dev-first-project` and ask it a question, as you did with `gm` in step 2. A
+second turn such as "write a file notes.txt in your data dir with the word ROTPROOF" gives
+step 7 something to recall. Detach with `Ctrl-B D`. The grader grounds the successor's answer in the
 predecessor's transcript; the tool warns before it starts if that transcript is too
 thin. Proven on public main, twice, with exactly those thin turns: a fresh
 `orchestra spawn` seat rotated and promoted to gen 2 in about a minute each time.
 
-Expected: a new generation of `hello` boots, reads the handoff the old one
+Expected: a new generation of `dev-first-project` boots, reads the handoff the old one
 wrote, answers a short set of canary questions anchored in the predecessor's
 own state, and — on a passing grade — is promoted: the registry's canonical
-pointer for `hello` now points at the new generation, the old one is retired.
+pointer for `dev-first-project` now points at the new generation, the old one is retired.
 
 **If it fails, look here:** `rotation REFUSED ... no authoritative generation ...
-seed the seat via the identity store` means the seat was not spawned with
-`orchestra spawn` (step 2) — the older `registry-update.py` + `spawn-agent.sh`
-recipe registers a seat without a lineage. Spawn it again with `orchestra spawn`
+seed the seat via the identity store` means the seat was not started with
+`orchestra starter` or `orchestra spawn` (step 2) — the older `registry-update.py` + `spawn-agent.sh`
+recipe registers a seat without a lineage. Start a seat again with `orchestra spawn`
 (a new name is simplest) and retry. `HOLD_GRADE` with `canary.missed: []` means every answer passed on its own and the
 veto is aggregate-level: `aggregate.reason` in the grade JSON says which rule
 (`distinct_q N < M: questions share anchors` — the same id repeated in every answer
@@ -206,7 +226,7 @@ earns credit for only one of them — or a union / id-class shortfall) and
 with `orchestra rotate <seat> --resume`. A `--synthesize` baton asks ONE combined
 question precisely so this cannot happen on a fresh seat. Plain `HOLD_GRADE` means the successor's readback
 did not clear the strict grader; with `--synthesize` on a seat this young the
-usual cause is a predecessor transcript too thin to anchor against — ask `hello`
+usual cause is a predecessor transcript too thin to anchor against — ask `dev-first-project`
 to do a little real work first, then retry. The handoff document and the successor's readback
 are both real files (see [docs/ARCHITECTURE.md](ARCHITECTURE.md)'s Vocabulary section for
 where) — read them; a failed promotion almost always shows up as a readback
@@ -215,13 +235,13 @@ answer that doesn't match an anchor in the predecessor's transcript, which
 
 ## 7. One fact written, restart, agent recalls it
 
-Inside the `hello` pane:
+Inside the `dev-first-project` pane (`tmux attach -t dev-first-project`):
 
 ```
 Remember that my favorite color is blue. Write it to your memory files.
 ```
 
-Restart or rotate `hello` (step 6), then inside the new generation:
+Restart or rotate `dev-first-project` (step 6), then inside the new generation:
 
 ```
 What's my favorite color?

@@ -30,18 +30,19 @@ run `orchestra doctor` again and confirm every required row is OK. Show me
 the exit code.
 ```
 
-## First agent
+## Starter team
 
-Why: `orchestra spawn` registers the seat, seeds its lineage (what a later
-rotation needs) and launches it in one step — an agent running it for you also
-verifies the tmux session and the API row.
+Why: `orchestra starter` starts three seats in one step (gm, a project manager and a
+worker), registers each one and seeds its lineage (what a later rotation needs). An
+agent running it for you also verifies the tmux sessions and the API rows.
 
 ```
-Spawn one seat named "hello" per docs/GATE.md §2: `orchestra spawn hello --task
-"Say hello, then park."` (runtime = whatever I have authed). Do NOT use
-scripts/registry-update.py + spawn-agent.sh — that older recipe registers a seat
-with no lineage and step 6's rotation refuses it. Show me the tmux session is
-running and that GET /api/agents (through the dashboard proxy) lists it.
+Start the starter team per docs/GATE.md §2: `orchestra starter` (runtime = whatever
+I have authed). It must end with `starter team up: gm (T0) -> pm-first-project (T1)
+-> dev-first-project (T2)`. Do NOT use scripts/registry-update.py + spawn-agent.sh:
+that older recipe registers a seat with no lineage, and step 6's rotation refuses
+it. Show me that output, `tmux ls` listing all three sessions, and GET /api/agents
+(through the dashboard proxy) listing gm, pm-first-project and dev-first-project.
 ```
 
 ## Connect Telegram
@@ -65,12 +66,12 @@ just that both seats exist — insist on inbox evidence, not just "sent
 successfully."
 
 ```
-Register and spawn a second seat named "hello-2" the same way as "hello".
-From "hello", send a message to "hello-2" with
-`python3 msg_store.py send --from hello --to hello-2 --type task --subject test
---body-file <a file, not --body inline>`. Then show me
-`python3 msg_store.py inbox --agent hello-2` proving the row arrived, and that
-the dashboard's Inbox view lists it too.
+Both seats are already running from the starter team. From "pm-first-project",
+send a message to "dev-first-project" with
+`python3 msg_store.py send --from pm-first-project --to dev-first-project --type task
+--subject test --body-file <a file, not --body inline>`. Then show me
+`python3 msg_store.py inbox --agent dev-first-project` proving the row arrived, and
+that the dashboard's Inbox view lists it too.
 ```
 
 ## Answer a card
@@ -81,12 +82,12 @@ once by hand is worth the two minutes.
 
 ```
 Fire one approval card per docs/INSTALL.md §5:
-`python3 scripts/approval.py request "Ship the hello change?" --from hello
+`python3 scripts/approval.py request "Ship the first change?" --from dev-first-project
 --worker-kind pane --options approve,deny`. Show me the card id, then answer
 it either from the dashboard or with curl against
 /api/approvals/<id>/approve, then show me `approval.py get <id>` reporting
-status "resumed" and the decision actually landed in the "hello" seat's tmux
-pane.
+status "resumed" and the decision actually landed in the "dev-first-project"
+seat's tmux pane.
 ```
 
 ## Rotate
@@ -96,8 +97,8 @@ dying when it runs out of context — trigger one manually once so you have
 seen a handoff and readback before you ever need to trust it unattended.
 
 ```
-Rotate the "hello" seat: `orchestra rotate hello --synthesize` (the
---synthesize flag writes a minimal handoff since "hello" has not banked one
+Rotate the worker seat: `orchestra rotate dev-first-project --synthesize` (the
+--synthesize flag writes a minimal handoff since "dev-first-project" has not banked one
 of its own — give it at least one real turn first, like writing a file with
 a distinctive word in it, so the successor has something to recall). Show me
 the handoff document the old generation wrote, the successor's readback
@@ -112,7 +113,7 @@ trustworthy — write one fact, restart the seat (or rotate it), and prove the
 new generation actually reads it rather than starting blank.
 
 ```
-Have the "hello" seat write one fact to its memory directory (a short
+Have the "dev-first-project" seat write one fact to its memory directory (a short
 one-fact file plus an update to its MEMORY.md index — see
 docs/ARCHITECTURE.md's Memory section and docs/MEMORY.md, once it lands, for
 the shape; this is NOT the handoff document -- that carries position, not

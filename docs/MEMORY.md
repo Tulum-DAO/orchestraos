@@ -14,7 +14,7 @@ Two stores, two jobs:
 ### Layout
 
 ```
-$ORCHESTRA_DIR/memory/hello/            <- lineage id: seat name minus any -gN / -genN suffix
+$ORCHESTRA_DIR/memory/dev-first-project/ <- lineage id: seat name minus any -gN / -genN suffix
 ├── MEMORY.md                           <- the index: one line per memory, no content
 ├── user_favorite_color.md              <- one fact per file
 ├── project_pixel_rollout.md
@@ -22,13 +22,13 @@ $ORCHESTRA_DIR/memory/hello/            <- lineage id: seat name minus any -gN /
 ```
 
 - `spawn-agent.sh` creates the directory and an empty `MEMORY.md` on the first spawn and puts the exact path in the seat's boot prompt, with the instruction to read the index before anything else.
-- The directory is keyed by the **lineage id** (`hello-g4` and `hello-gen12` both map to `hello`), so a rotated or restarted seat lands on the same files. That is the whole trick behind gate step 7.
+- The directory is keyed by the **lineage id** (`dev-first-project-g4` and `dev-first-project-gen12` both map to `dev-first-project`), so a rotated or restarted seat lands on the same files. That is the whole trick behind gate step 7.
 - The data dir is a small git repo (`orchestra init` sets it up); `memory/` is whitelisted in its `.gitignore` alongside the handoffs, so memory changes are versioned with the readbacks.
 
 ### `MEMORY.md` — the index
 
 ```markdown
-# hello memory index
+# dev-first-project memory index
 - [Favorite color](user_favorite_color.md) — operator's favorite color is blue
 - [Pixel rollout](project_pixel_rollout.md) — Acme Dental pixel live on staging 2026-09-17, prod pending DNS
 - [Never force-push](feedback_never_force_push.md) — operator correction 2026-09-15
@@ -71,7 +71,7 @@ Link related memories with `[[name]]`.
 
 ### Copy-paste prompt (gate step 7)
 
-Inside the `hello` seat's pane:
+Inside the `dev-first-project` seat's pane (`tmux attach -t dev-first-project`):
 
 ```
 Remember that my favorite color is blue. Write it to your memory directory:
@@ -86,7 +86,7 @@ Restart or rotate the seat (gate step 6), then in the new generation:
 What's my favorite color, and where did you read that from?
 ```
 
-Expected: "blue", citing `$ORCHESTRA_DIR/memory/hello/user_favorite_color.md` via the index. If the new generation does not know, check the directory directly — either the file was never written, or the successor skipped the index at boot.
+Expected: "blue", citing `$ORCHESTRA_DIR/memory/dev-first-project/user_favorite_color.md` via the index. If the new generation does not know, check the directory directly — either the file was never written, or the successor skipped the index at boot.
 
 ## 2. The facts store (what Arturo recalls)
 
