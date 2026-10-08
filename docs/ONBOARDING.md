@@ -9,8 +9,13 @@ Just want the web dashboard in your browser? That needs no pairing:
 This page is about the gateway (8890), which the phone app talks to.
 
 In the dashboard, Arturo may ask which devices you have (iPhone, iPad, Apple Watch, Mac, Android
-phone, or just this computer). Answering is optional and only tells it what you use; Arturo never
-pairs a device. Pairing is this page.
+phone, or just this computer). Answering is optional. For each iPhone, iPad or Mac you pick there,
+Arturo makes a pairing code and shows it in a card on the dashboard page, never in the chat
+text. The card says where to paste the code, what the device may do (read, approve, message) and
+how to revoke it, and Arturo then checks that the device connected. It pairs only from the
+dashboard's own chat, only devices you picked in the last 10 minutes, and never from a voice call
+or a phone. Apple Watch and Android get an answer but no code. This page is the other way to do
+the same thing yourself, with `orchestra pair`; both give the same kind of code.
 
 > **What works today, step by step** (updated 2026-10-08):
 >
@@ -263,6 +268,10 @@ through.
 
 ## 4. Connect the iOS app
 
+**Easier way:** in the dashboard, tell Arturo you have an iPhone or iPad. It shows the pairing
+code in a card there, with where to paste it. You still need the app and the pairing screen
+below; the code replaces running `orchestra pair` yourself.
+
 **Getting the app:** it is not on the App Store yet and has no public download. If nobody gave
 you a test build, you can't connect an iPhone yet: stop here. **[PERSON ONLY]** Installing and
 opening it is yours.
@@ -359,6 +368,10 @@ device stays active on the server. To cut it off there too, revoking is your dec
 **[PERSON ONLY]**: `orchestra devices --revoke <device id>`.
 
 ## 5. Connect the Mac app
+
+**Easier way:** in the dashboard, tell Arturo you have a Mac. It shows the pairing code in a card
+there, with where to paste it, instead of you running `orchestra pair`. Everything under "Before
+you start" still applies.
 
 The Mac app connects to your **gateway** (8890), the same way the iOS app does. It is not
 the dashboard: the dashboard (8891) needs no app, just a browser ([docs/INSTALL.md](INSTALL.md) §2).
