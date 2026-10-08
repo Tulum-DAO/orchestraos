@@ -89,7 +89,7 @@ Work out where things stand before doing anything. These checks only read; they 
   install's only if it proxies to the dashboard port that `orchestra status` shows AND the
   person added it in phase 7; anything else is not theirs.
 - Is `orchestra init` running, done or failed? `orchestra status` can't tell (it says the
-  supervisor is not running in all three cases), so check:
+  supervisor is not running in all three cases), so check, over ssh like the line above:
   `pgrep -af "[o]rchestra_cli init"`, then `tail -n 5 ~/init.log` and
   `grep -n -i failed ~/init.log`.
   - `pgrep` lists any line at all: init is still running (however it was started, by you or by
@@ -97,7 +97,8 @@ Work out where things stand before doing anything. These checks only read; they 
   - Nothing listed, and `~/init.log` ends with `INIT_EXIT=0` and `grep` finds no `failed` row:
     init finished. Continue phase 6 from the `[runtimes]` `sed` line.
   - `INIT_EXIT=` followed by anything else, or `grep` shows a `failed` row: bring those rows to
-    the person; don't retry by guessing.
+    the person; don't retry by guessing. (The `grep` can also catch npm or pip output that
+    happens to contain "failed". That errs on the safe side: the person decides.)
   - Nothing listed, and no `INIT_EXIT=` line (it was cut off): start it once more, as phase 6
     shows.
 
@@ -283,7 +284,7 @@ Ask them to open it on their own computer (any device on their Tailscale network
 you that the dashboard loads. The first visit can take a few seconds while the certificate is
 issued. Once they confirm, add one line:
 
-> Arturo takes it from there.
+> Arturo, your assistant, greets you in its own words and walks you through the rest in the chat.
 
 Don't set up the team yourself. In the dashboard, Arturo offers to start it, and it can explain
 the rest.
