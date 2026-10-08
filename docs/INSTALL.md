@@ -434,6 +434,12 @@ to. Use `["gemini"]` or `["codex"]` if that is your CLI. `orchestra.toml` has ot
 lines (`[arturo]`, `[telemetry]`, `[plugins.*]`); leave those alone. To edit by hand instead:
 `$EDITOR orchestra.toml`, find `[runtimes]`, and change the `enabled` line just below it.
 
+**Your timezone (recommended).** Agents show times in UTC unless you tell them where you are.
+In `orchestra.toml`, under `[operator]`, set `timezone` to your IANA zone name, for example
+`timezone = "America/Cancun"` or `timezone = "Europe/Berlin"` (find yours by searching "IANA
+time zone" plus your city). It is not detected from the server on purpose: a cloud server
+usually runs on UTC, not where you are. Left empty, agents show UTC and label it "UTC".
+
 `orchestra init` is idempotent: it never overwrites `orchestra.toml`, skips what
 exists, and prints did/skipped per step. `--data-dir PATH` moves state elsewhere
 (so does `ORCHESTRA_DIR=PATH` in the environment: flag > `ORCHESTRA_DIR` > `[data] dir`
