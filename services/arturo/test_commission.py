@@ -2,6 +2,8 @@
 # seat (the repo's spawn-agent.sh, runtime-declared, registered) plus a durable msg_store
 # commission row — not a bare `tmux new-session 'claude'` and a Telegram text (T2 acceptance).
 import importlib.util
+
+from services.arturo.conftest import as_fleet
 import pathlib
 
 import pytest
@@ -12,7 +14,7 @@ def _load_proxy():
         "arturo_proxy_commission", pathlib.Path("services/arturo/arturo-proxy.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod
+    return as_fleet(mod)
 
 
 @pytest.fixture

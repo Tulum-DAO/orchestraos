@@ -4178,6 +4178,28 @@ async def handle_arturo_ptt_vendor(request):
 ARTURO_TEXT_BASE = os.environ.get("ARTURO_TEXT_BASE") or (_loopback("ORCHESTRA_ARTURO_PORT", 5071) + "")
 
 
+def _arturo_upstream_headers(request) -> dict:
+    """Upstream headers for an Arturo text turn, built FRESH (a client's own headers never pass
+    through), plus who is calling: X-Arturo-Principal "fleet" for the fleet bearer (the dashboard's
+    path), "device:<id>" for a paired device. Arturo makes a pairing code only on a "fleet" turn, so
+    a voice-only device cannot ask it for a read, approve and message code (congruence
+    DEC-1791485978471942, A8). No resolved principal = no stamp, and Arturo then refuses.
+    "fleet" travels with this install's stamp secret (scripts/arturo_stamp.py): Arturo believes it only
+    with that secret, so the gateway's principal stamp is authenticated."""
+    headers = {"Content-Type": "application/json"}
+    ran, principal = _resolved_principal(request)
+    dev_id = (principal or {}).get("id") if ran else None
+    if dev_id == "legacy":
+        from scripts import arturo_stamp
+        secret = arturo_stamp.ensure(_data_dir())
+        if secret:
+            headers["X-Arturo-Principal"] = "fleet"
+            headers[arturo_stamp.HEADER] = secret
+    elif dev_id:
+        headers["X-Arturo-Principal"] = f"device:{dev_id}"
+    return headers
+
+
 async def handle_arturo_text(request):
     """POST /arturo/text {text, conversation_id} — the Arturo home's TEXT turn (tracks T2/T4).
     Bearer here, loopback upstream (:5071/text), which runs the full tool-enabled turn on
@@ -4191,7 +4213,7 @@ async def handle_arturo_text(request):
     try:
         async with aiohttp.ClientSession() as s:
             async with s.post(f"{ARTURO_TEXT_BASE}/text", data=body,
-                              headers={"Content-Type": "application/json"},
+                              headers=_arturo_upstream_headers(request),
                               timeout=aiohttp.ClientTimeout(total=190)) as r:
                 out = await r.json(content_type=None)
                 return _json(out, status=r.status)
@@ -4211,7 +4233,7 @@ async def handle_arturo_text_prewarm(request):
     try:
         async with aiohttp.ClientSession() as s:
             async with s.post(f"{ARTURO_TEXT_BASE}/text/prewarm", data=body,
-                              headers={"Content-Type": "application/json"},
+                              headers=_arturo_upstream_headers(request),
                               timeout=aiohttp.ClientTimeout(total=30)) as r:
                 return _json(await r.json(content_type=None), status=r.status)
     except Exception as e:  # noqa: BLE001
@@ -4235,7 +4257,7 @@ async def handle_arturo_text_stream(request):
         session = aiohttp.ClientSession()
         upstream = await session.post(
             f"{ARTURO_TEXT_BASE}/text/stream", data=body,
-            headers={"Content-Type": "application/json"},
+            headers=_arturo_upstream_headers(request),
             timeout=aiohttp.ClientTimeout(total=None, sock_read=190))
     except Exception as e:  # noqa: BLE001
         log.error(f"arturo/text/stream forward: upstream unreachable: {e}")
@@ -5465,10 +5487,13 @@ def _pairing_store():
     return PairingStore(_pairing_dir())
 
 
-def _pairing_dir():
+def _data_dir():
     from pathlib import Path as _P
-    base = os.environ.get("ORCHESTRA_DIR") or str(_P.home() / ".orchestra")
-    return _P(base) / "state" / "pairing"
+    return _P(os.environ.get("ORCHESTRA_DIR") or str(_P.home() / ".orchestra"))
+
+
+def _pairing_dir():
+    return _data_dir() / "state" / "pairing"
 
 
 #: The id recorded as `minted_by` for anything the fleet bearer issues. A stable string rather
@@ -5569,6 +5594,14 @@ async def handle_pair_exchange(request):
     if not got:
         return _json({"ok": False, "error": "pairing failed"}, status=400)
     log.info("pair/exchange: a pairing code was redeemed")   # never log the code or token
+    # Redeeming is the device's first use: mark it seen, so a newer code for the same device never
+    # treats a phone that just paired (and has not called anything else yet) as unused.
+    try:
+        rec = _device_store().resolve(str(got.get("token") or ""))
+        if rec:
+            _device_store().touch(rec["id"])
+    except Exception as e:  # noqa: BLE001 — bookkeeping must never fail the exchange
+        log.warning(f"pair/exchange: could not mark the device seen: {e}")
     return _json({"ok": True, "base_url": got["base_url"], "token": got["token"]})
 
 
@@ -6347,6 +6380,11 @@ def main():
               "(run: python3 watch_gateway.py --make-token)", file=sys.stderr)
         sys.exit(2)
     from aiohttp import web
+    try:
+        from scripts import arturo_stamp
+        arturo_stamp.ensure(_data_dir())      # Arturo's principal stamp secret, made on first start
+    except Exception as e:  # noqa: BLE001 — without it Arturo simply never sees a fleet turn
+        print(f"[watch_gateway] arturo stamp secret not created: {e}", file=sys.stderr)
     app = build_app()
     print(f"[watch_gateway] listening on http://{GATEWAY_HOST}:{GATEWAY_PORT}", file=sys.stderr)
     web.run_app(app, host=GATEWAY_HOST, port=GATEWAY_PORT, print=None)

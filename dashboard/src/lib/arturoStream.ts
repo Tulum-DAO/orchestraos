@@ -117,8 +117,12 @@ export interface StreamOutcome {
   spawned?: string[];
   operator?: any;
   brain?: any;
-  /** Only on a 'team' onboarding turn: the starter team as the server sees it after the turn. */
-  team?: any;
+  /** What the turn's tools left for the page (a choice card, a pairing card), and on an onboarding
+   *  turn whether onboarding is now done. */
+  choices?: any;
+  pair_card?: any;
+  paired?: any;
+  onboarding?: any;
   error?: string;
 }
 
@@ -191,7 +195,8 @@ export async function arturoTextStream(
   // operator, and a streamed turn used to report none of them.
   return {
     ok: true, reply_text: final.reply_text, tools_called: final.tools_called || [],
-    spawned: final.spawned || [], operator: final.operator, brain: final.brain, team: final.team,
+    spawned: final.spawned || [], operator: final.operator, brain: final.brain,
+    choices: final.choices, pair_card: final.pair_card, paired: final.paired, onboarding: final.onboarding,
   };
 }
 
@@ -234,7 +239,10 @@ export async function arturoTurn(
     return {
       ok: true, reply_text: res.reply_text || '', tools_called: res.tools_called || [],
       spawned: res.spawned || [], ...(res.operator !== undefined ? { operator: res.operator } : {}),
-      ...(res.team !== undefined ? { team: res.team } : {}),
+      ...(res.choices !== undefined ? { choices: res.choices } : {}),
+      ...(res.pair_card !== undefined ? { pair_card: res.pair_card } : {}),
+      ...(res.paired !== undefined ? { paired: res.paired } : {}),
+      ...(res.onboarding !== undefined ? { onboarding: res.onboarding } : {}),
     } as ArturoReply;
   }
   if (opts.signal?.aborted) return { ok: false, error: 'aborted' } as ArturoReply;

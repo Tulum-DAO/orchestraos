@@ -252,3 +252,16 @@
   width:44px; height:44px; margin-right:-8px; border-radius:12px;
 }
 .arturo-drawer .drawer-close:hover{ background:rgba(255,255,255,0.07); color:#fff; }
+/* A server line above a card's options (the starter team's cost). */
+.decision-note{ padding:12px 16px; font-size:13.5px; color:var(--grey2); border-bottom:1px solid var(--hair); }
+/* The pairing code card (PairCodeCard). */
+.pair-card{ box-sizing:border-box; width:100%; max-width:360px; background:var(--card); border-radius:18px; border:1px solid var(--hair); margin-top:4px; padding:14px 16px; display:flex; flex-direction:column; gap:8px; color:#fff; }
+.pair-card.expired, .pair-card.done{ color:var(--grey2); font-size:14px; }
+.pair-card.done{ color:#fff; }
+.pair-head{ font-size:15px; font-weight:600; display:flex; justify-content:space-between; gap:8px; }
+.pair-ttl{ color:var(--grey2); font-variant-numeric:tabular-nums; font-weight:500; }
+.pair-code{ box-sizing:border-box; display:block; font-size:12.5px; line-height:1.35; word-break:break-all; background:var(--card2); border-radius:10px; padding:10px 12px; user-select:all; }
+.pair-copy{ align-self:flex-start; background:var(--accent); color:#fff; border:0; border-radius:12px; padding:8px 14px; font-size:14px; font-weight:600; }
+.pair-line{ font-size:13.5px; line-height:1.4; }
+.pair-line.dim{ color:var(--grey2); }
+.pair-line.warn{ color:var(--accent); }

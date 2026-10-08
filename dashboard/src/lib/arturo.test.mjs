@@ -3,7 +3,7 @@
  *   node --experimental-strip-types dashboard/src/lib/arturo.test.mjs
  */
 import assert from 'node:assert';
-import { isStarting, waitForArturo, contextLine, contextFromLocation, brainLabel, slugify, firstStep, stepAfterRuntime, onboardingTurn, teamStepDone, toggleChoice, devicesAnswer, DEVICE_OPTIONS, DEVICE_ONLY_HERE } from './arturo.ts';
+import { isStarting, waitForArturo, contextLine, contextFromLocation, brainLabel, slugify, firstStep, onboardingTurn, toggleChoice, onboardingDone, isPageOpener, ONBOARDING_OPENER } from './arturo.ts';
 
 // --- isStarting: boot-window errors are "starting", real errors are not ------------------
 assert.equal(isStarting({ ok: false, error: 'HTTP 502' }), true);
@@ -65,34 +65,25 @@ console.log('arturo.test.mjs: all assertions passed');
 // --- onboarding is decided by what the SERVER knows; no surface parses a name ----------------
 assert.equal(firstStep(true), 'done');
 assert.equal(firstStep(false), 'runtime');          // a brain must exist before it is asked to listen (even when a name is cached)
-assert.equal(stepAfterRuntime(null, true), 'name');       // server knows no name -> ask (via the brain)
-assert.equal(stepAfterRuntime('Shaw', true), 'voice');    // known name -> never asked twice
-assert.equal(stepAfterRuntime('Shaw', false), 'team');
-// The team step ends on what the SERVER sees after the turn, never on a tool's name.
-assert.equal(teamStepDone({ state: 'present' }), true);
-assert.equal(teamStepDone({ state: 'other_manager', manager: 'boss' }), true);   // nothing it may create
-assert.equal(teamStepDone({ state: 'unknown' }), true);                          // could not check: explain, never offer
-assert.equal(teamStepDone({ state: 'absent' }), false);                          // still to ask
-assert.equal(teamStepDone({ state: 'incomplete' }), false);                      // a partial start can be asked again
-assert.equal(teamStepDone({ state: 'starting' }), false);                        // still running: ask again in a minute
-assert.equal(teamStepDone({ state: 'absent', declined: true }), true);           // an explicit no ends it
-assert.equal(onboardingTurn('team_open', 'Introduce my team.'), '[Onboarding: step=team_open]\nIntroduce my team.');
-// The devices card: multi-select, in the card's order, with "Just this computer" exclusive.
+// The brain runs onboarding from its instructions; the page only marks the turns and opens it.
+assert.equal(onboardingTurn('onboarding', 'hi my name is Shaw nice to meet you'), '[Onboarding: step=onboarding]\nhi my name is Shaw nice to meet you');
+assert.equal(onboardingTurn('onboarding_open', ONBOARDING_OPENER), `[Onboarding: step=onboarding_open]\n${ONBOARDING_OPENER}`);
+// The page's openers are never shown as the operator's words, including the two older ones on reload.
+assert.equal(isPageOpener(ONBOARDING_OPENER), true);
+assert.equal(isPageOpener('Introduce my team.'), true);
+assert.equal(isPageOpener('Explain how seats are organised here.'), true);
+assert.equal(isPageOpener('introduce my team please'), false);
+assert.equal(isPageOpener('hi'), false);
+// A multi-select card the brain wrote: card order, a second tap un-picks, an exclusive option stays exclusive.
 {
-  const O = DEVICE_OPTIONS, X = DEVICE_ONLY_HERE;
-  let p = toggleChoice(O, [], 'Apple Watch', X);
-  p = toggleChoice(O, p, 'iPhone', X);
-  assert.deepEqual(p, ['iPhone', 'Apple Watch']);                 // card order, not tap order
-  assert.deepEqual(toggleChoice(O, p, 'iPhone', X), ['Apple Watch']);   // a second tap un-picks
-  assert.deepEqual(toggleChoice(O, p, X, X), [X]);                 // the exclusive one clears the rest
-  assert.deepEqual(toggleChoice(O, [X], 'Mac', X), ['Mac']);       // and any other clears it
-  assert.deepEqual(toggleChoice(O, [X], X, X), []);
-  assert.equal(devicesAnswer(['iPhone', 'Apple Watch']), 'My devices: iPhone, Apple Watch');
-  assert.equal(onboardingTurn('devices', 'My devices: Mac'), '[Onboarding: step=devices]\nMy devices: Mac');
+  const O = ['iPhone', 'iPad', 'Apple Watch', 'Mac', 'None of these'], X = 'None of these';
+  let p = toggleChoice(O, [], 'Apple Watch');
+  p = toggleChoice(O, p, 'iPhone');
+  assert.deepEqual(p, ['iPhone', 'Apple Watch']);
+  assert.deepEqual(toggleChoice(O, p, 'iPhone'), ['Apple Watch']);
+  assert.deepEqual(toggleChoice(O, p, X, X), [X]);
+  assert.deepEqual(toggleChoice(O, [X], 'Mac', X), ['Mac']);
 }
-assert.equal(teamStepDone(undefined), false);                                    // an older server sends no state
-assert.equal(onboardingTurn('team', 'Introduce my team.'), '[Onboarding: step=team]\nIntroduce my team.');
-assert.equal(onboardingTurn('name', 'hi my name is Shaw nice to meet you'), '[Onboarding: step=name]\nhi my name is Shaw nice to meet you');
 console.log('arturo.test.mjs: onboarding helpers ok');
 
 // --- message states: one vocabulary for every Arturo chatmode ---------------------------
@@ -103,3 +94,11 @@ assert.equal(sendStateLabel('acked'), 'Acknowledged');
 assert.equal(sendStateLabel('failed'), 'Not delivered');
 assert.equal(sendStateLabel(undefined), '');
 console.log('arturo.test.mjs: send states ok');
+
+// --- onboardingDone: the page leaves onboarding only on the server's flag (S3, review of #278) ---------
+assert.equal(onboardingDone({ ok: true, onboarding: { done: true } }), true);
+assert.equal(onboardingDone({ ok: true, onboarding: { done: false } }), false);
+assert.equal(onboardingDone({ ok: true }), false);                                  // a turn off the onboarding says nothing
+assert.equal(onboardingDone({ ok: false, onboarding: { done: true } }), false);     // a failed turn never ends it
+assert.equal(onboardingDone({ ok: true, onboarding: { done: 'yes' } }), false);     // only the boolean
+assert.equal(onboardingDone(null), false);

@@ -155,33 +155,37 @@ Mac targets keep the legacy raw-tmux spawn (spawn-agent.sh is a server-side scri
 
 ### Onboarding (the first thread)
 
-The operator's name is **server state**: `services/arturo/operator_store.py` writes
+The operator's facts are **server state**: `services/arturo/operator_store.py` writes
 `<ARTURO_STATE>/operator.json`, `/health` and every `/text` reply carry
-`operator: {name, …}`, and every surface reads it there. `localStorage`
-`orchestra.arturo.name` is only a cache for the first paint;
-`orchestra.arturo.onboarded` marks a browser that finished the thread. Clear both
-and delete `operator.json` to run onboarding again. That erases the saved operator name and is
+`operator: {name, …}`, and every surface reads them there. Onboarding is finished when
+`<ARTURO_STATE>/onboarding.json` exists (the `finish_onboarding` tool writes it); `localStorage`
+`orchestra.arturo.onboarded` is the browser's copy. Delete `onboarding.json` and clear that key to
+run onboarding again. Deleting `operator.json` as well erases the saved operator name, and that is
 **a person's decision**: an agent must not do it unless the person asks for it.
 
-1. **runtime detect** — reads `/api/runtimes/available` + `/api/arturo/health`; if
-   nothing is logged in you get a terminal here and a *Check again* card. A brain must
-   exist before it is asked to listen, so this runs first.
-2. **name** — "What should I call you?" is a **brain turn**. The page sends the reply
-   with a first-line marker `[Onboarding: step=name]`; the proxy strips it and adds the
-   step's directive (`services/arturo/onboarding.py`) to the system context for that turn.
-   The brain understands the reply — typed or dictated, any phrasing, any language —
-   and records it with the `set_operator_fact` tool, or asks again in its own words.
-   The page advances when `tools_called` includes `set_operator_fact` (the same rule
-   the first-agent step uses for `spawn_agent`). Nothing parses a name on the client,
-   and a browser the server already knows is never asked twice.
-3. **voice** — the mic already dictates with no key; the card asks whether Arturo
-   should talk *back* (vendor key) or stay text-only. Only shown in text-only mode.
-4. **first agent** — "What should your first agent do?" → your answer is sent as a
-   commission; the brain picks the seat name and runs `spawn_agent`; when it ran, the
-   thread flips to ordinary chat.
+1. **runtime detect**: reads `/api/runtimes/available` + `/api/arturo/health`; if nothing is
+   logged in you get a terminal here and a *Check again* card. A brain must exist before it is
+   asked to listen, so this runs first.
+2. **the brain runs the rest from instructions**. No surface scripts a question. The page sends
+   one invisible opener marked `[Onboarding: step=onboarding_open]`, then marks every turn
+   `[Onboarding: step=onboarding]` until the server says onboarding is done. The proxy strips the
+   marker and adds ONE playbook (`services/arturo/onboarding.py`), rebuilt each turn from what
+   only the server knows: the operator facts, the team as seen, the voice mode. The brain decides
+   what to say and acts through tools: `set_operator_fact`, `ask_choices` (tap-to-pick cards),
+   `create_starter_team` / `decline_starter_team`, `pair_device` / `check_paired`,
+   `finish_onboarding`. The page leaves onboarding only when a reply carries
+   `onboarding: {done: true}`.
 
-Pairing (Track 1) is not in the web thread yet; the iOS thread adds it between
-steps 1 and 2 when it lands, and reads the name from `/health` like the web does.
+What the brain says is the playbook's; what may HAPPEN is pinned in `arturo-proxy.py`:
+- The starter team starts only on the operator turn right after a `starter_team` card shown on
+  an onboarding turn, and never on the page's own opener. A decline takes the offer off the book.
+- A pairing code is made only on a dashboard turn (the gateway stamps `X-Arturo-Principal: fleet`),
+  only for an iPhone, iPad or Mac the operator picked on a `devices` card (the server records that
+  answer), with fixed scopes (read, approve, message). The code goes to the page in a card and
+  never to the brain, the log or the thread history.
+- The turn right after a `devices` card records the devices and runs nothing else.
+- Any turn that is not a dashboard turn (a paired device, voice, `/ptt`, a raw loopback call)
+  runs a fail-closed tool allowlist.
 
 ## Paths, config keys, env — the index
 

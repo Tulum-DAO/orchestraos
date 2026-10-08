@@ -75,3 +75,32 @@ def configured_install(tmp_path, monkeypatch):
     assert c.load().data_dir == data_dir, "fixture did not take effect"
     yield data_dir
     c.load.cache_clear()
+
+
+# --------------------------------------------------------------------------------------
+# as_fleet: a tool unit test runs as the dashboard's turn.
+#
+# Non-fleet turns run a fail-closed tool allowlist (test_non_fleet_allowlist.py), and a bare
+# execute_tool() call has no turn record, which IS a non-fleet turn. A test of what an action
+# tool does therefore says whose turn it is: this marks the freshly loaded proxy's current
+# context as a fleet turn. Only for modules that do not drive text_turn (a turn there is made
+# per request) -- those pass principal="fleet" to the turn they start.
+def as_fleet(mod):
+    mod._TEAM_TURN.set(mod._begin_team_turn(None, None, "fleet"))
+    return mod
+
+
+# --------------------------------------------------------------------------------------
+# fleet_stamp: the headers the GATEWAY sends for a dashboard turn. "fleet" is believed only with
+# this install's stamp secret (scripts/arturo_stamp.py), made here in the test's own data dir.
+import pytest as _pytest
+
+
+@_pytest.fixture()
+def fleet_stamp(monkeypatch, tmp_path):
+    def make(mod):
+        data = tmp_path / "data"
+        monkeypatch.setattr(mod, "ORCHESTRA_DIR", data)
+        from scripts import arturo_stamp
+        return {"X-Arturo-Principal": "fleet", arturo_stamp.HEADER: arturo_stamp.ensure(data)}
+    return make

@@ -11,12 +11,16 @@
  */
 export interface ArturoBrain { kind: 'api' | 'runtime' | 'none'; runtime?: string; cli?: string; model: string; reason?: string; provider?: string }
 export interface ArturoStt { server: boolean; backend: 'local-whisper' | 'none'; state: 'ready' | 'warming' | 'not-installed' | 'off' | 'error'; reason?: string; install?: string; model?: string }
-export interface ArturoHealth { operator?: OperatorFacts; ok: boolean; status?: number; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; stt?: ArturoStt; error?: string }
-/** The starter team as the server sees it after a 'team' onboarding turn (services/arturo
- *  starter_team_state). Only `state` is read here; the seats are for the brain. */
-export type TeamState = { state: 'absent' | 'starting' | 'incomplete' | 'present' | 'other_manager' | 'unknown'; declined?: boolean; seats?: { name: string; tier: string; seen: string }[]; project?: string; manager?: string };
+export interface ArturoHealth { onboarded?: boolean; operator?: OperatorFacts; ok: boolean; status?: number; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; stt?: ArturoStt; error?: string }
+/** A tap-to-pick card the BRAIN wrote with ask_choices: its options, and whether several may be picked.
+ *  `note` is the server's own line (the starter team's cost), never the model's. */
+export type ChoiceCard = { options: string[]; multi: boolean; purpose: 'starter_team' | 'devices' | 'other'; note?: string; exclusive?: string };
+/** A pairing code card (pair_device). The brain never sees `code`; it is shown here and nowhere else. */
+export type PairCard = { device: string; device_id: string; code: string; expires_in_s: number; where: string; powers: string; revoke: string;
+  /** Page-only: set when a later turn's check_paired saw this device connect. The code is then dropped. */
+  paired?: boolean };
 
-export interface ArturoReply { team?: TeamState; operator?: OperatorFacts; ok: boolean; status?: number; reply_text?: string; conversation_id?: string; brain?: ArturoBrain; tools_called?: string[]; spawned?: string[]; error?: string; detail?: unknown; provider?: string; model?: string; reason?: string; field?: string }
+export interface ArturoReply { choices?: ChoiceCard; pair_card?: PairCard; paired?: string[]; onboarding?: { done: boolean }; operator?: OperatorFacts; ok: boolean; status?: number; reply_text?: string; conversation_id?: string; brain?: ArturoBrain; tools_called?: string[]; spawned?: string[]; error?: string; detail?: unknown; provider?: string; model?: string; reason?: string; field?: string }
 export interface ArturoContext { route: string; entityKind?: string; entityId?: string; hint?: string }
 export interface RuntimeRow { id: string; label?: string; cli?: string; installed: boolean; authed: boolean | 'unverified'; auth_reason?: string | null }
 
@@ -138,37 +142,25 @@ export function prettyModel(id: string): string {
 /** Server-side operator facts (services/arturo/operator_store.py); carried on /health and every /text reply. */
 export type OperatorFacts = { name?: string | null; timezone?: string | null; role?: string | null; pronouns?: string | null; devices?: string | null };
 
-/** Where the first thread starts. runtime first — a brain must exist before it is asked to
- *  listen; an onboarded browser goes straight to the thread. The known-name case is honoured
- *  inside the runtime step (stepAfterRuntime), so this never depends on localStorage alone. */
+/** Where the first thread starts: the runtime check (a brain must exist before it is asked to
+ *  listen), then the onboarding the brain runs from its instructions; an onboarded browser goes
+ *  straight to the thread. */
 export function firstStep(onboarded: boolean): 'runtime' | 'done' {
   return onboarded ? 'done' : 'runtime';
 }
 
-/** After a successful runtime probe: ask the name only if the SERVER does not know it. */
-export function stepAfterRuntime(operatorName?: string | null, textOnly?: boolean): 'name' | 'voice' | 'team' {
-  if (!operatorName) return 'name';
-  return textOnly ? 'voice' : 'team';
+/** The page's invisible opener: it lets the brain speak first. Never shown as the operator's words
+ *  (services/arturo/onboarding.py OPENER_SENTINEL). */
+export const ONBOARDING_OPENER = '(first run: the operator just opened OrchestraOS)';
+const LEGACY_OPENERS = ['Introduce my team.', 'Explain how seats are organised here.'];
+/** True for a stored user turn that the PAGE sent, not the operator: the opener, and the two openers
+ *  older pages sent. Hidden in the thread, including when a thread is reloaded. */
+export function isPageOpener(text: string): boolean {
+  const t = (text || '').trim();
+  return t.startsWith('(first run:') || LEGACY_OPENERS.includes(t);
 }
 
-/** The team step ends on what the SERVER says after the turn, never on the reply's wording: the team
- *  is running, there is nothing this step may create (another manager, or an unreadable registry), or
- *  the operator said no (decline_starter_team ran). absent / starting / incomplete keep the step open:
- *  a question is not a no, and a failed, partial or still-running start can be asked about again. */
-export function teamStepDone(team?: TeamState): boolean {
-  return !!team && (team.declined === true || team.state === 'present' || team.state === 'other_manager' || team.state === 'unknown');
-}
-
-/** The onboarding turn a surface sends: a first-line marker the proxy strips and turns into the
- *  step directive (services/arturo/onboarding.py). No parsing happens on this side, ever. */
-/** The devices card (onboarding step 'devices'). The SAME list, in the same order, as
- *  services/arturo/onboarding.py DEVICES, whose per-device facts the brain answers from; a test there
- *  reads this line, so the two cannot drift. */
-export const DEVICE_OPTIONS = ['iPhone', 'iPad', 'Apple Watch', 'Mac', 'Android phone', 'Just this computer'];
-/** Picking it clears the others, and picking any other clears it. */
-export const DEVICE_ONLY_HERE = 'Just this computer';
-
-/** One tap on a multi-select card: toggles `option`, keeps the card's order, and keeps the exclusive
+/** One tap on a multi-select card: toggles `option`, keeps the card's order, and keeps an exclusive
  *  option exclusive. */
 export function toggleChoice(options: string[], picked: string[], option: string, exclusive?: string): string[] {
   if (exclusive && option === exclusive) return picked.includes(option) ? [] : [option];
@@ -177,12 +169,15 @@ export function toggleChoice(options: string[], picked: string[], option: string
   return options.filter((o) => next.has(o));
 }
 
-/** The operator's answer as it is sent, and as it reads in their bubble. */
-export function devicesAnswer(picked: string[]): string {
-  return `My devices: ${picked.join(', ')}`;
+/** Onboarding ends by EFFECT: only when the server's reply says so (finish_onboarding wrote its flag),
+ *  never on a failed turn and never on the reply's wording. */
+export function onboardingDone(r: Pick<ArturoReply, 'ok' | 'onboarding'> | null | undefined): boolean {
+  return !!r && r.ok !== false && r.onboarding?.done === true;
 }
 
-export function onboardingTurn(step: 'name' | 'team' | 'team_open' | 'devices', text: string): string {
+/** The onboarding turn a surface sends: a first-line marker the proxy strips and turns into the
+ *  playbook (services/arturo/onboarding.py). No parsing happens on this side, ever. */
+export function onboardingTurn(step: 'onboarding' | 'onboarding_open', text: string): string {
   return `[Onboarding: step=${step}]\n${text}`;
 }
 

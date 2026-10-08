@@ -5,12 +5,12 @@
  * a one-off hand-drawn glyph, black canvas with the
  * accent glow behind the composer, empty state = mark + serif greeting, one two-row composer.
  *
- * Onboarding is Arturo's FIRST THREAD, not a form: runtime detect (catalog probe +
- * /api/arturo/health) → name (a BRAIN turn: the brain extracts it with set_operator_fact —
- * nothing here parses a reply) → optional voice → the team: Arturo explains gm (T0) → project manager (T1)
- * → worker (T2) and what gm does, and sets the team up with `orchestra starter` when the operator says yes
- * → which devices they have (a multi-select card; Arturo answers each from fixed facts), all through
- * the conversation. The team step ends on what the SERVER sees running; after devices it is ordinary chat.
+ * Onboarding is Arturo's FIRST THREAD, run by its BRAIN, not scripted here (the operator, 2026-10-08:
+ * "I don't want hardcoded arturo questions, just instructions to the llm that powers it"). The page
+ * only checks that a brain exists (catalog probe + /api/arturo/health; with none it offers a terminal
+ * to log one in), then sends one invisible opener and marks each turn until the SERVER says onboarding
+ * is done. The questions, the cards (ask_choices) and the pairing codes (pair_device) all come from
+ * the brain's tools; this page renders them and parses nothing.
  * The operator's name is SERVER state (/api/arturo/health .operator.name); localStorage only
  * caches it for the first paint.
  *
@@ -27,8 +27,8 @@ import { useArturoBrain } from '../stores/arturoBrain';
 import { arturoTurn, arturoPrewarm } from '../lib/arturoStream';
 import { brainFromThread, describeTurnError, toWireBrain } from '../lib/arturoBrain';
 import { arturoHealth, arturoText, runtimesAvailable, brainLabel, greeting, newConversationId,
-  isStarting, waitForArturo, STARTING_TEXT, firstStep, stepAfterRuntime, onboardingTurn, teamStepDone, sendStateLabel,
-  devicesAnswer, DEVICE_OPTIONS, DEVICE_ONLY_HERE,
+  isStarting, waitForArturo, STARTING_TEXT, firstStep, onboardingTurn, onboardingDone, isPageOpener, ONBOARDING_OPENER, sendStateLabel,
+  type ChoiceCard, type PairCard,
   type ArturoHealth, type RuntimeRow, type SendState } from '../lib/arturo';
 import { listThreads, loadThread, type ThreadSummary } from '../lib/arturoThreads';
 import WebTerminal from '../components/WebTerminal';
@@ -37,6 +37,7 @@ import { uploadAttachment, attachmentPreamble, describeAttachment, type Attachme
 import { useDictation } from '../components/arturo/useDictation.ts';
 import SpawnedAgentCard from '../components/arturo/SpawnedAgentCard';
 import ChoicesCard from '../components/arturo/ChoicesCard';
+import PairCodeCard from '../components/arturo/PairCodeCard';
 import ToolRun from '../components/arturo/ToolRun';
 import { applyTextDelta, applyToolCall, applyToolResult, groupParts, hasToolParts, type TurnPart } from '../lib/turnParts';
 import { Brain, Settings } from 'lucide-react';
@@ -45,9 +46,11 @@ type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[
   /** A streamed turn that ran tools, in the order it happened: text, tool cards, more text. */
   parts?: TurnPart[];
   decision?: { options: string[]; onPick: (v: string) => void };
-  /** A multi-select card: tap any number of options, then Continue. */
-  choices?: { options: string[]; exclusive?: string; onSubmit: (picked: string[]) => void } };
-type Step = 'name' | 'runtime' | 'voice' | 'team' | 'devices' | 'done';
+  /** A card the brain wrote (ask_choices): picking sends the option's words as the operator's turn. */
+  choices?: ChoiceCard;
+  /** A pairing code (pair_device). Lives only in this page's state: never in thread history. */
+  pairCard?: PairCard };
+type Step = 'runtime' | 'onboarding' | 'done';
 
 
 const LS_NAME = 'orchestra.arturo.name';
@@ -139,7 +142,9 @@ export default function ArturoHome() {
     const resumedBrain = brainFromThread(t, {});
     chooseBrain(resumedBrain);
     arturoPrewarm(id, toWireBrain(resumedBrain));
-    setTurns(t.turns.map((x) => ({ id: nextId.current++, role: x.role === 'user' ? 'user' : 'arturo', text: x.content })));
+    // The page's own opener is not the operator's words: hidden here too, on every reload.
+    setTurns(t.turns.filter((x) => !(x.role === 'user' && isPageOpener(x.content)))
+      .map((x) => ({ id: nextId.current++, role: x.role === 'user' ? 'user' : 'arturo', text: x.content })));
     setStep('done'); lsSet(LS_ONBOARDED, '1');
     setDrawer(false);
   }
@@ -164,6 +169,9 @@ export default function ArturoHome() {
       const h = await arturoHealth();
       if (!alive) return;
       if (h.operator?.name) { setName(h.operator.name); lsSet(LS_NAME, h.operator.name); }   // the server knows the operator
+      // The server's flag (finish_onboarding) ORed with this browser's: every existing install already
+      // has the local one, so nobody is sent through onboarding again.
+      if (h.onboarded) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }
       if (h.ok || !isStarting(h)) { setHealth(h); return; }
       setStarting(true);
       const ready = await waitForArturo({ onTick: (last) => { if (alive) setHealth(last); } });
@@ -185,57 +193,19 @@ export default function ArturoHome() {
   useEffect(() => {
     if (startedStep.current === step) return;
     startedStep.current = step;
-    if (step === 'runtime') {
-      if (turns.length === 0) say("Hi, I'm Arturo — the voice and text front door of this OrchestraOS. One moment while I check what I can think with.");
-      void runtimeStep();
-    }
-    // The team step is the brain's to speak, but a marker-only turn is rejected as empty, so the
-    // client opens it with a synthetic prompt. The directive, and the facts it branches on (is there a
-    // team, is each seat running), live server-side.
-    if (step === 'team') void openTeam();
-    // Asked AFTER the team: who you are, then your team, then where you will reach it.
-    if (step === 'devices') {
-      say('Which devices do you have? Pick all that apply, and I will tell you how to reach your team on each.', {
-        choices: { options: DEVICE_OPTIONS, exclusive: DEVICE_ONLY_HERE, onSubmit: (picked: string[]) => { void sendDevices(devicesAnswer(picked)); } },
-      });
-    }
+    if (step === 'runtime') void runtimeStep();
+    if (step === 'onboarding') void openOnboarding();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
-  /** Opens the team step: Arturo explains the tiers and gm's job, then asks its one question, or
-   *  names a team that is already up. Sent as a marked turn so the proxy attaches the step directive
-   *  and the server's view of the team to THIS turn only. */
-  async function openTeam() {
+  /** The brain speaks first: one invisible opener, marked onboarding_open (the server never lets it
+   *  create anything, and the page never shows it as the operator's words). */
+  async function openOnboarding() {
     const id = say('', { pending: true });
-    // A MINIMAL trigger on purpose, as the old hierarchy opener learned: anything that reads like a
-    // status question invites list_agents instead of the walk-through the directive asks for.
-    // 'team_open', not 'team': these are the PAGE's words, so the server never lets this turn start
-    // the team, however the brain reads them. The offer it makes is answered by the operator's turn.
-    const r = await arturoText(onboardingTurn('team_open', 'Introduce my team.'), convId.current);
-    patch(id, { pending: false, text: r.ok ? (r.reply_text || '(no reply)') : 'I could not introduce your team just now. Send me anything and I will try again.', tools: r.tools_called, spawned: r.spawned });
-    // Nothing to ask (the team is up, another manager exists, or the server could not check): done.
-    // A failed opener is NOT done: the step stays, so the operator's next message gets the intro.
-    if (r.ok && teamStepDone(r.team)) setStep('devices');
-  }
-
-  /** The devices answer, from the card or typed. A marked turn, so the proxy attaches the facts the
-   *  brain may use for each device; the brain records them with set_operator_fact. */
-  async function sendDevices(answer: string) {
-    if (busy) return;                      // one answer at a time: a card tap plus a quick typed line is two turns
-    setBusy(true);
-    setTurns((t) => t.map((x) => x.choices ? { ...x, choices: undefined } : x));
-    user(answer, 'sent');
-    const id = say('', { pending: true });
-    const r = await arturoText(onboardingTurn('devices', answer), convId.current);
-    setBusy(false);
-    // By EFFECT, and THIS turn's effect: the fact was written now (a devices turn can write no other
-    // field). Devices already on file from another browser must not close the step on a reply that
-    // recorded nothing, such as an off-topic question. Otherwise the card comes back.
-    const recorded = r.ok && (r.tools_called || []).includes('set_operator_fact') && !!r.operator?.devices;
-    patch(id, { pending: false, tools: r.tools_called,
-      text: r.ok ? (r.reply_text || '(no reply)') : 'I could not answer that just now.',
-      ...(recorded ? {} : { choices: { options: DEVICE_OPTIONS, exclusive: DEVICE_ONLY_HERE, onSubmit: (picked: string[]) => { void sendDevices(devicesAnswer(picked)); } } }) });
-    if (recorded) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }
+    const r = await arturoText(onboardingTurn('onboarding_open', ONBOARDING_OPENER), convId.current);
+    patch(id, { pending: false, text: r.ok ? (r.reply_text || '(no reply)') : 'I could not start just now. Send me anything and I will pick it up.',
+      tools: r.tools_called, spawned: r.spawned, choices: r.choices, pairCard: r.pair_card });
+    if (onboardingDone(r)) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }
   }
 
   async function runtimeStep(fresh = false) {
@@ -254,6 +224,7 @@ export default function ArturoHome() {
     const known = h.operator?.name || name;
     if (h.operator?.name && h.operator.name !== name) { setName(h.operator.name); lsSet(LS_NAME, h.operator.name); }
     const who = known ? `Good to see you, ${known}. ` : '';
+    if (h.onboarded) { setTurns((t) => t.filter((x) => x.id !== id)); lsSet(LS_ONBOARDED, '1'); setStep('done'); return; }
     if (h.brain?.kind === 'none' || (authed.length === 0 && h.brain?.kind !== 'api')) {
       const hint = installedOnly.length
         ? `I can see ${installedOnly.map((r) => r.label || r.id).join(', ')} installed but not logged in. `
@@ -291,45 +262,29 @@ export default function ArturoHome() {
         } });
       return;
     }
-    const brain = h.brain?.kind === 'api' ? `an API key (${brainLabel(h.brain)})` : `${brainLabel(h.brain)} through your logged-in CLI`;
-    const list = authed.length ? authed.map((r) => r.label || r.id).join(', ') : 'none';
-    const next = stepAfterRuntime(known, h.mode === 'text-only');
-    patch(id, { pending: false, text: `${who}I can see ${authed.length || 'no'} runtime${authed.length === 1 ? '' : 's'} authenticated: ${list}. My brain is running on ${brain}.${next === 'name' ? ' What should I call you?' : ''}` });
-    if (next === 'name') { setStep('name'); return; }
-    voiceStep();
-  }
-
-  /** The voice card. The mic already dictates with no key (on-device or the local STT); what
-   *  needs a vendor key is Arturo talking BACK. Say exactly that. */
-  function voiceStep() {
-    if (health?.mode !== 'text-only') { setStep('team'); return; }
-    setStep('voice');
-    say('You can already talk to me with the mic. Want me to talk back too (that needs a voice key), or is text fine for today?', {
-      decision: { options: ['Text is fine', 'I will add a voice key'], onPick: (v) => {
-        user(v);
-        if (v.startsWith('Text')) say('Text it is. You can add ELEVENLABS_API_KEY later and restart Arturo — nothing else changes.');
-        else say('Put ELEVENLABS_API_KEY (or CARTESIA_API_KEY) in the environment `orchestra up` runs under, restart, and /health will say mode: voice.');
-        setStep('team');
-      } },
-    });
+    // A brain exists: from here the brain runs the onboarding. The page says nothing of its own.
+    setTurns((t) => t.filter((x) => x.id !== id));
+    setStep('onboarding');
   }
 
   const user = (text: string, state?: SendState) => { const id = nextId.current++; setTurns((t) => [...t, { id, role: 'user', text, state }]); return id; };
 
-  async function send() {
-    const text = draft.trim();
+  /** Send the composer's text, or `picked`: the words of a card option the operator tapped. */
+  async function send(picked?: string) {
+    const text = (picked ?? draft).trim();
     if (!text || busy) return;
-    if (dictating) stopDictation();      // the sent text is final; don't re-append into the empty box
-    clearDictNote();
-    setDraft('');
-    // A typed answer to the devices card goes the card's way: the same marked turn, then done.
-    if (step === 'devices') { void sendDevices(text); return; }
+    if (picked === undefined) {
+      if (dictating) stopDictation();    // the sent text is final; don't re-append into the empty box
+      clearDictNote();
+      setDraft('');
+    }
+    // A card is answered once: by a tap, or by whatever the operator typed instead.
+    setTurns((t) => t.map((x) => x.choices ? { ...x, choices: undefined } : x));
     const uid = user(text, 'sending');   // the bubble appears NOW; the box is already empty
-    const isName = step === 'name';
-    const isTeam = step === 'team';
-    // The name and team steps are BRAIN turns: the marker makes the proxy add the step's directive,
-    // the brain understands the reply (dictated or typed, any phrasing, any language) and acts on it
-    // with a tool — or asks again in its own words. Nothing is parsed here.
+    // While onboarding, every turn is a BRAIN turn under the playbook: the marker makes the proxy add
+    // it, the brain understands the reply (dictated or typed, any phrasing) and acts with a tool or
+    // asks again in its own words. Nothing is parsed here.
+    const isOnboarding = step === 'onboarding';
     const body = text;
     setBusy(true);
     const id = say('', { pending: true });
@@ -338,9 +293,8 @@ export default function ArturoHome() {
     const pre = attachmentPreamble(attachments);
     const withFiles = pre ? `${pre}\n\n${body}` : body;
     // The onboarding marker is applied LAST so it is always line 1 — the proxy anchors on it
-    // (a file attached during the name step must not push it down; peer review DEC-1790048447550594).
-    const sent = isName ? onboardingTurn('name', withFiles)
-      : isTeam ? onboardingTurn('team', withFiles) : withFiles;
+    // (an attached file must not push it down; peer review DEC-1790048447550594).
+    const sent = isOnboarding ? onboardingTurn('onboarding', withFiles) : withFiles;
     setAttachments([]);
     const onSent = () => patch(uid, { state: 'sent' });
     const turnBrain = toWireBrain(brainChoice);
@@ -392,20 +346,19 @@ export default function ArturoHome() {
       return;
     }
     patch(id, { pending: false, streaming: false, text: r.reply_text || streamed || '(no reply)', tools: r.tools_called, spawned: r.spawned,
+      choices: r.choices, pairCard: r.pair_card,
       // Kept only when tools ran: a turn of text alone renders exactly as it always has.
       parts: hasToolParts(parts) ? parts : undefined });
-    if (isName) {
-      // Advance only on the EFFECT: the brain recorded a name (the spawn_agent pattern). Otherwise
-      // its reply was a re-ask and the step stays — including the NullBrain sentence, where the
-      // honest path is to wait for a brain rather than store a guess.
-      const got = (r.tools_called || []).includes('set_operator_fact') ? (r.operator?.name || '') : '';
-      if (got) { setName(got); lsSet(LS_NAME, got); voiceStep(); }
-      return;
+    if (r.operator?.name && r.operator.name !== name) { setName(r.operator.name); lsSet(LS_NAME, r.operator.name); }
+    // A device the server saw connect (check_paired): its card drops the code and says "paired".
+    const nowPaired = r.paired || [];
+    if (nowPaired.length) {
+      setTurns((t) => t.map((x) => x.pairCard && nowPaired.includes(x.pairCard.device_id)
+        ? { ...x, pairCard: { ...x.pairCard, code: '', paired: true } } : x));
     }
-    // By EFFECT: the server re-reads the team after the turn, so the step ends when it is RUNNING or
-    // the operator said no (the server records an explicit decline), never on a tool's name or on a
-    // reply with no tool call: "how much does gm cost?" is a question, not a no.
-    if (isTeam && teamStepDone(r.team)) setStep('devices');
+    // By EFFECT: onboarding ends when the server says so (finish_onboarding wrote its flag), never on
+    // a reply's wording.
+    if (isOnboarding && onboardingDone(r)) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }
   }
 
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -464,7 +417,19 @@ export default function ArturoHome() {
               : <div className="txt">{renderText(t.text)}</div>}
             {!hasToolParts(t.parts) && t.tools && t.tools.length > 0 && <div className="tools">ran {t.tools.join(', ')}</div>}
             <SpawnedAgentCard ids={t.spawned} />
-            {t.choices && <ChoicesCard options={t.choices.options} exclusive={t.choices.exclusive} onSubmit={t.choices.onSubmit} />}
+            {t.pairCard && <PairCodeCard card={t.pairCard} />}
+            {t.choices && t.choices.multi && (
+              <ChoicesCard options={t.choices.options} note={t.choices.note} exclusive={t.choices.exclusive} onSubmit={(picked) => { void send(picked.join(', ')); }} />
+            )}
+            {t.choices && !t.choices.multi && (
+              <div className="decision-card">
+                {t.choices.note && <div className="decision-note">{t.choices.note}</div>}
+                {t.choices.options.map((o) => (
+                  <button key={o} className="decision-opt" onClick={() => { void send(o); }}>{o}<span className="r" /></button>
+                ))}
+                <div className="decision-freetext">✎ Or type your own answer below…</div>
+              </div>
+            )}
             {t.decision && (
               <div className="decision-card">
                 {t.decision.options.map((o) => (

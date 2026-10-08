@@ -5,6 +5,8 @@
 # SAFETY: every wiring test stubs requests.post with a loud recorder BEFORE calling
 # execute_tool — in a broken/RED state the real branch would otherwise text the operator.
 import importlib.util
+
+from services.arturo.conftest import as_fleet
 import pathlib
 
 import pytest
@@ -17,7 +19,7 @@ def _load_proxy():
         "arturo_proxy", pathlib.Path("services/arturo/arturo-proxy.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod
+    return as_fleet(mod)
 
 
 # The two verbatim field misroutes from the operator's 2026-08-18 calls (logs/arturo-proxy.log

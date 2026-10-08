@@ -7,6 +7,8 @@ made binding: the T0 check is SERVER-side with three states (never two), a refus
 spawn, and an unset `kind` leaves the worker path byte-identical.
 """
 import importlib.util
+
+from services.arturo.conftest import as_fleet
 import json
 import pathlib
 
@@ -15,7 +17,7 @@ def _load_proxy():
     spec = importlib.util.spec_from_file_location("arturo_proxy", pathlib.Path("services/arturo/arturo-proxy.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod
+    return as_fleet(mod)
 
 
 def _registry(tmp_path, agents):
@@ -28,7 +30,7 @@ def _registry(tmp_path, agents):
 def test_an_unknown_step_still_carries_no_directive():
     from services.arturo import onboarding as onb
     assert onb.directive("nope", {"manager": None}) == ""
-    assert onb.directive("name") != ""        # the old one-arg call still works
+    assert onb.directive("onboarding") != ""  # the one-arg call still works
     assert onb.directive("hierarchy", {"manager": None}) == ""   # retired with the dashboard step
 
 

@@ -5,6 +5,8 @@ line) + the fold-in (journal `surface` stamping from active-surface at call star
 All subprocess tests use injected fake commands — no real claude/agy spawns.
 """
 import importlib.util
+
+from services.arturo.conftest import as_fleet
 import json
 import os
 import pathlib
@@ -24,7 +26,7 @@ def _load_proxy():
         "arturo_proxy_dp", pathlib.Path("services/arturo/arturo-proxy.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod
+    return as_fleet(mod)
 
 
 @pytest.fixture(autouse=True)

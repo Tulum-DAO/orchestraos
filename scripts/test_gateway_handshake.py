@@ -206,3 +206,21 @@ def test_pair_exchange_with_no_code_is_a_400_not_a_crash(gw, monkeypatch, tmp_pa
 def test_pair_exchange_route_is_registered(gw):
     src = (ROOT / "scripts" / "watch_gateway.py").read_text()
     assert 'app.router.add_post("/pair/exchange"' in src
+
+
+def test_pair_exchange_marks_the_redeemed_device_seen(gw, tmp_path, monkeypatch):
+    """Redeeming is the device's first use. Unmarked, a newer code for the same device took a phone
+    that had just paired (and called nothing else yet) for an unused device and revoked it."""
+    import asyncio
+    from scripts.device_tokens import DeviceStore
+    from scripts.pairing import PairingStore
+    monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path / "data"))
+    devices = DeviceStore(tmp_path / "data" / "state" / "devices")
+    dev, token = devices.mint("iphone (arturo)", ["read"], minted_by="arturo-onboarding")
+    other, _ = devices.mint("ipad", ["read"])
+    store = PairingStore(tmp_path / "pairing")
+    code = store.mint(base_url="https://box:8443", token=token)
+    monkeypatch.setattr(gw, "_pairing_store", lambda: store, raising=False)
+    assert asyncio.run(gw.handle_pair_exchange(_PostReq({"code": code}))).status == 200
+    rows = {r["id"]: r for r in devices.list()}
+    assert rows[dev]["last_seen_at"] and not rows[other]["last_seen_at"]

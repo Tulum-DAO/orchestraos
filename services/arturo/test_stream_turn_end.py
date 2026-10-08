@@ -41,9 +41,9 @@ def test_an_onboarding_turn_goes_down_the_whole_turn_path_with_its_marker_applie
     monkeypatch.setattr(P._text_stream, "stream_turn",
                         lambda **kw: (_ for _ in ()).throw(AssertionError("an onboarding turn must not stream")))
     with P.app.test_client() as c:
-        r = c.post("/text/stream", json={"text": "[Onboarding: step=name]\nI'm Mo", "conversation_id": "c1"})
+        r = c.post("/text/stream", json={"text": "[Onboarding: step=onboarding]\nI'm Mo", "conversation_id": "c1"})
         end = _turn_end(_events(r))
-    assert seen["text"].startswith("[Onboarding: step=name]"), "text_turn applies the marker itself"
+    assert seen["text"].startswith("[Onboarding: step=onboarding]"), "text_turn applies the marker itself"
     assert end["tools_called"] == ["set_operator_fact"]
     assert end["operator"] == {"name": "Mo"}
 
@@ -73,7 +73,7 @@ def test_the_marker_is_found_on_the_message_even_with_page_context(P, monkeypatc
     monkeypatch.setattr(P._text_stream, "stream_turn",
                         lambda **kw: (_ for _ in ()).throw(AssertionError("an onboarding turn must not stream")))
     with P.app.test_client() as c:
-        r = c.post("/text/stream", json={"text": "[Onboarding: step=team]\nno thanks",
+        r = c.post("/text/stream", json={"text": "[Onboarding: step=onboarding]\nno thanks",
                                          "conversation_id": "c3", "context": {"route": "/arturo"}})
         _turn_end(_events(r))
 
