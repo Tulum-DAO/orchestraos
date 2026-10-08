@@ -141,6 +141,12 @@ def test_a_manager_not_named_gm_is_other_manager(P, tmp_path, monkeypatch):
     assert st == {"state": "other_manager", "manager": "boss"}
 
 
+def test_state_starting_while_a_run_is_in_progress(P, tmp_path, monkeypatch):
+    monkeypatch.setattr(P, "ORCHESTRA_DIR", _registry(tmp_path, {}))
+    monkeypatch.setattr(P, "starter_running", lambda: True)
+    assert P.starter_team_state(seen=lambda n: "running")["state"] == "starting"
+
+
 def test_an_unreadable_registry_is_unknown(P, tmp_path, monkeypatch):
     (tmp_path / "registry.json").write_text("{not json")
     monkeypatch.setattr(P, "ORCHESTRA_DIR", str(tmp_path))
@@ -169,7 +175,24 @@ def test_seat_seen_without_a_session(P, monkeypatch):
     assert P.seat_seen("gm") == "no session"
 
 
-# ---- the tool -----------------------------------------------------------------------------
+# ---- the tool ----------------------------------------------------------------------------------
+import contextlib
+import threading
+
+
+@contextlib.contextmanager
+def _turn(P, offered=True, opener=False, cid="web_c1"):
+    tok = P._TEAM_TURN.set({"conversation_id": cid, "opener": opener, "offered": offered, "declined": False})
+    try:
+        yield
+    finally:
+        P._TEAM_TURN.reset(tok)
+
+
+def _no_run(*a, **k):
+    raise AssertionError("orchestra starter ran")
+
+
 def test_the_tool_runs_orchestra_starter_and_reports_each_seat_as_seen(P, tmp_path, monkeypatch):
     monkeypatch.setattr(P, "ORCHESTRA_DIR", _registry(tmp_path, {}))
     ran = {}
@@ -181,7 +204,8 @@ def test_the_tool_runs_orchestra_starter_and_reports_each_seat_as_seen(P, tmp_pa
     monkeypatch.setattr(P, "seat_seen", lambda n: "stopped" if n == "dev-website" else "running")
     spawned = []
     monkeypatch.setattr(P, "_record_spawned_this_turn", spawned.append)
-    out = P.execute_tool("create_starter_team", {"project": "website"})
+    with _turn(P):
+        out = P.execute_tool("create_starter_team", {"project": "website"})
     assert ran["argv"][1:] == ["starter", "--project", "website"]
     assert ran["argv"][0].endswith("bin/orchestra")
     assert "gm (T0): running" in out
@@ -196,71 +220,279 @@ def test_the_tool_defaults_the_project(P, tmp_path, monkeypatch):
     ran = {}
     monkeypatch.setattr(P, "_run_commission", lambda plan, timeout=120: (ran.setdefault("argv", plan.argv), (True, ""))[1])
     monkeypatch.setattr(P, "seat_seen", lambda n: "running")
-    P.execute_tool("create_starter_team", {})
+    with _turn(P):
+        P.execute_tool("create_starter_team", {})
     assert ran["argv"][-2:] == ["--project", "first-project"]
+
+
+def test_a_fresh_install_with_no_registry_file_proceeds_like_the_directive_offered(P, tmp_path, monkeypatch):
+    # review #268 should-fix 4: the directive said "absent" (offer) while the tool said "could not
+    # check" (refuse). Both now read starter_team_state.
+    monkeypatch.setattr(P, "ORCHESTRA_DIR", str(tmp_path))
+    ran = []
+    monkeypatch.setattr(P, "_run_commission", lambda plan, timeout=120: (ran.append(plan.argv), (True, ""))[1])
+    monkeypatch.setattr(P, "seat_seen", lambda n: "running")
+    with _turn(P):
+        P.execute_tool("create_starter_team", {"project": "website"})
+    assert ran
 
 
 @pytest.mark.parametrize("bad", ["My Website", "web.site", "-x", "a" * 41, "../etc"])
 def test_the_tool_refuses_a_project_name_before_running_anything(P, tmp_path, monkeypatch, bad):
     monkeypatch.setattr(P, "ORCHESTRA_DIR", _registry(tmp_path, {}))
-    monkeypatch.setattr(P, "_run_commission", lambda *a, **k: (_ for _ in ()).throw(AssertionError("ran")))
-    out = P.execute_tool("create_starter_team", {"project": bad})
+    monkeypatch.setattr(P, "_run_commission", _no_run)
+    with _turn(P):
+        out = P.execute_tool("create_starter_team", {"project": bad})
     assert "lowercase" in out
 
 
 def test_the_tool_refuses_when_another_manager_exists(P, tmp_path, monkeypatch):
     monkeypatch.setattr(P, "ORCHESTRA_DIR", _registry(tmp_path, {"boss": {"tier": "T0"}}))
-    monkeypatch.setattr(P, "_run_commission", lambda *a, **k: (_ for _ in ()).throw(AssertionError("ran")))
-    out = P.execute_tool("create_starter_team", {"project": "website"})
+    monkeypatch.setattr(P, "_run_commission", _no_run)
+    with _turn(P):
+        out = P.execute_tool("create_starter_team", {"project": "website"})
     assert "boss" in out and "did not" in out
+
+
+def test_gm_beside_another_manager_is_not_refused_for_the_other_one(P, tmp_path, monkeypatch):
+    # the old tool read existing_manager(), which could return the other T0 and refuse
+    monkeypatch.setattr(P, "ORCHESTRA_DIR", _registry(tmp_path, {"aaa": {"tier": "T0"}, "gm": {"tier": "T0"}}))
+    ran = []
+    monkeypatch.setattr(P, "_run_commission", lambda plan, timeout=120: (ran.append(1), (True, ""))[1])
+    monkeypatch.setattr(P, "seat_seen", lambda n: "running" if n == "gm" else "no session")
+    with _turn(P):
+        P.execute_tool("create_starter_team", {"project": "website"})
+    assert ran
 
 
 def test_the_tool_refuses_when_the_registry_is_unreadable(P, tmp_path, monkeypatch):
     (tmp_path / "registry.json").write_text("{not json")
     monkeypatch.setattr(P, "ORCHESTRA_DIR", str(tmp_path))
-    monkeypatch.setattr(P, "_run_commission", lambda *a, **k: (_ for _ in ()).throw(AssertionError("ran")))
-    out = P.execute_tool("create_starter_team", {"project": "website"})
+    monkeypatch.setattr(P, "_run_commission", _no_run)
+    with _turn(P):
+        out = P.execute_tool("create_starter_team", {"project": "website"})
     assert "could not" in out.lower()
+
+
+def test_a_running_team_is_not_started_again(P, tmp_path, monkeypatch):
+    monkeypatch.setattr(P, "ORCHESTRA_DIR", _registry(tmp_path, STARTER))
+    monkeypatch.setattr(P, "_run_commission", _no_run)
+    monkeypatch.setattr(P, "seat_seen", lambda n: "running")
+    with _turn(P):
+        out = P.execute_tool("create_starter_team", {"project": "website"})
+    assert "already running" in out and "dev-website (T2): running" in out
 
 
 def test_a_failed_starter_still_reports_what_is_seen(P, tmp_path, monkeypatch):
     monkeypatch.setattr(P, "ORCHESTRA_DIR", _registry(tmp_path, {}))
     monkeypatch.setattr(P, "_run_commission", lambda plan, timeout=120: (False, "starter stopped at pm-website: boom"))
     monkeypatch.setattr(P, "seat_seen", lambda n: "running" if n == "gm" else "no session")
-    out = P.execute_tool("create_starter_team", {"project": "website"})
+    with _turn(P):
+        out = P.execute_tool("create_starter_team", {"project": "website"})
     assert out.startswith("FAILED")
     assert "boom" in out
     assert "gm (T0): running" in out and "pm-website (T1): not started" in out
 
 
-def test_the_tool_is_offered_to_the_brain_and_is_side_effecting(P):
+def test_the_tools_are_offered_to_the_brain_and_are_side_effecting(P):
     from services.arturo import voice_guards as vg
     names = [t["function"]["name"] for t in P.TOOLS]
-    assert "create_starter_team" in names
-    assert vg.is_side_effecting("create_starter_team")
+    for tool in ("create_starter_team", "decline_starter_team"):
+        assert tool in names
+        assert vg.is_side_effecting(tool)
+
+
+# ---- the operator's yes, enforced in code (review #268 blocker) --------------------------------
+def test_the_page_opener_can_never_start_the_team(P, tmp_path, monkeypatch):
+    # "Introduce my team." is the PAGE's words; even with an offer on the book it is not a yes
+    monkeypatch.setattr(P, "ORCHESTRA_DIR", _registry(tmp_path, {}))
+    monkeypatch.setattr(P, "_run_commission", _no_run)
+    with _turn(P, offered=True, opener=True):
+        out = P.execute_tool("create_starter_team", {"project": "website"})
+    assert out.startswith("NOT STARTED")
+
+
+def test_an_unrelated_turn_cannot_start_it_and_asks_instead(P, tmp_path, monkeypatch):
+    monkeypatch.setattr(P, "ORCHESTRA_DIR", _registry(tmp_path, {}))
+    monkeypatch.setattr(P, "_run_commission", _no_run)
+    P._TEAM_OFFERS.clear()
+    with _turn(P, offered=False, cid="web_unrelated"):
+        out = P.execute_tool("create_starter_team", {"project": "website"})
+    assert out.startswith("NOT STARTED") and "always on" in out
+    assert "web_unrelated" in P._TEAM_OFFERS            # so the operator's NEXT turn can say yes
+
+
+def test_voice_and_other_turns_without_a_conversation_never_start_it(P, tmp_path, monkeypatch):
+    monkeypatch.setattr(P, "ORCHESTRA_DIR", _registry(tmp_path, {}))
+    monkeypatch.setattr(P, "_run_commission", _no_run)
+    out = P.execute_tool("create_starter_team", {"project": "website"})
+    assert out.startswith("NOT STARTED")
+
+
+def test_an_offer_is_good_for_exactly_the_next_turn(P):
+    P._TEAM_OFFERS.clear()
+    P._offer_team("web_o1")
+    assert P._begin_team_turn("web_o1", "team")["offered"] is True
+    assert P._begin_team_turn("web_o1", "team")["offered"] is False     # taken: a later turn has none
+    assert P._begin_team_turn("web_other", "team")["offered"] is False  # never another conversation's
+
+
+def test_an_expired_offer_is_not_a_yes(P, monkeypatch):
+    P._TEAM_OFFERS.clear()
+    P._offer_team("web_o2")
+    monkeypatch.setattr(P.time, "time", lambda: 10 ** 12)
+    assert P._begin_team_turn("web_o2", "team")["offered"] is False
+
+
+def test_the_opener_turn_is_marked_as_the_opener(P):
+    assert P._begin_team_turn("web_o3", "team_open")["opener"] is True
+    assert P._begin_team_turn("web_o3", "team")["opener"] is False
+
+
+def test_an_offer_is_spent_by_the_run_it_allowed(P, tmp_path, monkeypatch):
+    monkeypatch.setattr(P, "ORCHESTRA_DIR", _registry(tmp_path, {}))
+    runs = []
+    monkeypatch.setattr(P, "_run_commission", lambda plan, timeout=120: (runs.append(1), (True, ""))[1])
+    monkeypatch.setattr(P, "seat_seen", lambda n: "no session")
+    P._TEAM_OFFERS.clear()
+    with _turn(P, offered=True, cid="web_spent"):
+        P.execute_tool("create_starter_team", {"project": "website"})
+        out = P.create_starter_team("website")     # the model calls it again in the same turn
+    assert runs == [1] and out.startswith("NOT STARTED")
+
+
+# ---- one run at a time (review #268 should-fix 3) ----------------------------------------------
+def test_a_second_call_while_a_run_is_in_progress_does_not_start_another(P, tmp_path, monkeypatch):
+    monkeypatch.setattr(P, "ORCHESTRA_DIR", _registry(tmp_path, {}))
+    monkeypatch.setattr(P, "_STARTER_WAIT_S", 0.2)
+    release, runs = threading.Event(), []
+
+    def slow_run(plan, timeout=120):
+        runs.append(1)
+        release.wait(5)
+        return True, ""
+    monkeypatch.setattr(P, "_run_commission", slow_run)
+    monkeypatch.setattr(P, "seat_seen", lambda n: "no session")
+    try:
+        with _turn(P, cid="web_tab1"):
+            first = P.create_starter_team("website")
+        assert "Still setting up" in first             # the turn answers; the run goes on
+        assert P.starter_running()
+        assert P.starter_team_state()["state"] == "starting"
+        with _turn(P, cid="web_tab2"):
+            second = P.create_starter_team("website")
+        assert "Already setting up" in second
+        assert runs == [1]
+    finally:
+        release.set()
+    for _ in range(50):
+        if not P.starter_running():
+            break
+        threading.Event().wait(0.05)
+    assert not P.starter_running()
+
+
+def test_the_run_holds_a_file_lock_in_the_data_dir_so_another_process_waits(P, tmp_path, monkeypatch):
+    import fcntl
+    monkeypatch.setattr(P, "ORCHESTRA_DIR", _registry(tmp_path, {}))
+    (tmp_path / "state").mkdir()
+    with open(tmp_path / "state" / "starter.lock", "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)                  # another proxy (or process) is mid-run
+        try:
+            assert P.starter_running()
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+    assert not P.starter_running()
+
+
+def test_the_directive_does_not_offer_while_a_run_is_in_progress():
+    from services.arturo import onboarding as onb
+    d = onb.directive("team", {"state": "starting", "seats": [{"name": "gm", "tier": "T0", "seen": "running"}]})
+    assert "do not call create_starter_team" in d.lower()
+    assert "gm (T0): running" in d
+
+
+# ---- a decline is explicit (review #268 should-fix 2) ------------------------------------------
+def test_decline_marks_the_turn(P):
+    with _turn(P, cid="web_d1"):
+        P.execute_tool("decline_starter_team", {})
+        assert P._TEAM_TURN.get()["declined"] is True
+
+
+def test_the_directive_names_the_decline_tool_and_says_a_question_is_not_a_no():
+    from services.arturo import onboarding as onb
+    d = onb.directive("team", {"state": "absent"})
+    assert "decline_starter_team" in d
+    assert "a question is not a no" in d.lower()
+    assert onb.directive("team_open", {"state": "absent"}) == d
 
 
 # ---- /text carries the state, so the home page can finish the step by effect ---------------
-def test_a_team_turn_returns_the_team_state_after_the_turn(P, monkeypatch, tmp_path):
+def _stub_turn(P, monkeypatch, tmp_path, reply=("ok", [], [])):
     monkeypatch.setattr(P, "ARTURO_STATE", tmp_path)
-    states = iter([{"state": "absent"}, {"state": "present", "seats": []}])
-    monkeypatch.setattr(P, "starter_team_state", lambda seen=None: next(states))
-    monkeypatch.setattr(P, "_brain_reply", lambda messages, cid: ("Your team is up.", ["create_starter_team"], ["gm"]))
+    monkeypatch.setattr(P, "_brain_reply", lambda messages, cid: reply)
     monkeypatch.setattr(P, "_conversation_history", lambda cid: [])
     monkeypatch.setattr(P, "_record_text_turn", lambda **kw: None)
+
+
+def test_a_team_turn_returns_the_team_state_after_the_turn(P, monkeypatch, tmp_path):
+    _stub_turn(P, monkeypatch, tmp_path, ("Your team is up.", ["create_starter_team"], ["gm"]))
+    states = iter([{"state": "absent"}, {"state": "present", "seats": []}])
+    monkeypatch.setattr(P, "starter_team_state", lambda seen=None: next(states))
     status, body = P.text_turn("[Onboarding: step=team]\nyes, call it website", "web_t1")
     assert status == 200
     assert body["team"] == {"state": "present", "seats": []}
 
 
 def test_a_turn_outside_the_team_step_carries_no_team_field(P, monkeypatch, tmp_path):
-    monkeypatch.setattr(P, "ARTURO_STATE", tmp_path)
+    _stub_turn(P, monkeypatch, tmp_path, ("hi", [], []))
     monkeypatch.setattr(P, "starter_team_state", lambda seen=None: (_ for _ in ()).throw(AssertionError("not consulted")))
-    monkeypatch.setattr(P, "_brain_reply", lambda messages, cid: ("hi", [], []))
-    monkeypatch.setattr(P, "_conversation_history", lambda cid: [])
-    monkeypatch.setattr(P, "_record_text_turn", lambda **kw: None)
     status, body = P.text_turn("hello", "web_t2")
     assert status == 200 and "team" not in body
+
+
+def test_the_opener_puts_an_offer_on_the_book_for_the_operators_reply(P, monkeypatch, tmp_path):
+    _stub_turn(P, monkeypatch, tmp_path, ("Here is how it works... what should I call your project?", [], []))
+    monkeypatch.setattr(P, "starter_team_state", lambda seen=None: {"state": "absent"})
+    P._TEAM_OFFERS.clear()
+    P.text_turn("[Onboarding: step=team_open]\nIntroduce my team.", "web_t3")
+    assert "web_t3" in P._TEAM_OFFERS
+
+
+def test_the_operators_reply_to_the_offer_may_start_the_team_end_to_end(P, monkeypatch, tmp_path):
+    # opener (offer made) -> operator's "yes" turn: the tool runs inside that turn
+    monkeypatch.setattr(P, "ORCHESTRA_DIR", _registry(tmp_path, {}))
+    monkeypatch.setattr(P, "ARTURO_STATE", tmp_path)
+    monkeypatch.setattr(P, "_conversation_history", lambda cid: [])
+    monkeypatch.setattr(P, "_record_text_turn", lambda **kw: None)
+    monkeypatch.setattr(P, "seat_seen", lambda n: "running")
+    runs = []
+    monkeypatch.setattr(P, "_run_commission", lambda plan, timeout=120: (runs.append(1), (True, ""))[1])
+    results = []
+
+    def brain(messages, cid):                       # a brain that ALWAYS reaches for the tool
+        results.append(P.execute_tool("create_starter_team", {"project": "website"}))
+        return "done", ["create_starter_team"], []
+    monkeypatch.setattr(P, "_brain_reply", brain)
+    P._TEAM_OFFERS.clear()
+    P.text_turn("[Onboarding: step=team_open]\nIntroduce my team.", "web_t4")
+    assert runs == [] and results[0].startswith("NOT STARTED")       # the opener could not
+    P.text_turn("[Onboarding: step=team]\nyes, call it website", "web_t4")
+    assert runs == [1]                                                # the reply to the offer could
+
+
+def test_a_decline_is_reported_and_takes_the_offer_off_the_book(P, monkeypatch, tmp_path):
+    _stub_turn(P, monkeypatch, tmp_path)
+
+    def brain(messages, cid):
+        P.execute_tool("decline_starter_team", {})
+        return "No problem.", ["decline_starter_team"], []
+    monkeypatch.setattr(P, "_brain_reply", brain)
+    monkeypatch.setattr(P, "starter_team_state", lambda seen=None: {"state": "absent"})
+    P._TEAM_OFFERS.clear()
+    _, body = P.text_turn("[Onboarding: step=team]\nnot now", "web_t5")
+    assert body["team"] == {"state": "absent", "declined": True}
+    assert "web_t5" not in P._TEAM_OFFERS
 
 
 def test_the_stream_fallback_passes_the_team_state_through():

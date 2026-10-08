@@ -14,7 +14,7 @@ export interface ArturoStt { server: boolean; backend: 'local-whisper' | 'none';
 export interface ArturoHealth { operator?: OperatorFacts; ok: boolean; status?: number; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; stt?: ArturoStt; error?: string }
 /** The starter team as the server sees it after a 'team' onboarding turn (services/arturo
  *  starter_team_state). Only `state` is read here; the seats are for the brain. */
-export type TeamState = { state: 'absent' | 'incomplete' | 'present' | 'other_manager' | 'unknown'; seats?: { name: string; tier: string; seen: string }[]; project?: string; manager?: string };
+export type TeamState = { state: 'absent' | 'starting' | 'incomplete' | 'present' | 'other_manager' | 'unknown'; declined?: boolean; seats?: { name: string; tier: string; seen: string }[]; project?: string; manager?: string };
 
 export interface ArturoReply { team?: TeamState; operator?: OperatorFacts; ok: boolean; status?: number; reply_text?: string; conversation_id?: string; brain?: ArturoBrain; tools_called?: string[]; spawned?: string[]; error?: string; detail?: unknown; provider?: string; model?: string; reason?: string; field?: string }
 export interface ArturoContext { route: string; entityKind?: string; entityId?: string; hint?: string }
@@ -151,16 +151,17 @@ export function stepAfterRuntime(operatorName?: string | null, textOnly?: boolea
   return textOnly ? 'voice' : 'team';
 }
 
-/** The team step ends on what the SERVER sees after the turn, never on the reply's wording: the team
- *  is running, or there is nothing this step may create (another manager, or an unreadable registry).
- *  absent / incomplete keep the step open, so a failed or partial start can be asked for again. */
+/** The team step ends on what the SERVER says after the turn, never on the reply's wording: the team
+ *  is running, there is nothing this step may create (another manager, or an unreadable registry), or
+ *  the operator said no (decline_starter_team ran). absent / starting / incomplete keep the step open:
+ *  a question is not a no, and a failed, partial or still-running start can be asked about again. */
 export function teamStepDone(team?: TeamState): boolean {
-  return !!team && (team.state === 'present' || team.state === 'other_manager' || team.state === 'unknown');
+  return !!team && (team.declined === true || team.state === 'present' || team.state === 'other_manager' || team.state === 'unknown');
 }
 
 /** The onboarding turn a surface sends: a first-line marker the proxy strips and turns into the
  *  step directive (services/arturo/onboarding.py). No parsing happens on this side, ever. */
-export function onboardingTurn(step: 'name' | 'team', text: string): string {
+export function onboardingTurn(step: 'name' | 'team' | 'team_open', text: string): string {
   return `[Onboarding: step=${step}]\n${text}`;
 }
 

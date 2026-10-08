@@ -197,10 +197,13 @@ export default function ArturoHome() {
     const id = say('', { pending: true });
     // A MINIMAL trigger on purpose, as the old hierarchy opener learned: anything that reads like a
     // status question invites list_agents instead of the walk-through the directive asks for.
-    const r = await arturoText(onboardingTurn('team', 'Introduce my team.'), convId.current);
-    patch(id, { pending: false, text: r.ok ? (r.reply_text || '(no reply)') : 'I could not introduce your team just now — ask me any time.', tools: r.tools_called, spawned: r.spawned });
+    // 'team_open', not 'team': these are the PAGE's words, so the server never lets this turn start
+    // the team, however the brain reads them. The offer it makes is answered by the operator's turn.
+    const r = await arturoText(onboardingTurn('team_open', 'Introduce my team.'), convId.current);
+    patch(id, { pending: false, text: r.ok ? (r.reply_text || '(no reply)') : 'I could not introduce your team just now. Send me anything and I will try again.', tools: r.tools_called, spawned: r.spawned });
     // Nothing to ask (the team is up, another manager exists, or the server could not check): done.
-    if (!r.ok || teamStepDone(r.team)) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }
+    // A failed opener is NOT done: the step stays, so the operator's next message gets the intro.
+    if (r.ok && teamStepDone(r.team)) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }
   }
 
   async function runtimeStep(fresh = false) {
@@ -365,14 +368,10 @@ export default function ArturoHome() {
       if (got) { setName(got); lsSet(LS_NAME, got); voiceStep(); }
       return;
     }
-    if (isTeam) {
-      // By EFFECT: the server re-reads the team after the turn, so the step ends when it is RUNNING,
-      // not when a tool was named (a failed or partial start keeps the step, and the operator can ask
-      // again). A decline is the other way out, and it is only legible when there IS a brain: a
-      // NullBrain turn also returns 200 with no tool call.
-      const declined = (r.tools_called || []).length === 0 && health?.brain?.kind !== 'none';
-      if (teamStepDone(r.team) || declined) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }
-    }
+    // By EFFECT: the server re-reads the team after the turn, so the step ends when it is RUNNING or
+    // the operator said no (the server records an explicit decline), never on a tool's name or on a
+    // reply with no tool call: "how much does gm cost?" is a question, not a no.
+    if (isTeam && teamStepDone(r.team)) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }
   }
 
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {

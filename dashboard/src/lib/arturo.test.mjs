@@ -74,6 +74,9 @@ assert.equal(teamStepDone({ state: 'other_manager', manager: 'boss' }), true);  
 assert.equal(teamStepDone({ state: 'unknown' }), true);                          // could not check: explain, never offer
 assert.equal(teamStepDone({ state: 'absent' }), false);                          // still to ask
 assert.equal(teamStepDone({ state: 'incomplete' }), false);                      // a partial start can be asked again
+assert.equal(teamStepDone({ state: 'starting' }), false);                        // still running: ask again in a minute
+assert.equal(teamStepDone({ state: 'absent', declined: true }), true);           // an explicit no ends it
+assert.equal(onboardingTurn('team_open', 'Introduce my team.'), '[Onboarding: step=team_open]\nIntroduce my team.');
 assert.equal(teamStepDone(undefined), false);                                    // an older server sends no state
 assert.equal(onboardingTurn('team', 'Introduce my team.'), '[Onboarding: step=team]\nIntroduce my team.');
 assert.equal(onboardingTurn('name', 'hi my name is Shaw nice to meet you'), '[Onboarding: step=name]\nhi my name is Shaw nice to meet you');

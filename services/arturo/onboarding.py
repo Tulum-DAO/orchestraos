@@ -55,6 +55,16 @@ SEEN_WORDS = {
     "unknown": "could not tell",
 }
 
+# How an answer to the one question is handled. The yes is checked in CODE too (arturo-proxy.py
+# _begin_team_turn): the tool refuses on the page's own opener and on any turn that did not follow an
+# offer, so these words are the brain's half of the rule, not the whole of it.
+_ANSWER_RULES = (
+    " If they say no or not now, call decline_starter_team and accept it in one clause, saying they can "
+    "ask you for their team any time. If they ask something else, answer it briefly and then repeat the "
+    "one question in one short sentence; a question is not a no. Nothing you were sent before their reply "
+    "is a yes."
+)
+
 _TEAM_RULES = (
     " Rules for this turn: keep it to at most six short sentences, in plain words. Describe a seat ONLY as a "
     "fact in this instruction or what the tool says it sees; a seat the tool did not report as running is not "
@@ -65,7 +75,7 @@ _TEAM_RULES = (
 )
 
 
-def _seat_line(seats) -> str:
+def seat_line(seats) -> str:
     return "; ".join(f"{s.get('name')} ({s.get('tier')}): {SEEN_WORDS.get(s.get('seen'), 'could not tell')}"
                      for s in (seats or []))
 
@@ -83,16 +93,15 @@ def _team(ctx) -> str:
             "question: what to call their first project, in a word or two, or whether to use the default name "
             f"'{DEFAULT_PROJECT}'. Say plainly that this starts three agents on the runtime they are logged "
             "in to, and that gm is always on, which means it keeps costing tokens whether or not it is asked "
-            "anything. When they answer with a name or accept the default, call create_starter_team with "
-            "project set to that name in lowercase letters, digits and dashes (for example 'website'), or "
-            f"'{DEFAULT_PROJECT}'. If they decline, accept it in one clause, say they can ask you to set up "
-            "their team any time, and do not ask again. After the tool runs, report each seat exactly as "
+            "anything. Only when THEY answer yes, with a name or accepting the default, call "
+            "create_starter_team with project set to that name in lowercase letters, digits and dashes (for "
+            f"example 'website'), or '{DEFAULT_PROJECT}'." + _ANSWER_RULES + " After the tool runs, report each seat exactly as "
             "what the tool says it sees, and if every seat is running tell them to open gm from the Agents "
             "list to give it work."
         )
     elif state == "incomplete":
         project = ctx.get("project")
-        seen = _seat_line(ctx.get("seats"))
+        seen = seat_line(ctx.get("seats"))
         body = (
             "This install has started a team but it is not complete. What is seen on each seat right now: "
             + (seen or "no seats") + ". Explain the three tiers and what gm does, say what is missing in "
@@ -101,12 +110,19 @@ def _team(ctx) -> str:
                f"Ask what to call the project as part of that one question (default '{DEFAULT_PROJECT}'); if "
                "they say yes, call create_starter_team with that name. ")
             + "It starts only what is missing and restarts a seat whose agent stopped; seats already running "
-            "are left alone. If they decline, accept it in one clause. After the tool runs, report each seat "
-            "exactly as what the tool says it sees."
+            "are left alone." + _ANSWER_RULES + " After the tool runs, report each seat exactly as what the "
+            "tool says it sees."
+        )
+    elif state == "starting":
+        body = (
+            "Their team is being set up right now. What is seen on each seat so far: "
+            + (seat_line(ctx.get("seats")) or "nothing yet") + ". Say that in one sentence, explain the three "
+            "tiers and what gm does while they wait, and say they can ask you again in a minute. Ask no "
+            "question. Do not call create_starter_team: a run is already in progress."
         )
     elif state == "present":
         body = (
-            "Their team is already up. What is seen on each seat right now: " + _seat_line(ctx.get("seats"))
+            "Their team is already up. What is seen on each seat right now: " + seat_line(ctx.get("seats"))
             + ". Explain the three tiers and what gm does, naming their seats, and say they can open gm from "
             "the Agents list to give it work. Ask no question. Do not call create_starter_team: there is "
             "nothing to create."
@@ -129,6 +145,6 @@ def _team(ctx) -> str:
 
 def directive(step, ctx=None) -> str:
     """ctx is only read by steps that need a server-side fact (team). The one-arg call still works."""
-    if (step or "").lower() == "team":
+    if (step or "").lower() in ("team", "team_open"):    # team_open: the page's own opener
         return _team(ctx)
     return DIRECTIVES.get(step or "", "")

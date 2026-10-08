@@ -526,7 +526,7 @@ def tg_send_appropriate(message, recent_user_turns, lookback=5):
 SIDE_EFFECTING_TOOLS = frozenset({
     "inject_message", "send_telegram", "spawn_agent", "kill_agent",
     "agent_message", "async_task", "run_command", "remember_note",
-    "answer_menu", "focus_entity", "create_starter_team",
+    "answer_menu", "focus_entity", "create_starter_team", "decline_starter_team",
 })
 
 

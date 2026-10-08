@@ -1412,7 +1412,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "create_starter_team",
-            "description": "Set up the operator's starter team with `orchestra starter`: gm (the T0 manager, always on) -> pm-<project> (T1 project manager) -> dev-<project> (T2 worker). Starts only what is missing and leaves running seats alone. Use it when the operator asks for their team or agrees during onboarding, never to do a job. The result says what is seen on each seat; report exactly that.",
+            "description": "Set up the operator's starter team with `orchestra starter`: gm (the T0 manager, always on) -> pm-<project> (T1 project manager) -> dev-<project> (T2 worker). Starts only what is missing and leaves running seats alone. Call it only after the operator has said yes to setting up their team, never to do a job; without a yes it asks you to ask them first. The result says what is seen on each seat; report exactly that.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1423,6 +1423,14 @@ TOOLS = [
                 },
                 "required": [],
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "decline_starter_team",
+            "description": "Record that the operator said no, or not now, to setting up their starter team. Call it only on a clear no; a question is not a no.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
     {
@@ -1887,61 +1895,120 @@ def seat_seen(name):
 
 
 def starter_team_state(seen=None):
-    """The starter team as the server sees it. FIVE states, never two: absent (no manager yet; a
-    missing registry file is a fresh install, known-empty), incomplete, present, other_manager (a T0 not
-    named gm: `orchestra starter` would add a second one), unknown (the registry could not be read)."""
+    """The starter team as the server sees it, and the ONE reading both the onboarding directive and
+    create_starter_team act on (review #268: two readers disagreed). SIX states, never two:
+    absent (no manager yet; a missing registry file is a fresh install, known-empty), starting (an
+    `orchestra starter` run is in progress), incomplete, present, other_manager (a T0 not named gm:
+    `orchestra starter` would add a second one), unknown (the registry could not be read)."""
     seen = seen or seat_seen
     try:
         reg = json.loads((Path(ORCHESTRA_DIR) / "registry.json").read_text())
     except FileNotFoundError:
-        return {"state": "absent"}
+        reg = {"agents": {}}
     except Exception:  # noqa: BLE001 — unreadable is not empty
         return {"state": "unknown"}
     agents = reg.get("agents") or {}
     managers = sorted(n for n, r in agents.items() if str((r or {}).get("tier") or "").upper() == "T0")
-    if not managers:
-        return {"state": "absent"}
-    if "gm" not in managers:
+    if managers and "gm" not in managers:
         return {"state": "other_manager", "manager": managers[0]}
-    seats = [{"name": "gm", "tier": "T0"}]
-    pms = sorted(n for n, r in agents.items()
-                 if str((r or {}).get("tier") or "").upper() == "T1" and (r or {}).get("reports_to") == "gm")
+    seats = []
     project = None
-    if pms:
-        pm = pms[0]
-        seats.append({"name": pm, "tier": "T1"})
-        project = pm[3:] if pm.startswith("pm-") else None
-        devs = sorted(n for n, r in agents.items()
-                      if str((r or {}).get("tier") or "").upper() == "T2" and (r or {}).get("reports_to") == pm)
-        if devs:
-            seats.append({"name": devs[0], "tier": "T2"})
+    if managers:
+        seats.append({"name": "gm", "tier": "T0"})
+        pms = sorted(n for n, r in agents.items()
+                     if str((r or {}).get("tier") or "").upper() == "T1" and (r or {}).get("reports_to") == "gm")
+        if pms:
+            pm = pms[0]
+            seats.append({"name": pm, "tier": "T1"})
+            project = pm[3:] if pm.startswith("pm-") else None
+            devs = sorted(n for n, r in agents.items()
+                          if str((r or {}).get("tier") or "").upper() == "T2" and (r or {}).get("reports_to") == pm)
+            if devs:
+                seats.append({"name": devs[0], "tier": "T2"})
     for s in seats:
         s["seen"] = seen(s["name"])
-    complete = len(seats) == 3 and all(s["seen"] == "running" for s in seats)
-    out = {"state": "present" if complete else "incomplete", "seats": seats}
+    if starter_running():
+        out = {"state": "starting", "seats": seats}
+    elif not seats:
+        return {"state": "absent"}
+    else:
+        complete = len(seats) == 3 and all(s["seen"] == "running" for s in seats)
+        out = {"state": "present" if complete else "incomplete", "seats": seats}
     if project and _PROJECT_RE.match(project):
         out["project"] = project
     return out
 
 
-def create_starter_team(project):
-    """The create_starter_team tool: refuse what `orchestra starter` must not do, run it, then report
-    each seat as SEEN, whatever the CLI printed."""
+# ---- consent: the operator's yes is enforced HERE, not only in the prompt (review #268 blocker) ----
+# An offer belongs to one conversation and is good for exactly ONE operator turn: it is taken off the
+# book when that turn begins (_begin_team_turn), and put back only when Arturo makes the offer again.
+# Arturo makes it when a team-step turn ends with nothing running (the directive asks the question),
+# or when it reached for the tool without one (the tool asks instead of running). The page's own
+# opener ('team_open') never runs the tool, and neither does a turn with no conversation (voice).
+_TEAM_OFFERS = {}
+_TEAM_OFFERS_LOCK = _threading.Lock()
+_TEAM_OFFER_TTL_S = 1800
+_TEAM_TURN = _contextvars.ContextVar("arturo_team_turn", default=None)
+
+
+def _onb_step_of(text):
     from services.arturo import onboarding as _onb
-    project = (project or "").strip() or _onb.DEFAULT_PROJECT
-    if not _PROJECT_RE.match(project):
-        return (f"I did not start anything: '{project}' cannot be a project name. Use lowercase letters, "
-                f"digits and dashes, starting with a letter or digit, at most 40 (for example 'website').")
-    who, known = existing_manager()
-    if not known:
-        return ("I could not read the registry to check whether a team already exists, so I did not start "
-                "anything; an unchecked registry is not an empty one.")
-    if who and who != "gm":
-        return (f"This install already has a manager, {who}, so I did not start the starter team: it would "
-                f"add a second manager, and there is one per install.")
-    plan = starter_plan(project)
-    log.info(f"STARTER TEAM: {' '.join(plan.argv[1:])}")
-    ok, out = _run_commission(plan, 600)
+    return _onb.split_marker(text)[0]
+
+
+def _offer_team(conversation_id):
+    if conversation_id:
+        with _TEAM_OFFERS_LOCK:
+            _TEAM_OFFERS[conversation_id] = time.time()
+
+
+def _begin_team_turn(conversation_id, step):
+    """Called once per operator turn, before the brain runs. Takes this conversation's offer off the
+    book: this turn may accept it; no later turn can."""
+    with _TEAM_OFFERS_LOCK:
+        made = _TEAM_OFFERS.pop(conversation_id, None) if conversation_id else None
+    return {"conversation_id": conversation_id, "opener": step == "team_open",
+            "offered": made is not None and time.time() - made < _TEAM_OFFER_TTL_S,
+            "declined": False}
+
+
+def decline_starter_team():
+    turn = _TEAM_TURN.get()
+    if turn is not None:
+        turn["declined"] = True
+    return "Noted: no team for now. The operator can ask for it any time."
+
+
+# ---- single flight: one `orchestra starter` per install at a time (review #268) ----------------
+# The run can outlive the turn (the whole request chain gives up at ~190 s; the CLI gets 600 s), and
+# a re-sent turn or a second tab must not start a second run that rewrites registry.json under the
+# first. In-process flag for this proxy, plus an advisory file lock in the data dir for any other.
+_STARTER_LOCK = _threading.Lock()
+_STARTER_WAIT_S = 90
+
+
+def _starter_lockfile():
+    return Path(ORCHESTRA_DIR) / "state" / "starter.lock"
+
+
+def starter_running():
+    if _STARTER_LOCK.locked():
+        return True
+    import fcntl
+    try:
+        with open(_starter_lockfile(), "a") as f:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return True
+            fcntl.flock(f, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    return False
+
+
+def _seen_report(project):
+    from services.arturo import onboarding as _onb
     lines = []
     for name, tier in (("gm", "T0"), (f"pm-{project}", "T1"), (f"dev-{project}", "T2")):
         s = seat_seen(name)
@@ -1949,10 +2016,71 @@ def create_starter_team(project):
         if s == "running":
             record_spawned_session(name)
             _record_spawned_this_turn(name)
-    seen = "What I see on each seat now: " + "; ".join(lines) + "."
+    return "What I see on each seat now: " + "; ".join(lines) + "."
+
+
+def _run_starter(plan, done):
+    """The whole run, off the turn's thread, holding both locks until the CLI exits."""
+    import fcntl
+    try:
+        _starter_lockfile().parent.mkdir(parents=True, exist_ok=True)
+        with open(_starter_lockfile(), "a") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                done["result"] = _run_commission(plan, 600)
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
+    except Exception as e:  # noqa: BLE001 — a crashed run is a failed run, never a silent one
+        done["result"] = (False, str(e))
+    finally:
+        _STARTER_LOCK.release()
+
+
+def create_starter_team(project):
+    """The create_starter_team tool: consent first, then the same state the directive used, then ONE
+    run of `orchestra starter`, then each seat reported as SEEN, whatever the CLI printed."""
+    from services.arturo import onboarding as _onb
+    turn = _TEAM_TURN.get()
+    if turn is None:
+        return ("NOT STARTED: I can only set up the team from the Arturo chat, after the operator says yes "
+                "there. Tell them to open the Arturo home page and ask for their team.")
+    if turn.get("opener"):
+        return "NOT STARTED: the team is never set up on the introduction. Ask the operator first."
+    state = starter_team_state()
+    if state["state"] == "unknown":
+        return ("I could not read the registry to check whether a team already exists, so I did not start "
+                "anything; an unchecked registry is not an empty one.")
+    if state["state"] == "other_manager":
+        return (f"This install already has a manager, {state['manager']}, so I did not start the starter team: "
+                f"it would add a second manager, and there is one per install.")
+    if state["state"] == "present":
+        return ("Nothing to start: the team is already running. What I see on each seat now: "
+                + _onb.seat_line(state["seats"]) + ".")
+    project = (project or "").strip() or state.get("project") or _onb.DEFAULT_PROJECT
+    if not _PROJECT_RE.match(project):
+        return (f"I did not start anything: '{project}' cannot be a project name. Use lowercase letters, "
+                f"digits and dashes, starting with a letter or digit, at most 40 (for example 'website').")
+    if not turn.get("offered"):
+        _offer_team(turn.get("conversation_id"))
+        return (f"NOT STARTED: the operator has not said yes yet. Ask them now, in one question: this starts "
+                f"gm (the manager, always on, which keeps costing tokens), pm-{project} and dev-{project}. "
+                f"Start it only after they say yes.")
+    if state["state"] == "starting" or not _STARTER_LOCK.acquire(blocking=False):
+        return "Already setting up the team; it can take a few minutes. " + _seen_report(project)
+    turn["offered"] = False                      # spent: a second call in this turn asks again
+    plan = starter_plan(project)
+    log.info(f"STARTER TEAM: {' '.join(plan.argv[1:])}")
+    done = {}
+    worker = _threading.Thread(target=_run_starter, args=(plan, done), daemon=True)
+    worker.start()
+    worker.join(_STARTER_WAIT_S)
+    if "result" not in done:
+        return (f"Still setting up the team for project '{project}' (orchestra starter is running; it can "
+                f"take a few minutes). " + _seen_report(project) + " Ask me again in a minute and I will check.")
+    ok, out = done["result"]
     if not ok:
-        return f"FAILED: orchestra starter stopped: {out[-400:]} {seen}"
-    return f"orchestra starter finished for project '{project}'. {seen}"
+        return f"FAILED: orchestra starter stopped: {out[-400:]} " + _seen_report(project)
+    return f"orchestra starter finished for project '{project}'. " + _seen_report(project)
 
 
 def registration_status(name):
@@ -2227,6 +2355,8 @@ def execute_tool(name, args, user_turns=None):
 
     if name == "create_starter_team":
         return create_starter_team(args.get("project"))
+    if name == "decline_starter_team":
+        return decline_starter_team()
 
     if name == "spawn_agent":
         session = args.get("session_name", "voice-agent")
@@ -4819,7 +4949,8 @@ def text_turn(text, conversation_id, brain=None, context=None):
     # and what is running, which only the server can see. It is passed as CONTEXT, never through the
     # marker — the marker regex is anchored to the step name, so appended context would fail to match
     # and leak into the brain message and the archive.
-    _ctx = starter_team_state() if step == "team" else None
+    _team_step = step in ("team", "team_open")
+    _ctx = starter_team_state() if _team_step else None
     _dir = _onb.directive(step, _ctx)
     if _dir:
         context = f"{context}\n\n{_dir}".strip() if context else _dir
@@ -4830,6 +4961,13 @@ def text_turn(text, conversation_id, brain=None, context=None):
     messages = _ptt.build_messages(context, history, text, current_brain=effective)
     brain_tok = _BRAIN_THIS_TURN.set(chosen) if chosen is not None else None
     fail_tok = _brain.TURN_FAILURE.set(None)
+    # The operator's yes, as code: a stream that fell back here already took the offer off the book,
+    # so its record is inherited, never taken twice.
+    team_turn = _TEAM_TURN.get()
+    team_tok = None
+    if team_turn is None:
+        team_turn = _begin_team_turn(conversation_id, step)
+        team_tok = _TEAM_TURN.set(team_turn)
     try:
         _res = _brain_reply(messages, conversation_id)
         # Tolerant unpack: a stub (and any older caller) may still return the 2-tuple.
@@ -4842,6 +4980,8 @@ def text_turn(text, conversation_id, brain=None, context=None):
         _brain.TURN_FAILURE.reset(fail_tok)
         if brain_tok is not None:
             _BRAIN_THIS_TURN.reset(brain_tok)
+        if team_tok is not None:
+            _TEAM_TURN.reset(team_tok)
     if chosen is not None:
         if failure is None and not (reply or "").strip():
             failure = {"code": "empty_response"}
@@ -4861,10 +5001,13 @@ def text_turn(text, conversation_id, brain=None, context=None):
             "brain": (chosen or _turn_brain()).describe(), "tools_called": tools_called,
             "spawned": spawned,
             "operator": _ops.public(ARTURO_STATE)}
-    if step == "team":
-        # Re-read AFTER the turn, so the home page finishes the step on what is now running, never on
-        # the tool's name or the reply's wording.
-        body["team"] = starter_team_state()
+    if _team_step:
+        # Re-read AFTER the turn, so the home page finishes the step on what is now running (or on an
+        # explicit no), never on the tool's name or the reply's wording.
+        after = starter_team_state()
+        body["team"] = {**after, **({"declined": True} if team_turn["declined"] else {})}
+        if after["state"] in ("absent", "incomplete") and not team_turn["declined"]:
+            _offer_team(conversation_id)           # the directive had Arturo ask: the next turn may answer
     return 200, body
 
 
@@ -5012,6 +5155,9 @@ def text_stream_endpoint():
         return jsonify({"ok": False, "error": "bad_context", "field": "context"}), 400
 
     turn_brain = chosen or _turn_brain()
+    # Taken once for the whole turn, whichever path ends up running it (stream, or text_turn behind
+    # the fallback), and published to the threads that run its tools.
+    _team_turn = _begin_team_turn(conversation_id, _onb_step_of(text_in))
     version = _THREADS.turn_count(conversation_id)          # before the history: see prewarm
     history = _conversation_history(conversation_id)
     effective = _effective_brain(turn_brain)
@@ -5049,9 +5195,11 @@ def text_stream_endpoint():
         # the stream already ran is not run again. Scoped to the call, reset in finally.
         inherit_tok = _INHERIT_DEDUP.set(True)
         ledger_tok = _TURN_DEDUP.set(_stream_ledger)
+        team_tok = _TEAM_TURN.set(_team_turn)
         try:
             return text_turn(text_in, conversation_id, brain=brain_req, context=page_ctx)
         finally:
+            _TEAM_TURN.reset(team_tok)
             _TURN_DEDUP.reset(ledger_tok)
             _INHERIT_DEDUP.reset(inherit_tok)
 
@@ -5078,6 +5226,8 @@ def text_stream_endpoint():
         # ContextVar set in one is invisible in the other.
         if _SPAWNED_THIS_TURN.get() is None:
             _SPAWNED_THIS_TURN.set(_spawned)
+        if _TEAM_TURN.get() is None:
+            _TEAM_TURN.set(_team_turn)
         results = []
         for call in calls:
             name, args = call["name"], call.get("arguments") or {}
