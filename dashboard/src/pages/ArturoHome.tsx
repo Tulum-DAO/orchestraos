@@ -19,7 +19,8 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { Mic, Plus, ArrowUp, AudioLines, Paperclip, X } from 'lucide-react';
+import { Mic, Plus, ArrowUp, AudioLines, Paperclip, X, PhoneOff } from 'lucide-react';
+import { useHandsFreeCall } from '../hooks/useHandsFreeCall';
 import '../components/arturo/arturo.css';
 import { BrainModal } from '../components/agent/BrainModal';
 import { ModelSelectorSheet } from '../components/agent/ModelSelectorSheet';
@@ -28,7 +29,7 @@ import { arturoTurn, arturoPrewarm } from '../lib/arturoStream';
 import { brainFromThread, describeTurnError, toWireBrain } from '../lib/arturoBrain';
 import { arturoHealth, arturoText, runtimesAvailable, brainLabel, greeting, newConversationId,
   isStarting, waitForArturo, STARTING_TEXT, firstStep, onboardingTurn, onboardingDone, isPageOpener,
-  DICTATE_TITLE, HANDS_FREE, handsFreeTitle, ONBOARDING_OPENER, sendStateLabel,
+  DICTATE_TITLE, HANDS_FREE, handsFreeTitle, handsFreeReady, ONBOARDING_OPENER, sendStateLabel,
   type ChoiceCard, type PairCard,
   type ArturoHealth, type RuntimeRow, type SendState } from '../lib/arturo';
 import { listThreads, loadThread, type ThreadSummary } from '../lib/arturoThreads';
@@ -117,6 +118,13 @@ export default function ArturoHome() {
   // Dictation needs nothing from OrchestraOS: the browser's own mic permission is its only gate.
   const { mode: dictMode, dictating, note: dictNote, toggle: toggleDictation, stop: stopDictation, clearNote: clearDictNote } =
     useDictation(draft, setDraft, () => taRef.current?.focus());
+  // Hands-free conversation: the same call the "Ask Arturo" pill starts (hooks/useHandsFreeCall). Its
+  // captions commit as turns in this thread; a call that cannot start says why, here.
+  const call = useHandsFreeCall({
+    onFinal: (text, role) => { if (role === 'user') user(text); else say(text); },
+    onUnavailable: (reason) => { say(`Hands-free conversation could not start: ${reason}`); },
+    onEnded: (text) => { say(text); },
+  });
   const fileInput = useRef<HTMLInputElement>(null);
   const convId = useRef<string>(ls(LS_CONV) || '');
   useEffect(() => { if (!convId.current) { convId.current = newConversationId('web'); lsSet(LS_CONV, convId.current); } }, []);
@@ -373,7 +381,7 @@ export default function ArturoHome() {
   // The chip shows the CHOSEN brain when there is one; otherwise what the install defaults to.
   const model = starting ? 'starting…' : brainChoice ? brainChoice.label : brainLabel(brain);
   const eff = brainChoice ? 'CLI' : brain?.kind === 'runtime' ? 'CLI' : brain?.kind === 'api' ? 'API' : '';
-  const empty = turns.length === 0;
+  const empty = turns.length === 0 && !call.inCall;
 
   return (
     <div className="arturo-shell">
@@ -444,6 +452,9 @@ export default function ArturoHome() {
             )}
           </div>
         ))}
+        {call.liveUser && <div className="turn-user"><div className="bubble-user" style={{ opacity: 0.7 }}>{call.liveUser}…</div></div>}
+        {call.liveArturo && <div className="turn-assistant"><ArturoMark className="mark-sm" /><div className="txt" style={{ opacity: 0.7 }}>{call.liveArturo}…</div></div>}
+        {call.callState === 'connecting' && <div className="turn-assistant"><ArturoMark className="mark-sm" /><span className="thinking" aria-label="connecting the call" /></div>}
       </div>
 
       {(onboardShell || shellError) && (
@@ -503,11 +514,14 @@ export default function ArturoHome() {
                     aria-label={dictMode === 'listening' ? 'Stop dictation' : dictMode === 'recording' ? 'Stop recording' : dictMode === 'transcribing' ? 'Transcribing' : 'Dictate'}
                     aria-pressed={dictating} title={dictMode === 'transcribing' ? 'Transcribing on the server…' : DICTATE_TITLE}
                     onClick={toggleDictation} disabled={dictMode === 'transcribing'}><Mic size={16} /></button>
-            {draft.trim() ? (
+            {call.inCall ? (
+              <button className="circle-btn white" aria-label="End call" aria-pressed title="End call"
+                      onClick={() => void call.toggle({ route: '/' })}><PhoneOff size={18} /></button>
+            ) : draft.trim() ? (
               <button className="circle-btn white" aria-label="Send" onClick={() => void send()} disabled={busy}><ArrowUp size={18} /></button>
             ) : (
-              <button className="circle-btn white" aria-label={HANDS_FREE} title={handsFreeTitle(!!health?.voice)}
-                      disabled={!health?.voice}><AudioLines size={16} /></button>
+              <button className="circle-btn white" aria-label={HANDS_FREE} title={handsFreeTitle(handsFreeReady(health))}
+                      disabled={!handsFreeReady(health)} onClick={() => void call.toggle({ route: '/' })}><AudioLines size={16} /></button>
             )}
           </div>
         </div>

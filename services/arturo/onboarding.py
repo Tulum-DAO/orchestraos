@@ -45,8 +45,9 @@ ONBOARDING_GUIDE = "https://github.com/Tulum-DAO/orchestraos/blob/main/docs/ONBO
 VOICE_FACT = ("Talking: dictation already works for them: the mic button turns their speech into text, "
               "with only their browser's own mic permission. Never offer it, ask about it or call it a "
               "mode. What is not on yet is hands-free conversation, where they talk and you talk back "
-              "live: that needs a voice key on their server (ELEVENLABS_API_KEY or CARTESIA_API_KEY) and "
-              "Arturo restarted. Mention it once, briefly, as something they can turn on later.")
+              "live: in the browser it needs GEMINI_API_KEY on their server (the phone app's call uses its "
+              "own voice key, such as ELEVENLABS_API_KEY) and Arturo restarted. Mention it once, briefly, "
+              "as something they can turn on later.")
 DEFAULT_PROJECT = "first-project"
 
 TEAM_SHAPE = (

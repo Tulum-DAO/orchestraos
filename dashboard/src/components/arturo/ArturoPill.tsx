@@ -25,7 +25,7 @@ import {
   listThreads, loadThread, contextCardLabel, isContextDismissed, dismissContext,
   restoreContext, contextForTurn, type ThreadSummary,
 } from '../../lib/arturoThreads';
-import { VoiceSession, type VoiceSessionState } from '../../lib/voiceSession';
+import { useHandsFreeCall } from '../../hooks/useHandsFreeCall';
 import SpawnedAgentCard from './SpawnedAgentCard';
 import { ModelSelectorSheet } from '../agent/ModelSelectorSheet';
 import { useArturoBrain } from '../../stores/arturoBrain';
@@ -85,55 +85,24 @@ export function ArturoPill() {
   const [focus, setFocus] = useState(getArturoFocus);
   useEffect(() => subscribeArturoFocus(() => setFocus(getArturoFocus())), []);
 
-  // ── live voice call, IN THIS PANE ──────────────────────────────────────────
-  // The same VoiceSession the agent composer's call button uses (lib/voiceSession.ts →
-  // /api/voice/live → gateway /live → Gemini Live). Arturo's words arrive as
-  // {event:"transcript"} frames from the server; YOUR words are captioned on-device by
-  // the browser's SpeechRecognition (startDictation), because the gateway deliberately
-  // does not transcribe the caller. Both render live below the thread, then commit as
-  // turns when final. The call ends with the same `[voice-call: …]` marker the composer
-  // path uses, so the transcript card can be fetched by id later.
-  const [callState, setCallState] = useState<VoiceSessionState>('idle');
-  const [liveUser, setLiveUser] = useState('');
-  const [liveArturo, setLiveArturo] = useState('');
-  const callStateRef = useRef<VoiceSessionState>('idle');
-  const voice = useRef<VoiceSession | null>(null);
+  // ── hands-free conversation, IN THIS PANE ──────────────────────────────────
+  // The shared call (hooks/useHandsFreeCall → lib/handsFree → lib/voiceSession → /api/voice/live →
+  // gateway /live → Gemini Live), the same one the home composer drives. Arturo's words arrive as
+  // transcript frames; YOUR words are captioned on-device by the browser. Both render live below the
+  // thread, then commit as turns when final. The call ends with the same `[voice-call: …]` marker the
+  // composer path uses, so the transcript card can be fetched by id later.
   const appendRef = useRef<(t: PillTurn) => void>(() => {});
   const noteRef = useRef<(reason: string) => void>(() => {});
-  function voiceSession(): VoiceSession {
-    if (!voice.current) {
-      voice.current = new VoiceSession({
-        onPartial: (text, role) => { if (role === 'user') setLiveUser(text); else setLiveArturo(text); },
-        onFinal: (text, role) => {
-          if (role === 'user') setLiveUser(''); else setLiveArturo('');
-          appendRef.current({ role, text, at: Date.now(), live: true });
-        },
-        onUnavailable: (reason) => noteRef.current(reason),
-        onStateChange: (s) => {
-          callStateRef.current = s;
-          setCallState(s);
-          // The call is over (ended, refused, or failed): its on-device captions end with it, so a later
-          // Dictate tap never fights a stale recognizer (that fight surfaced as "dictation error: aborted").
-          if (s === 'idle' || s === 'error') { voice.current?.stopDictation(); setLiveUser(''); setLiveArturo(''); }
-        },
-        onCallEnded: (marker, id) => {
-          setLiveUser(''); setLiveArturo('');
-          appendRef.current({ role: 'arturo', text: `Call ended (${id}). ${marker}`, at: Date.now(), live: true });
-        },
-      });
-    }
-    return voice.current;
-  }
-  const inCall = callState === 'live' || callState === 'connecting';
+  const call = useHandsFreeCall({
+    onFinal: (text, role) => appendRef.current({ role, text, at: Date.now(), live: true }),
+    onUnavailable: (reason) => noteRef.current(reason),
+    onEnded: (text) => appendRef.current({ role: 'arturo', text, at: Date.now(), live: true }),
+  });
+  const { callState, liveUser, liveArturo, inCall } = call;
   async function toggleCall() {
-    if (inCall) { voiceSession().stop(); voiceSession().stopDictation(); return; }
     const focused = ctx.entityKind && ctx.entityId ? `${ctx.entityKind}:${ctx.entityId}` : null;
-    await voiceSession().start({ route: ctx.route, focusedEntity: focused });
-    // Captions only for a call that actually opened; a refused call already left its note in the thread.
-    const st = callStateRef.current;
-    if (st === 'connecting' || st === 'live') voiceSession().startDictation();
+    await call.toggle({ route: ctx.route, focusedEntity: focused });
   }
-  useEffect(() => () => { voice.current?.stop(); voice.current?.stopDictation(); }, []);
   const routeCtx = contextFromLocation(location.pathname, params as Record<string, string | undefined>, location.search);
   const ctx = focus
     ? { ...routeCtx, entityKind: focus.kind, entityId: focus.id }

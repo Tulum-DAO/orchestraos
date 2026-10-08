@@ -11,7 +11,7 @@
  */
 export interface ArturoBrain { kind: 'api' | 'runtime' | 'none'; runtime?: string; cli?: string; model: string; reason?: string; provider?: string }
 export interface ArturoStt { server: boolean; backend: 'local-whisper' | 'none'; state: 'ready' | 'warming' | 'not-installed' | 'off' | 'error'; reason?: string; install?: string; model?: string }
-export interface ArturoHealth { onboarded?: boolean; operator?: OperatorFacts; ok: boolean; status?: number; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; stt?: ArturoStt; error?: string }
+export interface ArturoHealth { live?: boolean; onboarded?: boolean; operator?: OperatorFacts; ok: boolean; status?: number; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; stt?: ArturoStt; error?: string }
 /** A tap-to-pick card the BRAIN wrote with ask_choices: its options, and whether several may be picked.
  *  `note` is the server's own line (the starter team's cost), never the model's. */
 export type ChoiceCard = { options: string[]; multi: boolean; purpose: 'starter_team' | 'devices' | 'other'; note?: string; exclusive?: string };
@@ -178,8 +178,14 @@ export const DICTATE_TITLE = "Dictate (uses your browser's mic permission)";
 export const HANDS_FREE = 'Hands-free conversation';
 export function handsFreeTitle(keyPresent: boolean): string {
   return keyPresent
-    ? `${HANDS_FREE}: talk, and Arturo talks back (uses the voice key on your server)`
-    : `${HANDS_FREE} needs a voice key on your server (ELEVENLABS_API_KEY or CARTESIA_API_KEY)`;
+    ? `${HANDS_FREE}: talk, and Arturo talks back (uses GEMINI_API_KEY on your server)`
+    : `${HANDS_FREE} needs a voice key: GEMINI_API_KEY on your server`;
+}
+/** The browser's call runs on Gemini Live, so it needs GEMINI_API_KEY (`/health.live`). A server from
+ *  before that field said only whether ANY voice key was set; fall back to that. */
+export function handsFreeReady(h: Pick<ArturoHealth, 'live' | 'voice'> | null | undefined): boolean {
+  if (!h) return false;
+  return typeof h.live === 'boolean' ? h.live : !!h.voice;
 }
 
 /** Onboarding ends by EFFECT: only when the server's reply says so (finish_onboarding wrote its flag),

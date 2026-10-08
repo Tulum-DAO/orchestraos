@@ -5847,6 +5847,8 @@ def health():
         "mode": ARTURO_MODE,                       # "voice" | "text-only"
         "onboarded": onboarded(),                  # finish_onboarding's server flag (the page ORs its local one)
         "voice": bool(VOICE_VENDORS_PRESENT),
+        # The browser's hands-free conversation runs on Gemini Live (gateway /live): it needs this key.
+        "live": "GEMINI_API_KEY" in VOICE_VENDORS_PRESENT,
         # item C: can the box transcribe a recorded clip with no vendor key? (web dictation tier 2)
         "stt": _local_stt.state(),
         "tools": [t["function"]["name"] for t in TOOLS],
