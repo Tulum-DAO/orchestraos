@@ -4,7 +4,7 @@
 
 OrchestraOS, published by Tulum DAO: an open harness for running a fleet of coding agents as a team — agents that message each other, remember across restarts, rotate themselves before they run out of context, and put every real decision in front of the human on their phone.
 
-**This is not a finished product.** It runs one operator's fleet today, every day, and that setup is the reference install. We are opening it so people who want this to exist can build it with us. The first hackathon — Build-a-thon — is Saturday and Sunday, 2026-09-19 and 20.
+**This is not a finished product.** It runs one operator's fleet today, every day, and that setup is the reference install. We are opening it so people who want this to exist can build it with us. The first hackathon, Build-a-thon, ran on 2026-09-19 and 20; its tracks are still open (`docs/tracks/README.md`).
 
 ## What is in the box
 
@@ -66,11 +66,8 @@ completes before picking a track.
 
 ## How to contribute
 
-Repo: https://github.com/Tulum-DAO/orchestraos (private until the Saturday
-hackathon opens; public from then on). Fork, branch, open a pull request
+Repo: https://github.com/Tulum-DAO/orchestraos. Fork, branch, open a pull request
 against `main`. CI runs the tests per package and a secrets scan, and both must pass. Sign off your commits (DCO). Read `CONTRIBUTING.md` for the review rules and `ARCHITECTURE.md` for the map before you touch the rotation lane or the approvals contract, which other components depend on.
-
-Maintainers answer pull requests within the hour during the hackathon weekend.
 
 ## License
 

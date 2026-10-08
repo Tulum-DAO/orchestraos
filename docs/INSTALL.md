@@ -10,6 +10,34 @@ short walkthrough, not part of this doc's steps.
 
 ## 0. Prerequisites
 
+### Run as a normal user, not root
+
+On a fresh VPS you are often logged in as `root`. Do not install as root. Every seat launches
+its agent CLI with the permission-skip flag (`claude --dangerously-skip-permissions`;
+`spawn-agent.sh`), and Claude Code refuses that flag as root with
+`--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons`.
+Every seat would fail at launch.
+
+If `whoami` prints `root`, create a normal user with sudo once, give it your ssh key, and log
+back in as that user. Everything after this point runs as that user.
+
+```bash
+# as root, once (the name "orchestra" is only an example)
+adduser orchestra                       # choose a password; the other questions can be left blank
+usermod -aG sudo orchestra
+mkdir -p /home/orchestra/.ssh
+cp ~/.ssh/authorized_keys /home/orchestra/.ssh/
+chown -R orchestra:orchestra /home/orchestra/.ssh
+chmod 700 /home/orchestra/.ssh && chmod 600 /home/orchestra/.ssh/authorized_keys
+exit
+```
+
+Then, from your own computer: `ssh orchestra@<your server address>`. Check: `whoami` prints
+`orchestra` and `sudo -v` asks for that user's password and succeeds. If your provider already
+logs you in as a normal user with sudo, skip this step.
+
+### Packages
+
 ```bash
 sudo apt update && sudo apt install -y git tmux python3 python3-venv build-essential curl iproute2   # iproute2 = `ss`, which `orchestra doctor` needs to attribute ports to its own supervisor
 # build-essential + python3 are not optional: node-pty (the web terminal's native addon) compiles at `npm install`;
@@ -35,10 +63,19 @@ auto-updater off. Two versions are known good, both measured on 2026-09-19: the 
 native install moved from 2.1.263 to 2.1.278 in one morning with no action from the operator.
 
 ```bash
-npm install -g @anthropic-ai/claude-code@2.1.276
-export DISABLE_AUTOUPDATER=1     # put it in your shell profile so every seat inherits it
+sudo npm install -g @anthropic-ai/claude-code@2.1.276
+echo 'export DISABLE_AUTOUPDATER=1' >> ~/.bashrc && export DISABLE_AUTOUPDATER=1   # every seat's shell inherits it
 claude --version                 # must print 2.1.276
 ```
+
+Why `sudo`: the Node above is a system-wide install, so global npm packages go to
+`/usr/lib/node_modules`, which is owned by root. Without `sudo` the install fails with
+`EACCES: permission denied` for a normal user. Do not work around that by pointing npm at a
+prefix in your home directory: a prefix you own is one the CLI's auto-updater can write to,
+and it can then move you off the pinned version. With the root-owned install the pin holds
+even if `DISABLE_AUTOUPDATER` is ever missing from a shell; the updater just reports
+`Auto-update failed: no write permission to npm prefix`, which is harmless. To change versions
+later, run the same `sudo npm install -g` line with the new version.
 
 If you installed Claude Code with the native installer instead of npm, it auto-updates; switch to the
 npm install above for any machine that runs seats. For the Docker image, pass the pin as the build
@@ -46,8 +83,8 @@ argument: `--build-arg AGENT_CLIS="@anthropic-ai/claude-code@2.1.276"`. Without 
 whatever is current at build time, and inside the container auto-update is attempted every session
 and fails with `Auto-update failed: no write permission to npm prefix` because the npm prefix is not
 writable by the container user. That footer is not a fault in your setup; the pin and the export make
-it go away. Gemini and Codex CLIs: pin the same way with their package managers (the reference fleet
-runs agy 1.2.6 and codex-cli 0.153.4).
+it go away. Gemini and Codex CLIs: pin the same way with their package managers (`sudo npm install -g` for
+an npm package; the reference fleet runs agy 1.2.6 and codex-cli 0.153.4).
 
 ## 1. Clone, init, doctor
 
@@ -255,8 +292,8 @@ docker run -it --rm -p 8891:8891 -p 8888:8888 -p 8890:8890 orchestraos
 ### Machine image (VPS snapshot) — 20-minute job once the provider is chosen
 
 Same recipe, no Docker: on a fresh Ubuntu 24.04 VPS as a non-root sudo user, run the
-`RUN` steps of the `Dockerfile` in order (§0 prerequisites, node 22, `npm i -g
-@anthropic-ai/claude-code`, clone, `make install`, `orchestra init`), leave the agent CLI
+`RUN` steps of the `Dockerfile` in order (§0 prerequisites, node 22, `sudo npm i -g
+@anthropic-ai/claude-code@2.1.276`, clone, `make install`, `orchestra init`), leave the agent CLI
 logged OUT, then snapshot. A team booting the snapshot logs in, edits `[runtimes]
 enabled`, and runs `orchestra doctor && orchestra up --detach`. Pre-provision one snapshot
 per team (P5).
