@@ -1,10 +1,10 @@
-"""A single-digit permission answer can only answer what the device could have seen.
+"""A single-digit permission answer can only answer what the device was shown.
 
 /agent-key's digit path sends the key to whatever prompt is on screen, and the apps send no card
 identity with it. So a tap meant for "proceed? [Bash: cmd A]" used to approve cmd B if B replaced
-A before the tap arrived. The gateway now refuses (409) when the prompt on screen was first seen
-AFTER the requesting device last fetched a surface showing permission cards, or when it has no
-fetch on record for that device.
+A before the tap arrived. The gateway now remembers, per device and session, the permission
+instance it last served that device, and refuses (409) unless the prompt on screen is that same
+instance, or when it has nothing on record for that device and session.
 """
 import asyncio
 import json
@@ -28,8 +28,10 @@ CMD_A, CMD_B = _menu("echo safe"), _menu("rm -rf /tmp/important")
 
 
 class _Req:
-    def __init__(self, payload=None, ua=PHONE_UA):
+    def __init__(self, payload=None, ua=PHONE_UA, install=None):
         self.headers = {"Authorization": "Bearer fleet-tok", "User-Agent": ua}
+        if install:
+            self.headers["X-Client-Install"] = install
         self._payload = payload or {}
         self.query = {}
         self.match_info = {}
@@ -58,18 +60,20 @@ def screen(monkeypatch, tmp_path):
         returncode = 0
 
     monkeypatch.setattr(G, "_tmux", lambda *a: state["sent"].append(a) or _R())
-    monkeypatch.setattr(G, "_MENU_FETCHES", {})
+    monkeypatch.setattr(G, "_SERVED", G._OrderedDict())
     return state
 
 
 def _show(menu, now):
-    """A surface rendered `menu`: the gateway stamps its instance (as /pending-approvals and
+    """Some surface rendered `menu`: the gateway stamps its instance (as /pending-approvals and
     /agent-screen do) at `now`."""
-    G._stamp_instance(SESSION, menu, now=now)
+    n, d = G._stamp_instance(SESSION, menu, now=now)
+    return f"{d}:{n}"
 
 
-def _fetch(now, ua=PHONE_UA):
-    G._note_menu_fetch(_Req(ua=ua), now=now)
+def _serve(menu, now, ua=PHONE_UA, session=SESSION):
+    """`menu` was shown to the device with this User-Agent (stamped and recorded as served)."""
+    G._note_served(_Req(ua=ua), session, _show(menu, now))
 
 
 def _tap(ua=PHONE_UA, key="1"):
@@ -77,56 +81,93 @@ def _tap(ua=PHONE_UA, key="1"):
     return resp.status, json.loads(resp.text)
 
 
-def test_a_device_that_saw_the_prompt_can_answer_it(screen):
-    _show(CMD_A, now=100.0)
-    _fetch(now=101.0)
+def test_a_device_that_was_shown_the_prompt_can_answer_it(screen):
+    _serve(CMD_A, now=100.0)
     status, body = _tap()
     assert status == 200 and body["sent"] == "1"
     assert screen["sent"], "the key reached the pane"
 
 
 def test_a_tap_meant_for_A_does_not_approve_B_that_replaced_it(screen):
-    _show(CMD_A, now=100.0)
-    _fetch(now=101.0)                         # the device saw A
+    _serve(CMD_A, now=100.0)                  # the device saw A
     screen["menu"] = CMD_B
-    _show(CMD_B, now=105.0)                   # B appeared after that fetch (another surface stamped it)
+    _show(CMD_B, now=105.0)                   # another surface stamped B
     status, body = _tap()
     assert status == 409 and body["reason"] == "instance_mismatch"
     assert screen["sent"] == [], "nothing reached the pane"
 
 
 def test_a_prompt_no_surface_has_shown_yet_is_refused(screen):
-    _show(CMD_A, now=100.0)
-    _fetch(now=101.0)
+    _serve(CMD_A, now=100.0)
     screen["menu"] = CMD_B                    # B is on screen but nothing has stamped it yet
     status, body = _tap()
     assert status == 409 and body["reason"] == "instance_unknown" and screen["sent"] == []
 
 
-def test_after_a_fresh_fetch_the_new_prompt_can_be_answered(screen):
-    _show(CMD_A, now=100.0)
-    _fetch(now=101.0)
+def test_after_being_shown_the_new_prompt_it_can_be_answered(screen):
+    _serve(CMD_A, now=100.0)
     screen["menu"] = CMD_B
-    _show(CMD_B, now=105.0)
-    _fetch(now=106.0)                         # the device refreshed and saw B
+    _serve(CMD_B, now=105.0)                  # the device refreshed and saw B
     assert _tap()[0] == 200
 
 
-def test_no_fetch_on_record_fails_closed_for_permission_prompts(screen):
+def test_nothing_served_on_record_fails_closed_for_permission_prompts(screen):
     _show(CMD_A, now=100.0)
     status, body = _tap()
     assert status == 409 and body["reason"] == "instance_unknown"
     assert "Open it in Approvals" in body["error"]
 
 
-def test_phone_and_watch_on_one_bearer_do_not_vouch_for_each_other(screen):
-    _show(CMD_A, now=100.0)
-    _fetch(now=101.0, ua=WATCH_UA)            # the watch last looked when A was up
+def test_a_look_at_another_session_does_not_vouch_for_this_one(screen):
+    """Review B2: being served session X's prompt says nothing about what it saw on this one."""
+    _serve(CMD_B, now=100.0, session="other-seat")
     screen["menu"] = CMD_B
-    _show(CMD_B, now=105.0)
-    _fetch(now=106.0, ua=PHONE_UA)            # the phone has seen B
+    _show(CMD_B, now=101.0)
+    assert _tap()[0] == 409
+
+
+def test_phone_and_watch_on_one_bearer_do_not_vouch_for_each_other(screen):
+    _serve(CMD_A, now=100.0, ua=WATCH_UA)     # the watch last looked when A was up
+    screen["menu"] = CMD_B
+    _serve(CMD_B, now=105.0, ua=PHONE_UA)     # the phone has seen B
     assert _tap(ua=WATCH_UA)[0] == 409, "the watch's stale card can't answer B"
     assert _tap(ua=PHONE_UA)[0] == 200, "the phone, which saw B, can"
+
+
+def test_an_install_id_separates_a_phone_and_ipad_on_the_same_build(screen):
+    """Same app build = same User-Agent; X-Client-Install is what tells them apart."""
+    G._note_served(_Req(install="ipad-1"), SESSION, _show(CMD_A, now=100.0))
+    screen["menu"] = CMD_B
+    G._note_served(_Req(install="phone-1"), SESSION, _show(CMD_B, now=105.0))
+
+    def tap(install):
+        r = _Req({"session": SESSION, "key": "1", "confirm": True}, install=install)
+        return asyncio.run(G.handle_agent_key(r)).status
+
+    assert tap("ipad-1") == 409, "the iPad's stale card can't answer B"
+    assert tap("phone-1") == 200
+
+
+def test_without_an_install_id_the_same_build_shares_a_record(screen):
+    """The known limit, pinned so it is not mistaken for a guarantee: no install id, same UA."""
+    _serve(CMD_A, now=100.0)
+    screen["menu"] = CMD_B
+    _serve(CMD_B, now=105.0)                  # "the other" device, same User-Agent
+    assert _tap()[0] == 200
+
+
+def test_a_served_record_expires(screen):
+    _serve(CMD_A, now=100.0)
+    k = next(iter(G._SERVED))
+    G._SERVED[k] = (G._SERVED[k][0], G._SERVED[k][1] - G._SERVED_TTL_S - 1)
+    assert _tap()[1]["reason"] == "instance_unknown"
+
+
+def test_the_served_record_is_bounded(screen, monkeypatch):
+    monkeypatch.setattr(G, "_SERVED_MAX", 3)
+    for i in range(5):
+        G._note_served(_Req(ua=f"ua{i}"), SESSION, "d:1")
+    assert len(G._SERVED) == 3
 
 
 def test_non_permission_menus_are_not_gated(screen):
@@ -135,30 +176,83 @@ def test_non_permission_menus_are_not_gated(screen):
     assert status == 200
 
 
+def _respond(ua=PHONE_UA):
+    resp = asyncio.run(G.handle_agent_key(_Req({"session": SESSION, "answer": "respond",
+                                                "text": "do it differently", "confirm": True}, ua=ua)))
+    return resp.status, json.loads(resp.text)
+
+
 def test_the_respond_path_is_gated_too(screen, monkeypatch):
     _show(CMD_A, now=100.0)
     called = []
     monkeypatch.setattr(G, "permission_respond", lambda *a, **k: called.append(1) or (True, {}))
-    resp = asyncio.run(G.handle_agent_key(_Req({"session": SESSION, "answer": "respond",
-                                                "text": "do it differently", "confirm": True})))
-    assert resp.status == 409 and called == []
+    assert _respond()[0] == 409 and called == []
 
 
-def test_the_two_surfaces_record_a_fetch_and_a_refusal_does_not(screen, monkeypatch):
-    async def ok(request):
-        return G._json({"ok": True})
+def test_the_respond_path_never_skips_the_check_on_a_missed_read(screen, monkeypatch):
+    """Review B1: no menu on the first read used to skip the check, then a second read acted."""
+    screen["menu"] = None
+    called = []
+    monkeypatch.setattr(G, "permission_respond", lambda *a, **k: called.append(1) or (True, {}))
+    status, body = _respond()
+    assert status == 409 and body["reason"] == "menu_gone" and called == []
 
-    async def denied(request):
-        return G._json({"ok": False}, status=401)
 
-    for name in ("_handle_pending", "_handle_agent_screen"):
-        G._MENU_FETCHES.clear()
-        monkeypatch.setattr(G, name, denied)
-        asyncio.run(getattr(G, name.replace("_handle", "handle"))(_Req()))
-        assert G._MENU_FETCHES == {}, name
-        monkeypatch.setattr(G, name, ok)
-        asyncio.run(getattr(G, name.replace("_handle", "handle"))(_Req()))
-        assert len(G._MENU_FETCHES) == 1, name
+def test_the_respond_path_passes_the_checked_prompt_on(screen, monkeypatch):
+    _serve(CMD_A, now=100.0)
+    seen = {}
+    monkeypatch.setattr(G, "permission_respond",
+                        lambda *a, **k: seen.update(k) or (True, {}))
+    assert _respond()[0] == 200
+    assert seen["expect_digest"] == G._perm_digest(SESSION, CMD_A["question"], CMD_A["context"])
+
+
+def test_permission_respond_sends_nothing_when_the_prompt_changed_under_it():
+    """Review B1: the prompt the gate checked (A) was replaced (B) while the answer waited."""
+    keys = []
+    ok, info = G.permission_respond(
+        SESSION, "do it differently", armed=True,
+        read_fn=lambda: dict(CMD_B, options=[{"n": "3", "label": "No, and tell Claude what to do differently"}]),
+        key_fn=lambda k: keys.append(k) or True, type_fn=lambda t: keys.append(t) or True,
+        gone_fn=lambda: True, settle_s=0,
+        expect_digest=G._perm_digest(SESSION, CMD_A["question"], CMD_A["context"]))
+    assert not ok and info["reason"] == "instance_mismatch" and keys == []
+
+
+def test_both_surfaces_record_what_they_served(screen, monkeypatch):
+    class _Store:
+        def migrate(self):
+            pass
+
+        def pending_to_notify(self):
+            return []
+
+        def list_pending(self):
+            return []
+
+    monkeypatch.setattr(G, "ApprovalStore", _Store)
+    monkeypatch.setattr(G, "QuestionnaireStore", _Store)
+    monkeypatch.setattr(G, "_perm_pseudo_rows", lambda: [G._perm_pseudo_row(SESSION, CMD_A)])
+    asyncio.run(G.handle_pending(_Req()))
+    assert _tap()[0] == 200, "/pending-approvals recorded the row it served"
+
+    G._SERVED.clear()
+    monkeypatch.setattr(G, "_capture_pane", lambda *a: "")
+    r = _Req(ua=WATCH_UA)
+    r.query = {"session": SESSION}
+    asyncio.run(G.handle_agent_screen(r))
+    assert _tap(ua=WATCH_UA)[0] == 200, "/agent-screen recorded the menu it served"
+    assert _tap(ua=PHONE_UA)[0] == 409
+
+
+def test_a_refused_fetch_records_nothing(screen):
+    class _Bad(_Req):
+        def __init__(self):
+            super().__init__()
+            self.headers = {"User-Agent": PHONE_UA}
+
+    asyncio.run(G.handle_pending(_Bad()))
+    assert len(G._SERVED) == 0
 
 
 def test_the_instance_ledger_records_when_each_instance_was_first_seen(screen):
@@ -171,19 +265,57 @@ def test_the_instance_ledger_records_when_each_instance_was_first_seen(screen):
     assert entry["first_seen_ts"] == 100.0
 
 
-def test_the_same_prompt_coming_back_as_a_NEW_instance_needs_a_fresh_look(screen):
+def test_two_isolated_misses_do_not_make_a_new_instance(screen):
+    """Review B3: one missed scrape, a long run of sightings, another miss: still instance 1."""
+    led = {}
+    G._instance_step(led, SESSION, "d", present=True, now=0)
+    G._instance_step(led, SESSION, "d", present=False, now=1)
+    for t in range(2, 101):
+        G._instance_step(led, SESSION, "d", present=True, now=t)
+    G._instance_step(led, SESSION, "d", present=False, now=101)
+    assert G._instance_step(led, SESSION, "d", present=True, now=102) == 1
+
+
+def test_a_session_the_fast_path_skipped_is_not_reaped(screen, monkeypatch):
+    """Review B3: an unflagged session was not looked at, so its prompt must not count as gone."""
     _show(CMD_A, now=100.0)
-    _fetch(now=101.0)
+    monkeypatch.setitem(G._agents_cache, "data", [{"id": SESSION, "has_pending_menu": False}])
+    G._perm_pseudo_rows()                     # a sweep that read no session
+    (entry,) = G._load_instance_ledger().values()
+    assert entry["phase"] == "present" and entry["gone_since"] is None
+
+
+def test_the_same_prompt_coming_back_as_a_NEW_instance_needs_a_fresh_look(screen):
+    _serve(CMD_A, now=100.0)
     G._mark_instance_answered(SESSION, CMD_A["question"], CMD_A["context"])   # answered elsewhere
     _show(CMD_A, now=105.0)                   # the same ask again: a new instance
     assert _tap()[0] == 409
-    _fetch(now=106.0)
+    _serve(CMD_A, now=106.0)
     assert _tap()[0] == 200
+
+
+def test_ledger_writers_never_share_a_temp_file(screen, tmp_path):
+    import threading
+    errs = []
+
+    def stamp(i):
+        try:
+            for j in range(20):
+                G._stamp_instance(f"s{i}", _menu(f"cmd {i} {j}"), now=float(j))
+        except Exception as e:  # noqa: BLE001
+            errs.append(e)
+
+    ts = [threading.Thread(target=stamp, args=(i,)) for i in range(6)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert not errs
+    assert len(G._load_instance_ledger()) == 6 * 20, "no writer lost another's entries"
+    assert not list(tmp_path.glob("*.tmp")), "no temp file left behind"
 
 
 def test_the_off_switch_logs_and_allows_without_a_restart(screen, monkeypatch, tmp_path, caplog):
     monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path))
-    _show(CMD_A, now=100.0)                   # no fetch on record: would be refused
+    _show(CMD_A, now=100.0)                   # nothing served on record: would be refused
     with caplog.at_level("WARNING", logger="watch_gateway"):
         assert _tap()[0] == 409
         assert "refused" in caplog.text and "reason=instance_unknown" in caplog.text
