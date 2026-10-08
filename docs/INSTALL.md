@@ -3,6 +3,10 @@
 > **Never rented a server, made an ssh key, or used Terminal?** Start with
 > [docs/FROM_SCRATCH.md](FROM_SCRATCH.md). It takes you from your computer (Mac, Windows or Linux) to logged in on your own server
 > in about 20 minutes, then sends you back here to §0.
+>
+> **Want an AI agent to guide you?** Sections of §0 have a **Hand this to your agent** box:
+> copy it into the AI you already use. Steps marked **[PERSON ONLY]** (paying, signing in,
+> passwords, approving a device) are yours to do; the agent stops there.
 
 One machine, one CLI (claude OR gemini OR codex), no voice, no Telegram.
 Starting from nothing, you end with: a VPS, Tailscale on it and on your own
@@ -58,6 +62,23 @@ opened on it.
 
 ### Run as a normal user, not root
 
+**Hand this to your agent** (Claude, ChatGPT, Codex, Gemini or any other), if you'd rather
+have it guide you through this section. Copy the whole box:
+
+```text
+Help me with one step of installing OrchestraOS. Read this section and do it with me:
+https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md#run-as-a-normal-user-not-root
+The commands in this section run on my server; I log in to it with ssh (ask me for the
+address and user if you need them).
+Rules:
+- If you can run commands on my computer, run them yourself and show me every output.
+  If you can't, give me one command at a time and wait for me to paste back what it printed.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, passwords, approving a
+  device) and let me do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset or wipe anything.
+- We are done when logged in as the new user, `whoami` prints its name and `sudo -v` succeeds. Show me that output; don't just tell me it worked.
+```
+
 On a fresh VPS you are often logged in as `root`. Do not install as root. Every seat launches
 its agent CLI with the permission-skip flag (`claude --dangerously-skip-permissions`;
 `spawn-agent.sh`), and Claude Code refuses that flag as root with
@@ -78,7 +99,7 @@ chmod 700 /home/orchestra/.ssh && chmod 600 /home/orchestra/.ssh/authorized_keys
 exit
 ```
 
-What `adduser` asks: `New password:` and `Retype new password:` (type a password for
+What `adduser` asks: **[PERSON ONLY]** `New password:` and `Retype new password:` (type a password for
 the new account and remember it: `sudo` asks for it later; nothing shows while you
 type), then `Full Name []:`, `Room Number []:` and a few more (press Enter for each),
 then `Is the information correct? [Y/n]` (press Enter). The other lines print nothing
@@ -95,6 +116,23 @@ logs you in as a normal user with sudo, skip this step.
 
 ### Tailscale on the VPS and on your own device
 
+**Hand this to your agent** (Claude, ChatGPT, Codex, Gemini or any other), if you'd rather
+have it guide you through this section. Copy the whole box:
+
+```text
+Help me with one step of installing OrchestraOS. Read this section and do it with me:
+https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md#tailscale-on-the-vps-and-on-your-own-device
+The commands in this section run on my server; I log in to it with ssh (ask me for the
+address and user if you need them).
+Rules:
+- If you can run commands on my computer, run them yourself and show me every output.
+  If you can't, give me one command at a time and wait for me to paste back what it printed.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, passwords, approving a
+  device) and let me do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset or wipe anything.
+- We are done when `tailscale status` on the server lists both the server and my own computer or phone. Show me that output; don't just tell me it worked.
+```
+
 Tailscale puts the VPS and your own laptop or phone on a private network (a
 "tailnet") that only your devices can join. It is how you will open the dashboard
 in your browser over https without putting it on the public internet. The free
@@ -109,14 +147,14 @@ sudo tailscale set --operator=$USER     # lets your user run `tailscale serve` w
 tailscale status                        # the VPS is listed, with a 100.x.y.z address
 ```
 
-`sudo tailscale up` prints `To authenticate, visit:` and a link. Select the link, copy it
+`sudo tailscale up` prints `To authenticate, visit:` and a link. **[PERSON ONLY]** Select the link, copy it
 (`Cmd+C` on a Mac, `Ctrl+C` in Windows Terminal, `Ctrl+Shift+C` on Linux), and open it in
 your own computer's browser. Sign in or create a
 Tailscale account (it signs you in with an existing Google, Microsoft, GitHub or Apple account) and approve the
 device. The command on the server then finishes by itself. Remember which account you
 used: your computer and phone must sign in with the same one.
 
-On your own computer and/or phone: install Tailscale and sign in **with the same account**.
+**[PERSON ONLY]** On your own computer and/or phone: install Tailscale and sign in **with the same account**.
 - **Mac:** **Tailscale** from the Mac App Store (or tailscale.com/download); open it and click
   its icon in the menu bar, top right of the screen, to log in.
 - **Windows:** the installer from tailscale.com/download; after installing, click the
@@ -131,6 +169,23 @@ From your laptop, `ping <that address>` answers (`Ctrl-C` stops it). From now on
 you can `ssh <your user>@<that address>` instead of the public IP.
 
 ### Packages
+
+**Hand this to your agent** (Claude, ChatGPT, Codex, Gemini or any other), if you'd rather
+have it guide you through this section. Copy the whole box:
+
+```text
+Help me with one step of installing OrchestraOS. Read this section and do it with me:
+https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md#packages
+The commands in this section run on my server; I log in to it with ssh (ask me for the
+address and user if you need them).
+Rules:
+- If you can run commands on my computer, run them yourself and show me every output.
+  If you can't, give me one command at a time and wait for me to paste back what it printed.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, passwords, approving a
+  device) and let me do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset or wipe anything.
+- We are done when `node -v` prints a version starting with `v22`. Show me that output; don't just tell me it worked.
+```
 
 ```bash
 sudo apt update && sudo apt install -y git tmux python3 python3-venv build-essential curl iproute2   # iproute2 = `ss`, which `orchestra doctor` needs to attribute ports to its own supervisor
@@ -153,6 +208,23 @@ Then install ONE agent CLI, pinned (next section), and log in to it (the section
 after).
 
 ### Pin the agent CLI version
+
+**Hand this to your agent** (Claude, ChatGPT, Codex, Gemini or any other), if you'd rather
+have it guide you through this section. Copy the whole box:
+
+```text
+Help me with one step of installing OrchestraOS. Read this section and do it with me:
+https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md#pin-the-agent-cli-version
+The commands in this section run on my server; I log in to it with ssh (ask me for the
+address and user if you need them).
+Rules:
+- If you can run commands on my computer, run them yourself and show me every output.
+  If you can't, give me one command at a time and wait for me to paste back what it printed.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, passwords, approving a
+  device) and let me do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset or wipe anything.
+- We are done when `claude --version` prints `2.1.276 (Claude Code)`. Show me that output; don't just tell me it worked.
+```
 
 The harness reads the CLI's screen, transcripts, and hook events. It does not heal itself yet when
 the CLI changes shape under it, so pin the CLI to a version this release was proven on and turn the
@@ -190,10 +262,27 @@ an npm package; the reference fleet runs agy 1.2.6 and codex-cli 0.153.4).
 
 ### Log in to the agent CLI (the one step only you can do)
 
+**Hand this to your agent** (Claude, ChatGPT, Codex, Gemini or any other), if you'd rather
+have it guide you through this section. Copy the whole box:
+
+```text
+Help me with one step of installing OrchestraOS. Read this section and do it with me:
+https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md#log-in-to-the-agent-cli-the-one-step-only-you-can-do
+The commands in this section run on my server; I log in to it with ssh (ask me for the
+address and user if you need them).
+Rules:
+- If you can run commands on my computer, run them yourself and show me every output.
+  If you can't, give me one command at a time and wait for me to paste back what it printed.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, passwords, approving a
+  device) and let me do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset or wipe anything.
+- We are done when `claude auth status` shows `"loggedIn": true`. Show me that output; don't just tell me it worked.
+```
+
 This is the only step that needs a person: you sign in with your own account. Use
 your own login; never copy someone else's credentials onto the server.
 
-**You need a paid plan.** For Claude Code that is a Claude **Pro** or **Max** subscription
+**[PERSON ONLY] You need a paid plan.** For Claude Code that is a Claude **Pro** or **Max** subscription
 (claude.com/pricing; [docs/COSTS.md](COSTS.md) compares the options). Buy it first, with the same
 email you will sign in with.
 
@@ -209,11 +298,11 @@ It shows a few screens. The server has no browser, so you sign in from your own 
    one marked `❯`. Press Enter to keep it (you can change it later with `/theme`).
 2. **`Select login method:`** The first option is selected:
    `1. Claude account with subscription · Pro, Max, Team, or Enterprise`. Press Enter.
-3. **`Browser didn't open? Use the url below to sign in`**, then a very long link that wraps
+3. **[PERSON ONLY]** **`Browser didn't open? Use the url below to sign in`**, then a very long link that wraps
    over several lines, then `Paste code here if prompted >`. With the mouse, select the
    whole link, from `https://` to its last character on the last line, copy it, and open it in
    your own computer's browser. Sign in, and click to authorize Claude Code.
-4. The browser then shows a **code**. Copy it, go back to your terminal, paste it after
+4. **[PERSON ONLY]** The browser then shows a **code**. Copy it, go back to your terminal, paste it after
    `Paste code here if prompted >`, and press Enter.
 5. A few more screens follow (a login confirmation and some notes). Press Enter on each.
    If it asks whether you trust the files in this folder, choose the option that says yes.

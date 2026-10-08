@@ -37,6 +37,14 @@ fine to paste it too. Under each box, **"You should see"** tells you what succes
 like. If you see something else, stop and check the "If it goes wrong" notes before you
 continue.
 
+**Steps marked [PERSON ONLY]** are ones you do yourself: paying, signing in, choosing a
+password, approving a device. If an AI agent is helping you, it stops there and lets you do
+them.
+
+**Want an AI agent to guide you?** Each step below has a **Hand this to your agent** box.
+Copy it into the AI you already use (Claude, ChatGPT, Codex, Gemini or any other); it reads
+that step and walks you through it, and stops at the [PERSON ONLY] steps.
+
 **Copy and paste in a terminal:**
 
 - **Mac** (Terminal): `Cmd+C` and `Cmd+V`.
@@ -64,6 +72,21 @@ then the prompt again.
 
 ## 2. Make an ssh key
 
+**Hand this to your agent** (Claude, ChatGPT, Codex, Gemini or any other), if you'd rather
+have it guide you through this section. Copy the whole box:
+
+```text
+Help me with one step of installing OrchestraOS. Read this section and do it with me:
+https://github.com/Tulum-DAO/orchestraos/blob/main/docs/FROM_SCRATCH.md#2-make-an-ssh-key
+Rules:
+- If you can run commands on my computer, run them yourself and show me every output.
+  If you can't, give me one command at a time and wait for me to paste back what it printed.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, passwords, approving a
+  device) and let me do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset or wipe anything.
+- We are done when showing my public key prints one line that starts with `ssh-ed25519`. Show me that output; don't just tell me it worked.
+```
+
 First check whether you already have one:
 
 - **Mac or Linux**: `ls ~/.ssh/id_ed25519.pub`
@@ -81,7 +104,7 @@ ssh-keygen -t ed25519 -C "my-computer"
 It asks three questions. Answer them like this:
 
 1. `Enter file in which to save the key`: press Enter (keep the suggested place).
-2. `Enter passphrase`: press Enter for no passphrase, or type one you will remember.
+2. **[PERSON ONLY]** `Enter passphrase`: press Enter for no passphrase, or type one you will remember.
    Nothing appears on screen while you type it; that is normal.
 3. `Enter same passphrase again`: the same again.
 
@@ -106,6 +129,21 @@ does the same.)
 
 ## 3. Rent a server
 
+**Hand this to your agent** (Claude, ChatGPT, Codex, Gemini or any other), if you'd rather
+have it guide you through this section. Copy the whole box:
+
+```text
+Help me with one step of installing OrchestraOS. Read this section and do it with me:
+https://github.com/Tulum-DAO/orchestraos/blob/main/docs/FROM_SCRATCH.md#3-rent-a-server
+Rules:
+- If you can run commands on my computer, run them yourself and show me every output.
+  If you can't, give me one command at a time and wait for me to paste back what it printed.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, passwords, approving a
+  device) and let me do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset or wipe anything.
+- We are done when I have my new server's IP address (four numbers with dots). Show me that output; don't just tell me it worked.
+```
+
 This is the step where you pay. A server is rented by the hour from a hosting company,
 and you pay that company directly, not OrchestraOS. The size these docs use costs about
 $24 a month at DigitalOcean, billed by the hour while the server exists. You will also need a paid plan for one AI tool to run your agents (Claude
@@ -117,12 +155,12 @@ card, PayPal, Google Pay or Apple Pay. (PayPal makes a small temporary $5 charge
 the account.) The install works on any Ubuntu 24.04 server; other providers are at the
 end of this step.
 
-1. **Sign up** at digitalocean.com and add a payment method (card, PayPal, Google Pay or
+1. **[PERSON ONLY]** **Sign up** at digitalocean.com and add a payment method (card, PayPal, Google Pay or
    Apple Pay). Confirm your email if asked.
-2. **Give it your public key.** Go to **Settings**, then the **Security** tab, and click
+2. **[PERSON ONLY]** **Give it your public key.** Go to **Settings**, then the **Security** tab, and click
    **Add SSH Key**. Paste the line you copied in step 2 into **Public Key**. Type
    `my-computer` as the **Key Name**. Click **Add SSH Key**.
-3. **Create the server.** Click the green **Create** button at the top, then
+3. **[PERSON ONLY]** **Create the server.** Click the green **Create** button at the top, then
    **Droplets** ("Droplet" is DigitalOcean's word for a server). Fill in the page from
    top to bottom:
    - **Choose Region**: the one nearest to you.
@@ -145,6 +183,21 @@ and others. Pick Ubuntu 24.04, at least 2 CPUs and 4 GB of memory, and choose yo
 
 ## 4. Log in to your server for the first time
 
+**Hand this to your agent** (Claude, ChatGPT, Codex, Gemini or any other), if you'd rather
+have it guide you through this section. Copy the whole box:
+
+```text
+Help me with one step of installing OrchestraOS. Read this section and do it with me:
+https://github.com/Tulum-DAO/orchestraos/blob/main/docs/FROM_SCRATCH.md#4-log-in-to-your-server-for-the-first-time
+Rules:
+- If you can run commands on my computer, run them yourself and show me every output.
+  If you can't, give me one command at a time and wait for me to paste back what it printed.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, passwords, approving a
+  device) and let me do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset or wipe anything.
+- We are done when `ssh root@<my server address> whoami` prints `root`. Show me that output; don't just tell me it worked.
+```
+
 In your terminal, type `ssh root@` followed by your server's address. It is the same on
 every computer:
 
@@ -160,8 +213,8 @@ ED25519 key fingerprint is SHA256:...
 Are you sure you want to continue connecting (yes/no/[fingerprint])?
 ```
 
-Type `yes` and press Enter. This happens once per server and is normal. If you set a
-passphrase in step 2, type it when asked.
+Type `yes` and press Enter. This happens once per server and is normal. **[PERSON ONLY]** If you
+set a passphrase in step 2, type it when asked.
 
 You should see: a welcome text that starts with `Welcome to Ubuntu 24.04`, and then a
 new prompt that ends in `#`, like `root@orchestra:~#`. You are now on the server:
