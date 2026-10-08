@@ -120,16 +120,20 @@ async def view_transcript(ctx: ToolEnv, session: str, count: int = 10) -> str:
         return f"Error retrieving transcript: {e}"
 
 
-ALL_TOOLS = [
-    end_call,
-    read_screen_context,
-    knowledge,
-    gm_command,
-    answer_menu,
-    run_shell,
-    agent_status,
-    view_transcript,
-]
+# The tool each wrapper runs through execute_tool. A Cartesia call carries no caller, so every turn is a
+# non-fleet turn: the model is OFFERED only what Arturo's non-fleet allowlist runs (execute_tool refuses
+# the rest anyway, and a tool offered but refused invites a promise Arturo cannot keep). end_call is the
+# call's own control, not an Arturo tool.
+_EXECUTES = {
+    read_screen_context: "read_screen_context",
+    knowledge: "knowledge",
+    gm_command: "gm_command",
+    answer_menu: "answer_menu",
+    run_shell: "run_shell",
+    agent_status: "agent_status",
+    view_transcript: "view_transcript",
+}
+ALL_TOOLS = [end_call] + [fn for fn, name in _EXECUTES.items() if name in _arturo_mod._NON_FLEET_ALLOWED]
 
 async def get_agent(env, call_request):
     log.info(f"Incoming call request: agent={call_request.agent.id if call_request.agent else 'default'}")

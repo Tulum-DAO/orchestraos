@@ -198,6 +198,14 @@ TOOL_DECLARATIONS = [
     }
 ]
 
+def offered_declarations():
+    """A live call carries no caller, so every turn is a non-fleet turn: the model is OFFERED only what
+    Arturo's non-fleet allowlist runs (execute_tool refuses the rest anyway, and a tool offered but
+    refused invites a promise Arturo cannot keep). No proxy module, no list: nothing is offered."""
+    allowed = getattr(globals().get("arturo_mod"), "_NON_FLEET_ALLOWED", frozenset())
+    return [d for d in TOOL_DECLARATIONS if d["name"] in allowed]
+
+
 class GeminiLiveSession:
     def __init__(self, client_ws, voice_name: str = "Fenrir", session_id: str = None):
         self.client_ws = client_ws
@@ -291,6 +299,7 @@ class GeminiLiveSession:
             system_instruction_parts.append(f"ACTIVE SCREEN CONTEXT: {self.surface_desc}.")
 
         system_instruction = " ".join(system_instruction_parts)
+        decls = offered_declarations()
 
         setup_frame = {
             "setup": {
@@ -311,7 +320,7 @@ class GeminiLiveSession:
                 "system_instruction": {
                     "parts": [{"text": system_instruction}]
                 },
-                "tools": [{"function_declarations": TOOL_DECLARATIONS}],
+                "tools": [{"function_declarations": decls}] if decls else [],
                 # Native Live-API OUTPUT transcription: streams Arturo's spoken words
                 # word-by-word in serverContent.outputTranscription -> client caption
                 # events (role:"arturo"). Replaces the old post-hoc batch
