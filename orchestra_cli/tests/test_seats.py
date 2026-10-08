@@ -331,3 +331,53 @@ def test_starter_worker_works_in_its_own_project_dir_not_the_harness_checkout(re
     assert reg["dev-first-project"]["cwd"] == str(proj)
     assert reg["gm"]["cwd"] == str(repo_with_templates)               # gm and the PM stay in the checkout
     assert f"cwd {proj}" in (repo_with_templates / "prompts" / "dev-first-project.md").read_text()
+
+
+# ---- one `orchestra starter` per install at a time (pm doc test, 2026-10-08) ----
+# Arturo's create_starter_team (#268) holds <data>/state/starter.lock for its run, but the CLI took
+# no lock: an operator who said yes to Arturo and then ran §3's `orchestra starter` raced it, two
+# writers on registry.json. The CLI takes the same lock; Arturo's own child says it already holds it.
+
+def _hold_starter_lock(tmp_path):
+    import fcntl
+    p = tmp_path / "data" / "state" / "starter.lock"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    f = open(p, "a")
+    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return f
+
+
+def test_starter_refuses_while_another_starter_holds_the_lock(repo_with_templates, tmp_path, monkeypatch, capsys):
+    calls = _starter_env(monkeypatch)
+    monkeypatch.delenv("ORCHESTRA_STARTER_LOCK_HELD", raising=False)
+    held = _hold_starter_lock(tmp_path)
+    try:
+        rc = M.main(["starter"])
+    finally:
+        held.close()
+    assert rc == 3
+    assert "already" in capsys.readouterr().err
+    assert calls == [], "nothing may be spawned or registered while another run holds the lock"
+
+
+def test_starter_runs_inside_the_lock_its_parent_holds(repo_with_templates, tmp_path, monkeypatch):
+    """Arturo holds the lock and runs `orchestra starter` as its child with
+    ORCHESTRA_STARTER_LOCK_HELD=1: that child must not refuse its own parent's lock."""
+    spawned = set()
+    calls = _starter_env(monkeypatch, alive=lambda name: name in spawned)
+    monkeypatch.setattr(SE, "_run", lambda argv, env=None, cwd=None: (calls.append(argv), spawned.add(argv[1]))[0] or 0)
+    monkeypatch.setenv("ORCHESTRA_STARTER_LOCK_HELD", "1")
+    held = _hold_starter_lock(tmp_path)
+    try:
+        assert M.main(["starter"]) == 0
+    finally:
+        held.close()
+
+
+def test_starter_releases_the_lock_when_it_is_done(repo_with_templates, tmp_path, monkeypatch):
+    spawned = set()
+    calls = _starter_env(monkeypatch, alive=lambda name: name in spawned)
+    monkeypatch.setattr(SE, "_run", lambda argv, env=None, cwd=None: (calls.append(argv), spawned.add(argv[1]))[0] or 0)
+    monkeypatch.delenv("ORCHESTRA_STARTER_LOCK_HELD", raising=False)
+    assert M.main(["starter"]) == 0
+    _hold_starter_lock(tmp_path).close()          # free again: this would raise if still held

@@ -429,7 +429,6 @@ def _starter_plan(project: str) -> list[dict]:
 
 
 def cmd_starter(ns) -> int:
-    import argparse
     _apply_verbose(ns)
     st = S.load_settings()
     if not st.config_exists:
@@ -442,6 +441,40 @@ def cmd_starter(ns) -> int:
     refused = _refuse_if_no_runtime_authed(st)
     if refused is not None:
         return refused
+    lock = _starter_lock(st)
+    if lock is False:
+        print("another `orchestra starter` is already running on this install (Arturo may be setting up "
+              "the team): wait for it to finish, then run this again", file=sys.stderr)
+        return 3
+    try:
+        return _starter_seats(st, ns)
+    finally:
+        if lock is not None:
+            lock.close()                      # closing the file releases the flock
+
+
+def _starter_lock(st):
+    """One starter run per install: an advisory flock on <data>/state/starter.lock, the file Arturo's
+    create_starter_team (#268) holds for its run. Without it an operator who said yes to Arturo and
+    then ran `orchestra starter` raced it, two writers on registry.json (pm doc test, 2026-10-08).
+    Returns the open file (held), False when another run holds it, or None when the lock is
+    already held for us: Arturo runs this CLI as its child with ORCHESTRA_STARTER_LOCK_HELD=1."""
+    if os.environ.get("ORCHESTRA_STARTER_LOCK_HELD") == "1":
+        return None
+    import fcntl
+    path = st.data_dir / "state" / "starter.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    f = open(path, "a")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return False
+    return f
+
+
+def _starter_seats(st, ns) -> int:
+    import argparse
     for seat in _starter_plan(ns.project):
         name = seat["name"]
         p, reg = _registry(st)
