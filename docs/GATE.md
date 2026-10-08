@@ -44,11 +44,14 @@ orchestra up --detach && orchestra status
 ```
 
 Expected: `orchestra status` shows every supervised process (`gateway`, `api`,
-`dashboard`, `router`, the beats) with a live pid. Open
-`http://127.0.0.1:8891` (or `ssh -L 8891:127.0.0.1:8891` if remote) — the
-dashboard loads with an empty Agents list. Inside a Docker container the services
+`dashboard`, `router`, the beats) with a live pid. Open the dashboard at the
+Tailscale https address from `docs/INSTALL.md` §2 ("Open the dashboard in your
+browser"; `tailscale serve status` prints it), or `http://127.0.0.1:8891` on the
+machine itself — it loads with an empty Agents list. Inside a Docker container the services
 bind `127.0.0.1` by design, so check with `curl -s 127.0.0.1:8891/api/agents` from
-inside the container (or set `[dashboard] host = "0.0.0.0"` before publishing a port).
+inside the container (or set `[dashboard] host = "0.0.0.0"` before publishing a port — inside a
+container only; on a VPS that puts an unauthenticated dashboard and web terminal on
+the internet).
 
 **If it fails, look here:** `orchestra doctor`'s failing row names the exact
 fix (a missing CLI, a bad port, an unauthed runtime) — read its remedy line

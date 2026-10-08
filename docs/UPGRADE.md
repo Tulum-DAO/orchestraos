@@ -1,6 +1,6 @@
 # Upgrading — pulling latest `main` without losing your seats
 
-The harness is under active development during the hackathon. This doc covers
+The harness is under active development. This doc covers
 the safe way to pick up new code without killing your running agents or losing
 what they remember.
 

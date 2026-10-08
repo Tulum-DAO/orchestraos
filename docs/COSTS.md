@@ -8,9 +8,15 @@ source link before budgeting.
 ## VPS: the minimum path needs one small box
 
 `orchestra up` runs five always-on processes (gateway, api, dashboard, arturo,
-plus the cron beats) and one tmux seat per agent. Nothing here is GPU or
-memory-heavy — the model runs on the vendor's servers, not yours. A 2-4 GB / 2
-vCPU box is enough for one operator with a handful of seats.
+plus the cron beats) and one tmux seat per agent. Nothing here is GPU-heavy — the
+model runs on the vendor's servers, not yours. What takes memory is the agent CLIs:
+roughly 400 MB per Claude Code seat (median of 27 seats on the reference install).
+Take at least **2 vCPU and 4 GB RAM** (the minimum in `docs/INSTALL.md`, "Get a VPS");
+8 GB for more than five seats. We have not tested below 4 GB, so the 1 GB plan below
+is listed for price comparison only.
+
+Tailscale, which the minimum path uses to reach the dashboard in your browser, is
+free on its personal plan.
 
 | Provider | Plan | Specs | Price |
 |---|---|---|---|

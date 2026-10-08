@@ -19,7 +19,7 @@ OrchestraOS, published by Tulum DAO: an open harness for running a fleet of codi
 
 ## Two ways to run it
 
-**Minimum path** (one machine, one CLI, no voice, no chat bridges): gateway up, one seat spawned, one card answered from the web dashboard. Target is under thirty minutes on a clean Ubuntu VPS. See `docs/INSTALL.md`.
+**Minimum path** (one machine, one CLI, no voice, no chat bridges): from nothing to a VPS, Tailscale on it and on your own laptop or phone, `orchestra up` running, the dashboard open in your browser over Tailscale https, and one seat spawned. About an hour the first time. See `docs/INSTALL.md`, which starts at "Get a VPS".
 
 **Reference install** (the operator's own setup): a VPS plus a Mac over Tailscale, tmux seats, the rotation beat, push notifications, Telegram, and voice. See `docs/REFERENCE_INSTALL.md`. Do this second.
 

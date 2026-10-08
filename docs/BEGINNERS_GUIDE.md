@@ -32,22 +32,25 @@ assistant actually run commands on your behalf instead of just describing what
 you should type. You only need one. Pick whichever company you already have an
 account with, or Claude if you have none:
 
-- **Claude Code:** `npm install -g @anthropic-ai/claude-code` (needs Node.js
+- **Claude Code:** `sudo npm install -g @anthropic-ai/claude-code` (needs Node.js
   installed first — if `npm` prints "command not found", install Node.js from
-  nodejs.org, then retry).
+  nodejs.org, then retry). On the server that will run your agents, use the
+  pinned version in `docs/INSTALL.md` §0 instead.
 - **Gemini (Antigravity `agy` CLI):** this harness detects Google's Antigravity `agy`
   binary, not `@google/gemini-cli` — installing `gemini` will not be recognised. A
   validated `agy` install recipe lands after the launch; the free-tier figures in
   `docs/COSTS.md` are unverified against `agy`.
-- **Codex (OpenAI):** `npm install -g @openai/codex`, or see OpenAI's install
+- **Codex (OpenAI):** `sudo npm install -g @openai/codex`, or see OpenAI's install
   docs — bundled with a ChatGPT Plus subscription.
 
 ## Log in
 
-Run the CLI's name by itself (`claude`, or `gemini`, or `codex login`). It opens
+Run the CLI's name by itself (`claude`, or `agy`, or `codex login`). It opens
 a login page in your browser, you sign in with the account for whichever
 company you picked, and the terminal shows you are logged in. You do this once;
-after that the CLI remembers you.
+after that the CLI remembers you. On a server with no browser, it prints the
+login link instead: open it on your own computer (`docs/INSTALL.md` §0, "Log in
+to the agent CLI").
 
 ## Run one command
 
@@ -66,9 +69,10 @@ runs commands, writes things) and tells you what it did.
 
 This repo's harness runs agents that stay alive continuously — not just for one
 question, but as a standing presence you message like a coworker. Follow
-`docs/INSTALL.md` up through spawning one seat (§§1-3): it walks the exact
-commands to get the harness running and one always-on agent live in its own
-terminal window. If a command's output does not match what the doc says it
+`docs/INSTALL.md` from the top through spawning one seat (§3): it walks you from
+renting a small server (a VPS) and connecting it to your own devices with
+Tailscale, to the harness running, the dashboard open in your browser, and one
+always-on agent live in its own terminal window. If a command's output does not match what the doc says it
 should, stop and read the error rather than guessing — every command in that
 doc prints something specific so you know it worked.
 
@@ -92,16 +96,16 @@ one carries where it stopped, not what it remembers).
 
 ## The seven-step gate
 
-Everyone doing anything at the hackathon — picking a track, adding a feature —
+Everyone who wants to build on the harness — picking a track, adding a feature —
 completes these seven steps first. They are cumulative: each one builds on the
 last, and together they touch most of the files any track's doc will send you
 to, so you will recognize them when you get there. `docs/GATE.md` has the full
 version of each step below — the exact command, what it should print, and
 where to look if it doesn't.
 
-1. **Install, doctor green, dashboard open.** `docs/INSTALL.md` §§0-2:
-   `orchestra init`, `orchestra doctor` (every row OK), `orchestra up`, open the
-   dashboard in a browser.
+1. **Install, doctor green, dashboard open.** `docs/INSTALL.md` from the top
+   through §2: a VPS with Tailscale, `orchestra init`, `orchestra doctor` (every
+   row OK), `orchestra up`, the dashboard open in your browser over Tailscale.
 2. **Always-on agent spawned, answers questions in terminal.** `docs/INSTALL.md`
    §3: spawn one seat, confirm it is alive, ask it something in its own tmux
    pane and get a real answer.
