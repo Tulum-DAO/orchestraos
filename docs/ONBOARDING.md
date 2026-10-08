@@ -184,9 +184,10 @@ Confirm the `gateway` row has a live pid again.
   | `approve` | answer approvals and questionnaires: it acts as you |
   | `message` | send a message to an agent, upload a file |
   | `inject` | press keys in a live agent's terminal |
-  | `voice` | talk to Arturo (every call spends provider credit) |
-  | `ptt` | push-to-talk to Arturo **with its tools**, which can act on your agents: as strong as `inject`. Not a mild "talk" scope |
+  | `voice` | talk to Arturo from this device, typed or spoken (every turn spends provider credit) |
+  | `ptt` | push-to-talk to Arturo from a headset or Watch, **with its tools**, which can act on your agents: as strong as `inject`. Not a mild "talk" scope |
   | `admin` | file red-alert reports, post telemetry |
+  | `usage` | nothing yet: reserved for reading usage later, so a device paired now needs no re-pair |
 
   A phone or Mac that answers cards needs `read,approve`. Add `message` only if you want to
   message agents from it. Give it more only if you mean to.
