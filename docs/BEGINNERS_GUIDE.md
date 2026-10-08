@@ -69,7 +69,7 @@ runs commands, writes things) and tells you what it did.
 
 This repo's harness runs agents that stay alive continuously — not just for one
 question, but as a standing presence you message like a coworker. First,
-[docs/FROM_SCRATCH.md](FROM_SCRATCH.md) gets you a server and logs you in to it from your Mac. Then follow
+[docs/FROM_SCRATCH.md](FROM_SCRATCH.md) gets you a server and logs you in to it from your computer (Mac, Windows or Linux). Then follow
 [docs/INSTALL.md](INSTALL.md) from §0 through spawning one seat (§3): it walks you from
 renting a small server (a VPS) and connecting it to your own devices with
 Tailscale, to the harness running, the dashboard open in your browser, and one
