@@ -31,7 +31,7 @@ Choose:
   takes roughly 400 MB (median of 27 seats on the reference install). 4 GB holds
   the services and a handful of seats; take 8 GB if you plan on more than five.
   On a 2 GB box, `orchestra init` and `orchestra up` have been seen to work (a clean
-  run, 2026-10-08); seats were not tested there, so treat 2 GB as a trial, not a plan.
+  run, 2026-10-08); seats were not tested there, so plan on 4 GB once you run seats.
 - **ssh key login.** Most providers ask for your public key when you create the
   server. If you have none, run `ssh-keygen -t ed25519` on your own computer
   and paste the contents of `~/.ssh/id_ed25519.pub`.
