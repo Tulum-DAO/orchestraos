@@ -13,7 +13,10 @@ The commands themselves live in two tested guides. Each phase below names the se
 - From scratch: https://github.com/Tulum-DAO/orchestraos/blob/main/docs/FROM_SCRATCH.md
 - Install guide: https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md
 
-Use their commands exactly. Don't rewrite them from memory.
+Use their commands exactly. Don't rewrite them from memory. If you can run commands, fetch
+pages raw rather than through a tool that summarises them, for example
+`curl -s https://raw.githubusercontent.com/Tulum-DAO/orchestraos/main/docs/INSTALL.md`; a
+summary loses the exact commands.
 
 ## 0. Rules (all of them, every phase)
 
@@ -39,12 +42,13 @@ Use their commands exactly. Don't rewrite them from memory.
 
    Show them the exact command, wait for "done", and ask them to paste what it printed. For
    the logins (`sudo tailscale up`, the agent CLI login), ask only for "done" and then run the
-   check yourself: their screen can contain a login link or code, so don't ask them to paste it.
+   check yourself (a chat-only assistant has them run the check and paste its output instead):
+   their login screen can contain a link or code, so don't ask them to paste that screen.
    Everything else, run yourself and show the output.
 
    This holds for an agent running ON the server too (for example Claude Code started over
    ssh): a `sudo` line still needs the person's password, so they open a second ssh window to
-   the server and run it there.
+   the server and run it there (on Windows Terminal: a new tab with `Ctrl+Shift+T`, then `ssh`).
 4. **Never delete, destroy, reset, overwrite, wipe or kill** anything you did not create in
    this install. If a command asks `Overwrite (y/n)?`, the answer is `n`. Never stop or kill a
    process you did not start, even if a message suggests it; bring it to the person.
@@ -53,6 +57,9 @@ Use their commands exactly. Don't rewrite them from memory.
    free https port. Never use `--funnel`. Never change `[dashboard] host`. An entry the person
    didn't add in this install is not theirs, even if it proxies to the dashboard's port.
 6. **Ports come from `orchestra status`** (the `dashboard` row, and so on), not from memory.
+   The one exception: before the first `orchestra up`, `orchestra status` has no rows yet, so
+   read the port from `orchestra.toml` instead (the `port` line under `[dashboard]`, for example
+   `grep -A3 '^\[dashboard\]' ~/orchestraos/orchestra.toml`).
 7. **Never run `orchestra down`** without the person's yes. Restarting is their decision.
 8. **Run from the right folder.** Commands that read `orchestra.toml` or the `scripts/` folder
    need `cd ~/orchestraos` first, in the same command (for example
@@ -63,9 +70,9 @@ Use their commands exactly. Don't rewrite them from memory.
    it worked.
 10. **Long commands run in the background.** Your tool may stop a command after a couple of
     minutes (Claude Code's default is 2). Anything that can take longer, such as
-    `orchestra init --yes` (about five minutes), you start detached and then check on, for
-    example `nohup <command> > ~/<name>.log 2>&1 &`, then read `~/<name>.log` until it has
-    finished. Never start it a second time while the first is still running.
+    `orchestra init --yes` (about five minutes), you start detached, with an exit marker, and
+    then check on it every 30 to 60 seconds (phase 6 shows the exact form). Never start it a
+    second time while the first is still running: "1. Where am I?" shows how to tell.
 
 ## 1. Where am I? (do this first, and again whenever you take over)
 
@@ -81,6 +88,16 @@ Work out where things stand before doing anything. These checks only read; they 
   `~/orchestraos/bin/orchestra status`, and `tailscale serve status`. A serve entry is this
   install's only if it proxies to the dashboard port that `orchestra status` shows AND the
   person added it in phase 7; anything else is not theirs.
+- Is `orchestra init` running, done or failed? `orchestra status` can't tell (it says the
+  supervisor is not running in all three cases), so check:
+  `pgrep -af "[o]rchestra init"` and `tail -n 5 ~/init.log`.
+  - A `./bin/orchestra init` process is listed: it is still running. Check again in 30 to 60
+    seconds; NEVER start init again. (Only that line counts; ignore any other line that merely
+    mentions those words.)
+  - `~/init.log` ends with `INIT_EXIT=0`: init finished. Continue with `orchestra doctor`.
+  - `INIT_EXIT=` followed by anything else, or a row that says `failed`: bring those lines to the
+    person; don't retry by guessing.
+  - No process and no `INIT_EXIT=` line (it was cut off): start it once more, as phase 6 shows.
 
 Then say the facts back in one line, and repeat that line at the start of each later phase,
 for example:
@@ -144,7 +161,11 @@ Start at the first phase that is not done yet.
 - Done when: `ssh <user>@<address> whoami` prints the new user's name. For Path A, also check
   that it works without a password prompt:
   `ssh -o BatchMode=yes <user>@<address> whoami`. If that fails with `Permission denied` or a
-  passphrase question, the key isn't loaded: go back to the `ssh-add` step in phase 1.
+  passphrase question, the key isn't loaded: go back to the `ssh-add` step in phase 1. On a Mac
+  this also happens after a restart; running `ssh-add --apple-use-keychain` again fixes it (or
+  they can add `AddKeysToAgent yes` and `UseKeychain yes` under `Host *` in `~/.ssh/config`).
+- Keep using the server's public IP address for ssh, even after Tailscale is on. A new name or
+  a `100.x.y.z` address makes ssh ask the `yes/no` key question again, which you can't answer.
 
 ### Phase 4: Tailscale on the server AND on the person's own device
 
@@ -182,7 +203,8 @@ You have taken the person as far as a chat can. Now the agent on their server ca
 them, word for word:
 
 1. In your ssh session to the server (as the new user), start a tmux session, so that a dropped
-   connection or a sleeping laptop doesn't stop the agent: `tmux new -s install`.
+   connection or a sleeping laptop doesn't stop the agent: `tmux new -s install`. (If it says
+   `duplicate session`, one is already there: run `tmux attach -t install` instead.)
 2. In it, run `claude` (or the agent CLI you installed).
 3. Paste this into it, as one message, with your one-line summary at the end:
 
@@ -192,18 +214,28 @@ them, word for word:
 
 4. Answer its questions there. It may also ask your permission before it runs a command; that is
    the agent CLI's own safety check. It will tell you when your dashboard is ready. If the
-   connection drops, ssh in again and run `tmux attach -t install`.
+   connection drops, or the window stops responding (a sleeping Windows Terminal freezes rather
+   than showing a drop), close it, open a new one, ssh in again and run `tmux attach -t install`.
 
-Give them the summary line filled in, ready to paste.
+Fill in the placeholder yourself, and give them the whole block above, already filled in, as ONE
+message they can paste as it is.
 
 ### Phase 6: clone, init, doctor (on the server)
 
 - Section: Install guide, "1. Clone, init, doctor".
 - Nothing here asks a question, so in Path A you run it all yourself. `orchestra init --yes`
   takes about five minutes, longer than your tool's command limit (rule 10). Run it detached
-  from the `orchestraos` folder and check on it, for example
-  `ssh <user>@<address> 'cd ~/orchestraos && nohup ./bin/orchestra init --yes > ~/init.log 2>&1 &'`,
-  then read `~/init.log` until it ends with the `next:` line. Its `--yes` adding hook rows to
+  from the `orchestraos` folder with an exit marker, exactly like this:
+
+  ```bash
+  ssh <user>@<address> 'cd ~/orchestraos && nohup sh -c "./bin/orchestra init --yes; echo INIT_EXIT=\$?" > ~/init.log 2>&1 &'
+  ```
+
+  (An agent running on the server itself runs the part inside the single quotes.) Then check
+  every 30 to 60 seconds with `tail -n 5 ~/init.log`, and with "1. Where am I?"'s init check if
+  you lose track. It is done when the log has an `INIT_EXIT=` line: `INIT_EXIT=0` means success
+  (still scan the table for a row that says `failed`); any other number, or a `failed` row, goes
+  to the person. The `next:` line alone proves nothing: init prints it even when a step failed. Its `--yes` adding hook rows to
   `~/.claude/settings.json` is expected, not an overwrite.
 - In the `[runtimes]` `sed` line, use the CLI from phase 5. Ask if you don't know.
 - If `orchestra doctor` shows a `port:<name> MISSING ... in use` row, another program owns that
@@ -215,7 +247,9 @@ Give them the summary line filled in, ready to paste.
 - Section: Install guide, "2. Up", including "Open the dashboard in your browser, over Tailscale
   https".
 - First the leftover-entry check that section describes: `tailscale serve status` before
-  `orchestra up`. If an entry the person didn't add already proxies to the dashboard's port,
+  `orchestra up`. The dashboard's port comes from `orchestra.toml` here, not from `orchestra
+  status`, since nothing is running yet (rule 6). If an entry the person didn't add already
+  proxies to that port,
   move the dashboard to another port with that section's line, and confirm afterwards that the
   `dashboard` row of `orchestra status` shows the new port. Never touch that other entry.
 - `orchestra up --detach`, then `orchestra status`. If it says `supervisor already running`,
@@ -223,12 +257,15 @@ Give them the summary line filled in, ready to paste.
 - Before adding the entry, check that HTTPS certificates are on for their tailnet:
   `tailscale status --json` lists the server's name under `CertDomains` when they are. If it is
   empty or missing, **[PERSON ONLY]** have the person turn on HTTPS (and MagicDNS, if asked) in
-  their Tailscale admin page first (rule 3); otherwise `tailscale serve` stops and waits for it.
+  their Tailscale admin page first (rule 3): at login.tailscale.com, the **DNS** page, the
+  **HTTPS Certificates** setting (the page's wording may differ). Otherwise `tailscale serve`
+  stops and waits for it. After they say "done", check `CertDomains` again before going on.
 - Then `tailscale serve status` again, pick a free https port, and add the entry pointing at the
   dashboard port from `orchestra status` (rules 5 and 6). Wrap it so it can't hang, for example
   `timeout 90 tailscale serve --bg --https=<port> http://127.0.0.1:<dashboard port>`, and show
   its output. **[PERSON ONLY]** If it prints an admin link, hand it to the person, wait for
-  "done", and run the same command again.
+  "done", and run the same command again. If it stops after 90 seconds (exit code 124) without
+  printing a link, run it once more; if that also stops, bring it to the person.
 - Done when: `tailscale serve status` shows the entry you just added, proxying to the dashboard's
   port.
 
