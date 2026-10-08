@@ -37,19 +37,23 @@ What is built:
   (TestFlight and App Store builds register production tokens, Xcode builds sandbox ones).
 - **`rev` orders everything; the client must grow it on EVERY PUT and DELETE** (ms since epoch).
   An APNs token belongs to the app install, not the pairing, so Forget-then-pair-again keeps
-  the same token. A PUT at or below the stored rev changes nothing (`registered: false`); a
-  DELETE below it changes nothing (`removed: false`); a DELETE is remembered for 30 days, so a
-  delayed older PUT can't bring a forgotten device back. rev is at most 2^53.
+  the same token. A PUT at or below the stored rev changes nothing (`registered: false`, with
+  `reason: "stale_rev"`); a DELETE below it changes nothing (`removed: false`); a DELETE is
+  remembered for 30 days (`reason: "forgotten"`), so a delayed older PUT can't bring a
+  forgotten device back. A rev more than a day ahead of the gateway's clock is refused, so no
+  request can pin a token for good.
 - **A token belongs to its owner.** Another device can take it over only when the owner is
   revoked, or when the owner is the shared fleet bearer (a phone moving onto its own token),
-  and only with a strictly newer rev.
+  and only with a strictly newer rev. Otherwise the PUT gets `reason: "owned"`: the app must
+  Forget the token with its OLD bearer before discarding that bearer.
 - **Tokens die with their owner, on positive evidence only.** A sender reads `push_targets()`:
-  it sends only to owners it can confirm are alive, prunes owners it can confirm are dead (a
-  revoked device, or a rotated fleet bearer, since fleet tokens are filed under a fingerprint
-  of the bearer), and skips without pruning any owner it can't read. Missing data never
-  deletes a token.
+  it sends only to owners it can confirm are alive, prunes owners it can confirm are dead, and
+  skips without pruning any owner it can't read. Dead means a revoked device, or a fleet
+  bearer that `orchestra rotate-fleet-token` recorded as retired (fleet tokens are filed under
+  a fingerprint of the bearer). A sender that merely reads a different bearer (another HOME or
+  token file) does not count that as a rotation. Missing data never deletes a token.
 - **Bounded:** 8 tokens per device, 16 for the fleet bearer (phone, iPad and watch in two
-  envs); the oldest is evicted. Tokens are stored lowercase. A corrupt store file is moved
+  envs), and 32 remembered Forgets per principal; the oldest is evicted. Tokens are stored lowercase. A corrupt store file is moved
   aside, never overwritten.
 - `GET /gateway/capabilities` lists `"push"` in `features` whenever the route exists, and
   `push: {delivery: "direct"|"relay"|"none", bundle_ids}`; delivery comes from

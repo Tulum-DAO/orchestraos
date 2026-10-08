@@ -31,6 +31,7 @@ The rules this module exists to keep:
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import logging
 import os
@@ -49,11 +50,13 @@ ENVS = ("sandbox", "production")
 DEFAULT_BUNDLE_IDS = ("co.bizypro.OrchestraOS", "co.bizypro.OrchestraOS.watchkitapp")
 #: Prefix of the fleet bearer's principal ("legacy:<fingerprint of the bearer>").
 LEGACY_PREFIX = "legacy:"
-#: JSON- and Swift-safe ceiling for rev (2**53). Larger values would let one write pin a token
-#: forever.
-MAX_REV = 2 ** 53
+#: rev is ms since epoch, so anything more than a day ahead of now is refused: a far-future rev
+#: would let one write pin a token (or a Forget) for good.
+REV_FUTURE_SLACK_MS = 24 * 3600 * 1000
 MAX_PER_DEVICE = 8
 MAX_PER_LEGACY = 16
+#: Forgets remembered per principal; the oldest go first. Bounds a PUT/DELETE loop.
+MAX_TOMBSTONES = 32
 #: How long a Forget is remembered, so a delayed older PUT cannot resurrect the token.
 TOMBSTONE_TTL_S = 30 * 24 * 3600
 
@@ -80,9 +83,22 @@ def _token(value) -> str:
 
 
 def _rev(value) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_REV:
-        raise PushTokenError("rev must be an integer from 0 to 2**53 that grows on every request")
+    ceiling = int(time.time() * 1000) + REV_FUTURE_SLACK_MS
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= ceiling:
+        raise PushTokenError("rev must be ms since epoch (not in the future), growing on every request")
     return value
+
+
+def _stored_rev(rec) -> int:
+    try:
+        return int(rec.get("rev", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def legacy_principal(bearer: str) -> str:
+    """The push principal for a fleet bearer: a short fingerprint, never the bearer itself."""
+    return LEGACY_PREFIX + hashlib.sha256(bearer.encode("utf-8")).hexdigest()[:16]
 
 
 def validate_registration(data: dict) -> dict:
@@ -109,6 +125,7 @@ def _is_legacy(principal_id) -> bool:
 class PushTokenStore:
     def __init__(self, path):
         self.path = Path(path)
+        self.retired_path = self.path.with_name(self.path.stem + ".retired-bearers.json")
 
     # ------------------------------------------------------------------ file plumbing
 
@@ -162,19 +179,55 @@ class PushTokenStore:
             del data[tok]
 
     @staticmethod
-    def _enforce_cap(data: dict, principal_id: str) -> None:
-        cap = MAX_PER_LEGACY if _is_legacy(principal_id) else MAX_PER_DEVICE
-        mine = sorted((r.get("updated_at") or 0, t) for t, r in data.items()
-                      if not r.get("deleted") and r.get("principal") == principal_id)
+    def _evict_oldest(data: dict, principal_id: str, deleted: bool, cap: int, stamp: str) -> None:
+        mine = sorted((r.get(stamp) or 0, t) for t, r in data.items()
+                      if bool(r.get("deleted")) == deleted and r.get("principal") == principal_id)
         for _, tok in mine[:max(0, len(mine) - cap)]:
             del data[tok]
 
+    def _enforce_cap(self, data: dict, principal_id: str) -> None:
+        cap = MAX_PER_LEGACY if _is_legacy(principal_id) else MAX_PER_DEVICE
+        self._evict_oldest(data, principal_id, False, cap, "updated_at")
+        self._evict_oldest(data, principal_id, True, MAX_TOMBSTONES, "deleted_at")
+
+    # ------------------------------------------------------------------ fleet bearer rotation
+
+    def retire_bearer(self, bearer: str) -> None:
+        """Record that this fleet bearer was rotated away. This is the POSITIVE evidence that
+        makes its tokens dead; a sender that merely sees a different bearer (another HOME,
+        another token file) treats them as unknown and leaves them alone."""
+        with self._locked():
+            got = self.retired_fingerprints()
+            got.add(legacy_principal(bearer))
+            tmp = self.retired_path.with_suffix(".tmp")
+            try:
+                tmp.unlink()
+            except FileNotFoundError:
+                pass
+            fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w") as fh:
+                json.dump(sorted(got), fh)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, self.retired_path)
+
+    def retired_fingerprints(self) -> set:
+        try:
+            got = json.loads(self.retired_path.read_text())
+        except FileNotFoundError:
+            return set()
+        except (OSError, ValueError):
+            log.warning(f"push tokens: {self.retired_path} unreadable; no bearer counts as retired")
+            return set()
+        return {str(x) for x in got} if isinstance(got, list) else set()
+
     # ------------------------------------------------------------------ operations
 
-    def register(self, principal_id: str, fields: dict, classify) -> bool:
-        """Store or refresh a token. Returns whether it was stored. `classify(principal) ->
-        ALIVE | DEAD | UNKNOWN` decides whether another principal's token may be taken over
-        (rule 3). Nothing changes when the stored rev (live or tombstone) is >= this one."""
+    def register(self, principal_id: str, fields: dict, classify) -> str | None:
+        """Store or refresh a token. Returns None when stored, else why not: "stale_rev" (a newer
+        request is on file), "forgotten" (a Forget at or after this rev) or "owned" (another
+        device that is still paired, or one we cannot read, holds it). `classify(principal) ->
+        ALIVE | DEAD | UNKNOWN` decides whether another principal's token may be taken over."""
         principal_id = str(principal_id)
         now = time.time()
         with self._locked():
@@ -183,21 +236,21 @@ class PushTokenStore:
             cur = data.get(fields["token"])
             rev = fields["rev"]
             if cur and cur.get("deleted"):
-                if rev <= int(cur.get("rev", 0)):
-                    return False            # forgotten at or after this rev (rule 2)
+                if rev <= _stored_rev(cur):
+                    return "forgotten"      # a Forget at or after this rev (rule 2)
             elif cur:
-                owner, stored = cur.get("principal"), int(cur.get("rev", 0))
+                owner, stored = cur.get("principal"), _stored_rev(cur)
                 if rev < stored:
-                    return False            # a delayed older request
+                    return "stale_rev"      # a delayed older request
                 if owner != principal_id:
                     if rev == stored:
-                        return False        # a takeover needs a strictly newer rev
+                        return "stale_rev"  # a takeover needs a strictly newer rev
                     if not _is_legacy(owner) and classify(owner) != DEAD:
-                        return False        # someone else's live token (rule 3)
+                        return "owned"      # someone else's token (rule 3)
             data[fields["token"]] = {**fields, "principal": principal_id, "updated_at": now}
             self._enforce_cap(data, principal_id)
             self._save(data)
-            return True
+            return None
 
     def remove(self, principal_id: str, token, rev) -> bool:
         """Forget. Applies only to the caller's own token, and only when `rev` is at least the
@@ -210,10 +263,11 @@ class PushTokenStore:
             cur = data.get(tok)
             if not cur or cur.get("deleted") or cur.get("principal") != str(principal_id):
                 return False
-            if rev < int(cur.get("rev", 0)):
+            if rev < _stored_rev(cur):
                 return False
             data[tok] = {"deleted": True, "rev": rev, "deleted_at": now,
                          "principal": str(principal_id)}
+            self._enforce_cap(data, str(principal_id))
             self._save(data)
             return True
 

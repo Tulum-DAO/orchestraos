@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import stat
+import time
 
 import pytest
 
@@ -28,6 +29,8 @@ TOK = "ab" * 32
 TOK2 = "cd" * 32
 TOK3 = "ef" * 32
 FLEET_BEARER = "fleet-token-value"
+NOW_MS = int(time.time() * 1000)
+FAR_FUTURE = NOW_MS + 2 * 24 * 3600 * 1000
 
 
 def _fp(bearer):
@@ -111,7 +114,7 @@ def test_every_field_is_required(field):
 @pytest.mark.parametrize("field,value", [
     ("platform", "android"), ("env", "prod"), ("bundle_id", "com.someone.else"),
     ("token", "not-hex"), ("token", "ab" * 16), ("rev", -1), ("rev", "100"), ("rev", True),
-    ("rev", 1.5), ("rev", 2 ** 53 + 1), ("rev", 10 ** 30),
+    ("rev", 1.5), ("rev", FAR_FUTURE), ("rev", 2 ** 53), ("rev", 10 ** 30),
 ])
 def test_an_unknown_value_is_refused_not_coerced(field, value):
     with pytest.raises(PushTokenError):
@@ -123,8 +126,12 @@ def test_case_and_spaces_are_normalised_and_the_token_is_stored_lowercase():
     assert got["platform"] == "iphone" and got["token"] == TOK
 
 
-def test_the_largest_rev_is_2_to_the_53():
-    assert validate_registration(_reg(rev=2 ** 53))["rev"] == 2 ** 53
+def test_rev_may_run_a_little_ahead_of_this_clock_but_not_a_day():
+    """rev is ms since epoch; a phone's clock may be ahead of the gateway's, but a far-future
+    rev would pin a token (or a Forget) for good."""
+    assert validate_registration(_reg(rev=NOW_MS + 3600 * 1000))["rev"] == NOW_MS + 3600 * 1000
+    with pytest.raises(PushTokenError):
+        validate_registration(_reg(rev=FAR_FUTURE))
 
 
 def test_the_watch_topic_is_accepted_by_default():
@@ -191,7 +198,8 @@ def test_a_retry_at_the_same_rev_by_the_same_caller_is_idempotent(data_dir, devi
 def test_an_older_rev_does_not_overwrite_a_newer_registration(data_dir, devices):
     phone = _device(devices)
     _put(phone, _reg(rev=200, env="production"))
-    assert _body(_put(phone, _reg(rev=100, env="sandbox")))["registered"] is False
+    assert _body(_put(phone, _reg(rev=100, env="sandbox"))) == {
+        "ok": True, "registered": False, "delivery": "none", "reason": "stale_rev"}
     assert _stored(data_dir)[TOK]["env"] == "production"
 
 
@@ -212,8 +220,9 @@ def test_put_reports_the_configured_delivery(data_dir, devices, monkeypatch):
 def test_another_device_cannot_take_a_paired_devices_token_even_with_a_huge_rev(data_dir, devices):
     a, b = _device(devices, "phone-a"), _device(devices, "phone-b")
     _put(a, _reg(rev=5))
-    assert _put(b, _reg(rev=10 ** 30)).status == 400                     # past 2**53
-    assert _body(_put(b, _reg(rev=2 ** 53)))["registered"] is False      # A is still paired
+    assert _put(b, _reg(rev=FAR_FUTURE)).status == 400                   # cannot pin
+    got = _body(_put(b, _reg(rev=NOW_MS)))
+    assert got["registered"] is False and got["reason"] == "owned"      # A is still paired
     assert _stored(data_dir)[TOK]["principal"] == a["id"]
     assert _body(_put(a, _reg(rev=6)))["registered"] is True             # A is not locked out
     assert _body(_delete(a, {"token": TOK, "rev": 7}))["removed"] is True
@@ -272,7 +281,7 @@ def test_a_DELAYED_older_put_cannot_bring_a_forgotten_device_back(data_dir, devi
     phone = _device(devices)
     _put(phone, _reg(rev=1))
     _delete(phone, {"token": TOK, "rev": 2})
-    assert _body(_put(phone, _reg(rev=1)))["registered"] is False
+    assert _body(_put(phone, _reg(rev=1)))["reason"] == "forgotten"
     assert _body(_put(phone, _reg(rev=2)))["registered"] is False
     assert _live_records(data_dir) == {}
     assert _body(_put(phone, _reg(rev=3)))["registered"] is True          # a real re-pair
@@ -311,6 +320,16 @@ def test_each_device_holds_at_most_8_tokens_and_the_oldest_is_evicted(data_dir, 
     assert len(kept) == P.MAX_PER_DEVICE and kept == set(toks[2:])
 
 
+def test_a_put_forget_loop_cannot_grow_the_store_past_32_tombstones(data_dir, devices):
+    phone = _device(devices)
+    for i in range(50):
+        t = f"{i:02x}" * 32
+        _put(phone, _reg(token=t, rev=2 * i + 1))
+        _delete(phone, {"token": t, "rev": 2 * i + 2})
+    tombs = [r for r in _stored(data_dir).values() if r.get("deleted")]
+    assert len(tombs) == P.MAX_TOMBSTONES
+
+
 def test_the_fleet_bearer_holds_up_to_16(data_dir):
     for i in range(20):
         _put(FLEET, _reg(token=f"{i:02x}" * 32, rev=i + 1))
@@ -329,11 +348,37 @@ def test_a_revoked_devices_tokens_are_pruned_from_the_send_list(data_dir, device
     assert TOK2 not in _stored(data_dir), "pruned, not just skipped"
 
 
-def test_rotating_the_fleet_bearer_kills_its_tokens(data_dir, monkeypatch):
+def test_a_RECORDED_rotation_kills_the_old_bearers_tokens(data_dir, monkeypatch):
     _put(FLEET, _reg())
+    G._push_store().retire_bearer(FLEET_BEARER)
     monkeypatch.setattr(G, "gateway_token", lambda: "a-new-bearer")
     assert G.push_targets() == []
     assert TOK not in _stored(data_dir)
+
+
+def test_a_merely_DIFFERENT_bearer_is_not_a_rotation(data_dir, monkeypatch):
+    """The round-2 blocker: a sender that reads another token file (other HOME, other env) sees
+    a different bearer. That is not evidence of a rotation, so nothing may be pruned."""
+    _put(FLEET, _reg())
+    monkeypatch.setattr(G, "gateway_token", lambda: "a-bearer-from-another-token-file")
+    assert G.push_targets() == []
+    assert TOK in _stored(data_dir), "skipped, but kept"
+
+
+def test_rotate_fleet_token_records_the_old_bearer_as_retired(data_dir, monkeypatch):
+    from orchestra_cli.pair_cmd import run_rotate_fleet_token
+    token_file = data_dir / "state" / "watch-gateway-token"
+    token_file.parent.mkdir(parents=True, exist_ok=True)
+    token_file.write_text(FLEET_BEARER + "\n")
+    monkeypatch.setenv("WATCH_GATEWAY_TOKEN_FILE", str(token_file))
+
+    class _Args:
+        minted_by = None
+        revoke_only = False
+
+    assert run_rotate_fleet_token(_Args(), out=lambda *_: None) == 0
+    assert _fp(FLEET_BEARER) in G._push_store().retired_fingerprints()
+    assert token_file.read_text().strip() != FLEET_BEARER
 
 
 def test_an_unset_fleet_bearer_is_unknown_not_a_rotation(data_dir, monkeypatch):
@@ -378,12 +423,14 @@ def test_owner_state_is_positive_evidence_only(data_dir, devices):
     assert G._push_owner_state("../../etc/passwd") == UNKNOWN
     assert G._push_owner_state("0123456789abcdef") == UNKNOWN            # no such file
     assert G._push_owner_state(_fp(FLEET_BEARER)) == ALIVE
+    assert G._push_owner_state(_fp("old-bearer")) == UNKNOWN
+    G._push_store().retire_bearer("old-bearer")
     assert G._push_owner_state(_fp("old-bearer")) == DEAD
 
 
 def test_apns_410_removes_the_token_without_a_rev(tmp_path):
     store = PushTokenStore(tmp_path / "p.json")
-    store.register("0123456789abcdef", validate_registration(_reg()), lambda _: ALIVE)
+    assert store.register("0123456789abcdef", validate_registration(_reg()), lambda _: ALIVE) is None
     assert store.remove_unregistered(TOK) is True
     assert store.remove_unregistered(TOK) is False
 
@@ -399,6 +446,16 @@ def test_a_corrupt_store_is_moved_aside_never_silently_overwritten(data_dir, dev
     aside = list(state.glob("push-tokens.json.corrupt-*"))
     assert len(aside) == 1 and aside[0].read_text() == content
     assert TOK in _stored(data_dir)
+
+
+def test_a_tampered_stored_rev_is_not_a_500(data_dir, devices):
+    phone = _device(devices)
+    _put(phone, _reg())
+    path = data_dir / "state" / "push-tokens.json"
+    rec = json.loads(path.read_text())
+    rec[TOK]["rev"] = "garbage"
+    path.write_text(json.dumps(rec))
+    assert _put(phone, _reg(rev=101)).status == 200
 
 
 def test_non_object_records_are_ignored_not_a_500(data_dir, devices):

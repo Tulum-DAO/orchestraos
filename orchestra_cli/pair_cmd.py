@@ -216,6 +216,17 @@ def run_rotate_fleet_token(args, out=print):
         out("--revoke-only: the fleet bearer itself was NOT rotated.")
         return 0
 
+    # Leave POSITIVE evidence of the rotation before the old bearer is gone, so the push
+    # sender prunes the old bearer's tokens (a lost phone stops receiving pushes) without ever
+    # treating a merely different bearer as a rotation.
+    try:
+        old = Path(token_file).read_text().strip()
+    except OSError:
+        old = ""
+    if old:
+        from scripts.push_tokens import PushTokenStore
+        PushTokenStore(Path(base) / "state" / "push-tokens.json").retire_bearer(old)
+
     new = secrets.token_urlsafe(32)
     path = Path(token_file)
     path.parent.mkdir(parents=True, exist_ok=True)

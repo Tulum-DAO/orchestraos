@@ -4496,10 +4496,9 @@ def _legacy_push_principal() -> str | None:
     """The fleet bearer's push principal: "legacy:" + a short fingerprint of the CURRENT bearer.
     Rotating the bearer changes it, so tokens registered under the old one count as dead
     (push_tokens rule 4) and a lost phone stops receiving pushes. None if no bearer is set."""
+    from scripts.push_tokens import legacy_principal
     tok = gateway_token()
-    if not tok:
-        return None
-    return "legacy:" + hashlib.sha256(tok.encode("utf-8")).hexdigest()[:16]
+    return legacy_principal(tok) if tok else None
 
 
 def _push_principal_id(request):
@@ -4517,15 +4516,16 @@ _DEVICE_ID_RE = re.compile(r"^[0-9a-f]{8,64}$")
 
 def _push_owner_state(principal_id) -> str:
     """ALIVE / DEAD / UNKNOWN for a push token's owner, on POSITIVE evidence only.
-    DEAD means we read the record and it says revoked (or the fleet bearer was rotated).
+    DEAD means we read the record and it says revoked, or `orchestra rotate-fleet-token`
+    recorded that fleet bearer as retired. A fleet fingerprint that merely differs from the
+    bearer THIS process reads (another HOME, another token file) is UNKNOWN, not a rotation.
     Anything we could not read is UNKNOWN: not sent to, and never pruned."""
     from scripts.push_tokens import ALIVE, DEAD, UNKNOWN, LEGACY_PREFIX
     pid = str(principal_id or "")
     if pid.startswith(LEGACY_PREFIX):
-        current = _legacy_push_principal()
-        if current is None:
-            return UNKNOWN
-        return ALIVE if pid == current else DEAD
+        if pid == _legacy_push_principal():
+            return ALIVE
+        return DEAD if pid in _push_store().retired_fingerprints() else UNKNOWN
     if not _DEVICE_ID_RE.match(pid):
         return UNKNOWN
     try:
@@ -4541,9 +4541,10 @@ async def handle_push_token_put(request):
     """PUT /push/token {token, platform, bundle_id, env, rev} -> {ok, registered, delivery}.
 
     Bound to the CALLER: the token is filed under its principal, never under an id from the
-    body. `rev` must grow on every PUT and DELETE (ms since epoch). `registered: false` means
-    nothing changed: a newer rev or a Forget at/after this rev is on file, or the token
-    belongs to another device that is still paired."""
+    body. `rev` is ms since epoch and must grow on every PUT and DELETE. `registered: false`
+    comes with `reason`: "stale_rev" (a newer request is on file), "forgotten" (a Forget at or
+    after this rev) or "owned" (another paired device holds this token; Forget it there, with
+    its bearer, before discarding that bearer)."""
     import asyncio
     from scripts.push_tokens import PushTokenError, validate_registration
     pid = _push_principal_id(request)
@@ -4558,11 +4559,14 @@ async def handle_push_token_put(request):
     except PushTokenError as e:
         return _json({"ok": False, "error": str(e)}, status=400)
     try:
-        stored = await asyncio.to_thread(_push_store().register, pid, fields, _push_owner_state)
+        refused = await asyncio.to_thread(_push_store().register, pid, fields, _push_owner_state)
     except OSError as e:
         log.warning(f"push/token: store write failed: {e}")
         return _json({"ok": False, "error": "could not store the token"}, status=500)
-    return _json({"ok": True, "registered": stored, "delivery": _push_delivery()})
+    body = {"ok": True, "registered": refused is None, "delivery": _push_delivery()}
+    if refused:
+        body["reason"] = refused
+    return _json(body)
 
 
 async def handle_push_token_delete(request):
