@@ -59,7 +59,7 @@ summary loses the exact commands.
 6. **Ports come from `orchestra status`** (the `dashboard` row, and so on), not from memory.
    The one exception: before the first `orchestra up`, `orchestra status` has no rows yet, so
    read the port from `orchestra.toml` instead (the `port` line under `[dashboard]`, for example
-   `grep -A3 '^\[dashboard\]' ~/orchestraos/orchestra.toml`).
+   `sed -n '/^\[dashboard\]/,/^\[/p' ~/orchestraos/orchestra.toml | grep '^port'`).
 7. **Never run `orchestra down`** without the person's yes. Restarting is their decision.
 8. **Run from the right folder.** Commands that read `orchestra.toml` or the `scripts/` folder
    need `cd ~/orchestraos` first, in the same command (for example
@@ -90,14 +90,16 @@ Work out where things stand before doing anything. These checks only read; they 
   person added it in phase 7; anything else is not theirs.
 - Is `orchestra init` running, done or failed? `orchestra status` can't tell (it says the
   supervisor is not running in all three cases), so check:
-  `pgrep -af "[o]rchestra init"` and `tail -n 5 ~/init.log`.
-  - A `./bin/orchestra init` process is listed: it is still running. Check again in 30 to 60
-    seconds; NEVER start init again. (Only that line counts; ignore any other line that merely
-    mentions those words.)
-  - `~/init.log` ends with `INIT_EXIT=0`: init finished. Continue with `orchestra doctor`.
-  - `INIT_EXIT=` followed by anything else, or a row that says `failed`: bring those lines to the
-    person; don't retry by guessing.
-  - No process and no `INIT_EXIT=` line (it was cut off): start it once more, as phase 6 shows.
+  `pgrep -af "[o]rchestra_cli init"`, then `tail -n 5 ~/init.log` and
+  `grep -n -i failed ~/init.log`.
+  - `pgrep` lists any line at all: init is still running (however it was started, by you or by
+    the person by hand). Check again in 30 to 60 seconds; NEVER start another init.
+  - Nothing listed, and `~/init.log` ends with `INIT_EXIT=0` and `grep` finds no `failed` row:
+    init finished. Continue phase 6 from the `[runtimes]` `sed` line.
+  - `INIT_EXIT=` followed by anything else, or `grep` shows a `failed` row: bring those rows to
+    the person; don't retry by guessing.
+  - Nothing listed, and no `INIT_EXIT=` line (it was cut off): start it once more, as phase 6
+    shows.
 
 Then say the facts back in one line, and repeat that line at the start of each later phase,
 for example:
@@ -206,19 +208,21 @@ them, word for word:
    connection or a sleeping laptop doesn't stop the agent: `tmux new -s install`. (If it says
    `duplicate session`, one is already there: run `tmux attach -t install` instead.)
 2. In it, run `claude` (or the agent CLI you installed).
-3. Paste this into it, as one message, with your one-line summary at the end:
-
-   > Read https://raw.githubusercontent.com/Tulum-DAO/orchestraos/main/docs/AGENT_INSTALL.md
-   > and continue the install. You are running ON the server now. Start with "1. Where am I?".
-   > What's done so far: <the one-line summary from "1. Where am I?">
-
+3. Paste in the message I give you below, exactly as it is, as one message.
 4. Answer its questions there. It may also ask your permission before it runs a command; that is
    the agent CLI's own safety check. It will tell you when your dashboard is ready. If the
    connection drops, or the window stops responding (a sleeping Windows Terminal freezes rather
    than showing a drop), close it, open a new one, ssh in again and run `tmux attach -t install`.
 
-Fill in the placeholder yourself, and give them the whole block above, already filled in, as ONE
-message they can paste as it is.
+Then give them the message, with the placeholder already filled in by you, in a code block, so the
+only thing they paste is that block:
+
+```text
+Fetch https://raw.githubusercontent.com/Tulum-DAO/orchestraos/main/docs/AGENT_INSTALL.md with
+curl -s (not a tool that summarises pages) and continue the install. You are running ON the
+server now. Start with "1. Where am I?".
+What's done so far: <the one-line summary from "1. Where am I?">
+```
 
 ### Phase 6: clone, init, doctor (on the server)
 
@@ -228,14 +232,14 @@ message they can paste as it is.
   from the `orchestraos` folder with an exit marker, exactly like this:
 
   ```bash
-  ssh <user>@<address> 'cd ~/orchestraos && nohup sh -c "./bin/orchestra init --yes; echo INIT_EXIT=\$?" > ~/init.log 2>&1 &'
+  ssh <user>@<address> 'cd ~/orchestraos && nohup sh -c "./bin/orchestra init --yes; echo INIT_EXIT=\$?" < /dev/null > ~/init.log 2>&1 &'
   ```
 
   (An agent running on the server itself runs the part inside the single quotes.) Then check
-  every 30 to 60 seconds with `tail -n 5 ~/init.log`, and with "1. Where am I?"'s init check if
-  you lose track. It is done when the log has an `INIT_EXIT=` line: `INIT_EXIT=0` means success
-  (still scan the table for a row that says `failed`); any other number, or a `failed` row, goes
-  to the person. The `next:` line alone proves nothing: init prints it even when a step failed. Its `--yes` adding hook rows to
+  every 30 to 60 seconds with "1. Where am I?"'s init check (`pgrep`, `tail`, and
+  `grep -n -i failed ~/init.log`). It is done when the log has an `INIT_EXIT=` line: `INIT_EXIT=0`
+  with no `failed` row means success; any other number, or a `failed` row, goes to the person
+  (the last lines of the log never show the failed row, so use the `grep`). The `next:` line alone proves nothing: init prints it even when a step failed. Its `--yes` adding hook rows to
   `~/.claude/settings.json` is expected, not an overwrite.
 - In the `[runtimes]` `sed` line, use the CLI from phase 5. Ask if you don't know.
 - If `orchestra doctor` shows a `port:<name> MISSING ... in use` row, another program owns that
