@@ -176,6 +176,14 @@ def load_settings(repo_root: Path | None = None, config_path: Path | None = None
     return st
 
 
+def _connectable(host: str) -> str:
+    """A host a local client can dial: a wildcard (or empty) bind means loopback."""
+    if host in ("", "0.0.0.0", "::", "[::]"):
+        return "127.0.0.1"
+    # an IPv6 literal needs brackets in a URL: http://[::1]:8888, not http://::1:8888
+    return f"[{host}]" if ":" in host and not host.startswith("[") else host
+
+
 def child_env(st: Settings, base: dict | None = None) -> dict:
     """The environment every supervised process (and every beat) receives.
 
@@ -212,6 +220,10 @@ def child_env(st: Settings, base: dict | None = None) -> dict:
         # same host/port so a default install's WebSocket bridge reaches the gateway.
         "WATCH_GATEWAY_WS_URL": f"ws://{st.gateway_host}:{st.gateway_port}",
         "WATCH_GATEWAY_TOKEN_FILE": str(st.token_file),
+        # The gateway's loopback client URL for the API (watch_gateway.py API_URL: /upload,
+        # red-alert forwarding). Without it a changed [api] port was ignored and the gateway
+        # posted to whatever else owned 8888. A wildcard bind is not a connectable address.
+        "ORCH_API_URL": f"http://{_connectable(st.api_host)}:{st.api_port}",
         "ORCHESTRA_API_HOST": st.api_host,
         "ORCHESTRA_API_PORT": str(st.api_port),
         "PORT": str(st.api_port),

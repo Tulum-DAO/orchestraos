@@ -1457,7 +1457,18 @@ async def handle_projects(request):
 # bearer origin; the gateway proxies the Node API's /api/people CRM routes.
 # ---------------------------------------------------------------------------
 
-API_ORIGIN = "http://127.0.0.1:8891"
+def _loopback(port_env, default):
+    """http://127.0.0.1:<configured port>. orchestra child_env / orchestra-env.sh export each
+    [section] port; an unset key can arrive as "", which means the default. Literal ports here
+    sent a changed-port install's traffic to whatever else owned the default port."""
+    return f"http://127.0.0.1:{os.environ.get(port_env) or default}"
+
+
+# The Node API, from the configured [api] host/port (child_env ORCH_API_URL). The People
+# passthrough calls it directly; it used to go through the dashboard proxy on a literal 8891,
+# an extra hop that broke with a moved [dashboard] port or a dashboard that was down.
+API_URL = os.environ.get("ORCH_API_URL") or _loopback("ORCHESTRA_API_PORT", 8888)
+API_ORIGIN = API_URL
 _PERSON_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 _PEOPLE_QUERY_KEYS = ("relationship", "project", "search", "sort", "company_slug")
 
@@ -3821,7 +3832,7 @@ async def handle_agent_screen(request):
     return _json(out)
 
 
-API_URL = os.environ.get("ORCH_API_URL", "http://127.0.0.1:8888")
+# API_URL is defined with the People passthrough above (one definition, one source).
 
 # ---------------------------------------------------------------------------
 # P3: /upload — bearer-gated streaming proxy to the API's /api/uploads
@@ -3959,7 +3970,7 @@ async def handle_red_alert_reports(request):
 # lives; this route is the thin AUTHENTICATED front door that forwards on loopback (same trust model as
 # ARTURO_FINALIZE_URL). See services/arturo/SPEC_watch-ptt-endpoint.md.
 PTT_MAX_BYTES = int(os.environ.get("WATCH_GATEWAY_PTT_MAX", str(1_000_000)))
-ARTURO_PTT_URL = os.environ.get("ARTURO_PTT_URL", "http://127.0.0.1:5071/ptt")
+ARTURO_PTT_URL = os.environ.get("ARTURO_PTT_URL") or (_loopback("ORCHESTRA_ARTURO_PORT", 5071) + "/ptt")
 
 
 async def handle_arturo_ptt(request):
@@ -4029,7 +4040,7 @@ async def handle_arturo_ptt(request):
 # 10 MB (services/arturo/ptt.py MAX_TRANSCRIBE_BYTES) — the watch's 1 MB m4a rule is untouched.
 # Timeout ladder: proxy 25 s < gateway 35 s < api 40 s, so nothing is orphaned.
 TRANSCRIBE_MAX_BYTES = int(os.environ.get("WATCH_GATEWAY_TRANSCRIBE_MAX", str(10_000_000)))
-ARTURO_TRANSCRIBE_URL = os.environ.get("ARTURO_TRANSCRIBE_URL", "http://127.0.0.1:5071/transcribe")
+ARTURO_TRANSCRIBE_URL = os.environ.get("ARTURO_TRANSCRIBE_URL") or (_loopback("ORCHESTRA_ARTURO_PORT", 5071) + "/transcribe")
 
 
 async def handle_arturo_transcribe(request):
@@ -4081,7 +4092,7 @@ async def handle_arturo_transcribe(request):
 # --- v2/(b) Watch-Arturo stream relay thin proxies (ARCHITECTURE-B.md; auth+forward ONLY,
 # all relay logic lives on :5071 behind ARTURO_STREAM_RELAY; flag-off :5071 404s and these
 # forward that 404 honestly). Same trust model as /arturo/ptt: Bearer here, loopback upstream.
-ARTURO_PTT_STREAM_BASE = os.environ.get("ARTURO_PTT_STREAM_BASE", "http://127.0.0.1:5071/ptt/stream")
+ARTURO_PTT_STREAM_BASE = os.environ.get("ARTURO_PTT_STREAM_BASE") or (_loopback("ORCHESTRA_ARTURO_PORT", 5071) + "/ptt/stream")
 PTT_STREAM_CHUNK_MAX = 256 * 1024
 
 
@@ -4133,7 +4144,7 @@ async def handle_arturo_ptt_stream_end(request):
     return await _stream_forward(request, "POST", "/end", timeout_s=15)
 
 
-ARTURO_PTT_VENDOR_URL = os.environ.get("ARTURO_PTT_VENDOR_URL", "http://127.0.0.1:5071/ptt/vendor")
+ARTURO_PTT_VENDOR_URL = os.environ.get("ARTURO_PTT_VENDOR_URL") or (_loopback("ORCHESTRA_ARTURO_PORT", 5071) + "/ptt/vendor")
 
 
 async def handle_arturo_ptt_vendor(request):
@@ -4158,7 +4169,7 @@ async def handle_arturo_ptt_vendor(request):
         return _json({"ok": False, "error": "arturo unreachable"}, status=502)
 
 
-ARTURO_TEXT_BASE = os.environ.get("ARTURO_TEXT_BASE", "http://127.0.0.1:5071")
+ARTURO_TEXT_BASE = os.environ.get("ARTURO_TEXT_BASE") or (_loopback("ORCHESTRA_ARTURO_PORT", 5071) + "")
 
 
 async def handle_arturo_text(request):
@@ -4285,7 +4296,7 @@ async def handle_arturo_health(request):
         return _json({"ok": False, "error": "arturo unreachable", "detail": str(e)[:200]}, status=502)
 
 
-ARTURO_PTT_VOICE_BASE = os.environ.get("ARTURO_PTT_VOICE_BASE", "http://127.0.0.1:5071")
+ARTURO_PTT_VOICE_BASE = os.environ.get("ARTURO_PTT_VOICE_BASE") or (_loopback("ORCHESTRA_ARTURO_PORT", 5071) + "")
 
 
 async def handle_arturo_ptt_voice(request):
@@ -4585,7 +4596,7 @@ async def handle_voice_call_ended(request):
     return _json({"ok": True, "call_id": call_id})
 
 
-ARTURO_FINALIZE_URL = "http://127.0.0.1:5071/finalize-call"
+ARTURO_FINALIZE_URL = _loopback("ORCHESTRA_ARTURO_PORT", 5071) + "/finalize-call"
 
 
 async def _notify_arturo_finalize(conv_id, call_id):
