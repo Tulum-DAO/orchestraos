@@ -8,6 +8,10 @@ Just want the web dashboard in your browser? That needs no pairing:
 [docs/INSTALL.md](INSTALL.md) §2, "Open the dashboard in your browser, over Tailscale https".
 This page is about the gateway (8890), which the phone app talks to.
 
+In the dashboard, Arturo may ask which devices you have (iPhone, iPad, Apple Watch, Mac, Android
+phone, or just this computer). Answering is optional and only tells it what you use; Arturo never
+pairs a device. Pairing is this page.
+
 > **What works today, step by step** (updated 2026-10-08):
 >
 > | Step | Status |

@@ -703,7 +703,10 @@ Open that address in a browser on your laptop or phone (it must be signed in to
 Tailscale). The dashboard opens on its chat page, with **Arturo** at the top. Arturo
 greets you and may start asking you first-run questions; you don't need to answer them to
 continue. If you do answer, Arturo may offer to set up your team: that runs the same
-`orchestra starter` as §3, so either way is fine (§3 says what to do if Arturo already did it). To see your agents, tap the gear button at the top left, then **Agents** (or add `/agents` to the
+`orchestra starter` as §3, so either way is fine (§3 says what to do if Arturo already did it). Arturo
+may also ask which devices you have (iPhone, iPad, Apple Watch, Mac, Android phone, or just this
+computer). Answering is optional; it only notes what you use and says what works today. Arturo
+never pairs a device: pairing a phone or Mac is [docs/ONBOARDING.md](ONBOARDING.md). To see your agents, tap the gear button at the top left, then **Agents** (or add `/agents` to the
 address). That page's heading is **Agents**, and it stays empty until step 3. Step 4 walks you
 through this again once your team is running. The first
 visit can take a few seconds while the certificate is issued. Optional: put the
