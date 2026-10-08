@@ -3,7 +3,7 @@
  *   node --experimental-strip-types dashboard/src/lib/arturo.test.mjs
  */
 import assert from 'node:assert';
-import { isStarting, waitForArturo, contextLine, contextFromLocation, brainLabel, slugify, firstStep, onboardingTurn, toggleChoice, onboardingDone, DICTATE_TITLE, HANDS_FREE, handsFreeTitle, isPageOpener, ONBOARDING_OPENER } from './arturo.ts';
+import { isStarting, waitForArturo, contextLine, contextFromLocation, brainLabel, slugify, firstStep, onboardingTurn, toggleChoice, onboardingDone, DICTATE_TITLE, HANDS_FREE, handsFreeTitle, handsFreeReady, isPageOpener, ONBOARDING_OPENER } from './arturo.ts';
 
 // --- isStarting: boot-window errors are "starting", real errors are not ------------------
 assert.equal(isStarting({ ok: false, error: 'HTTP 502' }), true);
@@ -109,7 +109,11 @@ assert.equal(onboardingDone(null), false);
   assert.equal(HANDS_FREE, 'Hands-free conversation');
   assert.match(handsFreeTitle(true), /talks back/);
   assert.match(handsFreeTitle(false), /needs a voice key/);
-  assert.match(handsFreeTitle(false), /ELEVENLABS_API_KEY/);
+  assert.match(handsFreeTitle(false), /GEMINI_API_KEY/);                       // the key the browser call uses
+  assert.equal(handsFreeReady({ live: true, voice: true }), true);
+  assert.equal(handsFreeReady({ live: false, voice: true }), false);          // an ElevenLabs key alone cannot start it
+  assert.equal(handsFreeReady({ voice: true }), true);                        // an older server: any key
+  assert.equal(handsFreeReady(null), false);
   // "Voice mode" named neither dictation nor the call: it is gone from every screen
   const { readdirSync, readFileSync, statSync } = await import('node:fs');
   const { join } = await import('node:path');
