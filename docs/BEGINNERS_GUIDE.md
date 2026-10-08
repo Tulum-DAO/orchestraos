@@ -119,7 +119,7 @@ where to look if it doesn't.
    "Two-seat message" prompt: spawn a second seat, send one message between
    them, see it land in both the dashboard's Inbox and the command line.
 5. **One approval card answered from Telegram or dashboard.**
-   [docs/INSTALL.md](INSTALL.md) §4 / [docs/PROMPTS.md](PROMPTS.md)'s "Answer a card" prompt: fire a
+   [docs/INSTALL.md](INSTALL.md) §5 / [docs/PROMPTS.md](PROMPTS.md)'s "Answer a card" prompt: fire a
    card, answer it from your phone or the dashboard, watch the decision land
    back in the agent's terminal.
 6. **Manual rotation of the always-on agent completed, nothing lost.**

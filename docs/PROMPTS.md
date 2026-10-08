@@ -80,7 +80,7 @@ mechanism every other decision in the harness goes through, so proving it
 once by hand is worth the two minutes.
 
 ```
-Fire one approval card per docs/INSTALL.md §4:
+Fire one approval card per docs/INSTALL.md §5:
 `python3 scripts/approval.py request "Ship the hello change?" --from hello
 --worker-kind pane --options approve,deny`. Show me the card id, then answer
 it either from the dashboard or with curl against

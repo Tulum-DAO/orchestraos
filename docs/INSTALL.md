@@ -23,7 +23,8 @@ The path, in order:
 | 1. Clone, init, doctor | the VPS | `orchestra doctor` all OK |
 | 2. Up | the VPS, then your browser | the supervisor running; the dashboard open at `https://<vps>.<tailnet>.ts.net` |
 | 3. Your starter team | the VPS | three live seats: gm (T0) → a project manager (T1) → a worker (T2) |
-| 4. Answer one card | the dashboard | the seat receives your answer |
+| 4. See your team | your own computer | your computer on your Tailscale network; the dashboard open in your browser, showing the three agents |
+| 5. Answer one card | the dashboard | the seat receives your answer |
 
 Connecting the iOS app to your gateway (pairing) is [docs/ONBOARDING.md](ONBOARDING.md), a
 separate short walkthrough after this one.
@@ -203,7 +204,8 @@ You should see: `tailscale status` on the VPS now lists your device too, and `ta
 prints the VPS's tailnet address (it starts with `100.`). From your own computer,
 `ping <that address>` answers (on a Mac or Linux, `Ctrl-C` stops it; on Windows it stops by
 itself after four replies). From now on
-you can `ssh <your user>@<that address>` instead of the public IP.
+you can `ssh <your user>@<that address>` instead of the public IP. (Step 4 checks your
+computer is on the network again, and opens your dashboard on it.)
 
 ### Packages
 
@@ -531,7 +533,8 @@ are not enabled on your tailnet and print an admin link: open it, enable them, a
 run the command again.
 
 Open that address in a browser on your laptop or phone (it must be signed in to
-Tailscale). The dashboard loads, with an empty Agents list until step 3. The first
+Tailscale). The dashboard loads, with an empty Agents list until step 3. Step 4 walks you
+through this again once your team is running. The first
 visit can take a few seconds while the certificate is issued. Optional: put the
 address in `orchestra.toml` as `[public] host` so links in the UI and notifications
 point at it.
@@ -674,7 +677,107 @@ be a seat that already exists. For example, with an existing `gm`:
 orchestra agent create dev-x --template dev --parent gm --set PROJECT=demo
 ```
 
-## 4. Answer one approval card from the dashboard
+## 4. See your team from your own computer
+
+Your three agents are running on the server. Now look at them from your own computer, in
+your browser: the dashboard shows each agent, its tier and what it is doing, and lets you
+type to it. No terminal needed for that.
+
+**Hand this to your agent** (Claude, ChatGPT, Codex, Gemini or any other), if you'd rather
+have it guide you through this section. Copy the whole box:
+
+```text
+Help me with one step of installing OrchestraOS. Read this section and do it with me:
+https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md#4-see-your-team-from-your-own-computer
+Some commands run on my server (I log in to it with ssh; ask me for the address and user if
+you need them), and one part happens on my own computer.
+Rules:
+- If you can run commands on my computer, run them yourself and show me every output.
+  If you can't, give me one command at a time and wait for me to paste back what it printed.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, any password or
+  passphrase prompt including sudo's, approving a device or an admin prompt) and let me
+  do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset, overwrite or wipe anything. If a command asks
+  `Overwrite (y/n)?`, the answer is n.
+- We are done when my browser shows the dashboard's Agents page with gm, pm-first-project
+  and dev-first-project. Ask me to confirm what I see; don't just tell me it worked.
+```
+
+### 1. Put your computer on your Tailscale network
+
+Your server is already on your private Tailscale network (§0). Your own computer has to join
+the same one, signed in to **the same Tailscale account** as the server. If you already did
+this in §0, skip to the check below.
+
+**[PERSON ONLY]** Install Tailscale on your computer and sign in:
+- **Mac:** **Tailscale** from the Mac App Store (or tailscale.com/download). Open it, click its
+  icon in the menu bar (top right of the screen) and log in.
+- **Windows:** the installer from tailscale.com/download. Windows asks whether to allow it to
+  make changes: that admin prompt is yours. Then click the Tailscale icon in the taskbar's
+  notification area, bottom right (click the `^` arrow there if you don't see it), and log in.
+- **Linux:** the commands at tailscale.com/download, then `sudo tailscale up` and open the
+  link it prints.
+- **Phone** (optional, to see your team on the go): the **Tailscale** app from the App Store or
+  Google Play.
+
+Check, on the server:
+
+```bash
+tailscale status
+```
+
+You should see: one line for the server and one for your computer, with its name (for
+example `macbook-pro` or `desktop-1a2b3c`) and a `100.x.y.z` address. If your computer is not
+listed, it is signed in to a different Tailscale account: sign out of Tailscale on your
+computer and sign in again with the account you used on the server.
+
+### 2. Find your dashboard's address
+
+On the server:
+
+```bash
+tailscale serve status
+```
+
+You should see an address like `https://<server>.<tailnet>.ts.net` pointing at
+`http://127.0.0.1:8891`. That is your dashboard. If it says `No serve config` instead, you
+skipped that part of §2; set it up now (it stays private to your Tailscale network):
+
+```bash
+tailscale serve --bg --https=443 http://127.0.0.1:8891
+```
+
+Then run `tailscale serve status` again and use the address it prints.
+
+### 3. Open it and see your team
+
+On your own computer, open that address in your browser and go to **Agents**.
+
+You should see three agents, each marked alive, with its tier on the card:
+
+- `gm`, **T0**: the one you talk to.
+- `pm-first-project`, **T1**: reports to gm.
+- `dev-first-project`, **T2**: reports to the project manager.
+
+Click an agent to open its page: its screen, what it is doing, and a box to type to it. Typing
+there is the same as `tmux attach` on the server. The first visit can take a few seconds while
+Tailscale issues the https certificate.
+
+### If it does not load
+
+- **The page never loads, or says the site can't be reached:** your computer is not on your
+  Tailscale network, or is signed in to another account. Check `tailscale status` on the
+  server (step 1).
+- **Tailscale says HTTPS or serve is not enabled** when you run `tailscale serve`: it prints an
+  admin link. **[PERSON ONLY]** Open it, turn on HTTPS certificates for your tailnet, then run
+  the `tailscale serve` line again.
+- **It works on your computer but not your phone:** the phone needs the Tailscale app, signed
+  in to the same account.
+- **The Agents page is empty or the agents show as not alive:** wait 15 seconds and reload. If
+  they stay that way, run `orchestra starter` on the server again; agents that are running are
+  skipped.
+
+## 5. Answer one approval card from the dashboard
 
 From a shell (or let the seat run it):
 
@@ -710,7 +813,7 @@ What happens next, and how to see it:
 A card requested from an ambient shell behaves exactly like one a seat requested for
 itself: the seat named in `--from` is the one that receives the answer.
 
-## 5. Rotate a seat (manual, lossless)
+## 6. Rotate a seat (manual, lossless)
 
 A seat near its context ceiling banks a handoff (its prompt knows the format:
 `<data>/docs/HANDOFF_<seat>-next.md` with a `## canary_questions` block anchored in its own
@@ -744,7 +847,7 @@ python3 -c "import json;print(json.load(open('$ORCHESTRA_DIR/registry.json'))['a
 tmux ls | grep gm
 ```
 
-## 6. Check the rotation beat is armed (default ON)
+## 7. Check the rotation beat is armed (default ON)
 
 `orchestra doctor` rows `rotation:beat` (armed, cadence, e-brake) and
 `rotation:seats` (which T2 claude seats are eligible; the
