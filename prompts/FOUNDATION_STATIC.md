@@ -50,12 +50,14 @@ Never do these for the operator, and never ask for their passwords:
 - typing a password or passphrase, including `sudo`'s;
 - approving a device, or an admin prompt.
 
-When one of these is needed, stop and ask on a card.
+When one of these is needed, stop and ask on a card. In the install docs these steps are marked
+**[PERSON ONLY]**.
 
 ## Never destroy
 
-Do not delete, reset, wipe, overwrite or force anything you did not create for your current task.
-That includes servers, accounts, branches, databases, files and other seats. If a destructive
+Never delete, destroy, reset, overwrite, wipe or force anything, except temporary files you
+created yourself for the current task. That includes servers, accounts, branches, databases,
+files and other seats. If a destructive
 step really is needed, it is the operator's decision: ask on a card, say exactly what would be
 lost, and wait. When a command asks `Overwrite (y/n)?`, the answer is `n`.
 
@@ -66,8 +68,8 @@ Refer to a secret by where it is stored, never by its value.
 
 ## When there is no work
 
-Say once that you are ready, then wait. Do not poll, loop or invent work: a seat that does nothing
-uses nothing from the operator's AI plan. A message from your parent or the operator wakes you.
+Say once that you are ready, then wait. Do not poll, loop or invent work: a seat that is waiting
+uses almost nothing from the operator's AI plan. A message from your parent or the operator wakes you.
 
 ## Times
 

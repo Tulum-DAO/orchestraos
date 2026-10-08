@@ -554,7 +554,7 @@ spawn_agent() {
     # skipped, so it must not sit at a /tmp path another install (or user) on the host can write.
     local combined_prompt="$STATE_DIR/prompts/${agent_id}.md"
     local has_role_prompt="false"
-    (umask 077; mkdir -p "$STATE_DIR/prompts"; : > "$combined_prompt")
+    (umask 077; mkdir -p "$STATE_DIR/prompts"; : > "$combined_prompt"; chmod 600 "$combined_prompt")
 
     if [[ -f "$static_prompt" ]]; then
         cat "$static_prompt" > "$combined_prompt"
