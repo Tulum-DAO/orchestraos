@@ -285,9 +285,10 @@ opening it is yours.
 10 minutes of picking iPhone or iPad on its devices card, and only if `ORCHESTRA_PUBLIC_URL` is
 set (see the top of this page). You still need Tailscale on the iPhone, the gateway on an https
 address (step 2, "Before you run it", and this step's `tailscale serve`), and the pairing screen
-below. The card has a copy button but no QR, so the easiest way is to open the dashboard on the
-iPhone itself (Safari, over Tailscale), copy the code there and paste it into the app. Otherwise,
-use `orchestra pair` as below.
+below. The card has a copy button but no QR, and it appears only in the browser page whose chat
+asked for it: a card shown on your computer does not appear on the iPhone. So ask Arturo from the
+dashboard open on the iPhone itself (Safari, over Tailscale), copy the code there and paste it
+into the app. Otherwise, use `orchestra pair` as below.
 
 **Finding the pairing screen.** The app does not open on it by itself: it opens on the
 **Arturo** tab, which shows no pairing prompt. **[PERSON ONLY]** Tap the gear at the top right of the Arturo tab
@@ -399,9 +400,10 @@ connect a Mac yet: stop here. **[PERSON ONLY]** Installing and opening it is you
 
 **Arturo's card instead of `orchestra pair`:** only during Arturo's first-run questions, within
 10 minutes of picking Mac on its devices card, and only if `ORCHESTRA_PUBLIC_URL` is set (see the
-top of this page). Everything under "Before you start" still applies. Open the dashboard on the
-Mac, copy the code from the card, and paste it into **Connect this Mac**. Otherwise, use
-`orchestra pair` as below.
+top of this page). Everything under "Before you start" still applies. The card appears only in
+the browser page whose chat asked for it, so ask Arturo from the dashboard open on the Mac, copy
+the code from the card, and paste it into **Connect this Mac**. Otherwise, use `orchestra pair`
+as below.
 
 On the Mac, open the app. It has one window, titled **OrchestraOS**, which first shows **Connect
 this Mac**, with the line *Run `orchestra pair` on the gateway machine and paste the code it

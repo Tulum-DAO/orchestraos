@@ -12,7 +12,7 @@ placeholders — `<vps>`, `<laptop>`, `<tailnet>`, `<chat-id>` — fill in your 
 | process model | `orchestra up` supervisor | supervisor **or** crontab + systemd units (this page) |
 | seats | one, spawned by hand | 20–50 tmux seats, registry-driven, auto-rotated |
 | decisions reach you via | web dashboard | dashboard + phone/watch app, Telegram; push is legacy ntfy (one-way, see §4) with APNs as track T8 |
-| voice | off | Arturo voice brain (BYO vendor keys) |
+| Arturo | typed chat (no key needed) | typed chat plus voice (BYO vendor keys) |
 | data dir | `~/.orchestra` | the checkout itself (`[data] dir` = repo root) |
 
 ## 0. Topology
@@ -156,11 +156,11 @@ exits non-zero on failure. Track T6 moves this under `plugins/`.
 
 ## 6. Voice: Arturo (BYO keys)
 
-`services/arturo` is the voice brain (`[arturo] enabled = true`, `:5071`). It needs vendor
-keys in the environment of `services/arturo/run.sh`: a Gemini API key for the
-conversational turn today (track T2 makes the authed CLI the zero-key brain) and an
-ElevenLabs or Cartesia key for speech. Without keys the supervisor child restarts until
-you set `enabled = false`. The run script's `ARTURO_*` switches (stream relay, partials,
+`services/arturo` is Arturo, typed chat and voice alike (`[arturo] enabled = true`, `:5071`);
+`enabled = false` turns off Arturo entirely, typed chat included. With no key, Arturo answers
+typed chat through a logged-in agent CLI (doctor's `arturo:brain` row says which). Voice needs
+keys in the environment of `services/arturo/run.sh`: a Gemini API key, and an ElevenLabs or
+Cartesia key for speech. The run script's `ARTURO_*` switches (stream relay, partials,
 speaking flip, semantic and facts recall, gm injection) default to the reference values;
 leave them unless you are working on the voice lane.
 
