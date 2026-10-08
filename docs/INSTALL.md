@@ -563,18 +563,26 @@ the `gm` seat's screen: type to it like a chat and press Enter. To leave without
 seat keeps running. (Closing the Terminal window also leaves it running.) `tmux ls` lists the
 sessions. You can also talk to seats from the dashboard in your browser.
 
-**Scrolling back in a seat.** A seat's screen is a tmux session, and it does not scroll like a
-normal terminal window. To read earlier output:
+**Scrolling back in a seat.** Turn the mouse wheel over the seat's screen: it scrolls back
+through earlier output (tmux scroll mode; press `q` to get back to typing). Without a mouse,
+press `Ctrl-B`, let go, then `[`, and use the arrow keys or `PgUp`/`PgDn` (on a Mac laptop, `fn`
+with the up or down arrow); `q` leaves.
 
-1. Press `Ctrl-B`, let go, then press `[`. That turns on tmux's scroll mode (a line count
-   appears in the top-right corner).
-2. Use the arrow keys, or `PgUp` and `PgDn` (on a Mac laptop, `fn` with the up or down arrow).
-3. Press `q` to leave scroll mode and get back to typing.
+**Selecting text in a seat** to copy it: because the wheel belongs to the seat, a plain drag
+does not select. Instead:
 
-**Careful with the mouse wheel and the up arrow** when you are not in scroll mode. In a seat,
-they do not scroll: they bring back an earlier prompt into the input box, and the box shows
-`History 1/...`. If you see that, press `Esc` to clear it. Never press Enter on it, or that
-old prompt is sent to the seat again.
+- **Windows Terminal, or Linux:** hold `Shift` while you drag.
+- **iTerm2 on a Mac:** hold `Option` while you drag.
+- **The Mac's Terminal app:** it has no drag key for this. Untick **View → Allow Mouse
+  Reporting**, select and copy, then tick it again.
+
+**Careful with the up arrow.** In a seat, the up arrow brings an earlier prompt back into the
+input box, which then shows `History 1/...`. If you see that, press `Esc` to clear it. Never
+press Enter on it, or that old prompt is sent to the seat again.
+
+A seat started before you upgraded to a version with this mouse setting keeps the old
+behaviour (the wheel recalls prompts) until it restarts. To switch it on now:
+`tmux set -t <seat> mouse on`.
 
 The new seat appears in the dashboard's Agents list in your browser within about 15 seconds.
 
