@@ -59,7 +59,8 @@ Rules:
 - Before every `orchestra pair`, make sure I have the app installed, open and on its pairing
   screen, with Tailscale on that device: the code disappears from the screen after 60
   seconds.
-- We are done when the app has left its pairing screen (I tell you what I see), and
+- We are done when the app shows it is connected (I tell you what I see: on a Mac the
+  connect window closes; on an iPhone a green "Connected to ..." line appears), AND
   `orchestra devices` on the server lists my device with the scopes I chose AND a LAST
   SEEN time, not `never`. A row appears as soon as `orchestra pair` runs, so the row alone
   proves nothing. Show me that output; don't just tell me it worked.
@@ -112,7 +113,9 @@ git merge-base --is-ancestor cdcd701 HEAD && echo "up to date"
 
 It prints `up to date` if you are. If it prints nothing, or an error, run `orchestra upgrade`
 and then the restart in [docs/UPGRADE.md](UPGRADE.md). **[PERSON ONLY]** The restart is your
-decision: it briefly stops your agents' services, so choose a moment that suits you.
+decision: it briefly stops your agents' services, so choose a moment that suits you. If you
+decide not to restart yet, you can still pair: the only difference is the long-message
+problem described above, until you do.
 
 ## 2. Run `orchestra pair`
 
@@ -188,7 +191,10 @@ its id is in the `Minted device <id> ...` line printed just above the code. If t
 already cleared, run `orchestra devices`: it lists the newest first, and the newest row with
 your label and LAST SEEN `never` is the one. The device id is not secret. If your own app
 already paired with that code (its row shows a LAST SEEN time), the code is spent and nobody
-else can use it: don't revoke, or you'll cut off your own app. Otherwise, revoking is your own
+else can use it: don't revoke, or you'll cut off your own app. But if your app's first try
+failed and you paired again, an older row with your label and a LAST SEEN time is NOT your
+app's: that one is the code someone else used. (LAST SEEN is shown in UTC.) Otherwise,
+revoking is your own
 decision **[PERSON ONLY]**:
 
 ```bash
@@ -306,8 +312,10 @@ A reverse proxy with a real certificate (Caddy, nginx + Let's Encrypt) works
 too; a self-signed certificate does not.
 
 Either way, the app exchanges the code for its own token and stores both in
-Keychain. It does not ask again unless you revoke that device from Settings
-or its pairing genuinely expires.
+Keychain. It does not ask again unless the device is revoked or its pairing genuinely
+expires. **Forget this gateway** in the app only removes the pairing from the phone; the
+device stays active on the server. To cut it off there too, revoking is your decision
+**[PERSON ONLY]**: `orchestra devices --revoke <device id>`.
 
 ## 5. Connect the Mac app
 
