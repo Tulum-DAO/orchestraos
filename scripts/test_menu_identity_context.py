@@ -192,3 +192,9 @@ def test_is_session_carded_cannot_be_called_without_the_context():
     import menu_bridge as mb
     with pytest.raises(TypeError):
         mb.is_session_carded(None, "s", "q?")
+
+
+def test_a_permission_command_line_with_an_arrow_or_a_tick_is_kept(S):
+    for line in ("echo a b c d →", "← back", "✔ done && rm x"):
+        m = S.parse_pending_menu(_pane(line, "Run it"))
+        assert line.replace("✔", "").strip() in m["context"], line

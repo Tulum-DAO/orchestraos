@@ -651,7 +651,7 @@ def _menu_question(lines: list[str], first_opt_idx: int | None) -> str:
 _CONTEXT_MAX_LINES = 120
 
 
-def _menu_context(lines: list[str], first_opt_idx: int | None) -> str:
+def _menu_context(lines: list[str], first_opt_idx: int | None, kind: str = "") -> str:
     """What the prompt is ABOUT: the block between the widget's top frame and the question
     (a permission prompt's tool label, command, description; a menu's preamble). Identity, not
     display: two "Do you want to proceed?" prompts for DIFFERENT commands must not look like the
@@ -677,7 +677,7 @@ def _menu_context(lines: list[str], first_opt_idx: int | None) -> str:
         s = lines[j].strip()
         if _RULE_RE.match(s) or (s and set(s) <= set('╌─━ ')) or s.startswith(('╭', '┌')):
             break                         # the widget frame: above it is scrollback
-        if _is_tab_chip(s) or s.startswith('←') or s.endswith('→'):
+        if kind != 'permission' and (_is_tab_chip(s) or (s.startswith('←') and s.endswith('→'))):
             continue                      # a multi-part tab bar: its ☐/☒ state changes as parts are answered
         s = re.sub(r'^[│┃╎╏┆┇┊┋|]\s*|\s*[│┃╎╏┆┇┊┋|]$', '', s)
         s = re.sub(r'[☐☑☒✔✓✗]', '', s)  # tick glyphs flip while the same prompt is on screen
@@ -963,7 +963,7 @@ def parse_pending_menu(stripped: list[str], now: float | None = None,
               'selected_n': selected, 'chrome': chrome, 'captured_at': round(now, 3)}
     # Identity context (what the prompt is about). Additive: absent when empty, so every
     # consumer that ignores it is unchanged.
-    _ctx = _menu_context(lines, first_idx)
+    _ctx = _menu_context(lines, first_idx, kind)
     if _ctx:
         result['context'] = _ctx
     # menu_family (F6, 2026-08-24): the ANSWER contract differs by agent runtime.
