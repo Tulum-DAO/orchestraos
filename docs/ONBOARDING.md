@@ -112,10 +112,16 @@ git merge-base --is-ancestor cdcd701 HEAD && echo "up to date"
 ```
 
 It prints `up to date` if you are. If it prints nothing, or an error, run `orchestra upgrade`
-and then the restart in [docs/UPGRADE.md](UPGRADE.md). **[PERSON ONLY]** The restart is your
-decision: it briefly stops your agents' services, so choose a moment that suits you. If you
-decide not to restart yet, you can still pair: the only difference is the long-message
-problem described above, until you do.
+and then the restart in [docs/UPGRADE.md](UPGRADE.md). If `orchestra upgrade` stops with a
+message about uncommitted changes, don't discard anything: stop, and bring that message to
+whoever is helping you (or open an issue at https://github.com/Tulum-DAO/orchestraos/issues).
+
+**Pairing needs the restarted server.** Updating the files is not enough: the running gateway
+keeps its old code until it restarts, and an old gateway can refuse the app's token or be
+unable to take the app's answers to cards. The same goes if you updated earlier and haven't
+restarted since. **[PERSON ONLY]** The restart is your decision: it briefly stops your
+agents' services, so choose a moment that suits you. If you'd rather not restart now, stop
+here and come back to this page when you have.
 
 ## 2. Run `orchestra pair`
 
@@ -232,8 +238,7 @@ you a test build, you can't connect an iPhone yet: stop here. **[PERSON ONLY]** 
 opening it is yours.
 
 **Finding the pairing screen.** The app does not open on it by itself: it opens on the
-**Arturo** tab, which shows no pairing prompt (with nothing paired it may say it couldn't reach
-its memory; that is expected). **[PERSON ONLY]** Tap the gear at the top right of the Arturo tab
+**Arturo** tab, which shows no pairing prompt. **[PERSON ONLY]** Tap the gear at the top right of the Arturo tab
 (to the right of the brain icon), then, under **GATEWAY**, tap **Connect your gateway**. On an
 iPad, use **Settings** in the sidebar instead. Have that screen open, and Tailscale on the
 iPhone (see step 2, "Before you run it"), before you run `orchestra pair`.
@@ -295,7 +300,7 @@ tailscale serve status
 
 In that list, each entry is an `https://` line with a `|-- / proxy ...` line under it. An entry
 whose proxy is `http://127.0.0.1:8890` is your gateway, already served: reuse its port and skip
-the `tailscale serve` command below. The `:8891` entry is the dashboard, not the gateway. The
+the `tailscale serve` command below. The entry whose proxy is `http://127.0.0.1:8891` is the dashboard, not the gateway. The
 host name in any entry is your `<machine>.<tailnet>.ts.net`.
 
 Otherwise, pick an https port that is not in that list (8445 here) and serve the
