@@ -42,20 +42,20 @@ What it does, in order:
 3. `git pull --ff-only` (exit 1 with the git message if the branch diverged).
 4. `orchestra init --yes`: idempotent — `orchestra.toml` and the data dir are kept, the
    Claude Code hook rows are re-written against the new checkout path, venv and npm
-   refresh (`--no-venv` / `--no-npm` / `--no-build` are passed through). It does **not**
-   rebuild the API or the dashboard: `init` skips a build whose output (`api/dist/server.js`,
-   `dashboard/dist/index.html`) already exists. Do the rebuild step below after every upgrade.
+   refresh, and the API and dashboard are rebuilt when any of their source is newer than
+   the last build (`--no-venv` / `--no-npm` / `--no-build` are passed through).
 5. `orchestra doctor`; its exit code is the command's.
 
-Then rebuild and restart. Until `orchestra upgrade` rebuilds by itself, this step is not
-optional: without it the API and dashboard keep running the code from before the upgrade,
-including any security fix that came in with it (for example the web terminal origin check
-in #208, which is partly in the API):
+Then restart, so the running services use the new code:
 
 ```bash
-rm -rf api/dist dashboard/dist && orchestra init --yes   # rebuilds both (a few minutes)
-orchestra down && orchestra up --detach                  # services and beats pick up the new code
+orchestra down && orchestra up --detach
 ```
+
+**If you upgraded between #208 and #218 (2026-10-08):** back then `init` did not rebuild an
+existing API build, so your API may still lack the web terminal origin check from #208.
+Run `orchestra upgrade` once more (or `rm -rf api/dist && orchestra init --yes`), then the
+restart above. From #218 on, a plain upgrade rebuilds correctly.
 
 `orchestra upgrade` never restarts anything itself. Spawned seats keep the code they were
 spawned with until their next spawn or rotation.
@@ -75,8 +75,7 @@ the paths other running components trust not to change shape underneath them.
 
 ```bash
 git pull
-rm -rf api/dist dashboard/dist   # init only builds what is missing; remove the old builds
-orchestra init --yes    # idempotent: re-runs npm/venv/build steps, never
+orchestra init --yes    # idempotent: re-runs npm/venv steps and rebuilds what changed, never
                          # touches orchestra.toml or the data dir; --yes re-writes the
                          # same hook rows without the prompt
 orchestra doctor         # confirm every row is still OK
