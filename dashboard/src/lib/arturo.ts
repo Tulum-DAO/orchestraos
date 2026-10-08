@@ -14,7 +14,7 @@ export interface ArturoStt { server: boolean; backend: 'local-whisper' | 'none';
 export interface ArturoHealth { onboarded?: boolean; operator?: OperatorFacts; ok: boolean; status?: number; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; stt?: ArturoStt; error?: string }
 /** A tap-to-pick card the BRAIN wrote with ask_choices: its options, and whether several may be picked.
  *  `note` is the server's own line (the starter team's cost), never the model's. */
-export type ChoiceCard = { options: string[]; multi: boolean; purpose: 'starter_team' | 'devices' | 'other'; note?: string };
+export type ChoiceCard = { options: string[]; multi: boolean; purpose: 'starter_team' | 'devices' | 'other'; note?: string; exclusive?: string };
 /** A pairing code card (pair_device). The brain never sees `code`; it is shown here and nowhere else. */
 export type PairCard = { device: string; device_id: string; code: string; expires_in_s: number; where: string; powers: string; revoke: string;
   /** Page-only: set when a later turn's check_paired saw this device connect. The code is then dropped. */
@@ -167,6 +167,12 @@ export function toggleChoice(options: string[], picked: string[], option: string
   const next = new Set(picked.filter((p) => p !== exclusive));
   if (next.has(option)) next.delete(option); else next.add(option);
   return options.filter((o) => next.has(o));
+}
+
+/** Onboarding ends by EFFECT: only when the server's reply says so (finish_onboarding wrote its flag),
+ *  never on a failed turn and never on the reply's wording. */
+export function onboardingDone(r: Pick<ArturoReply, 'ok' | 'onboarding'> | null | undefined): boolean {
+  return !!r && r.ok !== false && r.onboarding?.done === true;
 }
 
 /** The onboarding turn a surface sends: a first-line marker the proxy strips and turns into the

@@ -5437,6 +5437,14 @@ async def handle_pair_exchange(request):
     if not got:
         return _json({"ok": False, "error": "pairing failed"}, status=400)
     log.info("pair/exchange: a pairing code was redeemed")   # never log the code or token
+    # Redeeming is the device's first use: mark it seen, so a newer code for the same device never
+    # treats a phone that just paired (and has not called anything else yet) as unused.
+    try:
+        rec = _device_store().resolve(str(got.get("token") or ""))
+        if rec:
+            _device_store().touch(rec["id"])
+    except Exception as e:  # noqa: BLE001 — bookkeeping must never fail the exchange
+        log.warning(f"pair/exchange: could not mark the device seen: {e}")
     return _json({"ok": True, "base_url": got["base_url"], "token": got["token"]})
 
 

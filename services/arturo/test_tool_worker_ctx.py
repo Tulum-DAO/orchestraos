@@ -12,13 +12,15 @@
 import pathlib
 import importlib.util
 
+from services.arturo.conftest import as_fleet
+
 
 def _load_proxy():
     spec = importlib.util.spec_from_file_location(
         "arturo_proxy", pathlib.Path("services/arturo/arturo-proxy.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod
+    return as_fleet(mod)
 
 
 def test_tool_worker_records_into_callers_tools_bucket():

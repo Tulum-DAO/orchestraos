@@ -5,6 +5,8 @@
 # strings and returns controlled capture output. No hand-typed command expectations.
 
 import importlib.util
+
+from services.arturo.conftest import as_fleet
 import pathlib
 
 
@@ -13,7 +15,7 @@ def _load_proxy():
         "arturo_proxy", pathlib.Path("services/arturo/arturo-proxy.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod
+    return as_fleet(mod)
 
 
 class _Spy:

@@ -68,7 +68,8 @@ def test_health_carries_operator_none_then_name(tmp_path):
 
 
 def test_set_operator_fact_tool_reports_an_unwritable_store_instead_of_raising(tmp_path):
-    mod = _load_proxy(); _wire(mod, tmp_path)
+    from services.arturo.conftest import as_fleet
+    mod = as_fleet(_load_proxy()); _wire(mod, tmp_path)
     ro = tmp_path / "ro"; ro.mkdir(); ro.chmod(0o500)
     mod.ARTURO_STATE = ro / "arturo"
     try:

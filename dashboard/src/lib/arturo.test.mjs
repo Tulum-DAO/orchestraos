@@ -3,7 +3,7 @@
  *   node --experimental-strip-types dashboard/src/lib/arturo.test.mjs
  */
 import assert from 'node:assert';
-import { isStarting, waitForArturo, contextLine, contextFromLocation, brainLabel, slugify, firstStep, onboardingTurn, toggleChoice, isPageOpener, ONBOARDING_OPENER } from './arturo.ts';
+import { isStarting, waitForArturo, contextLine, contextFromLocation, brainLabel, slugify, firstStep, onboardingTurn, toggleChoice, onboardingDone, isPageOpener, ONBOARDING_OPENER } from './arturo.ts';
 
 // --- isStarting: boot-window errors are "starting", real errors are not ------------------
 assert.equal(isStarting({ ok: false, error: 'HTTP 502' }), true);
@@ -94,3 +94,11 @@ assert.equal(sendStateLabel('acked'), 'Acknowledged');
 assert.equal(sendStateLabel('failed'), 'Not delivered');
 assert.equal(sendStateLabel(undefined), '');
 console.log('arturo.test.mjs: send states ok');
+
+// --- onboardingDone: the page leaves onboarding only on the server's flag (S3, review of #278) ---------
+assert.equal(onboardingDone({ ok: true, onboarding: { done: true } }), true);
+assert.equal(onboardingDone({ ok: true, onboarding: { done: false } }), false);
+assert.equal(onboardingDone({ ok: true }), false);                                  // a turn off the onboarding says nothing
+assert.equal(onboardingDone({ ok: false, onboarding: { done: true } }), false);     // a failed turn never ends it
+assert.equal(onboardingDone({ ok: true, onboarding: { done: 'yes' } }), false);     // only the boolean
+assert.equal(onboardingDone(null), false);

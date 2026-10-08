@@ -41,7 +41,7 @@ def test_the_watch_pairs_through_the_iphone():
 
 def test_the_playbook_asks_devices_with_a_multi_card_and_records_the_fact():
     p = _playbook()
-    assert "ask_choices(purpose='devices', multi=true)" in p
+    assert "ask_choices(purpose='devices', multi=true, exclusive='Just this computer')" in p
     assert "set_operator_fact(field='devices')" in p
 
 
@@ -130,7 +130,7 @@ def test_the_devices_card_is_good_for_exactly_the_next_turn(P):
 
 
 def test_other_turns_are_not_limited_by_the_devices_rule(P):
-    tok = P._TEAM_TURN.set(P._begin_team_turn("web_dev5", "onboarding"))
+    tok = P._TEAM_TURN.set(P._begin_team_turn("web_dev5", "onboarding", "fleet"))
     try:
         out = P.execute_tool("decline_starter_team", {})
     finally:

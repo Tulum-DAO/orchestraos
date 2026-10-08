@@ -23,7 +23,7 @@ def _pb(**ctx):
 def test_the_playbook_carries_every_goal_in_order():
     p = _pb()
     for goal in ("set_operator_fact(field='name')", "ask_choices(purpose='starter_team')", "create_starter_team",
-                 "ask_choices(purpose='devices', multi=true)", "pair_device", "check_paired", "finish_onboarding"):
+                 "ask_choices(purpose='devices', multi=true", "pair_device", "check_paired", "finish_onboarding"):
         assert goal in p, goal
     assert p.index("field='name'") < p.index("purpose='starter_team'") < p.index("purpose='devices'") \
         < p.index("pair_device") < p.index("finish_onboarding")
@@ -140,11 +140,26 @@ def test_finish_sets_the_flag_and_health_reports_it(P):
 
 
 # ---- pair_device / check_paired --------------------------------------------------------------------
+def _answer_devices(P, answer, cid="web_d", options=onb.DEVICES):
+    """The operator's consent the way it really arrives: a devices card on an onboarding turn, then
+    their answer recorded on the very next turn."""
+    tok = _turn(P, cid=cid)
+    try:
+        P.execute_tool("ask_choices", {"options": list(options), "multi": True, "purpose": "devices"})
+    finally:
+        P._TEAM_TURN.reset(tok)
+    tok = _turn(P, cid=cid)
+    try:
+        return P.execute_tool("set_operator_fact", {"field": "devices", "value": answer})
+    finally:
+        P._TEAM_TURN.reset(tok)
+
+
 @pytest.fixture()
 def pairing(P, tmp_path, monkeypatch):
     monkeypatch.setattr(P, "ORCHESTRA_DIR", tmp_path / "data")
     monkeypatch.setenv("ORCHESTRA_PUBLIC_URL", "https://box.example.ts.net:8443")
-    ops.set_fact(P.ARTURO_STATE, "devices", "iPhone, Apple Watch, Mac")
+    _answer_devices(P, "iPhone, Apple Watch, Mac")
     from scripts.device_tokens import DeviceStore
     return DeviceStore(tmp_path / "data" / "state" / "devices")
 
@@ -185,12 +200,12 @@ def test_the_model_cannot_choose_scopes_or_label(P, pairing):
 @pytest.mark.parametrize("principal", [None, "device:dev_voice", "", "FLEET"])
 def test_only_a_fleet_stamped_turn_can_pair(P, pairing, principal):
     out, card = _pair(P, principal=principal)
-    assert out.startswith("NOT PAIRED") and card is None and pairing.list() == []
+    assert out.startswith("NOT RUN") and card is None and pairing.list() == []
 
 
 def test_no_turn_record_at_all_cannot_pair(P, pairing):
     # voice (/v1/chat/completions) and /ptt run tools with no turn record
-    assert P.execute_tool("pair_device", {"device": "iPhone"}).startswith("NOT PAIRED")
+    assert P.execute_tool("pair_device", {"device": "iPhone"}).startswith("NOT RUN")
     assert pairing.list() == []
 
 
@@ -220,17 +235,25 @@ def test_a_new_code_revokes_only_arturos_previous_one_for_that_device(P, pairing
     assert not rows[cli_id]["revoked_at"]
 
 
+def _checked(P, device_id):
+    tok = _turn(P)
+    try:
+        return P.execute_tool("check_paired", {"device_id": device_id})
+    finally:
+        P._TEAM_TURN.reset(tok)
+
+
 def test_check_paired_reports_by_effect(P, pairing):
     _, card = _pair(P)
     dev = card["device_id"]
-    assert P.execute_tool("check_paired", {"device_id": dev}).startswith("Not yet")
+    assert _checked(P, dev).startswith("Not yet")
     pairing.touch(dev)
-    assert P.execute_tool("check_paired", {"device_id": dev}).startswith("Connected")
+    assert _checked(P, dev).startswith("Connected")
     _pair(P)                                                    # a newer code leaves a CONNECTED device alone
-    assert P.execute_tool("check_paired", {"device_id": dev}).startswith("Connected")
+    assert _checked(P, dev).startswith("Connected")
     _, unused = _pair(P)
     _pair(P)                                                    # ...and replaces an unused one
-    assert "revoked" in P.execute_tool("check_paired", {"device_id": unused["device_id"]})
+    assert "revoked" in _checked(P, unused["device_id"])
 
 
 def _text_with_pair(P, monkeypatch, path, headers):
@@ -246,12 +269,12 @@ def _text_with_pair(P, monkeypatch, path, headers):
 
 def test_a_raw_loopback_text_call_without_the_stamp_cannot_pair(P, pairing, monkeypatch):
     results, _ = _text_with_pair(P, monkeypatch, "/text", {})
-    assert results[0].startswith("NOT PAIRED")
+    assert results[0].startswith("NOT RUN")
 
 
 def test_a_device_stamped_text_call_cannot_pair(P, pairing, monkeypatch):
     results, _ = _text_with_pair(P, monkeypatch, "/text", {"X-Arturo-Principal": "device:dev_voice"})
-    assert results[0].startswith("NOT PAIRED")
+    assert results[0].startswith("NOT RUN")
 
 
 def test_a_fleet_text_call_pairs_and_the_reply_carries_the_card_not_the_history(P, pairing, monkeypatch):
@@ -310,4 +333,4 @@ def test_a_connected_device_is_reported_so_the_card_drops_the_code(P, pairing, m
 def test_voice_never_gets_a_code_to_speak(P, pairing):
     # /v1/chat/completions and /ptt run tools with no turn record: no code exists, so TTS has none
     out = P.execute_tool("pair_device", {"device": "iPhone"})
-    assert out.startswith("NOT PAIRED") and "orc1_" not in out
+    assert out.startswith("NOT RUN") and "orc1_" not in out

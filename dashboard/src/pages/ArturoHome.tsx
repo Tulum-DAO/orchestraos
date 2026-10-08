@@ -27,7 +27,7 @@ import { useArturoBrain } from '../stores/arturoBrain';
 import { arturoTurn, arturoPrewarm } from '../lib/arturoStream';
 import { brainFromThread, describeTurnError, toWireBrain } from '../lib/arturoBrain';
 import { arturoHealth, arturoText, runtimesAvailable, brainLabel, greeting, newConversationId,
-  isStarting, waitForArturo, STARTING_TEXT, firstStep, onboardingTurn, isPageOpener, ONBOARDING_OPENER, sendStateLabel,
+  isStarting, waitForArturo, STARTING_TEXT, firstStep, onboardingTurn, onboardingDone, isPageOpener, ONBOARDING_OPENER, sendStateLabel,
   type ChoiceCard, type PairCard,
   type ArturoHealth, type RuntimeRow, type SendState } from '../lib/arturo';
 import { listThreads, loadThread, type ThreadSummary } from '../lib/arturoThreads';
@@ -205,7 +205,7 @@ export default function ArturoHome() {
     const r = await arturoText(onboardingTurn('onboarding_open', ONBOARDING_OPENER), convId.current);
     patch(id, { pending: false, text: r.ok ? (r.reply_text || '(no reply)') : 'I could not start just now. Send me anything and I will pick it up.',
       tools: r.tools_called, spawned: r.spawned, choices: r.choices, pairCard: r.pair_card });
-    if (r.onboarding?.done) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }
+    if (onboardingDone(r)) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }
   }
 
   async function runtimeStep(fresh = false) {
@@ -358,7 +358,7 @@ export default function ArturoHome() {
     }
     // By EFFECT: onboarding ends when the server says so (finish_onboarding wrote its flag), never on
     // a reply's wording.
-    if (isOnboarding && r.onboarding?.done) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }
+    if (isOnboarding && onboardingDone(r)) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }
   }
 
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -419,7 +419,7 @@ export default function ArturoHome() {
             <SpawnedAgentCard ids={t.spawned} />
             {t.pairCard && <PairCodeCard card={t.pairCard} />}
             {t.choices && t.choices.multi && (
-              <ChoicesCard options={t.choices.options} note={t.choices.note} onSubmit={(picked) => { void send(picked.join(', ')); }} />
+              <ChoicesCard options={t.choices.options} note={t.choices.note} exclusive={t.choices.exclusive} onSubmit={(picked) => { void send(picked.join(', ')); }} />
             )}
             {t.choices && !t.choices.multi && (
               <div className="decision-card">

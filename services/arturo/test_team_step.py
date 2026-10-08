@@ -118,7 +118,8 @@ import threading
 
 @contextlib.contextmanager
 def _turn(P, offered=True, opener=False, cid="web_c1"):
-    tok = P._TEAM_TURN.set({"conversation_id": cid, "opener": opener, "offered": offered, "declined": False})
+    tok = P._TEAM_TURN.set({"conversation_id": cid, "opener": opener, "offered": offered, "declined": False,
+                            "principal": "fleet", "onboarding": True})
     try:
         yield
     finally:
@@ -262,7 +263,7 @@ def test_voice_and_other_turns_without_a_conversation_never_start_it(P, tmp_path
     monkeypatch.setattr(P, "ORCHESTRA_DIR", _registry(tmp_path, {}))
     monkeypatch.setattr(P, "_run_commission", _no_run)
     out = P.execute_tool("create_starter_team", {"project": "website"})
-    assert out.startswith("NOT STARTED")
+    assert out.startswith("NOT RUN")          # no turn record is a non-fleet turn: refused before the tool
 
 
 def test_an_offer_is_good_for_exactly_the_next_turn(P):
@@ -371,14 +372,14 @@ def _stub_turn(P, monkeypatch, tmp_path, reply=("ok", [], [])):
 def test_an_onboarding_turn_says_whether_onboarding_is_done(P, monkeypatch, tmp_path):
     _stub_turn(P, monkeypatch, tmp_path)
     monkeypatch.setattr(P, "starter_team_state", lambda seen=None: {"state": "absent"})
-    _, body = P.text_turn("[Onboarding: step=onboarding]\nhi", "web_t1")
+    _, body = P.text_turn("[Onboarding: step=onboarding]\nhi", "web_t1", principal="fleet")
     assert body["onboarding"] == {"done": False}
 
 
 def test_a_turn_outside_onboarding_carries_no_onboarding_field(P, monkeypatch, tmp_path):
     _stub_turn(P, monkeypatch, tmp_path, ("hi", [], []))
     monkeypatch.setattr(P, "starter_team_state", lambda seen=None: (_ for _ in ()).throw(AssertionError("not consulted")))
-    status, body = P.text_turn("hello", "web_t2")
+    status, body = P.text_turn("hello", "web_t2", principal="fleet")
     assert status == 200 and "onboarding" not in body
 
 
@@ -391,7 +392,7 @@ def test_the_team_card_puts_an_offer_on_the_book_for_the_operators_reply(P, monk
         return "Shall I set up your team?", ["ask_choices"], []
     monkeypatch.setattr(P, "_brain_reply", brain)
     P._TEAM_OFFERS.clear()
-    _, body = P.text_turn("[Onboarding: step=onboarding_open]\n(first run: the operator just opened OrchestraOS)", "web_t3")
+    _, body = P.text_turn("[Onboarding: step=onboarding_open]\n(first run: the operator just opened OrchestraOS)", "web_t3", principal="fleet")
     assert "web_t3" in P._TEAM_OFFERS
     assert body["choices"]["options"] == ["Set it up", "Not now"]
     assert "always on" in body["choices"]["note"]           # the server's cost line, not the model's
@@ -413,9 +414,9 @@ def test_the_operators_reply_to_the_card_may_start_the_team_end_to_end(P, monkey
         return "done", ["create_starter_team", "ask_choices"], []
     monkeypatch.setattr(P, "_brain_reply", brain)
     P._TEAM_OFFERS.clear()
-    P.text_turn("[Onboarding: step=onboarding_open]\n(first run: hello)", "web_t4")
+    P.text_turn("[Onboarding: step=onboarding_open]\n(first run: hello)", "web_t4", principal="fleet")
     assert runs == [] and results[0].startswith("NOT STARTED")       # the opener could not
-    P.text_turn("[Onboarding: step=onboarding]\nSet it up", "web_t4")
+    P.text_turn("[Onboarding: step=onboarding]\nSet it up", "web_t4", principal="fleet")
     assert runs == [1]                                                # the reply to the card could
 
 
@@ -426,7 +427,7 @@ def test_a_turn_without_a_card_before_it_cannot_start_the_team(P, monkeypatch, t
     out = []
     monkeypatch.setattr(P, "_brain_reply", lambda m, c: (out.append(P.execute_tool("create_starter_team", {})), ("ok", [], []))[1])
     P._TEAM_OFFERS.clear()
-    P.text_turn("[Onboarding: step=onboarding]\nset up my team", "web_t5")
+    P.text_turn("[Onboarding: step=onboarding]\nset up my team", "web_t5", principal="fleet")
     assert out[0].startswith("NOT STARTED")
 
 

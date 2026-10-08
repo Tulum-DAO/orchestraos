@@ -10,9 +10,10 @@ to say and ask, and acts through tools (set_operator_fact, ask_choices, create_s
 decline_starter_team, pair_device, check_paired, finish_onboarding).
 
 What the playbook asks is the brain's; what may HAPPEN is the code's (arturo-proxy.py): the team is
-created only on the operator turn right after a starter_team card, a pairing code only for a device
-on record and only on a dashboard (fleet) turn, and the turn after a devices card can record devices
-and nothing else. Congruence DEC-1791485978471942 (v4).
+created only on the operator turn right after a starter_team card shown on an onboarding turn, a
+pairing code only for a device the operator picked on a devices card (the server's record of that
+answer) and only on a dashboard (fleet) turn, and the turn after a devices card can record devices and
+nothing else. Any non-fleet turn runs a fail-closed tool allowlist. Congruence DEC-1791485978471942 (v4).
 """
 from __future__ import annotations
 
@@ -145,8 +146,9 @@ def playbook(ctx=None) -> str:
         "cost plainly: " + TEAM_COST + " Ask what to call the first project, or use '" + DEFAULT_PROJECT + "'. "
         "On their yes, call create_starter_team; on a clear no, call decline_starter_team. Report each seat "
         "exactly as the tool says it sees it.",
-        "3. Their devices: ask which they have with ask_choices(purpose='devices', multi=true), options such as "
-        + ", ".join(DEVICES) + ". Record their answer with set_operator_fact(field='devices').",
+        "3. Their devices: ask which they have with ask_choices(purpose='devices', multi=true, exclusive='"
+        + DEVICES[-1] + "'), options such as " + ", ".join(DEVICES)
+        + ". Record their answer with set_operator_fact(field='devices'), on the turn right after the card.",
         "4. Then walk them through each device they picked, ONE at a time, in the order picked, from these facts: "
         + " ".join(f"{k}: {v}" for k, v in DEVICE_FACTS.items())
         + " For an iPhone, iPad or Mac they have the test app for, call pair_device(device=<that device>): the "
