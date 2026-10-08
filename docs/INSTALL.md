@@ -610,17 +610,18 @@ the `gm` seat's screen: type to it like a chat and press Enter. To leave without
 seat keeps running. (Closing the Terminal window also leaves it running.) `tmux ls` lists the
 sessions. You can also talk to seats from the dashboard in your browser.
 
-**Scrolling back in a seat.** The mouse wheel scrolls a seat's screen through its earlier
-output; press `q` to get back to typing. From the keyboard: press `Ctrl-B`, let go, then `[`,
-and use the arrow keys or `PgUp`/`PgDn` (on a Mac laptop, `fn` with the up or down arrow);
-`q` leaves.
+**Scrolling back.** While you are looking at an agent's screen in your terminal, turn the mouse
+wheel to scroll back through what it wrote. To get back to typing, press `q`.
 
-**If the input box shows `History 1/...`** instead (you pressed the up arrow, or the seat was
-started before mouse support), it is offering to re-send an earlier prompt. Press `Esc` to
-clear it. Never press Enter on it: that sends the old prompt to the seat again. For a seat
-that is already running, `tmux set -t <seat> mouse on` turns the wheel on.
+**If an old message appears in the box where you type** (it shows `History 1/...`; this happens
+if you press the up arrow), press the **down arrow** until the box is empty again. Never press
+Enter on it: that sends the old message to the agent again.
 
-**Selecting text in a seat** to copy it: a plain drag may not select. Instead:
+(Without a mouse: press `Ctrl-B`, let go, then `[`, and use the arrow keys; `q` returns. If the
+wheel does not scroll an agent that was already running before you upgraded, run
+`tmux set -t <seat> mouse on` once, with the agent's name in place of `<seat>`.)
+
+**Selecting text** on an agent's screen to copy it: a plain drag does not select. Instead:
 
 - **Windows Terminal, or Linux:** hold `Shift` while you drag.
 - **iTerm2 on a Mac:** hold `Option` while you drag.
