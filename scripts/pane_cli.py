@@ -53,32 +53,55 @@ def _panes(session):
     return (panes, created) if panes else None
 
 
-def _runtime_in_tree(root_pid):
-    """The runtime of the first agent CLI at or below root_pid, or None."""
+# Interpreters a CLI can be wrapped in (`node …/codex`): the runtime is the script's name.
+_INTERPRETERS = {"node", "nodejs", "bun", "deno", "python", "python3"}
+
+
+def _ps_table():
+    """{pid: [children]}, {pid: argv} for every process, or None when ps cannot be read. None
+    is UNKNOWN, never "no CLI": a loaded box can time ps out, and reading that as "nothing
+    running" would relaunch over a live seat (pm review of 4d750ff)."""
     try:
-        out = subprocess.run(["ps", "-e", "-ww", "-o", "pid=,ppid=,args="],
-                             capture_output=True, text=True, timeout=5).stdout
+        res = subprocess.run(["ps", "-e", "-ww", "-o", "pid=,ppid=,args="],
+                             capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
         return None
-    kids, argv0 = {}, {}
-    for line in out.splitlines():
+    if res.returncode != 0 or not res.stdout.strip():
+        return None
+    kids, argv = {}, {}
+    for line in res.stdout.splitlines():
         parts = line.split(None, 2)
         if len(parts) < 3 or not (parts[0].isdigit() and parts[1].isdigit()):
             continue
         pid, ppid = int(parts[0]), int(parts[1])
         kids.setdefault(ppid, []).append(pid)
-        argv0[pid] = parts[2].split()[0] if parts[2].split() else ""
-    todo, seen = [root_pid], set()
+        argv[pid] = parts[2].split()
+    return (kids, argv) if argv else None
+
+
+def _scan_tree(root_pid, table):
+    """(runtime or None, busy) for the process tree at root_pid. busy = anything in it besides
+    a shell or a tmux client, so a CLI this file cannot name (a `gemini` under node, a renamed
+    binary) still keeps the session."""
+    kids, argv = table
+    todo, seen, runtime, busy = [root_pid], set(), None, False
     while todo:
         pid = todo.pop(0)
         if pid in seen:
             continue
         seen.add(pid)
-        rt = providers.runtime_for_command(argv0.get(pid, ""))
-        if rt:
-            return rt
+        av = argv.get(pid) or [""]
+        name = os.path.basename(av[0]).lstrip("-")
+        rt = providers.runtime_for_command(av[0])
+        if not rt and name in _INTERPRETERS:
+            script = next((a for a in av[1:] if not a.startswith("-")), "")
+            rt = providers.runtime_for_command(script)
+        if rt and not runtime:
+            runtime = rt
+        if name not in _IDLE_FOREGROUND:
+            busy = True
         todo.extend(kids.get(pid, []))
-    return None
+    return runtime, busy
 
 
 def pane_state(session):
@@ -86,13 +109,21 @@ def pane_state(session):
     if got is None:
         return {"exists": False, "runtime": None, "foreground": None}
     panes, created = got
-    runtime = next((rt for rt in (_runtime_in_tree(pid) for pid, _ in panes) if rt), None)
+    table = _ps_table()
+    runtime, busy = None, False
+    if table is not None:
+        for pid, _ in panes:
+            rt, b = _scan_tree(pid, table)
+            runtime = runtime or rt
+            busy = busy or b
     return {"exists": True, "runtime": runtime, "foreground": panes[0][1] or None,
-            "foregrounds": [cmd or None for _, cmd in panes], "created": created}
+            "foregrounds": [cmd or None for _, cmd in panes], "created": created,
+            "tree": "ok" if table is not None else "unknown", "busy": busy}
 
 
 def relaunchable(state, min_age_s=None):
-    """The session exists, no agent CLI is anywhere in ANY of its panes, EVERY pane shows only
+    """The process table was read (unknown is never relaunchable), the session exists, nothing
+    but shells and tmux clients runs in ANY of its panes, EVERY pane shows only
     the shell its CLI exited to (or a nested client over one), and the session is older than
     min_age_s. The age floor is the startup gap: spawn-agent.sh creates the session, then types
     the CLI into its shell a second or more later; a second spawn inside that gap (a double
@@ -100,9 +131,10 @@ def relaunchable(state, min_age_s=None):
     if min_age_s is None:
         min_age_s = float(os.environ.get("ORCH_RELAUNCH_MIN_AGE_S", "30"))
     fgs = state.get("foregrounds") or [state.get("foreground")]
-    return bool(state.get("exists")) and state.get("runtime") is None \
+    return bool(state.get("exists")) and state.get("tree") == "ok" and not state.get("busy") \
+        and state.get("runtime") is None \
         and all(fg in _IDLE_FOREGROUND for fg in fgs) \
-        and time.time() - (state.get("created") or 0) >= min_age_s
+        and bool(state.get("created")) and time.time() - state["created"] >= min_age_s
 
 
 def main(argv):

@@ -168,7 +168,10 @@ def _pane_alive(tmux_session: str) -> bool:
     if scripts not in sys.path:
         sys.path.insert(0, scripts)
     import pane_cli
-    return pane_cli.pane_state(tmux_session)["runtime"] is not None
+    st = pane_cli.pane_state(tmux_session)
+    # An unreadable process table is UNKNOWN: report alive, so nothing relaunches over a seat
+    # that may be running.
+    return st["runtime"] is not None or st.get("tree") == "unknown"
 
 
 _TEMPLATE_KINDS = {"dev": "prompts/_dev-template.md", "pm": "prompts/_pm-template.md",

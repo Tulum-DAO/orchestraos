@@ -48,6 +48,7 @@ def lab(monkeypatch):
     shim.write_text(f'#!/bin/sh\nexec "{REAL_TMUX}" -S "{sock}" "$@"\n')
     shim.chmod(0o755)
     (bindir / "claude").symlink_to(shutil.which("sleep"))
+    os.mkfifo(bindir / "gemini")       # a node-wrapped CLI's script path: `cat` blocks on it
     monkeypatch.delenv("TMUX", raising=False)
     monkeypatch.setenv("ORCH_RELAUNCH_MIN_AGE_S", "0")        # the startup-gap floor has its own test
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
@@ -57,22 +58,23 @@ def lab(monkeypatch):
         return subprocess.run(["tmux", *a], capture_output=True, text=True, timeout=10)
 
     tmux("-f", "/dev/null", "new-session", "-d", "-s", "base", "sleep 600")
+    tmux.bindir = bindir
     try:
         yield tmux
     finally:
         subprocess.run([REAL_TMUX, "-S", str(sock), "kill-server"], capture_output=True, timeout=10)
-        _kill_fake_clis()
+        _kill_fake_clis(str(d))
         shutil.rmtree(d, ignore_errors=True)
 
 
-def _kill_fake_clis():
+def _kill_fake_clis(lab_dir=None):
     """A `claude 613 &` job outlives kill-server (it is reparented to init), and argv[0]
     `claude` makes it look like an agent to anything on the host that scans ps. Exact args
     only: a real CLI never runs as `claude 613`."""
     out = subprocess.run(["ps", "-e", "-o", "pid=,args="], capture_output=True, text=True).stdout
     for line in out.splitlines():
         pid, _, args = line.strip().partition(" ")
-        if args.strip() == "claude 613" and pid.isdigit():
+        if pid.isdigit() and (args.strip() == "claude 613" or (lab_dir and lab_dir in args)):
             try:
                 os.kill(int(pid), 9)
             except OSError:
@@ -240,3 +242,54 @@ def test_a_session_inside_the_startup_gap_is_never_cleared(lab, monkeypatch):
     assert pane_cli.relaunchable(st) is False
     assert _clear("g1").stdout.strip() == "KEPT" and _has(lab, "g1")
     assert pane_cli.relaunchable(st, min_age_s=0) is True
+
+
+
+def test_an_unreadable_process_table_is_never_relaunchable(lab, monkeypatch, tmp_path):
+    """pm review of 4d750ff: ps failing or timing out read as "no CLI", and with a tmux or
+    shell foreground (Shaw's exact state, which can also be a LIVE CLI running a nested
+    client) that killed a live seat. Unknown must never relaunch."""
+    _seat(lab, "u1", "true")
+    time.sleep(0.5)
+    assert pane_cli.relaunchable(pane_cli.pane_state("u1")) is True       # control: readable
+    broken = tmp_path / "broken"
+    broken.mkdir()
+    (broken / "ps").write_text("#!/bin/sh\nexit 1\n")
+    (broken / "ps").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{broken}{os.pathsep}{os.environ['PATH']}")
+    st = pane_cli.pane_state("u1")
+    assert st["tree"] == "unknown"
+    assert pane_cli.relaunchable(st) is False
+    assert _clear("u1").stdout.strip() == "KEPT" and _has(lab, "u1")
+    sys.path.insert(0, str(ROOT))
+    from orchestra_cli import seats as SE
+    assert SE._pane_alive("u1") is True, "unknown must read alive, so starter never relaunches"
+
+
+def test_a_cli_this_file_cannot_name_still_keeps_the_session(lab):
+    """A node-wrapped CLI whose name is in no table (here `node <lab>/bin/gemini`), running in
+    the background under an idle shell: the foreground is the shell, the runtime is unknown,
+    but something besides a shell is running, so the session is kept."""
+    # bash, not the pane's sh: dash has no `exec -a`
+    _seat(lab, "n1", f"bash -c 'exec -a node cat {lab.bindir}/gemini' &")
+    assert _until(lambda: any(l.split(None, 1)[1:] == [f"node {lab.bindir}/gemini"] for l in
+                              subprocess.run(["ps", "-e", "-o", "pid=,args="], capture_output=True,
+                                             text=True).stdout.splitlines())), "fixture never ran"
+    assert _until(lambda: pane_cli.pane_state("n1").get("busy") is True)
+    st = pane_cli.pane_state("n1")
+    assert st["runtime"] is None and st["foreground"] == "sh"
+    assert pane_cli.relaunchable(st) is False
+    assert _clear("n1").stdout.strip() == "KEPT"
+
+
+def test_an_interpreter_wrapped_known_cli_is_named(lab):
+    (lab.bindir / "codex").symlink_to(lab.bindir / "gemini")       # a path named codex
+    _seat(lab, "n2", f"bash -c 'exec -a node cat {lab.bindir}/codex'")
+    assert _until(lambda: pane_cli.pane_state("n2")["runtime"] == "codex")
+
+
+def test_a_missing_creation_time_is_never_relaunchable():
+    st = {"exists": True, "tree": "ok", "busy": False, "runtime": None,
+          "foreground": "bash", "foregrounds": ["bash"], "created": 0}
+    assert pane_cli.relaunchable(st, min_age_s=0) is False
+    assert pane_cli.relaunchable({**st, "created": 1}, min_age_s=0) is True
