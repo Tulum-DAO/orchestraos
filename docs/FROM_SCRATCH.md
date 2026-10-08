@@ -109,7 +109,9 @@ does the same.)
 This is the step where you pay. A server is rented by the hour from a hosting company,
 and you pay that company directly, not OrchestraOS. The size these docs use costs about
 $24 a month at DigitalOcean, charged only while the server exists; delete it and the
-charges stop. [docs/COSTS.md](COSTS.md) compares providers and prices.
+charges stop. You will also need a paid plan for one AI tool to run your agents (Claude
+Pro is about $20 a month); [docs/INSTALL.md](INSTALL.md) covers it when you get there.
+[docs/COSTS.md](COSTS.md) compares providers and prices.
 
 We suggest **DigitalOcean** for a first server: its screens are simple, and it takes a
 card, PayPal, Google Pay or Apple Pay. (PayPal makes a small temporary $5 charge to check
