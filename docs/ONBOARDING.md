@@ -31,6 +31,9 @@ address and user if you need them). Some steps happen in the app on my phone or 
 Rules:
 - If you can run commands on my computer, run them yourself and show me every output.
   If you can't, give me one command at a time and wait for me to paste back what it printed.
+  Exception: never ask me to paste what `orchestra pair` printed. I only tell you whether I
+  saw `Minted device ... with scopes: ...`; the `orc1_` code stays with me, because it is
+  a password for my server.
 - Stop at every step marked [PERSON ONLY] (paying, signing in, any password or
   passphrase prompt including sudo's, approving a device or an admin prompt) and let me
   do it myself. Never do those for me, and never ask for my passwords.
@@ -39,14 +42,17 @@ Rules:
 - Before any `tailscale serve --https=...` command, run `tailscale serve status` and show me
   the output. Use an https port that is not in that list; never replace or turn off an
   entry that is already there, and never use `--funnel`.
-- For `orchestra pair --scopes`, ask me what the device may do. A phone that answers cards
-  needs `read,approve`; never add a scope I did not ask for.
-- The pairing code (one long word starting with `orc1_`) is a credential. Show it only to
-  me, never save it to a file or send it anywhere else; I paste it into the app myself.
+- For `orchestra pair --scopes`, ask me what the device may do. A phone or Mac that answers
+  cards needs `read,approve`; add `message` only if I want to message agents from it. Never
+  add a scope I did not ask for.
+- If you can run commands yourself, never show me the `orc1_` code in our chat or save it
+  anywhere; let me run `orchestra pair` in my own terminal instead.
 - Never revoke a device (`orchestra devices --revoke`) unless I ask you to.
+- Skip step 3 (the web dashboard connect screen): it is not on `main` yet.
 - We are done when the app has left its pairing screen (I tell you what I see), and
-  `orchestra devices` on the server lists my device with the scopes I chose. Show me that
-  output; don't just tell me it worked.
+  `orchestra devices` on the server lists my device with the scopes I chose AND a LAST
+  SEEN time, not `never`. A row appears as soon as `orchestra pair` runs, so the row alone
+  proves nothing. Show me that output; don't just tell me it worked.
 ```
 
 ## Before anything else: log in
@@ -85,7 +91,8 @@ host, never share it outside people you're actually pairing.
 **The apps need OrchestraOS on your server at `main` `cdcd701` (#259, 2026-10-08) or newer.**
 On an older checkout, a long or multi-line message you send from the app comes back in your
 transcript as a one-line `[LONG-MSG chip-dodge] ...` note with a server file path, instead of
-your own words and photos. To check, run this on the server, inside your OrchestraOS checkout:
+your own words and photos. To check, run this on the server, inside your OrchestraOS checkout
+(`cd ~/orchestraos` first if you are not already there):
 
 ```bash
 git merge-base --is-ancestor cdcd701 HEAD && echo "up to date"
@@ -113,17 +120,25 @@ and then the restart in [docs/UPGRADE.md](UPGRADE.md).
   | `message` | send a message to an agent, upload a file |
   | `inject` | press keys in a live agent's terminal |
   | `voice` | talk to Arturo (every call spends provider credit) |
+  | `ptt` | push-to-talk to Arturo **with its tools**, which can act on your agents: as strong as `inject`. Not a mild "talk" scope |
   | `admin` | file red-alert reports, post telemetry |
 
-  A phone that answers cards needs `read,approve`. Give it more only if you mean to.
+  A phone or Mac that answers cards needs `read,approve`. Add `message` only if you want to
+  message agents from it. Give it more only if you mean to.
 
 ```bash
 orchestra pair --base-url https://<machine>.<tailnet>.ts.net:8445 --scopes read,approve --label my-phone
 ```
 
-`orchestra devices` lists paired devices; `orchestra devices --revoke <device id>`
-cuts one off (its token stops working on its next request). Revoking is your decision: an
-agent should not revoke a device on its own. Re-pairing with a new code undoes it.
+`orchestra devices` lists paired devices, with a LAST SEEN column. A row appears the moment
+`orchestra pair` runs, before any app uses the code, so a new row says `never` until the app
+has actually connected; check LAST SEEN, not just the row. Each `orchestra pair` adds a row, so
+a retry after an expired code leaves an extra `never` row behind. The list ends with a note that
+the gateway's own bearer (`legacy-fleet-token`) has every scope: that is the server's built-in
+key, not a paired device, and it is not something to revoke here.
+`orchestra devices --revoke <device id>` cuts one off (its token stops working on its next
+request). Revoking is your decision: an agent should not revoke a device on its own.
+Re-pairing with a new code undoes it.
 
 This prints the pairing code: one long word starting with `orc1_`. Copy all of it and
 paste it into the app's pairing box. It carries your server's address too, so there is
@@ -133,9 +148,11 @@ you updated OrchestraOS, so run `orchestra down && orchestra up --detach` once a
 all you get: the terminal says
 `No QR encoder is installed on this machine`. To also get a scannable QR code drawn as
 text (works over a bare ssh session), install the `segno` package into the install's
-Python once, from your checkout: `.venv/bin/pip install segno`. The code is
-**short-lived and single-use**: it expires the moment it's exchanged, or after
-about 10 minutes, whichever comes first. Running `orchestra pair` again always
+Python once, from your checkout (`cd ~/orchestraos` first): `.venv/bin/pip install segno`.
+The code is **short-lived and single-use**: it expires the moment it's exchanged, or after
+about 10 minutes, whichever comes first. The command also waits 60 seconds and then clears the
+screen (`Pairing code hidden`), so the code does not sit in your scrollback; if you weren't
+fast enough, run it again. Running `orchestra pair` again always
 mints a fresh one; an old code left on screen goes stale on its own.
 
 **Do not screenshare this terminal while the code is visible.** The code is
@@ -160,13 +177,23 @@ through.
 
 ## 4. Connect the iOS app
 
+**Getting the app:** it is not on the App Store yet and has no public download. If nobody gave
+you a test build, you can't connect an iPhone yet: stop here. **[PERSON ONLY]** Installing and
+opening it is yours.
+
+**Getting the code onto the iPhone.** `orchestra pair` prints the code in your computer's
+terminal, not on the phone. Either install `segno` first (step 2) and tap **Scan** on the QR, or,
+if your computer is a Mac signed in to the same Apple ID as the iPhone, copy the code on the Mac
+and paste on the iPhone (Universal Clipboard). Never message or email the code to yourself.
+
 First launch shows a pairing screen, not the approvals list. It says *On the machine running
 your OrchestraOS gateway, run `orchestra pair`, then paste the code it prints here — or scan
 its QR.*
 
-1. Paste exactly what `orchestra pair` printed into the **PAIRING CODE** box (placeholder
-   *paste the code from orchestra pair*), or tap **Scan** and point the camera at its QR.
-2. Tap **Pair**. There is no address to type: the code carries it.
+1. **[PERSON ONLY]** Paste exactly what `orchestra pair` printed into the **PAIRING CODE** box
+   (placeholder *paste the code from orchestra pair*), or tap **Scan** and point the camera at
+   its QR.
+2. **[PERSON ONLY]** Tap **Pair**. There is no address to type: the code carries it.
 
 If what you pasted is not a pairing code at all, the app says *That isn’t a pairing code. Paste
 exactly what `orchestra pair` printed.* Copy the whole code again, from the first character
@@ -194,7 +221,12 @@ silently REPLACES whatever was there:
 tailscale serve status
 ```
 
-Then pick an https port that is not in that list (8445 here) and serve the
+In that list, each entry is an `https://` line with a `|-- / proxy ...` line under it. An entry
+whose proxy is `http://127.0.0.1:8890` is your gateway, already served: reuse its port and skip
+the `tailscale serve` command below. The `:8891` entry is the dashboard, not the gateway. The
+host name in any entry is your `<machine>.<tailnet>.ts.net`.
+
+Otherwise, pick an https port that is not in that list (8445 here) and serve the
 gateway on it. The proxy target is the plain-HTTP address your gateway listens
 on. `8890` below is the default (`[gateway] port` in `orchestra.toml`); if you
 changed it, use the port that `orchestra status` prints on the `gateway` row:
@@ -232,25 +264,29 @@ Before you start:
 On the server, make a pairing code for the Mac:
 
 ```bash
-orchestra pair --base-url https://<machine>.<tailnet>.ts.net:8445 --scopes read,approve,message --label my-mac
+orchestra pair --base-url https://<machine>.<tailnet>.ts.net:8445 --scopes read,approve --label my-mac
 ```
 
-`read,approve,message` lets the Mac see your cards, answer them, and message your agents
-(step 2 explains each scope). You should see `Minted device … (my-mac) with scopes: read,
-approve, message`, and then the code to paste: one long word starting with `orc1_`. (An older
+`read,approve` lets the Mac see your cards and answer them (step 2 explains each scope). To
+also message your agents from it, use `--scopes read,approve,message` instead. You should see
+`Minted device … (my-mac) with scopes: read, approve`, and then the code to paste: one long word starting with `orc1_`. (An older
 OrchestraOS prints a `{"code":…}` line instead; the Mac app takes that too.)
+
+**Getting the app:** it has no public download yet. If nobody gave you a test build, you can't
+connect a Mac yet: stop here. **[PERSON ONLY]** Installing and opening it is yours.
 
 On the Mac, open the app. Its first window is **Connect this Mac**, with the line *Run
 `orchestra pair` on the gateway machine and paste the code it prints.*
 
-1. In Terminal, select the whole code and copy it (`Cmd+C`).
-2. Paste it into **Pairing code** (the box that says *Paste the code orchestra pair
+1. **[PERSON ONLY]** In Terminal, select the whole code and copy it (`Cmd+C`).
+2. **[PERSON ONLY]** Paste it into **Pairing code** (the box that says *Paste the code orchestra pair
    printed*). The gateway address fills itself in, and appears under the box as
    `Gateway: <address>`.
-3. Press **Pair** (or Return).
+3. **[PERSON ONLY]** Press **Pair** (or Return).
 
 When it works, the connect window goes away and the app's main window opens. To check from
-the server: `orchestra devices` lists `my-mac` with the scopes you gave it.
+the server: `orchestra devices` lists `my-mac` with the scopes you gave it and a LAST SEEN time
+(not `never`).
 
 **If it does not work**, a sentence appears under the button. *That isn’t a pairing code. Paste
 exactly what `orchestra pair` printed.* means the paste was not a code: copy the whole code again.
