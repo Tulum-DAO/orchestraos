@@ -82,12 +82,11 @@ once by hand is worth the two minutes.
 
 ```
 Fire one approval card per docs/INSTALL.md §5:
-`python3 scripts/approval.py request "Ship the first change?" --from dev-first-project
---worker-kind pane --options approve,deny`. Show me the card id, then answer
-it either from the dashboard or with curl against
-/api/approvals/<id>/approve, then show me `approval.py get <id>` reporting
-status "resumed" and the decision actually landed in the "dev-first-project"
-seat's tmux pane.
+`python3 scripts/approval.py request "Reply OK to this test card?" --from dev-first-project
+--worker-kind pane --options approve,deny`. Show me the card id. I answer it myself
+in the dashboard; don't answer it for me. Then show me the decision landed in the
+"dev-first-project" seat's tmux pane (`tmux capture-pane -p -t dev-first-project | tail -20`),
+and, once the seat has acknowledged it, `approval.py get <id>` reporting "status": "resumed".
 ```
 
 ## Rotate
