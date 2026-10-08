@@ -35,6 +35,9 @@ What is built:
   APNs topic (the watch app has its own) and must be on an allowlist
   (`ORCHESTRA_PUSH_BUNDLE_IDS`, default the published app's two); `env` picks the APNs host
   (TestFlight and App Store builds register production tokens, Xcode builds sandbox ones).
+  **If you build the app yourself** under your own bundle ids, set
+  `ORCHESTRA_PUSH_BUNDLE_IDS=<your app id>,<your watch app id>` on the gateway, or every
+  registration is refused; and send with your own APNs key (`ORCHESTRA_PUSH_DELIVERY=direct`).
 - **`rev` orders everything; the client must grow it on EVERY PUT and DELETE**: send
   `max(last_rev + 1, now_ms)`, so a clock set backwards still moves forward.
   An APNs token belongs to the app install, not the pairing, so Forget-then-pair-again keeps
@@ -45,8 +48,13 @@ What is built:
   request can pin a token for good.
 - **A token belongs to its owner.** Another device can take it over only when the owner is
   revoked, or when the owner is the shared fleet bearer (a phone moving onto its own token),
-  and only with a strictly newer rev. Otherwise the PUT gets `reason: "owned"`: the app must
-  Forget the token with its OLD bearer before discarding that bearer.
+  and only with a strictly newer rev. Otherwise the PUT gets `reason: "owned"`.
+  - Moving a device off the shared fleet bearer onto its own token is never stuck: a token the
+    fleet bearer holds is taken over by the next PUT with a newer rev.
+  - Re-minting a device's token is never stuck either: `/device/upgrade` revokes the previous
+    token for that label, so the old owner is dead and the takeover succeeds. A duplicate minted
+    by hand stays `owned` until the old device is revoked with `orchestra devices`.
+  - Good hygiene, not a requirement: Forget the token with the old bearer before discarding it.
 - **Tokens die with their owner, on positive evidence only.** A sender reads `push_targets()`:
   it sends only to owners it can confirm are alive, prunes owners it can confirm are dead, and
   skips without pruning any owner it can't read. Dead means a revoked device, or a fleet
