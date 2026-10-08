@@ -4177,12 +4177,18 @@ def _arturo_upstream_headers(request) -> dict:
     through), plus who is calling: X-Arturo-Principal "fleet" for the fleet bearer (the dashboard's
     path), "device:<id>" for a paired device. Arturo makes a pairing code only on a "fleet" turn, so
     a voice-only device cannot ask it for a read, approve and message code (congruence
-    DEC-1791485978471942, A8). No resolved principal = no stamp, and Arturo then refuses."""
+    DEC-1791485978471942, A8). No resolved principal = no stamp, and Arturo then refuses.
+    "fleet" travels with this install's stamp secret (scripts/arturo_stamp.py): Arturo believes it only
+    with that secret, so the gateway's principal stamp is authenticated."""
     headers = {"Content-Type": "application/json"}
     ran, principal = _resolved_principal(request)
     dev_id = (principal or {}).get("id") if ran else None
     if dev_id == "legacy":
-        headers["X-Arturo-Principal"] = "fleet"
+        from scripts import arturo_stamp
+        secret = arturo_stamp.ensure(_data_dir())
+        if secret:
+            headers["X-Arturo-Principal"] = "fleet"
+            headers[arturo_stamp.HEADER] = secret
     elif dev_id:
         headers["X-Arturo-Principal"] = f"device:{dev_id}"
     return headers
@@ -5333,10 +5339,13 @@ def _pairing_store():
     return PairingStore(_pairing_dir())
 
 
-def _pairing_dir():
+def _data_dir():
     from pathlib import Path as _P
-    base = os.environ.get("ORCHESTRA_DIR") or str(_P.home() / ".orchestra")
-    return _P(base) / "state" / "pairing"
+    return _P(os.environ.get("ORCHESTRA_DIR") or str(_P.home() / ".orchestra"))
+
+
+def _pairing_dir():
+    return _data_dir() / "state" / "pairing"
 
 
 #: The id recorded as `minted_by` for anything the fleet bearer issues. A stable string rather
@@ -6221,6 +6230,11 @@ def main():
               "(run: python3 watch_gateway.py --make-token)", file=sys.stderr)
         sys.exit(2)
     from aiohttp import web
+    try:
+        from scripts import arturo_stamp
+        arturo_stamp.ensure(_data_dir())      # Arturo's principal stamp secret, made on first start
+    except Exception as e:  # noqa: BLE001 — without it Arturo simply never sees a fleet turn
+        print(f"[watch_gateway] arturo stamp secret not created: {e}", file=sys.stderr)
     app = build_app()
     print(f"[watch_gateway] listening on http://{GATEWAY_HOST}:{GATEWAY_PORT}", file=sys.stderr)
     web.run_app(app, host=GATEWAY_HOST, port=GATEWAY_PORT, print=None)

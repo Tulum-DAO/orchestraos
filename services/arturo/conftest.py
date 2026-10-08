@@ -88,3 +88,19 @@ def configured_install(tmp_path, monkeypatch):
 def as_fleet(mod):
     mod._TEAM_TURN.set(mod._begin_team_turn(None, None, "fleet"))
     return mod
+
+
+# --------------------------------------------------------------------------------------
+# fleet_stamp: the headers the GATEWAY sends for a dashboard turn. "fleet" is believed only with
+# this install's stamp secret (scripts/arturo_stamp.py), made here in the test's own data dir.
+import pytest as _pytest
+
+
+@_pytest.fixture()
+def fleet_stamp(monkeypatch, tmp_path):
+    def make(mod):
+        data = tmp_path / "data"
+        monkeypatch.setattr(mod, "ORCHESTRA_DIR", data)
+        from scripts import arturo_stamp
+        return {"X-Arturo-Principal": "fleet", arturo_stamp.HEADER: arturo_stamp.ensure(data)}
+    return make

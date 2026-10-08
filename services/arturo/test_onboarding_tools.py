@@ -288,17 +288,17 @@ def test_a_device_stamped_text_call_cannot_pair(P, pairing, monkeypatch):
     assert results[0].startswith("NOT RUN")
 
 
-def test_a_fleet_text_call_pairs_and_the_reply_carries_the_card_not_the_history(P, pairing, monkeypatch):
-    results, r = _text_with_pair(P, monkeypatch, "/text", {"X-Arturo-Principal": "fleet"})
+def test_a_fleet_text_call_pairs_and_the_reply_carries_the_card_not_the_history(P, pairing, monkeypatch, fleet_stamp):
+    results, r = _text_with_pair(P, monkeypatch, "/text", fleet_stamp(P))
     body = r.get_json()
     assert results[0].startswith("A pairing code") and body["pair_card"]["code"].startswith("orc1_")
     archived = json.dumps(P._THREADS.get_thread("web_p"))
     assert body["pair_card"]["code"] not in archived
 
 
-def test_the_stream_fallback_keeps_the_principal(P, pairing, monkeypatch):
+def test_the_stream_fallback_keeps_the_principal(P, pairing, monkeypatch, fleet_stamp):
     # an onboarding turn on /text/stream runs whole through text_turn; the stamp must ride along
-    results, r = _text_with_pair(P, monkeypatch, "/text/stream", {"X-Arturo-Principal": "fleet"})
+    results, r = _text_with_pair(P, monkeypatch, "/text/stream", fleet_stamp(P))
     data = r.get_data(as_text=True)            # the turn runs as the stream is read
     assert results and results[0].startswith("A pairing code")
     assert '"pair_card"' in data
@@ -314,10 +314,10 @@ def test_a_new_code_never_revokes_a_device_that_is_in_use(P, pairing):
     assert not rows[first["device_id"]]["revoked_at"] and not rows[second["device_id"]]["revoked_at"]
 
 
-def test_the_code_is_nowhere_but_the_card(P, pairing, monkeypatch, caplog, tmp_path):
+def test_the_code_is_nowhere_but_the_card(P, pairing, monkeypatch, caplog, tmp_path, fleet_stamp):
     # not in the log, the thread store, the journal, the operator store, or anything else Arturo writes
     caplog.set_level(logging.DEBUG)
-    results, r = _text_with_pair(P, monkeypatch, "/text", {"X-Arturo-Principal": "fleet"})
+    results, r = _text_with_pair(P, monkeypatch, "/text", fleet_stamp(P))
     code = r.get_json()["pair_card"]["code"]
     raw = json.loads(__import__("base64").urlsafe_b64decode(code[5:] + "=" * (-len(code[5:]) % 4)))["code"]
     assert "orc1_" not in caplog.text and raw not in caplog.text

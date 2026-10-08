@@ -120,8 +120,8 @@ def test_a_text_turn_that_is_not_fleet_runs_no_command(P, monkeypatch, path, hea
 
 
 @pytest.mark.parametrize("path", ["/text", "/text/stream"])
-def test_the_dashboards_text_turn_still_runs_it(P, monkeypatch, path):
-    ran, results = _text_running(P, monkeypatch, path, {"X-Arturo-Principal": "fleet"})
+def test_the_dashboards_text_turn_still_runs_it(P, monkeypatch, path, fleet_stamp):
+    ran, results = _text_running(P, monkeypatch, path, fleet_stamp(P))
     assert ran == ["cat /etc/hostname"]
 
 
@@ -195,8 +195,8 @@ def test_on_the_onboarding_the_offer_is_recorded(P, monkeypatch):
 def test_stale_offers_and_device_cards_are_swept(P):
     P._TEAM_OFFERS.clear(); P._DEVICE_CARDS.clear()
     old = time.time() - P._TEAM_OFFER_TTL_S - 1
-    P._TEAM_OFFERS["web_old"] = old
-    P._DEVICE_CARDS["web_old2"] = (old, ("iPhone",))
+    P._TEAM_OFFERS["web_old"] = (old, "fleet")
+    P._DEVICE_CARDS["web_old2"] = (old, ("iPhone",), "fleet")
     _record(P, "web_any", "onboarding", "fleet")
     assert P._TEAM_OFFERS == {} and P._DEVICE_CARDS == {}
 
@@ -489,3 +489,100 @@ def test_the_seat_message_tools_reach_the_store(P, monkeypatch, tool, args):
     finally:
         P._TEAM_TURN.reset(tok)
     assert "not defined" not in out and not out.startswith("Failed")
+
+
+# ---- the gateway's principal stamp is authenticated ----------------------------------------------------
+_FWD = [{}, {"X-Forwarded-For": "203.0.113.9"}, {"X-Forwarded-Host": "box.ts.net"}, {"Tailscale-Funnel-Request": "?1"},
+        {"Forwarded": "for=203.0.113.9"}]
+
+
+@pytest.mark.parametrize("path", ["/text", "/text/stream"])
+@pytest.mark.parametrize("extra", _FWD, ids=["loopback", "xff", "xfh", "funnel", "forwarded"])
+@pytest.mark.parametrize("secret", ["none", "wrong"])
+def test_a_fleet_stamp_without_this_installs_secret_is_not_fleet(P, monkeypatch, fleet_stamp, path, extra, secret):
+    good = fleet_stamp(P)                                    # the install HAS a secret; the caller lacks it
+    h = {"X-Arturo-Principal": "fleet", **extra}
+    if secret == "wrong":
+        h["X-Arturo-Stamp"] = good["X-Arturo-Stamp"][::-1]
+    ran, results = _text_running(P, monkeypatch, path, h)
+    assert ran == [] and results and results[0].startswith("NOT RUN")
+
+
+@pytest.mark.parametrize("path", ["/text", "/text/stream"])
+@pytest.mark.parametrize("extra", _FWD[1:], ids=["xff", "xfh", "funnel", "forwarded"])
+def test_even_the_right_secret_is_ignored_on_a_forwarded_request(P, monkeypatch, fleet_stamp, path, extra):
+    ran, results = _text_running(P, monkeypatch, path, {**fleet_stamp(P), **extra})
+    assert ran == [] and results[0].startswith("NOT RUN")
+
+
+@pytest.mark.parametrize("state", ["missing", "empty"])
+def test_no_secret_file_means_no_fleet_ever(P, monkeypatch, fleet_stamp, state):
+    h = fleet_stamp(P)
+    from scripts import arturo_stamp
+    f = arturo_stamp.path(P.ORCHESTRA_DIR)
+    if state == "missing":
+        f.unlink()
+    else:
+        f.write_text("")
+    ran, results = _text_running(P, monkeypatch, "/text", h)
+    assert ran == [] and results[0].startswith("NOT RUN")
+    h["X-Arturo-Stamp"] = ""                                  # an empty presented secret never matches an empty file
+    ran, results = _text_running(P, monkeypatch, "/text", h)
+    assert ran == []
+
+
+# ---- S6: never promise a text that will not come ---------------------------------------------------------
+def test_a_refused_background_run_is_never_promised(P):
+    assert P._promise_or_refusal("NOT RUN: async_task is not available here.", "On it, I'll text you.") == P._NOT_FROM_HERE
+    assert "text you" not in P._NOT_FROM_HERE and "dashboard" in P._NOT_FROM_HERE
+    assert P._promise_or_refusal("Task queued: x.", "On it, I'll text you.") == "On it, I'll text you."
+
+
+def test_both_voice_escalations_check_the_result_before_speaking():
+    # the two places that speak a promise right after async_task (the gm_command guardrail and the
+    # can't-answer escalation) say it only through _promise_or_refusal
+    assert _SRC.count("_promise_or_refusal(") == 3                    # the definition + 2 call sites
+    assert 'yield make_sse_chunk("On it, I\'ll text you' not in _SRC
+    assert "yield make_sse_chunk(\"That's a deeper one" not in _SRC
+
+
+# ---- S7: consent is bound to the principal that was shown the card ----------------------------------------
+@pytest.mark.parametrize("purpose", ["starter_team", "devices"])
+def test_a_device_turn_cannot_arm_a_consent(P, monkeypatch, purpose):
+    monkeypatch.setattr(P, "starter_team_state", lambda seen=None: {"state": "absent"})
+    P._TEAM_OFFERS.clear(); P._DEVICE_CARDS.clear()
+    tok = P._TEAM_TURN.set(_record(P, "web_s7", "onboarding", "device:dev_voice"))
+    try:
+        P.execute_tool("ask_choices", {"options": list(onb.DEVICES), "multi": True, "purpose": purpose})
+        card = P._TEAM_TURN.get()["choices"]
+    finally:
+        P._TEAM_TURN.reset(tok)
+    assert card["purpose"] == "other" and P._TEAM_OFFERS == {} and P._DEVICE_CARDS == {}
+    nxt = _record(P, "web_s7", "onboarding", "fleet")                 # the operator's next dashboard turn
+    assert nxt["offered"] is False and nxt["devices_answer"] is False
+
+
+def test_a_card_armed_by_one_principal_is_not_answered_by_another(P):
+    now = time.time()
+    P._TEAM_OFFERS.clear(); P._DEVICE_CARDS.clear()
+    P._TEAM_OFFERS["web_s7b"] = (now, "device:dev_voice")
+    P._DEVICE_CARDS["web_s7b"] = (now, ("iPhone",), "device:dev_voice")
+    rec = _record(P, "web_s7b", "onboarding", "fleet")
+    assert rec["offered"] is False and rec["devices_answer"] is False
+    P._TEAM_OFFERS["web_s7c"] = (now, "fleet")
+    P._DEVICE_CARDS["web_s7c"] = (now, ("iPhone",), "fleet")
+    rec = _record(P, "web_s7c", "onboarding", "fleet")
+    assert rec["offered"] is True and rec["devices_answer"] is True
+
+
+# ---- S8: a devices answer is consent for minutes, not for good ------------------------------------------
+def test_an_expired_devices_answer_refuses_pairing(P, pairing):
+    _on(P, "web_s8", "onboarding", "ask_choices", {"options": list(onb.DEVICES), "multi": True, "purpose": "devices"})
+    _on(P, "web_s8", "onboarding", "set_operator_fact", {"field": "devices", "value": "iPhone and Mac"})
+    rec = json.loads(P._devices_answer_path().read_text())
+    assert rec["devices"] == ["iPhone", "Mac"]                         # "and" counts as a separator
+    assert rec["expires_at"] - rec["answered_at"] == P._DEVICES_ANSWER_TTL_S == 600
+    rec["expires_at"] = time.time() - 1
+    P._devices_answer_path().write_text(json.dumps(rec))
+    out, turn = _on(P, "web_s8", "onboarding", "pair_device", {"device": "iPhone"})
+    assert out.startswith("NOT PAIRED") and turn["pair_card"] is None and pairing.list() == []
