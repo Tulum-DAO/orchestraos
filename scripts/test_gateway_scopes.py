@@ -428,3 +428,28 @@ def test_holding_voice_does_NOT_imply_ptt_and_vice_versa(monkeypatch, tmp_path):
     deny, reached, _ = _call("POST", "/arturo/ptt", {"Authorization": f"Bearer {voice_only}"})
     assert deny.status == 403 and not reached
     assert G.ROUTE_SCOPES[("GET", "/live")] == "voice", "the richer surface still needs voice"
+
+
+def test_no_route_consumes_usage_yet():
+    """`usage` is minted ahead of its consumer on purpose. When a route starts requiring it,
+    delete this test in the same change and say which route, so the verb never gates something
+    silently."""
+    assert "usage" in VERBS
+    assert "usage" not in set(G.ROUTE_SCOPES.values())
+
+
+def test_a_stored_verb_this_gateway_does_not_know_is_inert_not_a_lockout(monkeypatch, tmp_path):
+    """Devices can be minted by a NEWER release than the gateway that later loads them (a verb
+    added ahead of its consumer, then a rollback or a lagging live port). Such a token must keep
+    every verb this gateway knows. If resolve or the middleware ever validates stored scopes, every
+    device carrying the newer verb is locked out at once, and re-pairing costs single-use codes."""
+    import json as _json
+    store, dev_id, token = _with_store(monkeypatch, tmp_path, ["read"])
+    path = tmp_path / "devices" / f"{dev_id}.json"
+    rec = _json.loads(path.read_text())
+    rec["scopes"] = ["read", "a-verb-from-a-newer-release"]
+    path.write_text(_json.dumps(rec))
+    resp, reached, req = _call("GET", "/agents", {"Authorization": f"Bearer {token}"})
+    assert reached and resp.status == 200, "a known verb still works beside an unknown one"
+    resp, reached, _ = _call("POST", "/agent-key", {"Authorization": f"Bearer {token}"})
+    assert resp.status == 403 and not reached, "the unknown verb grants nothing"

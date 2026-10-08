@@ -58,7 +58,7 @@ def test_the_mintable_set_is_an_ALLOWLIST_of_exactly_three_verbs():
     """A denylist would silently grant every verb added later. `ptt` is excluded on purpose: a
     credential that can mint itself speech is minting PROVIDER SPEND."""
     assert HTTP_MINTABLE == ("read", "approve", "message")
-    for verb in ("inject", "ptt", "voice", "admin"):
+    for verb in ("inject", "ptt", "voice", "admin", "usage"):
         ok, why = http_mintable([verb])
         assert ok is False, verb
         assert "cannot be minted over HTTP" in why

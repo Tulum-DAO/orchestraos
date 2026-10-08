@@ -53,7 +53,11 @@ import time
 from pathlib import Path
 
 TOKEN_BYTES = 32
-VERBS = ("read", "approve", "message", "inject", "ptt", "voice", "admin")
+#: `usage` is INERT for now: no route requires it yet. It exists ahead of its consumer so devices
+#: minted today can carry it, and a later usage-read route does not cost every phone a re-pair
+#: (pairing codes are single-use, and a watch inherits its phone's token). It is not in
+#: HTTP_MINTABLE: like every verb added later, it is mintable only by the host CLI until decided.
+VERBS = ("read", "approve", "message", "inject", "ptt", "voice", "admin", "usage")
 
 #: The one remaining all-powerful credential. The fleet token resolves to this so Shaw's
 #: phone and watch keep working unchanged; it is NAMED in listings rather than hidden, so
