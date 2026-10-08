@@ -108,8 +108,7 @@ does the same.)
 
 This is the step where you pay. A server is rented by the hour from a hosting company,
 and you pay that company directly, not OrchestraOS. The size these docs use costs about
-$24 a month at DigitalOcean, charged only while the server exists; delete it and the
-charges stop. You will also need a paid plan for one AI tool to run your agents (Claude
+$24 a month at DigitalOcean, billed by the hour while the server exists. You will also need a paid plan for one AI tool to run your agents (Claude
 Pro is about $20 a month); [docs/INSTALL.md](INSTALL.md) covers it when you get there.
 [docs/COSTS.md](COSTS.md) compares providers and prices.
 
@@ -138,9 +137,6 @@ end of this step.
    `203.0.113.25`. Copy it; you need it in the next step. Wherever the docs say
    "your server address", this is what they mean (until Tailscale gives the server a
    second, private address in [docs/INSTALL.md](INSTALL.md)).
-
-**To stop paying later:** open the droplet and choose **Destroy**. Turning it off is
-not enough; a droplet is charged while it exists.
 
 **Other providers.** Any company that rents Ubuntu 24.04 servers and lets you add an
 ssh key works: Hetzner (cheaper; may ask for identity verification), Vultr, Linode,
@@ -180,7 +176,11 @@ new prompt that ends in `#`, like `root@orchestra:~#`. You are now on the server
 
 - `Permission denied (publickey)`: the server does not have your key. In step 3 you
   must tick `my-computer` under **Choose Authentication Method** when creating the server.
-  The simplest fix is to destroy that droplet and create a new one with the key ticked.
+  To add it now, without starting over: in DigitalOcean, click your droplet's name, then
+  **Web Console** at the top of its page. A terminal on the server opens in your browser.
+  There, type `echo '`, paste your public key line from step 2, type `' >> ~/.ssh/authorized_keys`
+  and press Enter. (`>>` adds the key; it does not remove anything.) Then try `ssh` again
+  from your own terminal.
 - `Connection timed out` or `Operation timed out`: check the address, and give a brand
   new server another minute to start.
 - `Could not resolve hostname`: there is a typo in the address.

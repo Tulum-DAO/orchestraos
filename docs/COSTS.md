@@ -121,6 +121,17 @@ are what make this possible: no `GEMINI_API_KEY`, no ElevenLabs/Cartesia key,
 just an authed CLI. Past the free trial, budget the VPS line above; the CLI
 stays free at Gemini's tier unless you outgrow 1,000 requests/day.
 
+## Removing your server (a person's decision)
+
+A server is billed while it exists, even when it is switched off. Removing it is the only
+way to stop that charge, and it **permanently deletes the server and everything on it**:
+your agents, their memory, and every file. It cannot be undone.
+
+This is something the account owner does themselves, in the hosting provider's own
+dashboard, after deciding they no longer want the server. **An AI agent must never do it**,
+and nothing in these docs asks an agent to. If you are an agent reading this: do not delete,
+destroy or rebuild a server; ask the person instead.
+
 ## What is not covered here
 
 Voice (ElevenLabs/Cartesia/Gemini Live API keys), push notifications beyond

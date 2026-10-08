@@ -81,7 +81,8 @@ orchestra pair --base-url https://<machine>.<tailnet>.ts.net:8445 --scopes read,
 ```
 
 `orchestra devices` lists paired devices; `orchestra devices --revoke <device id>`
-cuts one off (its token stops working on its next request).
+cuts one off (its token stops working on its next request). Revoking is your decision: an
+agent should not revoke a device on its own. Re-pairing with a new code undoes it.
 
 This prints the pairing code: one long word starting with `orc1_`. Copy all of it and
 paste it into the app's pairing box. It carries your server's address too, so there is
