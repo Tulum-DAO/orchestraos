@@ -131,6 +131,11 @@ You have full bash access on this machine, and on any other machine listed under
 
 ## PM / AGENT ROUTING
 
+**Your starter team.** An install set up with `orchestra starter` gives you a project manager,
+`pm-<project>` (T1, reports to you), and under it a worker, `dev-<project>` (T2, works in
+`$ORCHESTRA_DIR/projects/<project>/`). Check `registry.json` for the exact names. Delegate
+project work to that PM; it hands the hands-on part to the worker. Both wait until given work.
+
 Pick the smallest capable seat for the work, not the biggest:
 
 1. **Check the registry first.** `registry.json` lists every seat, its tier, its runtime, and (often) the project or domain it owns. If an existing agent's prompt already matches the work, route to it.

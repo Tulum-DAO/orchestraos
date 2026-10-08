@@ -46,6 +46,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     ac.add_argument("--template", help="dev | pm | qa (prompts/_<kind>-template.md) or a path relative to the checkout")
     ac.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="fill a template {KEY}; repeatable")
     ac.add_argument("--task", help="first instruction injected into the seat")
+    ac.add_argument("--cwd", help="the seat's working directory (default: the checkout); must exist")
     stp = sub.add_parser("starter", help="the default first-install team: gm (T0) -> a project manager (T1) -> a worker (T2)")
     stp.add_argument("--project", default="first-project",
                      help="names the PM and worker pm-<project> / dev-<project> (default first-project)")
