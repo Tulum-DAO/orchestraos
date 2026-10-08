@@ -391,6 +391,36 @@ seat's terminal.
 
 ## 1. Clone, init, doctor
 
+**Hand this to your agent** (Claude, ChatGPT, Codex, Gemini or any other), if you'd rather
+have it guide you through this section. Copy the whole box:
+
+```text
+Help me with one step of installing OrchestraOS. Read this section and do it with me:
+https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md#1-clone-init-doctor
+If you can't open that link, ask me to paste the section to you; don't guess commands.
+The commands in this section run on my server, as my normal user (not root); I log in to
+it with ssh (ask me for the address and user if you need them).
+Rules:
+- If you can run commands on my computer, run them yourself and show me every output.
+  If you can't, give me one command at a time and wait for me to paste back what it printed.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, any password or
+  passphrase prompt including sudo's, approving a device or an admin prompt) and let me
+  do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset, overwrite or wipe anything. If a command asks
+  `Overwrite (y/n)?`, the answer is n.
+- Never stop or kill a process you did not start, even if a message suggests it. Bring it
+  to me instead.
+- In the `[runtimes]` `sed` line, use the agent CLI I logged in to in section 0 (claude, gemini or
+  codex). Ask me which one if you don't know; don't guess.
+- `orchestra init --yes` takes about five minutes. Wait for it to finish; don't stop it.
+  Its `--yes` adds OrchestraOS's hook rows to `~/.claude/settings.json`; that is expected
+  and is not an overwrite.
+- If `orchestra doctor` shows a `port:<name> MISSING ... in use` row, change that port with
+  the section's line for it, then run `orchestra doctor` again; never stop the other process.
+- We are done when `orchestra doctor` ends with `doctor: all required checks OK`. Show me
+  that output; don't just tell me it worked.
+```
+
 ```bash
 git clone https://github.com/Tulum-DAO/orchestraos.git orchestraos && cd orchestraos
 make install                 # symlinks bin/orchestra into ~/.local/bin
@@ -412,15 +442,49 @@ agent CLI you use; `orchestra doctor` checks the result.
 
 You should see:
 
-- `git clone`: progress lines ending with `Resolving deltas: 100% (...), done.`
-- `make install`: `installed /home/<you>/.local/bin/orchestra`, then a `NOTE` that
+- `git clone`: progress lines ending with `Resolving deltas: 100% (...), done.` If it says the
+  folder `orchestraos` already exists instead (you ran it before), run `cd ~/orchestraos` and
+  continue with the next line.
+- `make install`: first the command it runs (a line starting `mkdir -p`), then
+  `installed /home/<you>/.local/bin/orchestra`, then a `NOTE` that
   `orchestra` is not on your PATH yet. The two PATH lines right after it fix that; they
   print nothing.
 - `orchestra init --yes`: about five minutes of output, ending with a table whose rows
-  say `did` (or `skipped` on a re-run), then `next:     orchestra doctor && orchestra up`.
+  say `did` (or `skipped` on a re-run), then three lines: `data dir:` (where OrchestraOS keeps
+  its state), `config:` (your `orchestra.toml`) and `next:     orchestra doctor && orchestra up`.
+  A step that failed shows `skipped` and the word `failed` in its row (for example
+  `failed rc=1`, or `hook install failed: ...`); bring that row to
+  whoever is helping you.
 - `sed`: nothing.
-- `orchestra doctor`: a table with one row per check (`CHECK`, `STATUS`, `DETAIL`), ending
-  with `doctor: all required checks OK`. `WARN` and `INFO` rows are advice, not failures.
+- `orchestra doctor`: a table with one row per check (`CHECK`, `STATUS`, `DETAIL`, `REMEDY`),
+  ending with `doctor: all required checks OK`. `WARN` and `INFO` rows are advice, not
+  failures. A failing row ends with `-> ...`, a suggested fix: read it, and if an agent is
+  helping you, it brings the suggestion to you rather than acting on it alone.
+
+**A port is already taken** (`port:<name> MISSING :<port> in use by pid N`, or `in use by an
+unknown process`, where `<name>` is `api`, `gateway`, `dashboard` or `arturo`): another program
+on this server already uses that port. Don't stop that program, even though the remedy
+mentions it; you may need it. Instead, give OrchestraOS a different port. Run only the line for
+the row that failed, inside the `orchestraos` folder:
+
+```bash
+sed -i '/^\[dashboard\]/,/^\[/ s/^port = .*/port = 18891/' orchestra.toml   # port:dashboard
+```
+
+```bash
+sed -i '/^\[gateway\]/,/^\[/ s/^port = .*/port = 18890/' orchestra.toml     # port:gateway
+```
+
+```bash
+sed -i '/^\[api\]/,/^\[/ s/^port = .*/port = 18888/' orchestra.toml         # port:api
+```
+
+```bash
+sed -i '/^\[arturo\]/,/^\[/ s/^port = .*/port = 15071/' orchestra.toml      # port:arturo
+```
+
+Then run `orchestra doctor` again. If you changed the `[dashboard]` port, use 18891 in §2's
+`tailscale serve` command instead of 8891.
 
 Not logged in to the CLI yet? Then `runtime:login` is the one `MISSING` row (a few rows
 marked `MISSING*` go away with it) and the last line is `doctor: 1 required check(s)
@@ -432,9 +496,12 @@ already existed then. On a clean machine it did not, so without them a bare `orc
 later one; `./bin/orchestra` from the checkout always works too.
 
 The `sed` line sets the `enabled = [...]` line **under `[runtimes]`** to the one CLI you logged in
-to. Use `["gemini"]` or `["codex"]` if that is your CLI. `orchestra.toml` has other `enabled =`
+to. It must run inside the `orchestraos` folder (if you reconnected, run `cd ~/orchestraos`
+first). Use `["gemini"]` or `["codex"]` if that is your CLI. For Gemini the command you ran is
+`agy`, but the value here is still `"gemini"`. `orchestra.toml` has other `enabled =`
 lines (`[arturo]`, `[telemetry]`, `[plugins.*]`); leave those alone. To edit by hand instead:
-`$EDITOR orchestra.toml`, find `[runtimes]`, and change the `enabled` line just below it.
+`nano orchestra.toml`, find `[runtimes]`, and change the `enabled` line just below it (save with
+`Ctrl-O` then Enter; exit with `Ctrl-X`).
 
 **Your timezone (recommended).** Agents show times in UTC unless you tell them where you are.
 In `orchestra.toml`, under `[operator]`, set `timezone` to your IANA zone name, for example
@@ -464,12 +531,46 @@ rows in doctor become INFO and `orchestra up` skips it.
 
 ## 2. Up
 
+**Hand this to your agent** (Claude, ChatGPT, Codex, Gemini or any other), if you'd rather
+have it guide you through this section. Copy the whole box:
+
+```text
+Help me with one step of installing OrchestraOS. Read this section and do it with me:
+https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md#2-up
+If you can't open that link, ask me to paste the section to you; don't guess commands.
+The commands in this section run on my server, as my normal user (not root); I log in to
+it with ssh (ask me for the address and user if you need them). The last part happens in
+the browser on my own computer.
+Rules:
+- If you can run commands on my computer, run them yourself and show me every output.
+  If you can't, give me one command at a time and wait for me to paste back what it printed.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, any password or
+  passphrase prompt including sudo's, approving a device or an admin prompt) and let me
+  do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset, overwrite or wipe anything. If a command asks
+  `Overwrite (y/n)?`, the answer is n.
+- Never stop or kill a process you did not start, even if a message suggests it. Bring it
+  to me instead.
+- Before any `tailscale serve --https=...` command, run `tailscale serve status` and show me
+  the output. Use an https port that is not in that list; never replace or turn off an
+  entry that is already there. Never use `--funnel`, and never change `[dashboard] host`.
+- We are done when `orchestra status` prints `supervisor: running pid ...`, and my browser
+  shows the dashboard at the https address whose entry proxies to
+  `http://127.0.0.1:<my [dashboard] port, default 8891>` in `tailscale serve status`. Ask
+  me to confirm what I see; don't just tell me it worked.
+```
+
 ```bash
 orchestra up --detach && orchestra status   # starts everything in the background, then shows what is running
 ```
 
 You should see: `supervisor started in background (pid …)`, then `supervisor: running pid …`,
-then one line per part (`gateway`, `api`, `dashboard`, the beats) with its status. It keeps
+then one line per part (`gateway`, `api`, `dashboard`, the beats) with its status. If it
+says `supervisor already running` instead (you ran it before), run `orchestra status` on its own.
+If it says `supervisor did not come up (...); see <data>/logs/supervisor.log`, read the last
+lines of that file with `tail -n 30 <the supervisor.log path it printed>` and bring them to whoever is helping
+you; don't keep re-running `orchestra up`.
+It keeps
 running after you log out. `orchestra down` stops it. (`orchestra up` without `--detach` runs
 in the foreground instead, and `Ctrl-C` stops it.)
 
@@ -494,8 +595,9 @@ One supervisor process runs, restarts (with backoff) and logs each child under
 No crontab is installed. `orchestra up --dry-run` prints this table without
 starting anything. `orchestra down` stops it; `orchestra status` shows pids.
 
-Smoke check: `curl -s http://127.0.0.1:8888/api/health` → `{"status":"ok", "db":{"open":true}, ...}`
-(`orchestra doctor` runs the same probe as `api:health` while the supervisor is up).
+Smoke check: run `orchestra doctor` and look for its `api:health` row (it probes the API on
+your own `[api] port`). Or, on the default port 8888 only:
+`curl -s http://127.0.0.1:8888/api/health` → `{"status":"ok", "db":{"open":true}, ...}`.
 
 ### Open the dashboard in your browser, over Tailscale https
 
@@ -518,29 +620,62 @@ port that is already taken silently replaces whatever was there:
 tailscale serve status        # on a fresh VPS: "No serve config"
 ```
 
+Each entry starts with an `https://` line. An entry shown with no `:port` after the name (for
+example `https://x.ts.net (tailnet only)`) is using port 443, so if you see one, 443 is taken.
+
 Pick an https port that is not in that list. On a fresh VPS nothing is, so use 443,
 which gives an address with no port number in it. The target is the dashboard's plain
 http address (`[dashboard] port`, default 8891; `orchestra status` prints it):
 
 ```bash
 tailscale serve --bg --https=443 http://127.0.0.1:8891
-tailscale serve status        # prints the address, e.g. https://<vps>.<tailnet>.ts.net
 ```
 
-If 443 was taken, use another free port, e.g. `--https=8446`; the address then ends
-in `:8446`. The first time, Tailscale may answer that serve or https certificates
-are not enabled on your tailnet and print an admin link: open it, enable them, and
-run the command again.
+If 443 was taken, use another free port instead, for example 8446 (the address then ends
+in `:8446`):
+
+```bash
+tailscale serve --bg --https=8446 http://127.0.0.1:8891
+```
+
+If you changed the dashboard's port in §1 (`orchestra status` then shows `dashboard` on
+`:18891`), use `http://127.0.0.1:18891` instead of `http://127.0.0.1:8891` in these commands.
+
+The first time, Tailscale may answer that serve or https certificates
+are not enabled on your tailnet and print an admin link. **[PERSON ONLY]** Open it, sign in
+if asked, and enable them. The command may wait at that point and carry on by itself once
+they are enabled; if it stopped, or you pressed `Ctrl-C`, run it again.
+
+Then find your dashboard's address:
+
+```bash
+tailscale serve status
+```
+
+Each entry is an `https://` line followed by a `|-- / proxy ...` line. Your dashboard's
+address is the `https://` line just above `|-- / proxy http://127.0.0.1:8891` (or your own
+`[dashboard] port`, if you changed it in §1), for example:
+
+```text
+https://<vps>.<tailnet>.ts.net (tailnet only)
+|-- / proxy http://127.0.0.1:8891
+```
+
+Ignore every other entry; they belong to other things on this server.
 
 Open that address in a browser on your laptop or phone (it must be signed in to
-Tailscale). The dashboard loads, with an empty Agents list until step 3. Step 4 walks you
+Tailscale). The dashboard opens on its chat page, with **Arturo** at the top. Arturo
+greets you and may start asking you first-run questions; you don't need to answer them to
+continue. To see your agents, tap the gear button at the top left, then **Agents** (or add `/agents` to the
+address). That page's heading is **Agents**, and it stays empty until step 3. Step 4 walks you
 through this again once your team is running. The first
 visit can take a few seconds while the certificate is issued. Optional: put the
 address in `orchestra.toml` as `[public] host` so links in the UI and notifications
 point at it.
 
-`tailscale serve` keeps this setting across reboots. `tailscale serve --https=443 off`
-removes it.
+`tailscale serve` keeps this setting across reboots. `tailscale serve --https=<the port you
+used> off` removes only your dashboard's entry. Never turn off a port you didn't add: it may
+belong to another app on this server.
 
 The web terminal only accepts connections from the address the dashboard was opened at,
 and it knows three kinds: loopback (`127.0.0.1`), the `[dashboard] host` you set, and
@@ -709,6 +844,14 @@ Rules:
   do it myself. Never do those for me, and never ask for my passwords.
 - Never delete, destroy, reset, overwrite or wipe anything. If a command asks
   `Overwrite (y/n)?`, the answer is n.
+- Never stop or kill a process you did not start, even if a message suggests it. Bring it
+  to me instead.
+- Don't run `tailscale serve` in this section, never use `--funnel`, and never change
+  `[dashboard] host`. If no serve entry points at my dashboard, use section 2's own box
+  instead (or ask me to paste section 2).
+- First run `orchestra status` on the server and read the port on the `dashboard` row (8891
+  unless I changed it). The dashboard's address is the serve entry that proxies to THAT
+  port; another app may also use 8891.
 - We are done when my browser shows the dashboard's Agents page with gm, pm-first-project
   and dev-first-project. Ask me to confirm what I see; don't just tell me it worked.
 ```
@@ -743,21 +886,26 @@ computer and sign in again with the account you used on the server.
 
 ### 2. Find your dashboard's address
 
-On the server:
+On the server, first check which port your dashboard uses:
+
+```bash
+orchestra status
+```
+
+Read the port on the `dashboard` row: `:8891`, unless you changed it in §1 (for example
+`:18891`). Then:
 
 ```bash
 tailscale serve status
 ```
 
-You should see an address like `https://<server>.<tailnet>.ts.net` pointing at
-`http://127.0.0.1:8891`. That is your dashboard. If it says `No serve config` instead, you
-skipped that part of §2; set it up now (it stays private to your Tailscale network):
-
-```bash
-tailscale serve --bg --https=443 http://127.0.0.1:8891
-```
-
-Then run `tailscale serve status` again and use the address it prints.
+Your dashboard is the `https://` line just above `|-- / proxy http://127.0.0.1:<that port>`.
+Ignore every other entry, including one that proxies to a port your dashboard does not use:
+another app on this server may use 8891 too. If no entry proxies to your dashboard's port,
+you skipped that part of §2, or it stopped at the link to turn on HTTPS certificates. Use
+§2's **Hand this to your agent** box (or §2, "Open the dashboard in your browser, over
+Tailscale https", by hand). It checks which ports are already taken before you pick one, so
+you don't replace another app's address.
 
 ### 3. Open it and see your team
 
@@ -779,9 +927,10 @@ Tailscale issues the https certificate.
 - **The page never loads, or says the site can't be reached:** your computer is not on your
   Tailscale network, or is signed in to another account. Check `tailscale status` on the
   server (step 1).
-- **Tailscale says HTTPS or serve is not enabled** when you run `tailscale serve`: it prints an
-  admin link. **[PERSON ONLY]** Open it, turn on HTTPS certificates for your tailnet, then run
-  the `tailscale serve` line again.
+- **The page still fails although your computer is on your Tailscale network** (it shows in
+  `tailscale status`): the first visit waits for the https certificate. Wait a minute and
+  reload. If it still fails, bring the exact error text your browser shows to whoever is
+  helping you.
 - **It works on your computer but not your phone:** the phone needs the Tailscale app, signed
   in to the same account.
 - **The Agents page is empty or the agents show as not alive:** wait 15 seconds and reload. If
