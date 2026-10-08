@@ -49,6 +49,7 @@ def lab(monkeypatch):
     shim.chmod(0o755)
     (bindir / "claude").symlink_to(shutil.which("sleep"))
     monkeypatch.delenv("TMUX", raising=False)
+    monkeypatch.setenv("ORCH_RELAUNCH_MIN_AGE_S", "0")        # the startup-gap floor has its own test
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
     assert shutil.which("tmux") == str(shim)                   # FENCE before any tmux call
 
@@ -60,7 +61,22 @@ def lab(monkeypatch):
         yield tmux
     finally:
         subprocess.run([REAL_TMUX, "-S", str(sock), "kill-server"], capture_output=True, timeout=10)
+        _kill_fake_clis()
         shutil.rmtree(d, ignore_errors=True)
+
+
+def _kill_fake_clis():
+    """A `claude 613 &` job outlives kill-server (it is reparented to init), and argv[0]
+    `claude` makes it look like an agent to anything on the host that scans ps. Exact args
+    only: a real CLI never runs as `claude 613`."""
+    out = subprocess.run(["ps", "-e", "-o", "pid=,args="], capture_output=True, text=True).stdout
+    for line in out.splitlines():
+        pid, _, args = line.strip().partition(" ")
+        if args.strip() == "claude 613" and pid.isdigit():
+            try:
+                os.kill(int(pid), 9)
+            except OSError:
+                pass
 
 
 def _seat(tmux, name, keys):
@@ -79,7 +95,7 @@ def _until(pred, secs=5.0):
 
 
 def test_a_cli_under_the_shell_is_found(lab):
-    _seat(lab, "s1", "claude 600")
+    _seat(lab, "s1", "claude 613")
     assert _until(lambda: pane_cli.pane_state("s1")["runtime"] == "claude")
     st = pane_cli.pane_state("s1")
     assert st["exists"] is True
@@ -102,12 +118,12 @@ def test_a_nested_tmux_client_over_a_shell_is_not_a_cli(lab):
 
 def test_a_nested_client_launched_BY_the_cli_still_has_the_cli(lab):
     """The Bash-tool path: the CLI is alive underneath; the seat is not dead."""
-    _seat(lab, "s4", "claude 600 & env -u TMUX tmux attach -t =base:")
+    _seat(lab, "s4", "claude 613 & env -u TMUX tmux attach -t =base:")
     assert _until(lambda: pane_cli.pane_state("s4")["runtime"] == "claude")
 
 
 def test_no_session_and_no_prefix_match(lab):
-    _seat(lab, "s5x", "claude 600")
+    _seat(lab, "s5x", "claude 613")
     st = pane_cli.pane_state("s5")
     assert st == {"exists": False, "runtime": None, "foreground": None}
 
@@ -115,7 +131,7 @@ def test_no_session_and_no_prefix_match(lab):
 def test_relaunchable_only_for_an_idle_shell_or_a_bare_nested_client(lab):
     _seat(lab, "r1", "true")                                  # CLI exited -> shell
     _seat(lab, "r2", "env -u TMUX tmux attach -t =base:")     # nested client over a shell
-    _seat(lab, "r3", "claude 600")                            # live
+    _seat(lab, "r3", "claude 613")                            # live
     _seat(lab, "r4", "sleep 600")                             # something else the operator runs
     assert _until(lambda: pane_cli.pane_state("r2")["foreground"] == "tmux"
                   and pane_cli.pane_state("r3")["runtime"] == "claude"
@@ -129,7 +145,7 @@ def test_relaunchable_only_for_an_idle_shell_or_a_bare_nested_client(lab):
 
 def test_cli_prints_json_and_relaunch_exit_code(lab):
     _seat(lab, "c1", "true")
-    _seat(lab, "c2", "claude 600")
+    _seat(lab, "c2", "claude 613")
     assert _until(lambda: pane_cli.pane_state("c2")["runtime"] == "claude")
     time.sleep(0.3)
     run = lambda *a: subprocess.run([sys.executable, str(ROOT / "scripts" / "pane_cli.py"), *a],
@@ -168,9 +184,9 @@ def test_spawn_clears_a_session_whose_cli_exited_so_it_can_relaunch(lab):
 
 
 def test_spawn_never_clears_a_live_seat_or_the_operators_work(lab):
-    _seat(lab, "k1", "claude 600")
+    _seat(lab, "k1", "claude 613")
     _seat(lab, "k2", "sleep 600")
-    _seat(lab, "k3", "claude 600 & env -u TMUX tmux attach -t =base:")
+    _seat(lab, "k3", "claude 613 & env -u TMUX tmux attach -t =base:")
     assert _until(lambda: pane_cli.pane_state("k1")["runtime"] == "claude"
                   and pane_cli.pane_state("k2")["foreground"] == "sleep"
                   and pane_cli.pane_state("k3")["runtime"] == "claude")
@@ -185,10 +201,42 @@ def test_orchestra_pane_alive_reads_the_process_tree(lab):
     shell read as a live gm and `orchestra starter` skipped it."""
     sys.path.insert(0, str(ROOT))
     from orchestra_cli import seats as SE
-    _seat(lab, "a1", "claude 600")
+    _seat(lab, "a1", "claude 613")
     _seat(lab, "a2", "env -u TMUX tmux attach -t =base:")
     assert _until(lambda: pane_cli.pane_state("a1")["runtime"] == "claude"
                   and pane_cli.pane_state("a2")["foreground"] == "tmux")
     assert SE._pane_alive("a1") is True
     assert SE._pane_alive("a2") is False
     assert SE._pane_alive("nope") is False
+
+
+
+def test_a_cli_in_another_window_or_pane_keeps_the_session(lab):
+    """Review of the first version: only the current window's first pane was checked, and the
+    WHOLE session was then killed. A shell the operator opened beside the CLI must not count."""
+    _seat(lab, "w1", "claude 613")
+    assert _until(lambda: pane_cli.pane_state("w1")["runtime"] == "claude")
+    lab("new-window", "-t", "=w1:", "sh")                     # operator opens a shell window
+    _seat(lab, "w2", "claude 613")
+    assert _until(lambda: pane_cli.pane_state("w2")["runtime"] == "claude")
+    lab("split-window", "-t", "=w2:", "sh")                   # a split; the shell pane is selected
+    lab("select-pane", "-t", "=w2:.1")
+    for name in ("w1", "w2"):
+        st = pane_cli.pane_state(name)
+        assert st["runtime"] == "claude", st
+        assert pane_cli.relaunchable(st) is False
+        assert _clear(name).stdout.strip() == "KEPT"
+        assert _has(lab, name)
+
+
+def test_a_session_inside_the_startup_gap_is_never_cleared(lab, monkeypatch):
+    """spawn-agent.sh creates the session, then types the CLI into its shell a second or more
+    later. A second spawn in that gap must not kill the first one's session."""
+    monkeypatch.setenv("ORCH_RELAUNCH_MIN_AGE_S", "30")
+    _seat(lab, "g1", "true")
+    time.sleep(0.5)
+    st = pane_cli.pane_state("g1")
+    assert st["runtime"] is None and st["foreground"] == "sh"
+    assert pane_cli.relaunchable(st) is False
+    assert _clear("g1").stdout.strip() == "KEPT" and _has(lab, "g1")
+    assert pane_cli.relaunchable(st, min_age_s=0) is True

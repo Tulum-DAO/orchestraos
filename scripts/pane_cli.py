@@ -18,6 +18,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import providers  # noqa: E402
@@ -28,19 +29,28 @@ import providers  # noqa: E402
 _IDLE_FOREGROUND = {"sh", "bash", "zsh", "dash", "fish", "ksh", "tmux"}
 
 
-def _first_pane(session):
-    """(pane_pid, pane_current_command) of the session's first pane, or None. `=name:` is an
-    exact session match: a bare name would prefix-match a neighbour (seat-x -> seat-xy)."""
+def _panes(session):
+    """[(pane_pid, pane_current_command)] for EVERY pane in EVERY window of the session, plus
+    the session's creation time; None when there is no such session. `-s` because a CLI in
+    window 0 is not in a shell window the operator opened beside it, and the caller kills the
+    WHOLE session (review of the first version: one pane checked, the session killed). `=name:`
+    is an exact session match: a bare name would prefix-match a neighbour (seat-x -> seat-xy)."""
     try:
-        out = subprocess.run(["tmux", "list-panes", "-t", f"={session}:", "-F",
-                              "#{pane_pid}\t#{pane_current_command}"],
+        out = subprocess.run(["tmux", "list-panes", "-s", "-t", f"={session}:", "-F",
+                              "#{pane_pid}\t#{pane_current_command}\t#{session_created}"],
                              capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
         return None
     if out.returncode != 0 or not out.stdout.strip():
         return None
-    pid, _, cmd = out.stdout.splitlines()[0].partition("\t")
-    return (int(pid), cmd.strip()) if pid.isdigit() else None
+    panes, created = [], 0
+    for line in out.stdout.splitlines():
+        pid, cmd, born = (line.split("\t") + ["", ""])[:3]
+        if pid.isdigit():
+            panes.append((int(pid), cmd.strip()))
+        if born.isdigit():
+            created = int(born)
+    return (panes, created) if panes else None
 
 
 def _runtime_in_tree(root_pid):
@@ -72,18 +82,27 @@ def _runtime_in_tree(root_pid):
 
 
 def pane_state(session):
-    pane = _first_pane(session)
-    if pane is None:
+    got = _panes(session)
+    if got is None:
         return {"exists": False, "runtime": None, "foreground": None}
-    pid, fg = pane
-    return {"exists": True, "runtime": _runtime_in_tree(pid), "foreground": fg or None}
+    panes, created = got
+    runtime = next((rt for rt in (_runtime_in_tree(pid) for pid, _ in panes) if rt), None)
+    return {"exists": True, "runtime": runtime, "foreground": panes[0][1] or None,
+            "foregrounds": [cmd or None for _, cmd in panes], "created": created}
 
 
-def relaunchable(state):
-    """The session exists, no agent CLI is anywhere in its pane, and the screen shows only the
-    shell it exited to (or a nested client over that shell)."""
+def relaunchable(state, min_age_s=None):
+    """The session exists, no agent CLI is anywhere in ANY of its panes, EVERY pane shows only
+    the shell its CLI exited to (or a nested client over one), and the session is older than
+    min_age_s. The age floor is the startup gap: spawn-agent.sh creates the session, then types
+    the CLI into its shell a second or more later; a second spawn inside that gap (a double
+    clicked Resume, a starter re-run) must not kill the first one's session."""
+    if min_age_s is None:
+        min_age_s = float(os.environ.get("ORCH_RELAUNCH_MIN_AGE_S", "30"))
+    fgs = state.get("foregrounds") or [state.get("foreground")]
     return bool(state.get("exists")) and state.get("runtime") is None \
-        and state.get("foreground") in _IDLE_FOREGROUND
+        and all(fg in _IDLE_FOREGROUND for fg in fgs) \
+        and time.time() - (state.get("created") or 0) >= min_age_s
 
 
 def main(argv):
