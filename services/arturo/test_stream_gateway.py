@@ -4,6 +4,7 @@ Auth + forward ONLY (same trust model as /arturo/ptt): Bearer at the gateway, lo
 :5071 upstream, zero relay/brain logic in the gateway.
 """
 import importlib.util
+import os
 import pathlib
 
 import pytest
@@ -53,4 +54,9 @@ def test_stream_gateway_has_no_relay_logic():
     for forbidden in ("RelayManager", "PartialsEngine", "user_audio_chunk", "websocket",
                       "StreamRegistry", "scribe_v1"):
         assert forbidden not in src, f"gateway must stay a thin forward: {forbidden!r}"
-    assert "127.0.0.1:5071/ptt/stream" in src, "upstream must be the loopback :5071 relay routes"
+    # The upstream is loopback Arturo on the CONFIGURED [arturo] port (default 5071); the port
+    # is no longer a literal (a moved Arturo sent the phone's audio to whatever owned 5071).
+    assert '_loopback("ORCHESTRA_ARTURO_PORT", 5071) + "/ptt/stream"' in src, \
+        "upstream must be the loopback Arturo relay routes"
+    if not os.environ.get("ORCHESTRA_ARTURO_PORT") and not os.environ.get("ARTURO_PTT_STREAM_BASE"):
+        assert _load_gateway().ARTURO_PTT_STREAM_BASE == "http://127.0.0.1:5071/ptt/stream"

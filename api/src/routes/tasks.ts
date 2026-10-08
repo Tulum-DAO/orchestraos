@@ -349,6 +349,10 @@ router.post('/', (req: Request, res: Response) => {
       // Immediate dispatch: check if agent is alive, if not spawn it
       const { execFile } = require('child_process');
       const tmuxCheck = require('child_process').execFileSync;
+      // Resolved BEFORE the try below: that catch means "agent not running" and spawns, so a
+      // config error here must never be read as a dead seat.
+      let apiBase = 'http://127.0.0.1:8888';
+      try { apiBase = apiBaseForSeats(); } catch { /* keep the default; never spawn over it */ }
       try {
         // Check if agent tmux session exists
         tmuxCheck('tmux', ['has-session', '-t', routeTo], { timeout: 3000 });
@@ -356,7 +360,7 @@ router.post('/', (req: Request, res: Response) => {
         const taskPrompt = `You have a new task (${taskId}): ${description}` +
           (client ? `. Client: ${client}.` : '') +
           (inboxMsg.context_files ? ` Read these files first: ${inboxMsg.context_files.join(', ')}` : '') +
-          `. Priority: ${(task as any).priority}. Start immediately and update task status when done via: curl -X PATCH ${apiBaseForSeats()}/api/tasks/${taskId} -H "Content-Type: application/json" -d '{"status":"completed"}'`;
+          `. Priority: ${(task as any).priority}. Start immediately and update task status when done via: curl -X PATCH ${apiBase}/api/tasks/${taskId} -H "Content-Type: application/json" -d '{"status":"completed"}'`;
         execFile('tmux', ['send-keys', '-t', routeTo, taskPrompt, 'Enter'], { timeout: 5000 }, () => {});
 
         // Mark task as in_progress
