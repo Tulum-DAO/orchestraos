@@ -221,13 +221,17 @@ export default function ArturoHome() {
   /** The devices answer, from the card or typed. A marked turn, so the proxy attaches the facts the
    *  brain may use for each device; the brain records them with set_operator_fact. */
   async function sendDevices(answer: string) {
+    if (busy) return;                      // one answer at a time: a card tap plus a quick typed line is two turns
+    setBusy(true);
     setTurns((t) => t.map((x) => x.choices ? { ...x, choices: undefined } : x));
     user(answer, 'sent');
     const id = say('', { pending: true });
     const r = await arturoText(onboardingTurn('devices', answer), convId.current);
-    // By EFFECT: the step ends when the server has the devices on record, never on a reply alone (an
-    // off-topic or tool-less answer is not an answer). Otherwise the card comes back to answer again.
-    const recorded = r.ok && !!r.operator?.devices;
+    setBusy(false);
+    // By EFFECT, and THIS turn's effect: the fact was written now (a devices turn can write no other
+    // field). Devices already on file from another browser must not close the step on a reply that
+    // recorded nothing, such as an off-topic question. Otherwise the card comes back.
+    const recorded = r.ok && (r.tools_called || []).includes('set_operator_fact') && !!r.operator?.devices;
     patch(id, { pending: false, tools: r.tools_called,
       text: r.ok ? (r.reply_text || '(no reply)') : 'I could not answer that just now.',
       ...(recorded ? {} : { choices: { options: DEVICE_OPTIONS, exclusive: DEVICE_ONLY_HERE, onSubmit: (picked: string[]) => { void sendDevices(devicesAnswer(picked)); } } }) });

@@ -2251,9 +2251,12 @@ def execute_tool(name, args, user_turns=None):
     # The devices step records and explains, nothing else (pm-tulumdao guardrail): a selection never
     # pairs, mints a code, starts a seat or sends anything, whatever the brain makes of it.
     _turn = _TEAM_TURN.get()
-    if _turn is not None and _turn.get("step") == "devices" and name != "set_operator_fact":
+    if _turn is not None and _turn.get("step") == "devices" and not (
+            name == "set_operator_fact" and (args or {}).get("field") == "devices"):
+        # The fact tool too, for any other field: an answer to "which devices" must not rewrite the
+        # operator's name or role, which ride in every later system prompt (review #271).
         return (f"NOT RUN: {name} is not available while the operator answers which devices they have; "
-                f"this step only records the devices and explains each one.")
+                f"this step only records the devices (set_operator_fact field='devices') and explains each one.")
     # Record the tool run for the per-call journal (gm bug fix). Best-effort — never let capture
     # break tool execution. The result is appended after the call returns (see the wrapper below).
     _bucket = _TOOLS_THIS_TURN.get()
