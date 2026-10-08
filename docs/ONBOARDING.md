@@ -133,6 +133,7 @@ you're ready, and only if the check didn't print `up to date`, update the files:
 orchestra upgrade
 ```
 
+It can take about five minutes (it may rebuild the dashboard); wait for it to finish, don't stop it.
 If it stops with a message about uncommitted changes, don't discard anything: stop, and bring
 that message to whoever is helping you (or open an issue at
 https://github.com/Tulum-DAO/orchestraos/issues). It ends by running `orchestra doctor`; if a

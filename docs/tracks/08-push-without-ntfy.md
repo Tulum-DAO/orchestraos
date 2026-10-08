@@ -21,6 +21,50 @@ the intended default for a single-operator install (the card is durable in the
 ledger the instant it is filed, and the app polls), and an APNs push must deep-link
 into the app rather than inherit ntfy's dead-end button pattern.
 
+## Decided (2026-10-08): the token route
+
+The registration route below changed shape after the iOS and watch builders reviewed it.
+What is built:
+
+- `PUT /push/token {token, platform: iphone|ipad|watch, bundle_id, env: sandbox|production, rev}`
+  and `DELETE /push/token {token, rev}`, in `scripts/watch_gateway.py`, stored by
+  `scripts/push_tokens.py` in `<data dir>/state/push-tokens.json` (0600).
+- **Bound to the caller's bearer, not a device id in the path.** The shared fleet bearer has
+  no device id, and a caller-bound route can't touch another device's tokens.
+- **No defaults.** `platform` tells devices apart under a shared bearer; `bundle_id` is the
+  APNs topic (the watch app has its own) and must be on an allowlist
+  (`ORCHESTRA_PUSH_BUNDLE_IDS`, default the published app's two); `env` picks the APNs host
+  (TestFlight and App Store builds register production tokens, Xcode builds sandbox ones).
+- **`rev` orders everything; the client must grow it on EVERY PUT and DELETE**: send
+  `max(last_rev + 1, now_ms)`, so a clock set backwards still moves forward.
+  An APNs token belongs to the app install, not the pairing, so Forget-then-pair-again keeps
+  the same token. A PUT at or below the stored rev changes nothing (`registered: false`, with
+  `reason: "stale_rev"`); a DELETE below it changes nothing (`removed: false`); a DELETE is
+  remembered for 30 days (`reason: "forgotten"`), so a delayed older PUT can't bring a
+  forgotten device back. A rev more than a day ahead of the gateway's clock is refused, so no
+  request can pin a token for good.
+- **A token belongs to its owner.** Another device can take it over only when the owner is
+  revoked, or when the owner is the shared fleet bearer (a phone moving onto its own token),
+  and only with a strictly newer rev. Otherwise the PUT gets `reason: "owned"`: the app must
+  Forget the token with its OLD bearer before discarding that bearer.
+- **Tokens die with their owner, on positive evidence only.** A sender reads `push_targets()`:
+  it sends only to owners it can confirm are alive, prunes owners it can confirm are dead, and
+  skips without pruning any owner it can't read. Dead means a revoked device, or a fleet
+  bearer that `orchestra rotate-fleet-token` recorded as retired (fleet tokens are filed under
+  a fingerprint of the bearer). A sender that merely reads a different bearer (another HOME or
+  token file) does not count that as a rotation. Missing data never deletes a token.
+- **Bounded:** 8 tokens per device, 16 for the fleet bearer (phone, iPad and watch in two
+  envs), and 32 remembered Forgets per principal; the oldest is evicted. Tokens are stored lowercase. A corrupt store file is moved
+  aside, never overwritten.
+- `GET /gateway/capabilities` lists `"push"` in `features` whenever the route exists, and
+  `push: {delivery: "direct"|"relay"|"none", bundle_ids}`; delivery comes from
+  `ORCHESTRA_PUSH_DELIVERY` and is `"none"` unless set. The app registers only when delivery
+  isn't `none`, and keeps polling regardless.
+
+Still to build: the sender (payload with `aps.category` chosen per card, burst coalescing,
+one alert per person when a phone and its watch both hold tokens) and the relay for App Store
+installs, which can't hold the app owner's APNs key.
+
 ## Design
 
 A `notify` backend abstraction for push specifically (distinct from the channel

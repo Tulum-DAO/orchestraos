@@ -173,25 +173,32 @@ means the same thing: run `source scripts/orchestra-env.sh` and try again.
 
 ```bash
 source scripts/orchestra-env.sh   # already done in step 4 if this is the same shell; harmless to repeat
-python3 scripts/approval.py request "Ship the first change?" --from dev-first-project --worker-kind pane --options approve,deny
+python3 scripts/approval.py request "Reply OK to this test card?" --from dev-first-project --worker-kind pane --options approve,deny
 ```
 
 Expected: prints a card id (`apr_...`). It appears under Approvals in the
 dashboard, and — once step 3 is done — as a push on your phone.
+
+This uses the default dashboard port 8891; if the `dashboard` row of `orchestra status` shows
+another port, put that one in instead:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8891/api/approvals/<card id>/approve
 python3 scripts/approval.py get <card id>
 ```
 
-Expected: within a minute, `approval.py get` shows `status: resumed`, and
-`tmux capture-pane -p -t dev-first-project | tail -20` shows the decision delivered into
-the `dev-first-project` pane.
+Expected: the answer is delivered at once: `tmux capture-pane -p -t dev-first-project | tail -20`
+shows the decision typed into the `dev-first-project` pane, ending with a request to run
+`approval.py ack ...`. Once the seat acknowledges it, `approval.py get` shows
+`"status": "resumed"`.
 
-**If it fails, look here:** `<data>/logs/approval_resume.log` has the
-delivery attempt; a card stuck at `status: answered` (never `resumed`) means
-the `approval_resume` beat hasn't run yet (every 60s) or `dev-first-project`'s pane
-wasn't idle when it tried.
+**If it fails, look here:** each delivery result is a line in
+`logs/answer-telemetry.jsonl` in the checkout (`delivery_confirmed` or `delivery_failed`). A
+card still at `"status": "answered"` with the decision visible in the pane means the seat hasn't
+acknowledged yet. The answer is typed in every 5 minutes, 3 times in all (the first delivery
+counts); after that nothing more is typed and the alert goes to ntfy, so ask the seat to run the
+`approval.py ack <card id> --from dev-first-project` line shown in its pane. With nothing in the pane, the seat was busy: the
+`approval_resume` beat retries about every minute.
 
 ## 6. Manual rotation of a seat completed, nothing lost
 

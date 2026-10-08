@@ -33,6 +33,12 @@ def _repo(tmp_path: Path, *, config=True, data=True, built=True, registry=None):
     (root / "dashboard").mkdir(exist_ok=True)
     (root / "dashboard" / "package.json").write_text("{}")
     (root / "package.json").write_text("{}")
+    if built:
+        # a COMPLETED install: init's stamp, not just a node_modules folder (#277)
+        from orchestra_cli import init_cmd as _I
+        for d in (root / "api", root / "dashboard", root):
+            if (d / "package.json").exists():
+                _I._stamp_deps(d)
     data_dir = tmp_path / "data"
     if config:
         (root / "orchestra.toml").write_text(
