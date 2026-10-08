@@ -527,6 +527,7 @@ SIDE_EFFECTING_TOOLS = frozenset({
     "inject_message", "send_telegram", "spawn_agent", "kill_agent",
     "agent_message", "async_task", "run_command", "remember_note",
     "answer_menu", "focus_entity", "create_starter_team", "decline_starter_team",
+    "ask_choices", "finish_onboarding", "pair_device",
 })
 
 

@@ -4172,6 +4172,22 @@ async def handle_arturo_ptt_vendor(request):
 ARTURO_TEXT_BASE = os.environ.get("ARTURO_TEXT_BASE") or (_loopback("ORCHESTRA_ARTURO_PORT", 5071) + "")
 
 
+def _arturo_upstream_headers(request) -> dict:
+    """Upstream headers for an Arturo text turn, built FRESH (a client's own headers never pass
+    through), plus who is calling: X-Arturo-Principal "fleet" for the fleet bearer (the dashboard's
+    path), "device:<id>" for a paired device. Arturo makes a pairing code only on a "fleet" turn, so
+    a voice-only device cannot ask it for a read, approve and message code (congruence
+    DEC-1791485978471942, A8). No resolved principal = no stamp, and Arturo then refuses."""
+    headers = {"Content-Type": "application/json"}
+    ran, principal = _resolved_principal(request)
+    dev_id = (principal or {}).get("id") if ran else None
+    if dev_id == "legacy":
+        headers["X-Arturo-Principal"] = "fleet"
+    elif dev_id:
+        headers["X-Arturo-Principal"] = f"device:{dev_id}"
+    return headers
+
+
 async def handle_arturo_text(request):
     """POST /arturo/text {text, conversation_id} — the Arturo home's TEXT turn (tracks T2/T4).
     Bearer here, loopback upstream (:5071/text), which runs the full tool-enabled turn on
@@ -4185,7 +4201,7 @@ async def handle_arturo_text(request):
     try:
         async with aiohttp.ClientSession() as s:
             async with s.post(f"{ARTURO_TEXT_BASE}/text", data=body,
-                              headers={"Content-Type": "application/json"},
+                              headers=_arturo_upstream_headers(request),
                               timeout=aiohttp.ClientTimeout(total=190)) as r:
                 out = await r.json(content_type=None)
                 return _json(out, status=r.status)
@@ -4229,7 +4245,7 @@ async def handle_arturo_text_stream(request):
         session = aiohttp.ClientSession()
         upstream = await session.post(
             f"{ARTURO_TEXT_BASE}/text/stream", data=body,
-            headers={"Content-Type": "application/json"},
+            headers=_arturo_upstream_headers(request),
             timeout=aiohttp.ClientTimeout(total=None, sock_read=190))
     except Exception as e:  # noqa: BLE001
         log.error(f"arturo/text/stream forward: upstream unreachable: {e}")

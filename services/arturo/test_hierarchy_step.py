@@ -28,7 +28,7 @@ def _registry(tmp_path, agents):
 def test_an_unknown_step_still_carries_no_directive():
     from services.arturo import onboarding as onb
     assert onb.directive("nope", {"manager": None}) == ""
-    assert onb.directive("name") != ""        # the old one-arg call still works
+    assert onb.directive("onboarding") != ""  # the one-arg call still works
     assert onb.directive("hierarchy", {"manager": None}) == ""   # retired with the dashboard step
 
 

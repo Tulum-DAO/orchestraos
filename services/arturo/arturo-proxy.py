@@ -1436,6 +1436,54 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "ask_choices",
+            "description": "Show the operator a tap-to-pick card with options you write (2-8 short labels), while you ask the question in your reply. Use it whenever the answer is a choice. Picking sends the option's words as their next message. purpose: 'starter_team' when offering their starter team, 'devices' when asking which devices they have, otherwise 'other'. One card per turn.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "options": {"type": "array", "items": {"type": "string"}, "description": "2 to 8 short option labels."},
+                    "multi": {"type": "boolean", "description": "true when they may pick several (devices)."},
+                    "purpose": {"type": "string", "enum": ["starter_team", "devices", "other"]},
+                },
+                "required": ["options"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "finish_onboarding",
+            "description": "End the operator's first run, when the onboarding goals are done or they want to stop.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "pair_device",
+            "description": "Make a pairing code for one of the operator's devices (iPhone, iPad or Mac, one they told you they have and have the app for). The code goes to them in a card; you never see it, so never repeat or invent one. The result gives a device id for check_paired.",
+            "parameters": {
+                "type": "object",
+                "properties": {"device": {"type": "string", "enum": ["iPhone", "iPad", "Mac"]}},
+                "required": ["device"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_paired",
+            "description": "Check whether a device paired with pair_device has reached the gateway. Report exactly what it says.",
+            "parameters": {
+                "type": "object",
+                "properties": {"device_id": {"type": "string"}},
+                "required": ["device_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "inject_message",
             "description": "Send a message/task to a running agent's tmux session. Works on both Mac and VPS agents.",
             "parameters": {
@@ -1941,15 +1989,19 @@ def starter_team_state(seen=None):
     return out
 
 
-# ---- consent: WHEN the tool may run is enforced HERE, not only in the prompt (review #268 blocker) ----
-# Code guarantees the tool runs only on the one operator turn right after Arturo's offer; whether that
-# turn said yes is still the brain's reading of it.
-# An offer belongs to one conversation and is good for exactly ONE operator turn: it is taken off the
-# book when that turn begins (_begin_team_turn), and put back only when Arturo makes the offer again.
-# Arturo makes it when a team-step turn ends with nothing running (the directive asks the question),
-# or when it reached for the tool without one (the tool asks instead of running). The page's own
-# opener ('team_open') never runs the tool, and neither does a turn with no conversation (voice).
+# ---- the onboarding turn record (congruence DEC-1791485978471942 v4) ---------------------------
+# One record per operator turn, made by the endpoint (text_turn, or /text/stream once per turn) and
+# shared BY REFERENCE with the threads that run its tools, the way _spawned is: a value set from a
+# worker thread would never reach turn.end. It carries what code enforces:
+# - WHEN create_starter_team may run: only on the operator turn right after Arturo showed a
+#   starter_team card (or after the tool itself asked). Whether that turn said yes is still the
+#   brain's reading of it. Never on the page's own opener, never on a turn with no conversation.
+# - the turn right after a devices card may record devices and nothing else (a fixed allowlist).
+# - pair_device only on a turn the gateway stamped as the fleet bearer (the dashboard's path).
+# Offers and devices cards belong to one conversation and are good for exactly ONE operator turn:
+# taken off the book when that turn begins.
 _TEAM_OFFERS = {}
+_DEVICE_CARDS = {}
 _TEAM_OFFERS_LOCK = _threading.Lock()
 _TEAM_OFFER_TTL_S = 1800
 _TEAM_TURN = _contextvars.ContextVar("arturo_team_turn", default=None)
@@ -1966,24 +2018,158 @@ def _offer_team(conversation_id):
             _TEAM_OFFERS[conversation_id] = time.time()
 
 
-def _begin_team_turn(conversation_id, step):
-    """Called once per operator turn, before the brain runs. Takes this conversation's offer off the
-    book: this turn may accept it; no later turn can."""
+def _begin_team_turn(conversation_id, step, principal=None):
+    """Called once per operator turn, before the brain runs. Takes this conversation's offer and
+    devices card off the book: this turn may answer them; no later turn can."""
+    from services.arturo import onboarding as _onb
+    now = time.time()
     with _TEAM_OFFERS_LOCK:
         made = _TEAM_OFFERS.pop(conversation_id, None) if conversation_id else None
-    return {"conversation_id": conversation_id, "step": step, "opener": step == "team_open",
-            "offered": made is not None and time.time() - made < _TEAM_OFFER_TTL_S,
-            "declined": False}
+        card = _DEVICE_CARDS.pop(conversation_id, None) if conversation_id else None
+    return {"conversation_id": conversation_id, "step": step, "principal": principal,
+            "onboarding": step in _onb.ONBOARDING_STEPS, "opener": step == "onboarding_open",
+            "offered": made is not None and now - made < _TEAM_OFFER_TTL_S,
+            "devices_answer": card is not None and now - card < _TEAM_OFFER_TTL_S,
+            "declined": False, "choices": None, "pair_card": None, "finished": False}
 
 
 def decline_starter_team():
     turn = _TEAM_TURN.get()
     if turn is not None and turn.get("opener"):
-        # The page's "Introduce my team." is not the operator's no, any more than it is their yes.
-        return "Not recorded: the operator has not answered yet. Ask them the one question."
+        # The page's opener is not the operator's no, any more than it is their yes.
+        return "Not recorded: the operator has not answered yet. Ask them first."
     if turn is not None:
         turn["declined"] = True
     return "Noted: no team for now. The operator can ask for it any time."
+
+
+# The turn after a devices card: these and nothing else (claude-peer, v3): set_operator_fact only for
+# field 'devices', checked in execute_tool. Fail closed: a tool added later is refused here.
+_DEVICES_ANSWER_ALLOWED = frozenset({
+    "set_operator_fact", "ask_choices", "finish_onboarding",
+    "list_agents", "get_agent_output", "read_agent_conversation", "query_roadmap", "knowledge",
+})
+_CHOICE_PURPOSES = ("starter_team", "devices", "other")
+_CHOICE_STRIP = re.compile(r"[*_`#>\[\]()~|]")
+
+
+def ask_choices(options, multi=False, purpose="other"):
+    """Show the operator a tap-to-pick card whose options the brain wrote. The card is data: picking
+    an option sends its words as the operator's next message, never a tool call."""
+    from services.arturo import onboarding as _onb
+    turn = _TEAM_TURN.get()
+    if turn is None:
+        return "NOT SHOWN: cards exist only in the Arturo chat. Ask in words instead."
+    if turn.get("choices") is not None:
+        return "NOT SHOWN: one card per turn, and this turn already has one. Wait for their answer."
+    clean = []
+    for o in (options if isinstance(options, list) else []):
+        label = " ".join(_CHOICE_STRIP.sub("", str(o or "")).split())[:60].strip()
+        if label and label not in clean:
+            clean.append(label)
+    if not 2 <= len(clean) <= 8:
+        return "NOT SHOWN: a card needs 2 to 8 short, different options."
+    purpose = purpose if purpose in _CHOICE_PURPOSES else "other"
+    card = {"options": clean, "multi": bool(multi), "purpose": purpose}
+    note = ""
+    if purpose == "starter_team":
+        state = starter_team_state()["state"]
+        if state in ("absent", "incomplete"):
+            _offer_team(turn.get("conversation_id"))
+            card["note"] = _onb.TEAM_COST        # the server's words, never the model's
+        else:
+            card["purpose"] = "other"
+            note = f" (no team offer recorded: the team is {state})"
+    elif purpose == "devices" and turn.get("conversation_id"):
+        with _TEAM_OFFERS_LOCK:
+            _DEVICE_CARDS[turn["conversation_id"]] = time.time()
+    turn["choices"] = card
+    return f"Card shown with: {', '.join(clean)}{note}. Wait for their answer."
+
+
+def onboarded():
+    return (Path(ARTURO_STATE) / "onboarding.json").exists()
+
+
+def finish_onboarding():
+    """Ends the first run for this install. Reset = delete ARTURO_STATE/onboarding.json."""
+    turn = _TEAM_TURN.get()
+    if turn is None or not turn.get("onboarding") or turn.get("opener"):
+        return "NOT RUN: onboarding ends only on an onboarding turn from the operator."
+    if onboarded():
+        turn["finished"] = True
+        return "Onboarding was already finished."
+    p = Path(ARTURO_STATE) / "onboarding.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"finished_at": time.time()}) + "\n")
+    turn["finished"] = True
+    return "Onboarding finished. From here on this thread is ordinary chat."
+
+
+_PAIR_MINTER = "arturo-onboarding"
+_PAIR_SCOPES = ("read", "approve", "message")
+_PAIR_POWERS = "see your agents and approvals, answer approvals as you, and send messages to agents"
+
+
+def pair_device(device):
+    """Mint a pairing code for one of the operator's devices and put it in a card the brain never
+    sees. Scopes are the server's (the operator's ruling: read, approve, message), never the model's."""
+    from services.arturo import onboarding as _onb
+    from services.arturo import operator_store as _ops
+    turn = _TEAM_TURN.get()
+    if turn is None or turn.get("principal") != "fleet":
+        # Fail closed: only a turn the gateway stamped as the fleet bearer (the dashboard's path). A
+        # voice-only device must not be able to ask for a read, approve and message code.
+        return "NOT PAIRED: a pairing code can only be made from the dashboard's Arturo chat."
+    if turn.get("opener"):
+        return "NOT PAIRED: ask the operator first."
+    want = str(device or "").strip().lower()
+    match = next((d for d in _onb.DEVICES if d.lower() == want), None)
+    if match not in _onb.PAIRABLE:
+        return (f"NOT PAIRED: only an iPhone, iPad or Mac app pairs with a code. "
+                f"{_onb.DEVICE_FACTS.get(match, 'This device has no app.')}")
+    on_record = [d.strip().lower() for d in str(_ops.public(ARTURO_STATE).get("devices") or "").split(",")]
+    if match.lower() not in on_record:
+        return f"NOT PAIRED: {match} is not among the devices the operator told you they have."
+    base_url = (os.environ.get("ORCHESTRA_PUBLIC_URL") or "").strip()
+    _sys.path.insert(0, str(_REPO_ROOT)) if str(_REPO_ROOT) not in _sys.path else None
+    from scripts.device_tokens import DeviceStore
+    from scripts.pairing import PairingStore, pair_token, valid_base_url
+    if not base_url or not valid_base_url(base_url):
+        return ("NOT PAIRED: this server does not know the https address a device can reach it on "
+                "(ORCHESTRA_PUBLIC_URL). Say so; the guide covers it: " + _onb.ONBOARDING_GUIDE)
+    label = f"{match.lower()} (arturo)"
+    devices = DeviceStore(Path(ORCHESTRA_DIR) / "state" / "devices")
+    devices.revoke_label(label, minted_by=_PAIR_MINTER)       # one live code per device; never a CLI-minted one
+    device_id, token = devices.mint(label, list(_PAIR_SCOPES), minted_by=_PAIR_MINTER)
+    store = PairingStore(Path(ORCHESTRA_DIR) / "state" / "pairing")
+    store.sweep()
+    code = store.mint(base_url=base_url, token=token)
+    turn["pair_card"] = {
+        "device": match, "device_id": device_id, "code": pair_token(code, base_url=base_url),
+        "expires_in_s": int(store.ttl_s), "where": _onb.PASTE_WHERE[match], "powers": _PAIR_POWERS,
+        "revoke": f"orchestra devices --revoke {device_id}",
+    }
+    log.info(f"PAIR CARD: minted device {device_id} for {match}")        # never the code
+    return (f"A pairing code for the {match} is shown to the operator in a card (device id {device_id}, good "
+            f"for {int(store.ttl_s) // 60} minutes). You do not have the code: never repeat or invent one. "
+            f"Tell them where to paste it: {_onb.PASTE_WHERE[match]} Then wait for them to say it is done.")
+
+
+def check_paired(device_id):
+    """Read-only: has this device used its token since it was minted?"""
+    _sys.path.insert(0, str(_REPO_ROOT)) if str(_REPO_ROOT) not in _sys.path else None
+    from scripts.device_tokens import DeviceStore
+    rows = DeviceStore(Path(ORCHESTRA_DIR) / "state" / "devices").list()
+    rec = next((r for r in rows if r.get("id") == str(device_id or "").strip()), None)
+    if rec is None:
+        return f"No device {device_id} here."
+    if rec.get("revoked_at"):
+        return f"Device {device_id} was revoked (a newer code replaced it, or it was removed)."
+    seen, made = rec.get("last_seen_at"), rec.get("created_at") or 0
+    if seen and seen >= made:
+        return f"Connected: device {device_id} ({rec.get('label')}) has reached the gateway."
+    return f"Not yet: device {device_id} has not reached the gateway since its code was made."
 
 
 # ---- single flight: one `orchestra starter` per install at a time (review #268) ----------------
@@ -2250,15 +2436,15 @@ def execute_tool(name, args, user_turns=None):
     that don't thread turns fail CLOSED on send_telegram (policy: internal
     messages never reach the operator's TG without an ask or a deliverable link)."""
     log.info(f"EXECUTING TOOL: {name}({json.dumps(args)})")
-    # The devices step records and explains, nothing else (pm-tulumdao guardrail): a selection never
-    # pairs, mints a code, starts a seat or sends anything, whatever the brain makes of it.
+    # The answer to a devices card records devices and nothing else: it never pairs, mints a code,
+    # starts a seat or sends anything, and it rewrites no other operator fact (those ride in every later
+    # system prompt). A fixed allowlist, so a tool added later is refused too.
     _turn = _TEAM_TURN.get()
-    if _turn is not None and _turn.get("step") == "devices" and not (
-            name == "set_operator_fact" and (args or {}).get("field") == "devices"):
-        # The fact tool too, for any other field: an answer to "which devices" must not rewrite the
-        # operator's name or role, which ride in every later system prompt (review #271).
+    if _turn is not None and _turn.get("devices_answer") and (
+            name not in _DEVICES_ANSWER_ALLOWED
+            or (name == "set_operator_fact" and (args or {}).get("field") != "devices")):
         return (f"NOT RUN: {name} is not available while the operator answers which devices they have; "
-                f"this step only records the devices (set_operator_fact field='devices') and explains each one.")
+                f"this turn only records the devices (set_operator_fact field='devices').")
     # Record the tool run for the per-call journal (gm bug fix). Best-effort — never let capture
     # break tool execution. The result is appended after the call returns (see the wrapper below).
     _bucket = _TOOLS_THIS_TURN.get()
@@ -2381,6 +2567,14 @@ def execute_tool(name, args, user_turns=None):
         return create_starter_team(args.get("project"))
     if name == "decline_starter_team":
         return decline_starter_team()
+    if name == "ask_choices":
+        return ask_choices(args.get("options"), args.get("multi", False), args.get("purpose", "other"))
+    if name == "finish_onboarding":
+        return finish_onboarding()
+    if name == "pair_device":
+        return pair_device(args.get("device"))
+    if name == "check_paired":
+        return check_paired(args.get("device_id"))
 
     if name == "spawn_agent":
         session = args.get("session_name", "voice-agent")
@@ -4934,7 +5128,7 @@ def _resolve_turn_brain(req):
     return chosen, {"provider": provider, "model": model}, None
 
 
-def text_turn(text, conversation_id, brain=None, context=None):
+def text_turn(text, conversation_id, brain=None, context=None, principal=None):
     """Returns (http_status, {ok, reply_text, conversation_id, brain, tools_called}).
     `brain` = {provider, model} names this turn's brain (None = the default); `context` = the
     web client's ArturoContext {route, entityKind?, entityId?, hint?} (None = none)."""
@@ -4969,12 +5163,15 @@ def text_turn(text, conversation_id, brain=None, context=None):
     # message on top of it; building a second copy here would send ~16 KB twice per onboarding turn
     # and admit two copies that can disagree. test_onboarding_seam.py pins this.
     context = ""
-    # The team step's whole branch (offer, finish, name the seats, or explain only) hangs on what exists
-    # and what is running, which only the server can see. It is passed as CONTEXT, never through the
-    # marker — the marker regex is anchored to the step name, so appended context would fail to match
-    # and leak into the brain message and the archive.
-    _team_step = step in ("team", "team_open")
-    _ctx = starter_team_state() if _team_step else None
+    # The onboarding playbook is rebuilt each turn from what only the server knows: the operator facts,
+    # the team as seen, and the voice mode. It is passed as CONTEXT, never through the marker: the
+    # marker regex is anchored to the step name, so appended context would fail to match and leak into
+    # the brain message and the archive.
+    _team_step = step in _onb.ONBOARDING_STEPS
+    _ctx = None
+    if _team_step:
+        from services.arturo import operator_store as _ops_ctx
+        _ctx = {"operator": _ops_ctx.public(ARTURO_STATE), "team": starter_team_state(), "voice_mode": ARTURO_MODE}
     _dir = _onb.directive(step, _ctx)
     if _dir:
         context = f"{context}\n\n{_dir}".strip() if context else _dir
@@ -4990,7 +5187,7 @@ def text_turn(text, conversation_id, brain=None, context=None):
     team_turn = _TEAM_TURN.get()
     team_tok = None
     if team_turn is None:
-        team_turn = _begin_team_turn(conversation_id, step)
+        team_turn = _begin_team_turn(conversation_id, step, principal)
         team_tok = _TEAM_TURN.set(team_turn)
     try:
         _res = _brain_reply(messages, conversation_id)
@@ -5025,14 +5222,22 @@ def text_turn(text, conversation_id, brain=None, context=None):
             "brain": (chosen or _turn_brain()).describe(), "tools_called": tools_called,
             "spawned": spawned,
             "operator": _ops.public(ARTURO_STATE)}
-    if _team_step:
-        # Re-read AFTER the turn, so the home page finishes the step on what is now running (or on an
-        # explicit no), never on the tool's name or the reply's wording.
-        after = starter_team_state()
-        body["team"] = {**after, **({"declined": True} if team_turn["declined"] else {})}
-        if after["state"] in ("absent", "incomplete") and not team_turn["declined"]:
-            _offer_team(conversation_id)           # the directive had Arturo ask: the next turn may answer
+    body.update(_turn_extras(team_turn, _team_step))
     return 200, body
+
+
+def _turn_extras(team_turn, onboarding_turn):
+    """What a turn's tools left for the page: a choice card, a pairing card (the only place its code
+    goes; never logged, never in history), and, on an onboarding turn, whether onboarding is now done
+    (by EFFECT: finish_onboarding wrote the flag), read after the turn."""
+    out = {}
+    if team_turn.get("choices"):
+        out["choices"] = team_turn["choices"]
+    if team_turn.get("pair_card"):
+        out["pair_card"] = team_turn["pair_card"]
+    if onboarding_turn:
+        out["onboarding"] = {"done": onboarded()}
+    return out
 
 
 def _loopback_only():
@@ -5181,7 +5386,8 @@ def text_stream_endpoint():
     turn_brain = chosen or _turn_brain()
     # Taken once for the whole turn, whichever path ends up running it (stream, or text_turn behind
     # the fallback), and published to the threads that run its tools.
-    _team_turn = _begin_team_turn(conversation_id, _onb_step_of(text_in))
+    _team_turn = _begin_team_turn(conversation_id, _onb_step_of(text_in),
+                                  request.headers.get("X-Arturo-Principal"))
     version = _THREADS.turn_count(conversation_id)          # before the history: see prewarm
     history = _conversation_history(conversation_id)
     effective = _effective_brain(turn_brain)
@@ -5309,6 +5515,9 @@ def text_stream_endpoint():
                 data["operator"] = _ops.public(ARTURO_STATE)
             except Exception:  # noqa: BLE001 — the operator card is never worth a turn
                 data["operator"] = {}
+        # A streamed turn's cards: the record is the endpoint's own dict, shared with the tool threads.
+        for key, value in _turn_extras(_team_turn, _team_turn.get("onboarding")).items():
+            data.setdefault(key, value)
         return {**event, "data": data}
 
     def _run_whole(sink):
@@ -5365,7 +5574,8 @@ def text_endpoint():
         return jsonify({"ok": False, "error": "loopback only"}), 403
     data = request.get_json(silent=True) or {}
     code, result = text_turn(data.get("text"), data.get("conversation_id"),
-                             brain=data.get("brain"), context=data.get("context"))
+                             brain=data.get("brain"), context=data.get("context"),
+                             principal=request.headers.get("X-Arturo-Principal"))
     return jsonify(result), code
 
 
@@ -5394,6 +5604,7 @@ def health():
         # reads the same name here instead of a per-browser localStorage copy.
         "operator": __import__("services.arturo.operator_store", fromlist=["public"]).public(ARTURO_STATE),
         "mode": ARTURO_MODE,                       # "voice" | "text-only"
+        "onboarded": onboarded(),                  # finish_onboarding's server flag (the page ORs its local one)
         "voice": bool(VOICE_VENDORS_PRESENT),
         # item C: can the box transcribe a recorded clip with no vendor key? (web dictation tier 2)
         "stt": _local_stt.state(),

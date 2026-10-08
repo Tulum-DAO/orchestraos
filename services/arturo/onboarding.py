@@ -1,11 +1,18 @@
-"""onboarding — the server-side half of Arturo's first thread.
+"""onboarding — the instructions Arturo's brain runs the first thread from.
 
-A surface marks an onboarding turn with a first line `[Onboarding: step=<step>]` (the same shape as
-the `[Context: …]` line the pill sends). The proxy strips the marker and appends the step's
-directive to the system context, so the instruction for "listen for the operator's name" lives in
-ONE place — here — and no surface parses a reply. The brain answers the turn; when it learns a
-fact it calls set_operator_fact (operator_store.TOOL), and the surface advances when that tool
-name appears in tools_called, exactly as the first-agent step advances on spawn_agent.
+The operator, 2026-10-08: "I don't want hardcoded arturo questions, just instructions to the llm that
+powers it to ensure a clean onboarding." So no surface scripts a question. While the operator is not
+onboarded, a surface marks each turn with a first line `[Onboarding: step=onboarding]` (the page's own
+invisible opener uses `step=onboarding_open`). The proxy strips the marker and appends ONE playbook,
+built here per turn from facts only the server holds: what is already known about the operator,
+whether their team exists and is running, and fixed facts about this release. The brain decides what
+to say and ask, and acts through tools (set_operator_fact, ask_choices, create_starter_team,
+decline_starter_team, pair_device, check_paired, finish_onboarding).
+
+What the playbook asks is the brain's; what may HAPPEN is the code's (arturo-proxy.py): the team is
+created only on the operator turn right after a starter_team card, a pairing code only for a device
+on record and only on a dashboard (fleet) turn, and the turn after a devices card can record devices
+and nothing else. Congruence DEC-1791485978471942 (v4).
 """
 from __future__ import annotations
 
@@ -13,17 +20,11 @@ import re
 
 _MARK = re.compile(r"^\[Onboarding:\s*step=([a-z_]+)\]\s*\n?", re.I)
 
-DIRECTIVES = {
-    "name": (
-        "ONBOARDING, step 'name': you just asked the operator \"What should I call you?\" and this is their "
-        "reply, possibly dictated (lower case, no punctuation, filler words). If it contains the name they want "
-        "to be called, call set_operator_fact(field='name', value=<that name only>) and greet them by it in one "
-        "short sentence. If it contains no name (a greeting, a question, a refusal, or a sentence that was cut "
-        "off), do NOT call the tool: ask again plainly in one sentence. If it is unclear which words are the "
-        "name (for example two words that may be a first and a last name), do NOT call the tool: ask which "
-        "they prefer. Never invent or guess a name."
-    ),
-}
+ONBOARDING_STEPS = ("onboarding", "onboarding_open")
+# The opener's text, which the page never shows as the operator's words (it hides any user turn that
+# starts with this, and the two openers older pages sent).
+OPENER_SENTINEL = "(first run:"
+LEGACY_OPENERS = ("Introduce my team.", "Explain how seats are organised here.")
 
 
 def split_marker(text: str):
@@ -35,39 +36,8 @@ def split_marker(text: str):
     return m.group(1).lower(), text[m.end():]
 
 
-# ---- step 'devices': which devices the operator has (asked with a multi-select card) ----------
-# The card's options, in order, and the ONE thing to say about each. These are facts about this
-# release, not the brain's to improvise: no app is public yet (docs/ONBOARDING.md, "What works today"),
-# and a phone reaches the same dashboard in its browser once Tailscale is on it (docs/INSTALL.md §1).
+# ---- fixed facts: the brain words them, it does not invent them ----------------------------------
 ONBOARDING_GUIDE = "https://github.com/Tulum-DAO/orchestraos/blob/main/docs/ONBOARDING.md"
-
-DEVICES = ("iPhone", "iPad", "Apple Watch", "Mac", "Android phone", "Just this computer")
-DEVICE_FACTS = {
-    "iPhone": "The iPhone app is in testing and not released yet. Until it is, install Tailscale from the "
-              "App Store, sign in with the same Tailscale account, and open this page's address in Safari.",
-    "iPad": "The iPad app is in testing and not released yet. Until it is, install Tailscale from the App "
-            "Store, sign in with the same Tailscale account, and open this page's address in Safari.",
-    "Apple Watch": "The Watch app comes with the iPhone app and pairs through it, so there is nothing to set "
-                   "up on the watch itself; it is not released yet either.",
-    "Mac": "The Mac app is in testing and not released yet. Until it is, use this page in a browser on the "
-           "Mac, with Tailscale signed in to the same account.",
-    "Android phone": "There is no Android app. Install Tailscale from Google Play, sign in with the same "
-                     "Tailscale account, and open this page's address in Chrome.",
-    "Just this computer": "Nothing more to set up: this page is the whole of it.",
-}
-
-_DEVICES = (
-    "ONBOARDING, step 'devices': the operator just told you which devices they have, from a list or in "
-    "their own words. Call set_operator_fact(field='devices', value=<the devices, comma-separated>) "
-    "with exactly what they said. Then give ONE short line for each device they named, using only these "
-    "facts: " + " ".join(f"{k}: {v}" for k, v in DEVICE_FACTS.items()) + " Do not invent a download, a "
-    "link, a store listing or a release date; an app that is not released is not released. For a device "
-    "not in this list, say there is no app for it and that this page works in its browser. Never pair a "
-    "device, run `orchestra pair` or hand out a pairing code here: when an app is released, pairing is the "
-    f"operator's own step in the guide, {ONBOARDING_GUIDE}, and you give that link, nothing else. Finish with one "
-    "sentence saying this thread is their front door from here on. Ask no question. Keep it plain and short."
-)
-
 DEFAULT_PROJECT = "first-project"
 
 TEAM_SHAPE = (
@@ -78,9 +48,9 @@ TEAM_SHAPE = (
     "does the actual jobs its project manager gives it. More projects mean more project managers and workers "
     "under the same gm."
 )
+TEAM_COST = "This starts three agents; gm is always on and keeps costing tokens whether or not it is asked anything."
 
-# The words a tool result uses for each seat (arturo-proxy.py seat_seen). Repeated here so the brain is
-# told what each one means instead of guessing.
+# The words a tool result uses for each seat (arturo-proxy.py seat_seen).
 SEEN_WORDS = {
     "running": "running",
     "stopped": "a session is open but no agent is running in it",
@@ -88,23 +58,39 @@ SEEN_WORDS = {
     "unknown": "could not tell",
 }
 
-# How an answer to the one question is handled. Code limits WHEN the tool can run (arturo-proxy.py
-# _begin_team_turn): only on the one operator turn right after Arturo's offer, never on the page's own
-# opener. Whether that turn said yes is still the brain's reading, which is what these words are for.
-_ANSWER_RULES = (
-    " If they say no or not now, call decline_starter_team and accept it in one clause, saying they can "
-    "ask you for their team any time. If they ask something else, answer it briefly and then repeat the "
-    "one question in one short sentence; a question is not a no. Nothing you were sent before their reply "
-    "is a yes."
-)
+# Per device: what is true of this release (docs/ONBOARDING.md "What works today"; INSTALL.md §1), and
+# whether Arturo can pair it. No app is public: nothing here is a link, a store listing or a date.
+DEVICES = ("iPhone", "iPad", "Apple Watch", "Mac", "Android phone", "Just this computer")
+DEVICE_FACTS = {
+    "iPhone": "The iPhone app is in testing and not released yet. Tailscale from the App Store, signed in to "
+              "the same account, puts the phone on the network; this page then opens in Safari at the same "
+              "address. With the test app installed, a code pairs it: in the app, the Arturo tab, then the "
+              "gear at the top right, then Connect your gateway, then paste the code and press Pair.",
+    "iPad": "The iPad app is in testing and not released yet. Tailscale from the App Store, signed in to the "
+            "same account, then this page opens in Safari. With the test app installed, a code pairs it: "
+            "Settings in the sidebar, then Connect your gateway, then paste the code and press Pair.",
+    "Apple Watch": "The Watch app comes with the iPhone app and takes its pairing from the iPhone, so there is "
+                   "nothing to pair on the watch itself; pair the iPhone. It is not released yet either.",
+    "Mac": "The Mac app is in testing and not released yet. Tailscale on the Mac (Mac App Store or "
+           "tailscale.com/download), signed in to the same account, and this page works in a browser. With the "
+           "test app installed, a code pairs it: the Connect this Mac window, paste the code, press Pair.",
+    "Android phone": "There is no Android app, so nothing to pair. Tailscale from Google Play, signed in to "
+                     "the same account, then this page opens in Chrome at the same address.",
+    "Just this computer": "Nothing more to set up: this page is the whole of it.",
+}
+PAIRABLE = ("iPhone", "iPad", "Mac")
+# Where the pairing card says to paste, per device (the same paths DEVICE_FACTS gives the brain).
+PASTE_WHERE = {
+    "iPhone": "In the iPhone app: the Arturo tab, then the gear at the top right, then Connect your gateway.",
+    "iPad": "In the iPad app: Settings in the sidebar, then Connect your gateway.",
+    "Mac": "In the Mac app: the Connect this Mac window.",
+}
 
-_TEAM_RULES = (
-    " Rules for this turn: keep it to at most six short sentences, in plain words. Describe a seat ONLY as a "
-    "fact in this instruction or what the tool says it sees; a seat the tool did not report as running is not "
-    "running, whatever else you believe. If the operator tells you something different from what you were "
-    "given, their screen is the fact: say what you were given and that the two disagree. Never tell the "
-    "operator to run `tmux attach`, and never run it yourself: they talk to gm by picking it in the Agents "
-    "list. Do not list features and do not pitch."
+NAME_RULES = (
+    "Their answer may be dictated: lower case, no punctuation, filler words. Record a name only when it is "
+    "clearly the name they want to be called; if two words may be a first and a last name, ask which they "
+    "prefer; if there is no name in it (a greeting, a question, a refusal, a sentence cut off), ask again. "
+    "Never invent or guess a name."
 )
 
 
@@ -113,73 +99,78 @@ def seat_line(seats) -> str:
                      for s in (seats or []))
 
 
-def _team(ctx) -> str:
-    """Generated per turn from the server's view of the starter team (arturo-proxy.py
-    starter_team_state). Five states, never two: only absent and incomplete may create anything."""
-    ctx = ctx or {}
-    state = ctx.get("state")
-    head = ("ONBOARDING, step 'team': you are leading this operator's first run. Explain the team in their "
-            "terms using these facts and no others: " + TEAM_SHAPE + " ")
+def _team_fact(team) -> str:
+    team = team or {}
+    state = team.get("state")
+    seats = seat_line(team.get("seats"))
     if state == "absent":
-        body = (
-            "This install has no team yet. Explain the three tiers and what gm does, then ask exactly ONE "
-            "question: what to call their first project, in a word or two, or whether to use the default name "
-            f"'{DEFAULT_PROJECT}'. Say plainly that this starts three agents on the runtime they are logged "
-            "in to, and that gm is always on, which means it keeps costing tokens whether or not it is asked "
-            "anything. Only when THEY answer yes, with a name or accepting the default, call "
-            "create_starter_team with project set to that name in lowercase letters, digits and dashes (for "
-            f"example 'website'), or '{DEFAULT_PROJECT}'." + _ANSWER_RULES + " After the tool runs, report each seat exactly as "
-            "what the tool says it sees, and if every seat is running tell them to open gm from the Agents "
-            "list to give it work."
-        )
-    elif state == "incomplete":
-        project = ctx.get("project")
-        seen = seat_line(ctx.get("seats"))
-        body = (
-            "This install has started a team but it is not complete. What is seen on each seat right now: "
-            + (seen or "no seats") + ". Explain the three tiers and what gm does, say what is missing in "
-            "one sentence, and ask exactly ONE question: whether to finish setting it up. "
-            + (f"If they say yes, call create_starter_team with project='{project}'. " if project else
-               f"Ask what to call the project as part of that one question (default '{DEFAULT_PROJECT}'); if "
-               "they say yes, call create_starter_team with that name. ")
-            + "It starts only what is missing and restarts a seat whose agent stopped; seats already running "
-            "are left alone." + _ANSWER_RULES + " After the tool runs, report each seat exactly as what the "
-            "tool says it sees."
-        )
-    elif state == "starting":
-        body = (
-            "Their team is being set up right now. What is seen on each seat so far: "
-            + (seat_line(ctx.get("seats")) or "nothing yet") + ". Say that in one sentence, explain the three "
-            "tiers and what gm does while they wait, and say they can ask you again in a minute. Ask no "
-            "question. Do not call create_starter_team: a run is already in progress."
-        )
-    elif state == "present":
-        body = (
-            "Their team is already up. What is seen on each seat right now: " + seat_line(ctx.get("seats"))
-            + ". Explain the three tiers and what gm does, naming their seats, and say they can open gm from "
-            "the Agents list to give it work. Ask no question. Do not call create_starter_team: there is "
-            "nothing to create."
-        )
-    elif state == "other_manager":
-        body = (
-            f"This install already has a manager named {ctx.get('manager')}, set up some other way. Explain the "
-            "three tiers, say their manager plays the gm role, and that project managers and workers can be "
-            "added under it later. Ask no question. Do not call create_starter_team: it would create a second "
-            "manager, and there is one per install."
-        )
-    else:
-        body = (
-            "Whether this install already has a team could not be checked, and an unchecked registry is not an "
-            "empty one. Explain the three tiers and what gm does, and say they can ask you to set up the team "
-            "once the Agents page loads. Ask no question. Do not call create_starter_team."
-        )
-    return head + body + _TEAM_RULES
+        return "Their team: none yet."
+    if state == "starting":
+        return f"Their team: being set up right now; seen so far: {seats or 'nothing yet'}. Do not offer it again."
+    if state == "incomplete":
+        project = team.get("project")
+        return (f"Their team: started but not complete; seen: {seats or 'no seats'}."
+                + (f" Its project is '{project}'." if project else ""))
+    if state == "present":
+        return f"Their team: up; seen: {seats}. Nothing to create."
+    if state == "other_manager":
+        return (f"Their team: they already have a manager named {team.get('manager')}, set up some other way; "
+                "it plays the gm role. Do not offer the starter team: it would add a second manager.")
+    return "Their team: could not be checked (an unread registry is not an empty one). Do not offer it."
+
+
+def playbook(ctx=None) -> str:
+    """The whole onboarding, as instructions, rebuilt every turn from what the server knows. The brain
+    is told what is still missing; it decides the words and when to finish."""
+    ctx = ctx or {}
+    op = ctx.get("operator") or {}
+    name, devices = op.get("name"), op.get("devices")
+    known = [
+        f"Their name: {name}." if name else "Their name: not known yet.",
+        f"Their devices: {devices}." if devices else "Their devices: not known yet.",
+        _team_fact(ctx.get("team")),
+    ]
+    if ctx.get("voice_mode") == "text-only":
+        known.append("Voice: they can already talk to you with the mic; for you to talk BACK, an ElevenLabs or "
+                     "Cartesia key has to be added to the server's environment (ELEVENLABS_API_KEY or "
+                     "CARTESIA_API_KEY) and Arturo restarted. Mention it once, briefly.")
+    if ctx.get("opener"):
+        known.append("This turn is the page opening for the first time, not the operator speaking: greet them, "
+                     "say in one sentence who you are, and start on the first missing goal.")
+    goals = [
+        "1. If their name is not known: ask what to call them, and record it with set_operator_fact(field='name'). "
+        + NAME_RULES,
+        "2. Their team: explain it in their terms (" + TEAM_SHAPE + ") If there is no team, or it is incomplete, "
+        "offer it with ask_choices(purpose='starter_team'), options like 'Set it up' and 'Not now', and say the "
+        "cost plainly: " + TEAM_COST + " Ask what to call the first project, or use '" + DEFAULT_PROJECT + "'. "
+        "On their yes, call create_starter_team; on a clear no, call decline_starter_team. Report each seat "
+        "exactly as the tool says it sees it.",
+        "3. Their devices: ask which they have with ask_choices(purpose='devices', multi=true), options such as "
+        + ", ".join(DEVICES) + ". Record their answer with set_operator_fact(field='devices').",
+        "4. Then walk them through each device they picked, ONE at a time, in the order picked, from these facts: "
+        + " ".join(f"{k}: {v}" for k, v in DEVICE_FACTS.items())
+        + " For an iPhone, iPad or Mac they have the test app for, call pair_device(device=<that device>): the "
+        "code goes to them in a card you never see, so never repeat, guess or invent a code; tell them where to "
+        "paste it. When they say it is done, call check_paired(device_id=<the id the tool gave you>) and report "
+        "exactly what it says. If they do not have the app yet, say it is in testing and not released, skip that "
+        "device, and say you can pair it later when they ask.",
+        "5. When the goals are done, or they want to stop, call finish_onboarding and say this thread is their "
+        "front door from here on.",
+    ]
+    rules = (
+        "Rules: one question per turn; plain, short words (at most six sentences); skip any goal already done; "
+        "use ask_choices whenever the answer is a choice, writing the options yourself; facts only from this "
+        "instruction or what a tool says; what the operator says they see on their screen is the fact; never "
+        "tell them to run tmux attach; no download, store or TestFlight links, and no release dates; for "
+        f"pairing an app later, the guide is {ONBOARDING_GUIDE}. If they ask something else, answer it "
+        "briefly, then return to the next goal."
+    )
+    return ("ONBOARDING: you are leading this operator's first run. What is known now: " + " ".join(known)
+            + " Goals, in order: " + " ".join(goals) + " " + rules)
 
 
 def directive(step, ctx=None) -> str:
-    """ctx is only read by steps that need a server-side fact (team). The one-arg call still works."""
-    if (step or "").lower() in ("team", "team_open"):    # team_open: the page's own opener
-        return _team(ctx)
-    if (step or "").lower() == "devices":
-        return _DEVICES
-    return DIRECTIVES.get(step or "", "")
+    """The step's instruction for this turn, or '' for none. Only the onboarding steps carry one."""
+    if (step or "").lower() in ONBOARDING_STEPS:
+        return playbook({**(ctx or {}), "opener": (step or "").lower() == "onboarding_open"})
+    return ""

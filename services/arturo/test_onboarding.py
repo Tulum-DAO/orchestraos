@@ -2,12 +2,18 @@
 from services.arturo import onboarding as O
 
 
-def test_name_marker_is_stripped_and_carries_the_name_directive():
-    step, text = O.split_marker("[Onboarding: step=name]\nhi my name is Shaw nice to meet you")
-    assert step == "name"
+def test_the_onboarding_marker_is_stripped_and_carries_the_playbook():
+    step, text = O.split_marker("[Onboarding: step=onboarding]\nhi my name is Shaw nice to meet you")
+    assert step == "onboarding"
     assert text == "hi my name is Shaw nice to meet you"
     d = O.directive(step)
-    assert "set_operator_fact" in d and "Never invent" in d
+    assert "set_operator_fact" in d and "Never invent" in d     # the name rules ride in the playbook
+
+
+def test_the_old_scripted_steps_carry_nothing_now():
+    # the operator, 2026-10-08: no hardcoded questions; one playbook drives the first run
+    for old in ("name", "team", "team_open", "devices", "hierarchy"):
+        assert O.directive(old) == "", old
 
 
 def test_ordinary_turns_are_untouched():

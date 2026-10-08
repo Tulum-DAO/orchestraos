@@ -43,70 +43,6 @@ STARTER = {
 }
 
 
-# ---- the directive ------------------------------------------------------------------------
-def _d(ctx):
-    from services.arturo import onboarding as onb
-    return onb.directive("team", ctx)
-
-
-def test_every_state_explains_the_three_tiers_and_the_managers_job():
-    for ctx in ({"state": "absent"}, {"state": "present", "seats": []}, {"state": "unknown"},
-                {"state": "other_manager", "manager": "boss"}, {"state": "incomplete", "seats": []}):
-        d = _d(ctx)
-        assert "T0" in d and "T1" in d and "T2" in d, ctx
-        assert "manager" in d.lower() and "gm" in d, ctx
-
-
-def test_absent_asks_one_question_and_names_the_tool_and_the_default_project():
-    d = _d({"state": "absent"})
-    assert "create_starter_team" in d
-    assert "first-project" in d
-    assert "one question" in d.lower()
-    assert "always on" in d.lower()            # the honest cost sentence
-
-
-def test_present_names_the_seats_and_creates_nothing():
-    d = _d({"state": "present", "seats": [
-        {"name": "gm", "tier": "T0", "seen": "running"},
-        {"name": "pm-website", "tier": "T1", "seen": "running"},
-        {"name": "dev-website", "tier": "T2", "seen": "running"}]})
-    assert "pm-website" in d and "dev-website" in d
-    assert "do not call create_starter_team" in d.lower()
-
-
-def test_incomplete_reports_what_is_seen_and_offers_to_finish_with_the_known_project():
-    d = _d({"state": "incomplete", "project": "website", "seats": [
-        {"name": "gm", "tier": "T0", "seen": "stopped"},
-        {"name": "pm-website", "tier": "T1", "seen": "running"}]})
-    assert "gm (T0): a session is open but no agent is running in it" in d
-    assert "project='website'" in d
-    assert "create_starter_team" in d
-
-
-def test_another_manager_is_never_doubled():
-    d = _d({"state": "other_manager", "manager": "boss"})
-    assert "boss" in d
-    assert "do not call create_starter_team" in d.lower()
-
-
-def test_an_unreadable_registry_is_not_an_empty_one():
-    d = _d({"state": "unknown"})
-    assert "do not call create_starter_team" in d.lower()
-
-
-def test_the_directive_never_sends_the_operator_to_tmux_attach():
-    for ctx in ({"state": "absent"}, {"state": "present", "seats": []}, {"state": "unknown"},
-                {"state": "incomplete", "seats": []}, {"state": "other_manager", "manager": "boss"}):
-        d = _d(ctx).lower()
-        assert "never tell" in d and "tmux attach" in d   # only ever as the prohibition
-        assert d.count("tmux attach") == 1
-
-
-def test_the_reply_must_report_seats_as_seen_never_as_assumed():
-    d = _d({"state": "absent"}).lower()
-    assert "what the tool says it sees" in d
-
-
 # ---- server-side state ------------------------------------------------------------------
 def test_state_absent_when_no_manager(P, tmp_path, monkeypatch):
     monkeypatch.setattr(P, "ORCHESTRA_DIR", _registry(tmp_path, {"hello": {"tier": "T2"}}))
@@ -345,8 +281,8 @@ def test_an_expired_offer_is_not_a_yes(P, monkeypatch):
 
 
 def test_the_opener_turn_is_marked_as_the_opener(P):
-    assert P._begin_team_turn("web_o3", "team_open")["opener"] is True
-    assert P._begin_team_turn("web_o3", "team")["opener"] is False
+    assert P._begin_team_turn("web_o3", "onboarding_open")["opener"] is True
+    assert P._begin_team_turn("web_o3", "onboarding")["opener"] is False
 
 
 def test_an_offer_is_spent_by_the_run_it_allowed(P, tmp_path, monkeypatch):
@@ -405,10 +341,10 @@ def test_the_run_holds_a_file_lock_in_the_data_dir_so_another_process_waits(P, t
     assert not P.starter_running()
 
 
-def test_the_directive_does_not_offer_while_a_run_is_in_progress():
+def test_the_playbook_does_not_offer_while_a_run_is_in_progress():
     from services.arturo import onboarding as onb
-    d = onb.directive("team", {"state": "starting", "seats": [{"name": "gm", "tier": "T0", "seen": "running"}]})
-    assert "do not call create_starter_team" in d.lower()
+    d = onb.directive("onboarding", {"team": {"state": "starting", "seats": [{"name": "gm", "tier": "T0", "seen": "running"}]}})
+    assert "Do not offer it again" in d
     assert "gm (T0): running" in d
 
 
@@ -419,15 +355,12 @@ def test_decline_marks_the_turn(P):
         assert P._TEAM_TURN.get()["declined"] is True
 
 
-def test_the_directive_names_the_decline_tool_and_says_a_question_is_not_a_no():
+def test_the_playbook_names_the_decline_tool():
     from services.arturo import onboarding as onb
-    d = onb.directive("team", {"state": "absent"})
-    assert "decline_starter_team" in d
-    assert "a question is not a no" in d.lower()
-    assert onb.directive("team_open", {"state": "absent"}) == d
+    assert "decline_starter_team" in onb.directive("onboarding", {"team": {"state": "absent"}})
 
 
-# ---- /text carries the state, so the home page can finish the step by effect ---------------
+# ---- /text carries what the turn did, so the page acts by effect -------------------------------
 def _stub_turn(P, monkeypatch, tmp_path, reply=("ok", [], [])):
     monkeypatch.setattr(P, "ARTURO_STATE", tmp_path)
     monkeypatch.setattr(P, "_brain_reply", lambda messages, cid: reply)
@@ -435,73 +368,77 @@ def _stub_turn(P, monkeypatch, tmp_path, reply=("ok", [], [])):
     monkeypatch.setattr(P, "_record_text_turn", lambda **kw: None)
 
 
-def test_a_team_turn_returns_the_team_state_after_the_turn(P, monkeypatch, tmp_path):
-    _stub_turn(P, monkeypatch, tmp_path, ("Your team is up.", ["create_starter_team"], ["gm"]))
-    states = iter([{"state": "absent"}, {"state": "present", "seats": []}])
-    monkeypatch.setattr(P, "starter_team_state", lambda seen=None: next(states))
-    status, body = P.text_turn("[Onboarding: step=team]\nyes, call it website", "web_t1")
-    assert status == 200
-    assert body["team"] == {"state": "present", "seats": []}
+def test_an_onboarding_turn_says_whether_onboarding_is_done(P, monkeypatch, tmp_path):
+    _stub_turn(P, monkeypatch, tmp_path)
+    monkeypatch.setattr(P, "starter_team_state", lambda seen=None: {"state": "absent"})
+    _, body = P.text_turn("[Onboarding: step=onboarding]\nhi", "web_t1")
+    assert body["onboarding"] == {"done": False}
 
 
-def test_a_turn_outside_the_team_step_carries_no_team_field(P, monkeypatch, tmp_path):
+def test_a_turn_outside_onboarding_carries_no_onboarding_field(P, monkeypatch, tmp_path):
     _stub_turn(P, monkeypatch, tmp_path, ("hi", [], []))
     monkeypatch.setattr(P, "starter_team_state", lambda seen=None: (_ for _ in ()).throw(AssertionError("not consulted")))
     status, body = P.text_turn("hello", "web_t2")
-    assert status == 200 and "team" not in body
+    assert status == 200 and "onboarding" not in body
 
 
-def test_the_opener_puts_an_offer_on_the_book_for_the_operators_reply(P, monkeypatch, tmp_path):
-    _stub_turn(P, monkeypatch, tmp_path, ("Here is how it works... what should I call your project?", [], []))
+def test_the_team_card_puts_an_offer_on_the_book_for_the_operators_reply(P, monkeypatch, tmp_path):
+    _stub_turn(P, monkeypatch, tmp_path)
     monkeypatch.setattr(P, "starter_team_state", lambda seen=None: {"state": "absent"})
+
+    def brain(messages, cid):
+        P.execute_tool("ask_choices", {"options": ["Set it up", "Not now"], "purpose": "starter_team"})
+        return "Shall I set up your team?", ["ask_choices"], []
+    monkeypatch.setattr(P, "_brain_reply", brain)
     P._TEAM_OFFERS.clear()
-    P.text_turn("[Onboarding: step=team_open]\nIntroduce my team.", "web_t3")
+    _, body = P.text_turn("[Onboarding: step=onboarding_open]\n(first run: the operator just opened OrchestraOS)", "web_t3")
     assert "web_t3" in P._TEAM_OFFERS
+    assert body["choices"]["options"] == ["Set it up", "Not now"]
+    assert "always on" in body["choices"]["note"]           # the server's cost line, not the model's
 
 
-def test_the_operators_reply_to_the_offer_may_start_the_team_end_to_end(P, monkeypatch, tmp_path):
-    # opener (offer made) -> operator's "yes" turn: the tool runs inside that turn
+def test_the_operators_reply_to_the_card_may_start_the_team_end_to_end(P, monkeypatch, tmp_path):
+    # opener (card shown, create refused) -> operator's reply turn: the tool runs inside that turn
     monkeypatch.setattr(P, "ORCHESTRA_DIR", _registry(tmp_path, {}))
     monkeypatch.setattr(P, "ARTURO_STATE", tmp_path)
     monkeypatch.setattr(P, "_conversation_history", lambda cid: [])
     monkeypatch.setattr(P, "_record_text_turn", lambda **kw: None)
     monkeypatch.setattr(P, "seat_seen", lambda n: "running")
-    runs = []
+    runs, results = [], []
     monkeypatch.setattr(P, "_run_commission", lambda plan, timeout=120: (runs.append(1), (True, ""))[1])
-    results = []
 
-    def brain(messages, cid):                       # a brain that ALWAYS reaches for the tool
+    def brain(messages, cid):                       # a brain that ALWAYS reaches for both
         results.append(P.execute_tool("create_starter_team", {"project": "website"}))
-        return "done", ["create_starter_team"], []
+        P.execute_tool("ask_choices", {"options": ["Set it up", "Not now"], "purpose": "starter_team"})
+        return "done", ["create_starter_team", "ask_choices"], []
     monkeypatch.setattr(P, "_brain_reply", brain)
     P._TEAM_OFFERS.clear()
-    P.text_turn("[Onboarding: step=team_open]\nIntroduce my team.", "web_t4")
+    P.text_turn("[Onboarding: step=onboarding_open]\n(first run: hello)", "web_t4")
     assert runs == [] and results[0].startswith("NOT STARTED")       # the opener could not
-    P.text_turn("[Onboarding: step=team]\nyes, call it website", "web_t4")
-    assert runs == [1]                                                # the reply to the offer could
+    P.text_turn("[Onboarding: step=onboarding]\nSet it up", "web_t4")
+    assert runs == [1]                                                # the reply to the card could
 
 
-def test_a_decline_is_reported_and_takes_the_offer_off_the_book(P, monkeypatch, tmp_path):
+def test_a_turn_without_a_card_before_it_cannot_start_the_team(P, monkeypatch, tmp_path):
+    monkeypatch.setattr(P, "ORCHESTRA_DIR", _registry(tmp_path, {}))
     _stub_turn(P, monkeypatch, tmp_path)
-
-    def brain(messages, cid):
-        P.execute_tool("decline_starter_team", {})
-        return "No problem.", ["decline_starter_team"], []
-    monkeypatch.setattr(P, "_brain_reply", brain)
-    monkeypatch.setattr(P, "starter_team_state", lambda seen=None: {"state": "absent"})
+    monkeypatch.setattr(P, "_run_commission", _no_run)
+    out = []
+    monkeypatch.setattr(P, "_brain_reply", lambda m, c: (out.append(P.execute_tool("create_starter_team", {})), ("ok", [], []))[1])
     P._TEAM_OFFERS.clear()
-    _, body = P.text_turn("[Onboarding: step=team]\nnot now", "web_t5")
-    assert body["team"] == {"state": "absent", "declined": True}
-    assert "web_t5" not in P._TEAM_OFFERS
+    P.text_turn("[Onboarding: step=onboarding]\nset up my team", "web_t5")
+    assert out[0].startswith("NOT STARTED")
 
 
-def test_the_stream_fallback_passes_the_team_state_through():
+def test_the_stream_fallback_passes_the_cards_through():
     from services.arturo import text_stream as ts
     body = {"ok": True, "reply_text": "ok", "tools_called": [], "spawned": [], "brain": {"kind": "runtime"},
-            "team": {"state": "present"}}
+            "choices": {"options": ["a", "b"], "multi": False, "purpose": "other"},
+            "pair_card": {"device": "iPhone"}, "onboarding": {"done": False}}
     events = list(ts._whole_reply("t1", "c1", lambda: (200, body), brain=None))
-    end = [e for e in events if e["event"] == "turn.end"][-1]
-    assert end["data"]["team"] == {"state": "present"}
+    end = [e for e in events if e["event"] == "turn.end"][-1]["data"]
+    assert end["choices"]["options"] == ["a", "b"] and end["pair_card"] == {"device": "iPhone"}
+    assert end["onboarding"] == {"done": False}
 
 
 # ---- delta review of 24140d3 (orchestraos-builder) -----------------------------------------------
