@@ -174,11 +174,12 @@ export function toggleChoice(options: string[], picked: string[], option: string
  *  OrchestraOS asks nothing. Hands-free conversation (Arturo talks back, live) is the one thing that
  *  needs the server's voice key. The old one-word label named neither, so it is gone. */
 export const DICTATE_TITLE = "Dictate (uses your browser's mic permission)";
+/** A working name (the operator may rename it): change it here and every label follows. */
 export const HANDS_FREE = 'Hands-free conversation';
 export function handsFreeTitle(keyPresent: boolean): string {
   return keyPresent
-    ? 'Hands-free conversation: talk, and Arturo talks back (uses the voice key on your server)'
-    : 'Hands-free conversation needs a voice key on your server (ELEVENLABS_API_KEY or CARTESIA_API_KEY)';
+    ? `${HANDS_FREE}: talk, and Arturo talks back (uses the voice key on your server)`
+    : `${HANDS_FREE} needs a voice key on your server (ELEVENLABS_API_KEY or CARTESIA_API_KEY)`;
 }
 
 /** Onboarding ends by EFFECT: only when the server's reply says so (finish_onboarding wrote its flag),
