@@ -170,7 +170,7 @@ run onboarding again. Deleting `operator.json` as well erases the saved operator
    one invisible opener marked `[Onboarding: step=onboarding_open]`, then marks every turn
    `[Onboarding: step=onboarding]` until the server says onboarding is done. The proxy strips the
    marker and adds ONE playbook (`services/arturo/onboarding.py`), rebuilt each turn from what
-   only the server knows: the operator facts, the team as seen, the voice mode. The brain decides
+   only the server knows: the operator facts, the team as seen, whether a voice key is set. The brain decides
    what to say and acts through tools: `set_operator_fact`, `ask_choices` (tap-to-pick cards),
    `create_starter_team` / `decline_starter_team`, `pair_device` / `check_paired`,
    `finish_onboarding`. The page leaves onboarding only when a reply carries

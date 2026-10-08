@@ -65,8 +65,12 @@
   padding:2px 4px 10px; min-height:34px; max-height:140px; font-family:inherit;
 }
 .arturo-composer textarea::placeholder{ color:var(--grey); }
-.ctrl-row{ display:flex; align-items:center; justify-content:space-between; }
-.ctrl-row .cluster{ display:flex; align-items:center; gap:10px; }
+.ctrl-row{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.ctrl-row .cluster{ display:flex; align-items:center; gap:10px; min-width:0; }
+/* At phone widths the chips give way, never the mic and call buttons: the left group shrinks and its
+   chips truncate; the right group keeps its size (it was pushed off the edge at 390 px). */
+.ctrl-row .cluster:first-child{ flex:1 1 auto; overflow:hidden; }
+.ctrl-row .cluster:last-child{ flex:0 0 auto; }
 .circle-btn{ width:34px; height:34px; aspect-ratio:1 / 1; border-radius:50%; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.08); color:#fff; border:0; flex:0 0 auto; font-size:18px; }
 .circle-btn.white{ background:#fff; color:#111; }
 .circle-btn.grey-send{ background:rgba(255,255,255,0.16); }
@@ -83,7 +87,7 @@
   .circle-btn { width:44px; height:44px; }
   .arturo-glyph { width:44px; height:44px; }
 }
-.model-chip{ display:flex; align-items:center; gap:5px; background:rgba(255,255,255,0.08); border-radius:999px; padding:8px 14px; font-size:14px; border:0; color:#fff; }
+.model-chip{ display:flex; align-items:center; gap:5px; min-width:0; overflow:hidden; white-space:nowrap; background:rgba(255,255,255,0.08); border-radius:999px; padding:8px 14px; font-size:14px; border:0; color:#fff; }
 .model-chip b{ font-weight:600; }
 .model-chip .eff{ color:var(--grey); font-weight:400; }
 /* drawer */
@@ -196,7 +200,7 @@
    reached it and it sat shorter than the circles), and it no longer spells out "Looking at": the
    focus glyph says that, the label is just the page. */
 .arturo-context-chip{
-  display:inline-flex; align-items:center; gap:6px; max-width:min(62vw,230px); box-sizing:border-box;
+  display:inline-flex; align-items:center; gap:6px; max-width:min(62vw,230px); min-width:0; flex:0 1 auto; box-sizing:border-box;
   height:34px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.09); border-radius:999px;
   padding:0 6px 0 10px; font-size:12px; color:rgba(255,255,255,0.72); font-family:inherit;
 }

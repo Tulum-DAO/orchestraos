@@ -38,7 +38,7 @@ def test_a_cartesia_call_is_offered_only_the_non_fleet_allowlist(monkeypatch):
 
 
 def test_a_gemini_live_call_is_offered_only_the_non_fleet_allowlist():
-    # the browser's hands-free conversation (gateway /live): no caller on the call, so non-fleet
+    # the browser's Live voice mode (gateway /live): no caller on the call, so non-fleet
     from services.arturo import gemini_live_bridge as glb
     assert glb.arturo_mod is not None
     assert {d["name"] for d in glb.offered_declarations()} == {"knowledge", "list_agents"}
