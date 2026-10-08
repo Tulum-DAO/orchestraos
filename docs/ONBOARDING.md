@@ -15,7 +15,7 @@ This page is about the gateway (8890), which the phone app talks to.
 > | 1. Run your gateway | Works on `main`. |
 > | 2. `orchestra pair` | Works on `main`: prints the code and QR; the gateway serves `POST /pair/exchange`. |
 > | 3. Connect the web dashboard | **Not on `main`.** The connect screen described below was proposed (PR #23) and closed unmerged; this section describes the intended flow. |
-> | 4. Connect the iOS app | **Not released yet.** The pairing screen is being built and the app is headed for the App Store; this section describes that build. |
+> | 4. Connect the iOS app | **Not released yet.** In testing and headed for the App Store; this section describes the build under test, with a fallback for older builds. |
 > | 5. Connect the Mac app | **Not released yet.** It is in testing, with no public download; this section describes the build under test (it accepts the code `orchestra pair` prints, as is). |
 >
 > Run `orchestra pair --help` to confirm the command on your install.
@@ -118,17 +118,23 @@ through.
 
 ## 4. Connect the iOS app
 
-First launch shows a pairing screen, not the approvals list:
+First launch shows a pairing screen, not the approvals list. It says *On the machine running
+your OrchestraOS gateway, run `orchestra pair`, then paste the code it prints here — or scan
+its QR.*
 
-- **Type it in**: type your gateway's `https://` address into the address field, then
-  into the code field paste:
-  - the **whole code**, if `orchestra pair` printed one word starting with `orc1_`;
-  - only the **code value**, if it printed a `{"code":"…","base_url":"…"}` line (an older
-    version): the text inside the quotes after `"code":`, without the quotes. Or run
-    `orchestra upgrade` to get the `orc1_` code.
+1. Paste exactly what `orchestra pair` printed into the **PAIRING CODE** box (placeholder
+   *paste the code from orchestra pair*), or tap **Scan** and point the camera at its QR.
+2. Tap **Pair**. There is no address to type: the code carries it.
 
-Today's iOS app refuses a whole `{"code":…}` line, pasted or scanned as a QR, as a bad
-code. "Type it in" above is the path we have checked. (The Mac app, step 5, needs no address: it takes the code as is.)
+The address field is under **Advanced: gateway address and token**. You only need it for an
+older OrchestraOS that prints a code with no address in it; the screen tells you, and opens
+**Advanced** by itself, when that happens.
+
+**On an older build of the iOS app** (one without that intro line): type your gateway's
+`https://` address into the address field, then paste the whole `orc1_` code into the code
+field. If your `orchestra pair` printed a `{"code":"…","base_url":"…"}` line instead (an
+older OrchestraOS), paste only the code value, the text inside the quotes after `"code":`,
+or run `orchestra upgrade` first.
 
 **The app only connects over https, with a certificate the phone trusts.**
 A plain `http://` address (a LAN IP, `localhost`) is refused on the pairing
@@ -185,13 +191,13 @@ orchestra pair --base-url https://<machine>.<tailnet>.ts.net:8445 --scopes read,
 
 `read,approve,message` lets the Mac see your cards, answer them, and message your agents
 (step 2 explains each scope). You should see `Minted device … (my-mac) with scopes: read,
-approve, message`, and then the code to paste: one line. Depending on your version it
-starts with `orc1_` or with `{"code":`. Either works in the Mac app.
+approve, message`, and then the code to paste: one long word starting with `orc1_`. (An older
+OrchestraOS prints a `{"code":…}` line instead; the Mac app takes that too.)
 
 On the Mac, open the app. Its first window is **Connect this Mac**, with the line *Run
 `orchestra pair` on the gateway machine and paste the code it prints.*
 
-1. In Terminal, select the whole code line and copy it (`Cmd+C`).
+1. In Terminal, select the whole code and copy it (`Cmd+C`).
 2. Paste it into **Pairing code** (the box that says *Paste the code orchestra pair
    printed*). The gateway address fills itself in, and appears under the box as
    `Gateway: <address>`.
