@@ -4,6 +4,7 @@ const path = require("path");
 const { URL } = require("url");
 const { execFileSync } = require("child_process");
 const { WebSocketServer } = require("ws");
+const { wsOriginDecision } = require("./dashboard-ws-origin");
 let pty = null;
 try { pty = require("node-pty"); } catch (e) { console.warn("dashboard-proxy: node-pty not installed — web terminal disabled (npm install node-pty to enable)"); }
 
@@ -73,6 +74,7 @@ function setAggressiveResize(sess, mach) {
 // through (return without handling) for everything else, incl. /ws/terminal.
 server.prependListener("upgrade", (req, socket, head) => {
   if (!req.url.startsWith("/api/")) return; // fall through to /ws/terminal etc.
+  if (!wsAllowed(req)) { socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n"); socket.destroy(); return; }
   const p = http.request({ hostname: API_HOST, port: API_PORT, path: req.url, method: "GET", headers: req.headers });
   p.on("upgrade", (r, s, h) => { socket.write("HTTP/1.1 101 Switching Protocols\r\n" + Object.entries(r.headers).map(([k, v]) => k + ": " + v).join("\r\n") + "\r\n\r\n"); if (h.length) socket.write(h); s.pipe(socket); socket.pipe(s); });
   p.on("error", () => socket.destroy());
@@ -80,7 +82,22 @@ server.prependListener("upgrade", (req, socket, head) => {
 });
 
 // WebSocket terminal with ws library + node-pty
-const wss = new WebSocketServer({ server, path: "/ws/terminal" });
+// A WebSocket here is a shell into a seat's pane, and browsers do not apply the same-origin
+// policy to WebSockets, so every handshake must pass the origin check (dashboard-ws-origin.js).
+function wsAllowed(req) {
+  const d = wsOriginDecision({
+    origin: req.headers.origin,
+    hostHeader: req.headers.host,
+    forwardedHost: req.headers["x-forwarded-host"],
+    peerAddress: req.socket && req.socket.remoteAddress,
+    port: PORT,
+    dashboardHost: process.env.ORCHESTRA_DASHBOARD_HOST || "127.0.0.1",
+    extraHosts: process.env.ORCHESTRA_DASHBOARD_ALLOWED_HOSTS || "",
+  });
+  if (!d.allow) console.warn("[ws] refused " + req.url.split("?")[0] + " from origin " + req.headers.origin + " (" + d.reason + ")");
+  return d.allow;
+}
+const wss = new WebSocketServer({ server, path: "/ws/terminal", verifyClient: (info) => wsAllowed(info.req) });
 wss.on("connection", (ws, req) => {
   const url = new URL(req.url, "http://localhost");
   const session = url.searchParams.get("session");

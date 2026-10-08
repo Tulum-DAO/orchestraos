@@ -72,7 +72,7 @@ jobs:
           - name: orchestra-cli
             args: "orchestra_cli/tests"
           - name: root
-            args: "test_router_prefixes.py test_msg_threading.py --ignore=scripts"
+            args: "test_router_prefixes.py test_msg_threading.py test_dashboard_ws_origin.py --ignore=scripts"
           - name: services-arturo
             args: "services/arturo"
           - name: scripts-top
