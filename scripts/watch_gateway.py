@@ -499,13 +499,14 @@ def _instance_step(ledger, session, digest, present, now,
         if not present:
             return 0
         ledger[key] = {"instance_n": 1, "phase": "present", "answered": False,
-                       "last_present_ts": now, "gone_since": None}
+                       "last_present_ts": now, "gone_since": None, "first_seen_ts": now}
         return 1
     if present:
         if e.get("phase") == "gone":
             e["instance_n"] = int(e.get("instance_n", 0)) + 1
             e["phase"] = "present"; e["answered"] = False
             e["gone_since"] = None
+            e["first_seen_ts"] = now
         e["last_present_ts"] = now
         if answered_signal:
             e["answered"] = True
@@ -543,6 +544,59 @@ def _stamp_instance(session, menu, ledger=None, now=None, answered_signal=False,
     except Exception as e:  # noqa: BLE001 — never let identity break the surface
         print(f"[watch_gateway] instance stamp failed for {session}: {e}", file=sys.stderr)
         return 1, digest
+
+
+# --- "You can only answer what you could have seen" (single-digit permission answers) ---------
+# /agent-key's single-digit path sends a key to whatever prompt is on screen; the apps send no
+# card identity with it. So the gateway refuses a PERMISSION answer when the prompt on screen
+# was first seen AFTER the requesting device last fetched a surface that shows permission cards
+# (/pending-approvals, /agent-screen): that device cannot have seen it, so its tap was meant for
+# an earlier prompt. No fetch on record (e.g. after a gateway restart) refuses too; the app's
+# next poll records one. Both surfaces stamp the instance BEFORE they answer, so a prompt a
+# device saw always has first_seen_ts <= that device's fetch time.
+_MENU_FETCHES: dict = {}
+
+
+def _menu_fetch_key(request):
+    """Who fetched: the principal, plus the client's User-Agent, because Shaw's phone, iPad and
+    watch can share one fleet bearer and must not vouch for each other's screens."""
+    _, principal = _resolved_principal(request)
+    if principal is None:
+        principal = resolve_principal(request)
+    pid = (principal or {}).get("id") or "anon"
+    ua = ""
+    try:
+        ua = request.headers.get("User-Agent", "") or ""
+    except Exception:  # noqa: BLE001 — a header-less double
+        ua = ""
+    return pid + "|" + hashlib.sha256(ua.encode()).hexdigest()[:12]
+
+
+def _note_menu_fetch(request, now=None):
+    import time as _time
+    _MENU_FETCHES[_menu_fetch_key(request)] = _time.time() if now is None else now
+
+
+def _could_have_seen(request, session, menu):
+    """(ok, reason). Non-permission menus are not gated here."""
+    if not isinstance(menu, dict) or menu.get("kind") != "permission":
+        return True, None
+    last = _MENU_FETCHES.get(_menu_fetch_key(request))
+    if last is None:
+        return False, "instance_unknown"
+    led = _load_instance_ledger()
+    e = led.get(f"{session}|{_perm_digest(session, menu.get('question') or '', menu.get('context') or '')}")
+    if not isinstance(e, dict):
+        return False, "instance_unknown"           # never shown on any surface yet
+    if float(e.get("first_seen_ts") or 0) > float(last):
+        return False, "instance_mismatch"          # appeared after this device last looked
+    return True, None
+
+
+_COULD_NOT_HAVE_SEEN = {
+    "instance_unknown": "Can't tell which prompt this is any more. Open it in Approvals.",
+    "instance_mismatch": "This prompt was replaced by a newer one. Open it in Approvals to see what's waiting.",
+}
 
 
 def _perm_digest(session, question, context=""):
@@ -764,6 +818,13 @@ def _options_n_str(opts):
 
 
 async def handle_pending(request):
+    resp = await _handle_pending(request)
+    if getattr(resp, "status", 0) == 200:
+        _note_menu_fetch(request)
+    return resp
+
+
+async def _handle_pending(request):
     if not _authorized(request):
         return _json({"ok": False, "error": "unauthorized"}, status=401)
     store = ApprovalStore(); store.migrate()
@@ -3804,6 +3865,13 @@ async def handle_agent_menu_capture(request):
 
 
 async def handle_agent_screen(request):
+    resp = await _handle_agent_screen(request)
+    if getattr(resp, "status", 0) == 200:
+        _note_menu_fetch(request)
+    return resp
+
+
+async def _handle_agent_screen(request):
     """GET /agent-screen?session=&lines= -> ANSI-stripped pane tail + live state.
     The chat surface's honest 'reply view': what the agent's screen shows now."""
     if not _authorized(request):
@@ -4879,6 +4947,14 @@ async def handle_agent_key(request):
                          status=428)
         armed = os.environ.get("PERM_RESPOND_ARMED") == "1"
         import asyncio
+        _st = await asyncio.get_event_loop().run_in_executor(
+            None, _agent_status().get_agent_status, session)
+        _pm = _st.get("pending_menu") if isinstance(_st, dict) else None
+        if isinstance(_pm, dict):
+            seen_ok, seen_reason = _could_have_seen(request, session, _pm)
+            if not seen_ok:
+                return _json({"ok": False, "reason": seen_reason,
+                              "error": _COULD_NOT_HAVE_SEEN[seen_reason]}, status=409)
         with _session_send_lock(session):            # no interleave w/ walk/suggest/key
             ok, info = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: permission_respond(session, text, armed=armed))
@@ -5037,6 +5113,10 @@ async def handle_agent_key(request):
     # three-phase (digit -> literal text -> Enter) — never a bare digit that
     # strands an open TUI field (the operator live-finding 07:27).
     menu = stamp_input_kinds(dict(st["pending_menu"]))
+    seen_ok, seen_reason = _could_have_seen(request, session, menu)
+    if not seen_ok:
+        return _json({"ok": False, "reason": seen_reason,
+                      "error": _COULD_NOT_HAVE_SEEN[seen_reason]}, status=409)
     opt = next((o for o in (menu.get("options") or [])
                 if isinstance(o, dict) and o.get("n") == key), None)
     if text:
