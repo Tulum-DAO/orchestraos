@@ -512,7 +512,35 @@ export function queuedCommandItems(o: any): any[] {
   if (!text) return [];
   // `queued` flows through buildRenderItems to the client, which can say "sent while the
   // agent was working" rather than presenting it as an ordinary turn.
-  return [{ kind: 'text', role: 'user', text, ts: o.timestamp, uuid: o.uuid, queued: true }];
+  // queued:true here is a MARKER the two dedupes below find these by -- it is NOT the
+  // client's "still pending" meaning, and settleIngestedQueuedCommands strips it before
+  // anything is returned. See that function for why a logged queued_command is ingested.
+  return [{ kind: 'text', role: 'user', text, ts: o.timestamp, uuid: o.uuid, queued: true, [FROM_QUEUED_COMMAND]: true }];
+}
+
+const FROM_QUEUED_COMMAND = '__fromQueuedCommand';
+
+/**
+ * A queued_command in the log has ALREADY been ingested -- clear its queued flag.
+ *
+ * The operator, 2026-10-08 (screenshots): "Queued badge never actually disappears after message
+ * ingestion." The client contract for `queued` is "the server STILL holds this message"
+ * (it draws a chip). But Claude Code writes a queued_command line AT INJECTION: measured
+ * on live logs, it lands AFTER the tool_result it rides with (its own timestamp is the
+ * earlier send time) and the agent's thinking follows at once. So once it is in the log
+ * it is in the agent, and queued:true is false by construction. It was shipped forever.
+ *
+ * A message that is GENUINELY still pending is a msg_store held row with no delivered_at
+ * (mergeQueuedItems, B1). Those never carry the marker, so their chip is untouched.
+ *
+ * Runs LAST, after both dedupes, because they find these items by the queued marker.
+ */
+export function settleIngestedQueuedCommands(items: any[]): any[] {
+  return items.map((it) => {
+    if (!it || it[FROM_QUEUED_COMMAND] !== true) return it;
+    const { queued: _q, [FROM_QUEUED_COMMAND]: _m, ...rest } = it;
+    return rest;
+  });
 }
 
 /**
@@ -581,6 +609,12 @@ function normalizeClaudeEntry(o: any): any[] {
   if (t === 'attachment') return queuedCommandItems(o);
   if (t !== 'user' && t !== 'assistant') return [];
   if (o.isSidechain === true || o.isCompactSummary === true) return [];
+  // The harness writes its own notes as type:'user' with isMeta:true -- the image-size
+  // note after a photo is read, stop-hook feedback, a loaded skill's body, local-command
+  // caveats. The operator, 2026-10-08: rendered as user rows, they "look like messages that come
+  // from the user when it's not". Measured across the 60 most recent live transcripts:
+  // not one isMeta entry is human speech. Only the explicit `true` hides a turn.
+  if (t === 'user' && o.isMeta === true) return [];
   const msg = o.message || {};
   const role = msg.role || t;
   const ts = o.timestamp;
@@ -965,6 +999,7 @@ export function normalizeTranscript(
     // The batch wins: it knows who sent it.
     windowed = dropQueuedCommandsCoveredByBatches(windowed);
   }
+  windowed = settleIngestedQueuedCommands(windowed);
   return {
     agent_id: agentId,
     session_id: sessionId,
