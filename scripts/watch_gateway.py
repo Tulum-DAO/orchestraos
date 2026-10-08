@@ -3380,8 +3380,18 @@ def durable_first_batch_submit(session, answers, *, store, armed=False,
               f"durable anchor carries parts but no per-part questions", file=sys.stderr)
     ok, sinfo = submit_fn(session, answers=answers, armed=True, **_kw)
     if ok and not sinfo.get("dry_run"):
-        # delivered live. Resolve any stale mirror dupes for the session (the row
-        # we persisted is 'answered', not 'pending', so the resolver skips it).
+        # delivered live = TERMINAL, the same self-ack approval_resume path (A) does after a
+        # keypress (answered -> resumed). Left 'answered', approval_resume picked the row up
+        # (option_n is None for a multi-part menu -> path B) and re-delivered the answer as a
+        # digest inject AND a queued approval_resolved (one headset answer reached a seat's
+        # pane three times).
+        try:
+            store.ack(row["id"])
+        except Exception as e:  # noqa: BLE001 — delivered already; worst case a duplicate later
+            print(f"[watch_gateway] durable_first: self-ack failed ({row['id']}): {e}",
+                  file=sys.stderr)
+        # Resolve any stale mirror dupes for the session (the row we persisted is no
+        # longer 'pending', so the resolver skips it).
         try:
             store.resolve_pending_menus_for_session(session)
         except Exception as e:  # noqa: BLE001 — delivery already durable

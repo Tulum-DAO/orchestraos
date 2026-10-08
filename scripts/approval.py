@@ -474,6 +474,14 @@ def main(argv=None):
         return 0
     if args.cmd == "ack":
         ok = store.ack(args.id)
+        if not ok:
+            # Idempotent: the pipeline may have self-acked the row
+            # already (a live menu replay, approval_resume path A). The approval_resolved text tells
+            # the agent to ack, so already-acked is success, not an error. Never-answered still fails.
+            cur = store.get(args.id) or {}
+            if cur.get("status") == "resumed" and cur.get("resume_acked_at"):
+                print(json.dumps({"acked": True, "already": True, "id": args.id}))
+                return 0
         print(json.dumps({"acked": ok, "id": args.id}))
         return 0 if ok else 1
     if args.cmd == "questionnaire":
