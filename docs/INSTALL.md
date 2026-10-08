@@ -563,6 +563,19 @@ the `gm` seat's screen: type to it like a chat and press Enter. To leave without
 seat keeps running. (Closing the Terminal window also leaves it running.) `tmux ls` lists the
 sessions. You can also talk to seats from the dashboard in your browser.
 
+**Scrolling back in a seat.** A seat's screen is a tmux session, and it does not scroll like a
+normal terminal window. To read earlier output:
+
+1. Press `Ctrl-B`, let go, then press `[`. That turns on tmux's scroll mode (a line count
+   appears in the top-right corner).
+2. Use the arrow keys, or `PgUp` and `PgDn` (on a Mac laptop, `fn` with the up or down arrow).
+3. Press `q` to leave scroll mode and get back to typing.
+
+**Careful with the mouse wheel and the up arrow** when you are not in scroll mode. In a seat,
+they do not scroll: they bring back an earlier prompt into the input box, and the box shows
+`History 1/...`. If you see that, press `Esc` to clear it. Never press Enter on it, or that
+old prompt is sent to the seat again.
+
 The new seat appears in the dashboard's Agents list in your browser within about 15 seconds.
 
 Options: `--runtime claude|gemini|codex` (default: first of `[runtimes] enabled`), `--model`,
@@ -598,7 +611,7 @@ The `hello` row appears immediately; `alive`/`state` follow within ~15 s from th
 status detector. Only registered seats are listed — tmux is host-global, see "Sharing a
 host" below.
 
-### Advanced: create a seat from a role template (skip on a first install)
+### Later: more seats (skip on a first install)
 
 `orchestra agent create` fills a role template (it refuses an unfilled `{TOKEN}`), records the
 seat's parent, checks the runtime and model, spawns it and checks it is alive. The parent should
