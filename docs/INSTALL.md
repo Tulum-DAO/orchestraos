@@ -616,12 +616,27 @@ the `gm` seat's screen: type to it like a chat and press Enter. To leave without
 seat keeps running. (Closing the Terminal window also leaves it running.) `tmux ls` lists the
 sessions. You can also talk to seats from the dashboard in your browser.
 
+Never ask a seat to run `tmux attach` for you either: it would run it inside its own screen.
+
 **If an agent's screen shows another tmux inside it** (two status bars at the bottom, or a
-different agent's screen where you expected this one): press `Ctrl-B`, then `Ctrl-B` again,
-then `D`. That closes the inner one and leaves your own view open; a single `Ctrl-B` then `D`
-only detaches your own view. If the screen then shows a plain `$` prompt instead of the agent,
-the agent itself has stopped: detach (`Ctrl-B`, then `D`), don't type commands at that prompt,
-and send a report with the dashboard's **Report** button (top bar).
+different agent's screen where you expected this one), keys you press while looking at it reach
+your own view first, so `Ctrl-B` then `D` only detaches you and leaves the seat stuck. Instead,
+at your server's prompt (not attached to any seat), run this, with the seat's name in place of
+`gm` in both places:
+
+```bash
+tmux detach-client -t "$(tmux display -p -t gm '#{pane_tty}')"
+```
+
+Then check what the seat's screen is running:
+
+```bash
+tmux display -p -t gm '#{pane_current_command}'
+```
+
+You should see `claude` (or the name of your agent CLI). If it prints `bash` instead, the agent
+itself has stopped: don't type commands into that seat's screen, and send a report with the
+dashboard's **Report** button (top bar).
 
 **Scrolling back.** While you are looking at an agent's screen in your terminal, turn the mouse
 wheel to scroll back through what it wrote. To get back to typing, press `q`.
