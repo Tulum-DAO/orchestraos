@@ -18,7 +18,8 @@ doctor` in step 1 checks this and tells you what's missing, but you can't pass
 it without having done this first. See `docs/INSTALL.md` §0 for the exact
 per-CLI install + login commands, or `docs/BEGINNERS_GUIDE.md` if you've never
 used a terminal before. `docs/COSTS.md` covers what each CLI plan costs and the
-no-cost path (Gemini CLI's free tier).
+possible no-cost path (Google's free tier; its figures are unverified against the
+`agy` CLI the harness uses).
 
 ## 1. Install, doctor green, dashboard open
 
@@ -229,7 +230,7 @@ its `-gN`/`-genN` generation suffix stripped), indexed by `MEMORY.md`.
 the path in the new generation's boot prompt with a read-first instruction —
 that boot-prompt line, not the handoff document, is what makes the successor
 actually read it. See `docs/ARCHITECTURE.md`'s Memory section and
-`docs/MEMORY.md` (full walkthrough, once it lands) for the exact shape.
+`docs/MEMORY.md` (full walkthrough) for the exact shape.
 
 **If it fails, look here:** if the new generation doesn't know, the fact
 either wasn't written to disk (check the memory directory directly) or the
@@ -247,5 +248,5 @@ will send you to. Pick a track (`docs/tracks/README.md`) or a
 
 **Stuck on any step above?** The in-app **Report** button (dashboard top bar)
 files a structured report of what actually broke — use it before describing
-the problem from memory. The GitHub Discussions "Start here" post has this
-same path pinned. In person: the room, out loud, any time.
+the problem from memory. Then open an issue on the GitHub repo with what you ran
+and what it printed.

@@ -23,7 +23,8 @@ the contracts other things depend on — check changes there specifically.
 
 ## `orchestra upgrade`
 
-One command:
+One command, run from inside your orchestraos checkout (`cd orchestraos`), like
+every command on this page:
 
 ```bash
 orchestra upgrade              # fetch, show what's coming, pull --ff-only, init --yes, doctor

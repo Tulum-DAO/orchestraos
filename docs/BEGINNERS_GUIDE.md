@@ -90,7 +90,7 @@ Later (even after restarting it), ask "what's my favorite color?" — it should
 answer correctly by reading back what it wrote, not by guessing. This is the
 same mechanism the full harness uses to survive `docs/ARCHITECTURE.md`'s
 rotations — an agent replacing itself without forgetting anything. The exact
-files and paths this writes to are in `docs/MEMORY.md`, once it lands (it's
+files and paths this writes to are in `docs/MEMORY.md` (it's
 not the same file as the handoff document a retiring generation writes — that
 one carries where it stopped, not what it remembers).
 
@@ -105,7 +105,8 @@ where to look if it doesn't.
 
 1. **Install, doctor green, dashboard open.** `docs/INSTALL.md` from the top
    through §2: a VPS with Tailscale, `orchestra init --yes`, `orchestra doctor` (every
-   row OK), `orchestra up`, the dashboard open in your browser over Tailscale.
+   row OK once your CLI is logged in; before that, `runtime:login` is the one missing
+   row), `orchestra up`, the dashboard open in your browser over Tailscale.
 2. **Always-on agent spawned, answers questions in terminal.** `docs/INSTALL.md`
    §3: spawn one seat, confirm it is alive, ask it something in its own tmux
    pane and get a real answer.
@@ -142,9 +143,7 @@ question you are about to ask.
 
 ## If you're still stuck
 
-Three places, in order: the in-app **Report** button (dashboard top bar) files
+Two places, in order: the in-app **Report** button (dashboard top bar) files
 a structured report of exactly what broke, so whoever helps you starts from
-real state instead of a description; the GitHub Discussions "Start here" post
-pins the same path you're reading now for anyone else who lands there with the
-same question; and — if you're at the event in person — the room, out loud,
-any time. Nobody expects you to debug this alone.
+real state instead of a description; then open an issue on the GitHub repo with
+what you ran and what it printed. Nobody expects you to debug this alone.
