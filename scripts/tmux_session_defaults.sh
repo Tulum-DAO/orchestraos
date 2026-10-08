@@ -14,8 +14,10 @@
 # The cost of mouse on, and its guard: a scroll-up puts the pane in tmux's scroll mode
 # (copy-mode), which it leaves only when scrolled back to the bottom. While a pane is in that
 # mode, `send-keys` text is swallowed with no error, and most of the injectors (approval
-# resume, nudges, Arturo, the dashboard send) do not check for it. A pane can only ENTER the
-# mode from an attached client. So a client-detached hook leaves the mode: an unattended pane,
+# resume, nudges, Arturo, the dashboard send) do not check for it. In this codebase a pane only
+# ENTERS the mode from an attached client (a wheel scroll, prefix-[, or the web terminal, which is
+# an attached client too). A script that runs `tmux copy-mode -t <seat>` would break that, so
+# don't add one. So a client-detached hook leaves the mode: an unattended pane,
 # which is exactly when injectors type into it, is never stuck in it. That covers ssh detach,
 # a closed terminal window and a closed web-terminal tab. While someone is attached and
 # scrolled up, they are looking at it; that case predates this file (prefix-[ and the web
