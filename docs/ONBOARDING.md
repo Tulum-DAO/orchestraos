@@ -120,14 +120,15 @@ through.
 
 First launch shows a pairing screen, not the approvals list:
 
-- **Type it in**: the line `orchestra pair` printed looks like
-  `{"code":"<code>","base_url":"https://<host>:<port>"}`. Type the `base_url` value into
-  the address field, and the `code` value (the text inside the quotes after `"code":`,
-  without the quotes) into the code field.
+- **Type it in**: type your gateway's `https://` address into the address field, then
+  into the code field paste:
+  - the **whole code**, if `orchestra pair` printed one word starting with `orc1_`;
+  - only the **code value**, if it printed a `{"code":"…","base_url":"…"}` line (an older
+    version): the text inside the quotes after `"code":`, without the quotes. Or run
+    `orchestra upgrade` to get the `orc1_` code.
 
-Today the iOS app does **not** accept that whole line, or a scan of the QR made from it: it
-refuses it as a bad code. Use "type it in" above until an app update says otherwise. (The
-Mac app, step 5, accepts it as is.)
+Today's iOS app refuses a whole `{"code":…}` line, pasted or scanned as a QR, as a bad
+code. "Type it in" above is the path we have checked. (The Mac app, step 5, needs no address: it takes the code as is.)
 
 **The app only connects over https, with a certificate the phone trusts.**
 A plain `http://` address (a LAN IP, `localhost`) is refused on the pairing
