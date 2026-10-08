@@ -748,7 +748,8 @@ Rules:
   do it myself. Never do those for me, and never ask for my passwords.
 - Never delete, destroy, reset, overwrite or wipe anything. If a command asks
   `Overwrite (y/n)?`, the answer is n.
-- If I already said yes to Arturo in section 2, run `tmux ls` first and follow the section's
+- If I said yes to Arturo in section 2, first ask me whether Arturo has said the team is up;
+  wait until it has. Then run `tmux ls` and follow the section's
   "If you already said yes to Arturo" paragraph: use my project name, never add a second one.
 - We are done when `orchestra starter` prints `starter team up: gm (T0) -> pm-first-project (T1) -> dev-first-project (T2)`
   (its very last line is `talk to gm: ...`)
@@ -1020,6 +1021,11 @@ Tailscale issues the https certificate.
 
 ## 5. Answer one approval card from the dashboard
 
+The card goes to your worker seat: `dev-first-project`, or `dev-<name>` if Arturo set up your
+team with another project name (`tmux ls` shows it). The commands in this section use
+`dev-first-project`; if yours is different, put your own seat's name in its place, or the card
+goes to a seat that doesn't exist and is never delivered.
+
 From a shell (or let the seat run it):
 
 ```bash
@@ -1034,7 +1040,9 @@ signal ... fail-open`, because you ran it from a plain shell, not a seat) and on
 ntfy push (no push is set up on the minimum path). Both are normal; the card is created.
 
 The card appears under Approvals in the dashboard (`GET /api/approvals` through the
-proxy lists it under `pending`); answer it there, or from a shell:
+proxy lists it under `pending`); answer it there, or from a shell. This uses the default
+dashboard port 8891; if the `dashboard` row of `orchestra status` shows another port, put that
+one in instead:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8891/api/approvals/<card id>/approve
@@ -1045,8 +1053,8 @@ What happens next, and how to see it:
 1. The answer is recorded in `<data>/state/tasks.db` (`python3 scripts/approval.py get <card id>`
    shows `status: answered`).
 2. Within a minute the `approval_resume` beat (see the `orchestra up` table) delivers it:
-   because the card came `--from dev-first-project --worker-kind pane`, the decision is typed into the
-   `dev-first-project` tmux pane as a message and a durable row is written for the seat
+   because the card came `--from dev-first-project --worker-kind pane` (or your own `dev-<name>`),
+   the decision is typed into that seat's tmux pane as a message and a durable row is written for the seat
    (`python3 msg_store.py inbox --agent dev-first-project`). `approval.py get` then shows
    `status: resumed`; `tmux capture-pane -p -t dev-first-project | tail -20` shows the delivered
    decision; `<data>/logs/approval_resume.log` has the delivery line.
