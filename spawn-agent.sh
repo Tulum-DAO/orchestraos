@@ -44,6 +44,10 @@ NC='\033[0m'
 log() { echo -e "${CYAN}[spawn]${NC} $*"; }
 warn() { echo -e "${YELLOW}[spawn]${NC} $*"; }
 err() { echo -e "${RED}[spawn]${NC} $*" >&2; }
+# vlog: detail that helps when debugging a spawn but reads as an alarm to a newcomer (benign
+# model-banner checks, where generated settings went). Shown with --verbose or
+# ORCHESTRA_SPAWN_VERBOSE=1. Real failures always use warn/err.
+vlog() { [[ "${ORCHESTRA_SPAWN_VERBOSE:-}" == "1" ]] && echo -e "${CYAN}[spawn]${NC} $*"; return 0; }
 
 # Pinned Claude binary — prevents PATH version skew between tmux shells.
 # Set ORCHESTRA_CLAUDE_BIN to pin an exact path; otherwise resolve from PATH.
@@ -144,8 +148,8 @@ verify_spawn_model() {
     verdict=$(classify_model_line "$line")
     case "$verdict" in
         1m)     log "  [1m]-verify OK (by effect): '$session' running a [1m] model"; return 0 ;;
-        family) warn "  [1m]-verify: '$session' banner shows '$(printf '%s' "$line" | grep -oE "$SPAWN_MODEL_LABEL_RE" | head -1)' — [1m] cannot be confirmed from this banner; continuing (non-fatal)"; return 0 ;;
-        none)   warn "  [1m]-verify: could not read a model from '$session' (non-fatal); continuing"; return 0 ;;
+        family) vlog "  [1m]-verify: '$session' banner shows '$(printf '%s' "$line" | grep -oE "$SPAWN_MODEL_LABEL_RE" | head -1)' — [1m] cannot be confirmed from this banner; continuing (non-fatal)"; return 0 ;;
+        none)   vlog "  [1m]-verify: could not read a model from '$session' (non-fatal); continuing"; return 0 ;;
     esac
     # bare: an explicit non-[1m] model id is visible. Correct ONLY if the operator asked for a
     # [1m] model (#95): config/providers.json ships no [1m] SKU for any family, so on a default
@@ -559,7 +563,7 @@ spawn_agent() {
         fi
     elif [[ -f "$role_prompt" ]]; then
         # Fallback: no static foundation, use role prompt alone
-        warn "FOUNDATION_STATIC.md not found — using role prompt only"
+        warn "prompts/FOUNDATION_STATIC.md not found (it ships with OrchestraOS; is the checkout complete?) — using the role prompt only"
         cp "$role_prompt" "$combined_prompt"
     else
         warn "No system prompts found — proceeding without system prompt"
@@ -592,6 +596,12 @@ spawn_agent() {
     # Build the initial prompt
     local init_prompt="You are ${name} (${agent_id}), a ${tier} agent in this OrchestraOS install."
     init_prompt+=" Your working directory is ${cwd}."
+    # The role prompt (shared foundation + this seat's role) was assembled above and, until this
+    # line, never handed to the seat: nothing referenced it, so every seat ran without its role
+    # prompt unless its task text happened to say "read your prompt".
+    if [[ -n "$full_prompt" && -f "$full_prompt" ]]; then
+        init_prompt+=" FIRST, read $full_prompt: it is your role prompt (the rules every seat follows, then your own role). Follow it for the whole session."
+    fi
 
     # Inject reincarnation protocol
     local reincarnation_protocol="$SCRIPT_DIR/prompts/_reincarnation-protocol.md"
@@ -808,7 +818,7 @@ spawn_agent() {
         perm_settings="$(python3 "$SCRIPT_DIR/scripts/spawn_permission_rules.py" "$agent_id" "$cwd" 2>"$perm_err" || true)"
         if [[ -n "$perm_settings" && -f "$perm_settings" ]]; then
             launch_cmd+=" --settings $perm_settings"
-            log "  Perms: project-local allow-rules -> $perm_settings"
+            vlog "  Perms: project-local allow-rules -> $perm_settings"
         else
             warn "  Perms: allow-rule generation failed — spawning without (prompts escalate via Layer B)"
             # if-form, not `[[ ]] && warn`. I expected the && form to abort the spawn under
@@ -945,6 +955,7 @@ case "${1:-}" in
         while [[ $# -gt 0 ]]; do
             case "$1" in
                 --task)   shift; task="${1:-}";;
+                --verbose) export ORCHESTRA_SPAWN_VERBOSE=1;;
                 --resume) shift; resume_sid="${1:-}"
                           [[ -n "$resume_sid" ]] || { echo "--resume needs a session id" >&2; exit 2; };;
                 *) echo "unknown option: $1" >&2; exit 2;;
