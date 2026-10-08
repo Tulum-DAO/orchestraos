@@ -229,7 +229,7 @@ rows in doctor become INFO and `orchestra up` skips it.
 ```bash
 orchestra up                 # foreground; Ctrl-C stops everything
 # or
-orchestra up --detach && sleep 5 && orchestra status   # status can say "not running" for the first few seconds
+orchestra up --detach && orchestra status   # --detach returns once the supervisor is up (or says why it did not start)
 ```
 
 One supervisor process runs, restarts (with backoff) and logs each child under
