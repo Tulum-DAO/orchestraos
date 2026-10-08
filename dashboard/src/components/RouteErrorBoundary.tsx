@@ -34,7 +34,9 @@ class Boundary extends Component<BoundaryProps, State> {
       <div role="alert" className="m-6 rounded-lg border border-red-900/60 bg-red-950/30 p-5 text-sm text-neutral-200">
         <p className="font-semibold text-red-300">This page hit an error and could not be shown.</p>
         <p className="mt-2 text-neutral-400">
-          Other pages still work: pick one from the menu. Or reload this one.
+          {this.props.label === 'page'
+            ? 'Other pages still work: pick one from the menu. Or reload this one.'
+            : "Use your browser's Back button to return, or reload."}
         </p>
         <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap text-xs text-neutral-500">
           {this.state.error.message}
