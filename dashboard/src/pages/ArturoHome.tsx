@@ -507,7 +507,7 @@ export default function ArturoHome() {
           <div className="cluster">
             <button className="circle-btn" aria-label="Attach a file" title="Attach a file"
                     onClick={() => fileInput.current?.click()} disabled={uploading}><Plus size={18} /></button>
-            <button className="model-chip" onClick={() => setModelOpen(true)}><b>{model}</b>{eff && <span className="eff">{eff}</span>}</button>
+            <button className="model-chip" onClick={() => setModelOpen(true)} aria-label={`Brain: ${model}. Change`} title={`Answering on ${model}`}><b>{model}</b>{eff && <span className="eff">{eff}</span>}</button>
           </div>
           <div className="cluster">
             <button className={dictMode === 'idle' ? 'circle-btn' : `circle-btn ${dictMode}`}
