@@ -73,9 +73,11 @@ address and user if you need them).
 Rules:
 - If you can run commands on my computer, run them yourself and show me every output.
   If you can't, give me one command at a time and wait for me to paste back what it printed.
-- Stop at every step marked [PERSON ONLY] (paying, signing in, passwords, approving a
-  device) and let me do it myself. Never do those for me, and never ask for my passwords.
-- Never delete, destroy, reset or wipe anything.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, any password or
+  passphrase prompt including sudo's, approving a device or an admin prompt) and let me
+  do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset, overwrite or wipe anything. If a command asks
+  `Overwrite (y/n)?`, the answer is n.
 - We are done when logged in as the new user, `whoami` prints its name and `sudo -v` succeeds. Show me that output; don't just tell me it worked.
 ```
 
@@ -111,11 +113,18 @@ directory`, you use a password, so read on.
 
 Logged in as root with a password rather than a key? Then `/root/.ssh/authorized_keys` does
 not exist and the `cp` line fails. Run only `adduser` and `usermod`, `exit`, and then, from your
-own computer, `ssh-copy-id orchestra@<server ip>` (it asks for the new user's password once).
+own computer, **[PERSON ONLY]** `ssh-copy-id orchestra@<server ip>` (it asks for the new user's password once). On
+Windows there is no `ssh-copy-id`; in PowerShell use
+`type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh orchestra@<server ip> "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"`
+(it also asks for the new user's password once; `>>` only adds the key).
 
 Then, from your own computer: `ssh orchestra@<your server address>` (the same address you
-used for `root@`). Check: `whoami` prints `orchestra`, and `sudo -v` asks for that user's
-password (`[sudo] password for orchestra:`) and then prints nothing, which means it worked. If your provider already
+used for `root@`).
+
+You should see: `whoami` prints `orchestra`, and `sudo -v` asks for that user's password
+(`[sudo] password for orchestra:`, **[PERSON ONLY]**: type it yourself) and then prints nothing, which
+means it worked. From now on, `sudo` asks for this password the first time in a while; that
+prompt is always yours to answer. If your provider already
 logs you in as a normal user with sudo, skip this step.
 
 ### Tailscale on the VPS and on your own device
@@ -131,9 +140,11 @@ address and user if you need them).
 Rules:
 - If you can run commands on my computer, run them yourself and show me every output.
   If you can't, give me one command at a time and wait for me to paste back what it printed.
-- Stop at every step marked [PERSON ONLY] (paying, signing in, passwords, approving a
-  device) and let me do it myself. Never do those for me, and never ask for my passwords.
-- Never delete, destroy, reset or wipe anything.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, any password or
+  passphrase prompt including sudo's, approving a device or an admin prompt) and let me
+  do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset, overwrite or wipe anything. If a command asks
+  `Overwrite (y/n)?`, the answer is n.
 - We are done when `tailscale status` on the server lists both the server and my own computer or phone. Show me that output; don't just tell me it worked.
 ```
 
@@ -146,7 +157,7 @@ On the VPS, as your normal user:
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh   # downloads and installs Tailscale; ends with "Installation complete!"
-sudo tailscale up                       # prints a login URL: open it in your browser and sign in
+sudo tailscale up                       # [PERSON ONLY] prints a login URL: open it in your browser and sign in
 sudo tailscale set --operator=$USER     # lets your user run `tailscale serve` without sudo (step 2); prints nothing
 tailscale status                        # the VPS is listed, with a 100.x.y.z address
 ```
@@ -161,15 +172,17 @@ used: your computer and phone must sign in with the same one.
 **[PERSON ONLY]** On your own computer and/or phone: install Tailscale and sign in **with the same account**.
 - **Mac:** **Tailscale** from the Mac App Store (or tailscale.com/download); open it and click
   its icon in the menu bar, top right of the screen, to log in.
-- **Windows:** the installer from tailscale.com/download; after installing, click the
-  Tailscale icon in the taskbar's notification area (bottom right) to log in.
+- **Windows:** the installer from tailscale.com/download. Windows asks whether to allow it to
+  make changes: that admin prompt is yours (**[PERSON ONLY]**). Then click the Tailscale icon in the
+  taskbar's notification area, bottom right; if you don't see it, click the `^` arrow there
+  to show hidden icons.
 - **Linux:** the commands at tailscale.com/download, then `sudo tailscale up`.
 - **Phone:** the **Tailscale** app from the App Store or Google Play.
 
-Run `tailscale status` on the VPS again: your device is now listed too.
-
-Check: on the VPS, `tailscale ip -4` prints its tailnet address (it starts with `100.`).
-From your laptop, `ping <that address>` answers (`Ctrl-C` stops it). From now on
+You should see: `tailscale status` on the VPS now lists your device too, and `tailscale ip -4`
+prints the VPS's tailnet address (it starts with `100.`). From your own computer,
+`ping <that address>` answers (on a Mac or Linux, `Ctrl-C` stops it; on Windows it stops by
+itself after four replies). From now on
 you can `ssh <your user>@<that address>` instead of the public IP.
 
 ### Packages
@@ -185,11 +198,17 @@ address and user if you need them).
 Rules:
 - If you can run commands on my computer, run them yourself and show me every output.
   If you can't, give me one command at a time and wait for me to paste back what it printed.
-- Stop at every step marked [PERSON ONLY] (paying, signing in, passwords, approving a
-  device) and let me do it myself. Never do those for me, and never ask for my passwords.
-- Never delete, destroy, reset or wipe anything.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, any password or
+  passphrase prompt including sudo's, approving a device or an admin prompt) and let me
+  do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset, overwrite or wipe anything. If a command asks
+  `Overwrite (y/n)?`, the answer is n.
 - We are done when `node -v` prints a version starting with `v22`. Show me that output; don't just tell me it worked.
 ```
+
+**[PERSON ONLY]** The first `sudo` in a while asks for your password (`[sudo] password for
+<you>:`); type it yourself. That goes for every `sudo` line below, including the pinned CLI
+install.
 
 ```bash
 sudo apt update && sudo apt install -y git tmux python3 python3-venv build-essential curl iproute2   # iproute2 = `ss`, which `orchestra doctor` needs to attribute ports to its own supervisor
@@ -224,9 +243,11 @@ address and user if you need them).
 Rules:
 - If you can run commands on my computer, run them yourself and show me every output.
   If you can't, give me one command at a time and wait for me to paste back what it printed.
-- Stop at every step marked [PERSON ONLY] (paying, signing in, passwords, approving a
-  device) and let me do it myself. Never do those for me, and never ask for my passwords.
-- Never delete, destroy, reset or wipe anything.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, any password or
+  passphrase prompt including sudo's, approving a device or an admin prompt) and let me
+  do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset, overwrite or wipe anything. If a command asks
+  `Overwrite (y/n)?`, the answer is n.
 - We are done when `claude --version` prints `2.1.276 (Claude Code)`. Show me that output; don't just tell me it worked.
 ```
 
@@ -277,9 +298,11 @@ address and user if you need them).
 Rules:
 - If you can run commands on my computer, run them yourself and show me every output.
   If you can't, give me one command at a time and wait for me to paste back what it printed.
-- Stop at every step marked [PERSON ONLY] (paying, signing in, passwords, approving a
-  device) and let me do it myself. Never do those for me, and never ask for my passwords.
-- Never delete, destroy, reset or wipe anything.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, any password or
+  passphrase prompt including sudo's, approving a device or an admin prompt) and let me
+  do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset, overwrite or wipe anything. If a command asks
+  `Overwrite (y/n)?`, the answer is n.
 - We are done when `claude auth status` shows `"loggedIn": true`. Show me that output; don't just tell me it worked.
 ```
 
@@ -288,7 +311,9 @@ your own login; never copy someone else's credentials onto the server.
 
 **[PERSON ONLY] You need a paid plan.** For Claude Code that is a Claude **Pro** or **Max** subscription
 (claude.com/pricing; [docs/COSTS.md](COSTS.md) compares the options). Buy it first, with the same
-email you will sign in with.
+email you will sign in with. On Claude's website it takes only a credit or debit card; if you
+subscribe in the Claude iPhone or Android app instead, the App Store or Google Play handles
+payment ("Paid plan billing FAQs", support.claude.com).
 
 On the server, start Claude Code once:
 
@@ -305,7 +330,9 @@ It shows a few screens. The server has no browser, so you sign in from your own 
 3. **[PERSON ONLY]** **`Browser didn't open? Use the url below to sign in`**, then a very long link that wraps
    over several lines, then `Paste code here if prompted >`. With the mouse, select the
    whole link, from `https://` to its last character on the last line, copy it, and open it in
-   your own computer's browser. Sign in, and click to authorize Claude Code.
+   your own computer's browser. Sign in, and click to authorize Claude Code. If the browser
+says the link is invalid, it was copied broken across the line wraps: make the terminal
+window wider and copy it again, or check that the pasted link has no spaces in it.
 4. **[PERSON ONLY]** The browser then shows a **code**. Copy it, go back to your terminal, paste it after
    `Paste code here if prompted >`, and press Enter.
 5. A few more screens follow (a login confirmation and some notes). Press Enter on each.

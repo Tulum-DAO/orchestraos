@@ -1,9 +1,9 @@
 # From scratch: from your computer to your own server
 
 This page is for you if you have never rented a server, made an ssh key, or typed
-commands into a server. You need a computer (Mac, Windows or Linux) with an internet
-connection, and an email address. You need to be able to copy and paste. Nothing else is
-assumed.
+commands into a server. You'll need a computer (Mac, Windows or Linux) with an internet
+connection, an email address, and a way to pay for a server and an AI plan; step 3 shows
+where. You need to be able to copy and paste. Nothing else is assumed.
 
 By the end of this page you will have your own server on the internet, and you will be
 logged in to it from your computer. Then [docs/INSTALL.md](INSTALL.md) takes over and
@@ -63,9 +63,11 @@ https://github.com/Tulum-DAO/orchestraos/blob/main/docs/FROM_SCRATCH.md#1-open-a
 Rules:
 - If you can run commands on my computer, run them yourself and show me every output.
   If you can't, give me one command at a time and wait for me to paste back what it printed.
-- Stop at every step marked [PERSON ONLY] (paying, signing in, passwords, approving a
-  device) and let me do it myself. Never do those for me, and never ask for my passwords.
-- Never delete, destroy, reset or wipe anything.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, any password or
+  passphrase prompt including sudo's, approving a device or an admin prompt) and let me
+  do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset, overwrite or wipe anything. If a command asks
+  `Overwrite (y/n)?`, the answer is n.
 - We are done when `whoami` in my terminal prints my username. Show me that output; don't just tell me it worked.
 ```
 
@@ -96,9 +98,11 @@ https://github.com/Tulum-DAO/orchestraos/blob/main/docs/FROM_SCRATCH.md#2-make-a
 Rules:
 - If you can run commands on my computer, run them yourself and show me every output.
   If you can't, give me one command at a time and wait for me to paste back what it printed.
-- Stop at every step marked [PERSON ONLY] (paying, signing in, passwords, approving a
-  device) and let me do it myself. Never do those for me, and never ask for my passwords.
-- Never delete, destroy, reset or wipe anything.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, any password or
+  passphrase prompt including sudo's, approving a device or an admin prompt) and let me
+  do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset, overwrite or wipe anything. If a command asks
+  `Overwrite (y/n)?`, the answer is n.
 - We are done when showing my public key prints one line that starts with `ssh-ed25519`. Show me that output; don't just tell me it worked.
 ```
 
@@ -155,9 +159,11 @@ https://github.com/Tulum-DAO/orchestraos/blob/main/docs/FROM_SCRATCH.md#3-rent-a
 Rules:
 - If you can run commands on my computer, run them yourself and show me every output.
   If you can't, give me one command at a time and wait for me to paste back what it printed.
-- Stop at every step marked [PERSON ONLY] (paying, signing in, passwords, approving a
-  device) and let me do it myself. Never do those for me, and never ask for my passwords.
-- Never delete, destroy, reset or wipe anything.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, any password or
+  passphrase prompt including sudo's, approving a device or an admin prompt) and let me
+  do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset, overwrite or wipe anything. If a command asks
+  `Overwrite (y/n)?`, the answer is n.
 - We are done when I tell you my new server's IP address (four numbers with dots), which
   I read off the provider's website.
 ```
@@ -165,16 +171,18 @@ Rules:
 This is the step where you pay. A server is rented by the hour from a hosting company,
 and you pay that company directly, not OrchestraOS. The size these docs use costs about
 $24 a month at DigitalOcean, billed by the hour while the server exists. You will also need a paid plan for one AI tool to run your agents (Claude
-Pro is about $20 a month); [docs/INSTALL.md](INSTALL.md) covers it when you get there.
+Pro is about $20 a month; Claude's website takes only a credit or debit card, while buying it
+in the Claude iPhone or Android app uses your App Store or Google Play payment);
+[docs/INSTALL.md](INSTALL.md) covers it when you get there.
 [docs/COSTS.md](COSTS.md) compares providers and prices.
 
 We suggest **DigitalOcean** for a first server: its screens are simple, and it takes a
-card, PayPal, Google Pay or Apple Pay. (PayPal makes a small temporary $5 charge to check
-the account.) The install works on any Ubuntu 24.04 server; other providers are at the
+card, PayPal, Google Pay or Apple Pay. (With PayPal, it asks you to allow a $5
+authorization charge to verify the account; see DigitalOcean's payment-methods docs.) The install works on any Ubuntu 24.04 server; other providers are at the
 end of this step.
 
 1. **[PERSON ONLY]** **Sign up** at digitalocean.com and add a payment method (card, PayPal, Google Pay or
-   Apple Pay). Confirm your email if asked.
+   Apple Pay). Confirm your email, and complete any identity check, if it asks.
 2. **[PERSON ONLY]** **Give it your public key.** Go to **Settings**, then the **Security** tab, and click
    **Add SSH Key**. Paste the line you copied in step 2 into **Public Key**. Type
    `my-computer` as the **Key Name**. Click **Add SSH Key**.
@@ -194,6 +202,8 @@ end of this step.
    "your server address", this is what they mean (until Tailscale gives the server a
    second, private address in [docs/INSTALL.md](INSTALL.md)).
 
+You should see: your new droplet in the **Droplets** list, with an IP address in its row.
+
 **Other providers.** Any company that rents Ubuntu 24.04 servers and lets you add an
 ssh key works: Hetzner (cheaper; may ask for identity verification), Vultr, Linode,
 and others. Pick Ubuntu 24.04, at least 2 CPUs and 4 GB of memory, and choose your
@@ -210,10 +220,13 @@ https://github.com/Tulum-DAO/orchestraos/blob/main/docs/FROM_SCRATCH.md#4-log-in
 Rules:
 - If you can run commands on my computer, run them yourself and show me every output.
   If you can't, give me one command at a time and wait for me to paste back what it printed.
-- Stop at every step marked [PERSON ONLY] (paying, signing in, passwords, approving a
-  device) and let me do it myself. Never do those for me, and never ask for my passwords.
-- Never delete, destroy, reset or wipe anything.
-- We are done when `ssh root@<my server address> whoami` prints `root`. Show me that output; don't just tell me it worked.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, any password or
+  passphrase prompt including sudo's, approving a device or an admin prompt) and let me
+  do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset, overwrite or wipe anything. If a command asks
+  `Overwrite (y/n)?`, the answer is n.
+- We are done when, at my server's prompt, `whoami` prints `root`. Show me that output;
+  don't just tell me it worked.
 ```
 
 In your terminal, type `ssh root@` followed by your server's address. It is the same on
@@ -258,6 +271,9 @@ new prompt that ends in `#`, like `root@orchestra:~#`. You are now on the server
 - **Windows:** `ssh` is not recognized: see the OpenSSH Client note in step 2.
 
 ## 5. Next: install OrchestraOS
+
+You should see, before you go on: the server's prompt, ending in `#`, still open in your
+terminal (step 4).
 
 Stay logged in, and continue with [docs/INSTALL.md](INSTALL.md) at **§0, "Run as a normal
 user, not root"**. You are root right now, so that step applies to you: it creates your
