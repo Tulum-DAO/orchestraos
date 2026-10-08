@@ -22,7 +22,7 @@ The path, in order:
 | 0. Prerequisites | the VPS | a normal sudo user, Tailscale, packages, a pinned agent CLI, logged in |
 | 1. Clone, init, doctor | the VPS | `orchestra doctor` all OK |
 | 2. Up | the VPS, then your browser | the supervisor running; the dashboard open at `https://<vps>.<tailnet>.ts.net` |
-| 3. Spawn one seat | the VPS or the dashboard | one live seat |
+| 3. Your starter team | the VPS | three live seats: gm (T0) → a project manager (T1) → a worker (T2) |
 | 4. Answer one card | the dashboard | the seat receives your answer |
 
 Connecting the iOS app to your gateway (pairing) is [docs/ONBOARDING.md](ONBOARDING.md), a
@@ -545,15 +545,31 @@ but its terminal fails to connect, and `<data>/logs/dashboard.log` shows
 No Tailscale? From your laptop, `ssh -L 8891:127.0.0.1:8891 <user>@<server>` and then
 open `http://127.0.0.1:8891` while that ssh session stays open.
 
-## 3. Spawn one seat
+## 3. Your starter team
 
-The one-command way: `orchestra spawn` registers the seat in the data-dir registry (if it is
-new) and launches it in tmux with the install env carried into the pane.
+One command starts three agents ("seats"), one at each level, each reporting to the one above:
+
+| seat | tier | what it does |
+|---|---|---|
+| `gm` | T0, the manager | the one you talk to; always on; hands work down |
+| `pm-first-project` | T1, a project manager | runs one project for gm; reports to `gm` |
+| `dev-first-project` | T2, a worker | does the hands-on work; reports to `pm-first-project` |
 
 ```bash
-orchestra spawn gm --gm                  # the General Manager: prompts/gm.md, tier T0, always-on
-orchestra spawn hello --task "Say hello, then park."   # a worker seat (prompts/hello.md if present)
-tmux attach -t gm                        # talk to it; detach with Ctrl-B D
+orchestra starter
+```
+
+You should see three lines, one per seat as it comes up, then `starter team up: gm (T0) ->
+pm-first-project (T1) -> dev-first-project (T2)`. It takes a minute or two. The project manager
+and the worker say they are ready and then wait (they use no work until you give them some).
+Want a real name instead of `first-project`? `orchestra starter --project website` names them
+`pm-website` and `dev-website`. Running `orchestra starter` again is safe: seats that are already
+running are skipped, and one that stopped is started again.
+
+Then talk to gm:
+
+```bash
+tmux attach -t gm
 ```
 
 **Talking to a seat.** Each seat runs in its own terminal session on the server, kept alive by
@@ -580,8 +596,9 @@ that is already running, `tmux set -t <seat> mouse on` turns the wheel on.
 - **The Mac's Terminal app:** it has no drag key for this. Untick **View → Allow Mouse
   Reporting**, select and copy, then tick it again.
 
-The new seat appears in the dashboard's Agents list in your browser within about 15 seconds.
+The three seats appear in the dashboard's Agents list in your browser within about 15 seconds.
 
+One seat at a time, later: `orchestra spawn <seat>` registers and launches a single seat.
 Options: `--runtime claude|gemini|codex` (default: first of `[runtimes] enabled`), `--model`,
 `--tier`, `--prompt path/relative/to/checkout`. An existing registry row is kept as-is.
 
@@ -611,7 +628,7 @@ Verify through the dashboard proxy (the same list the UI shows):
 curl -s http://127.0.0.1:8891/api/agents | python3 -m json.tool | grep -E '"id"|"alive"|"state"'
 ```
 
-The `hello` row appears immediately; `alive`/`state` follow within ~15 s from the
+The `gm`, `pm-first-project` and `dev-first-project` rows appear immediately; `alive`/`state` follow within ~15 s from the
 status detector. Only registered seats are listed — tmux is host-global, see "Sharing a
 host" below.
 
@@ -631,7 +648,7 @@ From a shell (or let the seat run it):
 
 ```bash
 source scripts/orchestra-env.sh      # already done in §3 if you are in the same shell; harmless to repeat
-python3 scripts/approval.py request "Ship the hello change?" --from hello --worker-kind pane --options approve,deny
+python3 scripts/approval.py request "Ship the first change?" --from dev-first-project --worker-kind pane --options approve,deny
 # -> prints the card id, e.g. apr_1a2b3c4d_567
 ```
 
@@ -651,10 +668,10 @@ What happens next, and how to see it:
 1. The answer is recorded in `<data>/state/tasks.db` (`python3 scripts/approval.py get <card id>`
    shows `status: answered`).
 2. Within a minute the `approval_resume` beat (see the `orchestra up` table) delivers it:
-   because the card came `--from hello --worker-kind pane`, the decision is typed into the
-   `hello` tmux pane as a message and a durable row is written for the seat
-   (`python3 msg_store.py inbox --agent hello`). `approval.py get` then shows
-   `status: resumed`; `tmux capture-pane -p -t hello | tail -20` shows the delivered
+   because the card came `--from dev-first-project --worker-kind pane`, the decision is typed into the
+   `dev-first-project` tmux pane as a message and a durable row is written for the seat
+   (`python3 msg_store.py inbox --agent dev-first-project`). `approval.py get` then shows
+   `status: resumed`; `tmux capture-pane -p -t dev-first-project | tail -20` shows the delivered
    decision; `<data>/logs/approval_resume.log` has the delivery line.
 3. `GET /api/approvals` keeps the card out of `pending` from the moment it is answered.
 

@@ -386,3 +386,79 @@ def cmd_rotate(ns) -> int:
         argv += ["--model", ns.model or row["model"]]
     print(f"rotate {seat}: baton {handoff}\n  {' '.join(argv)}")
     return _run(argv, env=env, cwd=str(st.repo_root))
+
+
+# ---- `orchestra starter`: the first-install default team ----
+# Shaw, 2026-10-08: "give them a gm, a project manager, and a worker under that project manager.
+# That way they have one t0, one t1, and one t2 agent from the start" — "MAKE THAT THE DEFAULT".
+# One verb, so a first install is one line (a pasted three-line block is how finding #5 happened).
+# Built on the two existing verbs, never a third spawn path: gm via spawn --gm, the PM and worker
+# via agent create (template filled, reports_to recorded, ALIVE by effect). Re-runnable: a seat
+# that is registered and alive is skipped; one that is registered but dead is relaunched with the
+# prompt it already has (agent create refuses to overwrite a prompt, by design).
+
+STARTER_PM_TASK = ("You are the starter project manager, reporting to gm. Tell gm you are ready, "
+                   "then park until gm or the operator gives you a project.")
+STARTER_DEV_TASK = ("You are the starter worker, reporting to your project manager. Tell it you are "
+                    "ready, then park until it gives you work.")
+
+
+def _starter_plan(project: str) -> list[dict]:
+    pm, dev = f"pm-{project}", f"dev-{project}"
+    return [
+        {"name": "gm", "tier": "T0", "gm": True, "template": None, "parent": None, "task": None},
+        {"name": pm, "tier": "T1", "gm": False, "template": "pm", "parent": "gm", "task": STARTER_PM_TASK,
+         "set": [f"PROJECT={project}", "CLIENT_NAME=none yet", f"CLIENT_SLUG={project}", "BRANCH=main"]},
+        {"name": dev, "tier": "T2", "gm": False, "template": "dev", "parent": pm, "task": STARTER_DEV_TASK,
+         "set": [f"PROJECT={project}"]},
+    ]
+
+
+def cmd_starter(ns) -> int:
+    import argparse
+    st = S.load_settings()
+    if not st.config_exists:
+        print(f"no config at {st.config_path} — run `orchestra init` first", file=sys.stderr); return 2
+    refused = _refuse_if_no_runtime_authed(st)
+    if refused is not None:
+        return refused
+    for seat in _starter_plan(ns.project):
+        name = seat["name"]
+        p, reg = _registry(st)
+        row = reg["agents"].get(name)
+        # register_seat keeps an existing row verbatim, so a gm written as T2 (spawned without
+        # --gm) stayed T2 forever. The starter team owns these three tiers: correct them.
+        if row and (row.get("tier") != seat["tier"] or (seat["gm"] and row.get("always_on") is not True)):
+            print(f"{name} tier {row.get('tier')} -> {seat['tier']}")
+            row["tier"] = seat["tier"]
+            if seat["gm"]:
+                row["always_on"] = True
+            reg["agents"][name] = row
+            tmp = p.with_suffix(".json.tmp"); tmp.write_text(json.dumps(reg, indent=2) + "\n"); os.replace(tmp, p)
+        if row and _pane_alive(row.get("tmux_session") or name):
+            print(f"{name} ({seat['tier']}) already running — skipped")
+            continue
+        if seat["gm"] or row or (st.repo_root / f"prompts/{name}.md").exists():
+            # gm, or a registered/prompted seat whose CLI exited: relaunch, keep its prompt
+            rc = cmd_spawn(argparse.Namespace(seat=name, gm=seat["gm"], task=seat["task"], runtime=ns.runtime,
+                                              model=None, tier=seat["tier"], prompt=None))
+            if rc == 0 and seat["parent"]:
+                p, reg = _registry(st)
+                if reg["agents"][name].get("reports_to") != seat["parent"]:
+                    reg["agents"][name]["reports_to"] = seat["parent"]
+                    tmp = p.with_suffix(".json.tmp"); tmp.write_text(json.dumps(reg, indent=2) + "\n"); os.replace(tmp, p)
+        else:
+            rc = cmd_agent_create(argparse.Namespace(name=name, tier=seat["tier"], runtime=ns.runtime, model=None,
+                                                     parent=seat["parent"], template=seat["template"],
+                                                     set=seat["set"], task=seat["task"]))
+        if rc != 0:
+            print(f"starter stopped at {name}: fix the error above, then run `orchestra starter` again "
+                  f"(seats already running are skipped)", file=sys.stderr)
+            return rc
+        if not _pane_alive(name):
+            print(f"starter stopped: {name} is not alive by effect; check {st.data_dir / 'logs'}", file=sys.stderr)
+            return 1
+    pm, dev = f"pm-{ns.project}", f"dev-{ns.project}"
+    print(f"\nstarter team up: gm (T0) -> {pm} (T1) -> {dev} (T2)")
+    print("talk to gm:   tmux attach -t gm      (detach: Ctrl-B then D)")
+    return 0
