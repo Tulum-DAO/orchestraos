@@ -415,10 +415,8 @@ Rules:
 - `orchestra init --yes` takes about five minutes. Wait for it to finish; don't stop it.
   Its `--yes` adds OrchestraOS's hook rows to `~/.claude/settings.json`; that is expected
   and is not an overwrite.
-- If `orchestra doctor` shows a `port:<name> MISSING ... in use` row, change that port in
-  `orchestra.toml` as the section says; never stop the other process. Except `port:api` and
-  `port:arturo`: don't change those. Stop, show me the section's paragraph about them, and
-  treat that row as a finish point.
+- If `orchestra doctor` shows a `port:<name> MISSING ... in use` row, change that port with
+  the section's line for it, then run `orchestra doctor` again; never stop the other process.
 - We are done when `orchestra doctor` ends with `doctor: all required checks OK`. Show me
   that output; don't just tell me it worked.
 ```
@@ -473,24 +471,20 @@ the row that failed, inside the `orchestraos` folder:
 sed -i '/^\[dashboard\]/,/^\[/ s/^port = .*/port = 18891/' orchestra.toml   # port:dashboard
 ```
 
-(One thing still expects the dashboard on 8891 until a fix lands: the People view in the iOS
-app.)
-
 ```bash
 sed -i '/^\[gateway\]/,/^\[/ s/^port = .*/port = 18890/' orchestra.toml     # port:gateway
 ```
 
+```bash
+sed -i '/^\[api\]/,/^\[/ s/^port = .*/port = 18888/' orchestra.toml         # port:api
+```
+
+```bash
+sed -i '/^\[arturo\]/,/^\[/ s/^port = .*/port = 15071/' orchestra.toml      # port:arturo
+```
+
 Then run `orchestra doctor` again. If you changed the `[dashboard]` port, use 18891 in §2's
 `tailscale serve` command instead of 8891.
-
-**If the taken port is `api` (8888) or `arturo` (5071):** changing those ports is not fully
-supported yet (some parts still expect 8888 and 5071), so don't change them. Instead, either:
-
-- **[PERSON ONLY]** move the other program to a different port yourself, by changing that
-  program's own settings (an agent helping you never stops, restarts or reconfigures it), then
-  run `orchestra doctor` again; or
-- stop here and ask for help: open an issue at https://github.com/Tulum-DAO/orchestraos/issues
-  and paste the `port:api` or `port:arturo` row that `orchestra doctor` printed.
 
 Not logged in to the CLI yet? Then `runtime:login` is the one `MISSING` row (a few rows
 marked `MISSING*` go away with it) and the last line is `doctor: 1 required check(s)
