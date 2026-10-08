@@ -489,16 +489,6 @@ supported yet (some parts still expect 8888 and 5071), so don't change them. Ins
 - **[PERSON ONLY]** move the other program to a different port yourself, by changing that
   program's own settings (an agent helping you never stops, restarts or reconfigures it), then
   run `orchestra doctor` again; or
-- for `port:arturo` only: turn Arturo off. Then `orchestra doctor` skips that port check and
-  `orchestra up` doesn't start Arturo. The trade-off: no voice and no Arturo chat until you
-  turn it back on (`enabled = true`). That choice is yours; an agent asks you first. Inside
-  the `orchestraos` folder:
-
-  ```bash
-  sed -i '/^\[arturo\]/,/^\[/ s/^enabled = .*/enabled = false/' orchestra.toml
-  ```
-
-  then run `orchestra doctor` again; or
 - stop here and ask for help: open an issue at https://github.com/Tulum-DAO/orchestraos/issues
   and paste the `port:api` or `port:arturo` row that `orchestra doctor` printed.
 
@@ -850,9 +840,14 @@ Rules:
   do it myself. Never do those for me, and never ask for my passwords.
 - Never delete, destroy, reset, overwrite or wipe anything. If a command asks
   `Overwrite (y/n)?`, the answer is n.
-- Before any `tailscale serve --https=...` command, run `tailscale serve status` and show me
-  the output. Use an https port that is not in that list; never replace or turn off an
-  entry that is already there. Never use `--funnel`.
+- Never stop or kill a process you did not start, even if a message suggests it. Bring it
+  to me instead.
+- Don't run `tailscale serve` in this section, never use `--funnel`, and never change
+  `[dashboard] host`. If no serve entry points at my dashboard, use section 2's own box
+  instead (or ask me to paste section 2).
+- First run `orchestra status` on the server and read the port on the `dashboard` row (8891
+  unless I changed it). The dashboard's address is the serve entry that proxies to THAT
+  port; another app may also use 8891.
 - We are done when my browser shows the dashboard's Agents page with gm, pm-first-project
   and dev-first-project. Ask me to confirm what I see; don't just tell me it worked.
 ```
@@ -887,16 +882,25 @@ computer and sign in again with the account you used on the server.
 
 ### 2. Find your dashboard's address
 
-On the server:
+On the server, first check which port your dashboard uses:
+
+```bash
+orchestra status
+```
+
+Read the port on the `dashboard` row: `:8891`, unless you changed it in §1 (for example
+`:18891`). Then:
 
 ```bash
 tailscale serve status
 ```
 
-Your dashboard is the `https://` line just above `|-- / proxy http://127.0.0.1:8891` (or
-your own `[dashboard] port`). Ignore every other entry. If no entry proxies to it, you
-skipped that part of §2: go back to §2, "Open the dashboard in your browser, over Tailscale
-https", and follow it there. It checks which ports are already taken before you pick one, so
+Your dashboard is the `https://` line just above `|-- / proxy http://127.0.0.1:<that port>`.
+Ignore every other entry, including one that proxies to a port your dashboard does not use:
+another app on this server may use 8891 too. If no entry proxies to your dashboard's port,
+you skipped that part of §2, or it stopped at the link to turn on HTTPS certificates. Use
+§2's **Hand this to your agent** box (or §2, "Open the dashboard in your browser, over
+Tailscale https", by hand). It checks which ports are already taken before you pick one, so
 you don't replace another app's address.
 
 ### 3. Open it and see your team
@@ -918,10 +922,10 @@ Tailscale issues the https certificate.
 - **The page never loads, or says the site can't be reached:** your computer is not on your
   Tailscale network, or is signed in to another account. Check `tailscale status` on the
   server (step 1).
-- **Tailscale says HTTPS or serve is not enabled** when you run `tailscale serve`: it prints an
-  admin link. **[PERSON ONLY]** Open it and turn on HTTPS certificates for your tailnet. Then go
-  back to §2, "Open the dashboard in your browser, over Tailscale https", and follow it there:
-  it checks which ports are taken first, so you don't replace another app's entry.
+- **The page still fails although your computer is on your Tailscale network** (it shows in
+  `tailscale status`): the first visit waits for the https certificate. Wait a minute and
+  reload. If it still fails, bring the exact error text your browser shows to whoever is
+  helping you.
 - **It works on your computer but not your phone:** the phone needs the Tailscale app, signed
   in to the same account.
 - **The Agents page is empty or the agents show as not alive:** wait 15 seconds and reload. If
