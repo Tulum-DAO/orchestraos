@@ -70,6 +70,10 @@ chmod 700 /home/orchestra/.ssh && chmod 600 /home/orchestra/.ssh/authorized_keys
 exit
 ```
 
+Logged in as root with a password rather than a key? Then `/root/.ssh/authorized_keys` does
+not exist and the `cp` line fails. Run only `adduser` and `usermod`, `exit`, and then, from your
+own computer, `ssh-copy-id orchestra@<server ip>` (it asks for the new user's password once).
+
 Then, from your own computer: `ssh orchestra@<your server address>`. Check: `whoami` prints
 `orchestra` and `sudo -v` asks for that user's password and succeeds. If your provider already
 logs you in as a normal user with sudo, skip this step.
@@ -172,18 +176,26 @@ sign-in screen waits unread in the seat's terminal.
 ```bash
 git clone https://github.com/Tulum-DAO/orchestraos.git orchestraos && cd orchestraos
 make install                 # symlinks bin/orchestra into ~/.local/bin
-./bin/orchestra init         # data dir (~/.orchestra), orchestra.toml, .venv + pip, npm install, builds;
+export PATH="$HOME/.local/bin:$PATH"
+grep -q 'HOME/.local/bin' ~/.bashrc || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+orchestra init --yes         # data dir (~/.orchestra), orchestra.toml, .venv + pip, npm install, builds.
+                             #   Takes about 5 minutes on a small VPS (the dashboard build); it is not hung.
+                             #   --yes writes the Claude Code hook rows into ~/.claude/settings.json (see below)
                              #   mic dictation works in every browser out of the box (~99 MB model, background);
                              #   --stt adds the better faster-whisper engine (+~500 MB, see docs/ARTURO.md)
-                             # shows the Claude hook rows it will add to ~/.claude/settings.json and asks (or --yes)
-$EDITOR orchestra.toml       # set [runtimes] enabled to the CLI you logged in to, e.g. ["claude"]
-./bin/orchestra doctor       # every row OK (WARN/INFO rows are advisory); exit code 0
+sed -i '/^\[runtimes\]/,/^\[/ s/^enabled = .*/enabled = ["claude"]/' orchestra.toml   # the CLI you logged in to
+orchestra doctor             # every row OK (WARN/INFO rows are advisory); exit code 0
 ```
 
-`./bin/orchestra` is spelled out above because `~/.local/bin` only joins your PATH at **login**, and
-only if it already existed then — on a clean machine it did not, so a bare `orchestra` in the same
-shell as `make install` answers `command not found`. `make install` prints the `export PATH=...` line
-when that applies; run it (and add it to `~/.bashrc`) to use the bare `orchestra` everywhere.
+The two PATH lines matter: `~/.local/bin` only joins your PATH at **login**, and only if it
+already existed then. On a clean machine it did not, so without them a bare `orchestra` right after
+`make install` answers `command not found`. With them, `orchestra` works in this shell and in every
+later one; `./bin/orchestra` from the checkout always works too.
+
+The `sed` line sets the `enabled = [...]` line **under `[runtimes]`** to the one CLI you logged in
+to. Use `["gemini"]` or `["codex"]` if that is your CLI. `orchestra.toml` has other `enabled =`
+lines (`[arturo]`, `[telemetry]`, `[plugins.*]`); leave those alone. To edit by hand instead:
+`$EDITOR orchestra.toml`, find `[runtimes]`, and change the `enabled` line just below it.
 
 `orchestra init` is idempotent: it never overwrites `orchestra.toml`, skips what
 exists, and prints did/skipped per step. `--data-dir PATH` moves state elsewhere
@@ -227,6 +239,9 @@ One supervisor process runs, restarts (with backoff) and logs each child under
 | cron_beat | autonomous blue-green rotation beat — ON by default | every `cron_beat_interval_seconds` (900) |
 | router | `message-router.py --cron` delivery backstop | `[router] interval_seconds` (60) |
 | approval_resume | `approval_resume.py` — delivers an answered card to its seat (pane inject + msg_store row) | every 60 s |
+| telemetryd | `lineage_daemon.telemetryd` — works out which seats are working or idle, for the Agents page and the router. Local only: it reads the seats' terminal output and `/proc` and writes a status file under `<data>/realtime`; nothing is sent anywhere | `[telemetry] enabled` (on) |
+| menu_bridge | `scripts/menu_bridge.py` — turns a question menu inside a seat into a decision card, and types your answer back | every 60 s (`[menus] bridge_enabled`) |
+| telegram | `plugins/telegram/router.py` (optional) | off unless `[plugins.telegram] enabled` and `TELEGRAM_BOT_TOKEN` |
 
 No crontab is installed. `orchestra up --dry-run` prints this table without
 starting anything. `orchestra down` stops it; `orchestra status` shows pids.

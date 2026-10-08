@@ -104,7 +104,7 @@ version of each step below — the exact command, what it should print, and
 where to look if it doesn't.
 
 1. **Install, doctor green, dashboard open.** `docs/INSTALL.md` from the top
-   through §2: a VPS with Tailscale, `orchestra init`, `orchestra doctor` (every
+   through §2: a VPS with Tailscale, `orchestra init --yes`, `orchestra doctor` (every
    row OK), `orchestra up`, the dashboard open in your browser over Tailscale.
 2. **Always-on agent spawned, answers questions in terminal.** `docs/INSTALL.md`
    §3: spawn one seat, confirm it is alive, ask it something in its own tmux
