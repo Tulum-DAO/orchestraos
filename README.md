@@ -6,6 +6,13 @@ OrchestraOS, published by Tulum DAO: an open harness for running a fleet of codi
 
 ## Start here
 
+**Install: give this link to the AI you already use** (Claude, ChatGPT, Codex, Gemini or any
+other): https://raw.githubusercontent.com/Tulum-DAO/orchestraos/main/docs/AGENT_INSTALL.md
+It walks you from renting a server to your dashboard, doing what it can for you and stopping only
+for what you must do yourself.
+
+Or do it by hand:
+
 - **Never used a server or Terminal?** → [From scratch](docs/FROM_SCRATCH.md): from your
   computer (Mac, Windows or Linux) to logged in on your own server, about 20 minutes. It then hands you to the install guide.
 - **Have a server and a terminal open?** → [Install guide](docs/INSTALL.md), about an hour.
