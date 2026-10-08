@@ -577,20 +577,40 @@ def _note_menu_fetch(request, now=None):
     _MENU_FETCHES[_menu_fetch_key(request)] = _time.time() if now is None else now
 
 
+def _stale_tap_check_off():
+    """The no-restart off switch: while <data dir>/state/menu-stale-tap.off exists, the check
+    only LOGS what it would refuse. Read on every request, so it can be flipped in seconds."""
+    from pathlib import Path as _P
+    base = os.environ.get("ORCHESTRA_DIR") or str(_P.home() / ".orchestra")
+    return (_P(base) / "state" / "menu-stale-tap.off").exists()
+
+
 def _could_have_seen(request, session, menu):
-    """(ok, reason). Non-permission menus are not gated here."""
+    """(ok, reason). Non-permission menus are not gated here. Every refusal is logged with its
+    reason; with the off switch present it is logged as would-refuse and allowed."""
     if not isinstance(menu, dict) or menu.get("kind") != "permission":
         return True, None
-    last = _MENU_FETCHES.get(_menu_fetch_key(request))
+    fkey = _menu_fetch_key(request)
+    last = _MENU_FETCHES.get(fkey)
+    first = None
     if last is None:
-        return False, "instance_unknown"
-    led = _load_instance_ledger()
-    e = led.get(f"{session}|{_perm_digest(session, menu.get('question') or '', menu.get('context') or '')}")
-    if not isinstance(e, dict):
-        return False, "instance_unknown"           # never shown on any surface yet
-    if float(e.get("first_seen_ts") or 0) > float(last):
-        return False, "instance_mismatch"          # appeared after this device last looked
-    return True, None
+        reason = "instance_unknown"                 # no fetch on record for this device
+    else:
+        led = _load_instance_ledger()
+        e = led.get(f"{session}|{_perm_digest(session, menu.get('question') or '', menu.get('context') or '')}")
+        if not isinstance(e, dict):
+            reason = "instance_unknown"             # never shown on any surface yet
+        else:
+            first = float(e.get("first_seen_ts") or 0)
+            reason = "instance_mismatch" if first > float(last) else None
+    if reason is None:
+        return True, None
+    off = _stale_tap_check_off()
+    log.warning(f"[stale-tap] {'WOULD REFUSE (check off)' if off else 'refused'} session={session} "
+                f"reason={reason} device={fkey} first_seen={first} last_fetch={last}")
+    if off:
+        return True, None
+    return False, reason
 
 
 _COULD_NOT_HAVE_SEEN = {

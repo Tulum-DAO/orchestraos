@@ -46,6 +46,7 @@ def screen(monkeypatch, tmp_path):
         def get_agent_status(self, session):
             return {"pending_menu": state["menu"], "state": "waiting"}
 
+    monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path))          # the off switch is read here, never on the host
     monkeypatch.setattr(G, "gateway_token", lambda: "fleet-tok")
     monkeypatch.setattr(G, "_PERM_INSTANCE_LEDGER", str(tmp_path / "ledger.json"), raising=False)
     monkeypatch.setattr(G, "_agent_status", lambda: _AS())
@@ -178,3 +179,18 @@ def test_the_same_prompt_coming_back_as_a_NEW_instance_needs_a_fresh_look(screen
     assert _tap()[0] == 409
     _fetch(now=106.0)
     assert _tap()[0] == 200
+
+
+def test_the_off_switch_logs_and_allows_without_a_restart(screen, monkeypatch, tmp_path, caplog):
+    monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path))
+    _show(CMD_A, now=100.0)                   # no fetch on record: would be refused
+    with caplog.at_level("WARNING", logger="watch_gateway"):
+        assert _tap()[0] == 409
+        assert "refused" in caplog.text and "reason=instance_unknown" in caplog.text
+        (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "state" / "menu-stale-tap.off").write_text("")
+        caplog.clear()
+        assert _tap()[0] == 200, "flipped off: allowed"
+        assert "WOULD REFUSE (check off)" in caplog.text
+        (tmp_path / "state" / "menu-stale-tap.off").unlink()
+        assert _tap()[0] == 409, "flipped back on, still no restart"
