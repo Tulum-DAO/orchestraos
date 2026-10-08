@@ -20,7 +20,7 @@ import { Mic, ArrowUp, X, History, Focus, PhoneOff, AudioLines, Plus, Paperclip,
 import { useDictation } from './useDictation.ts';
 import { uploadAttachment, attachmentPreamble, describeAttachment, type Attachment } from '../../lib/arturoUpload';
 import './arturo.css';
-import { arturoText, newConversationId, contextFromLocation, getArturoFocus, subscribeArturoFocus, sendStateLabel, isStarting, waitForArturo, STARTING_TEXT, DICTATE_TITLE, HANDS_FREE, handsFreeTitle, type SendState } from '../../lib/arturo';
+import { arturoText, newConversationId, contextFromLocation, getArturoFocus, subscribeArturoFocus, sendStateLabel, isStarting, waitForArturo, STARTING_TEXT, HANDS_FREE, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, arturoHealth, type ArturoHealth, type SendState } from '../../lib/arturo';
 import {
   listThreads, loadThread, contextCardLabel, isContextDismissed, dismissContext,
   restoreContext, contextForTurn, type ThreadSummary,
@@ -67,6 +67,14 @@ export function ArturoPill() {
   const brainChoice = useArturoBrain((s) => s.choice);
   const chooseBrain = useArturoBrain((s) => s.choose);
   const [modelOpen, setModelOpen] = useState(false);
+  // Whether this server can start Live voice mode (GEMINI_API_KEY; /health.live), read once: the button
+  // is gated the same way as on the home page.
+  const [health, setHealth] = useState<ArturoHealth | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void arturoHealth().then((h) => { if (alive) setHealth(h); });
+    return () => { alive = false; };
+  }, []);
   const ta = useRef<HTMLTextAreaElement>(null);
   // Same composer buttons as the Arturo home (Shaw 2026-09-21: "the buttons we see when Arturo
   // first loads are the same buttons we should see in every instance of Ask Arturo"): attach,
@@ -335,16 +343,16 @@ export function ArturoPill() {
           <div className="cluster">
             <button className={dictMode === 'idle' ? 'circle-btn' : `circle-btn ${dictMode}`}
                     aria-label={dictMode === 'listening' ? 'Stop dictation' : dictMode === 'recording' ? 'Stop recording' : dictMode === 'transcribing' ? 'Transcribing' : 'Dictate'}
-                    aria-pressed={dictating} title={inCall ? 'Captions run on their own during a call' : dictMode === 'transcribing' ? 'Transcribing on the server…' : DICTATE_TITLE}
-                    onClick={toggleDictation} disabled={inCall || dictMode === 'transcribing'}><Mic size={16} /></button>
+                    aria-pressed={dictating} title={dictateTitle(inCall, dictMode)}
+                    onClick={toggleDictation} disabled={dictateLocked(inCall, dictMode)}><Mic size={16} /></button>
             {inCall ? (
               <button className="circle-btn white" aria-label="End call" aria-pressed title="End call"
                       onClick={() => void toggleCall()}><PhoneOff size={18} /></button>
             ) : draft.trim() ? (
               <button className="circle-btn white" aria-label="Send" onClick={() => void send()} disabled={busy}><ArrowUp size={18} /></button>
             ) : (
-              <button className="circle-btn white" aria-label={HANDS_FREE} title={handsFreeTitle(true)}
-                      onClick={() => void toggleCall()}><AudioLines size={16} /></button>
+              <button className="circle-btn white" aria-label={HANDS_FREE} title={handsFreeTitle(handsFreeReady(health))}
+                      disabled={!handsFreeReady(health)} onClick={() => void toggleCall()}><AudioLines size={16} /></button>
             )}
           </div>
         </div>

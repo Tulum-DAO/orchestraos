@@ -29,7 +29,7 @@ import { arturoTurn, arturoPrewarm } from '../lib/arturoStream';
 import { brainFromThread, describeTurnError, toWireBrain } from '../lib/arturoBrain';
 import { arturoHealth, arturoText, runtimesAvailable, brainLabel, greeting, newConversationId,
   isStarting, waitForArturo, STARTING_TEXT, firstStep, onboardingTurn, onboardingDone, isPageOpener,
-  DICTATE_TITLE, HANDS_FREE, handsFreeTitle, handsFreeReady, ONBOARDING_OPENER, sendStateLabel,
+  HANDS_FREE, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, ONBOARDING_OPENER, sendStateLabel,
   type ChoiceCard, type PairCard,
   type ArturoHealth, type RuntimeRow, type SendState } from '../lib/arturo';
 import { listThreads, loadThread, type ThreadSummary } from '../lib/arturoThreads';
@@ -512,8 +512,8 @@ export default function ArturoHome() {
           <div className="cluster">
             <button className={dictMode === 'idle' ? 'circle-btn' : `circle-btn ${dictMode}`}
                     aria-label={dictMode === 'listening' ? 'Stop dictation' : dictMode === 'recording' ? 'Stop recording' : dictMode === 'transcribing' ? 'Transcribing' : 'Dictate'}
-                    aria-pressed={dictating} title={dictMode === 'transcribing' ? 'Transcribing on the server…' : DICTATE_TITLE}
-                    onClick={toggleDictation} disabled={dictMode === 'transcribing'}><Mic size={16} /></button>
+                    aria-pressed={dictating} title={dictateTitle(call.inCall, dictMode)}
+                    onClick={toggleDictation} disabled={dictateLocked(call.inCall, dictMode)}><Mic size={16} /></button>
             {call.inCall ? (
               <button className="circle-btn white" aria-label="End call" aria-pressed title="End call"
                       onClick={() => void call.toggle({ route: '/' })}><PhoneOff size={18} /></button>

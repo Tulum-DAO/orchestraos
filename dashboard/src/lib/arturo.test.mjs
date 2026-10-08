@@ -3,7 +3,7 @@
  *   node --experimental-strip-types dashboard/src/lib/arturo.test.mjs
  */
 import assert from 'node:assert';
-import { isStarting, waitForArturo, contextLine, contextFromLocation, brainLabel, slugify, firstStep, onboardingTurn, toggleChoice, onboardingDone, DICTATE_TITLE, HANDS_FREE, handsFreeTitle, handsFreeReady, isPageOpener, ONBOARDING_OPENER } from './arturo.ts';
+import { isStarting, waitForArturo, contextLine, contextFromLocation, brainLabel, slugify, firstStep, onboardingTurn, toggleChoice, onboardingDone, DICTATE_TITLE, HANDS_FREE, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, DICTATE_IN_CALL, isPageOpener, ONBOARDING_OPENER } from './arturo.ts';
 
 // --- isStarting: boot-window errors are "starting", real errors are not ------------------
 assert.equal(isStarting({ ok: false, error: 'HTTP 502' }), true);
@@ -131,4 +131,21 @@ assert.equal(onboardingDone(null), false);
     else if (/\.(tsx|ts)$/.test(f) && !/\.test\./.test(f) && BANNED.test(readFileSync(p, 'utf8'))) hits.push(p); } };
   walk(root);
   assert.deepEqual(hits, []);
+}
+
+// --- during a call Dictate is locked on BOTH surfaces; the pill gates Live voice mode like home (#288 review) --
+{
+  assert.equal(dictateLocked(true, 'idle'), true);                 // a second recognizer would fight the call's
+  assert.equal(dictateLocked(false, 'transcribing'), true);
+  assert.equal(dictateLocked(false, 'idle'), false);
+  assert.equal(dictateTitle(true, 'idle'), DICTATE_IN_CALL);
+  assert.equal(dictateTitle(false, 'idle'), DICTATE_TITLE);
+  const { readFileSync } = await import('node:fs');
+  const src = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
+  for (const f of ['../pages/ArturoHome.tsx', '../components/arturo/ArturoPill.tsx']) {
+    const t = src(f);
+    assert.match(t, /disabled=\{dictateLocked\(/, `${f}: Dictate locked through dictateLocked`);
+    assert.match(t, /disabled=\{!handsFreeReady\(health\)\}/, `${f}: Live voice mode gated on /health`);
+    assert.doesNotMatch(t, /handsFreeTitle\(true\)/, `${f}: no hard-coded "key present" tooltip`);
+  }
 }

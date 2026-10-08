@@ -181,6 +181,16 @@ export function handsFreeTitle(keyPresent: boolean): string {
     ? `${HANDS_FREE}: talk, and Arturo talks back (uses GEMINI_API_KEY on your server)`
     : `${HANDS_FREE} needs a voice key: GEMINI_API_KEY on your server`;
 }
+/** The Dictate button during a call: the call captions the caller already, so a second recognizer
+ *  would fight it ("dictation error: aborted"). Home and the pill both lock it the same way. */
+export const DICTATE_IN_CALL = 'Captions run on their own during a call';
+export function dictateLocked(inCall: boolean, mode: string): boolean {
+  return inCall || mode === 'transcribing';
+}
+export function dictateTitle(inCall: boolean, mode: string): string {
+  return inCall ? DICTATE_IN_CALL : mode === 'transcribing' ? 'Transcribing on the server…' : DICTATE_TITLE;
+}
+
 /** The browser's call runs on Gemini Live, so it needs GEMINI_API_KEY (`/health.live`). A server from
  *  before that field said only whether ANY voice key was set; fall back to that. */
 export function handsFreeReady(h: Pick<ArturoHealth, 'live' | 'voice'> | null | undefined): boolean {
