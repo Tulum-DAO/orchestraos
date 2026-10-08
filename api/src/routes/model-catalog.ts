@@ -58,6 +58,10 @@ export interface ModelProbeConfig {
   list_path?: string;
   id_key?: string;
   label_key?: string;
+  /** Key holding a longer description. Used only when the label carries no version: some
+   *  CLI builds label aliases "Sonnet" or "Opus (1M context)" and put "Sonnet 5 · ..." in the
+   *  description (claude 2.1.276, measured). */
+  description_key?: string;
   /** Key holding the model an id RESOLVES to (claude: `resolvedModel`). Ids that resolve
    *  to the same model are one row, and a concrete id beats an alias. */
   resolved_key?: string;
@@ -141,7 +145,7 @@ function jsonLines(stdout: string): Record<string, unknown>[] {
   return out;
 }
 
-interface RawModel { id: string; label?: string; modalities?: string[]; resolved?: string; isDefault?: boolean }
+interface RawModel { id: string; label?: string; description?: string; modalities?: string[]; resolved?: string; isDefault?: boolean }
 
 function readRows(rows: unknown, cfg: ModelProbeConfig): RawModel[] {
   if (!Array.isArray(rows)) return [];
@@ -153,12 +157,14 @@ function readRows(rows: unknown, cfg: ModelProbeConfig): RawModel[] {
     const id = r[cfg.id_key || 'id'];
     if (typeof id !== 'string' || !id) continue;
     const label = r[cfg.label_key || 'label'];
+    const description = cfg.description_key ? r[cfg.description_key] : undefined;
     const modalities = cfg.modalities_key ? r[cfg.modalities_key] : undefined;
     const resolved = cfg.resolved_key ? r[cfg.resolved_key] : undefined;
     const isDefault = cfg.default_key ? r[cfg.default_key] === true : false;
     out.push({
       id,
       label: typeof label === 'string' ? label : undefined,
+      description: typeof description === 'string' && description ? description : undefined,
       modalities: Array.isArray(modalities) ? modalities.filter((m): m is string => typeof m === 'string') : undefined,
       resolved: typeof resolved === 'string' && resolved ? resolved : undefined,
       ...(isDefault ? { isDefault } : {}),
@@ -269,6 +275,26 @@ function defaultModel(raw: RawModel[], cfg: ModelProbeConfig): string | undefine
   return undefined;
 }
 
+/**
+ * A label the operator can tell apart: it must carry a version. The operator, 2026-10-08,
+ * looking at "Opus (1M context) / Fable / Sonnet / Haiku": "there's no version numbers, it
+ * feels hard coded". Those are a CLI build's ALIAS labels; the same rows carry the version in
+ * the description head ("Sonnet 5 · Efficient for routine tasks") and in the resolved id. So:
+ * a label with a digit is kept as is; otherwise the description head if it has one; otherwise
+ * the label with the resolved id beside it. Provider-agnostic: no model names here.
+ */
+// A version number, not a context size: "1M" / "128K" are not versions ("Opus (1M context)").
+const VERSION_RE = /\d+(?:\.\d+)*(?![\dMKmk])/;
+
+export function versionedLabel(row: { label?: string; description?: string; resolved?: string }): string | undefined {
+  const label = row.label?.trim();
+  if (label && VERSION_RE.test(label)) return label;
+  const head = row.description?.split(' · ')[0]?.trim();
+  if (head && VERSION_RE.test(head) && head.length <= 60) return head;
+  if (label && row.resolved && row.resolved !== label) return `${label} (${row.resolved})`;
+  return label;
+}
+
 function toModels(raw: RawModel[], staticModels: StaticModel[]): ModelInfo[] {
   const byId = new Map(staticModels.map((m) => [m.id, m]));
   const out: ModelInfo[] = [];
@@ -295,7 +321,7 @@ function toModels(raw: RawModel[], staticModels: StaticModel[]): ModelInfo[] {
     }
     out.push({
       id: row.id,
-      label: row.label || known?.label || row.id,
+      label: versionedLabel(row) || known?.label || row.id,
       capabilities,
       ...(unverified.length ? { capabilities_unverified: unverified } : {}),
     });

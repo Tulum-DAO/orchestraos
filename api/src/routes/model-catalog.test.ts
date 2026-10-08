@@ -317,3 +317,53 @@ test('no default is claimed when the CLI does not say which it is', () => {
   const f = probeModelCatalog(CODEX_PROBE, [], () => { throw new Error('boom'); });
   assert.equal(f.default_model, undefined);
 });
+
+// ---- operator finding #8: labels must carry a version -----------------------------------
+// CAPTURED from the pinned claude 2.1.276 (the INSTALL pin) on 2026-10-08: alias rows label
+// "Opus (1M context)" / "Fable" / "Sonnet" / "Haiku" with the version only in the description
+// head and the resolved id. The operator: "there's no version numbers, it feels hard coded".
+
+const CLAUDE_2_1_276_STDOUT = [
+  JSON.stringify({
+    type: 'control_response',
+    response: {
+      response: {
+        models: [
+          { value: 'default', displayName: 'Default (recommended)', resolvedModel: 'claude-opus-5[1m]', description: 'Opus 5 with 1M context · Best for everyday, complex tasks' },
+          { value: 'opus[1m]', displayName: 'Opus (1M context)', resolvedModel: 'claude-opus-5[1m]', description: 'Opus 5 with 1M context · Best for everyday, complex tasks' },
+          { value: 'claude-fable-5-1[1m]', displayName: 'Fable', resolvedModel: 'claude-fable-5-1', description: 'Fable 5.1 · Most capable for your hardest and longest-running tasks' },
+          { value: 'sonnet', displayName: 'Sonnet', resolvedModel: 'claude-sonnet-5', description: 'Sonnet 5 · Efficient for routine tasks' },
+          { value: 'haiku', displayName: 'Haiku', resolvedModel: 'claude-haiku-4-5-20251001', description: 'Haiku 4.5 · Fastest for quick answers' },
+          { value: 'opus', displayName: 'Opus', resolvedModel: 'claude-opus-5', description: 'Opus 5 · Best for everyday, complex tasks' },
+        ],
+      },
+    },
+  }),
+  '',
+].join('\n');
+
+test('#8: a versionless alias label takes the version from the description head', () => {
+  const r = probeModelCatalog({ ...CLAUDE_PROBE, description_key: 'description' }, [], execReturning(CLAUDE_2_1_276_STDOUT));
+  const labels = Object.fromEntries(r.models.map((m) => [m.id, m.label]));
+  assert.equal(labels['opus[1m]'], 'Opus 5 with 1M context');
+  assert.equal(labels['claude-fable-5-1[1m]'], 'Fable 5.1');
+  assert.equal(labels['sonnet'], 'Sonnet 5');
+  assert.equal(labels['haiku'], 'Haiku 4.5');
+  assert.equal(labels['opus'], 'Opus 5');
+  for (const m of r.models) assert.match(m.label, /\d+(?:\.\d+)*(?![\dMKmk])/, `${m.id} still has no version: ${m.label}`);
+});
+
+test('#8: a label that already carries a version is left alone (claude 2.1.284 rows)', () => {
+  const r = probeModelCatalog({ ...CLAUDE_PROBE, description_key: 'description' }, [], execReturning(CLAUDE_STDOUT));
+  assert.deepEqual(r.models.map((m) => m.label), ['Opus 5.5', 'Fable 5.1']);
+});
+
+test('#8: with no usable description, the resolved id goes beside the label', async () => {
+  const { versionedLabel } = await import('./model-catalog.js');
+  assert.equal(versionedLabel({ label: 'Sonnet', resolved: 'claude-sonnet-5' }), 'Sonnet (claude-sonnet-5)');
+  assert.equal(versionedLabel({ label: 'Sonnet', description: 'Efficient · cheap', resolved: 'claude-sonnet-5' }), 'Sonnet (claude-sonnet-5)');
+  assert.equal(versionedLabel({ label: 'Sonnet' }), 'Sonnet');
+  assert.equal(versionedLabel({ label: 'GPT-6-Astra' }), 'GPT-6-Astra');
+  assert.equal(versionedLabel({ label: 'Opus (1M context)', resolved: 'claude-opus-5[1m]' }), 'Opus (1M context) (claude-opus-5[1m])');
+  assert.equal(versionedLabel({ label: 'Big (128K context)', description: 'Big 2.1 · x' }), 'Big 2.1');
+});
