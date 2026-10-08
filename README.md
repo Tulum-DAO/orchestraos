@@ -11,6 +11,24 @@ OrchestraOS, published by Tulum DAO: an open harness for running a fleet of codi
 - **Have a server and a terminal open?** → [Install guide](docs/INSTALL.md), about an hour.
 - The same guides, easier to read: [tulumdao.com/docs](https://tulumdao.com/docs/).
 
+**Or let your AI agent walk you through it.** Copy this into the AI you already use
+(Claude, ChatGPT, Codex, Gemini or any other):
+
+```text
+Help me install OrchestraOS, one step at a time. Start here and follow the guides it
+links to, section by section:
+https://github.com/Tulum-DAO/orchestraos/blob/main/README.md
+First ask me which computer I'm on (Mac, Windows or Linux) and whether I already have a
+server. Then take me through From scratch (if I have no server) and the install guide.
+Rules:
+- If you can run commands on my computer, run them yourself and show me every output.
+  If you can't, give me one command at a time and wait for me to paste back what it printed.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, passwords, approving a
+  device) and let me do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset or wipe anything.
+- At the end of each section, show me its "You should see" output before moving on.
+```
+
 On an Ubuntu 24.04 server, the install begins like this (the
 [install guide](docs/INSTALL.md) explains each step and what you should see):
 

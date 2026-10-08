@@ -1,6 +1,13 @@
 # Prompts
 
-Copy-paste prompts for the seven-step gate and the tracks. Paste one into your own
+**Installing?** The install prompts sit next to the steps they help with, so they always
+match the text: the kickoff prompt in the [README](../README.md#start-here), and a **Hand
+this to your agent** box at the top of each step in [From scratch](FROM_SCRATCH.md) (steps
+2, 3 and 4) and [INSTALL §0](INSTALL.md#0-prerequisites) (normal user, Tailscale, packages,
+pinning the CLI, logging in). Those work with any AI, on your own computer, before
+OrchestraOS is installed.
+
+The prompts below are for after the install: copy-paste prompts for the seven-step gate and the tracks. Paste one into your own
 agent CLI (Claude Code, Gemini CLI, or Codex) with this repo as its working
 directory. Each entry says why in two lines before the prompt. `docs/GATE.md` has
 the same seven steps as commands you run yourself, with expected output and a
