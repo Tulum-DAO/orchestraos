@@ -1861,7 +1861,9 @@ _RUNNING_STATES = {"working", "thinking", "idle", "waiting_permission", "strande
 
 def starter_plan(project, repo_root=None):
     root = Path(repo_root or _REPO_ROOT)
-    env = {"ORCHESTRA_DIR": str(ORCHESTRA_DIR), "PARENT_AGENT_ID": "arturo"}
+    # _run_starter holds <data>/state/starter.lock for this run, and the CLI takes the same lock
+    # (orchestra_cli seats._starter_lock); the flag tells the child its parent already holds it.
+    env = {"ORCHESTRA_DIR": str(ORCHESTRA_DIR), "PARENT_AGENT_ID": "arturo", "ORCHESTRA_STARTER_LOCK_HELD": "1"}
     return _CommissionPlan([str(root / "bin" / "orchestra"), "starter", "--project", project], env, "gm", "")
 
 

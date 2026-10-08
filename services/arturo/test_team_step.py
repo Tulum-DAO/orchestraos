@@ -540,3 +540,11 @@ def test_a_thread_that_cannot_start_releases_the_lock(P, tmp_path, monkeypatch):
     assert out.startswith("FAILED")
     assert not P._STARTER_LOCK.locked()
     assert P.starter_team_state(seen=lambda n: "no session")["state"] == "absent"
+
+
+def test_the_starter_child_is_told_its_parent_holds_the_lock(P):
+    """_run_starter holds <data>/state/starter.lock and runs `orchestra starter` as its child; the
+    CLI now takes that same lock (orchestra_cli seats._starter_lock), so without this flag Arturo's
+    own run would refuse itself. An operator's own CLI run still waits its turn."""
+    plan = P.starter_plan("website")
+    assert plan.env.get("ORCHESTRA_STARTER_LOCK_HELD") == "1"
