@@ -7,7 +7,7 @@ from services.arturo import operator_store as S
 
 
 def test_empty_state_knows_nothing(tmp_path):
-    assert S.public(tmp_path) == {"name": None, "timezone": None, "role": None, "pronouns": None}
+    assert S.public(tmp_path) == {"name": None, "timezone": None, "role": None, "pronouns": None, "devices": None}
     assert S.context_line(tmp_path) == ""          # no placeholder, no "the operator's name is None"
 
 

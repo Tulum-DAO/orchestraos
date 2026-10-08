@@ -1,4 +1,4 @@
-"""operator_store — the ONE place the operator's own facts live (name, timezone, role, pronouns).
+"""operator_store — the ONE place the operator's own facts live (name, timezone, role, pronouns, devices).
 
 Why (Shaw, 2026-09-22): onboarding used to parse the operator's name with a regex in the browser and
 keep it in localStorage, so the brain never learned who it was talking to, a second device asked
@@ -17,7 +17,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-FIELDS = ("name", "timezone", "role", "pronouns")
+FIELDS = ("name", "timezone", "role", "pronouns", "devices")
 _MAX_VALUE = 120
 
 
@@ -78,6 +78,8 @@ def context_line(state_dir) -> str:
         bits.append(f"role: {facts['role']}")
     if facts["timezone"]:
         bits.append(f"timezone {facts['timezone']}")
+    if facts["devices"]:
+        bits.append(f"devices they use: {facts['devices']}")
     return ("OPERATOR: " + "; ".join(bits) + ".") if bits else ""
 
 
@@ -87,7 +89,7 @@ TOOL = {
         "name": "set_operator_fact",
         "description": (
             "Record one durable fact about the OPERATOR you are talking to (the person, not the system): "
-            "their name, how they like to be addressed, their timezone, their role. Call it the moment "
+            "their name, how they like to be addressed, their timezone, their role, the devices they use. Call it the moment "
             "they tell you such a thing, so every future conversation on every surface knows it. Copy "
             "the value from what they said; capitalise a name the way a name is written. Never guess."
         ),
@@ -95,7 +97,7 @@ TOOL = {
             "type": "object",
             "properties": {
                 "field": {"type": "string", "enum": list(FIELDS)},
-                "value": {"type": "string", "description": "The fact, verbatim. For name: only the name they want to be called."},
+                "value": {"type": "string", "description": "The fact, verbatim. For name: only the name they want to be called. For devices: the device names, comma-separated."},
             },
             "required": ["field", "value"],
         },
