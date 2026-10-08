@@ -9,13 +9,22 @@ Just want the web dashboard in your browser? That needs no pairing:
 This page is about the gateway (8890), which the phone app talks to.
 
 In the dashboard, Arturo may ask which devices you have (iPhone, iPad, Apple Watch, Mac, Android
-phone, or just this computer). Answering is optional. For each iPhone, iPad or Mac you pick there,
-Arturo makes a pairing code and shows it in a card on the dashboard page, never in the chat
-text. The card says where to paste the code, what the device may do (read, approve, message) and
-how to revoke it, and Arturo then checks that the device connected. It pairs only from the
-dashboard's own chat, only devices you picked in the last 10 minutes, and never from a voice call
-or a phone. Apple Watch and Android get an answer but no code. This page is the other way to do
-the same thing yourself, with `orchestra pair`; both give the same kind of code.
+phone, or just this computer). Answering is optional. Arturo can also pair an iPhone, iPad or Mac
+for you, but only when all of these hold:
+
+- you have that device's app (test builds only; there is no public download yet);
+- you picked the device on Arturo's devices card during its first-run questions, in the last
+  10 minutes (after that, use `orchestra pair`);
+- the server knows its https gateway address: `ORCHESTRA_PUBLIC_URL` was set in the environment
+  that ran `orchestra up` (step 2 below explains the address; a default install does not set it).
+
+Then Arturo shows the code in a card on the dashboard page, never in the chat text, with where
+to paste it and how to revoke the device. The code always allows read, approve and message; for
+fewer powers, use `orchestra pair --scopes`. When you tell Arturo you're done, it checks that the
+device connected. It pairs only from the dashboard's own chat (in any browser, a phone's
+included), never from a voice call or from a paired app. Apple Watch and Android get an answer
+but no code. Everywhere else, this page is the way: `orchestra pair` gives the same kind of
+code.
 
 > **What works today, step by step** (updated 2026-10-08):
 >
@@ -268,13 +277,17 @@ through.
 
 ## 4. Connect the iOS app
 
-**Easier way:** in the dashboard, tell Arturo you have an iPhone or iPad. It shows the pairing
-code in a card there, with where to paste it. You still need the app and the pairing screen
-below; the code replaces running `orchestra pair` yourself.
-
 **Getting the app:** it is not on the App Store yet and has no public download. If nobody gave
 you a test build, you can't connect an iPhone yet: stop here. **[PERSON ONLY]** Installing and
 opening it is yours.
+
+**Arturo's card instead of `orchestra pair`:** only during Arturo's first-run questions, within
+10 minutes of picking iPhone or iPad on its devices card, and only if `ORCHESTRA_PUBLIC_URL` is
+set (see the top of this page). You still need Tailscale on the iPhone, the gateway on an https
+address (step 2, "Before you run it", and this step's `tailscale serve`), and the pairing screen
+below. The card has a copy button but no QR, so the easiest way is to open the dashboard on the
+iPhone itself (Safari, over Tailscale), copy the code there and paste it into the app. Otherwise,
+use `orchestra pair` as below.
 
 **Finding the pairing screen.** The app does not open on it by itself: it opens on the
 **Arturo** tab, which shows no pairing prompt. **[PERSON ONLY]** Tap the gear at the top right of the Arturo tab
@@ -293,7 +306,7 @@ and paste on the iPhone (Universal Clipboard). Never message or email the code t
 The **Connect your gateway** screen says *On the machine running your OrchestraOS gateway, run
 `orchestra pair`, then paste the code it prints here — or scan its QR.*
 
-1. **[PERSON ONLY]** Paste exactly what `orchestra pair` printed into the **PAIRING CODE** box
+1. **[PERSON ONLY]** Paste exactly what `orchestra pair` printed (or the code from Arturo's card) into the **PAIRING CODE** box
    (placeholder *paste the code from orchestra pair*), or tap **Scan** and point the camera at
    its QR.
 2. **[PERSON ONLY]** Tap **Pair**. There is no address to type: the code carries it.
@@ -369,10 +382,6 @@ device stays active on the server. To cut it off there too, revoking is your dec
 
 ## 5. Connect the Mac app
 
-**Easier way:** in the dashboard, tell Arturo you have a Mac. It shows the pairing code in a card
-there, with where to paste it, instead of you running `orchestra pair`. Everything under "Before
-you start" still applies.
-
 The Mac app connects to your **gateway** (8890), the same way the iOS app does. It is not
 the dashboard: the dashboard (8891) needs no app, just a browser ([docs/INSTALL.md](INSTALL.md) §2).
 
@@ -387,6 +396,12 @@ Before you start:
 
 **Getting the app:** it has no public download yet. If nobody gave you a test build, you can't
 connect a Mac yet: stop here. **[PERSON ONLY]** Installing and opening it is yours.
+
+**Arturo's card instead of `orchestra pair`:** only during Arturo's first-run questions, within
+10 minutes of picking Mac on its devices card, and only if `ORCHESTRA_PUBLIC_URL` is set (see the
+top of this page). Everything under "Before you start" still applies. Open the dashboard on the
+Mac, copy the code from the card, and paste it into **Connect this Mac**. Otherwise, use
+`orchestra pair` as below.
 
 On the Mac, open the app. It has one window, titled **OrchestraOS**, which first shows **Connect
 this Mac**, with the line *Run `orchestra pair` on the gateway machine and paste the code it

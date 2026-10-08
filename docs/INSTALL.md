@@ -706,11 +706,11 @@ greets you and may start asking you first-run questions; you don't need to answe
 continue. If you do answer, Arturo may offer to set up your team: that runs the same
 `orchestra starter` as §3, so either way is fine (§3 says what to do if Arturo already did it). Arturo
 may also ask which devices you have (iPhone, iPad, Apple Watch, Mac, Android phone, or just this
-computer). Answering is optional. For each iPhone, iPad or Mac you pick, Arturo makes a pairing
-code and shows it in a card on this dashboard page (never in the chat text), with where to paste
-it, what the device may do (read, approve, message) and how to revoke it. It pairs only from this
-dashboard chat, never from a voice call or a phone. Prefer to do it yourself? `orchestra pair`
-([docs/ONBOARDING.md](ONBOARDING.md)) works the same as before. To see your agents, tap the gear button at the top left, then **Agents** (or add `/agents` to the
+computer). Answering is optional. The iPhone, iPad and Mac apps are not released yet (test
+builds only). If you have one and pick that device, Arturo can show its pairing code in a card on
+this page, but only when the server knows its https gateway address (`ORCHESTRA_PUBLIC_URL`, which
+this guide does not set). Otherwise it tells you it can't, and you pair with `orchestra pair`
+([docs/ONBOARDING.md](ONBOARDING.md)) instead. To see your agents, tap the gear button at the top left, then **Agents** (or add `/agents` to the
 address). That page's heading is **Agents**, and it stays empty until step 3. Step 4 walks you
 through this again once your team is running. The first
 visit can take a few seconds while the certificate is issued. Optional: put the
