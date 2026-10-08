@@ -10,13 +10,18 @@ This page is about the gateway (8890), which the phone app talks to.
 
 In the dashboard, Arturo may ask which devices you have (iPhone, iPad, Apple Watch, Mac, Android
 phone, or just this computer). Answering is optional. Arturo can also pair an iPhone, iPad or Mac
-for you, but only when all of these hold:
+for you, then or any time later: say "pair my iPhone" in the dashboard chat. It needs:
 
-- you have that device's app (test builds only; there is no public download yet);
-- you picked the device on Arturo's devices card during its first-run questions, in the last
-  10 minutes (after that, use `orchestra pair`);
-- the server knows its https gateway address: `ORCHESTRA_PUBLIC_URL` was set in the environment
-  that ran `orchestra up` (step 2 below explains the address; a default install does not set it).
+- that device's app (test builds only; there is no public download yet);
+- the gateway served over https, which is step 4's `tailscale serve`. Arturo finds that address
+  itself. It never uses an address with Tailscale Funnel on, because Funnel opens it to the whole
+  internet. If it finds none, or more than one, it says what to do. To name the address yourself,
+  set `public_url` under `[gateway]` in `orchestra.toml` (Arturo reads it when its service
+  starts, so a change needs a restart; whether to restart is your decision);
+- a pick: Arturo shows a devices card, and a code is made only for an iPhone, iPad or Mac you
+  picked on it (a tap, or typing exactly one of its options) in the last 10 minutes. Anything
+  else you type is not an answer and records nothing; picking **None of these** takes back an
+  earlier pick.
 
 Then Arturo shows the code in a card on the dashboard page, never in the chat text, with where
 to paste it and how to revoke the device. The code always allows read, approve and message; for
@@ -177,13 +182,16 @@ Confirm the `gateway` row has a live pid again.
 - If you want a QR code to scan instead of copying the code, install `segno` first, once, on
   the server: `cd ~/orchestraos`, then `.venv/bin/pip install segno`.
 
-`orchestra pair` needs two things it will not guess:
+`orchestra pair` needs to know two things:
 
-- **The address the phone will use** (`--base-url`): the https gateway address from
-  step 4 below, e.g. `https://<machine>.<tailnet>.ts.net:8445`. If you pair a phone, do
-  step 4's `tailscale serve` first. Without it, pair stops with `I do not know this
-  gateway's public address`. You can set `ORCHESTRA_PUBLIC_URL` in your shell instead of
-  passing it each time; `[public] host` in `orchestra.toml` is **not** read here.
+- **The address the phone will use**: the https gateway address from step 4 below, e.g.
+  `https://<machine>.<tailnet>.ts.net:8445`. Do step 4's `tailscale serve` first: pair then finds
+  the address itself and says `Using <address>, the address tailscale serves this gateway on.`
+  It skips any address with Tailscale Funnel on (that one is open to the whole internet). If it
+  finds none, it says what to run; if it finds more than one, it lists them and asks you to set
+  `public_url` under `[gateway]` to the one your devices use. You can also name it yourself, in this order of precedence: `--base-url`, then
+  `ORCHESTRA_PUBLIC_URL` in your shell, then `public_url` under `[gateway]` in `orchestra.toml`.
+  `[public] host` is **not** read here.
 - **What the device may do** (`--scopes`): required, with no default, so nobody gets
   the power to answer on your behalf by accident. A comma-separated list of:
 
@@ -202,7 +210,7 @@ Confirm the `gateway` row has a live pid again.
   message agents from it. Give it more only if you mean to.
 
 ```bash
-orchestra pair --base-url https://<machine>.<tailnet>.ts.net:8445 --scopes read,approve --label my-phone
+orchestra pair --scopes read,approve --label my-phone
 ```
 
 `orchestra devices` lists paired devices, with a LAST SEEN column. A row appears the moment
@@ -282,11 +290,10 @@ through.
 you a test build, you can't connect an iPhone yet: stop here. **[PERSON ONLY]** Installing and
 opening it is yours.
 
-**Arturo's card instead of `orchestra pair`:** only during Arturo's first-run questions, within
-10 minutes of picking iPhone or iPad on its devices card, and only if `ORCHESTRA_PUBLIC_URL` is
-set (see the top of this page). You still need Tailscale on the iPhone, the gateway on an https
-address (step 2, "Before you run it", and this step's `tailscale serve`), and the pairing screen
-below. The card has a copy button but no QR, and it appears only in the browser page whose chat
+**Arturo's card instead of `orchestra pair`:** say "pair my iPhone" in the dashboard chat and
+pick iPhone or iPad on the devices card it shows (the pick lasts 10 minutes). You still need
+Tailscale on the iPhone, the gateway on an https address (this step's `tailscale serve`), and
+the pairing screen below. The card has a copy button but no QR, and it appears only in the browser page whose chat
 asked for it: a card shown on your computer does not appear on the iPhone. So ask Arturo from the
 dashboard open on the iPhone itself (Safari, over Tailscale), copy the code there and paste it
 into the app. Otherwise, use `orchestra pair` as below.
@@ -399,9 +406,9 @@ Before you start:
 **Getting the app:** it has no public download yet. If nobody gave you a test build, you can't
 connect a Mac yet: stop here. **[PERSON ONLY]** Installing and opening it is yours.
 
-**Arturo's card instead of `orchestra pair`:** only during Arturo's first-run questions, within
-10 minutes of picking Mac on its devices card, and only if `ORCHESTRA_PUBLIC_URL` is set (see the
-top of this page). Everything under "Before you start" still applies. The card appears only in
+**Arturo's card instead of `orchestra pair`:** say "pair my Mac" in the dashboard chat and pick
+Mac on the devices card it shows (the pick lasts 10 minutes). Everything under "Before you
+start" still applies. The card appears only in
 the browser page whose chat asked for it, so ask Arturo from the dashboard open on the Mac, copy
 the code from the card, and paste it into **Connect this Mac**. Otherwise, use `orchestra pair`
 as below.
@@ -413,7 +420,7 @@ prints.* Leave it on that screen.
 Then, on the server, make a pairing code for the Mac (it stays on screen for 60 seconds):
 
 ```bash
-orchestra pair --base-url https://<machine>.<tailnet>.ts.net:8445 --scopes read,approve --label my-mac
+orchestra pair --scopes read,approve --label my-mac
 ```
 
 `read,approve` lets the Mac see your cards and answer them (step 2 explains each scope). To
