@@ -262,9 +262,10 @@ export function parseCodexRollout(lines: string[]): any[] {
     const uuid = String(p.id || `${r.ordinal}`);
     switch (p.type) {
       case 'message': {
-        const text = codexText(p.content);
-        if (!text) break;
         const role = p.role === 'assistant' ? 'assistant' : 'user';
+        // The gateway chip-dodges long messages for every runtime, not just claude.
+        const text = role === 'user' ? expandChipDodge(codexText(p.content)) : codexText(p.content);
+        if (!text) break;
         const it: any = withTs({ kind: 'text', role, text, uuid }, r.ts);
         // The operator never typed the harness's own envelopes. Same rule as the Claude path
         // (sanitizeClaudeUserText, 55134d0): internals must not render as operator speech.
@@ -670,7 +671,7 @@ function normalizeAntigravity(lines: string[]): any[] {
     if (t === 'CHECKPOINT' || t === 'CONVERSATION_HISTORY') continue;
 
     if (t === 'USER_INPUT') {
-      let text = (o.content || '').trim();
+      let text = expandChipDodge((o.content || '').trim());
       if (text.includes('</CONTEXT_SUMMARY>')) {
         const parts = text.split('</CONTEXT_SUMMARY>');
         text = parts[parts.length - 1].trim();

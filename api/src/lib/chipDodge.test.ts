@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'child_process';
 import { mkdtempSync, writeFileSync, symlinkSync, rmSync } from 'fs';
+import { readInjectFile } from './chipDodge.js';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { expandChipDodge } from './chipDodge.js';
@@ -82,4 +83,15 @@ test('a look-alike banner cannot pull another file into the transcript', () => {
 test('ordinary text and short messages pass through unchanged', () => {
   assert.equal(expandChipDodge('hello there'), 'hello there');
   assert.equal(expandChipDodge('see [LONG-MSG chip-dodge] in the logs'), 'see [LONG-MSG chip-dodge] in the logs');
+});
+
+test('the reader refuses a symlink and never blocks on a FIFO', () => {
+  withDir((dir) => {
+    const target = join(dir, 'secret.txt'); writeFileSync(target, 'x');
+    const link = join(dir, 'agent-inject-2-deadbeef.md'); symlinkSync(target, link);
+    assert.equal(readInjectFile(link), null);
+    const fifo = join(dir, 'agent-inject-3-deadbeef.md');
+    execFileSync('mkfifo', [fifo]);
+    assert.equal(readInjectFile(fifo), null);          // returns at once (O_NONBLOCK), not a hang
+  });
 });

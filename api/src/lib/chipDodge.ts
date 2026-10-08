@@ -14,13 +14,14 @@
  * arbitrary file (or another message's file) into a transcript:
  *   - the whole turn is exactly one banner;
  *   - the path is <dodge dir>/agent-inject-<digits>-<8 hex>.md, nothing else;
- *   - it is a regular file (not a symlink), at most MAX_BYTES;
+ *   - opened without following a symlink or blocking, it is a regular file owned by this
+ *     process's user, at most MAX_BYTES;
  *   - its text has the banner's stated length AND its collapsed first 120 chars equal the
  *     banner's head.
  * Otherwise (file gone after a reboot, or any check fails) the turn shows the head the banner
  * quoted, without the plumbing.
  */
-import { lstatSync, readFileSync } from 'fs';
+import { closeSync, constants as FS, fstatSync, openSync, readSync } from 'fs';
 import { basename, dirname, resolve } from 'path';
 
 const BANNER_RE = /^\[LONG-MSG chip-dodge\] ([\s\S]*)… — FULL TEXT \((\d+) chars\): read (\S+)$/;
@@ -33,13 +34,27 @@ function dodgeDir(): string {
   return resolve(process.env.CHIP_DODGE_TMP_DIR || '/tmp');
 }
 
+/**
+ * The dodge dir is usually /tmp, which every local user can write. So nothing is decided on
+ * the path: open it without following a symlink and without blocking (a FIFO swapped in must
+ * not hang the API), then check the OPEN handle (a regular file, ours, not too big) and read a
+ * bounded amount. An lstat-then-read would leave a window to swap the file.
+ */
 export const readInjectFile: ReadInject = (path) => {
+  let fd: number | undefined;
   try {
-    const st = lstatSync(path);
-    if (!st.isFile() || st.isSymbolicLink() || st.size > MAX_BYTES) return null;
-    return readFileSync(path, 'utf8');
+    fd = openSync(path, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK);
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > MAX_BYTES) return null;
+    if (typeof process.getuid === 'function' && st.uid !== process.getuid()) return null;
+    const buf = Buffer.alloc(Math.min(st.size, MAX_BYTES) + 1);
+    const n = readSync(fd, buf, 0, buf.length, 0);
+    if (n > MAX_BYTES) return null;            // grew after the stat
+    return buf.subarray(0, n).toString('utf8');
   } catch {
     return null;
+  } finally {
+    if (fd !== undefined) { try { closeSync(fd); } catch { /* already closed */ } }
   }
 };
 
