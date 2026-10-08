@@ -75,8 +75,9 @@ def test_pairing_without_scopes_is_refused_and_explains_each_verb(monkeypatch, t
     rc, said = _lines(monkeypatch, tmp_path, _Args(scopes=None))
     assert rc == 2
     assert "Refusing to pair without --scopes" in said
-    for verb in ("read", "approve", "message", "inject", "voice", "admin"):
-        assert verb in said
+    from scripts.device_tokens import VERBS
+    for verb in VERBS:                       # every scope there is, `ptt` included, is explained
+        assert f"  {verb} " in said, verb
     assert "ANSWER approvals" in said, "the operator must be told what `approve` really means"
 
 

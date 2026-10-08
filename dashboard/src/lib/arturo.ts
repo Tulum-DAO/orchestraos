@@ -11,7 +11,7 @@
  */
 export interface ArturoBrain { kind: 'api' | 'runtime' | 'none'; runtime?: string; cli?: string; model: string; reason?: string; provider?: string }
 export interface ArturoStt { server: boolean; backend: 'local-whisper' | 'none'; state: 'ready' | 'warming' | 'not-installed' | 'off' | 'error'; reason?: string; install?: string; model?: string }
-export interface ArturoHealth { onboarded?: boolean; operator?: OperatorFacts; ok: boolean; status?: number; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; stt?: ArturoStt; error?: string }
+export interface ArturoHealth { live?: boolean; onboarded?: boolean; operator?: OperatorFacts; ok: boolean; status?: number; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; stt?: ArturoStt; error?: string }
 /** A tap-to-pick card the BRAIN wrote with ask_choices: its options, and whether several may be picked.
  *  `note` is the server's own line (the starter team's cost), never the model's. */
 export type ChoiceCard = { options: string[]; multi: boolean; purpose: 'starter_team' | 'devices' | 'other'; note?: string; exclusive?: string };
@@ -167,6 +167,35 @@ export function toggleChoice(options: string[], picked: string[], option: string
   const next = new Set(picked.filter((p) => p !== exclusive));
   if (next.has(option)) next.delete(option); else next.add(option);
   return options.filter((o) => next.has(o));
+}
+
+/** What the voice controls are called (the operator, 2026-10-08: say what each one is, and never ask
+ *  them to approve what they already have). Dictation is theirs as soon as the browser grants the mic;
+ *  OrchestraOS asks nothing. Live voice mode (Arturo talks back, live) is the one thing that
+ *  needs the server's voice key. The old one-word label named neither, so it is gone. */
+export const DICTATE_TITLE = "Dictate (uses your browser's mic permission)";
+/** A working name (the operator may rename it): change it here and every label follows. */
+export const HANDS_FREE = 'Live voice mode';
+export function handsFreeTitle(keyPresent: boolean): string {
+  return keyPresent
+    ? `${HANDS_FREE}: talk, and Arturo talks back (uses GEMINI_API_KEY on your server)`
+    : `${HANDS_FREE} needs a voice key: GEMINI_API_KEY on your server`;
+}
+/** The Dictate button during a call: the call captions the caller already, so a second recognizer
+ *  would fight it ("dictation error: aborted"). Home and the pill both lock it the same way. */
+export const DICTATE_IN_CALL = 'Captions run on their own during a call';
+export function dictateLocked(inCall: boolean, mode: string): boolean {
+  return inCall || mode === 'transcribing';
+}
+export function dictateTitle(inCall: boolean, mode: string): string {
+  return inCall ? DICTATE_IN_CALL : mode === 'transcribing' ? 'Transcribing on the server…' : DICTATE_TITLE;
+}
+
+/** The browser's call runs on Gemini Live, so it needs GEMINI_API_KEY (`/health.live`). A server from
+ *  before that field said only whether ANY voice key was set; fall back to that. */
+export function handsFreeReady(h: Pick<ArturoHealth, 'live' | 'voice'> | null | undefined): boolean {
+  if (!h) return false;
+  return typeof h.live === 'boolean' ? h.live : !!h.voice;
 }
 
 /** Onboarding ends by EFFECT: only when the server's reply says so (finish_onboarding wrote its flag),
