@@ -161,4 +161,4 @@ app = VoiceAgentApp(get_agent=get_agent)
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5072))
     log.info(f"Starting Arturo Cartesia Voice Agent on port {port}...")
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="127.0.0.1", port=port)       # loopback: a call on this port carries no caller

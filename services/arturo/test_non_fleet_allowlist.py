@@ -446,7 +446,9 @@ def _msg(P, rec):
 def test_a_device_turns_message_is_arturos_and_says_unverified(P, outbox):
     _msg(P, _record(P, "web_x", None, "device:dev_voice"))
     assert outbox[0]["from_agent"] == "arturo"
-    assert outbox[0]["body"] == "do it\n\n(via device:dev_voice, unverified caller)"
+    # the caveat comes FIRST: a seat meets it before the caller-controlled words
+    assert outbox[0]["subject"] == "[unverified device] s"
+    assert outbox[0]["body"] == "(via device:dev_voice, unverified caller)\n\ndo it"
 
 
 def test_a_voice_calls_message_names_the_call(P, outbox):
@@ -455,8 +457,8 @@ def test_a_voice_calls_message_names_the_call(P, outbox):
         _msg(P, None)
     finally:
         P._CALLER_CONV.reset(tok)
-    assert outbox[0]["from_agent"] == "arturo"
-    assert outbox[0]["body"].endswith("(via voice call conv_abc, unverified caller)")
+    assert outbox[0]["from_agent"] == "arturo" and outbox[0]["subject"] == "[unverified voice] s"
+    assert outbox[0]["body"].startswith("(via voice call conv_abc, unverified caller)\n")
 
 
 def test_an_unstamped_text_turns_message_is_marked_too(P, outbox):
@@ -466,7 +468,7 @@ def test_an_unstamped_text_turns_message_is_marked_too(P, outbox):
 
 def test_a_dashboard_turns_message_is_unchanged(P, outbox):
     _msg(P, _record(P, "web_z", None, "fleet"))
-    assert outbox[0]["from_agent"] == "gm" and outbox[0]["body"] == "do it"
+    assert outbox[0]["from_agent"] == "gm" and outbox[0]["body"] == "do it" and outbox[0]["subject"] == "s"
 
 
 @pytest.mark.parametrize("tool,args", [("agent_message", {"to_agent": "dev-x", "subject": "s"}),
@@ -586,3 +588,103 @@ def test_an_expired_devices_answer_refuses_pairing(P, pairing):
     P._devices_answer_path().write_text(json.dumps(rec))
     out, turn = _on(P, "web_s8", "onboarding", "pair_device", {"device": "iPhone"})
     assert out.startswith("NOT PAIRED") and turn["pair_card"] is None and pairing.list() == []
+
+
+# ---- the prompt of a non-fleet turn promises nothing it cannot do (S6, prompt side) -------------------
+def _real_proxy(tmp_path, monkeypatch):
+    # the real prompt builder, over an EMPTY data dir: never this machine's live fleet state
+    import importlib.util
+    monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path / "data"))
+    from services.arturo import surface as _surface
+
+    def _no_gateway(*a, **k):
+        raise OSError("no gateway in a test")
+    monkeypatch.setattr(_surface, "_gw_get", _no_gateway)        # the live box's approvals, agents, focus
+    monkeypatch.setattr(_surface, "_gw_token", lambda: "")
+    spec = importlib.util.spec_from_file_location("arturo_proxy_prompt", Path(__file__).parent / "arturo-proxy.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.ARTURO_STATE = tmp_path / "arturo"
+    return mod
+
+
+def test_every_fleet_promise_is_found_by_the_non_fleet_rewrite(tmp_path, monkeypatch):
+    mod = _real_proxy(tmp_path, monkeypatch)
+    fleet = mod._as_turn({"principal": "fleet"}, mod.build_context, calling_channel="voice")
+    for old, _ in mod._NON_FLEET_PROMPT_SWAPS:
+        assert old in fleet, old[:40]                      # a reworded fleet prompt must update the swaps
+    assert "text you" in fleet
+
+
+@pytest.mark.parametrize("turn", [None, {"principal": "device:dev_voice"}, {"principal": None}])
+def test_a_non_fleet_prompt_never_promises_a_text(tmp_path, monkeypatch, turn):
+    mod = _real_proxy(tmp_path, monkeypatch)
+    text = mod._as_turn(turn, mod.build_context, calling_channel="voice")
+    assert "apr_" not in text                                      # hermetic: nothing from a live box
+    assert "text you" not in text.lower() and mod._NON_FLEET_PROMPT_NOTE in text
+
+
+# ---- prewarm and the warm key carry the principal (a warm process is one principal's) -------------------
+def _stub_warm(P, seen):
+    import types
+    P.build_context = lambda **k: (seen.setdefault("fleet_prompt", []).append(P._is_fleet(P._TEAM_TURN.get())), "CTX")[1]
+    P._text_stream = types.SimpleNamespace(
+        stream_turn=lambda **kw: (seen.setdefault("stream_tools", []).append(_names(kw["tools"])), kw["discard"](), iter(()))[2],
+        whole_turn=lambda *a, **kw: iter(()),
+        with_heartbeat=lambda turn, interval_s=10.0: iter(()),
+        sse_frame=lambda ev: "",
+        warm_argv=lambda brain, prior, tools: (seen.setdefault("warm_tools", []).append(_names(tools)), ["cli"])[1],
+    )
+    P._WARM_POOL = types.SimpleNamespace(
+        prewarm=lambda key, argv, **k: (seen.setdefault("prewarm_key", []).append(key), True)[1],
+        turn=None, sync=lambda *a, **k: None, discard=lambda key: seen.setdefault("stream_key", []).append(key))
+
+
+@pytest.mark.parametrize("who", ["none", "device", "fleet"])
+def test_a_prewarm_is_built_for_the_stamped_caller(P, fleet_stamp, who):
+    seen = {}
+    _stub_warm(P, seen)
+    h = {"none": {}, "device": {"X-Arturo-Principal": "device:dev_voice"}, "fleet": fleet_stamp(P)}[who]
+    with P.app.test_client() as c:
+        r = c.post("/text/prewarm", json={"conversation_id": "c1", "brain": {"provider": "claude", "model": "claude-sonnet-5"}},
+                   headers=h)
+    assert r.status_code == 200 and r.get_json()["warmed"] is True
+    fleet = who == "fleet"
+    assert seen["prewarm_key"][0][-1] is fleet and seen["fleet_prompt"] == [fleet]
+    assert (seen["warm_tools"][0] == _names(P.TOOLS)) if fleet else (seen["warm_tools"][0] <= ALLOWED)
+
+
+@pytest.mark.parametrize("who", ["none", "fleet"])
+def test_a_stream_turns_warm_key_and_prompt_follow_its_principal(P, fleet_stamp, who):
+    seen = {}
+    _stub_warm(P, seen)
+    h = fleet_stamp(P) if who == "fleet" else {}
+    with P.app.test_client() as c:
+        c.post("/text/stream", json={"text": "hello", "conversation_id": "c2",
+                                     "brain": {"provider": "claude", "model": "claude-sonnet-5"}}, headers=h).get_data()
+    fleet = who == "fleet"
+    assert seen["stream_key"][0][-1] is fleet and seen["fleet_prompt"][0] is fleet
+    assert (seen["stream_tools"][0] == _names(P.TOOLS)) if fleet else (seen["stream_tools"][0] <= ALLOWED)
+
+
+# ---- the stamp secret file -------------------------------------------------------------------------------
+def test_the_secret_is_0600_whatever_the_umask(tmp_path):
+    import os
+    import stat
+    from scripts import arturo_stamp
+    old = os.umask(0)
+    try:
+        arturo_stamp.ensure(tmp_path)
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(arturo_stamp.path(tmp_path).stat().st_mode) == 0o600
+    assert not [p for p in arturo_stamp.path(tmp_path).parent.iterdir() if p.name.startswith(".arturo-stamp")]
+
+
+def test_a_secret_others_can_read_is_no_secret(tmp_path):
+    from scripts import arturo_stamp
+    secret = arturo_stamp.ensure(tmp_path)
+    arturo_stamp.path(tmp_path).chmod(0o644)
+    assert arturo_stamp.read(tmp_path) == "" and arturo_stamp.verify(tmp_path, secret) is False
+    arturo_stamp.path(tmp_path).chmod(0o600)
+    assert arturo_stamp.verify(tmp_path, secret) is True
