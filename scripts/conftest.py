@@ -32,6 +32,11 @@ os.environ.setdefault("NOTIFY_ESCALATION_LOG_PATH", str(_TMP_ESCALATION))
 # never write the prod state/notify-tailnet-state.json from a test run.
 _TMP_TAILNET = Path(tempfile.gettempdir()) / "notify-tailnet-TESTS.json"
 os.environ.setdefault("TAILNET_NOTIFY_STATE_PATH", str(_TMP_TAILNET))
+# ...and the phone's tailnet status: cron_backstop() without tailnet_status= ran the host's real
+# `tailscale status`, so on a machine whose phone was off the tailnet two Telegram tests got an
+# extra escalation message and failed there, while CI (no tailscale binary) passed. Under pytest
+# the default runner now behaves as if tailscale were absent; status tests inject `run=`.
+os.environ.setdefault("APPROVAL_NOTIFY_NO_TAILSCALE", "1")
 # Fleet-safety belt (gm msg_3477cbfb, incident apr_07805db5): under ANY pytest
 # run the resume path's REAL side-effect seams (msg_store send + live pane
 # inject) refuse outright, so a test row naming a live agent can never deliver
