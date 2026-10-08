@@ -136,7 +136,7 @@ export function prettyModel(id: string): string {
 }
 
 /** Server-side operator facts (services/arturo/operator_store.py); carried on /health and every /text reply. */
-export type OperatorFacts = { name?: string | null; timezone?: string | null; role?: string | null; pronouns?: string | null };
+export type OperatorFacts = { name?: string | null; timezone?: string | null; role?: string | null; pronouns?: string | null; devices?: string | null };
 
 /** Where the first thread starts. runtime first — a brain must exist before it is asked to
  *  listen; an onboarded browser goes straight to the thread. The known-name case is honoured
@@ -161,7 +161,28 @@ export function teamStepDone(team?: TeamState): boolean {
 
 /** The onboarding turn a surface sends: a first-line marker the proxy strips and turns into the
  *  step directive (services/arturo/onboarding.py). No parsing happens on this side, ever. */
-export function onboardingTurn(step: 'name' | 'team' | 'team_open', text: string): string {
+/** The devices card (onboarding step 'devices'). The SAME list, in the same order, as
+ *  services/arturo/onboarding.py DEVICES, whose per-device facts the brain answers from; a test there
+ *  reads this line, so the two cannot drift. */
+export const DEVICE_OPTIONS = ['iPhone', 'iPad', 'Apple Watch', 'Mac', 'Android phone', 'Just this computer'];
+/** Picking it clears the others, and picking any other clears it. */
+export const DEVICE_ONLY_HERE = 'Just this computer';
+
+/** One tap on a multi-select card: toggles `option`, keeps the card's order, and keeps the exclusive
+ *  option exclusive. */
+export function toggleChoice(options: string[], picked: string[], option: string, exclusive?: string): string[] {
+  if (exclusive && option === exclusive) return picked.includes(option) ? [] : [option];
+  const next = new Set(picked.filter((p) => p !== exclusive));
+  if (next.has(option)) next.delete(option); else next.add(option);
+  return options.filter((o) => next.has(o));
+}
+
+/** The operator's answer as it is sent, and as it reads in their bubble. */
+export function devicesAnswer(picked: string[]): string {
+  return `My devices: ${picked.join(', ')}`;
+}
+
+export function onboardingTurn(step: 'name' | 'team' | 'team_open' | 'devices', text: string): string {
   return `[Onboarding: step=${step}]\n${text}`;
 }
 

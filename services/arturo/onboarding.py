@@ -35,6 +35,39 @@ def split_marker(text: str):
     return m.group(1).lower(), text[m.end():]
 
 
+# ---- step 'devices': which devices the operator has (asked with a multi-select card) ----------
+# The card's options, in order, and the ONE thing to say about each. These are facts about this
+# release, not the brain's to improvise: no app is public yet (docs/ONBOARDING.md, "What works today"),
+# and a phone reaches the same dashboard in its browser once Tailscale is on it (docs/INSTALL.md §1).
+ONBOARDING_GUIDE = "https://github.com/Tulum-DAO/orchestraos/blob/main/docs/ONBOARDING.md"
+
+DEVICES = ("iPhone", "iPad", "Apple Watch", "Mac", "Android phone", "Just this computer")
+DEVICE_FACTS = {
+    "iPhone": "The iPhone app is in testing and not released yet. Until it is, install Tailscale from the "
+              "App Store, sign in with the same Tailscale account, and open this page's address in Safari.",
+    "iPad": "The iPad app is in testing and not released yet. Until it is, install Tailscale from the App "
+            "Store, sign in with the same Tailscale account, and open this page's address in Safari.",
+    "Apple Watch": "The Watch app comes with the iPhone app and pairs through it, so there is nothing to set "
+                   "up on the watch itself; it is not released yet either.",
+    "Mac": "The Mac app is in testing and not released yet. Until it is, use this page in a browser on the "
+           "Mac, with Tailscale signed in to the same account.",
+    "Android phone": "There is no Android app. Install Tailscale from Google Play, sign in with the same "
+                     "Tailscale account, and open this page's address in Chrome.",
+    "Just this computer": "Nothing more to set up: this page is the whole of it.",
+}
+
+_DEVICES = (
+    "ONBOARDING, step 'devices': the operator just told you which devices they have, from a list or in "
+    "their own words. Call set_operator_fact(field='devices', value=<the devices, comma-separated>) "
+    "with exactly what they said. Then give ONE short line for each device they named, using only these "
+    "facts: " + " ".join(f"{k}: {v}" for k, v in DEVICE_FACTS.items()) + " Do not invent a download, a "
+    "link, a store listing or a release date; an app that is not released is not released. For a device "
+    "not in this list, say there is no app for it and that this page works in its browser. Never pair a "
+    "device, run `orchestra pair` or hand out a pairing code here: when an app is released, pairing is the "
+    f"operator's own step in the guide, {ONBOARDING_GUIDE}, and you give that link, nothing else. Finish with one "
+    "sentence saying this thread is their front door from here on. Ask no question. Keep it plain and short."
+)
+
 DEFAULT_PROJECT = "first-project"
 
 TEAM_SHAPE = (
@@ -147,4 +180,6 @@ def directive(step, ctx=None) -> str:
     """ctx is only read by steps that need a server-side fact (team). The one-arg call still works."""
     if (step or "").lower() in ("team", "team_open"):    # team_open: the page's own opener
         return _team(ctx)
+    if (step or "").lower() == "devices":
+        return _DEVICES
     return DIRECTIVES.get(step or "", "")

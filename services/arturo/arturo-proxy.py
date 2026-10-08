@@ -1969,7 +1969,7 @@ def _begin_team_turn(conversation_id, step):
     book: this turn may accept it; no later turn can."""
     with _TEAM_OFFERS_LOCK:
         made = _TEAM_OFFERS.pop(conversation_id, None) if conversation_id else None
-    return {"conversation_id": conversation_id, "opener": step == "team_open",
+    return {"conversation_id": conversation_id, "step": step, "opener": step == "team_open",
             "offered": made is not None and time.time() - made < _TEAM_OFFER_TTL_S,
             "declined": False}
 
@@ -2248,6 +2248,12 @@ def execute_tool(name, args, user_turns=None):
     that don't thread turns fail CLOSED on send_telegram (policy: internal
     messages never reach the operator's TG without an ask or a deliverable link)."""
     log.info(f"EXECUTING TOOL: {name}({json.dumps(args)})")
+    # The devices step records and explains, nothing else (pm-tulumdao guardrail): a selection never
+    # pairs, mints a code, starts a seat or sends anything, whatever the brain makes of it.
+    _turn = _TEAM_TURN.get()
+    if _turn is not None and _turn.get("step") == "devices" and name != "set_operator_fact":
+        return (f"NOT RUN: {name} is not available while the operator answers which devices they have; "
+                f"this step only records the devices and explains each one.")
     # Record the tool run for the per-call journal (gm bug fix). Best-effort — never let capture
     # break tool execution. The result is appended after the call returns (see the wrapper below).
     _bucket = _TOOLS_THIS_TURN.get()
