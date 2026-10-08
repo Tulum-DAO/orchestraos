@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import subprocess
+import time
 import sys
 from pathlib import Path
 
@@ -165,9 +166,17 @@ def cmd_up(ns) -> int:
     if ns.detach:
         (st.data_dir / "logs").mkdir(parents=True, exist_ok=True)
         log = open(st.data_dir / "logs" / "supervisor.log", "ab")
+        launched = time.time()
         child = subprocess.Popen([sys.executable, "-m", "orchestra_cli", "up"], cwd=str(st.repo_root),
                                  stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                  start_new_session=True, env=dict(os.environ, ORCHESTRA_ROOT=str(st.repo_root)))
+        # Return only once it is actually up: `up --detach && orchestra status` (INSTALL §2)
+        # otherwise reads the half-started supervisor as "not running".
+        ok, why = SV.wait_until_up(st.data_dir, child, started_after=launched)
+        if not ok:
+            print(f"supervisor did not come up ({why}); see {st.data_dir / 'logs' / 'supervisor.log'}",
+                  file=sys.stderr)
+            return 1
         print(f"supervisor started in background (pid {child.pid}); logs: {st.data_dir / 'logs'}")
         return 0
     env = S.child_env(st)
