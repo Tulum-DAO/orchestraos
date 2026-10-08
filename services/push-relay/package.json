@@ -1,0 +1,12 @@
+{
+  "name": "orchestraos-push-relay",
+  "private": true,
+  "type": "module",
+  "description": "Push relay for self-hosted OrchestraOS gateways (Cloudflare Worker, no dependencies).",
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "engines": {
+    "node": ">=22.5"
+  }
+}
