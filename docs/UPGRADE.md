@@ -40,16 +40,24 @@ What it does, in order:
    fast-forward would fail anyway, and you should know why.
 3. `git pull --ff-only` (exit 1 with the git message if the branch diverged).
 4. `orchestra init --yes`: idempotent — `orchestra.toml` and the data dir are kept, the
-   Claude Code hook rows are re-written against the new checkout path, venv/npm/builds
-   refresh (`--no-venv` / `--no-npm` / `--no-build` are passed through).
+   Claude Code hook rows are re-written against the new checkout path, venv and npm
+   refresh (`--no-venv` / `--no-npm` / `--no-build` are passed through). It does **not**
+   rebuild the API or the dashboard: `init` skips a build whose output (`api/dist/server.js`,
+   `dashboard/dist/index.html`) already exists. Do the rebuild step below after every upgrade.
 5. `orchestra doctor`; its exit code is the command's.
 
-It never restarts anything. Spawned seats keep the code they were spawned with until
-their next spawn or rotation; the supervisor's services and beats pick the new code up on:
+Then rebuild and restart. Until `orchestra upgrade` rebuilds by itself, this step is not
+optional: without it the API and dashboard keep running the code from before the upgrade,
+including any security fix that came in with it (for example the web terminal origin check
+in #208, which is partly in the API):
 
 ```bash
-orchestra down && orchestra up --detach
+rm -rf api/dist dashboard/dist && orchestra init --yes   # rebuilds both (a few minutes)
+orchestra down && orchestra up --detach                  # services and beats pick up the new code
 ```
+
+`orchestra upgrade` never restarts anything itself. Spawned seats keep the code they were
+spawned with until their next spawn or rotation.
 
 ## Doing it by hand
 
@@ -66,7 +74,8 @@ the paths other running components trust not to change shape underneath them.
 
 ```bash
 git pull
-orchestra init --yes    # idempotent: re-runs npm/venv/build steps only, never
+rm -rf api/dist dashboard/dist   # init only builds what is missing; remove the old builds
+orchestra init --yes    # idempotent: re-runs npm/venv/build steps, never
                          # touches orchestra.toml or the data dir; --yes re-writes the
                          # same hook rows without the prompt
 orchestra doctor         # confirm every row is still OK
