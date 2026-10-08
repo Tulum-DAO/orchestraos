@@ -75,8 +75,9 @@ the registry **and** has its lineage seeded in the identity store (generation 1)
 lineage, and `orchestra rotate` will refuse it with "no authoritative generation ... seed the
 seat via the identity store".
 
-Expected: it ends with
-`starter team up: gm (T0) -> pm-first-project (T1) -> dev-first-project (T2)`.
+Expected: it prints
+`starter team up: gm (T0) -> pm-first-project (T1) -> dev-first-project (T2)`, then a last
+`talk to gm: ...` line.
 
 Then, at the same server prompt (never inside an agent's screen or the dashboard's agent page,
 where typing already goes to the agent):

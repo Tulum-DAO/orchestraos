@@ -575,11 +575,21 @@ Each entry is an `https://` line with a `|-- / proxy ...` line under it. If an e
 NOT add already proxies to `http://127.0.0.1:8891`, treat port 8891 as taken, even if
 `orchestra doctor` says it is free. Otherwise your dashboard, including its web terminal, would
 appear behind somebody else's address on your Tailscale network. Move your dashboard to another
-port before you start it, inside the `orchestraos` folder:
+port before you start it. First go to the `orchestraos` folder (the change only works there):
+
+```bash
+cd ~/orchestraos
+```
 
 ```bash
 sed -i '/^\[dashboard\]/,/^\[/ s/^port = .*/port = 18891/' orchestra.toml
 ```
+
+It prints nothing when it works. If it says `can't read orchestra.toml`, you are not in the
+`orchestraos` folder: run the `cd` line, then the `sed` line again. After `orchestra up` below,
+check that the `dashboard` row of `orchestra status` shows `:18891`. If it still shows `:8891`,
+stop and bring that to whoever is helping you; whether to restart is your decision
+**[PERSON ONLY]**.
 
 Never remove or change that other entry; it may belong to another app. If `tailscale serve
 status` prints `No serve config`, or nothing proxies to 8891, carry on.
@@ -724,6 +734,7 @@ have it guide you through this section. Copy the whole box:
 ```text
 Help me with one step of installing OrchestraOS. Read this section and do it with me:
 https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md#3-your-starter-team
+If you can't open that link, ask me to paste the section to you; don't guess commands.
 The commands in this section run on my server; I log in to it with ssh (ask me for the
 address and user if you need them).
 Rules:
@@ -736,7 +747,8 @@ Rules:
   `Overwrite (y/n)?`, the answer is n.
 - If I already said yes to Arturo in section 2, run `tmux ls` first and follow the section's
   "If you already said yes to Arturo" paragraph: use my project name, never add a second one.
-- We are done when `orchestra starter` ends with `starter team up: gm (T0) -> pm-first-project (T1) -> dev-first-project (T2)`
+- We are done when `orchestra starter` prints `starter team up: gm (T0) -> pm-first-project (T1) -> dev-first-project (T2)`
+  (its very last line is `talk to gm: ...`)
   (or `pm-<name>` and `dev-<name>` with the name I gave Arturo). Show me that output; don't just tell me it worked.
 ```
 
@@ -752,13 +764,15 @@ One command starts three agents ("seats"), one at each level, each reporting to 
 orchestra starter
 ```
 
-You should see some output for each of the three seats as it starts, ending with
-`starter team up: gm (T0) -> pm-first-project (T1) -> dev-first-project (T2)`. It takes a
+You should see some output for each of the three seats as it starts, then
+`starter team up: gm (T0) -> pm-first-project (T1) -> dev-first-project (T2)` and a last line
+`talk to gm:   tmux attach -t gm ...`. It takes a
 minute or two. The three seats run on your AI plan. The project manager and the worker say they
 are ready and then wait; they do almost nothing until you give them work.
 
 **If you already said yes to Arturo in §2,** your team may already be running. Arturo runs this
-same `orchestra starter` with the project name you gave it. Run `tmux ls`: if you see `gm`,
+same `orchestra starter` with the project name you gave it. Wait until Arturo tells you the team
+is up before you run anything in this section. Run `tmux ls`: if you see `gm`,
 `pm-<name>` and `dev-<name>`, your team is up. If `<name>` is not `first-project`, run
 `orchestra starter --project <name>` with that same name instead of the plain command, or skip
 this command. The plain one would add a second project, `pm-first-project` and
@@ -770,6 +784,7 @@ pm-<name> (T1) already running — skipped
 dev-<name> (T2) already running — skipped
 
 starter team up: gm (T0) -> pm-<name> (T1) -> dev-<name> (T2)
+talk to gm:   tmux attach -t gm      (detach: Ctrl-B then D)
 ```
 
 That is fine: it only means Arturo did this step for you.
@@ -833,6 +848,7 @@ Mail a seat and watch it act with no keypress (the shipped hooks + the router be
 `orchestra up`; see docs/HOOKS.md):
 
 ```bash
+cd ~/orchestraos                     # these commands run from the orchestraos folder
 source scripts/orchestra-env.sh      # once per shell: tells msg_store.py and the scripts where your data dir is
 echo "hello" > note.txt
 python3 msg_store.py send --from you --to gm --subject hi --body-file note.txt
@@ -849,7 +865,9 @@ show registered and live seats.
   acceptance for `cwd` (`scripts/ensure_cwd_trusted.py`; honors `CLAUDE_CONFIG_DIR`), so the
   seat does not stop at a first-run dialog. If you see one anyway, answer it once in `tmux attach`, run at your server's prompt (see §3).
 
-Verify through the dashboard proxy (the same list the UI shows):
+Verify through the dashboard proxy (the same list the UI shows). This uses the default
+dashboard port 8891; if the `dashboard` row of `orchestra status` shows another port, put that
+one in instead:
 
 ```bash
 curl -s http://127.0.0.1:8891/api/agents | python3 -m json.tool | grep -E '"id"|"alive"|"state"'
@@ -881,6 +899,7 @@ have it guide you through this section. Copy the whole box:
 ```text
 Help me with one step of installing OrchestraOS. Read this section and do it with me:
 https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md#4-see-your-team-from-your-own-computer
+If you can't open that link, ask me to paste the section to you; don't guess commands.
 Some commands run on my server (I log in to it with ssh; ask me for the address and user if
 you need them), and one part happens on my own computer.
 Rules:
@@ -941,7 +960,8 @@ On the server, first check which port your dashboard uses:
 orchestra status
 ```
 
-Read the port on the `dashboard` row: `:8891`, unless you changed it in §1 (for example
+Read the port on the `dashboard` row: `:8891`, unless you moved it in §1 or in §2's
+leftover-entry step (for example
 `:18891`). Then:
 
 ```bash
@@ -1000,6 +1020,7 @@ Tailscale issues the https certificate.
 From a shell (or let the seat run it):
 
 ```bash
+cd ~/orchestraos                     # run from the orchestraos folder
 source scripts/orchestra-env.sh      # already done in §3 if you are in the same shell; harmless to repeat
 python3 scripts/approval.py request "Ship the first change?" --from dev-first-project --worker-kind pane --options approve,deny
 # -> prints the card id, e.g. apr_1a2b3c4d_567
