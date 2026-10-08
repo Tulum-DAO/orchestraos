@@ -78,13 +78,17 @@ seat via the identity store".
 Expected: it ends with
 `starter team up: gm (T0) -> pm-first-project (T1) -> dev-first-project (T2)`.
 
+Then, at the same server prompt (never inside an agent's screen or the dashboard's agent page,
+where typing already goes to the agent):
+
 ```bash
 tmux attach -t gm
 ```
 
 Expected: the tmux pane shows the CLI's normal interactive UI. Type a question directly into
 the pane (e.g. "what files are in this folder?") and get a real, current answer, not a
-canned one. Detach with `Ctrl-B D`.
+canned one. Detach with `Ctrl-B D`. If the screen shows another tmux inside it, see "If an agent's
+screen shows another tmux inside it" in [docs/INSTALL.md](INSTALL.md#3-your-starter-team).
 
 ```bash
 curl -s http://127.0.0.1:8891/api/agents | python3 -m json.tool | grep -E '"id"|"alive"'
