@@ -139,7 +139,7 @@ def test_a_verb_must_be_named_explicitly_no_implication_between_verbs():
 
 def test_the_legacy_fleet_token_scope_allows_everything():
     assert ALL_SCOPES == ("*",)
-    for verb in ("read", "approve", "message", "inject", "voice", "admin"):
+    for verb in ("read", "approve", "message", "inject", "voice", "admin", "usage"):
         assert scopes_allow(ALL_SCOPES, verb) is True
 
 
@@ -175,3 +175,14 @@ def test_touch_records_last_seen_without_failing_a_request(tmp_path):
     st.touch(dev_id)
     assert st.resolve(token)["last_seen_at"] is not None
     st.touch("no-such-device")                 # must not raise
+
+
+def test_usage_is_a_known_verb_that_a_phone_mint_can_carry(tmp_path):
+    """A phone minted before the usage-read route exists must be able to hold `usage` already;
+    otherwise adding it later means re-pairing the phone and every watch that inherits it."""
+    store = DeviceStore(tmp_path)
+    device_id, token = store.mint("phone", "read,approve,message,ptt,usage")
+    rec = store.resolve(token)
+    assert rec is not None and "usage" in rec["scopes"]
+    assert scopes_allow(tuple(rec["scopes"]), "usage") is True
+    assert scopes_allow(("read",), "usage") is False

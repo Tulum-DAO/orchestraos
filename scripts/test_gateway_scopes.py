@@ -428,3 +428,11 @@ def test_holding_voice_does_NOT_imply_ptt_and_vice_versa(monkeypatch, tmp_path):
     deny, reached, _ = _call("POST", "/arturo/ptt", {"Authorization": f"Bearer {voice_only}"})
     assert deny.status == 403 and not reached
     assert G.ROUTE_SCOPES[("GET", "/live")] == "voice", "the richer surface still needs voice"
+
+
+def test_no_route_consumes_usage_yet():
+    """`usage` is minted ahead of its consumer on purpose. When a route starts requiring it,
+    delete this test in the same change and say which route, so the verb never gates something
+    silently."""
+    assert "usage" in VERBS
+    assert "usage" not in set(G.ROUTE_SCOPES.values())
