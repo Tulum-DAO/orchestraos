@@ -84,8 +84,7 @@ cuts one off (its token stops working on its next request).
 
 This prints the pairing code: one long word starting with `orc1_`. Copy all of it and
 paste it into the app's pairing box. It carries your server's address too, so there is
-nothing else to type. If the code wraps over two lines in your terminal, copy both lines;
-the app ignores the line break. (An older app that also shows an address field: type your
+nothing else to type. (An older app that also shows an address field: type your
 server's `https://` address there, then paste the code. That needs a gateway started after
 you updated OrchestraOS, so run `orchestra down && orchestra up --detach` once after updating.) On a stock install the code is
 all you get: the terminal says
