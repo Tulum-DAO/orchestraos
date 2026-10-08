@@ -44,9 +44,10 @@ orch_tmux_session_defaults() {
         # of this server's own panes can only be such a nested client, so it is detached at
         # once, and the attaching pane gets back whatever ran the attach. Clients from outside
         # (an ssh terminal, the web terminal's pty) have their own ttys and are left alone.
-        # ##{pane_tty} survives the hook's format expansion as #{pane_tty} for list-panes.
+        # ## survives the hook's format expansion as # for list-panes. A dead pane kept by
+        # remain-on-exit still reports its old tty, which a later ssh login can reuse: skipped.
         tmux set-hook -t "=$session:" client-attached \
-            "run-shell \"tmux list-panes -a -F '##{pane_tty}' | grep -qxF '#{client_tty}' && tmux detach-client -t '#{client_tty}' || true\"" \
+            "run-shell \"tmux list-panes -a -F '##{?pane_dead,,##{pane_tty}}' | grep -qxF '#{client_tty}' && tmux detach-client -t '#{client_tty}' || true\"" \
             >/dev/null 2>&1 || true
     fi
     return 0
