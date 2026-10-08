@@ -447,13 +447,15 @@ You should see:
 - `git clone`: progress lines ending with `Resolving deltas: 100% (...), done.` If it says the
   folder `orchestraos` already exists instead (you ran it before), run `cd ~/orchestraos` and
   continue with the next line.
-- `make install`: `installed /home/<you>/.local/bin/orchestra`, then a `NOTE` that
+- `make install`: first the command it runs (a line starting `mkdir -p`), then
+  `installed /home/<you>/.local/bin/orchestra`, then a `NOTE` that
   `orchestra` is not on your PATH yet. The two PATH lines right after it fix that; they
   print nothing.
 - `orchestra init --yes`: about five minutes of output, ending with a table whose rows
   say `did` (or `skipped` on a re-run), then three lines: `data dir:` (where OrchestraOS keeps
   its state), `config:` (your `orchestra.toml`) and `next:     orchestra doctor && orchestra up`.
-  A step that failed shows `skipped` with `failed rc=<number>` in its row; bring that row to
+  A step that failed shows `skipped` and the word `failed` in its row (for example
+  `failed rc=1`, or `hook install failed: ...`); bring that row to
   whoever is helping you.
 - `sed`: nothing.
 - `orchestra doctor`: a table with one row per check (`CHECK`, `STATUS`, `DETAIL`, `REMEDY`),
@@ -487,6 +489,16 @@ supported yet (some parts still expect 8888 and 5071), so don't change them. Ins
 - **[PERSON ONLY]** move the other program to a different port yourself, by changing that
   program's own settings (an agent helping you never stops, restarts or reconfigures it), then
   run `orchestra doctor` again; or
+- for `port:arturo` only: turn Arturo off. Then `orchestra doctor` skips that port check and
+  `orchestra up` doesn't start Arturo. The trade-off: no voice and no Arturo chat until you
+  turn it back on (`enabled = true`). That choice is yours; an agent asks you first. Inside
+  the `orchestraos` folder:
+
+  ```bash
+  sed -i '/^\[arturo\]/,/^\[/ s/^enabled = .*/enabled = false/' orchestra.toml
+  ```
+
+  then run `orchestra doctor` again; or
 - stop here and ask for help: open an issue at https://github.com/Tulum-DAO/orchestraos/issues
   and paste the `port:api` or `port:arturo` row that `orchestra doctor` printed.
 
@@ -572,7 +584,7 @@ You should see: `supervisor started in background (pid …)`, then `supervisor: 
 then one line per part (`gateway`, `api`, `dashboard`, the beats) with its status. If it
 says `supervisor already running` instead (you ran it before), run `orchestra status` on its own.
 If it says `supervisor did not come up (...); see <data>/logs/supervisor.log`, read the last
-lines of that file (`tail -n 30` and the path it printed) and bring them to whoever is helping
+lines of that file with `tail -n 30 <the supervisor.log path it printed>` and bring them to whoever is helping
 you; don't keep re-running `orchestra up`.
 It keeps
 running after you log out. `orchestra down` stops it. (`orchestra up` without `--detach` runs
@@ -838,6 +850,9 @@ Rules:
   do it myself. Never do those for me, and never ask for my passwords.
 - Never delete, destroy, reset, overwrite or wipe anything. If a command asks
   `Overwrite (y/n)?`, the answer is n.
+- Before any `tailscale serve --https=...` command, run `tailscale serve status` and show me
+  the output. Use an https port that is not in that list; never replace or turn off an
+  entry that is already there. Never use `--funnel`.
 - We are done when my browser shows the dashboard's Agents page with gm, pm-first-project
   and dev-first-project. Ask me to confirm what I see; don't just tell me it worked.
 ```
@@ -904,8 +919,9 @@ Tailscale issues the https certificate.
   Tailscale network, or is signed in to another account. Check `tailscale status` on the
   server (step 1).
 - **Tailscale says HTTPS or serve is not enabled** when you run `tailscale serve`: it prints an
-  admin link. **[PERSON ONLY]** Open it, turn on HTTPS certificates for your tailnet, then run
-  the `tailscale serve` line again.
+  admin link. **[PERSON ONLY]** Open it and turn on HTTPS certificates for your tailnet. Then go
+  back to §2, "Open the dashboard in your browser, over Tailscale https", and follow it there:
+  it checks which ports are taken first, so you don't replace another app's entry.
 - **It works on your computer but not your phone:** the phone needs the Tailscale app, signed
   in to the same account.
 - **The Agents page is empty or the agents show as not alive:** wait 15 seconds and reload. If
