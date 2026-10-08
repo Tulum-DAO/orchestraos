@@ -55,7 +55,7 @@ orchestra init --yes            # set everything up (about 5 minutes)
 | **Want to try it on your laptop, no server** | [Docker / dev container](docs/INSTALL.md#dev-container--docker-no-vps) | `docker build -t orchestraos .` from a clone of this repo, then log in to your agent CLI inside the container. |
 | **Want the full operator setup** (VPS + Mac, push, Telegram, voice) | [Reference install](docs/REFERENCE_INSTALL.md) | Do the install guide first; this adds to it. |
 | **Already running it, want the phone or Mac app** (both in testing, not yet public) | [Onboarding](docs/ONBOARDING.md) | On the server: `orchestra pair --base-url <your https gateway address> --scopes read,approve,message`, then paste the `orc1_` code it prints into the app. |
-| **Deciding what it costs** | [Costs](docs/COSTS.md) | A small VPS is about $24 a month; you also need one agent CLI plan (Claude Pro, or ChatGPT Plus for Codex; Google's free tier is unverified with `agy`). |
+| **Deciding what it costs** | [Costs](docs/COSTS.md) | You pay a hosting company for a server and one AI tool for an agent plan; see [Costs](docs/COSTS.md) for the options. |
 
 Every path needs one agent CLI (Claude Code, Codex, or Gemini through Google's Antigravity
 `agy` CLI) installed and **logged in** before you start a seat. The install guide shows how,
