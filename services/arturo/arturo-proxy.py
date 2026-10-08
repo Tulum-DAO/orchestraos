@@ -2099,6 +2099,38 @@ _NOT_FROM_HERE = ("I can't do that from a voice call. Ask me in the Arturo chat 
                   "I'll do it there.")
 
 
+# The fleet prompt's promises, and what a non-fleet turn says instead. Each must be found, or the test
+# that a non-fleet prompt promises no text goes red.
+_NON_FLEET_PROMPT_SWAPS = (
+    ('"Let me think on that — I\'ll text you", ', ""),
+    (" Any deep question you can't answer instantly, you route to your own deep brain via async_task (which "
+     "guarantees a Telegram answer back to the operator) — and you say so in the first person.",
+     " From this call you cannot reach your deep brain or text the operator: for a deep question, say plainly "
+     "that it needs the Arturo chat on the dashboard."),
+    ('Say "On it, I\'ll text you when it\'s done" and move on.',
+     "It is NOT available on this call: never say you will text them or do it later."),
+)
+_NON_FLEET_PROMPT_NOTE = (
+    "FROM THIS CALL OR DEVICE: you can look things up and message seats. You cannot run commands, read "
+    "files, spawn or type into seats, run background tasks or text the operator. Never promise any of "
+    "them; say plainly that it needs the Arturo chat on the dashboard.")
+
+
+def _non_fleet_prompt(text):
+    for old, new in _NON_FLEET_PROMPT_SWAPS:
+        text = text.replace(old, new)
+    return f"{text}\n{_NON_FLEET_PROMPT_NOTE}"
+
+
+def _as_turn(turn, fn, *a, **kw):
+    """Run fn with `turn` as the current turn record (the prompt and the offered tools depend on it)."""
+    tok = _TEAM_TURN.set(turn)
+    try:
+        return fn(*a, **kw)
+    finally:
+        _TEAM_TURN.reset(tok)
+
+
 def _promise_or_refusal(result, promise):
     return _NOT_FROM_HERE if str(result or "").startswith("NOT RUN") else promise
 
@@ -2115,6 +2147,13 @@ def _bound_tools(turn=None, use_current=True):
     if _is_fleet(turn):
         return TOOLS
     return [t for t in TOOLS if t["function"]["name"] in _NON_FLEET_ALLOWED]
+
+
+def _unverified_tag(turn):
+    principal = (turn or {}).get("principal") or ""
+    if turn is None:
+        return "[unverified voice]"
+    return "[unverified device]" if principal.startswith("device:") else "[unverified caller]"
 
 
 def _unverified_via(turn):
@@ -3414,9 +3453,11 @@ def execute_tool(name, args, user_turns=None):
         subject = args.get("subject", "")
         body = args.get("body", "")
         if not _is_fleet(_turn):
-            # Off the dashboard the caller is not verified: the message is Arturo's and says so.
+            # Off the dashboard the caller is not verified: the message is Arturo's and says so FIRST, so
+            # a seat meets the caveat before the caller's own words.
             from_agent = "arturo"
-            body = f"{body}\n\n({_unverified_via(_turn)})" if body else f"({_unverified_via(_turn)})"
+            subject = f"{_unverified_tag(_turn)} {subject}"
+            body = f"({_unverified_via(_turn)})\n\n{body}" if body else f"({_unverified_via(_turn)})"
         priority = args.get("priority", "medium")
         if not to_agent or not subject:
             return "to_agent and subject are required."
@@ -3814,7 +3855,10 @@ After spawning, the session name is auto-texted to Telegram.""")
 
     parts.append(f"\n--- TIME: {datetime.now(timezone.utc).isoformat()} ---")
 
-    return "\n".join(parts)
+    text = "\n".join(parts)
+    # A turn that is not the dashboard's cannot reach async_task or text the operator (the non-fleet
+    # allowlist): its prompt must not tell the model to promise either.
+    return text if _is_fleet(_TEAM_TURN.get()) else _non_fleet_prompt(text)
 
 
 # --- SSE Streaming with Tool Execution ---
@@ -5532,13 +5576,16 @@ def text_prewarm_endpoint():
     history = _conversation_history(conversation_id)
     # Everything the turn will have BEFORE its new message, built the way the turn builds it,
     # so the prewarmed process is the one the turn would have started itself.
-    prior = _ptt.build_messages(_context_as(chosen, calling_channel="text"), history, "",
+    # Built for the caller the gateway stamped, exactly as that caller's turn will build it: a non-fleet
+    # prewarm gets the non-fleet prompt and is offered only the allowlist.
+    stamp = {"principal": _stamped_principal(request)}
+    prior = _ptt.build_messages(_as_turn(stamp, _context_as, chosen, calling_channel="text"), history, "",
                                 current_brain=_effective_brain(turn_brain))[:-1]
-    argv = _text_stream.warm_argv(turn_brain, prior, TOOLS)
+    argv = _text_stream.warm_argv(turn_brain, prior, _bound_tools(stamp, use_current=False))
     env = dict(os.environ)
     for key in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"):
         env.pop(key, None)
-    key = (conversation_id, runtime, getattr(turn_brain, "_model_flag", "") or "")
+    key = (conversation_id, runtime, getattr(turn_brain, "_model_flag", "") or "", _is_fleet(stamp))
     try:
         started = _WARM_POOL.prewarm(key, argv, env=env, version=version)
     except Exception as e:  # noqa: BLE001 — a failed prewarm only means the turn spawns it
@@ -5587,7 +5634,7 @@ def text_stream_endpoint():
     # The authoritative context — who Arturo is and what is live on this box — is built by
     # build_context(), the same call the tool loop makes. Streaming without it answers as a
     # bare model with no identity and no tools.
-    _stream_context = _context_as(chosen, calling_channel="text")
+    _stream_context = _as_turn(_team_turn, _context_as, chosen, calling_channel="text")
     messages = _ptt.build_messages(_stream_context, history, body_text, current_brain=effective)
 
     def _spawn(cmd):
@@ -5625,8 +5672,10 @@ def text_stream_endpoint():
             _TURN_DEDUP.reset(ledger_tok)
             _INHERIT_DEDUP.reset(inherit_tok)
 
+    # A warm process is built with one principal's prompt and tools: a fleet turn and any other turn
+    # never share one.
     warm_key = (conversation_id, getattr(turn_brain, "runtime", ""),
-                getattr(turn_brain, "_model_flag", "") or "")
+                getattr(turn_brain, "_model_flag", "") or "", _is_fleet(_team_turn))
 
     # The tool loop's executor for a streamed turn: execute_tool itself, behind the SAME
     # per-turn dedupe ledger /text uses (so a model repeating a side-effecting call in a later

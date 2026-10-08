@@ -120,3 +120,12 @@ def test_a_client_cannot_pass_its_own_secret_through(monkeypatch):
 def test_the_secret_is_made_once_and_kept(_data_dir):
     first = arturo_stamp.ensure(_data_dir)
     assert first and arturo_stamp.ensure(_data_dir) == first
+
+
+@pytest.mark.parametrize("principal,stamp", [({"id": "legacy"}, "fleet"), ({"id": "dev_x"}, "device:dev_x")])
+def test_prewarm_forwards_the_stamp_too(monkeypatch, principal, stamp):
+    # the warm process is built for one caller's prompt and tools, so Arturo must know whose it is
+    seen = _capture_upstream(monkeypatch)
+    asyncio.run(G.handle_arturo_text_prewarm(_Req(principal)))
+    assert seen["headers"]["X-Arturo-Principal"] == stamp
+    assert (arturo_stamp.HEADER in seen["headers"]) is (stamp == "fleet")

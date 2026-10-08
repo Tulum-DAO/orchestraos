@@ -4227,7 +4227,7 @@ async def handle_arturo_text_prewarm(request):
     try:
         async with aiohttp.ClientSession() as s:
             async with s.post(f"{ARTURO_TEXT_BASE}/text/prewarm", data=body,
-                              headers={"Content-Type": "application/json"},
+                              headers=_arturo_upstream_headers(request),
                               timeout=aiohttp.ClientTimeout(total=30)) as r:
                 return _json(await r.json(content_type=None), status=r.status)
     except Exception as e:  # noqa: BLE001
