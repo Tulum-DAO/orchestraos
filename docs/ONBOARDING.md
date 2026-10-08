@@ -20,6 +20,35 @@ This page is about the gateway (8890), which the phone app talks to.
 >
 > Run `orchestra pair --help` to confirm the command on your install.
 
+**Hand this to your agent** (Claude, ChatGPT, Codex, Gemini or any other), if you'd rather
+have it guide you through this page. Copy the whole box:
+
+```text
+Help me connect my phone or Mac app to my own OrchestraOS server. Read this page and do it
+with me: https://github.com/Tulum-DAO/orchestraos/blob/main/docs/ONBOARDING.md
+The commands on this page run on my server; I log in to it with ssh (ask me for the
+address and user if you need them). Some steps happen in the app on my phone or Mac.
+Rules:
+- If you can run commands on my computer, run them yourself and show me every output.
+  If you can't, give me one command at a time and wait for me to paste back what it printed.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, any password or
+  passphrase prompt including sudo's, approving a device or an admin prompt) and let me
+  do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset, overwrite or wipe anything. If a command asks
+  `Overwrite (y/n)?`, the answer is n.
+- Before any `tailscale serve --https=...` command, run `tailscale serve status` and show me
+  the output. Use an https port that is not in that list; never replace or turn off an
+  entry that is already there, and never use `--funnel`.
+- For `orchestra pair --scopes`, ask me what the device may do. A phone that answers cards
+  needs `read,approve`; never add a scope I did not ask for.
+- The pairing code (one long word starting with `orc1_`) is a credential. Show it only to
+  me, never save it to a file or send it anywhere else; I paste it into the app myself.
+- Never revoke a device (`orchestra devices --revoke`) unless I ask you to.
+- We are done when the app has left its pairing screen (I tell you what I see), and
+  `orchestra devices` on the server lists my device with the scopes I chose. Show me that
+  output; don't just tell me it worked.
+```
+
 ## Before anything else: log in
 
 Do this before you do anything below — install and log in to one agent CLI
