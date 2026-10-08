@@ -1,5 +1,9 @@
 # Install — the minimum path
 
+> **Never rented a server, made an ssh key, or used Terminal?** Start with
+> `docs/FROM_SCRATCH.md`. It takes you from your Mac to logged in on your own server
+> in about 20 minutes, then sends you back here to §0.
+
 One machine, one CLI (claude OR gemini OR codex), no voice, no Telegram.
 Starting from nothing, you end with: a VPS, Tailscale on it and on your own
 laptop or phone, `orchestra up` running, the dashboard open in your browser over
@@ -21,6 +25,9 @@ Connecting the iOS app to your gateway (pairing) is `docs/ONBOARDING.md`, a
 separate short walkthrough after this one.
 
 ## Get a VPS
+
+(First time? `docs/FROM_SCRATCH.md` walks through this whole section step by step,
+with one recommended provider.)
 
 Any provider that sells a Linux virtual server works; nothing here is tied to one.
 Choose:
@@ -71,12 +78,19 @@ chmod 700 /home/orchestra/.ssh && chmod 600 /home/orchestra/.ssh/authorized_keys
 exit
 ```
 
+What `adduser` asks: `New password:` and `Retype new password:` (type a password for
+the new account and remember it: `sudo` asks for it later; nothing shows while you
+type), then `Full Name []:`, `Room Number []:` and a few more (press Enter for each),
+then `Is the information correct? [Y/n]` (press Enter). The other lines print nothing
+when they work. `exit` logs you out of the server.
+
 Logged in as root with a password rather than a key? Then `/root/.ssh/authorized_keys` does
 not exist and the `cp` line fails. Run only `adduser` and `usermod`, `exit`, and then, from your
 own computer, `ssh-copy-id orchestra@<server ip>` (it asks for the new user's password once).
 
-Then, from your own computer: `ssh orchestra@<your server address>`. Check: `whoami` prints
-`orchestra` and `sudo -v` asks for that user's password and succeeds. If your provider already
+Then, from your own computer: `ssh orchestra@<your server address>` (the same address you
+used for `root@`). Check: `whoami` prints `orchestra`, and `sudo -v` asks for that user's
+password (`[sudo] password for orchestra:`) and then prints nothing, which means it worked. If your provider already
 logs you in as a normal user with sudo, skip this step.
 
 ### Tailscale on the VPS and on your own device
@@ -89,15 +103,23 @@ personal plan is enough.
 On the VPS, as your normal user:
 
 ```bash
-curl -fsSL https://tailscale.com/install.sh | sh
+curl -fsSL https://tailscale.com/install.sh | sh   # downloads and installs Tailscale; ends with "Installation complete!"
 sudo tailscale up                       # prints a login URL: open it in your browser and sign in
-sudo tailscale set --operator=$USER     # lets your user run `tailscale serve` without sudo (step 2)
+sudo tailscale set --operator=$USER     # lets your user run `tailscale serve` without sudo (step 2); prints nothing
 tailscale status                        # the VPS is listed, with a 100.x.y.z address
 ```
 
-On your own laptop and/or phone: install Tailscale from tailscale.com/download (or
-the app store), and sign in **with the same account**. Run `tailscale status` on the
-VPS again: your device is now listed too.
+`sudo tailscale up` prints `To authenticate, visit:` and a link. Select the link, copy it
+(`Cmd+C` works in the Mac Terminal), and open it in your Mac's browser. Sign in or create a
+Tailscale account (it signs you in with an existing Google, Microsoft, GitHub or Apple account) and approve the
+device. The command on the server then finishes by itself. Remember which account you
+used: your Mac and phone must sign in with the same one.
+
+On your own laptop and/or phone: install Tailscale and sign in **with the same account**.
+On a Mac: install **Tailscale** from the Mac App Store (or tailscale.com/download), open
+it, and click its icon in the menu bar at the top right of the screen to log in. On a
+phone: the **Tailscale** app from the App Store or Google Play. Run `tailscale status` on
+the VPS again: your device is now listed too.
 
 Check: from your laptop, `ping <the VPS's 100.x.y.z address>` answers. From now on
 you can `ssh <your user>@<that address>` instead of the public IP.
