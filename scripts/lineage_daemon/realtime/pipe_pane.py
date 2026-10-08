@@ -59,11 +59,18 @@ def sink_path(session):
 def attach_command(session, sink):
     """The tmux argv to attach pipe-pane for one session. `session` is passed as a
     tmux argv element (never through sh -c); the sh -c PIPE body appends to the
-    shell-quoted, validated sink. `-o` only pipes when not already piping."""
+    shell-quoted, validated sink.
+
+    NO `-o`: `pipe-pane -o` is a TOGGLE, not "attach if missing". On a pane that already
+    has a pipe it CLOSES it (measured, tmux 3.4: 0 -> 1 -> 0 -> 1). That switched off an
+    operator's own pane logger, and on every telemetryd restart it closed the pipes the
+    previous run had attached, then recorded them as attached, so a seat's live status
+    went dark until its session was recreated. The caller checks #{pane_pipe} first and
+    attaches only to an UNPIPED pane (tmux_adapter.Tmux.pipe_pane)."""
     # tmux runs the final arg via `sh -c`; keep it a constant append to a quoted,
     # validated path. No agent-controlled bytes reach the shell.
     pipe_cmd = f"cat >> {shlex.quote(sink)}"
-    return ["tmux", "pipe-pane", "-o", "-t", session, pipe_cmd]
+    return ["tmux", "pipe-pane", "-t", session, pipe_cmd]
 
 
 class AttachSweep:

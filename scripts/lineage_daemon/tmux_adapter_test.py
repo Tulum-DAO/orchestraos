@@ -74,15 +74,35 @@ def test_pane_map_skips_malformed_and_non_integer_pids():
 
 
 def test_pipe_pane_uses_injection_safe_attach_command():
-    runner = FakeRunner([(0, "")])
+    runner = FakeRunner([(0, "0\n"), (0, "")])        # pane_pipe=0, then the attach
     tmux = Tmux(runner=runner)
-    tmux.pipe_pane("gm", "/home/testuser/.orchestra/realtime/panes/gm.pipe")
-    argv = runner.calls[0]
+    assert tmux.pipe_pane("gm", "/home/testuser/.orchestra/realtime/panes/gm.pipe") is True
+    assert runner.calls[0] == ["tmux", "display-message", "-p", "-t", "gm", "#{pane_pipe}"]
+    argv = runner.calls[1]
     # reuses pipe_pane.attach_command shape: session is a tmux argv element,
     # the sink is shell-quoted inside the `cat >>` body (never interpolated raw).
-    assert argv[0:5] == ["tmux", "pipe-pane", "-o", "-t", "gm"]
+    assert argv[0:4] == ["tmux", "pipe-pane", "-t", "gm"]
+    assert "-o" not in argv                            # -o TOGGLES: it would close a live pipe
     assert argv[-1].startswith("cat >> ")
     assert "gm.pipe" in argv[-1]
+
+
+def test_pipe_pane_leaves_an_existing_pipe_alone():
+    """An already-piped pane (ours from a previous telemetryd run, or an operator's own
+    logger) must not be closed (-o toggles) or replaced (a bare pipe-pane replaces)."""
+    runner = FakeRunner([(0, "1\n")])
+    tmux = Tmux(runner=runner)
+    assert tmux.pipe_pane("v", "/home/testuser/.orchestra/realtime/panes/v.pipe") is False
+    assert runner.calls == [["tmux", "display-message", "-p", "-t", "v", "#{pane_pipe}"]]
+
+
+def test_pipe_pane_raises_when_pane_state_is_unreadable():
+    """No evidence of the pane's pipe state must not be read as 'unpiped' (that would
+    replace someone's pipe). The sweep isolates the error to this one seat."""
+    runner = FakeRunner([(1, "")])
+    with pytest.raises(RuntimeError):
+        Tmux(runner=runner).pipe_pane("gm", "/tmp/x.pipe")
+    assert len(runner.calls) == 1
 
 
 def test_pipe_pane_refuses_unsafe_session_name():
