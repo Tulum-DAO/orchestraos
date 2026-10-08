@@ -563,6 +563,23 @@ the `gm` seat's screen: type to it like a chat and press Enter. To leave without
 seat keeps running. (Closing the Terminal window also leaves it running.) `tmux ls` lists the
 sessions. You can also talk to seats from the dashboard in your browser.
 
+**Scrolling back in a seat.** The mouse wheel scrolls a seat's screen through its earlier
+output; press `q` to get back to typing. From the keyboard: press `Ctrl-B`, let go, then `[`,
+and use the arrow keys or `PgUp`/`PgDn` (on a Mac laptop, `fn` with the up or down arrow);
+`q` leaves.
+
+**If the input box shows `History 1/...`** instead (you pressed the up arrow, or the seat was
+started before mouse support), it is offering to re-send an earlier prompt. Press `Esc` to
+clear it. Never press Enter on it: that sends the old prompt to the seat again. For a seat
+that is already running, `tmux set -t <seat> mouse on` turns the wheel on.
+
+**Selecting text in a seat** to copy it: a plain drag may not select. Instead:
+
+- **Windows Terminal, or Linux:** hold `Shift` while you drag.
+- **iTerm2 on a Mac:** hold `Option` while you drag.
+- **The Mac's Terminal app:** it has no drag key for this. Untick **View → Allow Mouse
+  Reporting**, select and copy, then tick it again.
+
 The new seat appears in the dashboard's Agents list in your browser within about 15 seconds.
 
 Options: `--runtime claude|gemini|codex` (default: first of `[runtimes] enabled`), `--model`,
@@ -598,7 +615,7 @@ The `hello` row appears immediately; `alive`/`state` follow within ~15 s from th
 status detector. Only registered seats are listed — tmux is host-global, see "Sharing a
 host" below.
 
-### Advanced: create a seat from a role template (skip on a first install)
+### Later: more seats (skip on a first install)
 
 `orchestra agent create` fills a role template (it refuses an unfilled `{TOKEN}`), records the
 seat's parent, checks the runtime and model, spawns it and checks it is alive. The parent should
