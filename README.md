@@ -23,9 +23,11 @@ server. Then take me through From scratch (if I have no server) and the install 
 Rules:
 - If you can run commands on my computer, run them yourself and show me every output.
   If you can't, give me one command at a time and wait for me to paste back what it printed.
-- Stop at every step marked [PERSON ONLY] (paying, signing in, passwords, approving a
-  device) and let me do it myself. Never do those for me, and never ask for my passwords.
-- Never delete, destroy, reset or wipe anything.
+- Stop at every step marked [PERSON ONLY] (paying, signing in, any password or
+  passphrase prompt including sudo's, approving a device or an admin prompt) and let me
+  do it myself. Never do those for me, and never ask for my passwords.
+- Never delete, destroy, reset, overwrite or wipe anything. If a command asks
+  `Overwrite (y/n)?`, the answer is n.
 - At the end of each section, show me its "You should see" output before moving on.
 ```
 
