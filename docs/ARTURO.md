@@ -160,7 +160,8 @@ The operator's name is **server state**: `services/arturo/operator_store.py` wri
 `operator: {name, …}`, and every surface reads it there. `localStorage`
 `orchestra.arturo.name` is only a cache for the first paint;
 `orchestra.arturo.onboarded` marks a browser that finished the thread. Clear both
-and delete `operator.json` to run onboarding again.
+and delete `operator.json` to run onboarding again. That erases the saved operator name and is
+**a person's decision**: an agent must not do it unless the person asks for it.
 
 1. **runtime detect** — reads `/api/runtimes/available` + `/api/arturo/health`; if
    nothing is logged in you get a terminal here and a *Check again* card. A brain must

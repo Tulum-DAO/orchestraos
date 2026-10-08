@@ -120,7 +120,8 @@ that is a seat registered by hand (`registry-update.py` + `spawn-agent.sh`) inst
 `orchestra spawn`; respawn it with `orchestra spawn` to make it rotatable.
 
 - `--runtime` / `--model` override what the successor boots on (default: inherit the seat's).
-- `--force` bypasses soft holds (use sparingly; the readiness/quota gates still apply).
+- `--force` bypasses soft holds (the readiness/quota gates still apply). Use it only when a
+  person asks for it: an agent must not add `--force` on its own to get past a hold.
 - The successor must pass the **comprehension readback** (it answers canary questions
   anchored in the predecessor's own state) before it is promoted; a failing readback holds
   the rotation instead of shipping a successor that did not understand the handoff.

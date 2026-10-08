@@ -97,7 +97,8 @@ empty" — that's the condition that routes to the pairing screen instead of
    second claim with the same code must 400 (single-use).
 4. `curl -H "Authorization: Bearer <new bearer>" localhost:<port>/api/approvals` —
    expect the same 200 the static token gets today.
-5. `curl -X DELETE -H "Authorization: Bearer <static token>" localhost:<port>/pair/devices/<device_id>`,
+5. On your own dev gateway, revoke **the test device you paired in step 3** (never another
+   device): `curl -X DELETE -H "Authorization: Bearer <static token>" localhost:<port>/pair/devices/<device_id>`,
    then repeat step 4 with the revoked bearer — expect 401.
 6. Wire the iOS first-run screen against the local gateway (or a Tailscale/LAN
    address), scan or hand-enter the code, confirm the approvals list loads.
@@ -109,7 +110,7 @@ empty" — that's the condition that routes to the pairing screen instead of
 Fresh app install (no baked token, `Config/Local.xcconfig` absent or empty) → the
 app shows the pairing screen, not the approvals list → scan (or type) the code from
 `orchestra pair` → the approvals list loads with live data. Then: revoke that
-device from Settings (or `curl -X DELETE .../pair/devices/<id>`) → the app's next
+test device (only the one you just paired) from Settings (or `curl -X DELETE .../pair/devices/<id>`) → the app's next
 API call returns 401 and the app returns to the pairing screen.
 
 ## Start prompt
