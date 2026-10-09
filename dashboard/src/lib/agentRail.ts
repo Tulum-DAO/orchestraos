@@ -24,10 +24,11 @@ export interface RailAgent {
 /**
  * A menu on screen OUTRANKS the detector state, because a menu is a question already asked and
  * the agent cannot proceed until it is answered — it is the most actionable thing the rail can
- * show. `waiting` (a permission prompt) and `stranded` (an unsent draft someone left at the
- * prompt) are the two detector states that mean a HUMAN is the blocker.
+ * show. `waiting` (a permission prompt), `stranded` (an unsent draft someone left at the
+ * prompt) and `queued` (a message the CLI accepted and never ran) are the detector states that
+ * mean a HUMAN is the blocker.
  */
-const NEEDS_YOU: ReadonlySet<LiveState> = new Set<LiveState>(['waiting', 'stranded']);
+const NEEDS_YOU: ReadonlySet<LiveState> = new Set<LiveState>(['waiting', 'stranded', 'queued']);
 
 /**
  * `stalled` lives in WORKING deliberately: it is the detector's 600s-quiet reclassification of a

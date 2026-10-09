@@ -4,7 +4,7 @@ import { feedHealthOf } from './feedLiveness.ts';
 
 // The CONTRACT the status line must keep, asserted on the inputs that decide it. The component
 // is JSX; these pin the decisions it makes, which is where Shaw's "the page lies" bug lived.
-import { normalizeAgentState, offersResume } from './agentStatus.ts';
+import { normalizeAgentState, offersResume, STATE_STYLE, QUEUED_LINE } from './agentStatus.ts';
 
 const NOW = 1_700_000_000_000;
 const liveFeed = feedHealthOf({ dataUpdatedAt: NOW, hasData: true, now: NOW });
@@ -56,4 +56,33 @@ test('Resume is NOT offered to a healthy or busy seat', () => {
   for (const s of ['idle', 'working', 'thinking', 'waiting', 'stranded', 'stalled', undefined]) {
     assert.equal(offersResume(s), false, `${s} should not offer Resume`);
   }
+});
+
+// ---- queued_input (live 0fa16b8c7e, upstreamed) ---------------------------------------------
+// The detector's queued_input: the CLI ACCEPTED a submit while busy and ended the turn without
+// running it, so the text is still at the prompt. Before this it fell through to 'unknown' and
+// the web painted it dark: an agent holding the person's message looked like no evidence at all.
+
+test('queued_input normalises to its own state, not unknown, stranded, working or idle', () => {
+  assert.equal(normalizeAgentState('queued_input'), 'queued');
+  assert.equal(normalizeAgentState('queued'), 'queued');            // gateway / already-mapped vocab
+  for (const other of ['unknown', 'stranded', 'working', 'idle']) {
+    assert.notEqual(normalizeAgentState('queued_input'), other);
+  }
+});
+
+test('queued has its own label and the stranded purple (same "needs a re-send" class)', () => {
+  assert.equal(STATE_STYLE.queued.label, 'queued, not running');
+  assert.equal(STATE_STYLE.queued.dot, STATE_STYLE.stranded.dot);
+});
+
+test('the queued status line says the message did not run, not that it will', () => {
+  // Live's line read "a message will wait until it starts", which describes a queue that drains.
+  // queued_input is the opposite: the turn ENDED and the message never ran; it needs a re-send.
+  assert.match(QUEUED_LINE, /did not run/);
+  assert.doesNotMatch(QUEUED_LINE, /will wait/);
+});
+
+test('a queued seat is not offered Resume: it is running, at its prompt', () => {
+  assert.equal(offersResume('queued_input'), false);
 });

@@ -10,7 +10,7 @@
  * the two cannot disagree — that was the P1 and it is the same rule here.
  */
 import { Loader2, CircleSlash, HandMetal, WifiOff } from 'lucide-react';
-import { normalizeAgentState, type LiveState, offersResume } from '../../lib/agentStatus';
+import { normalizeAgentState, type LiveState, offersResume, QUEUED_LINE } from '../../lib/agentStatus';
 import { lastSeenLabel, isDegraded, type FeedVerdict } from '../../lib/feedLiveness';
 
 export interface LiveStatusProps {
@@ -62,6 +62,17 @@ export function LiveStatusLine({ state, feed, stateAgeS, tool, onResume }: LiveS
       <div className={`${base} text-amber-300`} role="status">
         <HandMetal size={12} className="shrink-0" />
         <span>{st === 'waiting' ? 'Waiting for you to answer' : 'An unsent draft is in its composer'}</span>
+      </div>
+    );
+  }
+
+  // queued: the CLI accepted the message while busy and ended the turn without running it. Not
+  // "working" and not "idle at the prompt"; either would be the lie this line exists to stop.
+  if (st === 'queued') {
+    return (
+      <div className={`${base} text-[#BF5AF2]`} role="status">
+        <span className="w-1.5 h-1.5 rounded-full bg-[#BF5AF2] shrink-0" />
+        <span>{QUEUED_LINE}</span>
       </div>
     );
   }

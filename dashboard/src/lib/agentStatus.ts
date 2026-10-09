@@ -12,7 +12,7 @@
  */
 
 export type LiveState =
-  | 'working' | 'idle' | 'waiting' | 'stranded' | 'stalled'
+  | 'working' | 'idle' | 'waiting' | 'stranded' | 'queued' | 'stalled'
   | 'stopped' | 'crashed' | 'offline' | 'retired' | 'unknown';
 
 const STATE_ALIAS: Record<string, LiveState> = {
@@ -20,6 +20,10 @@ const STATE_ALIAS: Record<string, LiveState> = {
   thinking: 'working',
   waiting_permission: 'waiting',
   stranded_input: 'stranded',
+  // queued_input: the CLI accepted a submit while busy and ended the turn without running it;
+  // the text is still at the prompt. Purple like stranded (the same "needs a re-send" class),
+  // with its own label. Never working, never idle.
+  queued_input: 'queued',
   // legacy self-reported (status_source absent) free-text aliases
   running: 'working',
   active: 'working',
@@ -52,6 +56,7 @@ export const STATE_STYLE: Record<LiveState, { label: string; dot: string; text: 
   idle:     { label: 'idle · at prompt', dot: 'bg-green-500',               text: 'text-green-400' },
   waiting:  { label: 'needs you',        dot: 'bg-amber-300 ring-2 ring-amber-300/40 animate-pulse', text: 'text-amber-200' },
   stranded: { label: 'unsent draft',     dot: 'bg-[#BF5AF2]',               text: 'text-[#BF5AF2]' },
+  queued:   { label: 'queued, not running', dot: 'bg-[#BF5AF2]',            text: 'text-[#BF5AF2]' },
   stalled:  { label: 'stalled',          dot: 'bg-[#FF9F0A]',               text: 'text-[#FF9F0A]' },
   stopped:  { label: 'stopped',          dot: 'bg-red-500',                 text: 'text-red-400' },
   crashed:  { label: 'crashed',          dot: 'bg-red-500',                 text: 'text-red-400' },
@@ -63,6 +68,10 @@ export const STATE_STYLE: Record<LiveState, { label: string; dot: string; text: 
   retired:  { label: 'retired',          dot: 'bg-neutral-700',             text: 'text-neutral-600' },
   unknown:  { label: '—',                dot: 'bg-neutral-600',             text: 'text-neutral-500' },
 };
+
+/** The status line for a `queued` seat. The turn ENDED and the message never ran, so it needs a
+ *  re-send; it is not waiting in a queue that will drain on its own. */
+export const QUEUED_LINE = 'A message is at its prompt that did not run — send it again.';
 
 /**
  * May the chat surface offer to RESUME a seat in this state?
