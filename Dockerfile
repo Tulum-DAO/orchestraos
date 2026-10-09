@@ -20,7 +20,9 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG NODE_MAJOR=22
 # Which agent CLIs to preinstall (npm packages, space-separated). The runtime catalog
 # probes whichever are installed AND logged in; one is enough for the minimum path.
-ARG AGENT_CLIS="@anthropic-ai/claude-code"
+# Pinned to the version this release was proven on (orchestra_cli/doctor.py PROVEN_CLI_VERSIONS,
+# docs/INSTALL.md "Pin the agent CLI version"): the harness reads the CLI's screens.
+ARG AGENT_CLIS="@anthropic-ai/claude-code@2.1.295"
 
 # INSTALL.md §0 prerequisites + sudo for the non-root user
 RUN apt-get update \

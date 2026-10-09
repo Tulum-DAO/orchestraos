@@ -270,24 +270,26 @@ Rules:
   do it myself. Never do those for me, and never ask for my passwords.
 - Never delete, destroy, reset, overwrite or wipe anything. If a command asks
   `Overwrite (y/n)?`, the answer is n.
-- We are done when `claude --version` prints `2.1.276 (Claude Code)`. Show me that output; don't just tell me it worked.
+- We are done when `claude --version` prints `2.1.295 (Claude Code)`. Show me that output; don't just tell me it worked.
 ```
 
 The harness reads the CLI's screen, transcripts, and hook events. It does not heal itself yet when
 the CLI changes shape under it, so pin the CLI to a version this release was proven on and turn the
-auto-updater off. Two versions are known good, both measured on 2026-09-19: the release gate ran on
-**Claude Code 2.1.276** in the Docker image, and the reference fleet runs **2.1.260**. An unpinned
-native install moved from 2.1.263 to 2.1.278 in one morning with no action from the operator.
+auto-updater off. Two versions are known good: the release gate ran on **Claude Code 2.1.295** in the
+Docker image (2026-10-09, with real screen captures), and the reference fleet runs **2.1.284**. An
+unpinned native install moved from 2.1.263 to 2.1.278 in one morning with no action from the operator.
+`orchestra doctor` shows the installed version on its `cli:claude-version` row (WARN when it is not
+one of these two, with the exact install line to fix it) and warns while `DISABLE_AUTOUPDATER` is unset.
 
 ```bash
-sudo npm install -g @anthropic-ai/claude-code@2.1.276
+sudo npm install -g @anthropic-ai/claude-code@2.1.295
 echo 'export DISABLE_AUTOUPDATER=1' >> ~/.bashrc && export DISABLE_AUTOUPDATER=1   # every seat's shell inherits it
-claude --version                 # must print 2.1.276
+claude --version                 # must print 2.1.295
 ```
 
 You should see: the install prints `added 2 packages in 6s` (the time varies). It may also
 print a few `npm notice` lines saying a newer npm is available; ignore them, and do not
-update npm. The `echo` line prints nothing. `claude --version` prints `2.1.276 (Claude Code)`.
+update npm. The `echo` line prints nothing. `claude --version` prints `2.1.295 (Claude Code)`.
 
 Why `sudo`: the Node above is a system-wide install, so global npm packages go to
 `/usr/lib/node_modules`, which is owned by root. Without `sudo` the install fails with
@@ -299,12 +301,12 @@ even if `DISABLE_AUTOUPDATER` is ever missing from a shell; the updater just rep
 later, run the same `sudo npm install -g` line with the new version.
 
 If you installed Claude Code with the native installer instead of npm, it auto-updates; switch to the
-npm install above for any machine that runs seats. For the Docker image, pass the pin as the build
-argument: `--build-arg AGENT_CLIS="@anthropic-ai/claude-code@2.1.276"`. Without it the image pulls
-whatever is current at build time, and inside the container auto-update is attempted every session
-and fails with `Auto-update failed: no write permission to npm prefix` because the npm prefix is not
-writable by the container user. That footer is not a fault in your setup; the pin and the export make
-it go away. Gemini and Codex CLIs: pin the same way with their package managers (`sudo npm install -g` for
+npm install above for any machine that runs seats. The Docker image installs the pinned version by
+default (the `AGENT_CLIS` build argument, `@anthropic-ai/claude-code@2.1.295`); pass another value only
+on purpose, e.g. `--build-arg AGENT_CLIS="@anthropic-ai/claude-code@2.1.295 @openai/codex"` to add a
+CLI. Inside the container auto-update is attempted every session and fails with `Auto-update failed:
+no write permission to npm prefix` because the npm prefix is not writable by the container user.
+That footer is not a fault in your setup; the export makes it go away. Gemini and Codex CLIs: pin the same way with their package managers (`sudo npm install -g` for
 an npm package; the reference fleet runs agy 1.2.6 and codex-cli 0.153.4).
 
 ### Log in to the agent CLI (the one step only you can do)
@@ -1183,7 +1185,7 @@ docker run -it --rm -p 8891:8891 -p 8888:8888 -p 8890:8890 orchestraos
 - VS Code / GitHub Codespaces: "Reopen in Container". The workspace is bind-mounted over
   the image's copy, so `postCreateCommand` re-runs `orchestra init` once (~1 min) to
   rebuild `.venv` and `node_modules` for the mounted tree.
-- Other CLIs: `docker build --build-arg AGENT_CLIS="@anthropic-ai/claude-code@2.1.276 @openai/codex"` (pin the version; see "Pin the agent CLI version" above).
+- Other CLIs: `docker build --build-arg AGENT_CLIS="@anthropic-ai/claude-code@2.1.295 @openai/codex"` (pin the version; see "Pin the agent CLI version" above).
 - The container is one instance on one host: tmux inside it is its own, so the
   registry-scoping rules below apply per container.
 
@@ -1191,7 +1193,7 @@ docker run -it --rm -p 8891:8891 -p 8888:8888 -p 8890:8890 orchestraos
 
 Same recipe, no Docker: on a fresh Ubuntu 24.04 VPS as a non-root sudo user, run the
 `RUN` steps of the `Dockerfile` in order (§0 prerequisites, node 22, `sudo npm i -g
-@anthropic-ai/claude-code@2.1.276`, clone, `make install`, `orchestra init`), leave the agent CLI
+@anthropic-ai/claude-code@2.1.295`, clone, `make install`, `orchestra init`), leave the agent CLI
 logged OUT, then snapshot. A team booting the snapshot logs in, edits `[runtimes]
 enabled`, and runs `orchestra doctor && orchestra up --detach`. Pre-provision one snapshot
 per team (P5).

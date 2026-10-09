@@ -46,6 +46,50 @@ class DoctorProbes:
     git_hooks_path: Callable[[Path], str]
     http_get: Callable[[str], str] = None                    # raises on any failure; body text on 200
     tmux_sessions: Callable[[], list] = None                 # every tmux session name on this host
+    env_get: Callable[[str], Optional[str]] = None           # os.environ.get unless a test injects one
+
+
+# The agent CLI versions this release was PROVEN on (G22). The harness reads the CLI's screen,
+# transcripts and hook events and does not heal itself when the CLI changes shape, so a version not
+# listed here is a WARN (never MISSING: a mismatch must not block `orchestra up`). The FIRST entry is
+# the pin docs/INSTALL.md and the Dockerfile install; update both with this list at each release.
+# 2.1.295: the release gate + real captures (2026-10-09, menu context for the dashed-frame prompts);
+# 2.1.284: the reference fleet.
+PROVEN_CLI_VERSIONS = {"claude": ("2.1.295", "2.1.284")}
+CLI_PACKAGES = {"claude": "@anthropic-ai/claude-code"}
+_VERSION_RE = re.compile(r"(\d+\.\d+\.\d+)")
+
+
+def cli_version_checks(probes: "DoctorProbes", enabled_ids) -> list:
+    """One `cli:<id>-version` row per enabled runtime that has a proven-version list and is installed,
+    plus `cli:autoupdater` when DISABLE_AUTOUPDATER is not set. All advisory (required=False)."""
+    rows: list = []
+    env_get = probes.env_get or os.environ.get
+    checked_any = False
+    for rid, proven in PROVEN_CLI_VERSIONS.items():
+        if rid not in enabled_ids or not probes.which(rid):
+            continue
+        checked_any = True
+        pin = f"sudo npm install -g {CLI_PACKAGES[rid]}@{proven[0]}"
+        try:
+            out = probes.run_cmd([rid, "--version"]) or ""
+        except Exception:  # noqa: BLE001 — a probe failure is a WARN, never a crash
+            out = ""
+        m = _VERSION_RE.search(out)
+        if not m:
+            rows.append(Check(f"cli:{rid}-version", WARN, f"could not read `{rid} --version`", pin, required=False))
+        elif m.group(1) in proven:
+            rows.append(Check(f"cli:{rid}-version", OK, f"{m.group(1)} (proven: {', '.join(proven)})"))
+        else:
+            rows.append(Check(f"cli:{rid}-version", WARN,
+                              f"{m.group(1)} is not a version this release was proven on ({', '.join(proven)}); "
+                              f"the harness reads the CLI's screens and may misread a newer one",
+                              pin, required=False))
+    if checked_any and not env_get("DISABLE_AUTOUPDATER"):
+        rows.append(Check("cli:autoupdater", WARN, "DISABLE_AUTOUPDATER is not set: the CLI can update itself off the pin",
+                          "echo 'export DISABLE_AUTOUPDATER=1' >> ~/.bashrc && export DISABLE_AUTOUPDATER=1",
+                          required=False))
+    return rows
 
 
 # --- real probes -----------------------------------------------------------
@@ -241,6 +285,8 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
         # required only when it is the sole signal; the login row above owns the gate.
         checks.append(Check(f"runtime:{r['id']}", status, detail, remedy,
                             required=(status == MISSING and login_row is None)))
+    # G22: the installed CLI versions against the ones this release was proven on
+    checks.extend(cli_version_checks(probes, set(st.runtimes_enabled or ())))
     # Claude Code hooks installed into the user's settings (item: seats act on mail with no keypress)
     try:
         import sys as _sys

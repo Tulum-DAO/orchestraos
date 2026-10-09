@@ -499,8 +499,12 @@ Update every consumer in the same PR (grep the dashboard and the iOS repo for th
 existing data dir upgrades in place (`orchestra upgrade`) with no lost proposals/decisions;
 `/api/system` still answers with the presence field the clients read.
 
-## G22 · `orchestra doctor` has no CLI-version row — an auto-updated CLI drifts under a running fleet
-`labels: good-first-issue, size:S, doctor, install`
+## G22 · `orchestra doctor` has no CLI-version row — an auto-updated CLI drifts under a running fleet — FIXED
+`labels: good-first-issue, size:S, doctor, install, fixed`
+
+**SHIPPED (2026-10-09)** — `cli:claude-version` (OK on a proven version, WARN with the install line
+otherwise) and `cli:autoupdater` rows, `orchestra_cli/doctor.py` `PROVEN_CLI_VERSIONS`; the pin is
+2.1.295, with 2.1.284 as the second known-good version. Kept below as the design record.
 
 The harness reads the agent CLI's screen, transcripts and hook events, and does not heal itself yet when
 the CLI changes. On launch morning an unpinned native Claude Code install moved 2.1.263 -> 2.1.278 with no
