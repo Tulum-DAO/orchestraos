@@ -628,3 +628,46 @@ def test_expect_alone_after_the_record_expired(screen):
     k = next(iter(G._SERVED))
     G._SERVED[k] = (G._SERVED[k][0], G._SERVED[k][1] - G._SERVED_TTL_S - 1)
     assert _app_tap_with_expect(CMD_A)[0] == 200
+
+
+# --- menu instance identity phase 0: the hook id rides the wire, the served record stays the ledger's ---
+
+def test_a_hook_instance_on_the_row_does_not_break_the_served_record(screen, monkeypatch):
+    """The row's instance_id becomes the CLI tool_use_id when the hook proves one; the served record
+    must keep the LEDGER instance (digest:n), or every tap would mismatch."""
+    class _Store:
+        def migrate(self):
+            pass
+
+        def pending_to_notify(self):
+            return []
+
+        def list_pending(self):
+            return []
+
+    monkeypatch.setattr(G, "_menu_hook_instance", lambda session, menu: "toolu_01PROVEN" if menu else None)
+    monkeypatch.setattr(G, "ApprovalStore", _Store)
+    monkeypatch.setattr(G, "QuestionnaireStore", _Store)
+    row = G._perm_pseudo_row(SESSION, CMD_A)
+    assert row["instance"] == row["instance_id"] == row["menu"]["instance"] == "toolu_01PROVEN"
+    monkeypatch.setattr(G, "_perm_pseudo_rows", lambda: [row])
+    asyncio.run(G.handle_pending(_Req()))
+    assert _tap()[0] == 200, "/pending-approvals recorded the ledger instance"
+
+    G._SERVED.clear()
+    monkeypatch.setattr(G, "_capture_pane", lambda *a: "")
+    r = _Req(ua=WATCH_UA)
+    r.query = {"session": SESSION}
+    resp = asyncio.run(G.handle_agent_screen(r))
+    pm = json.loads(resp.text)["pending_menu"]
+    assert pm["instance"] == pm["instance_id"] == "toolu_01PROVEN"
+    assert _tap(ua=WATCH_UA)[0] == 200, "/agent-screen recorded the ledger instance"
+
+
+def test_without_a_proven_instance_the_screen_emits_none(screen, monkeypatch):
+    monkeypatch.setattr(G, "_menu_hook_instance", lambda session, menu: None)
+    monkeypatch.setattr(G, "_capture_pane", lambda *a: "")
+    r = _Req()
+    r.query = {"session": SESSION}
+    pm = json.loads(asyncio.run(G.handle_agent_screen(r)).text)["pending_menu"]
+    assert "instance" not in pm and ":" in pm["instance_id"]

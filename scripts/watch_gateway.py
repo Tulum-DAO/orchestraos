@@ -101,6 +101,7 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
 
     # --- read ------------------------------------------------------------------------
     ("GET", "/gateway/capabilities"): "read",
+    ("GET", "/menu-instance"): "read",
     ("GET", "/pending-approvals"): "read",
     ("GET", "/history"): "read",
     ("GET", "/approvals/{id}"): "read",
@@ -531,6 +532,21 @@ def _instance_step(ledger, session, digest, present, now,
     return int(e.get("instance_n", 1))
 
 
+def _menu_hook_instance(session, menu):
+    """The menu's per-call instance (scripts/menu_instance.py: the CLI tool_use_id of the ONE open
+    call it belongs to), or None. DEC-1791405753559307 phase 0: emitted, never enforced. Passing
+    menu=None resets the session's memo (no menu on screen)."""
+    try:
+        import menu_instance
+        if not menu:
+            menu_instance.MEMO.stamp(session, None, {})
+            return None
+        return menu_instance.instance_for(session, menu)
+    except Exception as e:  # noqa: BLE001 — identity is additive; a read must never fail on it
+        log.warning(f"menu instance: {session}: {e}")
+        return None
+
+
 def _stamp_instance(session, menu, ledger=None, now=None, answered_signal=False,
                     persist=True):
     """Resolve instance_n for a live permission `menu` and return
@@ -784,6 +800,12 @@ def _perm_pseudo_row(session, menu):
            "selected_n": menu.get("selected_n"),
            "chrome": menu.get("chrome"), "instance_id": f"{_digest}:{_n}",
            "created_at": created_iso, "urgency": 2}
+    _inst = _menu_hook_instance(session, menu)
+    if _inst:
+        # One name on the wire: `instance`. instance_id stays as a deprecated alias with the SAME
+        # value when the hook proves one, else the ledger's digest:n as before. The row id (and so
+        # the served record, which keys on the ledger's digest:n) is unchanged.
+        row["instance"] = row["menu"]["instance"] = row["instance_id"] = _inst
     row["priority_score"] = _priority_score(row)
     return row
 
@@ -988,8 +1010,10 @@ async def handle_pending(request):
     # watch renders server order as-is. Ties -> NEWEST first (see _sort_queue).
     _sort_queue(out)
     for r in out:      # remember which permission instance this device is being shown
-        if r.get("kind") == "permission" and r.get("instance_id"):
-            _note_served(request, r.get("session"), r["instance_id"])
+        if r.get("kind") == "permission" and str(r.get("id", "")).startswith("perm:"):
+            # the LEDGER instance (digest:n, from the row id): instance_id may now be a hook id
+            _rid = str(r["id"]).rsplit(":", 2)            # perm:<session>:<digest>:<n>
+            _note_served(request, r.get("session"), f"{_rid[1]}:{_rid[2]}")
     return _json({"ok": True, "pending": out})
 
 
@@ -4126,7 +4150,17 @@ async def handle_agent_menu_capture(request):
         except Exception as e:  # noqa: BLE001 — write-back best-effort, never 500 the walk
             print(f"[watch_gateway] hydrate_menu write-back failed ({session}): {e}",
                   file=sys.stderr)
-    return _json({"ok": True, "session": session, **out})
+    # The walk's instance (DEC-1791405753559307 phase 0), in the RESPONSE only. Deliberately NOT in
+    # `out` before hydrate_menu: hydrate_menu writes onto every pending row of the session unless
+    # the row carries an instance, so putting it there would spread the id onto rows that are not
+    # this menu.
+    resp = {"ok": True, "session": session, **out}
+    if isinstance(out, dict) and (out.get("parts") or out.get("question")):
+        import asyncio
+        _inst = await asyncio.get_event_loop().run_in_executor(None, _menu_hook_instance, session, out)
+        if _inst:
+            resp["instance"] = _inst
+    return _json(resp)
 
 
 async def handle_agent_screen(request):
@@ -4168,13 +4202,19 @@ async def handle_agent_screen(request):
         # armed/selected when a new same-question prompt replaces an answered one
         # (the operator's pre-armed-option-2 symptom). Additive, permission-only; other
         # menu kinds are unaffected.
+        _inst = await loop.run_in_executor(None, _menu_hook_instance, session, st["pending_menu"])
+        if _inst:
+            pm["instance"] = _inst          # the CLI tool_use_id (DEC-1791405753559307 phase 0)
         if pm.get("kind") == "permission":
             _n, _digest = _stamp_instance(session, pm)
-            pm["instance_id"] = f"{_digest}:{_n}"
-            _note_served(request, session, pm["instance_id"])
+            pm["instance_id"] = _inst or f"{_digest}:{_n}"
+            # the LEDGER instance: the tap check compares against digest:n, never the hook id
+            _note_served(request, session, f"{_digest}:{_n}")
         else:
             _note_served(request, session, _SERVED_OTHER)
         out["pending_menu"] = pm
+    elif isinstance(st, dict):
+        await loop.run_in_executor(None, _menu_hook_instance, session, None)   # no menu: reset the memo
     # Ghost-suggestion chip (spec 2026-08-15 §3a.2): surface the CLI-suggested
     # ghost as additive nullable `suggested_prompt`. get_agent_status only emits
     # composer_ghost when the FINAL state is idle AND zero typed text (fail-closed,
@@ -5843,6 +5883,39 @@ def _pending_count():
     return len(store.pending_to_notify() or [])
 
 
+def _is_fleet_bearer(request):
+    _, principal = _resolved_principal(request)
+    if principal is None:
+        principal = resolve_principal(request)
+    return (principal or {}).get("id") == "legacy"
+
+
+async def handle_menu_instance(request):
+    """GET /menu-instance?session= -> {ok, session, instance: str|null, signature, question, kind,
+    tool, decided_at, sticky}. The ONE resolver for the bridge (DEC-1791405753559307 phase 0): the
+    bridge binds a row to `instance` only when `signature` (menu_instance.signature, one
+    implementation) equals the signature of the menu IT captured on that tick, and on a timeout,
+    non-200 or mismatch binds none (never a cached value). No menu -> instance/signature null. A
+    resolver failure is 503, not a null that reads like "no instance". FLEET bearer only."""
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    if not _is_fleet_bearer(request):
+        return _json({"ok": False, "reason": "fleet_only"}, status=403)
+    session = request.query.get("session", "").strip()
+    if not session or session not in _tmux_session_names():
+        return _json({"ok": False, "error": "no such session"}, status=404)
+    import asyncio, menu_instance
+    loop = asyncio.get_event_loop()
+    st = await loop.run_in_executor(None, _agent_status().get_agent_status, session)
+    menu = st.get("pending_menu") if isinstance(st, dict) else None
+    d = await loop.run_in_executor(None, menu_instance.decision_for, session, menu)
+    if not menu:
+        return _json({"ok": True, "session": session, "instance": None, "signature": None})
+    if d is None:
+        return _json({"ok": False, "session": session, "reason": "resolver_failed"}, status=503)
+    return _json({"ok": True, "session": session, "kind": menu.get("kind"), **d})
+
+
 async def handle_gateway_capabilities(request):
     """GET /gateway/capabilities — BEHIND THE BEARER, additive-only.
 
@@ -6605,6 +6678,7 @@ def build_app():
     app.router.add_get("/health", handle_health)
     app.router.add_get("/gateway/identity", handle_gateway_identity)
     app.router.add_get("/gateway/capabilities", handle_gateway_capabilities)
+    app.router.add_get("/menu-instance", handle_menu_instance)
     app.router.add_post("/pair/exchange", handle_pair_exchange)
     app.router.add_post("/device/upgrade", handle_device_upgrade)
     app.router.add_post("/surface", handle_surface_post)
