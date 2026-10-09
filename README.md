@@ -63,7 +63,7 @@ orchestra starter               # your team: gm (T0) -> a project manager (T1) -
 | **Have a fresh Ubuntu server (VPS)** | [Install guide](docs/INSTALL.md) | Log in, create a normal user (seats refuse to run as root), set up Tailscale, then `git clone https://github.com/Tulum-DAO/orchestraos.git`. About an hour. |
 | **Want to try it on your laptop, no server** | [Docker / dev container](docs/INSTALL.md#dev-container--docker-no-vps) | `docker build -t orchestraos .` from a clone of this repo, then log in to your agent CLI inside the container. |
 | **Want the full operator setup** (VPS + Mac, push, Telegram, voice) | [Reference install](docs/REFERENCE_INSTALL.md) | Do the install guide first; this adds to it. |
-| **Already running it, want the phone or Mac app** (both in testing, not yet public) | [Onboarding](docs/ONBOARDING.md) | On the server: `orchestra pair --base-url <your https gateway address> --scopes read,approve,message`, then paste the `orc1_` code it prints into the app. |
+| **Already running it, want the phone or Mac app** (both in testing, not yet public) | [Onboarding](docs/ONBOARDING.md) | Serve the gateway over https (Onboarding step 4), then on the server: `orchestra pair --scopes read,approve,message`, and paste the `orc1_` code it prints into the app. Or ask Arturo in the dashboard: "pair my iPhone". |
 | **Deciding what it costs** | [Costs](docs/COSTS.md) | You pay a hosting company for a server and one AI tool for an agent plan; see [Costs](docs/COSTS.md) for the options. |
 
 Every path needs one agent CLI (Claude Code, Codex, or Gemini through Google's Antigravity
