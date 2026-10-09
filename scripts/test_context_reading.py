@@ -91,6 +91,59 @@ def test_out_of_range_values_never_reach_the_app(tmp_path):
     assert claude_context(SID, tr, tmp_dir=str(tmp_path)) == (39, None)
 
 
+def _transcript(tmp_path, entries, name="t.jsonl", trailer=""):
+    tr = tmp_path / name
+    tr.write_text("\n".join(json.dumps(e) for e in entries) + "\n" + trailer)
+    return str(tr)
+
+
+def test_housekeeping_after_the_reading_does_not_make_an_idle_seat_stale(tmp_path):
+    # claude-token-audit, 2026-10-09: last turn, then the reading, then only a
+    # "Remote Control disconnected" line a day later. Idle, not stale.
+    _seat(tmp_path)
+    tr = _transcript(tmp_path, [
+        {"type": "assistant", "timestamp": _iso(T0 - 60)},
+        {"type": "system", "subtype": "informational", "timestamp": _iso(T0 + 86400)},
+        {"type": "system", "subtype": "stop_hook_summary", "timestamp": _iso(T0 + 86400)},
+        {"type": "queue-operation", "timestamp": _iso(T0 + 86400)},
+        {"type": "file-history-delta", "timestamp": _iso(T0 + 86400)},
+    ])
+    assert claude_context(SID, tr, tmp_dir=str(tmp_path)) == (39, 49)
+
+
+def test_a_compaction_after_the_reading_makes_it_stale(tmp_path):
+    _seat(tmp_path)
+    tr = _transcript(tmp_path, [
+        {"type": "assistant", "timestamp": _iso(T0 - 60)},
+        {"type": "system", "subtype": "compact_boundary", "timestamp": _iso(T0 + 600)},
+    ])
+    assert claude_context(SID, tr, tmp_dir=str(tmp_path)) == (None, None)
+
+
+def test_activity_newer_than_the_reading_makes_it_stale_for_every_activity_type(tmp_path):
+    _seat(tmp_path)
+    for kind in ("user", "assistant", "attachment"):
+        tr = _transcript(tmp_path, [{"type": "assistant", "timestamp": _iso(T0 - 60)},
+                                    {"type": kind, "timestamp": _iso(T0 + 600)}], name=kind + ".jsonl")
+        assert claude_context(SID, tr, tmp_dir=str(tmp_path)) == (None, None), kind
+
+
+def test_a_tool_result_bigger_than_the_tail_is_read_past(tmp_path):
+    # The newest activity is one 400 KB tool result, older than the reading. The first tail read
+    # holds only part of it; giving up there would null a fresh reading.
+    _seat(tmp_path)
+    huge = {"type": "user", "timestamp": _iso(T0 - 60), "content": "x" * 400_000}
+    tr = _transcript(tmp_path, [{"type": "assistant", "timestamp": _iso(T0 - 120)}, huge])
+    assert claude_context(SID, tr, tmp_dir=str(tmp_path)) == (39, 49)
+
+
+def test_a_half_written_last_line_is_skipped(tmp_path):
+    _seat(tmp_path)
+    tr = _transcript(tmp_path, [{"type": "assistant", "timestamp": _iso(T0 - 60)}],
+                     trailer='{"type": "user", "timestamp": "' + _iso(T0 + 600)[:10])
+    assert claude_context(SID, tr, tmp_dir=str(tmp_path)) == (39, 49)
+
+
 # --- agent-status: whose reading it is --------------------------------------------------------
 
 def _agent_status():
