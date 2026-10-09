@@ -197,12 +197,18 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     # could switch what EVERY conversation on this box uses. Least privilege: a headset gets
     # `ptt`, which buys a turn of speech and no configuration at all.
 
-    # --- voice: the richer surfaces; every call SPENDS REAL PROVIDER MONEY -------------
+    # --- voice: the live AUDIO surfaces; every call SPENDS REAL PROVIDER MONEY ----------
+    # Typed Arturo chat is NOT voice (operator ruling 2026-10-09: "chatting with Arturo does not need
+    # the voice permission; a live voice mode does"). A typed turn from a paired device is stamped
+    # device:<id> and runs Arturo's non-fleet allowlist (arturo-proxy.py _NON_FLEET_ALLOWED), whose
+    # strongest act is an agent message marked unverified, which POST /agent-message already grants
+    # under `message`. So the typed routes take `message`; live audio (/live, /arturo/transcribe) and
+    # push-to-talk keep their own verbs. DEC-1791555859906550 (claude-peer + agy, APPROVE).
     ("GET", "/live"): "voice",
     ("POST", "/arturo/ptt"): "ptt",
-    ("POST", "/arturo/text"): "voice",
-    ("POST", "/arturo/text/stream"): "voice",
-    ("POST", "/arturo/text/prewarm"): "voice",
+    ("POST", "/arturo/text"): "message",
+    ("POST", "/arturo/text/stream"): "message",
+    ("POST", "/arturo/text/prewarm"): "message",
     ("POST", "/arturo/transcribe"): "voice",
     ("POST", "/arturo/ptt/stream/audio"): "ptt",
     ("GET", "/arturo/ptt/stream/events"): "ptt",
