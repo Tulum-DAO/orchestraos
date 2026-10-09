@@ -170,3 +170,63 @@ def test_a_scratch_checkout_never_installs_into_the_real_settings(tmp_path, monk
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "x")
     rep = H.install_statusline(settings_path=real, repo_root=REPO, data_dir=tmp_path / "d")
     assert "from inside a test" in rep["error"] and real.read_bytes() == before
+
+
+# --- a shared temp dir: never write through someone else's names ------------------------------
+
+def _cache_dir(tmpdir):
+    return Path(tmpdir) / f"orchestraos-statusline-{os.getuid()}"
+
+
+def test_a_cache_dir_that_is_a_symlink_is_not_used(tmp_path):
+    victim = tmp_path / "victim"
+    victim.mkdir(mode=0o700)                              # private, so only the symlink check can refuse it
+    victim.chmod(0o700)
+    _cache_dir(tmp_path).symlink_to(victim)               # planted before we ever ran
+    r = _run_shim(tmp_path, json.dumps(PAYLOAD).encode())
+    assert r.stdout.decode().strip().endswith("39% used")
+    assert list(victim.iterdir()) == [], "nothing written through the planted link"
+    assert (tmp_path / f"claude-ctx-{SID}.json").is_file(), "the reading is still written"
+
+
+def test_a_cache_dir_others_can_write_is_not_used(tmp_path):
+    d = _cache_dir(tmp_path)
+    d.mkdir()
+    d.chmod(0o777)
+    r = _run_shim(tmp_path, json.dumps(PAYLOAD).encode())
+    assert r.stdout.decode().strip().endswith("39% used")
+    assert list(d.iterdir()) == []
+
+
+def test_a_symlink_planted_at_the_reading_path_is_replaced_not_followed(tmp_path, monkeypatch):
+    target = tmp_path / "someones-file"
+    target.write_text("keep")
+    (tmp_path / f"claude-ctx-{SID}.json").symlink_to(target)
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    import statusline
+    statusline.write_reading(PAYLOAD)
+    assert target.read_text() == "keep"
+    p = tmp_path / f"claude-ctx-{SID}.json"
+    assert not p.is_symlink() and json.loads(p.read_text())["used_pct"] == 49
+    assert not list(tmp_path.glob(".claude-ctx-*")), "no temp file left behind"
+
+
+def test_a_chained_command_that_prints_nothing_stays_empty(tmp_path):
+    # Review (agy, #337): an empty line is the user's choice, not a failure to paper over.
+    original = {"type": "command", "command": "true"}
+    r = _run_shim(tmp_path, json.dumps(PAYLOAD).encode(), settings_cmd=H._statusline_command(REPO, original))
+    assert r.returncode == 0 and r.stdout == b""
+
+
+def test_a_checkout_path_with_spaces_dollars_and_quotes_still_works(tmp_path):
+    odd = tmp_path / 'my "repo" $HOME dir'
+    for rel in (H.STATUSLINE_SHIM, "hooks/statusline.py", "scripts/lineage_daemon/wal/ctx_adapters.py"):
+        (odd / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(REPO / rel, odd / rel)
+    original = _user_statusline(tmp_path)
+    cmd = H._statusline_command(odd, original)
+    stdin = json.dumps(PAYLOAD).encode()
+    r = _run_shim(tmp_path, stdin, settings_cmd=cmd)
+    assert r.stdout.startswith(b"MINE " + hashlib.sha256(stdin).hexdigest().encode()), r
+    assert (tmp_path / f"claude-ctx-{SID}.json").is_file(), "ran OUR shim from the odd path, not the fallback"
+    assert H._chained_original(cmd) == original

@@ -13,12 +13,27 @@
 CACHE_S=30
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 DIR="${TMPDIR:-/tmp}/orchestraos-statusline-$(id -u)"
-mkdir -p "$DIR" 2>/dev/null && chmod 700 "$DIR" 2>/dev/null
+PY="${ORCHESTRA_PY:-python3}"
+
+# The cache dir sits in a shared temp dir under a predictable name. Use it only if it is a real
+# directory that THIS user owns and no one else can write; otherwise another user could plant
+# symlinks in it (our writes would land on their targets) or feed us cached output. Not ours ->
+# no cache: run Python with stdin passed straight through.
+mkdir -m 700 "$DIR" 2>/dev/null
+if [ -L "$DIR" ] || [ ! -d "$DIR" ] || [ ! -O "$DIR" ] \
+        || [ -n "$(find "$DIR" -maxdepth 0 -perm -g+w -o -maxdepth 0 -perm -o+w 2>/dev/null)" ]; then
+    "$PY" "$HERE/statusline.py" "$@" 2>/dev/null || echo "Claude"
+    exit 0
+fi
 
 # stdin to a file, not a variable: $(...) strips trailing newlines, and a chained command must
-# receive the bytes Claude Code sent.
-IN="$DIR/in.$$"
-cat > "$IN" 2>/dev/null || IN=/dev/null
+# receive the bytes Claude Code sent. mktemp: a fresh, exclusively created name.
+IN=$(mktemp "$DIR/in.XXXXXX" 2>/dev/null) || IN=""
+if [ -z "$IN" ]; then
+    "$PY" "$HERE/statusline.py" "$@" 2>/dev/null || echo "Claude"
+    exit 0
+fi
+cat > "$IN" 2>/dev/null
 
 SID=$(grep -o '"session_id" *: *"[^"]*"' "$IN" 2>/dev/null | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
 case "$SID" in ''|*/*) KEY=none ;; *) KEY="$SID" ;; esac
@@ -33,11 +48,15 @@ if [ "$KEY" != none ] && [ -f "$OUT" ]; then
     fi
 fi
 
-"${ORCHESTRA_PY:-python3}" "$HERE/statusline.py" "$@" < "$IN" > "$OUT.$$" 2>/dev/null
-if [ -s "$OUT.$$" ]; then
-    mv -f "$OUT.$$" "$OUT" 2>/dev/null && cat "$OUT" || cat "$OUT.$$"
+NEW=$(mktemp "$DIR/out.XXXXXX" 2>/dev/null) || NEW=""
+if [ -z "$NEW" ]; then
+    "$PY" "$HERE/statusline.py" "$@" < "$IN" 2>/dev/null || echo "Claude"
+elif "$PY" "$HERE/statusline.py" "$@" < "$IN" > "$NEW" 2>/dev/null; then
+    # by exit status, not size: a chained command may legitimately print nothing
+    cat "$NEW"
+    mv -f "$NEW" "$OUT" 2>/dev/null || rm -f "$NEW" 2>/dev/null
 else
-    rm -f "$OUT.$$" 2>/dev/null
+    rm -f "$NEW" 2>/dev/null
     echo "Claude"
 fi
 rm -f "$IN" 2>/dev/null

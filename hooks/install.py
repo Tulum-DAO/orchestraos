@@ -266,11 +266,11 @@ def _statusline_command(repo_root: Path, original) -> str:
     if original is not None:
         blob = base64.b64encode(json.dumps(original, ensure_ascii=False, separators=(",", ":")).encode()).decode()
         fallback = f"sh -c {shlex.quote(str(original.get('command') or ''))}"
-        run = f'ORCHESTRA_PY="{PY}" sh "{shim}" {blob}'
+        run = f'ORCHESTRA_PY={shlex.quote(PY)} sh {shlex.quote(shim)} {blob}'
     else:
         fallback = "echo Claude"
-        run = f'ORCHESTRA_PY="{PY}" sh "{shim}"'
-    return f'[ -f "{shim}" ] && {run} || {fallback} {STATUSLINE_MARKER}'
+        run = f'ORCHESTRA_PY={shlex.quote(PY)} sh {shlex.quote(shim)}'
+    return f'[ -f {shlex.quote(shim)} ] && {run} || {fallback} {STATUSLINE_MARKER}'
 
 
 def _chained_original(cmd: str):
@@ -279,7 +279,7 @@ def _chained_original(cmd: str):
     import re
     if not (isinstance(cmd, str) and STATUSLINE_MARKER in cmd):
         return None
-    m = re.search(r'sh "[^"]*' + re.escape(STATUSLINE_SHIM) + r'" ([A-Za-z0-9+/=]+) \|\|', cmd)
+    m = re.search(re.escape(STATUSLINE_SHIM) + r"'? ([A-Za-z0-9+/=]+) \|\|", cmd)
     if not m:
         return None
     try:

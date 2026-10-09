@@ -47,13 +47,25 @@ def write_reading(d: dict, now: float | None = None) -> str | None:
             or not isinstance(rem, (int, float)):
         return None
     used = max(0.0, min(100.0, 100.0 - float(rem)))
+    import tempfile
     path = ctx_bridge_path(sid)
-    tmp = f"{path}.{os.getpid()}.tmp"
-    with open(tmp, "w") as fh:
-        json.dump({"session_id": sid, "remaining_percentage": rem,
-                   "used_pct": min(100, round(used / (BUDGET_FRACTION * 100) * 100)),
-                   "timestamp": int(time.time() if now is None else now)}, fh)
-    os.replace(tmp, path)            # a reader never sees a half-written file
+    # mkstemp: an exclusively created, unpredictable name in the shared temp dir (a fixed
+    # "<path>.<pid>.tmp" could be a symlink someone else planted). os.replace swaps the name
+    # atomically and never follows a symlink at `path`, so a reader never sees a half-written file.
+    fd, tmp = tempfile.mkstemp(prefix=f".claude-ctx-{sid}.", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w") as fh:
+            json.dump({"session_id": sid, "remaining_percentage": rem,
+                       "used_pct": min(100, round(used / (BUDGET_FRACTION * 100) * 100)),
+                       "timestamp": int(time.time() if now is None else now)}, fh)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return path
 
 
