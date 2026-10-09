@@ -23,7 +23,6 @@ export const TASK_STATUS_GROUPS: Record<string, string[]> = {
 };
 
 export const VOICE_AGENTS: Record<string, { label: string; description: string }> = {
-  'gemini-gm': { label: 'Jarvis (Gemini GM)', description: 'Full visibility across all projects, clients, and infrastructure' },
   gm: { label: 'Jarvis', description: 'Full visibility across all projects, clients, and infrastructure' },
   'pm-products': { label: 'Products PM', description: 'Your internal products and tools' },
   'pm-clients': { label: 'Clients PM', description: 'Your client projects (e.g. Acme, Northwind)' },

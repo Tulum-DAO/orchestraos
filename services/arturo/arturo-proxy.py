@@ -1401,8 +1401,8 @@ TOOLS = [
                     },
                     "kind": {
                         "type": "string",
-                        "enum": ["worker", "manager"],
-                        "description": "worker (default) = an ordinary T2 seat that does a job. manager = THE General Manager: tier T0, always on, runs the fleet. There is ONE manager per install — only use manager when the operator has asked for the manager, and never to do a job.",
+                        "enum": ["worker", "project_manager", "manager"],
+                        "description": "worker (default) = an ordinary T2 seat that does a job. project_manager = a T1 coordinator that reports to this install's manager and runs a project's workers; use it whenever the operator asks for a project manager or a PM. manager = THE General Manager: tier T0, always on, runs the fleet. There is ONE manager per install — only use manager when the operator has asked for the manager, and never to do a job.",
                     },
                 },
                 "required": ["session_name", "machine"],
@@ -1897,6 +1897,23 @@ def manager_plan(session, repo_root=None):
     root = Path(repo_root or _REPO_ROOT)
     env = {"ORCHESTRA_DIR": str(ORCHESTRA_DIR), "PARENT_AGENT_ID": "arturo"}
     return _CommissionPlan([str(root / "bin" / "orchestra"), "spawn", session, "--gm"], env, session, "")
+
+
+def pm_plan(session, parent, task, repo_root=None):
+    """`orchestra agent create <seat> --tier T1 --template pm --parent <manager>`: the same verb
+    `orchestra starter` makes its project manager with (template filled, reports_to recorded, alive
+    by effect). spawn-agent.sh alone would register a T2 with no parent. The project is the seat
+    name without its `pm-` prefix."""
+    root = Path(repo_root or _REPO_ROOT)
+    project = session[3:] if session.startswith("pm-") and len(session) > 3 else session
+    argv = [str(root / "bin" / "orchestra"), "agent", "create", session, "--tier", "T1",
+            "--template", "pm", "--parent", parent,
+            "--set", f"PROJECT={project}", "--set", "CLIENT_NAME=none yet",
+            "--set", f"CLIENT_SLUG={project}", "--set", "BRANCH=main"]
+    if task:
+        argv += ["--task", task]
+    env = {"ORCHESTRA_DIR": str(ORCHESTRA_DIR), "PARENT_AGENT_ID": "arturo"}
+    return _CommissionPlan(argv, env, session, task)
 
 
 # --- The starter team (onboarding step 'team', live new-user test finding #12) ----------------
@@ -3118,6 +3135,32 @@ def execute_tool(name, args, user_turns=None):
             return (f"The manager '{session}' is up: tier T0, always on, running the fleet prompt. "
                     f"It is registered and on the Agents page.")
 
+        # A PROJECT MANAGER is a T1 seat under this install's manager, found by tier like above (the
+        # operator may have named the manager anything). No manager, no PM: it would report to nobody.
+        if str(args.get("kind") or "worker").lower() == "project_manager":
+            who, known = existing_manager()
+            if not known:
+                return ("I could not read the registry to find this install's manager, so I did not "
+                        "create the project manager: it has to report to someone. Check the Agents "
+                        "page and ask me again.")
+            if not who:
+                return ("There is no manager on this install yet, and a project manager reports to "
+                        "one, so I did not create it. Set up the team first (I can do that), then ask "
+                        "me for the project manager again.")
+            plan = pm_plan(session, who, task)
+            log.info(f"COMMISSION PROJECT MANAGER: {' '.join(plan.argv[:4])} parent={who}")
+            ok, out = _run_commission(plan, 180)
+            if not ok:
+                return f"FAILED to create the project manager '{session}': {out[-400:]}"
+            verify_ok, _ = run_local(f"tmux has-session -t {session} 2>/dev/null", timeout=3)
+            if not verify_ok:
+                return f"FAILED: orchestra agent create ran but session '{session}' does not exist: {out[-300:]}"
+            record_spawned_session(session)
+            _record_spawned_this_turn(session)
+            _notify_spawned(session, "vps")
+            return (f"The project manager '{session}' is up: tier T1, reporting to {who}. "
+                    f"It is registered and on the Agents page.")
+
         if True:
             # VPS: a real seat through spawn-agent.sh + a msg_store commission row (T2).
             plan = commission_plan(session, task)
@@ -3155,93 +3198,6 @@ def execute_tool(name, args, user_turns=None):
             if msg_id:
                 result += f" Commission filed as {msg_id}."
             return result
-
-        mac_cmd, vps_cmd = _tmux_cmd(session, "spawn")
-        log.info(f"CMD: vps={vps_cmd}, target={target_machine}")
-        ok, out, machine = _run_on_machine(mac_cmd, vps_cmd, prefer_mac=(target_machine == "mac"))
-        log.info(f"RESULT: ok={ok}, machine={machine}, out={out[:200]}")
-
-        if not ok and "duplicate session" in out.lower():
-            return f"Session '{session}' already exists on {machine}. Use inject_message to send it a task."
-        if not ok:
-            if machine == "mac" and "MAC_UNREACHABLE" in out:
-                return f"FAILED: Mac is not reachable. Cannot spawn '{session}' on Mac. the operator's Mac may be closed or offline."
-            return f"FAILED to spawn '{session}' on {machine}: {out}"
-
-        # Verify the session actually exists now
-        if machine == "vps":
-            verify_ok, _ = run_local(f"tmux has-session -t {session} 2>/dev/null", timeout=3)
-        else:
-            verify_ok, _ = ssh_mac(f"PATH=/opt/homebrew/bin:$PATH tmux has-session -t {session} 2>/dev/null", timeout=5, force=True)
-        if not verify_ok:
-            return f"FAILED: Spawn command ran but session '{session}' does not exist on {machine}. Something went wrong."
-
-        result = f"CONFIRMED: Agent '{session}' is running on {machine}."
-        if machine == "vps":
-            result += " Visible on OrchestraOS dashboard."
-        else:
-            result += " Running on Mac."
-
-        # Auto-register in registry.json so it appears on dashboard immediately
-        try:
-            reg_file = ORCHESTRA_DIR / "registry.json"
-            reg = json.loads(reg_file.read_text())
-            if session not in reg.get("agents", {}):
-                reg["agents"][session] = {
-                    "name": session.replace("-", " ").title(),
-                    "tier": "T2",
-                    "machine": machine,
-                    "tmux_session": session,
-                    "always_on": False,
-                    "system_prompt": "",
-                    "memory_scope": ["global"],
-                    "cwd": str(Path.home()),
-                    "parent": "gemini-gm"
-                }
-                reg_file.write_text(json.dumps(reg, indent=2))
-                result += " Auto-registered in OrchestraOS."
-        except Exception as e:
-            log.warning(f"Failed to auto-register {session}: {e}")
-
-        # Track in voice memory
-        record_spawned_session(session)
-        _record_spawned_this_turn(session)
-
-        # Auto-text session name + attach command to Telegram
-        import requests as req_lib
-        try:
-            req_lib.post(
-                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                json={
-                    "chat_id": TELEGRAM_CHAT_ID,
-                    "text": f"Agent spawned ({machine}): {session}\n\ntmux attach -t {session}",
-                    "parse_mode": "HTML",
-                },
-                timeout=5,
-            )
-        except Exception:
-            pass
-
-        # Inject initial task — same three-runtime two-phase invariant as inject_message (Bug 1):
-        # literal paste (no Enter), settle, then a standalone C-m. Never a single text+Enter call.
-        if task:
-            time.sleep(2)
-            is_mac = (machine == "mac")
-            paste = _pane_inject.paste_command(session, task, mac=is_mac)
-            submit = _pane_inject.submit_command(session, mac=is_mac)
-            if is_mac:
-                ok2, _ = ssh_mac(paste)
-                time.sleep(_pane_inject.SUBMIT_SETTLE_S)
-                ssh_mac(submit)
-            else:
-                ok2, _ = run_local(paste)
-                time.sleep(_pane_inject.SUBMIT_SETTLE_S)
-                run_local(submit)
-            if ok2:
-                result += f" Initial task injected: {task[:100]}"
-            else:
-                result += " Warning: task injection failed."
-        return result
 
     elif name == "inject_message":
         session = args.get("session_name", "")

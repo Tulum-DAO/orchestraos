@@ -58,7 +58,7 @@ def test_spawn_agent_schema_has_kind_defaulting_to_worker():
     mod = _load_proxy()
     fn = next(t["function"] for t in mod.TOOLS if t["function"]["name"] == "spawn_agent")
     kind = fn["parameters"]["properties"]["kind"]
-    assert set(kind["enum"]) == {"worker", "manager"}
+    assert set(kind["enum"]) == {"worker", "project_manager", "manager"}
     assert "kind" not in fn["parameters"].get("required", [])
 
 
@@ -128,3 +128,61 @@ def test_without_kind_the_worker_path_is_untouched(tmp_path):
     calls = _stub_run(mod)
     mod.execute_tool("spawn_agent", {"session_name": "scout", "task": "hi", "machine": "vps"})
     assert calls and calls[0].argv[0] == "bash" and calls[0].argv[1].endswith("spawn-agent.sh")
+
+
+# ---- kind='project_manager': a T1 seat that reports to THIS install's manager --------------------
+# Found in a new-user test: "make me a generic project manager" produced a T2 worker, because the
+# tool offered only worker or manager.
+def test_pm_plan_is_agent_create_at_T1_with_the_pm_template_under_the_manager():
+    mod = _load_proxy()
+    plan = mod.pm_plan("pm-ops", "boss", "plan the launch")
+    a = plan.argv
+    assert a[0].endswith("/bin/orchestra") and a[1:4] == ["agent", "create", "pm-ops"]
+    assert a[a.index("--tier") + 1] == "T1" and a[a.index("--template") + 1] == "pm"
+    assert a[a.index("--parent") + 1] == "boss"
+    assert "PROJECT=ops" in a and a[a.index("--task") + 1] == "plan the launch"
+    assert plan.env["ORCHESTRA_DIR"] == str(mod.ORCHESTRA_DIR)
+
+
+def test_project_manager_kind_reports_to_the_installs_manager_whatever_its_name(tmp_path):
+    mod = _load_proxy()
+    mod.ORCHESTRA_DIR = str(_registry(tmp_path, {"boss": {"tier": "T0"}}))
+    calls = _stub_run(mod)
+    token = mod._SPAWNED_THIS_TURN.set([])
+    try:
+        out = mod.execute_tool("spawn_agent", {"session_name": "pm-ops", "kind": "project_manager",
+                                               "machine": "vps"})
+        assert calls and calls[0].argv[1:3] == ["agent", "create"]
+        assert calls[0].argv[calls[0].argv.index("--parent") + 1] == "boss"
+        assert mod._SPAWNED_THIS_TURN.get() == ["pm-ops"]
+        assert "T1" in out and "boss" in out and "FAILED" not in out
+    finally:
+        mod._SPAWNED_THIS_TURN.reset(token)
+
+
+def test_a_project_manager_without_a_manager_is_refused_in_words(tmp_path):
+    mod = _load_proxy()
+    mod.ORCHESTRA_DIR = str(_registry(tmp_path, {"w": {"tier": "T2"}}))
+    calls = _stub_run(mod)
+    token = mod._SPAWNED_THIS_TURN.set([])
+    try:
+        out = mod.execute_tool("spawn_agent", {"session_name": "pm-ops", "kind": "project_manager",
+                                               "machine": "vps"})
+        assert calls == [] and mod._SPAWNED_THIS_TURN.get() == []
+        assert "manager" in out.lower()
+    finally:
+        mod._SPAWNED_THIS_TURN.reset(token)
+
+
+def test_a_project_manager_on_an_unreadable_registry_is_refused(tmp_path):
+    mod = _load_proxy()
+    mod.ORCHESTRA_DIR = str(tmp_path / "nothing-here")
+    calls = _stub_run(mod)
+    out = mod.execute_tool("spawn_agent", {"session_name": "pm-ops", "kind": "project_manager",
+                                           "machine": "vps"})
+    assert calls == [] and "could not" in out.lower()
+
+
+def test_spawn_code_names_no_fleet_seat():
+    src = pathlib.Path("services/arturo/arturo-proxy.py").read_text()
+    assert '"gemini-gm"' not in src
