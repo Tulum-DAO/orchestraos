@@ -20,7 +20,7 @@ export type PairCard = { device: string; device_id: string; code: string; expire
   /** Page-only: set when a later turn's check_paired saw this device connect. The code is then dropped. */
   paired?: boolean };
 
-export interface ArturoReply { resumed?: boolean; switch?: boolean; onboarding_conversation?: string; choices?: ChoiceCard; pair_card?: PairCard; paired?: string[]; onboarding?: { done: boolean }; operator?: OperatorFacts; ok: boolean; status?: number; reply_text?: string; conversation_id?: string; brain?: ArturoBrain; tools_called?: string[]; spawned?: string[]; error?: string; detail?: unknown; provider?: string; model?: string; reason?: string; field?: string }
+export interface ArturoReply { replayed?: boolean; turn_id?: string; resumed?: boolean; switch?: boolean; onboarding_conversation?: string; choices?: ChoiceCard; pair_card?: PairCard; paired?: string[]; onboarding?: { done: boolean }; operator?: OperatorFacts; ok: boolean; status?: number; reply_text?: string; conversation_id?: string; brain?: ArturoBrain; tools_called?: string[]; spawned?: string[]; error?: string; detail?: unknown; provider?: string; model?: string; reason?: string; field?: string }
 export interface ArturoContext { route: string; entityKind?: string; entityId?: string; hint?: string }
 export interface RuntimeRow { id: string; label?: string; cli?: string; installed: boolean; authed: boolean | 'unverified'; auth_reason?: string | null }
 
@@ -52,21 +52,38 @@ export interface ArturoTextOptions {
   onSent?: () => void;
   /** This turn's brain, when the operator chose one (null/undefined = the default brain). */
   brain?: { provider: string; model: string };
+  /** This send's id (newTurnId), the SAME on every attempt of it: the server replays a send it has seen. */
+  turnId?: string;
 }
+
+/** One id per operator send (DEC-1791518421640932). Every attempt of that send carries it (the stream, the
+ *  whole-reply re-ask, each busy retry), so the server runs it at most once, and reading a dropped turn back
+ *  by it returns THIS send's reply, never an earlier identical message's. */
+export function newTurnId(): string {
+  const bytes = new Uint8Array(6);
+  try { crypto.getRandomValues(bytes); } catch { for (let i = 0; i < 6; i++) bytes[i] = Math.floor(Math.random() * 256); }
+  return `t_${Date.now()}_${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`;
+}
+
+/** The server finished with this send and nothing of it ran (DEC-1791518421640932, #319 review item 3). */
+export const NOT_ANSWERED_TEXT = 'That message may not have been answered; send it again.';
+/** The send may have run (tools included) but its answer cannot be shown: never re-sent for the operator. */
+export const MAY_HAVE_RUN_TEXT = 'That message may not have been answered, and anything it started may already have run: check before sending it again.';
 
 /** The /api/arturo/text body. Context is a FIELD now; the proxy renders the same line
  *  contextLine() produced, after the onboarding marker, so model input is unchanged.
  *  `brain` is sent only when the operator chose one (DEC-1790669162399904 §1.5-1.6). */
 export function buildTextBody(text: string, conversationId: string, ctx?: ArturoContext | null,
-                              brain?: { provider: string; model: string }): Record<string, unknown> {
+                              brain?: { provider: string; model: string }, turnId?: string): Record<string, unknown> {
   const body: Record<string, unknown> = { text, conversation_id: conversationId };
   if (ctx) body.context = ctx;
   if (brain) body.brain = brain;
+  if (turnId) body.turn_id = turnId;
   return body;
 }
 
 export async function arturoText(text: string, conversationId: string, ctx?: ArturoContext | null, opts: ArturoTextOptions = {}): Promise<ArturoReply> {
-  const body = JSON.stringify(buildTextBody(text, conversationId, ctx, opts.brain));
+  const body = JSON.stringify(buildTextBody(text, conversationId, ctx, opts.brain, opts.turnId));
   // XMLHttpRequest, not fetch: fetch has no "request body delivered" event, and the Sent state
   // must be real (the server has it), not a timer.
   return new Promise<ArturoReply>((resolve) => {

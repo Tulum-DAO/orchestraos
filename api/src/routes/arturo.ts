@@ -117,6 +117,9 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     if (!text) { res.status(400).json({ ok: false, error: 'text required' }); return; }
     const conversation_id = String((req.body || {}).conversation_id || '').slice(0, 200);
     const upstream: Record<string, unknown> = { text, conversation_id };
+    // The client's id for this send (DEC-1791518421640932): the proxy validates it and replays a send it has seen.
+    const turnId = (req.body || {}).turn_id;
+    if (typeof turnId === 'string' && turnId) upstream.turn_id = turnId.slice(0, 64);
     for (const [key, pick] of [['brain', pickBrain], ['context', pickContext]] as const) {
       const raw = (req.body || {})[key];
       if (raw === undefined || raw === null) continue;
@@ -173,6 +176,9 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     if (!text) { res.status(400).json({ ok: false, error: 'text required' }); return; }
     const conversation_id = String((req.body || {}).conversation_id || '').slice(0, 200);
     const upstream: Record<string, unknown> = { text, conversation_id };
+    // The client's id for this send (DEC-1791518421640932): the proxy validates it and replays a send it has seen.
+    const turnId = (req.body || {}).turn_id;
+    if (typeof turnId === 'string' && turnId) upstream.turn_id = turnId.slice(0, 64);
     for (const [key, pick] of [['brain', pickBrain], ['context', pickContext]] as const) {
       const raw = (req.body || {})[key];
       if (raw === undefined || raw === null) continue;
@@ -252,7 +258,10 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
   router.get('/threads/:id', async (req, res) => {
     const id = encodeURIComponent(String(req.params.id || '').slice(0, 200));
     if (!id) { res.status(400).json({ ok: false, error: 'thread id required' }); return; }
-    await forward(res, `/arturo/threads/${id}`, { method: 'GET' }, 10000);
+    // ?turn=<id>: one send's fate (running | done | lost | unknown), the read-back after a dropped turn.
+    const turn = req.query.turn;
+    const suffix = typeof turn === 'string' && turn ? `?turn=${encodeURIComponent(turn.slice(0, 64))}` : '';
+    await forward(res, `/arturo/threads/${id}${suffix}`, { method: 'GET' }, 10000);
   });
 
   return router;

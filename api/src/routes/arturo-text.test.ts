@@ -131,3 +131,11 @@ test("the proxy's 502 brain_failed keeps tools_called, so the UI can say what al
   assert.equal(r.status, 502);
   assert.deepEqual(r.json.tools_called, ['send_telegram']);
 });
+
+test('the client turn id rides along (DEC-1791518421640932); a non-string one does not', async () => {
+  const { deps, sent } = makeDeps();
+  await post(deps, { text: 'hi', conversation_id: 'c1', turn_id: 't_1700000000000_abcdef012345' });
+  assert.equal(sent[0].body.turn_id, 't_1700000000000_abcdef012345');
+  await post(deps, { text: 'hi', conversation_id: 'c1', turn_id: { evil: true } });
+  assert.equal('turn_id' in sent[1].body, false);
+});

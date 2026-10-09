@@ -273,3 +273,46 @@ def test_gemini_live_opens_the_session_as_fleet(monkeypatch):
     req = _LiveReq({"id": "legacy"}, client_headers={"Authorization": "Bearer tok"})
     asyncio.run(G.handle_gemini_live(req))
     assert made["principal"] == "fleet"
+
+
+# --- DEC-1791518421640932: a turn read-back carries its reader, and the turn id survives the hop ------------
+
+@pytest.mark.parametrize("principal,stamp", [({"id": "legacy"}, "fleet"), ({"id": "dev_x"}, "device:dev_x")])
+def test_a_thread_read_carries_its_reader_and_the_turn_query(monkeypatch, principal, stamp):
+    seen = {}
+
+    class _Resp:
+        status = 200
+
+        async def json(self, content_type=None):
+            return {"ok": True}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    class _Session:
+        def __init__(self, *a, **k):
+            pass
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            seen.update(url=url, params=dict(params or {}), headers=dict(headers or {}))
+            return _Resp()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(aiohttp, "ClientSession", _Session)
+    monkeypatch.setattr(G, "_authorized", lambda request: True)
+    req = _Req(principal, client_headers={"X-Arturo-Principal": "fleet"})
+    req.match_info = {"conversation_id": "c1"}
+    req.query = {"turn": "t_abc123456", "evil": "1"}
+    asyncio.run(G.handle_arturo_threads(req))
+    assert seen["url"].endswith("/threads/c1")
+    assert seen["params"] == {"turn": "t_abc123456"}
+    assert seen["headers"]["X-Arturo-Principal"] == stamp      # built fresh, never the client's own header

@@ -6,10 +6,10 @@
  * buffer and only emits on a complete blank-line-terminated frame, which is what the
  * split-at-every-byte test pins.
  */
-import { buildTextBody, arturoText, type ArturoContext, type ArturoReply } from './arturo';
+import { buildTextBody, arturoText, isStarting, newTurnId, type ArturoContext, type ArturoReply } from './arturo';
 import type { ToolCallEvent, ToolResultEvent } from './turnParts';
-import { loadThread } from './arturoThreads';
-import { stripContextLine } from './arturoResume';
+import { loadTurn, type TurnFate } from './arturoThreads';
+import { isBusy } from './arturoResume';
 
 export interface ArturoStreamEvent {
   event: 'turn.start' | 'text.delta' | 'thinking.delta' | 'tool.call' | 'tool.result'
@@ -128,6 +128,16 @@ export interface StreamOutcome {
   paired?: any;
   onboarding?: any;
   error?: string;
+  replayed?: boolean;
+  /** Set when the server reported the failure itself (an `error` event): its turn is over. */
+  reported?: boolean;
+}
+
+/** What a failure body says the turn already did: kept so the page can say so (describeTurnError). */
+function pickFailure(json: any): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of ['tools_called', 'provider', 'model', 'reason', 'detail', 'field']) if (json?.[k] !== undefined) out[k] = json[k];
+  return out;
 }
 
 /**
@@ -166,10 +176,13 @@ export async function arturoTextStream(
   }
   const ctype = res.headers.get('content-type') || '';
   if (!ctype.includes('text/event-stream')) {
-    // A refusal comes back as ordinary JSON (a bad model id, an empty message).
     const json = await res.json().catch(() => ({ ok: false, error: 'bad_response' }));
+    // A send the server has already answered comes back whole, as JSON: nothing ran again
+    // (DEC-1791518421640932). It is this send's answer, cards included.
+    if (res.ok && json.ok) { cb.onEnd?.(json); return { ...json, ok: true }; }
+    // A refusal comes back as ordinary JSON (a bad model id, an empty message).
     cb.onError?.(json);
-    return { ok: false, status: res.status, error: json.error || 'bad_response' };
+    return { ok: false, status: res.status, error: json.error || 'bad_response', ...pickFailure(json) };
   }
   if (!res.body) { cb.onError?.({ code: 'no_body' }); return { ok: false, error: 'no_body' }; }
 
@@ -193,7 +206,7 @@ export async function arturoTextStream(
     cb.onError?.({ code: outcome === 'stalled' ? 'stream_stalled' : 'stream_broken' });
     return { ok: false, error: outcome === 'stalled' ? 'stream_stalled' : 'stream_broken' };
   }
-  if (failed && !final) return { ok: false, error: failed.code || 'turn_failed' };
+  if (failed && !final) return { ok: false, error: failed.code || 'turn_failed', reported: true, ...pickFailure(failed) };
   if (!final) return { ok: false, error: 'incomplete' };
   // Everything turn.end says the turn DID — onboarding advances on tools_called, spawned and
   // operator, and a streamed turn used to report none of them.
@@ -206,12 +219,18 @@ export async function arturoTextStream(
 
 
 /**
- * A turn that streams, with the whole-reply path as its fallback.
+ * One operator send, start to finish: the ONE send path for the home and the pill (DEC-1791518421640932).
  *
- * The caller gets the same `ArturoReply` either way, so a surface can adopt streaming without
- * a second code path for "it didn't stream". Falls back when the install's API has no
- * /text/stream (an older box), or when the stream breaks before `turn.end` — a half-typed
- * reply is not an answer, so the turn is re-asked whole rather than left dangling.
+ * The send gets a turn id once, and every attempt carries it, so the server runs it at most once and a
+ * re-ask of a send that already landed is answered from the server's record, never run again. When an
+ * attempt's outcome is unclear (busy, a hop still starting, a timeout, a dropped stream), the page asks the
+ * server what became of THIS send (by id) before doing anything else:
+ *   done    -> its answer, cards included (a dropped onboarding turn still advances the page);
+ *   running -> keep waiting;
+ *   lost    -> it may have run: never re-sent for the operator (MAY_HAVE_RUN_TEXT);
+ *   unknown -> nothing of it ran: a turn that had started stops and says so (NOT_ANSWERED_TEXT, item 3);
+ *              one that never reached the server is sent again, with the same id.
+ * `stream: false` sends whole over /text (the pill); otherwise the first attempt streams.
  */
 export async function arturoTurn(
   text: string,
@@ -226,75 +245,118 @@ export async function arturoTurn(
     /** Clear what this turn has shown: the server's fallback is taking over, or ours is. */
     onReset?: () => void;
     signal?: AbortSignal;
+    /** This send's id; minted here when absent. Pass one to keep it across the caller's own retries. */
+    turnId?: string;
+    /** false = whole replies over /text only (no streaming). */
+    stream?: boolean;
+    /** The stack is still starting (G15): show it, wait for health, resolve whether it came up. */
+    onStarting?: () => Promise<boolean>;
   } = {},
 ): Promise<ArturoReply> {
-  const body = buildTextBody(text, conversationId, ctx, opts.brain);
-  let started = false;
-  const res = await arturoTextStream(body, {
-    // turn.start is the server saying it has the turn — a stricter "Sent" than an upload event.
-    onStart: () => { started = true; opts.onSent?.(); },
-    onDelta: (t) => opts.onDelta?.(t),
-    onToolCall: (c) => opts.onToolCall?.(c),
-    onToolResult: (r) => opts.onToolResult?.(r),
-    onReset: () => opts.onReset?.(),
-  }, opts.signal);
-
-  if (res.ok) {
-    return {
-      ok: true, reply_text: res.reply_text || '', tools_called: res.tools_called || [],
-      spawned: res.spawned || [], ...(res.operator !== undefined ? { operator: res.operator } : {}),
-      ...(res.choices !== undefined ? { choices: res.choices } : {}),
-      ...(res.pair_card !== undefined ? { pair_card: res.pair_card } : {}),
-      ...(res.paired !== undefined ? { paired: res.paired } : {}),
-      ...(res.onboarding !== undefined ? { onboarding: res.onboarding } : {}),
-    } as ArturoReply;
-  }
-  if (opts.signal?.aborted) return { ok: false, error: 'aborted' } as ArturoReply;
-  // Another turn in this conversation is running: re-sending over /text would queue the SAME message
-  // a second time and run it twice. The caller waits and retries instead.
-  if (res.status === 409 && res.error === 'busy') return { ok: false, status: 409, error: 'busy' } as ArturoReply;
-  // The server HAD the turn (turn.start) and only the connection went: it is still running it, and will
-  // record it. Re-sending would run the same message twice (#317 review SF1), so read it back instead.
-  // A failure the server itself reported (an error event) ended its turn, and is safe to re-ask below.
-  if (started && DROPPED.has(res.error || '')) {
+  const turnId = opts.turnId || newTurnId();
+  const deadline = Date.now() + SEND_MAX_MS;
+  let streamNext = opts.stream !== false;
+  let reasked = false;
+  for (let attempt = 0; ; attempt++) {
+    let started = false;
+    let res: StreamOutcome | ArturoReply;
+    if (streamNext) {
+      res = await arturoTextStream(buildTextBody(text, conversationId, ctx, opts.brain, turnId), {
+        // turn.start is the server saying it has the turn — a stricter "Sent" than an upload event.
+        onStart: () => { started = true; opts.onSent?.(); },
+        onDelta: (t) => opts.onDelta?.(t),
+        onToolCall: (c) => opts.onToolCall?.(c),
+        onToolResult: (r) => opts.onToolResult?.(r),
+        onReset: () => opts.onReset?.(),
+      }, opts.signal);
+      streamNext = false;          // any re-ask is whole: a second stream would only re-show what the first did
+    } else {
+      res = await arturoText(text, conversationId, ctx, { onSent: opts.onSent, brain: opts.brain, turnId });
+    }
+    if (res.ok) return asReply(res);
+    if (opts.signal?.aborted) return { ok: false, error: 'aborted' } as ArturoReply;
+    const busy = isBusy(res);
+    const reported = !!(res as StreamOutcome).reported;
+    const dropped = DROPPED.has(res.error || '');
+    const unclear = busy || reported || dropped || isUnclear(res);
+    if (!unclear) return asReply(res);           // a refusal or a brain's own error: the server's final word
+    // Whatever this attempt showed goes before the answer (or the next attempt) arrives.
     opts.onReset?.();
-    return readBackStartedTurn(text, conversationId);
+    const fate = await settleTurn(conversationId, turnId, opts.signal, deadline, busy ? 1 : UNKNOWN_POLLS);
+    if (fate.state === 'aborted') return { ok: false, error: 'aborted' } as ArturoReply;
+    if (fate.state === 'done') {
+      if (!fate.result) return { ok: false, error: 'not_answered_here' } as ArturoReply;
+      const { status, ...body } = fate.result;
+      return (status === undefined || status === 200) && body.ok !== false
+        ? asReply({ ...body, ok: true })
+        : { ...body, ok: false, status } as ArturoReply;
+    }
+    if (fate.state === 'lost' || fate.state === 'timeout') {
+      reportTurnFailure('turn_unresolved', { state: fate.state, error: res.error });
+      return { ok: false, error: 'may_have_run' } as ArturoReply;
+    }
+    // unknown: the server holds nothing of this send, so nothing of it ran.
+    if (started && !reported) {
+      reportTurnFailure('turn_not_answered', { error: res.error });
+      return { ok: false, error: 'not_answered' } as ArturoReply;
+    }
+    if (reported) {
+      // The server ended its turn with an error and ran nothing: ask once more, whole (the old fallback).
+      if (reasked) return asReply(res);
+      reasked = true;
+    } else if (!busy && isStarting(res as ArturoReply) && opts.onStarting) {
+      if (!(await opts.onStarting())) return asReply(res);
+    } else {
+      await pause(READ_BACK_EVERY_MS, opts.signal);
+    }
+    if (Date.now() >= deadline || (!busy && attempt >= MAX_RESENDS)) return asReply(res);
   }
-  // The re-ask answers from the top: whatever the dead attempt showed (half a reply, tool
-  // cards) is cleared first, or it sits beside the answer.
-  opts.onReset?.();
-  // Anything that failed BEFORE the first delta is safe to re-ask; a turn that failed after
-  // partial text is re-asked too, and the caller clears what it had shown.
-  const t0 = Date.now();
-  const whole = await arturoText(text, conversationId, ctx, { onSent: opts.onSent, brain: opts.brain });
-  if (!whole.ok) {
-    reportTurnFailure('fallback_failed', { error: (whole as any).error, stream_error: res.error, started, ms: Date.now() - t0 });
-  } else {
-    reportTurnFailure('fell_back_ok', { stream_error: res.error, started, ms: Date.now() - t0 });
-  }
-  return whole;
 }
 
+function asReply(r: StreamOutcome | ArturoReply): ArturoReply {
+  const { reported: _r, ...rest } = r as StreamOutcome;
+  return { ...rest, ...(rest.ok ? { reply_text: rest.reply_text || '', tools_called: rest.tools_called || [], spawned: rest.spawned || [] } : {}) } as ArturoReply;
+}
 
+/** Unclear = the send may or may not have reached the server: a hop still starting (502-504 from a hop, not a
+ *  brain's own error), a timeout, or the network. Only the server can say what happened to it. */
+function isUnclear(r: { ok: boolean; status?: number; error?: string }): boolean {
+  if (BRAIN_ERROR_RE.test(String(r.error || ''))) return false;
+  return isStarting(r as ArturoReply) || r.error === 'stream_timeout' || r.error === 'stream_no_body' || r.error === 'no_body';
+}
+
+const BRAIN_ERROR_RE = /^(brain_|empty_response|provider_unavailable|unknown_model|bad_brain|turn_lost|turn_id_conflict|turn_mark_unavailable|bad_turn_id)/;
 const DROPPED = new Set(['stream_broken', 'stream_stalled', 'incomplete']);
 const READ_BACK_EVERY_MS = 2000;
-const READ_BACK_TRIES = 150;                 // ~5 min: past any full tool turn
+const UNKNOWN_POLLS = 3;                     // "unknown" is final only when seen 3 times, 2 s apart (v4)
+const SEND_MAX_MS = 5 * 60 * 1000;           // past any full tool turn
+const MAX_RESENDS = 3;
 
-/** The stored reply of a turn the server is (or was) running after its connection dropped: the thread's
- *  last exchange, once its user side is this message. Never sends anything. */
-async function readBackStartedTurn(text: string, conversationId: string): Promise<ArturoReply> {
-  const mine = stripContextLine(text.replace(/^\[Onboarding: step=[a-z_]+\]\n/, '')).trim();
-  for (let i = 0; i < READ_BACK_TRIES; i++) {
-    const t = await loadThread(conversationId);
-    const turns = t?.turns || [];
-    const last = turns[turns.length - 1], prev = turns[turns.length - 2];
-    if (last?.role === 'assistant' && prev?.role === 'user' && stripContextLine(prev.content).trim() === mine) {
-      return { ok: true, reply_text: last.content, tools_called: [], spawned: [] } as ArturoReply;
-    }
-    await new Promise((ok) => setTimeout(ok, READ_BACK_EVERY_MS));
+function pause(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((ok) => {
+    if (signal?.aborted) { ok(); return; }
+    const t = setTimeout(ok, ms);
+    signal?.addEventListener('abort', () => { clearTimeout(t); ok(); }, { once: true });
+  });
+}
+
+type Settled = TurnFate | { state: 'timeout' } | { state: 'aborted' };
+
+/** Ask the server what became of this send until it is no longer running. Never sends anything. */
+async function settleTurn(conversationId: string, turnId: string, signal: AbortSignal | undefined,
+                          deadline: number, unknownPolls: number): Promise<Settled> {
+  let unknowns = 0;
+  for (;;) {
+    if (signal?.aborted) return { state: 'aborted' };
+    const fate = await loadTurn(conversationId, turnId);
+    if (signal?.aborted) return { state: 'aborted' };       // nit 8: an abort mid-read wins over its answer
+    if (fate) {
+      if (fate.state === 'done' || fate.state === 'lost') return fate;
+      if (fate.state === 'unknown') { if (++unknowns >= unknownPolls) return fate; } else unknowns = 0;
+    }                                                          // null: the read failed (a hop starting): wait
+    if (Date.now() >= deadline) return { state: 'timeout' };
+    await pause(READ_BACK_EVERY_MS, signal);
   }
-  reportTurnFailure('read_back_timed_out', { ms: READ_BACK_EVERY_MS * READ_BACK_TRIES });
-  return { ok: false, error: 'stream_broken' } as ArturoReply;
 }
 
 

@@ -296,3 +296,11 @@ test('POST /client-log keeps only the flat diagnostic fields, capped, and never 
   assert.equal(rec.text, undefined, 'message text must never reach the log');
   assert.equal(rec.reply_text, undefined);
 });
+
+test('a turn read-back (?turn=) survives the hop, escaped', async () => {
+  const deps = makeDeps();
+  await get(deps, '/api/arturo/threads/c1?turn=t_abc-123');
+  assert.equal(deps.urls[0], `${GATEWAY_URL}/arturo/threads/c1?turn=t_abc-123`);
+  await get(deps, '/api/arturo/threads/c1?turn=' + encodeURIComponent('a&b=c'));
+  assert.equal(deps.urls[1], `${GATEWAY_URL}/arturo/threads/c1?turn=a%26b%3Dc`);
+});

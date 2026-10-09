@@ -29,6 +29,7 @@ def _turn_end(evs):
 
 
 def test_an_onboarding_turn_goes_down_the_whole_turn_path_with_its_marker_applied(P, monkeypatch):
+    monkeypatch.setattr(P, "_stamped_principal", lambda req: "fleet")   # onboarding is the dashboard's (#319 item 5)
     seen = {}
 
     def whole_turn(text, conversation_id, brain=None, context=None, principal=None):
@@ -68,6 +69,7 @@ def test_a_streamed_turn_end_carries_what_the_turn_spawned_and_the_operator(P, m
 
 
 def test_the_marker_is_found_on_the_message_even_with_page_context(P, monkeypatch):
+    monkeypatch.setattr(P, "_stamped_principal", lambda req: "fleet")   # onboarding is the dashboard's (#319 item 5)
     monkeypatch.setattr(P, "text_turn", lambda text, conversation_id, brain=None, context=None, principal=None: (
         200, {"ok": True, "reply_text": "ok", "tools_called": [], "spawned": [], "operator": {}}))
     monkeypatch.setattr(P._text_stream, "stream_turn",

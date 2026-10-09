@@ -5735,6 +5735,70 @@ _TURN_LOCKS = _turn_lock.TurnLocks()
 # A turn waited past turn_lock.WAIT_S for the one before it in the same conversation.
 _BUSY = {"ok": False, "error": "busy", "detail": "still answering your last message in this conversation"}
 
+from services.arturo import turn_ids as _turn_ids
+
+_TURN_IDS = _turn_ids.Registry()
+
+
+def _turn_id_refusal(data, conversation_id):
+    """The client's turn id for this send (DEC-1791518421640932), checked before anything else. Returns
+    (turn_id or None, refusal (status, body) or None). No id = the old behaviour, unchanged."""
+    tid = data.get("turn_id")
+    if tid in (None, ""):
+        return None, None
+    if not _turn_ids.valid(tid):
+        return None, (400, {"ok": False, "error": "bad_turn_id", "field": "turn_id"})
+    if not (conversation_id or "").strip():
+        # No conversation = no lock and a freshly minted conversation: it could never be replayed.
+        return None, (400, {"ok": False, "error": "turn_id_needs_conversation"})
+    return tid, None
+
+
+def _claim_turn_id(turn, token):
+    """With the conversation's lock held: replay, refuse, or mark the turn started and let it run.
+    `turn` = {cid, tid, own, principal, req, ledger, final}. Returns None to run, else (status, body)."""
+    cid, tid, own = turn["cid"], turn["tid"], turn["own"]
+    try:
+        verdict, out = _turn_ids.decide(_THREADS, _TURN_IDS, cid, tid, own)
+        if verdict == "run":
+            _THREADS.mark_started(cid, tid, own, _turn_ids.BOOT, turn["principal"])
+    except Exception as e:  # noqa: BLE001 — a turn that cannot be marked must not run (fail closed)
+        log.warning(f"turn id {tid}: mark unavailable: {e}")
+        return 503, {"ok": False, "error": "turn_mark_unavailable"}
+    if verdict == "replay":
+        return out[0], {**out[1], "replayed": True, "turn_id": tid}
+    if verdict == "conflict":
+        return 409, {"ok": False, "error": "turn_id_conflict"}
+    if verdict == "lost":
+        # Started in an earlier process (or long ago) and never finished: it may have run. Never again.
+        return 409, {"ok": False, "error": "turn_lost"}
+    _TURN_IDS.promote(cid, tid, turn["req"])
+    token.on_release = lambda: _settle_turn_id(turn)
+    return None
+
+
+def _settle_turn_id(turn):
+    """Runs inside the lock's release, before the next request can take it: keep what the turn answered,
+    and keep its mark unless it did nothing at all (then a resend may run it). Retryability is the server's
+    own ledger's call, never the error body's (DEC-1791518421640932 v3.1)."""
+    cid, tid = turn["cid"], turn["tid"]
+    fin = turn.get("final")
+    recorded = _TURN_IDS.was_recorded(cid, tid)
+    ran = bool(turn.get("ledger") is not None and turn["ledger"].ran())
+    try:
+        if fin is not None and fin[0] == 200 and fin[1].get("ok"):
+            _TURN_IDS.put_final(cid, tid, fin[0], fin[1], turn["principal"], turn["own"])
+        elif recorded:
+            pass                            # failed after its record: the recorded reply is the answer
+        elif ran:
+            if fin is not None:             # tools ran, then it failed: that error is the answer, for good
+                _TURN_IDS.put_final(cid, tid, fin[0], fin[1], turn["principal"], turn["own"])
+        else:
+            _THREADS.clear_mark(cid, tid)   # nothing ran, nothing recorded
+    finally:
+        _TURN_IDS.forget_recorded(cid, tid)
+        _TURN_IDS.drop(cid, tid, turn["req"])
+
 # The reply a RETURNING opener showed, per conversation: one slot, never stored, taken by the
 # operator's next onboarding turn (DEC-1791511578959986 V3).
 _RETURNING_REPLIES = {}
@@ -5761,7 +5825,7 @@ def _onboarding_progress_ctx():
     return out
 
 
-def text_turn(text, conversation_id, brain=None, context=None, principal=None):
+def text_turn(text, conversation_id, brain=None, context=None, principal=None, turn_id=None):
     """Returns (http_status, {ok, reply_text, conversation_id, brain, tools_called}).
     `brain` = {provider, model} names this turn's brain (None = the default); `context` = the
     web client's ArturoContext {route, entityKind?, entityId?, hint?} (None = none)."""
@@ -5881,7 +5945,7 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None):
         _hold_returning_reply(conversation_id, reply)
     else:
         _record_text_turn(conversation_id=conversation_id, text=text, reply=reply, brain=chosen_id,
-                          effective=effective)
+                          effective=effective, turn_id=turn_id)
     from services.arturo import operator_store as _ops
     body = {"ok": True, "reply_text": reply, "conversation_id": conversation_id,
             "brain": (chosen or _turn_brain()).describe(), "tools_called": tools_called,
@@ -5938,6 +6002,14 @@ def thread_detail_endpoint(conversation_id):
     """One thread with its turns, so selecting it in the list loads the real conversation."""
     if not _loopback_only():
         return jsonify({"ok": False, "error": "loopback only"}), 403
+    turn_q = request.args.get("turn")
+    if turn_q is not None:
+        # One send's fate (DEC-1791518421640932): running | done (+ result, to the principal that sent it
+        # only) | lost | unknown. The thread itself is not loaded: a poll every 2 s stays cheap.
+        if not _turn_ids.valid(turn_q):
+            return jsonify({"ok": False, "error": "bad_turn_id"}), 400
+        return jsonify({"ok": True, "turn": _turn_ids.readback(_THREADS, _TURN_IDS, conversation_id, turn_q,
+                                                               _stamped_principal(request))})
     thread = _THREADS.get_thread(conversation_id)
     if thread is None:
         # A thread that has no turns yet is the NORMAL state the first time the pill opens (the
@@ -5960,7 +6032,7 @@ _WARM_POOL = _warm_session.WarmPool(spawn=_spawn_warm, argv_for=lambda key: [],
 atexit.register(_WARM_POOL.close_all)
 
 
-def _record_text_turn(conversation_id, text, reply, brain=None, effective=None):
+def _record_text_turn(conversation_id, text, reply, brain=None, effective=None, turn_id=None):
     """The ONE place a text turn is persisted. /text and /text/stream both come through here,
     so a streamed turn and a whole one leave the same history and the same thread row.
     `brain` = what the operator chose (None = default); `effective` = what actually wrote the
@@ -5969,7 +6041,10 @@ def _record_text_turn(conversation_id, text, reply, brain=None, effective=None):
     reply = _brain.without_envelope(reply)
     _TEXT_HISTORY.append(conversation_id, "user", text)
     _TEXT_HISTORY.append(conversation_id, "assistant", reply, brain=effective)
-    _THREADS.record_turn(conversation_id, text, reply, brain=brain, effective=effective)
+    _THREADS.record_turn(conversation_id, text, reply, brain=brain, effective=effective,
+                         **({"turn_id": turn_id} if turn_id else {}))
+    if turn_id:
+        _TURN_IDS.note_recorded(conversation_id, turn_id)
 
 
 def _conversation_history(conversation_id):
@@ -6062,8 +6137,18 @@ def text_stream_endpoint():
         return jsonify({"ok": False, "error": "bad_context", "field": "context"}), 400
 
     # Refused before the lock and before _begin_team_turn: a refused turn takes no card off the book.
-    if _onboarding_refusal(text_in, conversation_id, _stamped_principal(request)):
+    principal = _stamped_principal(request)
+    if _onboarding_refusal(text_in, conversation_id, principal):
         return jsonify(_ONBOARDING_ONLY), 403
+    tid, refusal = _turn_id_refusal(data, data.get("conversation_id"))
+    if refusal:
+        return jsonify(refusal[1]), refusal[0]
+    # Seen from the first moment, before the lock wait (DEC-1791518421640932 v4.1). The owner is the RAW
+    # text field, exactly as /text hashes it, so a stream re-asked over /text is the same send.
+    _turn = None
+    if tid:
+        _turn = {"cid": conversation_id, "tid": tid, "principal": principal, "req": _TURN_IDS.register(conversation_id, tid),
+                 "own": _turn_ids.owner(principal, data.get("text")), "ledger": None, "final": None}
 
     turn_brain = chosen or _turn_brain()
     # One turn at a time in this conversation, taken BEFORE the cards come off the book and the
@@ -6071,7 +6156,16 @@ def text_stream_endpoint():
     # never starts.
     _token = _TURN_LOCKS.acquire(conversation_id)
     if _token is None:
+        if _turn is not None:
+            _TURN_IDS.drop(conversation_id, tid, _turn["req"])
         return jsonify(_BUSY), 409
+    if _turn is not None:
+        answered = _claim_turn_id(_turn, _token)
+        if answered:
+            # A replay (or a refusal) is ordinary JSON: nothing runs, so no stream opens.
+            _token.release()
+            _TURN_IDS.drop(conversation_id, tid, _turn["req"])
+            return jsonify(answered[1]), answered[0]
     try:
         _started = []
         # Taken once for the whole turn, whichever path ends up running it (stream, or text_turn behind
@@ -6118,7 +6212,7 @@ def text_stream_endpoint():
             team_tok = _TEAM_TURN.set(_team_turn)
             try:
                 return text_turn(text_in, conversation_id, brain=brain_req, context=page_ctx,
-                                 principal=_team_turn.get("principal"))
+                                 principal=_team_turn.get("principal"), **({"turn_id": tid} if tid else {}))
             finally:
                 _TEAM_TURN.reset(team_tok)
                 _TURN_DEDUP.reset(ledger_tok)
@@ -6135,6 +6229,8 @@ def text_stream_endpoint():
         # send_telegram check reads real intent rather than failing closed.
         _user_turns = [t.get("content") for t in (history or []) if t.get("role") == "user"] + [text_in]
         _stream_ledger = _voice_guards.ToolDedupLedger()
+        if _turn is not None:
+            _turn["ledger"] = _stream_ledger         # the fallback inherits it: one ledger for the whole turn
         _spawned = []
 
         def _run_tools(calls):
@@ -6181,7 +6277,7 @@ def text_stream_endpoint():
             return _WARM_POOL.turn(warm_key, new_text, argv=argv, env=env, version=v)
 
         def _record(**kw):
-            _record_text_turn(**kw, effective=effective)
+            _record_text_turn(**kw, effective=effective, turn_id=tid)
             _WARM_POOL.sync(warm_key, _THREADS.turn_count(conversation_id))
 
         from services.arturo import onboarding as _onb
@@ -6213,6 +6309,19 @@ def text_stream_endpoint():
                 data.setdefault(key, value)
             return {**event, "data": data}
 
+        def _kept(event):
+            """The turn's outcome, kept for its turn id as it passes (in the pump thread, before the lock is
+            released): turn.end is what the page would have been shown, an error what it would have read."""
+            if _turn is not None:
+                name, edata = event.get("event"), dict(event.get("data") or {})
+                if name == "turn.end":
+                    _turn["final"] = (200, {"ok": True, "conversation_id": conversation_id, **edata})
+                elif name == "error":
+                    _turn["final"] = (502, {"ok": False, "error": edata.get("code") or "turn_failed",
+                                            "tools_called": edata.get("tools_called") or [],
+                                            "conversation_id": conversation_id})
+            return event
+
         def _run_whole(sink):
             """The whole turn, in whole_turn's worker thread, with its tool loop reporting each call
             and result to `sink` — so a codex turn shows its cards live (DEC-1790750869457756)."""
@@ -6236,15 +6345,16 @@ def text_stream_endpoint():
             if _onboarding_step or _no_stream_loop:
                 # Only text_turn knows the onboarding marker and its directive, so the step runs
                 # there, whole, and arrives as one reply.
-                turn = _text_stream.whole_turn(conversation_id, turn_brain, _fallback,
+                turn = _text_stream.whole_turn(conversation_id, turn_brain, _fallback, turn_id=tid,
                                                run_with_sink=_run_whole)
             else:
                 turn = _text_stream.stream_turn(
                     text=body_text, conversation_id=conversation_id, brain=turn_brain,
                     brain_id=chosen_id, messages=messages, spawn=_spawn,
                     fallback=_fallback, record=_record, tools=_bound_tools(_team_turn, use_current=False),
-                    warm=_warm, discard=lambda: _WARM_POOL.discard(warm_key), run_tools=_run_tools)
-            turn = (_complete(e) for e in turn)
+                    warm=_warm, discard=lambda: _WARM_POOL.discard(warm_key), run_tools=_run_tools,
+                    turn_id=tid)
+            turn = (_kept(_complete(e)) for e in turn)
             try:
                 for frame in _text_stream.with_heartbeat(turn, interval_s=10.0, on_start=lambda: _started.append(1),
                                                          on_done=_token.release):
@@ -6274,19 +6384,45 @@ def text_endpoint():
         return jsonify({"ok": False, "error": "loopback only"}), 403
     data = request.get_json(silent=True) or {}
     cid = (data.get("conversation_id") or "").strip()[:200]
-    if _onboarding_refusal(data.get("text"), cid, _stamped_principal(request)):
+    principal = _stamped_principal(request)
+    if _onboarding_refusal(data.get("text"), cid, principal):
         return jsonify(_ONBOARDING_ONLY), 403
-    token = _TURN_LOCKS.acquire(cid) if cid else None      # no id: text_turn mints a fresh one
-    if cid and token is None:
-        return jsonify(_BUSY), 409
+    tid, refusal = _turn_id_refusal(data, cid)
+    if refusal:
+        return jsonify(refusal[1]), refusal[0]
+    # Seen from the first moment, before the lock wait: a read-back meanwhile says "running", not "unknown".
+    turn = None
+    if tid:
+        turn = {"cid": cid, "tid": tid, "principal": principal, "own": _turn_ids.owner(principal, data.get("text")),
+                "req": _TURN_IDS.register(cid, tid), "ledger": _voice_guards.ToolDedupLedger(), "final": None}
+    token = None
     try:
-        code, result = text_turn(data.get("text"), data.get("conversation_id"),
-                                 brain=data.get("brain"), context=data.get("context"),
-                                 principal=_stamped_principal(request))
+        token = _TURN_LOCKS.acquire(cid) if cid else None      # no id: text_turn mints a fresh one
+        if cid and token is None:
+            return jsonify(_BUSY), 409
+        if turn is not None:
+            answered = _claim_turn_id(turn, token)
+            if answered:
+                return jsonify(answered[1]), answered[0]
+            # This turn's own ledger, so a brain failure after a tool still knows the tool ran.
+            inherit_tok, ledger_tok = _INHERIT_DEDUP.set(True), _TURN_DEDUP.set(turn["ledger"])
+        try:
+            code, result = text_turn(data.get("text"), data.get("conversation_id"),
+                                     brain=data.get("brain"), context=data.get("context"),
+                                     principal=principal, **({"turn_id": tid} if tid else {}))
+        finally:
+            if turn is not None:
+                _TURN_DEDUP.reset(ledger_tok)
+                _INHERIT_DEDUP.reset(inherit_tok)
+        if turn is not None:
+            turn["final"] = (code, result)
+            result = {**result, "turn_id": tid}
+        return jsonify(result), code
     finally:
         if token is not None:
             token.release()
-    return jsonify(result), code
+        if turn is not None:
+            _TURN_IDS.drop(cid, tid, turn["req"])          # idempotent: settle already dropped a turn that ran
 
 
 # --- Health ---

@@ -49,7 +49,21 @@ CREATE TABLE IF NOT EXISTS turns (
     PRIMARY KEY (thread_id, seq)
 );
 CREATE INDEX IF NOT EXISTS idx_threads_updated ON threads(updated DESC);
+CREATE TABLE IF NOT EXISTS turn_marks (
+    thread_id TEXT NOT NULL,
+    turn_id   TEXT NOT NULL,
+    owner     TEXT NOT NULL,
+    principal TEXT NOT NULL DEFAULT '',
+    state     TEXT NOT NULL,
+    boot      TEXT NOT NULL DEFAULT '',
+    reply_seq INTEGER,
+    ts        REAL NOT NULL,
+    PRIMARY KEY (thread_id, turn_id)
+);
 """
+
+# A turn mark outlives any client still waiting on its turn by far; older ones are pruned.
+TURN_MARK_TTL_S = 7 * 24 * 3600
 
 # Columns added after the tables first shipped. `CREATE TABLE IF NOT EXISTS` never alters an
 # existing threads.db, so each is added by an idempotent ALTER on open. '' = the default brain.
@@ -140,7 +154,7 @@ class ThreadStore:
     # --- write ---------------------------------------------------------------------
 
     def record_turn(self, conversation_id, user_text, assistant_text, ts=None, brain=None,
-                    effective=None):
+                    effective=None, turn_id=None):
         """Archive one completed turn (the user's message and Arturo's reply). Called AFTER
         the brain answers, so a failed turn leaves no half-thread. Never raises.
         `brain` = {provider, model} when the operator chose one for this turn, None = default —
@@ -183,6 +197,11 @@ class ThreadStore:
                     "UPDATE threads SET updated = ?, turns = ?, snippet = ?,"
                     " last_brain_provider = ?, last_brain_model = ? WHERE id = ?",
                     (now, seq + 2, (assistant_text or "")[:SNIPPET_MAX], bp, bm, conversation_id))
+                if turn_id:
+                    # In the same transaction as the turn: a crash between the two can never show a
+                    # recorded reply as a turn that started and was lost (DEC-1791518421640932 v5).
+                    conn.execute("UPDATE turn_marks SET state = 'recorded', reply_seq = ?"
+                                 " WHERE thread_id = ? AND turn_id = ?", (seq + 1, conversation_id, turn_id))
             return True
         except Exception as e:  # noqa: BLE001 — the archive is never worth failing a turn over,
             # but a lost turn is never silent either
@@ -191,6 +210,49 @@ class ThreadStore:
         finally:
             if conn is not None:
                 conn.close()
+
+    # --- turn marks (DEC-1791518421640932) -------------------------------------------
+    # One row per client-minted turn id: 'started' once the turn holds its conversation's lock and before
+    # anything runs, 'recorded' with the turn's own reply, deleted when the turn ended having done nothing
+    # (so a resend may run it). These RAISE: a caller that cannot mark a turn must not run it.
+
+    def mark_started(self, conversation_id, turn_id, owner, boot, principal=None):
+        if not self.usable:
+            raise RuntimeError("thread store unusable")
+        now = time.time()
+        with self._connect() as conn:
+            conn.execute("DELETE FROM turn_marks WHERE ts < ?", (now - TURN_MARK_TTL_S,))
+            conn.execute("INSERT INTO turn_marks (thread_id, turn_id, owner, principal, state, boot, ts)"
+                         " VALUES (?, ?, ?, ?, 'started', ?, ?)",
+                         (conversation_id, turn_id, owner, principal or "", boot, now))
+
+    def get_mark(self, conversation_id, turn_id):
+        """The mark as a dict (with `reply` once recorded), or None."""
+        if not self.usable:
+            raise RuntimeError("thread store unusable")
+        with self._connect() as conn:
+            row = conn.execute("SELECT owner, principal, state, boot, reply_seq FROM turn_marks"
+                               " WHERE thread_id = ? AND turn_id = ?", (conversation_id, turn_id)).fetchone()
+            if row is None:
+                return None
+            out = {"owner": row["owner"], "principal": row["principal"] or None, "state": row["state"],
+                   "boot": row["boot"]}
+            if row["state"] == "recorded" and row["reply_seq"] is not None:
+                r = conn.execute("SELECT content FROM turns WHERE thread_id = ? AND seq = ?",
+                                 (conversation_id, row["reply_seq"])).fetchone()
+                out["reply"] = r["content"] if r else ""
+            return out
+
+    def clear_mark(self, conversation_id, turn_id):
+        """Only a 'started' mark: a recorded turn keeps its mark for good."""
+        if not self.usable:
+            return
+        try:
+            with self._connect() as conn:
+                conn.execute("DELETE FROM turn_marks WHERE thread_id = ? AND turn_id = ? AND state = 'started'",
+                             (conversation_id, turn_id))
+        except Exception as e:  # noqa: BLE001 — a mark left behind reads as lost: safe, never a re-run
+            log.warning(f"thread store: could not clear a turn mark for {conversation_id}: {e}")
 
     # --- read ----------------------------------------------------------------------
 

@@ -4691,10 +4691,12 @@ async def handle_arturo_threads(request):
         return _json({"ok": False, "error": "unauthorized"}, status=401)
     cid = request.match_info.get("conversation_id") or ""
     path = f"/threads/{quote(cid, safe='')}" if cid else "/threads"
-    params = {k: v for k, v in request.query.items() if k in ("limit", "offset")}
+    params = {k: v for k, v in request.query.items() if k in ("limit", "offset", "turn")}
     try:
         async with aiohttp.ClientSession() as s:
+            # Who is reading: a turn's result goes only to the principal that sent it (DEC-1791518421640932).
             async with s.get(f"{ARTURO_TEXT_BASE}{path}", params=params,
+                             headers=_arturo_principal_headers(request, voice=False),
                              timeout=aiohttp.ClientTimeout(total=10)) as r:
                 out = await r.json(content_type=None)
                 return _json(out, status=r.status)
