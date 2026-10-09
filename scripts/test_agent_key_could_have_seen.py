@@ -219,6 +219,41 @@ def test_permission_respond_sends_nothing_when_the_prompt_changed_under_it():
     assert not ok and info["reason"] == "instance_mismatch" and keys == []
 
 
+_TEXT_OPT = [{"n": "1", "label": "Yes"}, {"n": "3", "label": "No, and tell Claude what to do differently"}]
+
+
+def _respond_with_screens(screens, monkeypatch):
+    """permission_respond with the DEFAULT gone check, reading `screens` in order (last repeats)."""
+    seq = list(screens)
+    keys = []
+    monkeypatch.setattr(G, "_mark_instance_answered", lambda *a, **k: None)
+    monkeypatch.setattr(G, "INJECT_INGEST_WAIT_S", 0.0)
+    import time as _t
+    monkeypatch.setattr(_t, "sleep", lambda s: None)
+    ok, info = G.permission_respond(
+        SESSION, "do it differently", armed=True,
+        read_fn=lambda: seq.pop(0) if len(seq) > 1 else seq[0],
+        key_fn=lambda k: keys.append(k) or True, type_fn=lambda t: keys.append(t) or True,
+        settle_s=0)
+    return ok, info, keys
+
+
+def test_permission_respond_is_not_verified_while_its_prompt_is_still_up(monkeypatch):
+    """Review (agy, #334): the default gone check must not read a STILL-PRESENT prompt as gone."""
+    a = dict(CMD_A, options=_TEXT_OPT)
+    ok, info, keys = _respond_with_screens([a], monkeypatch)
+    assert not ok and info["reason"] == "unverified_submit"
+
+
+def test_the_next_permission_prompt_is_not_the_answered_one(monkeypatch):
+    """The answered prompt (A) is replaced by the NEXT one (B, same question, other command).
+    Matching by question alone read B as A still waiting, and the retry Enter approved B."""
+    a, b = dict(CMD_A, options=_TEXT_OPT), dict(CMD_B, options=_TEXT_OPT)
+    ok, info, keys = _respond_with_screens([a, b], monkeypatch)
+    assert ok and info["attempts"] == 1
+    assert keys.count("Enter") == 1, keys
+
+
 def test_both_surfaces_record_what_they_served(screen, monkeypatch):
     class _Store:
         def migrate(self):

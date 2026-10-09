@@ -249,6 +249,24 @@ def test_transport_keypress_never_answers_a_permission_prompt(monkeypatch):
     assert [c for c in fake.calls if c[0] == "send-keys"] == []
 
 
+def test_free_text_answer_never_sends_a_second_enter_into_a_permission_prompt(monkeypatch):
+    # The typed answer submitted, and the agent's next tool call raised a permission prompt
+    # whose question contains the row's. The verify loop must read that as "resolved", not
+    # as the question still waiting: its retry Enter would select the highlighted "Yes".
+    q = "Do you want to proceed?"
+    auq = {"kind": "options", "question": q, "options": [], "selected_n": "1"}
+    perm = {"kind": "permission", "question": q,
+            "options": [{"n": "1", "label": "Yes"}, {"n": "2", "label": "No"}]}
+    fake = _transport_env(monkeypatch, [
+        {"state": "idle", "pending_menu": auq},                    # phase-1 gate
+        {"state": "waiting_permission", "pending_menu": perm},     # after the Enter
+    ])
+    ok, info = G.menu_resume_free_text("acme-dev", "4", "my answer", expect_question=q)
+    assert ok and info["attempts"] == 1
+    assert [c for c in fake.calls if c[0] == "send-keys" and "Enter" in c] == \
+        [("send-keys", "-t", "acme-dev", "Enter")]
+
+
 def test_transport_keypress_unverified_when_menu_stays(monkeypatch):
     # THE BUG: a digit-only keypress leaves the menu uncommitted, yet the old
     # code reported ok=True (falsely 'delivered'). After the fix, an un-resolved
