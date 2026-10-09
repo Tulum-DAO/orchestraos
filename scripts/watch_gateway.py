@@ -4150,13 +4150,11 @@ async def handle_agent_menu_capture(request):
         except Exception as e:  # noqa: BLE001 — write-back best-effort, never 500 the walk
             print(f"[watch_gateway] hydrate_menu write-back failed ({session}): {e}",
                   file=sys.stderr)
-    # The walk's instance (DEC-1791405753559307 phase 0), in the RESPONSE only. Deliberately NOT in
-    # `out` before hydrate_menu: hydrate_menu writes onto every pending row of the session unless
-    # the row carries an instance, so putting it there would spread the id onto rows that are not
-    # this menu.
+    # The walk's instance (DEC-1791405753559307 phase 0), in the RESPONSE only, never in `out`:
+    # hydrate_menu persists the walk onto the session's pending rows, and an id there would be a
+    # claim about rows that are not this menu.
     resp = {"ok": True, "session": session, **out}
     if isinstance(out, dict) and (out.get("parts") or out.get("question")):
-        import asyncio
         _inst = await asyncio.get_event_loop().run_in_executor(None, _menu_hook_instance, session, out)
         if _inst:
             resp["instance"] = _inst

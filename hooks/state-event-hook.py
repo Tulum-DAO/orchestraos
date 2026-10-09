@@ -9,7 +9,8 @@ scripts/agent-status.py.
 
 Also keeps state/agent-events/calls/<pane>.json: the pane's OPEN tool calls
 {tool_use_id: {tool, ts, questions?, file?}} (menu instance identity, DEC-1791405753559307
-phase 0). PreToolUse adds, PostToolUse drops, SessionStart / SessionEnd clear. Stop does NOT clear: background
+phase 0). PreToolUse adds; PostToolUse, PostToolUseFailure and PermissionDenied drop;
+SessionStart / SessionEnd clear. Stop does NOT clear: background
 subagents outlive the main agent's Stop, and clearing their calls let a later same-tool
 call own their menu. A call that never closes (denied, interrupted) lingers until the TTL;
 that can only make a menu ambiguous (no instance), never give it a wrong one. A menu on screen is
@@ -34,6 +35,16 @@ CALLS_DIR = os.environ.get(
 CALLS_CAP = 16
 CALLS_TTL_S = 1800
 _CLEAR_ON = ("SessionStart", "SessionEnd")
+_CLOSE_ON = ("PostToolUse", "PostToolUseFailure", "PermissionDenied")
+_LOCK_WAIT_S = 0.2
+
+
+def _mark_lossy(name, now):
+    """Open calls were LOST (evicted by the cap, a corrupt map, a clear while some were open): a
+    menu on screen may belong to a call no longer listed, so a later call could look like its
+    owner. The resolver (scripts/menu_instance.py) gives no instance while this marker is fresh."""
+    with open(os.path.join(CALLS_DIR, name + ".lossy"), "w") as f:
+        f.write(str(now))
 
 STATE_MAP = {
     "UserPromptSubmit": "working",
@@ -66,23 +77,37 @@ def update_open_calls(pane, data, event, now=None):
     tid = data.get("tool_use_id")
     if event == "PreToolUse" and not tid:
         return
-    if event not in ("PreToolUse", "PostToolUse") and event not in _CLEAR_ON:
+    if event != "PreToolUse" and event not in _CLOSE_ON and event not in _CLEAR_ON:
         return
     os.makedirs(CALLS_DIR, exist_ok=True)
     name = pane.lstrip("%")
     path = os.path.join(CALLS_DIR, name + ".json")
     with open(os.path.join(CALLS_DIR, name + ".lock"), "a") as lf:
-        fcntl.flock(lf, fcntl.LOCK_EX)
+        # Never block the agent on a lock some hung hook holds: give up on calls/ instead.
+        deadline = time.monotonic() + _LOCK_WAIT_S
+        while True:
+            try:
+                fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    return
+                time.sleep(0.01)
         try:
             with open(path) as f:
                 calls = json.load(f)
             if not isinstance(calls, dict):
-                calls = {}
+                raise ValueError("not a map")
+        except FileNotFoundError:
+            calls = {}
         except (OSError, ValueError):
             calls = {}
+            _mark_lossy(name, now)
         if event in _CLEAR_ON:
             if not calls:
                 return
+            if event == "SessionStart":
+                _mark_lossy(name, now)      # a compact keeps background subagents' calls running
             calls = {}
         elif event == "PreToolUse":
             calls[tid] = _call_entry(data, now)
@@ -94,6 +119,7 @@ def update_open_calls(pane, data, event, now=None):
                  if isinstance(v, dict) and now - (v.get("ts") or 0) < CALLS_TTL_S}
         if len(calls) > CALLS_CAP:
             calls = dict(sorted(calls.items(), key=lambda kv: kv[1].get("ts") or 0)[-CALLS_CAP:])
+            _mark_lossy(name, now)
         fd, tmp = tempfile.mkstemp(dir=CALLS_DIR, suffix=".tmp")
         try:
             try:

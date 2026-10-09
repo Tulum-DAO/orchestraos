@@ -1,6 +1,6 @@
 """Menu instance identity, phase 0 (DEC-1791405753559307): the hook's open-call map, the resolver,
 the sticky memo, and where the gateway emits `instance`. Every path points at tmp dirs."""
-import importlib.util, json, os, subprocess, sys, threading, asyncio, pytest
+import importlib.util, json, os, subprocess, sys, threading, asyncio, time, pytest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import menu_instance as MI
@@ -189,7 +189,7 @@ def test_multi_part_walk_and_review_screen_keep_one_instance():
     calls = {"toolu_A": {"tool": "AskUserQuestion", "questions": ["Lock the API down now?", "Which dashboards keep access?"]}}
     assert m.stamp("s", _auq_menu("Lock the API down now?"), calls) == "toolu_A"
     assert m.stamp("s", _auq_menu("Which dashboards keep access?"), calls) == "toolu_A"
-    assert m.stamp("s", _auq_menu("Review your answers"), calls) == "toolu_A"
+    assert m.stamp("s", _auq_menu("Review your answers", has_submit=True), calls) == "toolu_A"
 
 
 def test_no_menu_resets_the_session():
@@ -356,3 +356,116 @@ def test_an_unrelated_background_call_does_not_flip_the_card():
     with_read = {"toolu_x": {"tool": "Bash", "ts": 1.0}, "toolu_r": {"tool": "Read", "ts": later}}
     assert m.stamp("s", _perm(), with_read) == "toolu_x"
     assert m.stamp("s", _perm(), {"toolu_x": {"tool": "Bash", "ts": 1.0}}) == "toolu_x"
+
+
+# ---- review of PR #308: a wrong id is worse than none --------------------------------------------
+
+def _plan_menu():
+    return {"kind": "options", "menu_family": "claude", "question": "Would you like to proceed?",
+            "options": [{"n": 1, "label": "Yes, auto-accept"}, {"n": 2, "label": "No, keep planning"}]}
+
+
+def test_an_auq_id_never_sticks_to_a_different_menu_while_its_call_lingers():
+    # B1: AUQ X answered by Esc (no PostToolUse, X lingers), no poll while nothing was on screen,
+    # then a plan-approval menu. It belongs to no open call: it must get none, not X.
+    memo = MI.InstanceMemo()
+    calls = {"toolu_X": {"tool": "AskUserQuestion", "questions": ["Which dashboards keep access?"], "ts": 1.0}}
+    assert memo.stamp("s", _auq_menu(), calls) == "toolu_X"
+    assert memo.stamp("s", _plan_menu(), calls) is None
+
+
+def test_an_auq_id_does_not_survive_a_newer_call():
+    memo = MI.InstanceMemo()
+    calls = {"toolu_X": {"tool": "AskUserQuestion", "questions": ["Which dashboards keep access?"], "ts": 1.0}}
+    assert memo.stamp("s", _auq_menu(), calls) == "toolu_X"
+    calls["toolu_Y"] = {"tool": "Bash", "ts": 9e12}                   # the agent moved on
+    assert memo.stamp("s", _auq_menu("Pick a colour?"), calls) is None
+
+
+def test_the_review_screen_of_the_same_auq_call_keeps_its_id():
+    memo = MI.InstanceMemo()
+    calls = {"toolu_X": {"tool": "AskUserQuestion", "questions": ["Which dashboards keep access?"], "ts": 1.0}}
+    assert memo.stamp("s", _auq_menu(), calls) == "toolu_X"
+    review = {"kind": "options", "menu_family": "claude", "question": "Review your answers",
+              "has_submit": True,
+              "options": [{"n": 1, "label": "Submit answers"}, {"n": 2, "label": "Cancel"}]}
+    assert memo.stamp("s", review, calls) == "toolu_X"
+
+
+def test_an_evicted_call_makes_the_pane_unprovable_not_wrong(dirs):
+    # S2: A's prompt is on screen, A is evicted by the cap, and a later Bash call B must not own it.
+    _, calls = dirs
+    H = _hook_mod()
+    H.update_open_calls("%7", _pre("toolu_A"), "PreToolUse", now=time.time() - 60)
+    for n in range(H.CALLS_CAP - 1):
+        H.update_open_calls("%7", _pre(f"toolu_R{n}", "Read", file_path=f"/x/f{n}"), "PreToolUse", now=time.time() - 50 + n)
+    H.update_open_calls("%7", _pre("toolu_B"), "PreToolUse")
+    assert "toolu_A" not in _calls(calls)
+    assert MI.read_open_calls("%7") == {}
+    assert MI.resolve(_perm(), MI.read_open_calls("%7")) is None
+
+
+def test_a_corrupt_map_marks_the_pane_unprovable(dirs):
+    _, calls = dirs
+    calls.mkdir(parents=True, exist_ok=True)
+    (calls / "7.json").write_text("{not json")
+    _fire(_pre("toolu_B"))
+    assert list(_calls(calls)) == ["toolu_B"] and MI.read_open_calls("%7") == {}
+
+
+def test_a_session_start_that_drops_open_calls_marks_the_pane_but_an_empty_one_does_not(dirs):
+    _, calls = dirs
+    _fire({"hook_event_name": "SessionStart"})
+    _fire(_pre("toolu_A"))
+    assert list(MI.read_open_calls("%7")) == ["toolu_A"]
+    _fire({"hook_event_name": "SessionStart", "source": "compact"})
+    _fire(_pre("toolu_B"))
+    assert MI.read_open_calls("%7") == {}
+
+
+@pytest.mark.parametrize("event", ["PostToolUseFailure", "PermissionDenied"])
+def test_a_failed_or_denied_call_closes(dirs, event):
+    _, calls = dirs
+    _fire(_pre("toolu_A"))
+    _fire({"hook_event_name": event, "tool_use_id": "toolu_A", "tool_name": "Bash"})
+    assert _calls(calls) == {}
+
+
+def test_the_installer_registers_the_closing_events():
+    import importlib.util as iu
+    spec = iu.spec_from_file_location("hooks_install", os.path.join(os.path.dirname(HERE), "hooks", "install.py"))
+    m = iu.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    events = {e for e, _, script, _ in m.HOOKS if script == "hooks/state-event-hook.py"}
+    assert {"PostToolUseFailure", "PermissionDenied"} <= events
+
+
+def test_a_held_lock_never_blocks_the_agent(dirs):
+    # S3: another process holds the pane's lock; the hook must give up on calls/ and still exit fast.
+    import fcntl
+    ev, calls = dirs
+    calls.mkdir(parents=True, exist_ok=True)
+    with open(calls / "7.lock", "a") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        t0 = time.time()
+        _fire(_pre("toolu_A"))
+        assert time.time() - t0 < 3
+    assert json.loads((ev / "7.json").read_text())["event"] == "PreToolUse"
+
+
+def _parsed(fixture):
+    spec = importlib.util.spec_from_file_location("agent_status_fx", os.path.join(HERE, "agent-status.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    with open(os.path.join(HERE, "fixtures", "menus", fixture + ".pane.txt")) as f:
+        return m.parse_pending_menu(f.read().splitlines())
+
+
+def test_on_real_screens_the_review_keeps_the_id_and_a_plan_menu_does_not():
+    calls = {"toolu_X": {"tool": "AskUserQuestion", "questions": ["Which surfaces should this E2E test cover?"], "ts": 1.0}}
+    memo = MI.InstanceMemo()
+    assert memo.stamp("s", _parsed("askuserquestion_multipart_live"), calls) == "toolu_X"
+    assert memo.stamp("s", _parsed("askuserquestion_submit_confirm"), calls) == "toolu_X"
+    memo = MI.InstanceMemo()
+    assert memo.stamp("s", _parsed("askuserquestion_multipart_live"), calls) == "toolu_X"
+    assert memo.stamp("s", _parsed("planmode_options"), calls) is None

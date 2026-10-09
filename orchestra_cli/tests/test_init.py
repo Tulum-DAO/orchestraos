@@ -349,7 +349,7 @@ def test_init_hooks_prompt_shows_the_plan_and_a_no_writes_nothing(tmp_path, monk
     assert not (cfg / "settings.json").exists()
     assert len(seen) == 1
     plan = seen[0]
-    assert str(cfg / "settings.json") in plan and "12 hook rows" in plan
+    assert str(cfg / "settings.json") in plan and "14 hook rows" in plan
     assert f'ORCHESTRA_DIR="{tmp_path / "data"}"' in plan          # the exact command text it will write
     assert "agent-queue-drain.py" in plan
 

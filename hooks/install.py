@@ -27,6 +27,8 @@ HOOKS = [
     ("UserPromptSubmit", "", "hooks/state-event-hook.py", "py"),
     ("PreToolUse", "", "hooks/state-event-hook.py", "py"),
     ("PostToolUse", "", "hooks/state-event-hook.py", "py"),
+    ("PostToolUseFailure", "", "hooks/state-event-hook.py", "py"),   # closes the open call too
+    ("PermissionDenied", "", "hooks/state-event-hook.py", "py"),
     ("Notification", "", "hooks/state-event-hook.py", "py"),
     ("Stop", "", "hooks/state-event-hook.py", "py"),
     ("SessionEnd", "", "hooks/state-event-hook.py", "py"),

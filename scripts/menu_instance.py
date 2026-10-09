@@ -28,6 +28,9 @@ import time
 # up` sets ORCH_DIR for both; the calls/ files live next to the hook's panes/ files.
 ORCH_DIR = os.environ.get("ORCH_DIR") or os.environ.get("ORCHESTRA_DIR") or os.path.expanduser("~/scripts/agent-orchestra")
 
+# The hook's open-call TTL: a call lost from the map can have been open this long at most.
+LOSSY_TTL_S = 1800
+
 _FILE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 _NEVER_PERMISSION_OWNER = ("AskUserQuestion", "Agent", "Task")
 _TOOL_SUFFIX = re.compile(r"\[([A-Za-z_][\w.\-]*)\]\s*$")
@@ -39,9 +42,18 @@ def calls_dir():
 
 
 def read_open_calls(pane):
-    """{tool_use_id: entry} for a pane, {} when unknown. Read-only; the hook owns the file."""
+    """{tool_use_id: entry} for a pane, {} when unknown. Read-only; the hook owns the file.
+    {} too while the hook's loss marker is fresh: an open call was dropped (the cap, a corrupt map,
+    a clear while calls were open), so a listed call could look like the owner of a menu whose
+    real call is gone. No instance beats a wrong one."""
     if not pane:
         return {}
+    try:
+        with open(os.path.join(calls_dir(), pane.lstrip("%") + ".lossy")) as f:
+            if time.time() - float(f.read().strip() or 0) < LOSSY_TTL_S:
+                return {}
+    except (OSError, ValueError):
+        pass
     try:
         with open(os.path.join(calls_dir(), pane.lstrip("%") + ".json")) as f:
             calls = json.load(f)
@@ -179,7 +191,13 @@ class InstanceMemo:
                     return {**out, "instance": inst, "tool": m["tool"],
                             "decided_at": m["decided_at"], "sticky": True}
                 elif (inst is not None and m["tool"] == "AskUserQuestion"
-                      and menu.get("kind") != "permission"):
+                      and menu.get("kind") != "permission"
+                      # an AUQ blocks the agent: a newer call of any tool means the screen moved on
+                      and inst == max(calls, key=lambda t: (calls.get(t) or {}).get("ts") or 0)
+                      # the next tab matches the same call; the review screen matches nothing but
+                      # carries the AUQ's Submit (a plan or trust menu has none)
+                      and (candidates(menu, calls) == [inst]
+                           or (not candidates(menu, calls) and menu.get("has_submit")))):
                     m["sig"] = sig                         # next tab / review screen of the SAME call
                     return {**out, "instance": inst, "tool": m["tool"],
                             "decided_at": m["decided_at"], "sticky": True}
