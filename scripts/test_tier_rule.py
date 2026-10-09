@@ -101,13 +101,17 @@ def spawn(tmp_path):
     shim.chmod(0o755)
 
     def run(agent, **env_extra):
+        # REGISTRY overrides the ORCHESTRA_DIR-derived path (spawn-agent.sh:40): an inherited one would
+        # point this spawn at a real registry, so it is dropped with the rest.
         env = {k: v for k, v in os.environ.items() if k not in ("TMUX", "PARENT_AGENT_ID", "AGENT_TIER",
-                                                              "AGENT_ROLE", "IDENTITY_STORE_CUTOVER")}
+                                                              "AGENT_ROLE", "IDENTITY_STORE_CUTOVER",
+                                                              "REGISTRY", "REGISTRY_PATH")}
         env.update(PATH=f"{bindir}:{env['PATH']}", HOME=str(home), ORCHESTRA_DIR=str(data),
                    AGENT_RUNTIME="claude", AGENT_MODEL="claude-opus-4-8", **env_extra)
         r = subprocess.run(["bash", str(ROOT / "spawn-agent.sh"), agent], env=env,
                            capture_output=True, text=True, timeout=60, cwd=str(ROOT))
         row = json.loads((data / "registry.json").read_text())["agents"].get(agent)
+        assert not (ROOT / "registry.json").exists(), "spawn wrote the checkout's registry, not the fence"
         return r, row
     yield run
     shutil.rmtree(d, ignore_errors=True)
