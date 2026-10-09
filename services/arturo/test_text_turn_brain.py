@@ -193,7 +193,9 @@ def test_context_field_renders_the_line_the_web_client_prepends_today(P, case):
     user_msg = [m for m in P._test.calls["global_messages"] if m["role"] == "user"][-1]["content"]
     assert user_msg == f"{case['line']}\nwhat is this"
     # recorded exactly as today (the client used to prepend it), so history stays byte-identical
-    assert P._THREADS.get_thread("cx")["turns"][0]["content"] == f"{case['line']}\nwhat is this"
+    assert P._THREADS.history("cx")[0]["content"] == f"{case['line']}\nwhat is this"
+    # ...and a client reading the thread never sees it (DEC-1791511578959986)
+    assert P._THREADS.get_thread("cx")["turns"][0]["content"] == "what is this"
 
 
 def test_context_renders_after_the_onboarding_marker_is_split(P):
@@ -217,7 +219,8 @@ def test_text_route_forwards_brain_and_context(P):
                                   "brain": {"provider": "codex", "model": ""},
                                   "context": {"route": "/overview"}})
     assert r.status_code == 200 and r.get_json()["reply_text"] == "from the chosen brain"
-    assert P._THREADS.get_thread("cr")["turns"][0]["content"] == "[Context: route=/overview]\nhi"
+    assert P._THREADS.history("cr")[0]["content"] == "[Context: route=/overview]\nhi"
+    assert P._THREADS.get_thread("cr")["turns"][0]["content"] == "hi"
 
 
 def test_a_chosen_brain_whose_cli_is_logged_out_is_a_502_not_logged_in_and_nothing_is_saved(P):

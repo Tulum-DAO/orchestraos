@@ -14,6 +14,7 @@
  *     therefore a visible card at the top of the thread with an ×; deleting it is how you
  *     tell Arturo to stop focusing on this page, and it can be put back.
  */
+import { stripContextLine } from '../../lib/arturoResume';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { Mic, ArrowUp, X, History, Focus, PhoneOff, AudioLines, Plus, Paperclip, Cpu } from 'lucide-react';
@@ -127,7 +128,7 @@ export function ArturoPill() {
     // A thread the server knows answers on the brain it last used. A fresh thread (null) leaves
     // the current choice alone: resume runs on every open, and must not undo a pick just made.
     if (t) chooseBrain(brainFromThread(t, {}));
-    setTurns((t?.turns || []).map((x) => ({ role: x.role === 'user' ? 'user' : 'arturo', text: x.content, at: (x.ts || 0) * 1000 })));
+    setTurns((t?.turns || []).map((x) => ({ role: x.role === 'user' ? 'user' : 'arturo', text: x.role === 'user' ? stripContextLine(x.content) : x.content, at: (x.ts || 0) * 1000 })));
   }, [chooseBrain]);
 
   useEffect(() => { setCtxOn(!isContextDismissed(convId)); }, [convId]);

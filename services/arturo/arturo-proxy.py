@@ -2098,6 +2098,13 @@ def _begin_team_turn(conversation_id, step, principal=None, text=None):
     answering = picked is not None
     if answering:
         _record_devices_answer(picked)
+        # Their pick is also what they HAVE: the operator's own words, so a page reopened anywhere asks
+        # the next step, not devices again, whether or not the brain wrote the fact (pm-tulumdao, shot 07).
+        try:
+            from services.arturo import operator_store as _ops_pick
+            _ops_pick.set_fact(ARTURO_STATE, "devices", ", ".join(picked) or str(text or "").strip(), source="card")
+        except (ValueError, OSError) as e:
+            log.warning(f"devices fact not stored: {e}")
     return {"conversation_id": conversation_id, "step": step, "principal": principal,
             "onboarding": step in _onb.ONBOARDING_STEPS, "opener": step == "onboarding_open",
             "offered": fleet and made is not None and now - made[0] < _TEAM_OFFER_TTL_S and made[1] == principal,
@@ -2115,6 +2122,9 @@ def decline_starter_team():
         # create_starter_team refuses for the rest of this turn.
         turn["declined"] = True
         turn["offered"] = False
+        if turn.get("principal") == "fleet" and turn.get("onboarding"):
+            # Remembered past this turn, so a returning operator is not offered it again.
+            _progress.set_team_declined(ARTURO_STATE)
         if turn.get("conversation_id"):
             with _TEAM_OFFERS_LOCK:
                 _TEAM_OFFERS.pop(turn["conversation_id"], None)
@@ -2811,6 +2821,7 @@ def create_starter_team(project):
     if not _STARTER_LOCK.acquire(blocking=False):
         return "Already setting up the team; it can take a few minutes. " + _seen_report(project)
     turn["offered"] = False                      # spent: a second call in this turn asks again
+    _progress.clear_team_declined(ARTURO_STATE)
     plan = starter_plan(project)
     log.info(f"STARTER TEAM: {' '.join(plan.argv[1:])}")
     done = {}
@@ -5660,6 +5671,39 @@ def _resolve_turn_brain(req):
     return chosen, {"provider": provider, "model": model}, None
 
 
+from services.arturo import onboarding_progress as _progress
+from services.arturo import turn_lock as _turn_lock
+
+_TURN_LOCKS = _turn_lock.TurnLocks()
+# A turn waited past turn_lock.WAIT_S for the one before it in the same conversation.
+_BUSY = {"ok": False, "error": "busy", "detail": "still answering your last message in this conversation"}
+
+# The reply a RETURNING opener showed, per conversation: one slot, never stored, taken by the
+# operator's next onboarding turn (DEC-1791511578959986 V3).
+_RETURNING_REPLIES = {}
+_RETURNING_LOCK = _threading.Lock()
+
+
+def _hold_returning_reply(conversation_id, reply):
+    with _RETURNING_LOCK:
+        _RETURNING_REPLIES[conversation_id] = (reply or "").strip()
+
+
+def _take_returning_reply(conversation_id):
+    with _RETURNING_LOCK:
+        return _RETURNING_REPLIES.pop(conversation_id, "")
+
+
+def _onboarding_progress_ctx():
+    """The rest of "where the operator is": a team they declined, and which devices are paired."""
+    out = {"team_declined": _progress.team_declined(ARTURO_STATE), "paired": {}}
+    try:
+        out["paired"] = _progress.paired(_pair_stores()[0].list())
+    except Exception as e:  # noqa: BLE001 — an unreadable device store must not fail the turn
+        log.warning(f"onboarding progress: device store unreadable: {e}")
+    return out
+
+
 def text_turn(text, conversation_id, brain=None, context=None, principal=None):
     """Returns (http_status, {ok, reply_text, conversation_id, brain, tools_called}).
     `brain` = {provider, model} names this turn's brain (None = the default); `context` = the
@@ -5702,12 +5746,32 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None):
     # the brain message and the archive.
     _team_step = step in _onb.ONBOARDING_STEPS
     _ctx = None
+    returning = False
     if _team_step:
         from services.arturo import operator_store as _ops_ctx
-        _ctx = {"operator": _ops_ctx.public(ARTURO_STATE), "team": starter_team_state(), "voice_mode": ARTURO_MODE}
+        _ctx = {"operator": _ops_ctx.public(ARTURO_STATE), "team": starter_team_state(), "voice_mode": ARTURO_MODE,
+                **_onboarding_progress_ctx()}
+        # The page reopening on the onboarding thread is the operator coming BACK (the thread already
+        # holds the first-run opener), never a first greeting (DEC-1791511578959986).
+        returning = step == "onboarding_open" and _THREADS.has_opener(conversation_id)
+        _ctx["returning"] = returning
+        if step == "onboarding_open" and principal == "fleet":
+            pinned = _progress.conversation(ARTURO_STATE)
+            if pinned and pinned != conversation_id:
+                # Another browser already holds the onboarding thread: this one switches to it rather
+                # than starting a second first run.
+                return 200, {"ok": True, "reply_text": "", "conversation_id": conversation_id,
+                             "onboarding_conversation": pinned, "switch": True,
+                             "onboarding": {"done": onboarded()}}
     _dir = _onb.directive(step, _ctx)
     if _dir:
         context = f"{context}\n\n{_dir}".strip() if context else _dir
+    if step == "onboarding":
+        last = _take_returning_reply(conversation_id)
+        if last:
+            # What the page showed when it reopened is not in the history (it is never stored): the
+            # operator is answering THIS.
+            context = f"{context}\n\nArturo last said, when the page reopened (the operator is answering it): {last}"
     elif step:
         log.warning(f"onboarding marker with unknown step {step!r} — no directive applied")
     history = _conversation_history(conversation_id)
@@ -5748,14 +5812,24 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None):
                          "provider": chosen_id["provider"], "model": chosen_id["model"],
                          "tools_called": tools_called, "spawned": spawned,
                          "conversation_id": conversation_id}
-    _record_text_turn(conversation_id=conversation_id, text=text, reply=reply, brain=chosen_id,
-                      effective=effective)
+    if returning:
+        # Never stored: a reload must not grow the thread (or the brain's history window). Held for
+        # the operator's next turn instead (above).
+        _hold_returning_reply(conversation_id, reply)
+    else:
+        _record_text_turn(conversation_id=conversation_id, text=text, reply=reply, brain=chosen_id,
+                          effective=effective)
     from services.arturo import operator_store as _ops
     body = {"ok": True, "reply_text": reply, "conversation_id": conversation_id,
             "brain": (chosen or _turn_brain()).describe(), "tools_called": tools_called,
             "spawned": spawned,
             "operator": _ops.public(ARTURO_STATE)}
     body.update(_turn_extras(team_turn, _team_step))
+    if returning:
+        body["resumed"] = True
+    if _team_step and principal == "fleet" and not onboarded():
+        body["onboarding_conversation"] = (_progress.pin_conversation(ARTURO_STATE, conversation_id)
+                                           if step == "onboarding_open" else _progress.conversation(ARTURO_STATE))
     return 200, body
 
 
@@ -5922,189 +5996,205 @@ def text_stream_endpoint():
         return jsonify({"ok": False, "error": "bad_context", "field": "context"}), 400
 
     turn_brain = chosen or _turn_brain()
-    # Taken once for the whole turn, whichever path ends up running it (stream, or text_turn behind
-    # the fallback), and published to the threads that run its tools.
-    _team_turn = _begin_team_turn(conversation_id, _onb_step_of(text_in),
-                                  _stamped_principal(request), _operator_text_of(text_in))
-    version = _THREADS.turn_count(conversation_id)          # before the history: see prewarm
-    history = _conversation_history(conversation_id)
-    effective = _effective_brain(turn_brain)
-    body_text = f"{_context_line(page_ctx)}\n{text_in}" if page_ctx is not None else text_in
-    # The authoritative context — who Arturo is and what is live on this box — is built by
-    # build_context(), the same call the tool loop makes. Streaming without it answers as a
-    # bare model with no identity and no tools.
-    _stream_context = _as_turn(_team_turn, _context_as, chosen, calling_channel="text")
-    messages = _ptt.build_messages(_stream_context, history, body_text, current_brain=effective)
+    # One turn at a time in this conversation, taken BEFORE the cards come off the book and the
+    # history is read. Released when the turn ends (the heartbeat's pump), or below if the stream
+    # never starts.
+    _token = _TURN_LOCKS.acquire(conversation_id)
+    if _token is None:
+        return jsonify(_BUSY), 409
+    try:
+        _started = []
+        # Taken once for the whole turn, whichever path ends up running it (stream, or text_turn behind
+        # the fallback), and published to the threads that run its tools.
+        _team_turn = _begin_team_turn(conversation_id, _onb_step_of(text_in),
+                                      _stamped_principal(request), _operator_text_of(text_in))
+        version = _THREADS.turn_count(conversation_id)          # before the history: see prewarm
+        history = _conversation_history(conversation_id)
+        effective = _effective_brain(turn_brain)
+        body_text = f"{_context_line(page_ctx)}\n{text_in}" if page_ctx is not None else text_in
+        # The authoritative context — who Arturo is and what is live on this box — is built by
+        # build_context(), the same call the tool loop makes. Streaming without it answers as a
+        # bare model with no identity and no tools.
+        _stream_context = _as_turn(_team_turn, _context_as, chosen, calling_channel="text")
+        messages = _ptt.build_messages(_stream_context, history, body_text, current_brain=effective)
 
-    def _spawn(cmd):
-        """Line-by-line stdout from the CLI. The process is killed when the client goes away."""
-        env = dict(os.environ)
-        for key in (cmd.env_unset or []):
-            env.pop(key, None)
-        proc = subprocess.Popen(cmd.argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
-        try:
-            if cmd.stdin is not None:
-                proc.stdin.write(cmd.stdin)
-            if proc.stdin:
-                proc.stdin.close()
-            for line in proc.stdout:
-                yield line
-        finally:
-            if proc.poll() is None:
-                proc.kill()
+        def _spawn(cmd):
+            """Line-by-line stdout from the CLI. The process is killed when the client goes away."""
+            env = dict(os.environ)
+            for key in (cmd.env_unset or []):
+                env.pop(key, None)
+            proc = subprocess.Popen(cmd.argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
             try:
-                proc.wait(timeout=5)
-            except Exception:
-                pass
+                if cmd.stdin is not None:
+                    proc.stdin.write(cmd.stdin)
+                if proc.stdin:
+                    proc.stdin.close()
+                for line in proc.stdout:
+                    yield line
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                try:
+                    proc.wait(timeout=5)
+                except Exception:
+                    pass
 
-    def _fallback():
-        # The whole-reply path continues THIS turn, so it inherits the stream's ledger: a tool
-        # the stream already ran is not run again. Scoped to the call, reset in finally.
-        inherit_tok = _INHERIT_DEDUP.set(True)
-        ledger_tok = _TURN_DEDUP.set(_stream_ledger)
-        team_tok = _TEAM_TURN.set(_team_turn)
-        try:
-            return text_turn(text_in, conversation_id, brain=brain_req, context=page_ctx)
-        finally:
-            _TEAM_TURN.reset(team_tok)
-            _TURN_DEDUP.reset(ledger_tok)
-            _INHERIT_DEDUP.reset(inherit_tok)
-
-    # A warm process is built with one principal's prompt and tools: a fleet turn and any other turn
-    # never share one.
-    warm_key = (conversation_id, getattr(turn_brain, "runtime", ""),
-                getattr(turn_brain, "_model_flag", "") or "", _is_fleet(_team_turn))
-
-    # The tool loop's executor for a streamed turn: execute_tool itself, behind the SAME
-    # per-turn dedupe ledger /text uses (so a model repeating a side-effecting call in a later
-    # round runs it once), and with the operator's recent words as user_turns so the
-    # send_telegram check reads real intent rather than failing closed.
-    _user_turns = [t.get("content") for t in (history or []) if t.get("role") == "user"] + [text_in]
-    _stream_ledger = _voice_guards.ToolDedupLedger()
-    _spawned = []
-
-    def _run_tools(calls):
-        # These ContextVars are per thread; the turn runs in with_heartbeat's worker, so they are
-        # published here, in that thread, where execute_tool and nested dispatches read them.
-        if _TURN_DEDUP.get() is None:
-            _TURN_DEDUP.set(_stream_ledger)
-        if _TOOLS_THIS_TURN.get() is None:
-            _TOOLS_THIS_TURN.set([])
-        # spawn_agent appends a VERIFIED seat here. One list, made by the endpoint: the tools run
-        # in with_heartbeat's worker and turn.end is finished in the request thread, and a
-        # ContextVar set in one is invisible in the other.
-        if _SPAWNED_THIS_TURN.get() is None:
-            _SPAWNED_THIS_TURN.set(_spawned)
-        if _TEAM_TURN.get() is None:
-            _TEAM_TURN.set(_team_turn)
-        results = []
-        for call in calls:
-            name, args = call["name"], call.get("arguments") or {}
-            prior = _stream_ledger.reserve(name, args)
-            if prior is not None:
-                log.warning(f"DUP-CALL SUPPRESSED (stream): {name} args={_dedup_argsum(args)}")
-                results.append({"name": name, "ok": True, "result": prior})
-                continue
+        def _fallback():
+            # The whole-reply path continues THIS turn, so it inherits the stream's ledger: a tool
+            # the stream already ran is not run again. Scoped to the call, reset in finally.
+            inherit_tok = _INHERIT_DEDUP.set(True)
+            ledger_tok = _TURN_DEDUP.set(_stream_ledger)
+            team_tok = _TEAM_TURN.set(_team_turn)
             try:
-                result, ok = execute_tool(name, args, user_turns=_user_turns), True
-            except Exception as e:  # noqa: BLE001 — a failed tool is information for the model
-                result, ok = f"error: {e}", False
-            _stream_ledger.record(name, args, result)
-            log.info(f"Tool result ({name}): {str(result)[:200]}")
-            results.append({"name": name, "ok": ok, "result": result})
-        return results
+                return text_turn(text_in, conversation_id, brain=brain_req, context=page_ctx)
+            finally:
+                _TEAM_TURN.reset(team_tok)
+                _TURN_DEDUP.reset(ledger_tok)
+                _INHERIT_DEDUP.reset(inherit_tok)
 
-    _checked = []
+        # A warm process is built with one principal's prompt and tools: a fleet turn and any other turn
+        # never share one.
+        warm_key = (conversation_id, getattr(turn_brain, "runtime", ""),
+                    getattr(turn_brain, "_model_flag", "") or "", _is_fleet(_team_turn))
 
-    def _warm(argv, new_text):
-        env = dict(os.environ)
-        for key in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"):
-            env.pop(key, None)
-        # The turn's FIRST call checks the session is in step with the conversation; its later
-        # tool rounds continue the same exchange and are not re-checked.
-        v = None if _checked else version
-        _checked.append(True)
-        return _WARM_POOL.turn(warm_key, new_text, argv=argv, env=env, version=v)
+        # The tool loop's executor for a streamed turn: execute_tool itself, behind the SAME
+        # per-turn dedupe ledger /text uses (so a model repeating a side-effecting call in a later
+        # round runs it once), and with the operator's recent words as user_turns so the
+        # send_telegram check reads real intent rather than failing closed.
+        _user_turns = [t.get("content") for t in (history or []) if t.get("role") == "user"] + [text_in]
+        _stream_ledger = _voice_guards.ToolDedupLedger()
+        _spawned = []
 
-    def _record(**kw):
-        _record_text_turn(**kw, effective=effective)
-        _WARM_POOL.sync(warm_key, _THREADS.turn_count(conversation_id))
+        def _run_tools(calls):
+            # These ContextVars are per thread; the turn runs in with_heartbeat's worker, so they are
+            # published here, in that thread, where execute_tool and nested dispatches read them.
+            if _TURN_DEDUP.get() is None:
+                _TURN_DEDUP.set(_stream_ledger)
+            if _TOOLS_THIS_TURN.get() is None:
+                _TOOLS_THIS_TURN.set([])
+            # spawn_agent appends a VERIFIED seat here. One list, made by the endpoint: the tools run
+            # in with_heartbeat's worker and turn.end is finished in the request thread, and a
+            # ContextVar set in one is invisible in the other.
+            if _SPAWNED_THIS_TURN.get() is None:
+                _SPAWNED_THIS_TURN.set(_spawned)
+            if _TEAM_TURN.get() is None:
+                _TEAM_TURN.set(_team_turn)
+            results = []
+            for call in calls:
+                name, args = call["name"], call.get("arguments") or {}
+                prior = _stream_ledger.reserve(name, args)
+                if prior is not None:
+                    log.warning(f"DUP-CALL SUPPRESSED (stream): {name} args={_dedup_argsum(args)}")
+                    results.append({"name": name, "ok": True, "result": prior})
+                    continue
+                try:
+                    result, ok = execute_tool(name, args, user_turns=_user_turns), True
+                except Exception as e:  # noqa: BLE001 — a failed tool is information for the model
+                    result, ok = f"error: {e}", False
+                _stream_ledger.record(name, args, result)
+                log.info(f"Tool result ({name}): {str(result)[:200]}")
+                results.append({"name": name, "ok": ok, "result": result})
+            return results
 
-    from services.arturo import onboarding as _onb
-    from services.arturo import operator_store as _ops
-    # Found on text_in, the operator's message: the page-context line sits in front of it in
-    # body_text, pushing the marker off line 1.
-    _onboarding_step, _ = _onb.split_marker(text_in)
+        _checked = []
 
-    def _complete(event):
-        """turn.end reports what the turn DID, as /text does — the home page's onboarding steps
-        advance on tools_called, spawned and operator. A whole-reply turn.end already carries
-        text_turn's spawned; the stream's list is merged in after it, never written over it."""
-        if event.get("event") != "turn.end":
-            return event
-        data = dict(event.get("data") or {})
-        merged = []
-        for seat in list(data.get("spawned") or []) + _spawned:
-            if seat not in merged:
-                merged.append(seat)
-        data["spawned"] = merged
-        data.setdefault("tools_called", [])
-        if "operator" not in data:
+        def _warm(argv, new_text):
+            env = dict(os.environ)
+            for key in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"):
+                env.pop(key, None)
+            # The turn's FIRST call checks the session is in step with the conversation; its later
+            # tool rounds continue the same exchange and are not re-checked.
+            v = None if _checked else version
+            _checked.append(True)
+            return _WARM_POOL.turn(warm_key, new_text, argv=argv, env=env, version=v)
+
+        def _record(**kw):
+            _record_text_turn(**kw, effective=effective)
+            _WARM_POOL.sync(warm_key, _THREADS.turn_count(conversation_id))
+
+        from services.arturo import onboarding as _onb
+        from services.arturo import operator_store as _ops
+        # Found on text_in, the operator's message: the page-context line sits in front of it in
+        # body_text, pushing the marker off line 1.
+        _onboarding_step, _ = _onb.split_marker(text_in)
+
+        def _complete(event):
+            """turn.end reports what the turn DID, as /text does — the home page's onboarding steps
+            advance on tools_called, spawned and operator. A whole-reply turn.end already carries
+            text_turn's spawned; the stream's list is merged in after it, never written over it."""
+            if event.get("event") != "turn.end":
+                return event
+            data = dict(event.get("data") or {})
+            merged = []
+            for seat in list(data.get("spawned") or []) + _spawned:
+                if seat not in merged:
+                    merged.append(seat)
+            data["spawned"] = merged
+            data.setdefault("tools_called", [])
+            if "operator" not in data:
+                try:
+                    data["operator"] = _ops.public(ARTURO_STATE)
+                except Exception:  # noqa: BLE001 — the operator card is never worth a turn
+                    data["operator"] = {}
+            # A streamed turn's cards: the record is the endpoint's own dict, shared with the tool threads.
+            for key, value in _turn_extras(_team_turn, _team_turn.get("onboarding")).items():
+                data.setdefault(key, value)
+            return {**event, "data": data}
+
+        def _run_whole(sink):
+            """The whole turn, in whole_turn's worker thread, with its tool loop reporting each call
+            and result to `sink` — so a codex turn shows its cards live (DEC-1790750869457756)."""
+            tok = _TOOL_EVENTS.set(sink)
             try:
-                data["operator"] = _ops.public(ARTURO_STATE)
-            except Exception:  # noqa: BLE001 — the operator card is never worth a turn
-                data["operator"] = {}
-        # A streamed turn's cards: the record is the endpoint's own dict, shared with the tool threads.
-        for key, value in _turn_extras(_team_turn, _team_turn.get("onboarding")).items():
-            data.setdefault(key, value)
-        return {**event, "data": data}
+                return _fallback()
+            finally:
+                _TOOL_EVENTS.reset(tok)
 
-    def _run_whole(sink):
-        """The whole turn, in whole_turn's worker thread, with its tool loop reporting each call
-        and result to `sink` — so a codex turn shows its cards live (DEC-1790750869457756)."""
-        tok = _TOOL_EVENTS.set(sink)
-        try:
-            return _fallback()
-        finally:
-            _TOOL_EVENTS.reset(tok)
+        def _generate():
+            # with_heartbeat keeps the connection alive through a silent stretch — the tool-loop
+            # fallback produces nothing while it runs, and every hop in front of us drops an idle
+            # socket (the dashboard proxy at 30s), which reached the operator as a mid-turn 502.
+            # Only Claude has a streaming tool loop (a warm session). Any other CLI runtime streamed
+            # the cold way reached for its OWN sandboxed tools instead of Arturo's — codex answered
+            # "I couldn't access the live session list from this environment" (staging, 2026-09-30) —
+            # and codex hands over whole messages anyway. So those turns run whole, through the tool
+            # loop, until they have a streaming loop of their own.
+            _no_stream_loop = (getattr(turn_brain, "kind", "") == "runtime"
+                               and getattr(turn_brain, "runtime", "") not in _cli_events.WARM_RUNTIMES)
+            if _onboarding_step or _no_stream_loop:
+                # Only text_turn knows the onboarding marker and its directive, so the step runs
+                # there, whole, and arrives as one reply.
+                turn = _text_stream.whole_turn(conversation_id, turn_brain, _fallback,
+                                               run_with_sink=_run_whole)
+            else:
+                turn = _text_stream.stream_turn(
+                    text=body_text, conversation_id=conversation_id, brain=turn_brain,
+                    brain_id=chosen_id, messages=messages, spawn=_spawn,
+                    fallback=_fallback, record=_record, tools=_bound_tools(_team_turn, use_current=False),
+                    warm=_warm, discard=lambda: _WARM_POOL.discard(warm_key), run_tools=_run_tools)
+            turn = (_complete(e) for e in turn)
+            try:
+                for frame in _text_stream.with_heartbeat(turn, interval_s=10.0, on_start=lambda: _started.append(1),
+                                                         on_done=_token.release):
+                    yield frame
+            except GeneratorExit:
+                raise
+            except Exception as e:  # noqa: BLE001 — a dead stream must still say why
+                log.error(f"/text/stream failed: {e}")
+                yield _text_stream.sse_frame({"event": "error", "data": {
+                    "code": "stream_failed", "message": str(e)[:200]}})
 
-    def _generate():
-        # with_heartbeat keeps the connection alive through a silent stretch — the tool-loop
-        # fallback produces nothing while it runs, and every hop in front of us drops an idle
-        # socket (the dashboard proxy at 30s), which reached the operator as a mid-turn 502.
-        # Only Claude has a streaming tool loop (a warm session). Any other CLI runtime streamed
-        # the cold way reached for its OWN sandboxed tools instead of Arturo's — codex answered
-        # "I couldn't access the live session list from this environment" (staging, 2026-09-30) —
-        # and codex hands over whole messages anyway. So those turns run whole, through the tool
-        # loop, until they have a streaming loop of their own.
-        _no_stream_loop = (getattr(turn_brain, "kind", "") == "runtime"
-                           and getattr(turn_brain, "runtime", "") not in _cli_events.WARM_RUNTIMES)
-        if _onboarding_step or _no_stream_loop:
-            # Only text_turn knows the onboarding marker and its directive, so the step runs
-            # there, whole, and arrives as one reply.
-            turn = _text_stream.whole_turn(conversation_id, turn_brain, _fallback,
-                                           run_with_sink=_run_whole)
-        else:
-            turn = _text_stream.stream_turn(
-                text=body_text, conversation_id=conversation_id, brain=turn_brain,
-                brain_id=chosen_id, messages=messages, spawn=_spawn,
-                fallback=_fallback, record=_record, tools=_bound_tools(_team_turn, use_current=False),
-                warm=_warm, discard=lambda: _WARM_POOL.discard(warm_key), run_tools=_run_tools)
-        turn = (_complete(e) for e in turn)
-        try:
-            for frame in _text_stream.with_heartbeat(turn, interval_s=10.0):
-                yield frame
-        except GeneratorExit:
-            raise
-        except Exception as e:  # noqa: BLE001 — a dead stream must still say why
-            log.error(f"/text/stream failed: {e}")
-            yield _text_stream.sse_frame({"event": "error", "data": {
-                "code": "stream_failed", "message": str(e)[:200]}})
-
-    return Response(stream_with_context(_generate()), mimetype="text/event-stream",
-                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
-                             "Connection": "keep-alive"})
+        resp = Response(stream_with_context(_generate()), mimetype="text/event-stream",
+                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                                 "Connection": "keep-alive"})
+        # Closed before the turn began (the client left before the first byte): nothing else releases.
+        resp.call_on_close(lambda: None if _started else _token.release())
+        return resp
+    except BaseException:
+        # Anything that fails before the stream exists leaves no turn to release the lock.
+        _token.release()
+        raise
 
 
 @app.route("/text", methods=["POST"])
@@ -6112,9 +6202,15 @@ def text_endpoint():
     if not _gateway_hop_ok():
         return jsonify({"ok": False, "error": "loopback only"}), 403
     data = request.get_json(silent=True) or {}
-    code, result = text_turn(data.get("text"), data.get("conversation_id"),
-                             brain=data.get("brain"), context=data.get("context"),
-                             principal=_stamped_principal(request))
+    token = _TURN_LOCKS.acquire((data.get("conversation_id") or "").strip()[:200])
+    if token is None:
+        return jsonify(_BUSY), 409
+    try:
+        code, result = text_turn(data.get("text"), data.get("conversation_id"),
+                                 brain=data.get("brain"), context=data.get("context"),
+                                 principal=_stamped_principal(request))
+    finally:
+        token.release()
     return jsonify(result), code
 
 
@@ -6132,7 +6228,11 @@ def health():
         if nb is not brain:
             brain = nb
             LLM_MODEL = nb.model if nb.kind == "runtime" else _API_MODEL
+    # The onboarding thread, so every browser and device resumes the SAME one; only to the gateway
+    # (a public /health through the Funnel never carries it) and only while onboarding is not done.
+    _onb_conv = (_progress.conversation(ARTURO_STATE) or None) if (_gateway_hop_ok() and not onboarded()) else None
     return jsonify({
+        "onboarding_conversation": _onb_conv,
         "status": "ok",
         "service": "custom-llm-proxy",
         "model": LLM_MODEL,

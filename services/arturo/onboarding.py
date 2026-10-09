@@ -58,6 +58,14 @@ TEAM_SHAPE = (
     "does the actual jobs its project manager gives it. More projects mean more project managers and workers "
     "under the same gm."
 )
+# The page reopened on a thread that already holds the first-run opener: the operator is BACK
+# (DEC-1791511578959986). The goals below are rebuilt from what the server knows, so "the next
+# missing goal" is exactly where they left off.
+RETURNING_FACT = ("This turn is the page REOPENING, not the operator speaking: they left partway through "
+                  "the first run and came back, and they can see your earlier messages above. Do not greet "
+                  "them as new and do not introduce yourself again. In one sentence say what is already "
+                  "done, then ask the next missing goal; if that goal needs a card, show it again.")
+
 TEAM_COST = "This starts three agents; gm is always on and keeps costing tokens whether or not it is asked anything."
 # The devices card's own words: a pick there is consent to make pairing codes (arturo-proxy.py ask_choices).
 DEVICES_NOTE = "Picking an iPhone, iPad or Mac lets Arturo make a pairing code for it in the next few minutes."
@@ -142,9 +150,17 @@ def playbook(ctx=None) -> str:
         f"Their devices: {devices}." if devices else "Their devices: not known yet.",
         _team_fact(ctx.get("team")),
     ]
+    if ctx.get("team_declined") and (ctx.get("team") or {}).get("state") in ("absent", "incomplete"):
+        known.append("They said not now to the starter team: do not offer it again unless they ask for it.")
+    paired = ctx.get("paired") or {}
+    if paired:
+        known.append("Paired so far: " + ", ".join(f"{d} ({state})" for d, state in paired.items())
+                     + ". Skip a connected device; for one whose code was not used yet, offer a fresh code.")
     if ctx.get("voice_mode") == "text-only":
         known.append(VOICE_FACT)
-    if ctx.get("opener"):
+    if ctx.get("opener") and ctx.get("returning"):
+        known.append(RETURNING_FACT)
+    elif ctx.get("opener"):
         known.append("This turn is the page opening for the first time, not the operator speaking: greet them, "
                      "say in one sentence who you are, and start on the first missing goal.")
     goals = [

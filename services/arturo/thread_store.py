@@ -19,9 +19,13 @@ Degraded, never fatal: a turn must not fail because the archive is unwritable. A
 cannot open its file reports `usable = False` and answers empty for every read, rather than
 raising into the operator's turn or silently pretending a thread was saved.
 """
+import logging
+import re
 import sqlite3
 import time
 from pathlib import Path
+
+log = logging.getLogger("arturo.thread_store")
 
 TITLE_MAX = 80
 SNIPPET_MAX = 160
@@ -77,11 +81,32 @@ def _thread_row(r):
     return out
 
 
+# The proxy's page-context line (arturo-proxy.py _context_line), first line of a stored user turn.
+# Kept in storage (the model saw it); stripped from everything a client reads. A stored turn has it
+# on its own line; a title made by older code had it collapsed onto the same line.
+_CONTEXT_LINE = re.compile(r"^\[Context: route=[^\n]*\]\n")
+_CONTEXT_TITLE = re.compile(r"^\[Context: route=[^\]\n]*\] ")
+# The page's hidden opener (services/arturo/onboarding.py OPENER_SENTINEL): never a title.
+_OPENER = "(first run:"
+
+
+def strip_context_line(text):
+    text = text or ""
+    return _CONTEXT_TITLE.sub("", _CONTEXT_LINE.sub("", text, count=1), count=1)
+
+
+def _is_opener(text):
+    return strip_context_line(text).strip().startswith(_OPENER)
+
+
 def derive_title(text, limit=TITLE_MAX):
     """A thread's title is its FIRST user message, trimmed to one line — the operator is
     never asked to name a thread (G20 design). Truncation is on a word boundary when one is
-    close enough to the limit, so a title reads as a phrase rather than a cut word."""
-    one_line = " ".join((text or "").split())
+    close enough to the limit, so a title reads as a phrase rather than a cut word. The page's
+    opener is not the operator's words: it titles nothing (""), and the first real message does."""
+    if _is_opener(text):
+        return ""
+    one_line = " ".join(strip_context_line(text).split())
     if len(one_line) <= limit:
         return one_line
     cut = one_line[:limit]
@@ -129,9 +154,14 @@ class ThreadStore:
         bp, bm = ((brain or {}).get("provider") or "", (brain or {}).get("model") or "")
         wrote = effective if effective is not None else brain
         tp, tm = ((wrote or {}).get("provider") or "", (wrote or {}).get("model") or "")
+        conn = None
         try:
-            with self._connect() as conn:
-                row = conn.execute("SELECT turns FROM threads WHERE id = ?",
+            conn = self._connect()
+            # One write transaction from the count to the insert: two turns on one thread at once
+            # (two tabs, a phone and a laptop) must not both take the same seq and overwrite.
+            conn.execute("BEGIN IMMEDIATE")
+            with conn:
+                row = conn.execute("SELECT turns, title FROM threads WHERE id = ?",
                                    (conversation_id,)).fetchone()
                 if row is None:
                     conn.execute(
@@ -141,6 +171,9 @@ class ThreadStore:
                     seq = 0
                 else:
                     seq = int(row["turns"])
+                    if not row["title"] and derive_title(user_text):
+                        conn.execute("UPDATE threads SET title = ? WHERE id = ?",
+                                     (derive_title(user_text), conversation_id))
                 conn.executemany(
                     "INSERT OR REPLACE INTO turns (thread_id, seq, role, content, ts, brain_provider, brain_model)"
                     " VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -151,8 +184,13 @@ class ThreadStore:
                     " last_brain_provider = ?, last_brain_model = ? WHERE id = ?",
                     (now, seq + 2, (assistant_text or "")[:SNIPPET_MAX], bp, bm, conversation_id))
             return True
-        except Exception:  # noqa: BLE001 — the archive is never worth failing a turn over
+        except Exception as e:  # noqa: BLE001 — the archive is never worth failing a turn over,
+            # but a lost turn is never silent either
+            log.warning(f"thread store: could not record a turn for {conversation_id}: {e}")
             return False
+        finally:
+            if conn is not None:
+                conn.close()
 
     # --- read ----------------------------------------------------------------------
 
@@ -166,7 +204,7 @@ class ThreadStore:
                     f"SELECT {_THREAD_COLS} FROM threads"
                     " ORDER BY updated DESC, id DESC LIMIT ? OFFSET ?",
                     (max(1, min(int(limit), 200)), max(0, int(offset)))).fetchall()
-            return [_thread_row(r) for r in rows]
+                return [self._clean_title(conn, _thread_row(r)) for r in rows]
         except Exception:  # noqa: BLE001
             return []
 
@@ -183,12 +221,45 @@ class ThreadStore:
                 rows = conn.execute(
                     "SELECT role, content, ts, brain_provider, brain_model FROM turns"
                     " WHERE thread_id = ? ORDER BY seq", (conversation_id,)).fetchall()
-            out = _thread_row(head)
-            out["turns"] = [{"role": r["role"], "content": r["content"], "ts": r["ts"],
+                out = self._clean_title(conn, _thread_row(head))
+            # What a client reads: the page-context line is the model's, not the operator's words.
+            out["turns"] = [{"role": r["role"],
+                             "content": strip_context_line(r["content"]) if r["role"] == "user" else r["content"],
+                             "ts": r["ts"],
                              "brain": _brain(r["brain_provider"], r["brain_model"])} for r in rows]
             return out
         except Exception:  # noqa: BLE001
             return None
+
+    @staticmethod
+    def _clean_title(conn, out):
+        """A title as a client reads it. Rows from before the opener/context fix may carry the
+        page's opener or a context line; read them as the first real operator message."""
+        title = out.get("title") or ""
+        if title and not _is_opener(title):
+            out["title"] = strip_context_line(title)
+            return out
+        out["title"] = ""
+        for r in conn.execute("SELECT content FROM turns WHERE thread_id = ? AND role = 'user' ORDER BY seq",
+                              (out["id"],)):
+            t = derive_title(r["content"])
+            if t:
+                out["title"] = t
+                break
+        return out
+
+    def has_opener(self, conversation_id):
+        """True when this thread holds the page's first-run opener: it is the onboarding thread,
+        and a later opener on it is the operator coming BACK, not arriving."""
+        if not self.usable or not conversation_id:
+            return False
+        try:
+            with self._connect() as conn:
+                rows = conn.execute("SELECT content FROM turns WHERE thread_id = ? AND role = 'user'"
+                                    " ORDER BY seq LIMIT 50", (conversation_id,)).fetchall()
+            return any(_is_opener(r["content"]) for r in rows)
+        except Exception:  # noqa: BLE001
+            return False
 
     def history(self, conversation_id, max_turns=DEFAULT_HISTORY_TURNS):
         """The last `max_turns` messages as role/content pairs — the shape the brain takes.
