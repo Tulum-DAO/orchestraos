@@ -336,7 +336,11 @@ export default function ArturoHome() {
     // A card is answered once: by a tap, or by whatever the operator typed instead.
     setTurns((t) => t.map((x) => x.choices ? { ...x, choices: undefined } : x));
     const uid = user(text, 'sending');   // the bubble appears NOW; the box is already empty
-    if (waitFor) { setBusy(true); await waitFor; }
+    if (waitFor) {
+      setBusy(true); await waitFor;
+      // The opener may have brought a card back; this message answers it, so it goes like any other.
+      setTurns((t) => t.map((x) => x.choices ? { ...x, choices: undefined } : x));
+    }
     // While onboarding, every turn is a BRAIN turn under the playbook: the marker makes the proxy add
     // it, the brain understands the reply (dictated or typed, any phrasing) and acts with a tool or
     // asks again in its own words. Nothing is parsed here.
