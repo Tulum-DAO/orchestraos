@@ -397,7 +397,7 @@ def _whole_reply(turn_id, conversation_id, fallback, brain):
 _SENTINEL = object()
 
 
-def with_heartbeat(events, interval_s=10.0):
+def with_heartbeat(events, interval_s=10.0, on_start=None, on_done=None):
     """Yield SSE frames, filling any silence with `: ping` comments (spec §2.2).
 
     A turn can legitimately produce nothing for a while — the tool loop runs with no output,
@@ -407,6 +407,11 @@ def with_heartbeat(events, interval_s=10.0):
 
     The turn runs in a worker thread so the ping can be emitted while the turn is blocked;
     nothing about the turn itself becomes concurrent.
+
+    on_start: called once the worker runs the turn. on_done: called when the TURN ends (the worker
+    has consumed every event), not when the client goes away: a closed connection leaves the worker
+    finishing and recording the turn, so whatever the turn holds (its conversation's lock) is
+    released then and only then.
     """
     q: "queue.Queue" = queue.Queue()
 
@@ -418,9 +423,18 @@ def with_heartbeat(events, interval_s=10.0):
             q.put(("error", e))
         finally:
             q.put(("done", _SENTINEL))
+            if on_done is not None:
+                on_done()
 
     worker = threading.Thread(target=pump, daemon=True)
-    worker.start()
+    try:
+        worker.start()
+    except Exception:
+        if on_done is not None:
+            on_done()               # the turn never ran: nothing else will release what it holds
+        raise
+    if on_start is not None:
+        on_start()
     while True:
         try:
             kind, payload = q.get(timeout=interval_s)

@@ -28,11 +28,12 @@ import { useArturoBrain } from '../stores/arturoBrain';
 import { arturoTurn, arturoPrewarm } from '../lib/arturoStream';
 import { brainFromThread, describeTurnError, toWireBrain } from '../lib/arturoBrain';
 import { arturoHealth, arturoText, runtimesAvailable, brainLabel, greeting, newConversationId,
-  isStarting, waitForArturo, STARTING_TEXT, firstStep, onboardingTurn, onboardingDone, isPageOpener,
+  isStarting, waitForArturo, STARTING_TEXT, firstStep, onboardingTurn, onboardingDone,
   HANDS_FREE, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, ONBOARDING_OPENER, sendStateLabel,
   type ChoiceCard, type PairCard,
   type ArturoHealth, type RuntimeRow, type SendState } from '../lib/arturo';
 import { listThreads, loadThread, type ThreadSummary } from '../lib/arturoThreads';
+import { hydrateTurns, onboardingConversation, carriesOnboardingMarker, mergeResumeReply, isBusy } from '../lib/arturoResume';
 import WebTerminal from '../components/WebTerminal';
 import { installCommand } from '../lib/providerConnect';
 import { uploadAttachment, attachmentPreamble, describeAttachment, type Attachment } from '../lib/arturoUpload';
@@ -152,10 +153,9 @@ export default function ArturoHome() {
     const resumedBrain = brainFromThread(t, {});
     chooseBrain(resumedBrain);
     arturoPrewarm(id, toWireBrain(resumedBrain));
-    // The page's own opener is not the operator's words: hidden here too, on every reload.
-    setTurns(t.turns.filter((x) => !(x.role === 'user' && isPageOpener(x.content)))
-      .map((x) => ({ id: nextId.current++, role: x.role === 'user' ? 'user' : 'arturo', text: x.content })));
-    setStep('done'); lsSet(LS_ONBOARDED, '1');
+    // The page's own opener is not the operator's words: hidden here too, on every reload. Opening a
+    // thread does NOT end onboarding (it used to): done is the server's word only.
+    setTurns(hydrateTurns(t.turns).map((x) => ({ id: nextId.current++, ...x })));
     setDrawer(false);
   }
 
@@ -172,6 +172,10 @@ export default function ArturoHome() {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const nextId = useRef(1);
   const startedStep = useRef<Step | null>(null);   // StrictMode double-invokes effects
+  // The onboarding thread (the server's, so every browser resumes the same one) and the opener while it
+  // runs: a send typed meanwhile waits for it instead of racing it (DEC-1791511578959986).
+  const onbConv = useRef<string>('');
+  const opener = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -182,6 +186,13 @@ export default function ArturoHome() {
       // The server's flag (finish_onboarding) ORed with this browser's: every existing install already
       // has the local one, so nobody is sent through onboarding again.
       if (h.onboarded) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }
+      if (h.onboarding_conversation) onbConv.current = h.onboarding_conversation;
+      // The conversation this browser was in is on the server: show it (it used to open empty, and
+      // only a sidebar round trip brought the history back). Onboarding hydrates its own thread.
+      if (h.onboarded || ls(LS_ONBOARDED) === '1') {
+        const t = convId.current ? await loadThread(convId.current) : null;
+        if (alive && t) setTurns(hydrateTurns(t.turns).map((x) => ({ id: nextId.current++, ...x })));
+      }
       if (h.ok || !isStarting(h)) { setHealth(h); return; }
       setStarting(true);
       const ready = await waitForArturo({ onTick: (last) => { if (alive) setHealth(last); } });
@@ -210,11 +221,44 @@ export default function ArturoHome() {
 
   /** The brain speaks first: one invisible opener, marked onboarding_open (the server never lets it
    *  create anything, and the page never shows it as the operator's words). */
-  async function openOnboarding() {
-    const id = say('', { pending: true });
-    const r = await arturoText(onboardingTurn('onboarding_open', ONBOARDING_OPENER), convId.current);
-    patch(id, { pending: false, text: r.ok ? (r.reply_text || '(no reply)') : 'I could not start just now. Send me anything and I will pick it up.',
-      tools: r.tools_called, spawned: r.spawned, choices: r.choices, pairCard: r.pair_card });
+  function openOnboarding() {
+    opener.current = runOpener().finally(() => { opener.current = null; });
+  }
+
+  /** Into the onboarding thread, with its history on screen BEFORE the opener runs. On a thread that
+   *  already holds the opener the server answers as a RETURN (no greeting, the next step, its card
+   *  again) and stores nothing; its reply then refreshes the unanswered question in place. */
+  async function runOpener(switched = false) {
+    const conv = onboardingConversation(onbConv.current, convId.current);
+    if (conv !== convId.current) { convId.current = conv; lsSet(LS_CONV, conv); arturoPrewarm(conv, toWireBrain(brainChoice)); }
+    const t = await loadThread(conv);
+    const stored = t ? hydrateTurns(t.turns).map((x) => ({ id: nextId.current++, ...x })) : [];
+    // A message the operator sent while the history loaded stays, after it (it waits for this opener).
+    setTurns((prev) => [...stored, ...prev.filter((x) => x.role === 'user' && x.state)]);
+    const id = nextId.current++;
+    // The opener's bubble goes ABOVE anything typed meanwhile: it answers first.
+    setTurns((prev) => {
+      const at = prev.findIndex((x) => x.role === 'user' && x.state);
+      const bubble = { id, role: 'arturo' as const, text: '', pending: true };
+      return at < 0 ? [...prev, bubble] : [...prev.slice(0, at), bubble, ...prev.slice(at)];
+    });
+    let r = await arturoText(onboardingTurn('onboarding_open', ONBOARDING_OPENER), conv);
+    for (let tries = 0; isBusy(r) && tries < 30; tries++) {
+      await new Promise((ok) => setTimeout(ok, 2000));
+      r = await arturoText(onboardingTurn('onboarding_open', ONBOARDING_OPENER), conv);
+    }
+    if (r.ok && r.onboarding_conversation) onbConv.current = r.onboarding_conversation;
+    if (r.ok && r.switch && r.onboarding_conversation && !switched) {
+      // Another browser started the first run: continue THAT thread here.
+      setTurns((all) => all.filter((x) => x.role === 'user' && x.state));
+      return runOpener(true);
+    }
+    if (r.ok && r.resumed) {
+      setTurns((all) => mergeResumeReply(all, id, { text: r.reply_text || '', choices: r.choices, pairCard: r.pair_card }));
+    } else {
+      patch(id, { pending: false, text: r.ok ? (r.reply_text || '(no reply)') : 'I could not start just now. Send me anything and I will pick it up.',
+        tools: r.tools_called, spawned: r.spawned, choices: r.choices, pairCard: r.pair_card });
+    }
     if (onboardingDone(r)) { lsSet(LS_ONBOARDED, '1'); setStep('done'); }
   }
 
@@ -283,6 +327,7 @@ export default function ArturoHome() {
   async function send(picked?: string) {
     const text = (picked ?? draft).trim();
     if (!text || busy) return;
+    const waitFor = opener.current;           // the opener is still running: queue behind it
     if (picked === undefined) {
       if (dictating) stopDictation();    // the sent text is final; don't re-append into the empty box
       clearDictNote();
@@ -291,10 +336,11 @@ export default function ArturoHome() {
     // A card is answered once: by a tap, or by whatever the operator typed instead.
     setTurns((t) => t.map((x) => x.choices ? { ...x, choices: undefined } : x));
     const uid = user(text, 'sending');   // the bubble appears NOW; the box is already empty
+    if (waitFor) { setBusy(true); await waitFor; }
     // While onboarding, every turn is a BRAIN turn under the playbook: the marker makes the proxy add
     // it, the brain understands the reply (dictated or typed, any phrasing) and acts with a tool or
     // asks again in its own words. Nothing is parsed here.
-    const isOnboarding = step === 'onboarding';
+    const isOnboarding = carriesOnboardingMarker(step, convId.current, onbConv.current);
     const body = text;
     setBusy(true);
     const id = say('', { pending: true });
@@ -338,6 +384,11 @@ export default function ArturoHome() {
     };
     const streamOpts = { onSent, brain: turnBrain, onDelta, onToolCall, onToolResult, onReset };
     let r = await arturoTurn(sent, convId.current, null, streamOpts);
+    // Another tab or device is mid-turn in this conversation: the server serializes, so wait and resend.
+    for (let tries = 0; isBusy(r) && tries < 30; tries++) {
+      await new Promise((ok) => setTimeout(ok, 2000));
+      r = await arturoTurn(sent, convId.current, null, streamOpts);
+    }
     if (!r.ok) { streamed = ''; parts = []; patch(id, { pending: true, streaming: false, text: '', parts: undefined }); }
     if (!r.ok && isStarting(r)) {          // G15: still booting -> say so, wait for health, retry once
       patch(id, { pending: false, text: STARTING_TEXT, parts: undefined });

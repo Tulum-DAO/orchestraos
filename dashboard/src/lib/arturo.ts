@@ -11,7 +11,7 @@
  */
 export interface ArturoBrain { kind: 'api' | 'runtime' | 'none'; runtime?: string; cli?: string; model: string; reason?: string; provider?: string }
 export interface ArturoStt { server: boolean; backend: 'local-whisper' | 'none'; state: 'ready' | 'warming' | 'not-installed' | 'off' | 'error'; reason?: string; install?: string; model?: string }
-export interface ArturoHealth { live?: boolean; onboarded?: boolean; operator?: OperatorFacts; ok: boolean; status?: number; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; stt?: ArturoStt; error?: string }
+export interface ArturoHealth { live?: boolean; onboarded?: boolean; onboarding_conversation?: string | null; operator?: OperatorFacts; ok: boolean; status?: number; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; stt?: ArturoStt; error?: string }
 /** A tap-to-pick card the BRAIN wrote with ask_choices: its options, and whether several may be picked.
  *  `note` is the server's own line (the starter team's cost), never the model's. */
 export type ChoiceCard = { options: string[]; multi: boolean; purpose: 'starter_team' | 'devices' | 'other'; note?: string; exclusive?: string };
@@ -20,7 +20,7 @@ export type PairCard = { device: string; device_id: string; code: string; expire
   /** Page-only: set when a later turn's check_paired saw this device connect. The code is then dropped. */
   paired?: boolean };
 
-export interface ArturoReply { choices?: ChoiceCard; pair_card?: PairCard; paired?: string[]; onboarding?: { done: boolean }; operator?: OperatorFacts; ok: boolean; status?: number; reply_text?: string; conversation_id?: string; brain?: ArturoBrain; tools_called?: string[]; spawned?: string[]; error?: string; detail?: unknown; provider?: string; model?: string; reason?: string; field?: string }
+export interface ArturoReply { resumed?: boolean; switch?: boolean; onboarding_conversation?: string; choices?: ChoiceCard; pair_card?: PairCard; paired?: string[]; onboarding?: { done: boolean }; operator?: OperatorFacts; ok: boolean; status?: number; reply_text?: string; conversation_id?: string; brain?: ArturoBrain; tools_called?: string[]; spawned?: string[]; error?: string; detail?: unknown; provider?: string; model?: string; reason?: string; field?: string }
 export interface ArturoContext { route: string; entityKind?: string; entityId?: string; hint?: string }
 export interface RuntimeRow { id: string; label?: string; cli?: string; installed: boolean; authed: boolean | 'unverified'; auth_reason?: string | null }
 
