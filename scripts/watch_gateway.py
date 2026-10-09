@@ -4629,7 +4629,10 @@ def _agent_file_rate_ok(device: str, now: float | None = None) -> bool:
 
 
 # Belt to the Funnel header: a request served must come from this host or the tailnet. Tailscale
-# serve/funnel proxies arrive from loopback; direct tailnet peers from these ranges.
+# serve/funnel proxies arrive from loopback; direct tailnet peers from these ranges. LIMIT: behind a
+# reverse proxy (tailscale serve included) every request is from loopback, so this check cannot tell
+# a Funnel request from a tailnet one there; the Funnel header and listener separation (no public
+# entry targeting the gateway port) carry that case. See orchestra.example.toml [code].
 _AGENT_FILE_PEER_NETS = ("127.0.0.0/8", "::1/128", "100.64.0.0/10", "fd7a:115c:a1e0::/48")
 
 

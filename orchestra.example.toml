@@ -145,6 +145,10 @@ allowed_chat_ids = []
 # a dir that contains your home dir or the data dir, or anything inside the data dir. Dotfiles,
 # logs, keys, databases, transcripts and secret-shaped content are refused whatever the root.
 # Grant the scope only from the host: `orchestra pair --scopes read,code --label my-mac`.
+# Only loopback and tailnet peers are served, and Tailscale Funnel requests are refused. Behind a
+# reverse proxy (including `tailscale serve`) every request comes from the proxy, so the peer check
+# cannot tell a public request from a private one: then make sure no public (Funnel) entry points at
+# the gateway port, or serve the gateway on a port that only the tailnet reaches.
 roots = []
 # roots = ["~/code"]
 
