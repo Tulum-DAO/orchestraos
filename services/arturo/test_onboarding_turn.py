@@ -45,7 +45,7 @@ def test_name_marker_is_stripped_and_directive_applied_for_that_turn_only(tmp_pa
 
 def test_marker_survives_an_attachment_preamble_only_when_first_line(tmp_path):
     mod = _load_proxy(); seen = _wire(mod, tmp_path)
-    mod.text_turn("[Onboarding: step=onboarding]\n[attached: /tmp/x.png (12 KB)]\n\nshaw", "c2", principal="fleet")
+    mod.text_turn("[Onboarding: step=onboarding]\n[attached: /tmp/x.png (12 KB)]\n\nAda", "c2", principal="fleet")
     assert "set_operator_fact" in seen["system"] and seen["user"].startswith("[attached:")
 
 
@@ -63,8 +63,8 @@ def test_health_carries_operator_none_then_name(tmp_path):
     c = mod.app.test_client()
     assert c.get("/health").get_json()["operator"]["name"] is None
     from services.arturo import operator_store as ops
-    ops.set_fact(mod.ARTURO_STATE, "name", "Shaw", source="brain")
-    assert c.get("/health").get_json()["operator"]["name"] == "Shaw"
+    ops.set_fact(mod.ARTURO_STATE, "name", "Ada", source="brain")
+    assert c.get("/health").get_json()["operator"]["name"] == "Ada"
 
 
 def test_set_operator_fact_tool_reports_an_unwritable_store_instead_of_raising(tmp_path):
@@ -73,7 +73,7 @@ def test_set_operator_fact_tool_reports_an_unwritable_store_instead_of_raising(t
     ro = tmp_path / "ro"; ro.mkdir(); ro.chmod(0o500)
     mod.ARTURO_STATE = ro / "arturo"
     try:
-        out = mod.execute_tool("set_operator_fact", {"field": "name", "value": "Shaw"})
+        out = mod.execute_tool("set_operator_fact", {"field": "name", "value": "Ada"})
     finally:
         ro.chmod(0o700)
     assert out.startswith("Not recorded")

@@ -2084,6 +2084,25 @@ def _operator_text_of(text):
     return _onb.split_marker(text)[1].strip()
 
 
+_ONBOARDING_ONLY = {"ok": False, "error": "onboarding_dashboard_only"}
+
+
+def _onboarding_refusal(text, conversation_id, principal):
+    """The first run is the dashboard's alone (#312 review SF2, #319 review items 4-5). Any other caller is
+    refused BEFORE it takes the conversation's lock or its cards: an onboarding marker, or ANY turn into the
+    pinned onboarding thread, marker or not, would put its words (and the reply) into the operator's
+    onboarding history for good. Returns the 403 body, or None."""
+    if principal == "fleet":
+        return None
+    from services.arturo import onboarding as _onb
+    if _onb.split_marker(text or "")[0] in _onb.ONBOARDING_STEPS:
+        return _ONBOARDING_ONLY
+    cid = (conversation_id or "").strip()[:200]
+    if cid and cid == _progress.conversation(ARTURO_STATE):
+        return _ONBOARDING_ONLY
+    return None
+
+
 def _offer_team(conversation_id, principal):
     """An offer belongs to the caller who was shown it: only that principal's next turn answers it."""
     if conversation_id:
@@ -5769,10 +5788,10 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None):
     text = text.strip()
     if not text:
         return 400, {"ok": False, "error": "empty"}
-    if step in _onb.ONBOARDING_STEPS and principal != "fleet":
-        # The first run is the dashboard's alone: an onboarding turn from any other caller would put its
-        # words (and the reply) into the operator's onboarding thread for good (#312 review SF2).
-        return 403, {"ok": False, "error": "onboarding_dashboard_only"}
+    # The endpoints refuse these before the lock; checked again here for any other caller of text_turn.
+    if principal != "fleet" and (step in _onb.ONBOARDING_STEPS
+                                 or _onboarding_refusal(text, conversation_id, principal)):
+        return 403, dict(_ONBOARDING_ONLY)
     operator_text = text                     # before the page context: what the operator sent
     if page_ctx is not None:
         # After split_marker (the marker is anchored to the first line), and stored exactly as
@@ -6042,6 +6061,10 @@ def text_stream_endpoint():
     if page_ctx is not None and not _valid_context(page_ctx):
         return jsonify({"ok": False, "error": "bad_context", "field": "context"}), 400
 
+    # Refused before the lock and before _begin_team_turn: a refused turn takes no card off the book.
+    if _onboarding_refusal(text_in, conversation_id, _stamped_principal(request)):
+        return jsonify(_ONBOARDING_ONLY), 403
+
     turn_brain = chosen or _turn_brain()
     # One turn at a time in this conversation, taken BEFORE the cards come off the book and the
     # history is read. Released when the turn ends (the heartbeat's pump), or below if the stream
@@ -6251,6 +6274,8 @@ def text_endpoint():
         return jsonify({"ok": False, "error": "loopback only"}), 403
     data = request.get_json(silent=True) or {}
     cid = (data.get("conversation_id") or "").strip()[:200]
+    if _onboarding_refusal(data.get("text"), cid, _stamped_principal(request)):
+        return jsonify(_ONBOARDING_ONLY), 403
     token = _TURN_LOCKS.acquire(cid) if cid else None      # no id: text_turn mints a fresh one
     if cid and token is None:
         return jsonify(_BUSY), 409
