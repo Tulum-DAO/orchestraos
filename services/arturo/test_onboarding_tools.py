@@ -242,7 +242,7 @@ def test_no_public_address_means_no_code(P, pairing, monkeypatch):
 
 
 def test_a_default_install_pairs_on_the_address_tailscale_already_serves(P, pairing, monkeypatch, caplog):
-    # pm-tulumdao: nothing sets ORCHESTRA_PUBLIC_URL on a default install, so Arturo could never pair
+    # review: nothing sets ORCHESTRA_PUBLIC_URL on a default install, so Arturo could never pair
     from scripts import public_url
     monkeypatch.delenv("ORCHESTRA_PUBLIC_URL")
     monkeypatch.setenv("ORCHESTRA_GATEWAY_PORT", "8890")
@@ -324,7 +324,7 @@ def test_the_stream_fallback_keeps_the_principal(P, pairing, monkeypatch, fleet_
     assert '"pair_card"' in data
 
 
-# ---- pm-tulumdao leak paths (after the v3 design) ---------------------------------------------
+# ---- leak paths (after the v3 design) ---------------------------------------------
 def test_a_new_code_never_revokes_a_device_that_is_in_use(P, pairing):
     # revoking is the operator's own act; Arturo only replaces ITS OWN code that was never used
     _, first = _pair(P)

@@ -14,7 +14,10 @@ from __future__ import annotations
 
 import threading
 
-WAIT_S = 600.0          # longer than any full tool turn; past it the turn answers "busy"
+# A second turn in a busy conversation answers 409 "busy" almost at once; the client waits and resends.
+# A long wait here outlived the client's own deadline (20 s to the response head), and its fallback
+# re-sent the same message, which then ran twice (#312 review B1).
+WAIT_S = 1.5
 
 
 class TurnToken:

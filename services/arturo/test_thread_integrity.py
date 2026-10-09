@@ -1,5 +1,5 @@
 """Arturo chat thread integrity, the store side (DEC-1791511578959986; the operator's report,
-2026-10-09): a thread title read "[Context: route=/agent/pm-ops entity=agent:pm-ops] Wheres the
+2026-10-09): a thread title read "[Context: route=/agent/pm-web entity=agent:pm-web] Wheres the
 general manager", the onboarding thread was titled with the page's hidden opener, and two turns on
 one conversation at once could overwrite each other's rows.
 
@@ -13,7 +13,7 @@ import threading
 
 from services.arturo.thread_store import ThreadStore, derive_title, strip_context_line
 
-CTX = "[Context: route=/agent/pm-ops entity=agent:pm-ops]"
+CTX = "[Context: route=/agent/pm-web entity=agent:pm-web]"
 OPENER = "(first run: the operator just opened OrchestraOS)"
 
 
@@ -35,23 +35,23 @@ def test_the_page_opener_never_titles_a_thread(tmp_path):
     s = ThreadStore(tmp_path / "t.db")
     s.record_turn("c1", OPENER, "Hi, I'm Arturo. What should I call you?")
     assert s.list_threads()[0]["title"] == ""                 # nothing the operator said yet
-    s.record_turn("c1", "Shaw", "Good to meet you, Shaw.")
-    assert s.list_threads()[0]["title"] == "Shaw"             # their first real message
+    s.record_turn("c1", "Ada", "Good to meet you, Ada.")
+    assert s.list_threads()[0]["title"] == "Ada"             # their first real message
 
 
 def test_titles_stored_before_this_fix_read_clean(tmp_path):
     # rows written by the old code: the title is the opener, or carries the context line
     s = ThreadStore(tmp_path / "t.db")
     s.record_turn("c1", "x", "a")
-    s.record_turn("c1", "Shaw", "b")
+    s.record_turn("c1", "Ada", "b")
     s.record_turn("c2", f"{CTX}\nWheres gm", "c")
     with sqlite3.connect(tmp_path / "t.db") as conn:
         conn.execute("UPDATE threads SET title = ? WHERE id = 'c1'", (OPENER,))
         conn.execute("UPDATE turns SET content = ? WHERE thread_id = 'c1' AND seq = 0", (OPENER,))
         conn.execute("UPDATE threads SET title = ? WHERE id = 'c2'", (f"{CTX} Wheres gm",))
     titles = {t["id"]: t["title"] for t in s.list_threads()}
-    assert titles == {"c1": "Shaw", "c2": "Wheres gm"}
-    assert s.get_thread("c1")["title"] == "Shaw"
+    assert titles == {"c1": "Ada", "c2": "Wheres gm"}
+    assert s.get_thread("c1")["title"] == "Ada"
 
 
 def test_strip_matches_only_the_proxys_context_line():

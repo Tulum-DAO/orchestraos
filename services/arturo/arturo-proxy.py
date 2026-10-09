@@ -186,7 +186,7 @@ _INJECT_ASYNC = True
 import contextvars as _contextvars
 _TOOLS_THIS_TURN = _contextvars.ContextVar("arturo_tools_this_turn", default=None)
 # Seats CREATED during this turn. The seat id is known only inside the spawn tool, and the
-# surfaces need it to offer a way into the new agent (Shaw, 2026-09-22). Only the verified
+# surfaces need it to offer a way into the new agent (the operator, 2026-09-22). Only the verified
 # success path records, so a FAILED spawn can never produce a link to nothing.
 _SPAWNED_THIS_TURN = _contextvars.ContextVar("arturo_spawned_this_turn", default=None)
 # The turn's ToolDedupLedger, so the INDIRECT dispatch sites can consult the same ledger the tool
@@ -2099,10 +2099,10 @@ def _begin_team_turn(conversation_id, step, principal=None, text=None):
     if answering:
         _record_devices_answer(picked)
         # Their pick is also what they HAVE: the operator's own words, so a page reopened anywhere asks
-        # the next step, not devices again, whether or not the brain wrote the fact (pm-tulumdao, shot 07).
+        # the next step, not devices again, whether or not the brain wrote the fact.
         try:
             from services.arturo import operator_store as _ops_pick
-            _ops_pick.set_fact(ARTURO_STATE, "devices", ", ".join(picked) or str(text or "").strip(), source="card")
+            _ops_pick.set_fact(ARTURO_STATE, "devices", ", ".join(picked) or "none", source="card")
         except (ValueError, OSError) as e:
             log.warning(f"devices fact not stored: {e}")
     return {"conversation_id": conversation_id, "step": step, "principal": principal,
@@ -2124,7 +2124,10 @@ def decline_starter_team():
         turn["offered"] = False
         if turn.get("principal") == "fleet" and turn.get("onboarding"):
             # Remembered past this turn, so a returning operator is not offered it again.
-            _progress.set_team_declined(ARTURO_STATE)
+            try:
+                _progress.set_team_declined(ARTURO_STATE)
+            except OSError as e:
+                log.warning(f"could not remember the declined team: {e}")
         if turn.get("conversation_id"):
             with _TEAM_OFFERS_LOCK:
                 _TEAM_OFFERS.pop(turn["conversation_id"], None)
@@ -2821,7 +2824,10 @@ def create_starter_team(project):
     if not _STARTER_LOCK.acquire(blocking=False):
         return "Already setting up the team; it can take a few minutes. " + _seen_report(project)
     turn["offered"] = False                      # spent: a second call in this turn asks again
-    _progress.clear_team_declined(ARTURO_STATE)
+    try:
+        _progress.clear_team_declined(ARTURO_STATE)
+    except OSError as e:                         # never leaves _STARTER_LOCK held (#312 review S2)
+        log.warning(f"could not clear the declined-team note: {e}")
     plan = starter_plan(project)
     log.info(f"STARTER TEAM: {' '.join(plan.argv[1:])}")
     done = {}
@@ -3533,7 +3539,7 @@ def execute_tool(name, args, user_turns=None):
         return f"Command failed on {machine}: {out[:500]}"
 
     elif name == "set_operator_fact":
-        # Onboarding facts are BRAIN-extracted (Shaw 2026-09-22): the operator said who they are
+        # Onboarding facts are BRAIN-extracted (the operator, 2026-09-22): the operator said who they are
         # in conversation; the brain understood it; this is the only writer of operator.json.
         from services.arturo import operator_store as _ops
         try:
@@ -5753,7 +5759,9 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None):
                 **_onboarding_progress_ctx()}
         # The page reopening on the onboarding thread is the operator coming BACK (the thread already
         # holds the first-run opener), never a first greeting (DEC-1791511578959986).
-        returning = step == "onboarding_open" and _THREADS.has_opener(conversation_id)
+        # Only the dashboard's (fleet) turn: a reply held here is read into the operator's NEXT turn, so
+        # no other caller may put words there (#312 review S1).
+        returning = step == "onboarding_open" and principal == "fleet" and _THREADS.has_opener(conversation_id)
         _ctx["returning"] = returning
         if step == "onboarding_open" and principal == "fleet":
             pinned = _progress.conversation(ARTURO_STATE)
@@ -5766,14 +5774,14 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None):
     _dir = _onb.directive(step, _ctx)
     if _dir:
         context = f"{context}\n\n{_dir}".strip() if context else _dir
-    if step == "onboarding":
+    elif step:
+        log.warning(f"onboarding marker with unknown step {step!r} — no directive applied")
+    if step == "onboarding" and principal == "fleet":
         last = _take_returning_reply(conversation_id)
         if last:
             # What the page showed when it reopened is not in the history (it is never stored): the
             # operator is answering THIS.
             context = f"{context}\n\nArturo last said, when the page reopened (the operator is answering it): {last}"
-    elif step:
-        log.warning(f"onboarding marker with unknown step {step!r} — no directive applied")
     history = _conversation_history(conversation_id)
     effective = _effective_brain(chosen)
     messages = _ptt.build_messages(context, history, text, current_brain=effective)
@@ -5828,8 +5836,11 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None):
     if returning:
         body["resumed"] = True
     if _team_step and principal == "fleet" and not onboarded():
-        body["onboarding_conversation"] = (_progress.pin_conversation(ARTURO_STATE, conversation_id)
-                                           if step == "onboarding_open" else _progress.conversation(ARTURO_STATE))
+        try:
+            body["onboarding_conversation"] = (_progress.pin_conversation(ARTURO_STATE, conversation_id)
+                                               if step == "onboarding_open" else _progress.conversation(ARTURO_STATE))
+        except OSError as e:               # the turn is already recorded: never a 500 over the pin
+            log.warning(f"onboarding thread not pinned: {e}")
     return 200, body
 
 
@@ -6047,7 +6058,8 @@ def text_stream_endpoint():
             ledger_tok = _TURN_DEDUP.set(_stream_ledger)
             team_tok = _TEAM_TURN.set(_team_turn)
             try:
-                return text_turn(text_in, conversation_id, brain=brain_req, context=page_ctx)
+                return text_turn(text_in, conversation_id, brain=brain_req, context=page_ctx,
+                                 principal=_team_turn.get("principal"))
             finally:
                 _TEAM_TURN.reset(team_tok)
                 _TURN_DEDUP.reset(ledger_tok)
@@ -6202,15 +6214,17 @@ def text_endpoint():
     if not _gateway_hop_ok():
         return jsonify({"ok": False, "error": "loopback only"}), 403
     data = request.get_json(silent=True) or {}
-    token = _TURN_LOCKS.acquire((data.get("conversation_id") or "").strip()[:200])
-    if token is None:
+    cid = (data.get("conversation_id") or "").strip()[:200]
+    token = _TURN_LOCKS.acquire(cid) if cid else None      # no id: text_turn mints a fresh one
+    if cid and token is None:
         return jsonify(_BUSY), 409
     try:
         code, result = text_turn(data.get("text"), data.get("conversation_id"),
                                  brain=data.get("brain"), context=data.get("context"),
                                  principal=_stamped_principal(request))
     finally:
-        token.release()
+        if token is not None:
+            token.release()
     return jsonify(result), code
 
 

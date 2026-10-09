@@ -15,8 +15,15 @@ Reset: delete this file together with onboarding.json (docs/ARTURO.md).
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+import threading
 import time
 from pathlib import Path
+
+# Every write is read-modify-write: one at a time, or two openers (or an opener and a decline) lose an
+# update or both "win" the pin.
+_LOCK = threading.Lock()
 
 FILENAME = "onboarding-progress.json"
 PAIR_MINTER = "arturo-onboarding"          # arturo-proxy.py _PAIR_MINTER
@@ -37,19 +44,25 @@ def read(state_dir) -> dict:
 def _write(state_dir, rec):
     p = _path(state_dir)
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(rec) + "\n")
-    tmp.replace(p)
+    fd, tmp = tempfile.mkstemp(prefix=FILENAME + ".", suffix=".tmp", dir=p.parent)   # never a shared tmp
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(json.dumps(rec) + "\n")
+        os.replace(tmp, p)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def pin_conversation(state_dir, conversation_id) -> str:
     """The onboarding thread is the first one an opener ran in; later calls keep it. Returns the
     pinned id (which may be another browser's, when two opened at once)."""
-    rec = read(state_dir)
-    if not rec.get("onboarding_conversation") and conversation_id:
-        rec["onboarding_conversation"] = str(conversation_id)
-        _write(state_dir, rec)
-    return rec.get("onboarding_conversation") or ""
+    with _LOCK:
+        rec = read(state_dir)
+        if not rec.get("onboarding_conversation") and conversation_id:
+            rec["onboarding_conversation"] = str(conversation_id)
+            _write(state_dir, rec)
+        return rec.get("onboarding_conversation") or ""
 
 
 def conversation(state_dir) -> str:
@@ -57,15 +70,17 @@ def conversation(state_dir) -> str:
 
 
 def set_team_declined(state_dir, when=None):
-    rec = read(state_dir)
-    rec["team_declined_at"] = float(when if when is not None else time.time())
-    _write(state_dir, rec)
+    with _LOCK:
+        rec = read(state_dir)
+        rec["team_declined_at"] = float(when if when is not None else time.time())
+        _write(state_dir, rec)
 
 
 def clear_team_declined(state_dir):
-    rec = read(state_dir)
-    if rec.pop("team_declined_at", None) is not None:
-        _write(state_dir, rec)
+    with _LOCK:
+        rec = read(state_dir)
+        if rec.pop("team_declined_at", None) is not None:
+            _write(state_dir, rec)
 
 
 def team_declined(state_dir) -> bool:
