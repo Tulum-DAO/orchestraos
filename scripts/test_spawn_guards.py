@@ -5,6 +5,8 @@ scripts/spawn_guards.sh, sourced by spawn-agent.sh, and are exercised here the w
 test_spawn_model_verify.py exercises its helper: bash -c with the helper sourced."""
 import os
 import subprocess
+import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 HELPER = os.path.join(HERE, "spawn_guards.sh")
@@ -45,76 +47,69 @@ def test_refuse_model_mismatch_passes_matching_empty_and_unknown_models():
 # ---------------------------------------------------------------- inject_prompt, by effect
 # A new user's first gm sat with its init prompt typed in the composer and NOT sent, and the spawn
 # said success: the old check only asked whether the text was visible, and unsent text is visible.
-# These drive the real inject_prompt against a fake composer that loses the first N Enters, on a
-# private tmux server (never the operator's).
+# These drive the real inject_prompt -> scripts/boot_inject.py against a fake composer that loses
+# the first N Enters, on a PRIVATE tmux server (its own TMUX_TMPDIR, $TMUX unset), never the
+# operator's.
 
 import shutil
-import uuid
+import tempfile
 
 import pytest
 
 FAKE_TUI = os.path.join(HERE, "fixtures", "lossy_enter_tui.py")
-PROMPT = "You are gm. Read /tmp/agent-init-gm.md and follow all instructions in it."
-
-
-def _lab(drop_enters):
-    sock = f"inject-lab-{uuid.uuid4().hex[:8]}"
-    subprocess.run(["tmux", "-L", sock, "new-session", "-d", "-s", "seat", "-x", "200", "-y", "40",
-                    f"python3 {FAKE_TUI} {drop_enters}"], check=True)
-    return sock
-
-
-def _inject(sock):
-    script = (f"tmux() {{ command tmux -L {sock} \"$@\"; }}; warn() {{ echo \"WARN: $*\" >&2; }}; "
-              f"INJECT_POLL_S=0.3 INJECT_POLLS=4; runtime=claude; sleep 0.5; rc=0; "
-              f"inject_prompt seat '{PROMPT}' || rc=$?; echo rc=$rc")
-    return _bash(script)
-
-
-def _screen(sock):
-    return subprocess.run(["tmux", "-L", sock, "capture-pane", "-p", "-t", "seat"],
-                          capture_output=True, text=True).stdout
+PROMPT = "You are lab-gm. Read /tmp/agent-init-lab-gm.md and follow all instructions in it."
 
 
 @pytest.fixture
-def lab():
+def lab(tmp_path):
     if not shutil.which("tmux"):
         pytest.skip("tmux not installed")
-    socks = []
+    sock_dir = tempfile.mkdtemp(prefix="ibl.", dir="/tmp")    # short: a socket path has a size limit
+    env = {k: v for k, v in os.environ.items() if k != "TMUX"}
+    env.update(TMUX_TMPDIR=sock_dir, ORCHESTRA_DIR=str(tmp_path), PYTHONDONTWRITEBYTECODE="1")
 
-    def make(drop):
-        socks.append(_lab(drop))
-        return socks[-1]
-    yield make
-    for s in socks:
-        subprocess.run(["tmux", "-L", s, "kill-server"], capture_output=True)
+    def tmux(*args):
+        return subprocess.run(["tmux", *args], env=env, capture_output=True, text=True)
+
+    def start(drop):
+        tmux("new-session", "-d", "-s", "lab-gm", "-x", "200", "-y", "40", f"python3 {FAKE_TUI} {drop}")
+        return tmux, env
+    yield start
+    tmux("kill-session", "-t", "=lab-gm")
+    shutil.rmtree(sock_dir, ignore_errors=True)
 
 
-def _composer(screen):
-    return [line for line in screen.splitlines() if line.startswith("❯\xa0") or line.startswith("❯ ")][-1]
+def _inject(env):
+    return subprocess.run(
+        ["bash", "-c", f"set -euo pipefail; SCRIPT_DIR='{os.path.dirname(HERE)}'; "
+                       f"err() {{ echo \"ERR: $*\" >&2; }}; source '{HELPER}'; sleep 0.5; "
+                       f"runtime=claude; rc=0; inject_prompt lab-gm '{PROMPT}' || rc=$?; echo rc=$rc"],
+        env=env, capture_output=True, text=True, timeout=120)
 
 
 def test_a_lost_enter_is_pressed_again_and_the_prompt_is_submitted(lab):
-    sock = lab(1)
-    r = _inject(sock)
+    tmux, env = lab(1)
+    r = _inject(env)
     assert "rc=0" in r.stdout, r.stdout + r.stderr
-    assert "pressing Enter again" in r.stderr
-    screen = _screen(sock)
+    screen = tmux("capture-pane", "-p", "-t", "=lab-gm:").stdout
     assert "● working on it" in screen
-    assert PROMPT[:24] not in _composer(screen).replace("\xa0", " ")
+    assert screen.count("You are lab-gm.") == 1          # one paste, never a second copy
 
 
-def test_a_prompt_that_never_submits_fails_the_spawn_instead_of_reporting_success(lab):
-    sock = lab(99)
-    r = _inject(sock)
-    assert "rc=1" in r.stdout, r.stdout + r.stderr
-    assert "NOT SUBMITTED" in r.stderr
-    # exactly one copy in the box: a lost Enter is never answered with a second paste
-    assert _screen(sock).count("You are gm.") == 1
+def test_a_clean_submit_is_one_paste_on_the_first_enter(lab):
+    tmux, env = lab(0)
+    r = _inject(env)
+    assert "rc=0" in r.stdout and "enter-1" in r.stderr, r.stdout + r.stderr
+    assert tmux("capture-pane", "-p", "-t", "=lab-gm:").stdout.count("You are lab-gm.") == 1
 
 
-def test_a_clean_submit_is_one_paste_and_no_retry(lab):
-    sock = lab(0)
-    r = _inject(sock)
-    assert "rc=0" in r.stdout and "WARN" not in r.stderr, r.stdout + r.stderr
-    assert _screen(sock).count("You are gm.") == 1
+def test_a_prompt_that_never_submits_is_stuck_not_success(lab):
+    """boot_inject's own timings (3 Enters, then 90 s of polls) shortened in-process; same code."""
+    tmux, env = lab(99)
+    code = (f"import sys; sys.path.insert(0, {HERE!r}); import boot_inject as B; "
+            "B.FIRST_ENTER_GAP_S = 0.3; B.POLL_EVERY_S = 0.3; B.POLL_FOR_S = 1.5; "
+            f"print(B.boot_inject('lab-gm', {PROMPT!r}, 'claude', log_fn=lambda m: None))")
+    time.sleep(0.5)
+    r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=60)
+    assert "('stuck', 'stuck')" in r.stdout, r.stdout + r.stderr
+    assert tmux("capture-pane", "-p", "-t", "=lab-gm:").stdout.count("You are lab-gm.") == 1
