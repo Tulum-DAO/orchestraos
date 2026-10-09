@@ -2235,7 +2235,11 @@ def ask_choices(options, multi=False, purpose="other", exclusive=None):
         else:
             card["purpose"] = "other"
             note = f" (no team offer recorded: the team is {state})"
-    elif purpose == "devices" and turn.get("conversation_id"):
+    elif purpose == "devices":
+        # A tap here is consent to pair: the card says so in the server's words, however the brain
+        # framed the question (orchestraos-builder #296 delta, nit a).
+        card["note"] = _onb.DEVICES_NOTE
+    if purpose == "devices" and turn.get("conversation_id"):
         with _TEAM_OFFERS_LOCK:
             _DEVICE_CARDS[turn["conversation_id"]] = (time.time(), tuple(clean), turn.get("principal"))
     turn["choices"] = card

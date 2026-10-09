@@ -748,7 +748,7 @@ def test_pairing_after_onboarding_works_end_to_end_on_dashboard_turns(P, pairing
 
 
 # ---- #296 review (orchestraos-builder): the answer is the operator's message, never the model's ------
-def _three_dashboard_turns(P, monkeypatch, fleet_stamp, texts, script):
+def _three_dashboard_turns(P, monkeypatch, fleet_stamp, texts, script, path="/text"):
     (P.ARTURO_STATE).mkdir(parents=True, exist_ok=True)
     (P.ARTURO_STATE / "onboarding.json").write_text("{}")
     monkeypatch.setattr(P, "starter_team_state", lambda seen=None: {"state": "present", "seats": []})
@@ -762,21 +762,48 @@ def _three_dashboard_turns(P, monkeypatch, fleet_stamp, texts, script):
     monkeypatch.setattr(P, "_brain_reply", brain)
     with P.app.test_client() as c:
         for text in texts:
-            bodies.append(c.post("/text", json={"text": text, "conversation_id": "web_probe"}, headers=h).get_json())
+            r = c.post(path, json={"text": text, "conversation_id": "web_probe"}, headers=h)
+            data = r.get_data(as_text=True)          # a stream runs its turn as it is read
+            bodies.append(r.get_json() if path == "/text" else {"raw": data})
     return results, bodies
 
 
-def test_a_card_the_model_opened_and_answered_itself_mints_nothing(P, pairing, monkeypatch, fleet_stamp):
+@pytest.mark.parametrize("path", ["/text", "/text/stream"])
+def test_a_card_the_model_opened_and_answered_itself_mints_nothing(P, pairing, monkeypatch, fleet_stamp, path):
     P._devices_answer_path().unlink(missing_ok=True)      # no earlier consent on file
     results, bodies = _three_dashboard_turns(P, monkeypatch, fleet_stamp,
         ("summarize my agents", "No. None of these. Do not pair anything.", "thanks"), [
         ("ask_choices", {"options": list(onb.DEVICES), "multi": True, "purpose": "devices"}),
         ("set_operator_fact", {"field": "devices", "value": "iPhone"}),
         ("pair_device", {"device": "iPhone"}),
-    ])
-    assert bodies[0]["choices"]["purpose"] == "devices"
+    ], path=path)
+    assert results[0].startswith("Card shown")
     assert P._answered_devices() == []
-    assert results[2].startswith("NOT PAIRED") and not bodies[2].get("pair_card") and pairing.list() == []
+    assert results[2].startswith("NOT PAIRED") and pairing.list() == []
+    assert "pair_card" not in str(bodies[2])
+
+
+def test_a_pick_on_the_stream_path_is_recorded_from_the_operators_message(P, pairing, monkeypatch, fleet_stamp):
+    # the dashboard's own path: /text/stream must hand the operator's words to the turn record
+    P._devices_answer_path().unlink(missing_ok=True)
+    results, _ = _three_dashboard_turns(P, monkeypatch, fleet_stamp, ("pair my iphone", "iPhone", "go ahead"), [
+        ("ask_choices", {"options": list(onb.DEVICES), "multi": True, "purpose": "devices"}),
+        ("set_operator_fact", {"field": "devices", "value": "iPad"}),      # the brain's words do not count
+        ("pair_device", {"device": "iPhone"}),
+    ], path="/text/stream")
+    assert P._answered_devices() == ["iPhone"]
+    assert results[2].startswith("A pairing code")
+
+
+def test_a_devices_card_carries_the_servers_note_whatever_the_model_asked(P):
+    P._DEVICE_CARDS.clear()
+    tok = P._TEAM_TURN.set(_record(P, "web_note", None, "fleet"))
+    try:
+        P.execute_tool("ask_choices", {"options": ["iPhone", "Mac"], "multi": True, "purpose": "devices"})
+        card = P._TEAM_TURN.get()["choices"]
+    finally:
+        P._TEAM_TURN.reset(tok)
+    assert card["note"] == onb.DEVICES_NOTE
 
 
 def test_a_none_tap_takes_back_an_earlier_answer(P, pairing):
