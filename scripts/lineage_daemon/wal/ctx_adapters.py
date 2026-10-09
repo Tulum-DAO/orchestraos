@@ -30,6 +30,20 @@ DEFAULT_RUNTIME = "claude"
 
 DEFAULT_CTX_TTL_S = 120.0  # a detector file older than this is treated as UNKNOWN
 
+# The statusline writes the detector file only on a redraw, so an IDLE seat's file ages past the
+# TTL while its ctx cannot change (29 of 37 live seats >10 min old, 2026-10-09). A reading still
+# counts iff it was taken at/after the seat's last CONTEXT-CHANGING transcript entry, minus this
+# slack (the statusline's 30 s output cache can lag the last append). ONE definition of "fresh":
+# scripts/context_reading.py (the apps' context_pct_of_window / _of_budget) imports these.
+TRANSCRIPT_SLACK_S = 60.0
+# Entries that change what is in the context window. Everything else in a transcript is
+# housekeeping (stop_hook_summary, turn_duration, informational, queue-operation, ...): one
+# 'Remote Control disconnected' line 25 h into an idle seat's quiet read as missed activity.
+_CTX_ENTRY_TYPES = frozenset({"user", "assistant", "attachment"})
+_CTX_SYSTEM_SUBTYPES = frozenset({"compact_boundary"})
+# Read the transcript's tail in growing windows; a tool result can make one line megabytes long.
+_TAIL_WINDOWS = (256 * 1024, 4 * 1024 * 1024, 32 * 1024 * 1024)
+
 
 # ---- normalization (each adapter's conversion to fraction-of-usable-context 0..1) ----
 
@@ -52,6 +66,54 @@ def normalize_from_tokens(tokens, window):
 
 
 # ---- per-provider read_ctx adapters (thin wrappers over existing readers) ----
+
+def _iso_epoch(ts):
+    """A transcript ISO timestamp ('2026-01-01T00:00:00.000Z') -> epoch seconds, or None."""
+    import datetime as _dt
+    if not isinstance(ts, str) or not ts:
+        return None
+    try:
+        return _dt.datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def last_ctx_entry_epoch(path):
+    """Epoch of the last context-changing entry in a claude transcript, or None.
+
+    Reads only the tail. A trailing line that is not valid JSON (an append in progress) is
+    skipped. None when no such entry lies within the largest tail window."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return None
+    for window in _TAIL_WINDOWS:
+        start = max(0, size - window)
+        try:
+            with open(path, "rb") as fh:
+                fh.seek(start)
+                chunk = fh.read()
+        except OSError:
+            return None
+        lines = chunk.split(b"\n")
+        if start > 0:
+            lines = lines[1:]  # the first piece is the tail of a line that started earlier
+        for raw in reversed(lines):
+            if not raw.strip():
+                continue
+            try:
+                d = json.loads(raw)
+            except ValueError:
+                continue
+            if not isinstance(d, dict):
+                continue
+            t = d.get("type")
+            if t in _CTX_ENTRY_TYPES or (t == "system" and d.get("subtype") in _CTX_SYSTEM_SUBTYPES):
+                return _iso_epoch(d.get("timestamp"))
+        if start == 0:
+            return None
+    return None
+
 
 def read_ctx_detectorfile(seat, *, detector_dir=None, sid=None, now=None,
                           ttl_s=None, **_):

@@ -98,7 +98,7 @@ def _transcript(tmp_path, entries, name="t.jsonl", trailer=""):
 
 
 def test_housekeeping_after_the_reading_does_not_make_an_idle_seat_stale(tmp_path):
-    # claude-token-audit, 2026-10-09: last turn, then the reading, then only a
+    # An idle seat, 2026-10-09: last turn, then the reading, then only a
     # "Remote Control disconnected" line a day later. Idle, not stale.
     _seat(tmp_path)
     tr = _transcript(tmp_path, [

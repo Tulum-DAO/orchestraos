@@ -22,9 +22,10 @@ hours old and still true: its context has not moved. A wall-clock TTL would have
 STATUSLINE_SLACK_S) is stale, and stale or unprovable is None. Never a remembered value: a
 number that looks current and is not is what made the operator stop a healthy seat.
 
-The transcript's last ACTIVITY entry is used: not the file's mtime (transcripts are touched without
-being appended to; one had today's mtime and a last entry two days old), and not housekeeping
-lines, which carry timestamps too (see _is_activity).
+The transcript's last CONTEXT-CHANGING entry is used (user / assistant / attachment / a
+compaction): not the file's mtime (transcripts are touched without being appended to; one had
+today's mtime and a last entry two days old), and not housekeeping lines, which carry timestamps
+too. The rule lives in lineage_daemon/wal/ctx_adapters.py, shared with the rotation engine.
 
 KNOWN WINDOW: STATUSLINE_SLACK_S admits a reading taken up to that long before the last entry, so
 for one redraw cycle of_window can read slightly LOW (a big file read in that minute is not in it
@@ -32,12 +33,15 @@ yet). It corrects on the next redraw. Nulling those readings instead would blank
 """
 import json
 import os
-from datetime import datetime
+import sys
 
-# The status line may lag the transcript by a redraw plus its own output cache (the fleet's caches
-# for 30 s). A reading this much older than the last entry still counts.
-STATUSLINE_SLACK_S = 60
-_TAIL_BYTES = 262144
+# ONE definition of "fresh", shared with the rotation engine (lineage_daemon/wal/ctx_adapters.py):
+# which transcript entries change the context, how far back to read, and the status line's lag.
+_SCRIPTS = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+from lineage_daemon.wal.ctx_adapters import TRANSCRIPT_SLACK_S as STATUSLINE_SLACK_S  # noqa: E402
+from lineage_daemon.wal.ctx_adapters import last_ctx_entry_epoch  # noqa: E402
 
 
 def bridge_path(session_id: str, tmp_dir: str | None = None) -> str:
@@ -45,51 +49,9 @@ def bridge_path(session_id: str, tmp_dir: str | None = None) -> str:
     return os.path.join(tmp_dir or os.environ.get("TMPDIR") or "/tmp", f"claude-ctx-{session_id}.json")
 
 
-# What counts as the seat DOING something. Same rule as the rotation engine's freshness check
-# (orchestra-builder, 2026-10-09). Housekeeping lines carry timestamps too ("Remote Control
-# disconnected", stop-hook summaries, queue operations) and would make an idle seat's true
-# reading look stale. A compaction after the reading DOES make it stale.
-_ACTIVITY_TYPES = ("user", "assistant", "attachment")
-_ACTIVITY_SYSTEM_SUBTYPES = ("compact_boundary",)
-# One tool result can be larger than the tail: read further back before giving up.
-_TAIL_STEPS = (_TAIL_BYTES, 4 * 1024 * 1024)
-
-
-def _is_activity(entry: dict) -> bool:
-    t = entry.get("type")
-    return t in _ACTIVITY_TYPES or (t == "system" and entry.get("subtype") in _ACTIVITY_SYSTEM_SUBTYPES)
-
-
 def last_entry_ts(transcript_path: str | None) -> float | None:
-    """Epoch seconds of the newest ACTIVITY entry (see _is_activity) in the transcript, or None."""
-    if not transcript_path:
-        return None
-    for tail in _TAIL_STEPS:
-        try:
-            with open(transcript_path, "rb") as fh:
-                fh.seek(0, os.SEEK_END)
-                size = fh.tell()
-                fh.seek(max(0, size - tail))
-                chunk = fh.read().decode("utf-8", "replace")
-        except OSError:
-            return None
-        lines = chunk.split("\n")
-        if size > tail:
-            lines = lines[1:]             # the first line may be a partial record
-        for line in reversed(lines):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)  # a half-written last line fails here and is skipped
-                if not isinstance(entry, dict) or not _is_activity(entry):
-                    continue
-                return datetime.fromisoformat(entry["timestamp"].replace("Z", "+00:00")).timestamp()
-            except (ValueError, AttributeError, TypeError, KeyError):
-                continue
-        if size <= tail:
-            return None                   # read the whole file: there is no activity entry
-    return None
+    """Epoch seconds of the newest CONTEXT-CHANGING transcript entry, or None (ctx_adapters)."""
+    return last_ctx_entry_epoch(transcript_path) if transcript_path else None
 
 
 def _pct(v) -> int | None:
