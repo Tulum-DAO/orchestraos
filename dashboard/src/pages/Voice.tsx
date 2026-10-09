@@ -63,6 +63,7 @@ export default function Voice() {
             <VoiceAgentCard
               key={agent.pm_id}
               pmId={agent.pm_id}
+              name={agent.name}
               agentId={agent.agent_id}
               voice={agent.voice}
               updatedAt={agent.updated_at}

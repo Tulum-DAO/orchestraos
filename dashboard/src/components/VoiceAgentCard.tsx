@@ -1,9 +1,10 @@
 import { Mic } from 'lucide-react';
 import { clsx } from 'clsx';
-import { VOICE_AGENTS, VOICE_AGENT_PENDING_ID } from '../lib/constants';
+import { VOICE_AGENT_PENDING_ID } from '../lib/constants';
 
 interface Props {
   pmId: string;
+  name?: string;
   agentId: string;
   voice: string;
   updatedAt: string;
@@ -11,10 +12,9 @@ interface Props {
   onCall: () => void;
 }
 
-export function VoiceAgentCard({ pmId, agentId, voice, updatedAt, isInCall, onCall }: Props) {
-  const meta = VOICE_AGENTS[pmId];
-  const label = meta?.label ?? pmId;
-  const description = meta?.description ?? '';
+export function VoiceAgentCard({ pmId, name, agentId, voice, updatedAt, isInCall, onCall }: Props) {
+  // The install's own voice agent, as state/voice-agents.json names it: never a built-in roster.
+  const label = name || pmId;
   // A soak/POC card whose ElevenLabs agent isn't wired yet: render it, but the call
   // button is disabled + labeled honestly (no broken call). Real agents are unaffected.
   const isPending = !agentId || agentId === VOICE_AGENT_PENDING_ID;
@@ -28,7 +28,7 @@ export function VoiceAgentCard({ pmId, agentId, voice, updatedAt, isInCall, onCa
       <div className="flex items-start justify-between">
         <div>
           <h3 className="text-lg font-semibold">{label}</h3>
-          <p className="text-sm text-neutral-500 mt-0.5">{description}</p>
+          {label !== pmId && <p className="text-sm text-neutral-500 mt-0.5">{pmId}</p>}
         </div>
         {voice && (
           <span className="text-[10px] uppercase tracking-wider bg-neutral-800 text-neutral-400 px-2 py-0.5 rounded-full whitespace-nowrap">
