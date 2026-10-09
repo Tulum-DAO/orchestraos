@@ -4248,6 +4248,8 @@ async def handle_agent_screen(request):
            "context_pct": st.get("context_pct") or "",
            "context_pct_of_window": _int_or_none(st.get("context_pct_of_window")),
            "context_pct_of_budget": _int_or_none(st.get("context_pct_of_budget")),
+           # which CLI runs the seat, exactly as /agents sends it (the screen colours by it).
+           "provider": ((st.get("process") or {}).get("runtime") or None),
            # Rich live-turn detail (spinner line telemetry) for the
            # app's status strip: "Catapulting · 2m 36s · ↑766 tokens".
            "elapsed": st.get("elapsed") or "",
