@@ -98,7 +98,7 @@ test('B2: acknowledged batch renders ONE queued_batch node, entries newest->olde
   assert.equal(batches.length, 1);
   const b = batches[0];
   assert.equal(b.count, 2);
-  assert.equal(b.key, 'batch:BATCH1');
+  assert.equal(b.key, 'msg:b_a');                 // the batch's OLDEST message: the key its live card had
   assert.equal(b.entries.length, 2);
   // newest -> oldest
   assert.equal(b.entries[0].body, 'batch msg B (newer)');
@@ -110,7 +110,7 @@ test('B2: acknowledged batch renders ONE queued_batch node, entries newest->olde
 
 test('B2: an unacknowledged batch does NOT render (batch still mid-processing)', () => {
   const out = mergeQueuedItems([], 'gm');
-  assert.ok(!out.some((i: any) => i.kind === 'queued_batch' && i.key === 'batch:BATCH2'));
+  assert.ok(!out.some((i: any) => i.kind === 'queued_batch' && i.key === 'msg:b_c'));
 });
 
 test('interleave: synthetic items sort by ts among JSONL items, stable', () => {

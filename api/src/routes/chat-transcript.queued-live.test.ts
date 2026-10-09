@@ -105,7 +105,7 @@ test('a message not yet in the log is never shown early', () => {
   assert.equal(cards(env.items).length, 0);
 });
 
-test('once the drain stamps the batch, B2 takes the row over: still ONE card, never a bubble', () => {
+test('once the drain stamps the batch, B2 takes the row over: still ONE card, SAME key, never a bubble', () => {
   const d = new Database(DBP);
   d.prepare(`UPDATE messages SET status='acknowledged', acknowledged_at='2026-10-09T10:31:24.650464+00:00',
     metadata='{"batch_id":"B1X","processed_ts":"2026-10-09T10:31:22+00:00"}' WHERE id='m1'`).run();
@@ -114,7 +114,7 @@ test('once the drain stamps the batch, B2 takes the row over: still ONE card, ne
     const env = run('agent-a', midTurn(DECISION));
     const c = cards(env.items);
     assert.equal(c.length, 1, 'the live card is replaced by the batch, not doubled');
-    assert.equal(c[0].key, 'batch:B1X');
+    assert.equal(c[0].key, 'msg:m1', 'the SAME key as its live card: clients update it in place (iOS keeps expansion by key)');
     assert.equal(bubbles(env.items, DECISION).length, 0);
   } finally {
     const r = new Database(DBP);

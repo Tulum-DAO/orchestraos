@@ -26,7 +26,7 @@
  *       the Stop drain, i.e. at the END of the agent's turn: without B3 the operator saw the
  *       raw bubble for the whole turn and the card only after it (and never, for a row the
  *       agent acked before its drain ran). Once the drain stamps it, B2 takes the row over:
- *       card -> card, never card -> bubble -> card.
+ *       card -> card, never card -> bubble -> card, under the SAME key (msg:<oldest row id>).
  *
  * READ-ONLY, and its own connection (not the write-handle singleton): opens a
  * readonly better-sqlite3 handle on MSG_DB_PATH || <ORCHESTRA>/state/tasks.db.
@@ -100,14 +100,15 @@ function b2Batches(db: DB, agentId: string, claimed: Set<string> = new Set()): a
         WHERE to_agent = ? AND metadata LIKE '%"batch_id"%'
           AND (acknowledged_at IS NOT NULL OR status IN ('acknowledged', 'archived'))
         ORDER BY created_at DESC`).all(agentId) as any[];
-    const batches = new Map<string, { entries: BatchEntry[]; ts: string }>();
+    const batches = new Map<string, { entries: BatchEntry[]; ts: string; first: string }>();
     for (const r of rows) {
       let md: any = {};
       try { md = r.metadata ? JSON.parse(r.metadata) : {}; } catch { md = {}; }
       const bid = md && typeof md.batch_id === 'string' ? md.batch_id : null;
       if (!bid) continue;
       claimed.add(String(r.id));
-      const b = batches.get(bid) || { entries: [], ts: '' };
+      const b = batches.get(bid) || { entries: [], ts: '', first: '' };
+      b.first = String(r.id);             // rows arrive newest->oldest: the last one seen is the oldest
       // rows arrive newest->oldest (created_at DESC) -> entries stay newest-first
       b.entries.push({ agent: String(r.from_agent ?? ''), sent_ts: String(r.created_at ?? ''), body: String(r.body ?? '') });
       const cand = String(r.acknowledged_at || md.processed_ts || r.created_at || '');
@@ -116,7 +117,11 @@ function b2Batches(db: DB, agentId: string, claimed: Set<string> = new Set()): a
     }
     const out: any[] = [];
     for (const [bid, b] of batches) {
-      out.push({ kind: 'queued_batch', count: b.entries.length, entries: b.entries, ts: b.ts, key: `batch:${bid}` });
+      // Keyed by the batch's OLDEST message, the key that message's live card (B3) already had: the
+      // card keeps ONE identity when the drain batches it, so clients that key per-card state on it
+      // (iOS keeps expansion in a Set by row id) update it in place instead of deleting and
+      // re-inserting it. A batch's membership is write-once, so the oldest row never changes.
+      out.push({ kind: 'queued_batch', count: b.entries.length, entries: b.entries, ts: b.ts, key: `msg:${b.first}` });
     }
     return out;
   } catch {
@@ -128,6 +133,10 @@ function b2Batches(db: DB, agentId: string, claimed: Set<string> = new Set()): a
 // dropQueuedCommandsCoveredByBatches uses, so B3 never renders a card the drop would then fail
 // to pair with its bubble).
 const LIVE_MIN = 40;
+
+/** The B3 cards, by identity: bound by exact text, so they cover only that text (see
+ *  dropQueuedCommandsCoveredByBatches). Not a field: it never reaches a client. */
+export const LIVE_CARDS = new WeakSet<object>();
 const LIVE_LIMIT = 200;
 
 const norm = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -171,9 +180,11 @@ function b3LiveCards(db: DB, agentId: string, items: any[], floorMs: number | nu
       const qs = queuedByText.get(b) || [];
       if (rs.length !== 1 || qs.length !== 1) continue;          // ambiguous: leave it to the drain
       const r = rs[0];
-      out.push({ kind: 'queued_batch', count: 1,
+      const card = { kind: 'queued_batch', count: 1,
         entries: [{ agent: String(r.from_agent ?? ''), sent_ts: String(r.created_at ?? ''), body: String(r.body ?? '') }],
-        ts: qs[0].ts ?? r.created_at, key: `msg:${r.id}` });
+        ts: qs[0].ts ?? r.created_at, key: `msg:${r.id}` };
+      LIVE_CARDS.add(card);
+      out.push(card);
     }
     return out;
   } catch {
