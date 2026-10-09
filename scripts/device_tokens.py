@@ -27,8 +27,9 @@ The shape, and the reasoning behind each decision:
     The name is kept rather than changed because the live client gates on the string `ptt` and a
     rename would break a paired headset for a cosmetic gain. The honest fix is this paragraph.
   * `owner` says "this device is the operator's own": its push-to-talk calls (`ptt` routes) get
-    Arturo's full tools, the same as the dashboard; its typed turns are unchanged. No route requires it; the gateway reads it only to
-    stamp a call's caller. Mintable by the host CLI only, never over HTTP.
+    Arturo's full tools, the same as the dashboard; its typed turns are unchanged. No route
+    requires it; the gateway reads it only to stamp a call's caller. Mintable by the host CLI
+    only, never over HTTP.
   * `voice` is separate from `read` because every /arturo call SPENDS REAL PROVIDER MONEY.
     Reading state and buying tokens from a vendor are not the same permission.
   * `approve` is separate from everything because it ANSWERS ON THE OPERATOR'S BEHALF.

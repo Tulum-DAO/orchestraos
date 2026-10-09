@@ -445,3 +445,28 @@ def test_a_claim_whose_chunk_is_refused_is_rolled_back(R, monkeypatch):
     monkeypatch.setattr(R._STREAM_RELAY, "feed_audio", lambda *a, **k: {"ok": False, "error": "ended"})
     assert _chunk(R, _stamp(R)).status_code == 410
     assert R._call_principal(UUID) is None and UUID not in R._CALL_PRINCIPALS
+
+
+# --- review round 3 nits --------------------------------------------------------------------------
+
+def test_a_lost_call_stays_bound_through_a_second_restart(monkeypatch, tmp_path):
+    a = _load(monkeypatch, tmp_path, "arturo_g1_r1")
+    a._record_call(UUID, "owner:dev_phone")
+    a._STREAM_RELAY.shutdown()
+    b = _load(monkeypatch, tmp_path, "arturo_g1_r2")
+    b._record_call(HEX_ID, "fleet")               # another call saves the file again
+    b._STREAM_RELAY.shutdown()
+    c = _load(monkeypatch, tmp_path, "arturo_g1_r3")
+    try:
+        assert c._bind_call(UUID, "device:dev_quest", claim=True) == (False, False)
+        assert c._call_principal(UUID) is None
+    finally:
+        c._STREAM_RELAY.shutdown()
+
+
+def test_a_device_call_stays_bound_after_it_goes_idle(R):
+    now = time.time()
+    R._record_call(UUID, "device:dev_quest", now=now)
+    R._call_principal(UUID, now=now + 2 * R._CALL_IDLE_S)
+    assert R._bind_call(UUID, "device:dev_other", now=now + 2 * R._CALL_IDLE_S + 1) == (False, False)
+    assert R._call_lost_notice(UUID) is None, "nothing to apologise for: it never had tools"

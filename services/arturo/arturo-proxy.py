@@ -2265,6 +2265,8 @@ def _save_active_calls():
     bound to it."""
     try:
         live = {_cid_hash(c): r["principal"] for c, r in _CALL_PRINCIPALS.items() if _full_class(r["principal"])}
+        # calls that already lost their record stay bound through a second restart too
+        live.update({h: e["principal"] for h, e in _CALL_LOST.items() if _full_class(e.get("principal"))})
         ARTURO_STATE.mkdir(parents=True, exist_ok=True)
         tmp = _CALL_ACTIVE_FILE.with_suffix(".tmp")
         fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -2292,8 +2294,8 @@ def _prune_calls(now):
             if now - r["last_seen"] > _CALL_IDLE_S or now - r["started"] > _CALL_MAX_S]
     for c in gone:
         p = _CALL_PRINCIPALS[c]["principal"]
-        if _full_class(p):
-            _CALL_LOST.setdefault(_cid_hash(c), {"said": False, "principal": p})
+        # every lost call stays bound to its caller; only a full-tool one has something to say
+        _CALL_LOST.setdefault(_cid_hash(c), {"said": not _full_class(p), "principal": p})
         del _CALL_PRINCIPALS[c]
     return bool(gone)
 
@@ -2372,8 +2374,8 @@ def _end_call(cid):
         return
     with _CALL_LOCK:
         had = _CALL_PRINCIPALS.pop(cid, None)
-        _CALL_LOST.pop(_cid_hash(cid), None)
-        if had is not None and _full_class(had["principal"]):
+        lost = _CALL_LOST.pop(_cid_hash(cid), None)
+        if (had is not None and _full_class(had["principal"])) or lost is not None:
             _save_active_calls()
 
 
