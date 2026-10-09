@@ -103,7 +103,7 @@ def stream_turn(text, conversation_id, brain, brain_id, messages, spawn, fallbac
     else:
         source = spawn(stream_command(brain.runtime, brain.cli, system, prompt, model=model_flag))
     classifier, sanitizer = PassClassifier(), StreamingSanitizer()
-    verdict, held, failure = None, "", None
+    verdict, held, fed, failure = None, "", 0, None
 
     try:
         for event in read_events(brain.runtime, source):
@@ -121,16 +121,23 @@ def stream_turn(text, conversation_id, brain, brain_id, messages, spawn, fallbac
                         break          # structure: never shown, re-run down /text
                     if verdict is None:
                         continue       # undecided — nothing is safe to show yet
-                    out = sanitizer.feed(held)
-                else:
-                    out = sanitizer.feed(event.text)
-                if out:
-                    yield _ev("text.delta", turn_id=turn_id, text=out)
+                if _TOOL_ENVELOPE_RE.search(held):
+                    break              # prose that turned into a tool call: /text runs the tools
+                # Only what precedes a possible envelope: '{"tool_ca' can still become one.
+                safe = _prose_safe_len(held)
+                if safe > fed:
+                    out = sanitizer.feed(held[fed:safe])
+                    fed = safe
+                    if out:
+                        yield _ev("text.delta", turn_id=turn_id, text=out)
                 continue
             if isinstance(event, TurnEnd):
                 # truncated = the CLI's output stopped before its result line: half an answer.
                 if verdict != PROSE or event.truncated:
                     break
+                out = sanitizer.feed(held[fed:])      # a held brace that never became an envelope
+                if out:
+                    yield _ev("text.delta", turn_id=turn_id, text=out)
                 tail = sanitizer.finish()
                 if tail:
                     yield _ev("text.delta", turn_id=turn_id, text=tail)
