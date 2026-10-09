@@ -105,6 +105,23 @@ class _FakeRequest(dict):
         self.match_info = _FakeMatchInfo(canonical)
 
 
+def test_every_agent_file_route_needs_code_and_nothing_else_does():
+    """`code` reads files out of agents' folders, so its rows in the table are exactly the ones a bad
+    merge breaks: a conflict resolved into `read` would hand every paired phone the source tree.
+    Checked on the MOUNTED app (GET and the HEAD aiohttp adds), not only on the table."""
+    app = G.build_app()
+    mounted = {(route.method.upper(), resource.canonical)
+               for resource in app.router.resources() for route in resource}
+    agent_file = {(m, p) for (m, p) in mounted if p == "/agent-file"}
+    assert agent_file == {("GET", "/agent-file"), ("HEAD", "/agent-file")}, agent_file
+    for method, path in agent_file:
+        assert G.ROUTE_SCOPES[(method, path)] == "code", (method, path)
+    code_rows = {k for k, v in G.ROUTE_SCOPES.items() if v == "code"}
+    assert code_rows == agent_file, code_rows
+    for method in ("GET", "HEAD"):
+        assert G.ROUTE_SCOPES[(method, "/upload/{name}")] == "read", method
+
+
 def test_required_scope_reads_the_table():
     assert G.required_scope(_FakeRequest("GET", "/agents")) == "read"
     assert G.required_scope(_FakeRequest("POST", "/agent-key")) == "inject"
