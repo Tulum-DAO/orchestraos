@@ -1465,9 +1465,11 @@ def compute_agents():
 
     out, seen = [], set()
     perm_present = set()
+    agent_start = {}
     for sess in _tmux_session_names():
         seen.add(sess)
         st = ast.get_agent_status(sess)
+        agent_start[sess] = _proc_start_epoch(((st.get("process") or {}) if isinstance(st, dict) else {}).get("pid"))
         _pm = st.get("pending_menu") if isinstance(st, dict) else None
         if isinstance(_pm, dict) and _pm.get("kind") == "permission":
             perm_present.add(f"{sess}|{_perm_digest(sess, _pm.get('question') or '', _pm.get('context') or '')}")
@@ -1532,7 +1534,8 @@ def compute_agents():
         pane = (get_pane(sess) or "").lstrip("%")
         if not pane:
             return None
-        return _load_json(ORCH_DIR / "state" / "agent-events" / "panes" / f"{pane}.json")
+        ev = _load_json(ORCH_DIR / "state" / "agent-events" / "panes" / f"{pane}.json")
+        return ev if _hook_event_is_current(ev, agent_start.get(sess), sess in agent_start) else None
 
     _stamp_recency_and_subagents(out, _pane_event)
 
@@ -1622,6 +1625,34 @@ def count_running_subagents(transcript_path, now=None):
         for p in [p for p, v in _SUBAGENT_TAIL_CACHE.items() if now - v[0] > SUBAGENT_STALE_S]:
             _SUBAGENT_TAIL_CACHE.pop(p, None)
     return running
+
+
+def _proc_start_epoch(pid):
+    """When process `pid` started, as epoch seconds (Linux /proc); None when unknown."""
+    try:
+        pid = int(pid)
+        with open(f"/proc/{pid}/stat") as f:
+            fields = f.read().rsplit(")", 1)[1].split()
+        start_ticks = int(fields[19])                 # field 22: starttime, in clock ticks since boot
+        with open("/proc/stat") as f:
+            btime = next(int(line.split()[1]) for line in f if line.startswith("btime "))
+        return btime + start_ticks / os.sysconf("SC_CLK_TCK")
+    except (TypeError, ValueError, OSError, StopIteration, IndexError):
+        return None
+
+
+def _hook_event_is_current(ev, agent_started, scanned=True):
+    """A pane's hook-event file outlives its pane, and tmux reuses pane ids after a server restart,
+    so a service pane can carry an agent's hook file from days ago. The file counts only when an
+    agent process runs in the pane and the file was written after that process started. Where the
+    start cannot be read (no /proc), the file is kept, as before."""
+    if not isinstance(ev, dict):
+        return False
+    if not scanned:
+        return True
+    if agent_started is None:
+        return _proc_start_epoch(os.getpid()) is None    # no /proc here: keep; else no agent: drop
+    return float(ev.get("ts") or 0) >= agent_started - 1.0
 
 
 def _stamp_recency_and_subagents(rows, pane_event, now=None):
