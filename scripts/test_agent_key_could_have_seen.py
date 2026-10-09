@@ -575,3 +575,56 @@ def test_a_rewrapped_question_is_still_the_same_menu(screen):
     narrow = dict(OPTIONS_M, question="Overwrite /very/long/path/to/some/fi le.txt?")
     screen["menu"] = narrow
     assert _web_tap({"question": wide["question"]})[0] == 200
+
+
+# --- expect ADDS to the served record, never replaces it -----------------------------------------
+
+def _app_tap_with_expect(menu, ua=PHONE_UA):
+    body = {"session": SESSION, "key": "1", "confirm": True,
+            "expect": {"question": menu["question"], "context": menu["context"]}}
+    resp = asyncio.run(G.handle_agent_key(_Req(body, ua=ua)))
+    return resp.status, json.loads(resp.text)
+
+
+def test_expect_does_not_let_an_identical_re_ask_through_for_a_device_with_a_record(screen):
+    """expect checks content; an identical re-asked prompt has the same content. A device the
+    gateway served A#1 to must still be refused on A#2, as it is without expect."""
+    _serve(CMD_A, now=100.0)                                   # the phone was shown A#1
+    G._mark_instance_answered(SESSION, CMD_A["question"], CMD_A["context"])   # answered elsewhere
+    status, body = _app_tap_with_expect(CMD_A)                 # A#2 is up, same content
+    assert status == 409 and body["reason"] == "instance_mismatch" and screen["sent"] == []
+
+
+def test_expect_with_a_matching_record_answers(screen):
+    _serve(CMD_A, now=100.0)
+    assert _app_tap_with_expect(CMD_A)[0] == 200
+
+
+def test_expect_still_refuses_the_wrong_content_even_with_a_matching_record(screen):
+    _serve(CMD_A, now=100.0)
+    screen["menu"] = CMD_B
+    _serve(CMD_B, now=101.0)                                   # the record is current (B)
+    status, body = _app_tap_with_expect(CMD_A)                 # but the card the client rendered is A
+    assert status == 409 and body["reason"] == "instance_mismatch" and screen["sent"] == []
+
+
+def test_expect_does_not_let_a_re_ask_through_after_the_device_last_saw_another_menu(screen, monkeypatch):
+    """Review: served A#1, answered elsewhere, the chat view then saw an options menu ("other"),
+    an identical A#2 is up: refused, as it is without expect."""
+    _serve(CMD_A, now=100.0)
+    G._mark_instance_answered(SESSION, CMD_A["question"], CMD_A["context"])
+    screen["menu"] = OPTIONS_M
+    monkeypatch.setattr(G, "_capture_pane", lambda *a: "")
+    r = _Req()
+    r.query = {"session": SESSION}
+    asyncio.run(G.handle_agent_screen(r))                      # record becomes "other"
+    screen["menu"] = CMD_A                                     # A#2, identical
+    status, body = _app_tap_with_expect(CMD_A)
+    assert status == 409 and body["reason"] == "instance_mismatch" and screen["sent"] == []
+
+
+def test_expect_alone_after_the_record_expired(screen):
+    _serve(CMD_A, now=100.0)
+    k = next(iter(G._SERVED))
+    G._SERVED[k] = (G._SERVED[k][0], G._SERVED[k][1] - G._SERVED_TTL_S - 1)
+    assert _app_tap_with_expect(CMD_A)[0] == 200

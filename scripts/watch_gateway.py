@@ -655,26 +655,32 @@ def _expect_key(session, expect):
 
 def _could_have_seen(request, session, menu, now=None, expect_key=None):
     """(ok, reason). A client that says what it rendered (`expect_key`) is checked against the
-    menu on screen, of any kind. Otherwise a permission answer needs the served record (above), and
-    other menus are gated only by the crossover rule. Every refusal is logged with its reason; with
-    the off switch present it is logged as would-refuse and allowed."""
+    menu on screen, of any kind. That checks CONTENT, so it cannot tell an identical re-asked
+    prompt from the one the client rendered; the served record can, so when this device has ANY
+    record here (a permission instance, or "other") a permission answer must match it too, exactly
+    as without `expect` (`expect` adds to it, never replaces it). A client with no record at all
+    (the web, which renders from /api/agents) is held to `expect` alone. Without `expect`, a permission answer needs the served record, and other menus are
+    gated only by the crossover rule. Every refusal is logged with its reason; with the off switch
+    present it is logged as would-refuse and allowed."""
     import time as _time
     if not isinstance(menu, dict):
         return True, None
     now = _time.time() if now is None else now
     fkey = _menu_fetch_key(request)
-    if expect_key is not None:
-        if menu.get("kind") == "permission":
-            _stamp_instance(session, menu)          # still a sighting
-        current = _menu_key(session, menu)
-        if current == expect_key:
-            return True, None
-        rec, reason = ("expect", expect_key), "instance_mismatch"
-        return _refuse_or_log(session, reason, fkey, rec, current)
     with _SERVED_LOCK:
         rec = _SERVED.get((fkey, session))
     if rec is not None and (now - rec[1]) > _SERVED_TTL_S:
         rec = None
+    if expect_key is not None:
+        current = _menu_key(session, menu)
+        if current != expect_key:
+            return _refuse_or_log(session, "instance_mismatch", fkey, ("expect", expect_key), current)
+        if menu.get("kind") != "permission":
+            return True, None
+        current = _current_instance_id(session, menu)   # also a sighting
+        if rec is None or rec[0] == current:            # no record (the web): expect alone
+            return True, None
+        return _refuse_or_log(session, "instance_mismatch", fkey, rec, current)
     if menu.get("kind") != "permission":
         # Not gated, except a tap whose device last saw a PERMISSION prompt here: that tap was
         # meant for the permission card, and the screen has moved on to another menu.
