@@ -16,3 +16,4 @@ services/arturo/cartesia_deploy/.cartesia/
 # identifier fragments, so a per-clone .git/info/exclude is not enough -- a fresh
 # clone or worktree would track them.
 .workspace/
+services/push-relay/wrangler.toml

@@ -1,0 +1,16 @@
+# Copy to wrangler.toml and fill in your own values. wrangler.toml is not committed: it names
+# your account's database and your Apple team. The APNs key is NEVER put here: upload it with
+#   npx wrangler secret put APNS_KEY < AuthKey_<KEY_ID>.p8
+name = "orchestraos-push-relay"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "orchestraos-push-relay"
+database_id = "<the id printed by: npx wrangler d1 create orchestraos-push-relay>"
+
+[vars]
+TEAM_ID = "<your Apple team id>"
+BUNDLE_IDS = "<app bundle id>,<watch app bundle id>"
+APNS_KEY_ID = "<your APNs key id>"

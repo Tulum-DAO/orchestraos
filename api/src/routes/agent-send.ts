@@ -52,7 +52,6 @@ import { execFileSync } from 'child_process';
 import { join } from 'path';
 import { mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
-import { homedir } from 'os';
 import { getRegistry } from '../services/state-reader.js';
 import { loadConfig } from '../lib/config.js';
 import { actingAgent } from '../lib/principal.js';
@@ -60,8 +59,7 @@ import { gatewayTokenFile } from '../lib/gateway-token.js';
 import { resolveMsgStorePath } from './messages.js';
 import { agentScopeParam } from '../lib/agent-scope.js';
 
-const HOME = process.env.HOME || homedir();
-const ORCHESTRA_DIR = process.env.ORCHESTRA_DIR || join(HOME, 'scripts/agent-orchestra');
+const ORCHESTRA_DIR = process.env.ORCHESTRA_DIR || loadConfig().dataDir;   // the same rule as lib/db.ts
 const UPLOADS_DIR = join(ORCHESTRA_DIR, 'state', 'uploads');
 // msg_store.py is CODE, so it lives in the CHECKOUT, not the data dir. This was
 // join(ORCHESTRA_DIR, 'msg_store.py') — a path that has never existed — so the durable-first

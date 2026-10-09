@@ -7,6 +7,7 @@ import { queryDb, execDb } from '../lib/db.js';
 import { actingAgent, tenantScope } from '../lib/principal.js';
 import { tenantFilter, sortColumn } from '../lib/sqlScope.js';
 import { inboxDirFor, isSafeAgentId } from '../lib/agentPaths.js';
+import { routeTask, registeredAgents } from '../lib/taskRouting.js';
 
 // ORDER BY cannot take a bound parameter: the column comes from this closed set (the real columns
 // of `tasks`); an unknown one is a 400. It used to be req.query.sort, raw. See lib/sqlScope.ts.
@@ -29,8 +30,8 @@ function nanoid(): string {
   return 'task_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 }
 
-// PROJECT_KW/PM_ROUTE are a title-keyword classifier example — populate with
-// your own projects and clients. "orchestraos" (the harness itself) is the
+// PROJECT_KW is a title-keyword classifier example — populate with your own projects and
+// clients. A task is routed to its project's PM only when that seat is registered (taskRouting). "orchestraos" (the harness itself) is the
 // only entry with a real meaning out of the box; acme/northwind are a
 // generic example pair to show the shape.
 const PROJECT_KW: Record<string, string[]> = {
@@ -40,9 +41,6 @@ const PROJECT_KW: Record<string, string[]> = {
 };
 const PRIO_KW: Record<string, string> = {
   asap:'critical',urgent:'critical',broken:'critical',important:'high',fix:'high',bug:'high','nice to have':'low',eventually:'low',minor:'low',
-};
-const PM_ROUTE: Record<string, string> = {
-  orchestraos:'pm-infra',acme:'pm-products',northwind:'pm-clients',
 };
 // Which PROJECT_KW keys are "clients" (vs. internal products) — used to
 // auto-fill t.client below.
@@ -116,7 +114,7 @@ router.post('/', (req: Request, res: Response) => {
   const tenantId = scope.isAdmin ? (task.tenant_id || 'admin') : (scope.clientScope || scope.username);
   const createdBy = task.created_by || scope.username;
   task = enrichTask(task);
-  const routedTo = task.assigned_to || (task.project_id && PM_ROUTE[task.project_id]) || null;
+  const routedTo = task.assigned_to || (task.project_id && routeTask({ slug: task.project_id }, registeredAgents())) || null;
   const now = new Date().toISOString();
 
   execDb(`INSERT INTO tasks (id,tenant_id,title,description,status,priority,project_id,phase_id,parent_id,north_star_id,cohort_id,assigned_to,created_by,source,routed_to,client,tags,due_date,blocked_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
