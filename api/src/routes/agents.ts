@@ -624,14 +624,30 @@ async function gatewayInject(session: string, text: string, force: boolean):
 // between web render and tap returns 409 (answered elsewhere). Digits 1-9 only;
 // confirm:false -> 428 needs_confirm; confirm:true -> sends the digit (no Enter).
 // Returns the gateway status verbatim so the OptionsCard can drive its UX.
-async function gatewayKey(session: string, key: string, confirm: boolean):
+// `expect` is the menu the web card rendered ({question, context}): the gateway answers only if
+// that menu is still the one on screen (a tap meant for prompt A never answers prompt B).
+export interface MenuExpect { question: string; context?: string | null }
+
+// Far above what the detector captures (120 lines of a pane); the gateway uses the same bound.
+const EXPECT_MAX = 64 * 1024;
+
+export function menuExpectOf(raw: unknown): MenuExpect | null | 'bad' {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'object') return 'bad';
+  const { question, context } = raw as Record<string, unknown>;
+  if (typeof question !== 'string' || question.length > EXPECT_MAX) return 'bad';
+  if (context !== undefined && context !== null && (typeof context !== 'string' || context.length > EXPECT_MAX)) return 'bad';
+  return { question, context: (context as string | null | undefined) ?? '' };
+}
+
+async function gatewayKey(session: string, key: string, confirm: boolean, expect: MenuExpect | null):
     Promise<{ status: number; body: any }> {
   const token = readGatewayToken();
   if (!token) throw new Error('gateway token unavailable');
   const resp = await fetch(`${GATEWAY_URL}/agent-key`, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session, key, confirm }),
+    body: JSON.stringify(expect ? { session, key, confirm, expect } : { session, key, confirm }),
     signal: AbortSignal.timeout(10000),
   });
   const body: any = await resp.json().catch(() => ({}));
@@ -839,6 +855,8 @@ router.post('/:id/inject-raw', (req: Request, res: Response) => {
 router.post('/:id/agent-key', async (req: Request, res: Response) => {
   const { key, confirm } = req.body || {};
   if (!key) { res.status(400).json({ error: 'key required' }); return; }
+  const expect = menuExpectOf((req.body || {}).expect);
+  if (expect === 'bad') { res.status(400).json({ error: 'expect must be {question, context?} strings' }); return; }
 
   const registry = getRegistry() as any;
   const agent = registry?.agents?.[String(req.params.id)];
@@ -861,7 +879,7 @@ router.post('/:id/agent-key', async (req: Request, res: Response) => {
   }
 
   try {
-    const r = await gatewayKey(session, String(key), !!confirm);
+    const r = await gatewayKey(session, String(key), !!confirm, expect);
     res.status(r.status).json(r.body);
   } catch (err: any) {
     res.status(502).json({ ok: false, error: 'gateway unreachable', detail: err.message });

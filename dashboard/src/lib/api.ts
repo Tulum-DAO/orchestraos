@@ -205,12 +205,18 @@ export interface AgentKeyResult {
   confirm_text?: string;
   state?: string;
   error?: string;
+  /** 409 reason: instance_mismatch (a different menu is up now) | instance_unknown */
+  reason?: string;
 }
-export async function sendAgentKey(id: string, key: string, confirm: boolean): Promise<AgentKeyResult> {
+/** The menu a card rendered: the gateway answers only while that same menu is on screen. */
+export interface MenuExpect { question: string; context?: string | null }
+
+export async function sendAgentKey(id: string, key: string, confirm: boolean,
+                                   expect?: MenuExpect): Promise<AgentKeyResult> {
   const res = await fetch(`${BASE}/agents/${encodeURIComponent(id)}/agent-key`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ key, confirm }),
+    body: JSON.stringify(expect ? { key, confirm, expect } : { key, confirm }),
   });
   let body: Record<string, unknown> = {};
   try { body = await res.json(); } catch { /* non-json */ }
