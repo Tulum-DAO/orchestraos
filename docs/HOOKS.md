@@ -40,7 +40,9 @@ under pytest refuses to touch the real `~/.claude/settings.json` (`CLAUDE_CONFIG
 a temp dir by the test fixtures). Outside pytest it also refuses to install a checkout or data dir
 that lives under a temp dir into any settings file that is not itself under a temp dir: a scratch clone's rows would run in every Claude
 session on the host, out of a directory that is deleted later. Point `CLAUDE_CONFIG_DIR` at a
-scratch dir for a throwaway install, or set `ORCHESTRA_ALLOW_TEMP_INSTALL=1` if you mean it. A test
+scratch dir for a throwaway install, or set `ORCHESTRA_ALLOW_TEMP_INSTALL=1` if you mean it. If
+`HOME` itself is under a temp dir (some containers), `~/.claude/settings.json` counts as scratch
+too, so a checkout under a temp dir does install into it. A test
 run that changes the real file's tagged rows anyway fails as a whole (root `conftest.py`).
 
 ## Testing on a host that runs a live fleet
