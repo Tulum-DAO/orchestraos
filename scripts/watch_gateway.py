@@ -802,10 +802,9 @@ def _perm_pseudo_row(session, menu):
            "created_at": created_iso, "urgency": 2}
     _inst = _menu_hook_instance(session, menu)
     if _inst:
-        # One name on the wire: `instance`. instance_id stays as a deprecated alias with the SAME
-        # value when the hook proves one, else the ledger's digest:n as before. The row id (and so
-        # the served record, which keys on the ledger's digest:n) is unchanged.
-        row["instance"] = row["menu"]["instance"] = row["instance_id"] = _inst
+        # A NEW field. instance_id keeps its shipped meaning (the ledger's digest:n: clients key the
+        # card's render identity on it, and the served record compares it); the row id is unchanged.
+        row["instance"] = row["menu"]["instance"] = _inst
     row["priority_score"] = _priority_score(row)
     return row
 
@@ -4205,7 +4204,7 @@ async def handle_agent_screen(request):
             pm["instance"] = _inst          # the CLI tool_use_id (DEC-1791405753559307 phase 0)
         if pm.get("kind") == "permission":
             _n, _digest = _stamp_instance(session, pm)
-            pm["instance_id"] = _inst or f"{_digest}:{_n}"
+            pm["instance_id"] = f"{_digest}:{_n}"     # shipped meaning; the hook id is `instance`
             # the LEDGER instance: the tap check compares against digest:n, never the hook id
             _note_served(request, session, f"{_digest}:{_n}")
         else:

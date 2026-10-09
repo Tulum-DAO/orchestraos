@@ -649,7 +649,8 @@ def test_a_hook_instance_on_the_row_does_not_break_the_served_record(screen, mon
     monkeypatch.setattr(G, "ApprovalStore", _Store)
     monkeypatch.setattr(G, "QuestionnaireStore", _Store)
     row = G._perm_pseudo_row(SESSION, CMD_A)
-    assert row["instance"] == row["instance_id"] == row["menu"]["instance"] == "toolu_01PROVEN"
+    assert row["instance"] == row["menu"]["instance"] == "toolu_01PROVEN"
+    assert row["instance_id"] != "toolu_01PROVEN" and ":" in row["instance_id"]     # still the ledger's
     monkeypatch.setattr(G, "_perm_pseudo_rows", lambda: [row])
     asyncio.run(G.handle_pending(_Req()))
     assert _tap()[0] == 200, "/pending-approvals recorded the ledger instance"
@@ -660,7 +661,7 @@ def test_a_hook_instance_on_the_row_does_not_break_the_served_record(screen, mon
     r.query = {"session": SESSION}
     resp = asyncio.run(G.handle_agent_screen(r))
     pm = json.loads(resp.text)["pending_menu"]
-    assert pm["instance"] == pm["instance_id"] == "toolu_01PROVEN"
+    assert pm["instance"] == "toolu_01PROVEN" and ":" in pm["instance_id"]
     assert _tap(ua=WATCH_UA)[0] == 200, "/agent-screen recorded the ledger instance"
 
 

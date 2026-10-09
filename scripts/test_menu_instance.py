@@ -227,11 +227,13 @@ DEVICE = {"id": "dev_test_quest", "label": "quest", "scopes": ["read"]}
 FLEET = {"id": "legacy", "label": "fleet", "scopes": ["*"]}
 
 
-def test_perm_pseudo_row_carries_instance_and_the_alias(monkeypatch):
+def test_perm_pseudo_row_carries_instance_and_keeps_instance_id_the_ledgers(monkeypatch):
+    # instance_id is a SHIPPED field (the card's render identity): its meaning never changes.
     monkeypatch.setattr(G, "_menu_hook_instance", lambda session, menu: "toolu_B")
     monkeypatch.setattr(G, "_stamp_instance", lambda *a, **k: (1, "abcd"))
     row = G._perm_pseudo_row("gm", _perm())
-    assert row["instance"] == row["instance_id"] == row["menu"]["instance"] == "toolu_B"
+    assert row["instance"] == row["menu"]["instance"] == "toolu_B"
+    assert row["instance_id"] == "abcd:1"
     assert row["id"].startswith("perm:gm:abcd:")             # the answer path's id is unchanged
 
 
