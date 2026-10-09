@@ -2224,7 +2224,7 @@ def _non_fleet_refusal(name, turn):
 # again: it stays on the allowlist until it ends, and says so once. In memory only, except the
 # HASHES of calls that had full tools, kept so a restart can say so.
 _CALL_PRINCIPALS = {}
-_CALL_LOST = {}                       # sha256(call id) -> True once its "I can't act from here" was said
+_CALL_LOST = {}                       # sha256(call id) -> {"said": bool, "principal": the call's caller}
 _CALL_LOCK = _threading.Lock()
 _CALL_IDLE_S = 10 * 60
 _CALL_MAX_S = 2 * 60 * 60
@@ -2260,25 +2260,29 @@ def _full_class(principal):
 
 
 def _save_active_calls():
+    """{sha256(call id): caller} of the calls that have full tools now. The id is a capability, so it
+    is never written; the caller is not secret, and a call that comes back after a restart stays
+    bound to it."""
     try:
-        hashes = sorted(_cid_hash(c) for c, r in _CALL_PRINCIPALS.items() if _full_class(r["principal"]))
+        live = {_cid_hash(c): r["principal"] for c, r in _CALL_PRINCIPALS.items() if _full_class(r["principal"])}
         ARTURO_STATE.mkdir(parents=True, exist_ok=True)
         tmp = _CALL_ACTIVE_FILE.with_suffix(".tmp")
         fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
-            json.dump(hashes, f)
+            json.dump(live, f, sort_keys=True)
         os.replace(tmp, _CALL_ACTIVE_FILE)
     except OSError as e:
         log.warning(f"call records: could not save the active list: {e}")
 
 
 def _load_lost_after_restart():
-    """Calls that had full tools when Arturo last stopped have lost them: say so once."""
+    """Calls that had full tools when Arturo last stopped have lost them: say so once, and keep
+    them bound to their caller."""
     try:
-        for h in json.loads(_CALL_ACTIVE_FILE.read_text()):
-            if isinstance(h, str) and re.fullmatch(r"[0-9a-f]{64}", h):
-                _CALL_LOST.setdefault(h, False)
-    except (OSError, ValueError, TypeError):
+        for h, p in json.loads(_CALL_ACTIVE_FILE.read_text()).items():
+            if isinstance(h, str) and re.fullmatch(r"[0-9a-f]{64}", h) and _full_class(p):
+                _CALL_LOST.setdefault(h, {"said": False, "principal": p})
+    except (OSError, ValueError, TypeError, AttributeError):
         pass
 
 
@@ -2287,51 +2291,64 @@ def _prune_calls(now):
     gone = [c for c, r in _CALL_PRINCIPALS.items()
             if now - r["last_seen"] > _CALL_IDLE_S or now - r["started"] > _CALL_MAX_S]
     for c in gone:
-        if _full_class(_CALL_PRINCIPALS[c]["principal"]):
-            _CALL_LOST.setdefault(_cid_hash(c), False)
+        p = _CALL_PRINCIPALS[c]["principal"]
+        if _full_class(p):
+            _CALL_LOST.setdefault(_cid_hash(c), {"said": False, "principal": p})
         del _CALL_PRINCIPALS[c]
     return bool(gone)
 
 
-def _bind_call(cid, principal, now=None):
-    """Is this relay request from the call's own caller? (ok, recorded_principal_or_None).
-    Refused only when a record exists for the call and names someone else."""
+def _bind_call(cid, principal, now=None, claim=False):
+    """Is this relay request from the call's own caller? (ok, created). A call with a record, or one
+    that LOST its record (it stays bound to the caller it had), accepts only that caller. With
+    claim=True a call with neither is recorded for this caller NOW, under the lock, so two
+    concurrent first chunks cannot both pass (`created` says this request made the record; undo it
+    with _unclaim_call if the chunk is then refused). An id that may not carry a record is never
+    bound and never gets tools."""
     now = time.time() if now is None else now
     if not _call_id_ok(cid):
-        return True, None
+        return True, False
     with _CALL_LOCK:
-        if _prune_calls(now):
+        changed = _prune_calls(now)
+        try:
+            rec = _CALL_PRINCIPALS.get(cid)
+            if rec is not None:
+                if rec["principal"] != principal:
+                    return False, False
+                rec["last_seen"] = now
+                return True, False
+            lost = _CALL_LOST.get(_cid_hash(cid))
+            if lost is not None:
+                return lost.get("principal") == principal, False       # never recorded again
+            if not claim:
+                return True, False
+            _CALL_PRINCIPALS[cid] = {"principal": principal, "started": now, "last_seen": now}
+            changed = changed or _full_class(principal)
+            return True, True
+        finally:
+            if changed:
+                _save_active_calls()
+
+
+def _unclaim_call(cid):
+    """Undo a claim whose chunk the relay refused (no record from a chunk that never landed)."""
+    with _CALL_LOCK:
+        had = _CALL_PRINCIPALS.pop(cid, None)
+        if had is not None and _full_class(had["principal"]):
             _save_active_calls()
-        rec = _CALL_PRINCIPALS.get(cid)
-        if rec is None:
-            return True, None
-        if rec["principal"] != principal:
-            return False, rec["principal"]
-        rec["last_seen"] = now
-        return True, rec["principal"]
 
 
 def _record_call(cid, principal, now=None):
-    """At a call's first accepted chunk. Returns the call's recorded principal (the FIRST
-    writer's), or None when the id may not carry one or the call already lost its record."""
-    now = time.time() if now is None else now
-    if not _call_id_ok(cid):
-        return None
+    """Record a call's caller (its first writer wins). Returns the recorded principal, or None when
+    the id may not carry one or the call already lost its record."""
+    ok, _created = _bind_call(cid, principal, now=now, claim=True)
+    if not ok:
+        with _CALL_LOCK:
+            rec = _CALL_PRINCIPALS.get(cid)
+            return rec["principal"] if rec else None
     with _CALL_LOCK:
-        changed = _prune_calls(now)
-        if _cid_hash(cid) in _CALL_LOST:
-            if changed:
-                _save_active_calls()
-            return None                       # lost for the rest of the call: never re-recorded
         rec = _CALL_PRINCIPALS.get(cid)
-        if rec is None:
-            rec = _CALL_PRINCIPALS[cid] = {"principal": principal, "started": now, "last_seen": now}
-            changed = changed or _full_class(principal)
-        else:
-            rec["last_seen"] = now
-        if changed:
-            _save_active_calls()
-        return rec["principal"]
+        return rec["principal"] if rec else None
 
 
 def _call_principal(cid, now=None):
@@ -2372,9 +2389,10 @@ def _call_lost_notice(cid, consume=True):
         return None
     h = _cid_hash(cid)
     with _CALL_LOCK:
-        if _CALL_LOST.get(h) is False:
+        lost = _CALL_LOST.get(h)
+        if lost is not None and not lost["said"]:
             if consume:
-                _CALL_LOST[h] = True
+                lost["said"] = True
             return _CALL_LOST_LINE
     return None
 
@@ -5447,12 +5465,12 @@ if _STREAM_RELAY is not None:
         surface_device = request.headers.get("X-Surface")
         # G1': only the call's own caller may speak into it (recorded at its first chunk).
         _caller = _stamped_principal(request)
-        _ok_caller, _recorded = _bind_call(cid, _caller)
+        _ok_caller, _claimed = _bind_call(cid, _caller, claim=True)
         if not _ok_caller:
             return jsonify({"ok": False, "error": "not this call's caller"}), 403
         r = _STREAM_RELAY.feed_audio(cid, pcm, surface_device=surface_device)
-        if r.get("ok") and _recorded is None:
-            _record_call(cid, _caller)
+        if _claimed and not r.get("ok"):
+            _unclaim_call(cid)
         if not r.get("ok"):
             err = r.get("error")
             # 410 Gone = the conversation ENDED; the client must hard-stop streaming (a late
