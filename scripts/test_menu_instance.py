@@ -471,3 +471,34 @@ def test_on_real_screens_the_review_keeps_the_id_and_a_plan_menu_does_not():
     memo = MI.InstanceMemo()
     assert memo.stamp("s", _parsed("askuserquestion_multipart_live"), calls) == "toolu_X"
     assert memo.stamp("s", _parsed("planmode_options"), calls) is None
+
+
+def test_a_call_pruned_by_age_may_still_be_open_so_the_pane_is_unprovable(dirs):
+    # D1: A's prompt waits > TTL (operator away); a background call's PreToolUse prunes A. A's prompt,
+    # still on screen, must not resolve to the background call.
+    _, calls = dirs
+    H = _hook_mod()
+    now = time.time()
+    H.update_open_calls("%7", _pre("toolu_A"), "PreToolUse", now=now - H.CALLS_TTL_S - 60)
+    H.update_open_calls("%7", _pre("toolu_B"), "PreToolUse", now=now)
+    assert list(_calls(calls)) == ["toolu_B"]
+    assert MI.read_open_calls("%7") == {}
+
+
+@pytest.mark.parametrize("source", ["startup", "resume"])
+def test_a_new_process_loses_nothing_so_it_marks_nothing(dirs, source):
+    # D2: a new CLI process has no background subagents: its predecessor's calls are dead, not lost.
+    _, calls = dirs
+    _fire(_pre("toolu_OLD"))
+    _fire({"hook_event_name": "SessionStart", "source": source})
+    _fire(_pre("toolu_A"))
+    assert list(MI.read_open_calls("%7")) == ["toolu_A"]
+
+
+@pytest.mark.parametrize("source", ["compact", "clear"])
+def test_a_compact_or_clear_with_open_calls_marks_the_pane(dirs, source):
+    _, calls = dirs
+    _fire(_pre("toolu_SUB"))
+    _fire({"hook_event_name": "SessionStart", "source": source})
+    _fire(_pre("toolu_A"))
+    assert MI.read_open_calls("%7") == {}

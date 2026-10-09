@@ -106,8 +106,10 @@ def update_open_calls(pane, data, event, now=None):
         if event in _CLEAR_ON:
             if not calls:
                 return
-            if event == "SessionStart":
-                _mark_lossy(name, now)      # a compact keeps background subagents' calls running
+            if event == "SessionStart" and data.get("source") in ("compact", "clear"):
+                # The same process goes on, and so do its background subagents' calls. A new
+                # process (startup, resume) has none: its predecessor's calls are dead, not lost.
+                _mark_lossy(name, now)
             calls = {}
         elif event == "PreToolUse":
             calls[tid] = _call_entry(data, now)
@@ -115,8 +117,11 @@ def update_open_calls(pane, data, event, now=None):
             del calls[tid]
         else:
             return
-        calls = {k: v for k, v in calls.items()
-                 if isinstance(v, dict) and now - (v.get("ts") or 0) < CALLS_TTL_S}
+        kept = {k: v for k, v in calls.items()
+                if isinstance(v, dict) and now - (v.get("ts") or 0) < CALLS_TTL_S}
+        if len(kept) < len(calls):
+            _mark_lossy(name, now)          # an old entry may still be open (a prompt left waiting)
+        calls = kept
         if len(calls) > CALLS_CAP:
             calls = dict(sorted(calls.items(), key=lambda kv: kv[1].get("ts") or 0)[-CALLS_CAP:])
             _mark_lossy(name, now)

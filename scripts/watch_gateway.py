@@ -1009,10 +1009,8 @@ async def handle_pending(request):
     # watch renders server order as-is. Ties -> NEWEST first (see _sort_queue).
     _sort_queue(out)
     for r in out:      # remember which permission instance this device is being shown
-        if r.get("kind") == "permission" and str(r.get("id", "")).startswith("perm:"):
-            # the LEDGER instance (digest:n, from the row id): instance_id may now be a hook id
-            _rid = str(r["id"]).rsplit(":", 2)            # perm:<session>:<digest>:<n>
-            _note_served(request, r.get("session"), f"{_rid[1]}:{_rid[2]}")
+        if r.get("kind") == "permission" and r.get("instance_id"):
+            _note_served(request, r.get("session"), r["instance_id"])   # the ledger's digest:n
     return _json({"ok": True, "pending": out})
 
 

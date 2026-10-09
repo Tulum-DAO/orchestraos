@@ -43,23 +43,26 @@ def calls_dir():
 
 def read_open_calls(pane):
     """{tool_use_id: entry} for a pane, {} when unknown. Read-only; the hook owns the file.
-    {} too while the hook's loss marker is fresh: an open call was dropped (the cap, a corrupt map,
-    a clear while calls were open), so a listed call could look like the owner of a menu whose
+    {} too while the hook's loss marker is fresh: an open call was dropped (the cap, the age
+    prune, a corrupt map, a compact or clear while calls were open), so a listed call could look like the owner of a menu whose
     real call is gone. No instance beats a wrong one."""
     if not pane:
         return {}
+    try:
+        with open(os.path.join(calls_dir(), pane.lstrip("%") + ".json")) as f:
+            calls = json.load(f)
+        calls = calls if isinstance(calls, dict) else {}
+    except (OSError, ValueError):
+        return {}
+    # The marker AFTER the map: the hook writes the marker before it replaces the map, so a map read
+    # first is never an evicted one with no marker yet.
     try:
         with open(os.path.join(calls_dir(), pane.lstrip("%") + ".lossy")) as f:
             if time.time() - float(f.read().strip() or 0) < LOSSY_TTL_S:
                 return {}
     except (OSError, ValueError):
         pass
-    try:
-        with open(os.path.join(calls_dir(), pane.lstrip("%") + ".json")) as f:
-            calls = json.load(f)
-        return calls if isinstance(calls, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return calls
 
 
 def pane_for(session):
