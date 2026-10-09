@@ -108,13 +108,13 @@ def _settings() -> S.Settings:
 
 
 def cmd_init(ns) -> int:
-    from .init_cmd import render_report, run_init
+    from .init_cmd import failed_steps, render_report, run_init
     root = S.repo_root_from_env()
     report = run_init(root, data_dir=Path(ns.data_dir) if ns.data_dir else None,
                       skip_npm=ns.no_npm, skip_venv=ns.no_venv, skip_build=ns.no_build, demo=ns.demo,
                       yes=ns.yes, stt=ns.stt)
     print(render_report(report))
-    failed = [r for r in report if not r.did and ("failed" in r.detail)]
+    failed = failed_steps(report)
     st = _settings()
     print(f"\ndata dir: {st.data_dir}\nconfig:   {st.config_path}\nnext:     orchestra doctor && orchestra up")
     return 1 if failed else 0
