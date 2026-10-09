@@ -279,6 +279,9 @@ export async function arturoTurn(
     const reported = !!(res as StreamOutcome).reported;
     const dropped = DROPPED.has(res.error || '');
     const unclear = busy || reported || dropped || isUnclear(res);
+    // The server refused a resend of a send that started and never finished (a restart): it may have run.
+    // That is an unknown, never "it did not go through", and it is never sent again.
+    if (res.error === 'turn_lost') return { ok: false, error: 'may_have_run' } as ArturoReply;
     if (!unclear) return asReply(res);           // a refusal or a brain's own error: the server's final word
     // Whatever this attempt showed goes before the answer (or the next attempt) arrives.
     opts.onReset?.();

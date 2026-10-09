@@ -28,7 +28,7 @@ import { useArturoBrain } from '../stores/arturoBrain';
 import { arturoTurn, arturoPrewarm } from '../lib/arturoStream';
 import { brainFromThread, describeTurnError, toWireBrain } from '../lib/arturoBrain';
 import { arturoHealth, runtimesAvailable, brainLabel, greeting, newConversationId,
-  isStarting, waitForArturo, STARTING_TEXT, NOT_ANSWERED_TEXT, MAY_HAVE_RUN_TEXT, firstStep, onboardingTurn, onboardingDone,
+  isStarting, waitForArturo, STARTING_TEXT, sendOutcomeText, firstStep, onboardingTurn, onboardingDone,
   HANDS_FREE, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, ONBOARDING_OPENER, sendStateLabel,
   type ChoiceCard, type PairCard,
   type ArturoHealth, type RuntimeRow, type SendState } from '../lib/arturo';
@@ -402,13 +402,11 @@ export default function ArturoHome() {
     patch(uid, { state: r.ok ? 'acked' : 'failed' });
     if (!r.ok) {
       const chosenErr = describeTurnError(r);
-      patch(id, { pending: false, text: isStarting(r)
+      patch(id, { pending: false, text: sendOutcomeText(r) ?? (isStarting(r)
         ? 'I am still starting up and could not answer yet — give `orchestra up` a moment and send that again.'
         : chosenErr ? chosenErr.message
-        : r.error === 'not_answered' ? NOT_ANSWERED_TEXT
-        : r.error === 'may_have_run' ? MAY_HAVE_RUN_TEXT
         : isBusy(r) ? 'I am still answering an earlier message in this conversation (another tab or device). Send this again once that reply is in.'
-        : `I could not reach my brain: ${r.error || 'unknown'}. Is \`orchestra up\` running? Check /health on the Arturo service.` });
+        : `I could not reach my brain: ${r.error || 'unknown'}. Is \`orchestra up\` running? Check /health on the Arturo service.`) });
       return;
     }
     patch(id, { pending: false, streaming: false, text: r.reply_text || streamed || '(no reply)', tools: r.tools_called, spawned: r.spawned,
