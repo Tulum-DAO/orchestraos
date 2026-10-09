@@ -30,8 +30,10 @@ The shape, and the reasoning behind each decision:
     Arturo's full tools, the same as the dashboard; its typed turns are unchanged. No route
     requires it; the gateway reads it only to stamp a call's caller. Mintable by the host CLI
     only, never over HTTP.
-  * `voice` is separate from `read` because every /arturo call SPENDS REAL PROVIDER MONEY.
-    Reading state and buying tokens from a vendor are not the same permission.
+  * `voice` is separate from `read` because every live-audio call (/live, /arturo/transcribe)
+    SPENDS REAL PROVIDER MONEY. Reading state and buying tokens from a vendor are not the same
+    permission. Typed Arturo chat (/arturo/text*) is `message`, not `voice` (ruling 2026-10-09):
+    its strongest act is an unverified agent message, which `message` already grants.
   * `approve` is separate from everything because it ANSWERS ON THE OPERATOR'S BEHALF.
   * Revocation is a field honoured on every request, not a deletion, so a revoked device's
     past answers stay attributable (see the provenance field on approval answers).
@@ -263,7 +265,10 @@ def scopes_allow(scopes, needed: str | None) -> bool:
 #:
 #: `ptt` is excluded too, which is not an oversight: a credential that can mint itself speech is
 #: minting PROVIDER SPEND, and the whole reason the upgrade endpoint is safe to expose is that
-#: nothing it can issue costs money or presses keys.
+#: nothing it can issue presses keys or buys LIVE AUDIO. `message` does let a device run turns that
+#: spend credit (an agent's turn after /agent-message, and since 2026-10-09 a typed Arturo turn,
+#: lookups plus unverified agent messages only); that is accepted deliberately, as it always was
+#: for /agent-message.
 #:
 #: It is an ALLOWLIST, not a denylist, so a verb added later is NOT mintable until someone
 #: decides it is. A denylist would silently grant every future verb.

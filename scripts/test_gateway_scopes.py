@@ -62,8 +62,12 @@ def test_the_dangerous_verbs_are_not_filed_under_read():
     as `read`, every paired device gets it, because `read` is in every sane default."""
     for route in (("POST", "/agent-key"), ("POST", "/agent-interrupt"), ("POST", "/agent-suggest")):
         assert G.ROUTE_SCOPES[route] == "inject", route
-    for route in (("POST", "/arturo/text"), ("GET", "/live")):
+    # Live audio is `voice`; typed Arturo chat is `message` (operator ruling 2026-10-09). Neither is
+    # ever `read`: both spend provider credit.
+    for route in (("GET", "/live"), ("POST", "/arturo/transcribe")):
         assert G.ROUTE_SCOPES[route] == "voice", route
+    for route in (("POST", "/arturo/text"), ("POST", "/arturo/text/stream"), ("POST", "/arturo/text/prewarm")):
+        assert G.ROUTE_SCOPES[route] == "message", route
     # PTT is its own verb now (narrower than voice), but it must never fall to `read` either —
     # it spends provider credit per turn.
     assert G.ROUTE_SCOPES[("POST", "/arturo/ptt")] == "ptt"
@@ -247,6 +251,30 @@ def test_a_read_approve_message_device_can_approve_but_not_spend_provider_money(
     assert reached_ok and ok.status == 200
     deny, reached_deny, _ = _call("POST", "/arturo/ptt", {"Authorization": f"Bearer {token}"})
     assert deny.status == 403 and not reached_deny
+
+
+def test_a_message_device_can_TYPE_to_arturo_but_not_open_live_voice(monkeypatch, tmp_path):
+    """Operator ruling 2026-10-09: typed Arturo chat needs `message`, live voice needs `voice`.
+    Found by effect: a Mac paired read,approve,message,inject got 403 needed_scope=voice on 'hello'."""
+    _, _, token = _with_store(monkeypatch, tmp_path, ["read", "approve", "message"])
+    hdr = {"Authorization": f"Bearer {token}"}
+    for path in ("/arturo/text", "/arturo/text/stream", "/arturo/text/prewarm"):
+        resp, reached, _ = _call("POST", path, hdr)
+        assert reached and resp.status == 200, path
+    for method, path in (("GET", "/live"), ("POST", "/arturo/transcribe")):
+        resp, reached, _ = _call(method, path, hdr)
+        assert resp.status == 403 and not reached, path
+
+
+def test_a_voice_only_device_no_longer_types_to_arturo(monkeypatch, tmp_path):
+    """The accepted compat cost, pinned so it is a decision and not an accident: `voice` alone
+    buys live audio, not typed chat (no verb implies another, device_tokens.scopes_allow)."""
+    _, _, token = _with_store(monkeypatch, tmp_path, ["read", "voice"])
+    hdr = {"Authorization": f"Bearer {token}"}
+    resp, reached, _ = _call("POST", "/arturo/text/stream", hdr)
+    assert resp.status == 403 and not reached
+    live, reached_live, _ = _call("GET", "/live", hdr)
+    assert reached_live and live.status == 200
 
 
 def test_a_revoked_device_is_401_on_the_very_next_request(monkeypatch, tmp_path):
