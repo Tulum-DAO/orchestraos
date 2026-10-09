@@ -114,6 +114,22 @@ browser / iOS
 - `conversation_id` threads a bounded history per conversation (same store PTT uses).
 - The pill prefixes one line, `[Context: route=/approvals entity=approvals:apr_x]`,
   so Arturo knows where you were.
+- **A message sent once runs at most once.** Each send carries the page's own id for it
+  (`turn_id`); if the connection drops, the page asks again with that id and shows that
+  message's own reply instead of sending it twice.
+- **One turn at a time per conversation.** A second message while Arturo is still answering
+  gets `409 {"error": "busy"}` at once; the home and the pill wait and send it again by
+  themselves.
+- **Onboarding is the dashboard's.** Onboarding steps, and writes into the onboarding
+  conversation, are accepted only from the dashboard; any other caller (a paired device) gets
+  `403 onboarding_dashboard_only`.
+- What the person may see in the chat:
+  - *Still starting — I will retry in a few seconds.* The stack is booting; the page waits and
+    sends again by itself.
+  - *That message may not have been answered; send it again.* The server holds nothing of it.
+  - *That message may not have been answered, and anything it started may already have run:
+    check before sending it again.* Rare: it started and its answer was lost, for example after
+    a restart.
 - `GET /api/arturo/health` → `/arturo/health` → `:5071/health`:
 
 ```json
