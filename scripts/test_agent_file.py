@@ -193,19 +193,20 @@ def test_secret_shaped_content_is_refused_whatever_the_name(box, kind):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("harmless line\n" + SECRETS[kind] + "\nmore text\n")
     st, h, body = _get(box, "docs/notes/readme-2.md")
-    assert st == 403 and b"harmless" not in body
+    assert st == 404 and b"harmless" not in body
     assert h["Content-Security-Policy"] == "default-src 'none'; sandbox"
+    assert _audit(box)[-1]["reason"].startswith("secret-shaped:"), "the reason lives in the audit only"
 
 
 def test_the_gateway_bearer_in_a_file_is_refused_and_never_logged(box):
     (box["repo"] / "debug.txt").write_text(f"curl -H 'Authorization: Bearer {FLEET}'\n")
-    assert _get(box, "debug.txt")[0] == 403
+    assert _get(box, "debug.txt")[0] == 404 and _audit(box)[-1]["reason"] == "secret-shaped:gateway-bearer"
     assert FLEET not in (box["data"] / "logs" / "agent-file-audit.jsonl").read_text()
 
 
 def test_a_device_token_in_a_file_is_refused_by_hash_and_never_logged(box):
     (box["repo"] / "paste.txt").write_text(f"token was {box['read']} ok\n")
-    assert _get(box, "paste.txt")[0] == 403
+    assert _get(box, "paste.txt")[0] == 404
     audit = (box["data"] / "logs" / "agent-file-audit.jsonl").read_text()
     assert box["read"] not in audit and "device-token" in audit
 
@@ -352,3 +353,37 @@ def test_rotating_the_fleet_token_revokes_a_fleet_minted_device(box):
 def test_code_is_not_mintable_over_http():
     from scripts.device_tokens import http_mintable
     assert http_mintable(["code"])[0] is False
+
+
+# ---- gm rulings on #340 (msg_18064c14) ------------------------------------------------------------
+
+def test_a_secret_shaped_file_and_a_missing_file_answer_byte_identically(box):
+    """(a) A 403 would tell a caller which files hold secrets: a target list. One 404 for both."""
+    (box["repo"] / "conf.txt").write_text("x = " + SECRETS["github"] + "\n")
+    secret, missing = _get(box, "conf.txt"), _get(box, "no-such-file.txt")
+    drop = {"Date", "Server"}
+    strip = lambda h: {k: v for k, v in h.items() if k not in drop}
+    assert (secret[0], strip(secret[1]), secret[2]) == (missing[0], strip(missing[1]), missing[2])
+    assert secret[0] == 404
+    assert _audit(box)[-2]["reason"] == "secret-shaped:github-token"
+
+
+def test_the_fleet_bearer_does_not_pass_code(box):
+    """(b) `code` is device-token-only: the legacy fleet bearer is pending rotation and once sat on
+    public surfaces, so '*' expands to every verb EXCEPT code."""
+    st, _, _ = _get(box, "README.md", token=FLEET)
+    assert st == 403
+    from scripts.device_tokens import scopes_allow
+    assert scopes_allow(("*",), "code") is False and scopes_allow(("*",), "inject") is True
+
+
+@pytest.mark.parametrize("peer,ok", [("127.0.0.1", True), ("::1", True), ("100.64.0.7", True),
+                                     ("100.127.255.254", True), ("fd7a:115c:a1e0::1a", True),
+                                     ("100.128.0.1", False), ("203.0.113.5", False), ("10.0.0.2", False),
+                                     ("2001:db8::1", False), ("", False), ("not-an-ip", False),
+                                     ("::ffff:127.0.0.1", True), ("::ffff:203.0.113.5", False)])
+def test_only_loopback_and_tailnet_peers_are_served(box, monkeypatch, peer, ok):
+    """(c) A Funnel request that somehow lacks the header still fails on its peer address."""
+    monkeypatch.setattr(G, "_agent_file_peer", lambda request: peer)
+    st, _, _ = _get(box, "README.md")
+    assert (st == 200) is ok, (peer, st)

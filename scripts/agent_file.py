@@ -21,8 +21,8 @@ hold on its own (design ruled by gm, 2026-10-09):
    service-account JSON, and the gateway's own bearer or any device token (compared by hash; no
    token is ever logged). A match is refused.
 
-Every refusal before 7 is the same "not found" to the caller (it never reveals whether a file
-exists); the real reason goes only to the audit log.
+Every refusal, 7 included, is the same "not found" to the caller: it never reveals whether a file
+exists or which files hold secrets. The real reason goes only to the audit log.
 """
 import fnmatch
 import hashlib

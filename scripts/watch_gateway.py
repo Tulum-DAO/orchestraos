@@ -4585,7 +4585,8 @@ async def _upload_get_response(request):
 # a paired device with the `code` scope. Every fence lives in scripts/agent_file.py; this handler adds
 # the transport rules: off until [code] roots are configured, never through Tailscale Funnel, a
 # per-device rate limit, one audit line per request (never file bytes, never a token), and a refusal
-# that never says whether a file exists (one 404; a secret-shaped file is a 403).
+# that never says whether a file exists or holds a secret (one 404 for every refusal). Only loopback and
+# tailnet peers are served; the legacy fleet bearer does not hold `code` (device tokens only).
 # ---------------------------------------------------------------------------
 AGENT_FILE_RATE_PER_MIN = int(os.environ.get("ORCHESTRA_AGENT_FILE_RATE", "60"))
 AGENT_FILE_AUDIT_MAX_BYTES = 5 * 1024 * 1024
@@ -4625,6 +4626,26 @@ def _agent_file_rate_ok(device: str, now: float | None = None) -> bool:
     hits.append(now)
     _agent_file_hits[device] = hits
     return True
+
+
+# Belt to the Funnel header: a request served must come from this host or the tailnet. Tailscale
+# serve/funnel proxies arrive from loopback; direct tailnet peers from these ranges.
+_AGENT_FILE_PEER_NETS = ("127.0.0.0/8", "::1/128", "100.64.0.0/10", "fd7a:115c:a1e0::/48")
+
+
+def _agent_file_peer(request) -> str:
+    return str(getattr(request, "remote", "") or "")
+
+
+def _agent_file_peer_ok(peer: str) -> bool:
+    import ipaddress
+    try:
+        ip = ipaddress.ip_address(peer.split("%", 1)[0])
+    except ValueError:
+        return False
+    if getattr(ip, "ipv4_mapped", None):
+        ip = ip.ipv4_mapped
+    return any(ip in ipaddress.ip_network(n) for n in _AGENT_FILE_PEER_NETS)
 
 
 def _agent_file_audit(rec: dict) -> None:
@@ -4673,7 +4694,7 @@ async def handle_agent_file(request):
         _agent_file_audit(rec)
         headers = _agent_file_headers()
         if body is None:
-            msg = {404: "not found", 403: "secret-shaped", 429: "too many requests"}.get(status, "refused")
+            msg = {404: "not found", 429: "too many requests"}.get(status, "refused")
             resp = _json({"ok": False, "error": msg}, status=status)
             for k, v in headers.items():
                 resp.headers[k] = v
@@ -4685,6 +4706,8 @@ async def handle_agent_file(request):
 
     if request.headers.get("Tailscale-Funnel-Request"):
         return answer(404, "funnel")
+    if not _agent_file_peer_ok(_agent_file_peer(request)):
+        return answer(404, "peer-not-local-or-tailnet")
     if not _agent_file_rate_ok(device):
         return answer(429, "rate-limited")
     try:
@@ -4698,7 +4721,9 @@ async def handle_agent_file(request):
         rel, data = await asyncio.to_thread(AF.read_file, root, path, fleet_token=gateway_token(),
                                             device_hashes=_agent_file_device_hashes())
     except AF.Refused as e:
-        return answer(403 if e.secret else 404, e.reason)
+        # ONE answer for every refusal, a secret-shaped file included: a distinct status would hand the
+        # caller a list of the files that hold secrets (gm). The reason goes to the audit only.
+        return answer(404, e.reason)
     rec["resolved"] = str(rel)[:AF.MAX_PATH_LEN]
     ctype, inline = AF.content_type(data)
     return answer(200, "ok", body=data, ctype=ctype, inline=inline, name=rel.name, n=len(data))
