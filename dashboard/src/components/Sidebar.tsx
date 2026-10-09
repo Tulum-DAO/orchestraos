@@ -27,6 +27,7 @@ import { useUser } from '../hooks/useUser';
 import { ASSISTANT_V2_ENABLED } from '../lib/assistant/config';
 import { AgentRail } from './workbench/AgentRail';
 import { operatorUserId } from '../lib/runtimeConfig';
+import { navItemsFor } from '../lib/features';
 
 // The agents are the work; the pages are where you go occasionally. "More" remembers whether you
 // opened it, so anyone who lives in Tasks or Analytics keeps them visible after one click and the
@@ -171,7 +172,7 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
           {moreOpen && (
             <>
               {assistantNav.length > 0 && <NavItems items={assistantNav} />}
-              <NavItems items={coreNav} />
+              <NavItems items={navItemsFor(coreNav)} />
               <SectionHeader label="Operations" />
               <NavItems items={operationsNav} />
               <SectionHeader label="Intelligence" />

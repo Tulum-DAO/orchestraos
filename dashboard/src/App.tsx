@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { DashboardLayout } from './layouts/DashboardLayout';
 import { RouteErrorBoundary } from './components/RouteErrorBoundary';
@@ -22,6 +22,7 @@ import Assistant from './pages/Assistant';
 import AgentPage from './pages/AgentPage';
 import ArturoHome from './pages/ArturoHome';
 import { ASSISTANT_V2_ENABLED } from './lib/assistant/config';
+import { indexPage } from './lib/features';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchInterval: 10_000, staleTime: 5_000 } }
@@ -52,8 +53,10 @@ export default function App() {
       <BrowserRouter>
         <RouteErrorBoundary label="app">
         <Routes>
-          {/* Arturo home is the MAIN page — its own phone shell, no dashboard chrome (T4) */}
-          <Route index element={<ArturoHome />} />
+          {/* Arturo home is the MAIN page — its own phone shell, no dashboard chrome (T4). A
+              deployment without the Arturo service (runtime config features.arturo=false) opens
+              the Overview here instead of a home whose every call 404s. */}
+          <Route index element={indexPage() === 'arturo' ? <ArturoHome /> : <Navigate to="/overview" replace />} />
 
           {/* Internal dashboard */}
           <Route element={<DashboardLayout />}>

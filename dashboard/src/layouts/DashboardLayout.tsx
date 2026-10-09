@@ -11,6 +11,7 @@ import { ArturoPill } from '../components/arturo/ArturoPill';
 import CoachingToast from '../components/CoachingToast';
 import { useOrchestraStore } from '../stores/useOrchestraStore';
 import { initAutoDiscovery } from '../lib/telemetry';
+import { showArturoPill } from '../lib/features';
 
 export function DashboardLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -104,7 +105,7 @@ export function DashboardLayout() {
       <CommandPalette />
 
             {/* Arturo pill — always available on every non-home page (T4); replaces the legacy JarvisPanel */}
-      <ArturoPill />
+      {showArturoPill() && <ArturoPill />}
     </div>
   );
 }

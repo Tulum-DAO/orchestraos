@@ -7,20 +7,39 @@
  * directory. Absent, unreadable, slow or malformed -> the public defaults below, never a
  * blank page.
  *
- *   { "operatorUserId": "alice" }
+ *   { "operatorUserId": "alice", "features": { "arturo": false } }
  *
  * Fetched with `cache: 'no-store'` because static servers commonly mark every non-HTML file
  * `immutable` for a year (this repo's dashboard-proxy.js does), which would freeze a changed
  * value in every browser that ever loaded the old one.
  */
 
+/** Surfaces a deployment can switch OFF when its API does not serve them. A switched-off surface
+ *  does not render at all: no button that leads to a 404. Every one defaults to ON. */
+export interface Features {
+  /** The Arturo assistant: the home page at "/", the Ask Arturo pill, its sidebar entry
+   *  (/api/arturo/*). Off: "/" opens the Overview instead. */
+  arturo: boolean;
+  /** The New Agent button and modal on Overview and Agents (/api/agents/new, login-shell). */
+  newAgent: boolean;
+  /** Connecting a provider from the model picker: the connect modal behind a disconnected
+   *  provider tile and the "Add a provider" tile (/api/agents/login-shell, :id/sign-in-url). */
+  providerSignIn: boolean;
+}
+
+export type FeatureName = keyof Features;
+
 export interface RuntimeConfig {
   /** The human operator's user id: the key their insights, profile, telemetry and messages
    *  are stored under. Public placeholder 'operator'. */
   operatorUserId: string;
+  features: Features;
 }
 
-export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = { operatorUserId: 'operator' };
+export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
+  operatorUserId: 'operator',
+  features: { arturo: true, newAgent: true, providerSignIn: true },
+};
 
 // The id goes into URL paths (/adaptive/<id>/insights) and message fields, so only a plain
 // identifier is accepted; anything else falls back rather than being half-used.
@@ -28,10 +47,19 @@ const USER_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 /** Pure: merge an untrusted parsed value over the defaults, field by field. */
 export function resolveRuntimeConfig(raw: unknown): RuntimeConfig {
-  const cfg = { ...DEFAULT_RUNTIME_CONFIG };
+  const cfg = { ...DEFAULT_RUNTIME_CONFIG, features: { ...DEFAULT_RUNTIME_CONFIG.features } };
   if (raw && typeof raw === 'object') {
     const id = (raw as Record<string, unknown>).operatorUserId;
     if (typeof id === 'string' && USER_ID.test(id.trim())) cfg.operatorUserId = id.trim();
+    // Only a real boolean switches a feature: "false" (a string) or 0 is a typo, not an
+    // instruction, and a typo must not hide a working surface.
+    const f = (raw as Record<string, unknown>).features;
+    if (f && typeof f === 'object') {
+      for (const name of Object.keys(cfg.features) as FeatureName[]) {
+        const v = (f as Record<string, unknown>)[name];
+        if (typeof v === 'boolean') cfg.features[name] = v;
+      }
+    }
   }
   return cfg;
 }
@@ -44,6 +72,10 @@ export function runtimeConfig(): RuntimeConfig {
 
 export function operatorUserId(): string {
   return current.operatorUserId;
+}
+
+export function featureEnabled(name: FeatureName): boolean {
+  return current.features[name];
 }
 
 /** Test seam, and what loadRuntimeConfig() commits. */

@@ -23,6 +23,7 @@ import { isFleetMember } from '../lib/topologyLines';
 import { getRecentAgents, loadAndMergeRecentAgents, type RecentAgent } from '../lib/user-actions';
 import { GenChip } from '../components/GenChip';
 import NewAgentModal from '../components/NewAgentModal';
+import { showNewAgent } from '../lib/features';
 
 const TIERS = ['For You', 'Recent', 'All', 'T0', 'T1', 'T2', 'T3'] as const;
 // Spec §3 names these All / Active / Down. 'Dead' was the pre-existing label; review's
@@ -37,7 +38,7 @@ export default function Agents() {
   const { data, isLoading } = useAgents();
   const { data: user } = useUser();
   const queryClient = useQueryClient();
-  const [showNewAgent, setShowNewAgent] = useState(false);
+  const [showNewAgentModal, setShowNewAgentModal] = useState(false);
   const [tierFilter, setTierFilter] = useState<string>('For You');
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('cards');
@@ -396,22 +397,22 @@ export default function Agents() {
               </div>
             )}
           </div>
-          <button
-            onClick={() => setShowNewAgent(true)}
+          {showNewAgent() && <button
+            onClick={() => setShowNewAgentModal(true)}
             className="flex items-center gap-2 px-4 py-2 min-h-[44px] text-sm rounded-lg bg-blue-900/50 border border-blue-700/50 text-blue-200 hover:bg-blue-800/60 transition-colors"
           >
             <Plus size={16} />
             New agent
-          </button>
+          </button>}
         </div>
-        <NewAgentModal
-          open={showNewAgent}
-          onClose={() => setShowNewAgent(false)}
+        {showNewAgent() && <NewAgentModal
+          open={showNewAgentModal}
+          onClose={() => setShowNewAgentModal(false)}
           // allAgents, not `agents`: a retired id (gm-g2, build-g2) must still read as TAKEN,
           // or a new agent could be spawned onto a decommissioned row's id.
           taken={new Set(allAgents.map((a: { id: string }) => String(a.id)))}
           onCreated={() => { queryClient.invalidateQueries({ queryKey: ['agents'] }); }}
-        />
+        />}
         {/* Options bar — horizontally scrollable on mobile */}
         <div className="flex items-center gap-3 overflow-x-auto pb-2 -mx-6 px-6 scrollbar-hide" style={{ WebkitOverflowScrolling: 'touch' }}>
           {/* Status filter */}
@@ -558,14 +559,14 @@ export default function Agents() {
             agents.length === 0 ? (
               <div className="col-span-3 text-center py-12">
                 <p className="text-neutral-300 font-medium">No agents yet</p>
-                <p className="text-sm text-neutral-500 mt-1 mb-4">Create one here, or run <code className="text-neutral-400">orchestra agent create &lt;name&gt;</code> in a terminal.</p>
-                <button
-                  onClick={() => setShowNewAgent(true)}
+                <p className="text-sm text-neutral-500 mt-1 mb-4">{showNewAgent() ? 'Create one here, or run ' : 'Run '}<code className="text-neutral-400">orchestra agent create &lt;name&gt;</code> in a terminal.</p>
+                {showNewAgent() && <button
+                  onClick={() => setShowNewAgentModal(true)}
                   className="inline-flex items-center gap-2 px-4 py-2 min-h-[44px] text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors"
                 >
                   <Plus size={16} />
                   New agent
-                </button>
+                </button>}
               </div>
             ) : (
               <p className="col-span-3 text-neutral-600 text-center py-8">No agents match this filter</p>
