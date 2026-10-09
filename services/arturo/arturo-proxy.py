@@ -1077,6 +1077,20 @@ def mac_is_reachable():
     return ok and out == "ok"
 
 
+_SEAT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+
+
+def _shell_path(path):
+    """A path as ONE shell word: quoted, with a leading ~ or ~/ kept expandable as "$HOME"."""
+    import shlex
+    path = str(path)
+    if path == "~":
+        return '"$HOME"'
+    if path.startswith("~/"):
+        return '"$HOME"/' + shlex.quote(path[2:])
+    return shlex.quote(path)
+
+
 def run_local(cmd, timeout=15):
     """Run a command locally on VPS. Returns (success, output)."""
     try:
@@ -2993,6 +3007,13 @@ def execute_tool(name, args, user_turns=None):
     that don't thread turns fail CLOSED on send_telegram (policy: internal
     messages never reach the operator's TG without an ask or a deliverable link)."""
     log.info(f"EXECUTING TOOL: {name}({json.dumps(args)})")
+    # A seat name reaches tmux command STRINGS run through a shell (capture, kill, has-session,
+    # inject; local and over ssh), so a model-supplied name must be a plain tmux name: refused
+    # here, once, before any tool builds a command from it.
+    for _k in ("session_name", "session"):
+        _v = (args or {}).get(_k)
+        if _v not in (None, "") and not _SEAT_NAME_RE.match(str(_v)):
+            return f"NOT RUN: {_k} {str(_v)[:60]!r} is not a seat name (letters, digits, '-' and '_' only)."
     # The answer to a devices card records devices and nothing else: it never pairs, mints a code,
     # starts a seat or sends anything, and it rewrites no other operator fact (those ride in every later
     # system prompt). A fixed allowlist, so a tool added later is refused too.
@@ -3314,7 +3335,10 @@ def execute_tool(name, args, user_turns=None):
 
     elif name == "get_agent_output":
         session = args.get("session_name", "")
-        lines = min(args.get("lines", 80), 200)  # Default 80 lines, max 200
+        try:
+            lines = max(1, min(int(args.get("lines", 80)), 200))  # Default 80 lines, max 200
+        except (TypeError, ValueError):
+            lines = 80
         # Capture WITH SGR (-e) so the composer's ghost/draft can be classified by
         # style (gm msg_91dd9aa5 / composer-is-a-draft-surface + ghost-vs-typed law).
         # A plain -p capture attributed a CLI ghost suggestion in gm's composer as
@@ -3494,13 +3518,20 @@ def execute_tool(name, args, user_turns=None):
 
     elif name == "read_file":
         path = args.get("path", "")
-        lines = min(args.get("lines", 50), 200)
+        try:
+            lines = max(1, min(int(args.get("lines", 50)), 200))
+        except (TypeError, ValueError):
+            lines = 50
         machine = args.get("machine", "vps")
         if not path:
             return "No path provided."
+        if "\x00" in str(path) or "\n" in str(path) or "\r" in str(path):
+            return "Refused: a path cannot contain a NUL or a line break."
 
-        # Expand ~ for the target machine
-        cmd = f"head -n {lines} {path} 2>/dev/null || echo 'FILE_NOT_FOUND'"
+        # The path is a WORD in a shell command (run_local is shell=True; the Mac leg is ssh), so it
+        # is quoted: unquoted, a path like `x; cat <secret>` ran as a command. ~ still expands on the
+        # target machine.
+        cmd = f"head -n {lines} -- {_shell_path(path)} 2>/dev/null || echo 'FILE_NOT_FOUND'"
         if machine == "mac":
             ok, out = ssh_mac(cmd, timeout=10)
         else:
