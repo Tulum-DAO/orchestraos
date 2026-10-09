@@ -159,8 +159,13 @@ The operator's facts are **server state**: `services/arturo/operator_store.py` w
 `<ARTURO_STATE>/operator.json`, `/health` and every `/text` reply carry
 `operator: {name, …}`, and every surface reads them there. Onboarding is finished when
 `<ARTURO_STATE>/onboarding.json` exists (the `finish_onboarding` tool writes it); `localStorage`
-`orchestra.arturo.onboarded` is the browser's copy. Delete `onboarding.json` and clear that key to
-run onboarding again. Deleting `operator.json` as well erases the saved operator name, and that is
+`orchestra.arturo.onboarded` is the browser's copy. Where the operator is in onboarding is server
+state too: `<ARTURO_STATE>/onboarding-progress.json` (`services/arturo/onboarding_progress.py`) pins
+the onboarding thread, so every browser and device opens that same thread until onboarding is
+finished, and it remembers a declined team. Leaving partway and coming back resumes it where it
+stopped, with the history shown, and Arturo does not greet again. To run onboarding again, delete
+`onboarding.json` and `onboarding-progress.json`, clear that key, then start a **New
+conversation**. Deleting `operator.json` as well erases the saved operator name, and that is
 **a person's decision**: an agent must not do it unless the person asks for it.
 
 1. **runtime detect**: reads `/api/runtimes/available` + `/api/arturo/health`; if nothing is
