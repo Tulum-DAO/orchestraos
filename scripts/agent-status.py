@@ -651,6 +651,14 @@ def _menu_question(lines: list[str], first_opt_idx: int | None) -> str:
 _CONTEXT_MAX_LINES = 120
 
 
+def _is_inner_dash(s: str) -> bool:
+    """A `╌` dashed separator INSIDE the prompt widget. Since Claude Code 2.1.286 a permission prompt
+    draws its command between two of them (an edit prompt has always drawn its diff that way); the
+    widget's real edges are the solid `─`/`━` rule and a box corner. Real capture:
+    fixtures/claude-2.1.295/perm_bash_dashed.pane.txt."""
+    return bool(s) and '╌' in s and set(s) <= set('╌ ')
+
+
 def _menu_context(lines: list[str], first_opt_idx: int | None, kind: str = "") -> str:
     """What the prompt is ABOUT: the block between the widget's top frame and the question
     (a permission prompt's tool label, command, description; a menu's preamble). Identity, not
@@ -669,14 +677,20 @@ def _menu_context(lines: list[str], first_opt_idx: int | None, kind: str = "") -
     # skip the question block (contiguous prose) itself
     while i >= 0 and lines[i].strip():
         s = lines[i].strip()
-        if _RULE_RE.match(s) or set(s) <= set('╌─━ '):
+        if _is_inner_dash(s):
+            break                         # an inner separator ends the question; the context is above it
+        if _RULE_RE.match(s) or set(s) <= set('─━ '):
             return ""                     # the frame sits right above the question: no context
         i -= 1
     block: list[str] = []
     for j in range(i, max(-1, i - _CONTEXT_MAX_LINES), -1):
         s = lines[j].strip()
+        if _is_inner_dash(s):
+            continue                      # inside the widget: the command sits between these
         if _RULE_RE.match(s) or (s and set(s) <= set('╌─━ ')) or s.startswith(('╭', '┌')):
             break                         # the widget frame: above it is scrollback
+        if s.startswith('Tip:'):
+            continue                      # the CLI's hint ("Tip: auto mode handles these prompts"), not the prompt
         if kind != 'permission' and (_is_tab_chip(s) or (s.startswith('←') and s.endswith('→'))):
             continue                      # a multi-part tab bar: its ☐/☒ state changes as parts are answered
         s = re.sub(r'^[│┃╎╏┆┇┊┋|]\s*|\s*[│┃╎╏┆┇┊┋|]$', '', s)
