@@ -124,11 +124,12 @@ _HOOK_TAG = "#orchestraos-hook"
 def _tagged_rows(path=None):
     try:
         with open(path or _REAL_SETTINGS) as f:
-            data = _json.load(f)
+            text = f.read()
+        data = _json.loads(text) if text.strip() else {}       # empty = {}, as hooks/install.py reads it
     except FileNotFoundError:
         return ()
     except Exception as e:  # noqa: BLE001 — an unreadable file is compared as what it is
-        return ("<unreadable: %s>" % type(e).__name__,)
+        return (("<unreadable>", type(e).__name__),)
     rows = []
     for ev, rules in ((data.get("hooks") or {}) if isinstance(data, dict) else {}).items():
         for rule in rules or []:

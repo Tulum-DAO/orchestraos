@@ -38,7 +38,7 @@ The installer refuses to write a row whose script is missing on disk (a broken r
 every tool call and blocks the host), never overwrites a settings file it cannot parse, and
 under pytest refuses to touch the real `~/.claude/settings.json` (`CLAUDE_CONFIG_DIR` is set to
 a temp dir by the test fixtures). Outside pytest it also refuses to install a checkout or data dir
-that lives under a temp dir into the real file: a scratch clone's rows would run in every Claude
+that lives under a temp dir into any settings file that is not itself under a temp dir: a scratch clone's rows would run in every Claude
 session on the host, out of a directory that is deleted later. Point `CLAUDE_CONFIG_DIR` at a
 scratch dir for a throwaway install, or set `ORCHESTRA_ALLOW_TEMP_INSTALL=1` if you mean it. A test
 run that changes the real file's tagged rows anyway fails as a whole (root `conftest.py`).

@@ -89,16 +89,28 @@ def _under_temp(p: Path):
 
 
 def _strip_ours(hooks: dict) -> int:
-    """Drop every row tagged MARKER (any data dir, any repo path); keep every user rule intact."""
+    """Drop every row tagged MARKER (any data dir, any repo path). Everything else stays as it was: a rule
+    or an event list is dropped only when taking OUR rows out emptied it; a shape this code does not know
+    (a rule or a hook entry that is not an object, an event that is not a list) is left exactly as found."""
     removed = 0
     for ev, rules in list(hooks.items()):
-        kept_rules = []
-        for rule in rules or []:
-            hk = [h for h in (rule.get("hooks") or []) if not _is_ours(h.get("command", ""))]
-            removed += len(rule.get("hooks") or []) - len(hk)
-            if hk:
-                rule = dict(rule); rule["hooks"] = hk; kept_rules.append(rule)
-        if kept_rules:
+        if not isinstance(rules, list):
+            continue
+        kept_rules, took = [], 0
+        for rule in rules:
+            inner = rule.get("hooks") if isinstance(rule, dict) else None
+            if not isinstance(inner, list):
+                kept_rules.append(rule)
+                continue
+            hk = [h for h in inner if not (isinstance(h, dict) and _is_ours(h.get("command", "")))]
+            n = len(inner) - len(hk)
+            took += n
+            if hk or not n:
+                if n:
+                    rule = dict(rule); rule["hooks"] = hk
+                kept_rules.append(rule)
+        removed += took
+        if kept_rules or not took:
             hooks[ev] = kept_rules
         else:
             hooks.pop(ev, None)
@@ -106,10 +118,13 @@ def _strip_ours(hooks: dict) -> int:
 
 
 def _write(settings_path: Path, settings: dict) -> None:
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = settings_path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(settings, indent=2) + "\n")
-    os.replace(tmp, settings_path)
+    # Through a symlink (a dotfiles-managed settings.json): the file it points at is the one updated,
+    # and the link stays a link. Non-ASCII text is written as it was read.
+    target = settings_path.resolve() if settings_path.is_symlink() else settings_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, target)
 
 
 def install(*, settings_path: Path, repo_root: Path, data_dir: Path, dry_run: bool = False) -> dict:
@@ -136,18 +151,20 @@ def install(*, settings_path: Path, repo_root: Path, data_dir: Path, dry_run: bo
         return {"installed": 0, "removed": 0,
                 "error": "refusing to write the real ~/.claude/settings.json from inside a test (set CLAUDE_CONFIG_DIR)"}
     # GUARD 3: a checkout (or data dir) under a temp dir is a scratch copy: a proof, a red-team clone, a
-    # throwaway test. Installing it into the real settings file makes every Claude session on the host run
-    # hooks out of a directory that is deleted later and that anyone may re-create with other code; and
-    # step 1 below would replace a real install's rows with it. 2026-09-20: `orchestra init --yes` run from
-    # a scratchpad clone, outside pytest, left 12 such rows in an operator's live file for 19 days.
-    if settings_path.resolve() == real and os.environ.get(ALLOW_TEMP_ENV) != "1":
+    # throwaway test. Installing it into a settings file that is NOT itself scratch (the operator's, wherever
+    # it lives: ~/.claude, a CLAUDE_CONFIG_DIR, a --settings path) makes every Claude session that reads it run
+    # hooks out of a directory that is deleted later and that anyone may re-create with other code; and step 1
+    # below would replace a real install's rows with it. 2026-09-20: `orchestra init --yes` run from a
+    # scratchpad clone, outside pytest, left 12 such rows in an operator's live file for 19 days.
+    if os.environ.get(ALLOW_TEMP_ENV) != "1" and not _under_temp(settings_path.resolve()):
         scratch = next(((label, p) for label, p in (("checkout", repo_root), ("data dir", data_dir))
                         if _under_temp(p)), None)
         if scratch:
             return {"installed": 0, "removed": 0,
-                    "error": f"refusing to install hooks from a {scratch[0]} under a temp dir ({scratch[1]}) into the "
-                             f"real {real}: point CLAUDE_CONFIG_DIR at a scratch dir for a throwaway install, or set "
-                             f"{ALLOW_TEMP_ENV}=1 if this really is the install every Claude session should run"}
+                    "error": f"refusing to install hooks from a {scratch[0]} under a temp dir ({scratch[1]}) into "
+                             f"{settings_path}, which is not scratch: point CLAUDE_CONFIG_DIR at a scratch dir for a "
+                             f"throwaway install, or set {ALLOW_TEMP_ENV}=1 if this really is the install every "
+                             f"Claude session should run"}
     hooks = settings.setdefault("hooks", {})
     # 1. drop our previous rows (identified by MARKER only), keep every user rule intact
     removed = _strip_ours(hooks)
