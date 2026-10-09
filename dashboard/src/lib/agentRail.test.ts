@@ -18,6 +18,7 @@ test('waiting and stranded are the human-blocked states', () => {
   assert.equal(sectionFor(a('x', 'waiting_permission')), 'needsYou');  // detector vocab
   assert.equal(sectionFor(a('x', 'stranded')), 'needsYou');
   assert.equal(sectionFor(a('x', 'stranded_input')), 'needsYou');      // detector vocab
+  assert.equal(sectionFor(a('x', 'queued_input')), 'needsYou');        // accepted, never ran: needs a re-send
 });
 
 test('stalled is WORKING, not needs-you: a long turn must not cry for a human', () => {

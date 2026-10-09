@@ -310,6 +310,7 @@ test('isInterrupted: only on EVIDENCE -- later content, or a known stopped state
   assert.equal(isInterrupted({ isLast: false, state: 'working' }), true);   // the turn moved on
   assert.equal(isInterrupted({ isLast: true, state: 'idle' }), true);       // agent back at prompt
   assert.equal(isInterrupted({ isLast: true, state: 'crashed' }), true);
+  assert.equal(isInterrupted({ isLast: true, state: 'queued' }), true);     // turn ENDED, message never ran
   assert.equal(isInterrupted({ isLast: true, state: 'working' }), false);
   assert.equal(isInterrupted({ isLast: true, state: 'stalled' }), false);   // long turn, still working
   assert.equal(isInterrupted({ isLast: true, state: 'unknown' }), false);   // no evidence, no claim

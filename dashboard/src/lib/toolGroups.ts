@@ -173,8 +173,9 @@ export function formatDuration(ms: number): string {
 
 // States in which the agent is known NOT to be mid-turn. 'waiting' is deliberately absent: a
 // tool call blocked on a permission prompt is unfinished but very much alive. 'stalled' is a long
-// turn still working, and 'unknown' is no evidence at all.
-const STOPPED_STATES = new Set(['idle', 'stranded', 'stopped', 'crashed', 'offline', 'retired']);
+// turn still working, and 'unknown' is no evidence at all. 'queued' means the turn ENDED with the
+// person's message unrun at the prompt.
+const STOPPED_STATES = new Set(['idle', 'stranded', 'queued', 'stopped', 'crashed', 'offline', 'retired']);
 
 /**
  * Whether a group's unfinished calls can never finish. Only on EVIDENCE: the chat has moved past
