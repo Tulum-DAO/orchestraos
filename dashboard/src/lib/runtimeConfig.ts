@@ -12,6 +12,13 @@
  * Fetched with `cache: 'no-store'` because static servers commonly mark every non-HTML file
  * `immutable` for a year (this repo's dashboard-proxy.js does), which would freeze a changed
  * value in every browser that ever loaded the old one.
+ *
+ * DETECTION, only where the file is silent: with no explicit `features.arturo`, a 404 from
+ * GET /api/arturo/health (the route or its backend is not installed) switches Arturo off. A
+ * 502-504 is a service still STARTING and keeps it on; so do 401, a network error and a slow
+ * answer. An explicit flag always wins and then no probe is sent at all. newAgent and
+ * providerSignIn have no side-effect-free probe (their routes are POST, and a GET on a POST-only
+ * Express route is a 404 whether or not it exists), so they follow the file only.
  */
 
 /** Surfaces a deployment can switch OFF when its API does not serve them. A switched-off surface
@@ -78,6 +85,21 @@ export function featureEnabled(name: FeatureName): boolean {
   return current.features[name];
 }
 
+/** The value the file sets for a feature, or undefined when it says nothing (only booleans count). */
+export function explicitFeature(raw: unknown, name: FeatureName): boolean | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const f = (raw as Record<string, unknown>).features;
+  if (!f || typeof f !== 'object') return undefined;
+  const v = (f as Record<string, unknown>)[name];
+  return typeof v === 'boolean' ? v : undefined;
+}
+
+/** Pure: what the health probe's status says about Arturo. Only "not there" (404) turns it off;
+ *  null = no answer (network, timeout), which is no evidence of absence. */
+export function arturoFromHealthStatus(status: number | null): boolean {
+  return status !== 404;
+}
+
 /** Test seam, and what loadRuntimeConfig() commits. */
 export function setRuntimeConfig(raw: unknown): RuntimeConfig {
   current = resolveRuntimeConfig(raw);
@@ -89,14 +111,25 @@ export async function loadRuntimeConfig(
   fetchImpl: typeof fetch = fetch,
   url = '/runtime-config.json',
   timeoutMs = 3_000,
+  probeTimeoutMs = 1_500,
 ): Promise<RuntimeConfig> {
+  let raw: unknown = null;
   try {
     const res = await fetchImpl(url, { cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) });
     // A missing file usually comes back as the SPA fallback (index.html, 200), not a 404, so a
     // non-JSON body is "no config", not an error.
-    if (!res.ok) return setRuntimeConfig(null);
-    return setRuntimeConfig(await res.json());
-  } catch {
-    return setRuntimeConfig(null);
+    if (res.ok) raw = await res.json();
+  } catch { /* no file, or not JSON: defaults */ }
+  const cfg = setRuntimeConfig(raw);
+  if (explicitFeature(raw, 'arturo') === undefined) {
+    let status: number | null = null;
+    try {
+      const res = await fetchImpl('/api/arturo/health', { signal: AbortSignal.timeout(probeTimeoutMs) });
+      status = res.status;
+    } catch { /* no answer: no evidence it is absent */ }
+    if (!arturoFromHealthStatus(status)) {
+      current = { ...cfg, features: { ...cfg.features, arturo: false } };
+    }
   }
+  return current;
 }
