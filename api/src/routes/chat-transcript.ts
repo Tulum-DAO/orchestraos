@@ -418,8 +418,10 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
     sid = m && ok(m[1]) ? m[1] : null;
   }
 
-  // 6. If agent is Gemini or name starts with gemini, search Antigravity brains by declaration
-  if (agentId.startsWith('gemini') || agentId === 'agy-ops' || agentId.startsWith('agy')) {
+  // 6. A Gemini/Antigravity seat (by its recorded runtime, or a gemini-/agy- name): search the
+  //    Antigravity brains by declaration
+  const runtime = String(e.runtime || '').toLowerCase();
+  if (runtime === 'gemini' || runtime === 'agy' || agentId.startsWith('gemini') || agentId.startsWith('agy')) {
     const gHit = findGeminiByDeclaration(agentId);
     if (gHit) return gHit;
   }

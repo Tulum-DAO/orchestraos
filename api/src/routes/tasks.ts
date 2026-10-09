@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync, renameSync } from 'fs';
+import { routeTask } from '../lib/taskRouting.js';
 import { join } from 'path';
 import { getAllTasks, getPendingContext, getCompletedReports } from '../services/state-reader.js';
 import { logInteraction } from '../services/learning.js';
@@ -188,22 +189,8 @@ router.post('/analyze', (req: Request, res: Response) => {
     else if (/\b(important|high priority|today|soon)\b/.test(desc)) priority = 'high';
     else if (/\b(low priority|whenever|backlog|nice to have)\b/.test(desc)) priority = 'low';
 
-    // --- Infer assignee ---
-    let assignee: string | null = null;
-    if (client) {
-      // Route to client PM
-      assignee = `pm-${client}`;
-      if (!agents[assignee]) {
-        // Fall back to pm-clients
-        assignee = 'pm-clients';
-      }
-    } else if (type === 'internal' || type === 'bug') {
-      assignee = 'pm-infra';
-    } else if (type === 'question') {
-      assignee = 'gm';
-    } else {
-      assignee = 'pm-products';
-    }
+    // --- Infer assignee: only seats this install has (the client's PM, else the manager) ---
+    let assignee: string | null = routeTask({ slug: client }, agents);
 
     // Check for specific agent mentions
     for (const aid of Object.keys(agents)) {

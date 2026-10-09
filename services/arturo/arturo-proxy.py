@@ -804,7 +804,7 @@ def _escalate_inject_giveup(call_id):
                f"(it stayed busy). The full transcript is saved ({call_id}); ask me to retry it.")
         if _TG_OUTBOX.allow(msg)[0]:
             subprocess.run(["bash", str(ORCHESTRA_DIR / "scripts" / "tg-notify.sh"),
-                            "--from", "arturo-voice", msg],
+                            "--from", "arturo", msg],
                            capture_output=True, text=True, timeout=60)
     except Exception as _e:
         log.error(f"_escalate_inject_giveup error: {_e}")
@@ -3705,7 +3705,7 @@ def execute_tool(name, args, user_turns=None):
                 try:
                     r = subprocess.run(
                         ["bash", str(ORCHESTRA_DIR / "scripts" / "tg-notify.sh"),
-                         "--from", "arturo-voice", text],   # message is POSITIONAL (fleet convention)
+                         "--from", "arturo", text],   # message is POSITIONAL (fleet convention)
                         capture_output=True, text=True, timeout=60,
                     )
                     if r.returncode != 0:
