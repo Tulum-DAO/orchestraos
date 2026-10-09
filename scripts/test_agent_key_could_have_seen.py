@@ -517,7 +517,7 @@ def test_without_expect_the_web_has_nothing_on_record(screen):
 def test_a_malformed_expect_is_refused_not_ignored(screen):
     _show(CMD_A, now=100.0)
     for bad in ("A", {"context": "x"}, {"question": 3}, {"question": "q", "context": 4},
-                {"question": "q" * 4001}):
+                {"question": "q" * (64 * 1024 + 1)}):
         status, body = _web_tap(bad)
         assert status == 400, bad
     assert screen["sent"] == []
@@ -558,4 +558,20 @@ def test_a_menu_gone_by_the_locked_read_sends_nothing(screen, monkeypatch):
 
     monkeypatch.setattr(G, "_agent_status", lambda: _AS())
     status, body = _tap()
-    assert status == 409 and "no longer" in body["error"] and screen["sent"] == []
+    assert status == 409 and body["reason"] == "menu_gone" and screen["sent"] == []
+
+
+def test_a_long_command_fits_in_expect(screen):
+    """Round 4: the detector keeps up to 120 pane lines of context, far over 8000 characters."""
+    long_cmd = _menu("x" * 20_000)
+    screen["menu"] = long_cmd
+    _show(long_cmd, now=100.0)
+    assert _web_tap({"question": long_cmd["question"], "context": long_cmd["context"]})[0] == 200
+
+
+def test_a_rewrapped_question_is_still_the_same_menu(screen):
+    """Round 4: a resize breaks a long path mid-token; the comparison must not see a new menu."""
+    wide = dict(OPTIONS_M, question="Overwrite /very/long/path/to/some/file.txt?")
+    narrow = dict(OPTIONS_M, question="Overwrite /very/long/path/to/some/fi le.txt?")
+    screen["menu"] = narrow
+    assert _web_tap({"question": wide["question"]})[0] == 200

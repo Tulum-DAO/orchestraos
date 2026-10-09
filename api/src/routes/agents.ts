@@ -628,12 +628,15 @@ async function gatewayInject(session: string, text: string, force: boolean):
 // that menu is still the one on screen (a tap meant for prompt A never answers prompt B).
 export interface MenuExpect { question: string; context?: string | null }
 
+// Far above what the detector captures (120 lines of a pane); the gateway uses the same bound.
+const EXPECT_MAX = 64 * 1024;
+
 export function menuExpectOf(raw: unknown): MenuExpect | null | 'bad' {
   if (raw === undefined || raw === null) return null;
   if (typeof raw !== 'object') return 'bad';
   const { question, context } = raw as Record<string, unknown>;
-  if (typeof question !== 'string' || question.length > 4000) return 'bad';
-  if (context !== undefined && context !== null && (typeof context !== 'string' || context.length > 8000)) return 'bad';
+  if (typeof question !== 'string' || question.length > EXPECT_MAX) return 'bad';
+  if (context !== undefined && context !== null && (typeof context !== 'string' || context.length > EXPECT_MAX)) return 'bad';
   return { question, context: (context as string | null | undefined) ?? '' };
 }
 

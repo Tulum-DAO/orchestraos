@@ -23,7 +23,13 @@ test('a rendered menu passes through, context defaulting to empty', () => {
 
 test('a malformed expect is refused, never silently dropped', () => {
   for (const bad of ['x', 3, { context: 'c' }, { question: 7 }, { question: 'q', context: 5 },
-                     { question: 'q'.repeat(4001) }, { question: 'q', context: 'c'.repeat(8001) }]) {
+                     { question: 'q'.repeat(65537) }, { question: 'q', context: 'c'.repeat(65537) }]) {
     assert.equal(menuExpectOf(bad), 'bad', JSON.stringify(bad).slice(0, 60));
   }
+});
+
+test('a long permission command still fits (the detector keeps up to 120 pane lines)', () => {
+  const context = 'Bash command\n' + 'x'.repeat(20_000);
+  assert.deepEqual(menuExpectOf({ question: 'Do you want to proceed? [Bash]', context }),
+    { question: 'Do you want to proceed? [Bash]', context });
 });

@@ -627,10 +627,17 @@ def _stale_tap_check_off():
 
 
 def _menu_key(session, menu):
-    """What a menu IS (session + question + context, the same rule as a permission digest), for
-    comparing the menu a client rendered, or the one checked, with the one on screen now."""
+    """What a menu IS (session + question + context), for comparing the menu a client rendered,
+    or the one checked, with the one on screen now. All whitespace is removed from the question
+    as well (the context already ignores it): a re-wrap at another pane width breaks long paths
+    and URLs mid-token, and must not make the same menu look different. Comparison only; the
+    instance ledger and op_keys keep their own keys."""
     menu = menu or {}
-    return _perm_digest(session, menu.get("question") or "", menu.get("context") or "")
+    q = re.sub(r"\s+", "", menu.get("question") or "")
+    return _perm_digest(session, q, menu.get("context") or "")
+
+
+_EXPECT_MAX = 64 * 1024   # far above what the detector captures (120 lines of a pane)
 
 
 def _expect_key(session, expect):
@@ -641,7 +648,7 @@ def _expect_key(session, expect):
     ctx = expect.get("context")
     if ctx is not None and not isinstance(ctx, str):
         return None
-    if len(expect["question"]) > 4000 or len(ctx or "") > 8000:
+    if len(expect["question"]) > _EXPECT_MAX or len(ctx or "") > _EXPECT_MAX:
         return None
     return _menu_key(session, {"question": expect["question"], "context": ctx or ""})
 
@@ -5291,7 +5298,8 @@ async def handle_agent_key(request):
 
     r = await asyncio.get_event_loop().run_in_executor(None, _send_locked)
     if r == "gone":
-        return _json({"ok": False, "error": "menu no longer on screen"}, status=409)
+        return _json({"ok": False, "reason": "menu_gone", "error": "menu no longer on screen"},
+                     status=409)
     if r == "changed":
         return _json({"ok": False, "reason": "instance_mismatch",
                       "error": _COULD_NOT_HAVE_SEEN["instance_mismatch"]}, status=409)
