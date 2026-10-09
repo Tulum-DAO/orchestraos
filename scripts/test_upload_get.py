@@ -21,10 +21,16 @@ SVGISH = "1791529003_doc002.txt"
 
 
 def _png(w=1200, h=600):
-    from PIL import Image
-    b = io.BytesIO()
-    Image.new("RGB", (w, h), (200, 30, 30)).save(b, "PNG")
-    return b.getvalue()
+    """A real PNG built without Pillow (Pillow is optional on a public install: thumbnails need it,
+    serving does not)."""
+    import struct
+    import zlib
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    raw = b"".join(b"\x00" + bytes((10, 120, 200)) * w for _ in range(h))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
 @pytest.fixture
@@ -141,6 +147,7 @@ def test_range_request_is_206(orch):
 # ---- (e) thumbnails -----------------------------------------------------------------------------
 
 def test_image_thumb_is_jpeg_long_edge_400(orch):
+    pytest.importorskip("PIL")
     from PIL import Image
     st, h, body = _call("GET", f"/upload/{IMG}?thumb=1")
     assert st == 200 and h["Content-Type"] == "image/jpeg"
@@ -165,6 +172,7 @@ def test_thumb_never_writes_into_uploads(orch):
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="no ffmpeg")
 def test_video_poster_frame(orch):
+    pytest.importorskip("PIL")
     from PIL import Image
     out = orch / "state" / "uploads" / VID
     subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=10",
@@ -251,6 +259,7 @@ def test_video_bytes_named_png_are_an_attachment(orch):
 # ---- the app-store review conditions, by NAME --------------------------------------------------
 
 def _jpeg_with_gps():
+    pytest.importorskip("PIL")
     from PIL import Image
     im = Image.new("RGB", (1000, 800), (10, 120, 200))
     exif = Image.Exif()
@@ -263,6 +272,7 @@ def _jpeg_with_gps():
 
 
 def test_exif_strip_image_thumb_carries_no_exif_or_gps(orch):
+    pytest.importorskip("PIL")
     from PIL import Image
     src = _jpeg_with_gps()
     assert Image.open(io.BytesIO(src)).getexif().get_ifd(0x8825)      # the fixture really has GPS
@@ -276,6 +286,7 @@ def test_exif_strip_image_thumb_carries_no_exif_or_gps(orch):
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="no ffmpeg")
 def test_exif_strip_video_poster_carries_no_metadata(orch):
+    pytest.importorskip("PIL")
     from PIL import Image
     out = orch / "state" / "uploads" / "1791529017_vidgps.mp4"
     subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=10", "-t", "2",
@@ -320,8 +331,8 @@ def test_over_the_cap_refusal_carries_the_headers_too(orch, monkeypatch):
 
 def test_two_threads_making_the_same_thumb_never_share_a_temp_file(orch, monkeypatch):
     """Review of #339: both requests for one uncached thumb run in threads of one process."""
+    pytest.importorskip("PIL")
     seen = []
-    real_save = None
     from PIL import Image
     real_save = Image.Image.save
 
