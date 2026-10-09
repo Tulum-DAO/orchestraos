@@ -487,3 +487,43 @@ def test_a_cold_stream_cut_off_before_its_result_falls_back_and_records_nothing_
     assert "turn.reset" in kinds(evs)
     assert payloads(evs, "turn.end")[0]["reply_text"] == "On it, I'll text Shaw now."
     assert recorded == [], "the whole-reply path records its own turn; the half never is"
+
+
+# ---- a prose pass that turns into a tool envelope (cold path) ---------------------------------
+# Found in a new-user test: the reply read "e" and then the raw {"tool_calls":[...]} JSON. The first
+# character decided "prose", and nothing after that looked for an envelope.
+def _delta(text):
+    return json.dumps({"type": "stream_event", "event": {"type": "content_block_delta",
+                       "delta": {"type": "text_delta", "text": text}}}) + "\n"
+
+
+_RESULT = json.dumps({"type": "result", "is_error": False, "result": "ok"}) + "\n"
+PROSE_THEN_ENVELOPE = [_delta("e"), _delta('\n{"tool_calls": [{"name": "list_agents", "arguments": {}}]}'), _RESULT]
+PROSE_THEN_SPLIT_ENVELOPE = [_delta("Let me check. "), _delta('{"tool_ca'), _delta('lls": [{"name": "list_agents"}]}'), _RESULT]
+
+
+@pytest.mark.parametrize("chunks", [PROSE_THEN_ENVELOPE, PROSE_THEN_SPLIT_ENVELOPE])
+def test_an_envelope_after_prose_is_never_streamed(chunks):
+    evs = events(chunks)
+    shown = "".join(d["text"] for d in payloads(evs, "text.delta"))
+    assert "tool_calls" not in shown and "{" not in shown
+
+
+@pytest.mark.parametrize("chunks", [PROSE_THEN_ENVELOPE, PROSE_THEN_SPLIT_ENVELOPE])
+def test_an_envelope_after_prose_hands_the_turn_to_the_tool_path(chunks):
+    calls, seen = [], []
+
+    def fallback():
+        calls.append(True)
+        return 200, {"ok": True, "reply_text": "gm is up", "tools_called": ["list_agents"], "spawned": []}
+
+    evs = events(chunks, fallback=fallback, record=lambda **kw: seen.append(kw))
+    assert calls, "the tools have to run"
+    assert "turn.reset" in kinds(evs), "the prose already shown is cleared before the whole reply"
+    assert payloads(evs, "turn.end")[0]["reply_text"] == "gm is up"
+    assert seen == [], "the /text path records the turn, not the stream"
+
+
+def test_a_brace_that_never_becomes_an_envelope_is_still_shown():
+    evs = events([_delta("Use a set {1, 2}"), _delta(" for that."), _RESULT])
+    assert payloads(evs, "turn.end")[0]["reply_text"] == "Use a set {1, 2} for that."

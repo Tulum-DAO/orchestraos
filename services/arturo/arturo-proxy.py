@@ -5863,7 +5863,9 @@ def _record_text_turn(conversation_id, text, reply, brain=None, effective=None):
     """The ONE place a text turn is persisted. /text and /text/stream both come through here,
     so a streamed turn and a whole one leave the same history and the same thread row.
     `brain` = what the operator chose (None = default); `effective` = what actually wrote the
-    reply, kept on the turn so a later turn on another model knows it was not its own."""
+    reply, kept on the turn so a later turn on another model knows it was not its own.
+    A tool-call envelope is never stored: history is replayed and shown, so it would surface again."""
+    reply = _brain.without_envelope(reply)
     _TEXT_HISTORY.append(conversation_id, "user", text)
     _TEXT_HISTORY.append(conversation_id, "assistant", reply, brain=effective)
     _THREADS.record_turn(conversation_id, text, reply, brain=brain, effective=effective)
