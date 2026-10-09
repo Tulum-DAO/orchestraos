@@ -2103,6 +2103,34 @@ def _onboarding_refusal(text, conversation_id, principal):
     return None
 
 
+_NOT_YOUR_THREAD = {"ok": False, "error": "thread_not_yours"}
+
+
+def _thread_key(principal):
+    """The principal a thread is filed under: the stamped one, or the archive's ANONYMOUS. Only "fleet" is
+    verified (the stamp secret). A "device:<id>" label, or no label, is believed as sent: the gateway always
+    builds it fresh, and anything else that can reach this loopback-only port is already a local process."""
+    return principal or _thread_store.ANONYMOUS
+
+
+def _thread_refusal(conversation_id, principal):
+    """A non-fleet caller continues only a thread it started. A turn on a thread loads that thread's history
+    into the caller's prompt, so a device that learned (or guessed) another thread's id could otherwise read
+    it back through the model. Checked before the lock, like _onboarding_refusal. Returns the 403 body, or None."""
+    if principal == "fleet":
+        return None
+    cid = (conversation_id or "").strip()[:200]
+    owner = _THREADS.started_by(cid)
+    if owner is None:
+        # Not in the archive. A conversation this process still holds history for is one whose turns were never
+        # archived (an unusable archive, or a record_turn that failed): whose it is is unknown, so it stays the
+        # dashboard's. Fail-closed: a device's own unarchived conversation is refused too.
+        return _NOT_YOUR_THREAD if _TEXT_HISTORY.get(cid) else None
+    if owner == _thread_key(principal):
+        return None
+    return _NOT_YOUR_THREAD
+
+
 def _offer_team(conversation_id, principal):
     """An offer belongs to the caller who was shown it: only that principal's next turn answers it."""
     if conversation_id:
@@ -5856,6 +5884,8 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None, t
     if principal != "fleet" and (step in _onb.ONBOARDING_STEPS
                                  or _onboarding_refusal(text, conversation_id, principal)):
         return 403, dict(_ONBOARDING_ONLY)
+    if _thread_refusal(conversation_id, principal):
+        return 403, dict(_NOT_YOUR_THREAD)
     operator_text = text                     # before the page context: what the operator sent
     if page_ctx is not None:
         # After split_marker (the marker is anchored to the first line), and stored exactly as
@@ -5945,7 +5975,7 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None, t
         _hold_returning_reply(conversation_id, reply)
     else:
         _record_text_turn(conversation_id=conversation_id, text=text, reply=reply, brain=chosen_id,
-                          effective=effective, turn_id=turn_id)
+                          effective=effective, turn_id=turn_id, principal=principal)
     from services.arturo import operator_store as _ops
     body = {"ok": True, "reply_text": reply, "conversation_id": conversation_id,
             "brain": (chosen or _turn_brain()).describe(), "tools_called": tools_called,
@@ -5994,7 +6024,10 @@ def threads_endpoint():
         offset = int(request.args.get("offset") or 0)
     except ValueError:
         return jsonify({"ok": False, "error": "bad_paging"}), 400
-    return jsonify({"ok": True, "threads": _THREADS.list_threads(limit=limit, offset=offset)})
+    # A non-fleet reader (a paired device) lists only the threads it started.
+    principal = _stamped_principal(request)
+    mine = None if principal == "fleet" else _thread_key(principal)
+    return jsonify({"ok": True, "threads": _THREADS.list_threads(limit=limit, offset=offset, started_by=mine)})
 
 
 @app.route("/threads/<path:conversation_id>", methods=["GET"])
@@ -6010,6 +6043,10 @@ def thread_detail_endpoint(conversation_id):
             return jsonify({"ok": False, "error": "bad_turn_id"}), 400
         return jsonify({"ok": True, "turn": _turn_ids.readback(_THREADS, _TURN_IDS, conversation_id, turn_q,
                                                                _stamped_principal(request))})
+    principal = _stamped_principal(request)
+    if principal != "fleet" and _THREADS.started_by(conversation_id) not in (None, _thread_key(principal)):
+        # Another principal's thread reads exactly as one that does not exist: no turns, and no sign it is there.
+        return jsonify({"ok": True, "thread": None})
     thread = _THREADS.get_thread(conversation_id)
     if thread is None:
         # A thread that has no turns yet is the NORMAL state the first time the pill opens (the
@@ -6032,7 +6069,7 @@ _WARM_POOL = _warm_session.WarmPool(spawn=_spawn_warm, argv_for=lambda key: [],
 atexit.register(_WARM_POOL.close_all)
 
 
-def _record_text_turn(conversation_id, text, reply, brain=None, effective=None, turn_id=None):
+def _record_text_turn(conversation_id, text, reply, brain=None, effective=None, turn_id=None, principal=None):
     """The ONE place a text turn is persisted. /text and /text/stream both come through here,
     so a streamed turn and a whole one leave the same history and the same thread row.
     `brain` = what the operator chose (None = default); `effective` = what actually wrote the
@@ -6042,7 +6079,7 @@ def _record_text_turn(conversation_id, text, reply, brain=None, effective=None, 
     _TEXT_HISTORY.append(conversation_id, "user", text)
     _TEXT_HISTORY.append(conversation_id, "assistant", reply, brain=effective)
     stored = _THREADS.record_turn(conversation_id, text, reply, brain=brain, effective=effective,
-                                  **({"turn_id": turn_id} if turn_id else {}))
+                                  principal=_thread_key(principal), **({"turn_id": turn_id} if turn_id else {}))
     if turn_id and stored:
         # Only a turn the archive really holds counts as recorded (#319 delta SF2): an unrecorded one keeps
         # its 'started' mark, so it can never be replayed from a row that is not there.
@@ -6077,6 +6114,8 @@ def text_prewarm_endpoint():
     conversation_id = (data.get("conversation_id") or "").strip()[:200]
     if not conversation_id:
         return jsonify({"ok": False, "error": "conversation_id required"}), 400
+    if _thread_refusal(conversation_id, _stamped_principal(request)):
+        return jsonify(_NOT_YOUR_THREAD), 403             # a warm process would hold that thread's history
     brain_req = data.get("brain")
     chosen = None
     if brain_req is not None:
@@ -6142,6 +6181,8 @@ def text_stream_endpoint():
     principal = _stamped_principal(request)
     if _onboarding_refusal(text_in, conversation_id, principal):
         return jsonify(_ONBOARDING_ONLY), 403
+    if _thread_refusal(conversation_id, principal):
+        return jsonify(_NOT_YOUR_THREAD), 403
     tid, refusal = _turn_id_refusal(data, data.get("conversation_id"))
     if refusal:
         return jsonify(refusal[1]), refusal[0]
@@ -6161,6 +6202,13 @@ def text_stream_endpoint():
         if _turn is not None:
             _TURN_IDS.drop(conversation_id, tid, _turn["req"])
         return jsonify(_BUSY), 409
+    if _thread_refusal(conversation_id, principal):
+        # Again under the lock: a dashboard turn that started this thread while this one waited for the lock
+        # must not hand its history to this caller (text_turn re-checks the same way for /text).
+        _token.release()
+        if _turn is not None:
+            _TURN_IDS.drop(conversation_id, tid, _turn["req"])
+        return jsonify(_NOT_YOUR_THREAD), 403
     if _turn is not None:
         answered = _claim_turn_id(_turn, _token)
         if answered:
@@ -6279,7 +6327,7 @@ def text_stream_endpoint():
             return _WARM_POOL.turn(warm_key, new_text, argv=argv, env=env, version=v)
 
         def _record(**kw):
-            _record_text_turn(**kw, effective=effective, turn_id=tid)
+            _record_text_turn(**kw, effective=effective, turn_id=tid, principal=principal)
             _WARM_POOL.sync(warm_key, _THREADS.turn_count(conversation_id))
 
         from services.arturo import onboarding as _onb
@@ -6389,6 +6437,8 @@ def text_endpoint():
     principal = _stamped_principal(request)
     if _onboarding_refusal(data.get("text"), cid, principal):
         return jsonify(_ONBOARDING_ONLY), 403
+    if _thread_refusal(cid, principal):
+        return jsonify(_NOT_YOUR_THREAD), 403
     tid, refusal = _turn_id_refusal(data, cid)
     if refusal:
         return jsonify(refusal[1]), refusal[0]
@@ -6441,9 +6491,11 @@ def health():
         if nb is not brain:
             brain = nb
             LLM_MODEL = nb.model if nb.kind == "runtime" else _API_MODEL
-    # The onboarding thread, so every browser and device resumes the SAME one; only to the gateway
-    # (a public /health through the Funnel never carries it) and only while onboarding is not done.
-    _onb_conv = (_progress.conversation(ARTURO_STATE) or None) if (_gateway_hop_ok() and not onboarded()) else None
+    # The onboarding thread, so every browser resumes the SAME one; only to the dashboard (the gateway's
+    # stamped "fleet": onboarding is the dashboard's alone, and a public /health through the Funnel or a
+    # paired device's read never carries it) and only while onboarding is not done.
+    _onb_conv = ((_progress.conversation(ARTURO_STATE) or None)
+                 if (_gateway_hop_ok() and _stamped_principal(request) == "fleet" and not onboarded()) else None)
     return jsonify({
         "onboarding_conversation": _onb_conv,
         "status": "ok",

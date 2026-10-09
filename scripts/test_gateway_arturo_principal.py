@@ -316,3 +316,43 @@ def test_a_thread_read_carries_its_reader_and_the_turn_query(monkeypatch, princi
     assert seen["url"].endswith("/threads/c1")
     assert seen["params"] == {"turn": "t_abc123456"}
     assert seen["headers"]["X-Arturo-Principal"] == stamp      # built fresh, never the client's own header
+
+
+# --- a health read carries its reader: the onboarding thread id goes only to the dashboard -------------------
+
+@pytest.mark.parametrize("principal,stamp", [({"id": "legacy"}, "fleet"), ({"id": "dev_x"}, "device:dev_x")])
+def test_a_health_read_carries_its_reader(monkeypatch, principal, stamp):
+    seen = {}
+
+    class _Resp:
+        status = 200
+
+        async def json(self, content_type=None):
+            return {"status": "ok"}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    class _Session:
+        def __init__(self, *a, **k):
+            pass
+
+        def get(self, url, headers=None, timeout=None):
+            seen.update(url=url, headers=dict(headers or {}))
+            return _Resp()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(aiohttp, "ClientSession", _Session)
+    monkeypatch.setattr(G, "_authorized", lambda request: True)
+    req = _Req(principal, client_headers={"X-Arturo-Principal": "fleet"})
+    asyncio.run(G.handle_arturo_health(req))
+    assert seen["url"].endswith("/health")
+    assert seen["headers"].get("X-Arturo-Principal") == stamp   # built fresh, never the client's own header

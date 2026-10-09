@@ -39,7 +39,7 @@ def test_name_marker_is_stripped_and_directive_applied_for_that_turn_only(tmp_pa
     assert "set_operator_fact" in seen["system"] and "BASECTX" not in seen["system"]
     assert "[Onboarding" not in mod._THREADS.get_thread("c1")["turns"][0]["content"]   # nor the archive
     assert "operator" in body                                             # additive field on every reply
-    code, _ = mod.text_turn("and what can you do?", "c1")
+    code, _ = mod.text_turn("and what can you do?", "c1", principal="fleet")
     assert code == 200 and "set_operator_fact" not in seen["system"]     # next turn: no directive
 
 

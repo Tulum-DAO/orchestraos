@@ -19,7 +19,7 @@ def test_the_stored_reply_has_no_envelope(monkeypatch, tmp_path):
     P = _load_proxy(monkeypatch, tmp_path)
     seen = []
     monkeypatch.setattr(P._TEXT_HISTORY, "append", lambda cid, role, text, brain=None: seen.append((role, text)))
-    monkeypatch.setattr(P._THREADS, "record_turn", lambda cid, text, reply, brain=None, effective=None: seen.append(("thread", reply)))
+    monkeypatch.setattr(P._THREADS, "record_turn", lambda cid, text, reply, brain=None, effective=None, **kw: seen.append(("thread", reply)))
     P._record_text_turn("c1", "who is up?", 'e\n{"tool_calls": [{"name": "list_agents", "arguments": {}}]}')
     assert seen and all("tool_calls" not in t for _, t in seen)
     assert ("assistant", "e") in seen and ("thread", "e") in seen
@@ -29,6 +29,6 @@ def test_an_ordinary_reply_is_stored_as_is(monkeypatch, tmp_path):
     P = _load_proxy(monkeypatch, tmp_path)
     seen = []
     monkeypatch.setattr(P._TEXT_HISTORY, "append", lambda cid, role, text, brain=None: seen.append((role, text)))
-    monkeypatch.setattr(P._THREADS, "record_turn", lambda cid, text, reply, brain=None, effective=None: seen.append(("thread", reply)))
+    monkeypatch.setattr(P._THREADS, "record_turn", lambda cid, text, reply, brain=None, effective=None, **kw: seen.append(("thread", reply)))
     P._record_text_turn("c1", "hi", "Use a set {1, 2}.")
     assert ("assistant", "Use a set {1, 2}.") in seen

@@ -4713,7 +4713,9 @@ async def handle_arturo_health(request):
         return _json({"ok": False, "error": "unauthorized"}, status=401)
     try:
         async with aiohttp.ClientSession() as s:
-            async with s.get(f"{ARTURO_TEXT_BASE}/health", timeout=aiohttp.ClientTimeout(total=5)) as r:
+            # Who is asking: the onboarding thread id goes only to the dashboard (the fleet bearer).
+            async with s.get(f"{ARTURO_TEXT_BASE}/health", headers=_arturo_principal_headers(request, voice=False),
+                             timeout=aiohttp.ClientTimeout(total=5)) as r:
                 out = await r.json(content_type=None)
                 return _json(dict(out, ok=True), status=r.status)
     except Exception as e:  # noqa: BLE001

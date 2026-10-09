@@ -152,14 +152,21 @@ def test_finished_onboarding_hands_out_no_onboarding_thread(P):
     assert h["onboarded"] is True and h["onboarding_conversation"] is None
 
 
-def test_health_names_the_onboarding_thread_only_to_the_gateway(P):
+def test_health_names_the_onboarding_thread_only_to_the_dashboard(P, fleet_stamp):
     _open(P)
+    fleet = fleet_stamp(P)
     with P.app.test_client() as c:
-        mine = c.get("/health", environ_base={"REMOTE_ADDR": "127.0.0.1"}).get_json()
+        mine = c.get("/health", environ_base={"REMOTE_ADDR": "127.0.0.1"}, headers=fleet).get_json()
         funnel = c.get("/health", environ_base={"REMOTE_ADDR": "127.0.0.1"},
-                       headers={"X-Forwarded-For": "203.0.113.9"}).get_json()
+                       headers={**fleet, "X-Forwarded-For": "203.0.113.9"}).get_json()
+        device = c.get("/health", environ_base={"REMOTE_ADDR": "127.0.0.1"},
+                       headers={"X-Arturo-Principal": "device:dev_a"}).get_json()
+        unstamped = c.get("/health", environ_base={"REMOTE_ADDR": "127.0.0.1"}).get_json()
     assert mine["onboarding_conversation"] == "web_onb"
+    # onboarding is the dashboard's alone: a paired device, or a caller the gateway did not stamp, never learns it
     assert funnel["onboarding_conversation"] is None
+    assert device["onboarding_conversation"] is None
+    assert unstamped["onboarding_conversation"] is None
 
 
 # ---- a declined team is remembered, and only from the dashboard ----------------------------------

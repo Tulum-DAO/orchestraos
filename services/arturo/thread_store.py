@@ -70,11 +70,17 @@ TURN_MARK_TTL_S = 7 * 24 * 3600
 # existing threads.db, so each is added by an idempotent ALTER on open. '' = the default brain.
 _MIGRATIONS = {
     "threads": [("last_brain_provider", "TEXT NOT NULL DEFAULT ''"),
-                ("last_brain_model", "TEXT NOT NULL DEFAULT ''")],
+                ("last_brain_model", "TEXT NOT NULL DEFAULT ''"),
+                # Who started the thread (the gateway-stamped principal of its first turn). '' = a row from
+                # before this column, which only the dashboard could have written: read as "fleet".
+                ("started_by", "TEXT NOT NULL DEFAULT ''")],
     "turns": [("brain_provider", "TEXT NOT NULL DEFAULT ''"),
               ("brain_model", "TEXT NOT NULL DEFAULT ''")],
 }
 _THREAD_COLS = "id, title, created, updated, turns, snippet, last_brain_provider, last_brain_model"
+
+# A turn with no stamped principal still starts a thread someone may continue; never "" (that is "fleet").
+ANONYMOUS = "anonymous"
 
 
 def _migrate(conn):
@@ -155,14 +161,15 @@ class ThreadStore:
     # --- write ---------------------------------------------------------------------
 
     def record_turn(self, conversation_id, user_text, assistant_text, ts=None, brain=None,
-                    effective=None, turn_id=None):
+                    effective=None, turn_id=None, principal=None):
         """Archive one completed turn (the user's message and Arturo's reply). Called AFTER
         the brain answers, so a failed turn leaves no half-thread. Never raises.
         `brain` = {provider, model} when the operator chose one for this turn, None = default —
         that is what `last_brain` keeps, and what the picker restores. `effective` = the brain
         that actually WROTE the reply (a default turn names its model): that is what the turn
         row keeps, so a later turn on another model can be told which replies were not its own.
-        Omitted, the turn row keeps `brain`, as before."""
+        Omitted, the turn row keeps `brain`, as before. `principal` = who sent the turn; the first
+        turn's is kept as the thread's `started_by` (see started_by())."""
         if not self.usable or not conversation_id:
             return False
         now = float(ts if ts is not None else time.time())
@@ -180,9 +187,9 @@ class ThreadStore:
                                    (conversation_id,)).fetchone()
                 if row is None:
                     conn.execute(
-                        "INSERT INTO threads (id, title, created, updated, turns, snippet)"
-                        " VALUES (?, ?, ?, ?, 0, '')",
-                        (conversation_id, derive_title(user_text), now, now))
+                        "INSERT INTO threads (id, title, created, updated, turns, snippet, started_by)"
+                        " VALUES (?, ?, ?, ?, 0, '', ?)",
+                        (conversation_id, derive_title(user_text), now, now, principal or ANONYMOUS))
                     seq = 0
                 else:
                     seq = int(row["turns"])
@@ -257,16 +264,32 @@ class ThreadStore:
 
     # --- read ----------------------------------------------------------------------
 
-    def list_threads(self, limit=50, offset=0):
-        """Newest first, paged. Summaries only — never the turns."""
+    def started_by(self, conversation_id):
+        """Who started this thread: a principal ("fleet", "device:<id>", ANONYMOUS), or None when the
+        archive does not hold it (not started yet, or an unusable archive, which holds no history either).
+        A row from before the column reads as "fleet". A read that fails reads as "fleet" too: whoever is
+        not the dashboard is then refused, never let in."""
+        if not conversation_id or not self.usable:
+            return None
+        try:
+            with self._connect() as conn:
+                row = conn.execute("SELECT started_by FROM threads WHERE id = ?", (conversation_id,)).fetchone()
+            return None if row is None else (row["started_by"] or "fleet")
+        except Exception:  # noqa: BLE001
+            return "fleet"
+
+    def list_threads(self, limit=50, offset=0, started_by=None):
+        """Newest first, paged. Summaries only — never the turns. `started_by` = only the threads that
+        principal started (a non-fleet reader's list); None = all of them."""
         if not self.usable:
             return []
         try:
             with self._connect() as conn:
+                where, args = ("", ()) if started_by is None else (" WHERE started_by = ?", (started_by,))
                 rows = conn.execute(
-                    f"SELECT {_THREAD_COLS} FROM threads"
+                    f"SELECT {_THREAD_COLS} FROM threads{where}"
                     " ORDER BY updated DESC, id DESC LIMIT ? OFFSET ?",
-                    (max(1, min(int(limit), 200)), max(0, int(offset)))).fetchall()
+                    (*args, max(1, min(int(limit), 200)), max(0, int(offset)))).fetchall()
                 return [self._clean_title(conn, _thread_row(r)) for r in rows]
         except Exception:  # noqa: BLE001
             return []
