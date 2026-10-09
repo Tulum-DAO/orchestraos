@@ -101,7 +101,7 @@ def test_a_prompt_no_surface_has_shown_yet_is_refused(screen):
     _serve(CMD_A, now=100.0)
     screen["menu"] = CMD_B                    # B is on screen but nothing has stamped it yet
     status, body = _tap()
-    assert status == 409 and body["reason"] == "instance_unknown" and screen["sent"] == []
+    assert status == 409 and body["reason"] == "instance_mismatch" and screen["sent"] == []
 
 
 def test_after_being_shown_the_new_prompt_it_can_be_answered(screen):
@@ -326,3 +326,146 @@ def test_the_off_switch_logs_and_allows_without_a_restart(screen, monkeypatch, t
         assert "WOULD REFUSE (check off)" in caplog.text
         (tmp_path / "state" / "menu-stale-tap.off").unlink()
         assert _tap()[0] == 409, "flipped back on, still no restart"
+
+
+# --- review round 2 ------------------------------------------------------------------------------
+
+def test_an_identical_prompt_back_after_an_answer_is_a_new_instance_even_unpolled(screen):
+    """Round 2 B3: shown A#1, A#1 answered elsewhere, identical A#2 up, tap before any poll."""
+    _serve(CMD_A, now=100.0)
+    G._mark_instance_answered(SESSION, CMD_A["question"], CMD_A["context"])
+    status, body = _tap()
+    assert status == 409 and body["reason"] == "instance_mismatch" and screen["sent"] == []
+
+
+def test_the_fleet_sweep_reaps_a_self_cleared_prompt_so_its_return_is_new(screen, monkeypatch, tmp_path):
+    """Round 2 B2: the /pending-approvals fast path reads only flagged sessions, so the /agents
+    sweep (which reads every session) is where a self-cleared prompt is observed gone."""
+    import time
+    monkeypatch.setattr(G, "ORCH_DIR", tmp_path)
+    monkeypatch.setattr(G, "_live_voice_call", lambda: None)
+    t0 = time.time()
+    _serve(CMD_A, now=t0)
+    screen["menu"] = None                     # answered in the terminal: no answer signal
+    G.compute_agents()                        # sweep 1: absent (gone_since set)
+    led = G._load_instance_ledger()
+    for e in led.values():                    # the flap grace has passed
+        e["gone_since"] -= G.PERM_INSTANCE_FLAP_GRACE_S + 1
+    G._save_instance_ledger(G._PERM_INSTANCE_LEDGER, led)
+    G.compute_agents()                        # sweep 2: still absent -> gone
+    (entry,) = G._load_instance_ledger().values()
+    assert entry["phase"] == "gone"
+    screen["menu"] = CMD_A                    # the identical prompt is back
+    status, body = _tap()
+    assert status == 409 and body["reason"] == "instance_mismatch"
+
+
+def test_the_fleet_sweep_sees_a_present_prompt_as_present(screen, monkeypatch, tmp_path):
+    monkeypatch.setattr(G, "ORCH_DIR", tmp_path)
+    monkeypatch.setattr(G, "_live_voice_call", lambda: None)
+    _serve(CMD_A, now=100.0)
+    for _ in range(3):
+        G.compute_agents()
+    (entry,) = G._load_instance_ledger().values()
+    assert entry["phase"] == "present" and entry["instance_n"] == 1
+    assert _tap()[0] == 200
+
+
+def test_respond_refuses_when_the_screen_is_not_a_permission_prompt(screen, monkeypatch):
+    """Round 2 B1: first read an options menu, then permission B: nothing may be typed."""
+    _serve(CMD_A, now=100.0)
+    screen["menu"] = {"kind": "options", "question": "Which?", "options": [{"n": "1", "label": "x"}]}
+    called = []
+    monkeypatch.setattr(G, "permission_respond", lambda *a, **k: called.append(1) or (True, {}))
+    status, body = _respond()
+    assert status == 400 and body["reason"] == "not_permission_prompt" and called == []
+
+
+def test_a_permission_tap_does_not_land_on_the_menu_that_followed(screen):
+    """Round 2 should-fix: the device last saw permission A; an options menu is up now."""
+    _serve(CMD_A, now=100.0)
+    screen["menu"] = {"kind": "options", "question": "Deploy?", "options": [{"n": "1", "label": "Yes"}]}
+    status, body = _tap()
+    assert status == 409 and body["reason"] == "instance_mismatch" and screen["sent"] == []
+
+
+def test_a_device_that_was_shown_the_other_menu_can_answer_it(screen, monkeypatch):
+    _serve(CMD_A, now=100.0)
+    screen["menu"] = {"kind": "options", "question": "Deploy?", "options": [{"n": "1", "label": "Yes"}]}
+    monkeypatch.setattr(G, "_capture_pane", lambda *a: "")
+    r = _Req()
+    r.query = {"session": SESSION}
+    asyncio.run(G.handle_agent_screen(r))     # the chat card now shows the options menu
+    assert _tap()[0] == 200
+
+
+def test_the_digit_path_rereads_under_the_lock(screen, monkeypatch):
+    """Round 2 should-fix: B replaces A between the check and the locked send: zero keys."""
+    _serve(CMD_A, now=100.0)
+    reads = [CMD_A, CMD_B]
+
+    class _AS:
+        def get_agent_status(self, session):
+            return {"pending_menu": reads.pop(0) if reads else CMD_B, "state": "waiting"}
+
+    monkeypatch.setattr(G, "_agent_status", lambda: _AS())
+    status, body = _tap()
+    assert status == 409 and body["reason"] == "instance_mismatch" and screen["sent"] == []
+
+
+def test_the_send_lock_is_taken_off_the_event_loop(screen, monkeypatch):
+    """Round 2 should-fix: holding the lock across an await on the loop thread could hang the
+    gateway, so both answer paths take it on a worker thread."""
+    import threading
+    _serve(CMD_A, now=100.0)
+    main = threading.get_ident()
+    takers = []
+
+    class _Rec:
+        def __init__(self):
+            self._lk = threading.Lock()
+
+        def __enter__(self):
+            takers.append(threading.get_ident())
+            return self._lk.__enter__()
+
+        def __exit__(self, *a):
+            return self._lk.__exit__(*a)
+
+    rec = _Rec()
+    monkeypatch.setattr(G, "_session_send_lock", lambda s: rec)
+    monkeypatch.setattr(G, "permission_respond", lambda *a, **k: (True, {}))
+    assert _respond()[0] == 200
+    assert _tap()[0] == 200
+    assert len(takers) == 2 and main not in takers
+
+
+def test_a_sweep_sighting_clears_an_earlier_miss(screen, monkeypatch, tmp_path):
+    """Round 2: miss, sighting, miss (sweeps far apart) is still ONE instance."""
+    monkeypatch.setattr(G, "ORCH_DIR", tmp_path)
+    monkeypatch.setattr(G, "_live_voice_call", lambda: None)
+    import time
+    _serve(CMD_A, now=time.time())
+    screen["menu"] = None
+    G.compute_agents()                        # a missed scrape
+    led = G._load_instance_ledger()
+    for e in led.values():
+        e["gone_since"] -= G.PERM_INSTANCE_FLAP_GRACE_S + 1
+    G._save_instance_ledger(G._PERM_INSTANCE_LEDGER, led)
+    screen["menu"] = CMD_A
+    G.compute_agents()                        # seen again
+    screen["menu"] = None
+    G.compute_agents()                        # another isolated miss
+    (entry,) = G._load_instance_ledger().values()
+    assert entry["phase"] == "present" and entry["instance_n"] == 1
+
+
+def test_every_refusal_is_logged_with_its_reason_device_and_instances(screen, caplog):
+    """gm go-live condition: wrong refusals are the main risk, so each one is readable."""
+    _serve(CMD_A, now=100.0)
+    screen["menu"] = CMD_B
+    with caplog.at_level("WARNING", logger="watch_gateway"):
+        assert _tap()[0] == 409
+    line = next(r.getMessage() for r in caplog.records if "[stale-tap]" in r.getMessage())
+    assert "refused" in line and f"session={SESSION}" in line and "reason=instance_mismatch" in line
+    assert "device=" in line and "served=" in line and "current=" in line

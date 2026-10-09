@@ -464,8 +464,8 @@ def _load_instance_ledger(path=None):
         return {}
 
 
-import threading as _ledger_threading
-_INSTANCE_LEDGER_LOCK = _ledger_threading.RLock()   # load-modify-save is one critical section
+import threading as _threading
+_INSTANCE_LEDGER_LOCK = _threading.RLock()   # load-modify-save is one critical section
 
 
 def _save_instance_ledger(path, ledger):
@@ -562,15 +562,19 @@ def _stamp_instance(session, menu, ledger=None, now=None, answered_signal=False,
 
 # --- "You can only answer what you could have seen" (single-digit permission answers) ---------
 # /agent-key's single-digit path sends a key to whatever prompt is on screen; the apps send no
-# card identity with it. So the gateway remembers, per DEVICE and SESSION, the permission instance
-# it last SERVED that device (/pending-approvals rows, /agent-screen's pending_menu), and refuses
-# an answer unless the prompt on screen now is that same instance. No clocks: a device can only
-# answer the exact instance it was shown. Nothing on record (e.g. after a restart) refuses too;
-# the app's next poll records one.
+# card identity with it. So the gateway remembers, per DEVICE and SESSION, what it last SERVED that
+# device (the permission instance in /pending-approvals rows or /agent-screen's pending_menu; any
+# other menu on /agent-screen is recorded as "other"), and refuses a permission answer unless the
+# prompt on screen now is that same instance. Nothing on record (e.g. after a restart) refuses
+# too; the app's next poll records one. A digit for a NON-permission menu is refused only when
+# this device's latest record for the session is a permission instance (its tap was meant for a
+# permission card). "Served" means what this device fetched LAST: a client that fetches right
+# before answering (Arturo's voice tool reads /agent-screen first) is always current, so voice
+# answers get no protection from this check.
 from collections import OrderedDict as _OrderedDict
-import threading as _threading
 
 _SERVED: "_OrderedDict[tuple, tuple]" = _OrderedDict()
+_SERVED_OTHER = "other"
 _SERVED_MAX = 2048
 _SERVED_TTL_S = 4 * 3600
 _SERVED_LOCK = _threading.Lock()
@@ -607,13 +611,11 @@ def _note_served(request, session, instance_id, now=None):
 
 
 def _current_instance_id(session, menu):
-    """'<digest>:<n>' of the permission prompt on screen, from the ledger; None if no surface
-    has stamped it yet."""
-    digest = _perm_digest(session, (menu or {}).get("question") or "", (menu or {}).get("context") or "")
-    e = _load_instance_ledger().get(f"{session}|{digest}")
-    if not isinstance(e, dict):
-        return None
-    return f"{digest}:{int(e.get('instance_n', 1) or 1)}"
+    """'<digest>:<n>' of the permission prompt on screen. The read that found it is a real
+    sighting, so it is stamped: a prompt that came back after being answered becomes a NEW
+    instance here, even if no surface has polled it yet."""
+    n, digest = _stamp_instance(session, menu)
+    return f"{digest}:{n}"
 
 
 def _stale_tap_check_off():
@@ -628,17 +630,27 @@ def _could_have_seen(request, session, menu, now=None):
     """(ok, reason). Non-permission menus are not gated here. Every refusal is logged with its
     reason; with the off switch present it is logged as would-refuse and allowed."""
     import time as _time
-    if not isinstance(menu, dict) or menu.get("kind") != "permission":
+    if not isinstance(menu, dict):
         return True, None
     now = _time.time() if now is None else now
     fkey = _menu_fetch_key(request)
     with _SERVED_LOCK:
         rec = _SERVED.get((fkey, session))
-    current = _current_instance_id(session, menu)
-    if rec is None or (now - rec[1]) > _SERVED_TTL_S:
+    if rec is not None and (now - rec[1]) > _SERVED_TTL_S:
+        rec = None
+    if menu.get("kind") != "permission":
+        # Not gated, except a tap whose device last saw a PERMISSION prompt here: that tap was
+        # meant for the permission card, and the screen has moved on to another menu.
+        if rec is None or rec[0] == _SERVED_OTHER:
+            return True, None
+        current, reason = _SERVED_OTHER, "instance_mismatch"
+    else:
+        current = _current_instance_id(session, menu)
+        reason = None
+    if reason is not None:
+        pass
+    elif rec is None:
         reason = "instance_unknown"                 # this device was never shown a prompt here
-    elif current is None:
-        reason = "instance_unknown"                 # the prompt on screen was never served anywhere
     elif rec[0] != current:
         reason = "instance_mismatch"                # this device was shown a different instance
     else:
@@ -792,9 +804,14 @@ def _reap_absent_instances(present_keys, scanned_sessions, now=None):
             changed = False
             for key, e in led.items():
                 sess = key.split("|", 1)[0]
-                if sess in scanned_sessions and key not in present_keys \
-                        and isinstance(e, dict) and e.get("phase") != "gone":
-                    digest = key.split("|", 1)[1] if "|" in key else ""
+                if sess not in scanned_sessions or not isinstance(e, dict):
+                    continue
+                digest = key.split("|", 1)[1] if "|" in key else ""
+                if key in present_keys:
+                    # a sighting: clears a pending absence, or opens a new instance after gone
+                    _instance_step(led, sess, digest, present=True, now=now)
+                    changed = True
+                elif e.get("phase") != "gone":
                     _instance_step(led, sess, digest, present=False, now=now)
                     changed = True
             if changed:
@@ -1400,9 +1417,13 @@ def compute_agents():
         return g
 
     out, seen = [], set()
+    perm_present = set()
     for sess in _tmux_session_names():
         seen.add(sess)
         st = ast.get_agent_status(sess)
+        _pm = st.get("pending_menu") if isinstance(st, dict) else None
+        if isinstance(_pm, dict) and _pm.get("kind") == "permission":
+            perm_present.add(f"{sess}|{_perm_digest(sess, _pm.get('question') or '', _pm.get('context') or '')}")
         name, meta = sess_meta.get(sess, (sess, {}))
         ctx = (st.get("context_pct") or "").rstrip("%")
         out.append({
@@ -1426,6 +1447,9 @@ def compute_agents():
             # §2: cheap badge signal — True when detector emits pending_menu
             **({"has_pending_menu": True} if st.get("pending_menu") else {}),
         })
+    # Every live session was just read, so this is the sweep that may observe a permission
+    # prompt as gone (the /pending-approvals fast path reads only flagged sessions). Fail-open.
+    _reap_absent_instances(perm_present, seen)
 
     # Registered agents with NO tmux session: "crashed" (red) ONLY if the agent
     # last self-reported as alive — always_on relics whose own state blob says
@@ -3970,6 +3994,8 @@ async def handle_agent_screen(request):
             _n, _digest = _stamp_instance(session, pm)
             pm["instance_id"] = f"{_digest}:{_n}"
             _note_served(request, session, pm["instance_id"])
+        else:
+            _note_served(request, session, _SERVED_OTHER)
         out["pending_menu"] = pm
     # Ghost-suggestion chip (spec 2026-08-15 §3a.2): surface the CLI-suggested
     # ghost as additive nullable `suggested_prompt`. get_agent_status only emits
@@ -5009,18 +5035,23 @@ async def handle_agent_key(request):
         _pm = _st.get("pending_menu") if isinstance(_st, dict) else None
         if not isinstance(_pm, dict):                # never skip the check on a missed read
             return _json({"ok": False, "reason": "menu_gone"}, status=409)
+        if _pm.get("kind") != "permission":          # respond answers permission prompts only
+            return _json({"ok": False, "reason": "not_permission_prompt"}, status=400)
         seen_ok, seen_reason = _could_have_seen(request, session, _pm)
         if not seen_ok:
             return _json({"ok": False, "reason": seen_reason,
                           "error": _COULD_NOT_HAVE_SEEN[seen_reason]}, status=409)
         # The checked prompt is the only one this answer may reach: permission_respond reads
         # the screen again under the lock and sends nothing if a different prompt is up now.
-        _checked = (_perm_digest(session, _pm.get("question") or "", _pm.get("context") or "")
-                    if _pm.get("kind") == "permission" else None)
-        with _session_send_lock(session):            # no interleave w/ walk/suggest/key
-            ok, info = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: permission_respond(session, text, armed=armed,
-                                                 expect_digest=_checked))
+        _checked = _perm_digest(session, _pm.get("question") or "", _pm.get("context") or "")
+
+        def _respond_locked():
+            # The lock is taken on the worker thread: holding it across an await would let a
+            # concurrent request block the event loop on it, and then nothing could release it.
+            with _session_send_lock(session):        # no interleave w/ walk/suggest/key
+                return permission_respond(session, text, armed=armed, expect_digest=_checked)
+
+        ok, info = await asyncio.get_event_loop().run_in_executor(None, _respond_locked)
         if ok:
             return _json({"ok": True, "armed": armed, **info})
         if info.get("reason") == "instance_mismatch":
@@ -5203,12 +5234,28 @@ async def handle_agent_key(request):
 
     # Send the digit — NO Enter for Claude Code (menus commit on digit);
     # with Enter for Gemini / Antigravity (menus commit on digit + Enter).
-    # Held under the per-session send mutex (F3).
-    with _session_send_lock(session):
-        if _is_gemini_session(session):
-            r = _tmux("send-keys", "-t", session, key, "Enter")
-        else:
-            r = _tmux("send-keys", "-t", session, key)
+    # Held under the per-session send mutex (F3), on a worker thread. A PERMISSION answer re-reads
+    # the screen under the lock and sends nothing unless the checked prompt is still the one up.
+    _checked = (_perm_digest(session, menu.get("question") or "", menu.get("context") or "")
+                if menu.get("kind") == "permission" else None)
+
+    def _send_locked():
+        with _session_send_lock(session):
+            if _checked is not None:
+                _st2 = _agent_status().get_agent_status(session)
+                _pm2 = _st2.get("pending_menu") if isinstance(_st2, dict) else None
+                if not (isinstance(_pm2, dict) and _pm2.get("kind") == "permission"
+                        and _perm_digest(session, _pm2.get("question") or "",
+                                         _pm2.get("context") or "") == _checked):
+                    return None
+            if _is_gemini_session(session):
+                return _tmux("send-keys", "-t", session, key, "Enter")
+            return _tmux("send-keys", "-t", session, key)
+
+    r = await asyncio.get_event_loop().run_in_executor(None, _send_locked)
+    if r is None:
+        return _json({"ok": False, "reason": "instance_mismatch",
+                      "error": _COULD_NOT_HAVE_SEEN["instance_mismatch"]}, status=409)
     if r.returncode != 0:
         return _json({"ok": False, "error": "tmux send-keys failed"}, status=502)
     # Per-instance identity (DEC-1786771513): an answer is a CONFIRMED clear.
