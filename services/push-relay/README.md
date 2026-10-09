@@ -66,6 +66,24 @@ Limits: 30 pushes per device per hour, 300 per install per hour; per IP, 30 chal
 | `APNS_KEY_ID` | var | the APNs key id |
 | `APNS_KEY` | **secret** | the `.p8` key, PEM. Upload it as a Worker secret; never put it in code, config or logs. |
 
+## Deploy
+
+A free Cloudflare account is enough (Workers + D1 free tiers). With `wrangler`:
+
+```
+cd services/push-relay
+cp wrangler.example.toml wrangler.toml          # then fill in your values (not committed)
+npx wrangler d1 create orchestraos-push-relay   # put the printed id in wrangler.toml
+npx wrangler d1 execute orchestraos-push-relay --remote --file schema.sql
+npx wrangler secret put APNS_KEY < AuthKey_<KEY_ID>.p8
+npx wrangler deploy
+```
+
+The account needs a workers.dev subdomain before the first deploy (the dashboard offers one, or
+`PUT /accounts/<id>/workers/subdomain`). Check it is up: `GET /v1/challenge` answers 200 with a
+challenge, and an unsigned `POST /v1/push` answers 401. Nothing touching APNs is proven until one
+real push lands on a real device.
+
 ## Tests
 
 ```
