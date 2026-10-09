@@ -25,14 +25,25 @@ class TurnToken:
         self._locks, self._key, self._lock = locks, key, lock
         self._done = False
         self._guard = threading.Lock()
+        self.on_release = None
 
     def release(self):
+        """Once, from any thread. `on_release` (the turn's own bookkeeping: store its outcome, settle its turn
+        mark) runs first, while the lock is still held, so the next request to take it sees a finished turn;
+        a callback that raises still releases the lock (DEC-1791518421640932 v5.3)."""
         with self._guard:
             if self._done:
                 return
             self._done = True
-        self._lock.release()
-        self._locks._unref(self._key)
+        try:
+            if self.on_release is not None:
+                self.on_release()
+        except Exception:  # noqa: BLE001 — never leave a conversation locked over its bookkeeping
+            import logging
+            logging.getLogger("arturo.turn_lock").exception("turn on_release failed")
+        finally:
+            self._lock.release()
+            self._locks._unref(self._key)
 
     @property
     def released(self):

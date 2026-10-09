@@ -583,6 +583,10 @@ class ToolDedupLedger:
         self._done = {}          # key -> result string (completed)
         self._inflight = set()   # keys claimed by reserve() but not yet recorded
 
+    def ran(self):
+        """Whether any tool was claimed this turn (run or still running): such a turn is never re-run."""
+        return bool(self._done or self._inflight)
+
     @staticmethod
     def _key(name, args):
         try:

@@ -27,8 +27,8 @@ import { ModelSelectorSheet } from '../components/agent/ModelSelectorSheet';
 import { useArturoBrain } from '../stores/arturoBrain';
 import { arturoTurn, arturoPrewarm } from '../lib/arturoStream';
 import { brainFromThread, describeTurnError, toWireBrain } from '../lib/arturoBrain';
-import { arturoHealth, arturoText, runtimesAvailable, brainLabel, greeting, newConversationId,
-  isStarting, waitForArturo, STARTING_TEXT, firstStep, onboardingTurn, onboardingDone,
+import { arturoHealth, runtimesAvailable, brainLabel, greeting, newConversationId,
+  isStarting, waitForArturo, STARTING_TEXT, NOT_ANSWERED_TEXT, MAY_HAVE_RUN_TEXT, firstStep, onboardingTurn, onboardingDone,
   HANDS_FREE, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, ONBOARDING_OPENER, sendStateLabel,
   type ChoiceCard, type PairCard,
   type ArturoHealth, type RuntimeRow, type SendState } from '../lib/arturo';
@@ -242,11 +242,8 @@ export default function ArturoHome() {
       const bubble = { id, role: 'arturo' as const, text: '', pending: true };
       return at < 0 ? [...prev, bubble] : [...prev.slice(0, at), bubble, ...prev.slice(at)];
     });
-    let r = await arturoText(onboardingTurn('onboarding_open', ONBOARDING_OPENER), conv);
-    for (let tries = 0; isBusy(r) && tries < 90; tries++) {
-      await new Promise((ok) => setTimeout(ok, 2000));
-      r = await arturoText(onboardingTurn('onboarding_open', ONBOARDING_OPENER), conv);
-    }
+    // Whole, through the one send path: a busy thread or a slow reply is resolved by this opener's own id.
+    const r = await arturoTurn(onboardingTurn('onboarding_open', ONBOARDING_OPENER), conv, null, { stream: false });
     if (r.ok && r.onboarding_conversation) onbConv.current = r.onboarding_conversation;
     if (r.ok && r.onboarding_conversation && (r.switch || r.onboarding_conversation !== conv) && !switched) {
       // Another browser started the first run (or won the pin a moment before this one): continue THAT thread.
@@ -386,20 +383,21 @@ export default function ArturoHome() {
       streamed = ''; parts = [];
       patch(id, { pending: true, streaming: false, text: '', parts: undefined });
     };
-    const streamOpts = { onSent, brain: turnBrain, onDelta, onToolCall, onToolResult, onReset };
-    let r = await arturoTurn(sent, convId.current, null, streamOpts);
-    // Another tab or device is mid-turn in this conversation: the server serializes, so wait and resend.
-    for (let tries = 0; isBusy(r) && tries < 90; tries++) {
-      await new Promise((ok) => setTimeout(ok, 2000));
-      r = await arturoTurn(sent, convId.current, null, streamOpts);
-    }
+    // One send, one id (DEC-1791518421640932): busy, a hop still starting, a timeout or a dropped stream are
+    // resolved by asking the server what became of THIS send; it runs at most once.
+    const r = await arturoTurn(sent, convId.current, null, {
+      onSent, brain: turnBrain, onDelta, onToolCall, onToolResult, onReset,
+      // G15: still booting -> say so, wait for health; the send then goes again with the same id.
+      onStarting: async () => {
+        patch(id, { pending: false, text: STARTING_TEXT, parts: undefined });
+        const ready = await waitForArturo();
+        setHealth(ready);
+        parts = []; streamed = '';
+        patch(id, { pending: true, text: '', parts: undefined });
+        return ready.ok;
+      },
+    });
     if (!r.ok) { streamed = ''; parts = []; patch(id, { pending: true, streaming: false, text: '', parts: undefined }); }
-    if (!r.ok && isStarting(r)) {          // G15: still booting -> say so, wait for health, retry once
-      patch(id, { pending: false, text: STARTING_TEXT, parts: undefined });
-      const ready = await waitForArturo();
-      setHealth(ready);
-      if (ready.ok) { parts = []; patch(id, { pending: true, text: '', parts: undefined }); r = await arturoTurn(sent, convId.current, null, streamOpts); }
-    }
     setBusy(false);
     patch(uid, { state: r.ok ? 'acked' : 'failed' });
     if (!r.ok) {
@@ -407,6 +405,9 @@ export default function ArturoHome() {
       patch(id, { pending: false, text: isStarting(r)
         ? 'I am still starting up and could not answer yet — give `orchestra up` a moment and send that again.'
         : chosenErr ? chosenErr.message
+        : r.error === 'not_answered' ? NOT_ANSWERED_TEXT
+        : r.error === 'may_have_run' ? MAY_HAVE_RUN_TEXT
+        : isBusy(r) ? 'I am still answering an earlier message in this conversation (another tab or device). Send this again once that reply is in.'
         : `I could not reach my brain: ${r.error || 'unknown'}. Is \`orchestra up\` running? Check /health on the Arturo service.` });
       return;
     }

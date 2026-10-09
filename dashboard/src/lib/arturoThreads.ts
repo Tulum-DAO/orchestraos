@@ -44,6 +44,22 @@ export async function loadThread(id: string): Promise<LoadedThread | null> {
   } catch { return null; }
 }
 
+/** One send's fate on the server (DEC-1791518421640932): `result` is its whole answer (cards included), given
+ *  only to the caller that sent it. */
+export type TurnFate =
+  | { state: 'running' | 'lost' | 'unknown' }
+  | { state: 'done'; result?: Record<string, any> };
+
+/** Read a send's fate by its turn id. null = the read itself failed (a hop still starting): keep waiting. */
+export async function loadTurn(conversationId: string, turnId: string): Promise<TurnFate | null> {
+  try {
+    const res = await fetch(`/api/arturo/threads/${encodeURIComponent(conversationId)}?turn=${encodeURIComponent(turnId)}`);
+    if (!res.ok) return null;
+    const json = await res.json();
+    return (json && json.turn && typeof json.turn.state === 'string') ? json.turn as TurnFate : null;
+  } catch { return null; }
+}
+
 /** The server's thread JSON as the client uses it. last_brain rides along (null = default brain)
  *  so reopening a thread restores the brain it last answered on (DEC-1790669162399904 §1.5). */
 interface ThreadJson { id: string; title?: string; turns?: ThreadTurn[]; last_brain?: { provider: string; model: string } | null }

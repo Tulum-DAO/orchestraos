@@ -192,3 +192,34 @@ def test_calls_without_a_conversation_id_never_share_a_lock(tmp_path):
         r = c.post("/text", json={"text": "hi"}, environ_base={"REMOTE_ADDR": "127.0.0.1"})
     held.release()
     assert r.status_code == 200
+
+
+def test_two_calls_with_no_conversation_id_in_one_second_get_different_conversations(tmp_path):
+    # #317 review nit: text_{seconds} made two blank-id calls in one second share one conversation
+    P = _proxy(tmp_path)
+    P._brain_reply = lambda m, c: ("ok", [])
+    a = P.text_turn("hi", "")[1]["conversation_id"]
+    b = P.text_turn("hi", "")[1]["conversation_id"]
+    assert a != b and a.startswith("text_")
+
+
+# ---- DEC-1791518421640932 v5.3: a turn settles its bookkeeping BEFORE the next turn can take the lock ----
+def test_on_release_runs_while_the_lock_is_still_held_and_only_once():
+    locks = TurnLocks()
+    tok = locks.acquire("c1")
+    seen = []
+    tok.on_release = lambda: seen.append(locks.acquire("c1", timeout=0.05))   # the next turn tries meanwhile
+    tok.release()
+    tok.release()
+    assert seen == [None]                                   # it could not get in before the bookkeeping ended
+    again = locks.acquire("c1", timeout=0.5)
+    assert again is not None
+    again.release()
+
+
+def test_a_raising_on_release_still_frees_the_conversation():
+    locks = TurnLocks()
+    tok = locks.acquire("c1")
+    tok.on_release = lambda: (_ for _ in ()).throw(RuntimeError("bookkeeping failed"))
+    tok.release()
+    assert not locks.busy("c1")
