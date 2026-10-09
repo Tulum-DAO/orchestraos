@@ -1295,6 +1295,9 @@ def compute_agents():
             "tool": st.get("tool") or "",
             "context_pct": int(ctx) if ctx.isdigit() else None,
             "cpu": (st.get("process") or {}).get("cpu"),
+            # which CLI runs the seat (claude | codex | gemini | ...), from the detector's process
+            # scan; None when no agent process was found. Additive.
+            "provider": ((st.get("process") or {}).get("runtime") or None),
             "tmux_session": sess,
             "unregistered": sess not in sess_meta,
             # v2 detector additive fields (agent-state-truth 2026-08-09)
@@ -1327,30 +1330,113 @@ def compute_agents():
             "state": "crashed" if crashed else "offline",
             "activity": "No tmux session" if crashed else
                         (f"Not running (self-reported {self_status})" if relic else "Not running"),
-            "tool": "", "context_pct": None,
+            "tool": "", "context_pct": None, "provider": None,
             "cpu": None, "tmux_session": sess, "unregistered": False,
         })
 
-    # Recency (the operator 2026-08-09: agents ordered by most recently used): the
-    # pane's hook-event file carries the ts of the last hook event.
     get_pane = getattr(ast, "get_pane_id", None)
-    for a in out:
-        ts = 0.0
-        if a["state"] not in ("offline", "crashed") and callable(get_pane):
-            try:
-                pane = (get_pane(a["tmux_session"]) or "").lstrip("%")
-                if pane:
-                    ev = _load_json(ORCH_DIR / "state" / "agent-events" / "panes" / f"{pane}.json")
-                    if isinstance(ev, dict):
-                        ts = float(ev.get("ts") or 0)
-            except Exception:
-                pass
-        a["last_used_ts"] = ts
+
+    def _pane_event(sess):
+        if not callable(get_pane):
+            return None
+        pane = (get_pane(sess) or "").lstrip("%")
+        if not pane:
+            return None
+        return _load_json(ORCH_DIR / "state" / "agent-events" / "panes" / f"{pane}.json")
+
+    _stamp_recency_and_subagents(out, _pane_event)
 
     rank = {"waiting": 0, "stranded": 1, "stalled": 2, "crashed": 3, "stopped": 4,
             "working": 5, "idle": 6, "offline": 7}
     out.sort(key=lambda a: (rank.get(a["state"], 9), -a.get("last_used_ts", 0), a["id"]))
     return out
+
+
+SUBAGENT_STALE_S = 15 * 60
+_SUBAGENT_TAIL_BYTES = 8192
+# path -> (mtime, size, finished). A file is re-read only when it changes; /agents refreshes
+# every few seconds and most subagent files are idle between refreshes.
+_SUBAGENT_TAIL_CACHE: dict = {}
+
+
+def _subagent_finished(path):
+    """True iff the last conversational record is an assistant message that stopped with
+    end_turn/stop_sequence (its final answer). Trailing `attachment`/system records written
+    after that answer are skipped: measured 2026-10-08, 2 of 300 finished files end that way."""
+    try:
+        with open(path, "rb") as f:
+            size = os.fstat(f.fileno()).st_size
+            f.seek(max(0, size - _SUBAGENT_TAIL_BYTES))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return False
+    if size > _SUBAGENT_TAIL_BYTES and lines:
+        lines = lines[1:]          # the first line of a mid-file tail is partial
+    for line in reversed(lines):
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        kind = rec.get("type") if isinstance(rec, dict) else None
+        if kind not in ("assistant", "user"):
+            continue
+        return kind == "assistant" and (rec.get("message") or {}).get("stop_reason") in (
+            "end_turn", "stop_sequence")
+    return False
+
+
+def count_running_subagents(transcript_path, now=None):
+    """Subagents running now in the Claude session whose transcript is `transcript_path`
+    (the Quest's subagent "moons"). Running = not finished (see _subagent_finished) and the
+    file was written in the last 15 min. 0 when the session cannot be resolved."""
+    import time as _time
+    if not transcript_path or not str(transcript_path).endswith(".jsonl"):
+        return 0
+    sub = str(transcript_path)[:-len(".jsonl")] + os.sep + "subagents"
+    now = _time.time() if now is None else now
+    running = 0
+    try:
+        with os.scandir(sub) as it:
+            entries = [e for e in it if e.name.startswith("agent-") and e.name.endswith(".jsonl")]
+    except OSError:
+        return 0
+    for e in entries:
+        try:
+            st = e.stat()
+        except OSError:
+            continue
+        if now - st.st_mtime > SUBAGENT_STALE_S:
+            _SUBAGENT_TAIL_CACHE.pop(e.path, None)
+            continue
+        hit = _SUBAGENT_TAIL_CACHE.get(e.path)
+        if hit and hit[0] == st.st_mtime and hit[1] == st.st_size:
+            finished = hit[2]
+        else:
+            finished = _subagent_finished(e.path)
+            _SUBAGENT_TAIL_CACHE[e.path] = (st.st_mtime, st.st_size, finished)
+        if not finished:
+            running += 1
+    return running
+
+
+def _stamp_recency_and_subagents(rows, pane_event, now=None):
+    """Per row, from the pane's hook-event file (state-event-hook.py):
+    - last_used_ts: ts of the last hook event (the operator 2026-08-09: most recently used first).
+    - subagents: running subagent count for a live Claude seat, else 0. The event's
+      transcript_path names the CURRENT session, so a /clear or a rotation follows it."""
+    for a in rows:
+        ts, subs = 0.0, 0
+        if a.get("state") not in ("offline", "crashed"):
+            try:
+                ev = pane_event(a["tmux_session"])
+                if isinstance(ev, dict):
+                    ts = float(ev.get("ts") or 0)
+                    if a.get("provider") == "claude":
+                        subs = count_running_subagents(ev.get("transcript_path"), now=now)
+            except Exception:  # noqa: BLE001 — a badge must never break fleet liveness
+                pass
+        a["last_used_ts"] = ts
+        a["subagents"] = subs
 
 
 def _registry_mtime():
