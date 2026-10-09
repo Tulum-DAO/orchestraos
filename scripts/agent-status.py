@@ -41,6 +41,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import providers  # noqa: E402  — provider-aware process truth (Tier 1)
 from context_meter import footer_meter_line  # noqa: E402  — the footer is the only meter source
+from context_reading import claude_context  # noqa: E402  — window/budget %, one reading
 
 ORCH_DIR = os.environ.get("ORCH_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
 EVENTS_DIR = os.environ.get("ORCH_EVENTS_DIR", os.path.join(ORCH_DIR, "state", "agent-events", "panes"))
@@ -1121,6 +1122,43 @@ def _codex_context_pct(session_name: str) -> str:
         return ""
 
 
+def _etime_s(etime: str) -> int | None:
+    """ps etime ([[dd-]hh:]mm:ss) -> seconds, or None."""
+    try:
+        days, _, rest = etime.strip().rpartition('-')
+        parts = [int(x) for x in rest.split(':')]
+        while len(parts) < 3:
+            parts.insert(0, 0)
+        return (int(days) if days else 0) * 86400 + parts[0] * 3600 + parts[1] * 60 + parts[2]
+    except (ValueError, AttributeError):
+        return None
+
+
+def _context_pair(proc: dict, runtime: str | None, hook: dict | None, session: str,
+                  now: float | None = None) -> dict:
+    """context_pct_of_window / context_pct_of_budget for one seat (see scripts/context_reading.py).
+    Claude: the status line's bridge file for the pane's session, fresh only if taken at or after
+    the transcript's last entry. Codex: its rollout reader already measures the whole window;
+    it has no budget figure. Anything else: None.
+
+    The pane's hook event names the session, and a pane outlives its occupants: a Gemini seat
+    kept the event of the Claude session that ran in its pane weeks earlier, whose reading was
+    self-consistent and would have been served as the Gemini seat's (live, 2026-10-09). So the
+    event must come from THIS process (written after it started), and the runtime must be Claude."""
+    none = {'context_pct_of_window': None, 'context_pct_of_budget': None}
+    if runtime == 'codex':
+        pct = _codex_context_pct(session).rstrip('%')
+        return {**none, 'context_pct_of_window': int(pct) if pct.isdigit() else None}
+    if runtime != 'claude' or not hook:
+        return none
+    age = _etime_s(proc.get('elapsed') or '')
+    now = time.time() if now is None else now
+    if age is None or float(hook.get('ts') or 0) < now - age - 5:
+        return none                       # the event predates this process: another occupant's
+    window, budget = claude_context(hook.get('session_id'), _hook_transcript_path(hook))
+    return {'context_pct_of_window': window, 'context_pct_of_budget': budget}
+
+
 def count_subagents(stripped_lines: list[str]) -> int:
     """How many delegated agents this seat currently has in flight, from the status line.
 
@@ -1605,6 +1643,8 @@ def get_agent_status(session: str) -> dict:
             'screen': {'pending_menu': pending_menu} if pending_menu else {},
             'is_noise': [], 'confidence': 'deriver', 'state_age_s': age_s,
             'deriver_state': dstate,
+            # Needs no screen: the reading is the status line's file, so the deriver path carries it.
+            **_context_pair(proc, proc.get('runtime'), _read_hook_event(session), session, now),
         }
         if pending_menu:
             out['pending_menu'] = pending_menu       # additive; consumers read top-level
@@ -1714,6 +1754,10 @@ def get_agent_status(session: str) -> dict:
         'context_pct': (screen.get('context_pct', '')
                         or (_codex_context_pct(session)
                             if screen.get("runtime") == "codex" else "")),
+        # The same reading under two NAMED denominators (scripts/context_reading.py): of the whole
+        # window (what the apps show) and of the rotation budget (what rotation acts on). Int or
+        # None; None whenever no fresh reading exists. context_pct above keeps its meaning.
+        **_context_pair(proc, screen.get('runtime') or proc.get('runtime'), hook, session, now),
         'process': {
             # .get: proc dicts are constructed by callers and tests too, not
             # only by check_claude_process — a hard index here turns an

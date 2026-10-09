@@ -1483,6 +1483,12 @@ def _resolve_sess_meta(reg_agents):
     return sm
 
 
+def _int_or_none(v):
+    """An Int-typed client field: an int, or None. Never a string or a bool (the iOS app decodes
+    /agents in one pass, and a wrong type in any row loses the whole list)."""
+    return v if type(v) is int else None
+
+
 def compute_agents():
     """Fleet liveness: the agent-status.py ANSI/process detector per live tmux
     session, merged with registry.json metadata (tier/machine/model/lineage)."""
@@ -1529,6 +1535,9 @@ def compute_agents():
             # Int or null, never a string: the app decodes /agents in one pass with Int?, and a
             # string in ANY row loses the whole list (test_agents_context_pct_encoding.py).
             "context_pct": int(ctx) if ctx.isdigit() else None,
+            # One reading, two named denominators (scripts/context_reading.py). Int or null.
+            "context_pct_of_window": _int_or_none(st.get("context_pct_of_window")),
+            "context_pct_of_budget": _int_or_none(st.get("context_pct_of_budget")),
             "cpu": (st.get("process") or {}).get("cpu"),
             # which CLI runs the seat (claude | codex | gemini | ...), from the detector's process
             # scan; None when no agent process was found. Additive.
@@ -1568,7 +1577,8 @@ def compute_agents():
             "state": "crashed" if crashed else "offline",
             "activity": "No tmux session" if crashed else
                         (f"Not running (self-reported {self_status})" if relic else "Not running"),
-            "tool": "", "context_pct": None, "provider": None,
+            "tool": "", "context_pct": None, "context_pct_of_window": None,
+            "context_pct_of_budget": None, "provider": None,
             "cpu": None, "tmux_session": sess, "unregistered": False,
         })
 
@@ -4229,6 +4239,8 @@ async def handle_agent_screen(request):
            "state": _STATE_MAP.get(st.get("state"), st.get("state")),
            "activity": st.get("activity") or "",
            "context_pct": st.get("context_pct") or "",
+           "context_pct_of_window": _int_or_none(st.get("context_pct_of_window")),
+           "context_pct_of_budget": _int_or_none(st.get("context_pct_of_budget")),
            # Rich live-turn detail (spinner line telemetry) for the
            # app's status strip: "Catapulting · 2m 36s · ↑766 tokens".
            "elapsed": st.get("elapsed") or "",
