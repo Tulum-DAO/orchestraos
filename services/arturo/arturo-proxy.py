@@ -2013,6 +2013,12 @@ def _onb_step_of(text):
     return _onb.split_marker(text)[0]
 
 
+def _operator_text_of(text):
+    """The operator's own words in a turn: the onboarding marker line removed."""
+    from services.arturo import onboarding as _onb
+    return _onb.split_marker(text)[1].strip()
+
+
 def _offer_team(conversation_id, principal):
     """An offer belongs to the caller who was shown it: only that principal's next turn answers it."""
     if conversation_id:
@@ -2020,9 +2026,11 @@ def _offer_team(conversation_id, principal):
             _TEAM_OFFERS[conversation_id] = (time.time(), principal)
 
 
-def _begin_team_turn(conversation_id, step, principal=None):
+def _begin_team_turn(conversation_id, step, principal=None, text=None):
     """Called once per operator turn, before the brain runs. Takes this conversation's offer and
-    devices card off the book: this turn may answer them; no later turn can."""
+    devices card off the book: this turn may answer them; no later turn can. `text` is the operator's
+    own message (marker and page context stripped): a devices answer is read from it, never from the
+    brain (orchestraos-builder #296 review)."""
     from services.arturo import onboarding as _onb
     now = time.time()
     with _TEAM_OFFERS_LOCK:
@@ -2034,6 +2042,12 @@ def _begin_team_turn(conversation_id, step, principal=None):
     # Consent is bound to the principal that was shown the card, and only a dashboard turn can give it.
     fleet = principal == "fleet"
     answering = fleet and card is not None and now - card[0] < _TEAM_OFFER_TTL_S and card[2] == principal
+    # Only a message that reads as a pick from the card answers it; anything else ("no, do not pair
+    # anything", an unrelated ask) is an ordinary turn: nothing recorded, no tool limit.
+    picked = _devices_tap(text, card[1]) if answering else None
+    answering = picked is not None
+    if answering:
+        _record_devices_answer(picked)
     return {"conversation_id": conversation_id, "step": step, "principal": principal,
             "onboarding": step in _onb.ONBOARDING_STEPS, "opener": step == "onboarding_open",
             "offered": fleet and made is not None and now - made[0] < _TEAM_OFFER_TTL_S and made[1] == principal,
@@ -2260,18 +2274,31 @@ def _devices_answer_path():
     return Path(ARTURO_STATE) / "devices-answer.json"
 
 
-def _record_devices_answer(value, options):
-    """The operator's answer to a devices card, as the SERVER saw it: only devices that were on the
-    card the server showed AND in what was recorded on the turn right after it. pair_device reads this,
-    never the operator facts, which the brain can write on any turn."""
+def _devices_tap(text, options):
+    """The devices the operator picked, read from THEIR message on the turn after a devices card. A tap
+    sends the picked labels joined by ", " (dashboard ChoicesCard); a typed "iPhone and Mac" counts too
+    when every part is an option on the card. None when the message is anything else. A pick of an
+    option that is not a pairable device ("None of these", "Just this computer") is an answer that
+    picks nothing."""
     from services.arturo import onboarding as _onb
-    said = {d.strip().lower() for d in re.split(r",|\band\b|&|/", str(value or ""))}
-    shown = {str(o).strip().lower() for o in options}
-    picked = [d for d in _onb.DEVICES if d.lower() in said and d.lower() in shown]
+    shown = {" ".join(str(o).split()).lower() for o in options or ()}
+    said = " ".join(str(text or "").split()).lower()
+    if not said or not shown:
+        return None
+    parts = [said] if said in shown else [p.strip() for p in re.split(r",|\band\b|&|/", said) if p.strip()]
+    if not parts or any(p not in shown for p in parts):
+        return None
+    return [d for d in _onb.DEVICES if d.lower() in parts]
+
+
+def _record_devices_answer(picked):
+    """The operator's answer to a devices card, as the SERVER read it from their own message
+    (_devices_tap). pair_device reads this, never the operator facts, which the brain can write on any
+    turn. An answer that picks nothing replaces an earlier one: "none" takes consent back."""
     p = _devices_answer_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     now = time.time()
-    p.write_text(json.dumps({"devices": picked, "answered_at": now,
+    p.write_text(json.dumps({"devices": list(picked), "answered_at": now,
                              "expires_at": now + _DEVICES_ANSWER_TTL_S}) + "\n")
     return picked
 
@@ -2334,8 +2361,8 @@ def pair_device(device):
         # Consent is the operator's answer to a devices card, recorded by the server; a devices fact the
         # brain wrote is not one.
         return (f"NOT PAIRED: {match} is not among the devices the operator picked on a devices card in "
-                f"the last {_DEVICES_ANSWER_TTL_S // 60} minutes. Show them one (ask_choices purpose='devices') "
-                f"during the onboarding.")
+                f"the last {_DEVICES_ANSWER_TTL_S // 60} minutes. Show them one (ask_choices purpose='devices', "
+                f"multi=true) and pair on the turn after they pick.")
     _sys.path.insert(0, str(_REPO_ROOT)) if str(_REPO_ROOT) not in _sys.path else None
     from scripts.pairing import pair_token
     from scripts import public_url as _public_url
@@ -3296,8 +3323,6 @@ def execute_tool(name, args, user_turns=None):
             log.warning(f"operator fact not stored: {e}")
             return f"Not recorded: could not write the operator store ({e.__class__.__name__})"
         log.info(f"operator fact set [{args.get('field')}] = {entry['value']!r}")
-        if _turn is not None and _turn.get("devices_answer") and args.get("field") == "devices":
-            _record_devices_answer(entry["value"], _turn.get("devices_options") or ())
         return f"Recorded: {args.get('field')} = {entry['value']}"
 
     elif name == "remember_note":
@@ -5398,6 +5423,7 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None):
     text = text.strip()
     if not text:
         return 400, {"ok": False, "error": "empty"}
+    operator_text = text                     # before the page context: what the operator sent
     if page_ctx is not None:
         # After split_marker (the marker is anchored to the first line), and stored exactly as
         # the client-prepended line was, so model input and history stay byte-identical.
@@ -5430,7 +5456,7 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None):
     team_turn = _TEAM_TURN.get()
     team_tok = None
     if team_turn is None:
-        team_turn = _begin_team_turn(conversation_id, step, principal)
+        team_turn = _begin_team_turn(conversation_id, step, principal, operator_text)
         team_tok = _TEAM_TURN.set(team_turn)
     try:
         _res = _brain_reply(messages, conversation_id)
@@ -5635,7 +5661,7 @@ def text_stream_endpoint():
     # Taken once for the whole turn, whichever path ends up running it (stream, or text_turn behind
     # the fallback), and published to the threads that run its tools.
     _team_turn = _begin_team_turn(conversation_id, _onb_step_of(text_in),
-                                  _stamped_principal(request))
+                                  _stamped_principal(request), _operator_text_of(text_in))
     version = _THREADS.turn_count(conversation_id)          # before the history: see prewarm
     history = _conversation_history(conversation_id)
     effective = _effective_brain(turn_brain)

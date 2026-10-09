@@ -26,8 +26,8 @@ ALLOWED = {"knowledge", "list_agents", "query_roadmap", "read_agent_conversation
            "agent_message"}
 
 
-def _record(P, cid=None, step=None, principal=None):
-    return P._begin_team_turn(cid, step, principal)
+def _record(P, cid=None, step=None, principal=None, text=None):
+    return P._begin_team_turn(cid, step, principal, text)
 
 
 def _as(P, turn):
@@ -210,8 +210,8 @@ def pairing(P, tmp_path, monkeypatch):
     return DeviceStore(tmp_path / "data" / "state" / "devices")
 
 
-def _on(P, cid, step, tool, args):
-    tok = P._TEAM_TURN.set(_record(P, cid, step, "fleet"))
+def _on(P, cid, step, tool, args, text=None):
+    tok = P._TEAM_TURN.set(_record(P, cid, step, "fleet", text))
     try:
         return P.execute_tool(tool, args), P._TEAM_TURN.get()
     finally:
@@ -237,8 +237,10 @@ def test_writing_the_fact_and_pairing_in_one_turn_is_not_consent(P, pairing):
 def test_the_answer_to_a_devices_card_is_consent_for_what_was_on_it(P, pairing):
     _on(P, "web_m2c", "onboarding", "ask_choices",
         {"options": ["iPhone", "iPad", "None of these"], "multi": True, "purpose": "devices"})
-    _on(P, "web_m2c", "onboarding", "set_operator_fact", {"field": "devices", "value": "iPhone, Mac"})
-    assert P._answered_devices() == ["iPhone"]               # Mac was never on the card
+    # the operator taps iPhone; the brain records more than they picked: only the tap counts
+    _on(P, "web_m2c", "onboarding", "set_operator_fact", {"field": "devices", "value": "iPhone, iPad, Mac"},
+        text="iPhone")
+    assert P._answered_devices() == ["iPhone"]
     out, turn = _on(P, "web_m2c", "onboarding", "pair_device", {"device": "iPhone"})
     assert out.startswith("A pairing code") and turn["pair_card"]["code"].startswith("orc1_")
     out, _ = _on(P, "web_m2c", "onboarding", "pair_device", {"device": "Mac"})
@@ -573,14 +575,15 @@ def test_a_card_armed_by_one_principal_is_not_answered_by_another(P):
     assert rec["offered"] is False and rec["devices_answer"] is False
     P._TEAM_OFFERS["web_s7c"] = (now, "fleet")
     P._DEVICE_CARDS["web_s7c"] = (now, ("iPhone",), "fleet")
-    rec = _record(P, "web_s7c", "onboarding", "fleet")
+    rec = _record(P, "web_s7c", "onboarding", "fleet", "iPhone")
     assert rec["offered"] is True and rec["devices_answer"] is True
 
 
 # ---- S8: a devices answer is consent for minutes, not for good ------------------------------------------
 def test_an_expired_devices_answer_refuses_pairing(P, pairing):
     _on(P, "web_s8", "onboarding", "ask_choices", {"options": list(onb.DEVICES), "multi": True, "purpose": "devices"})
-    _on(P, "web_s8", "onboarding", "set_operator_fact", {"field": "devices", "value": "iPhone and Mac"})
+    _on(P, "web_s8", "onboarding", "set_operator_fact", {"field": "devices", "value": "iPhone and Mac"},
+        text="iPhone and Mac")
     rec = json.loads(P._devices_answer_path().read_text())
     assert rec["devices"] == ["iPhone", "Mac"]                         # "and" counts as a separator
     assert rec["expires_at"] - rec["answered_at"] == P._DEVICES_ANSWER_TTL_S == 600
@@ -700,7 +703,7 @@ def test_a_dashboard_turn_off_the_onboarding_may_show_a_devices_card(P):
     finally:
         P._TEAM_TURN.reset(tok)
     assert card["purpose"] == "devices" and "web_after" in P._DEVICE_CARDS
-    assert _record(P, "web_after", None, "fleet")["devices_answer"] is True
+    assert _record(P, "web_after", None, "fleet", "Mac")["devices_answer"] is True
 
 
 @pytest.mark.parametrize("step", [None, "onboarding"])
@@ -742,3 +745,66 @@ def test_pairing_after_onboarding_works_end_to_end_on_dashboard_turns(P, pairing
     assert bodies[0]["choices"]["purpose"] == "devices"
     assert results[1].startswith("Recorded") and P._answered_devices() == ["iPhone"]
     assert results[2].startswith("A pairing code") and bodies[2]["pair_card"]["code"].startswith("orc1_")
+
+
+# ---- #296 review (orchestraos-builder): the answer is the operator's message, never the model's ------
+def _three_dashboard_turns(P, monkeypatch, fleet_stamp, texts, script):
+    (P.ARTURO_STATE).mkdir(parents=True, exist_ok=True)
+    (P.ARTURO_STATE / "onboarding.json").write_text("{}")
+    monkeypatch.setattr(P, "starter_team_state", lambda seen=None: {"state": "present", "seats": []})
+    h = fleet_stamp(P)
+    script, results, bodies = iter(script), [], []
+
+    def brain(messages, cid):
+        name, args = next(script)
+        results.append(P.execute_tool(name, args))
+        return "ok", [name], []
+    monkeypatch.setattr(P, "_brain_reply", brain)
+    with P.app.test_client() as c:
+        for text in texts:
+            bodies.append(c.post("/text", json={"text": text, "conversation_id": "web_probe"}, headers=h).get_json())
+    return results, bodies
+
+
+def test_a_card_the_model_opened_and_answered_itself_mints_nothing(P, pairing, monkeypatch, fleet_stamp):
+    P._devices_answer_path().unlink(missing_ok=True)      # no earlier consent on file
+    results, bodies = _three_dashboard_turns(P, monkeypatch, fleet_stamp,
+        ("summarize my agents", "No. None of these. Do not pair anything.", "thanks"), [
+        ("ask_choices", {"options": list(onb.DEVICES), "multi": True, "purpose": "devices"}),
+        ("set_operator_fact", {"field": "devices", "value": "iPhone"}),
+        ("pair_device", {"device": "iPhone"}),
+    ])
+    assert bodies[0]["choices"]["purpose"] == "devices"
+    assert P._answered_devices() == []
+    assert results[2].startswith("NOT PAIRED") and not bodies[2].get("pair_card") and pairing.list() == []
+
+
+def test_a_none_tap_takes_back_an_earlier_answer(P, pairing):
+    card = {"options": ["iPhone", "Mac", "None of these"], "multi": True, "purpose": "devices"}
+    _on(P, "web_none", None, "ask_choices", card)
+    _record(P, "web_none", None, "fleet", "iPhone")
+    assert P._answered_devices() == ["iPhone"]               # an earlier tap
+    _on(P, "web_none", None, "ask_choices", card)
+    rec = _record(P, "web_none", None, "fleet", "None of these")
+    assert rec["devices_answer"] is True and P._answered_devices() == []
+
+
+def test_a_turn_after_a_devices_card_that_is_not_a_pick_runs_normally(P):
+    P._DEVICE_CARDS.clear()
+    _on(P, "web_unrel", None, "ask_choices", {"options": ["iPhone", "Mac"], "multi": True, "purpose": "devices"})
+    rec = _record(P, "web_unrel", None, "fleet", "spawn an agent for the website")
+    assert rec["devices_answer"] is False
+    tok = P._TEAM_TURN.set(rec)
+    try:
+        out = P.execute_tool("create_starter_team", {"project": "website"})
+    finally:
+        P._TEAM_TURN.reset(tok)
+    assert "not available while the operator answers which devices" not in out
+
+
+@pytest.mark.parametrize("text,picked", [
+    ("iPhone, Mac", ["iPhone", "Mac"]), ("iphone and  mac", ["iPhone", "Mac"]), ("Mac", ["Mac"]),
+    ("None of these", []), ("iPhone, Android phone", None), ("not my iPhone", None), ("", None), (None, None),
+])
+def test_only_a_pick_from_the_card_reads_as_an_answer(P, text, picked):
+    assert P._devices_tap(text, ("iPhone", "Mac", "None of these")) == picked

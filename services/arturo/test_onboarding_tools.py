@@ -76,8 +76,8 @@ def test_the_playbook_tells_the_brain_it_never_sees_a_code():
 
 
 # ---- ask_choices ---------------------------------------------------------------------------------
-def _turn(P, cid="web_c", step="onboarding", principal="fleet"):
-    return P._TEAM_TURN.set(P._begin_team_turn(cid, step, principal))
+def _turn(P, cid="web_c", step="onboarding", principal="fleet", text=None):
+    return P._TEAM_TURN.set(P._begin_team_turn(cid, step, principal, text))
 
 
 def test_a_card_records_cleaned_options_on_the_turn(P):
@@ -154,13 +154,13 @@ def test_finish_sets_the_flag_and_health_reports_it(P):
 # ---- pair_device / check_paired --------------------------------------------------------------------
 def _answer_devices(P, answer, cid="web_d", options=onb.DEVICES):
     """The operator's consent the way it really arrives: a devices card on an onboarding turn, then
-    their answer recorded on the very next turn."""
+    their tap (the picked labels, ", "-joined) as the very next turn's message."""
     tok = _turn(P, cid=cid)
     try:
         P.execute_tool("ask_choices", {"options": list(options), "multi": True, "purpose": "devices"})
     finally:
         P._TEAM_TURN.reset(tok)
-    tok = _turn(P, cid=cid)
+    tok = _turn(P, cid=cid, text=answer)
     try:
         return P.execute_tool("set_operator_fact", {"field": "devices", "value": answer})
     finally:

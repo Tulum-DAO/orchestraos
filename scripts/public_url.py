@@ -5,7 +5,8 @@ ONE answer for `orchestra pair` and for Arturo's pair_device, found in this orde
   b. ORCHESTRA_PUBLIC_URL in the environment;
   c. `[gateway] public_url` in orchestra.toml;
   d. `tailscale serve status --json`: the https address whose "/" is served from the gateway's own
-     port, which is exactly what the onboarding's `tailscale serve` step creates.
+     port, which is exactly what the onboarding's `tailscale serve` step creates. An address with
+     Tailscale Funnel on is never used: Funnel opens it to the whole internet, not only your tailnet.
 Never a guess: two candidates in (d) is a refusal that lists both, and every answer must be an https
 address with a host (scripts/pairing.valid_base_url), or the app could not pair with it.
 """
@@ -29,9 +30,13 @@ class Resolution:
 
 
 def serve_candidates(doc, gateway_port) -> list[str]:
-    """https addresses in a `tailscale serve status --json` document whose "/" proxies to the gateway."""
+    """https addresses in a `tailscale serve status --json` document whose "/" proxies to the gateway,
+    leaving out any with Funnel on (AllowFunnel): a device would be handed a public-internet address."""
     out = []
+    funnel = (doc or {}).get("AllowFunnel") or {}
     for hostport, web in ((doc or {}).get("Web") or {}).items():
+        if funnel.get(hostport):
+            continue
         handler = ((web or {}).get("Handlers") or {}).get("/") or {}
         m = _LOOPBACK_PROXY.match(str(handler.get("Proxy") or ""))
         if m and int(m.group(2)) == int(gateway_port):
@@ -62,7 +67,8 @@ def how_to_fix(gateway_port) -> str:
             f"on an https port nothing else serves, for example "
             f"`tailscale serve --bg --https=8445 http://127.0.0.1:{gateway_port}` (8445 is only an example; "
             f"step 4 shows how to check which ports are taken), then try again. Or set "
-            f"public_url under [gateway] in orchestra.toml to the https address your devices use.")
+            f"public_url under [gateway] in orchestra.toml to the https address your devices use. An address "
+            f"with Tailscale Funnel on is not used: it is open to the whole internet.")
 
 
 def resolve(explicit=None, env=None, config_value="", gateway_port=8890, run=None) -> Resolution:

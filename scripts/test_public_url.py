@@ -91,3 +91,15 @@ def test_nothing_found_says_exactly_what_to_do():
     got = pu.resolve(None, {}, "", GW, _run(rc=1))
     assert got.url is None
     assert "tailscale serve --bg --https=8445 http://127.0.0.1:8890" in got.problem and "public_url" in got.problem
+
+
+def test_an_address_with_funnel_on_is_never_handed_to_a_device():
+    # orchestraos-builder #296 review: Funnel makes the gateway a public-internet address
+    doc = _serve(**{"box.tn.ts.net:8445": {"/": {"Proxy": "http://127.0.0.1:8890"}}})
+    doc["AllowFunnel"] = {"box.tn.ts.net:8445": True}
+    assert pu.serve_candidates(doc, GW) == []
+    doc["Web"]["box.tn.ts.net:8446"] = {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8890"}}}
+    assert pu.serve_candidates(doc, GW) == ["https://box.tn.ts.net:8446"]
+    got = pu.resolve(env={}, gateway_port=GW, run=_run(stdout=json.dumps({**doc, "Web": {
+        "box.tn.ts.net:8445": doc["Web"]["box.tn.ts.net:8445"]}})))
+    assert got.url is None and "Funnel" in got.problem
