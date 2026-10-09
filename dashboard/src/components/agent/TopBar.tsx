@@ -8,9 +8,12 @@ interface TopBarProps {
   onReportOpen?: () => void;
   /** The seat this page belongs to; shown in the middle so the page says whose it is (and hosts the gen chip). */
   seat?: { id: string; generation?: unknown };
+  /** Chat (the transcript) or Dev (the seat's live terminal). The toggle shows only with a handler. */
+  mode?: 'chat' | 'dev';
+  onModeChange?: (mode: 'chat' | 'dev') => void;
 }
 
-export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen, seat }: TopBarProps) {
+export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen, seat, mode = 'chat', onModeChange }: TopBarProps) {
   const { theme, setTheme } = useTheme();
 
   const cycleTheme = () => {
@@ -44,6 +47,27 @@ export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen, seat }: TopBarPr
 
 
       <div className="ml-auto flex items-center gap-1">
+        {/* Chat / Dev, the same switch the Agents page's panel has: this page is where the rail and
+            Arturo send you for a seat, and without it the seat's terminal could not be reached. */}
+        {onModeChange && (
+          <div className="flex rounded-md border border-border overflow-hidden mr-1" role="group" aria-label="View">
+            {(['chat', 'dev'] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => onModeChange(m)}
+                aria-pressed={mode === m}
+                className={
+                  'text-xs px-2.5 py-1 transition-colors ' +
+                  (mode === m
+                    ? m === 'dev' ? 'bg-green-800 text-green-300' : 'bg-muted text-foreground'
+                    : 'text-muted-foreground hover:text-foreground')
+                }
+              >
+                {m === 'chat' ? 'Chat' : 'Dev'}
+              </button>
+            ))}
+          </div>
+        )}
         <button
           onClick={cycleTheme}
           className="p-2 text-foreground hover:bg-muted rounded-lg transition-colors"

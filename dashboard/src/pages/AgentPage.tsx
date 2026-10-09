@@ -13,6 +13,10 @@ import { useAgentSettings } from '../stores/agentSettings';
 import { spawnAgent } from '../lib/api';
 import { composerGate } from '../lib/composerGate';
 import { useAgents } from '../hooks/useAgents';
+import WebTerminal from '../components/WebTerminal';
+import ActionBar from '../components/ActionBar';
+import { injectToAgent, sendKeyToAgent } from '../lib/api';
+import { logAction } from '../lib/user-actions';
 
 export default function AgentPage() {
   const { id } = useParams<{ id?: string }>();
@@ -21,6 +25,17 @@ export default function AgentPage() {
   const [brainOpen, setBrainOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [resuming, setResuming] = useState(false);
+  // Chat (transcript + composer) or Dev (the seat's live terminal). It stays put when you move to
+  // another seat from the rail, the way a terminal user expects.
+  // Remembered in the browser, because the layout swap at phone width remounts this page.
+  const [mode, setMode] = useState<'chat' | 'dev'>(() => {
+    try { return localStorage.getItem('agentPage.mode') === 'dev' ? 'dev' : 'chat'; } catch { return 'chat'; }
+  });
+  const changeMode = (m: 'chat' | 'dev') => {
+    setMode(m);
+    try { localStorage.setItem('agentPage.mode', m); } catch { /* storage blocked: this tab only */ }
+    logAction(m === 'dev' ? 'agent.mode.dev' : 'agent.mode.chat', agentId);
+  };
   // Restart a seat that fell over. `spawnAgent` is the existing restart path, and this is the
   // first caller of the status line's Resume affordance. Undefined while in flight, so the
   // button disappears rather than queueing a second spawn on a double click.
@@ -32,7 +47,7 @@ export default function AgentPage() {
   // A seat's own page names the seat (Shaw's QA run: the composer said "Ask Arturo" on demo-planner's page).
   const { data } = useAgents();
   // /api/agents answers { agents: [...] }; tolerate a bare array too.
-  const rows = agentRowsFrom(data) as Array<{ id: string; generation?: unknown }> | undefined;
+  const rows = agentRowsFrom(data) as Array<{ id: string; generation?: unknown; tmux_session?: string; machine?: string }> | undefined;
   const seatRow = id && Array.isArray(rows) ? rows.find((a) => a.id === id) : undefined;
   const feed = useFeedHealth();
   const seat = id ? { id, generation: seatRow?.generation } : undefined;
@@ -50,6 +65,8 @@ export default function AgentPage() {
         onBrainOpen={() => setBrainOpen(true)}
         onReportOpen={() => setReportOpen(true)}
         seat={seat}
+        mode={mode}
+        onModeChange={changeMode}
       />
 
       {/* Report sheet — RED ALERT front door (docs/RED_ALERT.md) */}
@@ -61,36 +78,60 @@ export default function AgentPage() {
       {/* Brain modal */}
       <BrainModal isOpen={brainOpen} onClose={() => setBrainOpen(false)} />
 
-      {/* Main content. The agent rail lives in the Sidebar now — ONE nav column, not two. */}
-      <div className="flex-1 overflow-hidden flex flex-col min-h-0">
-        <Feed agentId={agentId} />
-      </div>
+      {mode === 'dev' ? (
+        <>
+          {/* Dev: the seat's own tmux pane, the same terminal the Agents page's panel opens. */}
+          <div className="flex-1 min-h-0 bg-black overflow-hidden">
+            <WebTerminal
+              key={agentId}
+              session={seatRow?.tmux_session || agentId}
+              machine={seatRow?.machine || 'vps'}
+            />
+          </div>
+          {/* special keys (arrows, Esc, Tab, ...): a phone has no keyboard for them */}
+          <div className="px-3 py-2 border-t border-border shrink-0 bg-neutral-950">
+            <ActionBar
+              agentId={agentId}
+              outputLines={[]}
+              onInject={(text) => injectToAgent(agentId, text)}
+              onSendKey={(key) => sendKeyToAgent(agentId, key)}
+              injectMode
+              devMode
+            />
+          </div>
+        </>
+      ) : (
+        <>
+        {/* Main content. The agent rail lives in the Sidebar now — ONE nav column, not two. */}
+        <div className="flex-1 overflow-hidden flex flex-col min-h-0">
+          <Feed agentId={agentId} />
+        </div>
 
-      {/* THE LIVE STATUS LINE, pinned directly above the composer (Shaw's top charge: nothing on
-          the page said what the agent was doing right now, so the sidebar and the page could
-          contradict each other). Same row, same staleness verdict as the rail dot. */}
-      {/* The Resume branch in LiveStatusLine had NO caller anywhere, so a stopped agent was
-          told it would not see the message and offered nothing to do about it. */}
-      <LiveStatusLine
-        onResume={resume}
-        state={(seatRow as { status?: string } | undefined)?.status}
-        feed={feed}
-        stateAgeS={(seatRow as { state_age_s?: number } | undefined)?.state_age_s}
-        tool={(seatRow as { tool?: string } | undefined)?.tool}
-      />
+        {/* THE LIVE STATUS LINE, pinned directly above the composer (Shaw's top charge: nothing on
+            the page said what the agent was doing right now, so the sidebar and the page could
+            contradict each other). Same row, same staleness verdict as the rail dot. */}
+        {/* The Resume branch in LiveStatusLine had NO caller anywhere, so a stopped agent was
+            told it would not see the message and offered nothing to do about it. */}
+        <LiveStatusLine
+          onResume={resume}
+          state={(seatRow as { status?: string } | undefined)?.status}
+          feed={feed}
+          stateAgeS={(seatRow as { state_age_s?: number } | undefined)?.state_age_s}
+          tool={(seatRow as { tool?: string } | undefined)?.tool}
+        />
 
-      <Composer
-        agentId={agentId}
-        seatName={id}
-        gate={composerGate({
-          state: (seatRow as { status?: string } | undefined)?.status,
-          pendingMenu: (seatRow as { pending_menu?: unknown } | undefined)?.pending_menu,
-          subagents: (seatRow as { subagents?: number } | undefined)?.subagents,
-        })}
-        subagents={(seatRow as { subagents?: number } | undefined)?.subagents}
-      />
-
-
+        <Composer
+          agentId={agentId}
+          seatName={id}
+          gate={composerGate({
+            state: (seatRow as { status?: string } | undefined)?.status,
+            pendingMenu: (seatRow as { pending_menu?: unknown } | undefined)?.pending_menu,
+            subagents: (seatRow as { subagents?: number } | undefined)?.subagents,
+          })}
+          subagents={(seatRow as { subagents?: number } | undefined)?.subagents}
+        />
+        </>
+      )}
     </div>
   );
 }
