@@ -19,6 +19,14 @@
  *       metadata.batch_id (stamped by the Stop-hook drain) -> ONE queued_batch
  *       node per batch, entries NEWEST->OLDEST.
  *
+ *   B3 (live card): a self-bound row with NO batch_id yet, which the transcript proves was
+ *       injected (a queued item whose text carries the row's body) -> a one-entry
+ *       queued_batch at once, at the injected item's position. The batch id is stamped by
+ *       the Stop drain, i.e. at the END of the agent's turn: without B3 the operator saw the
+ *       raw bubble for the whole turn and the card only after it (and never, for a row the
+ *       agent acked before its drain ran). Once the drain stamps it, B2 takes the row over:
+ *       card -> card, never card -> bubble -> card.
+ *
  * READ-ONLY, and its own connection (not the write-handle singleton): opens a
  * readonly better-sqlite3 handle on MSG_DB_PATH || <ORCHESTRA>/state/tasks.db.
  * WAL allows concurrent readers; a reader never blocks the writer. Every DB
@@ -113,6 +121,44 @@ function b2Batches(db: DB, agentId: string): any[] {
   }
 }
 
+// B3: a body shorter than this is not distinctive enough to tie a row to a queued item (the
+// same floor dropQueuedCommandsCoveredByBatches uses, so B3 never renders a card that the
+// drop would then fail to pair with its bubble).
+const LIVE_MIN = 40;
+const LIVE_LIMIT = 200;
+
+// B3: self-bound rows not yet batched, rendered as a card the moment the log shows them injected.
+function b3LiveCards(db: DB, agentId: string, items: any[], floorMs: number | null): any[] {
+  const queued = items.filter((it) => it?.kind === 'text' && it.queued && typeof it.text === 'string'
+    && it.text.trim().length >= LIVE_MIN);
+  if (!queued.length) return [];
+  try {
+    const floorIso = floorMs === null ? '' : new Date(floorMs - 60_000).toISOString();
+    const rows = db.prepare(
+      `SELECT id, from_agent, body, created_at FROM messages
+        WHERE to_agent = ? AND type != 'held_message'
+          AND (metadata IS NULL OR metadata NOT LIKE '%"batch_id"%')
+          AND created_at >= ?
+        ORDER BY created_at DESC LIMIT ${LIVE_LIMIT}`).all(agentId, floorIso) as any[];
+    const out: any[] = [];
+    const used = new Set<any>();
+    for (const r of rows) {
+      const body = String(r.body ?? '').trim();
+      if (body.length < LIVE_MIN) continue;
+      const head = body.slice(0, LIVE_MIN);
+      const hit = queued.find((q) => !used.has(q) && (q.text.includes(head) || body.includes(q.text.trim().slice(0, LIVE_MIN))));
+      if (!hit) continue;                       // not injected yet (or not by this agent's log): no card
+      used.add(hit);
+      out.push({ kind: 'queued_batch', count: 1,
+        entries: [{ agent: String(r.from_agent ?? ''), sent_ts: String(r.created_at ?? ''), body: String(r.body ?? '') }],
+        ts: hit.ts ?? r.created_at, key: `msg:${r.id}` });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 // Stable interleave of synthetics into the JSONL items by ts (carry-forward the
 // last valid ts so an undated JSONL item stays anchored to its neighbour; ties
 // keep original order via index).
@@ -141,8 +187,11 @@ export function mergeQueuedItems(items: any[], agentId: string): any[] {
   // on screen for an agent that has not started a turn yet, and dropping it would hide a
   // message the operator just sent. Only B2, which is history, is bounded.
   const pending = b1QueuedTurns(db, agentId);
-  const batches = boundQueuedBatches(b2Batches(db, agentId), earliestTurnMs(items));
-  const synthetic = [...pending, ...batches];
+  const floor = earliestTurnMs(items);
+  const batches = boundQueuedBatches(b2Batches(db, agentId), floor);
+  // B3 needs the transcript's own evidence of injection, so it can never show a row early.
+  const live = b3LiveCards(db, agentId, items, floor);
+  const synthetic = [...pending, ...batches, ...live];
   if (!synthetic.length) return items;
   return interleaveByTs(items.concat(synthetic));
 }
