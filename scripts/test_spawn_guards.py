@@ -5,8 +5,6 @@ scripts/spawn_guards.sh, sourced by spawn-agent.sh, and are exercised here the w
 test_spawn_model_verify.py exercises its helper: bash -c with the helper sourced."""
 import os
 import subprocess
-import sys
-import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 HELPER = os.path.join(HERE, "spawn_guards.sh")
@@ -101,15 +99,5 @@ def test_a_clean_submit_is_one_paste_on_the_first_enter(lab):
     r = _inject(env)
     assert "rc=0" in r.stdout and "enter-1" in r.stderr, r.stdout + r.stderr
     assert tmux("capture-pane", "-p", "-t", "=lab-gm:").stdout.count("You are lab-gm.") == 1
-
-
-def test_a_prompt_that_never_submits_is_stuck_not_success(lab):
-    """boot_inject's own timings (3 Enters, then 90 s of polls) shortened in-process; same code."""
-    tmux, env = lab(99)
-    code = (f"import sys; sys.path.insert(0, {HERE!r}); import boot_inject as B; "
-            "B.FIRST_ENTER_GAP_S = 0.3; B.POLL_EVERY_S = 0.3; B.POLL_FOR_S = 1.5; "
-            f"print(B.boot_inject('lab-gm', {PROMPT!r}, 'claude', log_fn=lambda m: None))")
-    time.sleep(0.5)
-    r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=60)
-    assert "('stuck', 'stuck')" in r.stdout, r.stdout + r.stderr
-    assert tmux("capture-pane", "-p", "-t", "=lab-gm:").stdout.count("You are lab-gm.") == 1
+# the stuck case (and every lost-Enter count) is exercised on boot_inject itself, by effect, in
+# scripts/test_boot_inject.py; these two prove spawn's inject_prompt is wired to it.
