@@ -201,16 +201,16 @@ Confirm the `gateway` row has a live pid again.
   |---|---|
   | `read` | see approvals, agents and transcripts |
   | `approve` | answer approvals and questionnaires: it acts as you |
-  | `message` | send a message to an agent, upload a file |
+  | `message` | send a message to an agent, upload a file, and type to Arturo. Arturo's lookups can read your agents' conversations, so `message` without `read` is not read-free; its messages to agents are marked unverified, and each typed turn spends provider credit |
   | `inject` | press keys in a live agent's terminal |
-  | `voice` | talk to Arturo from this device, typed or spoken (every turn spends provider credit) |
+  | `voice` | Live voice mode and dictation through the server, audio only (every call spends provider credit). Typing to Arturo is `message` |
   | `ptt` | push-to-talk to Arturo from a headset or Watch: lookups, and messages to agents marked unverified |
   | `admin` | file red-alert reports, post telemetry |
   | `usage` | nothing yet: reserved for reading usage later, so a device paired now needs no re-pair |
   | `owner` | this device is yours: its push-to-talk calls (with `ptt`) get Arturo's full tools, like the dashboard, instead of lookups only. Typed turns are unchanged |
 
   A phone or Mac that answers cards needs `read,approve`. Add `message` only if you want to
-  message agents from it. Give it more only if you mean to.
+  message agents or chat with Arturo from it. Give it more only if you mean to.
 
 ```bash
 orchestra pair --scopes read,approve --label my-phone
