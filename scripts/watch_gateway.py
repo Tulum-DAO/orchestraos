@@ -1526,6 +1526,8 @@ def compute_agents():
             "state": _STATE_MAP.get(st.get("state"), "idle"),
             "activity": st.get("activity") or "",
             "tool": st.get("tool") or "",
+            # Int or null, never a string: the app decodes /agents in one pass with Int?, and a
+            # string in ANY row loses the whole list (test_agents_context_pct_encoding.py).
             "context_pct": int(ctx) if ctx.isdigit() else None,
             "cpu": (st.get("process") or {}).get("cpu"),
             # which CLI runs the seat (claude | codex | gemini | ...), from the detector's process
