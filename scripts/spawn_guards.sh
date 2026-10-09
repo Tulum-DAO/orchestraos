@@ -34,50 +34,24 @@ PYEOF
     return 0
 }
 
-# inject_prompt <session> <text>
-# Race-safe prompt injection, verified SUBMITTED. send-keys text + Enter with no delay loses the
-# race against Ink's async input buffer, so the text goes in as one paste-buffer and Enter follows
-# after a pause. Then scripts/prompt_delivery.py reads the composer: "sent" is success; "pending"
-# (our text still in the box, the Enter was lost) gets Enter again, never a second paste; "absent"
-# (the paste was dropped) pastes once more. Visible-on-screen is NOT delivered: text sitting
-# unsent in the composer is visible too, which is how a new user's first gm sat with its init
-# prompt typed and not sent while the spawn said success (operator report, 2026-10-09).
-# Reads $runtime from the caller (default claude). INJECT_POLL_S / INJECT_POLLS: test knobs.
+# inject_prompt <session> <text> [--allow-canonical]
+# Type a prompt into a pane and VERIFY it SUBMITTED (scripts/boot_inject.py, the same typer the
+# fleet runs). The old body called "text visible on screen" success, and a prompt left unsent in the
+# composer IS visible: a new user's first gm sat with its init prompt typed and not sent while the
+# spawn said success (operator report, 2026-10-09). boot_inject pastes once, presses Enter until the
+# text leaves the composer and shows in the scrollback, never pastes a second copy, and exits 0
+# submitted / 2 stuck / 3 failed or refused. Reads $runtime from the caller (default claude).
 inject_prompt() {
-    local session="$1" text="$2"
-    local probe attempt poll v="unknown" rt="${runtime:-claude}"
-    local pause="${INJECT_POLL_S:-1}" polls="${INJECT_POLLS:-6}"
-    probe=$(printf '%s' "$text" | head -c 60)
-    for attempt in 1 2; do
-        tmux set-buffer -b spawn-inject "$text"
-        tmux paste-buffer -b spawn-inject -t "$session" -d
-        sleep 0.7
-        tmux send-keys -t "$session" Enter
-        for ((poll = 1; poll <= polls; poll++)); do
-            sleep "$pause"
-            v=$(tmux capture-pane -e -p -S -40 -t "$session" 2>/dev/null \
-                | python3 "$SCRIPT_DIR/scripts/prompt_delivery.py" "$probe" --runtime "$rt" 2>/dev/null) || v="unknown"
-            [[ -n "$v" ]] || v="unknown"
-            case "$v" in
-                sent) return 0 ;;
-                pending)
-                    warn "Prompt pasted but not submitted in '$session' — pressing Enter again"
-                    tmux send-keys -t "$session" Enter ;;
-                absent) break ;;
-                *) ;;
-            esac
-        done
-        # still in the box (or someone else's text is): a second paste would stack another copy
-        [[ "$v" == "absent" ]] || break
-        warn "Injection attempt $attempt not visible in '$session' — retrying"
-        sleep 2
-    done
-    case "$v" in
-        pending) err "Injection NOT SUBMITTED in '$session': the prompt is still in the composer after $polls Enter attempts" ;;
-        foreign) err "Injection NOT SUBMITTED in '$session': the composer holds text that is not ours, so nothing was pressed" ;;
-        absent)  err "Injection FAILED twice for '$session' — the prompt never appeared" ;;
-        *)       err "Injection UNVERIFIED in '$session': the composer could not be read for runtime '$rt'" ;;
-    esac
+    local session="$1" text="$2" allow="${3:-}"
+    local out rc=0
+    out=$(python3 "$SCRIPT_DIR/scripts/boot_inject.py" "$session" --runtime "${runtime:-claude}" \
+            --text "$text" $allow 2>&1) || rc=$?
+    if [[ $rc -eq 0 ]]; then
+        echo "[spawn]   ${out##*$'\n'}" >&2
+        return 0
+    fi
+    err "Prompt NOT submitted in '$session' (rc=$rc) — the agent may be sitting without its prompt:"
+    err "$out"
     return 1
 }
 
