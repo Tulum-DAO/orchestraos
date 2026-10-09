@@ -170,6 +170,16 @@ def test_only_role_of_decides_who_is_a_pm():
 def test_nothing_keys_behaviour_on_tier_T1():
     """T1 is position only. Comparing a tier to T1 outside tier_rule.py is the coupling this removed
     (the PM briefing, auto-retire and Arturo's PM pick all keyed on it)."""
-    bad = [line for line in _code_lines(r"""(tier|TIER)[^\n]{0,40}(==|!=)[^\n]{0,6}['"]T1['"]|\$tier" == "T1""")
-           if not line.startswith("scripts/tier_rule.py:")]
+    bad = [line for line in _code_lines(r"""(tier|TIER).{0,40}(==|!=).{0,6}['"]T1['"]|\$tier" == "T1""")
+           if not line.startswith("scripts/tier_rule.py:")
+           # fleet._armed: the T1 test is immediately decided by role_of (gm ruling on #348)
+           and not (line.startswith("scripts/lineage_daemon/fleet.py:") and '"T2" in armed_tiers' in line)]
     assert not bad, "behaviour keyed on tier T1:\n" + "\n".join(bad)
+
+
+def test_rotation_arming_goes_through_fleet_armed():
+    """gm ruling on #348: arming is (tier in the wave) OR (T2 armed AND a T1 worker), via role_of.
+    A bare `tier in armed_tiers` anywhere else would quietly drop the T1 helpers again."""
+    bad = [line for line in _code_lines(r"(if|elif|return|and|or|=) .{0,60}tier.{0,40}(not )?in (armed_tiers|ARMED_TIERS)")
+           if not (line.startswith("scripts/lineage_daemon/fleet.py:") and "if tier in armed_tiers" in line)]
+    assert not bad, "a tier-only arming check outside fleet._armed:\n" + "\n".join(bad)
