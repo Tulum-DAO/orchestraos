@@ -23,6 +23,7 @@ Each installed row is tagged `#orchestraos-hook` and carries `ORCHESTRA_DIR=<dat
 ```bash
 python3 hooks/install.py --data-dir ~/orchestra          # same thing orchestra init does
 python3 hooks/install.py --status                          # installed vs missing
+python3 hooks/install.py --remove                          # take out every #orchestraos-hook row, nothing else
 orchestra init --yes                                       # unattended: write the rows without the y/N prompt
 ORCHESTRA_SKIP_HOOKS=1 orchestra init                      # containers that run no Claude seats
 ```
@@ -36,7 +37,11 @@ every registered seat.
 The installer refuses to write a row whose script is missing on disk (a broken row errors on
 every tool call and blocks the host), never overwrites a settings file it cannot parse, and
 under pytest refuses to touch the real `~/.claude/settings.json` (`CLAUDE_CONFIG_DIR` is set to
-a temp dir by the test fixtures).
+a temp dir by the test fixtures). Outside pytest it also refuses to install a checkout or data dir
+that lives under a temp dir into any settings file that is not itself under a temp dir: a scratch clone's rows would run in every Claude
+session on the host, out of a directory that is deleted later. Point `CLAUDE_CONFIG_DIR` at a
+scratch dir for a throwaway install, or set `ORCHESTRA_ALLOW_TEMP_INSTALL=1` if you mean it. A test
+run that changes the real file's tagged rows anyway fails as a whole (root `conftest.py`).
 
 ## Testing on a host that runs a live fleet
 

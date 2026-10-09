@@ -75,6 +75,8 @@ jobs:
             args: "test_router_prefixes.py test_msg_threading.py test_dashboard_ws_origin.py --ignore=scripts"
           - name: services-arturo
             args: "services/arturo"
+          - name: hooks
+            args: "hooks"          # the installer's own tests (settings.json writes) ran nowhere before
           - name: scripts-top
             args: "scripts --ignore=scripts/lineage_daemon --ignore=scripts/identity_store --ignore=scripts/focus_registry"
           - name: scripts-lineage-daemon

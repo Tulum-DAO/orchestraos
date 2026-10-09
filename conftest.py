@@ -107,3 +107,59 @@ def _no_host_tailscale(monkeypatch):
     monkeypatch.setattr(_pu, "detect",
                         lambda gateway_port, run=None, timeout=None: real(gateway_port, run=run) if run else [])
     yield
+
+
+# --- the operator's Claude settings are not a test fixture (2026-09-20 / 2026-10-09) ---------
+# An install from a scratch clone left 12 `#orchestraos-hook` rows in an operator's real
+# ~/.claude/settings.json for 19 days: every tool call of every session forked a shell for them.
+# hooks/install.py refuses that write from inside pytest and from a temp checkout; this is the belt
+# behind both. The tagged rows of the real file are read when the run starts and again when it
+# ends: if any test added, removed or changed one, the run FAILS, whatever the tests themselves said.
+import json as _json
+
+_REAL_SETTINGS = os.path.join(os.path.expanduser("~"), ".claude", "settings.json")
+_HOOK_TAG = "#orchestraos-hook"
+
+
+def _tagged_rows(path=None):
+    try:
+        with open(path or _REAL_SETTINGS) as f:
+            text = f.read()
+        data = _json.loads(text) if text.strip() else {}       # empty = {}, as hooks/install.py reads it
+    except FileNotFoundError:
+        return ()
+    except Exception as e:  # noqa: BLE001 — an unreadable file is compared as what it is
+        return (("<unreadable>", type(e).__name__),)
+    rows = []
+    for ev, rules in ((data.get("hooks") or {}) if isinstance(data, dict) else {}).items():
+        for rule in rules or []:
+            for h in (rule or {}).get("hooks") or []:
+                cmd = (h or {}).get("command")
+                if isinstance(cmd, str) and _HOOK_TAG in cmd:
+                    rows.append((ev, cmd))
+    return tuple(sorted(rows))
+
+
+def pytest_sessionstart(session):
+    session.config._orchestra_settings_rows = _tagged_rows()
+
+
+def pytest_sessionfinish(session, exitstatus):
+    before = getattr(session.config, "_orchestra_settings_rows", None)
+    if before is None:
+        return
+    after = _tagged_rows()
+    if after != before:
+        added = [c for _e, c in after if (_e, c) not in before]
+        gone = [c for _e, c in before if (_e, c) not in after]
+        tr = session.config.pluginmanager.get_plugin("terminalreporter")
+        msg = ("\nFAIL: this test run changed the REAL " + _REAL_SETTINGS + " (" + _HOOK_TAG + " rows): "
+               + "%d added, %d removed.\n" % (len(added), len(gone))
+               + "".join("  + %s\n" % c for c in added[:5]) + "".join("  - %s\n" % c for c in gone[:5])
+               + "Clean up: python3 hooks/install.py --remove  (removes only tagged rows; then re-run "
+                 "`orchestra init` for a real install). A test must set CLAUDE_CONFIG_DIR to a tmp dir.\n")
+        if tr is not None:
+            tr.write_line(msg, red=True)
+        else:
+            print(msg)
+        session.exitstatus = _pytest.ExitCode.TESTS_FAILED
