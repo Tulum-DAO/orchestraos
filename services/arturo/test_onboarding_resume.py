@@ -233,3 +233,19 @@ def test_a_message_that_is_not_a_pick_writes_no_devices_fact(P):
         P._TEAM_TURN.reset(tok)
     _say(P, "not my iPhone, what is this for?")
     assert ops.public(P.ARTURO_STATE)["devices"] is None
+
+
+def test_a_returning_opener_can_bring_back_a_live_team_offer_card(P):
+    # pm-tulumdao, shot 07: the scripted brain re-asked the team step as plain text. A real brain follows
+    # goal 2 (ask_choices purpose='starter_team'); on a returning opener that card is live and booked.
+    _open(P)
+    P.starter_team_state = lambda seen=None: {"state": "absent", "seats": []}
+
+    def brain(messages, cid):
+        P.seen.append(messages[0]["content"])
+        P.execute_tool("ask_choices", {"options": ["Set it up", "Not now"], "purpose": "starter_team"})
+        return ("Next is your team: want me to set it up?", ["ask_choices"])
+    P._brain_reply = brain
+    code, body = _open(P)
+    assert body["resumed"] is True and body["choices"]["purpose"] == "starter_team"
+    assert body["choices"]["note"] == onb.TEAM_COST and "web_onb" in P._TEAM_OFFERS
