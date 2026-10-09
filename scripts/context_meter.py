@@ -17,23 +17,34 @@ belongs to something else.
 """
 import re
 
-# A frame rule: a run of box-drawing horizontals (Claude Code draws ─; some themes ━), optionally
-# with a label inset. Same shape agent-status.py uses for the composer frame.
+# A frame rule: a run of box-drawing horizontals (Claude Code draws ─; some themes ━) from column 0,
+# optionally with a label inset. Same shape agent-status.py uses for the composer frame.
 _RULE_RE = re.compile(r'^[─━]{8,}( .+ [─━]+)?\s*$')
+# A highlighted menu option: the cursor glyph, then the option number.
+_MENU_OPTION_RE = re.compile(r'^[❯>]\s*\d{1,2}\.\s')
+
 
 def footer_meter_line(stripped_lines) -> str:
     """The meter line (`█`/`░` plus a percent) in the footer under the composer box, or ''.
 
     `stripped_lines`: the screen, top to bottom, with ANSI removed."""
     lines = list(stripped_lines)
-    rules = [i for i, line in enumerate(lines) if _RULE_RE.match(line.strip())]
+    # Frame rules start at column 0; output, quoted text and a typed message's own lines are
+    # indented, so a rule-like line inside the composer or the conversation is not a frame edge.
+    rules = [i for i, line in enumerate(lines) if _RULE_RE.match(line.rstrip())]
     if len(rules) < 2:
         return ''
     box_top, box_bottom = rules[-2], rules[-1]
-    first = lines[box_top + 1].strip() if box_top + 1 < box_bottom else ''
-    if not (first.startswith('❯') or (first.startswith('>') and not first.startswith('>>'))):
+    if not (box_top + 1 < box_bottom and _is_composer(lines[box_top + 1])):
         return ''
     for line in lines[box_bottom + 1:]:
         if ('█' in line or '░' in line) and '%' in line:
             return line
     return ''
+
+
+def _is_composer(line: str) -> bool:
+    t = line.strip()
+    if _MENU_OPTION_RE.match(t):
+        return False
+    return t.startswith('❯') or (t.startswith('>') and not t.startswith('>>'))

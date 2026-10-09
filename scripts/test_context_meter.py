@@ -78,6 +78,18 @@ def test_an_earlier_composer_frame_left_on_screen_is_not_the_live_box():
     assert footer_meter_line(screen) == ""
 
 
+def test_a_highlighted_option_right_under_a_rule_is_not_a_composer():
+    # Review (agy, #333): a menu with no header line puts "❯ 1." directly under its frame.
+    screen = [RULE, "❯ 1. Proceed", "  2. Stop", RULE, "  ⎿  ██████████ 90%"]
+    assert footer_meter_line(screen) == ""
+
+
+def test_a_typed_message_containing_a_rule_still_finds_the_bar():
+    # Review (agy, #333): a rule-like line typed into the composer is inside the box.
+    screen = [*FOREIGN, RULE, "❯ notes:", "  " + "─" * 20, "  more", RULE, BAR, MODE]
+    assert footer_meter_line(screen) == BAR
+
+
 def test_a_glyph_row_without_a_percent_is_not_the_meter():
     screen = [RULE, "❯ ", RULE, "  ░░ syncing", BAR]
     assert footer_meter_line(screen) == BAR
