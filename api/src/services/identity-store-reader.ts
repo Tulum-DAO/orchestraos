@@ -81,6 +81,34 @@ export function canonicalTmuxSession(id: string, orch: string = ORCHESTRA_DIR): 
   return canon?.[id]?.tmux_session ?? null;
 }
 
+/** Every session id the identity store knows -> {root, current}, plus every root the store knows
+ *  (one that owns a session, or has a canonical row: a service pane's lineage has one with no
+ *  session id yet), in ONE read. For callers that test
+ *  many ids (a project dir can hold thousands of transcripts): one DB open, not one per id. null when
+ *  the store is absent/unreadable. */
+export function sessionOwners(orch: string = ORCHESTRA_DIR):
+    { sessions: Map<string, { root: string; current: boolean }>; roots: Set<string> } | null {
+  let db: Database.Database | null = null;
+  try {
+    db = new Database(dbPath(orch), { readonly: true, fileMustExist: true });
+    db.pragma('busy_timeout = 5000');
+    const rows = db.prepare(
+      `SELECT g.session_id AS sid, g.root AS root, (g.id = c.generation_id) AS current
+       FROM generations g LEFT JOIN canonical c ON c.root = g.root
+       WHERE g.session_id IS NOT NULL`,
+    ).all() as { sid: string; root: string; current: number | null }[];
+    const sessions = new Map<string, { root: string; current: boolean }>();
+    for (const r of rows) sessions.set(r.sid, { root: r.root, current: r.current === 1 });
+    const roots = new Set(rows.map((r) => r.root));
+    for (const r of db.prepare('SELECT root FROM canonical').all() as { root: string }[]) roots.add(r.root);
+    return { sessions, roots };
+  } catch {
+    return null;
+  } finally {
+    try { db?.close(); } catch { /* best-effort */ }
+  }
+}
+
 /** One past (or current) generation of a lineage, for the Agents page's history list. */
 export interface GenerationRow {
   generation: number;

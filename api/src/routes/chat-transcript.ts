@@ -19,6 +19,7 @@ import { homedir } from 'os';
 import Database from 'better-sqlite3';
 import { agentScopeParam } from '../lib/agent-scope.js';
 import { expandChipDodge } from '../lib/chipDodge.js';
+import { sessionOwners } from '../services/identity-store-reader.js';
 
 const router = Router();
 // Every /:id route on this router is scoped to the caller's principal — the same rule GET /
@@ -318,6 +319,26 @@ export function parseCodexRollout(lines: string[]): any[] {
   return items;
 }
 
+type SessionOwners = Map<string, { root: string; current: boolean }> | null;
+const lineageOf = (id: string) => id.replace(/-(?:gen\d+|g\d+|next)$/, '');
+
+/** May `agentId`'s chat show session `sid`? The state files this route reads can lag the identity
+ *  store (a projector re-emitted the PREDECESSOR's session id for a seat), and a reused pane id can
+ *  carry another session's hook file, so a file existing is not enough. A session the store knows
+ *  is refused when it belongs to another lineage (a green's shadow root, `<seat>-g25`, counts as
+ *  its seat's lineage), or, viewing the lineage's canonical id, to a generation of that root that
+ *  is not its current head. A session the store does not know (a /clear, a seat outside the store,
+ *  no store at all) is allowed, as before. A seat resumed on an older generation's session reads as
+ *  that older generation until the store re-attributes it. `owners` is one read of the store. */
+export function sessionIsThisSeats(agentId: string, sid: string | null | undefined,
+                                   owners: SessionOwners): boolean {
+  if (!sid || !owners) return true;
+  const o = owners.get(String(sid));
+  if (!o) return true;
+  if (lineageOf(o.root) !== lineageOf(agentId)) return false;
+  return agentId === o.root ? o.current : true;
+}
+
 // Resolve an agent id to its transcript JSONL path (re-read fresh per request).
 // Exported for the F1 streaming lane (transcript-stream.ts) — same resolution,
 // same file, so poll and stream can never disagree on WHICH transcript.
@@ -325,6 +346,9 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
   // The id becomes state/agents/<id>.json and a tmux target. A raw one read any .json for its
   // session_id. Safe ids only; no registry check, so a scratch tmux seat still resolves.
   if (!isSafeAgentId(agentId)) return { path: null, sid: null };
+  const store = sessionOwners(ORCH_DIR);           // one read of the store for this resolve
+  const owners = store?.sessions ?? null;
+  const ok = (sid: string | null | undefined) => sessionIsThisSeats(agentId, sid, owners);
   const sessions = loadAgentSessions();
   const e = sessions[agentId] || {};
   const tmuxSession = String(e.tmux_session || agentId);
@@ -348,8 +372,8 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
 
   // 0b. Hook event sid for live Claude process
   const hook = hookEventSid(tmuxSession);
-  let sid: string | null = hook.sid;
-  if (hook.sid && hook.cwd) {
+  let sid: string | null = ok(hook.sid) ? hook.sid : null;
+  if (sid && hook.cwd) {
     const p = join(CLAUDE_PROJECTS, hook.cwd.replace(/[/.]/g, '-'), `${hook.sid}.jsonl`);
     if (existsSync(p)) return { path: p, sid: hook.sid };
   }
@@ -359,7 +383,7 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
     const stateFile = join(ORCH_DIR, 'state', 'agents', `${agentId}.json`);
     if (existsSync(stateFile)) {
       const st = JSON.parse(readFileSync(stateFile, 'utf-8'));
-      if (st.session_id) {
+      if (st.session_id && ok(st.session_id)) {
         const gPath = join(GEMINI_BRAIN, st.session_id, '.system_generated', 'logs', 'transcript.jsonl');
         if (existsSync(gPath)) return { path: gPath, sid: st.session_id };
         if (st.cwd) {
@@ -371,18 +395,19 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
   } catch {}
 
   // 2. Explicit conversation_path in agent-sessions.json
-  if (e.conversation_path && existsSync(e.conversation_path)) {
+  const eSidOk = ok(e.session_id);
+  if (e.conversation_path && existsSync(e.conversation_path) && eSidOk) {
     return { path: e.conversation_path, sid: e.session_id || null };
   }
 
   // 3. Direct session_id check (Claude or Gemini brain)
-  if (e.session_id) {
+  if (e.session_id && eSidOk) {
     const gPath = join(GEMINI_BRAIN, e.session_id, '.system_generated', 'logs', 'transcript.jsonl');
     if (existsSync(gPath)) return { path: gPath, sid: e.session_id };
   }
 
   // 4. Resume command regex
-  sid = sid || e.session_id || null;
+  sid = sid || (eSidOk ? e.session_id : null) || null;
   if (!sid && typeof e.resume_command === 'string') {
     const magy = e.resume_command.match(/--conversation\s+([0-9a-f-]{36})/);
     if (magy) {
@@ -390,7 +415,7 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
       if (existsSync(gPath)) return { path: gPath, sid: magy[1] };
     }
     const m = e.resume_command.match(/--resume\s+([0-9a-f-]{36})/);
-    sid = m ? m[1] : null;
+    sid = m && ok(m[1]) ? m[1] : null;
   }
 
   // 6. If agent is Gemini or name starts with gemini, search Antigravity brains by declaration
@@ -408,11 +433,21 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
   }
   if (pdir && existsSync(pdir)) {
     try {
+      // A project dir is shared by every seat with that cwd, so its newest file can be anyone's.
+      // A seat the store knows (its lineage owns a session or has a canonical row, even with no
+      // session yet: a service pane) takes only its OWN lineage's sessions here; any other seat keeps the old rule minus
+      // sessions the store gives to someone else. Subagent sidechains (agent-*.jsonl) are never a
+      // seat's chat. Lazy: stops at the first acceptable file.
+      const known = !!store && [...store.roots].some((r) => lineageOf(r) === lineageOf(agentId));
       const js = readdirSync(pdir)
-        .filter((f) => f.endsWith('.jsonl'))
+        .filter((f) => f.endsWith('.jsonl') && !f.startsWith('agent-'))
         .map((f) => ({ f, m: statSync(join(pdir!, f)).mtimeMs }))
         .sort((a, b) => b.m - a.m);
-      if (js.length) return { path: join(pdir, js[0].f), sid: js[0].f.replace('.jsonl', '') };
+      const pick = js.find(({ f }) => {
+        const s = f.replace('.jsonl', '');
+        return known ? (!!owners!.get(s) && ok(s)) : ok(s);
+      });
+      if (pick) return { path: join(pdir, pick.f), sid: pick.f.replace('.jsonl', '') };
     } catch { /* ignore */ }
   }
 
