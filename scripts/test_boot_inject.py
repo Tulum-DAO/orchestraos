@@ -200,3 +200,59 @@ def test_guard_an_install_without_an_identity_db_has_no_canonical_seat(tmp_path,
     monkeypatch.setattr(B, "_HERE", str(tmp_path / "scripts"))
     assert B._registry_db() is None
     assert not B._canonical_live("gm", tmux_fn=_created(3600), now=1_000_000)
+
+
+# ---------------------------------------------------------------- by effect, on a real tmux pane
+# The Pane fake above models the composer; these run boot_inject against a real terminal program
+# that LOSES the first N Enters (scripts/fixtures/lossy_enter_tui.py), on a PRIVATE tmux server
+# (own TMUX_TMPDIR, $TMUX unset), never the operator's. Timings are shortened in-process; the code
+# path is the shipped one. Ran unshortened against the live module: drop 0/1/4/99 -> enter-1 /
+# enter-2 / late-poll-30s / stuck, never two copies.
+
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
+import tempfile  # noqa: E402
+
+import pytest  # noqa: E402
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+FAKE_TUI = os.path.join(_HERE, "fixtures", "lossy_enter_tui.py")
+REAL = "You are lab-seat. Read /tmp/agent-init-lab-seat.md and follow all instructions in it."
+
+
+@pytest.fixture
+def real_pane(tmp_path):
+    if not shutil.which("tmux"):
+        pytest.skip("tmux not installed")
+    sock_dir = tempfile.mkdtemp(prefix="ibl.", dir="/tmp")    # short: a socket path has a size limit
+    env = {k: v for k, v in os.environ.items() if k != "TMUX"}
+    env.update(TMUX_TMPDIR=sock_dir, ORCHESTRA_DIR=str(tmp_path), PYTHONDONTWRITEBYTECODE="1")
+
+    def tmux(*args):
+        return subprocess.run(["tmux", *args], env=env, capture_output=True, text=True)
+
+    def run(drop):
+        tmux("new-session", "-d", "-s", "lab-seat", "-x", "200", "-y", "40", f"python3 {FAKE_TUI} {drop}")
+        code = (f"import sys; sys.path.insert(0, {_HERE!r}); import boot_inject as B; "
+                "B.FIRST_ENTER_GAP_S = 0.5; B.POLL_EVERY_S = 0.5; B.POLL_FOR_S = 3.0; "
+                f"print(B.boot_inject('lab-seat', {REAL!r}, 'claude', log_fn=lambda m: None))")
+        subprocess.run(["sleep", "0.5"])
+        r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=60)
+        return r.stdout.strip(), tmux("capture-pane", "-p", "-t", "=lab-seat:").stdout
+    yield run
+    tmux("kill-session", "-t", "=lab-seat")
+    shutil.rmtree(sock_dir, ignore_errors=True)
+
+
+@pytest.mark.parametrize("drop,stage", [(0, "enter-1"), (1, "enter-2"), (4, "late-poll")])
+def test_BY_EFFECT_lost_enters_are_retried_until_the_prompt_submits(real_pane, drop, stage):
+    out, screen = real_pane(drop)
+    assert out.startswith("('submitted', '" + stage), out
+    assert "● working on it" in screen
+    assert screen.count("You are lab-seat.") == 1      # one paste, never a second copy
+
+
+def test_BY_EFFECT_a_prompt_that_never_submits_is_stuck_with_one_copy(real_pane):
+    out, screen = real_pane(99)
+    assert out == "('stuck', 'stuck')", out
+    assert screen.count("You are lab-seat.") == 1
