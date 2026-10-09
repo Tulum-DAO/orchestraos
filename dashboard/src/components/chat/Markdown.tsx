@@ -58,7 +58,7 @@ function renderInline(text: string, keyBase: string): React.ReactNode[] {
         </code>
       );
     } else if (tok.startsWith('**')) {
-      out.push(<strong key={`${keyBase}-b${k}`} className="font-semibold text-neutral-100">{tok.slice(2, -2)}</strong>);
+      out.push(<strong key={`${keyBase}-b${k}`} className="font-semibold text-foreground">{tok.slice(2, -2)}</strong>);
     } else {
       out.push(<em key={`${keyBase}-i${k}`}>{tok.slice(1, -1)}</em>);
     }
@@ -99,7 +99,7 @@ export default function Markdown({ text }: { text: string }) {
       const lvl = h[1].length;
       const cls = lvl <= 1 ? 'text-base font-semibold' : lvl === 2 ? 'text-sm font-semibold' : 'text-sm font-medium';
       blocks.push(
-        <div key={`h${bi++}`} className={`${cls} text-neutral-100 mt-2 mb-1`}>
+        <div key={`h${bi++}`} className={`${cls} text-foreground mt-2 mb-1`}>
           {renderInline(h[2], `h${bi}`)}
         </div>
       );
@@ -117,7 +117,7 @@ export default function Markdown({ text }: { text: string }) {
       blocks.push(
         <ul key={`ul${bi++}`} className="list-disc pl-5 my-1 space-y-0.5">
           {items.map((it, idx) => (
-            <li key={idx} className="text-[13px] text-neutral-200">{renderInline(it, `li${bi}-${idx}`)}</li>
+            <li key={idx} className="text-[13px] text-foreground/90">{renderInline(it, `li${bi}-${idx}`)}</li>
           ))}
         </ul>
       );
@@ -138,7 +138,7 @@ export default function Markdown({ text }: { text: string }) {
       i++;
     }
     blocks.push(
-      <p key={`p${bi++}`} className="text-[13px] leading-relaxed text-neutral-200 whitespace-pre-wrap break-words">
+      <p key={`p${bi++}`} className="text-[13px] leading-relaxed text-foreground/90 whitespace-pre-wrap break-words">
         {renderInline(para.join('\n'), `p${bi}`)}
       </p>
     );

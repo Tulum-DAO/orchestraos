@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Mic, PhoneCall, PhoneOff } from 'lucide-react';
 import { useAgentSettings } from '../../stores/agentSettings';
 import { VoiceSession } from '../../lib/voiceSession';
@@ -15,6 +15,16 @@ interface VoiceControlsProps {
   onCallEnded?: (marker: string) => void;
   /** true when the textarea is empty and there's no attachment — VoiceLogo shows; else hidden (Send owns that slot). */
   showCallButton: boolean;
+  /** Extra classes for the call button while NO call is live (the composer hides it on narrow
+   *  phones and offers "Start voice call" from its overflow menu instead). A live call's End
+   *  button is never hidden: a call you cannot see is a call you cannot end. */
+  idleCallClassName?: string;
+}
+
+/** For a caller that offers the call from elsewhere (the composer's overflow menu). */
+export interface VoiceControlsHandle {
+  toggleCall: () => Promise<void>;
+  inCall: boolean;
 }
 
 /**
@@ -23,14 +33,15 @@ interface VoiceControlsProps {
  * Live session over the new `/api/voice/live` proxy). Every unavailable path
  * renders an honest first-person reason (W1) — never a silent no-op.
  */
-export function VoiceControls({
+export const VoiceControls = forwardRef<VoiceControlsHandle, VoiceControlsProps>(function VoiceControls({
   route,
   focusedEntity,
   onPartial,
   onFinal,
   onCallEnded,
   showCallButton,
-}: VoiceControlsProps) {
+  idleCallClassName,
+}, ref) {
   const settings = useAgentSettings();
   const [unavailable, setUnavailable] = useState<string | null>(null);
   const [dictating, setDictating] = useState(false);
@@ -74,6 +85,8 @@ export function VoiceControls({
     await session().start({ route, focusedEntity });
   };
 
+  useImperativeHandle(ref, () => ({ toggleCall, inCall }));
+
   return (
     <div className="flex items-center gap-1">
       {unavailable && (
@@ -90,13 +103,13 @@ export function VoiceControls({
       >
         <Mic size={18} />
       </button>
-      {showCallButton && (
+      {(showCallButton || inCall) && (
         <button
           onClick={toggleCall}
           aria-pressed={inCall}
           aria-label={inCall ? 'End call' : 'Start voice call'}
           title={inCall ? `End call with ${settings.assistantName}` : `Call ${settings.assistantName}`}
-          className="h-9 w-9 flex items-center justify-center rounded-full transition-colors text-foreground/70 hover:text-foreground hover:bg-muted"
+          className={`h-9 w-9 flex items-center justify-center rounded-full transition-colors text-foreground/70 hover:text-foreground hover:bg-muted ${inCall ? '' : idleCallClassName ?? ''}`}
           style={{ color: inCall ? 'var(--accent-voice)' : undefined }}
         >
           {inCall ? <PhoneOff size={18} /> : <PhoneCall size={18} />}
@@ -104,4 +117,4 @@ export function VoiceControls({
       )}
     </div>
   );
-}
+});

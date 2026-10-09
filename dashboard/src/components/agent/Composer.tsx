@@ -1,12 +1,12 @@
-import { useState } from 'react';
-import { Cpu } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Cpu, PhoneCall } from 'lucide-react';
 import { withTimeout, sendFailureNote } from '../../lib/composerSend';
 import { delegatedWorkLabel, type ComposerGate } from '../../lib/composerGate';
 import { useLocation } from 'react-router-dom';
 import { useAgentSettings } from '../../stores/agentSettings';
 import { useModelSelection } from '../../stores/modelSelection';
 import { ModelSelectorSheet } from './ModelSelectorSheet';
-import { VoiceControls } from './VoiceControls';
+import { VoiceControls, type VoiceControlsHandle } from './VoiceControls';
 import ChatInput from '../chat/ChatInput';
 import {
   sendToAgent,
@@ -47,6 +47,7 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
   const [sheetOpen, setSheetOpen] = useState(false);
   const [draft, setDraft] = useState('');
   const modelLabel = useModelSelection((s) => s.modelLabel);
+  const voiceRef = useRef<VoiceControlsHandle>(null);
   // B2 video-upload capability gate: N/A — ChatInput's current attach
   // affordance has no video mime/extension support to gate yet, so
   // `capabilities?.video === true` has nothing to gate against for now.
@@ -134,13 +135,32 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
           onSend={handleSend}
           canStop={canStop}
           onStop={onStop}
+          // Below 480px the model chip and the call button live here, so the text gets the row.
+          menuItems={(close) => (
+            <>
+              <button type="button" role="menuitem"
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-left text-foreground hover:bg-muted rounded-lg"
+                onClick={() => { close(); setSheetOpen(true); }}>
+                <Cpu size={15} className="shrink-0 text-muted-foreground" />
+                <span className="truncate">Model <span className="text-muted-foreground">· {modelLabel ?? 'choose'}</span></span>
+              </button>
+              {draft.trim() === '' && (
+                <button type="button" role="menuitem"
+                  className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-left text-foreground hover:bg-muted rounded-lg"
+                  onClick={() => { close(); void voiceRef.current?.toggleCall(); }}>
+                  <PhoneCall size={15} className="shrink-0 text-muted-foreground" />
+                  <span>Call {settings.assistantName}</span>
+                </button>
+              )}
+            </>
+          )}
           leading={
-            // Compact model chip: the label from sm up, an icon below it so every control stays
-            // reachable at 360px. Opens the existing ModelSelectorSheet.
+            // Compact model chip: the label from sm up, an icon below it. Below 480px it folds
+            // into the pill's overflow menu (menuItems below). Opens the existing ModelSelectorSheet.
             <button
               type="button"
               onClick={() => setSheetOpen(true)}
-              className="shrink-0 h-9 min-w-9 px-2 sm:px-2.5 max-w-[130px] flex items-center justify-center gap-1.5 rounded-full text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              className="shrink-0 h-9 min-w-9 px-2 sm:px-2.5 max-w-[130px] flex items-center justify-center gap-1.5 rounded-full text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors max-[479px]:hidden"
               title={modelLabel ? `Model: ${modelLabel} — choose the model this agent runs` : 'Choose the model this agent runs'}
               aria-label={modelLabel ? `Model: ${modelLabel}` : 'Choose a model'}
             >
@@ -150,6 +170,8 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
           }
           trailing={
             <VoiceControls
+              ref={voiceRef}
+              idleCallClassName="max-[479px]:hidden"
               route={location.pathname}
               focusedEntity={null}
               onPartial={setDraft}
