@@ -201,3 +201,9 @@ def test_process_start_is_read_from_proc():
     started = wg._proc_start_epoch(os.getpid())
     assert started is not None and time.time() - 86400 * 30 < started <= time.time()
     assert wg._proc_start_epoch(None) is None and wg._proc_start_epoch(2 ** 30) is None
+
+
+def test_without_proc_the_hook_file_is_kept_as_before(monkeypatch):
+    """No /proc (macOS): no start time can be read, so the file keeps counting."""
+    monkeypatch.setattr(wg, "_proc_start_epoch", lambda pid: None)
+    assert wg._hook_event_is_current({"ts": 1.0}, None) is True
