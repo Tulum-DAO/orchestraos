@@ -59,6 +59,8 @@ TEAM_SHAPE = (
     "under the same gm."
 )
 TEAM_COST = "This starts three agents; gm is always on and keeps costing tokens whether or not it is asked anything."
+# The devices card's own words: a pick there is consent to make pairing codes (arturo-proxy.py ask_choices).
+DEVICES_NOTE = "Picking an iPhone, iPad or Mac lets Arturo make a pairing code for it in the next few minutes."
 
 # The words a tool result uses for each seat (arturo-proxy.py seat_seen).
 SEEN_WORDS = {

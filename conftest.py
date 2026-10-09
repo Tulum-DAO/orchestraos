@@ -90,3 +90,20 @@ def _guarded_connect(database, *a, **kw):
 def _refuse_the_live_db(monkeypatch):
     monkeypatch.setattr(_sqlite3, "connect", _guarded_connect)
     yield
+
+
+# --- this machine's tailscale is not a test fixture ------------------------------------------
+# scripts/public_url.py asks `tailscale serve status --json` for the address devices use. In a test
+# that would read whatever this host happens to serve (an operator's box answers differently from CI).
+# Default: tailscale finds nothing. A test about detection patches `detect` itself, or passes `run=`.
+@_pytest.fixture(autouse=True)
+def _no_host_tailscale(monkeypatch):
+    try:
+        from scripts import public_url as _pu
+    except Exception:  # noqa: BLE001 — a checkout without it has nothing to isolate
+        yield
+        return
+    real = _pu.detect
+    monkeypatch.setattr(_pu, "detect",
+                        lambda gateway_port, run=None, timeout=None: real(gateway_port, run=run) if run else [])
+    yield

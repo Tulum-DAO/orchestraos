@@ -13,6 +13,10 @@ dir = "/var/lib/orchestraos"
 # Host/port the local API gateway binds and listens on. required.
 host = "127.0.0.1"
 port = 8890
+# Optional: the https address your phone, iPad or Mac uses to reach this gateway, used by
+# `orchestra pair` and by Arturo's in-chat pairing. Leave it out and both find it themselves
+# from `tailscale serve` (docs/ONBOARDING.md step 4). Example: "https://box.tailnet.ts.net:8445"
+# public_url = ""
 
 [dashboard]
 # Host/port the web dashboard is served on (dashboard-proxy.js). required.

@@ -186,12 +186,12 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("POST", "/agent-interrupt"): "inject",
     ("POST", "/agent-suggest"): "inject",
 
-    # --- ptt: the relay voice path — AND IT REACHES A BRAIN THAT CAN ACT ---------------
-    # NOT "one turn of speech", despite the name. These routes reach the full Arturo brain WITH
-    # TOOLS (gm_command, spawn_agent), so `ptt` is closer to `inject` in reach than to `read` —
-    # the difference is that it arrives by voice instead of by keystroke. Granted to Shaw's own
-    # Quest on purpose (gm 2026-10-05, phone parity); never hand it out as a mild scope. See the
-    # paragraph at device_tokens.VERBS before granting it to anything.
+    # --- ptt: the relay voice path — a brain that can MESSAGE agents -------------------
+    # Since #278 these turns are non-fleet: the brain they reach can look things up and message
+    # agents (as Arturo, marked unverified), and nothing else (arturo-proxy.py _NON_FLEET_ALLOWED).
+    # Still not a mild scope: a later release may give a verified caller its tools back, which would
+    # put `ptt` close to `inject` again. Granted to Shaw's own Quest on purpose (gm 2026-10-05, phone
+    # parity). See the paragraph at device_tokens.VERBS before granting it to anything.
     # Split out of `voice` because `voice` was too coarse for a headset. It also reached the
     # FLEET-WIDE vendor and voice-id writes below, so a device granted `voice` just to speak
     # could switch what EVERY conversation on this box uses. Least privilege: a headset gets

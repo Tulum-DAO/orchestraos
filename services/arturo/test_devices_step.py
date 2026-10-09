@@ -73,7 +73,7 @@ def _answer_turn(P, cid):
         assert P.execute_tool("ask_choices", {"options": ["iPhone", "Mac"], "multi": True, "purpose": "devices"}).startswith("Card shown")
     finally:
         P._TEAM_TURN.reset(tok)
-    return P._begin_team_turn(cid, "onboarding", "fleet")
+    return P._begin_team_turn(cid, "onboarding", "fleet", "iPhone, Mac")     # their tap
 
 
 @pytest.mark.parametrize("tool,args", [

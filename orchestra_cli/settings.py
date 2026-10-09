@@ -269,6 +269,11 @@ def child_env(st: Settings, base: dict | None = None) -> dict:
         "ORCH_WAKE_COOLDOWN": str(st.data_dir / "state" / "wake-cooldown.json"),
         "BOUNDARY_DELIVER_ARMED": "1" if (st.beat_enabled and st.boundary_delivery_armed) else "0",
     })
+    # The https address devices use to reach the gateway ([gateway] public_url), for Arturo's in-chat
+    # pairing; the operator's own ORCHESTRA_PUBLIC_URL wins (scripts/public_url.py order).
+    public_url = str(_get(st.raw, "gateway", "public_url", "") or "").strip()
+    if public_url and not env.get("ORCHESTRA_PUBLIC_URL"):
+        env["ORCHESTRA_PUBLIC_URL"] = public_url
     venv_bin = st.venv_dir / "bin"
     if venv_bin.exists():
         env["PATH"] = str(venv_bin) + os.pathsep + env.get("PATH", "")

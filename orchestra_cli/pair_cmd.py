@@ -77,18 +77,28 @@ def run_pair(args, settings=None, store=None, out=print, clear_after_s=60):
 
     from scripts.pairing import PairingStore, pair_token
 
-    base_url = getattr(args, "base_url", None) or os.environ.get("ORCHESTRA_PUBLIC_URL") or ""
-    if not base_url:
-        out("I do not know this gateway's public address, so a phone could not reach it.")
-        out("Re-run with:  orchestra pair --base-url https://<host>:<port>")
+    # The same answer Arturo's pair_device uses (scripts/public_url.py): --base-url, then
+    # ORCHESTRA_PUBLIC_URL, then [gateway] public_url, then the address `tailscale serve` already
+    # serves the gateway on. The app refuses a token whose address is not https with a host, so an
+    # address that is not one never mints a code.
+    from scripts import public_url
+    if settings is None:
+        try:
+            from .settings import load_settings
+            settings = load_settings()
+        except Exception:  # noqa: BLE001 — no readable config: explicit/env/tailscale still work
+            settings = None
+    config_value = str((((getattr(settings, "raw", None) or {}).get("gateway") or {}).get("public_url")) or "")
+    gateway_port = getattr(settings, "gateway_port", None) or int(os.environ.get("ORCHESTRA_GATEWAY_PORT") or 8890)
+    found = public_url.resolve(explicit=getattr(args, "base_url", None), config_value=config_value,
+                               gateway_port=gateway_port)
+    if not found.url:
+        out(found.problem)
+        out("Or re-run with:  orchestra pair --base-url https://<host>:<port>")
         return 2
-    from scripts.pairing import valid_base_url
-    if not valid_base_url(base_url):
-        # The app refuses a token whose address is not https with a host, so minting one would
-        # print a code that cannot pair anything.
-        out(f"{base_url!r} is not an https address the app can reach.")
-        out("Re-run with:  orchestra pair --base-url https://<host>:<port>")
-        return 2
+    base_url = found.url
+    if found.source == "tailscale":
+        out(f"Using {base_url}, the address tailscale serves this gateway on.")
     # A pairing used to hand over the FLEET bearer, so every paired device held full gateway
     # power and any "this device cannot inject" rule was a promise the client made about itself.
     # It now mints a PER-DEVICE token with an explicit verb scope, which the gateway enforces.

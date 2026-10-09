@@ -76,8 +76,8 @@ def test_the_playbook_tells_the_brain_it_never_sees_a_code():
 
 
 # ---- ask_choices ---------------------------------------------------------------------------------
-def _turn(P, cid="web_c", step="onboarding", principal="fleet"):
-    return P._TEAM_TURN.set(P._begin_team_turn(cid, step, principal))
+def _turn(P, cid="web_c", step="onboarding", principal="fleet", text=None):
+    return P._TEAM_TURN.set(P._begin_team_turn(cid, step, principal, text))
 
 
 def test_a_card_records_cleaned_options_on_the_turn(P):
@@ -154,13 +154,13 @@ def test_finish_sets_the_flag_and_health_reports_it(P):
 # ---- pair_device / check_paired --------------------------------------------------------------------
 def _answer_devices(P, answer, cid="web_d", options=onb.DEVICES):
     """The operator's consent the way it really arrives: a devices card on an onboarding turn, then
-    their answer recorded on the very next turn."""
+    their tap (the picked labels, ", "-joined) as the very next turn's message."""
     tok = _turn(P, cid=cid)
     try:
         P.execute_tool("ask_choices", {"options": list(options), "multi": True, "purpose": "devices"})
     finally:
         P._TEAM_TURN.reset(tok)
-    tok = _turn(P, cid=cid)
+    tok = _turn(P, cid=cid, text=answer)
     try:
         return P.execute_tool("set_operator_fact", {"field": "devices", "value": answer})
     finally:
@@ -233,9 +233,28 @@ def test_only_a_pairable_device_on_record_pairs(P, pairing, device):
 
 
 def test_no_public_address_means_no_code(P, pairing, monkeypatch):
+    from scripts import public_url
     monkeypatch.delenv("ORCHESTRA_PUBLIC_URL")
+    monkeypatch.setattr(public_url, "detect", lambda port, run=None: [])          # tailscale serves nothing
     out, card = _pair(P)
-    assert out.startswith("NOT PAIRED") and "ORCHESTRA_PUBLIC_URL" in out and card is None
+    assert out.startswith("NOT PAIRED") and card is None
+    assert "tailscale serve --bg --https=8445 http://127.0.0.1:8890" in out and "orchestra pair" in out
+
+
+def test_a_default_install_pairs_on_the_address_tailscale_already_serves(P, pairing, monkeypatch, caplog):
+    # pm-tulumdao: nothing sets ORCHESTRA_PUBLIC_URL on a default install, so Arturo could never pair
+    from scripts import public_url
+    monkeypatch.delenv("ORCHESTRA_PUBLIC_URL")
+    monkeypatch.setenv("ORCHESTRA_GATEWAY_PORT", "8890")
+    seen = []
+    monkeypatch.setattr(public_url, "detect", lambda port, run=None: (seen.append(port), ["https://box.tn.ts.net:8445"])[1])
+    caplog.set_level(logging.INFO)
+    out, card = _pair(P)
+    assert out.startswith("A pairing code") and seen == [8890]
+    assert "PAIR URL: from tailscale" in caplog.text                     # which source won is logged
+    import base64
+    raw = json.loads(base64.urlsafe_b64decode(card["code"][5:] + "=" * (-len(card["code"][5:]) % 4)))
+    assert raw["base_url"] == "https://box.tn.ts.net:8445"
 
 
 def test_a_new_code_revokes_only_arturos_previous_one_for_that_device(P, pairing):
