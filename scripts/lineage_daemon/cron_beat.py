@@ -48,7 +48,7 @@ STATE_PATH = os.path.join(ORCHESTRA_DIR, "state", "fleet-beat-state.json")
 LOCK_PATH = os.path.join(ORCHESTRA_DIR, "state", "fleet-beat.lock")
 LOG_PATH = os.path.join(ORCHESTRA_DIR, "logs", "fleet-beat.log")
 
-ARMED_TIERS = frozenset({"T2"})       # wave-1: T2 only (T0/T1 observe-only)
+ARMED_TIERS = frozenset({"T2"})       # wave-1: T2, and T1 WORKERS (fleet._armed); PMs/T0 observe-only
 SOFT_ONLY = False                      # ARMED (the operator-directed 2026-08-26) — per-lineage
                                        # arm gate scopes hard_rotate to ~/runtime/
                                        # self_retire_armed (pm-acme only); every other

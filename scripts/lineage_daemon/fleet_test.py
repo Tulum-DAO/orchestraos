@@ -788,3 +788,29 @@ def test_c3_reset_at_promote_fires_on_mechanical_fleet_rotation(tmp_path):
     assert out["history"]["handoff_baseline"]["t2-hot"] == "shaCONSUMED:hashCONSUMED", (
         "C3 reset must fire on a mechanical promote (gated on 'promoted'), setting "
         "the baseline to the CONSUMED predecessor rev")
+
+
+# --- DEC-1791574633518521: tier is position; a T1 WORKER keeps the T2 rotation ---------------
+
+REG_ROLES = {"agents": {
+    "helper-hot": {"generation": 1, "tier": "T1", "role": "worker", "lineage_root": "helper-hot"},
+    "pm-hot": {"generation": 1, "tier": "T1", "role": "pm", "lineage_root": "pm-hot"},
+    "t1-hot": {"generation": 1, "tier": "T1", "lineage_root": "t1-hot"},       # pre-role: reads pm
+    "t2-hot": {"generation": 1, "tier": "T2", "lineage_root": "t2-hot"},
+}}
+
+
+def test_a_parentless_helper_T1_worker_is_armed_with_T2_and_a_pm_is_not():
+    agents = [_agent(a, 95, REG_ROLES["agents"][a]["tier"]) for a in REG_ROLES["agents"]]
+    out = fleet.plan_fleet(agents, REG_ROLES, now=0, armed_tiers={"T2"}, armed_lineages=ARMED_ANY,
+                           executors_impl=FakeExecutors(), safety_fn=SAFE, approval_fn=APPROVE,
+                           confirm_fn=lambda c, s: {"outcome": "confirmed"})
+    armed = {b["agent_id"]: b["armed"] for b in out["beats"]}
+    assert armed == {"helper-hot": True, "pm-hot": False, "t1-hot": False, "t2-hot": True}
+    cohort = {c["agent_id"] for c in fleet.armed_cohort(agents, REG_ROLES, {"T2"})}
+    assert cohort == {"helper-hot", "t2-hot"}
+
+
+def test_with_nothing_armed_a_T1_worker_is_not_armed_either():
+    assert fleet._armed(_agent("helper-hot", 95, "T1"), REG_ROLES, frozenset()) is False
+    assert fleet._armed(_agent("helper-hot", 95, "T1"), REG_ROLES, {"T1"}) is True

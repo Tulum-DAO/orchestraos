@@ -305,3 +305,20 @@ def test_respawn_of_retired_canonical_carries_a_supplied_session_id(orch):
     assert row["session_id"] == sid, "resumed seat must carry the known sid on its canonical generation"
     reg = json.loads((orch / "registry.json").read_text())["agents"]["task-y"]
     assert reg.get("session_id") == sid and reg.get("generation") == 2
+
+
+def test_new_agent_carries_its_parent_and_role_into_the_store_and_projection(orch):
+    """DEC-1791574633518521: the tier rule's reports_to lands on the lineage row and role in the
+    agent document; both are served by the projected flat registry the spawn reads next."""
+    r = _run(orch, ["helper-x", "--runtime", "claude", "--model", "claude-opus-4-8[1m]",
+                    "--tier", "T2", "--reports-to", "lead-x", "--role", "worker", "--cwd", "/x"])
+    assert r.returncode == 0, r.stderr
+    assert _rows(orch, "helper-x")["lineage"]["reports_to"] == "lead-x"
+    row = json.loads((orch / "registry.json").read_text())["agents"]["helper-x"]
+    assert row.get("reports_to") == "lead-x" and row.get("role") == "worker"
+    r = _run(orch, ["lead-y", "--runtime", "claude", "--model", "claude-opus-4-8[1m]",
+                    "--tier", "T1", "--reports-to", "", "--role", "pm", "--cwd", "/x"])
+    assert r.returncode == 0, r.stderr
+    assert _rows(orch, "lead-y")["lineage"]["reports_to"] is None
+    row = json.loads((orch / "registry.json").read_text())["agents"]["lead-y"]
+    assert "reports_to" not in row and row.get("role") == "pm"

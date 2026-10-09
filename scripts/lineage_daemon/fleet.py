@@ -28,6 +28,7 @@ from scripts.lineage_daemon.collect import beat_skip_reason, runtime_gated
 from scripts.lineage_daemon.ctxstate import context_pct
 from scripts.lineage_daemon import hold_ledger as _hledger
 from scripts.lineage_daemon import complete as _complete
+from scripts.tier_rule import role_of
 
 # The observe/armed disposition for one agent, before any action.
 OBSERVE_TIER = "observe:tier-not-armed"     # T0/T1 in wave 1 (or any non-armed tier)
@@ -253,6 +254,20 @@ def _tier_class(agent, registry):
     return entry.get("tier", "T2")
 
 
+def _armed(agent, registry, armed_tiers) -> bool:
+    """Is this agent in the armed wave? Its tier is in armed_tiers, OR T2 is armed and it is a T1
+    WORKER (DEC-1791574633518521, gm ruling): tier is hierarchy position now, so a parentless helper
+    that used to register as a T2 registers as a T1, and it keeps the rotation it had. A T1 whose
+    role_of is pm (including every T1 from before roles existed) stays unarmed, exactly as before."""
+    tier = _tier_class(agent, registry)
+    if tier in armed_tiers:
+        return True
+    if "T2" in armed_tiers and str(tier).upper() == "T1":
+        entry = (registry or {}).get("agents", {}).get(agent.get("agent_id"), {}) or {}
+        return role_of({**entry, "tier": tier, "role": agent.get("role", entry.get("role"))}) == "worker"
+    return False
+
+
 def plan_fleet(agents, registry, *, armed_tiers=frozenset(), now,
                locks=None, ledger=None, history=None, beat_fn=None,
                exclude=DEFAULT_EXCLUDE, max_rotations=MAX_ROTATIONS_PER_BEAT,
@@ -334,7 +349,7 @@ def plan_fleet(agents, registry, *, armed_tiers=frozenset(), now,
         aid = agent.get("agent_id")
         tier = _tier_class(agent, registry)
         summary["total"] += 1
-        armed_this = tier in armed_tiers
+        armed_this = _armed(agent, registry, armed_tiers)
         # Runtime gate FIRST (operator ruling 2026-09-17: blue-green default ON for Claude;
         # Gemini/Codex experimental, never armed unless [rotation] experimental_runtimes
         # opts in). Applied before actionability so an experimental seat is logged as
@@ -583,7 +598,7 @@ def armed_cohort(agents, registry, armed_tiers, *, exclude=DEFAULT_EXCLUDE,
     out = []
     for agent in agents:
         aid = agent.get("agent_id")
-        if _tier_class(agent, registry) not in armed_tiers:
+        if not _armed(agent, registry, armed_tiers):
             continue
         if aid in exclude or _has_open_hold(ledger, aid):
             continue

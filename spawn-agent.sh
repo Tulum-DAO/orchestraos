@@ -398,7 +398,7 @@ spawn_agent() {
 
     # Read agent config — auto-register unknown agents instead of failing.
     # Unregistered agents were invisible to recovery/reincarnation (12 of 18 live
-    # sessions weren't in the registry). Defaults: T2, vps, cwd from $AGENT_CWD
+    # sessions weren't in the registry). Defaults: tier by position (tier_rule), vps, cwd from $AGENT_CWD
     # or orchestra dir, not always_on.
     local tmux_name tier cwd prompt_file name machine memory_scope
     if ! tmux_name=$(get_agent_field "$agent_id" "tmux_session"); then
@@ -412,13 +412,32 @@ spawn_agent() {
         # flocks — memory reference_registry_write_protocol). runtime comes from
         # AGENT_RUNTIME, or AGENT_MODEL is derived by the writer; with NEITHER the
         # writer refuses and we abort rather than seat a guessed-claude row.
-        local -a ar_fields=( --field "name=$agent_id" --field "tier=T2"
+        # Tier is hierarchy position (scripts/tier_rule.py, DEC-1791574633518521): no parent or a T0
+        # parent -> T1; any other parent -> its T2. role (pm | worker) says what the seat does, and
+        # is what the PM briefing and auto-retire key on. An unknown parent refuses the spawn.
+        local parent_known=0 parent_tier="" decision new_tier new_reports_to new_role new_warning
+        if [[ -n "$parent_id" && "$parent_id" != "$agent_id" ]] \
+              && parent_tier=$(get_agent_field "$parent_id" "tier" 2>/dev/null); then
+            parent_known=1
+        fi
+        if ! decision=$(python3 "$SCRIPT_DIR/scripts/tier_rule.py" decide "$agent_id" --fields \
+                --parent "$parent_id" --parent-known "$parent_known" --parent-tier "$parent_tier" \
+                --requested "${AGENT_TIER:-}" --role "${AGENT_ROLE:-}" 2>&1); then
+            err "$agent_id: spawn REFUSED — $decision"
+            exit 3
+        fi
+        IFS=$'\x1f' read -r new_tier new_reports_to new_role new_warning <<< "$decision"
+        [[ -n "$new_warning" ]] && warn "$new_warning"
+        log "  Registering as $new_tier${new_reports_to:+ under $new_reports_to} (role $new_role)"
+        local -a ar_fields=( --field "name=$agent_id" --field "tier=$new_tier"
+            --field "role=$new_role"
             --field "machine=vps" --field "cwd=$reg_cwd"
             --field "tmux_session=$agent_id" --field "system_prompt="
             --field "always_on=false"
             --field "auto_registered=$(date -u +%Y-%m-%dT%H:%M:%SZ)" )
         [[ -n "${AGENT_RUNTIME:-}" ]] && ar_fields+=( --field "runtime=$AGENT_RUNTIME" )
         [[ -n "${AGENT_MODEL:-}" ]] && ar_fields+=( --field "model=$AGENT_MODEL" )
+        [[ -n "$new_reports_to" ]] && ar_fields+=( --field "reports_to=$new_reports_to" )
         # Under the identity-store cutover the generic registry CLI REFUSES to
         # establish a NEW identity (CutoverRefused, by design) — which left this
         # path with no legitimate new-agent route and grew the raw-tmux-spawn
@@ -431,7 +450,8 @@ spawn_agent() {
             if ! ORCHESTRA_DIR="$ORCHESTRA_DIR" python3 \
                     "$SCRIPT_DIR/scripts/identity_store/spawn_adopt.py" \
                     "$agent_id" --runtime "${AGENT_RUNTIME:-}" \
-                    --model "${AGENT_MODEL:-}" --tier "T2" \
+                    --model "${AGENT_MODEL:-}" --tier "$new_tier" --role "$new_role" \
+                    --reports-to "$new_reports_to" \
                     --cwd "$reg_cwd" --machine "vps" >/dev/null; then
                 err "$agent_id: auto-register REFUSED under cutover — a new agent"
                 err "  needs a COMPLETE identity (set AGENT_RUNTIME=claude|gemini"
@@ -575,7 +595,13 @@ spawn_agent() {
 
     # PM Startup Ritual — inject full briefing for T1 PMs
     local pm_briefing=""
-    if [[ "$tier" == "T1" && -x "$SCRIPT_DIR/pm-startup.sh" ]]; then
+    # The PM briefing keys on ROLE, not tier: a parentless helper is T1 by position but not a PM.
+    # A row from before roles existed reads as a PM exactly when it is a T1 (tier_rule.role_of).
+    local seat_role
+    seat_role=$(get_agent_field "$agent_id" "role" 2>/dev/null || true)
+    seat_role=$(python3 "$SCRIPT_DIR/scripts/tier_rule.py" role --role "$seat_role" --tier "$tier" 2>/dev/null \
+        || echo worker)
+    if [[ "$seat_role" == "pm" && -x "$SCRIPT_DIR/pm-startup.sh" ]]; then
         log "Running PM startup ritual for $agent_id..."
         pm_briefing=$("$SCRIPT_DIR/pm-startup.sh" "$agent_id" 2>/dev/null || true)
     fi

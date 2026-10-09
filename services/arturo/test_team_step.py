@@ -57,6 +57,17 @@ def test_state_present_when_gm_pm_and_worker_are_all_running(P, tmp_path, monkey
     assert st["project"] == "website"
 
 
+def test_a_parentless_helper_gm_spawned_is_not_taken_for_the_project_manager(P, tmp_path, monkeypatch):
+    """DEC-1791574633518521: tier is position, so a helper gm spawned is a T1 under gm too. The PM
+    is the seat whose ROLE is pm; "aaa-helper" sorts first and must not be picked."""
+    agents = dict(STARTER, **{"aaa-helper": {"tier": "T1", "reports_to": "gm", "role": "worker"}})
+    agents["pm-website"] = dict(agents["pm-website"], role="pm")
+    monkeypatch.setattr(P, "ORCHESTRA_DIR", _registry(tmp_path, agents))
+    st = P.starter_team_state(seen=lambda n: "running")
+    assert [s["name"] for s in st["seats"]] == ["gm", "pm-website", "dev-website"]
+    assert st["state"] == "present" and st["project"] == "website"
+
+
 def test_a_session_with_no_agent_in_it_makes_the_team_incomplete(P, tmp_path, monkeypatch):
     # finding #10: gm's tmux session existed, with a tmux client in it instead of claude
     monkeypatch.setattr(P, "ORCHESTRA_DIR", _registry(tmp_path, STARTER))

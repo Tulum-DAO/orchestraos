@@ -91,6 +91,7 @@ _scripts_dbc = _os_dbc.path.join(
 if _scripts_dbc not in _sys.path:
     _sys.path.insert(0, _scripts_dbc)
 import db_connect
+from tier_rule import role_of
 
 # VOICE_CALLS_DIR is env-overridable (gm): tests/verification MUST point at a SCRATCH dir via
 # ARTURO_VOICE_CALLS_DIR so they never write the LIVE state/voice-calls/ the app panel reads.
@@ -2031,8 +2032,10 @@ def starter_team_state(seen=None):
     project = None
     if managers:
         seats.append({"name": "gm", "tier": "T0"})
+        # The project's manager is the seat whose ROLE is pm under gm (scripts/tier_rule.role_of), not
+        # any T1 under gm: tier is position now, so a parentless helper gm spawned is a T1 too.
         pms = sorted(n for n, r in agents.items()
-                     if str((r or {}).get("tier") or "").upper() == "T1" and (r or {}).get("reports_to") == "gm")
+                     if role_of(r) == "pm" and (r or {}).get("reports_to") == "gm")
         if pms:
             pm = pms[0]
             seats.append({"name": pm, "tier": "T1"})

@@ -41,11 +41,39 @@ def _registry(st: S.Settings) -> tuple[Path, dict]:
     return p, data
 
 
+def _tier_rule(st: S.Settings):
+    scripts = str(st.repo_root / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import tier_rule
+    return tier_rule
+
+
 def register_seat(st: S.Settings, seat: str, *, gm: bool, runtime: str | None, model: str | None,
-                  tier: str | None, prompt: str | None, cwd: str | None = None) -> dict:
-    """Idempotent: an existing row is kept verbatim (only missing fields are filled)."""
+                  tier: str | None, prompt: str | None, cwd: str | None = None,
+                  parent: str | None = None, role: str | None = None) -> dict:
+    """Idempotent: an existing row is kept verbatim (only missing fields are filled).
+
+    A NEW non-gm seat gets its tier from its position (scripts/tier_rule.py): no parent or a T0
+    parent -> T1, any other parent -> that parent's T2 (with reports_to), and a role (pm | worker,
+    default worker). Raises tier_rule.TierRefused for an unregistered parent or a T2 request with no
+    non-T0 parent; nothing is written then."""
     p, reg = _registry(st)
-    row = dict(reg["agents"].get(seat) or {})
+    existing = reg["agents"].get(seat)
+    row = dict(existing or {})
+    if existing is None and not gm:
+        T = _tier_rule(st)
+        prow = reg["agents"].get(parent) if parent else None
+        tier, reports_to, warning = T.tier_for(seat, parent, prow is not None,
+                                               (prow or {}).get("tier"), tier)
+        if warning:
+            print(f"warning: {warning}", file=sys.stderr)
+        if reports_to:
+            row["reports_to"] = reports_to
+        role = (role or "worker").strip().lower()
+        if role not in T.ROLES:
+            raise T.TierRefused(f"{seat}: unknown role '{role}' (one of {', '.join(T.ROLES)})")
+        row["role"] = role
     runtime = runtime or row.get("runtime") or (st.runtimes_enabled or ["claude"])[0]
     default_prompt = "prompts/gm.md" if gm else f"prompts/{seat}.md"
     row.setdefault("name", seat)
@@ -53,7 +81,8 @@ def register_seat(st: S.Settings, seat: str, *, gm: bool, runtime: str | None, m
     if model:
         row["model"] = model
     row.setdefault("model", DEFAULT_MODEL.get(row["runtime"], ""))
-    # T0 = the always-on manager seat, T1 = coordinators, T2 = workers (docs/REFERENCE_INSTALL.md).
+    # T0 = the always-on manager seat; below it tier is POSITION (T1 = reports to a T0 or to no one,
+    # T2 = reports to a lead), and role says who runs the PM briefing (docs/REFERENCE_INSTALL.md).
     row.setdefault("tier", tier or ("T0" if gm else "T2"))
     row.setdefault("machine", "local")
     row.setdefault("cwd", cwd or str(st.repo_root))
@@ -133,7 +162,11 @@ def cmd_spawn(ns) -> int:
     if refused is not None:
         return refused
     seat = ns.seat
-    row = register_seat(st, seat, gm=ns.gm, runtime=ns.runtime, model=ns.model, tier=ns.tier, prompt=ns.prompt)
+    try:
+        row = register_seat(st, seat, gm=ns.gm, runtime=ns.runtime, model=ns.model, tier=ns.tier,
+                            prompt=ns.prompt, parent=getattr(ns, "parent", None), role=getattr(ns, "role", None))
+    except ValueError as e:      # tier_rule.TierRefused
+        print(f"spawn refused: {e}", file=sys.stderr); return 2
     prompt_path = st.repo_root / row["system_prompt"]
     if not prompt_path.exists():
         print(f"warning: no role prompt at {prompt_path}; the seat boots on the foundation prompt only", file=sys.stderr)
@@ -239,8 +272,12 @@ def cmd_agent_create(ns) -> int:
     refused = _refuse_if_no_runtime_authed(st)
     if refused is not None:
         return refused
-    row = register_seat(st, name, gm=False, runtime=runtime, model=ns.model, tier=ns.tier, prompt=prompt_rel,
-                        cwd=getattr(ns, "cwd", None))
+    role = getattr(ns, "role", None) or ("pm" if ns.template == "pm" else None)
+    try:
+        row = register_seat(st, name, gm=False, runtime=runtime, model=ns.model, tier=ns.tier, prompt=prompt_rel,
+                            cwd=getattr(ns, "cwd", None), parent=ns.parent, role=role)
+    except ValueError as e:      # tier_rule.TierRefused
+        print(f"agent create refused: {e}", file=sys.stderr); return 2
     if ns.parent and row.get("reports_to") != ns.parent:
         p, reg = _registry(st); reg["agents"][name]["reports_to"] = ns.parent; row["reports_to"] = ns.parent
         tmp = p.with_suffix(".json.tmp"); tmp.write_text(json.dumps(reg, indent=2) + "\n"); os.replace(tmp, p)
