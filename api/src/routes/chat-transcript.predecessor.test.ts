@@ -45,6 +45,10 @@ function store() {
   db.prepare("INSERT INTO generations (id, root, generation, session_id, promoted_at) VALUES (3, 'zz-other-seat', 1, ?, 'c')").run(OTHER);
   db.prepare("INSERT INTO canonical VALUES (?, 2, ?, 'online')").run(SEAT, SEAT);
   db.prepare("INSERT INTO canonical VALUES ('zz-other-seat', 3, 'zz-other-seat', 'online')").run();
+  // a service pane (a proxy, a router): a lineage with a canonical row whose generation has no session
+  db.prepare('INSERT INTO lineages (root, cwd) VALUES (?, ?)').run('zz-service', '/repo');
+  db.prepare("INSERT INTO generations (id, root, generation, session_id, promoted_at) VALUES (4, 'zz-service', 1, NULL, 'd')").run();
+  db.prepare("INSERT INTO canonical VALUES ('zz-service', 4, 'zz-service', 'online')").run();
   db.close();
 }
 store();
@@ -97,4 +101,10 @@ test('the fallback never picks a subagent sidechain or a session the store does 
   writeFileSync(join(orch, 'state', 'agents', `${SEAT}.json`), JSON.stringify({}));
   writeFileSync(join(orch, 'state', 'agent-sessions.json'), JSON.stringify({ [SEAT]: { cwd: '/repo' } }));
   assert.equal(resolveTranscriptPath(SEAT).sid, CUR);
+});
+
+test('a lineage the store knows with no session yet (a service pane) never takes someone else\'s newest file', () => {
+  transcript('99999999-2222-4333-8444-00000000000a', 0);     // a headless job the store does not know, newest
+  writeFileSync(join(orch, 'state', 'agent-sessions.json'), JSON.stringify({ 'zz-service': { cwd: '/repo' } }));
+  assert.equal(resolveTranscriptPath('zz-service').path, null);
 });

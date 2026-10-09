@@ -346,7 +346,8 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
   // The id becomes state/agents/<id>.json and a tmux target. A raw one read any .json for its
   // session_id. Safe ids only; no registry check, so a scratch tmux seat still resolves.
   if (!isSafeAgentId(agentId)) return { path: null, sid: null };
-  const owners = sessionOwners(ORCH_DIR);          // one read of the store for this resolve
+  const store = sessionOwners(ORCH_DIR);           // one read of the store for this resolve
+  const owners = store?.sessions ?? null;
   const ok = (sid: string | null | undefined) => sessionIsThisSeats(agentId, sid, owners);
   const sessions = loadAgentSessions();
   const e = sessions[agentId] || {};
@@ -433,10 +434,11 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
   if (pdir && existsSync(pdir)) {
     try {
       // A project dir is shared by every seat with that cwd, so its newest file can be anyone's.
-      // A seat the store knows takes only its OWN lineage's sessions here; any other seat keeps
-      // the old rule minus sessions the store gives to someone else. Subagent sidechains
-      // (agent-*.jsonl) are never a seat's chat. Lazy: stops at the first acceptable file.
-      const known = !!owners && [...owners.values()].some((o) => lineageOf(o.root) === lineageOf(agentId));
+      // A seat the store knows (its lineage has a canonical row, even with no session yet: a service
+      // pane) takes only its OWN lineage's sessions here; any other seat keeps the old rule minus
+      // sessions the store gives to someone else. Subagent sidechains (agent-*.jsonl) are never a
+      // seat's chat. Lazy: stops at the first acceptable file.
+      const known = !!store && [...store.roots].some((r) => lineageOf(r) === lineageOf(agentId));
       const js = readdirSync(pdir)
         .filter((f) => f.endsWith('.jsonl') && !f.startsWith('agent-'))
         .map((f) => ({ f, m: statSync(join(pdir!, f)).mtimeMs }))
