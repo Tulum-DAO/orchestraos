@@ -634,3 +634,27 @@ def test_doctor_calls_a_half_filled_node_modules_not_installed(tmp_path):
     assert I._deps_installed(root / "api") is False
     I._stamp_deps(root / "api")
     assert I._deps_installed(root / "api") is True
+
+
+def test_init_counts_a_refused_hook_install_as_failed(tmp_path, monkeypatch):
+    # #323 review: the installer's refusals ("refusing ...", "... left untouched") never said "failed", so
+    # `orchestra init` exited 0 with the hooks not installed.
+    root = _hooks_repo(tmp_path)
+    cfg = tmp_path / "claude-cfg"
+    cfg.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    (cfg / "settings.json").write_text("{not json")
+    report = I.run_init(root, data_dir=tmp_path / "data", run=Runner(), skip_npm=True, skip_venv=True, yes=True)
+    hooks = {r.step: r for r in report}["hooks"]
+    assert not hooks.did and hooks.detail.startswith("failed: ") and "left untouched" in hooks.detail
+    assert I.failed_steps(report) == [hooks]
+    assert (cfg / "settings.json").read_text() == "{not json"
+
+
+def test_init_does_not_count_a_skipped_or_declined_hook_step_as_failed(tmp_path, monkeypatch):
+    root = _hooks_repo(tmp_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-cfg"))
+    report = I.run_init(root, data_dir=tmp_path / "data", run=Runner(), skip_npm=True, skip_venv=True,
+                        confirm=lambda _p: False)
+    assert "declined" in {r.step: r for r in report}["hooks"].detail
+    assert I.failed_steps(report) == []

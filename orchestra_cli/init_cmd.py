@@ -25,6 +25,12 @@ class Step:
     detail: str
 
 
+def failed_steps(report):
+    """The steps that make `orchestra init` exit 1. A step that did nothing on purpose (skipped, declined,
+    present) is not one; an installer refusal or error is, and its detail says "failed"."""
+    return [r for r in report if not r.did and "failed" in r.detail]
+
+
 def default_run(argv, cwd=None, env=None) -> int:
     return subprocess.run(list(argv), cwd=cwd, env=env, check=False).returncode
 
@@ -540,7 +546,7 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
             settings_path = Path(os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude"))) / "settings.json"
             plan = _hooks.plan(settings_path=settings_path, repo_root=repo_root, data_dir=data_dir)
             if plan.get("error"):
-                report.append(Step("hooks", False, plan["error"]))
+                report.append(Step("hooks", False, f"failed: {plan['error']}"))
             else:
                 # The operator's Claude settings are shared with every other Claude session on the
                 # host: show exactly what will be written and ask (or --yes). 2026-09-17: an init
@@ -562,7 +568,7 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
                 else:
                     rep = _hooks.install(settings_path=settings_path, repo_root=repo_root, data_dir=data_dir)
                     if rep.get("error"):
-                        report.append(Step("hooks", False, rep["error"]))
+                        report.append(Step("hooks", False, f"failed: {rep['error']}"))
                     else:
                         report.append(Step("hooks", True, f"{rep['installed']} hook rows -> {settings_path} (replaced {rep['removed']} previous)"))
         except Exception as e:  # noqa: BLE001
