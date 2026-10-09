@@ -22,16 +22,6 @@ export const TASK_STATUS_GROUPS: Record<string, string[]> = {
   Failed: ['failed', 'error'],
 };
 
-export const VOICE_AGENTS: Record<string, { label: string; description: string }> = {
-  gm: { label: 'Jarvis', description: 'Full visibility across all projects, clients, and infrastructure' },
-  'pm-products': { label: 'Products PM', description: 'Your internal products and tools' },
-  'pm-clients': { label: 'Clients PM', description: 'Your client projects (e.g. Acme, Northwind)' },
-  'pm-infra': { label: 'Infra PM', description: 'Agent Orchestra, Dashboard, VPS Operations' },
-  // The next-gen co-worker POC (isolated soak): write-tools gated in shadow + confirm,
-  // reachable by voice via the isolated :5070 bridge. Distinct from live Jarvis (gm).
-  'jarvis-poc': { label: 'Jarvis · Co-Worker (POC · soak)', description: 'Next-gen co-worker — answers + proposes real work (writes shadow + confirm). Isolated soak.' },
-};
-
 // A soak/POC voice card whose ElevenLabs agent isn't wired yet carries this
 // placeholder agent_id — the card renders but its call button is disabled until
 // the operator sets the real agent_id in state/voice-agents.json.

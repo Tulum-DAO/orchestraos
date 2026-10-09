@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ConversationProvider, useConversation } from '@elevenlabs/react';
 import { Mic, MicOff, PhoneOff, Volume2, Minimize2 } from 'lucide-react';
 import { clsx } from 'clsx';
-import { VOICE_AGENTS } from '../lib/constants';
 
 interface Props {
   pmId: string;
@@ -17,7 +16,6 @@ function VoiceCallInner({ pmId, agentId, onClose }: Props) {
   const [muted, setMuted] = useState(false);
   const audioStreamRef = useRef<MediaStream | null>(null);
   const closedRef = useRef(false);
-  const meta = VOICE_AGENTS[pmId];
 
   const conversation = useConversation({
     onConnect: () => console.log('[VoiceCall] Connected to', pmId),
@@ -110,7 +108,7 @@ function VoiceCallInner({ pmId, agentId, onClose }: Props) {
 
         {/* Info pill */}
         <div className="bg-neutral-900 border border-neutral-700 rounded-full px-3 py-1.5 flex items-center gap-2 shadow-xl">
-          <span className="text-xs text-neutral-300 font-medium">{meta?.label || pmId}</span>
+          <span className="text-xs text-neutral-300 font-medium">{pmId}</span>
           <span className="text-xs text-neutral-500">{formatDuration(callDuration)}</span>
           <button onClick={toggleMute} className={clsx('ml-1', muted ? 'text-amber-400 hover:text-amber-300' : 'text-neutral-500 hover:text-neutral-300')}>
             {muted ? <MicOff size={14} /> : <Mic size={14} />}
@@ -130,7 +128,7 @@ function VoiceCallInner({ pmId, agentId, onClose }: Props) {
       <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-800">
         <div className="flex items-center gap-2">
           <span className={clsx('w-2 h-2 rounded-full', isConnected ? 'bg-green-500' : 'bg-amber-500 animate-pulse')} />
-          <span className="text-sm font-medium">{meta?.label || pmId}</span>
+          <span className="text-sm font-medium">{pmId}</span>
         </div>
         <div className="flex items-center gap-1">
           <button onClick={() => setMinimized(true)} className="p-1 text-neutral-500 hover:text-neutral-300">
