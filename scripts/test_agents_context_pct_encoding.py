@@ -68,3 +68,34 @@ def test_agent_screen_sends_the_pair_as_int_or_null(monkeypatch, tmp_path):
     body = json.loads(resp.body)
     assert body["context_pct"] == ""
     assert (body["context_pct_of_window"], body["context_pct_of_budget"]) == (39, None)
+
+
+def test_agent_screen_names_the_provider_like_agents_does(monkeypatch, tmp_path):
+    """The conversation screen colours a seat by its CLI. /agents has sent `provider` since the
+    detector learnt the runtime; /agent-screen did not, so a codex seat lost its colour there."""
+    import asyncio
+    import json
+
+    runtime = {"seat": "codex"}
+
+    class _AS:
+        def get_agent_status(self, session):
+            proc = {"runtime": runtime[session]} if runtime[session] else {}
+            return {"state": "idle", "context_pct": "", "process": proc}
+
+    class _Req:
+        headers = {"Authorization": "Bearer fleet-tok", "User-Agent": "OrchestraOS/271 CFNetwork Darwin iOS"}
+        query = {"session": "seat"}
+        match_info = {}
+
+    monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path))
+    monkeypatch.setattr(G, "ORCH_DIR", tmp_path)
+    monkeypatch.setattr(G, "gateway_token", lambda: "fleet-tok")
+    monkeypatch.setattr(G, "_agent_status", lambda: _AS())
+    monkeypatch.setattr(G, "_tmux_session_names", lambda: ["seat"])
+    monkeypatch.setattr(G, "_capture_pane", lambda *a, **k: "")
+    body = json.loads(asyncio.run(G.handle_agent_screen(_Req())).body)
+    assert body["provider"] == "codex"
+    runtime["seat"] = None              # no agent process found: null, as on /agents
+    body = json.loads(asyncio.run(G.handle_agent_screen(_Req())).body)
+    assert body["provider"] is None
