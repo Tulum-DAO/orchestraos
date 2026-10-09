@@ -231,6 +231,8 @@ def _parse_iso_epoch(v):
 
 def _run_tailscale_status(cmd, timeout):
     import subprocess
+    if os.environ.get("APPROVAL_NOTIFY_NO_TAILSCALE") == "1":     # test runs (scripts/conftest.py)
+        raise FileNotFoundError("tailscale disabled by APPROVAL_NOTIFY_NO_TAILSCALE")
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
 
