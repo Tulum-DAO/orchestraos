@@ -2,9 +2,9 @@
  * ChatInput — the floating pill composer: attach (+), text, inject/inbox toggle, caller slots
  * (model, voice) and a round send button that becomes Stop while the seat is mid-turn.
  */
-import { useState, useRef, useLayoutEffect, type ReactNode } from 'react';
+import { useState, useRef, useLayoutEffect, useEffect, useId, type ReactNode } from 'react';
 import { clsx } from 'clsx';
-import { ArrowUp, Square, Loader2, Plus, Paperclip, X, ClipboardList } from 'lucide-react';
+import { ArrowUp, Square, Loader2, Plus, Paperclip, X, ClipboardList, MoreHorizontal, Check } from 'lucide-react';
 import { injectAgentVerified, type InjectResult } from '../../lib/api';
 import { sendToAgent, isDelivered, isQueued, isHeld, describeSendState } from '../../lib/agentSend';
 import { sendPanelHeadline, shouldSendPhoto, clearsComposer, retryText, canForceRetry, composerKeyAction } from '../../lib/composerGate';
@@ -62,6 +62,10 @@ interface Props {
   /** May Stop be offered right now? The caller decides with composerGate.canStopTurn (mid-turn
    *  AND no pending menu): Stop presses Esc, and Esc at a prompt ANSWERS it (#334). */
   canStop?: boolean;
+  /** Extra rows for the narrow-phone overflow menu (below 480px the delivery mode and the
+   *  caller's secondary controls fold into one "more" button so the text gets the row).
+   *  `close` dismisses the menu. Callers that pass nothing still get the delivery-mode rows. */
+  menuItems?: (close: () => void) => ReactNode;
   /** Interrupt the agent's turn (the same Esc key the Dev-mode ActionBar sends). Absent = no Stop. */
   onStop?: () => Promise<unknown> | void;
 }
@@ -75,7 +79,7 @@ async function uploadImage(file: File): Promise<string> {
   return data.path;
 }
 
-export default function ChatInput({ agentId, disabled, placeholder, attachSupported = true, draft, onDraftChange, onSend, leading, trailing, canStop, onStop }: Props) {
+export default function ChatInput({ agentId, disabled, placeholder, attachSupported = true, draft, onDraftChange, onSend, leading, trailing, canStop, onStop, menuItems }: Props) {
   const [internalText, setInternalText] = useState('');
   // Single accessor pair every read/clear/paste/send path goes through, so
   // there is exactly one send path regardless of controlled vs internal
@@ -364,9 +368,9 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     logAction('chat.stop', agentId, '');
     try {
       await onStop();
-    } catch (err: any) {
+    } catch (err: unknown) {
       setResultOk(false);
-      setResult('Stop failed: ' + (err?.message || 'unknown'));
+      setResult('Stop failed: ' + ((err instanceof Error && err.message) || 'unknown'));
     } finally {
       stoppingRef.current = false;
       setStopping(false);
@@ -386,6 +390,50 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
 
   const heldChips = pastes.filter((p) => text.includes(pasteToken(p)));
   const roundBtn = 'shrink-0 h-9 w-9 rounded-full flex items-center justify-center transition-colors';
+
+  // The narrow-phone overflow menu. Closes on an outside press or Esc; Esc here never reaches
+  // the textarea's stop path, because focus is on the menu while it is open.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const deliveryLabelId = useId();
+  const closeMenu = () => setMenuOpen(false);
+  const menuItemsEls = () =>
+    Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]') ?? []);
+  // Arrow keys / Home / End move between the rows (WAI-ARIA menu pattern).
+  const onMenuKeyDown = (e: React.KeyboardEvent) => {
+    const items = menuItemsEls();
+    if (!items.length) return;
+    const i = items.indexOf(document.activeElement as HTMLElement);
+    const go = (n: number) => { e.preventDefault(); items[(n + items.length) % items.length].focus(); };
+    if (e.key === 'ArrowDown') go(i + 1);
+    else if (e.key === 'ArrowUp') go(i - 1);
+    else if (e.key === 'Home') go(0);
+    else if (e.key === 'End') go(items.length - 1);
+  };
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: PointerEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    };
+    // Esc closes and hands focus back to the trigger. Capture phase + stopPropagation, so it never
+    // reaches the textarea's onKeyDown (which would press Esc into the agent: Stop).
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); setMenuOpen(false); menuButtonRef.current?.focus(); }
+    };
+    // Focus the first row on open, so the keyboard lands in the menu.
+    requestAnimationFrame(() => menuItemsEls()[0]?.focus());
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKey, true);
+    // The Arturo pill (z-75, fixed) would sit on top of this menu; arturo.css hides it while open.
+    document.documentElement.setAttribute('data-composer-menu', 'open');
+    return () => {
+      document.removeEventListener('pointerdown', onDown);
+      document.removeEventListener('keydown', onKey, true);
+      document.documentElement.removeAttribute('data-composer-menu');
+    };
+  }, [menuOpen]);
+  const menuRow = 'w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-left text-foreground hover:bg-muted rounded-lg';
 
   return (
     <div
@@ -538,11 +586,50 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
             title={injectMode
               ? 'Delivering NOW, straight into the agent’s terminal. Click to queue to its inbox instead.'
               : 'Queuing to the agent’s INBOX, read at its next turn. Click to deliver now instead.'}
-            className="shrink-0 h-9 px-1.5 text-[11px] rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            className="shrink-0 h-9 px-1.5 text-[11px] rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors max-[479px]:hidden"
           >
             {injectMode ? 'now' : 'inbox'}
           </button>
           {leading}
+          {/* BELOW 480px: ONE overflow control instead of the delivery toggle + the caller's
+              secondary controls, so the text gets the row (at 390px it showed ~13 characters).
+              The non-default "inbox" mode shows on the button itself, so folding it never hides
+              where a message will go. */}
+          <div ref={menuRef} className="relative shrink-0 min-[480px]:hidden">
+            <button
+              ref={menuButtonRef}
+              type="button"
+              onClick={() => setMenuOpen((o) => !o)}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              aria-label={injectMode ? 'More options' : 'More options (queuing to inbox)'}
+              title="More options"
+              className={clsx(roundBtn, 'relative text-foreground/70 hover:text-foreground hover:bg-muted', menuOpen && 'bg-muted text-foreground')}
+            >
+              <MoreHorizontal size={20} />
+              {!injectMode && <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-amber-400" aria-hidden />}
+            </button>
+            {menuOpen && (
+              <div role="menu" aria-label="More options" onKeyDown={onMenuKeyDown}
+                className="absolute bottom-full right-0 mb-2 w-60 rounded-2xl border border-border bg-card p-1.5 shadow-xl shadow-black/30 z-20">
+                <div role="group" aria-labelledby={deliveryLabelId}>
+                <div id={deliveryLabelId} role="presentation" className="px-3 pt-1.5 pb-1 text-[11px] text-muted-foreground">Delivery</div>
+                <button type="button" role="menuitemradio" aria-checked={injectMode} className={menuRow}
+                  onClick={() => { setInjectMode(true); closeMenu(); }}>
+                  <Check size={15} className={injectMode ? 'opacity-100' : 'opacity-0'} />
+                  <span>Now <span className="text-muted-foreground">· into its terminal</span></span>
+                </button>
+                <button type="button" role="menuitemradio" aria-checked={!injectMode} className={menuRow}
+                  onClick={() => { setInjectMode(false); closeMenu(); }}>
+                  <Check size={15} className={!injectMode ? 'opacity-100' : 'opacity-0'} />
+                  <span>Inbox <span className="text-muted-foreground">· read next turn</span></span>
+                </button>
+                </div>
+                {menuItems && <div role="separator" className="my-1 border-t border-border" />}
+                {menuItems?.(closeMenu)}
+              </div>
+            )}
+          </div>
           {trailing}
           {showStop ? (
             <button

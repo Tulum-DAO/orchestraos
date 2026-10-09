@@ -145,6 +145,9 @@
    corner on every other page. The page also pads its transcript by the pill so it never covers
    the last message. */
 .arturo-pill{ bottom:calc(max(20px, var(--agent-composer-h, 0px) + 8px) + env(safe-area-inset-bottom)); }
+/* The composer's narrow-phone overflow menu opens where this pill sits; hide the pill while it is
+   open (ChatInput sets the attribute and always removes it on close/unmount). */
+html[data-composer-menu="open"] .arturo-pill{ visibility:hidden; }
 .arturo-pill .mic{ width:16px; height:16px; color:#d97757; }
 /* .arturo-pill-back (a full-screen rgba(0,0,0,0.55) scrim) is GONE on purpose: it dimmed the
    page and, being inset:0, swallowed every click on it. The pane is non-modal now. */

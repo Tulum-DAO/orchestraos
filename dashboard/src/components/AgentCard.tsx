@@ -21,6 +21,7 @@ import { GenChip } from './GenChip';
 import { useRecentAgents } from '../stores/recentAgents';
 import { RecentAgentChips } from './RecentAgentChips';
 import { setArturoFocus } from '../lib/arturo';
+import { useArturoLift } from '../hooks/useArturoLift';
 import { canStopTurn } from '../lib/composerGate';
 
 const PALETTE = [
@@ -112,6 +113,10 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
   const [injectOk, setInjectOk] = useState(false);
   const [useInjectMode, setUseInjectMode] = useState(false);
   const [devMode, setDevMode] = useState(false);
+  // The focused panel's box. On a phone the Arturo pill overlapped its key row; lift it above the
+  // panel's input (chat) or key row (dev) while the panel is open. See hooks/useArturoLift.ts.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useArturoLift(panelRef, devMode ? '[data-testid="panel-actionbar"]' : '[data-testid="composer-pill"]', focused && !!agent.alive);
   const [showAuthFlow, setShowAuthFlow] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [promptContent, setPromptContent] = useState<string | null>(null);
@@ -659,7 +664,10 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
       {/* Focused modal overlay */}
       {focused && agent.alive && (
         <div className={clsx(
-          "fixed inset-0 z-50 bg-black/70 flex overscroll-none",
+          // `dark`: this panel is always dark (neutral-900) whatever the app theme. Scoping the
+          // theme tokens here keeps token-coloured content in it (the pill, assistant prose)
+          // light-on-dark in the light theme too, instead of black ink on a black panel.
+          "dark fixed inset-0 z-50 bg-black/70 flex overscroll-none",
           devMode ? 'items-stretch justify-center p-0 overflow-hidden' : 'items-center justify-center p-4'
         )} onClick={() => { setFocused(false); setArturoFocus(null); }}>
           <div
@@ -669,6 +677,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                 ? 'w-full rounded-none border-0'
                 : 'border border-neutral-700 rounded-2xl w-full max-w-2xl max-h-[90vh]'
             )}
+            ref={panelRef}
             style={devMode ? { height: 'var(--vvh, 100vh)' } : undefined}
             onClick={(e) => e.stopPropagation()}
             onTouchStart={onOverlayTouchStart}
@@ -758,23 +767,19 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                   strandedText={typeof agent.stranded === 'string' ? agent.stranded : agent.stranded?.text}
                   pendingMenu={agent.pending_menu}
                 />
-                {/* `dark`: this panel is always dark (neutral-900) whatever the app theme, and the pill
-                    reads theme tokens; without it the light theme put a white pill in a black panel. */}
-                <div className="dark">
                 <ChatInput
                   agentId={agent.id}
                   attachSupported={(agent.machine || 'vps') === 'vps'}
-                  placeholder={agent.status === 'working' ? 'Agent is working (send will queue on the turn)…' : 'Message this agent…'}
+                  placeholder={agent.status === 'working' ? 'Working — a message will queue' : 'Message this agent…'}
                   // Stop = the Esc key the ActionBar below sends; never while a menu is open (#334).
                   canStop={canStopTurn({ state: agent.status, pendingMenu: agent.pending_menu })}
                   onStop={() => { logAction('agent.stop', agent.id); return sendKeyToAgent(agent.id, 'escape'); }}
                 />
-                </div>
               </div>
             )}
 
             {/* ActionBar — always visible (mobile needs special keys even in Dev mode) */}
-            <div className={clsx('px-3 py-2 border-t border-neutral-800 shrink-0', devMode && 'bg-neutral-950')}>
+            <div data-testid="panel-actionbar" className={clsx('px-3 py-2 border-t border-neutral-800 shrink-0', devMode && 'bg-neutral-950')}>
               <ActionBar
                 agentId={agent.id}
                 outputLines={outputLines}
