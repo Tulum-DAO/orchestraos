@@ -25,6 +25,8 @@ export interface PendingMenuOption { n: string; label: string; detail?: string }
 export interface PendingMenu {
   kind: 'options' | 'permission' | 'yes_no';
   question: string;
+  /** What the prompt is about (a permission prompt's command), from the detector. */
+  context?: string | null;
   options: PendingMenuOption[];
   selected_n?: string | null;
   chrome?: string;
@@ -68,13 +70,16 @@ export default function OptionsMenuCard({ agentId, menu }: { agentId: string; me
     setSending(true);
     setNotice(null);
     try {
-      const r = await sendAgentKey(agentId, n, true);
+      const r = await sendAgentKey(agentId, n, true,
+                                   { question: menu.question, context: menu.context ?? '' });
       if (r.status === 200 && r.ok) {
         setDone(n);
         setNotice(null);
       } else if (r.status === 409) {
         setArmed(null);
-        setNotice('Menu is gone — answered elsewhere.');
+        setNotice(r.reason === 'instance_mismatch'
+          ? 'This prompt was replaced by a newer one. Check the screen before answering.'
+          : 'Menu is gone — answered elsewhere.');
       } else if (r.status === 403) {
         setArmed(null);
         setNotice(r.error || 'That key is not enabled yet.');

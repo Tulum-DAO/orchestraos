@@ -469,3 +469,93 @@ def test_every_refusal_is_logged_with_its_reason_device_and_instances(screen, ca
     line = next(r.getMessage() for r in caplog.records if "[stale-tap]" in r.getMessage())
     assert "refused" in line and f"session={SESSION}" in line and "reason=instance_mismatch" in line
     assert "device=" in line and "served=" in line and "current=" in line
+
+
+# --- review round 3 ------------------------------------------------------------------------------
+WEB_UA = "node"
+OPTIONS_M = {"kind": "options", "question": "Deploy?", "options": [{"n": "1", "label": "Yes"}]}
+
+
+def _web_tap(expect, key="1"):
+    """The dashboard: the API posts /agent-key from Node with the fleet bearer, and renders menus
+    from /api/agents, so the gateway has nothing served on record for it."""
+    body = {"session": SESSION, "key": key, "confirm": True}
+    if expect is not None:
+        body["expect"] = expect
+    resp = asyncio.run(G.handle_agent_key(_Req(body, ua=WEB_UA)))
+    return resp.status, json.loads(resp.text)
+
+
+def test_the_web_answers_the_permission_prompt_it_rendered(screen):
+    """Round 3 B1: the web card says what it rendered; that, not a served record, is checked."""
+    _show(CMD_A, now=100.0)
+    status, body = _web_tap({"question": CMD_A["question"], "context": CMD_A["context"]})
+    assert status == 200 and screen["sent"]
+
+
+def test_the_web_tap_for_A_does_not_approve_B(screen):
+    _show(CMD_A, now=100.0)
+    screen["menu"] = CMD_B
+    status, body = _web_tap({"question": CMD_A["question"], "context": CMD_A["context"]})
+    assert status == 409 and body["reason"] == "instance_mismatch" and screen["sent"] == []
+
+
+def test_an_expect_for_an_options_menu_is_checked_too(screen):
+    screen["menu"] = OPTIONS_M
+    assert _web_tap({"question": "Deploy?"})[0] == 200
+    screen["sent"].clear()
+    status, body = _web_tap({"question": "Something else?"})
+    assert status == 409 and screen["sent"] == []
+
+
+def test_without_expect_the_web_has_nothing_on_record(screen):
+    _show(CMD_A, now=100.0)
+    status, body = _web_tap(None)
+    assert status == 409 and body["reason"] == "instance_unknown"
+
+
+def test_a_malformed_expect_is_refused_not_ignored(screen):
+    _show(CMD_A, now=100.0)
+    for bad in ("A", {"context": "x"}, {"question": 3}, {"question": "q", "context": 4},
+                {"question": "q" * 4001}):
+        status, body = _web_tap(bad)
+        assert status == 400, bad
+    assert screen["sent"] == []
+
+
+def test_respond_honours_expect(screen, monkeypatch):
+    _show(CMD_A, now=100.0)
+    seen = {}
+    monkeypatch.setattr(G, "permission_respond", lambda *a, **k: seen.update(k) or (True, {}))
+    body = {"session": SESSION, "answer": "respond", "text": "differently", "confirm": True,
+            "expect": {"question": CMD_A["question"], "context": CMD_A["context"]}}
+    assert asyncio.run(G.handle_agent_key(_Req(body, ua=WEB_UA))).status == 200
+    body["expect"] = {"question": CMD_B["question"], "context": CMD_B["context"]}
+    assert asyncio.run(G.handle_agent_key(_Req(body, ua=WEB_UA))).status == 409
+
+
+def test_a_digit_for_an_options_menu_does_not_land_on_the_permission_prompt_that_replaced_it(
+        screen, monkeypatch):
+    """Round 3 B2: the locked re-read covers every kind, not only permission prompts."""
+    reads = [OPTIONS_M, CMD_B]
+
+    class _AS:
+        def get_agent_status(self, session):
+            return {"pending_menu": reads.pop(0) if reads else CMD_B, "state": "waiting"}
+
+    monkeypatch.setattr(G, "_agent_status", lambda: _AS())
+    status, body = _tap()
+    assert status == 409 and body["reason"] == "instance_mismatch" and screen["sent"] == []
+
+
+def test_a_menu_gone_by_the_locked_read_sends_nothing(screen, monkeypatch):
+    _serve(CMD_A, now=100.0)
+    reads = [CMD_A, None]
+
+    class _AS:
+        def get_agent_status(self, session):
+            return {"pending_menu": reads.pop(0) if reads else None, "state": "waiting"}
+
+    monkeypatch.setattr(G, "_agent_status", lambda: _AS())
+    status, body = _tap()
+    assert status == 409 and "no longer" in body["error"] and screen["sent"] == []

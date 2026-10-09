@@ -626,14 +626,44 @@ def _stale_tap_check_off():
     return (_P(base) / "state" / "menu-stale-tap.off").exists()
 
 
-def _could_have_seen(request, session, menu, now=None):
-    """(ok, reason). Non-permission menus are not gated here. Every refusal is logged with its
-    reason; with the off switch present it is logged as would-refuse and allowed."""
+def _menu_key(session, menu):
+    """What a menu IS (session + question + context, the same rule as a permission digest), for
+    comparing the menu a client rendered, or the one checked, with the one on screen now."""
+    menu = menu or {}
+    return _perm_digest(session, menu.get("question") or "", menu.get("context") or "")
+
+
+def _expect_key(session, expect):
+    """The menu key of a client's `expect` {question, context?} (the menu it rendered), or None
+    when it sent none or a malformed one."""
+    if not isinstance(expect, dict) or not isinstance(expect.get("question"), str):
+        return None
+    ctx = expect.get("context")
+    if ctx is not None and not isinstance(ctx, str):
+        return None
+    if len(expect["question"]) > 4000 or len(ctx or "") > 8000:
+        return None
+    return _menu_key(session, {"question": expect["question"], "context": ctx or ""})
+
+
+def _could_have_seen(request, session, menu, now=None, expect_key=None):
+    """(ok, reason). A client that says what it rendered (`expect_key`) is checked against the
+    menu on screen, of any kind. Otherwise a permission answer needs the served record (above), and
+    other menus are gated only by the crossover rule. Every refusal is logged with its reason; with
+    the off switch present it is logged as would-refuse and allowed."""
     import time as _time
     if not isinstance(menu, dict):
         return True, None
     now = _time.time() if now is None else now
     fkey = _menu_fetch_key(request)
+    if expect_key is not None:
+        if menu.get("kind") == "permission":
+            _stamp_instance(session, menu)          # still a sighting
+        current = _menu_key(session, menu)
+        if current == expect_key:
+            return True, None
+        rec, reason = ("expect", expect_key), "instance_mismatch"
+        return _refuse_or_log(session, reason, fkey, rec, current)
     with _SERVED_LOCK:
         rec = _SERVED.get((fkey, session))
     if rec is not None and (now - rec[1]) > _SERVED_TTL_S:
@@ -655,6 +685,10 @@ def _could_have_seen(request, session, menu, now=None):
         reason = "instance_mismatch"                # this device was shown a different instance
     else:
         return True, None
+    return _refuse_or_log(session, reason, fkey, rec, current)
+
+
+def _refuse_or_log(session, reason, fkey, rec, current):
     off = _stale_tap_check_off()
     log.warning(f"[stale-tap] {'WOULD REFUSE (check off)' if off else 'refused'} session={session} "
                 f"reason={reason} device={fkey} served={rec[0] if rec else None} current={current}")
@@ -5005,6 +5039,10 @@ async def handle_agent_key(request):
     confirm = bool(data.get("confirm"))
     text = data.get("text")
     text = str(text).strip() if text is not None else None
+    if data.get("expect") is not None and _expect_key(session, data.get("expect")) is None:
+        return _json({"ok": False, "error": "expect must be {question, context?} strings"},
+                     status=400)
+    _expect = _expect_key(session, data.get("expect"))
 
     if not session:
         return _json({"ok": False, "error": "session required"}, status=400)
@@ -5037,7 +5075,7 @@ async def handle_agent_key(request):
             return _json({"ok": False, "reason": "menu_gone"}, status=409)
         if _pm.get("kind") != "permission":          # respond answers permission prompts only
             return _json({"ok": False, "reason": "not_permission_prompt"}, status=400)
-        seen_ok, seen_reason = _could_have_seen(request, session, _pm)
+        seen_ok, seen_reason = _could_have_seen(request, session, _pm, expect_key=_expect)
         if not seen_ok:
             return _json({"ok": False, "reason": seen_reason,
                           "error": _COULD_NOT_HAVE_SEEN[seen_reason]}, status=409)
@@ -5209,7 +5247,7 @@ async def handle_agent_key(request):
     # three-phase (digit -> literal text -> Enter) — never a bare digit that
     # strands an open TUI field (the operator live-finding 07:27).
     menu = stamp_input_kinds(dict(st["pending_menu"]))
-    seen_ok, seen_reason = _could_have_seen(request, session, menu)
+    seen_ok, seen_reason = _could_have_seen(request, session, menu, expect_key=_expect)
     if not seen_ok:
         return _json({"ok": False, "reason": seen_reason,
                       "error": _COULD_NOT_HAVE_SEEN[seen_reason]}, status=409)
@@ -5234,26 +5272,27 @@ async def handle_agent_key(request):
 
     # Send the digit — NO Enter for Claude Code (menus commit on digit);
     # with Enter for Gemini / Antigravity (menus commit on digit + Enter).
-    # Held under the per-session send mutex (F3), on a worker thread. A PERMISSION answer re-reads
-    # the screen under the lock and sends nothing unless the checked prompt is still the one up.
-    _checked = (_perm_digest(session, menu.get("question") or "", menu.get("context") or "")
-                if menu.get("kind") == "permission" else None)
+    # Held under the per-session send mutex (F3), on a worker thread. The screen is read again
+    # under the lock and nothing is sent unless the menu checked above (same kind, same question
+    # and context) is still the one up.
+    _checked = (menu.get("kind"), _menu_key(session, menu))
 
     def _send_locked():
         with _session_send_lock(session):
-            if _checked is not None:
-                _st2 = _agent_status().get_agent_status(session)
-                _pm2 = _st2.get("pending_menu") if isinstance(_st2, dict) else None
-                if not (isinstance(_pm2, dict) and _pm2.get("kind") == "permission"
-                        and _perm_digest(session, _pm2.get("question") or "",
-                                         _pm2.get("context") or "") == _checked):
-                    return None
+            _st2 = _agent_status().get_agent_status(session)
+            _pm2 = _st2.get("pending_menu") if isinstance(_st2, dict) else None
+            if not isinstance(_pm2, dict):
+                return "gone"
+            if (_pm2.get("kind"), _menu_key(session, _pm2)) != _checked:
+                return "changed"
             if _is_gemini_session(session):
                 return _tmux("send-keys", "-t", session, key, "Enter")
             return _tmux("send-keys", "-t", session, key)
 
     r = await asyncio.get_event_loop().run_in_executor(None, _send_locked)
-    if r is None:
+    if r == "gone":
+        return _json({"ok": False, "error": "menu no longer on screen"}, status=409)
+    if r == "changed":
         return _json({"ok": False, "reason": "instance_mismatch",
                       "error": _COULD_NOT_HAVE_SEEN["instance_mismatch"]}, status=409)
     if r.returncode != 0:
