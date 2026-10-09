@@ -144,7 +144,9 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
         data-testid="transcript-scroll"
         className={
           compact
-            ? 'bg-neutral-950 rounded-lg p-3 max-h-96 overflow-y-auto space-y-2.5'
+            // `dark`: this box is always near-black, so theme-token prose inside it (Markdown)
+            // must resolve dark in the light theme too, or it renders black on black.
+            ? 'dark bg-neutral-950 rounded-lg p-3 max-h-96 overflow-y-auto space-y-2.5'
             // CAPPED AND CENTRED (Shaw: prose ran ~1460px wide and the input ~1660px — unreadable,
             // and the right edges of tool cards and user bubbles were 130px apart because each
             // sized itself to a different container). ONE column, one pair of edges, shared with
