@@ -70,7 +70,20 @@ export function newTurnId(): string {
 /** The server finished with this send and nothing of it ran (DEC-1791518421640932, #319 review item 3). */
 export const NOT_ANSWERED_TEXT = 'That message may not have been answered; send it again.';
 /** The send may have run (tools included) but its answer cannot be shown: never re-sent for the operator. */
+/** 503 turn_mark_unavailable: the server could not note the message, so it ran NOTHING (the one final 5xx). */
+export const NOT_RECORDED_TEXT = 'I could not save that message, so I did not run it. Try sending it again in a moment.';
 export const MAY_HAVE_RUN_TEXT = 'That message may not have been answered, and anything it started may already have run: check before sending it again.';
+
+/** What became of one send, in words, when the send helper has already decided it (DEC-1791518421640932).
+ *  Checked FIRST on every page: turn_mark_unavailable is a 503, and a status check for "starting" would
+ *  otherwise claim it and tell the operator the stack is booting. null = not a send outcome. */
+export function sendOutcomeText(r: { ok: boolean; error?: string }): string | null {
+  if (r.ok) return null;
+  if (r.error === 'not_answered') return NOT_ANSWERED_TEXT;
+  if (r.error === 'may_have_run') return MAY_HAVE_RUN_TEXT;
+  if (r.error === 'turn_mark_unavailable') return NOT_RECORDED_TEXT;
+  return null;
+}
 
 /** The /api/arturo/text body. Context is a FIELD now; the proxy renders the same line
  *  contextLine() produced, after the onboarding marker, so model input is unchanged.

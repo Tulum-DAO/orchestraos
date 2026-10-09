@@ -22,7 +22,7 @@ import { Mic, ArrowUp, X, History, Focus, PhoneOff, AudioLines, Plus, Paperclip,
 import { useDictation } from './useDictation.ts';
 import { uploadAttachment, attachmentPreamble, describeAttachment, type Attachment } from '../../lib/arturoUpload';
 import './arturo.css';
-import { newConversationId, NOT_ANSWERED_TEXT, MAY_HAVE_RUN_TEXT, contextFromLocation, getArturoFocus, subscribeArturoFocus, sendStateLabel, isStarting, waitForArturo, STARTING_TEXT, HANDS_FREE, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, arturoHealth, type ArturoHealth, type SendState } from '../../lib/arturo';
+import { newConversationId, sendOutcomeText, contextFromLocation, getArturoFocus, subscribeArturoFocus, sendStateLabel, isStarting, waitForArturo, STARTING_TEXT, HANDS_FREE, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, arturoHealth, type ArturoHealth, type SendState } from '../../lib/arturo';
 import {
   listThreads, loadThread, contextCardLabel, isContextDismissed, dismissContext,
   restoreContext, contextForTurn, type ThreadSummary,
@@ -185,12 +185,10 @@ export function ArturoPill() {
     setState(r.ok ? 'acked' : 'failed');
     append(r.ok
       ? { role: 'arturo', text: r.reply_text || '(no reply)', tools: r.tools_called, spawned: r.spawned, at: Date.now() }
-      : { role: 'arturo', text: isStarting(r)
+      : { role: 'arturo', text: sendOutcomeText(r) ?? (isStarting(r)
           ? 'I am still starting up and could not answer yet — give `orchestra up` a moment and send that again.'
-          : r.error === 'not_answered' ? NOT_ANSWERED_TEXT
-          : r.error === 'may_have_run' ? MAY_HAVE_RUN_TEXT
           : isBusy(r) ? 'Still answering an earlier message in this conversation (another tab or device). Send this again in a moment.'
-          : describeTurnError(r)?.message || `Could not reach Arturo: ${r.error || 'unknown'}`, at: Date.now() });
+          : describeTurnError(r)?.message || `Could not reach Arturo: ${r.error || 'unknown'}`), at: Date.now() });
     void listThreads().then(setThreads);      // the thread it just created/updated joins the list
   }
 

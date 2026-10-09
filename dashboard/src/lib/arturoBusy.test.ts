@@ -259,3 +259,34 @@ test('B1: a 504 whose read-back cannot reach the server stops after 3 reads as "
     assert.notEqual(r.error, 'may_have_run');
   });
 });
+
+// A 409 turn_lost comes back directly when a resend meets a send that started and was never finished (a
+// restart): it may have run. It is an UNKNOWN, never "it did not go through" (ios-watch-dev, after #319).
+test('a direct turn_lost is "may have run", never a raw error, and never re-sent', async () => {
+  await withWorld({ stream: () => json(409, { ok: false, error: 'turn_lost' }) }, async (w) => {
+    const r = await arturoTurn('hello', 'web_c1');
+    assert.equal(r.error, 'may_have_run');
+    assert.equal(w.texts.length + w.reads.length, 0);
+  });
+});
+
+// 503 turn_mark_unavailable is the one FINAL 5xx: the server ran nothing. Not "starting", not unknown.
+test('turn_mark_unavailable is final: nothing ran, no retry, no read-back', async () => {
+  let starting = 0;
+  await withWorld({ stream: () => json(503, { ok: false, error: 'turn_mark_unavailable' }) }, async (w) => {
+    const r = await arturoTurn('hello', 'web_c1', null, { onStarting: async () => { starting++; return true; } });
+    assert.equal(r.error, 'turn_mark_unavailable');
+    assert.equal(starting, 0);
+    assert.equal(w.texts.length + w.reads.length, 0);
+  });
+});
+
+test('every send outcome has its own words, and a final 503 is never read as "starting"', async () => {
+  const { sendOutcomeText, isStarting, NOT_RECORDED_TEXT, MAY_HAVE_RUN_TEXT, NOT_ANSWERED_TEXT } = await import('./arturo.js');
+  const unrecorded = { ok: false, status: 503, error: 'turn_mark_unavailable' };
+  assert.equal(isStarting(unrecorded), true);              // the trap: a status check alone calls it booting
+  assert.equal(sendOutcomeText(unrecorded), NOT_RECORDED_TEXT);
+  assert.equal(sendOutcomeText({ ok: false, error: 'may_have_run' }), MAY_HAVE_RUN_TEXT);
+  assert.equal(sendOutcomeText({ ok: false, error: 'not_answered' }), NOT_ANSWERED_TEXT);
+  assert.equal(sendOutcomeText({ ok: false, status: 502, error: 'gateway unreachable' }), null);
+});
