@@ -606,3 +606,25 @@ def test_expect_still_refuses_the_wrong_content_even_with_a_matching_record(scre
     _serve(CMD_B, now=101.0)                                   # the record is current (B)
     status, body = _app_tap_with_expect(CMD_A)                 # but the card the client rendered is A
     assert status == 409 and body["reason"] == "instance_mismatch" and screen["sent"] == []
+
+
+def test_expect_does_not_let_a_re_ask_through_after_the_device_last_saw_another_menu(screen, monkeypatch):
+    """Review: served A#1, answered elsewhere, the chat view then saw an options menu ("other"),
+    an identical A#2 is up: refused, as it is without expect."""
+    _serve(CMD_A, now=100.0)
+    G._mark_instance_answered(SESSION, CMD_A["question"], CMD_A["context"])
+    screen["menu"] = OPTIONS_M
+    monkeypatch.setattr(G, "_capture_pane", lambda *a: "")
+    r = _Req()
+    r.query = {"session": SESSION}
+    asyncio.run(G.handle_agent_screen(r))                      # record becomes "other"
+    screen["menu"] = CMD_A                                     # A#2, identical
+    status, body = _app_tap_with_expect(CMD_A)
+    assert status == 409 and body["reason"] == "instance_mismatch" and screen["sent"] == []
+
+
+def test_expect_alone_after_the_record_expired(screen):
+    _serve(CMD_A, now=100.0)
+    k = next(iter(G._SERVED))
+    G._SERVED[k] = (G._SERVED[k][0], G._SERVED[k][1] - G._SERVED_TTL_S - 1)
+    assert _app_tap_with_expect(CMD_A)[0] == 200

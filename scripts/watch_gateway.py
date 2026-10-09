@@ -656,10 +656,10 @@ def _expect_key(session, expect):
 def _could_have_seen(request, session, menu, now=None, expect_key=None):
     """(ok, reason). A client that says what it rendered (`expect_key`) is checked against the
     menu on screen, of any kind. That checks CONTENT, so it cannot tell an identical re-asked
-    prompt from the one the client rendered; the served record can, so when this device has one
-    for a permission prompt here it must match too (`expect` adds to it, never replaces it). A
-    client with no record at all (the web, which renders from /api/agents) is held to `expect`
-    alone. Without `expect`, a permission answer needs the served record, and other menus are
+    prompt from the one the client rendered; the served record can, so when this device has ANY
+    record here (a permission instance, or "other") a permission answer must match it too, exactly
+    as without `expect` (`expect` adds to it, never replaces it). A client with no record at all
+    (the web, which renders from /api/agents) is held to `expect` alone. Without `expect`, a permission answer needs the served record, and other menus are
     gated only by the crossover rule. Every refusal is logged with its reason; with the off switch
     present it is logged as would-refuse and allowed."""
     import time as _time
@@ -678,7 +678,7 @@ def _could_have_seen(request, session, menu, now=None, expect_key=None):
         if menu.get("kind") != "permission":
             return True, None
         current = _current_instance_id(session, menu)   # also a sighting
-        if rec is None or rec[0] == _SERVED_OTHER or rec[0] == current:
+        if rec is None or rec[0] == current:            # no record (the web): expect alone
             return True, None
         return _refuse_or_log(session, "instance_mismatch", fkey, rec, current)
     if menu.get("kind") != "permission":
