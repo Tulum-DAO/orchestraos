@@ -15,7 +15,7 @@ and the history.
 ## 1. Create a seat
 
 ```
-orchestra agent create <name> [--tier T2] [--runtime claude] [--model <id>] [--parent <seat>]
+orchestra agent create <name> [--parent <seat>] [--role pm|worker] [--runtime claude] [--model <id>]
 ```
 
 One command does the whole thing: fills a role template, registers the seat (with its parent),
@@ -23,13 +23,21 @@ validates the runtime/model pair, spawns it, and verifies it is alive.
 
 | Flag | Meaning |
 |---|---|
-| `--tier` | `T0` the always-on manager · `T1` coordinator · `T2` worker (default) |
+| `--parent` | the seat this one reports to. It decides the tier (below); it must already be registered |
+| `--role` | `pm` runs the project-manager briefing at boot; `worker` (default) does not. `--template pm` implies `pm` |
+| `--tier` | rarely needed: the tier follows from the parent (below). `T0` is the always-on manager |
 | `--runtime` | `claude`, `gemini` or `codex`; defaults to the first enabled in `[runtimes]` |
 | `--model` | a model id **belonging to that runtime** — `orchestra doctor` lists them |
-| `--parent` | the seat this one reports to, recorded in the registry |
 | `--template` | role template to fill; omit for the default |
 | `--set KEY=VALUE` | substitutions into that template |
 | `--task` | first instruction injected into the pane |
+
+**Tier is position.** A seat with no parent, or whose parent is a T0, is a **T1** (a lead). A
+seat under any other parent is that parent's **T2** (`reports_to` is recorded). There are no
+standalone T2s: asking for `--tier T2` without a parent that is not a T0 is refused, and so is a
+`--parent` that is not registered yet. What a seat *does* is its role, not its tier: only a
+`pm` runs the project-manager briefing, and a PM is never retired without a card. Seats
+registered before roles existed keep their old meaning (a T1 is a PM).
 
 There is no manual step. You do **not** hand-edit `registry.json` to add an agent — the registry
 is written for you, and an entry added by hand can disagree with what the spawner validated.

@@ -48,8 +48,9 @@ You are an agent in an OrchestraOS install — a multi-agent orchestration syste
 
 ## Spawning New Agents
 Read `$ORCHESTRA_ROOT/docs/agent-provisioning-guide.md` for the full guide. Quick version:
-1. `orchestra agent create <name> [--tier T2] [--runtime claude] [--parent <seat>]` — one command:
-   fills the role template, registers the seat, validates runtime/model, spawns, verifies alive
+1. `orchestra agent create <name> [--parent <seat>] [--role pm|worker] [--runtime claude]` — one command:
+   fills the role template, registers the seat, validates runtime/model, spawns, verifies alive.
+   Tier follows the parent: none or a T0 -> T1 (a lead); any other parent -> its T2. No standalone T2s.
 2. Edit `prompts/<name>.md` to say what the seat is for
 3. `orchestra spawn <name> --task "..."` to bring it back up later
 Do NOT hand-edit `registry.json` to add an agent — `agent create` writes it, and an entry added by

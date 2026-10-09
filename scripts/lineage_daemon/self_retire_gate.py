@@ -12,8 +12,12 @@ Four independent AND-gates (SPEC §5/§8/§11; D4/D6/D8). Positive-signal-only:
                seat instantly (invariant #4). Defense-in-depth: the substrate's
                `require_card` ALSO forces the card when present; checking here too
                means the predicate itself is honest in isolation.
-  2. tier      the seat's lineage tier ∈ `ARMED_TIERS` (this wave = {"T2"}),
-               resolved from the DURABLE registry — never self-reported by the seat.
+  2. role      the seat's registry row says it is NOT a project manager, NOT always-on and
+               NOT a T0 (DEC-1791574633518521: tier is hierarchy position now, so a
+               parentless helper is a T1 and still eligible, while a PM is not, whatever
+               its tier). role comes from scripts/tier_rule.role_of: a row from before
+               roles existed reads as a PM exactly when it is a T1 (the old T2-only wave).
+               Resolved from the DURABLE registry — never self-reported by the seat.
   3. armed     the lineage is opted-in via the single-source arming allowlist
                `~/runtime/self_retire_armed` (one lineage root per line; `#`
                comments + blanks ignored). One greppable switch, widened deliberately.
@@ -34,9 +38,12 @@ while tests drive an isolated world.
 """
 import json
 import os
+import sys
 
-# This wave arms T2 ONLY. Widen to add T1 (after T2 proven); GM LAST (D1/§8).
-ARMED_TIERS = frozenset({"T2"})
+_SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+from tier_rule import role_of  # noqa: E402
 
 _HOME = os.path.expanduser("~")
 # Non-synced runtime e-brake + arming knob (fleet convention: ~/runtime is OUTSIDE
@@ -69,10 +76,9 @@ def _kill_switch_on(disabled_path):
         return True
 
 
-def _seat_tier(seat, registry_path):
-    """The seat's tier from the DURABLE registry (`agents[lineage].tier`), never
-    the seat's self-report. Unknown seat / unreadable registry -> None (no
-    affirmative tier signal)."""
+def _seat_row(seat, registry_path):
+    """The seat's row from the DURABLE registry (`agents[lineage]`), never the seat's
+    self-report. Unknown seat / unreadable registry -> None (no affirmative signal)."""
     lineage = _lineage_of(seat)
     if not lineage:
         return None
@@ -83,7 +89,16 @@ def _seat_tier(seat, registry_path):
         return None
     agents = reg.get("agents") if isinstance(reg, dict) else None
     row = agents.get(lineage) if isinstance(agents, dict) else None
-    return row.get("tier") if isinstance(row, dict) else None
+    return row if isinstance(row, dict) else None
+
+
+def _role_eligible(row) -> bool:
+    """Not a PM, not always-on, not a T0. No row -> not eligible (no affirmative signal)."""
+    if not isinstance(row, dict):
+        return False
+    if str(row.get("tier") or "").strip().upper() == "T0" or row.get("always_on") is True:
+        return False
+    return role_of(row) != "pm"
 
 
 def _lineage_armed(seat, armed_path):
@@ -132,13 +147,12 @@ def is_graduated_autoretire(seat, *,
                             disabled_path=_DEFAULT_DISABLED_PATH,
                             armed_path=_DEFAULT_ARMED_PATH,
                             registry_path=_DEFAULT_REGISTRY_PATH,
-                            handoffs_dir=_DEFAULT_HANDOFFS_DIR,
-                            armed_tiers=ARMED_TIERS) -> bool:
-    """True ONLY for a cold-verified graduated-T2 seat (all four gates PASS);
+                            handoffs_dir=_DEFAULT_HANDOFFS_DIR) -> bool:
+    """True ONLY for a cold-verified graduated non-PM seat (all four gates PASS);
     False on ANY missing/uncertain signal. Never widen without all four."""
     if _kill_switch_on(disabled_path):
         return False
-    if _seat_tier(seat, registry_path) not in armed_tiers:
+    if not _role_eligible(_seat_row(seat, registry_path)):
         return False
     if not _lineage_armed(seat, armed_path):
         return False

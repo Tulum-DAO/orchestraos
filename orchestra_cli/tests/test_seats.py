@@ -48,7 +48,9 @@ def test_spawn_registers_seat_and_runs_spawn_agent_with_child_env(repo, tmp_path
     assert rc == 0
     reg = json.loads((tmp_path / "data" / "registry.json").read_text())
     a = reg["agents"]["planner"]
-    assert a["runtime"] == "claude" and a["model"] == "claude-opus-5[1m]" and a["tier"] == "T2"
+    # no parent: a lead by position (T1), not a PM (DEC-1791574633518521)
+    assert a["runtime"] == "claude" and a["model"] == "claude-opus-5[1m]" and a["tier"] == "T1"
+    assert a["role"] == "worker" and "reports_to" not in a
     assert a["tmux_session"] == "planner" and a["system_prompt"] == "prompts/planner.md"
     argv, env, cwd = calls[-1]
     assert argv[0].endswith("spawn-agent.sh") and argv[1] == "planner" and "--task" in argv
@@ -176,7 +178,17 @@ def test_parse_agent_create():
     assert ns.parent == "pm-y" and ns.template == "dev" and ns.set == ["PROJECT=demo"]
 
 
+def _register(tmp_path, **rows):
+    p = tmp_path / "data" / "registry.json"
+    reg = json.loads(p.read_text()) if p.exists() else {"agents": {}}
+    reg.setdefault("agents", {}).update({k: {"name": k, "tier": t, "runtime": "claude", "tmux_session": k}
+                                         for k, t in rows.items()})
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(reg))
+
+
 def test_agent_create_fills_template_records_parent_and_spawns(repo_with_templates, tmp_path, monkeypatch):
+    _register(tmp_path, **{"pm-y": "T1"})
     calls = []
     monkeypatch.setattr(SE, "_run", lambda argv, env=None, cwd=None: calls.append(argv) or 0)
     monkeypatch.setattr(SE, "_tmux_has_session", lambda name: True)
@@ -189,6 +201,7 @@ def test_agent_create_fills_template_records_parent_and_spawns(repo_with_templat
     assert "{" not in prompt                                  # every token filled
     reg = json.loads((tmp_path / "data" / "registry.json").read_text())["agents"]["dev-x"]
     assert reg["reports_to"] == "pm-y" and reg["system_prompt"] == "prompts/dev-x.md"
+    assert reg["tier"] == "T2" and reg["role"] == "worker"
     assert calls and calls[-1][0].endswith("spawn-agent.sh") and calls[-1][1] == "dev-x"
 
 
@@ -210,7 +223,8 @@ def test_agent_create_refuses_a_model_of_another_runtime(repo_with_templates, mo
     assert rc == 2 and "claude-sonnet-5" in capsys.readouterr().err
 
 
-def test_agent_create_fails_by_effect_when_the_seat_is_not_alive(repo_with_templates, monkeypatch, capsys):
+def test_agent_create_fails_by_effect_when_the_seat_is_not_alive(repo_with_templates, tmp_path, monkeypatch, capsys):
+    _register(tmp_path, gm="T0")
     monkeypatch.setattr(SE, "_run", lambda argv, env=None, cwd=None: 0)
     monkeypatch.setattr(SE, "_tmux_has_session", lambda name: True)
     monkeypatch.setattr(SE, "_pane_alive", lambda name: False)     # session exists, CLI died
@@ -396,3 +410,59 @@ def test_the_held_flag_never_reaches_the_seats_it_spawns(repo_with_templates, tm
     assert M.main(["starter"]) == 0
     assert envs and all("ORCHESTRA_STARTER_LOCK_HELD" not in e for e in envs)
     assert "ORCHESTRA_STARTER_LOCK_HELD" not in os.environ
+
+
+
+# ---- tier is hierarchy position, role is what the seat does (DEC-1791574633518521) ----
+
+def _create(tmp_path, monkeypatch, *argv):
+    monkeypatch.setattr(SE, "_run", lambda a, env=None, cwd=None: 0)
+    monkeypatch.setattr(SE, "_tmux_has_session", lambda name: True)
+    monkeypatch.setattr(SE, "_pane_alive", lambda name: True)
+    return M.main(["agent", "create", *argv, "--model", "claude-opus-5[1m]"])
+
+
+def _row(tmp_path, name):
+    return json.loads((tmp_path / "data" / "registry.json").read_text())["agents"].get(name)
+
+
+def test_under_a_T0_parent_a_new_agent_is_a_T1_lead(repo_with_templates, tmp_path, monkeypatch):
+    _register(tmp_path, gm="T0")
+    assert _create(tmp_path, monkeypatch, "planner", "--parent", "gm") == 0
+    row = _row(tmp_path, "planner")
+    assert row["tier"] == "T1" and row["reports_to"] == "gm" and row["role"] == "worker"
+
+
+def test_a_pm_template_makes_a_pm_role(repo_with_templates, tmp_path, monkeypatch):
+    _register(tmp_path, gm="T0")
+    assert _create(tmp_path, monkeypatch, "pm-q", "--parent", "gm", "--template", "pm", "--set", "PROJECT=d",
+                   "--set", "CLIENT_NAME=c", "--set", "CLIENT_SLUG=c", "--set", "BRANCH=main") == 0
+    assert _row(tmp_path, "pm-q")["role"] == "pm" and _row(tmp_path, "pm-q")["tier"] == "T1"
+
+
+def test_a_T2_with_no_lead_is_refused_and_nothing_is_registered(repo_with_templates, tmp_path, monkeypatch, capsys):
+    _register(tmp_path, gm="T0")
+    assert _create(tmp_path, monkeypatch, "loner", "--tier", "T2") == 2
+    assert "a T2 needs a parent that is not a T0" in capsys.readouterr().err
+    assert _row(tmp_path, "loner") is None
+    assert _create(tmp_path, monkeypatch, "loner", "--tier", "T2", "--parent", "gm") == 2
+
+
+def test_an_unregistered_parent_is_refused(repo_with_templates, tmp_path, monkeypatch, capsys):
+    _register(tmp_path, gm="T0")
+    assert _create(tmp_path, monkeypatch, "orphan", "--parent", "nobody") == 2
+    assert "'nobody' is not a registered agent" in capsys.readouterr().err
+    assert _row(tmp_path, "orphan") is None
+
+
+def test_a_parent_with_no_readable_tier_gets_a_T2_and_a_warning(repo_with_templates, tmp_path, monkeypatch, capsys):
+    _register(tmp_path, lead="")
+    assert _create(tmp_path, monkeypatch, "w1", "--parent", "lead") == 0
+    assert _row(tmp_path, "w1")["tier"] == "T2" and _row(tmp_path, "w1")["reports_to"] == "lead"
+    assert "no readable tier" in capsys.readouterr().err
+
+
+def test_an_existing_row_is_never_re_tiered(repo_with_templates, tmp_path, monkeypatch):
+    _register(tmp_path, old="T2")
+    assert _create(tmp_path, monkeypatch, "old") == 0
+    assert _row(tmp_path, "old")["tier"] == "T2" and "role" not in _row(tmp_path, "old")

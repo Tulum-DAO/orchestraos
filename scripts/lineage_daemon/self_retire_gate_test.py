@@ -225,3 +225,32 @@ def test_notify_is_notify_only_never_raises_on_send_failure():
     # should swallow (return the message), never propagate.
     out = SG.notify_card_skipped(_seat(), reason="r", used_pct=1, send_fn=_boom)
     assert "x-gen2" in out
+
+
+# --- DEC-1791574633518521: eligibility keys on ROLE, not tier ------------------------------
+
+def _row_world(tmp_path, **row):
+    p = _paths(tmp_path)
+    reg = tmp_path / "registry.json"
+    reg.write_text(json.dumps({"agents": {"x": {"name": "x", **row}}}))
+    p["registry_path"] = str(reg)
+    return p
+
+
+def test_a_parentless_T1_helper_is_eligible(tmp_path):
+    # tier is position now: a helper with no parent registers as a T1 worker, and retires like one
+    assert SG.is_graduated_autoretire(_seat(), **_row_world(tmp_path, tier="T1", role="worker")) is True
+
+
+def test_a_pm_is_never_eligible_whatever_its_tier(tmp_path):
+    assert SG.is_graduated_autoretire(_seat(), **_row_world(tmp_path, tier="T1", role="pm")) is False
+    assert SG.is_graduated_autoretire(_seat(), **_row_world(tmp_path, tier="T2", role="pm")) is False
+
+
+def test_a_legacy_T1_with_no_role_reads_as_a_pm_and_stays_carded(tmp_path):
+    assert SG.is_graduated_autoretire(_seat(), **_row_world(tmp_path, tier="T1")) is False
+
+
+def test_always_on_and_T0_are_never_eligible(tmp_path):
+    assert SG.is_graduated_autoretire(_seat(), **_row_world(tmp_path, tier="T2", always_on=True)) is False
+    assert SG.is_graduated_autoretire(_seat(), **_row_world(tmp_path, tier="T0", role="worker")) is False

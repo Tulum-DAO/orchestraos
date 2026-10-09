@@ -53,6 +53,11 @@ def main(argv=None):
     p.add_argument("--runtime", default=None)
     p.add_argument("--model", default=None)
     p.add_argument("--tier", default=None)
+    p.add_argument("--reports-to", default=None,
+                   help="parent seat (spawn-agent.sh passes the tier rule's reports_to). Blank = none; "
+                        "lands in lineages.reports_to")
+    p.add_argument("--role", default=None,
+                   help="pm | worker (scripts/tier_rule.py). Kept in the agent document")
     p.add_argument("--cwd", default=None)
     p.add_argument("--machine", default="vps")
     p.add_argument("--generation", type=int, default=1)
@@ -200,6 +205,12 @@ def main(argv=None):
             "spawn_adopted_at": orchestra_db._utcnow()}
     if args.session_id:
         full["session_id"] = args.session_id
+    # Hierarchy (DEC-1791574633518521): the parent the tier rule chose, and what the seat does.
+    parent = (args.reports_to or "").strip()
+    if parent and parent != args.agent_id:
+        full["reports_to"] = parent
+    if (args.role or "").strip():
+        full["role"] = args.role.strip()
     try:
         identity_writer.update_registry_agent(orch, args.agent_id, full,
                                               full_record=full)

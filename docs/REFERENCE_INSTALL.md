@@ -109,7 +109,9 @@ reconciler:** the rotation beat reads the identity store the reconciler just rep
   hard rotation is the `<runtime_dir>/self_retire_armed` allowlist; the e-brake is
   `<runtime_dir>/FLEET_BEAT_DISABLED`. `runtime_dir` is a NON-synced directory (the
   reference install uses `~/runtime`) so a sync tool never copies an e-brake between machines.
-- Tiers: T0 (the always-on manager seat), T1 (coordinators), T2 (workers, the armed tier).
+- Tiers are POSITION: T0 (the always-on manager seat), T1 (reports to a T0 or to no one), T2 (reports
+  to a lead). What a seat does is its `role` (`pm` | `worker`): the PM briefing and the no-card retire
+  key on role, not tier.
 
 ## 4. Push: APNs, ntfy, or none (the minimum path has none)
 
