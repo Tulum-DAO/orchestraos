@@ -41,12 +41,12 @@ _SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPTS not in sys.path:
     sys.path.insert(0, _SCRIPTS)
 from lineage_daemon.wal.ctx_adapters import TRANSCRIPT_SLACK_S as STATUSLINE_SLACK_S  # noqa: E402
-from lineage_daemon.wal.ctx_adapters import last_ctx_entry_epoch  # noqa: E402
+from lineage_daemon.wal.ctx_adapters import ctx_bridge_path, last_ctx_entry_epoch  # noqa: E402
 
 
 def bridge_path(session_id: str, tmp_dir: str | None = None) -> str:
-    """Where the status line writes the reading. Node's os.tmpdir() is $TMPDIR or /tmp."""
-    return os.path.join(tmp_dir or os.environ.get("TMPDIR") or "/tmp", f"claude-ctx-{session_id}.json")
+    """Where the status line writes the reading (ctx_adapters.ctx_bridge_path: $TMPDIR or /tmp)."""
+    return ctx_bridge_path(session_id, tmp_dir)
 
 
 def last_entry_ts(transcript_path: str | None) -> float | None:

@@ -196,6 +196,27 @@ def _runtime_field(entry: dict) -> str:
     return "claude"          # runtime_signatures DEFAULT_RUNTIME fail-safe
 
 
+def statusline_check(hooks_mod, settings_path: Path) -> "Check":
+    """The status line writes each Claude session's context reading. Without it the apps' context
+    numbers (context_pct_of_window / _of_budget) stay empty and rotation reads only the screen.
+    Advisory: OrchestraOS runs without it."""
+    sl = hooks_mod.statusline_status(settings_path=settings_path)
+    empty = "app context numbers will stay empty"
+    if sl["state"] == "installed":
+        return Check("statusline:claude", OK, f"installed: writes each session's context reading ({settings_path})",
+                     required=False)
+    if sl["state"] == "chained":
+        return Check("statusline:claude", OK, "installed, chained to your own status line (shown unchanged); "
+                     "writes each session's context reading", required=False)
+    if sl["state"] == "theirs":
+        return Check("statusline:claude", WARN, f"declined: your own status line is kept, so {empty}",
+                     "`orchestra init` and answer yes to keep yours and add context tracking", required=False)
+    if sl["state"] == "absent":
+        return Check("statusline:claude", WARN, f"not installed, so {empty}", "`orchestra init` to install it",
+                     required=False)
+    return Check("statusline:claude", WARN, sl.get("error", "unreadable"), "fix the settings file", required=False)
+
+
 def run_doctor(st: Settings, probes: DoctorProbes) -> list:
     checks: list[Check] = []
     root = st.repo_root
@@ -303,6 +324,10 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
             checks.append(Check("hooks:claude", OK, f"{len(hs['installed'])} hook rows in {settings_path}"))
     except Exception as e:  # noqa: BLE001
         checks.append(Check("hooks:claude", WARN, f"hook status unavailable: {e}"))
+    try:
+        checks.append(statusline_check(_hooks, settings_path))
+    except Exception as e:  # noqa: BLE001
+        checks.append(Check("statusline:claude", WARN, f"status line status unavailable: {e}", required=False))
     # Channel plugins (plugins/): each reports its own row; disabled = INFO, never a failure.
     try:
         import sys as _sys

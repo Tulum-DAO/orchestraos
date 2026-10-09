@@ -132,7 +132,9 @@ def build_obs(agent, blue, wal_dir=None, now=None, ctx_ttl_s=None, detector_dir=
 
     now = time.time() if now is None else now
     ttl_s = DEFAULT_CTX_TTL_S if ctx_ttl_s is None else ctx_ttl_s
-    detector_dir = "/tmp" if detector_dir is None else detector_dir
+    if detector_dir is None:
+        from .ctx_adapters import ctx_bridge_dir
+        detector_dir = ctx_bridge_dir()     # $TMPDIR or /tmp: the same dir the status line writes
 
     # v2 (the operator #1, data-driven): the runtime is resolved FIRST (a data key, no
     # conditional) so the ctx-source ladder can consult the provider-adapter registry.

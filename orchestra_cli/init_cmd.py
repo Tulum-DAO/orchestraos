@@ -252,7 +252,8 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
              skip_npm: bool = False, skip_venv: bool = False, skip_build: bool = False,
              config_path: Optional[Path] = None, demo: bool = False,
              yes: bool = False, confirm: Optional[Callable[[str], bool]] = None,
-             interactive: Optional[bool] = None, stt: bool = False) -> list:
+             interactive: Optional[bool] = None, stt: bool = False,
+             confirm_statusline: Optional[Callable[[str], bool]] = None) -> list:
     """yes / $ORCHESTRA_YES=1: write the Claude settings hooks without asking. confirm(plan) -> bool:
     the prompt (tests inject one; the CLI reads a y/N from the terminal). interactive=None:
     detect a TTY; False: never prompt (a non-interactive run without --yes SKIPS the hooks)."""
@@ -574,7 +575,67 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
         except Exception as e:  # noqa: BLE001
             report.append(Step("hooks", False, f"hook install failed: {e}"))
 
+    # 10. the status line (opt-in): it records each Claude session's context reading, which the apps'
+    # context numbers and the rotation engine read. A status line the user already has is NEVER
+    # replaced silently: they are asked whether to keep it and add context tracking (chain), and
+    # --yes alone answers no to that question.
+    if os.environ.get("ORCHESTRA_SKIP_HOOKS"):
+        report.append(Step("statusline", False, "skipped (ORCHESTRA_SKIP_HOOKS)"))
+    else:
+        report.append(_statusline_step(repo_root, data_dir, yes=yes, confirm=confirm_statusline,
+                                       interactive=interactive))
+
     return report
+
+
+def _statusline_step(repo_root: Path, data_dir: Path, *, yes: bool, confirm, interactive) -> "Step":
+    try:
+        sys.path.insert(0, str(repo_root / "hooks"))
+        import install as _hooks  # noqa: WPS433
+        settings_path = Path(os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude"))) / "settings.json"
+        cur = _hooks.statusline_status(settings_path=settings_path)
+        if cur["state"] == "error":
+            return Step("statusline", False, f"skipped: {cur['error']}")
+        theirs = cur["state"] == "theirs"
+        if theirs:
+            text = (f"You already have a Claude Code status line ({settings_path}):\n  {cur.get('command')}\n"
+                    "OrchestraOS can keep it and add context tracking: your command keeps running with the same\n"
+                    "input and its output is shown unchanged (refreshed at most every 30 s), and each session's\n"
+                    "context % is recorded for the apps and for rotation. `python3 hooks/install.py --remove`\n"
+                    "puts your status line back exactly.")
+            question = "Keep yours and add context tracking? [y/N] "
+        else:
+            text = (f"orchestra init can install a Claude Code status line in {settings_path}: model | project |\n"
+                    "context used. It also records each session's context % for the apps and for rotation.\n"
+                    "Cost: a shell per redraw, Python at most once per 30 s per session.")
+            question = "Install it? [y/N] "
+        if theirs and yes and confirm is None:
+            go = False                    # --yes never replaces or wraps the user's own line
+        elif yes and not theirs:
+            go = True
+        elif confirm is not None:
+            go = bool(confirm(text))
+        elif (sys.stdin.isatty() if interactive is None else interactive):
+            print(text)
+            try:
+                go = input(question).strip().lower() in ("y", "yes")
+            except EOFError:
+                go = False
+        else:
+            go = None
+        if go is None:
+            return Step("statusline", False, "skipped: not a terminal and no --yes; app context numbers stay empty")
+        if not go:
+            return Step("statusline", False, ("declined: kept your own status line; " if theirs else "declined; ")
+                        + "app context numbers will stay empty")
+        rep = _hooks.install_statusline(settings_path=settings_path, repo_root=repo_root, data_dir=data_dir,
+                                        chain=theirs)
+        if rep.get("error"):
+            return Step("statusline", False, f"failed: {rep['error']}")
+        return Step("statusline", True, f"{rep['state']} -> {settings_path}"
+                    + (" (your own status line keeps running, unchanged)" if rep["state"] == "chained" else ""))
+    except Exception as e:  # noqa: BLE001
+        return Step("statusline", False, f"failed: status line install: {e}")
 
 
 def _tty_confirm(text: str) -> bool:

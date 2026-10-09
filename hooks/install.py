@@ -88,6 +88,30 @@ def _under_temp(p: Path):
     return None
 
 
+def _scratch_refusal(settings_path: Path, repo_root: Path, data_dir: Path, what: str):
+    """Why this install must not write `settings_path`, or None. Shared by the hooks and the status line.
+
+    GUARD 2: under pytest never write the developer's real settings file.
+    GUARD 3: a checkout (or data dir) under a temp dir is a scratch copy: a proof, a red-team clone, a
+    throwaway test. Installing it into a settings file that is NOT itself scratch (the operator's, wherever
+    it lives: ~/.claude, a CLAUDE_CONFIG_DIR, a --settings path) makes every Claude session that reads it run
+    commands out of a directory that is deleted later and that anyone may re-create with other code, and it
+    would replace a real install's rows. 2026-09-20: `orchestra init --yes` run from a scratchpad clone,
+    outside pytest, left 12 such rows in an operator's live file for 19 days."""
+    real = _real_settings()
+    if os.environ.get("PYTEST_CURRENT_TEST") and settings_path.resolve() == real:
+        return "refusing to write the real ~/.claude/settings.json from inside a test (set CLAUDE_CONFIG_DIR)"
+    if os.environ.get(ALLOW_TEMP_ENV) != "1" and not _under_temp(settings_path.resolve()):
+        scratch = next(((label, p) for label, p in (("checkout", repo_root), ("data dir", data_dir))
+                        if _under_temp(p)), None)
+        if scratch:
+            return (f"refusing to install {what} from a {scratch[0]} under a temp dir ({scratch[1]}) into "
+                    f"{settings_path}, which is not scratch: point CLAUDE_CONFIG_DIR at a scratch dir for a "
+                    f"throwaway install, or set {ALLOW_TEMP_ENV}=1 if this really is the install every "
+                    f"Claude session should run")
+    return None
+
+
 def _strip_ours(hooks: dict) -> int:
     """Drop every row tagged MARKER (any data dir, any repo path). Everything else stays as it was: a rule
     or an event list is dropped only when taking OUR rows out emptied it; a shape this code does not know
@@ -145,26 +169,9 @@ def install(*, settings_path: Path, repo_root: Path, data_dir: Path, dry_run: bo
     if missing:
         return {"installed": 0, "removed": 0,
                 "error": f"refusing to install: hook scripts missing under {repo_root}: {', '.join(sorted(set(missing)))}"}
-    # GUARD 2: under pytest never write the developer's real settings file.
-    real = _real_settings()
-    if os.environ.get("PYTEST_CURRENT_TEST") and settings_path.resolve() == real:
-        return {"installed": 0, "removed": 0,
-                "error": "refusing to write the real ~/.claude/settings.json from inside a test (set CLAUDE_CONFIG_DIR)"}
-    # GUARD 3: a checkout (or data dir) under a temp dir is a scratch copy: a proof, a red-team clone, a
-    # throwaway test. Installing it into a settings file that is NOT itself scratch (the operator's, wherever
-    # it lives: ~/.claude, a CLAUDE_CONFIG_DIR, a --settings path) makes every Claude session that reads it run
-    # hooks out of a directory that is deleted later and that anyone may re-create with other code; and step 1
-    # below would replace a real install's rows with it. 2026-09-20: `orchestra init --yes` run from a
-    # scratchpad clone, outside pytest, left 12 such rows in an operator's live file for 19 days.
-    if os.environ.get(ALLOW_TEMP_ENV) != "1" and not _under_temp(settings_path.resolve()):
-        scratch = next(((label, p) for label, p in (("checkout", repo_root), ("data dir", data_dir))
-                        if _under_temp(p)), None)
-        if scratch:
-            return {"installed": 0, "removed": 0,
-                    "error": f"refusing to install hooks from a {scratch[0]} under a temp dir ({scratch[1]}) into "
-                             f"{settings_path}, which is not scratch: point CLAUDE_CONFIG_DIR at a scratch dir for a "
-                             f"throwaway install, or set {ALLOW_TEMP_ENV}=1 if this really is the install every "
-                             f"Claude session should run"}
+    refusal = _scratch_refusal(settings_path, repo_root, data_dir, "hooks")
+    if refusal:
+        return {"installed": 0, "removed": 0, "error": refusal}
     hooks = settings.setdefault("hooks", {})
     # 1. drop our previous rows (identified by MARKER only), keep every user rule intact
     removed = _strip_ours(hooks)
@@ -243,6 +250,121 @@ def status(*, settings_path: Path, repo_root: Path) -> dict:
     return {"installed": [w for w in want if w in present], "missing": [w for w in want if w not in present]}
 
 
+# ---- the status line (opt-in; writes the context reading the apps and the rotation engine read) ----
+
+STATUSLINE_MARKER = "#orchestraos-statusline"
+STATUSLINE_SHIM = "hooks/statusline.sh"
+
+
+def _statusline_command(repo_root: Path, original) -> str:
+    """Our statusLine command. CHAINED when `original` (the user's statusLine object) is given: it is
+    carried base64-encoded so --remove can put it back exactly, and if the checkout is gone the user's
+    own command still runs (fail-open to THEIR line, not a blank one)."""
+    import base64
+    import shlex
+    shim = str(Path(repo_root) / STATUSLINE_SHIM)
+    if original is not None:
+        blob = base64.b64encode(json.dumps(original, ensure_ascii=False, separators=(",", ":")).encode()).decode()
+        fallback = f"sh -c {shlex.quote(str(original.get('command') or ''))}"
+        run = f'ORCHESTRA_PY={shlex.quote(PY)} sh {shlex.quote(shim)} {blob}'
+    else:
+        fallback = "echo Claude"
+        run = f'ORCHESTRA_PY={shlex.quote(PY)} sh {shlex.quote(shim)}'
+    return f'[ -f {shlex.quote(shim)} ] && {run} || {fallback} {STATUSLINE_MARKER}'
+
+
+def _chained_original(cmd: str):
+    """The user's original statusLine object carried in our command, or None (not chained)."""
+    import base64
+    import re
+    if not (isinstance(cmd, str) and STATUSLINE_MARKER in cmd):
+        return None
+    m = re.search(re.escape(STATUSLINE_SHIM) + r"'? ([A-Za-z0-9+/=]+) \|\|", cmd)
+    if not m:
+        return None
+    try:
+        obj = json.loads(base64.b64decode(m.group(1), validate=True))
+    except (ValueError, TypeError):
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def statusline_status(*, settings_path: Path) -> dict:
+    """state: 'installed' (ours), 'chained' (ours, running the user's own line too), 'theirs' (a status
+    line that is not ours: the user kept theirs, so no context reading is written), 'absent', or 'error'."""
+    settings_path = Path(os.path.expanduser(str(settings_path)))
+    try:
+        settings = _load(settings_path)
+    except ValueError:
+        return {"state": "error", "error": f"{settings_path} is not valid JSON"}
+    sl = settings.get("statusLine") if isinstance(settings, dict) else None
+    if not sl:
+        return {"state": "absent"}
+    cmd = sl.get("command", "") if isinstance(sl, dict) else ""
+    if STATUSLINE_MARKER not in str(cmd):
+        return {"state": "theirs", "command": cmd}
+    orig = _chained_original(cmd)
+    return {"state": "chained", "original": orig} if orig else {"state": "installed"}
+
+
+def install_statusline(*, settings_path: Path, repo_root: Path, data_dir: Path, chain: bool = False,
+                       dry_run: bool = False) -> dict:
+    """Install our status line. A status line that is not ours is NEVER replaced unless chain=True (the
+    operator said yes): then it keeps running, fed the same stdin, its output printed unchanged.
+    Re-installing over ours keeps whatever it already chains."""
+    settings_path = Path(os.path.expanduser(str(settings_path)))
+    repo_root = Path(repo_root).resolve()
+    data_dir = Path(os.path.expanduser(str(data_dir))).resolve()
+    try:
+        settings = _load(settings_path)
+    except ValueError as e:
+        return {"error": f"{settings_path} is not valid JSON ({e}); left untouched"}
+    if not isinstance(settings, dict):
+        return {"error": f"{settings_path} top level is not an object; left untouched"}
+    for rel in (STATUSLINE_SHIM, "hooks/statusline.py"):
+        if not (repo_root / rel).is_file():
+            return {"error": f"refusing to install the status line: {rel} missing under {repo_root}"}
+    refusal = _scratch_refusal(settings_path, repo_root, data_dir, "the status line")
+    if refusal:
+        return {"error": refusal}
+    cur = statusline_status(settings_path=settings_path)
+    existing = settings.get("statusLine")
+    if cur["state"] == "theirs" and not chain:
+        return {"error": "a status line that is not OrchestraOS's is configured; not replaced (chain=False)",
+                "state": "theirs"}
+    original = cur.get("original") if cur["state"] == "chained" else (
+        dict(existing) if cur["state"] == "theirs" and isinstance(existing, dict) else None)
+    base = dict(original) if original else {"type": "command"}
+    base["command"] = _statusline_command(repo_root, original)
+    rep = {"state": "chained" if original else "installed", "settings": str(settings_path),
+           "command": base["command"], "replaces": cur["state"]}
+    if dry_run:
+        return rep
+    settings["statusLine"] = base
+    _write(settings_path, settings)
+    return rep
+
+
+def remove_statusline(*, settings_path: Path, dry_run: bool = False) -> dict:
+    """Take our status line out. A chained one puts the user's original object back exactly as it was;
+    one we added to a file that had none is deleted. A status line that is not ours is left alone."""
+    settings_path = Path(os.path.expanduser(str(settings_path)))
+    try:
+        settings = _load(settings_path)
+    except ValueError as e:
+        return {"removed": False, "error": f"{settings_path} is not valid JSON ({e}); left untouched"}
+    cur = statusline_status(settings_path=settings_path)
+    if cur["state"] not in ("installed", "chained"):
+        return {"removed": False, "state": cur["state"]}
+    if cur["state"] == "chained":
+        settings["statusLine"] = cur["original"]
+    else:
+        settings.pop("statusLine", None)
+    if not dry_run:
+        _write(settings_path, settings)
+    return {"removed": True, "restored": cur["state"] == "chained", "settings": str(settings_path)}
+
+
 def main(argv=None) -> int:
     import argparse
     ap = argparse.ArgumentParser(description="install/inspect the OrchestraOS Claude Code hooks")
@@ -250,11 +372,22 @@ def main(argv=None) -> int:
     ap.add_argument("--repo-root", default=str(Path(__file__).resolve().parent.parent))
     ap.add_argument("--data-dir", default=os.environ.get("ORCHESTRA_DIR") or os.path.expanduser("~/orchestra"))
     ap.add_argument("--status", action="store_true")
-    ap.add_argument("--remove", action="store_true", help=f"remove every row tagged {MARKER}, nothing else")
+    ap.add_argument("--remove", action="store_true",
+                    help=f"remove every row tagged {MARKER} and our status line (a chained one is restored exactly)")
+    ap.add_argument("--statusline", choices=("install", "chain", "status", "remove"),
+                    help="the status line alone: install (refuses to replace yours), chain (keep yours), status, remove")
     ns = ap.parse_args(argv)
+    if ns.statusline:
+        sp = Path(ns.settings)
+        rep = (statusline_status(settings_path=sp) if ns.statusline == "status" else
+               remove_statusline(settings_path=sp) if ns.statusline == "remove" else
+               install_statusline(settings_path=sp, repo_root=Path(ns.repo_root), data_dir=Path(ns.data_dir),
+                                  chain=ns.statusline == "chain"))
+        print(json.dumps(rep, indent=2)); return 1 if rep.get("error") else 0
     if ns.remove:
         rep = remove(settings_path=Path(ns.settings))
-        print(json.dumps(rep, indent=2)); return 1 if rep.get("error") else 0
+        rep["statusline"] = remove_statusline(settings_path=Path(ns.settings))
+        print(json.dumps(rep, indent=2)); return 1 if rep.get("error") or rep["statusline"].get("error") else 0
     if ns.status:
         print(json.dumps(status(settings_path=Path(ns.settings), repo_root=Path(ns.repo_root)), indent=2)); return 0
     rep = install(settings_path=Path(ns.settings), repo_root=Path(ns.repo_root), data_dir=Path(ns.data_dir))
