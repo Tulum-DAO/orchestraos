@@ -6,6 +6,7 @@
  */
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { loadConfig } from './config.js';
 
 export type Registry = Record<string, { tier?: string } | null | undefined>;
 
@@ -24,7 +25,7 @@ export function routeTask(task: { slug?: string | null }, agents: Registry): str
 
 /** The install's registered seats (registry.json `agents`), {} when unreadable. */
 export function registeredAgents(
-  orchestraDir: string = process.env.ORCHESTRA_DIR || join(process.env.HOME || '', 'scripts/agent-orchestra'),
+  orchestraDir: string = process.env.ORCHESTRA_DIR || loadConfig().dataDir,   // the same rule as lib/db.ts
 ): Registry {
   try {
     return JSON.parse(readFileSync(join(orchestraDir, 'registry.json'), 'utf-8')).agents || {};

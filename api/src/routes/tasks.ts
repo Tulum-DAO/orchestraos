@@ -8,7 +8,7 @@ import { loadConfig } from '../lib/config.js';
 import { actingAgent } from '../lib/principal.js';
 
 const router = Router();
-const ORCHESTRA = process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
+const ORCHESTRA = process.env.ORCHESTRA_DIR || loadConfig().dataDir;   // the same rule as lib/db.ts
 const TASKS_DIR = join(ORCHESTRA, 'tasks');
 const CLIENTS_DIR = join(ORCHESTRA, 'state', 'clients');
 
