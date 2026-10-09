@@ -115,7 +115,8 @@ def test_compute_agents_reports_provider_and_subagents_end_to_end(tmp_path, monk
 
         def get_agent_status(self, sess):
             rt = {"seat": "claude", "gem": "gemini"}[sess]
-            return {"state": "working", "process": {"runtime": rt, "cpu": 1.0}}
+            # a real pid that started before the hook files were written (this test process)
+            return {"state": "working", "process": {"runtime": rt, "cpu": 1.0, "pid": os.getpid()}}
 
     monkeypatch.setattr(wg, "ORCH_DIR", tmp_path / "orch")
     monkeypatch.setattr(wg, "_agent_status", lambda: _AS())
@@ -154,3 +155,49 @@ def test_the_tail_cache_drops_entries_nobody_scans(tmp_path, monkeypatch):
     tp = _session(tmp_path, {"a": ([_rec("user"), _rec("assistant", "tool_use")], 5)}, now)
     wg.count_running_subagents(tp, now=now)
     assert not [p for p in wg._SUBAGENT_TAIL_CACHE if p.startswith("/gone/")]
+
+
+
+def _fleet(tmp_path, monkeypatch, event_ts, pid):
+    now = time.time()
+    tp = _session(tmp_path, {"a": ([_rec("user"), _rec("assistant", "tool_use")], 5)}, now)
+    panes = tmp_path / "orch" / "state" / "agent-events" / "panes"
+    panes.mkdir(parents=True)
+    (panes / "1.json").write_text(json.dumps({"ts": event_ts, "transcript_path": tp}))
+
+    class _AS:
+        def get_pane_id(self, sess):
+            return "%1"
+
+        def get_agent_status(self, sess):
+            return {"state": "idle", "process": {"runtime": "claude", "cpu": 0.0, "pid": pid}}
+
+    monkeypatch.setattr(wg, "ORCH_DIR", tmp_path / "orch")
+    monkeypatch.setattr(wg, "_agent_status", lambda: _AS())
+    monkeypatch.setattr(wg, "_tmux_session_names", lambda: ["svc"])
+    monkeypatch.setattr(wg, "_live_voice_call", lambda: None)
+    return {r["tmux_session"]: r for r in wg.compute_agents()}["svc"]
+
+
+def test_a_hook_file_older_than_the_panes_agent_is_not_its_recency(tmp_path, monkeypatch):
+    """tmux reuses pane ids after a restart, so a pane can carry another session's old hook file."""
+    started = wg._proc_start_epoch(os.getpid())
+    row = _fleet(tmp_path, monkeypatch, event_ts=started - 3600, pid=os.getpid())
+    assert row["last_used_ts"] == 0.0 and row["subagents"] == 0
+
+
+def test_a_pane_with_no_agent_process_has_no_hook_recency(tmp_path, monkeypatch):
+    row = _fleet(tmp_path, monkeypatch, event_ts=time.time(), pid=None)
+    assert row["last_used_ts"] == 0.0
+
+
+def test_a_current_hook_file_counts(tmp_path, monkeypatch):
+    ts = time.time()
+    row = _fleet(tmp_path, monkeypatch, event_ts=ts, pid=os.getpid())
+    assert row["last_used_ts"] == ts and row["subagents"] == 1
+
+
+def test_process_start_is_read_from_proc():
+    started = wg._proc_start_epoch(os.getpid())
+    assert started is not None and time.time() - 86400 * 30 < started <= time.time()
+    assert wg._proc_start_epoch(None) is None and wg._proc_start_epoch(2 ** 30) is None
