@@ -58,6 +58,14 @@ for (const id of ['m7', 'm8'])
     ts: `2026-10-09T10:30:1${id === 'm7' ? 0 : 1}.000000+00:00`, ack: null });
 ins.run({ id: 'm9', type: 'approval_resolved', from: 'approval-loop', to: 'agent-g', body: DECISION, status: 'pending', md: null,
   ts: '2026-10-09T10:30:10.000000+00:00', ack: null });
+// #327 review: (P4) the operator's OWN message that merely opens like an agent's must stay;
+// (P3) a row the drain has stamped but not yet acked is in B2's gap and must still be a card.
+const ALARM = 'pulse Level A: identity-invariant: gm tmux pane mismatch at 10:29Z (seat gm, pane %41)';
+ins.run({ id: 'm10', type: 'status', from: 'identity-reconciler', to: 'agent-h', body: ALARM, status: 'pending', md: null,
+  ts: '2026-10-09T10:30:09.000000+00:00', ack: null });
+const STAMPED = '[APPROVAL RESOLVED apr_22222222_22222222] Deploy the staging build -> approved';
+ins.run({ id: 'm11', type: 'approval_resolved', from: 'approval-loop', to: 'agent-i', body: STAMPED, status: 'pending',
+  md: '{"batch_id":"BSTAMP","processed_ts":"2026-10-09T10:31:00+00:00"}', ts: '2026-10-09T10:30:10.000000+00:00', ack: null });
 db.close();
 process.env.MSG_DB_PATH = DBP;
 const { normalizeTranscript } = await import('./chat-transcript.js');
@@ -144,5 +152,25 @@ test('ambiguity 2: two rows with ONE body (a re-send) bind to neither: no live c
 test('ambiguity 3: one body typed into the log TWICE binds to neither', () => {
   const env = run('agent-g', [assistantText('a1', 0, 'x'), queuedCommand('q1', 11, DECISION),
     queuedCommand('q2', 13, DECISION), assistantText('a2', 14, 'y')]);
+  assert.equal(cards(env.items).length, 0);
+});
+
+test('the operator\'s own message that only OPENS like a live card\'s body is never hidden', () => {
+  const mine = 'pulse Level A: identity-invariant: gm tmux pane mismatch -- is this the same one as yesterday? ignore it';
+  const env = run('agent-h', [assistantText('a1', 0, 'x'), queuedCommand('q1', 11, ALARM),
+    queuedCommand('q2', 13, mine), assistantText('a2', 14, 'y')]);
+  assert.deepEqual(cards(env.items).map((c) => c.key), ['msg:m10']);
+  assert.equal(env.items.filter((i) => i.kind === 'text' && i.text === mine).length, 1, 'the operator\'s bubble stays');
+  assert.equal(env.items.filter((i) => i.kind === 'text' && i.text === ALARM).length, 0, 'the agent\'s copy is the card');
+});
+
+test('a row the drain stamped but has not acked (B2 does not render it yet) is still a live card', () => {
+  const env = run('agent-i', midTurn(STAMPED));
+  assert.deepEqual(cards(env.items).map((c) => c.key), ['msg:m11']);
+  assert.equal(bubbles(env.items, STAMPED).length, 0);
+});
+
+test('a window with no real turn skips the live lane (no unbounded scan)', () => {
+  const env = run('agent-a', [queuedCommand('q1', 11, DECISION)]);
   assert.equal(cards(env.items).length, 0);
 });

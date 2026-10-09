@@ -91,8 +91,9 @@ function b1QueuedTurns(db: DB, agentId: string): any[] {
   }
 }
 
-// B2: acknowledged self-bound rows grouped by write-once metadata.batch_id.
-function b2Batches(db: DB, agentId: string): any[] {
+// B2: acknowledged self-bound rows grouped by write-once metadata.batch_id. `claimed` receives the
+// id of every row B2 renders, so B3 can take exactly the rest.
+function b2Batches(db: DB, agentId: string, claimed: Set<string> = new Set()): any[] {
   try {
     const rows = db.prepare(
       `SELECT id, from_agent, body, created_at, metadata, acknowledged_at FROM messages
@@ -105,6 +106,7 @@ function b2Batches(db: DB, agentId: string): any[] {
       try { md = r.metadata ? JSON.parse(r.metadata) : {}; } catch { md = {}; }
       const bid = md && typeof md.batch_id === 'string' ? md.batch_id : null;
       if (!bid) continue;
+      claimed.add(String(r.id));
       const b = batches.get(bid) || { entries: [], ts: '' };
       // rows arrive newest->oldest (created_at DESC) -> entries stay newest-first
       b.entries.push({ agent: String(r.from_agent ?? ''), sent_ts: String(r.created_at ?? ''), body: String(r.body ?? '') });
@@ -136,7 +138,10 @@ const norm = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
 // answer) or one body typed twice is AMBIGUOUS: no live card, and the drain's batch (B2) shows it
 // at the end of the turn as before. A late card is a timing annoyance; a card naming the wrong
 // sender, or two rows folded into one, is wrong data the operator cannot detect.
-function b3LiveCards(db: DB, agentId: string, items: any[], floorMs: number | null): any[] {
+function b3LiveCards(db: DB, agentId: string, items: any[], floorMs: number | null, claimed: Set<string>): any[] {
+  // No real turn in the window = nothing to anchor the search to: the unbounded scan cost 128 ms per
+  // poll on a busy seat (#327 review). Such a window has no mid-turn message to card anyway.
+  if (floorMs === null) return [];
   const queuedByText = new Map<string, any[]>();
   for (const it of items) {
     if (it?.kind !== 'text' || !it.queued) continue;
@@ -146,15 +151,17 @@ function b3LiveCards(db: DB, agentId: string, items: any[], floorMs: number | nu
   }
   if (!queuedByText.size) return [];
   try {
-    const floorIso = floorMs === null ? '' : new Date(floorMs - 60_000).toISOString();
+    const floorIso = new Date(floorMs - 60_000).toISOString();
+    // Every row B2 did NOT render, batch_id or not: the drain stamps batch_id BEFORE the row is acked,
+    // so "no batch_id" would leave a stamped-but-unacked row in neither lane (a bubble again).
     const rows = db.prepare(
       `SELECT id, from_agent, body, created_at FROM messages
         WHERE to_agent = ? AND type != 'held_message'
-          AND (metadata IS NULL OR metadata NOT LIKE '%"batch_id"%')
           AND created_at >= ?
         ORDER BY created_at DESC LIMIT ${LIVE_LIMIT}`).all(agentId, floorIso) as any[];
     const rowsByBody = new Map<string, any[]>();
     for (const r of rows) {
+      if (claimed.has(String(r.id))) continue;
       const b = norm(r.body);
       if (b.length < LIVE_MIN || !queuedByText.has(b)) continue;   // not injected yet: no card
       rowsByBody.set(b, [...(rowsByBody.get(b) || []), r]);
@@ -201,11 +208,21 @@ export function mergeQueuedItems(items: any[], agentId: string): any[] {
   // B1 (still-pending held turns) is CURRENT STATE and is never bounded: it is the only thing
   // on screen for an agent that has not started a turn yet, and dropping it would hide a
   // message the operator just sent. Only B2, which is history, is bounded.
-  const pending = b1QueuedTurns(db, agentId);
   const floor = earliestTurnMs(items);
-  const batches = boundQueuedBatches(b2Batches(db, agentId), floor);
-  // B3 needs the transcript's own evidence of injection, so it can never show a row early.
-  const live = b3LiveCards(db, agentId, items, floor);
+  // One read snapshot for all three lanes: a batch stamp or an ack landing between two queries
+  // must not drop a row out of both B2 and B3 for a poll.
+  let pending: any[] = [], batches: any[] = [], live: any[] = [];
+  try {
+    db.transaction(() => {
+      pending = b1QueuedTurns(db, agentId);
+      const claimed = new Set<string>();
+      batches = boundQueuedBatches(b2Batches(db, agentId, claimed), floor);
+      // B3 needs the transcript's own evidence of injection, so it can never show a row early.
+      live = b3LiveCards(db, agentId, items, floor, claimed);
+    })();
+  } catch {
+    return items;
+  }
   const synthetic = [...pending, ...batches, ...live];
   if (!synthetic.length) return items;
   return interleaveByTs(items.concat(synthetic));
