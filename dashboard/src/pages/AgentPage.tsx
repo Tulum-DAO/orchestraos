@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { agentRowsFrom } from '../lib/api';
 import { useParams } from 'react-router-dom';
 import { TopBar } from '../components/agent/TopBar';
@@ -11,7 +11,7 @@ import { useFeedHealth } from '../hooks/useFeedHealth';
 import { ReportSheet } from '../components/agent/ReportSheet';
 import { useAgentSettings } from '../stores/agentSettings';
 import { spawnAgent } from '../lib/api';
-import { composerGate } from '../lib/composerGate';
+import { composerGate, canStopTurn } from '../lib/composerGate';
 import { useAgents } from '../hooks/useAgents';
 import WebTerminal from '../components/WebTerminal';
 import ActionBar from '../components/ActionBar';
@@ -51,6 +51,47 @@ export default function AgentPage() {
   const seatRow = id && Array.isArray(rows) ? rows.find((a) => a.id === id) : undefined;
   const feed = useFeedHealth();
   const seat = id ? { id, generation: seatRow?.generation } : undefined;
+
+  // Stop = Esc into the seat's pane, the exact key the Dev-mode ActionBar's Esc sends. Offered
+  // only mid-turn with no menu open (canStopTurn): Esc at a prompt is an ANSWER (#334). Reads the
+  // seat row's raw `status` and `pending_menu`.
+  const seatStatus = (seatRow as { status?: string } | undefined)?.status;
+  const seatMenu = (seatRow as { pending_menu?: unknown } | undefined)?.pending_menu;
+  const canStop = canStopTurn({ state: seatStatus, pendingMenu: seatMenu });
+  const stopTurn = () => {
+    logAction('agent.stop', agentId);
+    return sendKeyToAgent(agentId, 'escape');
+  };
+
+  // THE FLOATING COMPOSER'S HEIGHT, measured. The transcript pads its bottom by it so the last
+  // message is never under the pill, and below 640px the Arturo pill lifts above it (it covered
+  // Send on phones). Published as --composer-h on the chat column and --agent-composer-h on the
+  // root (the Arturo pill lives outside this page); removed when the chat column unmounts.
+  const chatRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const dock = dockRef.current;
+    const col = chatRef.current;
+    if (!dock || !col) return;
+    const root = document.documentElement;
+    const apply = () => {
+      const h = Math.ceil(dock.getBoundingClientRect().height);
+      const scroller = col.querySelector<HTMLElement>('[data-testid="transcript-scroll"]');
+      // keep a reader who was at the bottom AT the bottom when the pill grows
+      const pinned = !!scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
+      // ...plus the Arturo pill, which lifts to sit on top of the dock (arturo.css), so the
+      // transcript clears both. Absent (pane open) = nothing to clear.
+      const arturo = document.querySelector('.arturo-pill');
+      const extra = arturo ? Math.ceil(arturo.getBoundingClientRect().height) + 8 : 0;
+      col.style.setProperty('--composer-h', `${h + extra}px`);
+      root.style.setProperty('--agent-composer-h', `${h}px`);
+      if (scroller && pinned) scroller.scrollTop = scroller.scrollHeight;
+    };
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(dock);
+    return () => { ro.disconnect(); root.style.removeProperty('--agent-composer-h'); };
+  }, [mode]);
 
   // Load settings from storage on mount
   useEffect(() => {
@@ -101,36 +142,47 @@ export default function AgentPage() {
           </div>
         </>
       ) : (
-        <>
-        {/* Main content. The agent rail lives in the Sidebar now — ONE nav column, not two. */}
+        <div ref={chatRef} className="relative flex-1 min-h-0 flex flex-col overflow-hidden">
+        {/* Main content. The agent rail lives in the Sidebar now — ONE nav column, not two.
+            The transcript fills the column and scrolls UNDER the floating composer below. */}
         <div className="flex-1 overflow-hidden flex flex-col min-h-0">
           <Feed agentId={agentId} />
         </div>
 
-        {/* THE LIVE STATUS LINE, pinned directly above the composer (Shaw's top charge: nothing on
-            the page said what the agent was doing right now, so the sidebar and the page could
-            contradict each other). Same row, same staleness verdict as the rail dot. */}
-        {/* The Resume branch in LiveStatusLine had NO caller anywhere, so a stopped agent was
-            told it would not see the message and offered nothing to do about it. */}
-        <LiveStatusLine
-          onResume={resume}
-          state={(seatRow as { status?: string } | undefined)?.status}
-          feed={feed}
-          stateAgeS={(seatRow as { state_age_s?: number } | undefined)?.state_age_s}
-          tool={(seatRow as { tool?: string } | undefined)?.tool}
-        />
+        {/* THE DOCK floats over the bottom of the transcript: the live status line, then the
+            pill. A fade under it keeps the text that scrolls behind from fighting the controls.
+            pointer-events pass through the fade to the transcript; the controls take them back. */}
+        <div ref={dockRef} data-testid="composer-dock" className="absolute inset-x-0 bottom-0 z-10 pointer-events-none">
+          <div aria-hidden className="absolute inset-x-0 bottom-0 top-6 bg-gradient-to-t from-background via-background/90 to-transparent" />
+          <div className="relative pointer-events-auto">
+            {/* THE LIVE STATUS LINE, directly above the composer (Shaw's top charge: nothing on
+                the page said what the agent was doing right now, so the sidebar and the page could
+                contradict each other). Same row, same staleness verdict as the rail dot. */}
+            {/* The Resume branch in LiveStatusLine had NO caller anywhere, so a stopped agent was
+                told it would not see the message and offered nothing to do about it. */}
+            <LiveStatusLine
+              onResume={resume}
+              state={seatStatus}
+              feed={feed}
+              stateAgeS={(seatRow as { state_age_s?: number } | undefined)?.state_age_s}
+              tool={(seatRow as { tool?: string } | undefined)?.tool}
+            />
 
-        <Composer
-          agentId={agentId}
-          seatName={id}
-          gate={composerGate({
-            state: (seatRow as { status?: string } | undefined)?.status,
-            pendingMenu: (seatRow as { pending_menu?: unknown } | undefined)?.pending_menu,
-            subagents: (seatRow as { subagents?: number } | undefined)?.subagents,
-          })}
-          subagents={(seatRow as { subagents?: number } | undefined)?.subagents}
-        />
-        </>
+            <Composer
+              agentId={agentId}
+              seatName={id}
+              gate={composerGate({
+                state: seatStatus,
+                pendingMenu: seatMenu,
+                subagents: (seatRow as { subagents?: number } | undefined)?.subagents,
+              })}
+              subagents={(seatRow as { subagents?: number } | undefined)?.subagents}
+              canStop={canStop}
+              onStop={stopTurn}
+            />
+          </div>
+        </div>
+        </div>
       )}
     </div>
   );

@@ -153,7 +153,12 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
             : 'flex-1 overflow-y-auto min-h-0 overscroll-y-contain flex flex-col justify-end'
         }
       >
-        <div className={compact ? undefined : "w-full max-w-[860px] mx-auto px-4 py-4 space-y-2.5"}>
+        {/* --composer-h: the agent page's FLOATING composer height, so the last message clears the
+            pill. Unset everywhere else (the Agents-page panel, the harness): 0, i.e. py-4 as before. */}
+        <div
+          className={compact ? undefined : "w-full max-w-[860px] mx-auto px-4 pt-4 space-y-2.5"}
+          style={compact ? undefined : { paddingBottom: 'calc(var(--composer-h, 0px) + 1rem)' }}
+        >
         {loading ? (
           <div className="flex items-center gap-2 px-1 py-2">
             <div className="w-2 h-2 bg-neutral-500 rounded-full animate-pulse" />

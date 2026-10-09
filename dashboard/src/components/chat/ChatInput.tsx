@@ -1,12 +1,13 @@
 /**
- * ChatInput — text input with send button, inject/inbox toggle, and file upload.
+ * ChatInput — the floating pill composer: attach (+), text, inject/inbox toggle, caller slots
+ * (model, voice) and a round send button that becomes Stop while the seat is mid-turn.
  */
-import { useState, useRef, type ReactNode } from 'react';
+import { useState, useRef, useLayoutEffect, type ReactNode } from 'react';
 import { clsx } from 'clsx';
-import { Send, Paperclip, X, ClipboardList } from 'lucide-react';
+import { ArrowUp, Square, Loader2, Plus, Paperclip, X, ClipboardList } from 'lucide-react';
 import { injectAgentVerified, type InjectResult } from '../../lib/api';
 import { sendToAgent, isDelivered, isQueued, isHeld, describeSendState } from '../../lib/agentSend';
-import { sendPanelHeadline, shouldSendPhoto, clearsComposer, retryText, canForceRetry } from '../../lib/composerGate';
+import { sendPanelHeadline, shouldSendPhoto, clearsComposer, retryText, canForceRetry, composerKeyAction } from '../../lib/composerGate';
 import { logAction } from '../../lib/user-actions';
 import { isLargePaste, fencePaste } from '../../lib/pastedText';
 
@@ -51,12 +52,18 @@ interface Props {
     opts: { force: boolean }
   ) => Promise<{ ok: boolean; note?: string; queued?: boolean; held?: boolean; refused?: boolean;
     composer_text?: string; stranded?: { text?: string; age_s?: number } }>;
-  /** Rendered on the SEND ROW, before the input. Secondary controls belong on this baseline
+  /** Rendered INSIDE the pill's right cluster, after the delivery mode and before `trailing`
+      (the agent page puts the model chip here). Secondary controls belong on this baseline
       rather than stacked underneath it — a second row of controls under Send reads as a
       junk drawer, which is the defect these two slots exist to prevent. */
   leading?: ReactNode;
-  /** Rendered on the SEND ROW, between the input and Send. */
+  /** Rendered inside the pill, immediately before Send/Stop (the agent page's voice controls). */
   trailing?: ReactNode;
+  /** May Stop be offered right now? The caller decides with composerGate.canStopTurn (mid-turn
+   *  AND no pending menu): Stop presses Esc, and Esc at a prompt ANSWERS it (#334). */
+  canStop?: boolean;
+  /** Interrupt the agent's turn (the same Esc key the Dev-mode ActionBar sends). Absent = no Stop. */
+  onStop?: () => Promise<unknown> | void;
 }
 
 async function uploadImage(file: File): Promise<string> {
@@ -68,7 +75,7 @@ async function uploadImage(file: File): Promise<string> {
   return data.path;
 }
 
-export default function ChatInput({ agentId, disabled, placeholder, attachSupported = true, draft, onDraftChange, onSend, leading, trailing }: Props) {
+export default function ChatInput({ agentId, disabled, placeholder, attachSupported = true, draft, onDraftChange, onSend, leading, trailing, canStop, onStop }: Props) {
   const [internalText, setInternalText] = useState('');
   // Single accessor pair every read/clear/paste/send path goes through, so
   // there is exactly one send path regardless of controlled vs internal
@@ -340,127 +347,57 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
   };
 
   const canSend = (text.trim() || pendingImage) && !sending && !disabled;
+  // The round button is STOP only while the seat is mid-turn with no menu open (the caller's
+  // canStop, see composerGate.canStopTurn) AND there is nothing to send: text typed mid-turn is
+  // still a send, because the CLI queues it.
+  const showStop = !!onStop && !!canStop && !text.trim() && !pendingImage && !sending;
+
+  // Stop presses Esc in the seat's pane. A ref, not state, guards it: two clicks in one frame
+  // both read the same `stopping` state, and Esc pressed twice can land on whatever the first
+  // one surfaced.
+  const stoppingRef = useRef(false);
+  const [stopping, setStopping] = useState(false);
+  const handleStop = async () => {
+    if (!onStop || !canStop || stoppingRef.current) return;
+    stoppingRef.current = true;
+    setStopping(true);
+    logAction('chat.stop', agentId, '');
+    try {
+      await onStop();
+    } catch (err: any) {
+      setResultOk(false);
+      setResult('Stop failed: ' + (err?.message || 'unknown'));
+    } finally {
+      stoppingRef.current = false;
+      setStopping(false);
+    }
+  };
+
+  // Grow upward with the text (1 line -> ~8, then scroll). Layout effect so dictation and
+  // programmatic clears resize before paint.
+  useLayoutEffect(() => {
+    const el = textAreaRef.current;
+    if (!el) return;
+    // Empty: one row, so a long placeholder clips instead of growing the pill on a phone.
+    if (!text) { el.style.height = ''; return; }
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+  }, [text]);
+
+  const heldChips = pastes.filter((p) => text.includes(pasteToken(p)));
+  const roundBtn = 'shrink-0 h-9 w-9 rounded-full flex items-center justify-center transition-colors';
 
   return (
     <div
-      className={clsx('px-3 py-2 border-t shrink-0 transition-colors', isDragging ? 'border-blue-500 bg-blue-500/5' : 'border-neutral-800')}
+      className="px-3 pt-1 pb-3 shrink-0"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      {pendingImage && (
-        <div className="flex items-center gap-2 px-3 py-1.5 mb-1.5 bg-neutral-800 rounded-lg border border-neutral-700">
-          {imagePreview
-            ? <img src={imagePreview} alt="preview" className="h-10 w-10 rounded object-cover" />
-            : <Paperclip size={16} className="text-neutral-400 shrink-0" />
-          }
-          <span className="text-xs text-neutral-400 truncate flex-1">{pendingImage.name}</span>
-          <button
-            onClick={clearImage}
-            className="text-neutral-500 hover:text-red-400 transition-colors"
-          >
-            <X size={14} />
-          </button>
-        </div>
-      )}
-      {/* Held large pastes — chips show WHAT is attached; the token in the text
-          shows WHERE. Only render chips whose token still survives in the text. */}
-      {pastes.filter((p) => text.includes(pasteToken(p))).length > 0 && (
-        <div className="flex flex-wrap gap-1.5 mb-1.5">
-          {pastes.filter((p) => text.includes(pasteToken(p))).map((p) => (
-            <span key={p.id} className="inline-flex items-center gap-1.5 px-2 py-1 bg-neutral-800 rounded-lg border border-neutral-700 text-xs text-neutral-300">
-              <ClipboardList size={13} className="text-neutral-400 shrink-0" />
-              Pasted text · {p.lines} lines
-              <button onClick={() => removePaste(p.id)} className="text-neutral-500 hover:text-red-400 transition-colors">
-                <X size={12} />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-      {/* ONE ROW (Shaw: "the composer is a junk drawer" — five controls across three rows, the
-          paperclip outside the input, the model picker an orphan caption, mic and phone on a
-          different baseline). Attach and the delivery mode live INSIDE the input shell; Send is
-          the only thing outside it. */}
-      <div className="flex items-end gap-2">
-        {leading}
-        <div className="flex-1 flex items-end gap-1 bg-neutral-950 border border-neutral-800 rounded-lg px-1.5 focus-within:border-neutral-600 transition-colors">
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={!attachSupported}
-            className={clsx(
-              'p-1.5 mb-1.5 rounded transition-colors',
-              !attachSupported
-                ? 'text-neutral-700 cursor-not-allowed'
-                : 'text-neutral-400 hover:text-neutral-200'
-            )}
-            title={attachSupported ? 'Attach file (image, PDF, CSV, audio…)' : 'Attachments not supported for this agent yet'}
-          >
-            <Paperclip size={16} />
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.csv,.txt,.md,.json,.html,.htm,.vtt,.srt,.docx,.xlsx,.pptx,.zip,.m4a,.mp3,.wav,image/png,image/jpeg,image/gif,image/webp,application/pdf,text/csv,application/json,text/html,audio/mpeg,audio/mp4"
-            className="hidden"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) handleFileUpload(file);
-            }}
-          />
-          <textarea
-            ref={textAreaRef}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onPaste={handlePaste}
-            placeholder={placeholder || 'Message your agent...'}
-            rows={2}
-            disabled={disabled}
-            className="flex-1 bg-transparent px-1 py-2 text-sm text-neutral-300 placeholder-neutral-600 resize-none focus:outline-none disabled:opacity-50"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-          />
-          {/* The delivery mode is a REAL control, not debug output — it chooses between typing
-              into the agent's terminal now and queuing to its inbox. It read as a leaked badge
-              because it was an unlabelled amber chip under the button, so it now sits inside the
-              input, says what it does, and never competes with the primary action. */}
-          <button
-            onClick={() => setInjectMode(!injectMode)}
-            title={injectMode
-              ? 'Delivering NOW, straight into the agent\u2019s terminal. Click to queue to its inbox instead.'
-              : 'Queuing to the agent\u2019s INBOX, read at its next turn. Click to deliver now instead.'}
-            className={clsx(
-              'shrink-0 self-end mb-2 text-[10px] px-1.5 py-0.5 rounded border transition-colors',
-              injectMode
-                ? 'text-neutral-300 border-neutral-700 hover:bg-neutral-800'
-                : 'text-neutral-400 border-neutral-800 hover:bg-neutral-800'
-            )}
-          >
-            {injectMode ? 'now' : 'inbox'}
-          </button>
-        </div>
-        {trailing}
-        {/* "Send" is what a person does. "Inject" is plumbing. */}
-        <button
-          onClick={() => handleSend()}
-          disabled={!canSend}
-          className={clsx(
-            'shrink-0 flex items-center gap-1 px-4 py-2 min-h-[44px] rounded-lg text-sm font-medium transition-colors',
-            !canSend
-              ? 'bg-neutral-800 text-neutral-600 cursor-not-allowed'
-              : 'bg-blue-500/15 text-blue-400 hover:bg-blue-500/25'
-          )}
-        >
-          <Send size={14} />
-          {sending ? '…' : 'Send'}
-        </button>
-      </div>
+      {/* Send outcome and the refusal/queued panel sit ABOVE the pill, so the pill never moves
+          under the operator's thumb when one appears. */}
       {busy && (
-        <div className="mt-1.5 rounded-lg border border-amber-700/50 bg-amber-500/5 px-2.5 py-1.5">
+        <div className="mb-1.5 mx-2 rounded-xl border border-amber-700/50 bg-card px-2.5 py-1.5 shadow-sm">
           <div className="text-[11px] text-amber-300">
             {sendPanelHeadline(busy)}
             {busy.state ? <span className="text-neutral-500"> ({busy.state})</span> : null}
@@ -500,10 +437,144 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
         </div>
       )}
       {result && (
-        <span className={clsx('text-[10px] mt-1 block', resultOk ? 'text-green-500' : 'text-red-400')}>
+        <span className={clsx('text-[10px] mb-1 px-3 block', resultOk ? 'text-green-500' : 'text-red-400')}>
           {result}
         </span>
       )}
+      {/* ONE FLOATING PILL (Shaw 2026-10-09: "floating pill CLI in chat mode with a model
+          selector, microphone, and a round send/stop button and a plus button on the left for
+          attaching"). Left: attach. Middle: the text. Right: delivery mode, the caller's slots
+          (model, voice), then send/stop. Attachments and held pastes ride INSIDE it, above the
+          text, so what is attached sits with what is being sent. */}
+      <div
+        data-testid="composer-pill"
+        className={clsx(
+          'rounded-[26px] border bg-card shadow-lg shadow-black/20 transition-colors',
+          isDragging ? 'border-blue-500 bg-blue-500/5' : 'border-border focus-within:border-foreground/25'
+        )}
+      >
+        {(pendingImage || heldChips.length > 0) && (
+          <div className="flex flex-wrap items-center gap-1.5 px-3 pt-2.5">
+            {pendingImage && (
+              <span className="inline-flex items-center gap-2 max-w-full pl-1 pr-2 py-1 bg-muted rounded-xl border border-border">
+                {imagePreview
+                  ? <img src={imagePreview} alt="preview" className="h-9 w-9 rounded-lg object-cover" />
+                  : <Paperclip size={16} className="text-muted-foreground shrink-0 mx-1" />
+                }
+                <span className="text-xs text-muted-foreground truncate max-w-[180px]">{pendingImage.name}</span>
+                <button onClick={clearImage} aria-label="Remove attachment" className="text-muted-foreground hover:text-red-400 transition-colors">
+                  <X size={14} />
+                </button>
+              </span>
+            )}
+            {/* Held large pastes — chips show WHAT is attached; the token in the text shows
+                WHERE. Only chips whose token still survives in the text. */}
+            {heldChips.map((p) => (
+              <span key={p.id} className="inline-flex items-center gap-1.5 px-2 py-1 bg-muted rounded-xl border border-border text-xs text-foreground/80">
+                <ClipboardList size={13} className="text-muted-foreground shrink-0" />
+                Pasted text · {p.lines} lines
+                <button onClick={() => removePaste(p.id)} aria-label="Remove pasted text" className="text-muted-foreground hover:text-red-400 transition-colors">
+                  <X size={12} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="flex items-end gap-1 p-1.5">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={!attachSupported}
+            aria-label="Attach a file"
+            className={clsx(
+              roundBtn,
+              !attachSupported
+                ? 'text-muted-foreground/40 cursor-not-allowed'
+                : 'text-foreground/70 hover:text-foreground hover:bg-muted'
+            )}
+            title={attachSupported ? 'Attach file (image, PDF, CSV, audio…)' : 'Attachments not supported for this agent yet'}
+          >
+            <Plus size={20} />
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.csv,.txt,.md,.json,.html,.htm,.vtt,.srt,.docx,.xlsx,.pptx,.zip,.m4a,.mp3,.wav,image/png,image/jpeg,image/gif,image/webp,application/pdf,text/csv,application/json,text/html,audio/mpeg,audio/mp4"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) handleFileUpload(file);
+            }}
+          />
+          <textarea
+            ref={textAreaRef}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onPaste={handlePaste}
+            placeholder={placeholder || 'Message your agent...'}
+            rows={1}
+            disabled={disabled}
+            aria-label="Message"
+            className="flex-1 min-w-0 self-center bg-transparent px-1.5 py-2 text-sm leading-5 text-foreground placeholder:text-muted-foreground placeholder:whitespace-nowrap placeholder:text-ellipsis resize-none focus:outline-none disabled:opacity-50"
+            onKeyDown={(e) => {
+              // BEHAVIOUR CHANGE (2026-10-09): Enter sends, Shift+Enter is a newline. It used to be
+              // Cmd/Ctrl+Enter only, which still sends. Touch keyboards keep Enter as a newline.
+              const action = composerKeyAction({
+                key: e.key, shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey,
+                isComposing: e.nativeEvent.isComposing,
+                coarse: typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches,
+                canStop: !!onStop && !!canStop,
+              });
+              if (action === 'send') { e.preventDefault(); handleSend(); }
+              else if (action === 'stop') { e.preventDefault(); void handleStop(); }
+            }}
+          />
+          {/* The delivery mode is a REAL control, not debug output — it chooses between typing
+              into the agent's terminal now and queuing to its inbox. Kept, restyled to sit in the
+              pill's right cluster without competing with send. */}
+          <button
+            type="button"
+            onClick={() => setInjectMode(!injectMode)}
+            title={injectMode
+              ? 'Delivering NOW, straight into the agent’s terminal. Click to queue to its inbox instead.'
+              : 'Queuing to the agent’s INBOX, read at its next turn. Click to deliver now instead.'}
+            className="shrink-0 h-9 px-1.5 text-[11px] rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          >
+            {injectMode ? 'now' : 'inbox'}
+          </button>
+          {leading}
+          {trailing}
+          {showStop ? (
+            <button
+              type="button"
+              onClick={() => void handleStop()}
+              disabled={stopping}
+              aria-label={stopping ? 'Stopping' : 'Stop the agent'}
+              title={stopping ? 'Stopping…' : 'Stop — interrupt the agent’s turn (Esc)'}
+              className={clsx(roundBtn, 'bg-foreground text-background hover:opacity-90 disabled:opacity-60')}
+            >
+              {stopping ? <Loader2 size={16} className="animate-spin" /> : <Square size={13} fill="currentColor" />}
+            </button>
+          ) : (
+            /* "Send" is what a person does. "Inject" is plumbing. */
+            <button
+              type="button"
+              onClick={() => handleSend()}
+              disabled={!canSend}
+              aria-label="Send"
+              title="Send (Enter)"
+              className={clsx(
+                roundBtn,
+                !canSend
+                  ? 'bg-muted text-muted-foreground cursor-not-allowed'
+                  : 'bg-foreground text-background hover:opacity-90'
+              )}
+            >
+              {sending ? <Loader2 size={16} className="animate-spin" /> : <ArrowUp size={18} strokeWidth={2.5} />}
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { composerGate, delegatedWorkLabel, refusalCopy, refusalHeadline, sendPanelHeadline, shouldSendPhoto, clearsComposer, retryText, canForceRetry, STATE_COPY } from './composerGate.ts';
+import { composerGate, delegatedWorkLabel, refusalCopy, refusalHeadline, sendPanelHeadline, shouldSendPhoto, clearsComposer, retryText, canForceRetry, STATE_COPY, canStopTurn, composerKeyAction } from './composerGate.ts';
 
 // THE BUG (Shaw, 2026-10-06): a seat running a sub-agent read `working`, so chat refused to
 // send — while its CLI was accepting and queueing the same message. Measured live: 17 seats
@@ -201,4 +201,54 @@ test('a forced retry of a refused photo-only send is allowed; an empty retry is 
   assert.equal(canForceRetry('', 'stranded', false), false, 'nothing to send');
   assert.equal(canForceRetry('', 'queued', true), false, 'a queued photo was already uploaded');
   assert.equal(canForceRetry('hello', 'queued', false), true);
+});
+
+// ── Stop + keymap (floating pill composer). Stop presses Esc in the seat's pane, and Esc at a
+// prompt is an ANSWER, so the guard is the whole safety story (#334).
+
+test('Stop is offered for a mid-turn seat: working and thinking', () => {
+  assert.equal(canStopTurn({ state: 'working' }), true);
+  assert.equal(canStopTurn({ state: 'thinking' }), true);
+});
+
+test('Stop is NEVER offered while a menu is open, even mid-turn: Esc would answer it', () => {
+  assert.equal(canStopTurn({ state: 'working', pendingMenu: { options: ['Yes', 'No'] } }), false);
+  assert.equal(canStopTurn({ state: 'thinking', pendingMenu: { question: 'Allow?' } }), false);
+});
+
+test('Stop is not offered for idle, stalled, waiting, stopped or an unknown seat', () => {
+  for (const state of ['idle', 'stalled', 'waiting', 'waiting_permission', 'stopped', 'unknown', '', undefined]) {
+    assert.equal(canStopTurn({ state }), false, String(state));
+  }
+});
+
+test('working -> stop; working + menu -> send stays gated and no key is sent; idle -> send', () => {
+  // working: the button is Stop and Esc stops
+  assert.equal(composerKeyAction({ key: 'Escape', canStop: canStopTurn({ state: 'working' }) }), 'stop');
+  // working + pending_menu: the gate blocks the send, and Esc does nothing to the seat
+  const menu = { options: ['1', '2'] };
+  assert.equal(composerGate({ state: 'working', pendingMenu: menu }).send, 'blocked');
+  assert.equal(composerKeyAction({ key: 'Escape', canStop: canStopTurn({ state: 'working', pendingMenu: menu }) }), 'none');
+  // idle: Enter sends, Esc does nothing
+  assert.equal(composerKeyAction({ key: 'Enter', canStop: canStopTurn({ state: 'idle' }) }), 'send');
+  assert.equal(composerKeyAction({ key: 'Escape', canStop: canStopTurn({ state: 'idle' }) }), 'none');
+});
+
+test('keymap: Enter sends, Shift+Enter is a newline, Cmd/Ctrl+Enter sends', () => {
+  assert.equal(composerKeyAction({ key: 'Enter' }), 'send');
+  assert.equal(composerKeyAction({ key: 'Enter', shiftKey: true }), 'none');
+  assert.equal(composerKeyAction({ key: 'Enter', metaKey: true }), 'send');
+  assert.equal(composerKeyAction({ key: 'Enter', ctrlKey: true }), 'send');
+  assert.equal(composerKeyAction({ key: 'a' }), 'none');
+});
+
+test('keymap: on a touch device Enter is a newline; Cmd/Ctrl+Enter still sends', () => {
+  assert.equal(composerKeyAction({ key: 'Enter', coarse: true }), 'none');
+  assert.equal(composerKeyAction({ key: 'Enter', coarse: true, ctrlKey: true }), 'send');
+});
+
+test('keymap: IME composition never sends or stops', () => {
+  assert.equal(composerKeyAction({ key: 'Enter', isComposing: true }), 'none');
+  assert.equal(composerKeyAction({ key: 'Enter', metaKey: true, isComposing: true }), 'none');
+  assert.equal(composerKeyAction({ key: 'Escape', isComposing: true, canStop: true }), 'none');
 });
