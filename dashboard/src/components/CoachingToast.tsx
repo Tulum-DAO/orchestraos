@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Lightbulb, Check, X } from 'lucide-react';
 import { getPendingInsights, respondToInsight } from '../lib/api';
+import { operatorUserId } from '../lib/runtimeConfig';
 
 export default function CoachingToast() {
   const queryClient = useQueryClient();
@@ -44,7 +45,7 @@ export default function CoachingToast() {
 
   const respond = useMutation({
     mutationFn: ({ id, action }: { id: string; action: 'accept' | 'dismiss' }) =>
-      respondToInsight('operator', id, action),
+      respondToInsight(operatorUserId(), id, action),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pending-insights'] });
       queryClient.invalidateQueries({ queryKey: ['all-insights'] });

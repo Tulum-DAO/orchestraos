@@ -38,8 +38,5 @@ export const CONVERSE_ENDPOINT =
 export const JARVIS_TOKEN =
   (import.meta.env.VITE_JARVIS_TOKEN as string | undefined) || 'dev-mock-token';
 
-/** Default user identity for the dashboard bubble surface. */
-export const DEFAULT_USER = 'operator';
-
 /** Rendering surface for the dashboard converse UI (never scopes state). */
 export const DEFAULT_CHANNEL = 'bubble';

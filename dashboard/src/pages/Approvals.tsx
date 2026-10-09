@@ -15,6 +15,7 @@ import {
   type MenuOption,
 } from '../lib/menuAnswer';
 import MenuAnswerBlock from '../components/chat/MenuAnswerCard';
+import { operatorUserId } from '../lib/runtimeConfig';
 
 async function fetchJson<T>(path: string): Promise<T> {
   const res = await fetch(`/api${path}`);
@@ -249,7 +250,7 @@ export default function Approvals() {
                         failure
                       </span>
                     )}
-                    {item.initiated_by === 'operator' && (
+                    {item.initiated_by === operatorUserId() && (
                       <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/30 flex items-center gap-1">
                         <User size={9} /> the operator
                       </span>

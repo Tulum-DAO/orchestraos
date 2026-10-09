@@ -7,6 +7,7 @@ import {
   AlertTriangle,
   BookOpen,
 } from 'lucide-react';
+import { operatorUserId } from '../lib/runtimeConfig';
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -350,7 +351,7 @@ export default function CommandCenter() {
           agents: (p.agents || []).map((a: any) => ({ id: a.id, name: a.name, tier: a.tier || 'T2', alive: a.alive || false })),
           client: {
             name: p.name,
-            owner: 'operator',
+            owner: operatorUserId(),
             status: p.status || 'active',
             pm_agent: p.pm || null,
           },

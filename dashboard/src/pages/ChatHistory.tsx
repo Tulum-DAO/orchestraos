@@ -12,6 +12,7 @@ import {
   Smartphone,
   Monitor,
 } from 'lucide-react';
+import { operatorUserId } from '../lib/runtimeConfig';
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -189,11 +190,11 @@ function ThreadPanel({
     setSending(true);
     setSendError('');
     try {
-      const to = conversation.participants.find(p => p !== 'operator') ||
-        conversation.from_agent !== 'operator' ? conversation.from_agent : conversation.to_agent;
+      const to = conversation.participants.find(p => p !== operatorUserId()) ||
+        conversation.from_agent !== operatorUserId() ? conversation.from_agent : conversation.to_agent;
       await sendMessage({
         conversation_id: conversationId,
-        from: 'operator',
+        from: operatorUserId(),
         to: to || 'gm',
         subject: conversation.subject || 'Reply',
         body: replyText.trim(),
@@ -221,7 +222,7 @@ function ThreadPanel({
           <div className="text-center text-neutral-600 py-6 text-sm">No messages yet</div>
         )}
         {messages.map((msg) => {
-          const isOperator = msg.from_agent === 'operator';
+          const isOperator = msg.from_agent === operatorUserId();
           return (
             <div key={msg.id} className="flex gap-3 px-4 py-3">
               <div
@@ -394,10 +395,10 @@ function OperatorMessageCard({ msg }: { msg: any }) {
       <div
         className={clsx(
           'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0 mt-0.5',
-          agentColor(msg.from || 'operator')
+          agentColor(msg.from || operatorUserId())
         )}
       >
-        {agentInitial(msg.from || 'operator')}
+        {agentInitial(msg.from || operatorUserId())}
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-0.5 flex-wrap">
