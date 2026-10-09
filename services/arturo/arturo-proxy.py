@@ -2107,7 +2107,9 @@ _NOT_YOUR_THREAD = {"ok": False, "error": "thread_not_yours"}
 
 
 def _thread_key(principal):
-    """The principal a thread is filed under: the stamped one, or the archive's ANONYMOUS."""
+    """The principal a thread is filed under: the stamped one, or the archive's ANONYMOUS. Only "fleet" is
+    verified (the stamp secret). A "device:<id>" label, or no label, is believed as sent: the gateway always
+    builds it fresh, and anything else that can reach this loopback-only port is already a local process."""
     return principal or _thread_store.ANONYMOUS
 
 
@@ -2119,11 +2121,12 @@ def _thread_refusal(conversation_id, principal):
         return None
     cid = (conversation_id or "").strip()[:200]
     owner = _THREADS.started_by(cid)
-    if owner is None and not _THREADS.usable:
-        # An unusable archive fails no turn, but cannot say whose a conversation is: one this process holds
-        # history for stays the dashboard's.
+    if owner is None:
+        # Not in the archive. A conversation this process still holds history for is one whose turns were never
+        # archived (an unusable archive, or a record_turn that failed): whose it is is unknown, so it stays the
+        # dashboard's. Fail-closed: a device's own unarchived conversation is refused too.
         return _NOT_YOUR_THREAD if _TEXT_HISTORY.get(cid) else None
-    if owner is None or owner == _thread_key(principal):
+    if owner == _thread_key(principal):
         return None
     return _NOT_YOUR_THREAD
 
@@ -6199,6 +6202,13 @@ def text_stream_endpoint():
         if _turn is not None:
             _TURN_IDS.drop(conversation_id, tid, _turn["req"])
         return jsonify(_BUSY), 409
+    if _thread_refusal(conversation_id, principal):
+        # Again under the lock: a dashboard turn that started this thread while this one waited for the lock
+        # must not hand its history to this caller (text_turn re-checks the same way for /text).
+        _token.release()
+        if _turn is not None:
+            _TURN_IDS.drop(conversation_id, tid, _turn["req"])
+        return jsonify(_NOT_YOUR_THREAD), 403
     if _turn is not None:
         answered = _claim_turn_id(_turn, _token)
         if answered:

@@ -124,3 +124,36 @@ def test_an_unusable_archive_fails_no_new_turn_but_shows_no_device_a_held_conver
     assert _say(P, DEV_A, "dev_new", "hi").status_code == 200                    # a fresh conversation still runs
     r = _say(P, DEV_A, "web_new", "what did we just say?")
     assert r.status_code == 403 and r.get_json()["error"] == "thread_not_yours"
+
+
+def test_a_dashboard_turn_that_starts_the_thread_while_a_stream_waits_for_the_lock_is_not_handed_over(
+        P, fleet, calls, monkeypatch):
+    # #322 review SF1: the stream's first check ran before the lock; the dashboard's first turn landed in between.
+    real_acquire = P._TURN_LOCKS.acquire
+
+    def acquire(key, timeout=None):
+        if key == "race_1" and P._THREADS.started_by("race_1") is None:
+            P._THREADS.record_turn("race_1", "fleet secret plans", "reply 0", principal="fleet")
+            P._TEXT_HISTORY.append("race_1", "user", "fleet secret plans")
+        return real_acquire(key) if timeout is None else real_acquire(key, timeout=timeout)
+    monkeypatch.setattr(P._TURN_LOCKS, "acquire", acquire)
+    n = len(calls)
+    r = _say(P, DEV_A, "race_1", "what did they say?", route="/text/stream")
+    assert r.status_code == 403 and r.get_json()["error"] == "thread_not_yours"
+    assert len(calls) == n and P._THREADS.turn_count("race_1") == 2
+    assert not P._TURN_LOCKS.busy("race_1")                   # the lock it took is given back
+
+
+def test_a_dashboard_turn_the_archive_failed_to_record_is_not_a_device_s_to_take(P, fleet, calls, monkeypatch):
+    # #322 review SF2: a usable archive whose record_turn failed once left the turn in memory with no thread row.
+    real = P._THREADS.record_turn
+    monkeypatch.setattr(P._THREADS, "record_turn",
+                        lambda cid, *a, **kw: False if cid == "lost_1" else real(cid, *a, **kw))
+    assert _say(P, fleet, "lost_1", "fleet secret plans").status_code == 200
+    assert P._THREADS.started_by("lost_1") is None and P._TEXT_HISTORY.get("lost_1")
+    n = len(calls)
+    for route in ("/text", "/text/stream"):
+        r = _say(P, DEV_A, "lost_1", "what did we say?", route=route)
+        assert r.status_code == 403 and r.get_json()["error"] == "thread_not_yours", route
+    assert len(calls) == n
+    assert _say(P, fleet, "lost_1", "still mine").status_code == 200
