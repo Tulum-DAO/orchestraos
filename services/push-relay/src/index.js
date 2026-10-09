@@ -3,6 +3,7 @@
 //
 //   app     -> relay: GET /v1/challenge, POST /v1/devices (App Attest), PUT/DELETE /v1/devices/:h (assertion)
 //   gateway -> relay: POST /v1/installs, POST /v1/push (HMAC-signed)
+//   anyone  -> relay: GET /health (or /v1/health): booleans only, 503 when it could not push
 //
 // The relay writes every alert's text itself from a fixed template. A gateway sends a kind, a
 // count and an opaque card id, never words, so the worst a gateway can do is nudge devices that
@@ -292,6 +293,33 @@ function concatBody(ts, raw) {
   return out;
 }
 
+// ---------------------------------------------------------------------------- health
+
+// Open to anyone, so it answers booleans only: no ids, counts, versions or key material.
+// 200 when the relay could actually serve a push: D1 answers, the config is present and the
+// APNs key imports as P-256. 503 otherwise, so an uptime check fails on a broken deploy rather
+// than on a crash.
+async function health(c) {
+  let db = false;
+  try {
+    db = (await c.DB.prepare("SELECT 1 AS one").first())?.one === 1;
+  } catch {
+    db = false;
+  }
+  const e = c.env;
+  const config = Boolean(e.TEAM_ID && e.APNS_KEY_ID && bundleIds(e).length);
+  let apns_key = false;
+  try {
+    await crypto.subtle.importKey("pkcs8", pemToDer(String(e.APNS_KEY || "")),
+      { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+    apns_key = true;
+  } catch {
+    apns_key = false;
+  }
+  const ok = db && config && apns_key;
+  return json({ ok, db, config, apns_key }, ok ? 200 : 503);
+}
+
 // ---------------------------------------------------------------------------- router
 
 export function createRelay(deps = {}) {
@@ -300,7 +328,7 @@ export function createRelay(deps = {}) {
       const c = context(env, deps);
       const path = new URL(request.url).pathname;
       try {
-        if (request.method === "GET" && path === "/v1/health") return json({ ok: true });
+        if (request.method === "GET" && (path === "/health" || path === "/v1/health")) return await health(c);
         if (request.method === "GET" && path === "/v1/challenge") return await issueChallenge(request, c);
         if (request.method === "POST" && path === "/v1/devices") return await registerDevice(request, c);
         const m = /^\/v1\/devices\/([A-Za-z0-9_-]{16,64})$/.exec(path);

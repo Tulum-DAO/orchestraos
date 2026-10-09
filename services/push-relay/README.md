@@ -53,6 +53,10 @@ Gateway ↔ relay:
 the token is gone (the relay deletes the device; the gateway should drop the handle); `429` when
 rate-limited; `502` with APNs' reason otherwise.
 
+Health: `GET /health` (also `/v1/health`) answers `{ok, db, config, apns_key}`, booleans only,
+with 200 when the relay could serve a push and 503 otherwise (D1 down, config missing, or the APNs
+key does not import). Point uptime checks at it.
+
 Limits: 30 pushes per device per hour, 300 per install per hour; per IP, 30 challenges an hour,
 20 registrations and 10 installs a day.
 

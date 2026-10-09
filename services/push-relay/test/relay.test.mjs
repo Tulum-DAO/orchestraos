@@ -365,7 +365,32 @@ test("an oversized body is refused", async () => {
 
 test("unknown routes are 404 and health is open", async () => {
   assert.equal((await call(req("GET", "/v1/nope"))).status, 404);
-  assert.deepEqual(await (await call(req("GET", "/v1/health"))).json(), { ok: true });
+  for (const path of ["/health", "/v1/health"]) {
+    const r = await call(req("GET", path));
+    assert.equal(r.status, 200);
+    assert.deepEqual(await r.json(), { ok: true, db: true, config: true, apns_key: true });
+  }
+});
+
+test("health is 503 and names the part when the relay could not push", async () => {
+  const check = async (over, part) => {
+    const r = await relay.fetch(req("GET", "/health"), { ...env, ...over });
+    assert.equal(r.status, 503);
+    const b = await r.json();
+    assert.equal(b.ok, false);
+    assert.equal(b[part], false);
+  };
+  await check({ APNS_KEY: undefined }, "apns_key");
+  await check({ APNS_KEY: "not-a-pem-key" }, "apns_key");
+  await check({ TEAM_ID: "" }, "config");
+  await check({ BUNDLE_IDS: " , " }, "config");
+  await check({ DB: { prepare: () => ({ first: async () => { throw new Error("d1 down"); } }) } }, "db");
+});
+
+test("health answers booleans only (no ids, counts or key material)", async () => {
+  const b = await (await call(req("GET", "/health"))).json();
+  assert.deepEqual(Object.keys(b).sort(), ["apns_key", "config", "db", "ok"]);
+  assert.ok(Object.values(b).every((v) => typeof v === "boolean"));
 });
 
 test("the strict CBOR decoder refuses trailing bytes, tags and floats", () => {
