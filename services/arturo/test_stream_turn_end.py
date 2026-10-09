@@ -31,7 +31,7 @@ def _turn_end(evs):
 def test_an_onboarding_turn_goes_down_the_whole_turn_path_with_its_marker_applied(P, monkeypatch):
     seen = {}
 
-    def whole_turn(text, conversation_id, brain=None, context=None):
+    def whole_turn(text, conversation_id, brain=None, context=None, principal=None):
         seen["text"] = text
         return 200, {"ok": True, "reply_text": "Nice to meet you, Mo.", "conversation_id": conversation_id,
                      "tools_called": ["set_operator_fact"], "spawned": [], "operator": {"name": "Mo"},
@@ -68,7 +68,7 @@ def test_a_streamed_turn_end_carries_what_the_turn_spawned_and_the_operator(P, m
 
 
 def test_the_marker_is_found_on_the_message_even_with_page_context(P, monkeypatch):
-    monkeypatch.setattr(P, "text_turn", lambda text, conversation_id, brain=None, context=None: (
+    monkeypatch.setattr(P, "text_turn", lambda text, conversation_id, brain=None, context=None, principal=None: (
         200, {"ok": True, "reply_text": "ok", "tools_called": [], "spawned": [], "operator": {}}))
     monkeypatch.setattr(P._text_stream, "stream_turn",
                         lambda **kw: (_ for _ in ()).throw(AssertionError("an onboarding turn must not stream")))
@@ -94,7 +94,7 @@ def test_the_streams_fallback_inherits_the_streams_dedupe_ledger(P, monkeypatch)
     # fallback (it made a fresh ledger: send_telegram twice).
     seen = {}
 
-    def whole_turn(text, conversation_id, brain=None, context=None):
+    def whole_turn(text, conversation_id, brain=None, context=None, principal=None):
         seen["ledger"] = P._turn_ledger()
         return 200, {"ok": True, "reply_text": "ok", "tools_called": [], "spawned": []}
 
@@ -141,7 +141,7 @@ def test_merged_spawned_keeps_order_and_never_duplicates_a_seat(P, monkeypatch):
 # streaming it bought nothing and cost the tools.
 
 def test_a_codex_turn_runs_whole_through_the_tool_loop(P, monkeypatch):
-    monkeypatch.setattr(P, "text_turn", lambda text, conversation_id, brain=None, context=None: (
+    monkeypatch.setattr(P, "text_turn", lambda text, conversation_id, brain=None, context=None, principal=None: (
         200, {"ok": True, "reply_text": "Four sessions.", "tools_called": ["list_agents"], "spawned": []}))
     monkeypatch.setattr(P._text_stream, "stream_turn",
                         lambda **kw: (_ for _ in ()).throw(AssertionError("codex must not take the cold stream")))
