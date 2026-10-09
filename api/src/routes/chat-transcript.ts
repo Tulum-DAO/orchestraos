@@ -434,8 +434,8 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
   if (pdir && existsSync(pdir)) {
     try {
       // A project dir is shared by every seat with that cwd, so its newest file can be anyone's.
-      // A seat the store knows (its lineage has a canonical row, even with no session yet: a service
-      // pane) takes only its OWN lineage's sessions here; any other seat keeps the old rule minus
+      // A seat the store knows (its lineage owns a session or has a canonical row, even with no
+      // session yet: a service pane) takes only its OWN lineage's sessions here; any other seat keeps the old rule minus
       // sessions the store gives to someone else. Subagent sidechains (agent-*.jsonl) are never a
       // seat's chat. Lazy: stops at the first acceptable file.
       const known = !!store && [...store.roots].some((r) => lineageOf(r) === lineageOf(agentId));

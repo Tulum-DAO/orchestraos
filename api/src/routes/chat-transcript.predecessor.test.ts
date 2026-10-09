@@ -20,6 +20,7 @@ const SEAT = 'zz-transcript-seat';            // never a real tmux session on an
 const OLD = '11111111-2222-4333-8444-000000000001';
 const CUR = '11111111-2222-4333-8444-000000000002';
 const OTHER = '11111111-2222-4333-8444-000000000003';
+const RETIRED = '11111111-2222-4333-8444-000000000004';
 
 const root = mkdtempSync(join(tmpdir(), 'transcript-pred-'));
 const home = join(root, 'home');
@@ -49,6 +50,9 @@ function store() {
   db.prepare('INSERT INTO lineages (root, cwd) VALUES (?, ?)').run('zz-service', '/repo');
   db.prepare("INSERT INTO generations (id, root, generation, session_id, promoted_at) VALUES (4, 'zz-service', 1, NULL, 'd')").run();
   db.prepare("INSERT INTO canonical VALUES ('zz-service', 4, 'zz-service', 'online')").run();
+  // a retired lineage: sessions in the store, no canonical row
+  db.prepare('INSERT INTO lineages (root, cwd) VALUES (?, ?)').run('zz-retired', '/repo');
+  db.prepare("INSERT INTO generations (id, root, generation, session_id, promoted_at, retired_at) VALUES (5, 'zz-retired', 1, ?, 'e', 'f')").run(RETIRED);
   db.close();
 }
 store();
@@ -107,4 +111,10 @@ test('a lineage the store knows with no session yet (a service pane) never takes
   transcript('99999999-2222-4333-8444-00000000000a', 0);     // a headless job the store does not know, newest
   writeFileSync(join(orch, 'state', 'agent-sessions.json'), JSON.stringify({ 'zz-service': { cwd: '/repo' } }));
   assert.equal(resolveTranscriptPath('zz-service').path, null);
+});
+
+test('a retired lineage (sessions in the store, no canonical row) never takes someone else\'s newest file', () => {
+  transcript('99999999-2222-4333-8444-00000000000b', 0);     // a headless job the store does not know, newest
+  writeFileSync(join(orch, 'state', 'agent-sessions.json'), JSON.stringify({ 'zz-retired': { cwd: '/repo' } }));
+  assert.equal(resolveTranscriptPath('zz-retired').path, null);
 });

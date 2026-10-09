@@ -81,8 +81,9 @@ export function canonicalTmuxSession(id: string, orch: string = ORCHESTRA_DIR): 
   return canon?.[id]?.tmux_session ?? null;
 }
 
-/** Every session id the identity store knows -> {root, current}, plus every root with a canonical
- *  row (a service pane's lineage has one, with no session id yet), in ONE read. For callers that test
+/** Every session id the identity store knows -> {root, current}, plus every root the store knows
+ *  (one that owns a session, or has a canonical row: a service pane's lineage has one with no
+ *  session id yet), in ONE read. For callers that test
  *  many ids (a project dir can hold thousands of transcripts): one DB open, not one per id. null when
  *  the store is absent/unreadable. */
 export function sessionOwners(orch: string = ORCHESTRA_DIR):
@@ -98,7 +99,8 @@ export function sessionOwners(orch: string = ORCHESTRA_DIR):
     ).all() as { sid: string; root: string; current: number | null }[];
     const sessions = new Map<string, { root: string; current: boolean }>();
     for (const r of rows) sessions.set(r.sid, { root: r.root, current: r.current === 1 });
-    const roots = new Set((db.prepare('SELECT root FROM canonical').all() as { root: string }[]).map((r) => r.root));
+    const roots = new Set(rows.map((r) => r.root));
+    for (const r of db.prepare('SELECT root FROM canonical').all() as { root: string }[]) roots.add(r.root);
     return { sessions, roots };
   } catch {
     return null;
