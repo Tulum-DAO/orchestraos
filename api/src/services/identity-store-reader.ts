@@ -81,6 +81,29 @@ export function canonicalTmuxSession(id: string, orch: string = ORCHESTRA_DIR): 
   return canon?.[id]?.tmux_session ?? null;
 }
 
+/** Who a session id belongs to in the identity store: its lineage root and whether that generation
+ *  is the lineage's canonical head. null when the id is unknown to the store, or the store is
+ *  absent/unreadable (callers then keep their existing behaviour). Read-only, per call. */
+export function sessionOwner(sid: string, orch: string = ORCHESTRA_DIR):
+  { root: string; current: boolean } | null {
+  if (!sid) return null;
+  let db: Database.Database | null = null;
+  try {
+    db = new Database(dbPath(orch), { readonly: true, fileMustExist: true });
+    db.pragma('busy_timeout = 5000');
+    const r = db.prepare(
+      `SELECT g.root AS root, (g.id = c.generation_id) AS current
+       FROM generations g LEFT JOIN canonical c ON c.root = g.root
+       WHERE g.session_id = ? LIMIT 1`,
+    ).get(sid) as { root: string; current: number | null } | undefined;
+    return r ? { root: r.root, current: r.current === 1 } : null;
+  } catch {
+    return null;
+  } finally {
+    try { db?.close(); } catch { /* best-effort */ }
+  }
+}
+
 /** One past (or current) generation of a lineage, for the Agents page's history list. */
 export interface GenerationRow {
   generation: number;

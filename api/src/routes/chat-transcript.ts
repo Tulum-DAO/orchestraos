@@ -19,6 +19,7 @@ import { homedir } from 'os';
 import Database from 'better-sqlite3';
 import { agentScopeParam } from '../lib/agent-scope.js';
 import { expandChipDodge } from '../lib/chipDodge.js';
+import { sessionOwner } from '../services/identity-store-reader.js';
 
 const router = Router();
 // Every /:id route on this router is scoped to the caller's principal — the same rule GET /
@@ -318,6 +319,22 @@ export function parseCodexRollout(lines: string[]): any[] {
   return items;
 }
 
+/** May `agentId`'s chat show session `sid`? The state files this route reads can lag the identity
+ *  store (a projector re-emitted the PREDECESSOR's session id for a seat), and a reused pane id can
+ *  carry another session's hook file, so a file existing is not enough. A session the store knows
+ *  is refused when it belongs to another lineage, or, viewing the lineage's canonical id, to a
+ *  generation that is not its current head. A session the store does not know (a /clear, a seat
+ *  outside the store, no store at all) is allowed, as before. */
+export function sessionIsThisSeats(agentId: string, sid: string | null | undefined,
+                                   owner: typeof sessionOwner = sessionOwner): boolean {
+  if (!sid) return true;
+  const o = owner(String(sid), ORCH_DIR);
+  if (!o) return true;
+  const lineage = agentId.replace(/-(?:gen\d+|g\d+|next)$/, '');
+  if (o.root !== agentId && o.root !== lineage) return false;
+  return agentId === o.root ? o.current : true;   // a generation's own id may show its own session
+}
+
 // Resolve an agent id to its transcript JSONL path (re-read fresh per request).
 // Exported for the F1 streaming lane (transcript-stream.ts) — same resolution,
 // same file, so poll and stream can never disagree on WHICH transcript.
@@ -348,8 +365,8 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
 
   // 0b. Hook event sid for live Claude process
   const hook = hookEventSid(tmuxSession);
-  let sid: string | null = hook.sid;
-  if (hook.sid && hook.cwd) {
+  let sid: string | null = sessionIsThisSeats(agentId, hook.sid) ? hook.sid : null;
+  if (sid && hook.cwd) {
     const p = join(CLAUDE_PROJECTS, hook.cwd.replace(/[/.]/g, '-'), `${hook.sid}.jsonl`);
     if (existsSync(p)) return { path: p, sid: hook.sid };
   }
@@ -359,7 +376,7 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
     const stateFile = join(ORCH_DIR, 'state', 'agents', `${agentId}.json`);
     if (existsSync(stateFile)) {
       const st = JSON.parse(readFileSync(stateFile, 'utf-8'));
-      if (st.session_id) {
+      if (st.session_id && sessionIsThisSeats(agentId, st.session_id)) {
         const gPath = join(GEMINI_BRAIN, st.session_id, '.system_generated', 'logs', 'transcript.jsonl');
         if (existsSync(gPath)) return { path: gPath, sid: st.session_id };
         if (st.cwd) {
@@ -371,18 +388,19 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
   } catch {}
 
   // 2. Explicit conversation_path in agent-sessions.json
-  if (e.conversation_path && existsSync(e.conversation_path)) {
+  const eSidOk = sessionIsThisSeats(agentId, e.session_id);
+  if (e.conversation_path && existsSync(e.conversation_path) && eSidOk) {
     return { path: e.conversation_path, sid: e.session_id || null };
   }
 
   // 3. Direct session_id check (Claude or Gemini brain)
-  if (e.session_id) {
+  if (e.session_id && eSidOk) {
     const gPath = join(GEMINI_BRAIN, e.session_id, '.system_generated', 'logs', 'transcript.jsonl');
     if (existsSync(gPath)) return { path: gPath, sid: e.session_id };
   }
 
   // 4. Resume command regex
-  sid = sid || e.session_id || null;
+  sid = sid || (eSidOk ? e.session_id : null) || null;
   if (!sid && typeof e.resume_command === 'string') {
     const magy = e.resume_command.match(/--conversation\s+([0-9a-f-]{36})/);
     if (magy) {
@@ -390,7 +408,7 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
       if (existsSync(gPath)) return { path: gPath, sid: magy[1] };
     }
     const m = e.resume_command.match(/--resume\s+([0-9a-f-]{36})/);
-    sid = m ? m[1] : null;
+    sid = m && sessionIsThisSeats(agentId, m[1]) ? m[1] : null;
   }
 
   // 6. If agent is Gemini or name starts with gemini, search Antigravity brains by declaration
@@ -411,7 +429,10 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
       const js = readdirSync(pdir)
         .filter((f) => f.endsWith('.jsonl'))
         .map((f) => ({ f, m: statSync(join(pdir!, f)).mtimeMs }))
-        .sort((a, b) => b.m - a.m);
+        .sort((a, b) => b.m - a.m)
+        // a project dir is shared by every seat with that cwd: never another seat's or a
+        // predecessor's session just because it was written last
+        .filter(({ f }) => sessionIsThisSeats(agentId, f.replace('.jsonl', '')));
       if (js.length) return { path: join(pdir, js[0].f), sid: js[0].f.replace('.jsonl', '') };
     } catch { /* ignore */ }
   }
