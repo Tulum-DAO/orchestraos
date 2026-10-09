@@ -79,6 +79,12 @@ def test_pairing_without_scopes_is_refused_and_explains_each_verb(monkeypatch, t
     for verb in VERBS:                       # every scope there is, `ptt` included, is explained
         assert f"  {verb} " in said, verb
     assert "ANSWER approvals" in said, "the operator must be told what `approve` really means"
+    # After #329 typing to Arturo needs `message`, and `voice` covers audio only
+    # (watch_gateway ROUTE_SCOPES; docs/ONBOARDING.md scope table). The help must say the same.
+    lines = {ln.split()[0]: ln for ln in said.splitlines() if ln.startswith("  ") and ln.split()}
+    assert "type to Arturo" in lines["message"], lines["message"]
+    assert "audio only" in lines["voice"], lines["voice"]
+    assert "typed" not in lines["voice"], "typed Arturo chat is `message`, not `voice`"
 
 
 def test_pairing_with_a_bad_verb_is_refused(monkeypatch, tmp_path):
