@@ -523,6 +523,9 @@ Claude session on the machine reads. init prints exactly the rows it will add an
 `y/N`; `--yes` (or `ORCHESTRA_YES=1`) answers yes, and a non-interactive run without it
 SKIPS the hooks and says so (unattended installs: `orchestra init --yes`;
 `ORCHESTRA_SKIP_HOOKS=1` for a container that runs no Claude seats).
+It then offers a status line that records each session's context % for the apps and for
+rotation. If you already have a status line it asks whether to keep yours and add that, and
+`--yes` alone keeps yours untouched (docs/HOOKS.md, "The status line").
 
 Want gm on your phone? `plugins/telegram/README.md` — a BotFather token in
 `TELEGRAM_BOT_TOKEN`, `[plugins.telegram] enabled = true`, and `orchestra up` runs the

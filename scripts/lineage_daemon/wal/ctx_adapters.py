@@ -12,7 +12,7 @@ provider = one registry entry + one thin adapter that passes conformance; ZERO c
 changes.
 
 Adapters are THIN wrappers over the EXISTING readers (no new readers built):
-  * detector-file  -> the live claude ctx detector /tmp/claude-ctx-<sid>.json
+  * detector-file  -> the live claude ctx detector <$TMPDIR or /tmp>/claude-ctx-<sid>.json
   * codex          -> codex_context.get_codex_session_context (rollout tokens, reliable)
   * gemini         -> gemini_context.get_gemini_agents_status (approx tokens / 1M window)
 
@@ -29,6 +29,18 @@ import time
 DEFAULT_RUNTIME = "claude"
 
 DEFAULT_CTX_TTL_S = 120.0  # a detector file older than this is treated as UNKNOWN
+
+
+def ctx_bridge_dir():
+    """Where the status line writes claude-ctx-<sid>.json, and so where every reader looks: $TMPDIR,
+    else /tmp. That is what Node's os.tmpdir() and Python's tempfile both start from, and on macOS
+    $TMPDIR is a per-user /var/folders/... dir, not /tmp. ONE resolver for the writer
+    (hooks/statusline.py) and every reader (this module, bg_beat, scripts/context_reading.py)."""
+    return os.environ.get("TMPDIR") or "/tmp"
+
+
+def ctx_bridge_path(sid, bridge_dir=None):
+    return os.path.join(bridge_dir or ctx_bridge_dir(), f"claude-ctx-{sid}.json")
 
 # The statusline writes the detector file only on a redraw, so an IDLE seat's file ages past the
 # TTL while its ctx cannot change (29 of 37 live seats >10 min old, 2026-10-09). A reading still
@@ -125,7 +137,7 @@ def read_ctx_detectorfile(seat, *, detector_dir=None, sid=None, now=None,
         return (None, False)
     now = time.time() if now is None else now
     ttl_s = DEFAULT_CTX_TTL_S if ttl_s is None else ttl_s
-    path = os.path.join(detector_dir or "/tmp", f"claude-ctx-{sid}.json")
+    path = ctx_bridge_path(sid, detector_dir)
     try:
         with open(path) as fh:
             d = json.load(fh)
@@ -506,11 +518,11 @@ def _claude_verify_fresh(sid, mtime, start_epoch):
     import os as _os
     if start_epoch is None:
         # no process start to compare — require a detector that exists (weak but not stale-blind)
-        return _os.path.exists(f"/tmp/claude-ctx-{sid}.json")
+        return _os.path.exists(ctx_bridge_path(sid))
     if mtime is not None and mtime >= start_epoch - 5:
         return True
     try:
-        return _os.path.getmtime(f"/tmp/claude-ctx-{sid}.json") >= start_epoch - 5
+        return _os.path.getmtime(ctx_bridge_path(sid)) >= start_epoch - 5
     except OSError:
         return False
 

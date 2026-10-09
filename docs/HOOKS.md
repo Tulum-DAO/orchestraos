@@ -18,12 +18,34 @@ Each installed row is tagged `#orchestraos-hook` and carries `ORCHESTRA_DIR=<dat
 `ORCHESTRA_ROOT=<checkout>`, so a seat whose cwd is a client repo still finds
 `registry.json` and `state/tasks.db`.
 
+## The status line (opt-in): context numbers for the apps and for rotation
+
+`orchestra init` also offers a Claude Code status line (`hooks/statusline.sh` in front of
+`hooks/statusline.py`). It shows `model │ project ███░░░░░░░ 39% used` and, more to the point,
+writes each session's context reading to `$TMPDIR/claude-ctx-<session_id>.json` (`/tmp` when
+`TMPDIR` is unset; on macOS that is a per-user `/var/folders/...` dir). The apps' context numbers
+(`context_pct_of_window`, `context_pct_of_budget`) and the rotation engine read that file. Without
+it they stay empty, and rotation falls back to reading the screen.
+
+- **No status line yet:** init asks; `--yes` installs it.
+- **You already have one:** init shows your command and asks whether to keep it and add context
+  tracking. Yes means yours keeps running, gets the same input from Claude Code, and its output is
+  shown unchanged; `--yes` alone answers **no**, so your line is never replaced or wrapped silently.
+  If the checkout is moved or deleted, your own command still runs.
+- **Cost:** a shell per redraw. Python runs at most once per 30 s per session (the shim serves its
+  cache in between), so a chained line also refreshes at most every 30 s.
+- `orchestra doctor` reports `statusline:claude`: installed, chained, declined (your own line is
+  kept, so app context numbers will stay empty), or not installed.
+
 ## Install / inspect by hand
 
 ```bash
 python3 hooks/install.py --data-dir ~/orchestra          # same thing orchestra init does
 python3 hooks/install.py --status                          # installed vs missing
-python3 hooks/install.py --remove                          # take out every #orchestraos-hook row, nothing else
+python3 hooks/install.py --remove                          # take out every #orchestraos-hook row and our status line
+                                                           # (a chained one goes back exactly as it was), nothing else
+python3 hooks/install.py --statusline status               # installed | chained | theirs | absent
+python3 hooks/install.py --statusline chain                # keep your status line, add context tracking
 orchestra init --yes                                       # unattended: write the rows without the y/N prompt
 ORCHESTRA_SKIP_HOOKS=1 orchestra init                      # containers that run no Claude seats
 ```
