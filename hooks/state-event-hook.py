@@ -91,6 +91,7 @@ def update_open_calls(pane, data, event, now=None):
                 break
             except BlockingIOError:
                 if time.monotonic() >= deadline:
+                    _mark_lossy(name, now)  # this update is lost: a later call could look like its owner
                     return
                 time.sleep(0.01)
         try:
@@ -106,9 +107,9 @@ def update_open_calls(pane, data, event, now=None):
         if event in _CLEAR_ON:
             if not calls:
                 return
-            if event == "SessionStart" and data.get("source") in ("compact", "clear"):
-                # The same process goes on, and so do its background subagents' calls. A new
-                # process (startup, resume) has none: its predecessor's calls are dead, not lost.
+            if event == "SessionStart" and data.get("source") != "startup":
+                # compact / clear: the same process goes on, and so do its background subagents'
+                # calls (resume too: not proven otherwise). Only a fresh startup has none to lose.
                 _mark_lossy(name, now)
             calls = {}
         elif event == "PreToolUse":
@@ -152,7 +153,12 @@ def main() -> None:
     try:
         update_open_calls(pane, data, event)
     except Exception:
-        pass        # the state file below must still be written; identity is best-effort
+        # The update is lost (a full disk, a permission error): mark the pane so a later call can
+        # never look like the owner of this one's menu. The state file below must still be written.
+        try:
+            _mark_lossy(pane.lstrip("%"), time.time())
+        except Exception:
+            pass
 
     if event == "Notification":
         msg = (data.get("message") or "").lower()
