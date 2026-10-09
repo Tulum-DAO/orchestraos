@@ -43,8 +43,8 @@ interface Bubble { id: number; role: 'arturo' | 'user'; text: string; pending?: 
 
 /** A returning opener's reply, into its pending bubble. When the bubble before it is Arturo's unanswered
  *  QUESTION (it ends in "?"), that stale question is replaced, so the next step shows exactly once. A
- *  report ("Noted: iPhone.", "iPhone is paired.") or anything already answered stays, card or no card
- *  (pm-tulumdao, shot 07). An empty reply leaves no bubble. */
+ *  report ("Noted: iPhone.", "iPhone is paired.") or anything already answered stays, card or no
+ *  card. An empty reply leaves no bubble. */
 export function mergeResumeReply<B extends Bubble>(turns: B[], pendingId: number,
   reply: { text: string; choices?: unknown; pairCard?: unknown }): B[] {
   const at = turns.findIndex((t) => t.id === pendingId);

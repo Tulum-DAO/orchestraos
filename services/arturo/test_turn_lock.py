@@ -148,3 +148,47 @@ def test_a_stream_that_fails_before_it_starts_releases_its_conversation(tmp_path
         r = c.post("/text/stream", json={"text": "hi", "conversation_id": "c1"}, environ_base={"REMOTE_ADDR": "127.0.0.1"})
     assert r.status_code == 500
     assert not P._TURN_LOCKS.busy("c1")
+
+
+# ---- #312 review B1: a send while the conversation is mid-turn must not run twice ----------------
+def test_a_send_during_a_turn_answers_busy_at_once_and_runs_nothing(tmp_path):
+    P = _proxy(tmp_path)
+    calls, gate = [], threading.Event()
+
+    def brain(messages, cid):
+        calls.append(messages[-1]["content"])
+        if len(calls) == 1:
+            gate.wait(10)                                   # turn A is slow
+        return ("ok", [])
+    P._brain_reply = brain
+    env = {"REMOTE_ADDR": "127.0.0.1"}
+
+    def turn_a():
+        with P.app.test_client() as c:
+            c.post("/text", json={"text": "A slow", "conversation_id": "c1"}, environ_base=env)
+    a = threading.Thread(target=turn_a)
+    a.start()
+    for _ in range(100):
+        if calls:
+            break
+        time.sleep(0.02)
+    with P.app.test_client() as c:
+        t0 = time.time()
+        s = c.post("/text/stream", json={"text": "B says hi", "conversation_id": "c1"}, environ_base=env)
+        t = c.post("/text", json={"text": "B says hi", "conversation_id": "c1"}, environ_base=env)
+        waited = time.time() - t0
+    gate.set()
+    a.join(10)
+    assert s.status_code == 409 and t.status_code == 409 and s.get_json()["error"] == "busy"
+    assert waited < 5                                       # long before any client deadline (20 s)
+    assert calls == ["A slow"]                              # B never ran, let alone twice
+
+
+def test_calls_without_a_conversation_id_never_share_a_lock(tmp_path):
+    P = _proxy(tmp_path)
+    P._brain_reply = lambda m, c: ("ok", [])
+    held = P._TURN_LOCKS.acquire("")
+    with P.app.test_client() as c:
+        r = c.post("/text", json={"text": "hi"}, environ_base={"REMOTE_ADDR": "127.0.0.1"})
+    held.release()
+    assert r.status_code == 200

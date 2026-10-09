@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { stripContextLine, hydrateTurns, onboardingConversation, carriesOnboardingMarker, mergeResumeReply, isBusy }
   from './arturoResume';
 
-// The operator, 2026-10-09: the thread title read "[Context: route=/agent/pm-ops entity=agent:pm-ops] Wheres the
+// The operator, 2026-10-09: the thread title read "[Context: route=/agent/pm-web entity=agent:pm-web] Wheres the
 // general manager", and leaving onboarding partway then coming back showed a new-user greeting with the history
 // hidden above it (DEC-1791511578959986).
 
-const CTX = '[Context: route=/agent/pm-ops entity=agent:pm-ops]';
+const CTX = '[Context: route=/agent/pm-web entity=agent:pm-web]';
 const OPENER = '(first run: the operator just opened OrchestraOS)';
 
 test('the page-context line is never shown', () => {
@@ -19,11 +19,11 @@ test('the page-context line is never shown', () => {
 test("a stored thread hydrates without the page's opener or context lines", () => {
   const turns = hydrateTurns([
     { role: 'user', content: OPENER }, { role: 'assistant', content: 'Hi! What should I call you?' },
-    { role: 'user', content: 'Shaw' }, { role: 'assistant', content: 'Good to meet you.' },
+    { role: 'user', content: 'Ada' }, { role: 'assistant', content: 'Good to meet you.' },
     { role: 'user', content: `${CTX}\nWheres gm` }, { role: 'assistant', content: 'It runs as gm.' },
   ]);
   assert.deepEqual(turns.map((t) => [t.role, t.text]), [
-    ['arturo', 'Hi! What should I call you?'], ['user', 'Shaw'], ['arturo', 'Good to meet you.'],
+    ['arturo', 'Hi! What should I call you?'], ['user', 'Ada'], ['arturo', 'Good to meet you.'],
     ['user', 'Wheres gm'], ['arturo', 'It runs as gm.'],
   ]);
 });
@@ -45,7 +45,7 @@ type T = { id: number; role: 'arturo' | 'user'; text: string; pending?: boolean;
 
 test('a returning reply refreshes the unanswered question in place: the next step shows once', () => {
   const turns: T[] = [
-    { id: 1, role: 'user', text: 'Shaw' }, { id: 2, role: 'arturo', text: 'Which devices do you have?' },
+    { id: 1, role: 'user', text: 'Ada' }, { id: 2, role: 'arturo', text: 'Which devices do you have?' },
     { id: 3, role: 'arturo', text: '', pending: true },
   ];
   const out = mergeResumeReply(turns, 3, { text: 'Your name is set. Which devices do you have?', choices: { options: ['iPhone'] } });
@@ -60,7 +60,7 @@ test('a returning reply never replaces a report or an answered message', () => {
     { id: 3, role: 'arturo', text: '', pending: true },
   ];
   assert.deepEqual(mergeResumeReply(report, 3, { text: 'Next: your Mac.' }).map((t) => t.id), [1, 2, 3]);
-  // pm-tulumdao, shot 07: a returning reply WITH a card replaced "Noted: iPhone." — a card is no reason
+  // a returning reply WITH a card replaced "Noted: iPhone." — a card is no reason
   const noted: T[] = [
     { id: 1, role: 'user', text: 'iPhone' }, { id: 2, role: 'arturo', text: 'Noted: iPhone.' },
     { id: 3, role: 'arturo', text: '', pending: true },

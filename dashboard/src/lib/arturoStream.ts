@@ -112,6 +112,8 @@ export interface StreamCallbacks {
 /** What a finished streamed turn reports — the same facts /text returns. */
 export interface StreamOutcome {
   ok: boolean;
+  /** The HTTP status of a refusal (no stream opened), e.g. 409 when the conversation is mid-turn. */
+  status?: number;
   reply_text?: string;
   tools_called?: string[];
   spawned?: string[];
@@ -165,7 +167,7 @@ export async function arturoTextStream(
     // A refusal comes back as ordinary JSON (a bad model id, an empty message).
     const json = await res.json().catch(() => ({ ok: false, error: 'bad_response' }));
     cb.onError?.(json);
-    return { ok: false, error: json.error || 'bad_response' };
+    return { ok: false, status: res.status, error: json.error || 'bad_response' };
   }
   if (!res.body) { cb.onError?.({ code: 'no_body' }); return { ok: false, error: 'no_body' }; }
 
@@ -246,6 +248,9 @@ export async function arturoTurn(
     } as ArturoReply;
   }
   if (opts.signal?.aborted) return { ok: false, error: 'aborted' } as ArturoReply;
+  // Another turn in this conversation is running: re-sending over /text would queue the SAME message
+  // a second time and run it twice. The caller waits and retries instead.
+  if (res.status === 409 && res.error === 'busy') return { ok: false, status: 409, error: 'busy' } as ArturoReply;
   // The re-ask answers from the top: whatever the dead attempt showed (half a reply, tool
   // cards) is cleared first, or it sits beside the answer.
   opts.onReset?.();

@@ -105,7 +105,7 @@ def _events(resp):
 
 
 def test_a_codex_turn_on_the_stream_shows_its_tool_cards(P, monkeypatch):
-    def whole(text, conversation_id, brain=None, context=None):
+    def whole(text, conversation_id, brain=None, context=None, principal=None):
         sink = P._TOOL_EVENTS.get()
         cid = sink.call("knowledge", {"query": "agents"})
         sink.result(cid, "knowledge", True, "4 on VPS")

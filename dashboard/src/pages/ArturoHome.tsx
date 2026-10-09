@@ -243,13 +243,13 @@ export default function ArturoHome() {
       return at < 0 ? [...prev, bubble] : [...prev.slice(0, at), bubble, ...prev.slice(at)];
     });
     let r = await arturoText(onboardingTurn('onboarding_open', ONBOARDING_OPENER), conv);
-    for (let tries = 0; isBusy(r) && tries < 30; tries++) {
+    for (let tries = 0; isBusy(r) && tries < 90; tries++) {
       await new Promise((ok) => setTimeout(ok, 2000));
       r = await arturoText(onboardingTurn('onboarding_open', ONBOARDING_OPENER), conv);
     }
     if (r.ok && r.onboarding_conversation) onbConv.current = r.onboarding_conversation;
-    if (r.ok && r.switch && r.onboarding_conversation && !switched) {
-      // Another browser started the first run: continue THAT thread here.
+    if (r.ok && r.onboarding_conversation && (r.switch || r.onboarding_conversation !== conv) && !switched) {
+      // Another browser started the first run (or won the pin a moment before this one): continue THAT thread.
       setTurns((all) => all.filter((x) => x.role === 'user' && x.state));
       return runOpener(true);
     }
@@ -389,7 +389,7 @@ export default function ArturoHome() {
     const streamOpts = { onSent, brain: turnBrain, onDelta, onToolCall, onToolResult, onReset };
     let r = await arturoTurn(sent, convId.current, null, streamOpts);
     // Another tab or device is mid-turn in this conversation: the server serializes, so wait and resend.
-    for (let tries = 0; isBusy(r) && tries < 30; tries++) {
+    for (let tries = 0; isBusy(r) && tries < 90; tries++) {
       await new Promise((ok) => setTimeout(ok, 2000));
       r = await arturoTurn(sent, convId.current, null, streamOpts);
     }
