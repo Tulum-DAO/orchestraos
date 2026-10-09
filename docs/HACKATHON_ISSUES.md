@@ -526,7 +526,10 @@ On the release tree `api/src/routes/arturo.ts` serves `GET /api/arturo/threads` 
 reads that list, so the thread list and every thread's turns come from the SERVER: "New thread"
 leaves the old one IN the list instead of losing it, the home and the pill read the same list,
 and `localStorage` holds only WHICH thread you were in, never the archive. Verified by effect
-against the release sha, 2026-09-19. The rest of this section is kept as the design record.
+against the release sha, 2026-09-19. Since #322 the list is scoped to the caller: the
+dashboard sees every thread, a paired device only the threads it started, so "the phone and
+the web show the same threads" below no longer holds for a paired app. The rest of this
+section is kept as the design record.
 
 The Ask-Arturo pill keeps one conversation and its history, and "New thread" starts a fresh
 one — but the previous thread is then gone from the UI: there is no list, no switcher, no way
