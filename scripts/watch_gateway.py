@@ -2455,7 +2455,7 @@ def _q_norm(s):
     return " ".join((s or "").replace("\u2026", " ").split())
 
 
-def _menu_matches(session, expect_question):
+def _menu_matches(session, expect_question, menu=None):
     """Same-menu identity, VERSION-TOLERANT (P0 fix, v3 msg_667fb1b8 / the operator
     field-caught 07:24): the question-identity seam has two consumers on
     different deploy cadences (fresh-per-cron bridge vs this long-running
@@ -2465,7 +2465,7 @@ def _menu_matches(session, expect_question):
     substring of the new full-block capture, and vice versa), which stays
     correct across capture-format versions while still refusing a genuinely
     different menu. Never use strict equality across a deployable seam."""
-    menu = _current_menu(session)
+    menu = _current_menu(session) if menu is None else menu
     if not menu:
         return False
     if expect_question:
@@ -2474,6 +2474,19 @@ def _menu_matches(session, expect_question):
         if not a or not (a in b or b in a):
             return False
     return True
+
+
+def _ledger_menu_matches(session, expect_question):
+    """_menu_matches for the LEDGER answer path (menu_resume_keypress / menu_resume_free_text).
+    A live PERMISSION prompt is never the menu a ledger row expects: permission prompts are never
+    bridged to the ledger (menu_bridge_core), and question containment would otherwise match an
+    AskUserQuestion asking "Do you want to proceed?" to any of them and press its answer in (or,
+    in a verify loop, press a second Enter = the highlighted "Yes"). Permission prompts are
+    answered only via /agent-key, which checks what the device saw."""
+    menu = _current_menu(session)
+    if not menu or (isinstance(menu, dict) and menu.get("kind") == "permission"):
+        return False
+    return _menu_matches(session, expect_question, menu=menu)
 
 
 # Wall-clock waits for the commit-verify loop (post-Enter). Mirrors the
@@ -2501,7 +2514,7 @@ def menu_resume_keypress(session, key, expect_question=None, commit=True):
     with an empty body (strictly worse than the original bug)."""
     if session not in _tmux_session_names():
         return False, {"reason": "no_session"}
-    if not _menu_matches(session, expect_question):
+    if not _ledger_menu_matches(session, expect_question):
         return False, {"reason": "menu_gone"}
     if _is_gemini_session(session) or _is_codex_session(session):
         r = _tmux("send-keys", "-t", session, key, "Enter")
@@ -2520,7 +2533,7 @@ def menu_resume_keypress(session, key, expect_question=None, commit=True):
     import time as _time
     for attempt, wait_s in enumerate(MENU_COMMIT_VERIFY_WAITS_S, start=1):
         _time.sleep(wait_s)
-        if not _menu_matches(session, expect_question):
+        if not _ledger_menu_matches(session, expect_question):
             return True, {"sent": key, "verified": True, "attempts": attempt}
     return False, {"reason": "unverified_submit"}
 
@@ -2550,7 +2563,7 @@ def menu_resume_free_text(session, key, text, expect_question=None):
         if r.returncode != 0:
             return False, {"reason": "send_failed", "phase": 3}
         _time.sleep(0.8 if attempt == 1 else 1.6)
-        if not _menu_matches(session, expect_question):
+        if not _ledger_menu_matches(session, expect_question):
             return True, {"attempts": attempt}   # menu resolved — submit verified
     return False, {"reason": "unverified_submit", "phase": 3}
 
@@ -2599,8 +2612,6 @@ def permission_respond(session, text, *, armed=False, read_fn=None, key_fn=None,
     read_fn = read_fn or (lambda: _current_menu(session))
     key_fn = key_fn or (lambda k: _tmux("send-keys", "-t", session, k).returncode == 0)
     type_fn = type_fn or (lambda t: _tmux("send-keys", "-t", session, "-l", t).returncode == 0)
-    gone_fn = gone_fn or (lambda: not _menu_matches(session, question))
-
     menu = read_fn()
     if not isinstance(menu, dict):
         return False, {"reason": "menu_gone"}
@@ -2610,6 +2621,17 @@ def permission_respond(session, text, *, armed=False, read_fn=None, key_fn=None,
     if expect_digest is not None and \
             _perm_digest(session, question, menu.get("context") or "") != expect_digest:
         return False, {"reason": "instance_mismatch"}
+    if gone_fn is None:
+        # Gone = THIS prompt (by its digest: question + command) is no longer on screen. Matching
+        # by question alone read the NEXT "Do you want to proceed?" prompt as this one still
+        # waiting, and the retry Enter below would then approve it.
+        _answered = _perm_digest(session, question, menu.get("context") or "")
+
+        def gone_fn():
+            now = read_fn()
+            return not (isinstance(now, dict) and now.get("kind") == "permission"
+                        and _perm_digest(session, now.get("question") or "",
+                                         now.get("context") or "") == _answered)
     option_n = _perm_text_option_n(menu)
     if option_n is None:
         # FAIL-CLOSED, zero keystrokes — never guess an option on a textless prompt.
