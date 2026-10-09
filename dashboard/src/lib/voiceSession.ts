@@ -159,7 +159,8 @@ export class VoiceSession {
   private sourceNode: MediaStreamAudioSourceNode | null = null;
   private playbackCtx: AudioContext | null = null;
   private playbackTime = 0;
-  private callId: string | null = null;
+  /** Bumped by every start() and stop(): a grant that resolves under a stale value is released. */
+  private startSeq = 0;
   private dictation: DictationHandle | null = null;
 
   constructor(cb: VoiceSessionCallbacks = {}) {
@@ -188,6 +189,33 @@ export class VoiceSession {
     }
 
     this.setState('connecting');
+    // Which start() this is. stop() and a later start() both bump it, so a permission grant that
+    // lands after either belongs to nobody (see the await below).
+    const seq = ++this.startSeq;
+
+    // THE MIC FIRST, THEN THE SOCKET (2026-10-09). The socket used to be opened before this
+    // await and its 'open' listener attached after it: a socket that opened while the operator
+    // was reading the permission prompt fired 'open' to nobody and the call sat in 'connecting'
+    // forever. Opening it after the grant, with its listeners attached in the same tick, cannot
+    // miss the event. It also means a denied mic never opens a socket at all.
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e: any) {
+      if (seq !== this.startSeq) return;          // cancelled while the prompt was up: nothing to report
+      this.cb.onUnavailable?.(`voice isn't configured yet: microphone permission was denied or unavailable (${e?.message || e})`);
+      this.setState('error');
+      return;
+    }
+    // CANCELLED (or superseded) WHILE THE PROMPT WAS UP. stop() ran before there was a stream to
+    // stop, so this grant arrives for a call that no longer exists: release it here, or the mic
+    // stays on until the tab closes. Test: voiceSessionStart.test.mjs.
+    if (seq !== this.startSeq) {
+      for (const track of stream.getTracks()) track.stop();
+      return;
+    }
+    this.mediaStream = stream;
+
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
     const voice = opts.voice || 'Fenrir';
     const url = `${proto}://${window.location.host}/api/voice/live?voice=${encodeURIComponent(voice)}`;
@@ -198,19 +226,14 @@ export class VoiceSession {
       ws.binaryType = 'arraybuffer';
     } catch (e: any) {
       this.cb.onUnavailable?.(`voice isn't configured yet: couldn't open the voice socket (${e?.message || e})`);
+      this.stopMicCapture();                      // releases the stream we just took
       this.setState('error');
       return;
     }
     this.ws = ws;
-
-    try {
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (e: any) {
-      this.cb.onUnavailable?.(`voice isn't configured yet: microphone permission was denied or unavailable (${e?.message || e})`);
-      this.setState('error');
-      try { ws.close(); } catch { /* noop */ }
-      return;
-    }
+    // THIS socket's call id, held per socket: a stale socket closing after a re-call must report
+    // its own call's end, not the new call's.
+    let socketCallId: string | null = null;
 
     ws.addEventListener('open', () => {
       ws.send(JSON.stringify({ route: opts.route, focusedEntity: opts.focusedEntity ?? null }));
@@ -223,7 +246,7 @@ export class VoiceSession {
         let msg: GatewayEvent;
         try { msg = JSON.parse(ev.data); } catch { return; }
         if (msg.event === 'connected' && msg.session_id) {
-          this.callId = msg.session_id;
+          socketCallId = msg.session_id;
           this.cb.onConnected?.(msg.session_id);
           return;
         }
@@ -238,11 +261,16 @@ export class VoiceSession {
     });
 
     const finish = () => {
-      this.stopMicCapture();
-      const id = this.callId;
-      this.setState('idle');
+      // Only the CURRENT socket may end the call. After stop() + a new start(), the old socket's
+      // 'close' still arrives, later; letting it through ended the new call and stopped its mic.
+      const id = socketCallId;
+      socketCallId = null;                        // 'error' then 'close' must not report twice
+      if (this.ws === ws) {
+        this.ws = null;
+        this.stopMicCapture();
+        this.setState('idle');
+      }
       if (id) this.cb.onCallEnded?.(buildVoiceCallMarker(id), id);
-      this.callId = null;
     };
     ws.addEventListener('close', finish);
     ws.addEventListener('error', () => {
@@ -252,7 +280,11 @@ export class VoiceSession {
   }
 
   stop(): void {
+    this.startSeq++;                              // a permission grant still pending is now stale
     try { this.ws?.close(); } catch { /* noop */ }
+    // Detach it: its 'close' arrives later and must only report its own call, never reset a call
+    // started in the meantime (finish() acts on the session only for the CURRENT socket).
+    this.ws = null;
     this.stopMicCapture();
     this.setState('idle');
   }
