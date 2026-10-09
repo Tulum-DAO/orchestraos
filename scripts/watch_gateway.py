@@ -1368,7 +1368,7 @@ def _subagent_finished(path):
     end_turn/stop_sequence (its final answer). Trailing `attachment`/system records written
     after that answer are skipped: measured 2026-10-08, 2 of 300 finished files end that way.
     The tail grows (_SUBAGENT_TAIL_STEPS) until a whole conversational record is in it, because
-    a long final answer is one line longer than the first tail.
+    a long final answer can be longer than the first tail.
     Older Claude CLIs write the final answer with stop_reason null; such a subagent reads as
     running until its file is SUBAGENT_STALE_S old."""
     try:
