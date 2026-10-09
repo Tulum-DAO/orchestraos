@@ -84,7 +84,7 @@ export default function AgentPage() {
           <div className="flex-1 min-h-0 bg-black overflow-hidden">
             <WebTerminal
               key={agentId}
-              session={seatRow?.tmux_session || agentId}
+              session={seatRow?.tmux_session || agentId.replace('unregistered:', '')}
               machine={seatRow?.machine || 'vps'}
             />
           </div>
