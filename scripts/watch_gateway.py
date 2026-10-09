@@ -126,6 +126,10 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("GET", "/arturo/health"): "read",
     ("GET", "/arturo/threads"): "read",
     ("GET", "/arturo/threads/{conversation_id}"): "read",
+    # An attachment's BYTES (DEC-1791563277424023). `read`: every read device already sees the marker, name and
+    # server path in /transcript; this adds the content, not its existence. HEAD sizes/types it without the body.
+    ("GET", "/uploads/{name}"): "read",
+    ("HEAD", "/uploads/{name}"): "read",
     ("GET", "/arturo/ptt/vendor"): "read",
     ("GET", "/arturo/ptt/voices"): "read",
     ("GET", "/arturo/ptt/voice"): "read",
@@ -4366,6 +4370,67 @@ async def handle_upload(request):
         return _json({"ok": False, "error": f"api unreachable: {e}"}, status=502)
 
 
+# --- GET/HEAD /uploads/{name}: an attachment's bytes for a paired device (DEC-1791563277424023) ---------------
+# Before this, the bytes lived only behind the API's LOOPBACK /uploads static, so no phone, Mac or headset could show
+# an attachment it had not sent itself. The name is the API's own upload id (api/src/routes/agent-send.ts
+# SAFE_UPLOAD_ID), matched with fullmatch: no directory (the uploads dir holds a telegram/ subfolder the API answers
+# with a redirect), no dot-file, no percent-encoding, no trailing newline. The upstream URL is built ONLY from that
+# validated name; redirects are never followed (a 3xx becomes 404). Range/If-Range pass through so video plays. The
+# API's force-download of html/svg/xml survives (Content-Type/Disposition pass through) and the gateway adds its own
+# sandbox CSP, nosniff and private caching on every answer.
+_SAFE_UPLOAD_NAME = re.compile(r"[0-9]{1,12}_[a-z0-9]{1,16}\.[a-z0-9]{1,8}")
+_UPLOAD_PASS_HEADERS = ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges",
+                        "Content-Disposition", "Last-Modified", "ETag")
+_UPLOAD_SAFETY_HEADERS = {"Content-Security-Policy": "sandbox; default-src 'none'",
+                          "X-Content-Type-Options": "nosniff",
+                          "Cache-Control": "private, max-age=300"}
+
+
+def _upload_refusal(obj, status):
+    r = _json(obj, status=status)
+    r.headers.update(_UPLOAD_SAFETY_HEADERS)
+    return r
+
+
+async def handle_uploads_get(request):
+    import aiohttp
+    from aiohttp import web
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    name = request.match_info.get("name", "")
+    if not _SAFE_UPLOAD_NAME.fullmatch(name):
+        return _upload_refusal({"ok": False, "error": "not an upload id"}, 400)
+    fwd = {h: request.headers[h] for h in ("Range", "If-Range") if h in request.headers}
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.request(request.method, f"{API_URL}/uploads/{name}", headers=fwd, allow_redirects=False,
+                                 timeout=aiohttp.ClientTimeout(total=300)) as r:
+                if 300 <= r.status < 400 or r.status == 404:
+                    return _upload_refusal({"ok": False, "error": "no such upload"}, 404)
+                if r.status not in (200, 206, 416):
+                    return _upload_refusal({"ok": False, "error": f"api answered {r.status}"}, 502)
+                length = r.headers.get("Content-Length")
+                if length and length.isdigit() and int(length) > UPLOAD_MAX_BYTES:
+                    return _upload_refusal({"ok": False, "error": "file exceeds the upload cap"}, 413)
+                resp = web.StreamResponse(status=r.status)
+                for h in _UPLOAD_PASS_HEADERS:
+                    if h in r.headers:
+                        resp.headers[h] = r.headers[h]
+                resp.headers.update(_UPLOAD_SAFETY_HEADERS)
+                await resp.prepare(request)
+                if request.method != "HEAD":
+                    sent = 0
+                    async for chunk in r.content.iter_chunked(256 * 1024):
+                        sent += len(chunk)
+                        if sent > UPLOAD_MAX_BYTES:
+                            break
+                        await resp.write(chunk)
+                await resp.write_eof()
+                return resp
+    except aiohttp.ClientError as e:
+        return _upload_refusal({"ok": False, "error": f"api unreachable: {e}"}, 502)
+
+
 # --- RED ALERT report button (deliverable 6, docs/RED_ALERT.md; iOS/watch G18) ------------------
 # The phone and watch have ONE base and ONE bearer (this gateway); :8888 is loopback-only for them.
 # This is the thin authenticated front door: forward the report to the API, return its JSON verbatim.
@@ -6011,7 +6076,7 @@ async def handle_gateway_capabilities(request):
         body["device"] = {"id": principal.get("id"), "label": principal.get("label")}
     body["verbs"] = list(_ALL_VERBS)
     # Additive feature flags: a client shows a control only when its route exists here.
-    body["features"] = ["menu_submit", "push"]
+    body["features"] = ["menu_submit", "push", "uploads_get"]
     body["push"] = {"delivery": _push_delivery(), "bundle_ids": list(_push_bundle_ids())}
     body["menu_submit"] = {"armed": _menu_multipart_armed(),
                            "text_armed": _menu_submit_text_armed()}
@@ -6715,6 +6780,7 @@ def build_app():
     app.router.add_get("/agent-screen", handle_agent_screen)
     app.router.add_get("/transcript", handle_transcript)
     app.router.add_post("/upload", handle_upload)
+    app.router.add_get("/uploads/{name}", handle_uploads_get)     # add_get registers HEAD too
     app.router.add_post("/red-alert/report", handle_red_alert_report)
     app.router.add_get("/red-alert/reports", handle_red_alert_reports)
     app.router.add_post("/arturo/ptt", handle_arturo_ptt)
