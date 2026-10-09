@@ -337,7 +337,7 @@ def _format_dynamic_pulse(tool_name, tool_args, tool_names_str, emitted_idx):
     """Generate dynamic, context-aware progress updates for long-running tools.
 
     Rotates through distinct, informative progress lines describing what the tool
-    is actively doing (e.g. querying gemini-gm / deep brain, reviewing agent states,
+    is actively doing (e.g. querying the manager / deep brain, reviewing agent states,
     or executing shell commands), while keeping the WebRTC downlink alive.
     """
     tn = (tool_name or "").lower()

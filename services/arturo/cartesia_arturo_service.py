@@ -72,7 +72,7 @@ async def knowledge(ctx: ToolEnv, query: str, category: str = None) -> str:
 
 
 async def gm_command(ctx: ToolEnv, command: str) -> str:
-    """Send a command or instruction to the General Manager (gemini-gm) or orchestrate agents across the fleet."""
+    """Send a command or instruction to the General Manager (gm) or orchestrate agents across the fleet."""
     try:
         res = execute_tool("gm_command", {"command": command})
         return str(res)

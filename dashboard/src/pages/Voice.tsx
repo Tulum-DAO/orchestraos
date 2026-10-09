@@ -58,7 +58,7 @@ export default function Voice() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {agents
-          .sort((a, b) => (a.pm_id === 'gemini-gm' || a.pm_id === 'gm' ? -1 : b.pm_id === 'gemini-gm' || b.pm_id === 'gm' ? 1 : 0))
+          .sort((a, b) => (a.pm_id === 'gm' ? -1 : b.pm_id === 'gm' ? 1 : 0))
           .map(agent => (
             <VoiceAgentCard
               key={agent.pm_id}
