@@ -1496,6 +1496,11 @@ def _int_or_none(v):
     return v if type(v) is int else None
 
 
+def _str_or_none(v):
+    """A String-typed client field: a non-empty str, or None (same one-pass decode as above)."""
+    return v if isinstance(v, str) and v else None
+
+
 def compute_agents():
     """Fleet liveness: the agent-status.py ANSI/process detector per live tmux
     session, merged with registry.json metadata (tier/machine/model/lineage)."""
@@ -1548,7 +1553,7 @@ def compute_agents():
             "cpu": (st.get("process") or {}).get("cpu"),
             # which CLI runs the seat (claude | codex | gemini | ...), from the detector's process
             # scan; None when no agent process was found. Additive.
-            "provider": ((st.get("process") or {}).get("runtime") or None),
+            "provider": _str_or_none((st.get("process") or {}).get("runtime")),
             "tmux_session": sess,
             "unregistered": sess not in sess_meta,
             # v2 detector additive fields (agent-state-truth 2026-08-09)
@@ -4249,7 +4254,7 @@ async def handle_agent_screen(request):
            "context_pct_of_window": _int_or_none(st.get("context_pct_of_window")),
            "context_pct_of_budget": _int_or_none(st.get("context_pct_of_budget")),
            # which CLI runs the seat, exactly as /agents sends it (the screen colours by it).
-           "provider": ((st.get("process") or {}).get("runtime") or None),
+           "provider": _str_or_none((st.get("process") or {}).get("runtime")),
            # Rich live-turn detail (spinner line telemetry) for the
            # app's status strip: "Catapulting · 2m 36s · ↑766 tokens".
            "elapsed": st.get("elapsed") or "",
