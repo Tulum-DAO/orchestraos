@@ -2049,6 +2049,13 @@ def _begin_team_turn(conversation_id, step, principal=None, text=None):
     answering = picked is not None
     if answering:
         _record_devices_answer(picked)
+        # Their pick is also what they HAVE: the operator's own words, so a page reopened anywhere asks
+        # the next step, not devices again, whether or not the brain wrote the fact (pm-tulumdao, shot 07).
+        try:
+            from services.arturo import operator_store as _ops_pick
+            _ops_pick.set_fact(ARTURO_STATE, "devices", ", ".join(picked) or str(text or "").strip(), source="card")
+        except (ValueError, OSError) as e:
+            log.warning(f"devices fact not stored: {e}")
     return {"conversation_id": conversation_id, "step": step, "principal": principal,
             "onboarding": step in _onb.ONBOARDING_STEPS, "opener": step == "onboarding_open",
             "offered": fleet and made is not None and now - made[0] < _TEAM_OFFER_TTL_S and made[1] == principal,

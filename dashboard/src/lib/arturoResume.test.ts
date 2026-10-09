@@ -60,6 +60,12 @@ test('a returning reply never replaces a report or an answered message', () => {
     { id: 3, role: 'arturo', text: '', pending: true },
   ];
   assert.deepEqual(mergeResumeReply(report, 3, { text: 'Next: your Mac.' }).map((t) => t.id), [1, 2, 3]);
+  // pm-tulumdao, shot 07: a returning reply WITH a card replaced "Noted: iPhone." — a card is no reason
+  const noted: T[] = [
+    { id: 1, role: 'user', text: 'iPhone' }, { id: 2, role: 'arturo', text: 'Noted: iPhone.' },
+    { id: 3, role: 'arturo', text: '', pending: true },
+  ];
+  assert.deepEqual(mergeResumeReply(noted, 3, { text: 'Next: your team?', choices: { options: ['Set it up'] } }).map((t) => t.id), [1, 2, 3]);
   const answered: T[] = [
     { id: 2, role: 'arturo', text: 'Which devices?' }, { id: 4, role: 'user', text: 'iPhone' },
     { id: 3, role: 'arturo', text: '', pending: true },

@@ -42,17 +42,16 @@ export function carriesOnboardingMarker(step: string, conversationId: string, on
 interface Bubble { id: number; role: 'arturo' | 'user'; text: string; pending?: boolean; choices?: unknown; pairCard?: unknown }
 
 /** A returning opener's reply, into its pending bubble. When the bubble before it is Arturo's unanswered
- *  QUESTION (it ends in "?", or the reply brings a card back), that stale question is replaced, so the
- *  next step shows exactly once; a report or anything already answered stays. An empty reply leaves
- *  no bubble. */
+ *  QUESTION (it ends in "?"), that stale question is replaced, so the next step shows exactly once. A
+ *  report ("Noted: iPhone.", "iPhone is paired.") or anything already answered stays, card or no card
+ *  (pm-tulumdao, shot 07). An empty reply leaves no bubble. */
 export function mergeResumeReply<B extends Bubble>(turns: B[], pendingId: number,
   reply: { text: string; choices?: unknown; pairCard?: unknown }): B[] {
   const at = turns.findIndex((t) => t.id === pendingId);
   if (at < 0) return turns;
   if (!(reply.text || '').trim() && !reply.choices && !reply.pairCard) return turns.filter((t) => t.id !== pendingId);
   const prev = at > 0 ? turns[at - 1] : undefined;
-  const stale = !!prev && prev.role === 'arturo' && !prev.pending
-    && (/\?\s*$/.test(prev.text || '') || !!reply.choices || !!reply.pairCard);
+  const stale = !!prev && prev.role === 'arturo' && !prev.pending && /\?\s*$/.test(prev.text || '');
   const filled = { ...turns[at], pending: false, text: reply.text, choices: reply.choices, pairCard: reply.pairCard };
   return turns.flatMap((t, i) => (stale && i === at - 1) ? [] : i === at ? [filled] : [t]);
 }

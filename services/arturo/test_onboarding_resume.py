@@ -190,3 +190,46 @@ def test_paired_lines_never_carry_a_code_or_an_id():
     assert prog.paired(recs) == {"iPhone": "connected"}
     text = onb.playbook({"paired": prog.paired(recs)})
     assert "dev_secret" not in text and "iPhone (connected)" in text
+
+
+# ---- pm-tulumdao, shot 07: devices answered, then a fresh browser asked devices AGAIN ------------
+def test_a_devices_pick_is_known_to_the_next_reopening_even_if_the_brain_never_wrote_it(P):
+    _open(P)
+    _say(P, "Shaw")
+    ops.set_fact(P.ARTURO_STATE, "name", "Shaw", source="brain")
+    # the reopened page refreshes the devices question with a live card (stored nowhere)
+    tok = P._TEAM_TURN.set(P._begin_team_turn("web_onb", "onboarding_open", "fleet", "x"))
+    try:
+        P.execute_tool("ask_choices", {"options": ["iPhone", "Mac", "Just this computer"], "multi": True,
+                                       "purpose": "devices"})
+    finally:
+        P._TEAM_TURN.reset(tok)
+    code, body = _say(P, "iPhone")                         # the brain writes no fact on this turn
+    assert code == 200
+    assert ops.public(P.ARTURO_STATE)["devices"] == "iPhone"
+    turns = [t["content"] for t in P._THREADS.get_thread("web_onb")["turns"]]
+    assert turns[-2:] == ["iPhone", body["reply_text"]]    # the answer AND Arturo's reply are stored
+    _open(P, "web_onb")                                    # another browser opens the pinned thread
+    assert "Their devices: iPhone." in P.seen[-1] and "Their devices: not known yet." not in P.seen[-1]
+
+
+def test_a_pick_of_nothing_pairable_is_known_too(P):
+    _open(P)
+    tok = P._TEAM_TURN.set(P._begin_team_turn("web_onb", "onboarding_open", "fleet", "x"))
+    try:
+        P.execute_tool("ask_choices", {"options": ["iPhone", "Just this computer"], "multi": True, "purpose": "devices"})
+    finally:
+        P._TEAM_TURN.reset(tok)
+    _say(P, "Just this computer")
+    assert ops.public(P.ARTURO_STATE)["devices"] == "Just this computer"
+
+
+def test_a_message_that_is_not_a_pick_writes_no_devices_fact(P):
+    _open(P)
+    tok = P._TEAM_TURN.set(P._begin_team_turn("web_onb", "onboarding_open", "fleet", "x"))
+    try:
+        P.execute_tool("ask_choices", {"options": ["iPhone", "Mac"], "multi": True, "purpose": "devices"})
+    finally:
+        P._TEAM_TURN.reset(tok)
+    _say(P, "not my iPhone, what is this for?")
+    assert ops.public(P.ARTURO_STATE)["devices"] is None
