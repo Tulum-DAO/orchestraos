@@ -108,7 +108,7 @@ def run_pair(args, settings=None, store=None, out=print, clear_after_s=60):
     if not raw_scopes:
         out("Refusing to pair without --scopes: a device's power has to be a deliberate choice.")
         out("")
-        out("  read     see approvals, agents, transcripts            (a viewer)")
+        out("  read     see approvals, agents, transcripts, sent photos/files  (a viewer)")
         out("  approve  ANSWER approvals and questionnaires            (acts as you)")
         out("  message  send a message to an agent, upload a file, type to Arturo  (each typed turn spends provider credit)")
         out("  inject   press keys into a live agent pane")

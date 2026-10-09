@@ -199,7 +199,7 @@ Confirm the `gateway` row has a live pid again.
 
   | scope | the device can |
   |---|---|
-  | `read` | see approvals, agents and transcripts |
+  | `read` | see approvals, agents and transcripts, and open the photos and files sent in a chat |
   | `approve` | answer approvals and questionnaires: it acts as you |
   | `message` | send a message to an agent, upload a file, and type to Arturo. Arturo's lookups can read your agents' conversations, so `message` without `read` is not read-free; its messages to agents are marked unverified, and each typed turn spends provider credit |
   | `inject` | press keys in a live agent's terminal |
