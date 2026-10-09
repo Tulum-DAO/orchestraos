@@ -32,6 +32,7 @@ import {
   type ActivityState,
 } from '../lib/assistant/activity';
 import { getThread, hydrateTimeline } from '../lib/assistant/threads';
+import { operatorUserId } from '../lib/runtimeConfig';
 
 export type ConverseStatus = 'idle' | 'streaming' | 'error';
 
@@ -77,7 +78,9 @@ function freshThreadId(): string {
 }
 
 export const useConverseStore = create<ConverseStore>((set, get) => ({
-  user: 'operator',
+  // The default until main.tsx has loaded the runtime config and seeds the real id, before the
+  // first render; nothing reads the store earlier.
+  user: operatorUserId(),
   thread: 'default',
   timeline: emptyTimeline(),
   status: 'idle',

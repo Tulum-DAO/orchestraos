@@ -3,14 +3,21 @@ import { createRoot } from 'react-dom/client';
 import App from './App';
 import { ThemeProvider } from './theme/ThemeProvider';
 import './index.css';
+import { loadRuntimeConfig, operatorUserId } from './lib/runtimeConfig';
+import { useConverseStore } from './stores/useConverseStore';
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <ThemeProvider>
-      <App />
-    </ThemeProvider>
-  </StrictMode>
-);
+// Deployment values (lib/runtimeConfig) land BEFORE the first render, so no page ever issues a
+// request under the placeholder user id. Never rejects; a missing or slow file means defaults.
+loadRuntimeConfig().then(() => {
+  useConverseStore.setState({ user: operatorUserId() });
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    </StrictMode>
+  );
+});
 
 // Service worker removed — a stale cached SW caused API requests to hang ("Loading…"
 // forever). Actively evict any previously-registered worker and wipe its caches so

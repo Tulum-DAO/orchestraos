@@ -1,5 +1,6 @@
+import { operatorUserId } from './runtimeConfig';
+
 const BASE = '/api';
-const USER_ID = 'operator';
 
 interface TelemetryEvent {
   action: string;
@@ -18,7 +19,7 @@ function flush() {
   const batch = [...eventQueue];
   eventQueue = [];
   for (const event of batch) {
-    fetch(`${BASE}/adaptive/${USER_ID}/event`, {
+    fetch(`${BASE}/adaptive/${operatorUserId()}/event`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(event),

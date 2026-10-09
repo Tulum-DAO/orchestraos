@@ -1,3 +1,4 @@
+import { operatorUserId } from './runtimeConfig';
 const BASE = '/api';
 
 function handleAuthError(res: Response, path: string) {
@@ -153,7 +154,7 @@ export const fetchWorkflows = () => get('/workflows');
 export const fetchSkills = () => get('/skills');
 export const assignSkill = (skillId: string, agentId: string) => post('/skills/assign', { skill_id: skillId, agent_id: agentId });
 export const unassignSkill = (skillId: string, agentId: string) => post('/skills/unassign', { skill_id: skillId, agent_id: agentId });
-export const getAdaptiveAgents = (userId: string = 'operator') =>
+export const getAdaptiveAgents = (userId: string = operatorUserId()) =>
   get<{ agent_id: string; score: number; signals: Record<string, number> }[]>(`/adaptive/${userId}/agents`);
 
 export const spawnAgent = (id: string, task?: string) => post(`/agents/${id}/spawn`, task ? { task } : undefined);
@@ -244,12 +245,12 @@ export const sendJarvisMessage = (message: string) =>
 export const getJarvisHistory = (n: number = 50) =>
   get<any[]>(`/system/jarvis/history?n=${n}`);
 
-export const getPendingInsights = async (userId: string = 'operator') => {
+export const getPendingInsights = async (userId: string = operatorUserId()) => {
   const data = await get<any>(`/adaptive/${userId}/insights?status=pending`);
   return Array.isArray(data) ? data : data?.insights ?? [];
 };
 
-export const getAllInsights = async (userId: string = 'operator') => {
+export const getAllInsights = async (userId: string = operatorUserId()) => {
   const data = await get<any>(`/adaptive/${userId}/insights`);
   return Array.isArray(data) ? data : data?.insights ?? [];
 };
@@ -257,10 +258,10 @@ export const getAllInsights = async (userId: string = 'operator') => {
 export const respondToInsight = (userId: string, insightId: string, action: 'accept' | 'dismiss') =>
   post<any>(`/adaptive/${userId}/insights/${insightId}/respond`, { action });
 
-export const getUserProfile = (userId: string = 'operator') =>
+export const getUserProfile = (userId: string = operatorUserId()) =>
   get<any>(`/adaptive/${userId}/profile`);
 
-export const updateUserProfile = (userId: string = 'operator', updates: any) =>
+export const updateUserProfile = (userId: string = operatorUserId(), updates: any) =>
   patch<any>(`/adaptive/${userId}/profile`, updates);
 
 

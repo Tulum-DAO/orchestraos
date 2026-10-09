@@ -6,6 +6,8 @@ __pycache__/
 *.pyc
 .DS_Store
 orchestra.toml
+# Per-deployment dashboard values (see dashboard/src/lib/runtimeConfig.ts); never committed.
+dashboard/public/runtime-config.json
 services/arturo/cartesia_deploy/.cartesia/
 /tmp-shots/
 /state/

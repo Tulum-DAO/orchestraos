@@ -3,6 +3,7 @@ import { clsx } from 'clsx';
 import { Plus, ChevronDown, ChevronRight, X, Send, LayoutDashboard, FolderOpen } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { PriorityBadge } from '../components/PriorityBadge';
+import { operatorUserId } from '../lib/runtimeConfig';
 
 // ── API ─────────────────────────────────────────────────────────
 
@@ -186,7 +187,7 @@ export default function Tasks() {
   const needsMeCount = useMemo(() =>
     allTasks.filter((t: any) =>
       t.status === 'blocked' ||
-      (t.assigned_to || '').toLowerCase().includes('operator') ||
+      (t.assigned_to || '').toLowerCase().includes(operatorUserId().toLowerCase()) ||
       (t.type === 'approval' && t.status === 'pending')
     ).length,
   [allTasks]);
@@ -197,7 +198,7 @@ export default function Tasks() {
       if (needsMeActive) {
         const isNeeded =
           t.status === 'blocked' ||
-          (t.assigned_to || '').toLowerCase().includes('operator') ||
+          (t.assigned_to || '').toLowerCase().includes(operatorUserId().toLowerCase()) ||
           (t.type === 'approval' && t.status === 'pending');
         if (!isNeeded) return false;
       }

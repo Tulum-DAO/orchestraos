@@ -26,6 +26,7 @@ import type { LucideIcon } from 'lucide-react';
 import { useUser } from '../hooks/useUser';
 import { ASSISTANT_V2_ENABLED } from '../lib/assistant/config';
 import { AgentRail } from './workbench/AgentRail';
+import { operatorUserId } from '../lib/runtimeConfig';
 
 // The agents are the work; the pages are where you go occasionally. "More" remembers whether you
 // opened it, so anyone who lives in Tasks or Analytics keeps them visible after one click and the
@@ -123,7 +124,7 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
   const navigate = useNavigate();
   const agentMatch = useMatch('/agent/:id');
   const [moreOpen, setMoreOpen] = useState(readMoreOpen);
-  const username = user?.username || 'operator';
+  const username = user?.username || operatorUserId();
   const isAdmin = !user || user.role === 'admin';
 
   return (

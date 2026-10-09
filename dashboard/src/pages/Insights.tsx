@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Brain, Lightbulb, Check, X, Trash2, ToggleLeft, ToggleRight } from 'lucide-react';
 import { clsx } from 'clsx';
 import { getAllInsights, respondToInsight, getUserProfile, updateUserProfile } from '../lib/api';
+import { operatorUserId } from '../lib/runtimeConfig';
 
 const WEIGHT_KEYS = ['recency', 'frequency', 'active_context', 'time_of_day', 'sequence'] as const;
 
@@ -30,7 +31,7 @@ export default function Insights() {
 
   const respond = useMutation({
     mutationFn: ({ id, action }: { id: string; action: 'accept' | 'dismiss' }) =>
-      respondToInsight('operator', id, action),
+      respondToInsight(operatorUserId(), id, action),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['all-insights'] });
       queryClient.invalidateQueries({ queryKey: ['pending-insights'] });
@@ -39,7 +40,7 @@ export default function Insights() {
   });
 
   const updateProfile = useMutation({
-    mutationFn: (updates: any) => updateUserProfile('operator', updates),
+    mutationFn: (updates: any) => updateUserProfile(operatorUserId(), updates),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['user-profile'] });
     },
@@ -49,7 +50,7 @@ export default function Insights() {
     mutationFn: (ruleIndex: number) => {
       const rules = [...(profile?.coaching_rules ?? [])];
       rules.splice(ruleIndex, 1);
-      return updateUserProfile('operator', { coaching_rules: rules });
+      return updateUserProfile(operatorUserId(), { coaching_rules: rules });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['user-profile'] });
@@ -61,7 +62,7 @@ export default function Insights() {
       const rules = [...(profile?.coaching_rules ?? [])].map((r: any, i: number) =>
         i === ruleIndex ? { ...r, enabled: !r.enabled } : r
       );
-      return updateUserProfile('operator', { coaching_rules: rules });
+      return updateUserProfile(operatorUserId(), { coaching_rules: rules });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['user-profile'] });
