@@ -47,6 +47,17 @@ ins.run({ id: 'm4', type: 'task', from: 'pm-infra', to: 'agent-c', body: 'ok go'
 // a held phone message (B1's lane), even if its text were in the log
 ins.run({ id: 'm5', type: 'held_message', from: 'operator', to: 'agent-d', body: DECISION, status: 'pending', md: null,
   ts: '2026-10-09T10:30:10.000000+00:00', ack: null });
+// AMBIGUITY guards (ios-watch-dev, from the menu-card binding scar): binding is by EQUALITY and
+// only when unique on both sides.
+const PREFIX = 'On it: building the orange variants for the sidebar logo now';
+ins.run({ id: 'm6', type: 'reply', from: 'pm-x', to: 'agent-e', body: PREFIX, status: 'pending', md: null,
+  ts: '2026-10-09T10:30:10.000000+00:00', ack: null });
+const TWICE = '[DECISION ANSWERED apr_11111111_11111111] retry of the same card -> Ship it';
+for (const id of ['m7', 'm8'])
+  ins.run({ id, type: 'approval_resolved', from: 'approval-loop', to: 'agent-f', body: TWICE, status: 'pending', md: null,
+    ts: `2026-10-09T10:30:1${id === 'm7' ? 0 : 1}.000000+00:00`, ack: null });
+ins.run({ id: 'm9', type: 'approval_resolved', from: 'approval-loop', to: 'agent-g', body: DECISION, status: 'pending', md: null,
+  ts: '2026-10-09T10:30:10.000000+00:00', ack: null });
 db.close();
 process.env.MSG_DB_PATH = DBP;
 const { normalizeTranscript } = await import('./chat-transcript.js');
@@ -117,4 +128,21 @@ test('guards: a short body and a held phone message never become live cards', ()
   assert.equal(short.items.filter((i) => i.kind === 'text' && i.text === 'ok go').length, 1, 'the bubble stays');
   const held = run('agent-d', midTurn(DECISION));
   assert.equal(cards(held.items).length, 0, 'held_message is B1, never B3');
+});
+
+test('ambiguity 1: a row whose body is only a PREFIX of the queued text never binds (equality, not contains)', () => {
+  const env = run('agent-e', midTurn(PREFIX + ', and then the greens after lunch'));
+  assert.equal(cards(env.items).length, 0, 'no card naming a sender who did not write this text');
+});
+
+test('ambiguity 2: two rows with ONE body (a re-send) bind to neither: no live card, the drain shows it later', () => {
+  const env = run('agent-f', midTurn(TWICE));
+  assert.equal(cards(env.items).length, 0);
+  assert.equal(bubbles(env.items, TWICE).length, 1, 'the bubble stays until the drain batches it');
+});
+
+test('ambiguity 3: one body typed into the log TWICE binds to neither', () => {
+  const env = run('agent-g', [assistantText('a1', 0, 'x'), queuedCommand('q1', 11, DECISION),
+    queuedCommand('q2', 13, DECISION), assistantText('a2', 14, 'y')]);
+  assert.equal(cards(env.items).length, 0);
 });

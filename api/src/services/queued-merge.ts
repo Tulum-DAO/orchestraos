@@ -20,7 +20,8 @@
  *       node per batch, entries NEWEST->OLDEST.
  *
  *   B3 (live card): a self-bound row with NO batch_id yet, which the transcript proves was
- *       injected (a queued item whose text carries the row's body) -> a one-entry
+ *       injected (exactly one queued item whose text EQUALS the row's body, and no other row
+ *       with that body) -> a one-entry
  *       queued_batch at once, at the injected item's position. The batch id is stamped by
  *       the Stop drain, i.e. at the END of the agent's turn: without B3 the operator saw the
  *       raw bubble for the whole turn and the card only after it (and never, for a row the
@@ -121,17 +122,29 @@ function b2Batches(db: DB, agentId: string): any[] {
   }
 }
 
-// B3: a body shorter than this is not distinctive enough to tie a row to a queued item (the
-// same floor dropQueuedCommandsCoveredByBatches uses, so B3 never renders a card that the
-// drop would then fail to pair with its bubble).
+// B3: a body shorter than this is not distinctive enough to attribute (the same floor
+// dropQueuedCommandsCoveredByBatches uses, so B3 never renders a card the drop would then fail
+// to pair with its bubble).
 const LIVE_MIN = 40;
 const LIVE_LIMIT = 200;
 
+const norm = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
+
 // B3: self-bound rows not yet batched, rendered as a card the moment the log shows them injected.
+// Bound by EXACT body equality (measured: the logged queued_command prompt IS the row body), and
+// only when the match is unique on BOTH sides. Two rows with one body (a re-send of the same
+// answer) or one body typed twice is AMBIGUOUS: no live card, and the drain's batch (B2) shows it
+// at the end of the turn as before. A late card is a timing annoyance; a card naming the wrong
+// sender, or two rows folded into one, is wrong data the operator cannot detect.
 function b3LiveCards(db: DB, agentId: string, items: any[], floorMs: number | null): any[] {
-  const queued = items.filter((it) => it?.kind === 'text' && it.queued && typeof it.text === 'string'
-    && it.text.trim().length >= LIVE_MIN);
-  if (!queued.length) return [];
+  const queuedByText = new Map<string, any[]>();
+  for (const it of items) {
+    if (it?.kind !== 'text' || !it.queued) continue;
+    const t = norm(it.text);
+    if (t.length < LIVE_MIN) continue;
+    queuedByText.set(t, [...(queuedByText.get(t) || []), it]);
+  }
+  if (!queuedByText.size) return [];
   try {
     const floorIso = floorMs === null ? '' : new Date(floorMs - 60_000).toISOString();
     const rows = db.prepare(
@@ -140,18 +153,20 @@ function b3LiveCards(db: DB, agentId: string, items: any[], floorMs: number | nu
           AND (metadata IS NULL OR metadata NOT LIKE '%"batch_id"%')
           AND created_at >= ?
         ORDER BY created_at DESC LIMIT ${LIVE_LIMIT}`).all(agentId, floorIso) as any[];
-    const out: any[] = [];
-    const used = new Set<any>();
+    const rowsByBody = new Map<string, any[]>();
     for (const r of rows) {
-      const body = String(r.body ?? '').trim();
-      if (body.length < LIVE_MIN) continue;
-      const head = body.slice(0, LIVE_MIN);
-      const hit = queued.find((q) => !used.has(q) && (q.text.includes(head) || body.includes(q.text.trim().slice(0, LIVE_MIN))));
-      if (!hit) continue;                       // not injected yet (or not by this agent's log): no card
-      used.add(hit);
+      const b = norm(r.body);
+      if (b.length < LIVE_MIN || !queuedByText.has(b)) continue;   // not injected yet: no card
+      rowsByBody.set(b, [...(rowsByBody.get(b) || []), r]);
+    }
+    const out: any[] = [];
+    for (const [b, rs] of rowsByBody) {
+      const qs = queuedByText.get(b) || [];
+      if (rs.length !== 1 || qs.length !== 1) continue;          // ambiguous: leave it to the drain
+      const r = rs[0];
       out.push({ kind: 'queued_batch', count: 1,
         entries: [{ agent: String(r.from_agent ?? ''), sent_ts: String(r.created_at ?? ''), body: String(r.body ?? '') }],
-        ts: hit.ts ?? r.created_at, key: `msg:${r.id}` });
+        ts: qs[0].ts ?? r.created_at, key: `msg:${r.id}` });
     }
     return out;
   } catch {
