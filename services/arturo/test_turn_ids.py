@@ -251,3 +251,13 @@ def test_a_turn_served_whole_carries_the_clients_turn_id(P):
         r = c.post("/text/stream", json={"text": "check the agents", "conversation_id": "c9", "turn_id": "t_whole_codex1",
                                          "brain": {"provider": "codex", "model": "gpt-5.6-terra"}}, environ_base=ENV)
     assert _stream_end(r)["turn_id"] == "t_whole_codex1"
+
+
+def test_a_turn_the_archive_failed_to_store_is_not_counted_as_recorded(P, monkeypatch):
+    # #319 delta SF2: record_turn swallows its errors and answers False; such a turn has no row to replay from.
+    monkeypatch.setattr(P._THREADS, "record_turn", lambda *a, **k: False)
+    P._record_text_turn(conversation_id="c1", text="hi", reply="hello", turn_id="t_000000000001")
+    assert not P._TURN_IDS.was_recorded("c1", "t_000000000001")
+    monkeypatch.setattr(P._THREADS, "record_turn", lambda *a, **k: True)
+    P._record_text_turn(conversation_id="c1", text="hi", reply="hello", turn_id="t_000000000002")
+    assert P._TURN_IDS.was_recorded("c1", "t_000000000002")

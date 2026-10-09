@@ -36,6 +36,7 @@ async function withWorld(
       w.reads.push(u);
       const fates = h.fates || [{ state: 'unknown' }];
       const f = fates[Math.min(fateAt++, fates.length - 1)];
+      if (f.state === 'http502') return json(502, { ok: false, error: 'gateway unreachable' });   // the hop itself is down
       return json(200, { ok: true, turn: f });
     }
     throw new Error(`unexpected fetch ${u}`);
@@ -154,15 +155,17 @@ test('nit 6a: a /text that timed out at the gateway (504) is read back, not re-s
   });
 });
 
-test('nit 6b: a stream that never got a response head is re-asked only after the server confirms it holds nothing', async () => {
+test('nit 6b: a stream that failed before any response head waits for the stack, then goes again with the SAME id', async () => {
+  // It may or may not have reached the server; the same id makes the resend safe either way (a send that
+  // landed is replayed or answered busy, never run twice).
   await withWorld({
     stream: () => { throw new TypeError('Failed to fetch'); },
-    fates: [{ state: 'running' }, { state: 'unknown' }],
+    fates: [{ state: 'unknown' }],
   }, async (w) => {
-    const r = await arturoTurn('hello', 'web_c1');
+    const r = await arturoTurn('hello', 'web_c1', null, { onStarting: async () => true });
     assert.equal(r.ok, true);
-    assert.equal(w.reads.length, 4);                                    // running, then unknown x3
     assert.equal(w.texts.length, 1);
+    assert.equal((w.texts[0] as any).turn_id, (w.streams[0] as any).turn_id);
   });
 });
 
@@ -210,4 +213,49 @@ test('nit 8: an abort that lands while a read-back is in flight wins over the an
     const r = await arturoTurn('hello', 'web_c1', null, { signal: ac.signal });
     assert.equal(r.error, 'aborted');
   } finally { g.fetch = oldFetch; g.setTimeout = oldTimeout; }
+});
+
+
+// #319 delta B1: with the stack down, the read-back fails too. The page said nothing for 5 minutes and then
+// blamed a send that never reached the server ("may have run"); the pill never showed "starting".
+test('B1: a stack still starting is said at once, waited for, and the send then goes with the same id', async () => {
+  let starting = 0, readsAtStart = -1;
+  let n = 0;
+  await withWorld({
+    stream: () => json(502, { ok: false, error: 'gateway unreachable' }),
+    text: () => ({ status: 200, body: { ok: true, reply_text: 'up now' } }),
+    fates: [{ state: 'http502' }],
+  }, async (w) => {
+    const r = await arturoTurn('hello', 'web_c1', null, {
+      onStarting: async () => { starting++; readsAtStart = w.reads.length; n++; return true; },
+    });
+    assert.equal(starting, 1);
+    assert.equal(readsAtStart, 0);                                       // said at once, not after a read-back
+    assert.equal(r.ok, true);
+    assert.equal(r.reply_text, 'up now');
+    assert.equal((w.texts[0] as any).turn_id, (w.streams[0] as any).turn_id);
+  });
+});
+
+test('B1: a stack that does not come up ends as "starting", never as "may have run"', async () => {
+  await withWorld({ stream: () => json(502, { ok: false, error: 'gateway unreachable' }), fates: [{ state: 'http502' }] }, async (w) => {
+    const r = await arturoTurn('hello', 'web_c1', null, { onStarting: async () => false });
+    assert.notEqual(r.error, 'may_have_run');
+    assert.equal(r.status, 502);
+    assert.equal(w.reads.length, 0);
+    assert.equal(w.texts.length, 0);
+  });
+});
+
+test('B1: a 504 whose read-back cannot reach the server stops after 3 reads as "starting", not after 5 minutes', { timeout: 5000 }, async () => {
+  let starting = 0;
+  await withWorld({
+    text: () => ({ status: 504, body: { ok: false, error: 'timeout' } }),
+    fates: [{ state: 'http502' }],
+  }, async (w) => {
+    const r = await arturoTurn('hello', 'web_c1', null, { stream: false, onStarting: async () => { starting++; return false; } });
+    assert.equal(w.reads.length, 3);
+    assert.equal(starting, 1);
+    assert.notEqual(r.error, 'may_have_run');
+  });
 });

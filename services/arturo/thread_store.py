@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS turn_marks (
     ts        REAL NOT NULL,
     PRIMARY KEY (thread_id, turn_id)
 );
+CREATE INDEX IF NOT EXISTS idx_turn_marks_ts ON turn_marks(ts);
 """
 
 # A turn mark outlives any client still waiting on its turn by far; older ones are pruned.

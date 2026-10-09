@@ -271,7 +271,7 @@ export async function arturoTurn(
       }, opts.signal);
       streamNext = false;          // any re-ask is whole: a second stream would only re-show what the first did
     } else {
-      res = await arturoText(text, conversationId, ctx, { onSent: opts.onSent, brain: opts.brain, turnId });
+      res = await arturoText(text, conversationId, ctx, { onSent: opts.onSent, brain: opts.brain, turnId, signal: opts.signal });
     }
     if (res.ok) return asReply(res);
     if (opts.signal?.aborted) return { ok: false, error: 'aborted' } as ArturoReply;
@@ -282,8 +282,25 @@ export async function arturoTurn(
     if (!unclear) return asReply(res);           // a refusal or a brain's own error: the server's final word
     // Whatever this attempt showed goes before the answer (or the next attempt) arrives.
     opts.onReset?.();
+    // A hop still starting (502/503, unreachable, the network) before the server ever said it had the turn:
+    // say "starting" at once and wait for health (G15, the path hit live from the pill), then send again with
+    // the SAME id: if it did land meanwhile the server replays it or reports it busy, never runs it twice.
+    // A 504 / timeout is different: the turn may be running, so it is read back first.
+    const booting = !busy && !started && !reported && isStarting(res as ArturoReply) && !isTimeout(res);
+    if (booting) {
+      if (!opts.onStarting || !(await opts.onStarting())) return asReply(res);
+      if (Date.now() >= deadline || attempt >= MAX_RESENDS) return asReply(res);
+      continue;
+    }
     const fate = await settleTurn(conversationId, turnId, opts.signal, deadline, busy ? 1 : UNKNOWN_POLLS);
     if (fate.state === 'aborted') return { ok: false, error: 'aborted' } as ArturoReply;
+    if (fate.state === 'unreached') {
+      // The read-back itself cannot reach the server: nothing is known of this send, and nothing was lost.
+      // Treated as starting, never as "may have run".
+      if (!opts.onStarting || !(await opts.onStarting())) return { ...asReply(res), ok: false, error: res.error || 'network' } as ArturoReply;
+      if (Date.now() >= deadline || attempt >= MAX_RESENDS) return asReply(res);
+      continue;
+    }
     if (fate.state === 'done') {
       if (!fate.result) return { ok: false, error: 'not_answered_here' } as ArturoReply;
       const { status, ...body } = fate.result;
@@ -304,8 +321,6 @@ export async function arturoTurn(
       // The server ended its turn with an error and ran nothing: ask once more, whole (the old fallback).
       if (reasked) return asReply(res);
       reasked = true;
-    } else if (!busy && isStarting(res as ArturoReply) && opts.onStarting) {
-      if (!(await opts.onStarting())) return asReply(res);
     } else {
       await pause(READ_BACK_EVERY_MS, opts.signal);
     }
@@ -340,20 +355,29 @@ function pause(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-type Settled = TurnFate | { state: 'timeout' } | { state: 'aborted' };
+type Settled = TurnFate | { state: 'timeout' } | { state: 'aborted' } | { state: 'unreached' };
+
+const UNREACHED_READS = 3;                   // read-backs that cannot reach the server, in a row
+
+function isTimeout(r: { status?: number; error?: string }): boolean {
+  return r.status === 504 || r.error === 'timeout' || r.error === 'stream_timeout';
+}
 
 /** Ask the server what became of this send until it is no longer running. Never sends anything. */
 async function settleTurn(conversationId: string, turnId: string, signal: AbortSignal | undefined,
                           deadline: number, unknownPolls: number): Promise<Settled> {
-  let unknowns = 0;
+  let unknowns = 0, unreached = 0;
   for (;;) {
     if (signal?.aborted) return { state: 'aborted' };
     const fate = await loadTurn(conversationId, turnId);
     if (signal?.aborted) return { state: 'aborted' };       // nit 8: an abort mid-read wins over its answer
     if (fate) {
+      unreached = 0;
       if (fate.state === 'done' || fate.state === 'lost') return fate;
       if (fate.state === 'unknown') { if (++unknowns >= unknownPolls) return fate; } else unknowns = 0;
-    }                                                          // null: the read failed (a hop starting): wait
+    } else if (++unreached >= UNREACHED_READS) {
+      return { state: 'unreached' };                           // the read-back cannot reach the server either
+    }
     if (Date.now() >= deadline) return { state: 'timeout' };
     await pause(READ_BACK_EVERY_MS, signal);
   }

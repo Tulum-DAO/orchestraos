@@ -6041,9 +6041,11 @@ def _record_text_turn(conversation_id, text, reply, brain=None, effective=None, 
     reply = _brain.without_envelope(reply)
     _TEXT_HISTORY.append(conversation_id, "user", text)
     _TEXT_HISTORY.append(conversation_id, "assistant", reply, brain=effective)
-    _THREADS.record_turn(conversation_id, text, reply, brain=brain, effective=effective,
-                         **({"turn_id": turn_id} if turn_id else {}))
-    if turn_id:
+    stored = _THREADS.record_turn(conversation_id, text, reply, brain=brain, effective=effective,
+                                  **({"turn_id": turn_id} if turn_id else {}))
+    if turn_id and stored:
+        # Only a turn the archive really holds counts as recorded (#319 delta SF2): an unrecorded one keeps
+        # its 'started' mark, so it can never be replayed from a row that is not there.
         _TURN_IDS.note_recorded(conversation_id, turn_id)
 
 

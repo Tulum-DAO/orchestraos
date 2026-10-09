@@ -54,6 +54,8 @@ export interface ArturoTextOptions {
   brain?: { provider: string; model: string };
   /** This send's id (newTurnId), the SAME on every attempt of it: the server replays a send it has seen. */
   turnId?: string;
+  /** Leaving the page abandons the request (the server's turn, if it started, still finishes and is kept). */
+  signal?: AbortSignal;
 }
 
 /** One id per operator send (DEC-1791518421640932). Every attempt of that send carries it (the stream, the
@@ -99,6 +101,9 @@ export async function arturoText(text: string, conversationId: string, ctx?: Art
       else resolve(json as ArturoReply);
     };
     xhr.onerror = () => resolve({ ok: false, error: 'network' });
+    xhr.onabort = () => resolve({ ok: false, error: 'aborted' });
+    if (opts.signal?.aborted) { resolve({ ok: false, error: 'aborted' }); return; }
+    opts.signal?.addEventListener('abort', () => xhr.abort(), { once: true });
     xhr.ontimeout = () => resolve({ ok: false, error: 'timeout' });
     // ontimeout above never fired, because no timeout was ever set: a connection that stalled
     // after the server had answered left the bubble waiting for as long as the tab stayed open
