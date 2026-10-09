@@ -709,8 +709,8 @@ may also ask which devices you have (iPhone, iPad, Apple Watch, Mac, Android pho
 computer). Answering is optional. The iPhone, iPad and Mac apps are not released yet (test
 builds only). If you have one and pick that device, Arturo can show its pairing code in a card on
 this page once the gateway is served over https ([docs/ONBOARDING.md](ONBOARDING.md) step 4);
-until then it tells you what to run. You can also ask it later ("pair my iPhone"), or use
-`orchestra pair` from the same page. To see your agents, tap the gear button at the top left, then **Agents** (or add `/agents` to the
+until then it tells you what to run. You can also ask it later ("pair my iPhone"), or
+run `orchestra pair` on the server (see [docs/ONBOARDING.md](ONBOARDING.md)). To see your agents, tap the gear button at the top left, then **Agents** (or add `/agents` to the
 address). That page's heading is **Agents**, and it stays empty until step 3. Step 4 walks you
 through this again once your team is running. The first
 visit can take a few seconds while the certificate is issued. Optional: put the

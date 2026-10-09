@@ -16,12 +16,14 @@ for you, then or any time later: say "pair my iPhone" in the dashboard chat. It 
 - the gateway served over https, which is step 4's `tailscale serve`. Arturo finds that address
   itself. It never uses an address with Tailscale Funnel on, because Funnel opens it to the whole
   internet. If it finds none, or more than one, it says what to do. To name the address yourself,
-  set `public_url` under `[gateway]` in `orchestra.toml` (Arturo reads it when its service
-  starts, so a change needs a restart; whether to restart is your decision);
+  set `public_url` under `[gateway]` in `orchestra.toml`. Arturo reads it when its service
+  starts, so a change needs a restart: `orchestra down && orchestra up --detach`, as in step 1.
+  **[PERSON ONLY]** Whether and when to restart is your decision;
 - a pick: Arturo shows a devices card, and a code is made only for an iPhone, iPad or Mac you
-  picked on it (a tap, or typing exactly one of its options) in the last 10 minutes. Anything
-  else you type is not an answer and records nothing; picking **None of these** takes back an
-  earlier pick.
+  picked on it (a tap, or typing its options, such as "iPhone and Mac") in the last 10 minutes.
+  Anything else you type is not an answer and records nothing. Each new pick replaces the earlier
+  one, so picking only options that aren't an iPhone, iPad or Mac (such as **Just this computer**)
+  takes an earlier pick back.
 
 Then Arturo shows the code in a card on the dashboard page, never in the chat text, with where
 to paste it and how to revoke the device. The code always allows read, approve and message; for
@@ -375,8 +377,8 @@ changed it, use the port that `orchestra status` prints on the `gateway` row:
 tailscale serve --bg --https=8445 http://127.0.0.1:8890
 ```
 
-Your gateway URL is then `https://<machine>.<tailnet>.ts.net:8445`. Use that
-address in step 2 (`orchestra pair`) so the QR carries it. Keep it tailnet
+Your gateway URL is then `https://<machine>.<tailnet>.ts.net:8445`. Step 2's
+`orchestra pair` then finds this address itself. Keep it tailnet
 only: do not add `--funnel` (or `tailscale funnel`). The phone reaches it
 over Tailscale; the gateway does not need to be on the public internet.
 
