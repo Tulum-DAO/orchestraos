@@ -205,29 +205,8 @@ wait_for_tui() {
     return 1
 }
 
-# Race-safe prompt injection into the Claude TUI, with verify + one retry.
-# send-keys text + Enter with no delay loses the race against Ink's async
-# input buffer (~5-10% silent failures). paste-buffer is atomic; the delayed
-# Enter submits after ingestion settles; then we verify the text landed.
-inject_prompt() {
-    local session="$1" text="$2"
-    local probe attempt
-    probe=$(echo "$text" | head -c 60)
-    for attempt in 1 2; do
-        tmux set-buffer -b spawn-inject "$text"
-        tmux paste-buffer -b spawn-inject -t "$session" -d
-        sleep 0.7
-        tmux send-keys -t "$session" Enter
-        sleep 2
-        if tmux capture-pane -t "$session" -p -S -15 2>/dev/null | grep -qF "$probe"; then
-            return 0
-        fi
-        warn "Injection attempt $attempt not visible in '$session' — retrying"
-        sleep 2
-    done
-    err "Injection FAILED twice for '$session' — agent may be idle without a task"
-    return 1
-}
+# inject_prompt (race-safe paste + Enter, verified SUBMITTED, not just visible) lives in
+# scripts/spawn_guards.sh with inject_or_fail, so it can be tested on its own.
 
 # BG leg-(ii) P2.7 (Seam 2a): emit the launch_cmd env prefix that carries a BG green's
 # marker vars INTO the pane. spawn_green (bg_green_env) sets BG_GREEN_ROOT/ALIAS +
