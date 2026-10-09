@@ -60,7 +60,10 @@ TOKEN_BYTES = 32
 #: minted today can carry it, and a later usage-read route does not cost every phone a re-pair
 #: (pairing codes are single-use, and a watch inherits its phone's token). It is not in
 #: HTTP_MINTABLE: like every verb added later, it is mintable only by the host CLI until decided.
-VERBS = ("read", "approve", "message", "inject", "ptt", "voice", "admin", "usage", "owner")
+#: `code` reads files in the working folders of agents whose roots the operator allowlisted
+#: (GET /agent-file). Separate from `read` on purpose: it reaches the filesystem, not the fleet's
+#: own records. Not in HTTP_MINTABLE: only the host CLI can grant it.
+VERBS = ("read", "approve", "message", "inject", "ptt", "voice", "admin", "usage", "owner", "code")
 
 #: The one remaining all-powerful credential. The fleet token resolves to this so Shaw's
 #: phone and watch keep working unchanged; it is NAMED in listings rather than hidden, so

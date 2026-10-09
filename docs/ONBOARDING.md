@@ -208,6 +208,7 @@ Confirm the `gateway` row has a live pid again.
   | `admin` | file red-alert reports, post telemetry |
   | `usage` | nothing yet: reserved for reading usage later, so a device paired now needs no re-pair |
   | `owner` | this device is yours: its push-to-talk calls (with `ptt`) get Arturo's full tools, like the dashboard, instead of lookups only. Typed turns are unchanged |
+  | `code` | open a file in the working folder of an agent you allowlisted under `[code] roots` in orchestra.toml (off until you list a root). Dotfiles, logs, keys, databases, transcripts and anything secret-shaped are refused; every fetch is audited. Only the host can grant it |
 
   A phone or Mac that answers cards needs `read,approve`. Add `message` only if you want to
   message agents or chat with Arturo from it. Give it more only if you mean to.
