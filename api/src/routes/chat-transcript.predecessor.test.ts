@@ -76,12 +76,25 @@ test('the shared project dir never yields another seat\'s or a predecessor\'s ne
 });
 
 test('the rule, by owner', () => {
-  const owner = (sid: string) => ({ [OLD]: { root: SEAT, current: false }, [CUR]: { root: SEAT, current: true },
-                                     [OTHER]: { root: 'zz-other-seat', current: true } } as any)[sid] ?? null;
-  assert.equal(sessionIsThisSeats(SEAT, CUR, owner), true);
-  assert.equal(sessionIsThisSeats(SEAT, OLD, owner), false, 'a predecessor');
-  assert.equal(sessionIsThisSeats(SEAT, OTHER, owner), false, 'another seat');
-  assert.equal(sessionIsThisSeats(SEAT, 'unknown-sid', owner), true, 'a /clear or a seat outside the store');
-  assert.equal(sessionIsThisSeats(`${SEAT}-g1`, OLD, owner), true, 'a generation\'s own id shows its own session');
-  assert.equal(sessionIsThisSeats(`${SEAT}-g1`, OTHER, owner), false);
+  const owners = new Map<string, { root: string; current: boolean }>([
+    [OLD, { root: SEAT, current: false }], [CUR, { root: SEAT, current: true }],
+    [OTHER, { root: 'zz-other-seat', current: true }],
+    ['green-sid', { root: `${SEAT}-g3`, current: true }]]);
+  assert.equal(sessionIsThisSeats(SEAT, CUR, owners), true);
+  assert.equal(sessionIsThisSeats(SEAT, OLD, owners), false, 'a predecessor');
+  assert.equal(sessionIsThisSeats(SEAT, OTHER, owners), false, 'another seat');
+  assert.equal(sessionIsThisSeats(SEAT, 'unknown-sid', owners), true, 'a /clear or a seat outside the store');
+  assert.equal(sessionIsThisSeats(SEAT, 'green-sid', owners), true,
+               'a promoted green still filed under its shadow root is this seat\'s lineage');
+  assert.equal(sessionIsThisSeats(`${SEAT}-g1`, OLD, owners), true, 'a generation id may show its lineage');
+  assert.equal(sessionIsThisSeats(`${SEAT}-g1`, OTHER, owners), false);
+  assert.equal(sessionIsThisSeats(SEAT, OLD, null), true, 'no store: as before');
+});
+
+test('the fallback never picks a subagent sidechain or a session the store does not know, for a known seat', () => {
+  transcript('agent-a15c9fa', 1);                            // a subagent sidechain, newest of all
+  transcript('99999999-2222-4333-8444-000000000009', 2);     // a headless job the store does not know
+  writeFileSync(join(orch, 'state', 'agents', `${SEAT}.json`), JSON.stringify({}));
+  writeFileSync(join(orch, 'state', 'agent-sessions.json'), JSON.stringify({ [SEAT]: { cwd: '/repo' } }));
+  assert.equal(resolveTranscriptPath(SEAT).sid, CUR);
 });
