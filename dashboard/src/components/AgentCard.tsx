@@ -21,6 +21,7 @@ import { GenChip } from './GenChip';
 import { useRecentAgents } from '../stores/recentAgents';
 import { RecentAgentChips } from './RecentAgentChips';
 import { setArturoFocus } from '../lib/arturo';
+import { canStopTurn } from '../lib/composerGate';
 
 const PALETTE = [
   'bg-amber-600', 'bg-blue-600', 'bg-green-600', 'bg-purple-600',
@@ -757,11 +758,18 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                   strandedText={typeof agent.stranded === 'string' ? agent.stranded : agent.stranded?.text}
                   pendingMenu={agent.pending_menu}
                 />
+                {/* `dark`: this panel is always dark (neutral-900) whatever the app theme, and the pill
+                    reads theme tokens; without it the light theme put a white pill in a black panel. */}
+                <div className="dark">
                 <ChatInput
                   agentId={agent.id}
                   attachSupported={(agent.machine || 'vps') === 'vps'}
                   placeholder={agent.status === 'working' ? 'Agent is working (send will queue on the turn)…' : 'Message this agent…'}
+                  // Stop = the Esc key the ActionBar below sends; never while a menu is open (#334).
+                  canStop={canStopTurn({ state: agent.status, pendingMenu: agent.pending_menu })}
+                  onStop={() => { logAction('agent.stop', agent.id); return sendKeyToAgent(agent.id, 'escape'); }}
                 />
+                </div>
               </div>
             )}
 

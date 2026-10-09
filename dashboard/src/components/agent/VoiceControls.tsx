@@ -75,7 +75,7 @@ export function VoiceControls({
   };
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-1">
       {unavailable && (
         <div className="absolute bottom-full left-0 right-0 px-3 py-1.5 text-xs text-amber-500 bg-background/95 border-t border-border">
           {`I can't do that yet — ${unavailable}.`}
@@ -86,9 +86,9 @@ export function VoiceControls({
         aria-pressed={dictating}
         aria-label="Microphone"
         title={settings.micMode === 'hold' ? 'Hold to talk' : 'Tap to talk'}
-        className={`p-2 rounded-lg transition-colors ${dictating ? 'bg-[var(--accent-voice)] text-white' : 'text-foreground hover:bg-muted'}`}
+        className={`h-9 w-9 flex items-center justify-center rounded-full transition-colors ${dictating ? 'bg-[var(--accent-voice)] text-background' : 'text-foreground/70 hover:text-foreground hover:bg-muted'}`}
       >
-        <Mic size={20} />
+        <Mic size={18} />
       </button>
       {showCallButton && (
         <button
@@ -96,10 +96,10 @@ export function VoiceControls({
           aria-pressed={inCall}
           aria-label={inCall ? 'End call' : 'Start voice call'}
           title={inCall ? `End call with ${settings.assistantName}` : `Call ${settings.assistantName}`}
-          className="p-2 rounded-lg transition-colors text-foreground hover:bg-muted"
+          className="h-9 w-9 flex items-center justify-center rounded-full transition-colors text-foreground/70 hover:text-foreground hover:bg-muted"
           style={{ color: inCall ? 'var(--accent-voice)' : undefined }}
         >
-          {inCall ? <PhoneOff size={20} /> : <PhoneCall size={20} />}
+          {inCall ? <PhoneOff size={18} /> : <PhoneCall size={18} />}
         </button>
       )}
     </div>

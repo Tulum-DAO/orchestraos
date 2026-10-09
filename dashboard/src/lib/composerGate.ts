@@ -137,3 +137,35 @@ export function delegatedWorkLabel(subagents?: number): string | null {
   if (!subagents || subagents < 1) return null;
   return `${subagents} agent${subagents === 1 ? '' : 's'} running`;
 }
+
+/** Raw seat statuses that mean "mid-turn". Read from the seat row's `status` field (the
+ *  /api/agents row the page already has), NOT from composerGate's `queued`: `queued` is also true
+ *  for `stalled`, and a stalled seat may be sitting at something Esc would answer. */
+const MID_TURN = new Set(['working', 'thinking']);
+
+/** May the composer offer Stop (which presses Esc in the seat's pane)?
+ *
+ *  Esc at a permission prompt or a question menu is an ANSWER — it denies or dismisses — not a
+ *  stop (#334 exists because the gateway once pressed keys into a permission prompt). So Stop is
+ *  offered only while the seat is actually mid-turn AND has no pending menu. */
+export function canStopTurn(args: { state?: string; pendingMenu?: unknown }): boolean {
+  if (args.pendingMenu) return false;
+  return MID_TURN.has((args.state || '').trim().toLowerCase());
+}
+
+/** What a keydown in the composer's textarea does. Pure, so the keymap is testable.
+ *  - Enter sends; Shift+Enter is a newline. Cmd/Ctrl+Enter always sends.
+ *  - On a touch device (pointer: coarse) plain Enter stays a newline: the round button sends.
+ *  - Enter during IME composition never sends (it is confirming a character).
+ *  - Esc stops only when canStop; otherwise it does nothing to the seat. */
+export function composerKeyAction(e: {
+  key: string; shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean; isComposing?: boolean;
+  coarse?: boolean; canStop?: boolean;
+}): 'send' | 'stop' | 'none' {
+  if (e.isComposing) return 'none';
+  if (e.key === 'Escape') return e.canStop ? 'stop' : 'none';
+  if (e.key !== 'Enter') return 'none';
+  if (e.metaKey || e.ctrlKey) return 'send';
+  if (e.shiftKey || e.coarse) return 'none';
+  return 'send';
+}

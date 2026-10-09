@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Cpu } from 'lucide-react';
 import { withTimeout, sendFailureNote } from '../../lib/composerSend';
 import { delegatedWorkLabel, type ComposerGate } from '../../lib/composerGate';
 import { useLocation } from 'react-router-dom';
@@ -25,6 +26,10 @@ interface ComposerProps {
   gate?: ComposerGate;
   /** Delegated agents in flight, shown as an affordance. Never gates the send. */
   subagents?: number;
+  /** Stop may be offered (composerGate.canStopTurn: mid-turn, no menu open). */
+  canStop?: boolean;
+  /** Interrupt the turn: the Esc key, same path as the Dev-mode ActionBar. */
+  onStop?: () => Promise<unknown>;
 }
 
 async function uploadAttachment(file: File): Promise<SendAttachment> {
@@ -36,7 +41,7 @@ async function uploadAttachment(file: File): Promise<SendAttachment> {
   return { upload_id: data.filename };
 }
 
-export function Composer({ agentId = 'gm', seatName, gate, subagents }: ComposerProps) {
+export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, onStop }: ComposerProps) {
   const settings = useAgentSettings();
   const location = useLocation();
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -92,38 +97,31 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents }: Composer
   };
 
   return (
-    // NOT `fixed`: the composer belongs to the chat column, not to the window. As a fixed
-    // page-level bar it ran across the sidebar, cut the rail off ~145px from the bottom (so the
-    // last agent rows could not be reached), and read as a global "talk to the system" box when
-    // it is scoped to ONE agent.
-    // `sticky bottom-0` keeps the composer pinned to the bottom of ITS OWN column while the
-    // transcript scrolls behind it. It no longer has anything to do with the Arturo pill: the
-    // pill is now pinned to one corner at the highest z-index and sits ON TOP of this bar by
-    // design (operator ruling 2026-10-06), rather than being lifted clear of it.
-    <div className="shrink-0 sticky bottom-0 z-10 bg-background border-t border-border safe-bottom">
+    // FLOATING (Shaw 2026-10-09): no full-width bar any more. The page (AgentPage) positions this
+    // over the bottom of the chat column and pads the transcript by its measured height, so the
+    // conversation scrolls underneath and the last message is never covered. Still scoped to the
+    // chat column, never `fixed` to the window: as a window-level bar it once ran across the
+    // sidebar and read as a global "talk to the system" box when it is scoped to ONE agent.
+    <div className="shrink-0 safe-bottom">
       {/* Capped and centred on the SAME column as the transcript, so the two share one edge. */}
-      <div className="relative mx-auto w-full max-w-[860px] px-3">
-        {/* ONE row. The model picker and the voice controls ride the SEND ROW itself via
-            ChatInput's leading/trailing slots. They were previously an orphan caption plus a
-            second control row under Send, so five controls read as three ragged rows.
-            `items-end` on that row puts every one of them on Send's baseline. */}
-        {/* WHAT THE COMPOSER CAN DO RIGHT NOW, said plainly above the box.
+      <div className="relative mx-auto w-full max-w-[800px]">
+        {/* WHAT THE COMPOSER CAN DO RIGHT NOW, said plainly directly above the pill.
             A mid-turn seat is NOT refused: Claude Code queues natively, so the honest line is
             "this will wait", not a disabled button. The blocked cases are the two where a
             keystroke does damage (it answers a menu) or nothing at all (the pane is down). */}
         {gate && gate.send === 'blocked' && (
-          <p className="px-1 pb-1 text-[11px] text-amber-300" role="status">{gate.reason}</p>
+          <p className="mx-6 mb-1 text-[11px] text-amber-500 dark:text-amber-300" role="status">{gate.reason}</p>
         )}
         {gate && gate.send === 'enabled' && gate.queued && (
-          <p className="px-1 pb-1 text-[11px] text-neutral-400" role="status">
+          <p className="mx-6 mb-1 text-[11px] text-muted-foreground" role="status">
             {gate.reason}
             {delegatedWorkLabel(subagents) && (
-              <span className="text-neutral-500"> · {delegatedWorkLabel(subagents)}</span>
+              <span className="opacity-80"> · {delegatedWorkLabel(subagents)}</span>
             )}
           </p>
         )}
         {gate && gate.send === 'enabled' && !gate.queued && delegatedWorkLabel(subagents) && (
-          <p className="px-1 pb-1 text-[11px] text-neutral-500" role="status">
+          <p className="mx-6 mb-1 text-[11px] text-muted-foreground" role="status">
             {delegatedWorkLabel(subagents)}
           </p>
         )}
@@ -134,27 +132,31 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents }: Composer
           draft={draft}
           onDraftChange={setDraft}
           onSend={handleSend}
+          canStop={canStop}
+          onStop={onStop}
           leading={
+            // Compact model chip: the label from sm up, an icon below it so every control stays
+            // reachable at 360px. Opens the existing ModelSelectorSheet.
             <button
               type="button"
               onClick={() => setSheetOpen(true)}
-              className="shrink-0 self-end mb-3 max-w-[120px] truncate text-[10px] text-foreground/60 hover:text-foreground transition-colors"
-              title="Choose the model this agent runs"
+              className="shrink-0 h-9 min-w-9 px-2 sm:px-2.5 max-w-[130px] flex items-center justify-center gap-1.5 rounded-full text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              title={modelLabel ? `Model: ${modelLabel} — choose the model this agent runs` : 'Choose the model this agent runs'}
+              aria-label={modelLabel ? `Model: ${modelLabel}` : 'Choose a model'}
             >
-              {modelLabel ?? 'Choose a model'}
+              <Cpu size={16} className="shrink-0 sm:hidden" />
+              <span className="hidden sm:inline truncate">{modelLabel ?? 'Choose a model'}</span>
             </button>
           }
           trailing={
-            <div className="shrink-0 self-end flex items-center gap-2">
-              <VoiceControls
-                route={location.pathname}
-                focusedEntity={null}
-                onPartial={setDraft}
-                onFinal={setDraft}
-                onCallEnded={(marker) => setDraft((d) => (d ? d + '\n' : '') + marker)}
-                showCallButton={draft.trim() === ''}
-              />
-            </div>
+            <VoiceControls
+              route={location.pathname}
+              focusedEntity={null}
+              onPartial={setDraft}
+              onFinal={setDraft}
+              onCallEnded={(marker) => setDraft((d) => (d ? d + '\n' : '') + marker)}
+              showCallButton={draft.trim() === ''}
+            />
           }
         />
         <ModelSelectorSheet open={sheetOpen} onClose={() => setSheetOpen(false)} />
