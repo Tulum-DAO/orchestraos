@@ -43,3 +43,21 @@ def test_a_gemini_live_call_is_offered_only_the_non_fleet_allowlist():
     assert glb.arturo_mod is not None
     assert {d["name"] for d in glb.offered_declarations()} == {"knowledge", "list_agents"}
     assert all(d["name"] in glb.arturo_mod._NON_FLEET_ALLOWED for d in glb.offered_declarations())
+
+
+def test_a_fleet_gemini_live_session_is_offered_every_tool():
+    """G1': /live admits only the fleet bearer, so the gateway opens the session as "fleet"."""
+    from services.arturo import gemini_live_bridge as glb
+    assert glb.offered_declarations("fleet") == glb.TOOL_DECLARATIONS
+    assert {d["name"] for d in glb.offered_declarations(None)} == {"knowledge", "list_agents"}
+
+
+def test_a_fleet_gemini_live_tool_call_runs_under_a_fleet_turn(monkeypatch):
+    from services.arturo import gemini_live_bridge as glb
+    seen = []
+    monkeypatch.setattr(glb, "execute_tool_fn",
+                        lambda name, args: seen.append(glb.arturo_mod._is_fleet(glb.arturo_mod._TEAM_TURN.get())) or "ok")
+    glb.run_tool("fleet", "vc_live_x", "gm_command", {})
+    glb.run_tool(None, "vc_live_x", "gm_command", {})
+    assert seen == [True, False]
+    assert glb.arturo_mod._TEAM_TURN.get() is None, "the turn is reset after the call"

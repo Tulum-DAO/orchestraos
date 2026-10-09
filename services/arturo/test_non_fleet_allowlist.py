@@ -509,14 +509,21 @@ def test_a_fleet_stamp_without_this_installs_secret_is_not_fleet(P, monkeypatch,
     if presented == "reversed":
         h["X-Arturo-Stamp"] = good["X-Arturo-Stamp"][::-1]
     ran, results = _text_running(P, monkeypatch, path, h)
-    assert ran == [] and results and results[0].startswith("NOT RUN")
+    assert ran == []
+    # a loopback turn runs and is refused tools; a forwarded one never reaches a turn (G1')
+    assert (results and results[0].startswith("NOT RUN")) if not extra else results == []
 
 
 @pytest.mark.parametrize("path", ["/text", "/text/stream"])
 @pytest.mark.parametrize("extra", _FWD[1:], ids=["xff", "xfh", "funnel", "forwarded"])
 def test_even_the_right_secret_is_ignored_on_a_forwarded_request(P, monkeypatch, fleet_stamp, path, extra):
+    """A forwarded or Funnel request is not the gateway's hop, so a loopback-only route refuses it
+    outright (the Funnel delivers from loopback: remote_addr alone would let the internet in)."""
     ran, results = _text_running(P, monkeypatch, path, {**fleet_stamp(P), **extra})
-    assert ran == [] and results[0].startswith("NOT RUN")
+    assert ran == [] and results == []
+    with P.app.test_client() as c:
+        assert c.post(path, json={"text": "hi", "conversation_id": "web_g1"},
+                      headers={**fleet_stamp(P), **extra}).status_code == 403
 
 
 @pytest.mark.parametrize("state", ["missing", "empty"])

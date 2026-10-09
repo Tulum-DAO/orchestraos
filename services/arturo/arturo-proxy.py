@@ -19,6 +19,7 @@ import json
 import atexit
 import os
 import re
+import hashlib
 import hmac
 import subprocess
 import logging
@@ -2096,15 +2097,34 @@ def _stamped_principal(req):
     """Who the gateway says is calling. "fleet" only with this install's stamp secret
     (scripts/arturo_stamp.py), and never on a request that came through a proxy or the Funnel: a
     forwarded request is not the gateway's own hop. Anything else is at most a non-fleet label."""
-    names = {k.lower() for k in req.headers.keys()}
-    if "forwarded" in names or "tailscale-funnel-request" in names or any(n.startswith("x-forwarded-") for n in names):
+    if _forwarded(req):
         return None
     principal = (req.headers.get("X-Arturo-Principal") or "").strip()
-    if principal == "fleet":
+    if principal == "fleet" or principal.startswith("owner:"):
+        # Both mean full tools, so both need this install's secret. An owner id is a device id.
+        if principal.startswith("owner:") and not _OWNER_ID_RE.fullmatch(principal[len("owner:"):]):
+            return None
         _sys.path.insert(0, str(_REPO_ROOT)) if str(_REPO_ROOT) not in _sys.path else None
         from scripts import arturo_stamp
-        return "fleet" if arturo_stamp.verify(ORCHESTRA_DIR, req.headers.get(arturo_stamp.HEADER)) else None
+        return principal if arturo_stamp.verify(ORCHESTRA_DIR, req.headers.get(arturo_stamp.HEADER)) else None
     return principal or None
+
+
+_OWNER_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def _forwarded(req):
+    names = {k.lower() for k in req.headers.keys()}
+    return ("forwarded" in names or "tailscale-funnel-request" in names
+            or any(n.startswith("x-forwarded-") for n in names))
+
+
+def _gateway_hop_ok(req=None):
+    """A loopback-only route's trust boundary: the request is from this machine AND did not come
+    through a proxy or the Funnel. A Funnel request is delivered from loopback too, so remote_addr
+    alone would let the internet in."""
+    req = req or request
+    return (req.remote_addr or "") in ("127.0.0.1", "::1", "::ffff:127.0.0.1") and not _forwarded(req)
 
 
 # Said instead of a promise when the background run was refused (a non-fleet turn): never "I'll text you"
@@ -2150,7 +2170,14 @@ def _promise_or_refusal(result, promise):
 
 
 def _is_fleet(turn):
-    return turn is not None and turn.get("principal") == "fleet"
+    """Full tools: the dashboard ("fleet"), or a voice call whose recorded caller is the fleet bearer
+    or an `owner` device ("owner:<id>"). A fenced voice turn (a tool result has come back in it) is
+    down to the allowlist for the rest of the turn. Pairing and consent cards stay dashboard-only:
+    they check principal == "fleet" themselves."""
+    if turn is None or turn.get("fenced"):
+        return False
+    p = turn.get("principal") or ""
+    return p == "fleet" or p.startswith("owner:")
 
 
 def _bound_tools(turn=None, use_current=True):
@@ -2185,6 +2212,224 @@ def _non_fleet_refusal(name, turn):
         return None
     return (f"NOT RUN: {name} is not available here. From this device Arturo can look things up and "
             f"answer questions; actions run from the dashboard's Arturo chat.")
+
+
+# --- G1': voice calls carry their caller (congruence DEC-1791497888310543) ---------------------
+# The gateway stamps who is calling on every relay request; Arturo records the caller at the call's
+# first chunk and from then on accepts the call's audio, events and end ONLY from that same caller
+# (a stamped "fleet"/"owner:<id>" needs this install's secret, so only the gateway can send it). A
+# /v1/chat/completions turn of that call (found by its id EXACTLY: Hume sends our id, an ElevenLabs
+# id maps back through the relay) runs with the recorded caller. Only "fleet" and "owner:<id>" mean
+# full tools. A call that loses its record (10 min idle, the 2 h cap, a restart) is never recorded
+# again: it stays on the allowlist until it ends, and says so once. In memory only, except the
+# HASHES of calls that had full tools, kept so a restart can say so.
+_CALL_PRINCIPALS = {}
+_CALL_LOST = {}                       # sha256(call id) -> {"said": bool, "principal": the call's caller}
+_CALL_LOCK = _threading.Lock()
+_CALL_IDLE_S = 10 * 60
+_CALL_MAX_S = 2 * 60 * 60
+_CALL_ACTIVE_FILE = ARTURO_STATE / "calls-with-full-tools.json"   # sha256 of ids only, 0600
+_UUID_SHAPE_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
+_UUID4_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", re.I)
+_HEX128_RE = re.compile(r"[0-9a-f]{32,128}", re.I)
+_B64URL128_RE = re.compile(r"[A-Za-z0-9_-]{22,128}")
+
+
+def _call_id_ok(cid):
+    """Condition 3: only an unguessable id gets a record: an RFC 4122 v4 UUID (any case, 122
+    random bits), or an opaque id of at least 128 bits of hex or base64url that also LOOKS random
+    (a word-like or repetitive id such as "conversation_watch_0001" or "0"*32 does not). Refusing
+    an id only costs that call its tools; it never grants any."""
+    cid = str(cid or "")
+    if _UUID_SHAPE_RE.fullmatch(cid):
+        return bool(_UUID4_RE.fullmatch(cid))          # a UUID must be version 4 (v1 is a clock + MAC)
+    if _HEX128_RE.fullmatch(cid):
+        return len(set(cid.lower())) >= 10
+    if _B64URL128_RE.fullmatch(cid):
+        classes = sum(bool(re.search(p, cid)) for p in (r"[a-z]", r"[A-Z]", r"[0-9]"))
+        return classes == 3 and len(set(cid)) >= 12
+    return False
+
+
+def _cid_hash(cid):
+    return hashlib.sha256(str(cid).encode()).hexdigest()
+
+
+def _full_class(principal):
+    return principal == "fleet" or str(principal or "").startswith("owner:")
+
+
+def _save_active_calls():
+    """{sha256(call id): caller} of the calls that have full tools now. The id is a capability, so it
+    is never written; the caller is not secret, and a call that comes back after a restart stays
+    bound to it."""
+    try:
+        live = {_cid_hash(c): r["principal"] for c, r in _CALL_PRINCIPALS.items() if _full_class(r["principal"])}
+        # calls that already lost their record stay bound through a second restart too
+        live.update({h: e["principal"] for h, e in _CALL_LOST.items() if _full_class(e.get("principal"))})
+        ARTURO_STATE.mkdir(parents=True, exist_ok=True)
+        tmp = _CALL_ACTIVE_FILE.with_suffix(".tmp")
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(live, f, sort_keys=True)
+        os.replace(tmp, _CALL_ACTIVE_FILE)
+    except OSError as e:
+        log.warning(f"call records: could not save the active list: {e}")
+
+
+def _load_lost_after_restart():
+    """Calls that had full tools when Arturo last stopped have lost them: say so once, and keep
+    them bound to their caller."""
+    try:
+        for h, p in json.loads(_CALL_ACTIVE_FILE.read_text()).items():
+            if isinstance(h, str) and re.fullmatch(r"[0-9a-f]{64}", h) and _full_class(p):
+                _CALL_LOST.setdefault(h, {"said": False, "principal": p})
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+
+
+def _prune_calls(now):
+    """Idle or over the hard cap: the record goes, and a full-tool call is marked lost for good."""
+    gone = [c for c, r in _CALL_PRINCIPALS.items()
+            if now - r["last_seen"] > _CALL_IDLE_S or now - r["started"] > _CALL_MAX_S]
+    for c in gone:
+        p = _CALL_PRINCIPALS[c]["principal"]
+        # every lost call stays bound to its caller; only a full-tool one has something to say
+        _CALL_LOST.setdefault(_cid_hash(c), {"said": not _full_class(p), "principal": p})
+        del _CALL_PRINCIPALS[c]
+    return bool(gone)
+
+
+def _bind_call(cid, principal, now=None, claim=False):
+    """Is this relay request from the call's own caller? (ok, created). A call with a record, or one
+    that LOST its record (it stays bound to the caller it had), accepts only that caller. With
+    claim=True a call with neither is recorded for this caller NOW, under the lock, so two
+    concurrent first chunks cannot both pass (`created` says this request made the record; undo it
+    with _unclaim_call if the chunk is then refused). An id that may not carry a record is never
+    bound and never gets tools."""
+    now = time.time() if now is None else now
+    if not _call_id_ok(cid):
+        return True, False
+    with _CALL_LOCK:
+        changed = _prune_calls(now)
+        try:
+            rec = _CALL_PRINCIPALS.get(cid)
+            if rec is not None:
+                if rec["principal"] != principal:
+                    return False, False
+                rec["last_seen"] = now
+                return True, False
+            lost = _CALL_LOST.get(_cid_hash(cid))
+            if lost is not None:
+                return lost.get("principal") == principal, False       # never recorded again
+            if not claim:
+                return True, False
+            _CALL_PRINCIPALS[cid] = {"principal": principal, "started": now, "last_seen": now}
+            changed = changed or _full_class(principal)
+            return True, True
+        finally:
+            if changed:
+                _save_active_calls()
+
+
+def _unclaim_call(cid):
+    """Undo a claim whose chunk the relay refused (no record from a chunk that never landed)."""
+    with _CALL_LOCK:
+        had = _CALL_PRINCIPALS.pop(cid, None)
+        if had is not None and _full_class(had["principal"]):
+            _save_active_calls()
+
+
+def _record_call(cid, principal, now=None):
+    """Record a call's caller (its first writer wins). Returns the recorded principal, or None when
+    the id may not carry one or the call already lost its record."""
+    ok, _created = _bind_call(cid, principal, now=now, claim=True)
+    if not ok:
+        with _CALL_LOCK:
+            rec = _CALL_PRINCIPALS.get(cid)
+            return rec["principal"] if rec else None
+    with _CALL_LOCK:
+        rec = _CALL_PRINCIPALS.get(cid)
+        return rec["principal"] if rec else None
+
+
+def _call_principal(cid, now=None):
+    """The recorded caller of a live call, or None (no record, expired, or never full)."""
+    now = time.time() if now is None else now
+    if not cid:
+        return None
+    with _CALL_LOCK:
+        if _prune_calls(now):
+            _save_active_calls()
+        rec = _CALL_PRINCIPALS.get(cid)
+        if rec is None:
+            return None
+        rec["last_seen"] = now
+        return rec["principal"]
+
+
+def _end_call(cid):
+    """The call ended (relay end, finalize): no record and nothing to apologise for."""
+    if not cid:
+        return
+    with _CALL_LOCK:
+        had = _CALL_PRINCIPALS.pop(cid, None)
+        lost = _CALL_LOST.pop(_cid_hash(cid), None)
+        if (had is not None and _full_class(had["principal"])) or lost is not None:
+            _save_active_calls()
+
+
+_CALL_LOST_LINE = ("SAY THIS ONCE, plainly, at the start of your reply: you can no longer run commands, read "
+                   "files or change anything from this call, and the operator can ask you in the Arturo chat "
+                   "on the dashboard instead.")
+
+
+def _call_lost_notice(cid, consume=True):
+    """Condition 2: once per call that lost its record mid-call, the line Arturo must say. Peek
+    with consume=False; mark it said (consume=True) only when the reply is really being made."""
+    if not cid:
+        return None
+    h = _cid_hash(cid)
+    with _CALL_LOCK:
+        lost = _CALL_LOST.get(h)
+        if lost is not None and not lost["said"]:
+            if consume:
+                lost["said"] = True
+            return _CALL_LOST_LINE
+    return None
+
+
+def _voice_turn(cid, principal):
+    """The turn record of one voice-call turn."""
+    return {"conversation_id": cid, "step": None, "principal": principal, "voice": True,
+            "onboarding": False, "opener": False, "offered": False, "devices_answer": False,
+            "devices_options": (), "declined": False, "choices": None, "pair_card": None,
+            "finished": False, "fenced": False}
+
+
+_FENCE_PLACEHOLDER = "[an earlier tool result, withheld from this voice turn]"
+
+
+def _fence_history(messages):
+    """History fence for a full-tool voice turn: earlier tool results never reach the model, so
+    text that arrived inside one (a page, a file, a seat's output) cannot steer a shell call."""
+    out = []
+    for m in messages:
+        if m.get("role") in ("tool", "function"):
+            m = {**m, "content": _FENCE_PLACEHOLDER}
+        out.append(m)
+    return out
+
+
+def _fence_after_tool_result(turn):
+    """After any tool result in a full-tool voice turn, only the allowlist stays for the turn."""
+    if turn is not None and turn.get("voice") and _is_fleet(turn):
+        turn["fenced"] = True
+        return True
+    return False
+
+
+_load_lost_after_restart()
 
 
 _CHOICE_PURPOSES = ("starter_team", "devices", "other")
@@ -4253,6 +4498,15 @@ def _log_voice_turn(user_msg: str, assistant_msg: str, tool_calls: list, tool_re
         log.error(f"Voice call trace log error: {e}")
 
 
+@app.before_request
+def _no_turn_carried_over():
+    """A threaded server can serve several requests on one keep-alive thread, so a turn record set
+    by one external request must never reach the next. In-process calls (the nonce: text turns via
+    the test client) keep their caller's record."""
+    if not hmac.compare_digest(request.headers.get("X-Arturo-Internal", ""), _INTERNAL_NONCE):
+        _TEAM_TURN.set(None)
+
+
 @app.route("/v1/chat/completions", methods=["POST"])
 def chat_completions():
     if not check_auth():
@@ -4287,6 +4541,22 @@ def chat_completions():
     # (Hume: the query param, Task 8).
     _conv_id = _clm_conversation_id(data, metadata, request.args)
     _CALLER_CONV.set(_conv_id)
+    # G1': a vendor callback of a relay call runs with that call's recorded caller. The id is
+    # resolved EXACTLY (Hume: our id; ElevenLabs: its id through the relay's map), never by
+    # "the only live call". In-process turns (the nonce) keep the record their caller set.
+    _voice_call_id = None
+    _lost_notice = None
+    if not hmac.compare_digest(request.headers.get("X-Arturo-Internal", ""), _INTERNAL_NONCE):
+        if _STREAM_RELAY is not None and _conv_id:
+            try:
+                _voice_call_id = _STREAM_RELAY.resolve(_conv_id)
+            except Exception as _rse:  # noqa: BLE001
+                log.warning(f"caller record: relay resolve failed: {_rse}")
+        _rec_principal = _call_principal(_voice_call_id) if _voice_call_id else None
+        if _full_class(_rec_principal):
+            _TEAM_TURN.set(_voice_turn(_voice_call_id, _rec_principal))
+        else:
+            _lost_notice = _call_lost_notice(_voice_call_id or _conv_id, consume=False)
 
     global _current_channel, _apology_count
     _current_channel = calling_channel
@@ -4479,6 +4749,8 @@ def chat_completions():
     if _carried:
         context += "\n\n" + _carried
         log.info(f"trusted system delta carried: {len(_carried)} chars")   # length only — it can name a seat
+    if _lost_notice:
+        context += "\n\n" + _lost_notice
     final_messages = [{"role": "system", "content": context}]
     # Trim conversation to last 20 messages to prevent tool dropout
     if len(non_system) > 20:
@@ -4489,6 +4761,9 @@ def chat_completions():
     # replayed history self-cleans over time. non_system itself is NOT mutated
     # (journal/user-extraction below read the original).
     final_messages.extend(_voice_guards.scrub_history(non_system))
+    _fence_turn = _TEAM_TURN.get()
+    if _fence_turn is not None and _fence_turn.get("voice") and _is_fleet(_fence_turn):
+        final_messages = _fence_history(final_messages)
 
     log.info(f"Context: {len(context)} chars, messages: {len(final_messages)}")
 
@@ -4555,6 +4830,9 @@ def chat_completions():
         active_tools = _bound_tools()
 
     def generate():
+        nonlocal active_tools          # the G1' history fence narrows it mid-turn
+        if _lost_notice:
+            _call_lost_notice(_voice_call_id or _conv_id)        # the reply carrying it is being made
         _gen_t0 = time.time()
         log.info(f"generate() START: channel={calling_channel}, history={len(final_messages)} msgs")
         try:
@@ -4816,6 +5094,11 @@ def chat_completions():
 
                     # Add this round to conversation
                     loop_messages = loop_messages + [assistant_msg] + tool_results
+                    # G1' history fence: a tool result is in this voice turn now, so only the
+                    # allowlist is bound for the rest of it (execute_tool refuses the rest too).
+                    if _fence_after_tool_result(_TEAM_TURN.get()):
+                        active_tools = [t for t in _bound_tools() if t["function"]["name"] not in
+                                        ({"async_task"} if voice_pass1 else set())]
 
                     # Ask model: do you need more tools, or are you ready to answer?
                     followup_resp = _turn_brain().complete(
@@ -5080,14 +5363,20 @@ def finalize_call():
     # so the proxy finalizes FROM the client spine in SECONDS instead of waiting ~2min for the idle
     # watchdog. LOOPBACK-ONLY is the trust boundary (no check_auth — the gateway needn't propagate a
     # token). Accepts IPv4/IPv6 loopback. conv_id may be null in the body → fall back to call_id.
-    remote = request.remote_addr or ""
-    if remote not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+    if not _gateway_hop_ok():
         return jsonify({"ok": False, "error": "loopback only"}), 403
     data = request.json or {}
     conv_id = str(data.get("conv_id") or "")[:200]
     client_call_id = str(data.get("call_id") or "")[:80]
     if not conv_id and not client_call_id:
         return jsonify({"ok": False, "error": "conv_id or call_id required"}), 400
+    # G1': the call is over, so its caller record goes (conv_id may be the vendor's id).
+    _end_call(conv_id)
+    if _STREAM_RELAY is not None and conv_id:
+        try:
+            _end_call(_STREAM_RELAY.resolve(conv_id))
+        except Exception as _re_e:  # noqa: BLE001 — finalize must never fail on this
+            log.warning(f"/finalize-call: relay resolve failed: {_re_e}")
     # run off-thread so the gateway's best-effort POST returns immediately (it uses a ~3s cap).
     def _run():
         try:
@@ -5104,8 +5393,7 @@ def ptt_endpoint():
     # Bearer watch-gateway-token) authenticates the operator and forwards the multipart here on localhost, same
     # as /finalize-call. Synchronous — the gateway waits for {reply_text, stt_text, audio} to return
     # to the watch. This does NOT touch the call lifecycle (see ptt_turn / SPEC_watch-ptt-endpoint.md).
-    remote = request.remote_addr or ""
-    if remote not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+    if not _gateway_hop_ok():
         return jsonify({"ok": False, "error": "loopback only"}), 403
     f = request.files.get("audio")
     if f is None:
@@ -5124,8 +5412,7 @@ def transcribe_endpoint():
     the user reads the text and taps send. LOOPBACK-ONLY like /ptt: the gateway authenticates and
     forwards. 200 {ok,text,backend,ms} | 422 no_speech | 400/413 bad clip | 503 stt_unavailable
     (reason warming | not-installed | off | error, + install command) | 504 timeout."""
-    remote = request.remote_addr or ""
-    if remote not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+    if not _gateway_hop_ok():
         return jsonify({"ok": False, "error": "loopback only"}), 403
     f = request.files.get("audio")
     if f is None:
@@ -5159,7 +5446,7 @@ def transcribe_endpoint():
 # proxy serves 404 on these paths, byte-identical to today) ---
 if _STREAM_RELAY is not None:
     def _relay_loopback_ok():
-        return (request.remote_addr or "") in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+        return _gateway_hop_ok()
 
     @app.route("/ptt/stream/audio", methods=["POST"])
     def ptt_stream_audio():
@@ -5178,7 +5465,14 @@ if _STREAM_RELAY is not None:
         # item(1): stamp the call's surface from the phone's X-Surface header (forwarded by the
         # gateway). Missing (watch) -> normalized to 'watch' inside feed_audio; set once at creation.
         surface_device = request.headers.get("X-Surface")
+        # G1': only the call's own caller may speak into it (recorded at its first chunk).
+        _caller = _stamped_principal(request)
+        _ok_caller, _claimed = _bind_call(cid, _caller, claim=True)
+        if not _ok_caller:
+            return jsonify({"ok": False, "error": "not this call's caller"}), 403
         r = _STREAM_RELAY.feed_audio(cid, pcm, surface_device=surface_device)
+        if _claimed and not r.get("ok"):
+            _unclaim_call(cid)
         if not r.get("ok"):
             err = r.get("error")
             # 410 Gone = the conversation ENDED; the client must hard-stop streaming (a late
@@ -5198,6 +5492,8 @@ if _STREAM_RELAY is not None:
         cid = str(request.headers.get("X-Conversation-Id") or request.args.get("conversation_id") or "")[:200]
         if not cid:
             return jsonify({"ok": False, "error": "conversation_id required"}), 400
+        if not _bind_call(cid, _stamped_principal(request))[0]:
+            return jsonify({"ok": False, "error": "not this call's caller"}), 403
         if _STREAM_RELAY.is_ended(cid):
             # spec §6 downlink half (ios msg_84512683): a client reusing an ENDED cid must
             # hard-stop, never replay the dead conversation — mirror the uplink's 410.
@@ -5237,7 +5533,10 @@ if _STREAM_RELAY is not None:
         cid = str(request.headers.get("X-Conversation-Id") or "")[:200]
         if not cid:
             return jsonify({"ok": False, "error": "conversation_id required"}), 400
+        if not _bind_call(cid, _stamped_principal(request))[0]:
+            return jsonify({"ok": False, "error": "not this call's caller"}), 403
         ended = _STREAM_RELAY.end(cid)
+        _end_call(cid)
         return jsonify({"ok": True, "ended": ended}), 200
 
     # --- runtime voice-vendor preference (spec §4.1). Loopback-only; the gateway holds the Bearer.
@@ -5516,7 +5815,7 @@ def _turn_extras(team_turn, onboarding_turn):
 
 
 def _loopback_only():
-    return (request.remote_addr or "") in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+    return _gateway_hop_ok()
 
 
 @app.route("/threads", methods=["GET"])
@@ -5592,8 +5891,7 @@ def text_prewarm_endpoint():
     not (operator: "our first response takes a second longer than it should"). The page calls
     this when it opens a conversation, while the operator is still typing. It is idempotent: a
     live session is left alone. Nothing is sent to the model."""
-    remote = request.remote_addr or ""
-    if remote not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+    if not _gateway_hop_ok():
         return jsonify({"ok": False, "error": "loopback only"}), 403
     data = request.get_json(silent=True) or {}
     conversation_id = (data.get("conversation_id") or "").strip()[:200]
@@ -5639,8 +5937,7 @@ def text_stream_endpoint():
 
     A reply that turns out to be a tool envelope is never streamed: that turn re-runs down
     /text, tool loop and all, so tools behave identically on both endpoints."""
-    remote = request.remote_addr or ""
-    if remote not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+    if not _gateway_hop_ok():
         return jsonify({"ok": False, "error": "loopback only"}), 403
     data = request.get_json(silent=True) or {}
     text_in = (data.get("text") or "").strip()
@@ -5849,8 +6146,7 @@ def text_stream_endpoint():
 
 @app.route("/text", methods=["POST"])
 def text_endpoint():
-    remote = request.remote_addr or ""
-    if remote not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+    if not _gateway_hop_ok():
         return jsonify({"ok": False, "error": "loopback only"}), 403
     data = request.get_json(silent=True) or {}
     code, result = text_turn(data.get("text"), data.get("conversation_id"),

@@ -11,25 +11,25 @@ The shape, and the reasoning behind each decision:
     usable — the same reason a password file holds hashes. Lookup is by hashing what the
     caller presented, which is also why it stays O(1) with no scan.
   * SCOPES ARE VERBS, not roles. Roles are a presentation choice that can be built on top;
-    what a route needs is a verb. Seven: read, approve, message, inject, ptt, voice, admin.
+    what a route needs is a verb: read, approve, message, inject, ptt, voice, admin, usage, owner.
   * `ptt` exists because `voice` was too coarse for a headset: it also reached the FLEET-WIDE
     voice-vendor and voice-id writes, so a compromised headset could switch what every
     conversation on the box uses.
 
-    READ THIS BEFORE GRANTING `ptt`. It reads as "one turn of push-to-talk", and today that is
-    roughly what it is: since #278 a push-to-talk turn is a non-fleet turn, so the brain it reaches
-    can only look things up and message agents (attributed to Arturo, marked unverified); it cannot
-    run commands, spawn, inject or text anyone (arturo-proxy.py _NON_FLEET_ALLOWED). Still treat it
-    as a STRONG grant: messaging an agent is acting on the fleet, and a later release may give a
-    verified caller its tools back, which would put `ptt` close to `inject` in reach again.
-
-    It is granted to Shaw's own Quest deliberately (gm 2026-10-05, phone parity, repeatedly
-    asked for), but it is NOT a mild scope and must never be handed out as if it were. It is
-    excluded from HTTP_MINTABLE for exactly this reason: a credential that could mint itself
-    `ptt` could mint itself the ability to act.
+    What `ptt` reaches: a voice call to Arturo. On its own that call runs Arturo's READ-ONLY
+    tool allowlist: it can look things up and message agents (attributed to Arturo, marked
+    unverified), and cannot run commands, spawn, inject or text anyone (arturo-proxy.py
+    _NON_FLEET_ALLOWED). It reaches the tools that act only when the caller holds `owner` (below)
+    or is the fleet bearer: the gateway stamps who is calling and Arturo records it for the call.
+    Still treat `ptt` as a STRONG grant: messaging an agent is acting on the fleet, and every turn
+    spends provider credit, so it is excluded from HTTP_MINTABLE.
 
     The name is kept rather than changed because the live client gates on the string `ptt` and a
     rename would break a paired headset for a cosmetic gain. The honest fix is this paragraph.
+  * `owner` says "this device is the operator's own": its push-to-talk calls (`ptt` routes) get
+    Arturo's full tools, the same as the dashboard; its typed turns are unchanged. No route
+    requires it; the gateway reads it only to stamp a call's caller. Mintable by the host CLI
+    only, never over HTTP.
   * `voice` is separate from `read` because every /arturo call SPENDS REAL PROVIDER MONEY.
     Reading state and buying tokens from a vendor are not the same permission.
   * `approve` is separate from everything because it ANSWERS ON THE OPERATOR'S BEHALF.
@@ -58,7 +58,7 @@ TOKEN_BYTES = 32
 #: minted today can carry it, and a later usage-read route does not cost every phone a re-pair
 #: (pairing codes are single-use, and a watch inherits its phone's token). It is not in
 #: HTTP_MINTABLE: like every verb added later, it is mintable only by the host CLI until decided.
-VERBS = ("read", "approve", "message", "inject", "ptt", "voice", "admin", "usage")
+VERBS = ("read", "approve", "message", "inject", "ptt", "voice", "admin", "usage", "owner")
 
 #: The one remaining all-powerful credential. The fleet token resolves to this so Shaw's
 #: phone and watch keep working unchanged; it is NAMED in listings rather than hidden, so
@@ -259,7 +259,7 @@ def scopes_allow(scopes, needed: str | None) -> bool:
 
 
 #: Condition (a): what the FLEET BEARER may mint OVER HTTP. Everything else — inject, ptt,
-#: voice, admin — is mintable only by the VPS mint CLI, where a human is at a shell.
+#: voice, admin, owner — is mintable only by the VPS mint CLI, where a human is at a shell.
 #:
 #: `ptt` is excluded too, which is not an oversight: a credential that can mint itself speech is
 #: minting PROVIDER SPEND, and the whole reason the upgrade endpoint is safe to expose is that

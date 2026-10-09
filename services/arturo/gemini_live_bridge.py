@@ -198,17 +198,35 @@ TOOL_DECLARATIONS = [
     }
 ]
 
-def offered_declarations():
-    """A live call carries no caller, so every turn is a non-fleet turn: the model is OFFERED only what
-    Arturo's non-fleet allowlist runs (execute_tool refuses the rest anyway, and a tool offered but
-    refused invites a promise Arturo cannot keep). No proxy module, no list: nothing is offered."""
-    allowed = getattr(globals().get("arturo_mod"), "_NON_FLEET_ALLOWED", frozenset())
+def offered_declarations(principal=None):
+    """What the live model is OFFERED. A session the gateway opened for the fleet bearer (the only
+    caller /live admits) carries principal "fleet" and is offered every declaration; any other
+    session gets only Arturo's non-fleet allowlist (execute_tool refuses the rest anyway, and a tool
+    offered but refused invites a promise Arturo cannot keep). No proxy module, no list: nothing."""
+    mod = globals().get("arturo_mod")
+    if mod is None:
+        return []
+    if principal == "fleet":
+        return list(TOOL_DECLARATIONS)
+    allowed = getattr(mod, "_NON_FLEET_ALLOWED", frozenset())
     return [d for d in TOOL_DECLARATIONS if d["name"] in allowed]
 
 
+def run_tool(principal, session_id, name, args):
+    """Run one tool call of a live session under that session's caller, so execute_tool sees the
+    same turn record a dashboard turn would (G1', DEC-1791497888310543)."""
+    mod = globals().get("arturo_mod")
+    if execute_tool_fn is None or mod is None:
+        return f"Tool {name} executed."
+    if principal == "fleet" and hasattr(mod, "_voice_turn"):
+        return str(mod._as_turn(mod._voice_turn(session_id, "fleet"), execute_tool_fn, name, args))
+    return str(execute_tool_fn(name, args))
+
+
 class GeminiLiveSession:
-    def __init__(self, client_ws, voice_name: str = "Fenrir", session_id: str = None):
+    def __init__(self, client_ws, voice_name: str = "Fenrir", session_id: str = None, principal: str = None):
         self.client_ws = client_ws
+        self.principal = principal            # "fleet" only when the gateway opened it for the fleet bearer
         self.voice_name = voice_name if voice_name in SUPPORTED_VOICES else "Fenrir"
         self.session_id = session_id or f"vc_live_{uuid.uuid4().hex[:12]}"
         self.start_time = time.time()
@@ -299,7 +317,7 @@ class GeminiLiveSession:
             system_instruction_parts.append(f"ACTIVE SCREEN CONTEXT: {self.surface_desc}.")
 
         system_instruction = " ".join(system_instruction_parts)
-        decls = offered_declarations()
+        decls = offered_declarations(self.principal)
 
         setup_frame = {
             "setup": {
@@ -577,10 +595,7 @@ class GeminiLiveSession:
 
                         result_str = ""
                         try:
-                            if execute_tool_fn:
-                                result_str = str(execute_tool_fn(fn_name, fn_args))
-                            else:
-                                result_str = f"Tool {fn_name} executed."
+                            result_str = run_tool(self.principal, self.session_id, fn_name, fn_args)
                         except Exception as e:
                             result_str = f"Tool execution error: {e}"
 
