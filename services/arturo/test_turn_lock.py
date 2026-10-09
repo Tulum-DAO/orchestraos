@@ -192,3 +192,12 @@ def test_calls_without_a_conversation_id_never_share_a_lock(tmp_path):
         r = c.post("/text", json={"text": "hi"}, environ_base={"REMOTE_ADDR": "127.0.0.1"})
     held.release()
     assert r.status_code == 200
+
+
+def test_two_calls_with_no_conversation_id_in_one_second_get_different_conversations(tmp_path):
+    # #317 review nit: text_{seconds} made two blank-id calls in one second share one conversation
+    P = _proxy(tmp_path)
+    P._brain_reply = lambda m, c: ("ok", [])
+    a = P.text_turn("hi", "")[1]["conversation_id"]
+    b = P.text_turn("hi", "")[1]["conversation_id"]
+    assert a != b and a.startswith("text_")

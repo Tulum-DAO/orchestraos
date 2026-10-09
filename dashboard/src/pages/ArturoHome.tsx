@@ -407,6 +407,7 @@ export default function ArturoHome() {
       patch(id, { pending: false, text: isStarting(r)
         ? 'I am still starting up and could not answer yet — give `orchestra up` a moment and send that again.'
         : chosenErr ? chosenErr.message
+        : isBusy(r) ? 'I am still answering an earlier message in this conversation (another tab or device). Send this again once that reply is in.'
         : `I could not reach my brain: ${r.error || 'unknown'}. Is \`orchestra up\` running? Check /health on the Arturo service.` });
       return;
     }

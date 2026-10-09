@@ -14,7 +14,7 @@
  *     therefore a visible card at the top of the thread with an ×; deleting it is how you
  *     tell Arturo to stop focusing on this page, and it can be put back.
  */
-import { stripContextLine } from '../../lib/arturoResume';
+import { stripContextLine, isBusy } from '../../lib/arturoResume';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { Mic, ArrowUp, X, History, Focus, PhoneOff, AudioLines, Plus, Paperclip, Cpu } from 'lucide-react';
@@ -166,6 +166,11 @@ export function ArturoPill() {
     const body = pre ? `${pre}\n\n${text}` : text;
     const turnBrain = toWireBrain(brainChoice);
     let r = await arturoText(body, convId, contextForTurn(convId, ctx), { onSent: () => setState('sent'), brain: turnBrain });
+    // Another tab or device is mid-turn in this conversation: the server answers busy at once; wait, resend.
+    for (let tries = 0; isBusy(r) && tries < 90; tries++) {
+      await new Promise((ok) => setTimeout(ok, 2000));
+      r = await arturoText(body, convId, contextForTurn(convId, ctx), { onSent: () => setState('sent'), brain: turnBrain });
+    }
     if (!r.ok && isStarting(r)) {
       // Same rule as the home (G15): right after `orchestra up` the Arturo service is still booting and
       // the api answers 502/503/504. That is "starting", not "unreachable" — say so, wait for /health,
@@ -182,6 +187,7 @@ export function ArturoPill() {
       ? { role: 'arturo', text: r.reply_text || '(no reply)', tools: r.tools_called, spawned: r.spawned, at: Date.now() }
       : { role: 'arturo', text: isStarting(r)
           ? 'I am still starting up and could not answer yet — give `orchestra up` a moment and send that again.'
+          : isBusy(r) ? 'Still answering an earlier message in this conversation (another tab or device). Send this again in a moment.'
           : describeTurnError(r)?.message || `Could not reach Arturo: ${r.error || 'unknown'}`, at: Date.now() });
     void listThreads().then(setThreads);      // the thread it just created/updated joins the list
   }

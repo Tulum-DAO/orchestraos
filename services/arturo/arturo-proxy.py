@@ -72,6 +72,7 @@ ARTURO_LOGS = ORCHESTRA_DIR / "logs" / "arturo"
 # every restart / window-shift — gm caught a real call fragmented into 4 journals.) Journals are
 # written to the SHARED state/voice-calls/vc_<id>.json (the gateway + app poller read it).
 import threading as _threading
+import uuid as _uuid
 import sys as _sys
 # Run as a bare script so the `services` package isn't importable by default — add the CODE
 # root (this checkout) so `services.arturo.*` resolves both as-script and as-module. Never
@@ -5760,7 +5761,7 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None):
         return 400, {"ok": False, "error": "empty"}
     if len(text) > 8000:
         return 413, {"ok": False, "error": "too_large"}
-    conversation_id = (conversation_id or "").strip()[:200] or f"text_{int(time.time())}"
+    conversation_id = (conversation_id or "").strip()[:200] or f"text_{int(time.time())}_{_uuid.uuid4().hex[:8]}"
     # Onboarding turns carry a first-line marker; the step's directive lives server-side
     # (services/arturo/onboarding.py) and rides in the system context for THIS turn only.
     from services.arturo import onboarding as _onb
@@ -5768,6 +5769,10 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None):
     text = text.strip()
     if not text:
         return 400, {"ok": False, "error": "empty"}
+    if step in _onb.ONBOARDING_STEPS and principal != "fleet":
+        # The first run is the dashboard's alone: an onboarding turn from any other caller would put its
+        # words (and the reply) into the operator's onboarding thread for good (#312 review SF2).
+        return 403, {"ok": False, "error": "onboarding_dashboard_only"}
     operator_text = text                     # before the page context: what the operator sent
     if page_ctx is not None:
         # After split_marker (the marker is anchored to the first line), and stored exactly as
@@ -6020,7 +6025,7 @@ def text_stream_endpoint():
         return jsonify({"ok": False, "error": "loopback only"}), 403
     data = request.get_json(silent=True) or {}
     text_in = (data.get("text") or "").strip()
-    conversation_id = (data.get("conversation_id") or "").strip()[:200] or f"text_{int(time.time())}"
+    conversation_id = (data.get("conversation_id") or "").strip()[:200] or f"text_{int(time.time())}_{_uuid.uuid4().hex[:8]}"
     brain_req, page_ctx = data.get("brain"), data.get("context")
 
     # Validation answers with an ordinary JSON status — a client that got a bad request never

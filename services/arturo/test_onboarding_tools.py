@@ -299,13 +299,17 @@ def _text_with_pair(P, monkeypatch, path, headers):
 
 
 def test_a_raw_loopback_text_call_without_the_stamp_cannot_pair(P, pairing, monkeypatch):
-    results, _ = _text_with_pair(P, monkeypatch, "/text", {})
-    assert results[0].startswith("NOT RUN")
+    results, r = _text_with_pair(P, monkeypatch, "/text", {})
+    # an onboarding turn from anyone but the dashboard is refused before any tool runs (#312 review SF2)
+    assert r.status_code == 403 and r.get_json()["error"] == "onboarding_dashboard_only"
+    assert results == [] and pairing.list() == []
 
 
 def test_a_device_stamped_text_call_cannot_pair(P, pairing, monkeypatch):
-    results, _ = _text_with_pair(P, monkeypatch, "/text", {"X-Arturo-Principal": "device:dev_voice"})
-    assert results[0].startswith("NOT RUN")
+    results, r = _text_with_pair(P, monkeypatch, "/text", {"X-Arturo-Principal": "device:dev_voice"})
+    # an onboarding turn from anyone but the dashboard is refused before any tool runs (#312 review SF2)
+    assert r.status_code == 403 and r.get_json()["error"] == "onboarding_dashboard_only"
+    assert results == [] and pairing.list() == []
 
 
 def test_a_fleet_text_call_pairs_and_the_reply_carries_the_card_not_the_history(P, pairing, monkeypatch, fleet_stamp):

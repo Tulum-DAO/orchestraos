@@ -8,6 +8,8 @@
  */
 import { buildTextBody, arturoText, type ArturoContext, type ArturoReply } from './arturo';
 import type { ToolCallEvent, ToolResultEvent } from './turnParts';
+import { loadThread } from './arturoThreads';
+import { stripContextLine } from './arturoResume';
 
 export interface ArturoStreamEvent {
   event: 'turn.start' | 'text.delta' | 'thinking.delta' | 'tool.call' | 'tool.result'
@@ -251,6 +253,13 @@ export async function arturoTurn(
   // Another turn in this conversation is running: re-sending over /text would queue the SAME message
   // a second time and run it twice. The caller waits and retries instead.
   if (res.status === 409 && res.error === 'busy') return { ok: false, status: 409, error: 'busy' } as ArturoReply;
+  // The server HAD the turn (turn.start) and only the connection went: it is still running it, and will
+  // record it. Re-sending would run the same message twice (#317 review SF1), so read it back instead.
+  // A failure the server itself reported (an error event) ended its turn, and is safe to re-ask below.
+  if (started && DROPPED.has(res.error || '')) {
+    opts.onReset?.();
+    return readBackStartedTurn(text, conversationId);
+  }
   // The re-ask answers from the top: whatever the dead attempt showed (half a reply, tool
   // cards) is cleared first, or it sits beside the answer.
   opts.onReset?.();
@@ -264,6 +273,28 @@ export async function arturoTurn(
     reportTurnFailure('fell_back_ok', { stream_error: res.error, started, ms: Date.now() - t0 });
   }
   return whole;
+}
+
+
+const DROPPED = new Set(['stream_broken', 'stream_stalled', 'incomplete']);
+const READ_BACK_EVERY_MS = 2000;
+const READ_BACK_TRIES = 150;                 // ~5 min: past any full tool turn
+
+/** The stored reply of a turn the server is (or was) running after its connection dropped: the thread's
+ *  last exchange, once its user side is this message. Never sends anything. */
+async function readBackStartedTurn(text: string, conversationId: string): Promise<ArturoReply> {
+  const mine = stripContextLine(text.replace(/^\[Onboarding: step=[a-z_]+\]\n/, '')).trim();
+  for (let i = 0; i < READ_BACK_TRIES; i++) {
+    const t = await loadThread(conversationId);
+    const turns = t?.turns || [];
+    const last = turns[turns.length - 1], prev = turns[turns.length - 2];
+    if (last?.role === 'assistant' && prev?.role === 'user' && stripContextLine(prev.content).trim() === mine) {
+      return { ok: true, reply_text: last.content, tools_called: [], spawned: [] } as ArturoReply;
+    }
+    await new Promise((ok) => setTimeout(ok, READ_BACK_EVERY_MS));
+  }
+  reportTurnFailure('read_back_timed_out', { ms: READ_BACK_EVERY_MS * READ_BACK_TRIES });
+  return { ok: false, error: 'stream_broken' } as ArturoReply;
 }
 
 

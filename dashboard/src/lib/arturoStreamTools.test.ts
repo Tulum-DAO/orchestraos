@@ -67,15 +67,22 @@ test('turn.reset reaches onReset', async () => {
   assert.equal(resets, 1);
 });
 
-test('arturoTurn resets its caller BEFORE falling back to the whole-reply path', async () => {
-  // A stream that dies before turn.end: arturoTurn re-asks whole. Whatever the dead attempt
-  // showed (text, tool rows) must be cleared first, or it sits beside the fallback's answer.
-  (globalThis as any).fetch = async () => sse([['turn.start', {}], ['text.delta', { text: 'half a' }],
-    ['tool.call', { call_id: 'c1', name: 'list_agents', args_summary: '{}' }]]);
+test('arturoTurn resets its caller BEFORE reading back a turn whose stream died', async () => {
+  // A stream that dies after turn.start, before turn.end: the server is still running that turn, so
+  // arturoTurn reads its stored reply back instead of re-asking (#317 review SF1). Whatever the dead
+  // attempt showed (text, tool rows) must be cleared first, or it sits beside the answer.
+  (globalThis as any).fetch = async (url: string) => String(url).includes('/api/arturo/threads/')
+    ? new Response(JSON.stringify({ ok: true, thread: { id: 'c1', title: '', turns: [
+        { role: 'user', content: 'x' }, { role: 'assistant', content: 'Whole reply.' }] } }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } })
+    : sse([['turn.start', {}], ['text.delta', { text: 'half a' }],
+        ['tool.call', { call_id: 'c1', name: 'list_agents', args_summary: '{}' }]]);
   const order: string[] = [];
-  await arturoTurn('x', 'c1', null, {
+  const r = await arturoTurn('x', 'c1', null, {
     onDelta: () => order.push('delta'),
     onReset: () => order.push('reset'),
   } as any);
-  assert.equal(order[order.length - 1], 'reset', 'reset comes after the dead attempt, before the re-ask');
+  assert.equal(order[order.length - 1], 'reset', 'reset comes after the dead attempt, before the read-back');
+  assert.equal(r.ok, true);
+  assert.equal(r.reply_text, 'Whole reply.');
 });

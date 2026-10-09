@@ -28,9 +28,9 @@ def _wire(mod, tmp_path):
 
 def test_name_marker_is_stripped_and_directive_applied_for_that_turn_only(tmp_path):
     mod = _load_proxy(); seen = _wire(mod, tmp_path)
-    code, body = mod.text_turn("[Onboarding: step=onboarding]\nhi my name is shaw", "c1")
+    code, body = mod.text_turn("[Onboarding: step=onboarding]\nhi my name is ada", "c1", principal="fleet")
     assert code == 200 and body["ok"]
-    assert seen["user"] == "hi my name is shaw"                       # marker never reaches the brain as text
+    assert seen["user"] == "hi my name is ada"                       # marker never reaches the brain as text
     # CONTRACT CHANGE (DEC-1790166878384418): text_turn now passes the DELTA — the directive alone.
     # chat_completions() owns the base context and carries this on top of it. This file stubs
     # _brain_reply, so it can only ever see the message text_turn ASSEMBLED; production then threw
@@ -45,7 +45,7 @@ def test_name_marker_is_stripped_and_directive_applied_for_that_turn_only(tmp_pa
 
 def test_marker_survives_an_attachment_preamble_only_when_first_line(tmp_path):
     mod = _load_proxy(); seen = _wire(mod, tmp_path)
-    mod.text_turn("[Onboarding: step=onboarding]\n[attached: /tmp/x.png (12 KB)]\n\nshaw", "c2")
+    mod.text_turn("[Onboarding: step=onboarding]\n[attached: /tmp/x.png (12 KB)]\n\nshaw", "c2", principal="fleet")
     assert "set_operator_fact" in seen["system"] and seen["user"].startswith("[attached:")
 
 

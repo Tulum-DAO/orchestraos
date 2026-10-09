@@ -67,7 +67,7 @@ def test_directive_reaches_the_model_not_just_the_assembled_message(tmp_path):
     mod = _load_proxy()
     seen = _wire(mod, tmp_path)
     mod.starter_team_state = lambda seen=None: {"state": "absent"}
-    code, body = mod.text_turn("[Onboarding: step=onboarding]\nIntroduce my team.", "seam1")
+    code, body = mod.text_turn("[Onboarding: step=onboarding]\nIntroduce my team.", "seam1", principal="fleet")
     assert code == 200 and body["ok"]
     system = seen["system"]
     # The facts the directive carries must be in front of the model.
@@ -82,7 +82,7 @@ def test_name_step_directive_also_reaches_the_model(tmp_path):
     Operator-name onboarding is brain-driven, so its directive must arrive too."""
     mod = _load_proxy()
     seen = _wire(mod, tmp_path)
-    code, _ = mod.text_turn("[Onboarding: step=onboarding]\nhi my name is shaw", "seam2")
+    code, _ = mod.text_turn("[Onboarding: step=onboarding]\nhi my name is ada", "seam2", principal="fleet")
     assert code == 200
     assert "set_operator_fact" in seen["system"], "the name-step directive never reached the brain"
 
@@ -112,7 +112,7 @@ def test_text_turn_sends_the_directive_only_not_a_second_context(tmp_path):
 
     mod._ptt = types.SimpleNamespace(build_messages=spy)
     mod.starter_team_state = lambda seen=None: {"state": "absent"}
-    mod.text_turn("[Onboarding: step=onboarding]\nIntroduce my team.", "seam4")
+    mod.text_turn("[Onboarding: step=onboarding]\nIntroduce my team.", "seam4", principal="fleet")
     assert "BASECTX" not in captured["system_context"], \
         "text_turn sent a full context again — the handler already builds it; this doubles context"
     assert "T1 project manager" in captured["system_context"]
