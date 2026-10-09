@@ -17,9 +17,12 @@ def _load_proxy():
     return mod
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture()
 def P():
-    return _load_proxy()
+    # A dashboard (fleet) turn: since the non-fleet allowlist, read_file is refused anywhere else, and a
+    # refused tool would pass the injection test without ever building a command.
+    from services.arturo.conftest import as_fleet
+    return as_fleet(_load_proxy())
 
 
 def _read(P, path, **kw):
