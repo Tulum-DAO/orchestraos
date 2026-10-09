@@ -112,6 +112,9 @@ browser / iOS
 ```
 
 - `conversation_id` threads a bounded history per conversation (same store PTT uses).
+- **Who sees which threads.** The dashboard lists and opens every thread. A paired device
+  lists, opens and continues only the threads it started (`services/arturo/thread_store.py`,
+  `started_by`), and only the dashboard is told the onboarding thread's id.
 - The pill prefixes one line, `[Context: route=/approvals entity=approvals:apr_x]`,
   so Arturo knows where you were.
 - **A message sent once runs at most once.** Each send carries the page's own id for it
@@ -130,6 +133,8 @@ browser / iOS
   - *That message may not have been answered, and anything it started may already have run:
     check before sending it again.* Rare: it started and its answer was lost, for example after
     a restart.
+  - *I could not save that message, so I did not run it. Try sending it again in a moment.* The
+    server could not note the message, so nothing ran.
 - `GET /api/arturo/health` → `/arturo/health` → `:5071/health`:
 
 ```json
