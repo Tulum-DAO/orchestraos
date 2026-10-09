@@ -148,7 +148,7 @@ def test_a_parent_swapped_for_a_symlink_between_check_and_open_is_refused(box):
     "app/token.txt", "prod.env", "infra/main.tfstate", "vault.kdbx", "vpn/home.ovpn",
     "gcp/my-service-account.json", "gcp/deploy-key.json", "state/tasks.db", "data/app.sqlite",
     "run.log", "logs/today.txt", "backups/2026.tar", "settings.json.bak", "x.bak2", "transcript.jsonl",
-    "a.secrets", "home/.npmrc", "Sub/PassWords.txt"])
+    "a.secrets", "home/.npmrc", "Sub/PassWords.txt", "keys/server.ppk", "pub/key.asc", "x.gpg"])
 def test_denied_names_are_refused_at_any_depth_and_any_case(box, rel):
     p = box["repo"] / rel
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -180,6 +180,9 @@ SECRETS = {
     "github-pat": _j("github", "_pat_", "11", _B64, "_", _B64[:20]),
     "aws": _j("aws_access_key_id = ", "AK", "IA", "Z" * 16),
     "gcp-sa": _j('{"type": "service_account", "private', '_key": "x"}'),
+    "pgp-private": _j(_PEM, "BEGIN PGP ", "PRIVATE KEY", " BLOCK", _PEM, "\nlQOYBF\n"),
+    "putty": _j("PuTTY-User-Key-File-", "3: ssh-ed25519\nEncryption: none\n"),
+    "db-uri": _j("DATABASE_URL=postgres://", "app", ":", "s3cr3t-pw", "@db.internal:5432/app"),
     "jwt": _j("Authorization: Bearer ", "ey", "J", "hbGciOiJub25lIn0", ".", "ey", "J", "zdWIiOiJ4In0aaaa", ".", _B64[:20]),
 }
 
@@ -205,6 +208,21 @@ def test_a_device_token_in_a_file_is_refused_by_hash_and_never_logged(box):
     assert _get(box, "paste.txt")[0] == 403
     audit = (box["data"] / "logs" / "agent-file-audit.jsonl").read_text()
     assert box["read"] not in audit and "device-token" in audit
+
+
+def test_ordinary_urls_and_code_are_not_secret_shaped(box):
+    (box["repo"] / "links.md").write_text("see https://example.com/a:b and git@github.com:org/repo.git\n"
+                                          "postgres://localhost/app and http://host:8080/path\n")
+    assert _get(box, "links.md")[0] == 200
+
+
+def test_the_audit_log_rolls_over_instead_of_growing_forever(box, monkeypatch):
+    monkeypatch.setattr(G, "AGENT_FILE_AUDIT_MAX_BYTES", 200)
+    for _ in range(6):
+        _get(box, "README.md")
+    logs = box["data"] / "logs"
+    assert (logs / "agent-file-audit.jsonl.1").exists()
+    assert (logs / "agent-file-audit.jsonl").stat().st_size <= 200 + 400
 
 
 def test_a_43_char_string_that_is_no_device_token_is_served(box):

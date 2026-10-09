@@ -43,12 +43,16 @@ DENY_NAMES = (
     "*.env", ".env*", "*.secrets", "*.tfstate", "*.tfstate.*", "*.kdbx", "*.ovpn",
     "*service-account*.json", "*-key.json", "*.keystore", "*.jks",
     "*.sqlite", "*.sqlite3", "*.db", "*.db-*", "*.log", "*.log.*", "*.bak", "*.bak*", "*.jsonl",
-    "*.npmrc", "*.pypirc", "*.netrc", "*.git-credentials",
+    "*.npmrc", "*.pypirc", "*.netrc", "*.git-credentials", "*.ppk", "*.asc", "*.gpg",
 )
 
 # Content that must never leave the machine, whatever the file is called.
 SECRET_PATTERNS = (
-    ("private-key", re.compile(rb"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----")),
+    ("private-key", re.compile(rb"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY(?: BLOCK)?-----")),
+    ("putty-key", re.compile(rb"PuTTY-User-Key-File-\d+:")),
+    # A URL carrying a user name AND a password before the host. Over-denies local test fixtures; that is
+    # the accepted trade (a refused fixture costs a click, a served password does not come back).
+    ("uri-credentials", re.compile(rb"[a-z][a-z0-9+.\-]{1,20}://[^\s:/@'\"]{1,64}:[^\s@/'\"]{3,128}@[^\s/:'\"]+")),
     ("anthropic-key", re.compile(rb"sk-ant-[A-Za-z0-9_\-]{10,}")),
     ("openai-style-key", re.compile(rb"(?<![A-Za-z0-9])sk-(?:proj-|live-)?[A-Za-z0-9_\-]{20,}")),
     ("stripe-key", re.compile(rb"(?<![A-Za-z0-9])(?:rk|sk|pk)_live_[A-Za-z0-9]{10,}")),

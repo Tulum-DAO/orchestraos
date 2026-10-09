@@ -4588,6 +4588,7 @@ async def _upload_get_response(request):
 # that never says whether a file exists (one 404; a secret-shaped file is a 403).
 # ---------------------------------------------------------------------------
 AGENT_FILE_RATE_PER_MIN = int(os.environ.get("ORCHESTRA_AGENT_FILE_RATE", "60"))
+AGENT_FILE_AUDIT_MAX_BYTES = 5 * 1024 * 1024
 _agent_file_hits: dict = {}
 _code_roots_cache = {"path": None, "mtime": None, "roots": []}
 
@@ -4630,7 +4631,13 @@ def _agent_file_audit(rec: dict) -> None:
     try:
         d = _data_dir() / "logs"
         d.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(d / "agent-file-audit.jsonl"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        path = d / "agent-file-audit.jsonl"
+        try:                                   # one rollover keeps growth bounded (~2 x the cap)
+            if path.stat().st_size > AGENT_FILE_AUDIT_MAX_BYTES:
+                os.replace(path, d / "agent-file-audit.jsonl.1")
+        except OSError:
+            pass
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         with os.fdopen(fd, "a") as fh:
             fh.write(json.dumps(rec) + "\n")
     except OSError as e:
