@@ -114,6 +114,7 @@ def run_pair(args, settings=None, store=None, out=print, clear_after_s=60):
         out("  inject   press keys into a live agent pane")
         out("  voice    talk to Arturo from this device, typed or spoken  (every turn spends provider credit)")
         out("  ptt      push-to-talk to Arturo from a headset or Watch  (lookups and seat messages only)")
+        out("  owner    this device is yours: its push-to-talk calls get Arturo's full tools, like the dashboard")
         out("  admin    file red-alert reports, post telemetry")
         out("  usage    nothing yet: reserved for reading usage later, so a device paired now needs no re-pair")
         out("")

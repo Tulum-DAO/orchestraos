@@ -186,12 +186,11 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("POST", "/agent-interrupt"): "inject",
     ("POST", "/agent-suggest"): "inject",
 
-    # --- ptt: the relay voice path — a brain that can MESSAGE agents -------------------
-    # Since #278 these turns are non-fleet: the brain they reach can look things up and message
-    # agents (as Arturo, marked unverified), and nothing else (arturo-proxy.py _NON_FLEET_ALLOWED).
-    # Still not a mild scope: a later release may give a verified caller its tools back, which would
-    # put `ptt` close to `inject` again. Granted to Shaw's own Quest on purpose (gm 2026-10-05, phone
-    # parity). See the paragraph at device_tokens.VERBS before granting it to anything.
+    # --- ptt: the relay voice path -------------------------------------------------------
+    # A call on these routes runs Arturo's read-only tool allowlist (look things up, message agents
+    # as Arturo, marked unverified), unless its caller holds `owner` or is the fleet bearer: the
+    # gateway stamps the caller (_arturo_principal_headers) and Arturo records it for the call. Not a
+    # mild scope even so. See device_tokens.VERBS before granting it to anything.
     # Split out of `voice` because `voice` was too coarse for a headset. It also reached the
     # FLEET-WIDE vendor and voice-id writes below, so a device granted `voice` just to speak
     # could switch what EVERY conversation on this box uses. Least privilege: a headset gets
@@ -4375,7 +4374,7 @@ async def handle_arturo_ptt(request):
     import asyncio
     try:
         async with aiohttp.ClientSession() as s:
-            async with s.post(ARTURO_PTT_URL, data=data,
+            async with s.post(ARTURO_PTT_URL, data=data, headers=_arturo_principal_headers(request),
                               timeout=aiohttp.ClientTimeout(total=30)) as r:
                 body = await r.json(content_type=None)
                 return _json(body, status=r.status)
@@ -4453,7 +4452,9 @@ PTT_STREAM_CHUNK_MAX = 256 * 1024
 async def _stream_forward(request, method, path, body=None, params=None, timeout_s=30):
     import aiohttp
     import asyncio
-    headers = {"X-Conversation-Id": request.headers.get("X-Conversation-Id", "")}
+    headers = {"X-Conversation-Id": request.headers.get("X-Conversation-Id", ""),
+               # G1': who is calling, so Arturo can record the call's caller at its first chunk
+               **_arturo_principal_headers(request)}
     # item(1) surface stamp (DEC-1789341362142252): forward the phone's X-Surface: phone through to
     # :5071 so the relay journal attributes the call. Additive; the watch sends none (defaults watch).
     _surface = request.headers.get("X-Surface")
@@ -4526,26 +4527,36 @@ async def handle_arturo_ptt_vendor(request):
 ARTURO_TEXT_BASE = os.environ.get("ARTURO_TEXT_BASE") or (_loopback("ORCHESTRA_ARTURO_PORT", 5071) + "")
 
 
-def _arturo_upstream_headers(request) -> dict:
-    """Upstream headers for an Arturo text turn, built FRESH (a client's own headers never pass
-    through), plus who is calling: X-Arturo-Principal "fleet" for the fleet bearer (the dashboard's
-    path), "device:<id>" for a paired device. Arturo makes a pairing code only on a "fleet" turn, so
-    a voice-only device cannot ask it for a read, approve and message code (congruence
-    DEC-1791485978471942, A8). No resolved principal = no stamp, and Arturo then refuses.
-    "fleet" travels with this install's stamp secret (scripts/arturo_stamp.py): Arturo believes it only
-    with that secret, so the gateway's principal stamp is authenticated."""
-    headers = {"Content-Type": "application/json"}
+def _arturo_principal_headers(request, voice=True) -> dict:
+    """Who is calling, for Arturo, built FRESH (a client's own headers never pass through):
+    X-Arturo-Principal "fleet" for the fleet bearer (the dashboard's path), "owner:<id>" for a
+    paired device holding the `owner` verb, "device:<id>" for any other paired device. "fleet"
+    and "owner:<id>" travel with this install's stamp secret (scripts/arturo_stamp.py): Arturo
+    believes either only with that secret, so they cannot be forged; "device:<id>" can only ever
+    lower what a turn may do. Arturo makes a pairing code only on a "fleet" turn (congruence
+    DEC-1791485978471942, A8). No resolved principal = no header, and Arturo then refuses.
+    `owner` is a VOICE grant (G1', DEC-1791497888310543): a text turn (voice=False) from an owner
+    device is stamped as the device it is."""
+    headers = {}
     ran, principal = _resolved_principal(request)
     dev_id = (principal or {}).get("id") if ran else None
-    if dev_id == "legacy":
+    owner = voice and bool(dev_id) and "owner" in ((principal or {}).get("scopes") or ())
+    if dev_id == "legacy" or owner:
         from scripts import arturo_stamp
         secret = arturo_stamp.ensure(_data_dir())
         if secret:
-            headers["X-Arturo-Principal"] = "fleet"
+            headers["X-Arturo-Principal"] = "fleet" if dev_id == "legacy" else f"owner:{dev_id}"
             headers[arturo_stamp.HEADER] = secret
+        elif dev_id != "legacy":
+            headers["X-Arturo-Principal"] = f"device:{dev_id}"   # no secret: never more than a device
     elif dev_id:
         headers["X-Arturo-Principal"] = f"device:{dev_id}"
     return headers
+
+
+def _arturo_upstream_headers(request) -> dict:
+    """Upstream headers for an Arturo text turn: JSON plus who is calling (see above)."""
+    return {"Content-Type": "application/json", **_arturo_principal_headers(request, voice=False)}
 
 
 async def handle_arturo_text(request):
@@ -6524,7 +6535,8 @@ async def handle_gemini_live(request):
         live_session_cls = GeminiLiveSession
         if live_session_cls is None:
             from services.arturo.gemini_live_bridge import GeminiLiveSession as live_session_cls
-        session = live_session_cls(ws, voice_name=voice)
+        # The token check above admits ONLY the fleet bearer, so the call's caller is "fleet" (G1').
+        session = live_session_cls(ws, voice_name=voice, principal="fleet")
         await session.run()
     except Exception as e:
         print(f"[watch_gateway] gemini live session error: {e}", file=sys.stderr)

@@ -77,7 +77,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     # mint time, so nobody inherits `approve` — answering on the operator's behalf — by accident.
     pr.add_argument("--scopes", default=None,
                     help="REQUIRED. comma-separated verbs this device may use: "
-                         "read, approve, message, inject, voice, admin. "
+                         "read, approve, message, inject, ptt, voice, admin, usage, owner. "
                          "A phone that only reads is --scopes read")
     pr.add_argument("--label", default=None,
                     help="what this device is, e.g. 'quest-headset' — shown in `orchestra devices`")

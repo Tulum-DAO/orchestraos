@@ -129,3 +129,147 @@ def test_prewarm_forwards_the_stamp_too(monkeypatch, principal, stamp):
     asyncio.run(G.handle_arturo_text_prewarm(_Req(principal)))
     assert seen["headers"]["X-Arturo-Principal"] == stamp
     assert (arturo_stamp.HEADER in seen["headers"]) is (stamp == "fleet")
+
+
+# --- G1': voice calls carry their caller ---------------------------------------------------------
+
+def test_an_owner_device_is_stamped_owner_with_the_secret_on_voice(_data_dir):
+    h = G._arturo_principal_headers(_Req({"id": "dev_phone", "scopes": ["read", "ptt", "owner"]}))
+    assert h["X-Arturo-Principal"] == "owner:dev_phone"
+    assert h[arturo_stamp.HEADER] == arturo_stamp.read(_data_dir)
+
+
+def test_owner_is_a_voice_grant_a_text_turn_stays_a_device(monkeypatch):
+    seen = _capture_upstream(monkeypatch)
+    asyncio.run(G.handle_arturo_text(_Req({"id": "dev_phone", "scopes": ["voice", "owner"]})))
+    assert seen["headers"]["X-Arturo-Principal"] == "device:dev_phone"
+    assert arturo_stamp.HEADER not in seen["headers"]
+
+
+def test_without_the_owner_verb_a_ptt_device_stays_a_device():
+    h = G._arturo_principal_headers(_Req({"id": "dev_quest", "scopes": ["read", "ptt"]}))
+    assert h == {"X-Arturo-Principal": "device:dev_quest"}
+
+
+def test_an_owner_device_without_a_secret_is_only_a_device(monkeypatch):
+    monkeypatch.setattr(arturo_stamp, "ensure", lambda *_a, **_k: None)
+    h = G._arturo_principal_headers(_Req({"id": "dev_phone", "scopes": ["owner"]}))
+    assert h == {"X-Arturo-Principal": "device:dev_phone"}
+
+
+def _capture_stream(monkeypatch):
+    seen = {}
+
+    class _Resp:
+        status = 200
+
+        async def json(self, content_type=None):
+            return {"ok": True}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    class _Session:
+        def __init__(self, *a, **k):
+            pass
+
+        def request(self, method, url, data=None, params=None, headers=None, timeout=None):
+            seen["headers"] = dict(headers or {})
+            return _Resp()
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            seen["headers"] = dict(headers or {})
+            return _Resp()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(aiohttp, "ClientSession", _Session)
+    return seen
+
+
+class _StreamReq(_Req):
+    async def read(self):
+        return b"\x00\x01"
+
+
+@pytest.mark.parametrize("handler", ["handle_arturo_ptt_stream_audio", "handle_arturo_ptt_stream_end"])
+@pytest.mark.parametrize("principal,stamp", [({"id": "legacy"}, "fleet"),
+                                             ({"id": "dev_p", "scopes": ["ptt", "owner"]}, "owner:dev_p"),
+                                             ({"id": "dev_q", "scopes": ["ptt"]}, "device:dev_q")])
+def test_the_stream_relay_forwards_the_caller(monkeypatch, handler, principal, stamp):
+    seen = _capture_stream(monkeypatch)
+    req = _StreamReq(principal, client_headers={"X-Conversation-Id": "c1",
+                                                "X-Arturo-Principal": "fleet", arturo_stamp.HEADER: "guess"})
+    asyncio.run(getattr(G, handler)(req))
+    assert seen["headers"]["X-Arturo-Principal"] == stamp
+    assert seen["headers"]["X-Conversation-Id"] == "c1"
+    assert (arturo_stamp.HEADER in seen["headers"]) is (stamp != f"device:{principal['id']}")
+    assert seen["headers"].get(arturo_stamp.HEADER) != "guess"
+
+
+def test_the_single_ptt_turn_forwards_the_caller(monkeypatch):
+    seen = _capture_stream(monkeypatch)
+
+    class _Field:
+        def __init__(self, name, value):
+            self.name, self._v = name, value
+            self.filename, self.headers = "a.m4a", {}
+            self._sent = False
+
+        async def read_chunk(self, n):
+            if self._sent:
+                return b""
+            self._sent = True
+            return self._v
+
+        async def text(self):
+            return self._v.decode()
+
+    class _Reader:
+        def __init__(self):
+            self._f = [_Field("audio", b"\x00\x01"), _Field("conversation_id", b"c1")]
+
+        async def next(self):
+            return self._f.pop(0) if self._f else None
+
+    class _PttReq(_Req):
+        async def multipart(self):
+            return _Reader()
+
+    asyncio.run(G.handle_arturo_ptt(_PttReq({"id": "dev_p", "scopes": ["ptt", "owner"]})))
+    assert seen["headers"]["X-Arturo-Principal"] == "owner:dev_p"
+    assert arturo_stamp.HEADER in seen["headers"]
+
+
+def test_gemini_live_opens_the_session_as_fleet(monkeypatch):
+    from aiohttp import web
+    monkeypatch.setattr(G, "gateway_token", lambda: "tok")
+    made = {}
+
+    class _WS:
+        async def prepare(self, request):
+            return self
+
+    class _Session:
+        def __init__(self, ws, voice_name=None, principal=None):
+            made["principal"] = principal
+
+        async def run(self):
+            return None
+
+    monkeypatch.setattr(web, "WebSocketResponse", _WS)
+    monkeypatch.setattr(G, "GeminiLiveSession", _Session)
+
+    class _LiveReq(_Req):
+        query = {}
+
+    req = _LiveReq({"id": "legacy"}, client_headers={"Authorization": "Bearer tok"})
+    asyncio.run(G.handle_gemini_live(req))
+    assert made["principal"] == "fleet"

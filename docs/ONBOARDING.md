@@ -205,6 +205,7 @@ Confirm the `gateway` row has a live pid again.
   | `ptt` | push-to-talk to Arturo from a headset or Watch: lookups, and messages to agents marked unverified |
   | `admin` | file red-alert reports, post telemetry |
   | `usage` | nothing yet: reserved for reading usage later, so a device paired now needs no re-pair |
+  | `owner` | this device is yours: its push-to-talk calls (with `ptt`) get Arturo's full tools, like the dashboard, instead of lookups only. Typed turns are unchanged |
 
   A phone or Mac that answers cards needs `read,approve`. Add `message` only if you want to
   message agents from it. Give it more only if you mean to.

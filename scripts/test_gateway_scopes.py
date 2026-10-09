@@ -453,3 +453,13 @@ def test_a_stored_verb_this_gateway_does_not_know_is_inert_not_a_lockout(monkeyp
     assert reached and resp.status == 200, "a known verb still works beside an unknown one"
     resp, reached, _ = _call("POST", "/agent-key", {"Authorization": f"Bearer {token}"})
     assert resp.status == 403 and not reached, "the unknown verb grants nothing"
+
+
+def test_owner_is_a_verb_no_route_requires_and_http_cannot_mint():
+    """`owner` only tells the gateway whose voice call this is (G1': calls carry their caller). It
+    must never gate a route, and a credential must never be able to mint it over HTTP."""
+    from scripts.device_tokens import HTTP_MINTABLE, http_mintable
+    assert "owner" in VERBS
+    assert "owner" not in set(G.ROUTE_SCOPES.values())
+    assert "owner" not in HTTP_MINTABLE
+    assert http_mintable(["read", "owner"])[0] is False
