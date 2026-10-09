@@ -18,6 +18,7 @@ session_id is periodically clobbered to a stale value -- the sid-clobber gotcha)
 
 import json
 import os
+import sys
 import re
 import subprocess
 
@@ -156,11 +157,17 @@ def jsonl_context_tokens(sid, cwd="", project_root=None, brain_root=None,
 
 
 def _capture_status_line(session, capture_fn):
-    """Return the tmux status-bar line for a session (the last line carrying the
-    context bar glyphs), or "" -- READ-ONLY (`tmux capture-pane -p`)."""
-    text = capture_fn(session) or ""
-    bar_lines = [ln for ln in text.splitlines() if ("█" in ln or "░" in ln)]
-    return bar_lines[-1] if bar_lines else ""
+    """Return the tmux status-bar line for a session (the meter line in the footer
+    under the last frame rule), or "" -- READ-ONLY (`tmux capture-pane -p`).
+
+    Not "the last line carrying bar glyphs": while a menu hides the status bar,
+    that is a progress bar or a quoted meter from the conversation, and it read as
+    this seat's context (scripts/context_meter.py)."""
+    scripts_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    from context_meter import footer_meter_line
+    return footer_meter_line((capture_fn(session) or "").splitlines())
 
 
 def _tmux_capture(session):

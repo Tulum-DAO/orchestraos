@@ -105,7 +105,9 @@ def test_enrich_populates_pane_and_jsonl_for_empty():
                                          "'claude-opus-4-8[1m]'"}}
         statuses = [{"session": "ob", "context_pct": ""}]
         bar = "agent-orchestra ████████░░ 86%"
-        out = enrich_statuses(statuses, meta, {}, capture_fn=_fake_capture({"ob": bar}),
+        # The bar is read only from the footer under the composer box (scripts/context_meter.py).
+        screen = "\n".join(["● done", "─" * 40, "❯ ", "─" * 40, bar, "  ⏵⏵ bypass permissions on"])
+        out = enrich_statuses(statuses, meta, {}, capture_fn=_fake_capture({"ob": screen}),
                               project_root=root)
         assert out[0]["pane_status_line"] == bar
         assert out[0]["jsonl_tokens"] == 690334

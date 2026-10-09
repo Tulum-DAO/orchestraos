@@ -40,6 +40,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import providers  # noqa: E402  — provider-aware process truth (Tier 1)
+from context_meter import footer_meter_line  # noqa: E402  — the footer is the only meter source
 
 ORCH_DIR = os.environ.get("ORCH_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
 EVENTS_DIR = os.environ.get("ORCH_EVENTS_DIR", os.path.join(ORCH_DIR, "state", "agent-events", "panes"))
@@ -1222,16 +1223,22 @@ def parse_status(raw: str) -> dict:
     # history above its real fable-5 65% bar). Requiring a '%' on the line skips
     # decorative glyph lines. 'N% until auto-compact' is REMAINING headroom, so
     # used% = 100 - N (0% remaining => 100% used); a plain '████ NN%' is used%.
-    for s in reversed(stripped):
-        if ('█' in s or '░' in s) and '%' in s:
-            ac = re.search(r'(\d+)\s*%\s*until\s+auto-?compact', s, re.I)
-            if ac:
-                result['context_pct'] = str(100 - int(ac.group(1))) + '%'
-            else:
-                mm = re.findall(r'(\d+)\s*%', s)
-                if mm:
-                    result['context_pct'] = mm[-1] + '%'
-            break
+    #
+    # Bottom-most was not enough: while a menu is open the status bar is not drawn,
+    # and the scan read a progress bar or a quoted meter from the CONVERSATION as this
+    # seat's context (99% shown for a seat at 39%, 2026-10-09; the operator stopped
+    # it). The meter now counts only in the footer under the last frame rule
+    # (scripts/context_meter.py, shared with the lineage daemon's fallback); no
+    # footer meter -> '' (unknown), never a foreign number.
+    s = footer_meter_line(stripped)
+    if s:
+        ac = re.search(r'(\d+)\s*%\s*until\s+auto-?compact', s, re.I)
+        if ac:
+            result['context_pct'] = str(100 - int(ac.group(1))) + '%'
+        else:
+            mm = re.findall(r'(\d+)\s*%', s)
+            if mm:
+                result['context_pct'] = mm[-1] + '%'
 
     chrome = _find_chrome(stripped, raw_lines)
     tail15 = [s.strip() for s in stripped[-15:] if s.strip()]
