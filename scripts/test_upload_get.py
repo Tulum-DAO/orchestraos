@@ -316,3 +316,22 @@ def test_over_the_cap_refusal_carries_the_headers_too(orch, monkeypatch):
     monkeypatch.setattr(G, "UPLOAD_MAX_BYTES", 100)
     st, h, _ = _call("GET", f"/upload/{IMG}")
     assert st == 413 and h["Content-Security-Policy"] == "default-src 'none'; sandbox"
+
+
+def test_two_threads_making_the_same_thumb_never_share_a_temp_file(orch, monkeypatch):
+    """Review of #339: both requests for one uncached thumb run in threads of one process."""
+    seen = []
+    real_save = None
+    from PIL import Image
+    real_save = Image.Image.save
+
+    def spy(self, fp, *a, **k):
+        seen.append(str(fp))
+        return real_save(self, fp, *a, **k)
+    monkeypatch.setattr(Image.Image, "save", spy)
+    src = orch / "state" / "uploads" / IMG
+    out = orch / "state" / "upload-thumbs"
+    out.mkdir(parents=True, exist_ok=True)
+    assert G._make_upload_thumb(src, out / "a.jpg") and G._make_upload_thumb(src, out / "a.jpg")
+    assert len(seen) == 2 and seen[0] != seen[1]
+    assert sorted(p.name for p in out.iterdir()) == ["a.jpg"], "no temp file left behind"

@@ -4493,7 +4493,10 @@ def _upload_inline_type(p: Path, ext: str):
 def _make_upload_thumb(src: Path, out: Path) -> bool:
     """Write a <=400 px JPEG for an image or a video poster frame. False when it cannot."""
     ext = src.suffix.lower().lstrip(".")
-    tmp = out.with_name(out.name + f".{os.getpid()}.tmp")
+    # Unique per call: two requests for the same uncached thumb run in two threads of one process,
+    # so a pid-only name would have both write the same temp file (review of #339).
+    import uuid
+    tmp = out.with_name(f"{out.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
         if ext in _UPLOAD_IMAGE_EXTS:
             from PIL import Image, ImageOps
