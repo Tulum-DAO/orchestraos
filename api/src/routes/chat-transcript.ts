@@ -14,7 +14,7 @@ import { readFileSync, existsSync, readdirSync, statSync, openSync, readSync, cl
 import { join } from 'path';
 import { isSafeAgentId } from '../lib/agentPaths.js';
 import { execFileSync } from 'child_process';
-import { mergeQueuedItems } from '../services/queued-merge.js';
+import { LIVE_CARDS, mergeQueuedItems } from '../services/queued-merge.js';
 import { homedir } from 'os';
 import Database from 'better-sqlite3';
 import { agentScopeParam } from '../lib/agent-scope.js';
@@ -602,18 +602,27 @@ export function settleIngestedQueuedCommands(items: any[]): any[] {
  */
 export function dropQueuedCommandsCoveredByBatches(items: any[]): any[] {
   const bodies: string[] = [];
+  // A LIVE card (queued-merge B3, in LIVE_CARDS) was bound by exact text, so it covers exactly that
+  // text and nothing else: the prefix rule below would also hide an operator's own message that
+  // merely opens the same way (the live store has 100+ rows sharing one 40-char opening).
+  const exact = new Set<string>();
+  const norm = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
   for (const it of items) {
     if (it?.kind === 'queued_batch') {
+      const live = LIVE_CARDS.has(it);
       for (const e of it.entries || []) {
         const b = String(e?.body || '').trim();
-        if (b) bodies.push(b);
+        if (!b) continue;
+        if (live) exact.add(norm(b));
+        else bodies.push(b);
       }
     }
   }
-  if (!bodies.length) return items;
+  if (!bodies.length && !exact.size) return items;
   const MIN = 40; // below this a prefix is not distinctive enough to act on
   return items.filter((it) => {
     if (!it?.queued || it.kind !== 'text') return true;
+    if (exact.has(norm(it.text))) return false;
     const t = String(it.text || '').trim();
     if (t.length < MIN) return true;
     const head = t.slice(0, MIN);

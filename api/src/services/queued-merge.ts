@@ -19,6 +19,15 @@
  *       metadata.batch_id (stamped by the Stop-hook drain) -> ONE queued_batch
  *       node per batch, entries NEWEST->OLDEST.
  *
+ *   B3 (live card): a self-bound row with NO batch_id yet, which the transcript proves was
+ *       injected (exactly one queued item whose text EQUALS the row's body, and no other row
+ *       with that body) -> a one-entry
+ *       queued_batch at once, at the injected item's position. The batch id is stamped by
+ *       the Stop drain, i.e. at the END of the agent's turn: without B3 the operator saw the
+ *       raw bubble for the whole turn and the card only after it (and never, for a row the
+ *       agent acked before its drain ran). Once the drain stamps it, B2 takes the row over:
+ *       card -> card, never card -> bubble -> card, under the SAME key (msg:<oldest row id>).
+ *
  * READ-ONLY, and its own connection (not the write-handle singleton): opens a
  * readonly better-sqlite3 handle on MSG_DB_PATH || <ORCHESTRA>/state/tasks.db.
  * WAL allows concurrent readers; a reader never blocks the writer. Every DB
@@ -82,21 +91,24 @@ function b1QueuedTurns(db: DB, agentId: string): any[] {
   }
 }
 
-// B2: acknowledged self-bound rows grouped by write-once metadata.batch_id.
-function b2Batches(db: DB, agentId: string): any[] {
+// B2: acknowledged self-bound rows grouped by write-once metadata.batch_id. `claimed` receives the
+// id of every row B2 renders, so B3 can take exactly the rest.
+function b2Batches(db: DB, agentId: string, claimed: Set<string> = new Set()): any[] {
   try {
     const rows = db.prepare(
       `SELECT id, from_agent, body, created_at, metadata, acknowledged_at FROM messages
         WHERE to_agent = ? AND metadata LIKE '%"batch_id"%'
           AND (acknowledged_at IS NOT NULL OR status IN ('acknowledged', 'archived'))
         ORDER BY created_at DESC`).all(agentId) as any[];
-    const batches = new Map<string, { entries: BatchEntry[]; ts: string }>();
+    const batches = new Map<string, { entries: BatchEntry[]; ts: string; first: string }>();
     for (const r of rows) {
       let md: any = {};
       try { md = r.metadata ? JSON.parse(r.metadata) : {}; } catch { md = {}; }
       const bid = md && typeof md.batch_id === 'string' ? md.batch_id : null;
       if (!bid) continue;
-      const b = batches.get(bid) || { entries: [], ts: '' };
+      claimed.add(String(r.id));
+      const b = batches.get(bid) || { entries: [], ts: '', first: '' };
+      b.first = String(r.id);             // rows arrive newest->oldest: the last one seen is the oldest
       // rows arrive newest->oldest (created_at DESC) -> entries stay newest-first
       b.entries.push({ agent: String(r.from_agent ?? ''), sent_ts: String(r.created_at ?? ''), body: String(r.body ?? '') });
       const cand = String(r.acknowledged_at || md.processed_ts || r.created_at || '');
@@ -105,7 +117,74 @@ function b2Batches(db: DB, agentId: string): any[] {
     }
     const out: any[] = [];
     for (const [bid, b] of batches) {
-      out.push({ kind: 'queued_batch', count: b.entries.length, entries: b.entries, ts: b.ts, key: `batch:${bid}` });
+      // Keyed by the batch's OLDEST message, the key that message's live card (B3) already had: the
+      // card keeps ONE identity when the drain batches it, so clients that key per-card state on it
+      // (iOS keeps expansion in a Set by row id) update it in place instead of deleting and
+      // re-inserting it. A batch's membership is write-once, so the oldest row never changes.
+      out.push({ kind: 'queued_batch', count: b.entries.length, entries: b.entries, ts: b.ts, key: `msg:${b.first}` });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+// B3: a body shorter than this is not distinctive enough to attribute (the same floor
+// dropQueuedCommandsCoveredByBatches uses, so B3 never renders a card the drop would then fail
+// to pair with its bubble).
+const LIVE_MIN = 40;
+
+/** The B3 cards, by identity: bound by exact text, so they cover only that text (see
+ *  dropQueuedCommandsCoveredByBatches). Not a field: it never reaches a client. */
+export const LIVE_CARDS = new WeakSet<object>();
+const LIVE_LIMIT = 200;
+
+const norm = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
+
+// B3: self-bound rows not yet batched, rendered as a card the moment the log shows them injected.
+// Bound by EXACT body equality (measured: the logged queued_command prompt IS the row body), and
+// only when the match is unique on BOTH sides. Two rows with one body (a re-send of the same
+// answer) or one body typed twice is AMBIGUOUS: no live card, and the drain's batch (B2) shows it
+// at the end of the turn as before. A late card is a timing annoyance; a card naming the wrong
+// sender, or two rows folded into one, is wrong data the operator cannot detect.
+function b3LiveCards(db: DB, agentId: string, items: any[], floorMs: number | null, claimed: Set<string>): any[] {
+  // No real turn in the window = nothing to anchor the search to: the unbounded scan cost 128 ms per
+  // poll on a busy seat (#327 review). Such a window has no mid-turn message to card anyway.
+  if (floorMs === null) return [];
+  const queuedByText = new Map<string, any[]>();
+  for (const it of items) {
+    if (it?.kind !== 'text' || !it.queued) continue;
+    const t = norm(it.text);
+    if (t.length < LIVE_MIN) continue;
+    queuedByText.set(t, [...(queuedByText.get(t) || []), it]);
+  }
+  if (!queuedByText.size) return [];
+  try {
+    const floorIso = new Date(floorMs - 60_000).toISOString();
+    // Every row B2 did NOT render, batch_id or not: the drain stamps batch_id BEFORE the row is acked,
+    // so "no batch_id" would leave a stamped-but-unacked row in neither lane (a bubble again).
+    const rows = db.prepare(
+      `SELECT id, from_agent, body, created_at FROM messages
+        WHERE to_agent = ? AND type != 'held_message'
+          AND created_at >= ?
+        ORDER BY created_at DESC LIMIT ${LIVE_LIMIT}`).all(agentId, floorIso) as any[];
+    const rowsByBody = new Map<string, any[]>();
+    for (const r of rows) {
+      if (claimed.has(String(r.id))) continue;
+      const b = norm(r.body);
+      if (b.length < LIVE_MIN || !queuedByText.has(b)) continue;   // not injected yet: no card
+      rowsByBody.set(b, [...(rowsByBody.get(b) || []), r]);
+    }
+    const out: any[] = [];
+    for (const [b, rs] of rowsByBody) {
+      const qs = queuedByText.get(b) || [];
+      if (rs.length !== 1 || qs.length !== 1) continue;          // ambiguous: leave it to the drain
+      const r = rs[0];
+      const card = { kind: 'queued_batch', count: 1,
+        entries: [{ agent: String(r.from_agent ?? ''), sent_ts: String(r.created_at ?? ''), body: String(r.body ?? '') }],
+        ts: qs[0].ts ?? r.created_at, key: `msg:${r.id}` };
+      LIVE_CARDS.add(card);
+      out.push(card);
     }
     return out;
   } catch {
@@ -140,9 +219,22 @@ export function mergeQueuedItems(items: any[], agentId: string): any[] {
   // B1 (still-pending held turns) is CURRENT STATE and is never bounded: it is the only thing
   // on screen for an agent that has not started a turn yet, and dropping it would hide a
   // message the operator just sent. Only B2, which is history, is bounded.
-  const pending = b1QueuedTurns(db, agentId);
-  const batches = boundQueuedBatches(b2Batches(db, agentId), earliestTurnMs(items));
-  const synthetic = [...pending, ...batches];
+  const floor = earliestTurnMs(items);
+  // One read snapshot for all three lanes: a batch stamp or an ack landing between two queries
+  // must not drop a row out of both B2 and B3 for a poll.
+  let pending: any[] = [], batches: any[] = [], live: any[] = [];
+  try {
+    db.transaction(() => {
+      pending = b1QueuedTurns(db, agentId);
+      const claimed = new Set<string>();
+      batches = boundQueuedBatches(b2Batches(db, agentId, claimed), floor);
+      // B3 needs the transcript's own evidence of injection, so it can never show a row early.
+      live = b3LiveCards(db, agentId, items, floor, claimed);
+    })();
+  } catch {
+    return items;
+  }
+  const synthetic = [...pending, ...batches, ...live];
   if (!synthetic.length) return items;
   return interleaveByTs(items.concat(synthetic));
 }
