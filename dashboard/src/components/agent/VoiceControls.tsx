@@ -19,12 +19,14 @@ interface VoiceControlsProps {
    *  phones and offers "Start voice call" from its overflow menu instead). A live call's End
    *  button is never hidden: a call you cannot see is a call you cannot end. */
   idleCallClassName?: string;
+  /** Told whenever a call starts connecting or ends, so a caller can render for it. */
+  onInCallChange?: (inCall: boolean) => void;
 }
 
-/** For a caller that offers the call from elsewhere (the composer's overflow menu). */
+/** For a caller that offers the call from elsewhere (the composer's overflow menu). START only,
+ *  never a toggle: a menu row labelled "Call" must not hang up a live call (review of #351). */
 export interface VoiceControlsHandle {
-  toggleCall: () => Promise<void>;
-  inCall: boolean;
+  startCall: () => Promise<void>;
 }
 
 /**
@@ -41,6 +43,7 @@ export const VoiceControls = forwardRef<VoiceControlsHandle, VoiceControlsProps>
   onCallEnded,
   showCallButton,
   idleCallClassName,
+  onInCallChange,
 }, ref) {
   const settings = useAgentSettings();
   const [unavailable, setUnavailable] = useState<string | null>(null);
@@ -54,7 +57,7 @@ export const VoiceControls = forwardRef<VoiceControlsHandle, VoiceControlsProps>
         onPartial: (text, role) => { if (role === 'user') onPartial(text); },
         onFinal: (text, role) => { if (role === 'user') onFinal?.(text); },
         onUnavailable: (reason) => setUnavailable(reason),
-        onStateChange: (s) => setInCall(s === 'live' || s === 'connecting'),
+        onStateChange: (s) => { const c = s === 'live' || s === 'connecting'; setInCall(c); onInCallChange?.(c); },
         onCallEnded: (marker) => onCallEnded?.(marker),
       });
     }
@@ -78,14 +81,23 @@ export const VoiceControls = forwardRef<VoiceControlsHandle, VoiceControlsProps>
 
   const toggleCall = async () => {
     setUnavailable(null);
-    if (inCall) {
+    // The session's own state, not the render's `inCall`: a second tap in the same frame as the
+    // first still sees the call as connecting and cancels it rather than starting it twice.
+    const st = sessionRef.current?.state;
+    if (st === 'connecting' || st === 'live') {
       session().stop();
       return;
     }
     await session().start({ route, focusedEntity });
   };
 
-  useImperativeHandle(ref, () => ({ toggleCall, inCall }));
+  const startCall = async () => {
+    const st = sessionRef.current?.state;
+    if (st === 'connecting' || st === 'live') return;
+    setUnavailable(null);
+    await session().start({ route, focusedEntity });
+  };
+  useImperativeHandle(ref, () => ({ startCall }));
 
   return (
     <div className="flex items-center gap-1">

@@ -48,6 +48,7 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
   const [draft, setDraft] = useState('');
   const modelLabel = useModelSelection((s) => s.modelLabel);
   const voiceRef = useRef<VoiceControlsHandle>(null);
+  const [inCall, setInCall] = useState(false);
   // B2 video-upload capability gate: N/A — ChatInput's current attach
   // affordance has no video mime/extension support to gate yet, so
   // `capabilities?.video === true` has nothing to gate against for now.
@@ -144,10 +145,11 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
                 <Cpu size={15} className="shrink-0 text-muted-foreground" />
                 <span className="truncate">Model <span className="text-muted-foreground">· {modelLabel ?? 'choose'}</span></span>
               </button>
-              {draft.trim() === '' && (
+              {/* Start only, and only with no call live: a live call's End button is inline. */}
+              {draft.trim() === '' && !inCall && (
                 <button type="button" role="menuitem"
                   className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-left text-foreground hover:bg-muted rounded-lg"
-                  onClick={() => { close(); void voiceRef.current?.toggleCall(); }}>
+                  onClick={() => { close(); void voiceRef.current?.startCall(); }}>
                   <PhoneCall size={15} className="shrink-0 text-muted-foreground" />
                   <span>Call {settings.assistantName}</span>
                 </button>
@@ -172,6 +174,7 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
             <VoiceControls
               ref={voiceRef}
               idleCallClassName="max-[479px]:hidden"
+              onInCallChange={setInCall}
               route={location.pathname}
               focusedEntity={null}
               onPartial={setDraft}

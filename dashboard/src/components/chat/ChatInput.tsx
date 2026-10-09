@@ -2,7 +2,7 @@
  * ChatInput — the floating pill composer: attach (+), text, inject/inbox toggle, caller slots
  * (model, voice) and a round send button that becomes Stop while the seat is mid-turn.
  */
-import { useState, useRef, useLayoutEffect, useEffect, type ReactNode } from 'react';
+import { useState, useRef, useLayoutEffect, useEffect, useId, type ReactNode } from 'react';
 import { clsx } from 'clsx';
 import { ArrowUp, Square, Loader2, Plus, Paperclip, X, ClipboardList, MoreHorizontal, Check } from 'lucide-react';
 import { injectAgentVerified, type InjectResult } from '../../lib/api';
@@ -395,13 +395,34 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
   // the textarea's stop path, because focus is on the menu while it is open.
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const deliveryLabelId = useId();
   const closeMenu = () => setMenuOpen(false);
+  const menuItemsEls = () =>
+    Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]') ?? []);
+  // Arrow keys / Home / End move between the rows (WAI-ARIA menu pattern).
+  const onMenuKeyDown = (e: React.KeyboardEvent) => {
+    const items = menuItemsEls();
+    if (!items.length) return;
+    const i = items.indexOf(document.activeElement as HTMLElement);
+    const go = (n: number) => { e.preventDefault(); items[(n + items.length) % items.length].focus(); };
+    if (e.key === 'ArrowDown') go(i + 1);
+    else if (e.key === 'ArrowUp') go(i - 1);
+    else if (e.key === 'Home') go(0);
+    else if (e.key === 'End') go(items.length - 1);
+  };
   useEffect(() => {
     if (!menuOpen) return;
     const onDown = (e: PointerEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); setMenuOpen(false); } };
+    // Esc closes and hands focus back to the trigger. Capture phase + stopPropagation, so it never
+    // reaches the textarea's onKeyDown (which would press Esc into the agent: Stop).
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); setMenuOpen(false); menuButtonRef.current?.focus(); }
+    };
+    // Focus the first row on open, so the keyboard lands in the menu.
+    requestAnimationFrame(() => menuItemsEls()[0]?.focus());
     document.addEventListener('pointerdown', onDown);
     document.addEventListener('keydown', onKey, true);
     // The Arturo pill (z-75, fixed) would sit on top of this menu; arturo.css hides it while open.
@@ -576,6 +597,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
               where a message will go. */}
           <div ref={menuRef} className="relative shrink-0 min-[480px]:hidden">
             <button
+              ref={menuButtonRef}
               type="button"
               onClick={() => setMenuOpen((o) => !o)}
               aria-haspopup="menu"
@@ -588,8 +610,10 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
               {!injectMode && <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-amber-400" aria-hidden />}
             </button>
             {menuOpen && (
-              <div role="menu" className="absolute bottom-full right-0 mb-2 w-60 rounded-2xl border border-border bg-card p-1.5 shadow-xl shadow-black/30 z-20">
-                <div className="px-3 pt-1.5 pb-1 text-[11px] text-muted-foreground">Delivery</div>
+              <div role="menu" aria-label="More options" onKeyDown={onMenuKeyDown}
+                className="absolute bottom-full right-0 mb-2 w-60 rounded-2xl border border-border bg-card p-1.5 shadow-xl shadow-black/30 z-20">
+                <div role="group" aria-labelledby={deliveryLabelId}>
+                <div id={deliveryLabelId} role="presentation" className="px-3 pt-1.5 pb-1 text-[11px] text-muted-foreground">Delivery</div>
                 <button type="button" role="menuitemradio" aria-checked={injectMode} className={menuRow}
                   onClick={() => { setInjectMode(true); closeMenu(); }}>
                   <Check size={15} className={injectMode ? 'opacity-100' : 'opacity-0'} />
@@ -600,7 +624,8 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
                   <Check size={15} className={!injectMode ? 'opacity-100' : 'opacity-0'} />
                   <span>Inbox <span className="text-muted-foreground">· read next turn</span></span>
                 </button>
-                {menuItems && <div className="my-1 border-t border-border" />}
+                </div>
+                {menuItems && <div role="separator" className="my-1 border-t border-border" />}
                 {menuItems?.(closeMenu)}
               </div>
             )}
