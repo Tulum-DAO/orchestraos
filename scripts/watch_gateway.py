@@ -1354,6 +1354,10 @@ def compute_agents():
 
 SUBAGENT_STALE_S = 15 * 60
 _SUBAGENT_TAIL_BYTES = 8192
+# A final answer can be longer than the first tail (measured on a live fleet: the last complete
+# record started up to ~43 KB from the end), so the tail grows until a whole record parses.
+_SUBAGENT_TAIL_STEPS = (_SUBAGENT_TAIL_BYTES, 64 * 1024, 256 * 1024)
+_SUBAGENT_TAIL_CACHE_MAX = 1024
 # path -> (mtime, size, finished). A file is re-read only when it changes; /agents refreshes
 # every few seconds and most subagent files are idle between refreshes.
 _SUBAGENT_TAIL_CACHE: dict = {}
@@ -1362,26 +1366,33 @@ _SUBAGENT_TAIL_CACHE: dict = {}
 def _subagent_finished(path):
     """True iff the last conversational record is an assistant message that stopped with
     end_turn/stop_sequence (its final answer). Trailing `attachment`/system records written
-    after that answer are skipped: measured 2026-10-08, 2 of 300 finished files end that way."""
+    after that answer are skipped: measured 2026-10-08, 2 of 300 finished files end that way.
+    The tail grows (_SUBAGENT_TAIL_STEPS) until a whole conversational record is in it, because
+    a long final answer is one line longer than the first tail.
+    Older Claude CLIs write the final answer with stop_reason null; such a subagent reads as
+    running until its file is SUBAGENT_STALE_S old."""
     try:
         with open(path, "rb") as f:
             size = os.fstat(f.fileno()).st_size
-            f.seek(max(0, size - _SUBAGENT_TAIL_BYTES))
-            lines = f.read().decode("utf-8", "replace").splitlines()
+            for tail in _SUBAGENT_TAIL_STEPS:
+                f.seek(max(0, size - tail))
+                lines = f.read().decode("utf-8", "replace").splitlines()
+                if size > tail and lines:
+                    lines = lines[1:]          # the first line of a mid-file tail is partial
+                for line in reversed(lines):
+                    try:
+                        rec = json.loads(line)
+                    except ValueError:
+                        continue
+                    kind = rec.get("type") if isinstance(rec, dict) else None
+                    if kind not in ("assistant", "user"):
+                        continue
+                    return kind == "assistant" and (rec.get("message") or {}).get("stop_reason") in (
+                        "end_turn", "stop_sequence")
+                if tail >= size:
+                    break
     except OSError:
         return False
-    if size > _SUBAGENT_TAIL_BYTES and lines:
-        lines = lines[1:]          # the first line of a mid-file tail is partial
-    for line in reversed(lines):
-        try:
-            rec = json.loads(line)
-        except ValueError:
-            continue
-        kind = rec.get("type") if isinstance(rec, dict) else None
-        if kind not in ("assistant", "user"):
-            continue
-        return kind == "assistant" and (rec.get("message") or {}).get("stop_reason") in (
-            "end_turn", "stop_sequence")
     return False
 
 
@@ -1416,6 +1427,10 @@ def count_running_subagents(transcript_path, now=None):
             _SUBAGENT_TAIL_CACHE[e.path] = (st.st_mtime, st.st_size, finished)
         if not finished:
             running += 1
+    if len(_SUBAGENT_TAIL_CACHE) > _SUBAGENT_TAIL_CACHE_MAX:
+        # entries of files nobody scans any more (a /clear, a rotation, a deleted file)
+        for p in [p for p, v in _SUBAGENT_TAIL_CACHE.items() if now - v[0] > SUBAGENT_STALE_S]:
+            _SUBAGENT_TAIL_CACHE.pop(p, None)
     return running
 
 

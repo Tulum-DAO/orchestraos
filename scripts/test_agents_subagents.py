@@ -124,3 +124,33 @@ def test_compute_agents_reports_provider_and_subagents_end_to_end(tmp_path, monk
     by = {r["tmux_session"]: r for r in wg.compute_agents()}
     assert by["seat"]["provider"] == "claude" and by["seat"]["subagents"] == 1
     assert by["gem"]["provider"] == "gemini" and by["gem"]["subagents"] == 0
+
+
+def test_a_final_answer_longer_than_the_first_tail_is_finished(tmp_path):
+    """Measured on a live fleet: 145 of 611 finished files end in a final answer over 8 KB."""
+    now = time.time()
+    long_answer = _rec("assistant", "end_turn")
+    long_answer["message"]["content"][0]["text"] = "x" * 40_000
+    tp = _session(tmp_path, {
+        "long": ([_rec("user")] + [_rec("assistant", "tool_use"), _rec("user")] * 50 + [long_answer], 5),
+        "long_then_attach": ([_rec("user"), long_answer] + [_rec("attachment")] * 3, 5),
+    }, now)
+    assert wg.count_running_subagents(tp, now=now) == 0
+
+
+def test_a_record_too_long_for_every_tail_reads_as_running_until_stale(tmp_path):
+    now = time.time()
+    huge = _rec("assistant", "end_turn")
+    huge["message"]["content"][0]["text"] = "x" * (300 * 1024)
+    tp = _session(tmp_path, {"huge": ([_rec("user"), huge], 5)}, now)
+    assert wg.count_running_subagents(tp, now=now) == 1
+
+
+def test_the_tail_cache_drops_entries_nobody_scans(tmp_path, monkeypatch):
+    monkeypatch.setattr(wg, "_SUBAGENT_TAIL_CACHE_MAX", 2)
+    now = time.time()
+    for i in range(5):
+        wg._SUBAGENT_TAIL_CACHE[f"/gone/{i}"] = (now - wg.SUBAGENT_STALE_S - 10, 1, True)
+    tp = _session(tmp_path, {"a": ([_rec("user"), _rec("assistant", "tool_use")], 5)}, now)
+    wg.count_running_subagents(tp, now=now)
+    assert not [p for p in wg._SUBAGENT_TAIL_CACHE if p.startswith("/gone/")]
