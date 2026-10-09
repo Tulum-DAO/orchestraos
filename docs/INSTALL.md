@@ -1217,6 +1217,7 @@ simplest setup.
 - data: `[data] dir` → `registry.json`, `state/` (sqlite, sessions, gateway token), `logs/`, `queue/`
 - code: the checkout; `ORCHESTRA_ROOT` / `PYTHONPATH` are exported to every child by the supervisor
 - dashboard runtime values: optional `dashboard/public/runtime-config.json`, e.g. `{"operatorUserId": "alice"}` — the id your insights, profile and messages are stored under (default `operator`). Read by the browser at page load, so changing it needs no rebuild if you edit the copy in `dashboard/dist/`; git-ignored
+  - the same file switches dashboard surfaces off when your API does not serve them: `{"features": {"arturo": false, "newAgent": false, "providerSignIn": false}}` (each defaults to `true`). `arturo: false` also makes `/` open the Overview
 
 ## Running inside Docker: the services bind loopback
 

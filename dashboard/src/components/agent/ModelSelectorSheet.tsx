@@ -27,6 +27,7 @@ import {
   type ProviderAvailability,
   type ProviderRow,
 } from '../../lib/modelSelectorFilter';
+import { providerTileAction, showAddProvider } from '../../lib/features';
 
 interface RuntimesAvailableResponse {
   providers: ProviderAvailability[];
@@ -268,10 +269,14 @@ export function ModelSelectorSheet({ open, onClose, selection, onPick, onPickDef
               {rows.map((row) => (
                 <button
                   key={row.provider.id}
-                  onClick={() => row.selectable
-                    ? setExpandedProviderId((cur) => nextExpanded(cur, row.provider.id))
-                    : setConnectRow(row)}
-                  title={row.selectable ? row.provider.label : `${row.provider.label}: ${row.greyReason} — tap to connect`}
+                  onClick={() => {
+                    const action = providerTileAction(row.selectable);
+                    if (action === 'expand') setExpandedProviderId((cur) => nextExpanded(cur, row.provider.id));
+                    else if (action === 'connect') setConnectRow(row);
+                    // 'none': this deployment cannot sign a provider in from here; the reason is in the title.
+                  }}
+                  title={row.selectable ? row.provider.label
+                    : `${row.provider.label}: ${row.greyReason}${providerTileAction(false) === 'connect' ? ' — tap to connect' : ''}`}
                   className={`flex flex-col items-center justify-center gap-1 h-full min-h-[4.5rem] px-2 py-2 rounded-lg border transition-colors ${
                     row.selectable
                       ? expandedProviderId === row.provider.id
@@ -299,8 +304,9 @@ export function ModelSelectorSheet({ open, onClose, selection, onPick, onPickDef
               ))}
 
               {/* Fourth tile: add a provider. Never a dead end — it expands the same way a
-                  provider does, with what actually has to happen for one to appear here. */}
-              <button
+                  provider does, with what actually has to happen for one to appear here. Absent
+                  where the deployment cannot open an install terminal (features.providerSignIn). */}
+              {showAddProvider() && <button
                 onClick={() => setExpandedProviderId((cur) => nextExpanded(cur, ADD_PROVIDER))}
                 title="Add a provider"
                 className={`flex flex-col items-center justify-center gap-1 h-full min-h-[4.5rem] px-2 py-2 rounded-lg border border-dashed transition-colors ${
@@ -313,7 +319,7 @@ export function ModelSelectorSheet({ open, onClose, selection, onPick, onPickDef
                   <Plus size={18} />
                 </span>
                 <span className="text-[10px] text-foreground/70 leading-tight text-center">Add a provider</span>
-              </button>
+              </button>}
             </div>
 
             {onPickDefault && (

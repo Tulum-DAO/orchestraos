@@ -13,6 +13,7 @@ import { LiveFeed } from '../components/LiveFeed';
 import { FleetRecoveryModal } from '../components/FleetRecoveryModal';
 import NewAgentModal from '../components/NewAgentModal';
 import { useQueryClient } from '@tanstack/react-query';
+import { showNewAgent } from '../lib/features';
 
 const TIER_ORDER: Record<string, number> = { T0: 0, T1: 1, T2: 2, T3: 3 };
 
@@ -24,7 +25,7 @@ export default function Overview() {
   const goDarkMutation = useGoDark();
   const returnMutation = useReturn();
   const [showConfirm, setShowConfirm] = useState(false);
-  const [showNewAgent, setShowNewAgent] = useState(false);
+  const [showNewAgentModal, setShowNewAgentModal] = useState(false);
   const queryClient = useQueryClient();
   const [showReport, setShowReport] = useState(false);
   const [transitReport, setTransitReport] = useState<any>(null);
@@ -216,23 +217,23 @@ export default function Overview() {
           endpoints and the transit banner above are untouched). */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-neutral-100">Overview</h1>
-        <button
-          onClick={() => setShowNewAgent(true)}
+        {showNewAgent() && <button
+          onClick={() => setShowNewAgentModal(true)}
           className="flex items-center gap-2 px-4 py-2 text-sm rounded-lg bg-blue-900/50 border border-blue-700/50 text-blue-200 hover:bg-blue-800/60 transition-colors"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
             <path strokeLinecap="round" d="M12 5v14M5 12h14" />
           </svg>
           New Agent
-        </button>
+        </button>}
       </div>
 
-      <NewAgentModal
-        open={showNewAgent}
-        onClose={() => setShowNewAgent(false)}
+      {showNewAgent() && <NewAgentModal
+        open={showNewAgentModal}
+        onClose={() => setShowNewAgentModal(false)}
         taken={new Set(agents.map((a: { id: string }) => String(a.id)))}
         onCreated={() => { queryClient.invalidateQueries({ queryKey: ['agents'] }); }}
-      />
+      />}
 
       {/* Needs You — a dead feed must not render as calm */}
       {attentionFailed && (
