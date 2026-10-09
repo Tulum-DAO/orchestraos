@@ -234,6 +234,21 @@ def test_transport_keypress_commits_with_enter_and_verifies(monkeypatch):
     assert sk == [("send-keys", "-t", "acme-dev", "2", "Enter")]   # digit + Enter, one send
 
 
+def test_transport_keypress_never_answers_a_permission_prompt(monkeypatch):
+    # A ledger menu row is matched to the live menu by question CONTAINMENT. An
+    # AskUserQuestion that asks "Do you want to proceed?" (or any part of it) matches every
+    # permission prompt, so its pending answer could press digit+Enter into a permission
+    # prompt that replaced it. Permission prompts are never bridged to the ledger (menu_bridge_core), so a
+    # live one is never the menu a ledger row expects: it reads as menu_gone (the durable
+    # fallback delivers the answer as a message) and no key is sent.
+    perm = {"kind": "permission", "question": "Do you want to proceed?",
+            "options": [{"n": "1", "label": "Yes"}, {"n": "2", "label": "No"}]}
+    fake = _transport_env(monkeypatch, [{"state": "waiting_permission", "pending_menu": perm}])
+    ok, info = G.menu_resume_keypress("acme-dev", "1", expect_question="Do you want to proceed?")
+    assert not ok and info["reason"] == "menu_gone"
+    assert [c for c in fake.calls if c[0] == "send-keys"] == []
+
+
 def test_transport_keypress_unverified_when_menu_stays(monkeypatch):
     # THE BUG: a digit-only keypress leaves the menu uncommitted, yet the old
     # code reported ok=True (falsely 'delivered'). After the fix, an un-resolved

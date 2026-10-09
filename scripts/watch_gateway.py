@@ -2468,6 +2468,12 @@ def _menu_matches(session, expect_question):
     menu = _current_menu(session)
     if not menu:
         return False
+    # A live PERMISSION prompt is never the menu a ledger row expects: permission prompts are
+    # never bridged to the ledger (menu_bridge_core), and containment would otherwise match an
+    # AskUserQuestion asking "Do you want to proceed?" to any of them and press its answer in.
+    # They are answered only via /agent-key, which checks what the device saw.
+    if isinstance(menu, dict) and menu.get("kind") == "permission":
+        return False
     if expect_question:
         a = _q_norm(menu.get("question"))
         b = _q_norm(expect_question)
