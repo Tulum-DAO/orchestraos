@@ -1963,6 +1963,38 @@ def seat_seen(name):
     return "stopped" if state == "stopped" else "unknown"
 
 
+def _list_agents_text(hierarchy_agents, live_sessions, infra, detect=None):
+    """list_agents' answer. RUNNING only when the status detector sees an agent CLI on the seat's
+    pane (the dashboard's truth); a session holding a shell or a nested tmux client is "session up,
+    no agent running in it", and a detector that could not answer is "could not tell". The detector
+    runs only for seats with a session, in parallel."""
+    from concurrent.futures import ThreadPoolExecutor
+    detect = detect or _detector_state
+    live_ids = [h.get("agent_id", "") for h in hierarchy_agents if h.get("agent_id", "") in live_sessions]
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        states = dict(zip(live_ids, ex.map(lambda n: detect(n) or "unknown", live_ids)))
+    parts, running = [], 0
+    for h in hierarchy_agents:
+        aid = h.get("agent_id", "")
+        state = states.get(aid)
+        if state is None:
+            status = "stopped (no session)"
+        elif state in _RUNNING_STATES:
+            status = f"RUNNING ({state})"
+            running += 1
+        elif state == "stopped":
+            status = "session up, no agent running in it"
+        else:
+            status = "session up, could not tell whether the agent runs"
+        always_on = " (always-on)" if h.get("always_on") else ""
+        parts.append(f"  {aid}: {h.get('role', '?')} for {h.get('project', '')} — {status}{always_on}")
+    hierarchy_ids = {h.get("agent_id") for h in hierarchy_agents}
+    orphans = sorted(s for s in live_sessions - infra if s not in hierarchy_ids)
+    if orphans:
+        parts.append(f"\n  Unregistered sessions: {', '.join(orphans)}")
+    return f"Agents ({len(hierarchy_agents)} registered, {running} running):\n" + "\n".join(parts)
+
+
 def starter_team_state(seen=None):
     """The starter team as the server sees it, and the ONE reading both the onboarding directive and
     create_starter_team act on (review #268: two readers disagreed). SIX states, never two:
@@ -3315,44 +3347,17 @@ def execute_tool(name, args, user_turns=None):
         try:
             _sys.path.insert(0, str(ORCHESTRA_DIR))
             from msg_store import MessageStore
-            _store = MessageStore()
-            hierarchy_agents = _store.hierarchy_list(tenant_id="operator")
-            # Also check readiness for running agents
-            _sys.path.insert(0, str(ORCHESTRA_DIR / "lib"))
-            from agent_readiness import check_agent_ready as _check_ready
-        except Exception:
-            _check_ready = None
+            hierarchy_agents = MessageStore().hierarchy_list(tenant_id="operator")
+        except Exception:  # noqa: BLE001 — no hierarchy: the raw session list below
+            pass
 
         if hierarchy_agents:
-            # Rich view from hierarchy — show role, project, status
-            parts = []
-            for h in hierarchy_agents:
-                aid = h.get("agent_id", "")
-                role = h.get("role", "?")
-                project = h.get("project", "")
-                tmux_name = aid  # Default: agent_id IS tmux session name
-                is_live = tmux_name in live_sessions or aid in live_sessions
-                readiness = ""
-                if is_live and _check_ready:
-                    try:
-                        readiness = f" [{_check_ready(tmux_name)}]"
-                    except Exception:
-                        pass
-                status = f"RUNNING{readiness}" if is_live else "stopped"
-                always_on = " (always-on)" if h.get("always_on") else ""
-                parts.append(f"  {aid}: {role} for {project} — {status}{always_on}")
-
-            # Also list running sessions NOT in hierarchy (orphans)
-            hierarchy_ids = {h["agent_id"] for h in hierarchy_agents}
-            orphans = [s for s in live_sessions - infra if s not in hierarchy_ids]
-            if orphans:
-                parts.append(f"\n  Unregistered running sessions: {', '.join(sorted(orphans))}")
-
-            return f"Agents ({len(hierarchy_agents)} registered, {len(live_sessions - infra)} running):\n" + "\n".join(parts)
+            return _list_agents_text(hierarchy_agents, live_sessions, infra)
         else:
             # Fallback: raw tmux list if hierarchy is empty
             agent_sessions = sorted(live_sessions - infra)
-            return f"{len(live_sessions)} sessions on VPS. Agent sessions: {', '.join(agent_sessions)}"
+            return (f"No registered agents found. {len(agent_sessions)} tmux sessions on this host "
+                    f"(not checked for a running agent): {', '.join(agent_sessions)}")
 
     elif name == "kill_agent":
         session = args.get("session_name", "")
