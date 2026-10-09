@@ -761,6 +761,21 @@ def _mark_instance_answered(session, question, context=""):
         print(f"[watch_gateway] mark-answered failed for {session}: {e}", file=sys.stderr)
 
 
+# FAIL CLOSED (gm condition on the Claude Code 2.1.286+ dashed-frame break): a permission prompt
+# whose context did not parse shows a device "Do you want to proceed?" with no command, and two
+# different commands then share one identity, so a stale tap could approve the wrong one. Such a
+# prompt is never answered from a device: it is flagged on every card and refused on every answer
+# path, on any CLI version. It is answered in the terminal (the web terminal is a terminal).
+_ANSWER_IN_TERMINAL = ("This permission prompt shows no command, so it can only be answered in the "
+                       "terminal (attach to the seat, or open its web terminal).")
+
+
+def _contextless_permission(menu) -> bool:
+    """True for a permission prompt with no parsed context (see _ANSWER_IN_TERMINAL)."""
+    return isinstance(menu, dict) and menu.get("kind") == "permission" \
+        and not str(menu.get("context") or "").strip()
+
+
 def _perm_pseudo_row(session, menu):
     """Additive read-time PERMISSION pseudo-row (D3) from a live detector
     pending_menu whose kind=='permission'. OPTION-ONLY: every option is forced
@@ -805,6 +820,9 @@ def _perm_pseudo_row(session, menu):
         # A NEW field. instance_id keeps its shipped meaning (the ledger's digest:n: clients key the
         # card's render identity on it, and the served record compares it); the row id is unchanged.
         row["instance"] = row["menu"]["instance"] = _inst
+    if _contextless_permission(menu):
+        row["answer_in_terminal"] = row["menu"]["answer_in_terminal"] = True
+        row["answer_in_terminal_reason"] = _ANSWER_IN_TERMINAL
     row["priority_score"] = _priority_score(row)
     return row
 
@@ -4192,6 +4210,9 @@ async def handle_agent_screen(request):
     # as direct → stray digits typed into the TUI field).
     if isinstance(st, dict) and st.get("pending_menu"):
         pm = stamp_input_kinds(dict(st["pending_menu"]))
+        if _contextless_permission(pm):
+            pm["answer_in_terminal"] = True             # every surface says so; /agent-key refuses it
+            pm["answer_in_terminal_reason"] = _ANSWER_IN_TERMINAL
         # Per-instance identity (DEC-1786771513): stamp instance_id on a PERMISSION
         # menu so the iOS chat card can .id(instance_id) and reset its @State
         # armed/selected when a new same-question prompt replaces an answered one
@@ -5270,6 +5291,9 @@ async def handle_agent_key(request):
             return _json({"ok": False, "reason": "menu_gone"}, status=409)
         if _pm.get("kind") != "permission":          # respond answers permission prompts only
             return _json({"ok": False, "reason": "not_permission_prompt"}, status=400)
+        if _contextless_permission(_pm):
+            return _json({"ok": False, "reason": "answer_in_terminal", "error": _ANSWER_IN_TERMINAL},
+                         status=409)
         seen_ok, seen_reason = _could_have_seen(request, session, _pm, expect_key=_expect)
         if not seen_ok:
             return _json({"ok": False, "reason": seen_reason,
@@ -5428,6 +5452,9 @@ async def handle_agent_key(request):
                       "error": "no pending menu on screen",
                       "state": _STATE_MAP.get(st.get("state"), st.get("state"))
                       if isinstance(st, dict) else "unknown"},
+                     status=409)
+    if _contextless_permission(st["pending_menu"]):
+        return _json({"ok": False, "reason": "answer_in_terminal", "error": _ANSWER_IN_TERMINAL},
                      status=409)
 
     # Two-phase: first call (confirm absent/false) -> preview; second call
