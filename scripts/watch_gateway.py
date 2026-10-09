@@ -185,6 +185,9 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     # declared too, or it would 403 as "route declares no scope".
     ("GET", "/upload/{name}"): "read",
     ("HEAD", "/upload/{name}"): "read",
+    # --- code: a file from an allowlisted agent's working folder (scripts/agent_file.py) ---
+    ("GET", "/agent-file"): "code",
+    ("HEAD", "/agent-file"): "code",
 
     # --- inject: PRESSES KEYS IN A LIVE PANE ------------------------------------------
     ("POST", "/agent-key"): "inject",
@@ -4577,6 +4580,158 @@ async def _upload_get_response(request):
     return web.FileResponse(p, headers=headers)
 
 
+# ---------------------------------------------------------------------------
+# GET/HEAD /agent-file?seat=<seat>&path=<relative path>: one file from an agent's working folder, for
+# a paired device with the `code` scope. Every fence lives in scripts/agent_file.py; this handler adds
+# the transport rules: off until [code] roots are configured, never through Tailscale Funnel, a
+# per-device rate limit, one audit line per request (never file bytes, never a token), and a refusal
+# that never says whether a file exists or holds a secret (one 404 for every refusal). Only loopback and
+# tailnet peers are served; the legacy fleet bearer does not hold `code` (device tokens only).
+# ---------------------------------------------------------------------------
+AGENT_FILE_RATE_PER_MIN = int(os.environ.get("ORCHESTRA_AGENT_FILE_RATE", "60"))
+AGENT_FILE_AUDIT_MAX_BYTES = 5 * 1024 * 1024
+_agent_file_hits: dict = {}
+_code_roots_cache = {"path": None, "mtime": None, "roots": []}
+
+
+def _code_roots() -> list:
+    """[code] roots from the operator's orchestra.toml (ORCHESTRA_CONFIG). None configured -> []."""
+    cfg = os.environ.get("ORCHESTRA_CONFIG") or ""
+    try:
+        mtime = os.stat(cfg).st_mtime if cfg else None
+    except OSError:
+        mtime = None
+    if _code_roots_cache["path"] == cfg and _code_roots_cache["mtime"] == mtime:
+        return _code_roots_cache["roots"]
+    roots = []
+    if mtime is not None:
+        try:
+            import tomllib
+            with open(cfg, "rb") as fh:
+                raw = (tomllib.load(fh).get("code") or {}).get("roots") or []
+            roots = [str(r) for r in raw if isinstance(r, str) and r.strip()]
+        except Exception as e:  # noqa: BLE001 -- an unreadable config means no roots, never a crash
+            log.warning(f"agent-file: [code] roots unreadable: {e!r}")
+    _code_roots_cache.update(path=cfg, mtime=mtime, roots=roots)
+    return roots
+
+
+def _agent_file_rate_ok(device: str, now: float | None = None) -> bool:
+    import time as _t
+    now = _t.time() if now is None else now
+    hits = [t for t in _agent_file_hits.get(device, []) if now - t < 60.0]
+    if len(hits) >= AGENT_FILE_RATE_PER_MIN:
+        _agent_file_hits[device] = hits
+        return False
+    hits.append(now)
+    _agent_file_hits[device] = hits
+    return True
+
+
+# Belt to the Funnel header: a request served must come from this host or the tailnet. Tailscale
+# serve/funnel proxies arrive from loopback; direct tailnet peers from these ranges. LIMIT: behind a
+# reverse proxy (tailscale serve included) every request is from loopback, so this check cannot tell
+# a Funnel request from a tailnet one there; the Funnel header and listener separation (no public
+# entry targeting the gateway port) carry that case. See orchestra.example.toml [code].
+_AGENT_FILE_PEER_NETS = ("127.0.0.0/8", "::1/128", "100.64.0.0/10", "fd7a:115c:a1e0::/48")
+
+
+def _agent_file_peer(request) -> str:
+    return str(getattr(request, "remote", "") or "")
+
+
+def _agent_file_peer_ok(peer: str) -> bool:
+    import ipaddress
+    try:
+        ip = ipaddress.ip_address(peer.split("%", 1)[0])
+    except ValueError:
+        return False
+    if getattr(ip, "ipv4_mapped", None):
+        ip = ip.ipv4_mapped
+    return any(ip in ipaddress.ip_network(n) for n in _AGENT_FILE_PEER_NETS)
+
+
+def _agent_file_audit(rec: dict) -> None:
+    try:
+        d = _data_dir() / "logs"
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / "agent-file-audit.jsonl"
+        try:                                   # one rollover keeps growth bounded (~2 x the cap)
+            if path.stat().st_size > AGENT_FILE_AUDIT_MAX_BYTES:
+                os.replace(path, d / "agent-file-audit.jsonl.1")
+        except OSError:
+            pass
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a") as fh:
+            fh.write(json.dumps(rec) + "\n")
+    except OSError as e:
+        log.warning(f"agent-file audit write failed: {e!r}")
+
+
+def _agent_file_headers() -> dict:
+    return {"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox",
+            "Cache-Control": "private, no-store"}
+
+
+def _agent_file_device_hashes() -> frozenset:
+    try:
+        return frozenset(str(r.get("token_sha256") or "") for r in _device_store()._all() if r.get("token_sha256"))
+    except Exception:  # noqa: BLE001 -- the name and pattern checks still stand
+        return frozenset()
+
+
+async def handle_agent_file(request):
+    import asyncio
+    import time as _t
+    from aiohttp import web
+    import agent_file as AF
+    principal = request.get("principal") if hasattr(request, "get") else None
+    device = str((principal or {}).get("id") or "-")
+    seat = request.query.get("seat", "")
+    path = request.query.get("path", "")
+    rec = {"ts": round(_t.time(), 3), "device": device, "seat": seat[:128], "path": path[:AF.MAX_PATH_LEN],
+           "method": request.method}
+
+    def answer(status, reason, *, body=None, ctype=None, inline=False, name=None, n=0):
+        rec.update(status=status, reason=reason, bytes=n)
+        _agent_file_audit(rec)
+        headers = _agent_file_headers()
+        if body is None:
+            msg = {404: "not found", 429: "too many requests"}.get(status, "refused")
+            resp = _json({"ok": False, "error": msg}, status=status)
+            for k, v in headers.items():
+                resp.headers[k] = v
+            return resp
+        headers["Content-Type"] = ctype
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", name or "file")[:128]
+        headers["Content-Disposition"] = f'{"inline" if inline else "attachment"}; filename="{safe}"'
+        return web.Response(body=body, status=200, headers=headers)
+
+    if request.headers.get("Tailscale-Funnel-Request"):
+        return answer(404, "funnel")
+    if not _agent_file_peer_ok(_agent_file_peer(request)):
+        return answer(404, "peer-not-local-or-tailnet")
+    if not _agent_file_rate_ok(device):
+        return answer(429, "rate-limited")
+    try:
+        roots = _code_roots()
+        reg = _load_json(_data_dir() / "registry.json") or {}
+        entry = ((reg.get("agents") or {}) if isinstance(reg, dict) else {}).get(seat)
+        cwd = entry.get("cwd") if isinstance(entry, dict) else None
+        if not cwd:
+            raise AF.Refused("seat-not-registered")
+        root = AF.seat_root(cwd, roots, home=Path.home(), data_dir=_data_dir())
+        rel, data = await asyncio.to_thread(AF.read_file, root, path, fleet_token=gateway_token(),
+                                            device_hashes=_agent_file_device_hashes())
+    except AF.Refused as e:
+        # ONE answer for every refusal, a secret-shaped file included: a distinct status would hand the
+        # caller a list of the files that hold secrets (gm). The reason goes to the audit only.
+        return answer(404, e.reason)
+    rec["resolved"] = str(rel)[:AF.MAX_PATH_LEN]
+    ctype, inline = AF.content_type(data)
+    return answer(200, "ok", body=data, ctype=ctype, inline=inline, name=rel.name, n=len(data))
+
+
 async def handle_red_alert_report(request):
     if not _authorized(request):
         return _json({"ok": False, "error": "unauthorized"}, status=401)
@@ -6208,6 +6363,9 @@ async def handle_gateway_capabilities(request):
     # upload_fetch: GET/HEAD /upload/<name> exists. An app must work against a gateway that predates the
     # route, so it fetches only when this is advertised, else renders a chip.
     body["features"] = ["menu_submit", "push", "upload_fetch"]
+    # agent_file: GET /agent-file exists AND the operator has allowlisted at least one [code] root.
+    if _code_roots():
+        body["features"].append("agent_file")
     body["push"] = {"delivery": _push_delivery(), "bundle_ids": list(_push_bundle_ids())}
     body["menu_submit"] = {"armed": _menu_multipart_armed(),
                            "text_armed": _menu_submit_text_armed()}
@@ -6909,6 +7067,7 @@ def build_app():
     app.router.add_post("/menu-answer", handle_menu_answer)
     app.router.add_post("/menu-submit", handle_menu_submit)
     app.router.add_get("/agent-screen", handle_agent_screen)
+    app.router.add_get("/agent-file", handle_agent_file)          # + HEAD (aiohttp allow_head)
     app.router.add_get("/transcript", handle_transcript)
     app.router.add_post("/upload", handle_upload)
     app.router.add_get("/upload/{name}", handle_upload_get)   # + HEAD (aiohttp allow_head)

@@ -60,7 +60,15 @@ TOKEN_BYTES = 32
 #: minted today can carry it, and a later usage-read route does not cost every phone a re-pair
 #: (pairing codes are single-use, and a watch inherits its phone's token). It is not in
 #: HTTP_MINTABLE: like every verb added later, it is mintable only by the host CLI until decided.
-VERBS = ("read", "approve", "message", "inject", "ptt", "voice", "admin", "usage", "owner")
+#: `code` reads files in the working folders of agents whose roots the operator allowlisted
+#: (GET /agent-file). Separate from `read` on purpose: it reaches the filesystem, not the fleet's
+#: own records. Not in HTTP_MINTABLE: only the host CLI can grant it.
+VERBS = ("read", "approve", "message", "inject", "ptt", "voice", "admin", "usage", "owner", "code")
+
+#: Verbs the legacy fleet bearer ('*') does NOT get (gm ruling 2026-10-09): `code` reaches the
+#: filesystem, and the fleet bearer is the one credential pending rotation that once sat on public
+#: surfaces. Only a paired device token minted with the verb holds it. Revisit only after rotation.
+DEVICE_ONLY_VERBS = ("code",)
 
 #: The one remaining all-powerful credential. The fleet token resolves to this so Shaw's
 #: phone and watch keep working unchanged; it is NAMED in listings rather than hidden, so
@@ -248,7 +256,8 @@ class DeviceStore:
 def scopes_allow(scopes, needed: str | None) -> bool:
     """Does this scope set permit `needed`? `None` means a public route.
 
-    `'*'` is the legacy fleet token. Everything else must name the verb explicitly —
+    `'*'` is the legacy fleet token: every verb except DEVICE_ONLY_VERBS. Everything else must
+    name the verb explicitly —
     there is no implication between verbs (holding `inject` does not imply `read`),
     because an implication graph is a second policy nobody reviews."""
     if needed is None:
@@ -256,7 +265,7 @@ def scopes_allow(scopes, needed: str | None) -> bool:
     if not scopes:
         return False
     if "*" in scopes:
-        return True
+        return needed not in DEVICE_ONLY_VERBS
     return needed in scopes
 
 

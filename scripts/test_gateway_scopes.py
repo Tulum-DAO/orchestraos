@@ -288,11 +288,17 @@ def test_a_revoked_device_is_401_on_the_very_next_request(monkeypatch, tmp_path)
 
 
 def test_the_fleet_token_still_reaches_every_declared_route(monkeypatch, tmp_path):
-    """Back-compat for Shaw's phone and watch: no route regresses while he migrates."""
+    """Back-compat for the operator's phone and watch: no route regresses while they migrate. The one
+    exception is a DEVICE-ONLY verb (gm 2026-10-09: `code` reaches the filesystem, and the fleet bearer
+    is the credential pending rotation), which the fleet token is refused on."""
+    from scripts.device_tokens import DEVICE_ONLY_VERBS
     _with_store(monkeypatch, tmp_path, ["read"])
     hdr = {"Authorization": "Bearer fleet-token-value"}
     for (method, canonical), verb in G.ROUTE_SCOPES.items():
         resp, reached, _ = _call(method, canonical, hdr)
+        if verb in DEVICE_ONLY_VERBS:
+            assert not reached and resp.status == 403, f"fleet token reached device-only {method} {canonical}"
+            continue
         assert reached, f"fleet token was refused on {method} {canonical}"
         assert resp.status == 200
 

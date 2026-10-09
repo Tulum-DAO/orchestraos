@@ -117,6 +117,7 @@ def run_pair(args, settings=None, store=None, out=print, clear_after_s=60):
         out("  owner    this device is yours: its push-to-talk calls (with ptt) get Arturo's full tools, like the dashboard")
         out("  admin    file red-alert reports, post telemetry")
         out("  usage    nothing yet: reserved for reading usage later, so a device paired now needs no re-pair")
+        out("  code     open files in the working folders of agents you allowlisted ([code] roots), secrets refused")
         out("")
         out("  A read-only phone:   orchestra pair --scopes read")
         out("  A headset that approves:  orchestra pair --scopes read,approve,message")
