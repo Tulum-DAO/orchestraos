@@ -446,13 +446,15 @@ def test_a_held_lock_never_blocks_the_agent(dirs):
     # S3: another process holds the pane's lock; the hook must give up on calls/ and still exit fast.
     import fcntl
     ev, calls = dirs
-    calls.mkdir(parents=True, exist_ok=True)
+    _fire(_pre("toolu_RUNNING"))               # a background call already open and running
     with open(calls / "7.lock", "a") as lf:
         fcntl.flock(lf, fcntl.LOCK_EX)
         t0 = time.time()
         _fire(_pre("toolu_A"))
         assert time.time() - t0 < 3
     assert json.loads((ev / "7.json").read_text())["event"] == "PreToolUse"
+    # F1: the skipped PreToolUse is a lost call: the pane is unprovable, never resolved to another call
+    assert MI.read_open_calls("%7") == {}
 
 
 def _parsed(fixture):
@@ -485,7 +487,7 @@ def test_a_call_pruned_by_age_may_still_be_open_so_the_pane_is_unprovable(dirs):
     assert MI.read_open_calls("%7") == {}
 
 
-@pytest.mark.parametrize("source", ["startup", "resume"])
+@pytest.mark.parametrize("source", ["startup"])
 def test_a_new_process_loses_nothing_so_it_marks_nothing(dirs, source):
     # D2: a new CLI process has no background subagents: its predecessor's calls are dead, not lost.
     _, calls = dirs
@@ -495,10 +497,28 @@ def test_a_new_process_loses_nothing_so_it_marks_nothing(dirs, source):
     assert list(MI.read_open_calls("%7")) == ["toolu_A"]
 
 
-@pytest.mark.parametrize("source", ["compact", "clear"])
+@pytest.mark.parametrize("source", ["compact", "clear", "resume"])
 def test_a_compact_or_clear_with_open_calls_marks_the_pane(dirs, source):
+    # resume too: it is not proven that a /resume inside a running process ends its subagents' calls
     _, calls = dirs
     _fire(_pre("toolu_SUB"))
     _fire({"hook_event_name": "SessionStart", "source": source})
     _fire(_pre("toolu_A"))
+    assert MI.read_open_calls("%7") == {}
+
+
+def test_a_hook_write_that_fails_marks_the_pane(dirs, monkeypatch):
+    # F1: any exception that loses an update (a full disk at mkstemp) marks the pane.
+    _, calls = dirs
+    H = _hook_mod()
+    H.update_open_calls("%7", _pre("toolu_A"), "PreToolUse")
+    def boom(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(H.tempfile, "mkstemp", boom)
+    monkeypatch.setenv("TMUX_PANE", "%7")
+    monkeypatch.setattr(H.sys, "stdin", __import__("io").StringIO(json.dumps(_pre("toolu_B"))))
+    try:
+        H.main()
+    except OSError:
+        pass                                    # the panes write may fail too; the CLI wrapper exits 0
     assert MI.read_open_calls("%7") == {}
