@@ -181,6 +181,10 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     # --- message ---------------------------------------------------------------------
     ("POST", "/agent-message"): "message",
     ("POST", "/upload"): "message",
+    # Read a sent file back for chat previews. HEAD is its own method to the middleware, so it is
+    # declared too, or it would 403 as "route declares no scope".
+    ("GET", "/upload/{name}"): "read",
+    ("HEAD", "/upload/{name}"): "read",
 
     # --- inject: PRESSES KEYS IN A LIVE PANE ------------------------------------------
     ("POST", "/agent-key"): "inject",
@@ -4383,6 +4387,193 @@ async def _red_alert_api(method: str, path: str, body=None):
             return r.status, await r.json(content_type=None)
 
 
+# ---------------------------------------------------------------------------
+# GET/HEAD /upload/<name>: read a sent photo/video/file back so a chat can preview it (every surface
+# except the watch). Files only from <data>/state/uploads; the name must be the API's own generated
+# form. aiohttp's FileResponse gives Content-Length, HEAD, Range (206), ETag + Last-Modified and 304s.
+# The gateway can be Funnel-public, so nothing is ever served in a form a browser executes: only
+# image/video/audio go out inline (under a sandbox CSP + nosniff); every other kind (html, txt, pdf,
+# office, zip...) is an octet-stream attachment. Every answer, refusals included, carries those headers.
+# ?thumb=1: a JPEG, long edge <= 400 px (images: Pillow; video: an ffmpeg frame at ~1 s), cached in
+# state/upload-thumbs/, never in uploads/. No thumbnail possible -> 404, never a placeholder.
+# Same contract as the fleet gateway: route /upload/{name}, capability flag upload_fetch.
+# ---------------------------------------------------------------------------
+
+# Same grammar as the API's SAFE_UPLOAD_ID (api/src/routes/agent-send.ts): `<unix-seconds>_<base36>.<ext>`,
+# case-insensitive like the API. An allowlist, so '/', '..', NUL and every other surprise are refused
+# before the disk is touched. fullmatch: `$` alone also matches before a trailing newline.
+_UPLOAD_NAME_RE = re.compile(r"[0-9]{1,12}_[a-z0-9]{1,16}\.[a-z0-9]{1,8}", re.I)
+_UPLOAD_INLINE_TYPES = {
+    "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp",
+    "mp4": "video/mp4", "mov": "video/quicktime", "m4v": "video/x-m4v", "webm": "video/webm",
+    "m4a": "audio/mp4", "mp3": "audio/mpeg", "wav": "audio/wav",
+}
+_UPLOAD_IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
+_UPLOAD_VIDEO_EXTS = {"mp4", "mov", "m4v", "webm"}
+_UPLOAD_THUMB_EDGE = 400
+_upload_thumb_sem = None   # created lazily inside the running loop
+
+
+def _upload_headers():
+    return {"X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+            # A basename's bytes never change (the API names every upload freshly); private = behind auth.
+            "Cache-Control": "private, max-age=31536000, immutable"}
+
+
+def _upload_refusal(error: str, status: int):
+    """A refusal with the same sandbox + nosniff headers as a file; never cached."""
+    resp = _json({"ok": False, "error": error}, status=status)
+    for k, v in _upload_headers().items():
+        resp.headers[k] = v
+    resp.headers["Cache-Control"] = "private, no-store"
+    return resp
+
+
+def _upload_file(name: str):
+    """The file for an upload name, or None. Resolves INSIDE state/uploads and re-checks the parent, so a
+    symlink planted in uploads/ cannot point the read anywhere else."""
+    if not _UPLOAD_NAME_RE.fullmatch(name or ""):
+        return None
+    root = (_data_dir() / "state" / "uploads").resolve()
+    if (root / name).is_symlink():      # every symlink, even one aimed at another upload
+        return None
+    try:
+        p = (root / name).resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    if p.parent != root or not p.is_file():
+        return None
+    return p
+
+
+def _upload_sniff(p: Path):
+    """The inline Content-Type the file's BYTES prove, or None. The API keeps no stored type, so the type
+    comes from the bytes, never from the name alone. Measured on a real install: 48 of 72 .jpg uploads
+    were PNG bytes (devices send PNGs under .jpg), so an exact extension match would turn most photos
+    into downloads; the bytes decide the type, the extension only the family."""
+    try:
+        with open(p, "rb") as f:
+            h = f.read(16)
+    except OSError:
+        return None
+    if h.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if h.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if h.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if h[:4] == b"RIFF" and h[8:12] == b"WEBP":
+        return "image/webp"
+    if h[:4] == b"RIFF" and h[8:12] == b"WAVE":
+        return "audio/wav"
+    if h.startswith(b"\x1a\x45\xdf\xa3"):
+        return "video/webm"
+    if h[4:8] in (b"ftyp", b"moov", b"mdat", b"wide", b"free", b"skip"):   # ISO-BMFF / QuickTime
+        if h[4:8] == b"ftyp" and h[8:12].startswith((b"M4A", b"M4B")):
+            return "audio/mp4"
+        if h[4:8] == b"ftyp" and h[8:10] == b"qt":
+            return "video/quicktime"
+        return "video/mp4"
+    if h.startswith(b"ID3") or (len(h) > 1 and h[0] == 0xFF and (h[1] & 0xE0) == 0xE0):
+        return "audio/mpeg"
+    return None
+
+
+def _upload_inline_type(p: Path, ext: str):
+    """Inline only when the bytes prove a media type in the SAME family as the extension's allowlisted
+    type (image/video/audio); the response carries the sniffed type. Anything else -> None (attachment)."""
+    claimed = _UPLOAD_INLINE_TYPES.get(ext)
+    sniffed = _upload_sniff(p) if claimed else None
+    if not sniffed or sniffed.split("/")[0] != claimed.split("/")[0]:
+        return None
+    return sniffed
+
+
+def _make_upload_thumb(src: Path, out: Path) -> bool:
+    """Write a <=400 px JPEG for an image or a video poster frame. False when it cannot."""
+    ext = src.suffix.lower().lstrip(".")
+    tmp = out.with_name(out.name + f".{os.getpid()}.tmp")
+    try:
+        if ext in _UPLOAD_IMAGE_EXTS:
+            from PIL import Image, ImageOps
+            with Image.open(src) as im:          # DecompressionBombError on a hostile size -> except
+                im = ImageOps.exif_transpose(im)
+                im.thumbnail((_UPLOAD_THUMB_EDGE, _UPLOAD_THUMB_EDGE))
+                # No exif= argument: the thumbnail carries NO EXIF/GPS. A thumbnail is what gets cached and
+                # passed around; it must never say where a photo was taken.
+                im.convert("RGB").save(tmp, "JPEG", quality=80)
+        elif ext in _UPLOAD_VIDEO_EXTS:
+            import subprocess
+            scale = (f"scale='if(gt(iw,ih),{_UPLOAD_THUMB_EDGE},-2)':'if(gt(iw,ih),-2,{_UPLOAD_THUMB_EDGE})'")
+            for seek in ("1", "0"):              # a clip shorter than 1 s has no frame there
+                r = subprocess.run(["nice", "-n", "19", "ffmpeg", "-nostdin", "-loglevel", "error", "-y",
+                                    "-ss", seek, "-i", str(src), "-map_metadata", "-1", "-frames:v", "1", "-vf", scale,
+                                    "-f", "image2", "-c:v", "mjpeg", str(tmp)],
+                                   capture_output=True, timeout=30)
+                if r.returncode == 0 and tmp.exists() and tmp.stat().st_size > 0:
+                    break
+            else:
+                return False
+        else:
+            return False
+        os.replace(tmp, out)
+        return True
+    except Exception as e:  # noqa: BLE001 -- any decode/ffmpeg failure means "no thumbnail" = 404
+        log.info(f"upload thumb failed for {src.name}: {e!r}")
+        return False
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
+async def handle_upload_get(request):
+    """Logs every request: name, thumb, range, status, principal id. Never a header value."""
+    resp = await _upload_get_response(request)
+    principal = request.get("principal") if hasattr(request, "get") else None
+    log.info(f"upload-get {request.method} name={request.match_info.get('name', '')!r} "
+             f"thumb={request.query.get('thumb', '')!r} range={'yes' if request.headers.get('Range') else 'no'} "
+             f"status={resp.status} principal={(principal or {}).get('id', '-')}")
+    return resp
+
+
+async def _upload_get_response(request):
+    import asyncio
+    from aiohttp import web
+    p = _upload_file(request.match_info.get("name", ""))
+    if p is None:
+        return _upload_refusal("not found", 404)
+    if p.stat().st_size > UPLOAD_MAX_BYTES:      # nothing the API could have accepted
+        return _upload_refusal("file exceeds the upload cap", 413)
+    ext = p.suffix.lower().lstrip(".")
+    headers = _upload_headers()
+    if request.query.get("thumb") == "1":
+        global _upload_thumb_sem
+        thumbs = _data_dir() / "state" / "upload-thumbs"
+        out = thumbs / (p.name + ".jpg")
+        if not out.is_file():
+            if ext not in _UPLOAD_IMAGE_EXTS | _UPLOAD_VIDEO_EXTS:
+                return _upload_refusal("no thumbnail", 404)
+            thumbs.mkdir(parents=True, exist_ok=True)
+            if _upload_thumb_sem is None:
+                _upload_thumb_sem = asyncio.Semaphore(2)
+            async with _upload_thumb_sem:
+                ok = out.is_file() or await asyncio.to_thread(_make_upload_thumb, p, out)
+            if not ok:
+                return _upload_refusal("no thumbnail", 404)
+        headers["Content-Type"] = "image/jpeg"
+        return web.FileResponse(out, headers=headers)
+    ctype = _upload_inline_type(p, ext)
+    if ctype:
+        headers["Content-Type"] = ctype
+    else:
+        headers["Content-Type"] = "application/octet-stream"
+        headers["Content-Disposition"] = f'attachment; filename="{p.name}"'
+    return web.FileResponse(p, headers=headers)
+
+
 async def handle_red_alert_report(request):
     if not _authorized(request):
         return _json({"ok": False, "error": "unauthorized"}, status=401)
@@ -6011,7 +6202,9 @@ async def handle_gateway_capabilities(request):
         body["device"] = {"id": principal.get("id"), "label": principal.get("label")}
     body["verbs"] = list(_ALL_VERBS)
     # Additive feature flags: a client shows a control only when its route exists here.
-    body["features"] = ["menu_submit", "push"]
+    # upload_fetch: GET/HEAD /upload/<name> exists. An app must work against a gateway that predates the
+    # route, so it fetches only when this is advertised, else renders a chip.
+    body["features"] = ["menu_submit", "push", "upload_fetch"]
     body["push"] = {"delivery": _push_delivery(), "bundle_ids": list(_push_bundle_ids())}
     body["menu_submit"] = {"armed": _menu_multipart_armed(),
                            "text_armed": _menu_submit_text_armed()}
@@ -6715,6 +6908,7 @@ def build_app():
     app.router.add_get("/agent-screen", handle_agent_screen)
     app.router.add_get("/transcript", handle_transcript)
     app.router.add_post("/upload", handle_upload)
+    app.router.add_get("/upload/{name}", handle_upload_get)   # + HEAD (aiohttp allow_head)
     app.router.add_post("/red-alert/report", handle_red_alert_report)
     app.router.add_get("/red-alert/reports", handle_red_alert_reports)
     app.router.add_post("/arturo/ptt", handle_arturo_ptt)
