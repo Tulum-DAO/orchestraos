@@ -4,12 +4,13 @@
  */
 
 import { execFile } from 'child_process';
-import { join } from 'path';
 import { loadConfig } from '../lib/config.js';
-import { CODE_ROOT } from '../lib/codeRoot.js';
+import { capabilityPath, hasCapability } from '../lib/capabilities.js';
 
 const ORCHESTRA = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
-const SCRIPT = join(CODE_ROOT, 'scripts', 'log-interaction.py');   // code, not data (lib/codeRoot.ts)
+// The learning logger is optional (lib/capabilities.ts): absent => one notice, then a quiet no-op,
+// instead of a '[LEARNING] Log failed' ENOENT warning on every task and agent action.
+let learningAbsentNoted = false;
 
 interface QuickLogParams {
   channel: string;
@@ -42,7 +43,14 @@ export function logInteraction(params: QuickLogParams): void {
     correction_text: params.correctionText,
   });
 
-  execFile('python3', [SCRIPT, params.channel, params.userId, 'quick', data], {
+  if (!hasCapability('learningLog')) {
+    if (!learningAbsentNoted) {
+      learningAbsentNoted = true;
+      console.info('[LEARNING] interaction logging is not installed (scripts/log-interaction.py); skipping');
+    }
+    return;
+  }
+  execFile('python3', [capabilityPath('learningLog'), params.channel, params.userId, 'quick', data], {
     timeout: 5000,
     cwd: ORCHESTRA,
   }, (err, stdout, stderr) => {

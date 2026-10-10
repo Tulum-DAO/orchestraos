@@ -116,6 +116,7 @@ export const updateContext = (data: any) => patch('/memory/context', data);
 export const fetchRoadmaps = () => get('/roadmaps');
 export const fetchVoiceAgents = () => get('/voice/agents');
 export const syncVoicePrompts = () => post('/voice/sync-prompts');
+export const fetchCapabilities = () => get<Record<string, boolean>>('/capabilities');
 
 // Voice-call transcript for the [voice-call:] card. No-throw status passthrough
 // so the card can render stale/unavailable states: 200 {ok,call}; 404 gone;

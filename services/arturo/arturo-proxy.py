@@ -3650,7 +3650,12 @@ def execute_tool(name, args, user_turns=None):
 
         # Use dedicated jarvis-gm for voice/chat queries (doesn't block main GM)
         # Falls back to main GM via gm-converse.sh if jarvis-gm unavailable
-        gm_script = str(ORCHESTRA_DIR / "jarvis-gm-query.sh")
+        # jarvis-gm-query.sh is CODE (the checkout), never under ORCHESTRA_DIR (the DATA dir), and it does
+        # not ship in every install: absent => say so plainly instead of a "No such file" GM error (S4).
+        gm_script = str(Path(os.environ.get("ORCHESTRA_ROOT") or _REPO_ROOT) / "jarvis-gm-query.sh")
+        if not os.path.isfile(gm_script):
+            return ("The GM relay is not installed on this system (jarvis-gm-query.sh), so I can't pass this "
+                    "to the GM. Tell the operator that plainly; do not retry.")
         try:
             r = subprocess.run(
                 ["bash", gm_script, prompt, str(timeout)],

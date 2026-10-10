@@ -68,9 +68,13 @@ def _resolver():
 def _leak_lint(handoff, canary):
     """Run the calibrated leak lint; its CALIBRATION rides in the result so the
     grade artifact can tell 'clean' from 'blind' months later (spec A4)."""
-    r = subprocess.run([sys.executable,
-                        os.path.join(CODE, "scripts", "canary_leak_lint.py"),
-                        handoff, canary], capture_output=True, text=True)
+    lint = os.path.join(CODE, "scripts", "canary_leak_lint.py")
+    if not os.path.isfile(lint):
+        # Not shipped in every install. Say so: no leak was DETECTED, and no clean result either. The
+        # rubric fails H1 closed on a non-zero/None verdict + calibration_passed False (spec A4).
+        return {"leaking": None, "calibration_passed": False, "installed": False,
+                "raw": "canary_leak_lint.py is not installed in this checkout"}
+    r = subprocess.run([sys.executable, lint, handoff, canary], capture_output=True, text=True)
     clean = "0 leaking" in (r.stdout + r.stderr)
     return {"leaking": 0 if clean else 1,
             "calibration_passed": r.returncode in (0, 1),
