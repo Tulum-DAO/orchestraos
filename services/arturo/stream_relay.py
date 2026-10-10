@@ -730,10 +730,23 @@ class _Holder:
         if not self.ensure_socket():
             self._buffer_outage(pcm)
             return
+        frame = _encode_uplink(self.vendor, pcm)
+        sock = self.sock
         try:
-            self.sock.send(_encode_uplink(self.vendor, pcm))
+            sock.send(frame)
         except Exception:
-            self._on_socket_down()
+            with self._lock:
+                current = self.sock
+            if current is sock:
+                self._on_socket_down()
+            elif current is not None:
+                # the socket died and was REPLACED while this send was failing: the failure belongs to the
+                # dead socket, never to its replacement (soak 2026-10-10: one drop became two reconnects)
+                try:
+                    current.send(frame)
+                    return
+                except Exception:
+                    pass                 # the replacement's own reader owns its death
             self._buffer_outage(pcm)
 
     # -- agent_speaking boundary (spec @642abdd9; only when manager.speaking_enabled) --

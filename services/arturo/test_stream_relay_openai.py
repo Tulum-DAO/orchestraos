@@ -292,3 +292,26 @@ def test_user_first_words_are_never_lost_and_a_greeting_yields_to_them():
         assert got[0] == "Okay so what is gm doing", f"their first words were lost: {got[0]!r}"
     finally:
         m.shutdown()
+
+
+def test_a_stale_send_failure_never_retires_the_socket_that_replaced_it():
+    """Soak 2026-10-10 01:09 ET: after a socket died, the uplink send that was in flight on the DEAD socket failed
+    later (10 s timeout) and feed() retired whatever socket was CURRENT: the healthy replacement. One drop became
+    two reconnects. A send failure may only retire the socket it was sent on."""
+    m = _manager()
+    try:
+        s, h = _live(m)
+        s.push({"type": "session.started"})            # a healthy session (a frameless death trips the cooldown)
+        assert _wait(lambda: h._got_frame)
+
+        def send_after_replacement(payload):
+            h._retire_socket("socket_down", reconnect=True, detail="reader saw it first")
+            assert _wait(lambda: h.sock is not None and h.sock is not s)
+            raise ConnectionError("openai live: socket closed")
+        s.send = send_after_replacement
+        m.feed_audio("o1", b"\x00" * 3200)
+        time.sleep(0.3)
+        assert len(m._t) == 2, f"the replacement socket was retired too: {len(m._t)} sockets opened"
+        assert h.sock is m._t[1] and not m._t[1].closed
+    finally:
+        m.shutdown()

@@ -135,3 +135,23 @@ def test_connect_passes_the_auth_header_on_old_and_new_websockets(monkeypatch, a
     monkeypatch.setitem(__import__("sys").modules, "websockets", types.SimpleNamespace(connect=connect))
     assert asyncio.run(ol._ws_connect("wss://x", {"Authorization": "Bearer k"})) == "ws"
     assert got == {"url": "wss://x", "headers": {"Authorization": "Bearer k"}}
+
+
+def test_socket_facade_fails_fast_once_the_server_has_closed():
+    """Soak 2026-10-10 01:09 ET: after the vendor closed the socket the event loop had stopped, so send() waited out
+    its 10 s timeout (stalling the uplink) and close() its 5 s, on coroutines that were never run."""
+    import time
+    fake = _FakeWs()
+
+    async def connect(url, headers):
+        return fake
+    s = ol.AsyncWsSocket("wss://x", {}, connect=connect)
+    asyncio.run_coroutine_threadsafe(fake.inbox.put(None), s._loop).result(2)      # the server ends the stream
+    with pytest.raises(ConnectionError):
+        s.recv()
+    s._thread.join(2)
+    t = time.time()
+    with pytest.raises(ConnectionError):
+        s.send('{"a":1}')
+    s.close()
+    assert time.time() - t < 0.5, f"send+close on a dead socket took {time.time() - t:.1f} s"

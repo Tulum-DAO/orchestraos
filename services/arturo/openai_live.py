@@ -15,6 +15,7 @@ vendor is listed unavailable and the socket factory refuses; nothing falls back 
 """
 import asyncio
 import base64
+import concurrent.futures
 import json
 import os
 import queue
@@ -108,6 +109,7 @@ class AsyncWsSocket:
         self._ws = None
         self._ready = threading.Event()
         self._err = None
+        self._done = threading.Event()               # set when the event loop's stream has ended
         self._connect = connect
         self._thread = threading.Thread(target=self._run, args=(url, headers), daemon=True, name="openai-live-ws")
         self._thread.start()
@@ -138,13 +140,31 @@ class AsyncWsSocket:
         except Exception:
             pass
         finally:
+            self._done.set()
             self._q.put(self._CLOSED)
+
+    def _run_on_loop(self, make_coro, timeout):
+        """Run a coroutine on the socket's loop. Once the stream has ended the loop stops, and a coroutine handed to
+        it would never run: fail FAST (soak 2026-10-10: send waited 10 s and close 5 s on a dead socket)."""
+        if self._done.is_set():
+            raise ConnectionError("openai live: socket closed")
+        fut = asyncio.run_coroutine_threadsafe(make_coro(), self._loop)
+        waited = 0.0
+        while True:
+            try:
+                return fut.result(timeout=0.05)
+            except concurrent.futures.TimeoutError:
+                waited += 0.05
+                if self._done.is_set() and not fut.done():
+                    fut.cancel()
+                    raise ConnectionError("openai live: socket closed") from None
+                if waited >= timeout:
+                    raise
 
     def send(self, payload):
         if self._ws is None:
             raise ConnectionError("openai live: not connected")
-        fut = asyncio.run_coroutine_threadsafe(self._ws.send(payload), self._loop)
-        fut.result(timeout=10)
+        self._run_on_loop(lambda: self._ws.send(payload), 10)
 
     def recv(self):
         m = self._q.get()
@@ -157,8 +177,8 @@ class AsyncWsSocket:
         ws = self._ws
         if ws is not None:
             try:
-                asyncio.run_coroutine_threadsafe(ws.close(), self._loop).result(timeout=5)
-            except Exception:
+                self._run_on_loop(ws.close, 5)
+            except Exception:  # noqa: BLE001 — closing an already-dead socket is a no-op
                 pass
         self._q.put(self._CLOSED)
 
