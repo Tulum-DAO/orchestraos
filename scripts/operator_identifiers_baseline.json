@@ -62,12 +62,6 @@
       "rule": "city-clock"
     },
     {
-      "key": "docs/RELEASE_CHECKLIST.md::home-path::/home/shaw",
-      "path": "docs/RELEASE_CHECKLIST.md",
-      "reason": "pre-existing at gate introduction",
-      "rule": "home-path"
-    },
-    {
       "key": "docs/decks/4-decisions-reach-a-human.md::city-clock::20:03 Tulum",
       "path": "docs/decks/4-decisions-reach-a-human.md",
       "reason": "pre-existing at gate introduction",

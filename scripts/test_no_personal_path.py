@@ -117,3 +117,34 @@ def test_a_script_run_as_a_file_finds_the_one_default(rel, tmp_path):
                        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr[-1500:]
     assert r.stdout.strip().splitlines()[-1] == str(tmp_path / "configured")
+
+
+# ---- every module that uses the one default must still IMPORT ------------------------------------
+# The S5 edit inserted a sys.path block + import into ~55 files. Five of them (scripts/continuity/*) bound
+# `sys` as `_sys`, so the block raised NameError at import, and no existing test imports them: the suite
+# stayed green over modules that could not load. This imports every one, fresh, the way it is run.
+
+_PACKAGES = ("orchestra_cli/", "services/", "scripts/lineage_daemon/", "scripts/identity_store/",
+             "scripts/continuity/", "scripts/lineage_gate/", "scripts/focus_registry/")
+
+
+def _uses_default():
+    out = subprocess.run(["git", "grep", "-l", "-F", "_data_dir", "--", "*.py"], cwd=ROOT,
+                         capture_output=True, text=True).stdout.split()
+    return [p for p in out if not _exempt(p)]
+
+
+@pytest.mark.parametrize("rel", _uses_default())
+def test_module_using_the_default_imports(rel, tmp_path):
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "ORCHESTRA_ROOT", "ORCH_DIR")}
+    env["ORCHESTRA_DIR"] = str(tmp_path)              # an EMPTY data dir
+    if rel.startswith(_PACKAGES) and "-" not in rel.rsplit("/", 1)[-1]:
+        mod = rel[:-3].replace("/", ".")
+        code = f"import sys; sys.path.insert(0, {str(ROOT)!r}); import {mod}"
+    else:                                             # a standalone script, loaded by file
+        code = ("import importlib.util as u, sys; sys.argv = ['x']\n"
+                f"s = u.spec_from_file_location('m', {str(ROOT / rel)!r}); m = u.module_from_spec(s)\n"
+                "sys.modules['m'] = m; s.loader.exec_module(m)")
+    r = subprocess.run([sys.executable, "-c", code], cwd=str(tmp_path), env=env,
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, f"{rel} does not import:\n{r.stderr[-1200:]}"

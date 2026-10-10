@@ -30,12 +30,9 @@ seams are the real executors + a real approval gate + a real park-idle re-check.
 
 import re
 
-import sys
-# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
-# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
-if os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) not in sys.path:
-    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+# The ONE data-dir default (data-dir sweep S5). This module is imported as a package from the checkout
+# root (scripts.lineage_daemon.execute), so orchestra_cli is already importable.
+from orchestra_cli.settings import data_dir as _data_dir
 
 
 
