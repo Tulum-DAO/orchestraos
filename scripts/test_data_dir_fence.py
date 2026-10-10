@@ -132,3 +132,46 @@ def test_seats_registry_write_refuses_the_real_install(real, monkeypatch):
     with pytest.raises(S.RealDataDirWrite, match="registry.json"):
         seats.register_seat(st, "helper-a", gm=False, runtime="claude", model=None, tier=None, prompt=None)
     assert (real / "registry.json").read_text() == '{"agents": {}}'
+
+
+# ---- the snapshot guard in scripts/conftest.py: seats coming or going; edits are the store fence's ---
+
+def _scripts_conftest(monkeypatch, real):
+    guard = _load("scripts_conftest_fence", "scripts/conftest.py")
+    monkeypatch.setattr(guard, "_PROD_REGISTRIES", [real / "registry.json"])
+    return guard
+
+
+def test_guard_is_red_when_a_test_removes_an_agent_key(real, monkeypatch):
+    (real / "registry.json").write_text('{"agents": {"real-seat": {}, "other": {}}}')
+    guard = _scripts_conftest(monkeypatch, real)
+    before = guard._seats_snapshot()
+    (real / "registry.json").write_text('{"agents": {"real-seat": {}}}')
+    assert guard._seat_changes(before, guard._seats_snapshot()) == {
+        f"{real / 'registry.json'} agents removed": ["other"]}
+
+
+def test_guard_is_red_when_a_test_adds_an_agent_key_or_a_seat_dir(real, monkeypatch):
+    (real / "memory" / "real-seat").mkdir(parents=True)
+    guard = _scripts_conftest(monkeypatch, real)
+    before = guard._seats_snapshot()
+    (real / "registry.json").write_text('{"agents": {"helper-a": {}}}')
+    (real / "memory" / "real-seat").rmdir()
+    (real / "memory" / "helper-a").mkdir()
+    assert guard._seat_changes(before, guard._seats_snapshot()) == {
+        f"{real / 'memory'} seat dirs added": ["helper-a"],
+        f"{real / 'memory'} seat dirs removed": ["real-seat"],
+        f"{real / 'registry.json'} agents added": ["helper-a"]}
+
+
+def test_an_in_place_edit_is_not_the_snapshot_s_job_the_store_fence_refuses_it(real, monkeypatch):
+    (real / "registry.json").write_text('{"agents": {"real-seat": {"runtime": "claude"}}}')
+    guard = _scripts_conftest(monkeypatch, real)
+    before = guard._seats_snapshot()
+    from orchestra_cli import seats
+    st = S.load_settings()
+    monkeypatch.setattr(st, "data_dir", real)
+    with pytest.raises(S.RealDataDirWrite, match="registry.json"):
+        seats.register_seat(st, "real-seat", gm=False, runtime="codex", model=None, tier=None, prompt=None)
+    assert (real / "registry.json").read_text() == '{"agents": {"real-seat": {"runtime": "claude"}}}'
+    assert guard._seat_changes(before, guard._seats_snapshot()) == {}
