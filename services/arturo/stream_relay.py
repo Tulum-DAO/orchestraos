@@ -892,6 +892,16 @@ class _Holder:
                     log.info(f"relay {self.cid}: TURN-LATENCY final->first_audio="
                              f"{self._span_t0 - self._final_at:.2f}s")
                     self._final_at = None
+                # AUDIBLE-LATENCY (gm audit 2026-10-09 #6): Hume's CLM request reaching us -> the first
+                # reply audio, both on this box's clock. TURN-LATENCY reads ~0 because Hume sends the
+                # user final together with the reply; this is the server-side span the operator waits through
+                # (minus Hume's end-of-turn wait and the device leg). Once per streamed reply.
+                with self._rec_lock:
+                    _r = self._rec
+                    if _r and not _r.get("audible_logged") and self._span_t0 >= _r["t0"]:
+                        _r["audible_logged"] = True
+                        log.info(f"relay {self.cid}: AUDIBLE-LATENCY request->first_audio="
+                                 f"{self._span_t0 - _r['t0']:.2f}s")
                 self._span_pcm += len(pcm)
                 self._play_until = max(self._play_until, time.time()) + len(pcm) / BYTES_PER_S
                 self._last_agent_audio_ts = time.time()

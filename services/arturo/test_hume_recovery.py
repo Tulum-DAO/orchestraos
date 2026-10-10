@@ -236,3 +236,22 @@ def test_repeat_stays_empty_for_a_stale_reply(monkeypatch, tmp_path):
         assert _post_same(mod, "CIDRR4") == ""
     finally:
         m.shutdown()
+
+
+def test_audible_latency_logged_once_per_reply(caplog):
+    import base64, logging, time as _t
+    from services.arturo.test_stream_relay_hume import _wav48
+    caplog.set_level(logging.INFO, logger="arturo-stream-relay")
+    m = _manager()
+    try:
+        s, h = _live(m)
+        m.note_clm_reply("h1", "hello", _t.time() - 1.5)
+        for i in range(2):
+            s.push({"type": "audio_output", "id": "a", "index": i, "data": base64.b64encode(_wav48()).decode()})
+        assert _wait(lambda: "AUDIBLE-LATENCY request->first_audio=" in caplog.text)
+        _t.sleep(0.2)
+        assert caplog.text.count("AUDIBLE-LATENCY") == 1
+        line = [r.getMessage() for r in caplog.records if "AUDIBLE-LATENCY" in r.getMessage()][0]
+        assert float(line.split("=")[1].rstrip("s")) >= 1.4
+    finally:
+        m.shutdown()
