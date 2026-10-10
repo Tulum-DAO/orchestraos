@@ -80,10 +80,13 @@ class EventBuffer:
         with self._lock:
             s = self._q.setdefault(conversation_id, {"events": [], "next": 1, "ts": time.time()})
             s["events"].append((s["next"], event))
+            s.setdefault("put_ts", {})[s["next"]] = time.time()   # POLL-LAG (log-only)
             s["next"] += 1
             s["ts"] = time.time()
             if len(s["events"]) > self.cap:
                 s["events"] = s["events"][-self.cap:]
+                lo = s["events"][0][0]
+                s["put_ts"] = {c: t for c, t in s["put_ts"].items() if c >= lo}
 
     def since(self, conversation_id, cursor=0):
         """(events_after_cursor, new_cursor)."""
@@ -122,6 +125,20 @@ class EventBuffer:
             used_bytes += size
             used_audio += 1 if is_audio else 0
         return [e2 for _, e2 in out], out[-1][0], False
+
+    def put_ts(self, conversation_id, cursor):
+        """When the event at `cursor` was put (POLL-LAG instrumentation), or None."""
+        with self._lock:
+            s = self._q.get(conversation_id)
+            return (s.get("put_ts") or {}).get(cursor) if s else None
+
+    def pending_audio(self, conversation_id, cursor):
+        """How many audio events are queued after `cursor` (POLL-LAG backlog depth)."""
+        with self._lock:
+            s = self._q.get(conversation_id)
+            if not s:
+                return 0
+            return sum(1 for c, e in s["events"] if c > cursor and e.get("type") == "audio")
 
     def drop(self, conversation_id):
         """Forget a conversation's events NOW (end-of-call hygiene: a reused client cid at

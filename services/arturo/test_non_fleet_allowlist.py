@@ -550,9 +550,10 @@ def test_a_refused_background_run_is_never_promised(P):
 
 
 def test_both_voice_escalations_check_the_result_before_speaking():
-    # the two places that speak a promise right after async_task (the gm_command guardrail and the
-    # can't-answer escalation) say it only through _promise_or_refusal
-    assert _SRC.count("_promise_or_refusal(") == 3                    # the definition + 2 call sites
+    # the places that speak a tool's promise right after dispatching background work (the gm_command
+    # guardrail, the can't-answer escalation, and FAST-ACK for deep_query/ask_gm) say it only through
+    # _promise_or_refusal, so a refused tool is never read out as its "NOT RUN" text
+    assert _SRC.count("_promise_or_refusal(") == 4                    # the definition + 3 call sites
     assert 'yield make_sse_chunk("On it, I\'ll text you' not in _SRC
     assert "yield make_sse_chunk(\"That's a deeper one" not in _SRC
 

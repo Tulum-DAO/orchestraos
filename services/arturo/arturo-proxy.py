@@ -187,6 +187,30 @@ _INJECT_ASYNC = True
 # execute_tool.
 import contextvars as _contextvars
 _TOOLS_THIS_TURN = _contextvars.ContextVar("arturo_tools_this_turn", default=None)
+# VOICE-RESULTS (gm msg_b0b4228c): the live relay conversation this CLM turn belongs to, so an
+# async result can be spoken back into the same call. None = not a live relay call.
+_RELAY_CID_THIS_TURN = _contextvars.ContextVar("arturo_relay_cid_this_turn", default=None)
+_VOICE_RESULTS = None
+
+
+def _voice_results_on():
+    return os.environ.get("ARTURO_VOICE_RESULTS", "0") == "1"
+
+
+def _voice_results():
+    global _VOICE_RESULTS
+    if _VOICE_RESULTS is None and _STREAM_RELAY is not None:
+        from services.arturo import voice_delivery as _vd
+        _VOICE_RESULTS = _vd.VoiceResultDelivery(_STREAM_RELAY)
+    return _VOICE_RESULTS
+
+
+def _async_ack(default_line):
+    """Honest about where the answer comes from: by voice if the call is still live when it
+    lands, else Telegram. Flag off = the existing Telegram-only line, byte-identical."""
+    if _voice_results_on() and _RELAY_CID_THIS_TURN.get():
+        return "On it. I'll tell you as soon as it's back, or text you if we've hung up."
+    return default_line
 # Seats CREATED during this turn. The seat id is known only inside the spawn tool, and the
 # surfaces need it to offer a way into the new agent (the operator, 2026-09-22). Only the verified
 # success path records, so a FAILED spawn can never produce a link to nothing.
@@ -3504,15 +3528,19 @@ def execute_tool(name, args, user_turns=None):
         question = args.get("question", "")
         if not question:
             return "ERROR: deep_query called with an empty question."
-        _ok, _text = _dp.run_analyst(question)
-        if _ok:
-            return _text
+        # arturo-voice (gm msg_b0b4228c): 13/13 live runs never answered in-call (10 hit the
+        # 12s wall), so the sync analyst only bought ~15s of heartbeats before this same async
+        # fallback. Default skips it; ARTURO_DEEP_QUERY_SYNC=1 restores tier 2.
+        if os.environ.get("ARTURO_DEEP_QUERY_SYNC", "0") == "1":
+            _ok, _text = _dp.run_analyst(question)
+            if _ok:
+                return _text
         _dispatch_guarded("async_task", {
             "tool_name": "gm_command",
             "tool_args": {"prompt": question, "timeout": 120},
             "summary": f"Deep dive: {question[:80]}",
         })
-        return _dp.SPOKEN_DEEP_FALLBACK
+        return _async_ack(_dp.SPOKEN_DEEP_FALLBACK)
 
     elif name == "ask_gm":
         # P1b Tier 3 (D3): thin alias over the hardened async_task(gm_command) pipeline —
@@ -3527,7 +3555,7 @@ def execute_tool(name, args, user_turns=None):
             "tool_args": {"prompt": request, "timeout": 120},
             "summary": args.get("summary") or request[:80],
         })
-        return _dp.SPOKEN_ASK_GM_ACK
+        return _async_ack(_dp.SPOKEN_ASK_GM_ACK)
 
     elif name == "gm_command":
         prompt = args.get("prompt", "")
@@ -3747,6 +3775,10 @@ def execute_tool(name, args, user_turns=None):
             return "No tool_name provided."
 
         import threading
+        _vr_cid = _RELAY_CID_THIS_TURN.get() if _voice_results_on() else None
+        _vr_tok = None
+        if _vr_cid and _voice_results() is not None:
+            _vr_tok = _voice_results().started(_vr_cid, summary)
         def _run_async():
             # VQ-4 verify-after-inject: the async result MUST actually LAND on Telegram. The old
             # path used raw requests.post with `except: pass` — a failed send was swallowed, so
@@ -3778,9 +3810,19 @@ def execute_tool(name, args, user_turns=None):
                 _low = (result or "").strip().lower()
                 _is_err = _low.startswith(("gm error", "gm timed out", "error", "blocked", "❌", "no response"))
                 mark = "\u274c" if _is_err else "\u2705"
-                _deliver(f"{mark} {summary}\n\n{(result or '')[:1500]}")
+                _tg_text = f"{mark} {summary}\n\n{(result or '')[:1500]}"
+                _vr = _voice_results() if (_vr_cid and not _is_err) else None
+                if _vr is not None:
+                    # VOICE-RESULTS: spoken into the live call if the gates allow; the queue
+                    # calls the Telegram fallback itself (call ended / stale / too long).
+                    _vr.submit(_vr_cid, summary, result or "", lambda: _deliver(_tg_text))
+                else:
+                    _deliver(_tg_text)
             except Exception as e:
                 _deliver(f"\u274c {summary}\n\nFailed: {e}")
+            finally:
+                if _vr_tok is not None:
+                    _voice_results().finished(_vr_cid, _vr_tok)
 
         # Under this turn's context, so the task keeps the turn's principal: a thread starts with an
         # empty context, and an empty context is a non-fleet turn.
@@ -4804,6 +4846,34 @@ def chat_completions():
                     context += "\n\n" + _rb
         except Exception as _rbe:
             log.error(f"stream-relay replay seam error (non-fatal): {_rbe}")
+    # SUPERSEDE (arturo-voice, watch call vc_1114f6e34c65c245): Hume ended the operator's turn on a
+    # mid-thought pause, we answered the fragment, then the full final arrived with the
+    # fragment + our answer dropped from Hume's window. Answer the full final ONCE, as a
+    # continuation: the fragment's answer was already spoken and cannot be recalled, so the
+    # model must know it, or it repeats itself and redoes the fragment's tool calls.
+    if _is_hume_clm and _conv_id:
+        try:
+            _ext = _ANSWERED_FINALS.answered_extension(
+                _conv_id, _voice_guards.latest_user_text(messages))
+            if _ext:
+                log.warning(f"SUPERSEDE: latest final on {_conv_id} extends an answered fragment "
+                            "— answering once as a continuation")
+                context += (
+                    "\n\n--- SUPERSEDED TURN ---\nthe operator was cut off mid-sentence and you already "
+                    f"replied to the fragment (\"{_ext['text'][:400]}\") with: \"{_ext['reply'][:600]}\". "
+                    "Their latest message is the COMPLETE thought. Answer it once, building on what "
+                    "you already said. Do not repeat it, and do not redo any action you already took.")
+        except Exception as _sxe:
+            log.error(f"supersede seam error (non-fatal): {_sxe}")
+    if _STREAM_RELAY is not None and _voice_results_on():
+        try:
+            _vr_live = _STREAM_RELAY.resolve(_conv_id) if _conv_id else None
+            _RELAY_CID_THIS_TURN.set(_vr_live)
+            _vr_note = _voice_results().context_note(_vr_live) if _vr_live else ""
+            if _vr_note:
+                context += "\n\n" + _vr_note
+        except Exception as _vre:
+            log.error(f"voice-results cid seam error (non-fatal): {_vre}")
     # Last, after every preamble seam above (semantic recall, facts recall, stream-relay replay), so
     # the per-turn instruction is the most recent thing in the context and no later seam buries it.
     if _carried:
@@ -5160,6 +5230,24 @@ def chat_completions():
                         active_tools = [t for t in _bound_tools() if t["function"]["name"] not in
                                         ({"async_task"} if voice_pass1 else set())]
 
+                    # FAST-ACK (arturo-voice, gm msg_b0b4228c: "acknowledge the request immediately"): a
+                    # round that ONLY dispatched background work has nothing for a second model pass to
+                    # add; speak the tool's own first-person ack now and end the turn.
+                    if (_voice_results_on() and tool_round == 0
+                            and all(n in ("deep_query", "ask_gm") for n in tool_names)
+                            and tool_results and tool_results[0]["content"]
+                            and not tool_results[0]["content"].startswith("ERROR")):
+                        # a refused background tool is never read out as its "NOT RUN" text
+                        full = _promise_or_refusal(tool_results[0]["content"], tool_results[0]["content"])
+                        yield make_sse_chunk(full)
+                        log.info(f"FAST-ACK: {tool_names} dispatched — spoke the ack, skipped follow-up round")
+                        _log_voice_turn(
+                            user_msg=_user_msg, assistant_msg=full[:500],
+                            tool_calls=all_tool_calls_log, tool_results=all_tool_results_log,
+                            finish_reason="fast_ack",
+                        )
+                        break
+
                     # Ask model: do you need more tools, or are you ready to answer?
                     followup_resp = _turn_brain().complete(
                         model=LLM_MODEL,
@@ -5387,7 +5475,8 @@ def chat_completions():
                     # an identical re-final on this cid is a vendor retry, not a re-ask.
                     try:
                         _ANSWERED_FINALS.record_answered(
-                            _conv_id, _voice_guards.latest_user_text(messages))
+                            _conv_id, _voice_guards.latest_user_text(messages),
+                            reply=_voice_guards.strip_tool_code("".join(spoken))[:600])
                     except Exception as _afe:
                         log.error(f"answered-final record error: {_afe}")
 
@@ -5584,6 +5673,21 @@ if _STREAM_RELAY is not None:
         body = {"ok": True, "events": events, "cursor": new_cursor}
         if more:
             body["more"] = True
+        # POLL-LAG (ios-watch-dev msg_b22a71d8, log-only): how long the OLDEST event in an
+        # audio-carrying page sat in the buffer before this poll served it. Summarised per
+        # call at end() — the half of the operator's wait the device cannot see.
+        # The backlog depth at serve time is recorded with each lag so the end-of-call summary
+        # can test ios-watch-dev's prediction (msg_061b3fb6): with 8 audio events per page and a
+        # serial poller, lag should GROW with depth if the cap matters, stay flat if not.
+        try:
+            if any(e.get("type") == "audio" for e in events):
+                _pt = _STREAM_RELAY.buffer.put_ts(cid, cursor + 1)
+                _h = _STREAM_RELAY._holders.get(cid)
+                if _pt is not None and _h is not None:
+                    _h.poll_lags.append((time.time() - _pt,
+                                         _STREAM_RELAY.buffer.pending_audio(cid, cursor)))
+        except Exception as _ple:
+            log.error(f"poll-lag instrumentation error (non-fatal): {_ple}")
         return jsonify(body), 200
 
     @app.route("/ptt/stream/end", methods=["POST"])

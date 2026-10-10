@@ -375,3 +375,63 @@ def test_elevenlabs_default_unchanged_when_vendor_fn_says_elevenlabs():
         assert _wait(lambda: calls == ["e1"])
     finally:
         m.shutdown()
+
+
+def test_audio_span_logged_at_assistant_end_and_interruption(caplog):
+    # AUDIO-SPAN (gm msg_f0356ea9): log-only playback span per agent turn, so a mute tap or
+    # barge-in can be placed inside/outside Arturo's audio. audio_s = forwarded 16k PCM seconds.
+    import logging
+    caplog.set_level(logging.INFO, logger="arturo-stream-relay")
+    m = _manager()
+    try:
+        m.feed_audio("h1", b"\x00" * 10)
+        _wait(lambda: m._t)
+        s = m._t[0]
+        wav = base64.b64encode(_wav48()).decode()
+        s.push({"type": "audio_output", "id": "a", "index": 0, "data": wav})
+        s.push({"type": "audio_output", "id": "a", "index": 1, "data": wav})
+        s.push({"type": "assistant_end"})
+        assert _wait(lambda: "AUDIO-SPAN assistant_end" in caplog.text)
+        line = [r.getMessage() for r in caplog.records if "AUDIO-SPAN assistant_end" in r.getMessage()][0]
+        per = (int(48000 * 0.03) // 3) * 2
+        assert f"audio_s={2 * per / 32000:.2f}" in line and "start=-" not in line
+        s.push({"type": "audio_output", "id": "b", "index": 0, "data": wav})
+        s.push({"type": "user_interruption", "time": 3})
+        assert _wait(lambda: "AUDIO-SPAN user_interruption" in caplog.text)
+        line = [r.getMessage() for r in caplog.records if "AUDIO-SPAN user_interruption" in r.getMessage()][0]
+        assert "forwarded=True" in line and f"audio_s={per / 32000:.2f}" in line   # span reset per turn
+    finally:
+        m.shutdown()
+
+
+def test_turn_latency_and_poll_lag_logged(caplog):
+    # TURN-LATENCY / POLL-LAG (ios-watch-dev msg_b22a71d8): log-only. final -> first reply
+    # text and first reply audio per turn; per-call summary of audio wait in the buffer.
+    import logging
+    from services.arturo import ptt_stream
+    caplog.set_level(logging.INFO, logger="arturo-stream-relay")
+    m = _manager()
+    try:
+        m.feed_audio("h1", b"\x00" * 10)
+        _wait(lambda: m._t)
+        s = m._t[0]
+        s.push({"type": "user_message", "interim": False, "message": {"content": "how is the build"}})
+        s.push({"type": "assistant_message", "message": {"content": "It is green."}})
+        s.push({"type": "audio_output", "id": "a", "index": 0, "data": base64.b64encode(_wav48()).decode()})
+        assert _wait(lambda: "TURN-LATENCY final->first_audio=" in caplog.text)
+        assert "TURN-LATENCY final->first_text=" in caplog.text
+        s.push({"type": "audio_output", "id": "a", "index": 1, "data": base64.b64encode(_wav48()).decode()})
+        time.sleep(0.2)
+        assert caplog.text.count("TURN-LATENCY final->first_audio=") == 1, "once per turn"
+        m._holders["h1"].poll_lags.extend([(0.1, 2), (0.3, 5), (2.0, 20)])
+        m.end("h1")
+        assert "POLL-LAG audio polls n=3" in caplog.text
+        assert "by_depth p50 <=8:0.30s(n=2) >8:2.00s(n=1)" in caplog.text
+    finally:
+        m.shutdown()
+    b = ptt_stream.EventBuffer(cap=2)
+    b.put("c", {"type": "a"}); b.put("c", {"type": "b"}); b.put("c", {"type": "c"})
+    assert b.put_ts("c", 1) is None and b.put_ts("c", 3) is not None, "pruned with the cap"
+    b2 = ptt_stream.EventBuffer()
+    b2.put("d", {"type": "audio"}); b2.put("d", {"type": "agent_response"}); b2.put("d", {"type": "audio"})
+    assert b2.pending_audio("d", 0) == 2 and b2.pending_audio("d", 1) == 1

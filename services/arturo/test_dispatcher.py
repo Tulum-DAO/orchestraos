@@ -160,6 +160,41 @@ def test_tier2_degrade_to_tier3_spoken_line(monkeypatch, tmp_path):
     assert "gm" not in out.lower()
 
 
+
+def _deep_query_spies(monkeypatch, mod):
+    fired, analyst = [], []
+    orig = mod.execute_tool
+    def spy(name, args, user_turns=None):
+        if name == "async_task":
+            fired.append(args)
+            return "Task queued."
+        return orig(name, args, user_turns)
+    monkeypatch.setattr(mod, "execute_tool", spy)
+    monkeypatch.setattr(dp, "run_analyst", lambda *a, **k: analyst.append(a) or (False, ""))
+    return fired, analyst
+
+
+def test_deep_query_skips_sync_analyst_by_default(monkeypatch):
+    """arturo-voice (gm msg_b0b4228c): 13/13 live deep_query runs never answered in-call (10 hit
+    the 12s wall), so the operator sat through ~15s of heartbeats to reach the async fallback. Default:
+    go straight to async + the spoken line; the sync analyst never runs."""
+    monkeypatch.delenv("ARTURO_DEEP_QUERY_SYNC", raising=False)
+    mod = _load_proxy()
+    fired, analyst = _deep_query_spies(monkeypatch, mod)
+    out = mod.execute_tool("deep_query", {"question": "what is blocking listmagic"})
+    assert analyst == [], "sync analyst must not run when ARTURO_DEEP_QUERY_SYNC is unset"
+    assert fired and fired[0].get("tool_name") == "gm_command"
+    assert out == dp.SPOKEN_DEEP_FALLBACK
+
+
+def test_deep_query_sync_analyst_flag_restores_tier2(monkeypatch):
+    monkeypatch.setenv("ARTURO_DEEP_QUERY_SYNC", "1")
+    mod = _load_proxy()
+    fired, analyst = _deep_query_spies(monkeypatch, mod)
+    mod.execute_tool("deep_query", {"question": "what is blocking listmagic"})
+    assert len(analyst) == 1, "flag=1 must keep the tier-2 sync analyst"
+    assert fired, "and still degrade to async when it fails"
+
 # ---------- 6. concurrency: exactly one child ----------
 
 def test_concurrency_semaphore_limit(tmp_path):
