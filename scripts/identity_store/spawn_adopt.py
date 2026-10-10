@@ -72,8 +72,7 @@ def main(argv=None):
         try:
             import importlib.util
             q_spec = importlib.util.spec_from_file_location(
-                "quota_oracle", os.path.join(os.environ.get("ORCHESTRA_ROOT") or _ROOT,
-                                             "scripts", "quota_oracle.py"))   # CODE, not data
+                "quota_oracle", os.path.join(orch, "scripts", "quota_oracle.py"))
             q_mod = importlib.util.module_from_spec(q_spec)
             q_spec.loader.exec_module(q_mod)
             res_rt, res_md, _ = q_mod.resolve_adaptive_runtime(args.runtime, args.model, args.tier or "T2")
