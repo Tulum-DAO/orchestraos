@@ -363,12 +363,16 @@ def _runtime_harvest() -> dict:
     """Mechanical, best-effort, never fatal — agents contribute semantics,
     the machine harvests mechanics."""
     out = {}
+    # The RUNTIME line tells a successor which CODE it was running: the checkout's git, not the data
+    # dir's (which `orchestra init` makes its own repo for docs/memory/handoffs, always on main).
+    code_root = os.environ.get("ORCHESTRA_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
     try:
         out["head"] = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"], cwd=ORCHESTRA_DIR,
+            ["git", "rev-parse", "--short", "HEAD"], cwd=code_root,
             capture_output=True, text=True, timeout=5).stdout.strip()
         out["branch"] = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=ORCHESTRA_DIR,
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=code_root,
             capture_output=True, text=True, timeout=5).stdout.strip()
     except Exception:
         pass

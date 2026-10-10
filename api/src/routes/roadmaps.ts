@@ -1,8 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { join } from 'path';
-import { getRoadmaps } from '../services/state-reader.js';
-import { loadConfig } from '../lib/config.js';
+import { getRoadmaps, roadmapsFile } from '../services/state-reader.js';
 
 const router = Router();
 
@@ -77,7 +75,7 @@ router.patch('/:project/tasks/:phaseIndex/:taskIndex', (req: Request, res: Respo
   const taskIndex = req.params.taskIndex as string;
   const { deployment_state } = req.body;
 
-  const ROADMAPS_FILE = join(process.env.DASHBOARD_V4_DIR || join(loadConfig().dataDir, 'dashboard_v4'), 'roadmaps.json');
+  const ROADMAPS_FILE = roadmapsFile();   // the file the reader reads (services/state-reader.ts)
   if (!existsSync(ROADMAPS_FILE)) { res.status(404).json({ error: 'No roadmaps file' }); return; }
 
   const data = JSON.parse(readFileSync(ROADMAPS_FILE, 'utf-8'));

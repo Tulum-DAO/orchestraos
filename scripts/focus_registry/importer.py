@@ -13,9 +13,10 @@ from typing import Optional
 from scripts.focus_registry.parse import parse_audit
 from scripts.focus_registry.store import DEFAULT_STORE, import_focuses, load_store
 
-_ORCHESTRA_DIR = os.environ.get(
-    "ORCHESTRA_DIR", os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-)
+# FLEET_AUDIT_*.md reports are DATA: generated into the data dir's docs/ (versioned by `orchestra init`),
+# never shipped in the checkout. The env-less fallback used to be the checkout itself.
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402  (package import from the checkout root)
+_ORCHESTRA_DIR = os.environ.get("ORCHESTRA_DIR") or str(_data_dir())
 _DEFAULT_DOCS = os.path.join(_ORCHESTRA_DIR, "docs")
 _AUDIT_DATE_RE = re.compile(r"FLEET_AUDIT_(\d{4}-\d{2}-\d{2})\.md$")
 
