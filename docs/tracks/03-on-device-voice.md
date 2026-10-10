@@ -55,7 +55,8 @@ STT/TTS backend swaps.
 
 ## Files you will touch
 
-- `services/arturo/voice_vendor.py` — add `"local": []` to `REQUIRED`; update
+- `services/arturo/voice_vendor.py` — add `"local": []` to `REQUIRED` and a `VENDOR_COPY["local"]`
+  row (title + one-line subtitle: the picker's `vendors[]` copy comes from the server); update
   `get_vendor()` (or wherever the "refuse to select without creds" check lives) so
   `local` is always eligible and is the fallback when neither other vendor has
   creds.
