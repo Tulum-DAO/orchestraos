@@ -52,7 +52,7 @@ def test_hume_merely_slow_does_not_double():
         m.shutdown()
 
 
-def test_waits_while_shaw_speaks_and_only_latest_reply_is_recovered():
+def test_waits_while_the_operator_speaks_and_only_latest_reply_is_recovered():
     m = _manager()
     try:
         s, h = _live(m)
