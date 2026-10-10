@@ -43,6 +43,7 @@ def proxy(monkeypatch, tmp_path):
     from services.arturo import postcall_auth as pa
     monkeypatch.setattr(pa, "_secret", lambda k: "s3cret")
     monkeypatch.delenv("ARTURO_POSTCALL_AUTH", raising=False)
+    pa.reset_seen()
     return _Signed(mod.app.test_client()), calls
 
 
