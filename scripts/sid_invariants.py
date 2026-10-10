@@ -72,9 +72,14 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.abspath(__file__))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
 
 ORCH = Path(os.environ.get("SID_ORCH") or os.environ.get("ORCHESTRA_DIR")
-            or os.path.expanduser("~/orchestra"))
+            or str(_data_dir()))
 # CODE (scripts/, message-router.py) lives in the checkout, never under ORCH (the DATA dir)
 CODE_ROOT = Path(os.environ.get("ORCHESTRA_ROOT") or Path(__file__).resolve().parent.parent)
 PROJECTS_ROOT = Path(os.environ.get(

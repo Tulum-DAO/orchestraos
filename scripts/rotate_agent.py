@@ -25,10 +25,15 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.abspath(__file__))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
 
 # Setup paths
 ORCHESTRA_DIR = Path(os.environ.get(
-    "ORCHESTRA_DIR", os.path.expanduser("~/orchestra")))
+    "ORCHESTRA_DIR", str(_data_dir())))
 # CODE lives in the checkout (this file's parent's parent); ORCHESTRA_DIR is the DATA dir.
 CODE_ROOT = Path(os.environ.get("ORCHESTRA_ROOT") or Path(__file__).resolve().parent.parent)
 sys.path.insert(0, str(CODE_ROOT))
@@ -486,7 +491,7 @@ def ensure_canary_artifact(successor_alias: str, seat_name: str) -> Path:
             {
                 "id": "q2",
                 "question": "What is the first effect to execute upon seat promotion?",
-                "expected_answer": "python3 ~/orchestra/msg_store.py inbox"
+                "expected_answer": f"python3 {CODE_ROOT / 'msg_store.py'} inbox"   # msg_store.py lives in the checkout
             }
         ]
     }

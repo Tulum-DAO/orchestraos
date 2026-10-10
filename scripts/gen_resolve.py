@@ -18,6 +18,11 @@ Contract (consensus spec, agy+r-a-b folds):
 import os
 import sqlite3
 import sys
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.abspath(__file__))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
 
 
 def _default_alarm(msg: str) -> None:
@@ -45,7 +50,7 @@ def resolve_predecessor_generation(root, flat_value, *, orchestra_dir=None,
     fabricates (null-in-both => None — the CALLER owns fail-closed/refusal).
     """
     od = orchestra_dir or os.environ.get(
-        "ORCHESTRA_DIR", os.path.expanduser("~/orchestra"))
+        "ORCHESTRA_DIR", str(_data_dir()))
     dbp = os.path.join(str(od), "state", "orchestra-registry.db")
     db_gen = None
     if os.path.exists(dbp):

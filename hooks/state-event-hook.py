@@ -26,7 +26,18 @@ import sys
 import tempfile
 import time
 
-_DATA = os.environ.get("ORCHESTRA_DIR") or os.environ.get("ORCH_DIR") or os.path.expanduser("~/orchestra")
+
+def _default_data_dir():
+    """The install's data dir when no ORCHESTRA_DIR was baked into the hook command: the ONE default,
+    orchestra_cli.settings.data_dir (data-dir sweep S5), imported from this hook's checkout only then."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if root not in sys.path:
+        sys.path.append(root)
+    from orchestra_cli.settings import data_dir
+    return str(data_dir())
+
+
+_DATA = os.environ.get("ORCHESTRA_DIR") or os.environ.get("ORCH_DIR") or _default_data_dir()
 EVENTS_DIR = os.environ.get("ORCH_EVENTS_DIR", os.path.join(_DATA, "state", "agent-events", "panes"))
 
 CALLS_DIR = os.environ.get(

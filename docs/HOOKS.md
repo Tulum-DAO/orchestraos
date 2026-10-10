@@ -40,7 +40,7 @@ it they stay empty, and rotation falls back to reading the screen.
 ## Install / inspect by hand
 
 ```bash
-python3 hooks/install.py --data-dir ~/orchestra          # same thing orchestra init does
+python3 hooks/install.py --data-dir ~/.orchestra         # same thing orchestra init does
 python3 hooks/install.py --status                          # installed vs missing
 python3 hooks/install.py --remove                          # take out every #orchestraos-hook row and our status line
                                                            # (a chained one goes back exactly as it was), nothing else
