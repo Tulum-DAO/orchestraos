@@ -7,6 +7,7 @@ file:line. Fixed strings, not patterns: a marker either ships or it does not.
 """
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -60,6 +61,48 @@ def test_no_personal_marker_ships():
                 if m in line:
                     hits.append(f"{rel}:{i}: [{m}] {line.strip()[:120]}")
     assert not hits, "personal path / machine marker in shipped files:\n" + "\n".join(hits)
+
+
+# ---- the operator's own Hume account: custom voice name + ids (gm: "so it can't come back") -------------
+# Checked in EVERY tracked file, tests included: no fixture ever needs the real ones. Ids are fixed strings;
+# the voice name is a whole word, so ordinary words that merely contain it do not trip the lint.
+ACCOUNT_IDS = [bytes.fromhex(h).decode() for h in (
+    "36313032653432332d633763632d343465662d623365612d396239393462376365386634",   # pragma: allowlist secret (hex-encoded marker: Hume config id)
+    "34626332343536352d353234632d343639642d386235642d336366666433383430343361",   # pragma: allowlist secret (hex-encoded marker: Hume custom voice id)
+)]
+ACCOUNT_NAMES = [re.compile(r"\b" + re.escape(bytes.fromhex(h).decode()) + r"\b", re.I) for h in (
+    "4672616e6b",   # pragma: allowlist secret (hex-encoded marker: Hume custom voice name)
+)]
+ACCOUNT_EXEMPT = {"scripts/test_no_personal_path.py"} | EXEMPT_FILES
+
+
+def _account_hits(rel, text):
+    out = []
+    for i, line in enumerate(text.splitlines(), 1):
+        if any(x in line for x in ACCOUNT_IDS) or any(r.search(line) for r in ACCOUNT_NAMES):
+            out.append(f"{rel}:{i}: {line.strip()[:120]}")
+    return out
+
+
+def test_no_hume_account_identifier_ships_anywhere():
+    files = _tracked()
+    assert len(files) > 300, "git ls-files returned too little to be a real scan"
+    hits = []
+    for rel in files:
+        if rel in ACCOUNT_EXEMPT:
+            continue
+        try:
+            hits += _account_hits(rel, (ROOT / rel).read_text(errors="ignore"))
+        except (IsADirectoryError, FileNotFoundError):
+            continue
+    assert not hits, "the operator's Hume voice/config identifier in a tracked file:\n" + "\n".join(hits)
+
+
+def test_the_account_lint_bites():
+    name = bytes.fromhex("4672616e6b").decode()
+    assert _account_hits("x.json", f'"voice": "{name}"') and _account_hits("x.py", ACCOUNT_IDS[0])
+    assert _account_hits("x.py", name.lower() + " voice"), "case-insensitive"
+    assert not _account_hits("x.md", name + "furt " + name + "ly"), "whole word only"
 
 
 def test_the_lint_bites():
