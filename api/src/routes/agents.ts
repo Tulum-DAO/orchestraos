@@ -17,7 +17,7 @@ import { isCutoverActive, getCanonicalAgents, canonicalTmuxSession, getGeneratio
 import { buildCanonicalIndex, supersededBy, type CanonicalIndex } from '../services/rotation-leftovers.js';
 import { hierarchyFieldsFor } from './agentHierarchy.js';
 import { applyIdentityPrecedence, resolveMachineAndLiveness, discoverUnregistered, baseAgentId } from './agents-identity.js';
-import { loadConfig } from '../lib/config.js';
+import { loadConfig, dataDir } from '../lib/config.js';
 import { readGatewayToken } from '../lib/gateway-token.js';
 import { resolveSpecialKey } from '../lib/special-keys.js';
 import { actingAgent, principal } from '../lib/principal.js';
@@ -103,7 +103,7 @@ interface AgentEntry {
 
 // Load plain English agent descriptions for client-facing views
 function getAgentDescriptions(): Record<string, string> {
-  const descFile = join(process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra'), 'state', 'agent-descriptions.json');
+  const descFile = join(dataDir(), 'state', 'agent-descriptions.json');
   try { return JSON.parse(readFileSync(descFile, 'utf-8')); } catch { return {}; }
 }
 

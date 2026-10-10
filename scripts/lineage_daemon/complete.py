@@ -703,8 +703,9 @@ def build_completion_provider(*, orchestra_dir=None, sessions_meta=None,
       escalate_fn(canary,successor,ctx)   -> LOUD human surface (via first_escalation_gate).
       predecessor_live_fn(canary)  -> bool: predecessor still alive (assist routing)."""
     import os
+    from orchestra_cli.settings import data_dir as _data_dir   # the ONE data-dir default (S5)
     od = orchestra_dir or os.environ.get(
-        "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
+        "ORCHESTRA_DIR", str(_data_dir()))
     handoffs = os.path.join(od, "state", "agent-handoffs")
 
     def _sessions():

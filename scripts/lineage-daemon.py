@@ -27,6 +27,13 @@ import re
 import subprocess
 import sys
 
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.abspath(__file__))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
 # Put the worktree root on sys.path so `from scripts.lineage_daemon...`
 # resolves both when run directly and when loaded via importlib.
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -36,7 +43,7 @@ sys.path.insert(0, _ROOT)
 # worktree checkout carries a stale snapshot, so observing from it leaves the
 # jsonl/live-sid fallback blind. Read state from the canonical live dir
 # (READ-ONLY -- never written here), overridable via ORCHESTRA_DIR / test paths.
-_STATE_DIR = os.environ.get("ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
+_STATE_DIR = os.environ.get("ORCHESTRA_DIR", str(_data_dir()))
 
 from scripts.lineage_daemon.collect import collect_fleet
 from scripts.lineage_daemon.decide import decide

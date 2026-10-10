@@ -3,9 +3,10 @@ import { createHmac } from 'crypto';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { jwtSecret } from '../lib/shared-secret.js';
+import { dataDir } from '../lib/config.js';
 
 const router = Router();
-const ORCHESTRA = process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
+const ORCHESTRA = dataDir();
 const TENANTS_FILE = join(ORCHESTRA, 'state', 'tenants.json');
 const TOKEN_EXPIRY = 7 * 24 * 60 * 60;
 

@@ -29,7 +29,14 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from focus_registry.comprehension import check_comprehension  # noqa: E402
 
-ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra")))
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.abspath(__file__))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
+ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", str(_data_dir())))
 HANDOFFS_DIR = ORCHESTRA_DIR / "state" / "agent-handoffs"
 
 

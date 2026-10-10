@@ -6,11 +6,14 @@
 // ConfigError at first access, not a silent fallback to a guessed path.
 
 import { readFileSync, existsSync } from 'fs';
+import { homedir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import * as toml from 'toml';
 
-export class ConfigError extends Error {}
+export class ConfigError extends Error {
+  name = 'ConfigError';   // lib/configExit.ts turns an uncaught one into ONE plain line
+}
 
 export interface OrchestraConfig {
   dataDir: string;
@@ -80,14 +83,28 @@ function requireKey(table: any, keys: string[], section: string): any {
 
 let cached: OrchestraConfig | null = null;
 
+/** `~` / `~/x` -> the home dir, as the Python side does (os.path.expanduser); Node's join() would not. */
+function expandHome(p: string): string {
+  return p === '~' ? homedir() : p.startsWith('~/') ? join(homedir(), p.slice(2)) : p;
+}
+
+/**
+ * The install's DATA dir: $ORCHESTRA_DIR, else [data] dir in orchestra.toml (data-dir sweep S5). The
+ * ONE default for every route and service; there is no hard-coded fallback path. With neither, this
+ * throws ConfigError naming the missing file (one plain line at startup, lib/configExit.ts).
+ */
+export function dataDir(): string {
+  return process.env.ORCHESTRA_DIR || loadConfig().dataDir;
+}
+
 export function loadConfig(): OrchestraConfig {
   if (cached) return cached;
 
   const path = configPath();
   if (!existsSync(path)) {
     throw new ConfigError(
-      `No config found at ${path}. Copy orchestra.example.toml to orchestra.toml ` +
-        `(or set ORCHESTRA_CONFIG) before starting any OrchestraOS service.`
+      `No config found at ${path}. Run \`orchestra init\` to create it ` +
+        `(or set ORCHESTRA_CONFIG to an existing orchestra.toml).`
     );
   }
   const raw = toml.parse(readFileSync(path, 'utf-8'));
@@ -142,7 +159,7 @@ export function loadConfig(): OrchestraConfig {
   const rotation = raw.rotation || {};
 
   cached = {
-    dataDir: requireKey(raw, ['data', 'dir'], 'data') as string,
+    dataDir: expandHome(requireKey(raw, ['data', 'dir'], 'data') as string),
     gatewayHost: requireKey(raw, ['gateway', 'host'], 'gateway') as string,
     gatewayPort: Number(requireKey(raw, ['gateway', 'port'], 'gateway')),
     dashboardHost: requireKey(raw, ['dashboard', 'host'], 'dashboard') as string,

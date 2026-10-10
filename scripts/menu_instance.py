@@ -24,9 +24,17 @@ import subprocess
 import threading
 import time
 
+import sys
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.abspath(__file__))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
 # The same data dir the detector (agent-status.py) and the gateway read pane events from: `orchestra
 # up` sets ORCH_DIR for both; the calls/ files live next to the hook's panes/ files.
-ORCH_DIR = os.environ.get("ORCH_DIR") or os.environ.get("ORCHESTRA_DIR") or os.path.expanduser("~/scripts/agent-orchestra")
+ORCH_DIR = os.environ.get("ORCH_DIR") or os.environ.get("ORCHESTRA_DIR") or str(_data_dir())
 
 # The hook's open-call TTL: a call lost from the map can have been open this long at most.
 LOSSY_TTL_S = 1800

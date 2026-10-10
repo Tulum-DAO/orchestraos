@@ -38,8 +38,15 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.abspath(__file__))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
 # DATA dir (reports, logs, registry) — under `orchestra up` this is ORCHESTRA_DIR; code paths use CODE_ROOT.
-ORCH = os.environ.get("ORCHESTRA_DIR") or os.path.expanduser("~/scripts/agent-orchestra")
+ORCH = os.environ.get("ORCHESTRA_DIR") or str(_data_dir())
 CODE_ROOT = os.environ.get("ORCHESTRA_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 REPORTERS = ("user", "watchdog", "agent")

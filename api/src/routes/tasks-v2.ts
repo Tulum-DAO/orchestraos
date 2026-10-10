@@ -8,6 +8,7 @@ import { actingAgent, tenantScope } from '../lib/principal.js';
 import { tenantFilter, sortColumn } from '../lib/sqlScope.js';
 import { inboxDirFor, isSafeAgentId } from '../lib/agentPaths.js';
 import { routeTask, registeredAgents } from '../lib/taskRouting.js';
+import { dataDir } from '../lib/config.js';
 
 // ORDER BY cannot take a bound parameter: the column comes from this closed set (the real columns
 // of `tasks`); an unknown one is a 400. It used to be req.query.sort, raw. See lib/sqlScope.ts.
@@ -161,7 +162,7 @@ router.patch('/:id', (req: Request, res: Response) => {
     try {
       const { mkdirSync: mkd, writeFileSync: wf, existsSync: ex } = require('fs');
       const { join: jn } = require('path');
-      const oDir = process.env.ORCHESTRA_DIR || jn(process.env.HOME, 'scripts/agent-orchestra');
+      const oDir = dataDir();
       const inboxDir = inboxDirFor(oDir, task.created_by);   // throws on an unsafe id (caught below)
       if (!ex(inboxDir)) mkd(inboxDir, { recursive: true });
       wf(jn(inboxDir, `${Date.now()}_task_completed.json`), JSON.stringify({
@@ -182,7 +183,7 @@ router.patch('/:id', (req: Request, res: Response) => {
         const cohortTasks = queryDb("SELECT DISTINCT routed_to FROM tasks WHERE cohort_id=? AND routed_to IS NOT NULL", [task.cohort_id]);
         const { mkdirSync: mkd, writeFileSync: wf, existsSync: ex } = require('fs');
         const { join: jn } = require('path');
-        const oDir = process.env.ORCHESTRA_DIR || jn(process.env.HOME, 'scripts/agent-orchestra');
+        const oDir = dataDir();
         for (const ct of cohortTasks) {
           const inboxDir = inboxDirFor(oDir, ct.routed_to);   // throws on an unsafe id (caught below)
           if (!ex(inboxDir)) mkd(inboxDir, { recursive: true });

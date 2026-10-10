@@ -31,6 +31,13 @@ import sys
 import tempfile
 import time
 
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
 
 class _NoopSweep:
     """NEVER attaches pipe-panes fleet-wide; the shadow must not touch live wiring."""
@@ -90,7 +97,7 @@ def main(argv=None):
                     help="seconds of untimed warm-up (absorbs the cold full-history "
                          "mux re-tail the live daemon never pays)")
     ap.add_argument("--orchestra-dir",
-                    default=os.path.expanduser("~/scripts/agent-orchestra"))
+                    default=str(_data_dir()))
     ap.add_argument("--scratch", default=None)
     ap.add_argument("--idle-seat", default="pm-molevera",
                     help="a known-idle seat to confirm reads idle in the shadow")

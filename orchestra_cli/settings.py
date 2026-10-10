@@ -122,13 +122,37 @@ def resolve_data_dir(raw: dict | None, explicit: "Path | str | None" = None) -> 
     host that already has an OrchestraOS config without touching the operator's data dir."""
     env = os.environ.get("ORCHESTRA_DIR", "").strip()
     if explicit not in (None, "", "."):
-        chosen = str(explicit)
-    elif env:
-        chosen = env
-    else:
-        cfg = str(_get(raw or {}, "data", "dir", "") or "").strip()
-        chosen = cfg if cfg not in ("", ".") else DEFAULT_DATA_DIR
-    return Path(os.path.expanduser(chosen))
+        return Path(os.path.expanduser(str(explicit)))
+    if env:
+        return Path(os.path.expanduser(env))
+    return _configured_data_dir(raw)
+
+
+def _configured_data_dir(raw: dict | None) -> Path:
+    """[data] dir in orchestra.toml, else DEFAULT_DATA_DIR. No env involved."""
+    cfg = str(_get(raw or {}, "data", "dir", "") or "").strip()
+    return Path(os.path.expanduser(cfg if cfg not in ("", ".") else DEFAULT_DATA_DIR))
+
+
+def data_dir(include_env: bool = True) -> Path:
+    """The install's DATA dir: the ONE default every script and service falls back to (data-dir
+    sweep S5). Same order as resolve_data_dir: $ORCHESTRA_DIR, then $ORCH_DIR (DEPRECATED alias,
+    to be dropped in a later release), then [data] dir in orchestra.toml, then DEFAULT_DATA_DIR.
+    Read on every call, so a later env change or a test's monkeypatch is honoured.
+
+    include_env=False skips both env steps: the dir this checkout is CONFIGURED for, whatever the
+    process env says. Safety fences use it to name the real install a test must never touch."""
+    if include_env:
+        env = (os.environ.get("ORCHESTRA_DIR", "").strip()
+               or os.environ.get("ORCH_DIR", "").strip())
+        if env:
+            return Path(os.path.expanduser(env))
+    cfg = config_path_for(repo_root_from_env())
+    try:
+        raw = read_toml(cfg) if cfg.is_file() else {}
+    except (OSError, ValueError):
+        raw = {}                  # an unreadable toml is `orchestra doctor`'s to report, not a default's
+    return _configured_data_dir(raw)
 
 
 def load_settings(repo_root: Path | None = None, config_path: Path | None = None) -> Settings:

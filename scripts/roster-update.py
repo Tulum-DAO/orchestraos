@@ -65,7 +65,7 @@ def sid_for_pane(pane_pid, projdir):
 
     The old predicate — newest jsonl by mtime in the project dir — cross-attributed
     a co-located agent's sid whenever cwds are shared (which is the normal case in
-    ~/scripts/agent-orchestra): the roster carried the SUPERVISOR's sid on two
+    one checkout): the roster carried the SUPERVISOR's sid on two
     supervised agents' records. The roster is crash-recovery truth, so a wrong sid
     resumes someone else's session into a crashed pane.
 

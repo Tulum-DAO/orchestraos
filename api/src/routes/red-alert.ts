@@ -15,11 +15,11 @@ import { Router, type Request, type Response } from 'express';
 import { execFile } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { dataDir } from '../lib/config.js';
 
-const HOME = process.env.HOME || '';
 // DATA dir (reports land here) vs CODE root (the script lives here): under `orchestra up` they differ.
 // Clean-clone proof 2026-09-18 (gate7e): resolving the script under ORCHESTRA_DIR gave ENOENT.
-const ORCHESTRA_DIR = process.env.ORCHESTRA_DIR || join(HOME, 'scripts/agent-orchestra');
+const ORCHESTRA_DIR = dataDir();
 const CODE_ROOT = process.env.ORCHESTRA_ROOT || join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const RED_ALERT = join(CODE_ROOT, 'scripts', 'red_alert.py');
 

@@ -11,9 +11,10 @@ import { execFileSync } from 'child_process';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { CODE_ROOT } from '../lib/codeRoot.js';
+import { dataDir } from '../lib/config.js';
 
 const router = Router();
-const ORCHESTRA = process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
+const ORCHESTRA = dataDir();
 const DB_PATH = join(ORCHESTRA, 'state', 'tasks.db');
 const BUS = join(CODE_ROOT, 'message_bus.py');   // code, not data (lib/codeRoot.ts)
 

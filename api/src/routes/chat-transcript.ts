@@ -20,6 +20,7 @@ import Database from 'better-sqlite3';
 import { agentScopeParam } from '../lib/agent-scope.js';
 import { expandChipDodge } from '../lib/chipDodge.js';
 import { sessionOwners } from '../services/identity-store-reader.js';
+import { dataDir } from '../lib/config.js';
 
 const router = Router();
 // Every /:id route on this router is scoped to the caller's principal — the same rule GET /
@@ -28,7 +29,7 @@ const router = Router();
 router.param('id', agentScopeParam);
 
 const HOME = process.env.HOME || homedir();
-const ORCH_DIR = process.env.ORCHESTRA_DIR || join(HOME, 'scripts/agent-orchestra');
+const ORCH_DIR = dataDir();
 const CLAUDE_PROJECTS = join(HOME, '.claude', 'projects');
 const GEMINI_BRAIN = join(HOME, '.gemini', 'antigravity-cli', 'brain');
 

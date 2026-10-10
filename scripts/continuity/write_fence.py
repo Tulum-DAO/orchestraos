@@ -28,8 +28,15 @@ if _scripts_dbc not in _sys.path:
     _sys.path.insert(0, _scripts_dbc)
 import db_connect  # B1-thin: shared tasks.db connect (WAL + 30s busy_timeout)
 
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
 ORCHESTRA_DIR = Path(os.environ.get(
-    "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra")))
+    "ORCHESTRA_DIR", str(_data_dir())))
 DEFAULT_DB = str(ORCHESTRA_DIR / "state" / "tasks.db")
 KILL_SWITCH = Path(os.path.expanduser("~/runtime/CV4_WRITE_FENCE_DISABLED"))
 MODE = "shadow"   # {shadow, enforce}; Phase-0 is shadow-only, never enforce

@@ -7,7 +7,7 @@
 #
 # It can also be run manually: bash scripts/agent-recovery.sh [--dry-run]
 #
-# Cron safety: */5 * * * * bash ~/scripts/agent-orchestra/scripts/agent-recovery.sh --cron
+# Cron safety: */5 * * * * bash <checkout>/scripts/agent-recovery.sh --cron
 #   In --cron mode, only recovers agents that have been dead < 30 min
 #   (prevents respawning agents that were intentionally killed)
 
@@ -116,7 +116,7 @@ record_attempt_or_quarantine() {
         if [ -n "$TG_TOKEN" ] && [ -n "$TG_ID" ]; then
             curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
                 -d chat_id="$TG_ID" \
-                --data-urlencode "text=🚧 QUARANTINED: $agent_id crashed $count times in the last hour. Auto-recovery stopped. Release: rm ~/scripts/agent-orchestra/state/quarantine/$agent_id.json" \
+                --data-urlencode "text=🚧 QUARANTINED: $agent_id crashed $count times in the last hour. Auto-recovery stopped. Release: rm $STATE_DIR/quarantine/$agent_id.json" \
                 > /dev/null 2>&1
         fi
         return 1

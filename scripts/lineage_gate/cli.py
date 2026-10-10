@@ -24,6 +24,13 @@ import sys
 import time
 from pathlib import Path
 
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
 try:
     from .artifact import canonical_json
     from . import grade as G
@@ -36,7 +43,7 @@ except ImportError:
     from lineage_gate import grade as G                       # noqa: F401
     from lineage_gate import shadow as SH                     # noqa: F401
 
-ORCH = os.environ.get("ORCHESTRA_DIR") or os.path.expanduser("~/scripts/agent-orchestra")   # DATA
+ORCH = os.environ.get("ORCHESTRA_DIR") or str(_data_dir())   # DATA
 # CODE (scripts/*.py) lives in the checkout (this file is <root>/scripts/lineage_gate/cli.py)
 CODE = os.environ.get("ORCHESTRA_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 KILL_FILE = os.path.expanduser("~/runtime/LINEAGE_GATE_DISABLED")

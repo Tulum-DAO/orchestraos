@@ -51,8 +51,15 @@ from registry_lock import registry_lock  # noqa: E402
 from runtime_signatures import (  # noqa: E402,F401
     resolve_runtime, RuntimeResolutionError)
 
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.abspath(__file__))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
 ORCHESTRA_DIR = Path(os.environ.get(
-    "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra")))
+    "ORCHESTRA_DIR", str(_data_dir())))
 REGISTRY = ORCHESTRA_DIR / "registry.json"
 AGENT_SESSIONS = ORCHESTRA_DIR / "state" / "agent-sessions.json"
 AGENTS_DIR = ORCHESTRA_DIR / "state" / "agents"

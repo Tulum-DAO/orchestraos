@@ -33,10 +33,16 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from approval_schema import ApprovalStore
 
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.abspath(__file__))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
 
 def _default_pending_dir():
-    orchestra = os.environ.get("ORCHESTRA_DIR") or os.path.expanduser(
-        "~/scripts/agent-orchestra")
+    orchestra = os.environ.get("ORCHESTRA_DIR") or str(_data_dir())
     return os.path.join(orchestra, "state", "approvals", "pending")
 
 

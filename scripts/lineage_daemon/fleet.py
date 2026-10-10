@@ -30,6 +30,14 @@ from scripts.lineage_daemon import hold_ledger as _hledger
 from scripts.lineage_daemon import complete as _complete
 from scripts.tier_rule import role_of
 
+import sys
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
 # The observe/armed disposition for one agent, before any action.
 OBSERVE_TIER = "observe:tier-not-armed"     # T0/T1 in wave 1 (or any non-armed tier)
 OBSERVE_NOOP = "observe:noop"               # healthy ctx — nothing to do
@@ -122,7 +130,7 @@ def kill_switch_advisory(orchestra_dir=None) -> bool:
     is ~/runtime). Lets an operator SEE a spurious synced file without it stopping the
     beat."""
     od = orchestra_dir or os.environ.get(
-        "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
+        "ORCHESTRA_DIR", str(_data_dir()))
     return os.path.exists(os.path.join(od, KILL_SWITCH_FILE))
 
 
@@ -158,7 +166,7 @@ SELF_TRIGGER_MAX_AGE_S = 2700
 
 def _mark_path(session_id, orchestra_dir=None):
     od = orchestra_dir or os.environ.get(
-        "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
+        "ORCHESTRA_DIR", str(_data_dir()))
     return os.path.join(od, SELF_TRIGGER_DIR, f"{session_id}.json")
 
 

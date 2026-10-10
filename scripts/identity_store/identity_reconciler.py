@@ -45,6 +45,13 @@ from scripts.identity_store import (
     session_doc_reconcile, status_reconcile,
 )
 
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
 _MIDFIRE_STATES = {"PREWARMING", "READY", "SWAPPING"}
 _DEAD_PARK_THRESHOLD = 2   # consecutive dead passes before park/retire
 _LOG_REL = os.path.join("logs", "identity-reconciler.log")
@@ -738,7 +745,7 @@ def format_dry_run_report(report):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--dir", default=os.environ.get(
-        "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra")))
+        "ORCHESTRA_DIR", str(_data_dir())))
     ap.add_argument("--cron", action="store_true",
                     help="APPLY the pass (the only apply path). Default: dry-run.")
     ap.add_argument("--dry-run", action="store_true",

@@ -30,6 +30,14 @@ seams are the real executors + a real approval gate + a real park-idle re-check.
 
 import re
 
+import sys
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
 
 # --- outcome/status constants -------------------------------------------------
 DONE = "rotated"                       # full rotation incl. retire + repin
@@ -208,7 +216,7 @@ def default_safety_recheck(canary, orchestra_dir=None):
     import importlib.util
     import os
     od = orchestra_dir or os.environ.get(
-        "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
+        "ORCHESTRA_DIR", str(_data_dir()))
     from .code_root import code_path
     pk_path = code_path("scripts", "park-idle.py")   # CODE (checkout); its data comes from ORCHESTRA_DIR
     try:
@@ -264,7 +272,7 @@ def default_approval_gate(canary, successor, *, timeout_s=1800, poll_s=10,
     import sys
     import time
     od = orchestra_dir or os.environ.get(
-        "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
+        "ORCHESTRA_DIR", str(_data_dir()))
     from .code_root import code_path
     sys.path.insert(0, code_path("scripts"))   # approval_schema is CODE (checkout), not under the data dir
     from approval_schema import ApprovalStore

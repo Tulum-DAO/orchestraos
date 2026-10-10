@@ -268,7 +268,7 @@ with a generic example city/zone for consistency with the rest of the scrub.
 `labels: good-first-issue, size:S each, install`
 
 Each of these resolves its DATA dir (or, worse, a code path) from
-`os.environ.get("ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))` or
+`os.environ.get("ORCHESTRA_DIR", <one operator's private checkout path>)` or
 the shell/TS equivalent. They work under `orchestra up` and `scripts/orchestra-env.sh`
 (both export `ORCHESTRA_DIR`) and silently point at a directory that does not exist when
 run standalone. Fix shape, one file per PR: read the data dir through one helper —
@@ -278,7 +278,7 @@ run standalone. Fix shape, one file per PR: read the data dir through one helper
 from the checkout (`ORCHESTRA_ROOT` / `__file__`; see `cron_beat.code_path`,
 `watch_gateway.CODE_SCRIPTS_DIR`, `resolveDetectorPath`), never from the data dir.
 
-**Files.** `git grep -nE 'scripts/agent-orchestra' -- ':!*_test.py' ':!*/tests/*' ':!*.test.ts'`
+**Files.** a `git grep` for that private path outside tests
 (88 hits at the time of writing: `api/src/routes/*.ts`, `api/src/services/*.ts`,
 `msg_store.py`, `message_bus.py`, `scripts/*.py`, `scripts/continuity/*`,
 `scripts/identity_store/*`, `scripts/lineage_daemon/*`, `services/arturo/*.py`,
@@ -286,6 +286,11 @@ from the checkout (`ORCHESTRA_ROOT` / `__file__`; see `cron_beat.code_path`,
 
 **Acceptance.** That grep returns 0 hits and the touched script still runs under
 `orchestra up` (doctor + one beat tick clean).
+
+**Resolved on main** (data-dir sweep S5): one data-dir default for every Python file,
+`orchestra_cli.settings.data_dir()` (env, then `orchestra.toml [data] dir`, then `~/.orchestra`), and
+`dataDir()` in `api/src/lib/config.ts` for TS. `scripts/test_no_personal_path.py` now fails CI on the
+private path or any other operator marker anywhere outside tests.
 
 ## G6 · `orchestra doctor`: plugin and push rows
 `labels: good-first-issue, size:S, install`

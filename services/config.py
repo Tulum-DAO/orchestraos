@@ -90,9 +90,8 @@ def load() -> OrchestraConfig:
     path = _config_path()
     if not path.exists():
         raise ConfigError(
-            f"No config found at {path}. Copy orchestra.example.toml to "
-            f"orchestra.toml (or set ORCHESTRA_CONFIG) before starting any "
-            f"OrchestraOS service."
+            f"No config found at {path}. Run `orchestra init` to create it "
+            f"(or set ORCHESTRA_CONFIG to an existing orchestra.toml)."
         )
     with path.open("rb") as f:
         raw = tomllib.load(f)

@@ -1667,7 +1667,7 @@ TOOLS = [
                 "properties": {
                     "prompt": {
                         "type": "string",
-                        "description": "The command or question for the GM. Be specific. E.g. 'What is the current state of the acme build?' or 'Read the file ~/scripts/agent-orchestra/registry.json and tell me how many agents are registered' or 'Check git log for the last 5 commits in northwind'.",
+                        "description": "The command or question for the GM. Be specific. E.g. 'What is the current state of the acme build?' or 'Read the registry.json in the orchestra data dir and tell me how many agents are registered' or 'Check git log for the last 5 commits in northwind'.",
                     },
                     "timeout": {
                         "type": "integer",
@@ -1686,7 +1686,7 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Absolute file path. E.g. ~/scripts/agent-orchestra/registry.json"},
+                    "path": {"type": "string", "description": "Absolute file path, e.g. the data dir's registry.json (ORCHESTRA_DIR/registry.json)."},
                     "lines": {"type": "integer", "description": "Max lines to read (default 50, max 200)."},
                     "machine": {"type": "string", "enum": ["mac", "vps"], "description": "Which machine (default: vps)."},
                 },

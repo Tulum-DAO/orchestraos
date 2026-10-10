@@ -30,7 +30,8 @@ export function FleetRecoveryModal() {
   const dead = Object.values(roster).filter(e => e.status === 'dead').length;
   const total = Object.keys(roster).length;
 
-  const recoveryCmd = 'bash ~/scripts/agent-orchestra/scripts/roster-resume-all.sh';
+  // Run from the OrchestraOS checkout (the browser cannot know where it lives on the host).
+  const recoveryCmd = 'bash scripts/roster-resume-all.sh   # from your OrchestraOS checkout';
 
   const handleCopy = () => {
     navigator.clipboard.writeText(recoveryCmd);

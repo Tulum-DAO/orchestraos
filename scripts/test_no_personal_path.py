@@ -1,0 +1,119 @@
+"""Data-dir sweep S5 (gm ruling): no operator's personal path or machine marker ships.
+
+88 non-test files once defaulted their data dir to one operator's private checkout; the default is
+now orchestra_cli.settings.data_dir() (Python) and dataDir() in api/src/lib/config.ts (TS). This lint
+fails on that path, or on any other personal marker, in any tracked file outside tests, naming
+file:line. Fixed strings, not patterns: a marker either ships or it does not.
+"""
+import os
+import pathlib
+import subprocess
+import sys
+
+import pytest
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+# Hex-encoded so this file does not ship the markers (or fragments of them) as literals either.
+MARKERS = [bytes.fromhex(h).decode() for h in (
+    "736372697074732f6167656e742d6f7263686573747261",
+    "2f686f6d652f73686177",
+    "73727631333937303136",
+    "7461696c386265353431",
+    "53686177436f6c65",
+    "3130302e3132342e3135312e3934",
+    "3130302e36382e3137312e3939",
+)]
+
+# Exempt: tests and their fixtures (they may assert a marker is ABSENT, or fence this dev box), the
+# recorded contract transcripts, and the operator-identifier scanner whose detection patterns ARE
+# the markers.
+EXEMPT_FILES = {"scripts/scan_operator_identifiers.py", "scripts/operator_identifiers_baseline.json"}
+EXEMPT_PREFIXES = ("contract/transcript/fixtures/",)
+
+
+def _exempt(rel: str) -> bool:
+    name = rel.rsplit("/", 1)[-1]
+    return (rel in EXEMPT_FILES or rel.startswith(EXEMPT_PREFIXES)
+            or name.startswith("test_") or name.endswith(("_test.py", ".test.ts", ".test.tsx", ".test.mjs"))
+            or name == "conftest.py" or "/tests/" in f"/{rel}" or "/fixtures/" in f"/{rel}")
+
+
+def _tracked():
+    out = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, check=True).stdout
+    return [p for p in out.decode().split("\0") if p]
+
+
+def test_no_personal_marker_ships():
+    files = _tracked()
+    assert len(files) > 300, "git ls-files returned too little to be a real scan"
+    hits = []
+    for rel in files:
+        if _exempt(rel):
+            continue
+        try:
+            text = (ROOT / rel).read_text(errors="ignore")
+        except (IsADirectoryError, FileNotFoundError):
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            for m in MARKERS:
+                if m in line:
+                    hits.append(f"{rel}:{i}: [{m}] {line.strip()[:120]}")
+    assert not hits, "personal path / machine marker in shipped files:\n" + "\n".join(hits)
+
+
+def test_the_lint_bites():
+    # positive control: a marker in a non-exempt path is found (guards against a scan that sees nothing)
+    assert not _exempt("scripts/example.py") and _exempt("scripts/test_example.py")
+    assert any(m in "x = '~/" + MARKERS[0] + "'" for m in MARKERS)
+
+
+# ---- the ONE data-dir default -------------------------------------------------------------------
+
+sys.path.insert(0, str(ROOT))
+from orchestra_cli import settings  # noqa: E402
+
+
+def test_data_dir_order(monkeypatch, tmp_path):
+    cfg = tmp_path / "orchestra.toml"
+    cfg.write_text('[data]\ndir = "%s"\n' % (tmp_path / "configured"))
+    monkeypatch.setenv("ORCHESTRA_CONFIG", str(cfg))
+    monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path / "env"))
+    monkeypatch.setenv("ORCH_DIR", str(tmp_path / "old-alias"))
+    assert settings.data_dir() == tmp_path / "env"
+    monkeypatch.delenv("ORCHESTRA_DIR")
+    assert settings.data_dir() == tmp_path / "old-alias"          # deprecated alias, still honoured
+    monkeypatch.delenv("ORCH_DIR")
+    assert settings.data_dir() == tmp_path / "configured"
+    cfg.write_text("[data]\n")
+    assert settings.data_dir() == pathlib.Path(os.path.expanduser(settings.DEFAULT_DATA_DIR))
+
+
+def test_include_env_false_ignores_the_env(monkeypatch, tmp_path):
+    cfg = tmp_path / "orchestra.toml"
+    cfg.write_text('[data]\ndir = "%s"\n' % (tmp_path / "configured"))
+    monkeypatch.setenv("ORCHESTRA_CONFIG", str(cfg))
+    monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path / "env"))
+    assert settings.data_dir(include_env=False) == tmp_path / "configured"
+    assert os.environ["ORCHESTRA_DIR"] == str(tmp_path / "env")    # never mutates the env
+
+
+@pytest.mark.parametrize("rel", ["message_bus.py", "unified_log.py", "scripts/park-idle.py",
+                                 "scripts/session-index.py", "scripts/red_alert.py"])
+def test_a_script_run_as_a_file_finds_the_one_default(rel, tmp_path):
+    """Run the way an operator runs it by hand: fresh interpreter, no PYTHONPATH, no ORCHESTRA_DIR.
+    The data dir must come from orchestra.toml, not a hard-coded path."""
+    cfg = tmp_path / "orchestra.toml"
+    cfg.write_text('[data]\ndir = "%s"\n' % (tmp_path / "configured"))
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("PYTHONPATH", "ORCHESTRA_DIR", "ORCH_DIR", "ORCHESTRA_ROOT")}
+    env["ORCHESTRA_CONFIG"] = str(cfg)
+    code = ("import importlib.util as u, sys\n"
+            f"s = u.spec_from_file_location('m', {str(ROOT / rel)!r}); m = u.module_from_spec(s)\n"
+            "sys.argv = ['x']\n"
+            "s.loader.exec_module(m)\n"
+            "from orchestra_cli.settings import data_dir; print(data_dir())\n")
+    r = subprocess.run([sys.executable, "-c", code], cwd=str(tmp_path), env=env,
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr[-1500:]
+    assert r.stdout.strip().splitlines()[-1] == str(tmp_path / "configured")

@@ -31,6 +31,14 @@ import time
 
 from scripts.identity_store import cutover
 
+import sys
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
 # Debounce: coalesce a write burst (e.g. a rotation's ~10 writes) into <=1 projection.
 _DEFAULT_DEBOUNCE_S = 2.0
 # Idle force-floor: re-project at least this often. MUST be < the U12 monitor's
@@ -208,7 +216,7 @@ def _main(argv=None):
     p.add_argument("cmd", choices=["run", "start-if-armed"], nargs="?", default="run")
     p.add_argument("--orchestra-dir",
                    default=os.environ.get("ORCHESTRA_DIR",
-                                          os.path.expanduser("~/scripts/agent-orchestra")))
+                                          str(_data_dir())))
     args = p.parse_args(argv)
     if args.cmd == "start-if-armed":
         started = start_if_armed(args.orchestra_dir)

@@ -27,6 +27,14 @@ import subprocess
 
 from scripts.identity_store import identity_writer, orchestra_db, status_vocab
 
+import sys
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
 
 def _default_has_session(tmux):
     return subprocess.run(["tmux", "has-session", "-t", tmux],
@@ -226,7 +234,7 @@ def _apply(orchestra_dir, roots, new_status):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="canonical.status truth reconcile (dry-run default)")
     ap.add_argument("--dir", default=os.environ.get(
-        "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra")))
+        "ORCHESTRA_DIR", str(_data_dir())))
     ap.add_argument("--apply", action="store_true", help="write the flips (default: dry-run)")
     ap.add_argument("--local-machine", default="vps")
     a = ap.parse_args(argv)

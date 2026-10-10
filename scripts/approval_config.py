@@ -1,10 +1,18 @@
 """Central config for the approval loop. Import these; never hard-code twice."""
 import os
+import sys
 from pathlib import Path
 
-#: The LIVE operator tree. Kept as a constant so the pytest fence below can name the one path
-#: that a test must never open, independent of whatever ORCHESTRA_DIR happens to say.
-LIVE_ORCHESTRA_DIR = Path(os.path.expanduser("~/scripts/agent-orchestra"))
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.abspath(__file__))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+#: The LIVE install: the data dir this checkout is CONFIGURED for (orchestra.toml [data] dir, else
+#: the product default), deliberately ignoring ORCHESTRA_DIR, so the pytest fence below names the one
+#: path a test must never open whatever the test's env says.
+LIVE_ORCHESTRA_DIR = _data_dir(include_env=False)
 
 
 def orchestra_dir() -> Path:
@@ -14,7 +22,7 @@ def orchestra_dir() -> Path:
     test LOOK like isolation while the path stayed pinned to the live tree. A test then wrote
     to the operator's live ledger (2026-10-05, and the same class on 2026-09-25). Lazy
     resolution is what makes the env override actually mean something."""
-    return Path(os.environ.get("ORCHESTRA_DIR", str(LIVE_ORCHESTRA_DIR)))
+    return Path(os.environ.get("ORCHESTRA_DIR") or _data_dir())
 
 
 def db_path() -> Path:

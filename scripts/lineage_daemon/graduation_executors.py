@@ -33,8 +33,16 @@ import os
 
 from .code_root import code_path   # scripts are CODE (checkout), never under ORCHESTRA_DIR (DATA)
 
+import sys
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
 ORCHESTRA_DIR = os.environ.get(
-    "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
+    "ORCHESTRA_DIR", str(_data_dir()))
 
 # The park-idle retire reason — names this as a graduation completion (not an
 # emergency rotation) so the retire log/ledger is unambiguous.
