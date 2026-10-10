@@ -194,7 +194,68 @@ _TOOLS_THIS_TURN = _contextvars.ContextVar("arturo_tools_this_turn", default=Non
 # VOICE-RESULTS (gm msg_b0b4228c): the live relay conversation this CLM turn belongs to, so an
 # async result can be spoken back into the same call. None = not a live relay call.
 _RELAY_CID_THIS_TURN = _contextvars.ContextVar("arturo_relay_cid_this_turn", default=None)
+# ASYNC-HOLD (gm msg_2c161950 (iii)): (relay cid, request t0) of this Hume CLM turn, so async work
+# it asks for can wait for the turn to settle and be dropped if a longer final supersedes it.
+_HUME_TURN = _contextvars.ContextVar("arturo_hume_turn", default=None)
 _VOICE_RESULTS = None
+
+
+_RECALL_POOL = None
+
+
+def _parallel_recall_on():
+    return os.environ.get("ARTURO_PARALLEL_RECALL", "1") == "1"
+
+
+def _recall_pool():
+    global _RECALL_POOL
+    if _RECALL_POOL is None:
+        import concurrent.futures as _cf
+        _RECALL_POOL = _cf.ThreadPoolExecutor(max_workers=4, thread_name_prefix="arturo-recall")
+    return _RECALL_POOL
+
+
+def _start_recalls(non_system, calling_channel):
+    """Submit the enabled recalls, in the serial path's order: [(name, future, t0)]."""
+    if calling_channel != "voice":
+        return []
+    futs = []
+    t0 = time.time()
+    try:
+        if os.environ.get("ARTURO_SEMANTIC_RECALL") == "1":
+            from services.arturo import semantic_recall as _semrec
+            futs.append(("semantic-recall", _recall_pool().submit(
+                _semrec.recall_preamble, _semrec.latest_user_text(non_system)), t0))
+        if os.environ.get("ARTURO_FACTS_RECALL") == "1":
+            from services.arturo import facts_recall as _factrec
+            futs.append(("facts-recall", _recall_pool().submit(
+                _factrec.facts_preamble, _factrec.latest_user_text(non_system)), t0))
+    except Exception as _se:
+        log.error(f"parallel-recall submit error (non-fatal): {_se}")
+    return futs
+
+
+def _collect_recalls(futs):
+    """Blocks in submission order; one shared deadline from submit; late -> omitted (the worker
+    keeps its own budget wall and finishes on its own; nothing waits for it)."""
+    import concurrent.futures as _cf
+    try:
+        deadline_s = int(os.environ.get("ARTURO_RECALL_DEADLINE_MS", "350")) / 1000.0
+    except ValueError:
+        deadline_s = 0.35
+    out = ""
+    for name, fut, t0 in futs:
+        try:
+            block = fut.result(timeout=max(0.0, t0 + deadline_s - time.time()))
+        except _cf.TimeoutError:
+            log.info(f"parallel-recall: {name} late (> {deadline_s * 1000:.0f} ms shared deadline) — omitted")
+            continue
+        except Exception as _ce:
+            log.error(f"{name} seam error (non-fatal): {_ce}")
+            continue
+        if block:
+            out += "\n\n" + block
+    return out
 
 
 def _voice_results_on():
@@ -3795,7 +3856,22 @@ def execute_tool(name, args, user_turns=None):
         _vr_tok = None
         if _vr_cid and _voice_results() is not None:
             _vr_tok = _voice_results().started(_vr_cid, summary)
+        _hold = _HUME_TURN.get() if os.environ.get("ARTURO_ASYNC_HOLD", "1") == "1" else None
         def _run_async():
+            if _hold is not None and _STREAM_RELAY is not None:
+                # ASYNC-HOLD (gm msg_2c161950 (iii)): never run work a FRAGMENT final asked for.
+                try:
+                    _settle = _STREAM_RELAY.wait_turn_settled(*_hold)
+                except Exception as _he:
+                    log.error(f"ASYNC-HOLD check failed, dispatching (non-fatal): {_he!r}")
+                    _settle = "error"
+                if _settle == "superseded":
+                    log.warning(f"ASYNC-HOLD cancelled {tool_name} for {summary!r}: a longer, different "
+                                f"final superseded the turn that asked for it")
+                    if _vr_tok is not None:
+                        _voice_results().finished(_vr_cid, _vr_tok)
+                    return
+                log.info(f"ASYNC-HOLD released {tool_name} ({_settle})")
             # VQ-4 verify-after-inject: the async result MUST actually LAND on Telegram. The old
             # path used raw requests.post with `except: pass` — a failed send was swallowed, so
             # Arturo had already said "I'll text you" but nothing arrived (conv_2901). Route through
@@ -4685,6 +4761,17 @@ def chat_completions():
 
     log.info(f"Request: {len(messages)} messages, channel={calling_channel}, stream={want_stream}")
     _req_t0 = time.time()   # HUME-RECOVERY: any Arturo audio after this means Hume spoke a reply
+    _HUME_TURN.set(None)
+    if _is_hume_clm and _conv_id and _STREAM_RELAY is not None:
+        # SUPERSEDE (gm msg_2c161950 (ii)): a newer, different request makes the pending reply
+        # to the earlier fragment stale; HUME-RECOVERY must never re-send it (relay E58F077A).
+        try:
+            _src = _STREAM_RELAY.resolve(_conv_id)
+            if _src:
+                _STREAM_RELAY.note_clm_request(_src, _req_t0, _voice_guards.latest_user_text(messages))
+                _HUME_TURN.set((_src, _req_t0))
+        except Exception as _sre:
+            log.error(f"hume-recovery request note error (non-fatal): {_sre}")
 
     # === GUARDRAIL: Intelligent silence escalation on voice ===
     # Stage 1 (1 silence turn): passes through to generation for contextual proactive suggestions.
@@ -4818,12 +4905,16 @@ def chat_completions():
     # Capture turns mid-call for live memory
     capture_mid_call_turns(messages, calling_channel=calling_channel)
 
-    # Build context and messages
-    context = build_context(calling_channel=calling_channel)
     # IMPORTANT: Drop ElevenLabs system messages — they contain frozen/stale state
     # (hardcoded tmux sessions, task counts, agent lists from when the prompt was last synced).
     # The proxy's build_context() provides fresh, live data instead.
     non_system = [m for m in messages if m.get("role") != "system"]
+    # PARALLEL RECALL (gm msg_5dd2ce28, audit #1): the model is ~0.75 s of the p50 1.61 s; the rest
+    # was this serial pre-model work. Start both recalls NOW, alongside build_context, and collect
+    # them below in the SAME order under ONE shared deadline; a late block is omitted, never awaited.
+    _recall_futs = _start_recalls(non_system, calling_channel) if _parallel_recall_on() else None
+    # Build context and messages
+    context = build_context(calling_channel=calling_channel)
     # ...except from the in-process caller (the /text route replaying through here via the Flask
     # test client), whose system message is a PER-TURN DELTA, not a frozen context: the onboarding
     # step's directive. Dropping it indiscriminately is why every onboarding directive — 'name' as
@@ -4851,7 +4942,9 @@ def chat_completions():
     # block appended to the per-turn context. Env-gated BEFORE the import so flag-off boots
     # byte-identical (metadata-absent requests default to channel 'voice' — the flag, not the
     # channel, keeps local traffic inert). Every failure inside degrades to no-preamble.
-    if os.environ.get("ARTURO_SEMANTIC_RECALL") == "1" and calling_channel == "voice":
+    if _recall_futs is not None:
+        context += _collect_recalls(_recall_futs)
+    if _recall_futs is None and os.environ.get("ARTURO_SEMANTIC_RECALL") == "1" and calling_channel == "voice":
         try:
             from services.arturo import semantic_recall as _semrec
             _rp = _semrec.recall_preamble(_semrec.latest_user_text(non_system))
@@ -4865,7 +4958,7 @@ def chat_completions():
     # and separately gated from semantic recall above; appends a <=250-token FACTS block alongside
     # (never replaces/reranks it). Read-only (mode=ro), bounded (top-K over a recency window behind
     # a budget wall + single-flight), degrades to no-block on any failure. Voice channel only.
-    if os.environ.get("ARTURO_FACTS_RECALL") == "1" and calling_channel == "voice":
+    if _recall_futs is None and os.environ.get("ARTURO_FACTS_RECALL") == "1" and calling_channel == "voice":
         try:
             from services.arturo import facts_recall as _factrec
             _fp = _factrec.facts_preamble(_factrec.latest_user_text(non_system))

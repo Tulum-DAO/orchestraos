@@ -236,3 +236,107 @@ def test_repeat_stays_empty_for_a_stale_reply(monkeypatch, tmp_path):
         assert _post_same(mod, "CIDRR4") == ""
     finally:
         m.shutdown()
+
+
+def test_audible_latency_logged_once_per_reply(caplog):
+    import base64, logging, time as _t
+    from services.arturo.test_stream_relay_hume import _wav48
+    caplog.set_level(logging.INFO, logger="arturo-stream-relay")
+    m = _manager()
+    try:
+        s, h = _live(m)
+        m.note_clm_reply("h1", "hello", _t.time() - 1.5)
+        for i in range(2):
+            s.push({"type": "audio_output", "id": "a", "index": i, "data": base64.b64encode(_wav48()).decode()})
+        assert _wait(lambda: "AUDIBLE-LATENCY request->first_audio=" in caplog.text)
+        _t.sleep(0.2)
+        assert caplog.text.count("AUDIBLE-LATENCY") == 1
+        line = [r.getMessage() for r in caplog.records if "AUDIBLE-LATENCY" in r.getMessage()][0]
+        assert float(line.split("=")[1].rstrip("s")) >= 1.4
+    finally:
+        m.shutdown()
+
+
+# -- SUPERSEDE (gm msg_2c161950 (ii)): replay relay E58F077A / Hume chat dabf1bd3, 10-09. Hume
+# merged the operator's 33 s turn into ONE user message and called the CLM four times as its finals grew.
+# At 409.1 HUME-RECOVERY re-sent "On it..." (the reply to the 392 prefix) although a request for
+# the extended turn had begun at 408.2: a stale line over the operator, then a second answer.
+_Q1 = "Yeah, we need to turn back on the native ios. Audio cancellation such that when you say something."
+_Q2 = _Q1[:-1] + " and it's coming through the speaker {slightly determined}"
+
+
+def test_newer_different_request_supersedes_the_pending_reply(caplog):
+    import logging
+    caplog.set_level(logging.INFO, logger="arturo-stream-relay")
+    m = _manager()
+    try:
+        s, h = _live(m)
+        T = 1_000_000.0
+        h._last_agent_audio_ts = T - 15            # greeting only
+        m.note_clm_request("h1", T, _Q1)
+        m.note_clm_reply("h1", "On it, I'll look into it.", T, streamed_at=T + 3.3)
+        h._last_user_ts = T + 14                   # quiet gate satisfied at T+17
+        m.note_clm_request("h1", T + 16.3, _Q2)    # Hume asks again for the GROWN turn
+        assert h.recovery_check(now=T + 17.2) in ("none", "superseded")
+        assert _ai(s) == [], "a reply to a superseded fragment must never be re-sent"
+        assert "superseded" in caplog.text
+    finally:
+        m.shutdown()
+
+
+def test_late_reply_to_an_older_request_is_not_held():
+    m = _manager()
+    try:
+        s, h = _live(m)
+        T = 1_000_000.0
+        h._last_agent_audio_ts = T - 15
+        h._last_user_ts = T - 1
+        m.note_clm_request("h1", T, _Q1)
+        m.note_clm_request("h1", T + 2, _Q2)       # newer request starts before the old reply lands
+        m.note_clm_reply("h1", "stale answer", T, streamed_at=T + 3)
+        assert h.recovery_check(now=T + 6) in ("none", "superseded")
+        m.note_clm_reply("h1", "full answer", T + 2, streamed_at=T + 6)
+        assert h.recovery_check(now=T + 9) == "recovered"
+        assert _ai(s) == ["full answer"]
+    finally:
+        m.shutdown()
+
+
+def test_identical_re_ask_keeps_the_reply_for_answered_repeat():
+    m = _manager()
+    try:
+        s, h = _live(m)
+        T = 1_000_000.0
+        h._last_agent_audio_ts = T - 15
+        m.note_clm_request("h1", T, _Q1)
+        m.note_clm_reply("h1", "On it.", T, streamed_at=T + 1)
+        h._last_user_ts = T + 5                    # the operator re-asks; recovery waits
+        m.note_clm_request("h1", T + 6, _Q1 + " {anxious}")   # same words, new prosody tag
+        assert h.claim_respeak("answered-repeat", now=T + 6.1) == "On it."
+    finally:
+        m.shutdown()
+
+
+def test_clm_endpoint_supersedes_on_a_newer_different_request(monkeypatch, tmp_path):
+    """Call site (ii): a real CLM request whose user text EXTENDS the last one must clear the
+    pending reply at request START. note_clm_reply is muted for the second request so only the
+    request-start hook can clear it."""
+    m = _manager()
+    try:
+        s, h = _live(m, "CIDSUP")
+        mod = _repeat_proxy(monkeypatch, tmp_path, m)
+        c = mod.app.test_client()
+
+        def post(q):
+            c.post("/v1/chat/completions?custom_session_id=CIDSUP",
+                   json={"messages": [{"role": "assistant", "content": "Hey the operator, Arturo here."},
+                                      {"role": "user", "content": q}]},
+                   headers={"Authorization": f"Bearer {mod.BEARER_TOKEN}"},
+                   environ_base={"REMOTE_ADDR": "127.0.0.1"}).get_data()
+        post(_Q1)
+        assert h._rec is not None and not h._rec["done"]
+        monkeypatch.setattr(m, "note_clm_reply", lambda *a, **k: False)
+        post(_Q2)
+        assert h._rec["done"], "the reply to the fragment must be superseded at request start"
+    finally:
+        m.shutdown()

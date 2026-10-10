@@ -452,6 +452,11 @@ def test_follow_up_turn_sees_the_running_work(monkeypatch, tmp_path):
     try:
         _post(mod, "why are chats in terminal view")
         n = len(seen)
+        # Arturo SPEAKS the ack before the operator's follow-up (a real call always has it: without it Hume
+        # merges the two into one turn). That audio is what makes the follow-up a new turn, so
+        # ASYNC-HOLD does not cancel the running work (32b86ff24e + separator rule).
+        import time as _t
+        m._holders["CIDACK"]._last_agent_audio_ts = _t.time()
         _post(mod, "are you gonna tell me now")
         sys2 = seen[n][0]["content"]
         assert "BACKGROUND WORK ON THIS CALL" in sys2 and "RUNNING for" in sys2, sys2[-400:]
