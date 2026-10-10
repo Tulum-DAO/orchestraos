@@ -256,3 +256,67 @@ def test_BY_EFFECT_a_prompt_that_never_submits_is_stuck_with_one_copy(real_pane)
     out, screen = real_pane(99)
     assert out == "('stuck', 'stuck')", out
     assert screen.count("You are lab-seat.") == 1
+
+
+# --- codex: a freshly started CLI is busy for a moment on its own (PR 0) -----------------------
+# Gate container, codex 0.153.4 with an MCP server configured: for ~2 s after start the pane shows
+# "• Starting MCP servers (1/2): … (0s • esc to interrupt)" (real capture below). Boot used to give
+# up at once ("stuck (codex-busy)") and the seat sat idle with no instructions.
+_FIX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "codex")
+_STARTING = open(os.path.join(_FIX, "starting_mcp_0.153.4.pane.txt")).read()
+
+
+class CodexPane(Pane):
+    def __init__(self, busy_captures):
+        super().__init__()
+        self.busy_left = busy_captures
+        self.scroll = ["╭ OpenAI Codex", "  some earlier output"]
+
+    def render(self):
+        return "\n".join(self.scroll + [f"› {self.composer or 'Ask Codex to do anything'}", "",
+                                        "  gpt-5.6-terra default · ~/x"])
+
+    def __call__(self, *args, timeout=10):
+        if args[0] == "capture-pane" and "-S" not in args and self.busy_left > 0:
+            self.busy_left -= 1
+            self.calls.append(args)
+            return 0, _STARTING
+        return super().__call__(*args, timeout=timeout)
+
+
+def run_codex(pane):
+    slept = []
+    out = B.boot_inject("cx", TEXT, "codex", tmux_fn=pane, sleep_fn=slept.append, log_fn=lambda m: None,
+                        canonical_live_fn=lambda s, tmux_fn=None: False)
+    return out, slept
+
+
+def test_the_fixture_is_codex_starting_its_mcp_servers():
+    assert "Starting MCP servers" in _STARTING and "esc to interrupt" in _STARTING
+    assert "◦ Working" not in _STARTING, "the shared Working read alone would miss this screen"
+
+
+def test_codex_boot_waits_out_mcp_startup_then_submits():
+    pane = CodexPane(busy_captures=3)
+    (outcome, stage), slept = run_codex(pane)
+    assert outcome == "submitted", stage
+    assert pane.pastes == 1 and sum(1 for s in slept if s == 1.0) >= 3
+
+
+def test_codex_boot_never_types_into_a_pane_busy_past_the_bound():
+    pane = CodexPane(busy_captures=10_000)
+    (outcome, stage), slept = run_codex(pane)
+    assert (outcome, stage) == ("stuck", "codex-busy")
+    assert pane.pastes == 0 and not any(c[0] in ("paste-buffer", "send-keys") for c in pane.calls)
+    assert sum(slept) <= B.CODEX_BOOT_BUSY_WAIT_S + 1
+
+
+def test_codex_seats_launch_with_the_update_menu_off():
+    """codex 0.153.4 can open with "Update available! … › 1. Update now" (real capture), and Enter
+    picks UPDATE: the boot prompt's Enter would run `npm install -g @openai/codex` and move the seat
+    off its pinned version. spawn-agent.sh launches codex with the startup check off."""
+    upd = open(os.path.join(_FIX, "update_prompt_0.153.4.pane.txt")).read()
+    assert "Update available" in upd and "› 1. Update now" in upd
+    src = open(os.path.join(os.path.dirname(_FIX), "..", "..", "spawn-agent.sh")).read()
+    line = [l for l in src.splitlines() if 'runtime" == "codex" ]] && bypass_flag=' in l]
+    assert len(line) == 1 and "-c check_for_update_on_startup=false" in line[0]

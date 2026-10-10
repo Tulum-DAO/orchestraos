@@ -112,6 +112,18 @@ def _canonical_live(session, *, tmux_fn=_real_tmux, now=None, db_path=None):
     return ((now if now is not None else time.time()) - created) >= BOOT_GRACE_S
 
 
+CODEX_BOOT_BUSY_WAIT_S = 45.0
+
+
+def _codex_boot_busy(pane: str) -> bool:
+    """Busy for boot purposes: the shared Working/queue read, or an 'esc to interrupt' status near
+    the bottom (it also marks "Starting MCP servers", whose spinner glyph alternates • and ◦)."""
+    if codex_pane_is_busy(pane):
+        return True
+    tail = "\n".join((pane or "").splitlines()[-6:])
+    return "esc to interrupt" in tail
+
+
 def boot_inject(session, text, runtime=DEFAULT_RUNTIME, *, allow_canonical=False,
                 tmux_fn=_real_tmux, sleep_fn=time.sleep, log_fn=None, canonical_live_fn=None):
     """Type `text` into `session` and verify by effect. Returns (outcome, stage):
@@ -143,10 +155,20 @@ def boot_inject(session, text, runtime=DEFAULT_RUNTIME, *, allow_canonical=False
         sleep_fn(0.3)
 
     if runtime == "codex":
-        rc, pane = tmux_fn("capture-pane", "-p", "-t", _target(session))
-        if rc == 0 and codex_pane_is_busy(pane):
-            log("codex pane is WORKING: busy-hold, nothing typed")
-            return "stuck", "codex-busy"
+        # A freshly started codex is busy for a moment on its own: "◦ Starting MCP servers (1/2)
+        # … esc to interrupt" (gate container, codex 0.153.4, any MCP server configured). Boot
+        # waits that out (bounded) instead of giving up and leaving the seat with no instructions;
+        # it still never types into a busy pane.
+        waited = 0.0
+        while True:
+            rc, pane = tmux_fn("capture-pane", "-p", "-t", _target(session))
+            if not (rc == 0 and _codex_boot_busy(pane)):
+                break
+            if waited >= CODEX_BOOT_BUSY_WAIT_S:
+                log(f"codex pane still WORKING after {int(waited)}s: busy-hold, nothing typed")
+                return "stuck", "codex-busy"
+            sleep_fn(1.0)
+            waited += 1.0
 
     _, line0, ok0 = split()
     if ok0 and composer_has_stranded_chip(line0):

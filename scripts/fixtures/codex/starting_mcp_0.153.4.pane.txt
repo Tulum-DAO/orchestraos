@@ -1,0 +1,26 @@
+codex --yolo --dangerously-bypass-hook-trust -c check_for_update_on_startup=fals
+e
+orchestra@b546d57b75b0:~/proj-pr0$ codex --yolo --dangerously-bypass-hook-trust
+-c check_for_update_on_startup=false
+⚠ `--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without
+  review for this invocation.
+
+╭─────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.153.4)                  │
+│                                             │
+│ model:       gpt-6-astra   /model to change │
+│ directory:   ~/proj-pr0                     │
+│ permissions: YOLO mode                      │
+╰─────────────────────────────────────────────╯
+
+  Tip: New Use /fast to enable our fastest inference with increased plan usage.
+
+⚠ `--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without
+  review for this invocation.
+
+• Starting MCP servers (1/2): codex_apps (0s • esc to interrupt)
+
+
+› Ask Codex to do anything
+
+  gpt-6-astra default · ~/proj-pr0

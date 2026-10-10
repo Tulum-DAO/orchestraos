@@ -811,7 +811,10 @@ spawn_agent() {
     # --dangerously-skip-permissions; codex uses --yolo + --dangerously-bypass-hook-trust
     # to run lifecycle hooks without interactive prompt stalls.
     local bypass_flag="--dangerously-skip-permissions"
-    [[ "$runtime" == "codex" ]] && bypass_flag="--yolo --dangerously-bypass-hook-trust"
+    [[ "$runtime" == "codex" ]] && bypass_flag="--yolo --dangerously-bypass-hook-trust -c check_for_update_on_startup=false"
+    # ^ codex's startup "Update available! … › 1. Update now" menu (real capture,
+    #   fixtures/codex/update_prompt_0.153.4) defaults to UPDATE: the boot prompt's Enter would run
+    #   `npm install -g @openai/codex` and move the seat off its pinned version. Checking is off for seats.
     local launch_cmd="$agent_bin $bypass_flag"
     # Scrollback guard (2026-09-03): claude >=2.1.x renders in the terminal
     # ALTERNATE SCREEN by default, which zeroes tmux scrollback (history_size=0,
