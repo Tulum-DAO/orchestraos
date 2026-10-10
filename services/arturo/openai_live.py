@@ -65,10 +65,11 @@ def encode_uplink(pcm):
     return json.dumps({"type": "session.input_audio.append", "audio": base64.b64encode(pcm).decode()})
 
 
-def session_start(instructions=INSTRUCTIONS):
+def session_start(instructions=INSTRUCTIONS, voice="marin"):
+    """The voice is FIXED for the session (OpenAI voice-websockets guide), so a pick applies on the next call."""
     return {"type": "session.start", "session": {
         "model": MODEL, "instructions": instructions,
-        "audio": {"format": {"type": "audio/pcm", "rate": 16000}},
+        "audio": {"format": {"type": "audio/pcm", "rate": 16000}, "output": {"voice": voice}},
         "delegation": {"type": "client"}}}
 
 
@@ -281,5 +282,6 @@ def openai_socket_factory(conversation_id, **_):
     if not key:
         raise RuntimeError("openai: no API key (set OPENAI_API_KEY in <data dir>/.env.secrets or the env)")
     s = AsyncWsSocket(URL, {"Authorization": "Bearer " + key})
-    s.send(json.dumps(session_start()))
+    from services.arturo import voice_choice as _voice_choice
+    s.send(json.dumps(session_start(voice=_voice_choice.get_voice("openai") or _voice_choice.OPENAI_DEFAULT)))
     return s

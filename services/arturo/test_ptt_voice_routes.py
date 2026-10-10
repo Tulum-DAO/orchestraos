@@ -49,7 +49,9 @@ def test_voices_get_and_voice_get_put(monkeypatch, tmp_path):
     j = r.get_json()
     assert r.status_code == 200 and j["ok"] and j["vendor"] == "hume"
     assert j["current"] is None
-    assert j["voices"] == [{"id": "v-frank", "name": "Frank", "provider": "custom"}]
+    # contract v2 (msg_a7cf1484): server-rendered, strictly typed display rows
+    assert j["voices"] == [{"id": "v-frank", "name": "Frank", "title": "Frank", "subtitle": None,
+                            "recommended": False, "order": 10, "sample_url": None}]
     # EL voices are client-side
     assert c.get("/ptt/voices?vendor=elevenlabs", environ_base=loop).status_code == 400
     # PUT persists, echoes the record (no voices list in the PUT response)
@@ -95,6 +97,9 @@ def test_a_voice_write_logs_the_writing_DEVICE_from_the_gateway_never_the_body(m
     from services.arturo import voice_choice as vc
     store = vc.VoiceChoiceStore(path=tmp_path / "v.json", log_path=tmp_path / "v.log")
     monkeypatch.setattr(vc, "_default", store)
+    # contract v2: a hume pick must be one of Hume's voices (fails closed without the list)
+    monkeypatch.setattr(vc, "list_hume_voices", lambda fetch=None: [{"id": "v-a", "name": "A", "provider": "custom"},
+                                                                   {"id": "v-b", "name": "B", "provider": "custom"}])
     c = mod.app.test_client()
     loop = {"REMOTE_ADDR": "127.0.0.1"}
     r = c.put("/ptt/voice", json={"vendor": "hume", "voice_id": "v-a", "by": "settings-mac", "device": "forged"},
@@ -104,3 +109,21 @@ def test_a_voice_write_logs_the_writing_DEVICE_from_the_gateway_never_the_body(m
     log = [_json.loads(x) for x in store.log_path.read_text().splitlines()]
     assert log[0]["device"] == "device:mac-1" and log[0]["changed_by"] == "settings-mac"
     assert log[1]["device"] is None
+
+
+def test_no_vendor_param_on_a_default_install_still_means_hume(monkeypatch, tmp_path):
+    """Public adaptation: the shipped Hume picker sends no ?vendor=. On a public install the live vendor defaults
+    to elevenlabs, which has no server-side list; that must still mean hume (as before contract v2), never a 400."""
+    monkeypatch.setenv("ARTURO_STREAM_RELAY", "1")
+    mod = _load_proxy()
+    from services.arturo import voice_choice as vc, voice_vendor as vv
+    monkeypatch.setattr(vc, "_default", vc.VoiceChoiceStore(path=tmp_path / "v.json", log_path=tmp_path / "v.log"))
+    monkeypatch.setattr(vc, "list_hume_voices", lambda fetch=None: [{"id": "v-frank", "name": "Frank", "provider": "custom"}])
+    c = mod.app.test_client()
+    loop = {"REMOTE_ADDR": "127.0.0.1"}
+    monkeypatch.setattr(vv, "get_vendor", lambda: "elevenlabs")
+    r = c.get("/ptt/voices", environ_base=loop)
+    assert r.status_code == 200 and r.get_json()["vendor"] == "hume"
+    assert c.get("/ptt/voice", environ_base=loop).get_json()["vendor"] == "hume"
+    monkeypatch.setattr(vv, "get_vendor", lambda: "openai")          # a vendor WITH a list is still followed
+    assert c.get("/ptt/voices", environ_base=loop).get_json()["vendor"] == "openai"
