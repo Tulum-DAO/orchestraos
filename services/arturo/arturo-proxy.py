@@ -4804,6 +4804,25 @@ def chat_completions():
                     context += "\n\n" + _rb
         except Exception as _rbe:
             log.error(f"stream-relay replay seam error (non-fatal): {_rbe}")
+    # SUPERSEDE (arturo-voice, watch call vc_1114f6e34c65c245): Hume ended the operator's turn on a
+    # mid-thought pause, we answered the fragment, then the full final arrived with the
+    # fragment + our answer dropped from Hume's window. Answer the full final ONCE, as a
+    # continuation: the fragment's answer was already spoken and cannot be recalled, so the
+    # model must know it, or it repeats itself and redoes the fragment's tool calls.
+    if _is_hume_clm and _conv_id:
+        try:
+            _ext = _ANSWERED_FINALS.answered_extension(
+                _conv_id, _voice_guards.latest_user_text(messages))
+            if _ext:
+                log.warning(f"SUPERSEDE: latest final on {_conv_id} extends an answered fragment "
+                            "— answering once as a continuation")
+                context += (
+                    "\n\n--- SUPERSEDED TURN ---\nthe operator was cut off mid-sentence and you already "
+                    f"replied to the fragment (\"{_ext['text'][:400]}\") with: \"{_ext['reply'][:600]}\". "
+                    "Their latest message is the COMPLETE thought. Answer it once, building on what "
+                    "you already said. Do not repeat it, and do not redo any action you already took.")
+        except Exception as _sxe:
+            log.error(f"supersede seam error (non-fatal): {_sxe}")
     # Last, after every preamble seam above (semantic recall, facts recall, stream-relay replay), so
     # the per-turn instruction is the most recent thing in the context and no later seam buries it.
     if _carried:
@@ -5387,7 +5406,8 @@ def chat_completions():
                     # an identical re-final on this cid is a vendor retry, not a re-ask.
                     try:
                         _ANSWERED_FINALS.record_answered(
-                            _conv_id, _voice_guards.latest_user_text(messages))
+                            _conv_id, _voice_guards.latest_user_text(messages),
+                            reply=_voice_guards.strip_tool_code("".join(spoken))[:600])
                     except Exception as _afe:
                         log.error(f"answered-final record error: {_afe}")
 

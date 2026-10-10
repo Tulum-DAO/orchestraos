@@ -845,16 +845,32 @@ class AnsweredFinalMemory:
         if not conversation_id or n is None:
             return False
         with self._lock:
-            return self._m.get(conversation_id) == n
+            return (self._m.get(conversation_id) or (None,))[0] == n
 
-    def record_answered(self, conversation_id, text):
+    def answered_extension(self, conversation_id, text):
+        """EXTENSION (arturo-voice, watch call vc_1114f6e34c65c245): Hume ended the turn on a
+        mid-thought pause, we answered the fragment, then Hume sent the full sentence with the
+        fragment + answer dropped from its window, so the history-scanning superset guard is
+        blind. If `text` strictly extends (word-aligned) the final we LAST ANSWERED here, return
+        {"text": <answered final>, "reply": <what we said>} so the caller answers the full turn
+        once, as a continuation. Never a suppression: the extension is new speech from the operator."""
+        n = self._key_text(text)
+        if not conversation_id or n is None:
+            return None
+        with self._lock:
+            prev = self._m.get(conversation_id)
+        if not prev or not n.startswith(prev[0] + " "):
+            return None
+        return {"text": prev[0], "reply": prev[1]}
+
+    def record_answered(self, conversation_id, text, reply=None):
         n = self._key_text(text)
         if not conversation_id or n is None:
             return
         with self._lock:
             if len(self._m) >= self.cap:
                 self._m.clear()          # bounded; a rare reset only widens the guard briefly
-            self._m[conversation_id] = n
+            self._m[conversation_id] = (n, reply or "")
 
     def forget(self, conversation_id):
         with self._lock:
