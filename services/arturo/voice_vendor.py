@@ -56,7 +56,9 @@ class VendorStore:
 
     def vendors(self, un=None):
         """Rows to render. When present, a row's `available`/`reason` are authoritative; the old
-        `allowed`/`unavailable` fields are for clients that predate `vendors`."""
+        `allowed`/`unavailable` fields are for clients that predate `vendors`. Every field is a
+        non-null value of its type; an EMPTY or whitespace-only title/subtitle/reason means ABSENT,
+        exactly like null (an available row carries reason "", which is not a blocker)."""
         un = self.unavailable() if un is None else un
         out = []
         for vid in REQUIRED:

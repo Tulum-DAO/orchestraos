@@ -74,3 +74,22 @@ def test_route_serves_the_rows(monkeypatch, tmp_path):
     j = c.get("/ptt/vendor", environ_base={"REMOTE_ADDR": "127.0.0.1"}).get_json()
     assert j["ok"] and set(_by_id(j)) == set(vv.REQUIRED)
     assert set(j["allowed"]) == set(vv.REQUIRED)
+
+
+def test_every_row_is_strictly_typed_including_unavailable_ones(tmp_path):
+    """A client decoding strictly must never meet a null or a non-bool, available or not."""
+    for creds in (lambda k: "x", lambda k: ""):
+        for row in _store(tmp_path, creds).state()["vendors"]:
+            assert set(row) == {"id", "title", "subtitle", "available", "reason"}
+            assert type(row["available"]) is bool
+            for k in ("id", "title", "subtitle", "reason"):
+                assert isinstance(row[k], str), (k, row)
+
+
+def test_the_vendor_in_use_always_has_a_row(tmp_path):
+    """The picker must show what is current. A state file naming a vendor that is no longer
+    offered resolves to the default, which has a row."""
+    s = _store(tmp_path)
+    for named in ("hume", "elevenlabs", "a-removed-vendor"):
+        (tmp_path / "v.json").write_text('{"vendor": "%s"}' % named)
+        assert s.get() in _by_id(s.state())
