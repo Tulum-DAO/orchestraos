@@ -159,12 +159,12 @@ def retire_card(c, table, rid, caller, reason, superseded_by, reg, now_iso=None)
 
 
 def export_retired(row):
-    """Client-safe export of a retired card (gm msg_3f3a4d05 §6): until a client confirms it
-    tolerates an unknown status, a retired row is exported as status 'discarded' + an additive
-    'retired' object, and its answered_at reads as when it ended. Every other row is untouched."""
+    """Client export of a retired card: the REAL status 'retired' plus a 'retired' object with
+    exactly {by, reason, superseded_by, at}; answered_at reads as when it ended. All three clients
+    (iOS/watch, Mac, web) confirmed they tolerate an unknown status, so gm ruled the flip from the
+    interim 'discarded' (msg_6003469a). Every other row is untouched."""
     if row.get("status") != "retired":
         return row
-    row["status"] = "discarded"
     row["retired"] = {"by": row.get("retired_by"), "reason": row.get("retire_reason"),
                       "superseded_by": row.get("superseded_by"), "at": row.get("retired_at")}
     row["answered_at"] = row.get("answered_at") or row.get("retired_at")
