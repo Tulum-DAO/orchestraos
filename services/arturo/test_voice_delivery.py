@@ -421,6 +421,20 @@ def test_fast_ack_speaks_dispatch_line_without_a_second_model_round(monkeypatch,
         m.shutdown()
 
 
+def test_fast_ack_never_reads_out_a_refusal(monkeypatch, tmp_path):
+    """arturo-voice review of #371: on a call with no stamped caller, deep_query is refused
+    ("NOT RUN: ..."). FAST-ACK must speak the plain not-from-here line, never the refusal text."""
+    mod, m, seen = _e2e(monkeypatch, tmp_path, flag=True)
+    monkeypatch.setattr(mod, "_call_principal", lambda cid: None)   # an unstamped call: allowlist only
+    try:
+        spoken = _post(mod, "why are chats in terminal view")
+        assert "NOT RUN" not in spoken, spoken
+        assert spoken == mod._NOT_FROM_HERE, spoken
+    finally:
+        _join_async()
+        m.shutdown()
+
+
 def test_flag_off_keeps_the_follow_up_round(monkeypatch, tmp_path):
     mod, m, seen = _e2e(monkeypatch, tmp_path, flag=False)
     try:

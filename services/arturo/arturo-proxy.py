@@ -5237,7 +5237,8 @@ def chat_completions():
                             and all(n in ("deep_query", "ask_gm") for n in tool_names)
                             and tool_results and tool_results[0]["content"]
                             and not tool_results[0]["content"].startswith("ERROR")):
-                        full = tool_results[0]["content"]
+                        # a refused background tool is never read out as its "NOT RUN" text
+                        full = _promise_or_refusal(tool_results[0]["content"], tool_results[0]["content"])
                         yield make_sse_chunk(full)
                         log.info(f"FAST-ACK: {tool_names} dispatched — spoke the ack, skipped follow-up round")
                         _log_voice_turn(
