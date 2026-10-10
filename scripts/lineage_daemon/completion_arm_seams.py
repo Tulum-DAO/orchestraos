@@ -16,6 +16,8 @@ failure-never-proceeds, context-assist is best-effort + dry-safe.
 import json
 import os
 
+from .code_root import child_env, code_path   # scripts are CODE (checkout); orchestra_dir is DATA
+
 
 def resolve_repo(orchestra_dir, agent_id):
     """The lineage's work repo = registry.agents[agent_id].cwd (all ios-watch-dev
@@ -73,7 +75,7 @@ def build_escalate_fn(orchestra_dir, *, dry=False, runtime_dir=None, request_fn=
                  else "post-retire no-effect")
         question = (f"Lineage {canary} successor {successor}: {phase} — look. "
                     f"Rotation completion needs a human; nothing auto-reverts.")
-        argv = ["python3", os.path.join(orchestra_dir, "scripts", "approval.py"),
+        argv = ["python3", code_path("scripts", "approval.py"),   # CODE (checkout); data via child_env
                 "request", question, "--from", "lineage-daemon",
                 "--worker-kind", "pane", "--risk", "high",
                 "--reversibility", "hard", "--feature", "Rotation",
@@ -84,7 +86,7 @@ def build_escalate_fn(orchestra_dir, *, dry=False, runtime_dir=None, request_fn=
         if dry:
             return None
         import subprocess
-        subprocess.run(argv, capture_output=True, timeout=30)
+        subprocess.run(argv, capture_output=True, timeout=30, env=child_env(orchestra_dir))
 
     def escalate_fn(canary, successor, ctx):
         def _notify(root, c):

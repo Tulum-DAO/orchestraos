@@ -1015,8 +1015,9 @@ def _default_reap_pane_fn(orchestra_dir):
         from . import spawn_green as _sg
         if not _sg._tmux_has_session(green_alias):
             return
-        subprocess.run([os.path.join(orchestra_dir, "spawn-agent.sh"), "--kill", green_alias],
-                       capture_output=True, text=True, timeout=30)
+        from ..code_root import child_env, code_path
+        subprocess.run([code_path("spawn-agent.sh"), "--kill", green_alias],   # CODE; data via env
+                       capture_output=True, text=True, timeout=30, env=child_env(orchestra_dir))
     return reap
 
 

@@ -36,10 +36,11 @@ EXIT_REFUSED = 3
 
 
 def _default_system_prompt(orch, agent_id):
-    """prompts/<id>.md when it exists (the operator 'resume apprvd-pm': a blank system_prompt booted the
+    """prompts/<id>.md (CODE: checked in the checkout, as spawn-agent.sh and seats.py read it) when it exists (the operator 'resume apprvd-pm': a blank system_prompt booted the
     seat on the foundation prompt only), else '' — spawn-agent.sh resolves the same default."""
     rel = os.path.join("prompts", f"{agent_id}.md")
-    return rel if os.path.isfile(os.path.join(orch, rel)) else ""
+    code_root = os.environ.get("ORCHESTRA_ROOT") or _ROOT
+    return rel if os.path.isfile(os.path.join(code_root, rel)) else ""
 
 
 def _orchestra_dir():

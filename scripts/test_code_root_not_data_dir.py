@@ -31,8 +31,9 @@ def test_message_router_imports_its_code_from_the_checkout(tmp_path):
 
 
 def test_s3_seam_loads_rotation_gate_manual_from_the_checkout(tmp_path):
-    out = _run(f"import sys; sys.path.insert(0, {str(ROOT / 'scripts' / 'lineage_daemon')!r});"
-               "import s3_live_seams as s; RG = s._import_rgm(); print(RG.__file__)", tmp_path)
+    # the beat's own import form (cron_beat / complete import scripts.lineage_daemon.s3_live_seams)
+    out = _run(f"import sys; sys.path.insert(0, {str(ROOT)!r});"
+               "from scripts.lineage_daemon import s3_live_seams as s; RG = s._import_rgm(); print(RG.__file__)", tmp_path)
     assert pathlib.Path(out).resolve().parent == ROOT / "scripts"
 
 

@@ -45,9 +45,11 @@ def orch(tmp_path):
     return tmp_path
 
 
-def _run(orch, args, cutover=True):
+def _run(orch, args, cutover=True, code_root=None):
     env = dict(os.environ)
     env["ORCHESTRA_DIR"] = str(orch)
+    if code_root is not None:            # a fake CHECKOUT (prompts/ are code, not data)
+        env["ORCHESTRA_ROOT"] = str(code_root)
     env.pop("IDENTITY_STORE_CUTOVER", None)
     if cutover:
         (orch / "state" / "identity-store-cutover.flag").touch()
@@ -270,13 +272,18 @@ def test_doc_system_prompt_defaults_to_prompts_file_when_present(orch):
     """the operator 'resume apprvd-pm' 2026-09-16: the seat booted on FOUNDATION_STATIC only because the
     auto-register doc carried system_prompt='' although prompts/apprvd-pm.md exists. The gate's
     document must default system_prompt to prompts/<id>.md when that file exists (else '')."""
+    # prompts/ are CODE: spawn-agent.sh and seats.py read them from the checkout (data-dir sweep
+    # S1/S2), so the file goes in a fake checkout, and a copy under the DATA dir must NOT count.
+    code = orch / "checkout"
+    (code / "prompts").mkdir(parents=True)
+    (code / "prompts" / "role-x.md").write_text("# role-x\n")
     (orch / "prompts").mkdir()
-    (orch / "prompts" / "role-x.md").write_text("# role-x\n")
-    r = _run(orch, ["role-x", "--runtime", "claude", "--model", "m", "--tier", "T2"])
+    (orch / "prompts" / "role-y.md").write_text("# a stray copy under the data dir\n")
+    r = _run(orch, ["role-x", "--runtime", "claude", "--model", "m", "--tier", "T2"], code_root=code)
     assert r.returncode == 0, r.stderr
     reg = json.loads((orch / "registry.json").read_text())["agents"]
     assert reg["role-x"]["system_prompt"] == "prompts/role-x.md"
-    r2 = _run(orch, ["role-y", "--runtime", "claude", "--model", "m", "--tier", "T2"])
+    r2 = _run(orch, ["role-y", "--runtime", "claude", "--model", "m", "--tier", "T2"], code_root=code)
     assert r2.returncode == 0, r2.stderr
     reg = json.loads((orch / "registry.json").read_text())["agents"]
     assert reg["role-y"].get("system_prompt", "") == ""

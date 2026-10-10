@@ -10,8 +10,10 @@ import json
 import pytest
 
 from scripts.lineage_daemon import executors
+from scripts.lineage_daemon.code_root import code_root
 
-FAKE = "/tmp/fake"
+FAKE = "/tmp/fake"     # the DATA dir a beat passes down (orchestra_dir)
+CODE = code_root()     # the checkout: every script a step runs lives HERE, never under FAKE (S2)
 
 
 @pytest.fixture(autouse=True)
@@ -27,7 +29,7 @@ def _forbid_subprocess(monkeypatch):
 def test_plan_spawn_unarmed_cmd():
     r = executors.plan_spawn("cand-g2", armed=False, orchestra_dir=FAKE)
     assert r["executed"] is False
-    assert r["cmd"] == [FAKE + "/spawn-agent.sh", "cand-g2"]
+    assert r["cmd"] == [CODE + "/spawn-agent.sh", "cand-g2"]
 
 
 # --- plan_retire ---
@@ -36,7 +38,7 @@ def test_plan_retire_unarmed_cmd():
     r = executors.plan_retire("cand", armed=False, orchestra_dir=FAKE)
     assert r["executed"] is False
     assert r["cmd"] == [
-        "python3", FAKE + "/scripts/park-idle.py",
+        "python3", CODE + "/scripts/park-idle.py",
         "--agent", "cand", "--execute",
     ]
 
@@ -57,7 +59,7 @@ def test_plan_wire_edge_builds_three_commands():
     # pred_succession: succession edge goes to agent-sessions (consumer store).
     # sessions-update.py cand --json {"succeeded_by": "cand-g2"}
     assert pred_succ["cmd"][:3] == [
-        "python3", FAKE + "/scripts/sessions-update.py", "cand",
+        "python3", CODE + "/scripts/sessions-update.py", "cand",
     ]
     assert pred_succ["cmd"][3] == "--json"
     assert json.loads(pred_succ["cmd"][4]) == {"succeeded_by": "cand-g2"}
@@ -65,7 +67,7 @@ def test_plan_wire_edge_builds_three_commands():
     # succ_succession: successor lineage edge also in agent-sessions.
     # sessions-update.py cand-g2 --json {lineage_root, handoff_from}
     assert succ_succ["cmd"][:3] == [
-        "python3", FAKE + "/scripts/sessions-update.py", "cand-g2",
+        "python3", CODE + "/scripts/sessions-update.py", "cand-g2",
     ]
     assert succ_succ["cmd"][3] == "--json"
     assert json.loads(succ_succ["cmd"][4]) == {
@@ -76,7 +78,7 @@ def test_plan_wire_edge_builds_three_commands():
     # succ_generation: generation is a registry display/recovery field.
     # registry-update.py cand-g2 --json {generation, handoff_from}
     assert succ_gen["cmd"][:3] == [
-        "python3", FAKE + "/scripts/registry-update.py", "cand-g2",
+        "python3", CODE + "/scripts/registry-update.py", "cand-g2",
     ]
     assert succ_gen["cmd"][3] == "--json"
     assert json.loads(succ_gen["cmd"][4]) == {
@@ -91,7 +93,7 @@ def test_verify_successor_unarmed_cmd():
     r = executors.verify_successor("cand-g2", armed=False, orchestra_dir=FAKE)
     assert r["executed"] is False
     assert r["cmd"] == [
-        "python3", FAKE + "/scripts/agent-status.py", "cand-g2",
+        "python3", CODE + "/scripts/agent-status.py", "cand-g2",
     ]
 
 
@@ -104,7 +106,7 @@ def test_plan_register_successor_inherits_role():
     r = executors.plan_register_successor("cand-g3", pred, 3, "cand",
                                           armed=False, orchestra_dir=FAKE)
     assert r["executed"] is False
-    assert r["cmd"][:3] == ["python3", FAKE + "/scripts/registry-update.py", "cand-g3"]
+    assert r["cmd"][:3] == ["python3", CODE + "/scripts/registry-update.py", "cand-g3"]
     fields = json.loads(r["cmd"][4])
     assert fields["system_prompt"] == "prompts/gm.md"
     assert fields["cwd"] == "/home/x" and fields["model"] == "claude-opus-4-8[1m]"
@@ -119,7 +121,7 @@ def test_plan_register_successor_inherits_role():
 def test_plan_inject_init_cmd():
     r = executors.plan_inject_init("cand-g3", "cand", armed=False, orchestra_dir=FAKE)
     assert r["executed"] is False
-    assert r["cmd"][:2] == ["python3", FAKE + "/msg_store.py"]
+    assert r["cmd"][:2] == ["python3", CODE + "/msg_store.py"]
     assert "--to" in r["cmd"] and r["cmd"][r["cmd"].index("--to") + 1] == "cand-g3"
     body = r["cmd"][-1]
     assert "handoff" in body.lower() and "MEMORY.md" in body
@@ -151,7 +153,7 @@ def test_plan_inject_init_commands_a_gradable_readback():
 def test_plan_verify_edge_unarmed_cmd():
     r = executors.plan_verify_edge("cand", "cand-g3", armed=False, orchestra_dir=FAKE)
     assert r["executed"] is False
-    assert r["cmd"] == ["python3", FAKE + "/scripts/sessions-update.py", "cand"]
+    assert r["cmd"] == ["python3", CODE + "/scripts/sessions-update.py", "cand"]
 
 
 # --- Gap 7: plan_repin_canonical renames + clears succeeded_by, never guesses sid ---
@@ -191,4 +193,45 @@ def test_no_subprocess_when_unarmed():
 
 def test_default_orchestra_dir_used():
     r = executors.plan_spawn("a", armed=False)
-    assert r["cmd"][0] == executors.ORCHESTRA_DIR + "/spawn-agent.sh"
+    assert r["cmd"][0] == CODE + "/spawn-agent.sh"     # code root whatever the data dir is
+
+
+# --- S2: code from the checkout, data handed to the child explicitly ---
+
+def test_no_planned_step_runs_a_script_from_the_data_dir():
+    """Under `orchestra up` the data dir holds no code: a step that ran <data>/spawn-agent.sh or
+    <data>/scripts/*.py failed with ENOENT on every real install."""
+    steps = [
+        executors.plan_spawn("a", armed=False, orchestra_dir=FAKE),
+        executors.plan_retire("a", armed=False, orchestra_dir=FAKE),
+        executors.verify_successor("a", armed=False, orchestra_dir=FAKE),
+        executors.plan_register_successor("a", {}, 2, "a", armed=False, orchestra_dir=FAKE),
+        executors.plan_inject_init("a-g2", "a", armed=False, orchestra_dir=FAKE),
+        executors.plan_verify_edge("a", "a-g2", armed=False, orchestra_dir=FAKE),
+        *executors.plan_wire_edge("a", "b", 3, armed=False, orchestra_dir=FAKE).values(),
+        *[v for v in executors.plan_repin_canonical("a-g2", "a", 2, armed=False,
+                                                    orchestra_dir=FAKE).values() if "cmd" in v],
+    ]
+    for st in steps:
+        for arg in st["cmd"]:
+            assert not str(arg).startswith(FAKE), st["cmd"]
+
+
+def test_armed_step_hands_the_data_dir_to_the_child(monkeypatch):
+    """The scripts now run from the checkout, and several fall back to "next to my own file" for their
+    data (registry-update.py, approval.py, spawn-agent.sh). The child must get ORCHESTRA_DIR = od, or it
+    would read and write the checkout instead of the install's data."""
+    seen = {}
+
+    class _P:
+        returncode, stdout, stderr = 0, "", ""
+
+    def _fake_run(cmd, **kw):
+        seen["cmd"], seen["env"] = cmd, kw.get("env")
+        return _P()
+    monkeypatch.setattr(executors.subprocess, "run", _fake_run)
+    monkeypatch.delenv("ORCHESTRA_DIR", raising=False)
+    executors.plan_register_successor("a-g2", {}, 2, "a", armed=True, orchestra_dir=FAKE)
+    assert seen["cmd"][1] == CODE + "/scripts/registry-update.py"
+    assert seen["env"]["ORCHESTRA_DIR"] == FAKE and seen["env"]["ORCH_DIR"] == FAKE
+    assert seen["env"]["ORCHESTRA_ROOT"] == CODE

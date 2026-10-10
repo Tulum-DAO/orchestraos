@@ -31,6 +31,8 @@ importing live IO):
 """
 import os
 
+from .code_root import code_path   # scripts are CODE (checkout), never under ORCHESTRA_DIR (DATA)
+
 ORCHESTRA_DIR = os.environ.get(
     "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
 
@@ -59,7 +61,7 @@ def _promote(canonical_id, successor_session, **kw):
     pulls heavy live-state deps) so importing THIS module stays cheap + IO-free."""
     import importlib
     import sys
-    sys.path.insert(0, os.path.join(ORCHESTRA_DIR, "scripts"))
+    sys.path.insert(0, code_path("scripts"))
     ps = importlib.import_module("promote_successor")
     return ps.promote(canonical_id, successor_session, **kw)
 
@@ -68,7 +70,7 @@ def _load_park_idle():
     """Load the hyphenated park-idle.py as a module (same importlib pattern as
     cron_beat/execute use — the filename is not a valid import name)."""
     import importlib.util
-    pk_path = os.path.join(ORCHESTRA_DIR, "scripts", "park-idle.py")
+    pk_path = code_path("scripts", "park-idle.py")
     spec = importlib.util.spec_from_file_location("park_idle_rt", pk_path)
     pk = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(pk)
@@ -79,7 +81,7 @@ def _approval_store():
     """The card producer store (ApprovalStore) — the sanctioned single card
     producer seam. Imported lazily so this module stays IO-free at import."""
     import sys
-    sys.path.insert(0, os.path.join(ORCHESTRA_DIR, "scripts"))
+    sys.path.insert(0, code_path("scripts"))
     from approval_schema import ApprovalStore
     return ApprovalStore()
 
@@ -88,7 +90,7 @@ def _approval_notify(rid):
     """Push an existing card to the operator's surface (best-effort; the cron backstop
     re-notifies). Mirrors approval.py request: store.create -> notify."""
     import sys
-    sys.path.insert(0, os.path.join(ORCHESTRA_DIR, "scripts"))
+    sys.path.insert(0, code_path("scripts"))
     from approval_notify import notify
     return notify(rid)
 
@@ -97,7 +99,7 @@ def _send_ping(msg):
     """Durable msg_store row carrying the D2 notify-only ping (to gm). A silent
     auto-retire is wrong (the operator Q2) — this is the after-the-fact visibility line."""
     import sys
-    sys.path.insert(0, os.path.join(ORCHESTRA_DIR, "scripts"))
+    sys.path.insert(0, code_path("scripts"))
     from msg_store import MessageStore
     return MessageStore().send(
         from_agent="lineage-daemon", to_agent="gm",

@@ -19,6 +19,8 @@ tmux session without launching a full CLI; the live default calls spawn-agent.sh
 import os
 import subprocess
 
+from ..code_root import child_env, code_path   # spawn-agent.sh is CODE (checkout); orchestra_dir is DATA
+
 
 # Pre-spawn free-RAM floor (item 2c, gm gate msg_8f6cd0b2). A broad arm spawns MANY
 # greens at once; g15's pred4 proof-fire green was OOM-KILLED at boot under swap thrash
@@ -109,9 +111,12 @@ def _default_spawn_runner(orchestra_dir, timeout_s):
         # driver log), never blind. A timeout is itself a spawn failure and carries
         # whatever partial output was captured before the deadline.
         try:
+            # spawn-agent.sh is CODE (the checkout); the data dir goes over explicitly, since the
+            # script's own fallback (its directory) is now the checkout (code_root.child_env).
             r = subprocess.run(
-                [os.path.join(orchestra_dir, "spawn-agent.sh"), session],
-                capture_output=True, text=True, timeout=timeout_s, env=env)
+                [code_path("spawn-agent.sh"), session],
+                capture_output=True, text=True, timeout=timeout_s,
+                env=child_env(orchestra_dir, env))
             return {"session": session, "returncode": r.returncode,
                     "stderr_tail": _tail(r.stderr), "stdout_tail": _tail(r.stdout)}
         except subprocess.TimeoutExpired as e:

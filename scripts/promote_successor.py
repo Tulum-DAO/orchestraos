@@ -78,8 +78,9 @@ def _db_promote_swap(root: str, new_entry: dict, sess_entry: dict,
                      aliases_retired=None) -> bool:
     if not _cutover_active():
         return False
-    if str(ORCHESTRA_DIR) not in sys.path:
-        sys.path.insert(0, str(ORCHESTRA_DIR))
+    code_root = os.environ.get("ORCHESTRA_ROOT") or str(Path(__file__).resolve().parent.parent)
+    if code_root not in sys.path:   # scripts.identity_store is CODE (checkout), not under ORCHESTRA_DIR
+        sys.path.insert(0, code_root)
     from scripts.identity_store import identity_writer
     green = {
         "generation": sess_entry.get("generation") or new_entry.get("generation"),
