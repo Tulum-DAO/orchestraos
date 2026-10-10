@@ -67,7 +67,8 @@ Read scope, the same as `/briefing`. Response:
     "id": "a_<sha256 of kind+ref, 12 hex>",
     "kind": "call | answer | message | screen",
     "at": "2026-10-10T14:04:11Z",
-    "device": "Quest",
+    "device": "iPad",
+    "device_source": "label | channel | answer_device | none",
     "surface": "voice | phone | watch | web | unknown",
     "said": "make the away card start from my last action",
     "target": "gm",
@@ -100,7 +101,7 @@ No anchor at all (a fresh install): `anchor: null`, and the card falls back to "
 
 ### 5.3 "Since I last opened any screen" (`anchor=screen`)
 
-`last_seen` cannot answer this (§3). New, small: **`POST /presence {"foreground": true}`**, sent by a client when its app or tab comes to the foreground. The server stores `foreground_at` per device. `anchor=screen` uses the newest `foreground_at` across your devices. Until a client sends it, `anchor=screen` returns `anchor: null` with `reason: "no_presence_yet"`. It never falls back to `last_seen`.
+`last_seen` cannot answer this (§3). New, small: **`POST /presence {"foreground": true}`**, sent by a client when its app or tab comes to the foreground. The server stores `foreground_at` per device. `anchor=screen` uses the newest `foreground_at` across your devices. Writes are debounced per device (60 s), because clients send on every foreground. Until a client sends it, `anchor=screen` returns `anchor: null` with `reason: "no_presence_yet"`. It never falls back to `last_seen`.
 
 ### 5.4 The summary
 
@@ -120,6 +121,7 @@ It is marked deprecated in its docstring, in favour of `/away`.
 
 ## 6. Tests (server, written first)
 
+- Device naming: `X-Device-Label` wins; without it the card gets the channel only (`device: null`, `surface: "phone"` rendered as "on iOS"), never a guess.
 - Anchor selection: each source wins when it is newest; ties break deterministically; the legacy fleet token's answers show `device: null`, not a guess.
 - Outcome rule: each of the four states from a fixture, plus `unknown` when the agent is gone.
 - `moved` excludes: retired seats, service panes, events at or before the anchor, cards answered by agents (self-authored gates).
@@ -129,14 +131,14 @@ It is marked deprecated in its docstring, in favour of `/away`.
 
 ## 7. Open questions (for gm and the app owners)
 
-1. **Device on voice calls.** The journal records the channel (`page`), not the device. Is the channel enough ("from Quest", "from the watch")? Or should the app pass its device label when it starts a call, so it can be stamped on the journal? (ios-watch-dev)
+1. **Device on voice calls. ANSWERED (ios-watch-dev):** the channel is not enough, and today it is silently wrong. The iOS app sends `X-Surface: phone` from one literal (`RelayVoiceEngine.swift:68`), and the same binary runs on the iPhone and the iPad, so an iPad call is journaled as "phone". **Agreed:** `X-Surface` stays as is (phone | watch). Builds from 282 on add `X-Device-Label` (`iPhone` / `iPad` / `Apple Watch`, derived on the device), and the server stamps it on the journal at call start. **Absent-tolerant:** every shipped build today lacks the header, and the iPad updates rarely. Without the label the card states only the channel's truth ("on iOS", "on the watch"), never a guessed device. A card that names the wrong device is worse than one that names none.
 2. **Device on chat messages.** Operator messages carry no device. Proposal: stamp `"<device_id>:<label>"` on operator messages sent through the gateway, the same way `answer_device` is stamped on answers. One new column, read-only for everything else.
-3. **Presence signal.** Are iOS and web happy to send `POST /presence` on foreground? (ios-watch-dev, webos-dev)
+3. **Presence signal. ANSWERED for iOS (ios-watch-dev):** yes. One call from RootView's existing `scenePhase == .active` handler covers the iPhone and the iPad. Sizing: `.active` fires on every foreground, including glances and app-switcher passes, so **the server debounces** (one stored `foreground_at` update per device per 60 s; the newest value wins). No signal while the app is not running, so a gap means "not foregrounded", never "absent". The watch has its own lifecycle and is **not** covered by this yes, so watch presence is still open. Web (webos-dev) is still open.
 4. **Where the card lives.** The Arturo tab only (today), or also the dashboard home?
 
 ## 8. Order of work
 
 1. Agree on this shape (gm, ios-watch-dev, webos-dev).
-2. Server PR in this repo, test-first: `/away`, the `/briefing` honesty fixes, `/presence`, and the message device stamp if Q2 is yes.
+2. Server PR in this repo, test-first (not gated on the client half; the iOS build that sends the label and presence comes with 282): `/away`, the `/briefing` honesty fixes, `/presence`, and the message device stamp if Q2 is yes.
 3. Clients render `/away` (iOS: `ArturoView.swift`; web).
 4. Live: orchestra-builder applies the reviewed server diff.
