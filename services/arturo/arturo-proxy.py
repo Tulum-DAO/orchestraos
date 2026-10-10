@@ -3733,7 +3733,14 @@ def execute_tool(name, args, user_turns=None):
             "tool_args": {
                 "session_name": f"research-{int(time.time()) % 10000}",
                 "machine": "vps",
-                "prompt": f"Research this topic thoroughly and text the operator the results on Telegram when done:\n\n{query}\n\nUse WebSearch and WebFetch tools. Be concise but comprehensive. Send findings via: curl -s -X POST 'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage' -d chat_id={TELEGRAM_CHAT_ID} --data-urlencode 'text=Research results: {query[:50]}...\\n\\n<your findings>'"
+                # "task", not "prompt": spawn_agent reads only args["task"] (gm audit 2026-10-09 #2);
+                # with "prompt" every research seat spawned with no question at all. The agent reports
+                # through scripts/tg-notify.sh, which reads the bot token from <data dir>/.env.telegram
+                # by reference: the token never appears in the agent's task, transcript or a command line.
+                "task": (f"Research this topic thoroughly and send the operator the results on Telegram when done:\n\n{query}\n\n"
+                         "Use WebSearch and WebFetch tools. Be concise but comprehensive. Send your findings by running: "
+                         f"bash {ORCHESTRA_DIR / 'scripts' / 'tg-notify.sh'} --from research \"Research results: {query[:50]}...\\n\\n<your findings>\" "
+                         "(it reads the bot token by reference; never paste a token into a command)."),
             },
             "summary": f"Web research: {query[:80]}"
         })
