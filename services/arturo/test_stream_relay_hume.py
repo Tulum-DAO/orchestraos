@@ -375,3 +375,30 @@ def test_elevenlabs_default_unchanged_when_vendor_fn_says_elevenlabs():
         assert _wait(lambda: calls == ["e1"])
     finally:
         m.shutdown()
+
+
+def test_audio_span_logged_at_assistant_end_and_interruption(caplog):
+    # AUDIO-SPAN (gm msg_f0356ea9): log-only playback span per agent turn, so a mute tap or
+    # barge-in can be placed inside/outside Arturo's audio. audio_s = forwarded 16k PCM seconds.
+    import logging
+    caplog.set_level(logging.INFO, logger="arturo-stream-relay")
+    m = _manager()
+    try:
+        m.feed_audio("h1", b"\x00" * 10)
+        _wait(lambda: m._t)
+        s = m._t[0]
+        wav = base64.b64encode(_wav48()).decode()
+        s.push({"type": "audio_output", "id": "a", "index": 0, "data": wav})
+        s.push({"type": "audio_output", "id": "a", "index": 1, "data": wav})
+        s.push({"type": "assistant_end"})
+        assert _wait(lambda: "AUDIO-SPAN assistant_end" in caplog.text)
+        line = [r.getMessage() for r in caplog.records if "AUDIO-SPAN assistant_end" in r.getMessage()][0]
+        per = (int(48000 * 0.03) // 3) * 2
+        assert f"audio_s={2 * per / 32000:.2f}" in line and "start=-" not in line
+        s.push({"type": "audio_output", "id": "b", "index": 0, "data": wav})
+        s.push({"type": "user_interruption", "time": 3})
+        assert _wait(lambda: "AUDIO-SPAN user_interruption" in caplog.text)
+        line = [r.getMessage() for r in caplog.records if "AUDIO-SPAN user_interruption" in r.getMessage()][0]
+        assert "forwarded=True" in line and f"audio_s={per / 32000:.2f}" in line   # span reset per turn
+    finally:
+        m.shutdown()

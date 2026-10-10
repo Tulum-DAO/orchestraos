@@ -285,6 +285,8 @@ class _Holder:
         self._last_final_ts = 0.0
         self._rev = 0             # hume: interim revision counter within the current turn
         self._agent_buf = []      # hume: assistant_message segments awaiting assistant_end
+        self._span_t0 = None      # AUDIO-SPAN (gm msg_f0356ea9): first audio_output of the turn
+        self._span_pcm = 0        # 16k mono int16 bytes forwarded this turn -> playback seconds
         self._agent_turn = 0      # hume: assistant-turn counter for streamed agent_response
         self.ar_partials = 0      # by-effect proof (ios msg_3a5b4d4b): counted at end()
         self.ar_finals = 0
@@ -460,6 +462,17 @@ class _Holder:
         # hume session-cap resume: retire+reconnect BEFORE Hume hard-drops the chat; the fresh
         # socket resumes the same chat_group_id (context carries over server-side at Hume).
         self._retire_socket("session_cap_resume", reconnect=True)
+
+    def _log_audio_span(self, event, **extra):
+        """AUDIO-SPAN (gm msg_f0356ea9, ios-watch-dev mute hypothesis): log-only. The watch
+        plays a reply from roughly span start for audio_s seconds; assistant_end only says
+        Hume stopped SENDING. Resets the span so each agent turn logs once."""
+        t0, pcm = self._span_t0, self._span_pcm
+        self._span_t0, self._span_pcm = None, 0
+        start = f"{t0:.3f}" if t0 else "-"
+        more = "".join(f" {k}={v}" for k, v in extra.items())
+        log.info(f"relay {self.cid}: AUDIO-SPAN {event} agent_turn={self._agent_turn} "
+                 f"start={start} end={time.time():.3f} audio_s={pcm / 32000:.2f}{more}")
 
     def _flush_agent_buf(self):
         with self._lock:
@@ -733,6 +746,7 @@ class _Holder:
             return
         if t == "assistant_end":
             self._touch_activity()                # C2
+            self._log_audio_span("assistant_end")
             self._flush_agent_buf()               # coalesce the segments into ONE agent_response
             self.m.buffer.put(self.cid, {"type": "assistant_end"})
             return
@@ -746,10 +760,14 @@ class _Holder:
             except Exception:
                 pcm = b""
             if pcm:
+                if self._span_t0 is None:
+                    self._span_t0 = time.time()
+                self._span_pcm += len(pcm)
                 self.m.buffer.put(self.cid, {"type": "audio",
                                              "audio": base64.b64encode(pcm).decode()})
             return
         if t == "user_interruption":
+            self._log_audio_span("user_interruption", forwarded=self._agent_output_seen)
             # Greeting-clip guard (ios msg_59d6dcd5): Hume fires user_interruption on the
             # first silence chunks WHILE generating the greeting; forwarding barge_in then
             # makes the watch flush playback and clip it. Only forward once THIS socket has
