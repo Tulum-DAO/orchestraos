@@ -69,6 +69,10 @@ stronger claim, and it is not the one this run supports.
 
 Listed as issues (`T1`–`T12`, `G1`–`G20`), seeded from `docs/HACKATHON_ISSUES.md`.
 
+**Fixed after this release, on main (check your registry):** running the test suite in an installed checkout (one with `orchestra.toml`) could write test seats into your REAL data dir, because `scripts/orchestra-env.sh` overrode the data dir a test had chosen. If you ever ran the suite there, look for the seats `helper-a` and `probe-` followed by 8 hex characters:
+`python3 -c "import json,os; d=os.path.expanduser('~/.orchestra'); print([a for a in json.load(open(d+'/registry.json'))['agents'] if a == 'helper-a' or a.startswith('probe-')])"` (use your `[data] dir` if it is not `~/.orchestra`).
+To remove them: `orchestra down`, back up `registry.json`, delete those keys from its `agents`, and delete `<data>/memory/<seat>/` for each. Then `orchestra up`. A spawn in a checkout with no `[data] dir` also no longer falls back to the checkout itself: the data dir is `~/.orchestra`, as everywhere else.
+
 **Breaking after this release, on main:** Post-call webhook now requires `ELEVENLABS_WEBHOOK_SECRET`; without it ElevenLabs transcript saving stops (401). Set it in ElevenLabs > Agents > Settings > webhook (HMAC) and in `.env.secrets` (or the environment). `orchestra doctor` shows a WARN row (`arturo:post-call-secret`) and Arturo logs one warning at startup until it is set. Escape hatch while you set it: `ARTURO_POSTCALL_AUTH=log` accepts unsigned pushes and counts what it would have refused. A signed push is accepted once: re-sending the same signed push inside its 30-minute window is refused as a replay.
 
 **Added after this release, on main:** GPT-Live, a third Arturo voice vendor (OpenAI). Off until `OPENAI_API_KEY` is set; it is only the voice, and every substantive request still runs through Arturo with the same tool allowlist. Per-call and per-day minute caps bound its cost (docs/ARTURO.md, "GPT-Live").

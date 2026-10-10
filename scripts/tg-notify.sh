@@ -17,7 +17,8 @@
 
 set -uo pipefail
 
-ORCHESTRA_DIR="${ORCHESTRA_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# The data dir: the caller's, else the ONE default from orchestra_cli.settings (S5). Never the checkout.
+ORCHESTRA_DIR="${ORCHESTRA_DIR:-${ORCH_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && python3 -c 'from orchestra_cli.settings import data_dir; print(data_dir())')}}"
 ENV_FILE="$ORCHESTRA_DIR/.env.telegram"
 LOG="$ORCHESTRA_DIR/state/tg-notify.log"
 MAXLEN=3900   # under Telegram's 4096 hard limit, leaves room for a chunk header

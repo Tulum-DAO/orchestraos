@@ -34,9 +34,11 @@ source "$SCRIPT_DIR/scripts/orchestra-env.sh"
 # REGISTRY defaults to the checkout's registry.json; env-overridable so the
 # §4.2 dispatch path can be exercised against a scratch/fake registry without
 # a real spawn (the R3 real-artifact gate). Production sets no REGISTRY env.
-# ORCHESTRA_DIR (orchestra.toml [data] dir, exported by orchestra-env.sh / `orchestra up`)
-# is where registry.json + state/ + logs/ live; the checkout is the default.
-ORCHESTRA_DIR="${ORCHESTRA_DIR:-$SCRIPT_DIR}"
+# ORCHESTRA_DIR is where registry.json + state/ + logs/ live: the caller's, else orchestra.toml [data] dir
+# (exported by orchestra-env.sh / `orchestra up`), else the ONE default from orchestra_cli.settings
+# (data-dir sweep S5). Never the checkout.
+ORCHESTRA_DIR="${ORCHESTRA_DIR:-${ORCH_DIR:-$(cd "$SCRIPT_DIR" && python3 -c 'from orchestra_cli.settings import data_dir; print(data_dir())')}}"
+[ -n "$ORCHESTRA_DIR" ] || { echo "spawn-agent: could not resolve the data dir (orchestra_cli.settings)" >&2; exit 1; }
 REGISTRY="${REGISTRY:-$ORCHESTRA_DIR/registry.json}"
 OMNI_DIR="${OMNI_CONTEXT_DIR:-$HOME/scripts/omni-context}"
 STATE_DIR="$ORCHESTRA_DIR/state"

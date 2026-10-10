@@ -30,6 +30,17 @@ path, root = sys.argv[1], sys.argv[2]
 with open(path, "rb") as f:
     cfg = tomllib.load(f)
 
+# The data dir follows the ONE order (orchestra_cli.settings, data-dir sweep S5): a caller's
+# $ORCHESTRA_DIR (or the deprecated $ORCH_DIR) wins, then [data] dir in this toml, then the default
+# ~/.orchestra. Never the checkout root, and never over a dir the caller chose: a test or a second
+# install that points ORCHESTRA_DIR elsewhere must not be redirected into this install's data.
+import os
+sys.path.insert(0, root)
+from orchestra_cli.settings import _configured_data_dir
+data_dir = (os.environ.get("ORCHESTRA_DIR", "").strip() or os.environ.get("ORCH_DIR", "").strip()
+            or str(_configured_data_dir(cfg)))
+data_dir = os.path.expanduser(data_dir)
+
 data = cfg.get("data", {})
 gateway = cfg.get("gateway", {})
 dashboard = cfg.get("dashboard", {})
@@ -40,8 +51,8 @@ rotation = cfg.get("rotation", {})
 notify = cfg.get("notify", {})
 
 pairs = {
-    "ORCHESTRA_DIR": data.get("dir", root),
-    "ORCH_DIR": data.get("dir", root),  # older name read by watch_gateway.py / agent-status.py
+    "ORCHESTRA_DIR": data_dir,
+    "ORCH_DIR": data_dir,  # older name read by watch_gateway.py / agent-status.py
     "ORCHESTRA_GATEWAY_HOST": gateway.get("host", ""),
     "ORCHESTRA_GATEWAY_PORT": str(gateway.get("port", "")),
     "ORCHESTRA_DASHBOARD_HOST": dashboard.get("host", ""),
@@ -69,7 +80,7 @@ pairs = {
     "WATCH_GATEWAY_HOST": gateway.get("host", ""),
     "WATCH_GATEWAY_PORT": str(gateway.get("port", "")),
     "WATCH_GATEWAY_URL": ("http://%s:%s" % (gateway.get("host"), gateway.get("port"))) if gateway.get("port") else "",
-    "WATCH_GATEWAY_TOKEN_FILE": (data.get("dir", root) + "/state/watch-gateway-token"),
+    "WATCH_GATEWAY_TOKEN_FILE": (data_dir + "/state/watch-gateway-token"),
     "ORCH_RUNTIME_DIR": rotation.get("runtime_dir", ""),
 }
 if notify.get("channel") == "telegram":
