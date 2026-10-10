@@ -14,6 +14,7 @@ import {
   shouldOpenPalette, isPaletteChord, filterEntries, pushRecent, pruneRecents,
   RECENTS_KEY, type PaletteEntry,
 } from '../lib/commandPalette';
+import { navItemsFor } from '../lib/features';
 
 /**
  * Mac or not, decided ONCE at module load.
@@ -107,7 +108,8 @@ export function CommandPalette() {
       const id = String(a.id);
       return { kind: 'agent', id, label: String(a.name || id), to: `/agent/${encodeURIComponent(id)}` };
     });
-    return [...agents, ...PAGES];
+    // Pages the deployment hides (runtime config hiddenViews) are not offered.
+    return [...agents, ...navItemsFor(PAGES)];
   }, [rows]);
 
   // Shown when the query is EMPTY: where you were, newest first.

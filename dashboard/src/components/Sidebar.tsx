@@ -83,6 +83,11 @@ const assistantNav: NavItem[] = ASSISTANT_V2_ENABLED
   ? [{ to: '/assistant', icon: Sparkle, label: 'Assistant' }]
   : [];
 
+function NavSection({ label, items }: { label: string; items: NavItem[] }) {
+  if (items.length === 0) return null;
+  return (<><SectionHeader label={label} /><NavItems items={items} /></>);
+}
+
 function NavItems({ items }: { items: NavItem[] }) {
   return (
     <>
@@ -171,16 +176,14 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
           </button>
           {moreOpen && (
             <>
-              {assistantNav.length > 0 && <NavItems items={assistantNav} />}
+              {/* Every list goes through navItemsFor (features + hiddenViews), and a section whose
+                  every entry is hidden loses its header too. */}
+              <NavItems items={navItemsFor(assistantNav)} />
               <NavItems items={navItemsFor(coreNav)} />
-              <SectionHeader label="Operations" />
-              <NavItems items={operationsNav} />
-              <SectionHeader label="Intelligence" />
-              <NavItems items={intelligenceNav} />
-              <SectionHeader label="Projects" />
-              <NavItems items={projectsNav} />
-              <SectionHeader label="Comms" />
-              <NavItems items={commsNav} />
+              <NavSection label="Operations" items={navItemsFor(operationsNav)} />
+              <NavSection label="Intelligence" items={navItemsFor(intelligenceNav)} />
+              <NavSection label="Projects" items={navItemsFor(projectsNav)} />
+              <NavSection label="Comms" items={navItemsFor(commsNav)} />
             </>
           )}
         </nav>

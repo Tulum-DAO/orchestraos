@@ -2,7 +2,7 @@
  * What each runtime feature flag (lib/runtimeConfig) decides, as pure functions, so every
  * surface's on/off rule is tested both ways without a DOM. The components only call these.
  */
-import { featureEnabled, type Features } from './runtimeConfig';
+import { featureEnabled, hiddenViews, type Features } from './runtimeConfig';
 
 const live = (): Features => ({
   arturo: featureEnabled('arturo'),
@@ -15,9 +15,17 @@ export function indexPage(f: Features = live()): 'arturo' | 'overview' {
   return f.arturo ? 'arturo' : 'overview';
 }
 
-/** Sidebar entries: the Arturo entry (the one pointing at "/") goes when Arturo is off. */
-export function navItemsFor<T extends { to: string }>(items: T[], f: Features = live()): T[] {
-  return f.arturo ? items : items.filter((i) => i.to !== '/');
+/** Is this location inside a view the deployment hides? "/tasks" hides /tasks and /tasks/…, never
+ *  /tasks-archive. Case-insensitive, like the router. */
+export function isViewHidden(pathname: string, hidden: string[] = hiddenViews()): boolean {
+  const p = pathname.toLowerCase().replace(/\/+$/, '') || '/';
+  return hidden.some((h) => p === h || p.startsWith(h + '/'));
+}
+
+/** Sidebar / palette entries that may be shown: the Arturo entry (the one pointing at "/") goes
+ *  when Arturo is off, and every entry inside a hidden view goes. */
+export function navItemsFor<T extends { to: string }>(items: T[], f: Features = live(), hidden: string[] = hiddenViews()): T[] {
+  return items.filter((i) => (f.arturo || i.to !== '/') && !isViewHidden(i.to, hidden));
 }
 
 export function showArturoPill(f: Features = live()): boolean {
