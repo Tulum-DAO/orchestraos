@@ -222,3 +222,64 @@ def test_relay_superset_final_replaces_same_turn():
         assert finals[2]["turn"] == finals[1]["turn"] + 1
     finally:
         m.shutdown()
+
+
+# --- the boundary is Arturo's turn, not a clock (gm msg_1fb3f0ee; card apr_56528dc1's class fix) ---
+# MEASURED 2026-10-10 over 314 journals: 82 user->user superset continuations with no Arturo turn between,
+# 19 of them (23%) more than 6 s apart, so the 6 s window split ONE utterance into two bubbles.
+
+def _agent_says(s, text="Sure."):
+    s.push({"type": "assistant_message", "message": {"role": "assistant", "content": text}})
+
+
+def _finals(m):
+    return [e for e in m.events("h1", 0)[0] if e["type"] == "user_transcript"]
+
+
+def _live_hume():
+    m = _manager()
+    m.feed_audio("h1", b"\x00" * 10)
+    assert _wait(lambda: m._t)
+    return m, m._t[0], m._holders["h1"]
+
+
+def test_a_slow_superset_with_no_arturo_turn_between_is_still_the_same_turn():
+    m, s, h = _live_hume()
+    try:
+        _final(s, S1)
+        assert _wait(lambda: len(_finals(m)) == 1)
+        h._last_final_ts -= 30.0               # the operator paused 30 s mid-thought; Arturo said nothing
+        _final(s, S2)
+        assert _wait(lambda: len(_finals(m)) == 2)
+        f = _finals(m)
+        assert f[1]["turn"] == f[0]["turn"], "a slow re-final split one utterance into two bubbles"
+    finally:
+        m.shutdown()
+
+
+def test_a_superset_after_arturo_has_started_replying_is_a_new_turn():
+    m, s, h = _live_hume()
+    try:
+        _final(s, S1)
+        assert _wait(lambda: len(_finals(m)) == 1)
+        _agent_says(s)
+        assert _wait(lambda: h._agent_turn >= 1)
+        _final(s, S2)                          # fast, but Arturo already answered: the operator is continuing anew
+        assert _wait(lambda: len(_finals(m)) == 2)
+        f = _finals(m)
+        assert f[1]["turn"] == f[0]["turn"] + 1, "a turn after Arturo's reply was merged into the old one"
+    finally:
+        m.shutdown()
+
+
+def test_the_same_words_again_after_arturo_replied_are_a_new_turn():
+    m, s, h = _live_hume()
+    try:
+        _final(s, "yes")
+        assert _wait(lambda: len(_finals(m)) == 1)
+        _agent_says(s, "Want me to send it?")
+        assert _wait(lambda: h._agent_turn >= 1)
+        _final(s, "yes")                       # answering Arturo's question, inside the old 6 s window
+        assert _wait(lambda: len(_finals(m)) == 2), "the operator's answer to Arturo was absorbed as a duplicate"
+    finally:
+        m.shutdown()

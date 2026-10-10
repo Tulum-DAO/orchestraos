@@ -62,7 +62,9 @@ FRAMED_STORM_STREAK = int(os.environ.get("ARTURO_FRAMED_STORM_STREAK", "3"))
 FRAMELESS_GRACE_S = float(os.environ.get("ARTURO_FRAMELESS_GRACE_S", "2.0"))
                                                # a socket dying frameless inside this window
                                                # counts as a CONNECT FAILURE (storm-breaker)
-HUME_FINAL_DUP_WINDOW_S = 6.0    # window in which a repeat/superset user-final is ONE utterance
+# A repeat/superset Hume user-final is the SAME utterance while Arturo has not started a turn since the previous
+# final (gm msg_1fb3f0ee). The old fixed 6 s window split slow re-finals (19/82 measured were >6 s) into two
+# bubbles, and absorbed the operator's quick "yes" to Arturo's question as a duplicate. The boundary is Arturo's turn.
 UPLINK_TAP_FLAG = "ARTURO_UPLINK_TAP"          # diagnostic: raw uplink capture, default OFF
 UPLINK_TAP_MAX_BYTES = 10 * 1024 * 1024        # per-conversation cap (~5.5 min of 16k s16le)
 
@@ -290,8 +292,9 @@ class _Holder:
                                         # the RECONNECT path too (else 2-3 connects/s storm)
         self._credit_alerted = False    # one visible credit beat per outage, not per retry
         self._agent_output_seen = False  # hume: gates barge_in (greeting-clip guard)
-        self._last_final_norm = ""       # hume: dedup window for repeat/superset finals
+        self._last_final_norm = ""       # hume: the previous user-final, for repeat/superset re-finals
         self._last_final_ts = 0.0
+        self._last_final_agent_turn = 0  # hume: Arturo's turn counter when that final arrived
         self._rev = 0             # hume: interim revision counter within the current turn
         self._agent_buf = []      # hume: assistant_message segments awaiting assistant_end
         self._span_t0 = None      # AUDIO-SPAN (gm msg_f0356ea9): first audio_output of the turn
@@ -871,13 +874,16 @@ class _Holder:
                 self._speak_off()                 # turn boundary (mirrors EL user_transcript)
             norm = " ".join(re.sub(r"[^\w\s']", " ", text.lower()).split())
             now = time.time()
-            prev, prev_ts = self._last_final_norm, self._last_final_ts
-            in_window = prev and (now - prev_ts) < HUME_FINAL_DUP_WINDOW_S
+            prev = self._last_final_norm
+            with self._lock:
+                agent_turn = self._agent_turn
+            # same utterance <=> Arturo has not started a turn since the previous final (no clock)
+            same_utterance = bool(prev) and agent_turn == self._last_final_agent_turn
             self._touch_activity()       # C2
-            if in_window and norm and (norm == prev or prev.startswith(norm + " ") or prev == norm):
+            if same_utterance and norm and (norm == prev or prev.startswith(norm + " ")):
                 self._last_final_ts = now
                 return                   # duplicate/subset re-final: absorbed
-            if in_window and norm.startswith(prev + " "):
+            if same_utterance and norm.startswith(prev + " "):
                 self._last_final_norm, self._last_final_ts = norm, now
                 if text:
                     self.m.replay_log(self.cid).add("user", text)
@@ -886,6 +892,7 @@ class _Holder:
                 self.m.buffer.put(self.cid, {"type": "user_transcript", "text": text, "turn": turn})
                 return
             self._last_final_norm, self._last_final_ts = norm, now
+            self._last_final_agent_turn = agent_turn
             if text:
                 self.m.replay_log(self.cid).add("user", text)
             with self._lock:
