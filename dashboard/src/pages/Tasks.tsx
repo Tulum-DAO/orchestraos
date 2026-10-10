@@ -4,6 +4,7 @@ import { Plus, ChevronDown, ChevronRight, X, Send, LayoutDashboard, FolderOpen }
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { PriorityBadge } from '../components/PriorityBadge';
 import { operatorUserId } from '../lib/runtimeConfig';
+import { useAgents } from '../hooks/useAgents';
 
 // ── API ─────────────────────────────────────────────────────────
 
@@ -18,12 +19,6 @@ async function fetchV2Tasks(params?: string) {
 async function fetchPipelines() {
   const res = await fetch('/api/pipelines');
   if (!res.ok) throw new Error(`Pipelines: ${res.status}`);
-  return res.json();
-}
-
-async function fetchAgents() {
-  const res = await fetch('/api/agents');
-  if (!res.ok) throw new Error(`Agents: ${res.status}`);
   return res.json();
 }
 
@@ -131,12 +126,8 @@ export default function Tasks() {
   });
 
   // Fetch agents for alive status
-  const { data: agentsData } = useQuery({
-    queryKey: ['agents'],
-    queryFn: fetchAgents,
-    staleTime: 15_000,
-    refetchInterval: 30_000,
-  });
+  // The shared 3 s observer: a slower one here held the dots on this page to a 30 s refresh.
+  const { data: agentsData } = useAgents();
 
   // Build agent status map: agent id/name → status string
   const agentStatusMap = useMemo(() => {

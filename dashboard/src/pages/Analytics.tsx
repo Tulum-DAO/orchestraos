@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
-import { fetchAgents, fetchAnalyticsDashboard } from '../lib/api';
+import { fetchAnalyticsDashboard } from '../lib/api';
+import { useAgents } from '../hooks/useAgents';
 
 // ---- Section A: Agent Status Grid ----------------------------------------
 
 function AgentStatusGrid() {
-  const { data, isLoading } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents, refetchInterval: 15_000 });
+  const { data, isLoading } = useAgents();   // the shared 3 s observer, not a slower one of its own
 
   if (isLoading) return <p className="text-neutral-600 text-sm">Loading agents...</p>;
 
