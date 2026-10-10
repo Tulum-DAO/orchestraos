@@ -138,3 +138,25 @@ def test_relay_call_site_filters_a_reply_split_across_chunks_as_one_stream():
         assert np.abs(got()[:len(want)] - want).max() <= 1
     finally:
         m.shutdown()
+
+
+def test_without_scipy_the_downlink_falls_back_to_the_box_and_still_works(monkeypatch):
+    """Public install: scipy is optional. Missing, the Downsampler takes the old box path (exactly as
+    ARTURO_DOWNLINK_FIR=0) instead of raising inside a live call."""
+    import sys
+    import numpy as np
+    from services.arturo import hume_audio as ha
+    ha._have_scipy.cache_clear()
+    monkeypatch.setitem(sys.modules, "scipy", None)          # `import scipy...` now raises ImportError
+    monkeypatch.setitem(sys.modules, "scipy.signal", None)
+    try:
+        d = ha.Downsampler()
+        assert d._fir_on is False
+        pcm = (np.sin(np.arange(4800) * 2 * np.pi * 440 / 48000) * 8000).astype("<i2").tobytes()
+        import struct
+        hdr = (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt " +
+               struct.pack("<IHHIIHH", 16, 1, 1, 48000, 96000, 2, 16) + b"data" + struct.pack("<I", len(pcm)))
+        out = d.feed(hdr + pcm)
+        assert len(out) == 1600 * 2                            # 4800 samples at 48 kHz -> 1600 at 16 kHz
+    finally:
+        ha._have_scipy.cache_clear()
