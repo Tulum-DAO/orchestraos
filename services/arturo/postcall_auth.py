@@ -22,7 +22,7 @@ import sys
 if os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) not in sys.path:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
-SECRET_KEY = "ELEVENLABS_WEBHOOK_SECRET"
+SECRET_KEY = "ELEVENLABS_WEBHOOK_SECRET"  # pragma: allowlist secret (env var name, not a value)
 HEADER = "ElevenLabs-Signature"
 MAX_AGE_S = 30 * 60          # the SDK's tolerance
 MAX_SKEW_S = 5 * 60          # a timestamp from the future is a forgery or a broken clock

@@ -14,7 +14,7 @@ import pytest
 
 from services.arturo import postcall_auth as pa
 
-SECRET = "wsec_test_123"
+SECRET = "wsec_test_123"  # pragma: allowlist secret (synthetic test secret)
 
 
 def _sig(body, secret=SECRET, t=None):
