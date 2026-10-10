@@ -116,6 +116,44 @@ def gemini_idle_routing_armed() -> bool:
         return False
 
 
+def declared_runtime_disabled() -> bool:
+    """KILL SWITCH for declared-runtime routing (DEC-1791656515249463): instant, no deploy.
+      env  ROUTER_DECLARED_RUNTIME_DISABLED=1   OR   sentinel ~/runtime/ROUTER_DECLARED_RUNTIME_DISABLED
+    When set the router ignores declarations and behaves exactly as before them (claude, or the
+    inferred runtime when ROUTER_GEMINI_IDLE_ARMED is armed). Different from the arm: the arm ALSO
+    infers undeclared rows; the kill switch only turns declarations off."""
+    if os.environ.get("ROUTER_DECLARED_RUNTIME_DISABLED") == "1":
+        return True
+    try:
+        return (Path.home() / "runtime" / "ROUTER_DECLARED_RUNTIME_DISABLED").exists()
+    except OSError:
+        return False
+
+
+def declared_runtime(agent_id: str, meta: dict | None = None,
+                     registry_path: "Path | str | None" = None) -> "tuple[str | None, str | None]":
+    """(runtime, unknown) from the registry row's EXPLICIT `runtime` field only — no inference
+    from the model id (DEC-1791656515249463 Q1).
+      runtime: the field when it names a known signature ('agy' is the gemini runtime), else None.
+      unknown: the raw value when the field is set but names no signature (a typo, or a runtime
+               whose signature has not shipped), else None. The caller warns once and falls back.
+    Both None when the row or the field is absent."""
+    reg_path = REGISTRY if registry_path is None else registry_path
+    try:
+        reg = json.loads(Path(reg_path).read_text())
+        entry = reg.get("agents", {}).get(agent_id) or {}
+    except (json.JSONDecodeError, OSError, AttributeError):
+        return None, None
+    raw = entry.get("runtime") if isinstance(entry, dict) else None
+    if not isinstance(raw, str) or not raw.strip():
+        return None, None
+    rt = raw.strip().lower()
+    rt = "gemini" if rt == "agy" else rt
+    if rt in PROMPT_SIGNATURES:
+        return rt, None
+    return None, raw.strip()
+
+
 def agent_runtime(agent_id: str, meta: dict | None = None,
                   registry_path: "Path | str | None" = None) -> str:
     """Resolve an agent's runtime for prompt-signature selection.

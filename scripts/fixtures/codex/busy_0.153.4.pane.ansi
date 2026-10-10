@@ -1,0 +1,24 @@
+
+[2m────────────────────────────────────────────────────────────────────────────────
+
+• [0m{"content":[{"type":"text","text":"{"ok": true, "ui_id":
+  "ui_9ea1e5ea763ec5b7", "summary": "stub", "seat": "genui-
+  probe"}"}],"structuredContent":
+  {"ok":true,"ui_id":"ui_9ea1e5ea763ec5b7","summary":"stub","seat":"genui-
+  probe"}}
+
+[2m────────────────────────────────────────────────────────────────────────────────
+
+
+[1m› [0mRun the shell command: sleep 25 && echo done > /tmp/x.txt ; then say
+  finished.
+
+
+[2m• [0mRunning it now.
+
+• [2mWorking[0m [2m(12s • esc to interrupt) · 1 background terminal running · /ps to vie…
+[0m
+
+[1m›[0m [2mAsk Codex to do anything[0m
+
+  [38;2;246;226;183mgpt-5.6-terra default[2m[39m · [0m[38;2;171;223;167m~/orchestraos[39m

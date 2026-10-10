@@ -1,0 +1,23 @@
+
+
+› You are codex-trial. Read /tmp/agent-init-codex-trial.md and follow all
+  instructions in it.
+
+
+• I’ll load the initialization instructions and follow their task-specific
+  guidance.
+
+• Explored
+  └ Read agent-init-codex-trial.md, codex-trial.md, _reincarnation-protocol.md,
+         infrastructure.md, MEMORY.md, _agent-protocol.md
+
+────────────────────────────────────────────────────────────────────────────────
+
+• Hello — ready and waiting.
+
+────────────────────────────────────────────────────────────────────────────────
+
+
+› Ask Codex to do anything
+
+  gpt-5.6-terra default · ~/orchestraos

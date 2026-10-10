@@ -1,0 +1,24 @@
+
+[90m────────────────────────────────────────────────────────────[39m
+[1m[34m> Run the shell command `sleep 25 && echo done > /tmp/x.txt` and then reply[0m
+[1m[34m  with the single word: finished[0m
+
+[37m○[39m [37mThought for 6.4s[39m [37m(The command involves a 25-second sleep, exceeding the t...)[39m
+[33m●[39m [1m[33mRan[0m [37m(sleep 25 && echo done > /tmp/x.txt)[39m [37m(ctrl+o to expand)[39m
+
+[1m[33mCommand[0m
+[90m────────────────────────────────────────────────────────────────────────────────
+
+[1m[37mRequesting permission for:[0m
+[37m   sleep 25 && echo done > /tmp/x.txt[39m
+
+[1mRun this command?[0m
+[94m> 1. Yes, run command[39m
+  2. Yes, and always allow in this conversation for commands that start with
+'sleep'
+  3. Yes, and always allow for commands that start with 'sleep' (Persist to
+settings.json)
+  4. No, cancel
+
+  [1m[94m↑/↓[0m[90m Navigate · [1m[94mtab[0m[90m Amend · [1m[94mctrl+g[0m[90m edit/expand command[39m
+[90mesc to cancel[39m                                            [2mGemini 3.8 Flash · high
