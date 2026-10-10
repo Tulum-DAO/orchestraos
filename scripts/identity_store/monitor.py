@@ -15,6 +15,14 @@ import subprocess
 
 from scripts.identity_store import projector
 
+import sys
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
 _ARM_REL = os.path.join("state", "identity-store-monitor.flag")
 _LOG = logging.getLogger("identity_store.monitor")
 
@@ -55,7 +63,7 @@ def page(detail, *, telegram_send=None, gm_send=None):
 
 def _orchestra_dir(orchestra_dir=None):
     return orchestra_dir or os.environ.get(
-        "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
+        "ORCHESTRA_DIR", str(_data_dir()))
 
 
 def arm_path(orchestra_dir=None):

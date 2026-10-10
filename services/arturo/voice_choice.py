@@ -12,7 +12,15 @@ import time
 import urllib.request
 from pathlib import Path
 
-ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", Path.home() / "scripts/agent-orchestra"))
+import sys
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
+ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", _data_dir()))
 DEFAULT_PATH = ORCHESTRA_DIR / "state/voice-choice.json"
 DEFAULT_LOG = ORCHESTRA_DIR / "state/voice-choice.log"
 MAX_VOICE_ID = 200

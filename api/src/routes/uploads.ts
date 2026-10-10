@@ -2,9 +2,10 @@ import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import { join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
+import { dataDir } from '../lib/config.js';
 
 const router = Router();
-const ORCHESTRA_DIR = process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
+const ORCHESTRA_DIR = dataDir();
 const UPLOADS_DIR = join(ORCHESTRA_DIR, 'state', 'uploads');
 
 if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });

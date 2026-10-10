@@ -38,6 +38,14 @@ from scripts.focus_registry.event_schema import (
     validate_raw_event, validate_event, advance_receipt,
 )
 
+import sys
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
 # The actionable types the bus promotes to msg_store delivery rows.
 #
 # INTERIM (gm-directed 2026-08-15): OBSERVE-ONLY — EMPTY, so NOTHING is promoted.
@@ -259,7 +267,7 @@ def default_send_fn(row, *, orchestra_dir=None, from_agent="event-bus"):
     fake send_fn instead."""
     import sys
     od = orchestra_dir or os.environ.get(
-        "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
+        "ORCHESTRA_DIR", str(_data_dir()))
     sys.path.insert(0, od)
     from msg_store import MessageStore
     st = MessageStore()

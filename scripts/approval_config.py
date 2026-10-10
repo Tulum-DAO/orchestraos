@@ -1,10 +1,19 @@
 """Central config for the approval loop. Import these; never hard-code twice."""
 import os
+import sys
+import tempfile
 from pathlib import Path
 
-#: The LIVE operator tree. Kept as a constant so the pytest fence below can name the one path
-#: that a test must never open, independent of whatever ORCHESTRA_DIR happens to say.
-LIVE_ORCHESTRA_DIR = Path(os.path.expanduser("~/scripts/agent-orchestra"))
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.abspath(__file__))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+#: The LIVE install: the data dir this checkout is CONFIGURED for (orchestra.toml [data] dir, else
+#: the product default), deliberately ignoring ORCHESTRA_DIR, so the pytest fence below names the one
+#: path a test must never open whatever the test's env says.
+LIVE_ORCHESTRA_DIR = _data_dir(include_env=False)
 
 
 def orchestra_dir() -> Path:
@@ -14,7 +23,7 @@ def orchestra_dir() -> Path:
     test LOOK like isolation while the path stayed pinned to the live tree. A test then wrote
     to the operator's live ledger (2026-10-05, and the same class on 2026-09-25). Lazy
     resolution is what makes the env override actually mean something."""
-    return Path(os.environ.get("ORCHESTRA_DIR", str(LIVE_ORCHESTRA_DIR)))
+    return Path(os.environ.get("ORCHESTRA_DIR") or _data_dir())
 
 
 def db_path() -> Path:
@@ -36,13 +45,23 @@ def refuse_live_db_under_pytest(path) -> None:
     script a test shells out to. Two independent fences, because this class has now recurred."""
     if not under_pytest():
         return
-    try:
-        same = os.path.realpath(str(path)) == os.path.realpath(str(LIVE_DB_PATH))
-    except OSError:
+    if str(path) == ":memory:":
         return
-    if same:
+    try:
+        real = os.path.realpath(str(path))
+        same = real == os.path.realpath(str(LIVE_DB_PATH))
+        tmp = os.path.realpath(tempfile.gettempdir())
+    except OSError:
+        same, real, tmp = True, str(path), ""      # cannot tell where it points: fail CLOSED
+    # FAIL CLOSED: a test may only open an approvals DB under the temp dir (tmp_path, mkdtemp).
+    # LIVE_DB_PATH names the dir this checkout is CONFIGURED for, but an operator's real ledger can
+    # live elsewhere (a fleet checkout's own state/, an older default), and naming it here would
+    # ship a personal path. Anything outside the temp dir may be production, so it is refused.
+    outside_tmp = not tmp or not (real == tmp or real.startswith(tmp + os.sep))
+    if same or outside_tmp:
         raise RuntimeError(
-            f"a test tried to open the LIVE approvals DB ({LIVE_DB_PATH}).\n"
+            f"a test tried to open an approvals DB outside the temp dir ({path}); it may be the "
+            f"LIVE approvals DB (this checkout's is {LIVE_DB_PATH}).\n"
             "Pass an explicit path: ApprovalStore(db_path=str(tmp_path / 'tasks.db')).\n"
             "Note that setting ORCHESTRA_DIR works now too (the path resolves lazily), but an "
             "explicit db_path is clearer and cannot be defeated by import order.")

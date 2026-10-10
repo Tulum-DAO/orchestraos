@@ -26,6 +26,14 @@ import threading
 import time
 from pathlib import Path
 
+import sys
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
 log = logging.getLogger("arturo-dispatcher")
 
 FLAG = "ARTURO_DISPATCHER"
@@ -37,7 +45,7 @@ MEMINFO_PATH = "/proc/meminfo"
 ANALYST_CMD_ENV = "ARTURO_DEEP_QUERY_CMD"     # shlex-split override; default below
 DEFAULT_ANALYST_CMD = ["claude", "-p", "--model", "claude-haiku-4-5"]
 
-ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", Path.home() / "scripts/agent-orchestra"))
+ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", _data_dir()))
 
 # D4 spoken templates — first person, no third-person GM attribution (test-pinned).
 SPOKEN_DEEP_FALLBACK = ("Let me investigate and think through that. I'll text you on Telegram "

@@ -22,6 +22,13 @@ for p in (_ROOT, os.path.join(_ROOT, "scripts")):
 
 from scripts.identity_store import cutover, identity_writer  # noqa: E402
 
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
 
 def resume_command_for(runtime, sid):
     """The runtime's own resume shape (the same strings the swap path finalizes)."""
@@ -87,7 +94,7 @@ def main(argv=None):
     p.add_argument("--attempts", type=int, default=8)
     p.add_argument("--sleep", type=float, default=3.0)
     a = p.parse_args(argv)
-    orch = os.environ.get("ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
+    orch = os.environ.get("ORCHESTRA_DIR", str(_data_dir()))
     from lineage_daemon.wal.ctx_adapters import resolve_cid_any
     out = attribute(orch, a.agent_id, resolve_cid_fn=resolve_cid_any, runtime=a.runtime,
                     attempts=a.attempts, sleep_s=a.sleep)

@@ -8,7 +8,7 @@ do them right after the flip, before the first attendee clones.
 All `gh` calls use the org's own auth config, never the shared one:
 
 ```bash
-export GH_CONFIG_DIR=$HOME/.config/gh-tulum     # ShawCole = org admin; see docs/REFERENCE_INSTALL.md
+export GH_CONFIG_DIR=$HOME/.config/gh-tulum     # the org admin account; see docs/REFERENCE_INSTALL.md
 R=Tulum-DAO/orchestraos
 ```
 
@@ -223,7 +223,7 @@ R=Tulum-DAO/orchestraos
    the commits resolve:
    ```bash
    git branch -f rescue/<name> origin/<branch>
-   git bundle create /home/shaw/repos/_rescue/<name>-$(date -u +%Y%m%dT%H%M%SZ).bundle rescue/<name>
+   git bundle create ~/repos/_rescue/<name>-$(date -u +%Y%m%dT%H%M%SZ).bundle rescue/<name>
    git bundle verify <file> && git clone -q <file> /tmp/restore-probe && \
      git -C /tmp/restore-probe cat-file -t <sha>      # MUST print "commit"
    ```

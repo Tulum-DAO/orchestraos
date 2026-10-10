@@ -30,7 +30,14 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from registry_lock import registry_lock
 
-ORCH_DIR = Path(os.environ.get("ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra")))
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.abspath(__file__))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
+ORCH_DIR = Path(os.environ.get("ORCHESTRA_DIR", str(_data_dir())))
 REGISTRY_PATH = ORCH_DIR / "registry.json"
 SESSIONS_PATH = ORCH_DIR / "state" / "agent-sessions.json"
 AGENTS_DIR = ORCH_DIR / "state" / "agents"

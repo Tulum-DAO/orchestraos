@@ -2,9 +2,10 @@ import { Router, type Request, type Response } from 'express';
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { isSafeName, containedPath } from '../lib/agentPaths.js';
+import { dataDir } from '../lib/config.js';
 
 const router = Router();
-const ORCHESTRA = process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
+const ORCHESTRA = dataDir();
 const HEARTBEAT_DIR = join(ORCHESTRA, 'state', 'machine-heartbeats');
 
 // Ensure dir exists

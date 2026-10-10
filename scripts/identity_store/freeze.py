@@ -15,6 +15,14 @@ for the whole live fleet) and by ``barrier``'s timeout as a safety valve.
 import os
 import time
 
+import sys
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
 _FREEZE_REL = os.path.join("state", "identity-store-freeze.flag")
 
 
@@ -25,7 +33,7 @@ class FreezeTimeout(Exception):
 
 def _orchestra_dir(orchestra_dir=None):
     return orchestra_dir or os.environ.get(
-        "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
+        "ORCHESTRA_DIR", str(_data_dir()))
 
 
 def freeze_path(orchestra_dir=None):

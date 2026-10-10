@@ -7,12 +7,12 @@ import { execFileSync, execFile } from 'child_process';
 import { join } from 'path';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { queryDb, execDb } from '../lib/db.js';
-import { loadConfig } from '../lib/config.js';
+import { loadConfig, dataDir } from '../lib/config.js';
 import { CODE_ROOT } from '../lib/codeRoot.js';
 import { transitionSeat } from '../lib/seatTransition.js';
 
 const router = Router();
-const ORCHESTRA = process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
+const ORCHESTRA = dataDir();
 
 // ── Log conversation exchange ───────────────────────────────────
 
@@ -199,7 +199,7 @@ router.get('/:agentId/conversations', (req: Request, res: Response) => {
 
 // ── Live roster (survives crashes — the recovery source of truth) ──
 router.get('/roster', (_req: Request, res: Response) => {
-  const ORCHESTRA = process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
+  const ORCHESTRA = dataDir();
   const rosterPath = join(ORCHESTRA, 'state', 'live-roster.json');
   try {
     if (!existsSync(rosterPath)) { res.json({}); return; }
@@ -216,7 +216,7 @@ router.get('/roster', (_req: Request, res: Response) => {
 // collide with the /:agentId/* routes above.
 
 const recentAgentsPath = () =>
-  join(process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra'),
+  join(dataDir(),
     'state', 'recent-agents.json');
 
 router.get('/recent-agents', (_req: Request, res: Response) => {

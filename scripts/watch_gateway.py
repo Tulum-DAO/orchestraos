@@ -626,6 +626,13 @@ def _stamp_instance(session, menu, ledger=None, now=None, answered_signal=False,
 # answers get no protection from this check.
 from collections import OrderedDict as _OrderedDict
 
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.abspath(__file__))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
 _SERVED: "_OrderedDict[tuple, tuple]" = _OrderedDict()
 _SERVED_OTHER = "other"
 _SERVED_MAX = 2048
@@ -1401,7 +1408,7 @@ async def handle_approval_detail(request):
 # P1 fleet/business read endpoints (additive, read-only)
 # ---------------------------------------------------------------------------
 
-ORCH_DIR = Path(os.environ.get("ORCH_DIR", os.path.expanduser("~/scripts/agent-orchestra")))
+ORCH_DIR = Path(os.environ.get("ORCH_DIR", str(_data_dir())))
 # Code lives next to this file; ORCH_DIR is the DATA dir under `orchestra up` (they differ).
 CODE_SCRIPTS_DIR = Path(__file__).resolve().parent
 _agents_cache = {"at": 0.0, "data": None, "refreshing": False, "reg_mtime": None, "event_mtime": None}

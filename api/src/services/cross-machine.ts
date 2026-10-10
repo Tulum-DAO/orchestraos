@@ -4,9 +4,10 @@ import { join } from 'path';
 import os from 'os';
 import { getTmuxSessionNames } from './tmux-monitor.js';
 import { CODE_ROOT } from '../lib/codeRoot.js';
+import { dataDir } from '../lib/config.js';
 
 const IS_VPS = !os.platform().includes('darwin');
-const ORCHESTRA = process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
+const ORCHESTRA = dataDir();
 const SSH_KEY = join(process.env.HOME || os.homedir(), '.ssh', 'id_ed25519');
 const CACHE_TTL = 30_000; // 30s
 

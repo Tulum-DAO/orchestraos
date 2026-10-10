@@ -18,13 +18,14 @@
 import { execFile } from 'child_process';
 import { join } from 'path';
 import { CODE_ROOT } from '../lib/codeRoot.js';
+import { dataDir } from '../lib/config.js';
 
 const BRIDGE_TIMEOUT_MS = 4000;
 
 // Paths resolved at CALL time (not module load) so the env is honored per-call
 // (and tests can point LINEAGE_FLAGS_PATH / ORCHESTRA_DIR at fixtures).
 function paths() {
-  const ORCH = process.env.ORCHESTRA_DIR || join(process.env.HOME || '', 'scripts/agent-orchestra');
+  const ORCH = dataDir();
   return {
     ORCH,
     BRIDGE: join(CODE_ROOT, 'scripts', 'lineage_daemon', 'realtime', 'api_bridge.py'),   // code (lib/codeRoot.ts)

@@ -43,7 +43,14 @@ import providers  # noqa: E402  — provider-aware process truth (Tier 1)
 from context_meter import footer_meter_line  # noqa: E402  — the footer is the only meter source
 from context_reading import claude_context  # noqa: E402  — window/budget %, one reading
 
-ORCH_DIR = os.environ.get("ORCH_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.abspath(__file__))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
+ORCH_DIR = os.environ.get("ORCH_DIR", str(_data_dir()))
 EVENTS_DIR = os.environ.get("ORCH_EVENTS_DIR", os.path.join(ORCH_DIR, "state", "agent-events", "panes"))
 STATE_DIR = os.environ.get("ORCH_STATE_DIR", os.path.join(ORCH_DIR, "state", "agent-state"))
 

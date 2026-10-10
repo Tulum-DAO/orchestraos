@@ -1,3 +1,4 @@
+import './lib/configExit.js';   // FIRST: turns a missing orchestra.toml into one plain line (S5)
 import 'dotenv/config';
 import { queryDb } from './lib/db.js';
 import express from 'express';

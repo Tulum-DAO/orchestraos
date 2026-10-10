@@ -123,9 +123,9 @@ export function routeTranscriptEvent(msg: GatewayEvent, cb: TranscriptRouterCall
 
 /** `[voice-call: <id> <path>]` grammar (dashboard/src/lib/voiceCall.ts MARKER_RE).
  * The path segment is parsed-but-ignored by the reader (card fetches by id via
- * the gateway), so any well-formed non-whitespace token satisfies the grammar;
- * we still emit the real conventional path for honesty/debuggability. */
-export function buildVoiceCallMarker(callId: string, orchestraDir = '~/scripts/agent-orchestra'): string {
+ * the gateway), so any well-formed non-whitespace token satisfies the grammar.
+ * The browser does not know the host's data dir, so the default is a neutral token. */
+export function buildVoiceCallMarker(callId: string, orchestraDir = '<data-dir>'): string {
   return `[voice-call: ${callId} ${orchestraDir}/state/voice-calls/${callId}.json]`;
 }
 

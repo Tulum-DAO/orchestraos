@@ -16,8 +16,9 @@
  */
 import { readFileSync, statSync } from 'fs';
 import { join } from 'path';
+import { dataDir } from '../lib/config.js';
 
-const ORCH = process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
+const ORCH = dataDir();
 const LEDGER = join(ORCH, 'state', 'goals', 'ledger.json');
 
 // Defensive "open" definition until the miner's real status enum is observable:

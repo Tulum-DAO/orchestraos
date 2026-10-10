@@ -27,13 +27,21 @@ from pathlib import Path
 from services.arturo import hume_audio, ptt_stream, voice_vendor
 from services.arturo.voice_vendor import _secret
 
+import sys
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
 log = logging.getLogger("arturo-stream-relay")
 
 FLAG = "ARTURO_STREAM_RELAY"
 PARTIALS_FLAG = "ARTURO_STREAM_PARTIALS"
 EL_AGENT_ID = "agent_9001kzmyj4jwe3m8xk2a2s5vn3ac"      # SAME agent as the phone (brain parity)
 BYTES_PER_S = 32000                                     # s16le 16k mono
-ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", Path.home() / "scripts/agent-orchestra"))
+ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", _data_dir()))
 HUME_MAX_SESSION_S = 1800        # Hume EVI hard-caps a chat session; we resume proactively
 HUME_RESUME_MARGIN_S = 60        # retire+resume this long BEFORE the cap so audio never hard-drops
 IDLE_CLOSE_FLAG = "ARTURO_STREAM_IDLE_CLOSE"   # default OFF; only meaningful under STREAM_RELAY=1

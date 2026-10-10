@@ -1,7 +1,8 @@
 import { readFileSync, appendFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { dataDir } from '../lib/config.js';
 
-const ORCHESTRA_DIR = process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
+const ORCHESTRA_DIR = dataDir();
 
 function readJsonl(path: string): any[] {
   if (!existsSync(path)) return [];

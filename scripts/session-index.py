@@ -28,7 +28,14 @@ import time
 from pathlib import Path
 from datetime import datetime, timezone
 
-ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra")))
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.abspath(__file__))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
+ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", str(_data_dir())))
 # CODE (msg_store.py, scripts/) lives in the checkout, never under ORCHESTRA_DIR (the DATA dir)
 CODE_ROOT = Path(os.environ.get("ORCHESTRA_ROOT") or Path(__file__).resolve().parent.parent)
 INDEX_FILE = ORCHESTRA_DIR / "state" / "agent-sessions.json"
@@ -151,7 +158,7 @@ def load_registry() -> dict:
 def cwd_to_project_dir(cwd: str) -> str:
     """Convert a cwd to its Claude project dir name, exactly as Claude Code does.
 
-    /home/<user>/scripts/agent-orchestra -> -home-<user>-scripts-agent-orchestra
+    /home/<user>/work/my-repo -> -home-<user>-work-my-repo
     (leading dash is kept; dots also become dashes)
     """
     return re.sub(r"[/.]", "-", cwd)
@@ -409,7 +416,7 @@ def match_agent_to_sessions(agent_id: str, agent_config: dict, all_sessions: lis
                             registered_names: set = None) -> dict | None:
     """Find the best session match for an agent based on cwd and prompt content.
 
-    When multiple agents share a CWD (e.g. ~/scripts/agent-orchestra), we must
+    When multiple agents share a CWD (e.g. the orchestra checkout), we must
     disambiguate by checking if the session's first user message mentions this
     specific agent. If we can't disambiguate, return None rather than assigning
     a wrong session — fresh spawn is better than wrong-context resume.

@@ -30,6 +30,11 @@ seams are the real executors + a real approval gate + a real park-idle re-check.
 
 import re
 
+# The ONE data-dir default (data-dir sweep S5). This module is imported as a package from the checkout
+# root (scripts.lineage_daemon.execute), so orchestra_cli is already importable.
+from orchestra_cli.settings import data_dir as _data_dir
+
+
 
 # --- outcome/status constants -------------------------------------------------
 DONE = "rotated"                       # full rotation incl. retire + repin
@@ -208,7 +213,7 @@ def default_safety_recheck(canary, orchestra_dir=None):
     import importlib.util
     import os
     od = orchestra_dir or os.environ.get(
-        "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
+        "ORCHESTRA_DIR", str(_data_dir()))
     from .code_root import code_path
     pk_path = code_path("scripts", "park-idle.py")   # CODE (checkout); its data comes from ORCHESTRA_DIR
     try:
@@ -264,7 +269,7 @@ def default_approval_gate(canary, successor, *, timeout_s=1800, poll_s=10,
     import sys
     import time
     od = orchestra_dir or os.environ.get(
-        "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
+        "ORCHESTRA_DIR", str(_data_dir()))
     from .code_root import code_path
     sys.path.insert(0, code_path("scripts"))   # approval_schema is CODE (checkout), not under the data dir
     from approval_schema import ApprovalStore

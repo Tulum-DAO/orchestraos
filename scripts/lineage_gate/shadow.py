@@ -32,8 +32,16 @@ import os
 import time
 from pathlib import Path
 
+import sys
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+
+
 ORCH = Path(os.environ.get("LINEAGE_ORCH",
-                           os.path.expanduser("~/scripts/agent-orchestra")))
+                           str(_data_dir())))
 LEDGER = ORCH / "state" / "lineage-gate-shadow.jsonl"
 REQUIRED_AGREEMENTS = 5
 

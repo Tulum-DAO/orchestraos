@@ -16,6 +16,7 @@ import { fileURLToPath } from 'url';
 import { execFile } from 'child_process';
 import { join, dirname } from 'path';
 import { readdirSync, statSync } from 'fs';
+import { dataDir } from '../lib/config.js';
 
 export interface DetectorStatus {
   session: string;
@@ -31,7 +32,7 @@ export interface DetectorStatus {
   [key: string]: unknown;
 }
 
-const ORCH = process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
+const ORCH = dataDir();
 
 /**
  * The detector is CODE, not data. Under `orchestra up` ORCHESTRA_DIR is the data dir, so
