@@ -111,7 +111,7 @@ export const VoiceControls = forwardRef<VoiceControlsHandle, VoiceControlsProps>
         aria-pressed={dictating}
         aria-label="Microphone"
         title={settings.micMode === 'hold' ? 'Hold to talk' : 'Tap to talk'}
-        className={`h-9 w-9 max-md:h-11 max-md:w-11 flex items-center justify-center rounded-full transition-colors ${dictating ? 'bg-[var(--accent-voice)] text-background' : 'text-foreground/70 hover:text-foreground hover:bg-muted'}`}
+        className={`touch-circle flex items-center justify-center rounded-full transition-colors ${dictating ? 'bg-[var(--accent-voice)] text-background' : 'text-foreground/70 hover:text-foreground hover:bg-muted'}`}
       >
         <Mic size={18} />
       </button>
@@ -121,7 +121,7 @@ export const VoiceControls = forwardRef<VoiceControlsHandle, VoiceControlsProps>
           aria-pressed={inCall}
           aria-label={inCall ? 'End call' : 'Start voice call'}
           title={inCall ? `End call with ${settings.assistantName}` : `Call ${settings.assistantName}`}
-          className={`h-9 w-9 max-md:h-11 max-md:w-11 flex items-center justify-center rounded-full transition-colors text-foreground/70 hover:text-foreground hover:bg-muted ${inCall ? '' : idleCallClassName ?? ''}`}
+          className={`touch-circle flex items-center justify-center rounded-full transition-colors text-foreground/70 hover:text-foreground hover:bg-muted ${inCall ? '' : idleCallClassName ?? ''}`}
           style={{ color: inCall ? 'var(--accent-voice)' : undefined }}
         >
           {inCall ? <PhoneOff size={18} /> : <PhoneCall size={18} />}

@@ -291,6 +291,33 @@ button {
   -webkit-touch-callout: none;
 }
 
+/* A ROUND icon button: 36px on desktop, and 44px wherever the touch-target rule below forces a
+   44px min-height. Its query is THE SAME as that rule's (max-width: 768px), so the two can never
+   disagree: a 36px-wide button under a 44px min-height is an oval (Shaw, 2026-10-10), and a
+   Tailwind max-md: override drifted from this query at exactly 768px. */
+@layer components {
+  .touch-circle {
+    width: 36px;
+    height: 36px;
+  }
+  /* The composer's + button sits tight against the text: its glyph is centred in its circle, so
+     the circle's inset already reads as space. Scaled with the circle. */
+  .touch-circle-tight-right {
+    margin-right: -4px;
+  }
+  /* Same query as the touch-target rule below, on purpose. In the components layer so a utility
+     (e.g. sm:w-auto on a chip that is only round when icon-only) can still override it. */
+  @media (max-width: 768px) {
+    .touch-circle {
+      width: 44px;
+      height: 44px;
+    }
+    .touch-circle-tight-right {
+      margin-right: -8px;
+    }
+  }
+}
+
 /* Mobile touch targets */
 @media (max-width: 768px) {
   button, a, select, input {

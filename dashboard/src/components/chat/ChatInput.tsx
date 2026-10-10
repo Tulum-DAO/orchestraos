@@ -389,9 +389,9 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
   }, [text]);
 
   const heldChips = pastes.filter((p) => text.includes(pasteToken(p)));
-  // TRUE CIRCLES on phones: index.css forces min-height 44px on every button below 768px, so a
-  // 36x36 circle rendered 36x44 there, an oval (Shaw, 2026-10-10). Below md they are 44x44.
-  const roundBtn = 'shrink-0 h-9 w-9 max-md:h-11 max-md:w-11 rounded-full flex items-center justify-center transition-colors';
+  // TRUE CIRCLES: .touch-circle (index.css) is 36px, and 44px inside the same media query that
+  // forces a 44px min-height on buttons, so a circle is never an oval (Shaw, 2026-10-10).
+  const roundBtn = 'touch-circle shrink-0 rounded-full flex items-center justify-center transition-colors';
 
   // The narrow-phone overflow menu. Closes on an outside press or Esc; Esc here never reaches
   // the textarea's stop path, because focus is on the menu while it is open.
@@ -536,10 +536,10 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
             onClick={() => fileInputRef.current?.click()}
             disabled={!attachSupported}
             aria-label="Attach a file"
-            // -mr-1/-mr-2: the + glyph sits centred in its circle, so the circle's own inset already reads
+            // touch-circle-tight-right: the + glyph sits centred in its circle, so the circle's own inset already reads
             // as space; without this the text started ~20px after the glyph (Shaw, 2026-10-10).
             className={clsx(
-              roundBtn, '-mr-1 max-md:-mr-2',
+              roundBtn, 'touch-circle-tight-right',
               !attachSupported
                 ? 'text-muted-foreground/40 cursor-not-allowed'
                 : 'text-foreground/70 hover:text-foreground hover:bg-muted'
@@ -590,7 +590,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
             title={injectMode
               ? 'Delivering NOW, straight into the agent’s terminal. Click to queue to its inbox instead.'
               : 'Queuing to the agent’s INBOX, read at its next turn. Click to deliver now instead.'}
-            className="shrink-0 h-9 max-md:h-11 px-1.5 text-[11px] rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors max-[479px]:hidden"
+            className="shrink-0 h-9 px-1.5 text-[11px] rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors max-[480px]:hidden"
           >
             {injectMode ? 'now' : 'inbox'}
           </button>
