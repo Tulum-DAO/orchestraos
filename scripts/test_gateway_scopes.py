@@ -436,21 +436,36 @@ def test_push_to_talk_needs_only_ptt_not_voice():
         assert G.ROUTE_SCOPES[route] == "ptt", route
 
 
-def test_the_FLEET_WIDE_voice_config_writes_require_admin_not_voice():
-    """PUT /arturo/ptt/vendor and PUT /arturo/ptt/voice proxy to ONE loopback Arturo service and
-    take effect on the NEXT conversation — they are process-level settings for the whole box.
-    That is administration of voice, not use of it.
-
-    Raised to `admin` rather than merely adding `ptt`, because this closes the hole for EVERY
-    holder of `voice`, present and future. A narrow scope for one device would have left the
-    fleet-wide switch reachable by the next device granted `voice`."""
+def test_voice_and_vendor_writes_accept_voice_OR_ptt_OR_admin_by_ruling():
+    """gm rulings msg_f3c2cec6 + msg_40832c2d (2026-10-10; the operator picked "Let 'voice' change
+    it"): PUT /arturo/ptt/vendor and PUT /arturo/ptt/voice accept ANY of {voice, ptt, admin}. His
+    Mac holds voice, the Quest ptt; nothing that worked with admin loses access."""
     for route in (("PUT", "/arturo/ptt/vendor"), ("PUT", "/arturo/ptt/voice")):
-        assert G.ROUTE_SCOPES[route] == "admin", route
-    # NOT /voice-call-ended: that is DEVICE call lifecycle, and admin-gating it stopped a device
-    # ending its OWN call. ipad-dev measured a device doing POST /voice-call-ended then
-    # /stream/end on every relay call. Grouping it with the config writes was the wrong axis —
-    # blast radius, not URL shape.
+        assert set(G.accepted_scopes(*route)) == {"voice", "ptt", "admin"}, route
+        assert G.ROUTE_SCOPES[route] == "admin", route          # the base row is unchanged
     assert G.ROUTE_SCOPES[("POST", "/voice-call-ended")] == "ptt"
+
+
+def test_PIN_the_multi_verb_map_and_the_admin_ptt_voice_rows_exactly():
+    """The table is exactly what a careless edit widens (gm's condition). Pinned in full: the
+    any-of map names exactly two rows, every OTHER route accepts exactly its one table verb, and
+    the admin / ptt / voice rows are listed. Any other move fails here and must be made on purpose."""
+    assert {k: set(v) for k, v in G.ROUTE_ANY_OF.items()} == {
+        ("PUT", "/arturo/ptt/vendor"): {"voice", "ptt", "admin"},
+        ("PUT", "/arturo/ptt/voice"): {"voice", "ptt", "admin"},
+    }
+    for (m, p), verb in G.ROUTE_SCOPES.items():
+        if (m, p) not in G.ROUTE_ANY_OF:
+            assert G.accepted_scopes(m, p) == (verb,), (m, p)
+
+    def rows(verb):
+        return sorted(f"{m} {p}" for (m, p), v in G.ROUTE_SCOPES.items() if v == verb)
+    assert rows("admin") == ["POST /device/upgrade", "POST /red-alert/report", "POST /telemetry",
+                             "PUT /arturo/ptt/vendor", "PUT /arturo/ptt/voice"]
+    assert rows("ptt") == ["GET /arturo/ptt/stream/events", "POST /arturo/ptt",
+                           "POST /arturo/ptt/stream/audio", "POST /arturo/ptt/stream/end",
+                           "POST /voice-call-ended"]
+    assert rows("voice") == ["GET /live", "POST /arturo/transcribe"]
 
 
 def test_reading_the_active_vendor_stays_read():
@@ -461,14 +476,49 @@ def test_reading_the_active_vendor_stays_read():
         assert G.ROUTE_SCOPES[route] == "read", route
 
 
-def test_a_ptt_device_cannot_reach_the_vendor_switch(monkeypatch, tmp_path):
-    """The point of the split, asserted end to end through the middleware."""
-    _, _, token = _with_store(monkeypatch, tmp_path, ["read", "approve", "message", "ptt"])
-    ok, reached_ok, _ = _call("POST", "/arturo/ptt", {"Authorization": f"Bearer {token}"})
-    assert reached_ok and ok.status == 200, "a ptt device must still be able to speak"
-    for route in (("PUT", "/arturo/ptt/vendor"), ("PUT", "/arturo/ptt/voice")):
-        deny, reached, _ = _call(*route, {"Authorization": f"Bearer {token}"})
+def test_voice_OR_ptt_OR_admin_can_change_voice_and_engine_and_nothing_else_can(monkeypatch, tmp_path):
+    """End to end through the middleware, each verb on its own, both ways."""
+    writes = (("PUT", "/arturo/ptt/vendor"), ("PUT", "/arturo/ptt/voice"))
+    for verb in ("voice", "ptt", "admin"):
+        _, _, token = _with_store(monkeypatch, tmp_path, [verb])
+        for route in writes:
+            ok, reached, _ = _call(*route, {"Authorization": f"Bearer {token}"})
+            assert ok.status == 200 and reached, (verb, route)
+    _, _, other = _with_store(monkeypatch, tmp_path, ["read", "approve", "message", "inject", "code", "owner", "usage"])
+    for route in writes:
+        deny, reached, _ = _call(*route, {"Authorization": f"Bearer {other}"})
         assert deny.status == 403 and not reached, route
+        body = json.loads(deny.body)
+        assert body["needed_scope"] == "voice"                       # still ONE string for clients
+        assert body["accepted_scopes"] == ["voice", "ptt", "admin"]
+    # the widening is exactly these two rows: a voice-only device still cannot hit an admin route
+    _, _, voice_only = _with_store(monkeypatch, tmp_path, ["voice"])
+    deny, reached, _ = _call("POST", "/telemetry", {"Authorization": f"Bearer {voice_only}"})
+    assert deny.status == 403 and not reached
+    assert "accepted_scopes" not in json.loads(deny.body)           # single-verb refusal unchanged
+
+
+def test_a_voice_write_carries_the_RESOLVED_caller_to_arturo_not_a_client_claim(monkeypatch, tmp_path):
+    """gm's audit condition (by, source, device): the gateway builds the upstream headers fresh and
+    adds the same X-Arturo-Principal an Arturo turn carries, which Arturo logs as the writing
+    device. A client header of that name never reaches Arturo."""
+    from scripts import arturo_stamp
+    monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path / "data"))   # the stamp secret: never the real dir
+    _, dev_id, token = _with_store(monkeypatch, tmp_path, ["voice"])
+    _, _, req = _call("PUT", "/arturo/ptt/voice",
+                      {"Authorization": f"Bearer {token}", "X-Arturo-Principal": "fleet"})   # forged
+    h = G._voice_config_headers(req, "X-Voice-Source")
+    assert h["X-Arturo-Principal"] == f"device:{dev_id}"
+    assert arturo_stamp.HEADER not in h                     # a plain device never carries the stamp
+    assert h["X-Voice-Source"] == "settings" and h["Content-Type"] == "application/json"
+    # the fleet bearer is the fleet, with this install's stamp (made in the fenced dir)
+    _, _, req = _call("PUT", "/arturo/ptt/vendor", {"Authorization": "Bearer fleet-token-value"})
+    h = G._voice_config_headers(req, "X-Vendor-Source")
+    assert h["X-Arturo-Principal"] == "fleet" and h[arturo_stamp.HEADER] == arturo_stamp.read(tmp_path / "data")
+    # no resolved principal (middleware did not run): no claim at all, never a guessed one
+    class _Bare(dict):
+        pass
+    assert "X-Arturo-Principal" not in G._voice_config_headers(_Bare(), "X-Voice-Source")
 
 
 def test_holding_voice_does_NOT_imply_ptt_and_vice_versa(monkeypatch, tmp_path):

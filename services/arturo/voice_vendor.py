@@ -71,7 +71,7 @@ class VendorStore:
             return f"unknown vendor {vendor!r}"
         return self.unavailable().get(vendor) or ""
 
-    def set(self, vendor, by="unknown", source="api"):
+    def set(self, vendor, by="unknown", source="api", device=None):
         if vendor not in REQUIRED:
             raise ValueError(f"unknown vendor {vendor!r}; allowed: {sorted(REQUIRED)}")
         un = self.unavailable()
@@ -85,7 +85,7 @@ class VendorStore:
             tmp.write_text(json.dumps(st))
             tmp.replace(self.path)
             with open(self.log_path, "a") as f:
-                f.write(json.dumps(st) + "\n")
+                f.write(json.dumps({**st, "device": device}) + "\n")   # audit: who, how, which device
         return st
 
 
@@ -104,5 +104,5 @@ def unavailable_reason(vendor):
     return _default.unavailable_reason(vendor)
 
 
-def set_vendor(vendor, by="unknown", source="api"):
-    return _default.set(vendor, by=by, source=source)
+def set_vendor(vendor, by="unknown", source="api", device=None):
+    return _default.set(vendor, by=by, source=source, device=device)

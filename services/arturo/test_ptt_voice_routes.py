@@ -83,3 +83,24 @@ def test_voices_upstream_failure_is_502(monkeypatch, tmp_path):
                                   environ_base={"REMOTE_ADDR": "127.0.0.1"})
     assert r.status_code == 502 and not r.get_json()["ok"]
     mod._STREAM_RELAY.shutdown()
+
+
+def test_a_voice_write_logs_the_writing_DEVICE_from_the_gateway_never_the_body(monkeypatch, tmp_path):
+    """gm ruling msg_f3c2cec6, condition 2 (by, source, device): the device is the gateway's fresh
+    X-Arturo-Principal; "by" stays the client's label; a "device" in the body is ignored; a local
+    tool with no header logs device null (safe, never guessed)."""
+    import json as _json
+    monkeypatch.setenv("ARTURO_STREAM_RELAY", "1")
+    mod = _load_proxy()
+    from services.arturo import voice_choice as vc
+    store = vc.VoiceChoiceStore(path=tmp_path / "v.json", log_path=tmp_path / "v.log")
+    monkeypatch.setattr(vc, "_default", store)
+    c = mod.app.test_client()
+    loop = {"REMOTE_ADDR": "127.0.0.1"}
+    r = c.put("/ptt/voice", json={"vendor": "hume", "voice_id": "v-a", "by": "settings-mac", "device": "forged"},
+              headers={"X-Arturo-Principal": "device:mac-1"}, environ_base=loop)
+    assert r.status_code == 200 and r.get_json()["changed_by"] == "settings-mac"
+    c.put("/ptt/voice", json={"vendor": "hume", "voice_id": "v-b", "by": "local-tool"}, environ_base=loop)
+    log = [_json.loads(x) for x in store.log_path.read_text().splitlines()]
+    assert log[0]["device"] == "device:mac-1" and log[0]["changed_by"] == "settings-mac"
+    assert log[1]["device"] is None
