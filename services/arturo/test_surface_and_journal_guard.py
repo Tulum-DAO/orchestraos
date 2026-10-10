@@ -1,8 +1,8 @@
 """(1) gm msg_c0e18d14: the relay maps X-Surface EXACTLY. phone/watch/quest/ipad/mac are kept; a MISSING header
 is still the watch (the watch sends none); any other value is 'unknown', never silently 'watch' (Quest calls were
 journaled as watch: 14 since 09-16).
-(2) Capture hole (call BC9B5303, 10-09 23:05 ET): the journal guard skipped any request whose history had no
-assistant turn, meant for probes. When the operator talks over the greeting, Hume's history holds only his words, so a REAL
+(2) Capture hole: the journal guard skipped any request whose history had no
+assistant turn, meant for probes. When the operator talks over the greeting, Hume's history holds only their words, so a REAL
 call got no server journal (3 of 59 Hume calls; 15 of 386 turns unjournaled). A request whose conv_id resolves to a
 LIVE relay call is established, whatever its history."""
 import glob

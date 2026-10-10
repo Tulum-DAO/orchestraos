@@ -443,8 +443,8 @@ def _resolve_or_create(non_system, page="", origin="local", conv_id=""):
     from services.arturo.call_journal import find_matching_call, _atomic_write
     has_assistant = any(m.get("role") == "assistant" and m.get("content") for m in non_system)
     if not has_assistant:
-        # Capture hole (call BC9B5303, 10-09): when the operator talks over the greeting, Hume's history holds
-        # only his words. A conv_id that resolves to a LIVE relay call is a real call, never a probe.
+        # Capture hole: when the operator talks over the greeting, Hume's history holds
+        # only their words. A conv_id that resolves to a LIVE relay call is a real call, never a probe.
         _live = False
         try:
             _live = bool(conv_id and _STREAM_RELAY is not None and _STREAM_RELAY.resolve(conv_id))
