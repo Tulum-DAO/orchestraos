@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { CommandPalette } from '../components/CommandPalette';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router-dom';
 import { RouteErrorBoundary } from '../components/RouteErrorBoundary';
 import { Menu, X } from 'lucide-react';
 import { Sidebar } from '../components/Sidebar';
@@ -11,7 +11,8 @@ import { ArturoPill } from '../components/arturo/ArturoPill';
 import CoachingToast from '../components/CoachingToast';
 import { useOrchestraStore } from '../stores/useOrchestraStore';
 import { initAutoDiscovery } from '../lib/telemetry';
-import { showArturoPill } from '../lib/features';
+import { showArturoPill, isViewHidden } from '../lib/features';
+import NotFound from '../components/NotFound';
 
 export function DashboardLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -26,6 +27,10 @@ export function DashboardLayout() {
   // Hooks"), unmounted the whole tree, and every page after it was black until a reload.
   const onAgentWithId = useMatch('/agent/:id');
   const onAgentBare = useMatch('/agent');
+  // A view the deployment hides (runtime config hiddenViews) is Page not found, deep links
+  // included; the one gate for every route under this layout.
+  const location = useLocation();
+  const page = isViewHidden(location.pathname) ? <NotFound /> : <Outlet />;
   const isChatRoute = !!onAgentWithId || !!onAgentBare;
   const activeCall = useOrchestraStore((s) => s.activeCall);
   const endCall = useOrchestraStore((s) => s.endCall);
@@ -77,11 +82,11 @@ export function DashboardLayout() {
         <CoachingToast />
         {isChatRoute ? (
           <div className="flex-1 min-h-0 flex flex-col">
-            <RouteErrorBoundary label="page"><Outlet /></RouteErrorBoundary>
+            <RouteErrorBoundary label="page">{page}</RouteErrorBoundary>
           </div>
         ) : (
           <div className="p-4 md:p-6">
-            <RouteErrorBoundary label="page"><Outlet /></RouteErrorBoundary>
+            <RouteErrorBoundary label="page">{page}</RouteErrorBoundary>
           </div>
         )}
       </main>

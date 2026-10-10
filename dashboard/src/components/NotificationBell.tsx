@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Bell, ShieldCheck, ClipboardList, X } from 'lucide-react';
 import { getGmAuthState } from '../lib/api';
 import AuthFlow from './AuthFlow';
+import { isViewHidden } from '../lib/features';
 
 async function fetchJson<T>(path: string): Promise<T> {
   const res = await fetch(`/api${path}`);
@@ -103,7 +104,7 @@ export default function NotificationBell() {
 
               {pendingApprovals > 0 && (
                 <button
-                  onClick={() => { navigate('/inbox'); setDropdownOpen(false); }}
+                  onClick={() => { if (!isViewHidden('/inbox')) navigate('/inbox'); setDropdownOpen(false); }}
                   className="w-full text-left px-4 py-3 hover:bg-neutral-800 transition-colors flex items-center gap-3"
                 >
                   <div className="p-1.5 rounded-lg bg-violet-500/15">
@@ -119,7 +120,7 @@ export default function NotificationBell() {
 
               {pendingQuestionnaires > 0 && (
                 <button
-                  onClick={() => { navigate('/inbox'); setDropdownOpen(false); }}
+                  onClick={() => { if (!isViewHidden('/inbox')) navigate('/inbox'); setDropdownOpen(false); }}
                   className="w-full text-left px-4 py-3 hover:bg-neutral-800 transition-colors flex items-center gap-3"
                 >
                   <div className="p-1.5 rounded-lg bg-amber-500/15">
@@ -152,7 +153,7 @@ export default function NotificationBell() {
             {totalPending > 0 && (
               <div className="border-t border-neutral-800 px-4 py-2.5">
                 <button
-                  onClick={() => { navigate('/inbox'); setDropdownOpen(false); }}
+                  onClick={() => { if (!isViewHidden('/inbox')) navigate('/inbox'); setDropdownOpen(false); }}
                   className="text-xs text-violet-400 hover:text-violet-300 font-medium transition-colors"
                 >
                   View all in Inbox &rarr;

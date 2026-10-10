@@ -1218,6 +1218,7 @@ simplest setup.
 - code: the checkout; `ORCHESTRA_ROOT` / `PYTHONPATH` are exported to every child by the supervisor
 - dashboard runtime values: optional `dashboard/public/runtime-config.json`, e.g. `{"operatorUserId": "alice"}` — the id your insights, profile and messages are stored under (default `operator`). Read by the browser at page load, so changing it needs no rebuild if you edit the copy in `dashboard/dist/`; git-ignored
   - the same file switches dashboard surfaces off when your API does not serve them: `{"features": {"arturo": false, "newAgent": false, "providerSignIn": false}}` (each defaults to `true`). `arturo: false` also makes `/` open the Overview. Without an explicit `arturo`, the dashboard switches Arturo off by itself when `GET /api/arturo/health` answers 404 (not installed); a 502-504 still means "starting"
+  - `"hiddenViews": ["/analytics", "/tasks"]` takes views out of a deployment: each renders Page not found and drops out of the sidebar and the command palette (default none; a malformed value is ignored with a console warning)
 
 ## Running inside Docker: the services bind loopback
 

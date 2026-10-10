@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { isViewHidden } from '../../lib/features';
 
 interface DrawerProps {
   isOpen: boolean;
@@ -31,7 +32,7 @@ export function Drawer({ isOpen, onClose }: DrawerProps) {
       >
         <div className="p-4 space-y-2">
           <nav className="space-y-1">
-            {routes.map((route) => (
+            {routes.filter((route) => !isViewHidden(route.path)).map((route) => (
               <Link
                 key={route.path}
                 to={route.path}

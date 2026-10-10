@@ -7,7 +7,7 @@
  * directory. Absent, unreadable, slow or malformed -> the public defaults below, never a
  * blank page.
  *
- *   { "operatorUserId": "alice", "features": { "arturo": false } }
+ *   { "operatorUserId": "alice", "features": { "arturo": false }, "hiddenViews": ["/analytics"] }
  *
  * Fetched with `cache: 'no-store'` because static servers commonly mark every non-HTML file
  * `immutable` for a year (this repo's dashboard-proxy.js does), which would freeze a changed
@@ -41,12 +41,37 @@ export interface RuntimeConfig {
    *  are stored under. Public placeholder 'operator'. */
   operatorUserId: string;
   features: Features;
+  /** Dashboard views this deployment does not offer, as route paths ("/analytics"). A hidden view
+   *  renders Page not found and drops out of the sidebar and the command palette. */
+  hiddenViews: string[];
 }
 
 export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
   operatorUserId: 'operator',
   features: { arturo: true, newAgent: true, providerSignIn: true },
+  hiddenViews: [],
 };
+
+// One path segment or more, lowercase route words only. "/" itself is not hideable: the index is
+// governed by features.arturo.
+const VIEW_PATH = /^\/[a-z0-9-]+(\/[a-z0-9-]+)*$/;
+
+/** Pure: the valid entries of an untrusted hiddenViews value, normalised (trimmed, lowercased, no
+ *  trailing slash). Anything malformed is dropped with a console warning, never half-applied. */
+export function resolveHiddenViews(raw: unknown, warn: (m: string) => void = (m) => console.warn(m)): string[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    warn(`runtime-config: hiddenViews must be an array of paths like "/analytics"; ignored (${JSON.stringify(raw)})`);
+    return [];
+  }
+  const out: string[] = [];
+  for (const v of raw) {
+    const p = typeof v === 'string' ? v.trim().toLowerCase().replace(/\/+$/, '') : null;
+    if (p && VIEW_PATH.test(p)) { if (!out.includes(p)) out.push(p); }
+    else warn(`runtime-config: hiddenViews entry ${JSON.stringify(v)} is not a view path like "/analytics"; ignored`);
+  }
+  return out;
+}
 
 // The id goes into URL paths (/adaptive/<id>/insights) and message fields, so only a plain
 // identifier is accepted; anything else falls back rather than being half-used.
@@ -54,7 +79,7 @@ const USER_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 /** Pure: merge an untrusted parsed value over the defaults, field by field. */
 export function resolveRuntimeConfig(raw: unknown): RuntimeConfig {
-  const cfg = { ...DEFAULT_RUNTIME_CONFIG, features: { ...DEFAULT_RUNTIME_CONFIG.features } };
+  const cfg = { ...DEFAULT_RUNTIME_CONFIG, features: { ...DEFAULT_RUNTIME_CONFIG.features }, hiddenViews: [] as string[] };
   if (raw && typeof raw === 'object') {
     const id = (raw as Record<string, unknown>).operatorUserId;
     if (typeof id === 'string' && USER_ID.test(id.trim())) cfg.operatorUserId = id.trim();
@@ -67,6 +92,7 @@ export function resolveRuntimeConfig(raw: unknown): RuntimeConfig {
         if (typeof v === 'boolean') cfg.features[name] = v;
       }
     }
+    cfg.hiddenViews = resolveHiddenViews((raw as Record<string, unknown>).hiddenViews);
   }
   return cfg;
 }
@@ -83,6 +109,10 @@ export function operatorUserId(): string {
 
 export function featureEnabled(name: FeatureName): boolean {
   return current.features[name];
+}
+
+export function hiddenViews(): string[] {
+  return current.hiddenViews;
 }
 
 /** The value the file sets for a feature, or undefined when it says nothing (only booleans count). */

@@ -13,6 +13,7 @@ import {
   ArrowUpRight,
   ArrowRight,
 } from 'lucide-react';
+import { isViewHidden } from '../lib/features';
 
 // ── Status config ────────────────────────────────────────────────────
 
@@ -121,13 +122,13 @@ function ProjectDetail({ project, slug }: { project: any; slug: string }) {
   const navigate = useNavigate();
   return (
     <div className="border-t border-neutral-800 px-5 pb-5 pt-4 space-y-5">
-      {/* Roadmap link */}
-      <button
+      {/* Roadmap link (absent where the deployment hides the roadmaps view) */}
+      {!isViewHidden(`/roadmaps/${slug}`) && <button
         onClick={() => navigate(`/roadmaps/${slug}`)}
         className="flex items-center gap-2 px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium transition-colors w-fit"
       >
         View Roadmap <ArrowRight size={14} />
-      </button>
+      </button>}
 
       {/* Current State */}
       {project.current_state && (

@@ -1,5 +1,4 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { Link } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { useQuery } from '@tanstack/react-query';
 import { fetchActivity, connectActivitySSE } from '../lib/api';
@@ -12,6 +11,7 @@ import {
   HeartPulse,
   Zap,
 } from 'lucide-react';
+import ViewLink from '../components/ViewLink';
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -125,14 +125,14 @@ function linkifyDetail(detail: string, knownAgents: Set<string>): React.ReactNod
       parts.push(text.slice(last, match.index));
     }
     parts.push(
-      <Link
+      <ViewLink
         key={`${name}-${match.index}`}
         to={`/agents?focus=${encodeURIComponent(name)}`}
         className="inline-flex items-center px-1 py-0.5 rounded bg-violet-500/10 text-violet-400 hover:bg-violet-500/20 transition-colors"
         onClick={(e) => e.stopPropagation()}
       >
         {name}
-      </Link>
+      </ViewLink>
     );
     last = match.index + match[0].length;
   }
@@ -348,7 +348,7 @@ export default function ActivityPage() {
 
                 {/* Agent initial circle — clickable */}
                 {event.agent ? (
-                  <Link
+                  <ViewLink
                     to={`/agents?focus=${encodeURIComponent(event.agent)}`}
                     className={clsx(
                       'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0 hover:ring-2 hover:ring-white/20 transition-all',
@@ -357,7 +357,7 @@ export default function ActivityPage() {
                     title={event.agent}
                   >
                     {initial}
-                  </Link>
+                  </ViewLink>
                 ) : (
                   <div
                     className={clsx(
@@ -376,13 +376,13 @@ export default function ActivityPage() {
                 <div className="min-w-0 flex-1 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
                   <span className="text-sm font-semibold text-white shrink-0">{cat}</span>
                   {event.agent && (
-                    <Link
+                    <ViewLink
                       to={`/agents?focus=${encodeURIComponent(event.agent)}`}
                       className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-400 text-xs hover:bg-violet-500/20 transition-colors shrink-0"
                       onClick={(e) => e.stopPropagation()}
                     >
                       {event.agent}
-                    </Link>
+                    </ViewLink>
                   )}
                   {event.detail && (
                     <span className="text-sm text-neutral-500 truncate">
@@ -391,15 +391,15 @@ export default function ActivityPage() {
                   )}
                 </div>
 
-                {/* Task ID — clickable */}
+                {/* Task ID — clickable, unless this deployment hides the Tasks view (ViewLink: plain text) */}
                 {event.task_id && (
-                  <Link
+                  <ViewLink
                     to={`/tasks?task=${encodeURIComponent(event.task_id)}`}
                     className="text-xs font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 transition-colors shrink-0"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {event.task_id}
-                  </Link>
+                  </ViewLink>
                 )}
               </div>
             );

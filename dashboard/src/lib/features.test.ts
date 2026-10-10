@@ -2,9 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  indexPage, navItemsFor, showArturoPill, showNewAgent, providerTileAction, showAddProvider,
+  indexPage, navItemsFor, showArturoPill, showNewAgent, providerTileAction, showAddProvider, isViewHidden,
 } from './features.ts';
-import { resolveRuntimeConfig, setRuntimeConfig, featureEnabled, DEFAULT_RUNTIME_CONFIG } from './runtimeConfig.ts';
+import {
+  resolveRuntimeConfig, setRuntimeConfig, featureEnabled, DEFAULT_RUNTIME_CONFIG, resolveHiddenViews, hiddenViews,
+} from './runtimeConfig.ts';
 
 const ON = { arturo: true, newAgent: true, providerSignIn: true };
 const off = (name: keyof typeof ON) => ({ ...ON, [name]: false });
@@ -93,8 +95,123 @@ test('every gated surface is wired to its helper', () => {
     ['pages/Agents.tsx', /showNewAgent\(\)/],
     ['components/agent/ModelSelectorSheet.tsx', /providerTileAction\(/],
     ['components/agent/ModelSelectorSheet.tsx', /showAddProvider\(\)/],
+    ['layouts/DashboardLayout.tsx', /isViewHidden\(location\.pathname\) \? <NotFound \/> : <Outlet \/>/],
+    ['components/CommandPalette.tsx', /navItemsFor\(PAGES\)/],
+    // in-page view links (orchestra-builder msg_9b62f71a: every place a view is linked)
+    ['components/agent/Drawer.tsx', /routes\.filter\(\(route\) => !isViewHidden\(route\.path\)\)/],
+    ['pages/ArturoHome.tsx', /DRAWER\.filter\(\(\[, to\]\) => !isViewHidden\(to\)\)/],
+    ['pages/RoadmapDetail.tsx', /!isViewHidden\('\/approvals'\)/],
+    ['components/NotificationBell.tsx', /if \(!isViewHidden\('\/inbox'\)\) navigate\('\/inbox'\)/],
+    ['components/NewAgentModal.tsx', /!isViewHidden\('\/agents'\) && <button/],
   ];
   for (const [file, re] of wiring) assert.match(src(file), re, file);
   // No surface renders its component unconditionally any more.
   assert.doesNotMatch(src('layouts/DashboardLayout.tsx'), /^\s*<ArturoPill \/>/m);
+  // Every link into a view on these pages is gated: no bare navigate('/inbox') / to="/projects" left.
+  assert.doesNotMatch(src('components/NotificationBell.tsx'), /onClick=\{\(\) => \{ navigate\('\/inbox'\)/);
+  assert.equal((src('pages/RoadmapDetail.tsx').match(/!isViewHidden\('\/projects'\)/g) || []).length, 2);
+  // Activity links into views only through ViewLink (plain text when the view is hidden).
+  const activity = src('pages/Activity.tsx');
+  assert.doesNotMatch(activity, /<Link\b[^>]*to=\{`\/(agents|tasks)/s);
+  assert.equal((activity.match(/<ViewLink\b/g) || []).length, 4);
+  assert.match(src('components/ViewLink.tsx'), /if \(isViewHidden\(to\)\) return <span/);
+  // The layout renders the route ONLY through the gate.
+  assert.doesNotMatch(src('layouts/DashboardLayout.tsx'), /<RouteErrorBoundary label="page"><Outlet \/>/);
+  // Every sidebar list goes through navItemsFor: no raw list reaches NavItems / NavSection.
+  const sidebar = src('components/Sidebar.tsx');
+  for (const list of ['assistantNav', 'coreNav', 'operationsNav', 'intelligenceNav', 'projectsNav', 'commsNav']) {
+    assert.match(sidebar, new RegExp(`items=\\{navItemsFor\\(${list}\\)\\}`), list);
+    assert.doesNotMatch(sidebar, new RegExp(`items=\\{${list}\\}`), list);
+  }
+});
+
+// ---- hiddenViews ------------------------------------------------------------------------------
+
+test('hiddenViews defaults to none, so a public install shows every view', () => {
+  assert.deepEqual(resolveRuntimeConfig(null).hiddenViews, []);
+  assert.deepEqual(resolveRuntimeConfig({}).hiddenViews, []);
+  assert.deepEqual(DEFAULT_RUNTIME_CONFIG.hiddenViews, []);
+});
+
+test('valid entries are kept, normalised (trim, lowercase, no trailing slash, no duplicates)', () => {
+  const warned: string[] = [];
+  assert.deepEqual(resolveHiddenViews(['/chat-history', ' /Analytics/ ', '/tasks', '/tasks', '/roadmaps/x'], (m) => warned.push(m)),
+    ['/chat-history', '/analytics', '/tasks', '/roadmaps/x']);
+  assert.deepEqual(warned, []);
+});
+
+test('malformed: not an array -> none + a warning; bad entries dropped with a warning each', () => {
+  for (const bad of ['/tasks', { '/tasks': true }, 42, null, true]) {
+    const warned: string[] = [];
+    assert.deepEqual(resolveHiddenViews(bad, (m) => warned.push(m)), [], JSON.stringify(bad));
+    assert.equal(warned.length, 1, JSON.stringify(bad));
+  }
+  const warned: string[] = [];
+  assert.deepEqual(resolveHiddenViews(['/', 'tasks', '/a b', '../x', 7, '', '/ok'], (m) => warned.push(m)), ['/ok']);
+  assert.equal(warned.length, 6);           // "/" is not hideable: the index belongs to features.arturo
+});
+
+test('isViewHidden: the view and its sub-paths, never a lookalike', () => {
+  const h = ['/tasks', '/roadmaps'];
+  assert.equal(isViewHidden('/tasks', h), true);
+  assert.equal(isViewHidden('/tasks/', h), true);
+  assert.equal(isViewHidden('/Tasks', h), true);             // the router matches case-insensitively
+  assert.equal(isViewHidden('/roadmaps/acme', h), true);
+  assert.equal(isViewHidden('/tasks-archive', h), false);
+  assert.equal(isViewHidden('/agents', h), false);
+  assert.equal(isViewHidden('/', h), false);
+  assert.equal(isViewHidden('/tasks', []), false);           // control: nothing hidden
+  assert.equal(isViewHidden('/tasks?task=t-1', h), true);    // a deep link with a query
+  assert.equal(isViewHidden('/tasks#top', h), true);
+  assert.equal(isViewHidden('/tasks-archive?x=1', h), false);
+});
+
+test('navItemsFor drops hidden views (sidebar and palette), and nothing else', () => {
+  const items = [{ to: '/' }, { to: '/overview' }, { to: '/tasks' }, { to: '/chat-history' }];
+  assert.deepEqual(navItemsFor(items, ON, ['/tasks', '/chat-history']), [{ to: '/' }, { to: '/overview' }]);
+  assert.deepEqual(navItemsFor(items, ON, []), items);
+  // both rules together
+  assert.deepEqual(navItemsFor(items, off('arturo'), ['/tasks']), [{ to: '/overview' }, { to: '/chat-history' }]);
+});
+
+test('the helpers read the loaded config', () => {
+  setRuntimeConfig({ hiddenViews: ['/analytics'] });
+  assert.deepEqual(hiddenViews(), ['/analytics']);
+  assert.equal(isViewHidden('/analytics'), true);
+  assert.deepEqual(navItemsFor([{ to: '/analytics' }, { to: '/tasks' }]), [{ to: '/tasks' }]);
+  setRuntimeConfig(null);
+  assert.equal(isViewHidden('/analytics'), false);
+});
+
+test('SWEEP: every literal link or navigate() into a view is gated', async () => {
+  // Naming files missed one (Projects' "View Roadmap" button, found in review). This walks the
+  // whole tree instead: any navigate('/x…') or to="/x…" / to={`/x…`} whose target is a view must
+  // have isViewHidden / navItemsFor / ViewLink on its line or within the 3 lines before it.
+  // Not views: /agent/<id> (an agent, not a page), "/" (the index, governed by features.arturo).
+  // Exempt: App.tsx's index redirect to /overview (indexPage()): with Arturo off "/" has to go
+  // somewhere, and if a deployment hides /overview too, Page not found is the honest landing.
+  const { readdirSync, readFileSync, statSync } = await import('node:fs');
+  const { join, relative } = await import('node:path');
+  const root = new URL('..', import.meta.url).pathname;
+  const TARGET = /(?:navigate\(\s*|\bto=\{?\s*)['"`](\/[a-z][^'"`$]*)/g;
+  const GATE = /isViewHidden|navItemsFor|ViewLink/;
+  const ungated: string[] = [];
+  const walk = (dir: string) => {
+    for (const name of readdirSync(dir)) {
+      const p = join(dir, name);
+      if (statSync(p).isDirectory()) { walk(p); continue; }
+      if (!/\.tsx$/.test(name) || /\.test\./.test(name)) continue;
+      const lines = readFileSync(p, 'utf8').split('\n');
+      lines.forEach((line, i) => {
+        for (const m of line.matchAll(TARGET)) {
+          if (/^\/agent\//.test(m[1])) continue;
+          if (/indexPage\(\)/.test(line)) continue;
+          const window = lines.slice(Math.max(0, i - 3), i + 1).join('\n');
+          if (!GATE.test(window)) ungated.push(`${relative(root, p)}:${i + 1}: ${m[1]}`);
+        }
+      });
+    }
+  };
+  walk(root);
+  assert.deepEqual(ungated, []);
 });
