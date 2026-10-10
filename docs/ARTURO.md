@@ -1,7 +1,7 @@
 # Arturo — the front door
 
 Arturo is the voice-and-text assistant that sits in front of your OrchestraOS: the
-main page of the dashboard, a floating "Ask Arturo" pill on every other page, and
+main page of the dashboard, an Arturo button (a circle next to the notification bell in the top bar) on every other page, and
 (with a vendor key) a voice on your phone and watch. It answers questions about the
 fleet, reads what an agent is doing, files decisions, and — the part that matters
 on day one — **commissions agents**: "commission an agent to X" spawns a seat and
@@ -170,7 +170,7 @@ Mac targets keep the legacy raw-tmux spawn (spawn-agent.sh is a server-side scri
   composer. Header and chip read the live brain from `/api/arturo/health`.
 - Drawer (≡) = the rest of the OS. Brain glyph = Facts / Commitments. Model chip /
   title = the runtime catalog sheet (`/api/runtimes/available`).
-- `dashboard/src/components/arturo/ArturoPill.tsx` — the "Ask Arturo" pill on every
+- `dashboard/src/components/arturo/ArturoPill.tsx` — the Arturo pane (opened by `ArturoButton.tsx`, the top-bar circle) on every
   dashboard page; expands over the page with a context chip; "Open Arturo" jumps home.
 - The old dashboard Overview lives at `/overview`.
 
