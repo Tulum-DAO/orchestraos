@@ -236,13 +236,17 @@ def test_questionnaire_retire_same_rules(qstore, no_notify):
     assert no_notify == []
 
 
-# ---------------------------------------------------------------- export (client-safe default)
+# ---------------------------------------------------------------- export (gm msg_6003469a: real status)
 
-def test_export_retired_maps_to_discarded_plus_an_additive_object():
+RETIRED_KEYS = {"by", "reason", "superseded_by", "at"}
+
+
+def test_export_retired_keeps_the_real_status_plus_the_retired_object():
     row = {"id": "apr_1", "status": "retired", "retired_at": "2026-10-10T06:00:00Z", "retired_by": "gm",
            "retire_reason": "obsolete", "superseded_by": "apr_2", "answered_at": None}
     out = export_retired(dict(row))
-    assert out["status"] == "discarded"
+    assert out["status"] == "retired"                 # all 3 clients confirmed (gm msg_6003469a)
+    assert set(out["retired"]) == RETIRED_KEYS         # no fields beyond these 4
     assert out["retired"] == {"by": "gm", "reason": "obsolete", "superseded_by": "apr_2",
                               "at": "2026-10-10T06:00:00Z"}
     assert out["answered_at"] == "2026-10-10T06:00:00Z"        # sorts and reads as when it ended
@@ -250,7 +254,7 @@ def test_export_retired_maps_to_discarded_plus_an_additive_object():
     assert export_retired(dict(plain)) == plain                  # every other row untouched
 
 
-def test_gateway_history_and_detail_use_the_safe_export(store, qstore, monkeypatch, db):
+def test_gateway_history_and_detail_export_the_real_retired_status(store, qstore, monkeypatch, db):
     import watch_gateway as G
     import asyncio
     monkeypatch.setattr(G, "ApprovalStore", lambda: ApprovalStore(db_path=db))
@@ -266,10 +270,12 @@ def test_gateway_history_and_detail_use_the_safe_export(store, qstore, monkeypat
     hist = json.loads(asyncio.run(G.handle_history(R())).text)["history"]
     by = {h["id"]: h for h in hist}
     for i in (rid, q):
-        assert by[i]["status"] == "discarded" and by[i]["retired"]["reason"] == "obsolete", by[i]
+        assert by[i]["status"] == "retired" and by[i]["retired"]["reason"] == "obsolete", by[i]
+        assert set(by[i]["retired"]) == RETIRED_KEYS, by[i]["retired"]
     det = json.loads(asyncio.run(G.handle_approval_detail(R({"id": rid}))).text)
     row = det["approval"]
-    assert row["status"] == "discarded" and row["retired"]["by"] == "gm"
+    assert row["status"] == "retired" and row["retired"]["by"] == "gm"
+    assert set(row["retired"]) == RETIRED_KEYS
 
 
 # ---------------------------------------------------------------- CLI

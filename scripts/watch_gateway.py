@@ -1311,10 +1311,10 @@ async def handle_answer(request):
 
 
 def _safe_retired(entry, row):
-    """A RETIRED card (author/gm: no longer needed; operator ruling 2026-10-10) goes to clients as status
-    'discarded' + an additive 'retired' object until each client confirms it tolerates an
-    unknown status (gm msg_3f3a4d05 §6; asked ios-watch-dev / macos-dev / orchestraos-builder).
-    ONE place, so /history and /approvals/{id} cannot disagree. Every other row is untouched."""
+    """A RETIRED card (author/gm: no longer needed; operator ruling 2026-10-10) goes to clients with
+    the real status 'retired' + a 'retired' object {by, reason, superseded_by, at} (gm msg_6003469a:
+    all three clients confirmed an unknown status is safe). ONE place, so /history and
+    /approvals/{id} cannot disagree. Every other row is untouched."""
     if row.get("status") == "retired":
         from approval_schema import export_retired
         x = export_retired(dict(row))
