@@ -14,6 +14,8 @@ def _read_cursor():
         return "all"   # first run: ntfy 'since=all' replays retained messages
 
 def _write_cursor(ts):
+    from orchestra_cli.settings import guard_test_write   # approval_config put the checkout on the path
+    guard_test_write(CURSOR_FILE, "the approval listener cursor")
     try:
         CURSOR_FILE.write_text(str(ts))
     except OSError as e:

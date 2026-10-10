@@ -48,6 +48,7 @@ from context_reading import claude_context  # noqa: E402  — window/budget %, o
 if os.path.dirname(os.path.dirname(os.path.abspath(__file__))) not in sys.path:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+from orchestra_cli.settings import guard_test_write as _guard_test_write  # noqa: E402
 
 
 ORCH_DIR = os.environ.get("ORCH_DIR", str(_data_dir()))
@@ -1550,6 +1551,7 @@ def mark_turn_interrupted(session: str, now: float | None = None) -> bool:
             return False
         os.makedirs(EVENTS_DIR, exist_ok=True)
         path = os.path.join(EVENTS_DIR, pane.lstrip('%') + '.json')
+        _guard_test_write(path, "an agent event")
         tmp = path + '.tmp'
         with open(tmp, 'w') as f:
             json.dump({'event': 'Stop', 'state': 'idle',
@@ -1576,6 +1578,7 @@ def _load_prev(session: str) -> dict:
 
 
 def _persist(session: str, data: dict) -> None:
+    _guard_test_write(_state_path(session), "agent state")
     try:
         os.makedirs(STATE_DIR, exist_ok=True)
         tmp = _state_path(session) + '.tmp'

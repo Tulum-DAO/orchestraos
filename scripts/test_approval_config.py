@@ -33,4 +33,5 @@ def test_orchestra_dir_env_override(monkeypatch):
     # through no fault of either test, while `db_path()` always resolves.
     assert str(c.db_path()) == "/tmp/xyz-orch/state/tasks.db"
     monkeypatch.delenv("ORCHESTRA_DIR", raising=False)
+    monkeypatch.delenv("ORCH_DIR", raising=False)
     assert str(c.db_path()) == str(c.LIVE_DB_PATH), "no override -> falls back to the live tree"

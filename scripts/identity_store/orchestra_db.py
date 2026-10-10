@@ -30,7 +30,15 @@ What is load-bearing here:
 """
 import datetime
 import json
+import os
 import sqlite3
+import sys
+
+# The data-dir write fence lives in orchestra_cli.settings, in this file's checkout (appended, never
+# prepended, so nothing already on the path is shadowed).
+if os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from orchestra_cli.settings import guard_test_write as _guard_test_write  # noqa: E402
 
 # busy_timeout in milliseconds — a contended writer waits this long for the
 # lock instead of failing immediately with "database is locked".
@@ -118,6 +126,8 @@ def get_connection(db_path: str) -> sqlite3.Connection:
     transactions and ``BEGIN IMMEDIATE`` would collide. Individual statements
     outside an explicit BEGIN still auto-commit, and constraint violations still
     raise at execute time."""
+    if str(db_path) != ":memory:":
+        _guard_test_write(db_path, "the identity DB (orchestra-registry.db)")
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.isolation_level = None

@@ -93,7 +93,7 @@ def register_seat(st: S.Settings, seat: str, *, gm: bool, runtime: str | None, m
     row.setdefault("status", "provisioning")
     reg["agents"][seat] = row
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".json.tmp"); tmp.write_text(json.dumps(reg, indent=2) + "\n"); os.replace(tmp, p)
+    S.guard_test_write(p, "registry.json"); tmp = p.with_suffix(".json.tmp"); tmp.write_text(json.dumps(reg, indent=2) + "\n"); os.replace(tmp, p)
     return row
 
 
@@ -368,7 +368,7 @@ def cmd_agent_create(ns) -> int:
         print(f"agent create refused: {e}", file=sys.stderr); return 2
     if ns.parent and row.get("reports_to") != ns.parent:
         p, reg = _registry(st); reg["agents"][name]["reports_to"] = ns.parent; row["reports_to"] = ns.parent
-        tmp = p.with_suffix(".json.tmp"); tmp.write_text(json.dumps(reg, indent=2) + "\n"); os.replace(tmp, p)
+        S.guard_test_write(p, "registry.json"); tmp = p.with_suffix(".json.tmp"); tmp.write_text(json.dumps(reg, indent=2) + "\n"); os.replace(tmp, p)
     env = S.child_env(st); env["AGENT_RUNTIME"] = row["runtime"]
     if row.get("model"):
         env["AGENT_MODEL"] = row["model"]
@@ -614,7 +614,7 @@ def _starter_seats(st, ns) -> int:
             if seat["gm"]:
                 row["always_on"] = True
             reg["agents"][name] = row
-            tmp = p.with_suffix(".json.tmp"); tmp.write_text(json.dumps(reg, indent=2) + "\n"); os.replace(tmp, p)
+            S.guard_test_write(p, "registry.json"); tmp = p.with_suffix(".json.tmp"); tmp.write_text(json.dumps(reg, indent=2) + "\n"); os.replace(tmp, p)
         if row and _pane_alive(row.get("tmux_session") or name):
             print(f"{name} ({seat['tier']}) already running — skipped")
             continue
@@ -626,7 +626,7 @@ def _starter_seats(st, ns) -> int:
                 p, reg = _registry(st)
                 if reg["agents"][name].get("reports_to") != seat["parent"]:
                     reg["agents"][name]["reports_to"] = seat["parent"]
-                    tmp = p.with_suffix(".json.tmp"); tmp.write_text(json.dumps(reg, indent=2) + "\n"); os.replace(tmp, p)
+                    S.guard_test_write(p, "registry.json"); tmp = p.with_suffix(".json.tmp"); tmp.write_text(json.dumps(reg, indent=2) + "\n"); os.replace(tmp, p)
         else:
             cwd = None
             if seat["tier"] == "T2":
