@@ -182,3 +182,36 @@ test('the helpers read the loaded config', () => {
   setRuntimeConfig(null);
   assert.equal(isViewHidden('/analytics'), false);
 });
+
+test('SWEEP: every literal link or navigate() into a view is gated', async () => {
+  // Naming files missed one (Projects' "View Roadmap" button, found in review). This walks the
+  // whole tree instead: any navigate('/x…') or to="/x…" / to={`/x…`} whose target is a view must
+  // have isViewHidden / navItemsFor / ViewLink on its line or within the 3 lines before it.
+  // Not views: /agent/<id> (an agent, not a page), "/" (the index, governed by features.arturo).
+  // Exempt: App.tsx's index redirect to /overview (indexPage()): with Arturo off "/" has to go
+  // somewhere, and if a deployment hides /overview too, Page not found is the honest landing.
+  const { readdirSync, readFileSync, statSync } = await import('node:fs');
+  const { join, relative } = await import('node:path');
+  const root = new URL('..', import.meta.url).pathname;
+  const TARGET = /(?:navigate\(\s*|\bto=\{?\s*)['"`](\/[a-z][^'"`$]*)/g;
+  const GATE = /isViewHidden|navItemsFor|ViewLink/;
+  const ungated: string[] = [];
+  const walk = (dir: string) => {
+    for (const name of readdirSync(dir)) {
+      const p = join(dir, name);
+      if (statSync(p).isDirectory()) { walk(p); continue; }
+      if (!/\.tsx$/.test(name) || /\.test\./.test(name)) continue;
+      const lines = readFileSync(p, 'utf8').split('\n');
+      lines.forEach((line, i) => {
+        for (const m of line.matchAll(TARGET)) {
+          if (/^\/agent\//.test(m[1])) continue;
+          if (/indexPage\(\)/.test(line)) continue;
+          const window = lines.slice(Math.max(0, i - 3), i + 1).join('\n');
+          if (!GATE.test(window)) ungated.push(`${relative(root, p)}:${i + 1}: ${m[1]}`);
+        }
+      });
+    }
+  };
+  walk(root);
+  assert.deepEqual(ungated, []);
+});
