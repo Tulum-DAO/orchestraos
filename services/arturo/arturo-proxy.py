@@ -3740,10 +3740,12 @@ def execute_tool(name, args, user_turns=None):
                 # "task", not "prompt": spawn_agent reads only args["task"] (gm audit 2026-10-09 #2);
                 # with "prompt" every research seat spawned with no question at all. The agent reports
                 # through scripts/tg-notify.sh, which reads the bot token from <data dir>/.env.telegram
-                # by reference: the token never appears in the agent's task, transcript or a command line.
+                # by reference: the token never appears in the agent's task or transcript. The findings
+                # go in on STDIN, so a quote or "$(" in the spoken query cannot break the command.
                 "task": (f"Research this topic thoroughly and send the operator the results on Telegram when done:\n\n{query}\n\n"
-                         "Use WebSearch and WebFetch tools. Be concise but comprehensive. Send your findings by running: "
-                         f"ORCHESTRA_DIR={ORCHESTRA_DIR} bash {TG_NOTIFY} --from research \"Research results: {query[:50]}...\\n\\n<your findings>\" "
+                         "Use WebSearch and WebFetch tools. Be concise but comprehensive. To send your findings, "
+                         "write the message (a first line 'Research results: <topic>', then your findings) to a "
+                         f"file and pipe it in: ORCHESTRA_DIR={ORCHESTRA_DIR} bash {TG_NOTIFY} --from research < <file> "
                          "(it reads the bot token by reference; never paste a token into a command)."),
             },
             "summary": f"Web research: {query[:80]}"
