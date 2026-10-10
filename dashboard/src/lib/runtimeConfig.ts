@@ -24,7 +24,7 @@
 /** Surfaces a deployment can switch OFF when its API does not serve them. A switched-off surface
  *  does not render at all: no button that leads to a 404. Every one defaults to ON. */
 export interface Features {
-  /** The Arturo assistant: the home page at "/", the Ask Arturo pill, its sidebar entry
+  /** The Arturo assistant: the home page at "/", the top-bar Arturo button and its pane, its sidebar entry
    *  (/api/arturo/*). Off: "/" opens the Overview instead. */
   arturo: boolean;
   /** The New Agent button and modal on Overview and Agents (/api/agents/new, login-shell). */

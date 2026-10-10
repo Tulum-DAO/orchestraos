@@ -3,7 +3,7 @@ import { HandsFreeCall, isInCall } from '../lib/handsFree';
 import { VoiceSession, type VoiceSessionStartOptions, type VoiceSessionState } from '../lib/voiceSession';
 
 /** Live voice mode for a composer: one HandsFreeCall (lib/handsFree.ts) plus the live
- *  captions as React state. The home composer and the "Ask Arturo" pill both use it. */
+ *  captions as React state. The home composer and the Arturo pane both use it. */
 export function useHandsFreeCall(ev: {
   onFinal?: (text: string, role: 'user' | 'arturo') => void;
   onUnavailable?: (reason: string) => void;

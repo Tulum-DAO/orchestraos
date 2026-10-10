@@ -1,6 +1,6 @@
 /**
  * handsFree.ts — Live voice mode (the live call where Arturo talks back), as ONE
- * controller that the home composer and the "Ask Arturo" pill both drive. It was the pill's own
+ * controller that the home composer and the Arturo pane both drive. It was the pill's own
  * code; the home's button had no call behind it at all.
  *
  * The session is lib/voiceSession.ts (→ /api/voice/live → gateway /live → Gemini Live). Arturo's

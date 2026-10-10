@@ -10,7 +10,10 @@ composer, no legacy chrome, no inject buttons.
   detect + voice/text decision card → "what should your first agent do?" →
   seat spawned (`ran spawn_agent`) and the thread flips to ordinary chat.
 - `arturo-pill-390x844.png` — the "Ask Arturo" pill on `/approvals`, closed and
-  expanded (context chip `approvals`, "Open Arturo" jump).
+  expanded (context chip `approvals`, "Open Arturo" jump). **Superseded 2026-10-10:** the floating
+  pill covered text and the composer on phones; Arturo's way in is now a circle in the top bar
+  next to the notification bell (`dashboard/src/components/arturo/ArturoButton.tsx`), and the
+  pane opens under that bar. This image is kept as the design history.
 
 Regenerate: run the dashboard (`npx vite`) against an install, then a puppeteer
 script that clears `localStorage`, types through the thread and screenshots each

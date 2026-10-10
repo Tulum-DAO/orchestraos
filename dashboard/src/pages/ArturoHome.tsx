@@ -115,12 +115,12 @@ export default function ArturoHome() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   // Zero-key dictation (item B): the Mic button transcribes on-device into the draft. Shared
-  // hook with the "Ask Arturo" pill so every composer has the same buttons. Separate from the
+  // hook with the Arturo pane so every composer has the same buttons. Separate from the
   // AudioLines "Live voice mode" button, the live call where Arturo talks back (needs a voice key).
   // Dictation needs nothing from OrchestraOS: the browser's own mic permission is its only gate.
   const { mode: dictMode, dictating, note: dictNote, toggle: toggleDictation, stop: stopDictation, clearNote: clearDictNote } =
     useDictation(draft, setDraft, () => taRef.current?.focus());
-  // Live voice mode: the same call the "Ask Arturo" pill starts (hooks/useHandsFreeCall). Its
+  // Live voice mode: the same call the Arturo pane starts (hooks/useHandsFreeCall). Its
   // captions commit as turns in this thread; a call that cannot start says why, here.
   const call = useHandsFreeCall({
     onFinal: (text, role) => { if (role === 'user') user(text); else say(text); },
