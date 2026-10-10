@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
+import { VoiceControls } from './agent/VoiceControls';
 import { clsx } from 'clsx';
 import { MoreVertical, Play, Square, Terminal, Send, ChevronDown, ChevronUp, X, Maximize2, KeyRound, FileText, Copy, Download, RotateCcw, Eye, Edit3 } from 'lucide-react';
 import { StatusDot } from './StatusDot';
@@ -116,6 +117,9 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
   // The focused panel's box. On a phone the Arturo pill overlapped its key row; lift it above the
   // panel's input (chat) or key row (dev) while the panel is open. See hooks/useArturoLift.ts.
   const panelRef = useRef<HTMLDivElement>(null);
+  // The panel's composer draft, held here so the mic's dictation can write into it.
+  const [panelDraft, setPanelDraft] = useState('');
+  const location = useLocation();
   useArturoLift(panelRef, devMode ? '[data-testid="panel-actionbar"]' : '[data-testid="composer-pill"]', focused && !!agent.alive);
   const [showAuthFlow, setShowAuthFlow] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
@@ -668,7 +672,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
           // theme tokens here keeps token-coloured content in it (the pill, assistant prose)
           // light-on-dark in the light theme too, instead of black ink on a black panel.
           "dark fixed inset-0 z-50 bg-black/70 flex overscroll-none",
-          devMode ? 'items-stretch justify-center p-0 overflow-hidden' : 'items-center justify-center p-4'
+          devMode ? 'items-stretch justify-center p-0 overflow-hidden' : 'items-center justify-center p-4 max-sm:p-2'
         )} onClick={() => { setFocused(false); setArturoFocus(null); }}>
           <div
             className={clsx(
@@ -770,16 +774,34 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                 <ChatInput
                   agentId={agent.id}
                   attachSupported={(agent.machine || 'vps') === 'vps'}
-                  placeholder={agent.status === 'working' ? 'Working — a message will queue' : 'Message this agent…'}
-                  // Stop = the Esc key the ActionBar below sends; never while a menu is open (#334).
+                  // Short on purpose: at 360px the box shows ~13 characters, and "working" is already said
+                  // by the status line above and by the Stop button.
+                  placeholder="Message"
+                  draft={panelDraft}
+                  onDraftChange={setPanelDraft}
+                  // The mic: dictation into this box (Shaw, 2026-10-10: the panel had none). No call
+                  // button here; a voice call is Arturo's, not this agent's.
+                  trailing={
+                    <VoiceControls
+                      route={location.pathname}
+                      focusedEntity={agent.id}
+                      onPartial={setPanelDraft}
+                      onFinal={setPanelDraft}
+                      showCallButton={false}
+                    />
+                  }
+                  // Stop = the Esc key Dev mode's key row sends; never while a menu is open (#334).
                   canStop={canStopTurn({ state: agent.status, pendingMenu: agent.pending_menu })}
                   onStop={() => { logAction('agent.stop', agent.id); return sendKeyToAgent(agent.id, 'escape'); }}
                 />
               </div>
             )}
 
-            {/* ActionBar — always visible (mobile needs special keys even in Dev mode) */}
-            <div data-testid="panel-actionbar" className={clsx('px-3 py-2 border-t border-neutral-800 shrink-0', devMode && 'bg-neutral-950')}>
+            {/* The special-key row (arrows, Esc, Tab, ^C...) is for the TERMINAL: Dev mode only
+                (Shaw, 2026-10-10). Chat mode has what it needs in the pill: Stop for Esc, and the
+                decision card for menus. */}
+            {devMode && (
+            <div data-testid="panel-actionbar" className="px-3 py-2 border-t border-neutral-800 shrink-0 bg-neutral-950">
               <ActionBar
                 agentId={agent.id}
                 outputLines={outputLines}
@@ -789,6 +811,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                 devMode={devMode}
               />
             </div>
+            )}
 
           </div>
         </div>
