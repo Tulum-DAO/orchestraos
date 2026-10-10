@@ -84,3 +84,34 @@ def test_nothing_reads_the_old_name_alone():
         if re.search(r"SHAW_TELEGRAM(_CHAT)?_ID", text) and NEW not in text:
             lonely.append(rel)
     assert not lonely, f"reads the old Telegram chat id name without {NEW}: {lonely}"
+
+
+@pytest.mark.parametrize("files,want", [
+    ({".shaw_chat_id": "111\n"}, "111"),                                       # an existing install keeps working
+    ({"state/telegram/chat-id": "222\n", ".shaw_chat_id": "111"}, "222"),     # the plugin's record wins
+    ({"state/telegram/chat-id": "\n", ".shaw_chat_id": "111"}, "111"),        # an empty new file falls through
+])
+def test_brief_chat_id_file_order(tmp_path, monkeypatch, files, want):
+    """brief.py's last resort is a chat id FILE: the Telegram plugin's own record first, then the old
+    operator-named file (gm)."""
+    for rel, text in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text)
+    (tmp_path / ".env").write_text("TELEGRAM_BOT_TOKEN=t\n")
+    for k in (OLD, NEW, "ORCHESTRA_DIR"):
+        monkeypatch.delenv(k, raising=False)
+    spec = importlib.util.spec_from_file_location("brief_tgid", ROOT / "brief.py")
+    brief = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(brief)
+    monkeypatch.setattr(brief, "ORCHESTRA_DIR", tmp_path)
+    monkeypatch.setattr(brief, "ENV_FILE", tmp_path / ".env")
+    monkeypatch.setattr(brief, "ACTIVITY_FILE", tmp_path / "activity.jsonl")
+    sent = []
+
+    class _Req:
+        @staticmethod
+        def post(url, json=None, timeout=None):
+            sent.append(json["chat_id"])
+    monkeypatch.setattr(brief, "requests", _Req)
+    brief.send_brief("seat", "ack", "hi")
+    assert sent == [want]

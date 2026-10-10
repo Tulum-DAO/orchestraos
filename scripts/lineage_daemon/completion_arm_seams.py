@@ -1,7 +1,7 @@
 """completion_arm_seams.py — the REAL seams that bind the A.3 completion recovery model
 to a live lineage's work repo (ARM-PREP, DEC-1787808620). Replaces the fail-closed
 module-defaults with genuine detection / surfacing for the armed lineage (ios-watch-dev,
-repo /home/testuser/repos/watch-approval-app). INERT-until-armed is unchanged — these only
+repo /home/<you>/repos/watch-approval-app). INERT-until-armed is unchanged — these only
 run for an armed lineage; arming is the allowlist add (owner: orchestra-builder, after
 gm's arm-prep PASS).
 
@@ -21,7 +21,7 @@ from .code_root import child_env, code_path   # scripts are CODE (checkout); orc
 
 def resolve_repo(orchestra_dir, agent_id):
     """The lineage's work repo = registry.agents[agent_id].cwd (all ios-watch-dev
-    generations point at /home/testuser/repos/watch-approval-app). None if absent."""
+    generations point at /home/<you>/repos/watch-approval-app). None if absent."""
     try:
         with open(os.path.join(orchestra_dir, "registry.json")) as f:
             reg = json.load(f)

@@ -36,11 +36,14 @@ def send_brief(agent_id: str, stage: str, message: str):
     chat_id = (os.environ.get("ORCHESTRA_TELEGRAM_CHAT_ID") or env.get("ORCHESTRA_TELEGRAM_CHAT_ID")
                or os.environ.get("SHAW_TELEGRAM_ID") or env.get("SHAW_TELEGRAM_ID", ""))
 
-    # Also try the persisted chat ID file
+    # Also try the persisted chat id: the Telegram plugin's own record first; the old operator-named
+    # file is still read so existing installs keep working.
     if not chat_id:
-        chat_id_file = ORCHESTRA_DIR / ".shaw_chat_id"
-        if chat_id_file.exists():
-            chat_id = chat_id_file.read_text().strip()
+        for chat_id_file in (ORCHESTRA_DIR / "state" / "telegram" / "chat-id", ORCHESTRA_DIR / ".shaw_chat_id"):
+            if chat_id_file.exists():
+                chat_id = chat_id_file.read_text().strip()
+                if chat_id:
+                    break
 
     if not token or not chat_id:
         return False
