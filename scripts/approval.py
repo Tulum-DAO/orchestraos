@@ -309,6 +309,12 @@ def main(argv=None):
     pan.add_argument("--answered-by", dest="answered_by", default=None,
                      help="principal: 'operator' (authenticated edges) | '<agent_id>' "
                           "(self-authored gates)")
+    rt = sub.add_parser("retire")  # card no longer needed: author/current gen/gm (operator ruling 2026-10-10)
+    rt.add_argument("--id", required=True)
+    rt.add_argument("--from", dest="from_agent", required=True)
+    rt.add_argument("--reason", required=True, help="plain words: why the card is no longer needed")
+    rt.add_argument("--superseded-by", dest="superseded_by", default=None,
+                    help="apr_/qnr_ id of the card that replaced it")
     args = p.parse_args(argv)
     store = _store(); store.migrate()
 
@@ -459,6 +465,22 @@ def main(argv=None):
         ok = store.update_fields(args.id, **fields)
         print(args.id if ok else "")
         return 0 if ok else 4
+    if args.cmd == "retire":
+        # A PENDING card that is no longer needed (superseded, done another way, obsolete):
+        # status 'retired' with who/why/what replaced it, out of the pending feed, kept in
+        # history. Only the author, its current generation, or gm. Never a kind='menu' row.
+        # Sends NO notification and resumes nothing: it is not an answer (operator ruling
+        # 2026-10-10, gm msg_c16b5264 / msg_3f3a4d05).
+        if args.id.startswith("qnr_"):
+            qs = _qstore(); qs.migrate()     # applies the armed retire columns to questionnaires
+            ok, why = qs.retire(args.id, args.from_agent, args.reason, args.superseded_by)
+        else:
+            ok, why = store.retire(args.id, args.from_agent, args.reason, args.superseded_by)
+        if ok:
+            print(args.id)
+            return 0
+        print(f"REFUSED: {why}", file=sys.stderr)
+        return 4
     if args.cmd == "get":
         row = store.get(args.id)
         if row is None and args.id.startswith("qnr_"):

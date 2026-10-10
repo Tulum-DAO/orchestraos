@@ -33,6 +33,10 @@ def test_seed_command_from_init_creates_gated_columns(tmp_path, monkeypatch):
     conn = sqlite3.connect(data / "state" / "tasks.db")
     cols = {r[1] for r in conn.execute("PRAGMA table_info(approval_requests)")}
     assert {"snoozed_until", "block_task", "blocks_what", "answer_surface", "answered_by"} <= cols
+    # card RETIRE (m20261010_card_retire): one arm, both tables
+    retire = {"retired_at", "retired_by", "retire_reason", "superseded_by"}
+    assert retire <= cols
+    assert retire <= {r[1] for r in conn.execute("PRAGMA table_info(questionnaires)")}
     # and a second seed run is silent + idempotent
     r = subprocess.run(list(seed[0][0]), cwd=seed[0][1], env=seed[0][2], capture_output=True, text=True)
     assert r.returncode == 0 and "DDL PENDING" not in r.stderr, r.stderr

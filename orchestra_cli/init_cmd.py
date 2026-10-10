@@ -53,7 +53,7 @@ def _rewrite_data_dir(example_text: str, data_dir: Path) -> str:
 # new install half-migrated. A gated migration missing from this tuple ships as a
 # permanent "DDL PENDING" notice, which two tests assert never happens.
 RULED_APPROVAL_MIGRATIONS = ("m20260825_answer_attribution", "m20260825_human_task",
-                            "m20261005_answer_device")
+                            "m20261005_answer_device", "m20261010_card_retire")
 
 TASKS_DB_SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (

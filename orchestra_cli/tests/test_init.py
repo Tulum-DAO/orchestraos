@@ -194,8 +194,10 @@ def test_init_schema_seed_arms_the_ruled_gated_migrations(tmp_path):
     # column that is never armed records nothing, so approving (d) is what arms it. Kept as
     # an explicit literal rather than derived from init_cmd — deriving it would make this
     # test agree with whatever the code says, which is the opposite of its job.
+    # m20261010_card_retire joins on the operator's ruling 2026-10-10 (gm msg_c16b5264 /
+    # msg_3f3a4d05: "add the 4 fields"); a fresh install has no live table to protect.
     assert armed == {"m20260825_answer_attribution", "m20260825_human_task",
-                     "m20261005_answer_device"}
+                     "m20261005_answer_device", "m20261010_card_retire"}
 
 
 def test_init_demo_seeds_three_fixture_seats_and_runs_the_card_seeder(tmp_path):

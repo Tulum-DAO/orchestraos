@@ -1310,6 +1310,19 @@ async def handle_answer(request):
                   "snoozed": result.get("snoozed")})
 
 
+def _safe_retired(entry, row):
+    """A RETIRED card (author/gm: no longer needed; operator ruling 2026-10-10) goes to clients as status
+    'discarded' + an additive 'retired' object until each client confirms it tolerates an
+    unknown status (gm msg_3f3a4d05 §6; asked ios-watch-dev / macos-dev / orchestraos-builder).
+    ONE place, so /history and /approvals/{id} cannot disagree. Every other row is untouched."""
+    if row.get("status") == "retired":
+        from approval_schema import export_retired
+        x = export_retired(dict(row))
+        entry["status"], entry["retired"] = x["status"], x["retired"]
+        entry["answered_at"] = entry.get("answered_at") or x["retired"]["at"]
+    return entry
+
+
 async def handle_history(request):
     """Answered decisions, newest-first (for the iOS history surface). Additive,
     read-only; leaves the pending/answer/resume flow untouched. Optional ?limit=
@@ -1333,13 +1346,15 @@ async def handle_history(request):
             # §6.1 human_task feed export (additive; None on legacy/unarmed rows).
             "block_task": r.get("block_task"), "blocks_what": r.get("blocks_what"),
             "snoozed_until": r.get("snoozed_until")} for r in rows]
+    for e, r in zip(out, rows):
+        _safe_retired(e, r)
     # R8 everything-to-history: submitted/discarded questionnaires appear as
     # pseudo-rows (kind='questionnaire') — nothing vanishes invisibly. Old
     # clients ignore the unknown kind (same additive discipline as /pending).
     try:
         qstore = QuestionnaireStore(); qstore.migrate()
         for q in qstore.history(limit):
-            out.append({
+            out.append(_safe_retired({
                 "id": q["id"], "kind": "questionnaire", "from_agent": q["from_agent"],
                 "question": q["title"], "options": [], "created_at": q["created_at"],
                 "answered_at": q.get("submitted_at") or q.get("discarded_at"),
@@ -1348,7 +1363,7 @@ async def handle_history(request):
                 "questionnaire": {"question_count": q["question_count"],
                                   "answered_count": q.get("answered_count", 0),
                                   "draft_rev": q["draft_rev"]},
-            })
+            }, q))
         out.sort(key=lambda r: r.get("answered_at") or "", reverse=True)
         out = out[:limit]
     except Exception as e:  # noqa: BLE001 — never let questionnaires break the history feed
@@ -1368,6 +1383,7 @@ async def handle_approval_detail(request):
     if isinstance(row.get("options"), str):
         try: row["options"] = json.loads(row["options"])
         except ValueError: pass
+    _safe_retired(row, dict(row))
     row["evidence"] = _evidence(row)
     row["menu"] = _menu(row)
     # §1.1(b) condition 3 — CAPABILITY-GATED FAIL-SAFE through the SAME chokepoint
@@ -2003,7 +2019,8 @@ async def handle_briefing(request):
     since = request.query.get("since") or ""
     store = ApprovalStore(); store.migrate()
     pending = store.pending_to_notify()
-    answered = store.history(50)
+    # A retired card is not an answer: keep it out of "while you were away" (operator ruling 2026-10-10).
+    answered = [r for r in store.history(50) if r.get("status") != "retired"]
     if since:
         answered = [r for r in answered if (r.get("answered_at") or "") > since]
     # Use the agents cache (the fleet scan takes ~6s; never block the briefing).
