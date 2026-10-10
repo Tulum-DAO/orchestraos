@@ -37,9 +37,9 @@ def _default_telegram(text):
 
 
 def _default_gm_msg(text):
-    od = os.environ.get("ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
     subprocess.run(
-        ["python3", os.path.join(od, "msg_store.py"), "send",
+        ["python3", os.path.join(os.environ.get("ORCHESTRA_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                          "msg_store.py"), "send",   # CODE (checkout); data via ORCHESTRA_DIR
          "--from", "identity-store-monitor", "--to", "gm", "--type", "task",
          "--subject", "U12 projector-liveness PAGE", "--body", text],
         timeout=10, check=False)

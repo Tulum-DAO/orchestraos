@@ -36,7 +36,9 @@ except ImportError:
     from lineage_gate import grade as G                       # noqa: F401
     from lineage_gate import shadow as SH                     # noqa: F401
 
-ORCH = os.path.expanduser("~/scripts/agent-orchestra")
+ORCH = os.environ.get("ORCHESTRA_DIR") or os.path.expanduser("~/scripts/agent-orchestra")   # DATA
+# CODE (scripts/*.py) lives in the checkout (this file is <root>/scripts/lineage_gate/cli.py)
+CODE = os.environ.get("ORCHESTRA_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 KILL_FILE = os.path.expanduser("~/runtime/LINEAGE_GATE_DISABLED")
 
 
@@ -57,7 +59,7 @@ def _epoch_or_iso(v: str) -> int:
 
 def _resolver():
     spec = importlib.util.spec_from_file_location(
-        "RG", os.path.join(ORCH, "scripts", "rotation_gate_manual.py"))
+        "RG", os.path.join(CODE, "scripts", "rotation_gate_manual.py"))
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     return m.resolve_pointer
@@ -67,7 +69,7 @@ def _leak_lint(handoff, canary):
     """Run the calibrated leak lint; its CALIBRATION rides in the result so the
     grade artifact can tell 'clean' from 'blind' months later (spec A4)."""
     r = subprocess.run([sys.executable,
-                        os.path.join(ORCH, "scripts", "canary_leak_lint.py"),
+                        os.path.join(CODE, "scripts", "canary_leak_lint.py"),
                         handoff, canary], capture_output=True, text=True)
     clean = "0 leaking" in (r.stdout + r.stderr)
     return {"leaking": 0 if clean else 1,

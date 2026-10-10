@@ -94,7 +94,9 @@ def _cmd_supervise(args) -> int:
         status_list = []
         try:
             out = subprocess.check_output(
-                ["python3", "scripts/agent-status.py", "--all"], cwd=_ORCHESTRA_DIR, text=True)
+                ["python3", os.path.join(os.environ.get("ORCHESTRA_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "scripts", "agent-status.py"), "--all"],
+                cwd=_ORCHESTRA_DIR, text=True,   # agent-status.py is CODE (checkout); data via env
+                env={**os.environ, "ORCHESTRA_DIR": _ORCHESTRA_DIR, "ORCH_DIR": _ORCHESTRA_DIR})
             status_list = _json.loads(out)
         except Exception as e:
             print(f"(agent-status unavailable: {e}; treating all owners as non-idle)")

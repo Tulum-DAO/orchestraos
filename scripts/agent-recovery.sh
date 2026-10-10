@@ -14,7 +14,9 @@
 set -uo pipefail
 
 BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SCRIPT_DIR="${ORCHESTRA_DIR:-$(cd "$BIN_DIR/.." && pwd)}"
+SCRIPT_DIR="${ORCHESTRA_DIR:-$(cd "$BIN_DIR/.." && pwd)}"   # the DATA dir under `orchestra up`
+# CODE (scripts/, python -m scripts.*) lives in the checkout, never under the data dir.
+CODE_DIR="${ORCHESTRA_ROOT:-$(cd "$BIN_DIR/.." && pwd)}"
 source "$BIN_DIR/tmux_session_defaults.sh"   # mouse on per seat session, same as spawn-agent.sh
 STATE_DIR="$SCRIPT_DIR/state"
 SESSION_INDEX="$STATE_DIR/agent-sessions.json"
@@ -49,6 +51,15 @@ done
 mkdir -p "$(dirname "$LOG")"
 
 log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) [recovery] $*" | tee -a "$LOG"; }
+# Optional crash logger (CODE, in the checkout). Not shipped in every install: absent => one log line,
+# never a "No such file" error per recovered agent.
+crash_log() {
+    if [ -f "$CODE_DIR/scripts/agent-crash-logger.sh" ]; then
+        bash "$CODE_DIR/scripts/agent-crash-logger.sh" "$@"
+    else
+        log "crash logger not installed (scripts/agent-crash-logger.sh); crash for $1 not logged separately"
+    fi
+}
 
 # Prevent concurrent runs
 if [ -f "$LOCKFILE" ]; then
@@ -435,12 +446,12 @@ while IFS='|' read -r agent_id tmux_name session_id cwd conv_path; do
                 continue
             fi
             # Session exists but Claude is dead — log crash and recover
-            bash "$SCRIPT_DIR/scripts/agent-crash-logger.sh" "$agent_id" "$tmux_name" "auto-resumed"
+            crash_log "$agent_id" "$tmux_name" "auto-resumed"
             tmux kill-session -t "$tmux_name" 2>/dev/null
             sleep 1
         else
             # No session at all — log it
-            bash "$SCRIPT_DIR/scripts/agent-crash-logger.sh" "$agent_id" "$tmux_name" "auto-resumed-no-session"
+            crash_log "$agent_id" "$tmux_name" "auto-resumed-no-session"
         fi
 
         if $DRY_RUN; then
@@ -492,7 +503,7 @@ while IFS='|' read -r agent_id tmux_name session_id cwd conv_path; do
         fi
         # Session exists but Claude is dead — log and notify
         if ! already_notified "$agent_id"; then
-            bash "$SCRIPT_DIR/scripts/agent-crash-logger.sh" "$agent_id" "$tmux_name" "notified"
+            crash_log "$agent_id" "$tmux_name" "notified"
             TG_TOKEN=$(grep TELEGRAM_BOT_TOKEN "$SCRIPT_DIR/.env.telegram" 2>/dev/null | cut -d= -f2)
             TG_ID=$(grep SHAW_TELEGRAM_ID "$SCRIPT_DIR/.env.telegram" 2>/dev/null | cut -d= -f2)
             if [ -n "$TG_TOKEN" ] && [ -n "$TG_ID" ]; then
@@ -675,7 +686,7 @@ fi
 # after any cutover rollback) this changes NOTHING at boot. Defensive: last + isolated
 # + log-and-continue so a regenerator hiccup can never break agent recovery.
 if [ "${BOOT_MODE:-false}" = "true" ]; then
-    ( cd "$SCRIPT_DIR" && ORCHESTRA_DIR="$SCRIPT_DIR" \
+    ( cd "$CODE_DIR" && ORCHESTRA_DIR="$SCRIPT_DIR" \
         python3 -m scripts.identity_store.regenerator start-if-armed ) >> "$LOG" 2>&1 \
         || log "identity-store regenerator start-if-armed hook failed (non-fatal)"
 fi
@@ -689,7 +700,7 @@ if [ -f "$STATE_DIR/RECOVERY_SHADOW_ARMED" ]; then
     (
         ROSTER_TMP=$(mktemp) && get_recoverable_agents > "$ROSTER_TMP" 2>/dev/null
         TMUX_TMP=$(mktemp) && tmux list-sessions -F '#{session_name}' > "$TMUX_TMP" 2>/dev/null || true
-        cd "$SCRIPT_DIR" && python3 -c "
+        cd "$CODE_DIR" && python3 -c "
 import sys
 sys.path.insert(0, 'scripts')
 from identity_store import recovery_shadow

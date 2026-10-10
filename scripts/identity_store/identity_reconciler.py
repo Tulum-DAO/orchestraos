@@ -77,10 +77,11 @@ def _wal_dir(od):
 
 def _default_msg_store_send(orchestra_dir, subject, body):
     subprocess.run(
-        [sys.executable, os.path.join(orchestra_dir, "msg_store.py"), "send",
+        [sys.executable, os.path.join(os.environ.get("ORCHESTRA_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "msg_store.py"), "send",
          "--from", "identity-reconciler", "--to", "gm", "--type", "task",
-         "--subject", subject, "--body", body],
-        cwd=orchestra_dir, capture_output=True, text=True, timeout=30, check=False)
+         "--subject", subject, "--body", body],   # msg_store.py is CODE (checkout); the data dir goes in env
+        cwd=orchestra_dir, capture_output=True, text=True, timeout=30, check=False,
+        env={**os.environ, "ORCHESTRA_DIR": str(orchestra_dir), "ORCH_DIR": str(orchestra_dir)})
 
 
 def _append_log_line(orchestra_dir, text, *, log_path=None):

@@ -75,6 +75,8 @@ from pathlib import Path
 
 ORCH = Path(os.environ.get("SID_ORCH") or os.environ.get("ORCHESTRA_DIR")
             or os.path.expanduser("~/orchestra"))
+# CODE (scripts/, message-router.py) lives in the checkout, never under ORCH (the DATA dir)
+CODE_ROOT = Path(os.environ.get("ORCHESTRA_ROOT") or Path(__file__).resolve().parent.parent)
 PROJECTS_ROOT = Path(os.environ.get(
     "SID_PROJECTS", os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"), "projects")))
 CODEX_SESSIONS_ROOT = Path(os.environ.get(
@@ -327,14 +329,14 @@ def _load_resolvers():
     import importlib.util
     out = {}
     try:
-        sys.path.insert(0, str(ORCH / "scripts"))
+        sys.path.insert(0, str(CODE_ROOT / "scripts"))   # CODE, not the data dir
         import lineage_resolve as LR
         out["live_head"] = LR.resolve_live_head
     except Exception:
         out["live_head"] = None
     try:
         spec = importlib.util.spec_from_file_location(
-            "message_router", str(ORCH / "scripts" / "message-router.py"))
+            "message_router", str(CODE_ROOT / "scripts" / "message-router.py"))
         m = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(m)
         out["delivery"] = m.resolve_delivery_target

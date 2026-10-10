@@ -32,7 +32,8 @@ def _default_orchestra_dir() -> Path:
 
 ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR") or _default_orchestra_dir())  # #86: env first
 sys.path.insert(0, str(ARTURO_DIR))
-sys.path.insert(0, str(ORCHESTRA_DIR / "scripts"))
+# scripts/ is CODE (the checkout), never under ORCHESTRA_DIR (the DATA dir)
+sys.path.insert(0, str(Path(os.environ.get("ORCHESTRA_ROOT") or ARTURO_DIR.parent.parent) / "scripts"))
 
 execute_tool_fn = None
 build_context_fn = None
