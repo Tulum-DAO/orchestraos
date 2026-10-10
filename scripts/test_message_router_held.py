@@ -521,7 +521,9 @@ def test_a_terminated_bucket_does_not_silence_a_later_row(monkeypatch):
 
 
 def test_hold_state_is_durable_not_tmp():
-    assert "/tmp" not in str(mr.HOLD_FILE), mr.HOLD_FILE
+    # In the data dir's state/, not a bare /tmp file. (The test run's data dir itself is a temp dir,
+    # so "/tmp not in the path" no longer says anything.)
+    assert mr.HOLD_FILE.parent == mr.ORCHESTRA_DIR / "state", mr.HOLD_FILE
     assert str(mr.HOLD_FILE).endswith("message-router-holds.json")
 
 
