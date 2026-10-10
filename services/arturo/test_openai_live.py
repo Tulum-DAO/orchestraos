@@ -155,3 +155,88 @@ def test_socket_facade_fails_fast_once_the_server_has_closed():
         s.send('{"a":1}')
     s.close()
     assert time.time() - t < 0.5, f"send+close on a dead socket took {time.time() - t:.1f} s"
+
+
+# --- uplink pacing (the operator 2026-10-10 ~04:40 ET: "GPT-Live not loading its first turn after 10 seconds") ---
+# MEASURED on a real call: the first audio POST blocked ~3 s while the session connected; the phone then flushed
+# its backlog and OpenAI answered input_audio_rate_limit_exceeded: "Send audio at no more than 1.2x real-time speed
+# with bursts of at most 5 seconds" (probed verbatim). The dropped audio was their first sentence, so no turn ever came.
+
+def _speech(sec, rms=3000):
+    return _pcm(rms, n=int(16000 * sec), seed=7)
+
+
+def test_pacer_sends_one_burst_then_paces_under_the_vendor_limit():
+    p = ol.UplinkPacer(rate=1.15, burst_s=4.5)
+    for _ in range(40):                       # 8 s of audio arriving at once (a flushed backlog)
+        p.push(_speech(0.2))
+    sent = sum(len(f) for f in p.take(now=0.0)) / 32000
+    assert sent <= 4.5 + 1e-9, f"first burst {sent:.2f} s exceeds the 5 s vendor burst"
+    later = sum(len(f) for f in p.take(now=2.0)) / 32000
+    assert sent + later <= 4.5 + 2.0 * 1.15 + 1e-9, "by t, never more than one burst + t x 1.15 (the vendor rule)"
+    rest = sum(len(f) for f in p.take(now=100.0)) / 32000
+    assert abs(sent + later + rest - 8.0) < 1e-6, "speech is never dropped, only delayed"
+
+
+def test_pacer_trims_leading_silence_from_an_over_long_backlog_but_never_speech():
+    p = ol.UplinkPacer(rate=1.15, burst_s=4.5)
+    for _ in range(15):
+        p.push(_pcm(0, n=3200))                # 3 s of pre-speech silence buffered during connect
+    for _ in range(15):
+        p.push(_speech(0.2))                   # then 3 s of the operator talking
+    out = p.take(now=0.0)
+    speech_s = sum(len(f) for f in out if ol.is_speech(f)) / 32000
+    assert abs(speech_s - 3.0) < 1e-6, "all of their speech goes in the first burst"
+    assert sum(len(f) for f in out) / 32000 <= 4.5 + 1e-9
+
+
+def test_socket_paces_a_flushed_backlog_instead_of_bursting_it(monkeypatch):
+    fake = _FakeWs()
+
+    async def connect(url, headers):
+        return fake
+    s = ol.AsyncWsSocket("wss://x", {}, connect=connect)
+    try:
+        s.send('{"type":"session.start"}')
+        for _ in range(40):                    # 8 s of audio handed over in one go, as the relay did on a real call
+            s.send(ol.encode_uplink(_speech(0.2)))
+        asyncio.run_coroutine_threadsafe(fake.inbox.put('{"type":"session.started"}'), s._loop).result(2)
+        import time
+        time.sleep(0.3)
+        appended = [m for m in fake.sent if "input_audio.append" in m]
+        assert fake.sent[0] == '{"type":"session.start"}'
+        assert 0 < len(appended) * 0.2 <= 5.0, f"{len(appended) * 0.2:.1f} s sent at once: over the 5 s burst"
+    finally:
+        s.close()
+
+
+def test_arturo_greets_first_on_gpt_live():
+    """the operator 2026-10-10 ~04:40 ET: on GPT-Live nothing came for 10+ s (Hume greets; GPT-Live waits for the user).
+    MEASURED on the real API: a greet-on-start line in session.start instructions gives first speech ~1.9 s after
+    connect; session.instructions.append after start is refused (needs a delegation_id). The relay's user-first
+    guard already makes the greeting yield the moment the operator talks."""
+    instr = ol.session_start()["session"]["instructions"]
+    assert "greeting" in instr.lower() and "without waiting for them" in instr.lower()
+    assert "if the operator speaks first" in instr.lower(), "the greeting must yield to them"
+
+
+def test_audio_waits_for_session_started_because_earlier_audio_is_silently_lost():
+    """MEASURED on the real API 2026-10-10: the same 6 s burst sent BEFORE session.started lost its first sentence
+    ("Spin up a new agent to audit the landing page") with NO error; sent after, every word was heard."""
+    fake = _FakeWs()
+
+    async def connect(url, headers):
+        return fake
+    s = ol.AsyncWsSocket("wss://x", {}, connect=connect)
+    try:
+        s.send('{"type":"session.start"}')
+        s.send(ol.encode_uplink(_speech(0.2)))
+        import time
+        time.sleep(0.2)
+        assert not [m for m in fake.sent if "input_audio.append" in m], "audio left before session.started"
+        asyncio.run_coroutine_threadsafe(fake.inbox.put('{"type":"session.started"}'), s._loop).result(2)
+        assert json.loads(s.recv())["type"] == "session.started"
+        time.sleep(0.2)
+        assert [m for m in fake.sent if "input_audio.append" in m], "audio never released after session.started"
+    finally:
+        s.close()
