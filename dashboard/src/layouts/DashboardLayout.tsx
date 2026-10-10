@@ -91,10 +91,10 @@ export function DashboardLayout() {
             {sidebarOpen ? <X size={22} /> : <Menu size={22} />}
           </button>
           <span className="text-sm font-bold tracking-tight text-white">orchestraOS</span>
-          {/* Arturo's one spot, next to the bell, on every page (Shaw, 2026-10-10). */}
-          <div className="ml-auto flex items-center gap-1">
+          {/* Arturo's one spot. The one shared bell is fixed beside this bar, so leave room for
+              it instead of mounting a second polling bell on phone chat routes. */}
+          <div className="ml-auto mr-12 flex items-center gap-1">
             {showArturoPill() && <ArturoButton />}
-            <NotificationBell />
           </div>
         </div>
         <CoachingToast />
@@ -109,16 +109,12 @@ export function DashboardLayout() {
         )}
       </main>
 
-      {/* Desktop notification bell — fixed top-right */}
-      {/* Desktop Arturo + bell, fixed top-right on pages WITHOUT their own top bar. The agent page
-          has one, and renders the pair at the end of it (components/agent/TopBar), so they sit in
-          that row rather than floating beside it at a different height. */}
-      {!isChatRoute && (
-        <div className="hidden md:flex fixed top-4 right-4 z-30 items-center gap-1">
-          {showArturoPill() && <ArturoButton />}
-          <NotificationBell />
-        </div>
-      )}
+      {/* One bell for every route. It stays fixed so it is a phone-bar control below md and the
+          final top-bar control on desktop; agent TopBar reserves this same slot. Rendering it
+          once also means one polling loop and one dropdown state. */}
+      <div className="fixed right-4 top-[calc(env(safe-area-inset-top)+0.75rem)] z-30 md:top-4">
+        <NotificationBell />
+      </div>
 
       {/* Global voice call bubble — persists across page navigation */}
       {activeCall && (
