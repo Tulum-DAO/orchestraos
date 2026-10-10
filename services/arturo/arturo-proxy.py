@@ -187,6 +187,30 @@ _INJECT_ASYNC = True
 # execute_tool.
 import contextvars as _contextvars
 _TOOLS_THIS_TURN = _contextvars.ContextVar("arturo_tools_this_turn", default=None)
+# VOICE-RESULTS (gm msg_b0b4228c): the live relay conversation this CLM turn belongs to, so an
+# async result can be spoken back into the same call. None = not a live relay call.
+_RELAY_CID_THIS_TURN = _contextvars.ContextVar("arturo_relay_cid_this_turn", default=None)
+_VOICE_RESULTS = None
+
+
+def _voice_results_on():
+    return os.environ.get("ARTURO_VOICE_RESULTS", "0") == "1"
+
+
+def _voice_results():
+    global _VOICE_RESULTS
+    if _VOICE_RESULTS is None and _STREAM_RELAY is not None:
+        from services.arturo import voice_delivery as _vd
+        _VOICE_RESULTS = _vd.VoiceResultDelivery(_STREAM_RELAY)
+    return _VOICE_RESULTS
+
+
+def _async_ack(default_line):
+    """Honest about where the answer comes from: by voice if the call is still live when it
+    lands, else Telegram. Flag off = the existing Telegram-only line, byte-identical."""
+    if _voice_results_on() and _RELAY_CID_THIS_TURN.get():
+        return "On it. I'll tell you as soon as it's back, or text you if we've hung up."
+    return default_line
 # Seats CREATED during this turn. The seat id is known only inside the spawn tool, and the
 # surfaces need it to offer a way into the new agent (the operator, 2026-09-22). Only the verified
 # success path records, so a FAILED spawn can never produce a link to nothing.
@@ -3516,7 +3540,7 @@ def execute_tool(name, args, user_turns=None):
             "tool_args": {"prompt": question, "timeout": 120},
             "summary": f"Deep dive: {question[:80]}",
         })
-        return _dp.SPOKEN_DEEP_FALLBACK
+        return _async_ack(_dp.SPOKEN_DEEP_FALLBACK)
 
     elif name == "ask_gm":
         # P1b Tier 3 (D3): thin alias over the hardened async_task(gm_command) pipeline —
@@ -3531,7 +3555,7 @@ def execute_tool(name, args, user_turns=None):
             "tool_args": {"prompt": request, "timeout": 120},
             "summary": args.get("summary") or request[:80],
         })
-        return _dp.SPOKEN_ASK_GM_ACK
+        return _async_ack(_dp.SPOKEN_ASK_GM_ACK)
 
     elif name == "gm_command":
         prompt = args.get("prompt", "")
@@ -3751,6 +3775,7 @@ def execute_tool(name, args, user_turns=None):
             return "No tool_name provided."
 
         import threading
+        _vr_cid = _RELAY_CID_THIS_TURN.get() if _voice_results_on() else None
         def _run_async():
             # VQ-4 verify-after-inject: the async result MUST actually LAND on Telegram. The old
             # path used raw requests.post with `except: pass` — a failed send was swallowed, so
@@ -3782,7 +3807,14 @@ def execute_tool(name, args, user_turns=None):
                 _low = (result or "").strip().lower()
                 _is_err = _low.startswith(("gm error", "gm timed out", "error", "blocked", "❌", "no response"))
                 mark = "\u274c" if _is_err else "\u2705"
-                _deliver(f"{mark} {summary}\n\n{(result or '')[:1500]}")
+                _tg_text = f"{mark} {summary}\n\n{(result or '')[:1500]}"
+                _vr = _voice_results() if (_vr_cid and not _is_err) else None
+                if _vr is not None:
+                    # VOICE-RESULTS: spoken into the live call if the gates allow; the queue
+                    # calls the Telegram fallback itself (call ended / stale / too long).
+                    _vr.submit(_vr_cid, summary, result or "", lambda: _deliver(_tg_text))
+                else:
+                    _deliver(_tg_text)
             except Exception as e:
                 _deliver(f"\u274c {summary}\n\nFailed: {e}")
 
@@ -4827,6 +4859,11 @@ def chat_completions():
                     "you already said. Do not repeat it, and do not redo any action you already took.")
         except Exception as _sxe:
             log.error(f"supersede seam error (non-fatal): {_sxe}")
+    if _STREAM_RELAY is not None and _voice_results_on():
+        try:
+            _RELAY_CID_THIS_TURN.set(_STREAM_RELAY.resolve(_conv_id) if _conv_id else None)
+        except Exception as _vre:
+            log.error(f"voice-results cid seam error (non-fatal): {_vre}")
     # Last, after every preamble seam above (semantic recall, facts recall, stream-relay replay), so
     # the per-turn instruction is the most recent thing in the context and no later seam buries it.
     if _carried:

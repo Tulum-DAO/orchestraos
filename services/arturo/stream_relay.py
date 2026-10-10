@@ -287,6 +287,11 @@ class _Holder:
         self._agent_buf = []      # hume: assistant_message segments awaiting assistant_end
         self._span_t0 = None      # AUDIO-SPAN (gm msg_f0356ea9): first audio_output of the turn
         self._span_pcm = 0        # 16k mono int16 bytes forwarded this turn -> playback seconds
+        # VOICE-RESULTS gates (gm msg_b0b4228c): when did the operator last make speech, until when is
+        # Arturo's forwarded audio still playing, and is a reply to his last final still due.
+        self._last_user_ts = 0.0
+        self._play_until = 0.0
+        self._awaiting_reply = False
         self._agent_turn = 0      # hume: assistant-turn counter for streamed agent_response
         self.ar_partials = 0      # by-effect proof (ios msg_3a5b4d4b): counted at end()
         self.ar_finals = 0
@@ -463,6 +468,33 @@ class _Holder:
         # socket resumes the same chat_group_id (context carries over server-side at Hume).
         self._retire_socket("session_cap_resume", reconnect=True)
 
+    def speak_gate(self, now, user_quiet_s, margin_s, reply_wait_s=15.0):
+        """VOICE-RESULTS (gm msg_b0b4228c): '' when Arturo may speak an unsolicited result
+        now, else the reason to wait. Never over the operator, never over Arturo, never in the gap
+        between the operator's final and Arturo's reply to it."""
+        if self._closed or self.sock is None or self.vendor != "hume":
+            return "no-socket"
+        if now - self._last_user_ts < user_quiet_s:
+            return "user-speaking"
+        if self._awaiting_reply and now - self._last_user_ts < reply_wait_s:
+            return "reply-due"
+        if self._speaking or self._agent_buf or now < self._play_until + margin_s:
+            return "agent-speaking"
+        return ""
+
+    def speak_text(self, text, now):
+        """Send Hume an assistant_input (spoken verbatim, no CLM round, added to Hume's
+        history). Reserves the playback window up front so a second result cannot be
+        released before this one's audio has even arrived."""
+        try:
+            self.sock.send(json.dumps({"type": "assistant_input", "text": text}))
+        except Exception as e:
+            log.warning(f"relay {self.cid}: assistant_input send failed: {e!r}")
+            return False
+        self._play_until = max(self._play_until, now) + max(2.0, len(text.split()) / 2.5)
+        log.info(f"relay {self.cid}: VOICE-RESULT spoken ({len(text)} chars)")
+        return True
+
     def _log_audio_span(self, event, **extra):
         """AUDIO-SPAN (gm msg_f0356ea9, ios-watch-dev mute hypothesis): log-only. The watch
         plays a reply from roughly span start for audio_s seconds; assistant_end only says
@@ -529,6 +561,8 @@ class _Holder:
                 self.m.buffer.put(self.cid, {"type": "el_idle_resumed"})   # SILENT-class beat
             elif _rms(pcm) >= self.m.vad_rms_floor:
                 self._touch_activity()     # speech uplink keeps the idle timer fresh
+        if _rms(pcm) >= self.m.vad_rms_floor:
+            self._last_user_ts = time.time()   # VOICE-RESULTS: speech-level uplink
         self.turn_pcm.append(pcm)
         if self.partials and not self._idle_closed:   # I1: no Scribe billing on idle audio
             self.partials.feed(pcm)
@@ -683,6 +717,9 @@ class _Holder:
         if t == "user_message":
             if d.get("from_text"):
                 return                            # our own injected text echoed back — not speech
+            self._last_user_ts = time.time()      # VOICE-RESULTS: the operator is (or just was) talking
+            if not d.get("interim"):
+                self._awaiting_reply = True
             text = ((d.get("message") or {}).get("content") or "").strip()
             if d.get("interim"):
                 with self._lock:
@@ -747,6 +784,7 @@ class _Holder:
         if t == "assistant_end":
             self._touch_activity()                # C2
             self._log_audio_span("assistant_end")
+            self._awaiting_reply = False
             self._flush_agent_buf()               # coalesce the segments into ONE agent_response
             self.m.buffer.put(self.cid, {"type": "assistant_end"})
             return
@@ -763,6 +801,7 @@ class _Holder:
                 if self._span_t0 is None:
                     self._span_t0 = time.time()
                 self._span_pcm += len(pcm)
+                self._play_until = max(self._play_until, time.time()) + len(pcm) / BYTES_PER_S
                 self.m.buffer.put(self.cid, {"type": "audio",
                                              "audio": base64.b64encode(pcm).decode()})
             return
@@ -1097,6 +1136,21 @@ class RelayManager:
             self._last_contact[conversation_id] = time.time()
         h.feed(pcm)
         return {"ok": True}
+
+    def try_speak(self, conversation_id, text, user_quiet_s=2.5, margin_s=0.8, now=None):
+        """VOICE-RESULTS: 'spoken' | 'wait:<reason>' | 'gone' (call ended / never live here).
+        The caller owns the Telegram fallback for 'gone' and for anything it gives up on."""
+        now = time.time() if now is None else now
+        with self._lock:
+            h = self._holders.get(conversation_id)
+        if h is None or self._tombstoned(conversation_id, now) or self.is_ended(conversation_id):
+            return "gone"
+        why = h.speak_gate(now, user_quiet_s, margin_s)
+        if why == "no-socket":
+            return "gone" if h._closed else "wait:no-socket"
+        if why:
+            return "wait:" + why
+        return "spoken" if h.speak_text(text, now) else "wait:send-failed"
 
     def events(self, conversation_id, cursor=0):
         self.registry.touch(conversation_id)
