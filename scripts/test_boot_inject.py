@@ -320,3 +320,19 @@ def test_codex_seats_launch_with_the_update_menu_off():
     src = open(os.path.join(os.path.dirname(_FIX), "..", "..", "spawn-agent.sh")).read()
     line = [l for l in src.splitlines() if 'runtime" == "codex" ]] && bypass_flag=' in l]
     assert len(line) == 1 and "-c check_for_update_on_startup=false" in line[0]
+
+
+def test_ORCHESTRA_CODEX_UPDATE_CHECK_keeps_the_update_check_on_for_seats():
+    """The override is disclosed (INSTALL.md "Codex seats and updates"); the env var turns it back off."""
+    import subprocess
+    src = os.path.join(os.path.dirname(_FIX), "..", "..", "spawn-agent.sh")
+    lines = open(src).read().splitlines()
+    a = next(i for i, l in enumerate(lines) if 'runtime" == "codex" ]] && bypass_flag=' in l)
+    b = next(i for i in range(a, len(lines)) if lines[i].strip().startswith('&& bypass_flag="--yolo'))
+    snippet = 'runtime=codex; bypass_flag="--dangerously-skip-permissions"\n' + "\n".join(lines[a:b + 1]) + '\necho "$bypass_flag"\n'
+    on = subprocess.run(["bash", "-c", snippet], capture_output=True, text=True,
+                        env={**os.environ, "ORCHESTRA_CODEX_UPDATE_CHECK": "1"}).stdout.strip()
+    off = subprocess.run(["bash", "-c", snippet], capture_output=True, text=True,
+                         env={k: v for k, v in os.environ.items() if k != "ORCHESTRA_CODEX_UPDATE_CHECK"}).stdout.strip()
+    assert off == "--yolo --dangerously-bypass-hook-trust -c check_for_update_on_startup=false"
+    assert on == "--yolo --dangerously-bypass-hook-trust"

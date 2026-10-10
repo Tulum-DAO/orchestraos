@@ -309,6 +309,23 @@ no write permission to npm prefix` because the npm prefix is not writable by the
 That footer is not a fault in your setup; the export makes it go away. Gemini and Codex CLIs: pin the same way with their package managers (`sudo npm install -g` for
 an npm package; the reference fleet runs agy 1.2.6 and codex-cli 0.153.4).
 
+#### Codex seats and updates
+
+Two things OrchestraOS does for Codex seats only, so they start without a person at the keyboard:
+
+- **Trusts the seat's own folder.** Codex asks "Do you trust the contents of this directory?" the first
+  time it starts in a folder, even with `--yolo`. Before a Codex seat starts, spawn adds
+  `[projects."<that folder>"] trust_level = "trusted"` to `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`).
+  Only that folder, never your home folder or anything above it; every other line of the file is kept,
+  and the first time the file is changed the original is saved next to it as
+  `config.toml.orchestra-backup`. To undo, delete that `[projects."..."]` entry.
+- **Skips Codex's startup update question.** Codex can open on "Update available! … 1. Update now", and its
+  default answer is to update, which a seat's first Enter would pick, moving it off the version you pinned.
+  A seat's `codex` command line therefore carries `-c check_for_update_on_startup=false`. This is per run:
+  nothing is written to `config.toml`, and `codex` you start yourself still checks. To keep the check on for
+  seats too, set `ORCHESTRA_CODEX_UPDATE_CHECK=1` in the environment `orchestra up` runs in. Update Codex the
+  same way you pinned it: `sudo npm install -g @openai/codex@<version>`.
+
 ### Log in to the agent CLI (the one step only you can do)
 
 **Hand this to your agent** (Claude, ChatGPT, Codex, Gemini or any other), if you'd rather
