@@ -17,6 +17,7 @@
 import { Router, type Request, type Response } from 'express';
 import { execFile, execFileSync } from 'node:child_process';
 import { getRuntimesForAuth, type ProviderResult } from './runtimes-available.js';
+import { CODE_ROOT } from '../lib/codeRoot.js';
 
 /** A catalog row as this route needs it. GET /api/runtimes/available does not expose the
  *  binary name, so `cli` is optional and falls back to the provider id (they match for
@@ -28,7 +29,7 @@ const cliOf = (r: RuntimeRow): string => r.cli || CLI_FOR_ID[r.id] || r.id;
 // orchestra.toml at module load, which would make this file un-importable in a unit test.
 
 const ORCHESTRA = process.env.ORCHESTRA_DIR || process.env.HOME || '.';
-const ORCHESTRA_ROOT = process.env.ORCHESTRA_ROOT || ORCHESTRA;
+const ORCHESTRA_ROOT = CODE_ROOT;   // the checkout (lib/codeRoot.ts), never the data dir
 const MAX_NAME = 64;
 // Sentinels only. `gm` is NOT one: docs/INSTALL.md tells a new operator to run
 // `orchestra spawn gm --gm`, the CLI allows it, and a fresh install has no gm at all — so the

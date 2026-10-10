@@ -49,8 +49,10 @@ def _import_rgm(orchestra_dir=None):
     making the S3 confirm HOLD for EVERY seat (the watched trials masked this because
     they were driven by hand, never through the daemon's import context). Insert the
     scripts/ dir first (the same pattern execute.py:267 + graduation_executors.py use)."""
-    od = orchestra_dir or ORCHESTRA_DIR
-    scripts_dir = os.path.join(od, "scripts")
+    # rotation_gate_manual is CODE: it lives in the checkout's scripts/, never under the data dir
+    # (ORCHESTRA_DIR / orchestra_dir is the DATA dir under `orchestra up` and scripts/run-beat.sh).
+    code_root = os.environ.get("ORCHESTRA_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    scripts_dir = os.path.join(code_root, "scripts")
     if scripts_dir not in sys.path:
         sys.path.insert(0, scripts_dir)
     import rotation_gate_manual as RG

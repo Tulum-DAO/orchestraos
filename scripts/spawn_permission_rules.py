@@ -25,12 +25,28 @@ Rule syntax: Claude Code permission rules, absolute-path form `Tool(//abs/**)`.
 import argparse
 import json
 import os
+import sys
 
 # Write-capable tools only — the benign-self-edit class. A shell/network tool
 # in this list would be a blanket grant (gm ruling 1 violation).
 WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 
-DEFAULT_ORCHESTRA_DIR = os.path.expanduser("~/scripts/agent-orchestra")
+# CODE lives in the checkout (this file is <root>/scripts/spawn_permission_rules.py).
+CODE_ROOT = os.environ.get("ORCHESTRA_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def default_data_dir() -> str:
+    """The install's DATA dir: ORCHESTRA_DIR (exported by `orchestra up` / orchestra-env.sh), its older
+    name ORCH_DIR, else the product default from ONE place, orchestra_cli.settings.DEFAULT_DATA_DIR.
+    It used to default to one operator's private checkout path, so every seat on every install got
+    allow rules for that path instead of its own data dir (gm msg_75776be5)."""
+    env = os.environ.get("ORCHESTRA_DIR") or os.environ.get("ORCH_DIR")
+    if env:
+        return env
+    if CODE_ROOT not in sys.path:
+        sys.path.insert(0, CODE_ROOT)
+    from orchestra_cli.settings import DEFAULT_DATA_DIR
+    return os.path.expanduser(DEFAULT_DATA_DIR)
 
 
 def _norm(p: str) -> str:
@@ -41,7 +57,7 @@ def build_allow_rules(cwd: str, orchestra_dir: str | None = None) -> list[str]:
     """The ONE allow-set: seat cwd + orchestra own-state + .workspace, writes
     only. Deterministic order; deduped when cwd == orchestra_dir subsumes."""
     cwd = _norm(cwd)
-    orch = _norm(orchestra_dir or DEFAULT_ORCHESTRA_DIR)
+    orch = _norm(orchestra_dir or default_data_dir())
     scopes = [cwd]
     for extra in (orch + "/.workspace", orch + "/state"):
         # cwd/** already covers orchestra subdirs when the seat lives in the
@@ -76,8 +92,8 @@ def _bg_green_session_start_hook(orchestra_dir: str | None = None) -> dict | Non
     Returns None for a normal seat → the settings stay allow-only (legacy-identical)."""
     if not os.environ.get("BG_GREEN_ROOT"):
         return None
-    orch = _norm(orchestra_dir or DEFAULT_ORCHESTRA_DIR)
-    script = os.path.join(orch, "scripts", "lineage_daemon", "wal", "capture_green_sid.py")
+    # The hook script is CODE (the checkout), never under the data dir; orchestra_dir is unused here.
+    script = os.path.join(CODE_ROOT, "scripts", "lineage_daemon", "wal", "capture_green_sid.py")
     return {"SessionStart": [
         {"hooks": [{"type": "command", "command": f"python3 {script}", "timeout": 5}]}
     ]}

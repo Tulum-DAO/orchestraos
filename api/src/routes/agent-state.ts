@@ -8,6 +8,8 @@ import { join } from 'path';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { queryDb, execDb } from '../lib/db.js';
 import { loadConfig } from '../lib/config.js';
+import { CODE_ROOT } from '../lib/codeRoot.js';
+import { transitionSeat } from '../lib/seatTransition.js';
 
 const router = Router();
 const ORCHESTRA = process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
@@ -117,23 +119,33 @@ router.post('/:agentId/transition', (req: Request, res: Response) => {
        new Date().toISOString()]);
   }
 
-  // Increment generation in work state
+  // Increment generation in work state (undone below if the spawn fails)
   execDb('UPDATE agent_work_state SET generation = generation + 1, updated_at = ? WHERE agent_id = ?',
     [new Date().toISOString(), agentId]);
 
-  // Rename tmux session: {name} → {name}-transition
-  try {
-    execFileSync('tmux', ['rename-session', '-t', agentId, `${agentId}-transition`], { timeout: 3000 });
-  } catch { /* may fail if session name differs from agent_id */ }
-
-  // Spawn new instance (async — don't block the response)
-  const spawnScript = join(ORCHESTRA, 'spawn-agent.sh');
-  execFile('bash', [spawnScript, agentId], {
-    env: { ...process.env, REINCARNATION: 'true', ORCHESTRA_DIR: ORCHESTRA },
-    timeout: 60000,
-  }, (err) => {
-    if (err) console.error(`[agent-state] Reincarnation spawn failed for ${agentId}:`, err.message);
-    else console.log(`[agent-state] Reincarnated ${agentId} → generation ${currentGen + 1}`);
+  // Move the live session aside (<id> -> <id>-transition) and spawn the successor (async: the
+  // response does not wait). If the spawn FAILS, the old seat gets its name back, the generation is
+  // restored and the old session is not reaped: a failed spawn must never cost the seat (gm msg_75776be5).
+  let reap: ReturnType<typeof setTimeout> | undefined;
+  const spawnScript = join(CODE_ROOT, 'spawn-agent.sh');   // code, not data (lib/codeRoot.ts)
+  transitionSeat(agentId, {
+    tmux: (args) => { execFileSync('tmux', args, { timeout: 3000 }); },
+    hasSession: (name) => { try { execFileSync('tmux', ['has-session', '-t', `=${name}`], { timeout: 3000 }); return true; } catch { return false; } },
+    spawn: (id, cb) => {
+      execFile('bash', [spawnScript, id], {
+        env: { ...process.env, REINCARNATION: 'true', ORCHESTRA_DIR: ORCHESTRA },
+        timeout: 60000,
+      }, (err) => cb(err));
+    },
+  }, (r) => {
+    if (r.ok) { console.log(`[agent-state] Reincarnated ${agentId} → generation ${currentGen + 1}`); return; }
+    console.error(`[agent-state] Reincarnation spawn failed for ${agentId}: ${r.error}` +
+                  (r.restored ? ' (old seat restored under its own name)' : ''));
+    if (reap) clearTimeout(reap);
+    try {
+      execDb('UPDATE agent_work_state SET generation = generation - 1, updated_at = ? WHERE agent_id = ? AND generation > 1',
+        [new Date().toISOString(), agentId]);
+    } catch (e) { console.error(`[agent-state] generation rollback failed for ${agentId}:`, e); }
   });
 
   // Notify via the configured channel (BYO Telegram bot; token never in code/config file)
@@ -148,8 +160,8 @@ router.post('/:agentId/transition', (req: Request, res: Response) => {
     }
   } catch { /* non-critical */ }
 
-  // Schedule cleanup of old instance (1 hour)
-  setTimeout(() => {
+  // Schedule cleanup of old instance (1 hour); cancelled if the spawn failed and the seat was restored
+  reap = setTimeout(() => {
     try {
       execFileSync('tmux', ['kill-session', '-t', `${agentId}-transition`], { timeout: 3000 });
       console.log(`[agent-state] Killed old transition session: ${agentId}-transition`);

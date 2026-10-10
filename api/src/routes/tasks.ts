@@ -6,6 +6,7 @@ import { getAllTasks, getPendingContext, getCompletedReports } from '../services
 import { logInteraction } from '../services/learning.js';
 import { loadConfig } from '../lib/config.js';
 import { actingAgent } from '../lib/principal.js';
+import { CODE_ROOT } from '../lib/codeRoot.js';
 
 const router = Router();
 const ORCHESTRA = process.env.ORCHESTRA_DIR || loadConfig().dataDir;   // the same rule as lib/db.ts
@@ -356,7 +357,7 @@ router.post('/', (req: Request, res: Response) => {
       } catch {
         // Agent not running — try to spawn it
         try {
-          const spawnScript = join(ORCHESTRA, 'spawn-agent.sh');
+          const spawnScript = join(CODE_ROOT, 'spawn-agent.sh');   // code, not data (lib/codeRoot.ts)
           execFile('bash', [spawnScript, routeTo], { timeout: 30000 }, () => {});
         } catch { /* spawn failed, task stays pending */ }
       }

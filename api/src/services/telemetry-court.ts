@@ -17,6 +17,7 @@
  */
 import { execFile } from 'child_process';
 import { join } from 'path';
+import { CODE_ROOT } from '../lib/codeRoot.js';
 
 const BRIDGE_TIMEOUT_MS = 4000;
 
@@ -26,7 +27,7 @@ function paths() {
   const ORCH = process.env.ORCHESTRA_DIR || join(process.env.HOME || '', 'scripts/agent-orchestra');
   return {
     ORCH,
-    BRIDGE: join(ORCH, 'scripts', 'lineage_daemon', 'realtime', 'api_bridge.py'),
+    BRIDGE: join(CODE_ROOT, 'scripts', 'lineage_daemon', 'realtime', 'api_bridge.py'),   // code (lib/codeRoot.ts)
     // The durable per-lineage flag denylist (written by the court detection path
     // — OUT of B1/Build-B scope). Absent today => fail-closed => everything
     // blocks (the safe INERT default, exactly as B1 specifies).
@@ -55,7 +56,7 @@ export function flagStatus(lineageRoot: string | null): Promise<FlagStatus> {
     execFile(
       PYTHON,
       [BRIDGE, 'flag-status', '--lineage-root', lineageRoot, '--flags-path', FLAGS_PATH],
-      { timeout: BRIDGE_TIMEOUT_MS, env: { ...process.env, PYTHONPATH: join(ORCH, 'scripts') } },
+      { timeout: BRIDGE_TIMEOUT_MS, env: { ...process.env, PYTHONPATH: [join(CODE_ROOT, 'scripts'), CODE_ROOT].join(':') } },
       (err, stdout) => {
         if (err || !stdout) return resolve({ flagged: false, readable: false });
         try {

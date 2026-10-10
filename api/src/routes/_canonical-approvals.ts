@@ -22,9 +22,10 @@
 import { execFileSync } from 'child_process';
 import { join } from 'path';
 import { loadConfig } from '../lib/config.js';
+import { CODE_ROOT } from '../lib/codeRoot.js';
 
 const ORCHESTRA = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
-const SCRIPTS = process.env.ORCHESTRA_SCRIPTS_DIR || join(ORCHESTRA, 'scripts');
+const SCRIPTS = process.env.ORCHESTRA_SCRIPTS_DIR || join(CODE_ROOT, 'scripts');   // code, not data (lib/codeRoot.ts)
 const APPROVAL_CLI = join(SCRIPTS, 'approval.py');
 
 export interface CanonicalRow {
