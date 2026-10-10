@@ -402,3 +402,32 @@ def test_audio_span_logged_at_assistant_end_and_interruption(caplog):
         assert "forwarded=True" in line and f"audio_s={per / 32000:.2f}" in line   # span reset per turn
     finally:
         m.shutdown()
+
+
+def test_turn_latency_and_poll_lag_logged(caplog):
+    # TURN-LATENCY / POLL-LAG (ios-watch-dev msg_b22a71d8): log-only. final -> first reply
+    # text and first reply audio per turn; per-call summary of audio wait in the buffer.
+    import logging
+    from services.arturo import ptt_stream
+    caplog.set_level(logging.INFO, logger="arturo-stream-relay")
+    m = _manager()
+    try:
+        m.feed_audio("h1", b"\x00" * 10)
+        _wait(lambda: m._t)
+        s = m._t[0]
+        s.push({"type": "user_message", "interim": False, "message": {"content": "how is the build"}})
+        s.push({"type": "assistant_message", "message": {"content": "It is green."}})
+        s.push({"type": "audio_output", "id": "a", "index": 0, "data": base64.b64encode(_wav48()).decode()})
+        assert _wait(lambda: "TURN-LATENCY final->first_audio=" in caplog.text)
+        assert "TURN-LATENCY final->first_text=" in caplog.text
+        s.push({"type": "audio_output", "id": "a", "index": 1, "data": base64.b64encode(_wav48()).decode()})
+        time.sleep(0.2)
+        assert caplog.text.count("TURN-LATENCY final->first_audio=") == 1, "once per turn"
+        m._holders["h1"].poll_lags.extend([0.1, 0.3, 2.0])
+        m.end("h1")
+        assert "POLL-LAG audio polls n=3" in caplog.text
+    finally:
+        m.shutdown()
+    b = ptt_stream.EventBuffer(cap=2)
+    b.put("c", {"type": "a"}); b.put("c", {"type": "b"}); b.put("c", {"type": "c"})
+    assert b.put_ts("c", 1) is None and b.put_ts("c", 3) is not None, "pruned with the cap"

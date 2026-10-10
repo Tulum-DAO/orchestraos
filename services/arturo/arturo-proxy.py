@@ -5672,6 +5672,17 @@ if _STREAM_RELAY is not None:
         body = {"ok": True, "events": events, "cursor": new_cursor}
         if more:
             body["more"] = True
+        # POLL-LAG (ios-watch-dev msg_b22a71d8, log-only): how long the OLDEST event in an
+        # audio-carrying page sat in the buffer before this poll served it. Summarised per
+        # call at end() — the half of the operator's wait the device cannot see.
+        try:
+            if any(e.get("type") == "audio" for e in events):
+                _pt = _STREAM_RELAY.buffer.put_ts(cid, cursor + 1)
+                _h = _STREAM_RELAY._holders.get(cid)
+                if _pt is not None and _h is not None:
+                    _h.poll_lags.append(time.time() - _pt)
+        except Exception as _ple:
+            log.error(f"poll-lag instrumentation error (non-fatal): {_ple}")
         return jsonify(body), 200
 
     @app.route("/ptt/stream/end", methods=["POST"])

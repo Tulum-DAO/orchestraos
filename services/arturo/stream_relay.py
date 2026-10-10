@@ -292,6 +292,11 @@ class _Holder:
         self._last_user_ts = 0.0
         self._play_until = 0.0
         self._awaiting_reply = False
+        # TURN-LATENCY (ios-watch-dev msg_b22a71d8, log-only): the operator's final at the relay ->
+        # Arturo's first reply text / first reply audio. This, not generate(), is what he hears.
+        self._final_at = None
+        self._final_text_logged = False
+        self.poll_lags = []       # POLL-LAG: oldest-event age per audio-carrying poll
         self._agent_turn = 0      # hume: assistant-turn counter for streamed agent_response
         self.ar_partials = 0      # by-effect proof (ios msg_3a5b4d4b): counted at end()
         self.ar_finals = 0
@@ -720,6 +725,8 @@ class _Holder:
             self._last_user_ts = time.time()      # VOICE-RESULTS: the operator is (or just was) talking
             if not d.get("interim"):
                 self._awaiting_reply = True
+                self._final_at = time.time()      # TURN-LATENCY: (re)start on each final
+                self._final_text_logged = False
             text = ((d.get("message") or {}).get("content") or "").strip()
             if d.get("interim"):
                 with self._lock:
@@ -765,6 +772,10 @@ class _Holder:
             # NOTE: text does NOT unlock barge_in — assistant_message precedes Hume's
             # spurious silence-interruption on real calls (v1 keyed on it and barge_in still
             # hit the wire before the greeting, ios msg_b8f46733). Audio-forwarded only.
+            if self._final_at is not None and not self._final_text_logged:
+                self._final_text_logged = True
+                log.info(f"relay {self.cid}: TURN-LATENCY final->first_text="
+                         f"{time.time() - self._final_at:.2f}s")
             with self._lock:
                 if not self._agent_buf:
                     self._agent_turn += 1     # a fresh assistant turn opens on its 1st segment
@@ -800,6 +811,10 @@ class _Holder:
             if pcm:
                 if self._span_t0 is None:
                     self._span_t0 = time.time()
+                if self._final_at is not None:
+                    log.info(f"relay {self.cid}: TURN-LATENCY final->first_audio="
+                             f"{self._span_t0 - self._final_at:.2f}s")
+                    self._final_at = None
                 self._span_pcm += len(pcm)
                 self._play_until = max(self._play_until, time.time()) + len(pcm) / BYTES_PER_S
                 self.m.buffer.put(self.cid, {"type": "audio",
@@ -1180,6 +1195,10 @@ class RelayManager:
             # proxy access log carries no event bodies, so surface the counters at end.
             log.info(f"relay {conversation_id}: agent_response counters — "
                      f"partials={h.ar_partials} finals={h.ar_finals}")
+        if h.poll_lags:
+            pl = sorted(h.poll_lags)
+            log.info(f"relay {conversation_id}: POLL-LAG audio polls n={len(pl)} "
+                     f"p50={pl[len(pl) // 2]:.2f}s p90={pl[int(0.9 * len(pl))]:.2f}s max={pl[-1]:.2f}s")
         # Task 9: ONE usage record per conversation, keyed on _conv_started — resumes/reconnects
         # never split a call; add_seconds is fire-and-forget on alerts so this cannot block end().
         if self.usage is not None and started is not None:
