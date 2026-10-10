@@ -759,7 +759,8 @@ def _split_agy_inline_detail(label: str) -> tuple[str, str | None]:
 
 def parse_pending_menu(stripped: list[str], now: float | None = None,
                        has_composer_box: bool = False,
-                       raw_lines: list[str] | None = None) -> dict | None:
+                       raw_lines: list[str] | None = None,
+                       runtime: str | None = None) -> dict | None:
     """Structured interactive-menu extraction. Returns the pending_menu dict or
     None. Pure function of the visible (stripped) screen lines.
 
@@ -776,6 +777,29 @@ def parse_pending_menu(stripped: list[str], now: float | None = None,
     """
     if has_composer_box:
         return None
+    if runtime == 'codex':
+        # Codex draws its menu cursor as '›' (U+203A), e.g. "› 1. Yes, continue" (real captures:
+        # fixtures/codex/trust_prompt_0.153.4, update_prompt_0.153.4). Normalise ONLY that glyph, ONLY
+        # in front of a numbered option, ONLY for a codex pane, so the shared parser reads it; claude
+        # and agy screens are untouched. The result is fail-closed below (answer in the terminal).
+        stripped = [_CODEX_SELECTOR_RE.sub('\\1\u276f\\2', l) for l in stripped]
+        if raw_lines is not None:
+            raw_lines = [_CODEX_SELECTOR_RE.sub('\\1\u276f\\2', l) for l in raw_lines]
+    result = _parse_pending_menu(stripped, now, raw_lines)
+    if runtime == 'codex' and result:
+        # FAIL-CLOSED (gm msg_325ca9bf): no codex menu is answerable from a device until its exact
+        # screen has a real fixture AND an answer contract proven on the real CLI. The surfaces say
+        # "answer in the terminal"; the gateway refuses keys; the bridge makes no card.
+        result['menu_family'] = 'codex'
+        result['answer_in_terminal'] = True
+    return result
+
+
+_CODEX_SELECTOR_RE = re.compile(r'^(\s*)\u203a(\s*\d{1,2}\.\s)')
+
+
+def _parse_pending_menu(stripped: list[str], now: float | None,
+                        raw_lines: list[str] | None) -> dict | None:
     now = time.time() if now is None else now
     lines = [s.replace('\xa0', ' ') for s in stripped]
     # tmux pads the capture to pane height with blank lines — trim them first.
@@ -1190,7 +1214,7 @@ def count_subagents(stripped_lines: list[str]) -> int:
     return 0
 
 
-def parse_status(raw: str) -> dict:
+def parse_status(raw: str, runtime: str | None = None) -> dict:
     """Parse ANSI tmux output (visible screen) into a screen-tier state.
 
     Returns dict with state/activity/elapsed/tokens/tool/model/project/
@@ -1307,7 +1331,8 @@ def parse_status(raw: str) -> dict:
     # changes `state`). None unless a false-positive-free menu signature hits.
     # A composer box present => not a menu screen (menus replace the box).
     result['pending_menu'] = parse_pending_menu(
-        stripped, has_composer_box=bool(chrome), raw_lines=raw_lines)
+        stripped, has_composer_box=bool(chrome), raw_lines=raw_lines,
+        runtime=runtime or result.get('runtime'))
 
     # --- permission / dialog waiting (dialog replaces or overlays the box) ---
     dialog = (
@@ -1641,7 +1666,8 @@ def get_agent_status(session: str) -> dict:
             try:
                 chrome = _find_chrome(stripped, raw_lines)
                 pending_menu = parse_pending_menu(
-                    stripped, has_composer_box=bool(chrome), raw_lines=raw_lines)
+                    stripped, has_composer_box=bool(chrome), raw_lines=raw_lines,
+                    runtime=proc.get('runtime'))
             except Exception:
                 pending_menu = None
         _persist(session, {'state': mapped, 'since': now,
@@ -1669,7 +1695,7 @@ def get_agent_status(session: str) -> dict:
             'confidence': 'process', 'state_age_s': None,
         }
 
-    screen = parse_status(raw)
+    screen = parse_status(raw, runtime=proc.get('runtime'))
     hook = _read_hook_event(session)
     prev = _load_prev(session)
 

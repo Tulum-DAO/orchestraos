@@ -821,6 +821,24 @@ def _contextless_permission(menu) -> bool:
         and not str(menu.get("context") or "").strip()
 
 
+_ANSWER_IN_TERMINAL_CODEX = ("Codex is asking this on its own screen. Answering Codex menus from a device "
+                             "is not supported yet, so answer it in the terminal (attach to the seat, or "
+                             "open its web terminal).")
+
+
+def _terminal_only(menu) -> bool:
+    """A menu no device may answer: a permission prompt with no command shown, or ANY codex menu
+    (the detector stamps codex menus menu_family='codex' + answer_in_terminal; fail-closed until a
+    codex screen has a real fixture and a proven answer contract, gm msg_325ca9bf)."""
+    return _contextless_permission(menu) or (
+        isinstance(menu, dict) and (menu.get("menu_family") == "codex" or menu.get("answer_in_terminal") is True))
+
+
+def _terminal_only_reason(menu) -> str:
+    return _ANSWER_IN_TERMINAL_CODEX if isinstance(menu, dict) and menu.get("menu_family") == "codex" \
+        else _ANSWER_IN_TERMINAL
+
+
 def _perm_pseudo_row(session, menu):
     """Additive read-time PERMISSION pseudo-row (D3) from a live detector
     pending_menu whose kind=='permission'. OPTION-ONLY: every option is forced
@@ -865,9 +883,9 @@ def _perm_pseudo_row(session, menu):
         # A NEW field. instance_id keeps its shipped meaning (the ledger's digest:n: clients key the
         # card's render identity on it, and the served record compares it); the row id is unchanged.
         row["instance"] = row["menu"]["instance"] = _inst
-    if _contextless_permission(menu):
+    if _terminal_only(menu):
         row["answer_in_terminal"] = row["menu"]["answer_in_terminal"] = True
-        row["answer_in_terminal_reason"] = _ANSWER_IN_TERMINAL
+        row["answer_in_terminal_reason"] = _terminal_only_reason(menu)
     row["priority_score"] = _priority_score(row)
     return row
 
@@ -2503,23 +2521,10 @@ def stamp_input_kinds(menu):
 
 def _current_menu(session):
     st = _agent_status().get_agent_status(session)
-    menu = st.get("pending_menu") if isinstance(st, dict) else None
-    if not menu and _is_codex_session(session):
-        try:
-            from codex_menu_parser import parse_codex_menu
-            pane = _capture_pane(session, lines=30, ansi=True)
-            if pane:
-                parsed = parse_codex_menu(pane)
-                if parsed.get("kind") != "unknown" and parsed.get("options"):
-                    menu = {
-                        "kind": parsed.get("kind"),
-                        "question": parsed.get("title") or "Codex Prompt",
-                        "options": [{"n": str(o.get("num", i + 1) or (i + 1)), "label": o.get("label") or o.get("text") or ""} for i, o in enumerate(parsed["options"])],
-                        "source_session": session
-                    }
-        except Exception:
-            pass
-    return menu
+    # Codex menus come from the detector (agent-status parse_pending_menu, runtime='codex'), stamped
+    # answer_in_terminal. The fallback that used to sit here imported a codex_menu_parser module this
+    # repo never shipped, inside a bare `except: pass`, so it silently did nothing (audit 2026-10-10).
+    return st.get("pending_menu") if isinstance(st, dict) else None
 
 
 def _q_norm(s):
@@ -2549,14 +2554,14 @@ def _menu_matches(session, expect_question, menu=None):
     return True
 
 
-def _ledger_menu_matches(session, expect_question):
+def _ledger_menu_matches(session, expect_question, menu=None):
     """_menu_matches for the LEDGER answer path (menu_resume_keypress / menu_resume_free_text).
     A live PERMISSION prompt is never the menu a ledger row expects: permission prompts are never
     bridged to the ledger (menu_bridge_core), and question containment would otherwise match an
     AskUserQuestion asking "Do you want to proceed?" to any of them and press its answer in (or,
     in a verify loop, press a second Enter = the highlighted "Yes"). Permission prompts are
     answered only via /agent-key, which checks what the device saw."""
-    menu = _current_menu(session)
+    menu = _current_menu(session) if menu is None else menu
     if not menu or (isinstance(menu, dict) and menu.get("kind") == "permission"):
         return False
     return _menu_matches(session, expect_question, menu=menu)
@@ -2587,7 +2592,10 @@ def menu_resume_keypress(session, key, expect_question=None, commit=True):
     with an empty body (strictly worse than the original bug)."""
     if session not in _tmux_session_names():
         return False, {"reason": "no_session"}
-    if not _ledger_menu_matches(session, expect_question):
+    cur = _current_menu(session)            # ONE read: the same menu gates both checks below
+    if isinstance(cur, dict) and cur.get("menu_family") == "codex":
+        return False, {"reason": "answer_in_terminal"}    # codex menus: fail-closed, zero keys
+    if not _ledger_menu_matches(session, expect_question, menu=cur):
         return False, {"reason": "menu_gone"}
     if _is_gemini_session(session) or _is_codex_session(session):
         r = _tmux("send-keys", "-t", session, key, "Enter")
@@ -3401,6 +3409,11 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
             session, answers=answers, armed=armed, read_fn=read_fn,
             key_fn=key_fn, type_fn=type_fn, settle_s=settle_s,
             text_present_fn=text_present_fn)
+    # Codex menus are answer-in-terminal (gm msg_325ca9bf): a stale pending row for this session
+    # would otherwise be replayed below as Claude digits onto the codex screen ('1' on the update
+    # prompt is "Update now"). Zero keys have been sent at this point.
+    if isinstance(_fam_probe, dict) and _fam_probe.get("menu_family") == "codex":
+        return False, {"reason": "answer_in_terminal"}
 
     # CLAUDE LEG ONLY -- past the agy dispatch above, so the digit-press constraint is
     # applied only where a digit is actually pressed. Zero keys have been sent at this point.
@@ -3918,6 +3931,8 @@ def menu_submit(session, *, expect_question=None, dry_run=True,
     menu = read_fn()
     if not isinstance(menu, dict):
         return False, {"reason": "menu_gone"}
+    if menu.get("menu_family") == "codex":   # answer-in-terminal; not just "no Submit tab" by luck
+        return False, {"reason": "answer_in_terminal"}
     if not menu.get("has_submit"):
         return False, {"reason": "no_submit_tab"}
     if expect_question and menu.get("question") != expect_question:
@@ -4315,9 +4330,9 @@ async def handle_agent_screen(request):
     # as direct → stray digits typed into the TUI field).
     if isinstance(st, dict) and st.get("pending_menu"):
         pm = stamp_input_kinds(dict(st["pending_menu"]))
-        if _contextless_permission(pm):
+        if _terminal_only(pm):
             pm["answer_in_terminal"] = True             # every surface says so; /agent-key refuses it
-            pm["answer_in_terminal_reason"] = _ANSWER_IN_TERMINAL
+            pm["answer_in_terminal_reason"] = _terminal_only_reason(pm)
         # Per-instance identity (DEC-1786771513): stamp instance_id on a PERMISSION
         # menu so the iOS chat card can .id(instance_id) and reset its @State
         # armed/selected when a new same-question prompt replaces an answered one
@@ -5747,8 +5762,8 @@ async def handle_agent_key(request):
             return _json({"ok": False, "reason": "menu_gone"}, status=409)
         if _pm.get("kind") != "permission":          # respond answers permission prompts only
             return _json({"ok": False, "reason": "not_permission_prompt"}, status=400)
-        if _contextless_permission(_pm):
-            return _json({"ok": False, "reason": "answer_in_terminal", "error": _ANSWER_IN_TERMINAL},
+        if _terminal_only(_pm):
+            return _json({"ok": False, "reason": "answer_in_terminal", "error": _terminal_only_reason(_pm)},
                          status=409)
         seen_ok, seen_reason = _could_have_seen(request, session, _pm, expect_key=_expect)
         if not seen_ok:
@@ -5909,9 +5924,9 @@ async def handle_agent_key(request):
                       "state": _STATE_MAP.get(st.get("state"), st.get("state"))
                       if isinstance(st, dict) else "unknown"},
                      status=409)
-    if _contextless_permission(st["pending_menu"]):
-        return _json({"ok": False, "reason": "answer_in_terminal", "error": _ANSWER_IN_TERMINAL},
-                     status=409)
+    if _terminal_only(st["pending_menu"]):
+        return _json({"ok": False, "reason": "answer_in_terminal",
+                      "error": _terminal_only_reason(st["pending_menu"])}, status=409)
 
     # Two-phase: first call (confirm absent/false) -> preview; second call
     # (confirm=true) -> actually send the key.
