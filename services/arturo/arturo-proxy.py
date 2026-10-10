@@ -4671,6 +4671,7 @@ def chat_completions():
     _apology_count = 0
 
     log.info(f"Request: {len(messages)} messages, channel={calling_channel}, stream={want_stream}")
+    _req_t0 = time.time()   # HUME-RECOVERY: any Arturo audio after this means Hume spoke a reply
 
     # === GUARDRAIL: Intelligent silence escalation on voice ===
     # Stage 1 (1 silence turn): passes through to generation for contextual proactive suggestions.
@@ -5505,6 +5506,17 @@ def chat_completions():
                             _journal_append(_journal_cid, "arturo", text=_arturo_text)
                     except Exception as _je:
                         log.error(f"journal arturo-turn error: {_je}")
+                if spoken and _is_hume_clm and _conv_id and _STREAM_RELAY is not None:
+                    # HUME-RECOVERY (gm msg_8ce087b5): hand the streamed reply to the relay; if no
+                    # Arturo audio follows and the operator is quiet, it is re-sent as assistant_input.
+                    try:
+                        _rc = _STREAM_RELAY.resolve(_conv_id)
+                        if _rc:
+                            _STREAM_RELAY.note_clm_reply(
+                                _rc, _voice_guards.strip_tool_code("".join(spoken)).strip()[:1500],
+                                _req_t0)
+                    except Exception as _hre:
+                        log.error(f"hume-recovery note error (non-fatal): {_hre}")
                 if spoken and _is_hume_clm and _conv_id:
                     # ANSWERED-REPEAT memory: this user final now has a spoken answer —
                     # an identical re-final on this cid is a vendor retry, not a re-ask.
