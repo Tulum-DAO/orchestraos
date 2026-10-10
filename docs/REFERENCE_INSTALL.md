@@ -150,7 +150,7 @@ devices with a bundled key; no ntfy server. Device tokens come from pairing (tra
 
 Informational messages (task done, links) and the notify backstop go to a Telegram bot.
 Put the bot token and your chat id in `<data>/.env.telegram`
-(`TELEGRAM_BOT_TOKEN=…`, `<OPERATOR>_TELEGRAM_ID=…`), set `[notify] channel = "telegram"`
+(`TELEGRAM_BOT_TOKEN=…`, `ORCHESTRA_TELEGRAM_CHAT_ID=…`; the old name `SHAW_TELEGRAM_ID` is still read), set `[notify] channel = "telegram"`
 and `[notify.telegram] chat_id = "<chat-id>"` (the token itself is only ever read from the
 env file / the env var named by `bot_token_env`, never from `orchestra.toml`).
 `scripts/tg-notify.sh` is the one sender every script uses: it verifies delivery and

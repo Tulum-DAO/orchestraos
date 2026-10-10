@@ -113,12 +113,16 @@ def log(msg):
 def load_env_telegram():
     global TG_TOKEN, TG_ID
     env = ORCHESTRA_DIR / ".env.telegram"
+    vals = {}
     if env.exists():
         for line in env.read_text().splitlines():
-            if line.startswith("TELEGRAM_BOT_TOKEN="):
-                TG_TOKEN = line.split("=", 1)[1].strip()
-            elif line.startswith("SHAW_TELEGRAM_ID="):
-                TG_ID = line.split("=", 1)[1].strip()
+            if "=" in line:
+                k, v = line.split("=", 1)
+                vals[k.strip()] = v.strip().strip("'\"")
+    TG_TOKEN = vals.get("TELEGRAM_BOT_TOKEN", TG_TOKEN)
+    # ORCHESTRA_TELEGRAM_CHAT_ID (env, then the file); the old name SHAW_TELEGRAM_ID is still read.
+    TG_ID = (os.environ.get("ORCHESTRA_TELEGRAM_CHAT_ID") or vals.get("ORCHESTRA_TELEGRAM_CHAT_ID")
+             or os.environ.get("SHAW_TELEGRAM_ID") or vals.get("SHAW_TELEGRAM_ID") or TG_ID)
 
 
 def telegram(text):

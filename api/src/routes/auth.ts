@@ -223,7 +223,8 @@ router.post('/notify-telegram', async (req: Request, res: Response) => {
     try {
       chatId = readFileSync(path.join(ORCHESTRA_DIR, '.shaw_chat_id'), 'utf-8').trim();
     } catch {}
-    if (!chatId) chatId = process.env.SHAW_TELEGRAM_CHAT_ID || null;
+    // ORCHESTRA_TELEGRAM_CHAT_ID; the old name SHAW_TELEGRAM_CHAT_ID is still read.
+    if (!chatId) chatId = process.env.ORCHESTRA_TELEGRAM_CHAT_ID || process.env.SHAW_TELEGRAM_CHAT_ID || null;
     if (!chatId) {
       res.status(500).json({ error: 'the operator chat ID not found' });
       return;

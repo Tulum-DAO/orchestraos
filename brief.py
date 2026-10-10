@@ -32,7 +32,9 @@ def send_brief(agent_id: str, stage: str, message: str):
     """
     env = load_env()
     token = env.get("TELEGRAM_BOT_TOKEN", "")
-    chat_id = env.get("SHAW_TELEGRAM_ID", "")
+    # ORCHESTRA_TELEGRAM_CHAT_ID (env, then .env); the old name SHAW_TELEGRAM_ID is still read.
+    chat_id = (os.environ.get("ORCHESTRA_TELEGRAM_CHAT_ID") or env.get("ORCHESTRA_TELEGRAM_CHAT_ID")
+               or os.environ.get("SHAW_TELEGRAM_ID") or env.get("SHAW_TELEGRAM_ID", ""))
 
     # Also try the persisted chat ID file
     if not chat_id:

@@ -75,6 +75,8 @@ Listed as issues (`T1`–`T12`, `G1`–`G20`), seeded from `docs/HACKATHON_ISSUE
 
 **Added after this release, on main:** Voice selection for every server-side voice engine (Hume and GPT-Live). One pick per engine, shared by every device, so switching engine and back keeps each pick. The server renders the picker rows (title, group, recommended), and a pick must be one of that engine's voices. Rows keep the v1 `provider` field, and a request with no `?vendor=` still means Hume unless the live engine has its own list, so apps already shipped keep working.
 
+**Renamed after this release, on main:** the Telegram chat id setting is now `ORCHESTRA_TELEGRAM_CHAT_ID` (env, or a line in `<data>/.env.telegram`). The old `SHAW_TELEGRAM_ID` (and `SHAW_TELEGRAM_CHAT_ID` for the sign-in code) is still read, so nothing breaks; new installs should use the new name.
+
 **Removed after this release, on main:** `POST /api/voice/sync-prompts` and the dashboard's **Sync Prompts** button. Nothing in the product shipped the `voice-agent.py` script they ran, so on every install the button failed. No shipped client calls the route.
 
 **Removed after this release, on main:** `GET /api/project-status`. Nothing shipped its `project-status-api.py` script; Command Center now reads `/api/projects` directly, as it already did after every failed attempt. No shipped client calls the route.

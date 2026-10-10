@@ -7,7 +7,8 @@ import { loadConfig } from '../lib/config.js';
 const router = Router();
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
-const SHAW_TELEGRAM_ID = process.env.SHAW_TELEGRAM_ID || '';
+// ORCHESTRA_TELEGRAM_CHAT_ID; the old name SHAW_TELEGRAM_ID is still read so existing installs keep working.
+const TELEGRAM_CHAT_ID = process.env.ORCHESTRA_TELEGRAM_CHAT_ID || process.env.SHAW_TELEGRAM_ID || '';
 const STATE_DIR = join(process.env.ORCHESTRA_DIR || loadConfig().dataDir, 'state/clients');
 
 // POST /api/signing/webhook — receives signed agreement data
@@ -50,7 +51,7 @@ router.post('/webhook', async (req: Request, res: Response) => {
     writeFileSync(join(sigDir, recordFile), JSON.stringify(record, null, 2));
 
     // Send Telegram notification to the operator
-    if (TELEGRAM_BOT_TOKEN && SHAW_TELEGRAM_ID) {
+    if (TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
       const message = [
         `📝 **AGREEMENT SIGNED**`,
         ``,
@@ -66,7 +67,7 @@ router.post('/webhook', async (req: Request, res: Response) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          chat_id: SHAW_TELEGRAM_ID,
+          chat_id: TELEGRAM_CHAT_ID,
           text: message,
           parse_mode: 'Markdown'
         })
