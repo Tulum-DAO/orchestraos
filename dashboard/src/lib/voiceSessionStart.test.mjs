@@ -205,3 +205,24 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
   assert.deepStrictEqual(reasons, ['dictation error: not-allowed']);
   console.log('PASS: a dead recognizer service says "Chrome or Edge"; other errors keep their code');
 }
+
+// ── 7. Chrome itself reports 'network' when OFFLINE: say so, not "needs Chrome or Edge" ──────
+{
+  installBrowser();
+  class NetworkError extends EventTarget { start() { setTimeout(() => this.onerror && this.onerror({ error: 'network' }), 0); } stop() {} abort() {} }
+  globalThis.window.SpeechRecognition = NetworkError;
+  const run = async (online) => {
+    globalThis.navigator.onLine = online;
+    const reasons = [];
+    const s = new VoiceSession({ onUnavailable: (r) => reasons.push(r) });
+    s.startDictation(); await tick(); await tick(); s.stopDictation();
+    return reasons;
+  };
+  const offline = await run(false);
+  assert.strictEqual(offline.length, 1);
+  assert.match(offline[0], /offline/i, 'offline Chrome is told it is offline');
+  assert.doesNotMatch(offline[0], /Chrome or Edge/, 'not told to switch browser');
+  const online = await run(true);
+  assert.match(online[0], /Chrome or Edge/, 'online with a dead service: still the browser advice');
+  console.log('PASS: offline is reported as offline; a dead service online still says Chrome or Edge');
+}

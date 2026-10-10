@@ -371,6 +371,12 @@ export class VoiceSession {
         // The recognizer exists but its service is dead (Brave, Chromium without Google keys,
         // offline). This mic is tier 1 only (it never uploads a clip: that is Arturo's tier 2, behind
         // the arturo flag), so say what works instead of echoing the browser's code.
+        // Chrome itself reports 'network' when it is OFFLINE: say that, not "switch browser". Only an
+        // explicit false counts; an unknown onLine is treated as online.
+        if (code === 'network' && typeof navigator !== 'undefined' && navigator.onLine === false) {
+          this.cb.onUnavailable?.('dictation needs a connection: you are offline');
+          return;
+        }
         if (isTier1DeadError(code)) { this.cb.onUnavailable?.(`voice isn't configured yet: ${DICTATION_UNAVAILABLE}`); return; }
         this.cb.onUnavailable?.(`dictation error: ${code}`);
       },
