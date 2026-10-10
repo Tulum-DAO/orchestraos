@@ -51,7 +51,7 @@ def test_voices_get_and_voice_get_put(monkeypatch, tmp_path):
     assert j["current"] is None
     # contract v2 (msg_a7cf1484): server-rendered, strictly typed display rows
     assert j["voices"] == [{"id": "v-frank", "name": "Frank", "title": "Frank", "subtitle": None,
-                            "recommended": False, "order": 10, "sample_url": None}]
+                            "recommended": True, "order": 0, "sample_url": None, "group": "Your voices"}]
     # EL voices are client-side
     assert c.get("/ptt/voices?vendor=elevenlabs", environ_base=loop).status_code == 400
     # PUT persists, echoes the record (no voices list in the PUT response)

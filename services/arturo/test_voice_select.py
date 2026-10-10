@@ -11,7 +11,7 @@ import pytest
 from services.arturo import openai_live as ol
 from services.arturo import voice_choice as vc
 
-ROW_KEYS = {"id", "name", "title", "subtitle", "recommended", "order", "sample_url"}
+ROW_KEYS = {"id", "name", "title", "subtitle", "recommended", "order", "sample_url", "group"}
 HUME_RAW = [{"id": f"h{i}", "name": n, "provider": "hume_library"} for i, n in enumerate(
     ["Serene Assistant", "Warm Female Assistant Voice", "Warm American Female", "Comforting Male Conversationalist",
      "Soft Male Conversationalist", "Deep Male Conversational Voice", "Conversational English Guy",
@@ -61,6 +61,7 @@ def test_rows_are_strictly_typed_with_short_titles():
             assert type(r["recommended"]) is bool
             assert type(r["order"]) is int
             assert r["sample_url"] is None
+            assert r["group"] is None or (isinstance(r["group"], str) and r["group"])
 
 
 def test_hume_curation_is_the_server_list_in_order():
@@ -173,3 +174,13 @@ def test_routes_serve_every_vendor_and_default_to_the_live_one(monkeypatch, tmp_
         assert c.get("/ptt/voice?vendor=hume", environ_base=loop).get_json()["voice_id"] is None
     finally:
         mod._STREAM_RELAY.shutdown()
+
+
+def test_a_cloned_voice_keeps_its_own_server_named_group_first():
+    """ios-watch-dev msg_0aa40402 option (c): today's screen splits YOUR VOICES / HUME VOICES on `provider`. A voice
+    the operator made themselves is categorically theirs; the SERVER names the heading so no client hardcodes Hume's vocabulary."""
+    raw = [{"id": "c1", "name": "Frank", "provider": "custom"}] + HUME_RAW
+    rows = vc.voice_rows("hume", raw=raw)
+    assert rows[0]["id"] == "c1" and rows[0]["group"] == "Your voices" and rows[0]["recommended"] is True
+    assert {r["group"] for r in rows[1:]} == {"Hume voices"}
+    assert all(r["group"] is None for r in vc.voice_rows("openai"))

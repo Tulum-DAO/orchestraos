@@ -183,14 +183,19 @@ def short_title(name):
     return (cut if cut and len(cut) <= TITLE_MAX else name[:TITLE_MAX]).rstrip()
 
 
-def _row(vid, name, title, recommended, order):
+GROUP_CUSTOM, GROUP_HUME = "Your voices", "Hume voices"   # server-named headings (ios msg_0aa40402 option c)
+
+
+def _row(vid, name, title, recommended, order, group=None):
     return {"id": vid, "name": name, "title": title, "subtitle": name if name != title else None,
-            "recommended": bool(recommended), "order": int(order), "sample_url": None}
+            "recommended": bool(recommended), "order": int(order), "sample_url": None, "group": group}
 
 
 def voice_rows(vendor, raw=None):
     """The rows a picker draws, every field strictly typed. A row the server cannot fill completely is
-    DROPPED here, never sent half-filled (a lenient client must never be the only guard)."""
+    DROPPED here, never sent half-filled (a lenient client must never be the only guard). `group` is a
+    heading the server names; clients render whatever groups arrive, in `order`. A voice the operator made themselves
+    (Hume custom) is its own group, first and recommended; Hume's library follows."""
     if vendor == "openai":
         return [_row(v, v.capitalize(), v.capitalize(), True, i) for i, v in enumerate(OPENAI_VOICES)]
     if vendor != "hume":
@@ -203,11 +208,13 @@ def voice_rows(vendor, raw=None):
         if not (isinstance(vid, str) and vid and isinstance(name, str) and name.strip()):
             continue
         name = " ".join(name.split())
-        if name in curated:
+        if v.get("provider") == "custom":
+            rows.append(_row(vid, name, short_title(name), True, i, GROUP_CUSTOM))
+        elif name in curated:
             pos, title = curated[name]
-            rows.append(_row(vid, name, title, True, pos))
+            rows.append(_row(vid, name, title, True, 1000 + pos, GROUP_HUME))
         else:
-            rows.append(_row(vid, name, short_title(name), False, len(HUME_CURATED) + i))
+            rows.append(_row(vid, name, short_title(name), False, 2000 + i, GROUP_HUME))
     return sorted(rows, key=lambda r: r["order"])
 
 
