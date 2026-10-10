@@ -1,9 +1,6 @@
 import { Menu, Sun, Moon, Monitor, Brain, Siren } from 'lucide-react';
 import { useTheme } from '../../theme/ThemeProvider';
 import { GenChip } from '../GenChip';
-import { ArturoButton } from '../arturo/ArturoButton';
-import NotificationBell from '../NotificationBell';
-import { showArturoPill } from '../../lib/features';
 
 interface TopBarProps {
   onMenuOpen: () => void;
@@ -49,7 +46,9 @@ export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen, seat, mode = 'ch
       )}
 
 
-      <div className="ml-auto flex items-center gap-1">
+      {/* DashboardLayout owns one shared notification bell. Reserve its desktop slot so the
+          fixed control is visually the final member of this row without mounting another poller. */}
+      <div className="ml-auto flex items-center gap-1 md:pr-12">
         {/* Chat / Dev, the same switch the Agents page's panel has: this page is where the rail and
             Arturo send you for a seat, and without it the seat's terminal could not be reached. */}
         {onModeChange && (
@@ -104,14 +103,6 @@ export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen, seat, mode = 'ch
         >
           <Brain size={24} />
         </button>
-        {/* Arturo + the bell END THIS ROW on desktop (the operator, 2026-10-10: "make all of these line up
-            and look like they're from the same package"). Same 40px boxes, same 4px gap, same centre
-            line, because they are IN the row; the layout's fixed corner cluster stands down on this
-            route. On phones they live in the layout's own top bar above this one. */}
-        <div className="hidden md:flex items-center gap-1">
-          {showArturoPill() && <ArturoButton />}
-          <NotificationBell />
-        </div>
       </div>
     </div>
   );

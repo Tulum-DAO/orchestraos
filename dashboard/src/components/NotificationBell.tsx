@@ -83,7 +83,7 @@ export default function NotificationBell() {
         >
           <Bell size={24} />
           {totalPending > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-red-500 text-white border-2 border-neutral-950 px-1">
+            <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-red-500 text-white border-2 border-background px-1">
               {totalPending}
             </span>
           )}
@@ -91,30 +91,30 @@ export default function NotificationBell() {
 
         {/* Dropdown */}
         {dropdownOpen && (
-          <div className="absolute right-0 top-full mt-2 w-72 bg-neutral-900 border border-neutral-700 rounded-xl shadow-2xl z-50 overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-800">
-              <span className="text-sm font-semibold text-white">Notifications</span>
-              <button onClick={() => setDropdownOpen(false)} className="text-neutral-500 hover:text-neutral-300">
+          <div className="absolute right-0 top-full mt-2 w-72 overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl z-50">
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <span className="text-sm font-semibold">Notifications</span>
+              <button onClick={() => setDropdownOpen(false)} className="text-muted-foreground hover:text-foreground">
                 <X size={14} />
               </button>
             </div>
 
             <div className="max-h-80 overflow-y-auto">
               {totalPending === 0 && (
-                <p className="px-4 py-6 text-sm text-neutral-500 text-center">All clear</p>
+                <p className="px-4 py-6 text-center text-sm text-muted-foreground">All clear</p>
               )}
 
               {pendingApprovals > 0 && (
                 <button
                   onClick={() => { if (!isViewHidden('/inbox')) navigate('/inbox'); setDropdownOpen(false); }}
-                  className="w-full text-left px-4 py-3 hover:bg-neutral-800 transition-colors flex items-center gap-3"
+                  className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted"
                 >
                   <div className="p-1.5 rounded-lg bg-violet-500/15">
                     <ShieldCheck size={14} className="text-violet-400" />
                   </div>
                   <div className="flex-1">
-                    <p className="text-sm text-neutral-200">{pendingApprovals} pending approval{pendingApprovals !== 1 ? 's' : ''}</p>
-                    <p className="text-xs text-neutral-500">Review in Inbox</p>
+                    <p className="text-sm text-foreground">{pendingApprovals} pending approval{pendingApprovals !== 1 ? 's' : ''}</p>
+                    <p className="text-xs text-muted-foreground">Review in Inbox</p>
                   </div>
                   <span className="bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">{pendingApprovals}</span>
                 </button>
@@ -123,14 +123,14 @@ export default function NotificationBell() {
               {pendingQuestionnaires > 0 && (
                 <button
                   onClick={() => { if (!isViewHidden('/inbox')) navigate('/inbox'); setDropdownOpen(false); }}
-                  className="w-full text-left px-4 py-3 hover:bg-neutral-800 transition-colors flex items-center gap-3"
+                  className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted"
                 >
                   <div className="p-1.5 rounded-lg bg-amber-500/15">
                     <ClipboardList size={14} className="text-amber-400" />
                   </div>
                   <div className="flex-1">
-                    <p className="text-sm text-neutral-200">{pendingQuestionnaires} questionnaire{pendingQuestionnaires !== 1 ? 's' : ''}</p>
-                    <p className="text-xs text-neutral-500">Needs your input</p>
+                    <p className="text-sm text-foreground">{pendingQuestionnaires} questionnaire{pendingQuestionnaires !== 1 ? 's' : ''}</p>
+                    <p className="text-xs text-muted-foreground">Needs your input</p>
                   </div>
                   <span className="bg-amber-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">{pendingQuestionnaires}</span>
                 </button>
@@ -139,24 +139,24 @@ export default function NotificationBell() {
               {needsAuth && (
                 <button
                   onClick={() => { setAuthOpen(true); setDropdownOpen(false); }}
-                  className="w-full text-left px-4 py-3 hover:bg-neutral-800 transition-colors flex items-center gap-3"
+                  className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted"
                 >
                   <div className="p-1.5 rounded-lg bg-red-500/15">
                     <Bell size={14} className="text-red-400" />
                   </div>
                   <div className="flex-1">
-                    <p className="text-sm text-neutral-200">Auth required</p>
-                    <p className="text-xs text-neutral-500">GM needs login</p>
+                    <p className="text-sm text-foreground">Auth required</p>
+                    <p className="text-xs text-muted-foreground">GM needs login</p>
                   </div>
                 </button>
               )}
             </div>
 
             {totalPending > 0 && (
-              <div className="border-t border-neutral-800 px-4 py-2.5">
+              <div className="border-t border-border px-4 py-2.5">
                 <button
                   onClick={() => { if (!isViewHidden('/inbox')) navigate('/inbox'); setDropdownOpen(false); }}
-                  className="text-xs text-violet-400 hover:text-violet-300 font-medium transition-colors"
+                  className="text-xs font-medium text-primary hover:text-primary/80 transition-colors"
                 >
                   View all in Inbox &rarr;
                 </button>

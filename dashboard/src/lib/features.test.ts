@@ -107,18 +107,20 @@ test('every gated surface is wired to its helper', () => {
   for (const [file, re] of wiring) assert.match(src(file), re, file);
   // No surface renders its component unconditionally any more.
   assert.doesNotMatch(src('layouts/DashboardLayout.tsx'), /^\s*<ArturoPill \/>/m);
-  // Arturo's top-bar circle (it replaced the floating pill, 2026-10-10) sits next to BOTH bells,
-  // the phone bar's and the desktop one. Every one of them must ask the flag: with arturo off
-  // (explicitly, or detected by #356) there is no circle anywhere.
+  // Arturo's top-bar circle sits in the mobile header and must stay behind the feature flag.
   const layout = src('layouts/DashboardLayout.tsx');
   const buttons = layout.match(/<ArturoButton\b/g) ?? [];
   const gated = layout.match(/showArturoPill\(\)\s*&&\s*<ArturoButton\b/g) ?? [];
-  assert.equal(buttons.length, 2, 'one circle per bell: phone bar and desktop');
+  assert.equal(buttons.length, 1, 'the mobile header has Arturo’s one button');
   assert.equal(gated.length, buttons.length, 'every Arturo circle is behind showArturoPill()');
-  // ...and the agent page's own top bar, which ends with the pair on desktop.
+  // The bell is mounted exactly once at the layout: CSS position, rather than a second hidden
+  // route-specific component, decides where it appears. That keeps polling and dropdown state singular.
+  assert.equal((layout.match(/<NotificationBell\b/g) ?? []).length, 1, 'one application bell mount');
   const topbar = src('components/agent/TopBar.tsx');
-  assert.equal((topbar.match(/<ArturoButton\b/g) ?? []).length, 1);
-  assert.match(topbar, /showArturoPill\(\)\s*&&\s*<ArturoButton\b/, 'the agent top bar circle is gated too');
+  assert.doesNotMatch(topbar, /NotificationBell|ArturoButton/, 'agent top bar reserves the shared bell slot');
+  const bell = src('components/NotificationBell.tsx');
+  assert.match(bell, /bg-popover.*text-popover-foreground/, 'dropdown follows the active theme tokens');
+  assert.doesNotMatch(bell, /bg-neutral-|text-neutral-|border-neutral-|hover:bg-neutral-/, 'dropdown has no fixed dark surface tokens');
   // Every link into a view on these pages is gated: no bare navigate('/inbox') / to="/projects" left.
   assert.doesNotMatch(src('components/NotificationBell.tsx'), /onClick=\{\(\) => \{ navigate\('\/inbox'\)/);
   assert.equal((src('pages/RoadmapDetail.tsx').match(/!isViewHidden\('\/projects'\)/g) || []).length, 2);
