@@ -7198,7 +7198,7 @@ async def handle_telemetry(request):
 
     import json
     import os
-    telemetry_dir = os.path.join(os.environ.get("ORCHESTRA_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "state", "telemetry")
+    telemetry_dir = os.path.join(str(_data_dir()), "state", "telemetry")
     os.makedirs(telemetry_dir, exist_ok=True)
     out_path = os.path.join(telemetry_dir, f"{attempt_id}_client.json")
     with open(out_path, "w") as f:
@@ -7208,7 +7208,7 @@ async def handle_telemetry(request):
 
 def get_telemetry_attempts():
     import os, glob, datetime
-    tdir = os.path.join(os.environ.get("ORCHESTRA_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "state", "telemetry")
+    tdir = os.path.join(str(_data_dir()), "state", "telemetry")
     os.makedirs(tdir, exist_ok=True)
     files = glob.glob(os.path.join(tdir, "*.json*"))
     attempt_times = {}
@@ -7233,7 +7233,7 @@ def get_telemetry_attempts():
 
 def load_telemetry_events(attempt_id):
     import os, json
-    tdir = os.path.join(os.environ.get("ORCHESTRA_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "state", "telemetry")
+    tdir = os.path.join(str(_data_dir()), "state", "telemetry")
     events = []
     
     client_file = os.path.join(tdir, f"{attempt_id}_client.json")

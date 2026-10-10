@@ -19,14 +19,19 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from runtime_signatures import (  # noqa: E402
     RuntimeResolutionError, validate_runtime_for_registration)
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.abspath(__file__))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestra_cli.settings import data_dir as _data_dir, guard_test_write as _guard_test_write  # noqa: E402
 
 # REGISTRY_PATH env override (mirrors spawn-agent.sh's REGISTRY + the
 # runtime_signatures ORCHESTRA_DIR pattern) so the registration invariant can be
-# exercised against a SCRATCH registry without touching the live file. Production
-# sets no REGISTRY_PATH env and writes the checkout's registry.json exactly as before.
-REGISTRY = os.environ.get(
-    "REGISTRY_PATH",
-    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "registry.json"))
+# exercised against a SCRATCH registry without touching the live file. Production sets no
+# REGISTRY_PATH: the registry is <data dir>/registry.json ($ORCHESTRA_DIR, then [data] dir, then the
+# default), the one every other reader uses. It used to be the CHECKOUT's registry.json, so on an
+# install whose data dir is not the checkout a rotation's registry update went to the wrong file.
+REGISTRY = os.environ.get("REGISTRY_PATH") or os.path.join(str(_data_dir()), "registry.json")
 
 
 def _cv4_observe_registry_write(agent_id, on_disk, record):
@@ -146,6 +151,7 @@ def safe_update_registry(agent_id: str, data: dict) -> dict:
     if handled is not None:
         _project_now_best_effort(agent_id)
         return handled
+    _guard_test_write(REGISTRY, "registry.json")
     with open(REGISTRY, "r+") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         try:

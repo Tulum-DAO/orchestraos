@@ -30,6 +30,7 @@ import sys
 if os.path.dirname(os.path.dirname(os.path.abspath(__file__))) not in sys.path:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+from orchestra_cli.settings import guard_test_write as _guard_test_write  # noqa: E402
 
 
 ORCHESTRA_DIR = Path(os.environ.get(
@@ -51,6 +52,7 @@ def registry_lock(timeout_s: float = 10, lock_path=None):
     lock_path : override the lock file (tests); default state/registry.lock.
     """
     path = Path(lock_path or LOCK_FILE)
+    _guard_test_write(path, "the registry lock")
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(path), os.O_CREAT | os.O_RDWR, 0o644)
     acquired = False

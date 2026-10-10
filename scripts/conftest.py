@@ -7,6 +7,7 @@ decide whether arming is safe. A census polluted by test senders is worse than n
 census, because it looks like data.
 """
 import hashlib
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -55,24 +56,37 @@ os.environ.setdefault("ANSWER_TELEMETRY_PATH", str(_TMP_ANSWER_TELEMETRY))
 # the PROD checkout, so a test that drives execute_rotation writes prod even when
 # run from a worktree. This guard makes the hermetic seam MANDATORY: any test that
 # mutates the prod registry FAILS (naming itself), rather than silently leaking.
-_PROD_REGISTRY = Path(
-    os.environ.get("ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
-) / "registry.json"
+# Which registries: every data dir the run must not write (recorded by the repo-root conftest BEFORE it
+# points the run at a temp dir), plus this development box's live fleet tree when it exists. It used to
+# read ORCHESTRA_DIR here, which guarded nothing on a user's machine (orchestraos-providers, 2026-10-10).
+def _prod_registries():
+    from orchestra_cli.settings import protected_data_dirs
+    roots = list(protected_data_dirs()) + [os.path.expanduser("~/scripts/agent-orchestra")]
+    return sorted({Path(os.path.realpath(r)) / "registry.json" for r in roots})
 
 
-def _registry_fingerprint():
-    try:
-        return hashlib.sha256(_PROD_REGISTRY.read_bytes()).hexdigest()
-    except OSError:
-        return None  # absent -> nothing to protect (fingerprints compare equal)
+_PROD_REGISTRIES = _prod_registries()
+
+
+def _registry_agents():
+    """{registry: set of agent ids} for every guarded registry that exists. A test can only ADD a seat
+    (or a phantom row) to a registry it wrongly writes; comparing the agent ids, not a whole-file hash,
+    means a live fleet rewriting its own rows mid-run no longer fails an innocent test."""
+    out = {}
+    for p in _PROD_REGISTRIES:
+        try:
+            agents = json.loads(p.read_text()).get("agents") or {}
+            out[str(p)] = set(agents) if isinstance(agents, dict) else set(map(str, agents))
+        except (OSError, ValueError):
+            continue
+    return out
 
 
 @pytest.fixture(autouse=True)
 def _guard_prod_registry_unmutated():
-    """Fail any test that mutates the production registry.json. Snapshot before,
-    compare after — a changed fingerprint means the test wrote the prod store
-    instead of a sandbox path (repoint rotate_agent.REGISTRY_PATH to tmp_path)."""
-    before = _registry_fingerprint()
+    """Fail any test that adds a seat to a real registry (a data dir the run must not write, or this
+    box's live fleet tree): snapshot the agent ids before, compare after."""
+    before = _registry_agents()
     yield
     # Guard-run context (gm msg_141aff5e): the identity reconciler runs the fleet guards on a
     # LIVE fleet where a promote / regenerator write can legitimately change registry.json
@@ -80,9 +94,10 @@ def _guard_prod_registry_unmutated():
     # the guards' own DB-truth assertions still run. Normal pytest runs are unchanged.
     if os.environ.get("ORCH_GUARD_RUN") == "1":
         return
-    after = _registry_fingerprint()
-    assert before == after, (
-        f"HERMETICITY LEAK: this test mutated the PRODUCTION registry at "
-        f"{_PROD_REGISTRY}. Rotation tests MUST repoint rotate_agent.REGISTRY_PATH "
-        f"(and ORCHESTRA_DIR-derived store paths) to a tmp sandbox. A leaked "
+    after = _registry_agents()
+    added = {p: sorted(after.get(p, set()) - before.get(p, set())) for p in after}
+    added = {p: a for p, a in added.items() if a}
+    assert not added, (
+        f"HERMETICITY LEAK: this test added seats to a REAL registry: {added}. Point ORCHESTRA_DIR "
+        f"(and rotate_agent.REGISTRY_PATH / ORCHESTRA_DIR-derived store paths) at a tmp sandbox. A leaked "
         f"always_on row pages pulse forever and can become a recovery target.")

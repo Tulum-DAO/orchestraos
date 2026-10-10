@@ -155,6 +155,39 @@ def data_dir(include_env: bool = True) -> Path:
     return _configured_data_dir(raw)
 
 
+PROTECTED_ENV = "ORCHESTRA_TEST_PROTECTED_DIRS"
+
+
+class RealDataDirWrite(RuntimeError):
+    """A test tried to write into an install's real data dir (see guard_test_write)."""
+
+
+def protected_data_dirs() -> list[str]:
+    """The data dirs a test run must never write. The repo-root conftest records them when the run
+    starts, BEFORE it points the run at a temp dir, in $ORCHESTRA_TEST_PROTECTED_DIRS. Without it
+    (a test run from somewhere else): this checkout's configured dir and the default."""
+    rec = os.environ.get(PROTECTED_ENV, "")
+    dirs = [d for d in rec.split(os.pathsep) if d] if rec else [
+        str(data_dir(include_env=False)), os.path.expanduser(DEFAULT_DATA_DIR)]
+    return sorted({os.path.realpath(d) for d in dirs})
+
+
+def guard_test_write(path, what: str) -> None:
+    """Under pytest, refuse to WRITE `what` at `path` when it is inside a real data dir (registry,
+    tasks.db, the identity DB, agent state, locks). A test that forgot to isolate its data dir then
+    fails loudly, naming the store, instead of writing an operator's install (2026-10-10: the suite
+    put test seats and state files into a real install). Outside pytest this does nothing."""
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+    target = os.path.realpath(str(path))
+    for root in protected_data_dirs():
+        if target == root or target.startswith(root.rstrip(os.sep) + os.sep):
+            raise RealDataDirWrite(
+                f"refusing to write {what} at {target} from a test: it is inside the real data dir {root}. "
+                f"Point ORCHESTRA_DIR (or the store's path argument) at a temp dir; the repo-root conftest "
+                f"does that for every test unless the test overrides it.")
+
+
 def load_settings(repo_root: Path | None = None, config_path: Path | None = None) -> Settings:
     repo_root = Path(repo_root or repo_root_from_env()).resolve()
     config_path = Path(config_path or config_path_for(repo_root))

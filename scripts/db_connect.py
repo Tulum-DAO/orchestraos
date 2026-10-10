@@ -30,6 +30,7 @@ import sys
 if os.path.dirname(os.path.dirname(os.path.abspath(__file__))) not in sys.path:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+from orchestra_cli.settings import guard_test_write as _guard_test_write  # noqa: E402
 
 
 _ORCH = os.environ.get("ORCHESTRA_DIR", str(_data_dir()))
@@ -45,6 +46,8 @@ def connect(path=None, *, timeout=30.0):
     `timeout` is the sqlite3 driver-level busy timeout (seconds); we ALSO set PRAGMA busy_timeout
     (ms) so the wait applies uniformly whether a statement blocks in C or via the driver.
     """
+    if str(path or TASKS_DB) != ":memory:":
+        _guard_test_write(path or TASKS_DB, "tasks.db")
     conn = sqlite3.connect(path or TASKS_DB, timeout=timeout)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")

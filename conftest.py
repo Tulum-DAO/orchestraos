@@ -19,6 +19,28 @@ redirects WHICH copy of the module-under-test is exercised. Scratch DBs only.
 import os
 import sys
 
+# --- data-dir fence (gm msg_f0c527f4, 2026-10-10) -----------------------------------------------
+# FIRST, before anything below imports a module that freezes a path at import time. Measured: on an
+# installed checkout (orchestra.toml present) the suite wrote test seats, state/agent-state/*.json,
+# state/tasks.db rows, cursors and locks into the operator's REAL data dir, because those tests never
+# isolated it and the modules resolved it from the toml. So the whole run is pointed at a temp data
+# dir and a config that does not exist, the way CI already runs. The dirs that WERE real when the run
+# started are recorded in $ORCHESTRA_TEST_PROTECTED_DIRS, and the stores refuse to write under them
+# from a test (orchestra_cli.settings.guard_test_write). A test that sets its own ORCHESTRA_DIR /
+# ORCHESTRA_CONFIG is honoured; the environ restore below puts the run's values back after it.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from orchestra_cli import settings as _settings  # noqa: E402
+import tempfile as _tempfile  # noqa: E402
+
+if not os.environ.get(_settings.PROTECTED_ENV):
+    _real = [str(_settings.data_dir(include_env=True)), str(_settings.data_dir(include_env=False)),
+             os.path.expanduser(_settings.DEFAULT_DATA_DIR)]
+    os.environ[_settings.PROTECTED_ENV] = os.pathsep.join(sorted({os.path.realpath(d) for d in _real}))
+_FENCE_ROOT = _tempfile.mkdtemp(prefix="orchestra-test-data-")
+os.environ["ORCHESTRA_DIR"] = os.environ["ORCH_DIR"] = os.path.join(_FENCE_ROOT, "data")
+os.environ["ORCHESTRA_CONFIG"] = os.path.join(_FENCE_ROOT, "no-orchestra.toml")
+os.makedirs(os.environ["ORCHESTRA_DIR"], exist_ok=True)
+
 _WORKTREE_SCRIPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts")
 sys.path.insert(0, _WORKTREE_SCRIPTS)
 
