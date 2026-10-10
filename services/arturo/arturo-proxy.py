@@ -4762,6 +4762,26 @@ def chat_completions():
         # a different final is answered. Hume path only; short finals exempt inside the guard.
         if _is_hume_clm and _conv_id and _ANSWERED_FINALS.is_answered_repeat(
                 _conv_id, _voice_guards.latest_user_text(messages)):
+            # RESPEAK (gm msg_c07a2389): Hume re-asks the same final when it DROPPED our reply
+            # (5 dead calls, Hume chat history). If the relay heard no Arturo audio for that
+            # reply, re-speak it verbatim instead of answering with silence. One claim per reply
+            # shared with HUME-RECOVERY, so the operator never hears it twice.
+            _respeak = None
+            if os.environ.get("ARTURO_REPEAT_RESPEAK", "1") == "1" and _STREAM_RELAY is not None:
+                try:
+                    _rh = getattr(_STREAM_RELAY, "_holders", {}).get(_STREAM_RELAY.resolve(_conv_id) or "")
+                    if _rh is not None:
+                        _respeak = _rh.claim_respeak("answered-repeat")
+                except Exception as _rse:
+                    log.error(f"answered-repeat respeak error (non-fatal): {_rse}")
+            if _respeak:
+                log.warning(f"ANSWERED-REPEAT-RESPOKE on {_conv_id}: Hume re-asked and never spoke our "
+                            f"reply — re-speaking it ({len(_respeak)} chars, claimed_by=answered-repeat)")
+                def resp_gen(_t=_respeak):
+                    yield make_sse_chunk(_t)
+                    yield make_sse_done()
+                return Response(resp_gen(), mimetype="text/event-stream",
+                                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
             log.warning("ANSWERED-REPEAT: latest user final identical to the last answered final "
                         f"on {_conv_id} — suppressing re-answer (windowed-history retry)")
             def rep_gen():

@@ -501,6 +501,24 @@ class _Holder:
             t.daemon = True
             t.start()
 
+    def claim_respeak(self, path, now=None):
+        """ONE re-speak per reply across BOTH paths (gm msg_c07a2389). Returns the latest streamed
+        reply's text if it may be re-spoken by `path` NOW, claiming it; else None. Never when
+        Hume already spoke it (Arturo audio since the request), never past the 20 s window."""
+        now = time.time() if now is None else now
+        with self._rec_lock:
+            r = self._rec
+            if not r or r["done"]:
+                return None
+            if self._last_agent_audio_ts >= r["t0"]:
+                r["done"] = True
+                return None
+            if now - r["t0"] > self.RECOVERY_MAX_AGE_S:
+                return None
+            r["done"] = True
+            r["claimed_by"] = path
+            return r["text"]
+
     def recovery_check(self, now=None):
         """'none' | 'wait' | 'user-speaking' | 'spoken-by-hume' | 'stale' | 'gone' | 'recovered'."""
         now = time.time() if now is None else now
@@ -524,6 +542,7 @@ class _Holder:
                 r["done"] = True
                 return "gone"
             r["done"] = True
+            r["claimed_by"] = "recovery"
             text, waited = r["text"], now - r["streamed"]
         if self.speak_text(text, now):
             log.warning(f"relay {self.cid}: HUME-RECOVERY re-sent the dropped reply as assistant_input "
