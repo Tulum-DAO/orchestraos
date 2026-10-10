@@ -16,13 +16,13 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 # Hex-encoded so this file does not ship the markers (or fragments of them) as literals either.
 MARKERS = [bytes.fromhex(h).decode() for h in (
-    "736372697074732f6167656e742d6f7263686573747261",
-    "2f686f6d652f73686177",
-    "73727631333937303136",
-    "7461696c386265353431",
-    "53686177436f6c65",
-    "3130302e3132342e3135312e3934",
-    "3130302e36382e3137312e3939",
+    "736372697074732f6167656e742d6f7263686573747261",   # pragma: allowlist secret (hex-encoded marker, not a secret)
+    "2f686f6d652f73686177",   # pragma: allowlist secret (hex-encoded marker, not a secret)
+    "73727631333937303136",   # pragma: allowlist secret (hex-encoded marker, not a secret)
+    "7461696c386265353431",   # pragma: allowlist secret (hex-encoded marker, not a secret)
+    "53686177436f6c65",   # pragma: allowlist secret (hex-encoded marker, not a secret)
+    "3130302e3132342e3135312e3934",   # pragma: allowlist secret (hex-encoded marker, not a secret)
+    "3130302e36382e3137312e3939",   # pragma: allowlist secret (hex-encoded marker, not a secret)
 )]
 
 # Exempt: tests and their fixtures (they may assert a marker is ABSENT, or fence this dev box), the
