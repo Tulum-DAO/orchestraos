@@ -43,7 +43,15 @@ def test_garbage_returns_empty():
 
 # ---- DOWNLINK FIR (gm msg_77458978): the 3-tap box let 10 kHz fold to 6 kHz at only -5.9 dB
 # (sibilants -> harsh/metallic on every Hume call). A stateful polyphase FIR across Hume chunks.
+import importlib.util as _ilu
+import pytest
 import time as _time
+
+# The FIR needs scipy, which is OPTIONAL in the public install (hume_audio._have_scipy). Without it
+# these tests would measure the box fallback and fail; the fallback has its own test at the end of
+# this file. CI installs scipy for the services-arturo group so these still run there.
+needs_scipy = pytest.mark.skipif(_ilu.find_spec("scipy") is None,
+                                 reason="scipy not installed: the downlink FIR is off (box fallback)")
 
 
 def _tone48(freq, seconds=1.0, amp=12000.0):
@@ -66,18 +74,21 @@ def _level_db(pcm16k, freq, amp=12000.0):
     return 20 * np.log10(spec[np.argmin(np.abs(fr - freq))] / amp + 1e-12)
 
 
+@needs_scipy
 def test_fir_rejects_aliases_at_least_50db():
     for f in (10000, 12000, 14000):
         out = ha.Downsampler().feed(_wav_from(_tone48(f)))
         assert _level_db(out, 16000 - f) <= -50.0, f"{f} Hz folds to {16000 - f} Hz too loud"
 
 
+@needs_scipy
 def test_fir_passband_flat_within_half_db():
     for f in (1000, 4000, 7000):
         out = ha.Downsampler().feed(_wav_from(_tone48(f)))
         assert abs(_level_db(out, f)) <= 0.5, f"{f} Hz passband off by more than 0.5 dB"
 
 
+@needs_scipy
 def test_chunked_equals_whole_no_edge_clicks():
     rng = np.random.default_rng(7)
     x = (rng.standard_normal(48000) * 4000).astype("<i2")
@@ -92,6 +103,7 @@ def test_chunked_equals_whole_no_edge_clicks():
     assert np.abs(chunked - whole).max() <= 1
 
 
+@needs_scipy
 def test_fir_cpu_per_second_of_audio():
     wav = _wav_from(_tone48(1000))
     d = ha.Downsampler()
@@ -103,6 +115,7 @@ def test_fir_cpu_per_second_of_audio():
     assert per_s < 0.05, f"{per_s * 1000:.1f} ms CPU per second of audio (> 5% of a core)"
 
 
+@needs_scipy
 def test_stateless_helper_uses_the_fir_too():
     assert _level_db(ha.wav_to_pcm16k(_wav_from(_tone48(10000))), 6000) <= -50.0
 
@@ -113,6 +126,7 @@ def test_flag_off_restores_the_box(monkeypatch):
     assert _level_db(out, 6000) > -10.0                       # the old box: about -5.9 dB
 
 
+@needs_scipy
 def test_relay_call_site_filters_a_reply_split_across_chunks_as_one_stream():
     """Call site: the relay must keep ONE Downsampler per call. A per-chunk stateless filter
     restarts at every audio_output frame and clicks at each edge."""
