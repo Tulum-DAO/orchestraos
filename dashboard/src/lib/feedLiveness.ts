@@ -50,6 +50,8 @@ export interface FeedState {
   fetchStartedAt?: number;
   /** When the tab last became visible (epoch ms). 0 / absent = visible all along. */
   visibleSince?: number;
+  /** When the tab was hidden (epoch ms), while it IS hidden; absent = visible. */
+  hiddenSince?: number;
   now?: number;
 }
 
@@ -69,7 +71,13 @@ export interface FeedVerdict {
  * An error NEVER reads live, even when the data is seconds old: a failing fetch means the next
  * answer is unknown, and "live" is a claim about now, not about then.
  */
-export function feedHealthOf({ dataUpdatedAt = 0, hasData = false, isError = false, isFetching = false, fetchStartedAt, visibleSince = 0, now = Date.now() }: FeedState): FeedVerdict {
+export function feedHealthOf({ dataUpdatedAt = 0, hasData = false, isError = false, isFetching = false, fetchStartedAt, visibleSince = 0, hiddenSince, now = Date.now() }: FeedState): FeedVerdict {
+  // HIDDEN: the clock stops at the moment the tab was hidden. The browser pauses the poll then, so
+  // age that accrues while hidden says nothing about the feed, and a background tab that kept
+  // re-verdicting would paint grey "disconnected" and show THAT frame first on return (probe:
+  // hidden 130 s). Frozen, the hidden tab keeps its pre-hide verdict; an error still degrades it,
+  // and on return visibleSince takes over (UPDATING until the refetch lands).
+  if (hiddenSince) now = Math.min(now, hiddenSince);
   // Never heard anything: CONNECTING only while a fetch is actually in flight and has not yet
   // failed. The moment it errors, or stops being in flight without data, it is disconnected —
   // so this can never become the eternal spinner the old branch was written to prevent.
