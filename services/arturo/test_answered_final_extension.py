@@ -122,3 +122,44 @@ def test_clm_seam_unrelated_next_turn_carries_no_note(monkeypatch, tmp_path):
                                  {"role": "user", "content": "now open the approvals page for me please"}]},
            headers=hdrs, environ_base=env)
     assert "SUPERSEDED" not in seen[1][0]["content"]
+
+
+def test_clm_seam_no_supersede_note_when_relay_never_heard_the_answer(monkeypatch, tmp_path):
+    """vc_0ee7a77dbbf2a3f3: SUPERSEDE told the model "you already replied X" twice, but Hume's
+    chat history shows it never spoke X (zero agent messages). On a live relay call, the note
+    is only true if Arturo audio was seen AFTER that answer was recorded."""
+    import time as _t
+    seen = []
+    mod = _load(monkeypatch, tmp_path, [REPLY1, "second", REPLY1, "fourth"], seen)
+
+    class _H:
+        _last_agent_audio_ts = 0.0          # relay: no Arturo audio since the greeting
+
+    class _Relay:
+        _holders = {"CIDEXT3": _H()}
+        daemons = []
+
+        def resolve(self, cid):
+            return cid if cid in self._holders else None
+
+        def sole_live(self):
+            return None
+
+        def replay_block(self, cid):
+            return ""
+
+        def surface(self, cid):
+            return None
+    monkeypatch.setattr(mod, "_STREAM_RELAY", _Relay())
+    c = mod.app.test_client()
+    q = "/v1/chat/completions?custom_session_id=CIDEXT3"
+    hdrs = {"Authorization": f"Bearer {mod.BEARER_TOKEN}"}
+    env = {"REMOTE_ADDR": "127.0.0.1"}
+    c.post(q, json={"messages": [GREET, {"role": "user", "content": FRAG}]}, headers=hdrs, environ_base=env)
+    c.post(q, json={"messages": [GREET, {"role": "user", "content": FULL}]}, headers=hdrs, environ_base=env)
+    assert "SUPERSEDED" not in seen[1][0]["content"], "never claim an answer the operator did not hear"
+    # opposite direction: the fragment answer WAS heard (Arturo audio after it was recorded)
+    c.post(q, json={"messages": [GREET, {"role": "user", "content": FRAG}]}, headers=hdrs, environ_base=env)
+    _H._last_agent_audio_ts = _t.time() + 1
+    c.post(q, json={"messages": [GREET, {"role": "user", "content": FULL}]}, headers=hdrs, environ_base=env)
+    assert "SUPERSEDED" in seen[3][0]["content"], "a heard answer still gets the continuation note"

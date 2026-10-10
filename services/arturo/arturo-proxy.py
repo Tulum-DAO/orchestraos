@@ -563,7 +563,8 @@ def _finalize_journal_file(path):
                 _claimed = True
             marker = _endcall.build_marker(call_id, str(path.resolve()))
             ok, att = _endcall.inject_to_gm(VOICE_BRAIN_SESSION, summary, marker,   # v1 endcall: delivery target = VOICE_BRAIN_SESSION (gm, the operator 2026-08-25)
-                                            transcript=full_transcript)
+                                            transcript=full_transcript,
+                                            since=(d.get("started_at") or time.time() - 3600))
             log.info(f"gm injection {call_id}: ok={ok} attempts={att} (full transcript, {n_turns} turns)")
             if not ok and _claimed:
                 _eo.release(_call_key, ENDED_ONCE_LEDGER)   # success-tied: failed inject reopens the claim
@@ -767,6 +768,7 @@ def _attempt_gm_inject(cpath):
             summary = d.get("summary") or ""
             turns = d.get("turns") or []
             _call_key = d.get("conv_id") or call_id
+            _since = d.get("started_at") or (time.time() - 3600)   # delivery evidence window
         # P6 once-guard: if another path (watchdog/server shard) already injected this CALL,
         # suppress durably (stops the retry sweeper) instead of double-delivering.
         from services.arturo import ended_once as _eo
@@ -786,7 +788,8 @@ def _attempt_gm_inject(cpath):
         try:
             marker = _endcall.build_marker(call_id, str(cpath.resolve()))
             transcript = _endcall.build_full_transcript(turns)
-            ok, att = _endcall.inject_to_gm(VOICE_BRAIN_SESSION, summary, marker, max_attempts=2, base_delay=1.0, transcript=transcript)
+            ok, att = _endcall.inject_to_gm(VOICE_BRAIN_SESSION, summary, marker, max_attempts=2,
+                                            base_delay=1.0, transcript=transcript, since=_since)
         except Exception as _ie:
             log.error(f"_attempt_gm_inject build/inject error ({call_id}): {_ie}")
             ok = False
@@ -4487,7 +4490,10 @@ def _strip_hume_prosody(messages, is_hume):
     out = []
     for m in messages:
         if m.get("role") == "user" and isinstance(m.get("content"), str):
-            stripped = re.sub(r"\s*\{[^{}]*\}\s*$", "", m["content"])
+            # ANY position, not only trailing (arturo-voice, vc_0ee7a77dbbf2a3f3): once Hume
+            # merges continued speech into one turn the per-segment blocks land MID-text, and
+            # "{slightly angry, ...}" reached the model, which filed the operator's tone as a note.
+            stripped = re.sub(r"\s*\{[^{}]*\}", "", m["content"]).strip()
             if stripped != m["content"]:
                 m = dict(m, content=stripped)
         out.append(m)
@@ -4665,6 +4671,7 @@ def chat_completions():
     _apology_count = 0
 
     log.info(f"Request: {len(messages)} messages, channel={calling_channel}, stream={want_stream}")
+    _req_t0 = time.time()   # HUME-RECOVERY: any Arturo audio after this means Hume spoke a reply
 
     # === GUARDRAIL: Intelligent silence escalation on voice ===
     # Stage 1 (1 silence turn): passes through to generation for contextual proactive suggestions.
@@ -4755,6 +4762,26 @@ def chat_completions():
         # a different final is answered. Hume path only; short finals exempt inside the guard.
         if _is_hume_clm and _conv_id and _ANSWERED_FINALS.is_answered_repeat(
                 _conv_id, _voice_guards.latest_user_text(messages)):
+            # RESPEAK (gm msg_c07a2389): Hume re-asks the same final when it DROPPED our reply
+            # (5 dead calls, Hume chat history). If the relay heard no Arturo audio for that
+            # reply, re-speak it verbatim instead of answering with silence. One claim per reply
+            # shared with HUME-RECOVERY, so the operator never hears it twice.
+            _respeak = None
+            if os.environ.get("ARTURO_REPEAT_RESPEAK", "1") == "1" and _STREAM_RELAY is not None:
+                try:
+                    _rh = getattr(_STREAM_RELAY, "_holders", {}).get(_STREAM_RELAY.resolve(_conv_id) or "")
+                    if _rh is not None:
+                        _respeak = _rh.claim_respeak("answered-repeat")
+                except Exception as _rse:
+                    log.error(f"answered-repeat respeak error (non-fatal): {_rse}")
+            if _respeak:
+                log.warning(f"ANSWERED-REPEAT-RESPOKE on {_conv_id}: Hume re-asked and never spoke our "
+                            f"reply — re-speaking it ({len(_respeak)} chars, claimed_by=answered-repeat)")
+                def resp_gen(_t=_respeak):
+                    yield make_sse_chunk(_t)
+                    yield make_sse_done()
+                return Response(resp_gen(), mimetype="text/event-stream",
+                                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
             log.warning("ANSWERED-REPEAT: latest user final identical to the last answered final "
                         f"on {_conv_id} — suppressing re-answer (windowed-history retry)")
             def rep_gen():
@@ -4855,6 +4882,15 @@ def chat_completions():
         try:
             _ext = _ANSWERED_FINALS.answered_extension(
                 _conv_id, _voice_guards.latest_user_text(messages))
+            # Truth check (vc_0ee7a77dbbf2a3f3): on a live relay call the fragment's answer only
+            # counts as SAID if Arturo audio was seen after it was recorded. Hume kept none of
+            # our replies on that call, and the note made the model claim answers the operator never heard.
+            if _ext and _STREAM_RELAY is not None:
+                _sh = getattr(_STREAM_RELAY, "_holders", {}).get(_STREAM_RELAY.resolve(_conv_id) or "")
+                if _sh is not None and getattr(_sh, "_last_agent_audio_ts", 0.0) < _ext.get("ts", 0.0):
+                    log.warning(f"SUPERSEDE skipped on {_conv_id}: the fragment's answer was never "
+                                "heard (no Arturo audio since it was recorded)")
+                    _ext = None
             if _ext:
                 log.warning(f"SUPERSEDE: latest final on {_conv_id} extends an answered fragment "
                             "— answering once as a continuation")
@@ -5287,6 +5323,26 @@ def chat_completions():
                         # markerless variant (ios msg_72c19e09): backticked tool-plan sentences
                         # glued to the answer ('...`ask_gm` call.On it, I'll text...')
                         final_text = _voice_guards.strip_leading_tool_reasoning(final_text)
+                    if not final_text:
+                        # EMPTY-AFTER-TOOLS (arturo-voice, vc_0ee7a77dbbf2a3f3): a zero-word reply
+                        # left Hume's turn uncommitted and it never spoke another reply all call.
+                        # Retry once WITHOUT tools; if still empty, say something rather than nothing.
+                        log.warning(f"EMPTY-AFTER-TOOLS: {tool_names} follow-up had no text — retrying without tools")
+                        try:
+                            _rr = _turn_brain().complete(
+                                model=LLM_MODEL,
+                                messages=loop_messages + [{"role": "system", "content":
+                                    "Answer the operator now, in one or two short spoken sentences, using "
+                                    "the tool results above. Do not call tools."}],
+                                max_tokens=300, temperature=0.7,
+                            )
+                            final_text = _voice_guards.strip_leading_tool_reasoning(
+                                _voice_guards.strip_thought_block(_voice_guards.strip_tool_code(
+                                    _rr.choices[0].message.content or ""))).strip()
+                        except Exception as _rre:
+                            log.error(f"EMPTY-AFTER-TOOLS retry failed: {_rre}")
+                        if not final_text:
+                            final_text = "Sorry, I lost that one. Can you say it again?"
                     if final_text:
                         words = final_text.split(" ")
                         chunk_size = 4
@@ -5470,6 +5526,17 @@ def chat_completions():
                             _journal_append(_journal_cid, "arturo", text=_arturo_text)
                     except Exception as _je:
                         log.error(f"journal arturo-turn error: {_je}")
+                if spoken and _is_hume_clm and _conv_id and _STREAM_RELAY is not None:
+                    # HUME-RECOVERY (gm msg_8ce087b5): hand the streamed reply to the relay; if no
+                    # Arturo audio follows and the operator is quiet, it is re-sent as assistant_input.
+                    try:
+                        _rc = _STREAM_RELAY.resolve(_conv_id)
+                        if _rc:
+                            _STREAM_RELAY.note_clm_reply(
+                                _rc, _voice_guards.strip_tool_code("".join(spoken)).strip()[:1500],
+                                _req_t0)
+                    except Exception as _hre:
+                        log.error(f"hume-recovery note error (non-fatal): {_hre}")
                 if spoken and _is_hume_clm and _conv_id:
                     # ANSWERED-REPEAT memory: this user final now has a spoken answer —
                     # an identical re-final on this cid is a vendor retry, not a re-ask.

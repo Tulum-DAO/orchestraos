@@ -349,7 +349,7 @@ def _e2e(monkeypatch, tmp_path, flag, gm_block=None):
         orig = mod.execute_tool
         def ex(name, args, user_turns=None):
             if name == "gm_command":
-                gm_block.wait(5)
+                gm_block.wait(120)    # held until the test releases it (loaded box: >5 s/request)
                 return "done"
             return orig(name, args, user_turns)
         monkeypatch.setattr(mod, "execute_tool", ex)

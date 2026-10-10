@@ -292,6 +292,9 @@ class _Holder:
         self._last_user_ts = 0.0
         self._play_until = 0.0
         self._awaiting_reply = False
+        self._last_agent_audio_ts = 0.0   # SUPERSEDE truth check: did the operator actually hear a reply
+        self._rec = None          # HUME-RECOVERY: latest streamed reply awaiting proof Hume spoke it
+        self._rec_lock = threading.Lock()
         # TURN-LATENCY (ios-watch-dev msg_b22a71d8, log-only): the operator's final at the relay ->
         # Arturo's first reply text / first reply audio. This, not generate(), is what he hears.
         self._final_at = None
@@ -472,6 +475,80 @@ class _Holder:
         # hume session-cap resume: retire+reconnect BEFORE Hume hard-drops the chat; the fresh
         # socket resumes the same chat_group_id (context carries over server-side at Hume).
         self._retire_socket("session_cap_resume", reconnect=True)
+
+    # -- HUME-RECOVERY (gm msg_8ce087b5) --
+    RECOVERY_WAIT_S = 2.5        # after our stream ended, before we call a reply dropped
+    RECOVERY_QUIET_S = 2.5       # the operator silent at least this long
+    RECOVERY_MAX_AGE_S = 20.0    # older than this (from the request) -> drop, never speak
+
+    def note_reply(self, text, request_t0, streamed_at):
+        """The proxy streamed `text` for a CLM request that began at request_t0. Replaces any
+        earlier pending reply: only the LATEST is ever recovered."""
+        with self._rec_lock:
+            self._rec = {"text": text, "t0": request_t0, "streamed": streamed_at, "done": False}
+        t = threading.Timer(self.RECOVERY_WAIT_S + 0.1, self._recovery_timer)
+        t.daemon = True
+        t.start()
+
+    def _recovery_timer(self):
+        try:
+            r = self.recovery_check()
+        except Exception as e:
+            log.error(f"relay {self.cid}: recovery check failed: {e!r}")
+            return
+        if r in ("wait", "user-speaking"):
+            t = threading.Timer(1.0, self._recovery_timer)
+            t.daemon = True
+            t.start()
+
+    def claim_respeak(self, path, now=None):
+        """ONE re-speak per reply across BOTH paths (gm msg_c07a2389). Returns the latest streamed
+        reply's text if it may be re-spoken by `path` NOW, claiming it; else None. Never when
+        Hume already spoke it (Arturo audio since the request), never past the 20 s window."""
+        now = time.time() if now is None else now
+        with self._rec_lock:
+            r = self._rec
+            if not r or r["done"]:
+                return None
+            if self._last_agent_audio_ts >= r["t0"]:
+                r["done"] = True
+                return None
+            if now - r["t0"] > self.RECOVERY_MAX_AGE_S:
+                return None
+            r["done"] = True
+            r["claimed_by"] = path
+            return r["text"]
+
+    def recovery_check(self, now=None):
+        """'none' | 'wait' | 'user-speaking' | 'spoken-by-hume' | 'stale' | 'gone' | 'recovered'."""
+        now = time.time() if now is None else now
+        with self._rec_lock:
+            r = self._rec
+            if not r or r["done"]:
+                return "none"
+            if self._last_agent_audio_ts >= r["t0"]:
+                r["done"] = True
+                return "spoken-by-hume"
+            if now - r["t0"] > self.RECOVERY_MAX_AGE_S:
+                r["done"] = True
+                log.info(f"relay {self.cid}: HUME-RECOVERY dropped stale reply ({len(r['text'])} chars, "
+                         f"{now - r['t0']:.1f}s old)")
+                return "stale"
+            if now - r["streamed"] < self.RECOVERY_WAIT_S:
+                return "wait"
+            if now - self._last_user_ts < self.RECOVERY_QUIET_S:
+                return "user-speaking"
+            if self._closed or self.sock is None:
+                r["done"] = True
+                return "gone"
+            r["done"] = True
+            r["claimed_by"] = "recovery"
+            text, waited = r["text"], now - r["streamed"]
+        if self.speak_text(text, now):
+            log.warning(f"relay {self.cid}: HUME-RECOVERY re-sent the dropped reply as assistant_input "
+                        f"({len(text)} chars, {waited:.1f}s after our stream ended with no Arturo audio)")
+            return "recovered"
+        return "gone"
 
     def speak_gate(self, now, user_quiet_s, margin_s, reply_wait_s=15.0):
         """VOICE-RESULTS (gm msg_b0b4228c): '' when Arturo may speak an unsolicited result
@@ -817,6 +894,7 @@ class _Holder:
                     self._final_at = None
                 self._span_pcm += len(pcm)
                 self._play_until = max(self._play_until, time.time()) + len(pcm) / BYTES_PER_S
+                self._last_agent_audio_ts = time.time()
                 self.m.buffer.put(self.cid, {"type": "audio",
                                              "audio": base64.b64encode(pcm).decode()})
             return
@@ -1151,6 +1229,17 @@ class RelayManager:
             self._last_contact[conversation_id] = time.time()
         h.feed(pcm)
         return {"ok": True}
+
+    def note_clm_reply(self, conversation_id, text, request_t0, streamed_at=None):
+        """HUME-RECOVERY entry point (flag ARTURO_HUME_RECOVERY, default on in run.sh)."""
+        if os.environ.get("ARTURO_HUME_RECOVERY", "1") != "1" or not (text or "").strip():
+            return False
+        with self._lock:
+            h = self._holders.get(conversation_id)
+        if h is None or h.vendor != "hume":
+            return False
+        h.note_reply(text, request_t0, time.time() if streamed_at is None else streamed_at)
+        return True
 
     def try_speak(self, conversation_id, text, user_quiet_s=2.5, margin_s=0.8, now=None):
         """VOICE-RESULTS: 'spoken' | 'wait:<reason>' | 'gone' (call ended / never live here).

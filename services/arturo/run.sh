@@ -64,6 +64,14 @@ export ARTURO_DEEP_QUERY_SYNC="${ARTURO_DEEP_QUERY_SYNC:-0}"
 # awareness (arturo-voice, gm msg_b0b4228c): default OFF (0). Opt in: ARTURO_VOICE_RESULTS=1.
 # Off = Telegram-only, byte-identical.
 export ARTURO_VOICE_RESULTS="${ARTURO_VOICE_RESULTS:-0}"
+# HUME-RECOVERY (arturo-voice, gm msg_8ce087b5): if Hume speaks none of a streamed reply (no Arturo
+# audio since the request, the operator quiet 2.5 s), re-send the latest reply once as assistant_input.
+# Default ON (1). Flip-back: ARTURO_HUME_RECOVERY=0 + restart.
+export ARTURO_HUME_RECOVERY="${ARTURO_HUME_RECOVERY:-1}"
+# ANSWERED-REPEAT re-speak (arturo-voice, gm msg_c07a2389): when Hume re-asks a final whose reply it
+# never spoke, answer with that reply verbatim instead of silence (one claim shared with
+# HUME-RECOVERY). Default ON (1). Flip-back: ARTURO_REPEAT_RESPEAK=0 + restart.
+export ARTURO_REPEAT_RESPEAK="${ARTURO_REPEAT_RESPEAK:-1}"
 # Durable ended-once guard flag: default ON (1)
 export ARTURO_ENDED_ONCE="${ARTURO_ENDED_ONCE:-1}"
 # v2/(b) watch stream relay + the operator-directed live-partials (DEC-1788843712854271, gm GO

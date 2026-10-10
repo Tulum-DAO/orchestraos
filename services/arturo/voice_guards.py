@@ -722,6 +722,7 @@ class ToolDedupLedger:
 
 import hashlib as _hashlib
 import threading as _threading
+import time as _time
 
 
 _TOOLCODE_FENCE_RE = re.compile(r"```[^\n`]*\n?.*?```", re.DOTALL)
@@ -861,7 +862,7 @@ class AnsweredFinalMemory:
             prev = self._m.get(conversation_id)
         if not prev or not n.startswith(prev[0] + " "):
             return None
-        return {"text": prev[0], "reply": prev[1]}
+        return {"text": prev[0], "reply": prev[1], "ts": prev[2] if len(prev) > 2 else 0.0}
 
     def record_answered(self, conversation_id, text, reply=None):
         n = self._key_text(text)
@@ -870,7 +871,7 @@ class AnsweredFinalMemory:
         with self._lock:
             if len(self._m) >= self.cap:
                 self._m.clear()          # bounded; a rare reset only widens the guard briefly
-            self._m[conversation_id] = (n, reply or "")
+            self._m[conversation_id] = (n, reply or "", _time.time())
 
     def forget(self, conversation_id):
         with self._lock:
