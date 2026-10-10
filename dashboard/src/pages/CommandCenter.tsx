@@ -8,6 +8,8 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { operatorUserId } from '../lib/runtimeConfig';
+import { useCapabilities } from '../hooks/useCapabilities';
+import { isCapable } from '../lib/capabilities';
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -322,11 +324,14 @@ function ReferenceHubCard({ hub }: { hub: ReferenceHub }) {
 // ── Page ────────────────────────────────────────────────────────────
 
 export default function CommandCenter() {
+  const { data: caps } = useCapabilities();
   const { data, isLoading, error } = useQuery<{ projects: Project[] }>({
-    queryKey: ['project-status'],
+    queryKey: ['project-status', isCapable(caps, 'projectStatus')],
     queryFn: async () => {
-      // Try project-status first (rich format), fall back to projects (simple format)
+      // Try project-status first (rich format), fall back to projects (simple format).
+      // An install without scripts/project-status-api.py says so (capabilities): go straight to the fallback.
       try {
+        if (!isCapable(caps, 'projectStatus')) throw new Error('project-status not available');
         const r = await fetch('/api/project-status');
         if (r.ok) {
           const d = await r.json();

@@ -1,5 +1,7 @@
 import { VoiceAgentCard } from '../components/VoiceAgentCard';
 import { useVoiceAgents, useSyncPrompts } from '../hooks/useVoiceAgents';
+import { useCapabilities } from '../hooks/useCapabilities';
+import { isCapable } from '../lib/capabilities';
 import { useOrchestraStore } from '../stores/useOrchestraStore';
 import { RefreshCw, Phone } from 'lucide-react';
 import { clsx } from 'clsx';
@@ -16,6 +18,7 @@ interface VoiceAgent {
 export default function Voice() {
   const { data, isLoading } = useVoiceAgents();
   const syncMutation = useSyncPrompts();
+  const { data: caps } = useCapabilities();
   const activeCall = useOrchestraStore((s) => s.activeCall);
   const startCall = useOrchestraStore((s) => s.startCall);
 
@@ -38,6 +41,7 @@ export default function Voice() {
             Talk to your GM or any PM directly from the browser
           </p>
         </div>
+        {isCapable(caps, 'voicePromptSync') && (
         <button
           onClick={() => syncMutation.mutate()}
           disabled={syncMutation.isPending}
@@ -49,6 +53,7 @@ export default function Voice() {
           <RefreshCw size={14} className={clsx(syncMutation.isPending && 'animate-spin')} />
           Sync Prompts
         </button>
+        )}
       </div>
 
       {syncMutation.isSuccess && (

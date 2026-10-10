@@ -6,6 +6,7 @@ import { loadConfig } from '../lib/config.js';
 import { getRegistry } from '../services/state-reader.js';
 import { registeredAgent, inboxDirFor } from '../lib/agentPaths.js';
 import { CODE_ROOT } from '../lib/codeRoot.js';
+import { capabilityPath, hasCapability, notAvailable } from '../lib/capabilities.js';
 
 const router = Router();
 const ORCHESTRA = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
@@ -74,8 +75,8 @@ router.post('/', (req: Request, res: Response) => {
 });
 
 router.get('/script.js', (req: Request, res: Response) => {
-  const scriptPath = join(ORCHESTRA, 'skills', 'inspect-element.js');
-  if (!existsSync(scriptPath)) { res.status(404).send('// inspect-element.js not found'); return; }
+  if (!hasCapability('inspectScript')) { notAvailable(res, 'inspectScript'); return; }
+  const scriptPath = capabilityPath('inspectScript');
   const apiBase = req.query.api as string || `${req.protocol}://${req.get('host')}`;
   const agentId = req.query.agent as string || '';
   const config = `window.__INSPECT_CONFIG={apiEndpoint:'${apiBase}/api/inspect-feedback',agentId:'${agentId}'};\n`;

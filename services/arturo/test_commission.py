@@ -305,3 +305,33 @@ def test_spawn_agent_says_could_not_verify_on_an_unknown_registration(mod, monke
                                       "detail": "identity store unreadable (file is not a database)"})
     out = mod.execute_tool("spawn_agent", {"session_name": "seat-q", "machine": "vps", "task": "t"})
     assert "could not verify" in out.lower() and "not registered" not in out.lower()
+
+
+def test_gm_command_without_the_gm_relay_says_so_plainly(mod, monkeypatch, tmp_path):
+    # S4: jarvis-gm-query.sh is CODE and does not ship in every install. It used to be looked for under
+    # the DATA dir and every call came back "GM error: ... No such file". Absent => one plain line, no run.
+    monkeypatch.setenv("ORCHESTRA_ROOT", str(tmp_path / "checkout-without-relay"))
+    ran = []
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: ran.append(a) or None)
+    out = mod.execute_tool("gm_command", {"prompt": "what is the fleet status"})
+    assert "not installed" in out and "jarvis-gm-query.sh" in out
+    assert not ran
+
+
+def test_gm_command_runs_the_relay_from_the_checkout(mod, monkeypatch, tmp_path):
+    code = tmp_path / "checkout"
+    code.mkdir()
+    (code / "jarvis-gm-query.sh").write_text("#!/bin/sh\necho ok\n")
+    monkeypatch.setenv("ORCHESTRA_ROOT", str(code))
+    seen = {}
+
+    class _R:
+        returncode, stdout, stderr = 0, "fleet is fine", ""
+
+    def _run(argv, **k):
+        seen["argv"] = argv
+        return _R()
+    monkeypatch.setattr(mod.subprocess, "run", _run)
+    out = mod.execute_tool("gm_command", {"prompt": "what is the fleet status"})
+    assert seen["argv"][:2] == ["bash", str(code / "jarvis-gm-query.sh")]
+    assert "fleet is fine" in out

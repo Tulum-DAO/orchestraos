@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import { getVoiceAgentState, getVoiceTranscripts } from '../services/state-reader.js';
 import { execFile } from 'child_process';
-import { join } from 'path';
 
 const router = Router();
 const ORCHESTRA = process.env.ORCHESTRA_DIR!;
@@ -10,6 +9,7 @@ const ORCHESTRA = process.env.ORCHESTRA_DIR!;
 // JSONs + auth). Web voice-call cards fetch through here so the browser never
 // needs the gateway token. Read-only; the proxy owns all writes.
 import { readGatewayToken } from '../lib/gateway-token.js';  // #85: honour WATCH_GATEWAY_TOKEN_FILE
+import { capabilityPath, hasCapability, notAvailable } from '../lib/capabilities.js';
 const GATEWAY_URL = process.env.WATCH_GATEWAY_URL || 'http://127.0.0.1:9091';
 
 // GET /api/voice/call?call_id= → gateway GET /voice-call. Passes the gateway
@@ -59,7 +59,8 @@ router.get('/transcripts', (req, res) => {
 
 // POST /api/voice/sync-prompts — trigger prompt sync
 router.post('/sync-prompts', (_, res) => {
-  const script = join(ORCHESTRA, 'voice-agent.py');
+  if (!hasCapability('voicePromptSync')) { notAvailable(res, 'voicePromptSync'); return; }
+  const script = capabilityPath('voicePromptSync');   // code (the checkout), not the data dir
   execFile('python3', [script, 'sync-prompts'], { timeout: 30000, cwd: ORCHESTRA }, (err, stdout, stderr) => {
     if (err) {
       res.status(500).json({ error: 'Sync failed', detail: stderr || err.message });

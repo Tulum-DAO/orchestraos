@@ -55,6 +55,7 @@ import { principal } from './lib/principal.js';
 import { accessLog } from './lib/access-log.js';
 import { originDecision, publicOrigins } from './lib/cors-origin.js';
 import { wsOriginDecision } from './lib/ws-origin.js';
+import { capabilities } from './lib/capabilities.js';
 
 const app = express();
 
@@ -168,6 +169,10 @@ app.get('/api/me', (req, res) => {
     trusted: p.trusted,
   });
 });
+
+// Optional features whose backing script does not ship in every install (lib/capabilities.ts).
+// The dashboard hides an entry whose capability is false; its route answers 501. Booleans only.
+app.get('/api/capabilities', (_req, res) => { res.json(capabilities()); });
 
 // /new and /login-shell must mount BEFORE the agents router, whose '/:id/spawn'
 // would otherwise swallow them as an agent id.
