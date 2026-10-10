@@ -356,6 +356,7 @@ export default function Agents() {
               search={search}
               onSearchChange={setSearch}
               onSelectBusiest={busiest ? () => openConversation(busiest.a, busiest.b) : undefined}
+              onNewAgent={showNewAgent() ? () => setShowNewAgentModal(true) : undefined}
             />
             <p className="text-sm text-neutral-500 mt-0.5">
               showing {sorted.length} of {agents.length}
@@ -397,13 +398,6 @@ export default function Agents() {
               </div>
             )}
           </div>
-          {showNewAgent() && <button
-            onClick={() => setShowNewAgentModal(true)}
-            className="flex items-center gap-2 px-4 py-2 min-h-[44px] text-sm rounded-lg bg-blue-900/50 border border-blue-700/50 text-blue-200 hover:bg-blue-800/60 transition-colors"
-          >
-            <Plus size={16} />
-            New agent
-          </button>}
         </div>
         {showNewAgent() && <NewAgentModal
           open={showNewAgentModal}

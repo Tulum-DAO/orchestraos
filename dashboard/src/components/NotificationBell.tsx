@@ -76,10 +76,12 @@ export default function NotificationBell() {
       <div className="relative" ref={dropdownRef}>
         <button
           onClick={() => setDropdownOpen(!dropdownOpen)}
-          className="relative p-1.5 text-neutral-400 hover:text-white transition-colors"
+          // The same icon set as the agent page's top bar (p-2 + a 24px icon = 40px box, the
+          // foreground colour), so the bell reads as one of that row, not a smaller grey cousin.
+          className="relative p-2 text-foreground hover:bg-muted rounded-lg transition-colors"
           aria-label="Notifications"
         >
-          <Bell size={18} />
+          <Bell size={24} />
           {totalPending > 0 && (
             <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-red-500 text-white border-2 border-neutral-950 px-1">
               {totalPending}

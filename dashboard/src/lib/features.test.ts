@@ -115,6 +115,10 @@ test('every gated surface is wired to its helper', () => {
   const gated = layout.match(/showArturoPill\(\)\s*&&\s*<ArturoButton\b/g) ?? [];
   assert.equal(buttons.length, 2, 'one circle per bell: phone bar and desktop');
   assert.equal(gated.length, buttons.length, 'every Arturo circle is behind showArturoPill()');
+  // ...and the agent page's own top bar, which ends with the pair on desktop.
+  const topbar = src('components/agent/TopBar.tsx');
+  assert.equal((topbar.match(/<ArturoButton\b/g) ?? []).length, 1);
+  assert.match(topbar, /showArturoPill\(\)\s*&&\s*<ArturoButton\b/, 'the agent top bar circle is gated too');
   // Every link into a view on these pages is gated: no bare navigate('/inbox') / to="/projects" left.
   assert.doesNotMatch(src('components/NotificationBell.tsx'), /onClick=\{\(\) => \{ navigate\('\/inbox'\)/);
   assert.equal((src('pages/RoadmapDetail.tsx').match(/!isViewHidden\('\/projects'\)/g) || []).length, 2);

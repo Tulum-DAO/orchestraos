@@ -1,6 +1,9 @@
 import { Menu, Sun, Moon, Monitor, Brain, Siren } from 'lucide-react';
 import { useTheme } from '../../theme/ThemeProvider';
 import { GenChip } from '../GenChip';
+import { ArturoButton } from '../arturo/ArturoButton';
+import NotificationBell from '../NotificationBell';
+import { showArturoPill } from '../../lib/features';
 
 interface TopBarProps {
   onMenuOpen: () => void;
@@ -27,9 +30,7 @@ export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen, seat, mode = 'ch
     // `justify-between` across THREE children is what put the theme toggle in the middle of the
     // bar with nothing either side of it. The bar now has exactly two groups — the seat identity
     // on the left and every control on the right — so nothing floats unanchored.
-    // md:pr-28: room for the layout's fixed top-right cluster (Arturo + the bell, DashboardLayout),
-    // which otherwise sat on this bar's theme/alarm/brain buttons on desktop.
-    <div className="sticky top-0 z-20 flex items-center gap-2 px-4 md:pr-28 py-3 border-b bg-background border-border safe-top">
+    <div className="sticky top-0 z-20 flex items-center gap-2 px-4 py-3 border-b bg-background border-border safe-top">
       {/* The desktop sidebar is permanently visible (DashboardLayout renders it at md+), so this
           drawer trigger is a SECOND nav entry there. It is the mobile affordance only. */}
       <button
@@ -103,6 +104,14 @@ export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen, seat, mode = 'ch
         >
           <Brain size={24} />
         </button>
+        {/* Arturo + the bell END THIS ROW on desktop (the operator, 2026-10-10: "make all of these line up
+            and look like they're from the same package"). Same 40px boxes, same 4px gap, same centre
+            line, because they are IN the row; the layout's fixed corner cluster stands down on this
+            route. On phones they live in the layout's own top bar above this one. */}
+        <div className="hidden md:flex items-center gap-1">
+          {showArturoPill() && <ArturoButton />}
+          <NotificationBell />
+        </div>
       </div>
     </div>
   );
