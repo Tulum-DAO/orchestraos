@@ -4,7 +4,7 @@
  */
 import { useState, useRef, useLayoutEffect, useEffect, useId, type ReactNode } from 'react';
 import { clsx } from 'clsx';
-import { ArrowUp, Square, Loader2, Plus, Paperclip, X, ClipboardList, MoreHorizontal, Check } from 'lucide-react';
+import { ArrowUp, Loader2, Plus, Paperclip, X, ClipboardList, MoreHorizontal, Check } from 'lucide-react';
 import { injectAgentVerified, type InjectResult } from '../../lib/api';
 import { sendToAgent, isDelivered, isQueued, isHeld, describeSendState } from '../../lib/agentSend';
 import { sendPanelHeadline, shouldSendPhoto, clearsComposer, retryText, canForceRetry, composerKeyAction } from '../../lib/composerGate';
@@ -389,7 +389,9 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
   }, [text]);
 
   const heldChips = pastes.filter((p) => text.includes(pasteToken(p)));
-  const roundBtn = 'shrink-0 h-9 w-9 rounded-full flex items-center justify-center transition-colors';
+  // TRUE CIRCLES: .touch-circle (index.css) is 36px, and 44px inside the same media query that
+  // forces a 44px min-height on buttons, so a circle is never an oval (Shaw, 2026-10-10).
+  const roundBtn = 'touch-circle shrink-0 rounded-full flex items-center justify-center transition-colors';
 
   // The narrow-phone overflow menu. Closes on an outside press or Esc; Esc here never reaches
   // the textarea's stop path, because focus is on the menu while it is open.
@@ -534,8 +536,10 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
             onClick={() => fileInputRef.current?.click()}
             disabled={!attachSupported}
             aria-label="Attach a file"
+            // touch-circle-tight-right: the + glyph sits centred in its circle, so the circle's own inset already reads
+            // as space; without this the text started ~20px after the glyph (Shaw, 2026-10-10).
             className={clsx(
-              roundBtn,
+              roundBtn, 'touch-circle-tight-right',
               !attachSupported
                 ? 'text-muted-foreground/40 cursor-not-allowed'
                 : 'text-foreground/70 hover:text-foreground hover:bg-muted'
@@ -563,7 +567,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
             rows={1}
             disabled={disabled}
             aria-label="Message"
-            className="flex-1 min-w-0 self-center bg-transparent px-1.5 py-2 text-sm leading-5 text-foreground placeholder:text-muted-foreground placeholder:whitespace-nowrap placeholder:text-ellipsis resize-none focus:outline-none disabled:opacity-50"
+            className="flex-1 min-w-0 self-center bg-transparent pl-0.5 pr-1.5 py-2 text-sm leading-5 text-foreground placeholder:text-muted-foreground placeholder:whitespace-nowrap placeholder:text-ellipsis resize-none focus:outline-none disabled:opacity-50"
             onKeyDown={(e) => {
               // BEHAVIOUR CHANGE (2026-10-09): Enter sends, Shift+Enter is a newline. It used to be
               // Cmd/Ctrl+Enter only, which still sends. Touch keyboards keep Enter as a newline.
@@ -586,7 +590,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
             title={injectMode
               ? 'Delivering NOW, straight into the agent’s terminal. Click to queue to its inbox instead.'
               : 'Queuing to the agent’s INBOX, read at its next turn. Click to deliver now instead.'}
-            className="shrink-0 h-9 px-1.5 text-[11px] rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors max-[479px]:hidden"
+            className="shrink-0 h-9 px-1.5 text-[11px] rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors max-[480px]:hidden"
           >
             {injectMode ? 'now' : 'inbox'}
           </button>
@@ -640,7 +644,8 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
               title={stopping ? 'Stopping…' : 'Stop — interrupt the agent’s turn (Esc)'}
               className={clsx(roundBtn, 'bg-foreground text-background hover:opacity-90 disabled:opacity-60')}
             >
-              {stopping ? <Loader2 size={16} className="animate-spin" /> : <Square size={13} fill="currentColor" />}
+              {/* a plain box, not the outlined Square glyph: dead centre by construction */}
+              {stopping ? <Loader2 size={16} className="animate-spin" /> : <span aria-hidden className="block h-3.5 w-3.5 rounded-[3px] bg-current" />}
             </button>
           ) : (
             /* "Send" is what a person does. "Inject" is plumbing. */

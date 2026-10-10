@@ -162,7 +162,7 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
             <button
               type="button"
               onClick={() => setSheetOpen(true)}
-              className="shrink-0 h-9 min-w-9 px-2 sm:px-2.5 max-w-[130px] flex items-center justify-center gap-1.5 rounded-full text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors max-[479px]:hidden"
+              className="touch-circle sm:w-auto sm:h-9 sm:min-w-9 shrink-0 sm:px-2.5 max-w-[130px] flex items-center justify-center gap-1.5 rounded-full text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors max-[480px]:hidden"
               title={modelLabel ? `Model: ${modelLabel} — choose the model this agent runs` : 'Choose the model this agent runs'}
               aria-label={modelLabel ? `Model: ${modelLabel}` : 'Choose a model'}
             >
@@ -173,7 +173,7 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
           trailing={
             <VoiceControls
               ref={voiceRef}
-              idleCallClassName="max-[479px]:hidden"
+              idleCallClassName="max-[480px]:hidden"
               onInCallChange={setInCall}
               route={location.pathname}
               focusedEntity={null}
