@@ -140,6 +140,13 @@ class QuestionnaireStore:
                           "INTEGER NOT NULL DEFAULT 0")
                 # Backfill: historically every counted attempt WAS a real one.
                 c.execute("UPDATE questionnaires SET real_attempts=resume_attempts")
+            # Card RETIRE columns ride the SAME operator arm as approval_requests (gm msg_3f3a4d05:
+            # one arm, both tables). Unarmed: nothing is added and retire() refuses.
+            import approval_schema
+            if approval_schema.armed(approval_schema.RETIRE_MIGRATION):
+                for col in approval_schema.RETIRE_COLS:
+                    if col not in existing:
+                        c.execute(f"ALTER TABLE questionnaires ADD COLUMN {col} TEXT")
             c.commit()
         finally:
             c.close()
@@ -354,6 +361,17 @@ class QuestionnaireStore:
             c.close()
 
     # ---- terminal transitions ----
+    def retire(self, qid, caller, reason, superseded_by=None, now_iso=None):
+        """Card RETIRE verb for qnr_ containers: same rules and the SAME core as approvals
+        (approval_schema.retire_card). Returns (ok, reason)."""
+        import approval_schema, seat_identity
+        c = self._conn()
+        try:
+            return approval_schema.retire_card(c, "questionnaires", qid, caller, reason, superseded_by,
+                                               seat_identity.registry_beside(self.db_path), now_iso)
+        finally:
+            c.close()
+
     def discard(self, qid):
         """R8: the operator dismisses without answering. Guarded pending->discarded (once)."""
         c = self._conn()
@@ -454,14 +472,17 @@ class QuestionnaireStore:
 
     def history(self, limit=50):
         """R8 everything-to-history: containers that reached a the operator-visible end
-        (submitted/resumed AND discarded), newest-ended-first."""
+        (submitted/resumed, discarded, and retired by author/gm), newest-ended-first."""
         c = self._conn()
         try:
             out = []
+            cols = {r[1] for r in c.execute("PRAGMA table_info(questionnaires)").fetchall()}
+            ended = ("submitted_at, discarded_at, retired_at" if "retired_at" in cols
+                     else "submitted_at, discarded_at")
             for q in c.execute(
                     "SELECT * FROM questionnaires "
-                    "WHERE status IN ('submitted','resumed','discarded') "
-                    "ORDER BY COALESCE(submitted_at, discarded_at) DESC LIMIT ?",
+                    "WHERE status IN ('submitted','resumed','discarded','retired') "
+                    f"ORDER BY COALESCE({ended}) DESC LIMIT ?",
                     [int(limit)]).fetchall():
                 d = dict(q)
                 arows = c.execute(

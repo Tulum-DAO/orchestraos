@@ -89,7 +89,87 @@ GATED_MIGRATIONS: list = [
     #                   bearer and for every legacy row
     {"id": "m20261005_answer_device",
      "columns": [("answer_device", "TEXT")]},
+    # Card RETIRE verb (operator ruling 2026-10-10; gm msg_3f3a4d05). Additive, nullable, empty
+    # for every existing card. The SAME arm also adds them to questionnaires
+    # (QuestionnaireStore.migrate). Unarmed, retire() refuses rather than half-writing.
+    #   retired_at     when an author/gm marked the pending card no longer needed
+    #   retired_by     who (the author, its current generation, or gm)
+    #   retire_reason  why, in plain words (required)
+    #   superseded_by  optional apr_/qnr_ id of the card that replaced it
+    {"id": "m20261010_card_retire",
+     "columns": [("retired_at", "TEXT"), ("retired_by", "TEXT"),
+                 ("retire_reason", "TEXT"), ("superseded_by", "TEXT")]},
 ]
+
+RETIRE_MIGRATION = "m20261010_card_retire"
+RETIRE_COLS = ("retired_at", "retired_by", "retire_reason", "superseded_by")
+
+
+def _cols(c, table):
+    return {r[1] for r in c.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def retire_card(c, table, rid, caller, reason, superseded_by, reg, now_iso=None):
+    """THE one RETIRE transition, shared by ApprovalStore and QuestionnaireStore (same tasks.db).
+    pending -> 'retired' with who/why/what-replaced-it; the row stays and goes to history. Never a
+    kind='menu' row (menu-bridge resolves those from the pane). Sends nothing and resumes nothing:
+    it is not an answer. Returns (ok, reason); a refusal always says why."""
+    reason = (reason or "").strip()
+    if not reason:
+        return False, "a reason is required: say in plain words why the card is no longer needed"
+    if not set(RETIRE_COLS) <= _cols(c, table):
+        return False, (f"DDL not armed: {RETIRE_MIGRATION} (the retire columns do not exist yet; "
+                       f"the operator arms via ~/runtime/APPROVAL_DDL_ARMED_{RETIRE_MIGRATION})")
+    text_col = "question" if table == "approval_requests" else "title"
+    kind_sql = "COALESCE(kind,'')" if table == "approval_requests" else "''"
+    row = c.execute(f"SELECT from_agent, status, {kind_sql} AS kind, summary, {text_col} AS text "
+                    f"FROM {table} WHERE id=?", [rid]).fetchone()
+    if not row:
+        return False, f"no card {rid}"
+    if row["kind"] == "menu":
+        return False, f"{rid} is kind='menu': menu-bridge owns it and resolves it from the pane"
+    if row["status"] != "pending":
+        return False, f"{rid} is {row['status']}, not pending: only a pending card can be retired"
+    import seat_identity
+    ok, why = seat_identity.may_retire(reg, caller, row["from_agent"])
+    if not ok:
+        return False, why
+    if superseded_by:
+        if superseded_by == rid:
+            return False, "a card cannot supersede itself"
+        found = c.execute("SELECT 1 FROM approval_requests WHERE id=?", [superseded_by]).fetchone()
+        if not found and c.execute("SELECT name FROM sqlite_master WHERE type='table' "
+                                   "AND name='questionnaires'").fetchone():
+            found = c.execute("SELECT 1 FROM questionnaires WHERE id=?", [superseded_by]).fetchone()
+        if not found:
+            return False, f"--superseded-by {superseded_by}: no such card"
+    stamp = now_iso or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    line = f"\n\n— RETIRED {stamp} by {caller}: {reason}" + (
+        f" (superseded by {superseded_by})" if superseded_by else "")
+    res = c.execute(
+        f"UPDATE {table} SET status='retired', retired_at=?, retired_by=?, retire_reason=?, "
+        f"superseded_by=?, summary=COALESCE(summary, {text_col}, '') || ? "
+        f"WHERE id=? AND status='pending' AND {kind_sql}<>'menu'",
+        [stamp, caller, reason, superseded_by or None, line, rid])
+    c.commit()
+    if res.rowcount != 1:
+        now = c.execute(f"SELECT status FROM {table} WHERE id=?", [rid]).fetchone()
+        return False, f"{rid} changed under us (now {now['status'] if now else 'gone'}): not retired"
+    return True, None
+
+
+def export_retired(row):
+    """Client-safe export of a retired card (gm msg_3f3a4d05 §6): until a client confirms it
+    tolerates an unknown status, a retired row is exported as status 'discarded' + an additive
+    'retired' object, and its answered_at reads as when it ended. Every other row is untouched."""
+    if row.get("status") != "retired":
+        return row
+    row["status"] = "discarded"
+    row["retired"] = {"by": row.get("retired_by"), "reason": row.get("retire_reason"),
+                      "superseded_by": row.get("superseded_by"), "at": row.get("retired_at")}
+    row["answered_at"] = row.get("answered_at") or row.get("retired_at")
+    return row
+
 
 def armed(migration_id):
     """True iff this migration is armed to apply (default OFF — the operator's gate).
@@ -344,6 +424,17 @@ class ApprovalStore:
         ok = self.update_fields(rid, feature=feature, block_task=block_task,
                                 summary=summary, blocks_what=blocks_what)
         return rid if ok else None
+    def retire(self, rid, caller, reason, superseded_by=None, now_iso=None):
+        """Card RETIRE verb: the author, its current generation, or gm marks a PENDING card no
+        longer needed (operator ruling 2026-10-10). See retire_card. Returns (ok, reason)."""
+        import seat_identity
+        c = self._conn()
+        try:
+            return retire_card(c, "approval_requests", rid, caller, reason, superseded_by,
+                               seat_identity.registry_beside(self.db_path), now_iso)
+        finally:
+            c.close()
+
     def get(self, rid):
         c = self._conn()
         try:
@@ -821,14 +912,20 @@ class ApprovalStore:
           - resolved_elsewhere:            menu taken elsewhere but answered.
           - resume_failed WITH an answer:  the 8 backfill rows (answer NOT NULL).
           - discarded:                     dismissed without answering.
+          - retired:                       author/gm marked it no longer needed (who/why kept).
         """
         c = self._conn()
         try:
+            # 'retired' (operator ruling 2026-10-10) joins history; its timestamp column exists only
+            # once the m20261010_card_retire arm has applied, so the ORDER BY names it only then.
+            ended = ("answered_at, discarded_at, retired_at, created_at"
+                     if "retired_at" in _cols(c, "approval_requests")
+                     else "answered_at, discarded_at, created_at")
             return [dict(r) for r in c.execute(
                 "SELECT * FROM approval_requests WHERE "
-                "status IN ('answered','resumed','resolved_elsewhere','discarded') "
+                "status IN ('answered','resumed','resolved_elsewhere','discarded','retired') "
                 "OR (status='resume_failed' AND answer IS NOT NULL) "
-                "ORDER BY COALESCE(answered_at, discarded_at, created_at) DESC LIMIT ?",
+                f"ORDER BY COALESCE({ended}) DESC LIMIT ?",
                 [int(limit)]).fetchall()]
         finally:
             c.close()
