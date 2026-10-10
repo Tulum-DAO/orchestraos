@@ -6832,7 +6832,16 @@ _PLAIN_CONV_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 @app.route("/webhook/post-call", methods=["POST"])
 def post_call_webhook():
     """ElevenLabs post-call webhook — auto-saves transcript to voice memory."""
-    data = request.json or {}
+    # Public over the Funnel, and each push spends the operator's ElevenLabs key: only SIGNED pushes get past here
+    # (gm msg_1fb3f0ee). Checked on the RAW body, before any parsing or fetching; a refusal logs no body content.
+    from services.arturo import postcall_auth as _postcall_auth
+    _allow, _why = _postcall_auth.check(request.get_data(cache=True), request.headers.get(_postcall_auth.HEADER, ""))
+    if _why:
+        log.warning(f"Post-call webhook: {'REFUSED' if not _allow else 'would refuse (log mode)'} ({_why}); "
+                    f"counts={_postcall_auth.counts()}")
+    if not _allow:
+        return jsonify({"status": "refused", "error": "unsigned or invalid signature"}), 401
+    data = request.get_json(silent=True) or {}
     conversation_id = str(data.get("conversation_id", "") or "")
     # The id goes into the ElevenLabs URL, sent WITH the API key (requests normalises "../", so
     # "../../user" fetched /v1/user), AND into the transcript file path (save_transcript:
