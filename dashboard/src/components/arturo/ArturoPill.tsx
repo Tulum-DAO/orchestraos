@@ -3,7 +3,7 @@
  * the top bar, next to the bell (Shaw, 2026-10-10: the floating pill that used to open it covered
  * the text), and anchored under that bar.
  *
- * The pane It does NOT dim or block the page. Two things the operator asked for on
+ * The pane does NOT dim or block the page. Two things the operator asked for on
  * 2026-09-18, after using the surface:
  *
  *  1. "swap between Arturo's previous conversations and pick up right where we left off" —

@@ -1,6 +1,6 @@
 /**
  * useDictation — the Mic button's zero-key dictation, shared by EVERY Arturo composer
- * (home page + the "Ask Arturo" pill) so the buttons behave identically everywhere.
+ * (home page + the Arturo pane) so the buttons behave identically everywhere.
  *
  * Three tiers, chosen per tap and by EFFECT (item C, DEC-1790045383668733):
  *   1. on-device Web Speech (Chrome/Edge/Safari): words appear live while you talk.
