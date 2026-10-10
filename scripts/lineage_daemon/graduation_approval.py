@@ -42,7 +42,7 @@ def make_graduation_gated_approval(seat, *, graduated_fn, confirmed_fn,
     Auto-approves (no card, no wait) ONLY when BOTH signals are exactly True:
       graduated_fn(seat) is True        (is_graduated_autoretire — cold-verified T2)
       confirmed_fn(canary, successor) is True   (S3 confirm outcome == confirmed)
-    Otherwise DELEGATES to fallback_fn(canary, successor) (the the operator-card gate).
+    Otherwise DELEGATES to fallback_fn(canary, successor) (the operator-card gate).
 
     Seams (injected so the factory is hermetic + reversible):
       graduated_fn(seat) -> bool     — production: is_graduated_autoretire.

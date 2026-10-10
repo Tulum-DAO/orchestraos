@@ -9,7 +9,7 @@ registry (REJECT-NEW cap + idle-TTL), the downlink EventBuffer (SSE + long-poll 
 uplink backpressure across EL reconnects (reconnecting event, never a silent drop), the
 watch surface registry (relay knowledge beats active-surface inference), server-driven
 finalize on relay close, our-side replay across EL reconnects (fresh socket = fresh EL
-session — probe-corroborated), and the the operator-directed option-2 live-partials fork.
+session — probe-corroborated), and the operator-directed option-2 live-partials fork.
 
 INERT unless ARTURO_STREAM_RELAY=1; partials additionally behind ARTURO_STREAM_PARTIALS=1.
 Nothing here writes CallJournals — the exactly-one journal per conversation is created by

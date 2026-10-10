@@ -221,7 +221,7 @@ def supervise(store, lock_held, last_outcome):
 
 
 def degraded_action(beats, ctx_pct):
-    """DEGRADED ladder decision. ctx≥0.90 fires the the operator card immediately
+    """DEGRADED ladder decision. ctx≥0.90 fires the operator card immediately
     (rescue-before-death); otherwise re-page at N=4, hard card at 2N=8. The
     ladder resets on a state transition (caller resets `beats`)."""
     if ctx_pct >= CTX_FASTPATH:

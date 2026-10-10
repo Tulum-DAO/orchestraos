@@ -79,7 +79,7 @@ def execute_rotation(canary, registry, *, executors_impl=None,
     Seams (all injectable; defaults are the real IO):
       executors_impl     -- the executors module (armed=True calls run for real).
       approval_fn(canary, successor) -> "approve"|"deny"|"timeout"
-                            (the the operator one-tap gate; default posts an approval.py
+                            (the operator one-tap gate; default posts an approval.py
                             decision + waits).
       safety_fn(canary)  -> (category, reason)  (execute-time re-classify; default
                             re-runs park-idle.classify with fresh Gap-8 signals).
@@ -100,7 +100,7 @@ def execute_rotation(canary, registry, *, executors_impl=None,
                             grader on the successor's readback. Recorded as the
                             "auto_grade" trace step. A non-PASS disposition
                             (FAIL/REFUSED) HOLDS the rotation (status HOLD_GRADE):
-                            both stay LIVE, NOTHING is retired, and the the operator/approval
+                            both stay LIVE, NOTHING is retired, and the operator/approval
                             gate is never even reached. When None (default/v1 path),
                             auto-grade is skipped entirely and behavior is
                             byte-identical to the pre-grade executor. This is the

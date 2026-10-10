@@ -11,7 +11,7 @@ paths), that the wired components compose into the intended unattended loop:
                                  -> promoted_and_retired + notify-after fired
 
 AND the fail-safes: a supervised grade OR a REFUSED grade NEVER auto-retires
-(routes to the the operator card / keep). Touches NOTHING live.
+(routes to the operator card / keep). Touches NOTHING live.
 """
 import os, sys, json, tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))

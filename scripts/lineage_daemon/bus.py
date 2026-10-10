@@ -221,7 +221,7 @@ def beat_is_stale(last_beat_ts, now, max_gap_s=BEAT_MAX_GAP_S):
 def watchdog_check(cursor, now, max_gap_s=BEAT_MAX_GAP_S):
     """DECIDE what the liveness watchdog would do — pure; it does NOT restart or
     page (arming the operator-gated). Returns {live, gap_s, action} where action is 'ok' or
-    'restart-and-repage'. The the operator-gated cron entry calls this and, only when armed,
+    'restart-and-repage'. The operator-gated cron entry calls this and, only when armed,
     restarts the bus + re-pages gm — so dead-bus is detected, not silent."""
     last = (cursor or {}).get("last_beat_ts")
     gap = None if last is None else (now - last)

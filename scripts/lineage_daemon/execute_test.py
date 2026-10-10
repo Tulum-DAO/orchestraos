@@ -357,7 +357,7 @@ def test_autoloop_graded_confirmed_graduated_reaches_retire_no_card():
         {"agent_id": "cand", "lineage_root": "cand", "successor": "cand-g3"},
         graduated_fn=lambda seat: True,          # cold-verified graduated-T2
         confirmed_fn=lambda c, s: True,          # S3 confirmed for THIS rotation
-        fallback_fn=lambda c, s: card_calls.append(1) or "deny")  # the the operator card
+        fallback_fn=lambda c, s: card_calls.append(1) or "deny")  # the operator card
     trace = ex.execute_rotation(
         "cand", REG, executors_impl=fake,
         confirm_fn=lambda c, s: {"outcome": "confirmed"},
@@ -373,7 +373,7 @@ def test_autoloop_graded_confirmed_graduated_reaches_retire_no_card():
 
 
 def test_autoloop_not_graduated_falls_back_to_card():
-    """Same rotation but NOT graduated -> KILL GATE 2 falls back to the the operator card
+    """Same rotation but NOT graduated -> KILL GATE 2 falls back to the operator card
     (auto-approve is fail-toward-the-card)."""
     from scripts.lineage_daemon.graduation_approval import (
         make_graduation_gated_approval)
@@ -391,4 +391,4 @@ def test_autoloop_not_graduated_falls_back_to_card():
         safety_fn=lambda c: ("SUPERSEDED_SAFE", "ok"),
         approval_fn=approval)
     assert trace["status"] == ex.DONE            # card said approve -> still retires
-    assert card_calls == [1]                      # the the operator card WAS consulted
+    assert card_calls == [1]                      # the operator card WAS consulted

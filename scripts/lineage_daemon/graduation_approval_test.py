@@ -13,7 +13,7 @@ import pytest
 from scripts.lineage_daemon import graduation_approval as ga
 
 
-# --- a recording fallback that stands in for the the operator-card gate ----------------
+# --- a recording fallback that stands in for the operator-card gate ----------------
 
 def _recording_fallback(canary, successor, *, ret="deny", sink=None):
     if sink is not None:
@@ -46,7 +46,7 @@ def test_graduated_and_confirmed_auto_approves_no_card():
         fallback_fn=fb,
     )
     assert approval("cand-g2", "cand-g3") == "approve"
-    assert fb.calls == []                    # the the operator card was NEVER posted
+    assert fb.calls == []                    # the operator card was NEVER posted
 
 
 # --- supervised / no-mode grade -> graduated_fn returns False -> card ----------
