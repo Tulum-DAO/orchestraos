@@ -72,3 +72,19 @@ def test_the_fence_is_inert_outside_pytest(monkeypatch):
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     assert approval_config.under_pytest() is False
     approval_config.refuse_live_db_under_pytest(approval_config.LIVE_DB_PATH)   # must NOT raise
+
+
+def test_any_db_outside_the_temp_dir_is_refused_whatever_the_configured_dir(tmp_path):
+    """gm (S5): LIVE_DB_PATH names the dir this checkout is CONFIGURED for, but an operator's real
+    ledger can live elsewhere (a fleet checkout's own state/). The fence must not depend on naming
+    it: under pytest, any approvals DB outside the temp dir is refused, so a ledger in the home dir
+    is refused even when it is not LIVE_DB_PATH. Nothing is created: the constructor refuses first."""
+    elsewhere = os.path.join(os.path.expanduser("~"), "some-other-orchestra", "state", "tasks.db")
+    assert os.path.realpath(elsewhere) != os.path.realpath(str(approval_config.LIVE_DB_PATH))
+    with pytest.raises(RuntimeError, match="LIVE approvals DB"):
+        ApprovalStore(db_path=elsewhere)
+    assert not os.path.exists(elsewhere)
+
+
+def test_memory_db_is_allowed():
+    ApprovalStore(db_path=":memory:")
