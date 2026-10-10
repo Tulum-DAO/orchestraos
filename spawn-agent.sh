@@ -773,6 +773,19 @@ spawn_agent() {
         python3 "$SCRIPT_DIR/scripts/ensure_cwd_trusted.py" "$cwd" 2>&1 \
             | sed 's/^/[spawn] /' || warn "  trust pre-seed skipped for '$cwd'"
     fi
+    # Codex has the same kind of dialog ("Do you trust the contents of this directory?") and
+    # --yolo does NOT skip it (gate container, codex-cli 0.153.4): the boot instruction landed on
+    # the menu, Codex quit and the seat was a bare shell. Unlike the claude pre-seed this is NOT
+    # fail-soft: an untrusted codex seat never starts, so a refusal stops the spawn here, before
+    # any pane exists, with codex_trust.py's one-line reason.
+    if [[ "$runtime" == "codex" ]]; then
+        local _trust_out
+        if ! _trust_out="$(python3 "$SCRIPT_DIR/scripts/codex_trust.py" "$cwd" 2>&1)"; then
+            err "$agent_id: spawn REFUSED — ${_trust_out}"
+            exit 3
+        fi
+        [[ -n "$_trust_out" ]] && log "  ${_trust_out}"
+    fi
 
     tmux new-session -d -s "$tmux_name" -c "$cwd"
     orch_tmux_session_defaults "$tmux_name"
@@ -800,7 +813,10 @@ spawn_agent() {
     # --dangerously-skip-permissions; codex uses --yolo + --dangerously-bypass-hook-trust
     # to run lifecycle hooks without interactive prompt stalls.
     local bypass_flag="--dangerously-skip-permissions"
-    [[ "$runtime" == "codex" ]] && bypass_flag="--yolo --dangerously-bypass-hook-trust"
+    [[ "$runtime" == "codex" ]] && bypass_flag="--yolo --dangerously-bypass-hook-trust -c check_for_update_on_startup=false"
+    # ^ codex's startup "Update available! … › 1. Update now" menu (real capture,
+    #   fixtures/codex/update_prompt_0.153.4) defaults to UPDATE: the boot prompt's Enter would run
+    #   `npm install -g @openai/codex` and move the seat off its pinned version. Checking is off for seats.
     local launch_cmd="$agent_bin $bypass_flag"
     # Scrollback guard (2026-09-03): claude >=2.1.x renders in the terminal
     # ALTERNATE SCREEN by default, which zeroes tmux scrollback (history_size=0,

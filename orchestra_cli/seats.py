@@ -74,7 +74,7 @@ def register_seat(st: S.Settings, seat: str, *, gm: bool, runtime: str | None, m
         if role not in T.ROLES:
             raise T.TierRefused(f"{seat}: unknown role '{role}' (one of {', '.join(T.ROLES)})")
         row["role"] = role
-    runtime = runtime or row.get("runtime") or (st.runtimes_enabled or ["claude"])[0]
+    runtime = runtime or row.get("runtime") or default_runtime(st)
     default_prompt = "prompts/gm.md" if gm else f"prompts/{seat}.md"
     row.setdefault("name", seat)
     row.setdefault("runtime", runtime)
@@ -95,6 +95,77 @@ def register_seat(st: S.Settings, seat: str, *, gm: bool, runtime: str | None, m
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".json.tmp"); tmp.write_text(json.dumps(reg, indent=2) + "\n"); os.replace(tmp, p)
     return row
+
+
+def _local_unusable(st: S.Settings) -> dict:
+    """{runtime id: plain reason} for every enabled runtime that LOCAL evidence proves cannot run a
+    seat on this machine. Local only (PR 0, gm condition 3): `which` plus reading the CLI's own
+    login file, no command runs, no network (`claude auth status` makes HTTPS calls, measured), so
+    this is fast and bounded. A runtime is only listed when that evidence is definite:
+      * its CLI is not installed, or
+      * its login is a FILE probe (codex, gemini) and that file says logged out.
+    A command-probed runtime (claude) that is installed is never listed: its only local signal is
+    a fallback file that can be stale either way, so doubt keeps today's behaviour. Any error -> {}
+    (nothing is proven unusable; callers then behave exactly as before)."""
+    try:
+        from . import runtime_probe as RP
+        providers = st.repo_root / "config" / "providers.json"
+        if not providers.exists():
+            return {}
+
+        def _no_commands(argv):
+            raise RuntimeError("local probe: commands are not run")
+
+        def _read(path):
+            with open(path, encoding="utf-8") as f:
+                return f.read()
+
+        import shutil
+        import time
+        deps = RP.ProbeDeps(which=shutil.which, run_cmd=_no_commands, read_file=_read,
+                            now_ms=lambda: int(time.time() * 1000), expand_home=os.path.expanduser)
+        out = {}
+        for p in RP.load_providers(providers):
+            if p["id"] not in (st.runtimes_enabled or []):
+                continue
+            if not deps.which(p["cli"]):
+                out[p["id"]] = f"`{p['cli']}` is not installed on this machine"
+                continue
+            if (p.get("auth_probe") or {}).get("kind", "").startswith("file-"):
+                r = RP.run_auth_probe(p["auth_probe"], deps)
+                if r.get("authed") is False:
+                    out[p["id"]] = (f"`{p['cli']}` is installed but not logged in "
+                                    f"({r.get('auth_reason')} in {p['auth_probe'].get('path')})")
+        return out
+    except Exception:  # noqa: BLE001 — no proof of anything; never change the pick on doubt
+        return {}
+
+
+def default_runtime(st: S.Settings) -> str:
+    """The runtime a new seat gets when none is named: the first entry of [runtimes] enabled that
+    is not PROVEN unusable here (_local_unusable). With claude installed and listed first this is
+    claude, exactly as before; on a Codex-only box it is codex instead of a claude seat that cannot
+    start. If every enabled runtime is unusable, the old rule (first enabled) stands and the
+    login refusal explains."""
+    enabled = st.runtimes_enabled or ["claude"]
+    unusable = _local_unusable(st)
+    for rt in enabled:
+        if rt not in unusable:
+            return rt
+    return enabled[0]
+
+
+def _refuse_if_runtime_unusable(st: S.Settings, seat: str, runtime: str) -> int | None:
+    """Refuse a spawn on a runtime local evidence proves cannot start, naming it and why."""
+    why = _local_unusable(st).get(runtime)
+    if why is None:
+        return None
+    login = {"codex": "`codex login` (on a server without a browser: `codex login --device-auth`)",
+             "gemini": "`agy` once and complete its sign-in", "claude": "`claude` once and complete its login"}
+    print(f"refusing to spawn {seat} on {runtime}: {why}.\n"
+          f"  Install or log in to it (run {login.get(runtime, 'its CLI once')}), or pick another runtime with "
+          f"--runtime.\n  `orchestra doctor` shows every runtime it found.", file=sys.stderr)
+    return 2
 
 
 def _authed_runtimes(st: S.Settings) -> tuple[list, str | None]:
@@ -162,8 +233,12 @@ def cmd_spawn(ns) -> int:
     if refused is not None:
         return refused
     seat = ns.seat
+    runtime = ns.runtime or _registry(st)[1]["agents"].get(seat, {}).get("runtime") or default_runtime(st)
+    refused = _refuse_if_runtime_unusable(st, seat, runtime)
+    if refused is not None:
+        return refused
     try:
-        row = register_seat(st, seat, gm=ns.gm, runtime=ns.runtime, model=ns.model, tier=ns.tier,
+        row = register_seat(st, seat, gm=ns.gm, runtime=runtime, model=ns.model, tier=ns.tier,
                             prompt=ns.prompt, parent=getattr(ns, "parent", None), role=getattr(ns, "role", None))
     except ValueError as e:      # tier_rule.TierRefused
         print(f"spawn refused: {e}", file=sys.stderr); return 2
@@ -184,8 +259,19 @@ def cmd_spawn(ns) -> int:
         print(f"spawn reported success but no tmux session '{row['tmux_session']}' exists (by effect); check {st.data_dir / 'logs'}", file=sys.stderr)
         return 1
     print(f"seat {seat} up: tmux session {row['tmux_session']} ({row['runtime']} {row.get('model', '')}, prompt {row['system_prompt']})")
-    print(f"talk to it:   tmux attach -t {row['tmux_session']}\nmail it:      python3 msg_store.py send --from you --to {seat} --subject hi --body-file note.txt")
+    print(f"talk to it:   tmux attach -t {row['tmux_session']}\nmail it:      {mail_hint(st, seat)}")
     return 0
+
+
+def mail_hint(st: S.Settings, seat: str) -> str:
+    """A command that mails <seat> when pasted VERBATIM from any directory with nothing exported:
+    it names msg_store.py by absolute path and carries the data dir itself. The old hint
+    (`python3 msg_store.py send ...`) needed the checkout as cwd AND ORCHESTRA_DIR, because
+    msg_store.py's own fallback is not this install's data dir (gate container, 2026-10-10:
+    `unable to open database file`)."""
+    import shlex
+    return (f"ORCHESTRA_DIR={shlex.quote(str(st.data_dir))} python3 {shlex.quote(str(st.repo_root / 'msg_store.py'))} "
+            f"send --from you --to {shlex.quote(seat)} --subject hi --body hello")
 
 
 def _pane_alive(tmux_session: str) -> bool:
@@ -233,7 +319,7 @@ def cmd_agent_create(ns) -> int:
     if not st.config_exists:
         print(f"no config at {st.config_path} — run `orchestra init` first", file=sys.stderr); return 2
     name = ns.name
-    runtime = ns.runtime or (st.runtimes_enabled or ["claude"])[0]
+    runtime = ns.runtime or default_runtime(st)
     # 1. runtime/model pair (the same rule spawn-agent.sh refuses on; here it is a clean message)
     if ns.model:
         sys.path.insert(0, str(st.repo_root / "scripts")) if str(st.repo_root / "scripts") not in sys.path else None
@@ -270,6 +356,8 @@ def cmd_agent_create(ns) -> int:
         print(f"warning: no {prompt_rel} and no --template; the seat boots on the foundation prompt only", file=sys.stderr)
     # 3. register (+ parent), 4. spawn, 5. alive by effect
     refused = _refuse_if_no_runtime_authed(st)
+    if refused is None:
+        refused = _refuse_if_runtime_unusable(st, name, runtime)
     if refused is not None:
         return refused
     role = getattr(ns, "role", None) or ("pm" if ns.template == "pm" else None)
