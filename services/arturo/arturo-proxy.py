@@ -525,7 +525,7 @@ def _resolve_or_create(non_system, page="", origin="local", conv_id=""):
         return j.call_id
 
 
-def _journal_append(call_id, role, text=None, tool=None, args=None):
+def _journal_append(call_id, role, text=None, tool=None, args=None, **extra):
     # Load-modify-atomic-write one turn onto a journal by call_id (disk is source of truth — no
     # stale in-memory handle across restarts). Best-effort; never breaks the SSE stream.
     if not call_id:
@@ -547,7 +547,7 @@ def _journal_append(call_id, role, text=None, tool=None, args=None):
         else:
             if turns and turns[-1].get("role") == role and turns[-1].get("text") == (text or "")[:2000]:
                 return                    # dedup identical consecutive turn (retry)
-            turns.append({"role": role, "text": (text or "")[:2000], "ts": time.time()})
+            turns.append({"role": role, "text": (text or "")[:2000], "ts": time.time(), **extra})
         _atomic_write(p, d)
 
 
@@ -619,7 +619,7 @@ def _finalize_journal_file(path):
         log.info(f"finalized {call_id} -> ended ({n_turns} turns); gm injection DISABLED (kill switch)")
         return True
     # GATE 2: only a genuine funnel-origin the operator call injects. local/test/legacy-untagged never do.
-    if _origin != "funnel":
+    if _origin not in ("funnel", "relay"):
         log.info(f"finalized {call_id} -> ended ({n_turns} turns); NO inject (origin={_origin}, not genuine the operator)")
         return True
     full_transcript = _endcall.build_full_transcript(turns)   # the operator REQ: gm gets the call in full
@@ -4735,6 +4735,15 @@ def chat_completions():
         _origin = "funnel"
     else:
         _origin = "local"
+    # GPT-Live: the relay itself POSTs a LIVE openai call's delegated turn over loopback.
+    # That is a genuine call of the operator's, not a local probe: origin 'relay' (Hume calls keep arriving as 'funnel').
+    if _origin == "local" and _STREAM_RELAY is not None and request.args.get("custom_session_id"):
+        try:
+            _oh = _STREAM_RELAY._holders.get(_STREAM_RELAY.resolve(request.args["custom_session_id"]) or "")
+            if _oh is not None and _oh.vendor == "openai":
+                _origin = "relay"
+        except Exception:
+            pass
 
     data = request.json or {}
     metadata = data.get("metadata", {})
@@ -6887,6 +6896,73 @@ def _log_postcall_auth_state():
     if w:
         log.warning(w)
     return w
+
+
+# --- GPT-Live vendor wiring (docs/ARTURO.md "GPT-Live") ---
+def _sse_text(body):
+    """The text of an OpenAI-style SSE stream (or a plain JSON completion) from our own CLM endpoint."""
+    out = []
+    for line in (body or "").splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if payload == "[DONE]":
+            break
+        try:
+            ch = (json.loads(payload).get("choices") or [{}])[0]
+        except Exception:
+            continue
+        piece = (ch.get("delta") or {}).get("content") or (ch.get("message") or {}).get("content") or ""
+        out.append(piece)
+    if not out:
+        try:
+            return ((json.loads(body).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        except Exception:
+            return ""
+    return "".join(out).strip()
+
+
+def _openai_post_loopback(cid, messages):
+    """POST our CLM endpoint over loopback EXACTLY as Hume does: same bearer, same custom_session_id, no
+    internal nonce. So the caller stamp, the allowlist and the journal treat it as that call's turn."""
+    import urllib.parse
+    import urllib.request
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{ARTURO_PORT}/v1/chat/completions?custom_session_id={urllib.parse.quote(cid)}",
+        data=json.dumps({"messages": messages, "stream": True}).encode(),
+        headers={"Authorization": f"Bearer {BEARER_TOKEN}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=90) as r:
+        return r.read().decode("utf-8", "replace")
+
+
+_OPENAI_POST = _openai_post_loopback
+
+
+def _openai_delegate(cid, messages):
+    return _sse_text(_OPENAI_POST(cid, messages))
+
+
+def _openai_journal(cid, role, text, **meta):
+    """GPT-Live turns that never reach the CLM (answered without delegating; an interrupted answer) go into
+    the same call journal, flagged."""
+    call_id = _find_live_by_conv_id(cid)
+    if not call_id:
+        call_id = _resolve_or_create([{"role": "assistant", "content": "(GPT-Live call)"},
+                                      {"role": "user", "content": text or "(GPT-Live)"}],
+                                     page="voice", origin="relay", conv_id=cid)
+    _journal_append(call_id, role, text=text, **meta)
+
+
+def _wire_openai(relay):
+    """Give a relay manager the proxy's CLM delegation and call journal (late-bound, so tests can patch)."""
+    relay.openai_delegate = lambda cid, messages: _openai_delegate(cid, messages)
+    relay.journal_hook = lambda cid, role, text, **meta: _openai_journal(cid, role, text, **meta)
+
+
+if _STREAM_RELAY is not None:
+    _wire_openai(_STREAM_RELAY)
+
 
 
 if __name__ == "__main__":

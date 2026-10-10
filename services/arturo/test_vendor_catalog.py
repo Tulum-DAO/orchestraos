@@ -73,7 +73,7 @@ def test_route_serves_the_rows(monkeypatch, tmp_path):
     c = mod.app.test_client()
     j = c.get("/ptt/vendor", environ_base={"REMOTE_ADDR": "127.0.0.1"}).get_json()
     assert j["ok"] and set(_by_id(j)) == set(vv.REQUIRED)
-    assert set(j["allowed"]) == set(vv.REQUIRED)
+    assert set(j["allowed"]) == set(vv.LEGACY)
 
 
 def test_every_row_is_strictly_typed_including_unavailable_ones(tmp_path):
@@ -93,3 +93,30 @@ def test_the_vendor_in_use_always_has_a_row(tmp_path):
     for named in ("hume", "elevenlabs", "a-removed-vendor"):
         (tmp_path / "v.json").write_text('{"vendor": "%s"}' % named)
         assert s.get() in _by_id(s.state())
+
+
+# ---- GPT-Live ("openai"): a third vendor, selectable only with its key; old clients never see it ----------
+
+def test_openai_with_its_key_is_selectable(tmp_path):
+    v = _by_id(_store(tmp_path).state())
+    assert v["openai"]["available"] is True and v["openai"]["reason"] == ""
+    assert v["openai"]["title"] == "GPT-Live"
+
+
+def test_openai_without_its_key_is_listed_unavailable_and_refused(tmp_path):
+    no_openai = lambda k: "" if k == "OPENAI_API_KEY" else "x"
+    s = _store(tmp_path, no_openai)
+    v = _by_id(s.state())
+    assert v["openai"]["available"] is False and v["openai"]["reason"] == "missing OPENAI_API_KEY"
+    with pytest.raises(ValueError, match="missing OPENAI_API_KEY"):
+        s.set("openai", by="test")
+    assert not (tmp_path / "v.json").exists(), "a refused set must not write the preference"
+    assert _store(tmp_path).set("openai", by="test")["vendor"] == "openai"
+    assert _store(tmp_path).get() == "openai"
+
+
+def test_old_fields_never_name_openai(tmp_path):
+    """Apps that predate `vendors` read allowed/unavailable; an id they have never seen stays out of both."""
+    for creds in (lambda k: "x", lambda k: ""):
+        st = _store(tmp_path, creds).state()
+        assert "openai" not in st["allowed"] and "openai" not in st["unavailable"]
