@@ -816,7 +816,12 @@ spawn_agent() {
     [[ "$runtime" == "codex" ]] && bypass_flag="--yolo --dangerously-bypass-hook-trust -c check_for_update_on_startup=false"
     # ^ codex's startup "Update available! … › 1. Update now" menu (real capture,
     #   fixtures/codex/update_prompt_0.153.4) defaults to UPDATE: the boot prompt's Enter would run
-    #   `npm install -g @openai/codex` and move the seat off its pinned version. Checking is off for seats.
+    #   `npm install -g @openai/codex` and move the seat off its pinned version. So a SEAT's codex command
+    #   line carries `-c check_for_update_on_startup=false` (a per-run override: nothing is written to
+    #   ~/.codex/config.toml, and codex you start yourself still checks). ORCHESTRA_CODEX_UPDATE_CHECK=1
+    #   leaves the check on for seats too (docs/INSTALL.md, "Codex seats and updates").
+    [[ "$runtime" == "codex" && "${ORCHESTRA_CODEX_UPDATE_CHECK:-}" == "1" ]] \
+        && bypass_flag="--yolo --dangerously-bypass-hook-trust"
     local launch_cmd="$agent_bin $bypass_flag"
     # Scrollback guard (2026-09-03): claude >=2.1.x renders in the terminal
     # ALTERNATE SCREEN by default, which zeroes tmux scrollback (history_size=0,
