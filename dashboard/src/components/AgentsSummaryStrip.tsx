@@ -1,5 +1,5 @@
 import { clsx } from 'clsx';
-import { Search } from 'lucide-react';
+import { Search, Plus } from 'lucide-react';
 
 export interface AgentsSummaryStripProps {
   machineName: string;
@@ -17,6 +17,10 @@ export interface AgentsSummaryStripProps {
    *  but not a node in the graph. Rather than hide the busiest pair (it IS the busiest), give
    *  it the affordance it was missing. */
   onSelectBusiest?: () => void;
+  /** New agent. A plain "+" right after the title (Shaw, 2026-10-10: "the new agent button should
+   *  be a plus next to the agents title. We're pursuing a minimalist path"). Absent = no "+": the
+   *  caller passes it only when the deployment offers New Agent (showNewAgent). */
+  onNewAgent?: () => void;
 }
 
 function formatAgentsUp(agentsUp: number, agentsTotal: number): string {
@@ -39,6 +43,7 @@ export function AgentsSummaryStrip({
   search,
   onSearchChange,
   onSelectBusiest,
+  onNewAgent,
 }: AgentsSummaryStripProps) {
   return (
     // review's browser pass (2026-09-30) found two real layout bugs here, both desktop-first:
@@ -55,12 +60,23 @@ export function AgentsSummaryStrip({
     <div className="space-y-2 min-w-0">
       <div className="flex items-center gap-2 flex-wrap min-w-0">
         <h1 className="text-2xl font-bold text-neutral-100">Agents</h1>
+        {onNewAgent && (
+          <button
+            type="button"
+            onClick={onNewAgent}
+            aria-label="New agent"
+            title="New agent"
+            className="touch-circle shrink-0 rounded-full flex items-center justify-center text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors"
+          >
+            <Plus size={22} />
+          </button>
+        )}
         <span
           className={clsx('inline-block w-2 h-2 rounded-full shrink-0', machineLive ? 'bg-green-500 motion-safe:animate-pulse' : 'bg-red-500')}
           title={machineLive ? 'live' : 'down'}
         />
         {/* break-all, not wrap: a hostname has no spaces to break at, so at 375px it used to
-            push three lines wide into the New agent button instead of breaking. */}
+            push three lines wide into the old New agent button instead of breaking. */}
         <span className="text-sm text-neutral-500 break-all min-w-0">{machineName}</span>
       </div>
 

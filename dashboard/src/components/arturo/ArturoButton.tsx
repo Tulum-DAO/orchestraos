@@ -17,12 +17,15 @@ export function ArturoButton() {
       aria-label={open ? 'Close Arturo' : 'Ask Arturo'}
       aria-expanded={open}
       title="Ask Arturo"
-      // touch-circle (index.css): 36px, 44px under the touch rule's own query, so never an oval.
-      className={`touch-circle relative shrink-0 rounded-full flex items-center justify-center border transition-colors ${
-        open ? 'bg-[#d97757] border-[#d97757] text-white' : 'border-neutral-700 bg-neutral-900 text-[#d97757] hover:bg-neutral-800'
+      // 40px on desktop, the same box as the top-bar icons beside it; 44px under the touch rule
+      // (touch-circle), so never an oval. Its colour, not its size, is what sets it apart.
+      className={`touch-circle min-[769px]:h-10 min-[769px]:w-10 relative shrink-0 rounded-full flex items-center justify-center border transition-colors ${
+        // Arturo's own colour, filled, in both themes: the one control in the row that is not a plain
+        // icon. Open adds a ring (the pane below is its).
+        open ? 'bg-[#d97757] border-transparent text-white ring-2 ring-[#d97757]/40 ring-offset-2 ring-offset-background' : 'bg-[#d97757] border-transparent text-white hover:bg-[#c96747]'
       }`}
     >
-      <Mic size={18} />
+      <Mic size={20} />
       {exchanges > 0 && !open && (
         <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 rounded-full bg-neutral-200 text-neutral-900 text-[10px] leading-4 font-semibold text-center">
           {exchanges}

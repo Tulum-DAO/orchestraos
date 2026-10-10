@@ -82,7 +82,7 @@ export function DashboardLayout() {
       {/* Main content */}
       <main className={`flex-1 min-w-0 flex flex-col safe-top safe-bottom ${isChatRoute ? 'overflow-hidden' : 'overflow-y-auto'}`}>
         {/* Mobile header with hamburger */}
-        <div ref={topbarRef} className="sticky top-0 z-20 flex items-center gap-3 border-b border-neutral-800 bg-neutral-950/90 backdrop-blur px-4 py-3 md:hidden">
+        <div ref={topbarRef} className="dark sticky top-0 z-20 flex items-center gap-3 border-b border-neutral-800 bg-neutral-950/90 backdrop-blur px-4 py-3 md:hidden">
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className="p-1 -ml-1 text-neutral-400 hover:text-white"
@@ -92,7 +92,7 @@ export function DashboardLayout() {
           </button>
           <span className="text-sm font-bold tracking-tight text-white">orchestraOS</span>
           {/* Arturo's one spot, next to the bell, on every page (Shaw, 2026-10-10). */}
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-1">
             {showArturoPill() && <ArturoButton />}
             <NotificationBell />
           </div>
@@ -110,10 +110,15 @@ export function DashboardLayout() {
       </main>
 
       {/* Desktop notification bell — fixed top-right */}
-      <div className="hidden md:flex fixed top-4 right-4 z-30 items-center gap-2">
-        {showArturoPill() && <ArturoButton />}
-        <NotificationBell />
-      </div>
+      {/* Desktop Arturo + bell, fixed top-right on pages WITHOUT their own top bar. The agent page
+          has one, and renders the pair at the end of it (components/agent/TopBar), so they sit in
+          that row rather than floating beside it at a different height. */}
+      {!isChatRoute && (
+        <div className="hidden md:flex fixed top-4 right-4 z-30 items-center gap-1">
+          {showArturoPill() && <ArturoButton />}
+          <NotificationBell />
+        </div>
+      )}
 
       {/* Global voice call bubble — persists across page navigation */}
       {activeCall && (
