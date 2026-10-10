@@ -125,6 +125,28 @@ test('hidden 10 min -> visible: every frame until the refresh lands is UPDATING,
   assert.equal(feedHealthOf({ dataUpdatedAt: back + 1_200, hasData: true, visibleSince: back, now: back + 1_300 }).health, 'live');
 });
 
+test('WHILE hidden the verdict is frozen at the moment it was hidden: no grey painted in the background', () => {
+  // orchestra-builder's probe (hide 130 s): the throttled ticker kept re-verdicting the HIDDEN tab, the
+  // data aged past DISCONNECTED_AFTER_MS, the tab painted grey "disconnected" in the background, and that
+  // frame was the first thing the operator saw on return. The poll is paused while hidden, so age that
+  // accrues then says nothing about the feed.
+  const hid = NOW;
+  const last = hid - 2_000;               // a fresh success just before the tab was hidden
+  for (const t of [1_000, STALE_AFTER_MS, DISCONNECTED_AFTER_MS, TEN_MIN]) {
+    const v = feedHealthOf({ dataUpdatedAt: last, hasData: true, hiddenSince: hid, now: hid + t });
+    assert.equal(v.health, 'live', `hidden ${t} ms`);
+    assert.equal(staleStyleFor(v), undefined);
+  }
+  // and the first verdict after it becomes visible is UPDATING (dimmed), never grey
+  const back = hid + TEN_MIN;
+  const first = feedHealthOf({ dataUpdatedAt: last, hasData: true, visibleSince: back, now: back });
+  assert.equal(first.health, 'updating');
+  // a verdict that was already degraded when the tab was hidden stays degraded: hiding is not a cure
+  assert.ok(isDegraded(feedHealthOf({ dataUpdatedAt: hid - 45_000, hasData: true, hiddenSince: hid, now: hid + TEN_MIN })));
+  // an ERROR while hidden still greys
+  assert.ok(isDegraded(feedHealthOf({ dataUpdatedAt: last, hasData: true, isError: true, hiddenSince: hid, now: hid + TEN_MIN })));
+});
+
 test('UPDATING paints the last-known colour DIMMED, without the pulse, and says so', () => {
   const v = feedHealthOf({ dataUpdatedAt: NOW - TEN_MIN, hasData: true, isFetching: true, fetchStartedAt: NOW, visibleSince: NOW, now: NOW });
   const s = styleForAgentState(v, WORKING);

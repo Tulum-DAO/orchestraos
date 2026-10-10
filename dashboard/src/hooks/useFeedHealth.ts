@@ -30,11 +30,13 @@ function subscribe(fn: () => void) {
 // is one fetch and not one poll interval, and when the fetch now in flight started (one that has
 // not answered in FETCH_OUTSTANDING_MS is stale).
 let visibleSince = 0;                                  // 0 = visible all along
+let hiddenSince: number | undefined;                   // set while the tab IS hidden: verdict frozen
 let fetchStartedAt: number | undefined;
 let refetchAgents: (() => void) | undefined;
 let listening = false;
 function onVisibilityChange() {
-  if (document.visibilityState !== 'visible') return;
+  if (document.visibilityState !== 'visible') { hiddenSince ??= Date.now(); return; }
+  hiddenSince = undefined;
   visibleSince = Date.now();
   refetchAgents?.();
   subs.forEach((f) => f());                            // re-verdict at once: dimmed, never grey
@@ -51,11 +53,12 @@ export function useFeedHealth(): FeedVerdict {
     if (!listening && typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', onVisibilityChange);
       listening = true;
+      if (document.visibilityState !== 'visible') hiddenSince = Date.now();   // opened in a background tab
     }
   }, [qc]);
   useEffect(() => {
     if (!isFetching) fetchStartedAt = undefined;
     else if (fetchStartedAt === undefined) fetchStartedAt = Date.now();
   }, [isFetching]);
-  return feedHealthOf({ dataUpdatedAt, hasData: !!data, isError, isFetching, fetchStartedAt, visibleSince });
+  return feedHealthOf({ dataUpdatedAt, hasData: !!data, isError, isFetching, fetchStartedAt, visibleSince, hiddenSince });
 }
