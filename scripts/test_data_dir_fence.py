@@ -175,3 +175,12 @@ def test_an_in_place_edit_is_not_the_snapshot_s_job_the_store_fence_refuses_it(r
         seats.register_seat(st, "real-seat", gm=False, runtime="codex", model=None, tier=None, prompt=None)
     assert (real / "registry.json").read_text() == '{"agents": {"real-seat": {"runtime": "claude"}}}'
     assert guard._seat_changes(before, guard._seats_snapshot()) == {}
+
+
+def test_approval_listener_cursor_refuses_the_real_install(real, monkeypatch):
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import approval_listener
+    monkeypatch.setattr(approval_listener, "CURSOR_FILE", real / "state" / ".approval-listener-cursor")
+    with pytest.raises(S.RealDataDirWrite, match="approval listener cursor"):
+        approval_listener._write_cursor(1760000000)
+    assert not (real / "state" / ".approval-listener-cursor").exists()
