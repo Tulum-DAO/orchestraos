@@ -179,7 +179,7 @@ def test_routes_serve_every_vendor_and_default_to_the_live_one(monkeypatch, tmp_
 def test_a_cloned_voice_keeps_its_own_server_named_group_first():
     """ios-watch-dev msg_0aa40402 option (c): today's screen splits YOUR VOICES / HUME VOICES on `provider`. A voice
     the operator made themselves is categorically theirs; the SERVER names the heading so no client hardcodes Hume's vocabulary."""
-    raw = [{"id": "c1", "name": "Frank", "provider": "custom"}] + HUME_RAW
+    raw = [{"id": "c1", "name": "Orla", "provider": "custom"}] + HUME_RAW
     rows = vc.voice_rows("hume", raw=raw)
     assert rows[0]["id"] == "c1" and rows[0]["group"] == "Your voices" and rows[0]["recommended"] is True
     assert {r["group"] for r in rows[1:]} == {"Hume voices"}
@@ -189,7 +189,7 @@ def test_a_cloned_voice_keeps_its_own_server_named_group_first():
 def test_the_shipped_client_still_decodes_every_row():
     """The App Store build decodes Hume rows as {id, name, provider}. Until the v2 client ships, every row keeps
     those v1 fields with their v1 values, or the shipped Hume picker could decode to an empty list."""
-    raw = [{"id": "c1", "name": "Frank", "provider": "custom"}] + HUME_RAW
+    raw = [{"id": "c1", "name": "Orla", "provider": "custom"}] + HUME_RAW
     for r in vc.voice_rows("hume", raw=raw):
         assert r["provider"] in ("custom", "hume_library")
     assert vc.voice_rows("hume", raw=raw)[0]["provider"] == "custom"

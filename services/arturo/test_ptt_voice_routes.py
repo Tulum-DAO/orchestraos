@@ -38,7 +38,7 @@ def test_voices_get_and_voice_get_put(monkeypatch, tmp_path):
     monkeypatch.setattr(vc, "_default",
                         vc.VoiceChoiceStore(path=tmp_path / "v.json", log_path=tmp_path / "v.log"))
     monkeypatch.setattr(vc, "list_hume_voices",
-                        lambda fetch=None: [{"id": "v-frank", "name": "Frank", "provider": "custom"}])
+                        lambda fetch=None: [{"id": "v-orla", "name": "Orla", "provider": "custom"}])
     c = mod.app.test_client()
     loop = {"REMOTE_ADDR": "127.0.0.1"}
     # loopback trust boundary
@@ -50,20 +50,20 @@ def test_voices_get_and_voice_get_put(monkeypatch, tmp_path):
     assert r.status_code == 200 and j["ok"] and j["vendor"] == "hume"
     assert j["current"] is None
     # contract v2 (msg_a7cf1484): server-rendered, strictly typed display rows
-    assert j["voices"] == [{"id": "v-frank", "name": "Frank", "title": "Frank", "subtitle": None,
+    assert j["voices"] == [{"id": "v-orla", "name": "Orla", "title": "Orla", "subtitle": None,
                             "recommended": True, "order": 0, "sample_url": None, "group": "Your voices",
                             "provider": "custom"}]
     # EL voices are client-side
     assert c.get("/ptt/voices?vendor=elevenlabs", environ_base=loop).status_code == 400
     # PUT persists, echoes the record (no voices list in the PUT response)
-    r = c.put("/ptt/voice", json={"vendor": "hume", "voice_id": "v-frank", "by": "settings-ios"},
+    r = c.put("/ptt/voice", json={"vendor": "hume", "voice_id": "v-orla", "by": "settings-ios"},
               environ_base=loop)
     j = r.get_json()
-    assert r.status_code == 200 and j["ok"] and j["voice_id"] == "v-frank"
+    assert r.status_code == 200 and j["ok"] and j["voice_id"] == "v-orla"
     assert j["changed_by"] == "settings-ios" and "voices" not in j
     # GET voice reflects it; GET voices now shows current
-    assert c.get("/ptt/voice", environ_base=loop).get_json()["voice_id"] == "v-frank"
-    assert c.get("/ptt/voices?vendor=hume", environ_base=loop).get_json()["current"] == "v-frank"
+    assert c.get("/ptt/voice", environ_base=loop).get_json()["voice_id"] == "v-orla"
+    assert c.get("/ptt/voices?vendor=hume", environ_base=loop).get_json()["current"] == "v-orla"
     # bad PUTs are refused visibly
     assert c.put("/ptt/voice", json={"vendor": "elevenlabs", "voice_id": "x"},
                  environ_base=loop).status_code == 400
@@ -119,7 +119,7 @@ def test_no_vendor_param_on_a_default_install_still_means_hume(monkeypatch, tmp_
     mod = _load_proxy()
     from services.arturo import voice_choice as vc, voice_vendor as vv
     monkeypatch.setattr(vc, "_default", vc.VoiceChoiceStore(path=tmp_path / "v.json", log_path=tmp_path / "v.log"))
-    monkeypatch.setattr(vc, "list_hume_voices", lambda fetch=None: [{"id": "v-frank", "name": "Frank", "provider": "custom"}])
+    monkeypatch.setattr(vc, "list_hume_voices", lambda fetch=None: [{"id": "v-orla", "name": "Orla", "provider": "custom"}])
     c = mod.app.test_client()
     loop = {"REMOTE_ADDR": "127.0.0.1"}
     monkeypatch.setattr(vv, "get_vendor", lambda: "elevenlabs")
@@ -139,7 +139,7 @@ def test_the_shipped_client_request_decodes_as_v1_end_to_end(monkeypatch, tmp_pa
     from services.arturo import voice_choice as vc, voice_vendor as vv
     monkeypatch.setattr(vc, "_default", vc.VoiceChoiceStore(path=tmp_path / "v.json", log_path=tmp_path / "v.log"))
     monkeypatch.setattr(vc, "list_hume_voices", lambda fetch=None: [
-        {"id": "c1", "name": "Frank", "provider": "custom"},
+        {"id": "c1", "name": "Orla", "provider": "custom"},
         {"id": "h1", "name": "Serene Assistant", "provider": "hume_library"},
         {"id": "h2", "name": "Some Library Voice", "provider": "hume_library"}])
     monkeypatch.setattr(vv, "get_vendor", lambda: "elevenlabs")
