@@ -84,7 +84,29 @@ def _default_post(session, text):
         return e.code
 
 
-def inject_to_gm(session, summary, marker, post=None, max_attempts=6, base_delay=1.0, transcript=None):
+# Each gateway delivery to a seat leaves a /tmp/agent-inject-*.md file with the full text.
+INJECT_EVIDENCE_GLOB = "/tmp/agent-inject-*.md"
+
+
+def delivered_evidence(marker, since):
+    """True if a gateway inject file newer than `since` carries `marker` (gm msg_f9106d0c: a POST
+    that times out at 10 s under load has often ALREADY delivered; without this check the sweeper
+    re-delivered one call's transcript to gm 9 times)."""
+    import glob as _glob
+    for f in _glob.glob(INJECT_EVIDENCE_GLOB):
+        try:
+            if _os.path.getmtime(f) < since:
+                continue
+            with open(f, errors="replace") as fh:
+                if marker in fh.read():
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def inject_to_gm(session, summary, marker, post=None, max_attempts=6, base_delay=1.0, transcript=None,
+                 since=None):
     # the operator REQUIREMENT: gm receives the call IN ENTIRETY. When `transcript` (already per-turn
     # sanitized by build_full_transcript) is provided, the injected message carries the FULL
     # chronological transcript + the frozen marker (path to the canonical JSON for anything
@@ -98,8 +120,19 @@ def inject_to_gm(session, summary, marker, post=None, max_attempts=6, base_delay
                 f"{transcript}\n\n{marker}")
     else:
         text = f"Voice call ended: {summary}\n{marker}"
+    # Already delivered since the call ended (an earlier "timed out" attempt landed)? Never repost.
+    if since is not None and delivered_evidence(marker, since):
+        return True, 0
     for attempt in range(1, max_attempts + 1):
-        code = post(session, text)
+        _t0 = _time.time()
+        try:
+            code = post(session, text)
+        except (TimeoutError, OSError) as _te:
+            # Ambiguous: the gateway may have delivered and only been slow to answer.
+            _time.sleep(0.5)
+            if delivered_evidence(marker, _t0 - 2):
+                return True, attempt
+            return False, attempt      # genuinely unconfirmed: the caller's retry/backoff applies
         if code == 200:
             return True, attempt
         if code == 409:

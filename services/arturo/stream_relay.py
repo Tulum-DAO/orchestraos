@@ -292,6 +292,7 @@ class _Holder:
         self._last_user_ts = 0.0
         self._play_until = 0.0
         self._awaiting_reply = False
+        self._last_agent_audio_ts = 0.0   # SUPERSEDE truth check: did the operator actually hear a reply
         # TURN-LATENCY (ios-watch-dev msg_b22a71d8, log-only): the operator's final at the relay ->
         # Arturo's first reply text / first reply audio. This, not generate(), is what he hears.
         self._final_at = None
@@ -817,6 +818,7 @@ class _Holder:
                     self._final_at = None
                 self._span_pcm += len(pcm)
                 self._play_until = max(self._play_until, time.time()) + len(pcm) / BYTES_PER_S
+                self._last_agent_audio_ts = time.time()
                 self.m.buffer.put(self.cid, {"type": "audio",
                                              "audio": base64.b64encode(pcm).decode()})
             return
