@@ -29,8 +29,6 @@ test('capabilities: every optional script absent => all false; present => true (
   const { capabilities, CAPABILITIES } = await import(`./capabilities.js?t=${Date.now()}`);
   const none = capabilities();
   for (const c of CAPABILITIES) assert.equal(none[c], false, c);
-  writeFileSync(join(code, 'scripts', 'project-status-api.py'), 'print("{}")');
-  writeFileSync(join(code, 'voice-agent.py'), '');
   writeFileSync(join(code, 'scripts', 'log-interaction.py'), '');
   mkdirSync(join(data, 'skills'));
   writeFileSync(join(data, 'skills', 'inspect-element.js'), '');
@@ -40,12 +38,10 @@ test('capabilities: every optional script absent => all false; present => true (
 
 async function app() {
   const express = (await import('express')).default;
-  const projectStatus = (await import(`../routes/project-status.js?t=${Date.now()}`)).default;
   const voice = (await import(`../routes/voice.js?t=${Date.now()}`)).default;
   const inspect = (await import(`../routes/inspect-feedback.js?t=${Date.now()}`)).default;
   const a = express();
   a.use(express.json());
-  a.use('/api/project-status', projectStatus);
   a.use('/api/voice', voice);
   a.use('/api/inspect-feedback', inspect);
   const server = a.listen(0);
@@ -58,8 +54,6 @@ test('ROUTES: an absent script is an honest 501 naming the capability, never a 5
   const { server, base } = await app();
   try {
     const cases: [string, string, string][] = [
-      ['GET', '/api/project-status', 'projectStatus'],
-      ['POST', '/api/voice/sync-prompts', 'voicePromptSync'],
       ['GET', '/api/inspect-feedback/script.js', 'inspectScript'],
     ];
     for (const [method, path, cap] of cases) {
@@ -73,14 +67,16 @@ test('ROUTES: an absent script is an honest 501 naming the capability, never a 5
   }
 });
 
-test('ROUTES: a present script still runs (project-status from the CHECKOUT, not the data dir)', async () => {
-  const { code } = trees();
-  writeFileSync(join(code, 'scripts', 'project-status-api.py'), 'import json; print(json.dumps({"projects": [{"slug": "p1"}]}))');
+test('REMOVED (gm): voice sync-prompts and project-status are gone, not stubbed', async () => {
+  trees();
   const { server, base } = await app();
   try {
-    const r = await fetch(base + '/api/project-status');
-    assert.equal(r.status, 200);
-    assert.deepEqual(await r.json(), { projects: [{ slug: 'p1' }] });
+    // Nothing in the product produced voice-agent.py or scripts/project-status-api.py, and no shipped
+    // client (web, iOS, watch) calls either route, so they are deleted rather than kept as a 410.
+    assert.equal((await fetch(base + '/api/voice/sync-prompts', { method: 'POST' })).status, 404);
+    assert.equal((await fetch(base + '/api/project-status')).status, 404);
+    const { CAPABILITIES } = await import(`./capabilities.js?t=${Date.now()}`);
+    assert.ok(!CAPABILITIES.includes('projectStatus') && !CAPABILITIES.includes('voicePromptSync'));
   } finally {
     server.close();
   }

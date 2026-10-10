@@ -40,7 +40,6 @@ import northStarsRouter from './routes/northstars.js';
 import peopleRouter from './routes/people.js';
 import agentStateRouter from './routes/agent-state.js';
 import inspectFeedbackRouter from './routes/inspect-feedback.js';
-import projectStatusRouter from './routes/project-status.js';
 import telemetryRouter from './routes/telemetry.js';
 import agentSendRouter from './routes/agent-send.js';
 import runtimesAvailableRouter from './routes/runtimes-available.js';
@@ -212,7 +211,6 @@ app.use('/api/north-stars', northStarsRouter);
 app.use('/api/people', peopleRouter);
 app.use('/api/agent-state', agentStateRouter);
 app.use('/api/inspect-feedback', inspectFeedbackRouter);
-app.use('/api/project-status', projectStatusRouter);
 app.use('/api/telemetry', telemetryRouter); // Build B: read-only telemetry query/stream (INERT — no cron/systemd)
 app.use('/api/runtimes', runtimesAvailableRouter);
 app.use('/api/facts', factsRouter);

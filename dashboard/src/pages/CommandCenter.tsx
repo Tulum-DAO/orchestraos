@@ -8,8 +8,6 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { operatorUserId } from '../lib/runtimeConfig';
-import { useCapabilities } from '../hooks/useCapabilities';
-import { isCapable } from '../lib/capabilities';
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -324,21 +322,11 @@ function ReferenceHubCard({ hub }: { hub: ReferenceHub }) {
 // ── Page ────────────────────────────────────────────────────────────
 
 export default function CommandCenter() {
-  const { data: caps } = useCapabilities();
   const { data, isLoading, error } = useQuery<{ projects: Project[] }>({
-    queryKey: ['project-status', isCapable(caps, 'projectStatus')],
+    queryKey: ['command-center-projects'],
     queryFn: async () => {
-      // Try project-status first (rich format), fall back to projects (simple format).
-      // An install without scripts/project-status-api.py says so (capabilities): go straight to the fallback.
-      try {
-        if (!isCapable(caps, 'projectStatus')) throw new Error('project-status not available');
-        const r = await fetch('/api/project-status');
-        if (r.ok) {
-          const d = await r.json();
-          if (d.projects?.length) return d;
-        }
-      } catch {}
-      // Fallback: adapt /api/projects response to expected shape
+      // Adapt the /api/projects response to the Command Center shape. (The old project-status route is
+      // removed: nothing in the product shipped its script, so it only ever failed over to this path.)
       const r = await fetch('/api/projects');
       const d = await r.json();
       return {
