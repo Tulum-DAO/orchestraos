@@ -116,3 +116,31 @@ def test_secret_is_read_from_env_then_the_data_dirs_env_secrets(monkeypatch, tmp
     assert pa._secret(pa.SECRET_KEY) == "from-file"
     monkeypatch.setenv(pa.SECRET_KEY, "from-env")
     assert pa._secret(pa.SECRET_KEY) == "from-env"
+
+
+# ---- gm (R3): the upgrade break is LOUD, never silent --------------------------------------------
+
+def test_startup_warns_in_one_plain_line_when_enforce_has_no_secret(proxy, monkeypatch, caplog):
+    mod = proxy
+    monkeypatch.delenv("ARTURO_POSTCALL_AUTH", raising=False)
+    monkeypatch.setattr(pa, "_secret", lambda k, d=None: "")
+    with caplog.at_level(logging.WARNING):
+        line = mod._log_postcall_auth_state()
+    assert line and "\n" not in line
+    assert "ELEVENLABS_WEBHOOK_SECRET is not set" in line and "401" in line and "ARTURO_POSTCALL_AUTH=log" in line
+    assert line in caplog.text
+
+
+def test_startup_is_quiet_with_a_secret_or_in_log_mode(proxy, monkeypatch, caplog):
+    mod = proxy
+    monkeypatch.setattr(pa, "_secret", lambda k, d=None: "s3cret")
+    assert mod._log_postcall_auth_state() is None
+    monkeypatch.setattr(pa, "_secret", lambda k, d=None: "")
+    monkeypatch.setenv("ARTURO_POSTCALL_AUTH", "log")
+    assert mod._log_postcall_auth_state() is None
+
+
+def test_the_proxy_main_actually_calls_the_startup_warning():
+    src = pathlib.Path("services/arturo/arturo-proxy.py").read_text()
+    main = src[src.index('if __name__ == "__main__":'):]
+    assert "_log_postcall_auth_state()" in main

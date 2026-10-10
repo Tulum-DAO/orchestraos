@@ -6879,7 +6879,18 @@ def root():
     return jsonify({"service": "OrchestraOS Custom-LLM Proxy", "endpoint": "/v1/chat/completions"})
 
 
+def _log_postcall_auth_state():
+    """gm: the R3 upgrade break is LOUD. One plain warning at startup when the post-call webhook will
+    refuse every push (enforce, no ELEVENLABS_WEBHOOK_SECRET)."""
+    from services.arturo import postcall_auth as _pa
+    w = _pa.startup_warning()
+    if w:
+        log.warning(w)
+    return w
+
+
 if __name__ == "__main__":
+    _log_postcall_auth_state()
     ARTURO_STATE.mkdir(parents=True, exist_ok=True)
     ARTURO_LOGS.mkdir(parents=True, exist_ok=True)
     VOICE_CALLS_DIR.mkdir(parents=True, exist_ok=True)

@@ -31,14 +31,36 @@ _counts = {}
 _lock = threading.Lock()
 
 
-def _secret(k):
+FIX = ("set ELEVENLABS_WEBHOOK_SECRET (ElevenLabs > Agents > Settings > webhook, HMAC) in the env or in "
+       "<data dir>/.env.secrets; ARTURO_POSTCALL_AUTH=log accepts unsigned pushes meanwhile")
+
+
+def mode():
+    """"enforce" (default: unsigned pushes are refused) or "log" (let through, counted)."""
+    return "log" if os.environ.get("ARTURO_POSTCALL_AUTH", "enforce") == "log" else "enforce"
+
+
+def startup_warning(data_dir=None):
+    """ONE plain line when the webhook will refuse every push (enforce, no secret), else None (gm: the
+    upgrade break is loud, never silent). The proxy logs it at startup; `orchestra doctor` shows it as WARN."""
+    if mode() != "enforce":
+        return None
+    secret = _secret(SECRET_KEY) if data_dir is None else _secret(SECRET_KEY, data_dir)
+    if secret:
+        return None
+    return ("post-call webhook: ELEVENLABS_WEBHOOK_SECRET is not set, so every ElevenLabs post-call push is "
+            "refused (401) and call transcripts are not saved. Fix: " + FIX + ".")
+
+
+def _secret(k, data_dir=None):
     """The process env first, then <data dir>/.env.secrets: the same two places every other Arturo secret
     is read from (docs/ARTURO.md). Resolved per call, so setting it needs no restart."""
     env = os.environ.get(k, "").strip()
     if env:
         return env
     try:
-        for line in open(Path(os.environ.get("ORCHESTRA_DIR") or _data_dir()) / ".env.secrets"):
+        base = data_dir or os.environ.get("ORCHESTRA_DIR") or _data_dir()
+        for line in open(Path(base) / ".env.secrets"):
             if line.startswith(k + "="):
                 return line.split("=", 1)[1].strip()
     except OSError:

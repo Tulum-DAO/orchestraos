@@ -585,3 +585,18 @@ def test_marker_is_RENDER_ONLY_json_and_status_data_are_untouched(tmp_path):
     assert "*" not in _by_name(checks)["runtime:claude"].status
     import json as _j
     assert _j.loads(D.render_json(checks))["ok"] is False
+
+
+def test_post_call_secret_row_warns_with_the_fix_and_clears_when_set(tmp_path, monkeypatch):
+    """gm (R3): enforce-by-default with no ELEVENLABS_WEBHOOK_SECRET stops transcript saving. doctor says so."""
+    monkeypatch.delenv("ELEVENLABS_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("ARTURO_POSTCALL_AUTH", raising=False)
+    root = _repo(tmp_path)
+    st = S.load_settings(repo_root=root, config_path=root / "orchestra.toml")
+    row = _by_name(D.run_doctor(st, _probes()))["arturo:post-call-secret"]
+    assert row.status == "WARN" and "ELEVENLABS_WEBHOOK_SECRET is not set" in row.detail
+    assert "ARTURO_POSTCALL_AUTH=log" in row.remedy and row.required is False
+    st.data_dir.mkdir(parents=True, exist_ok=True)
+    (st.data_dir / ".env.secrets").write_text("ELEVENLABS_WEBHOOK_SECRET=x\n")
+    row = _by_name(D.run_doctor(st, _probes()))["arturo:post-call-secret"]
+    assert row.status == "OK"
