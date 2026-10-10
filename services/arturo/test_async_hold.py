@@ -215,3 +215,25 @@ def test_clm_endpoint_settled_async_runs(monkeypatch, tmp_path):
         assert ran and ran[0]["prompt"] == "Turn there."
     finally:
         m.shutdown()
+
+
+def test_follow_up_after_arturo_spoke_is_a_new_turn_not_a_supersede():
+    """Hume merges a growing utterance into one turn ONLY while it has not spoken in between.
+    Once Arturo's audio (an ack, a reply) has played, a newer request is a NEW turn: the work
+    the earlier, complete question asked for must keep running (test_voice_delivery e2e shape)."""
+    m = _manager()
+    try:
+        s, h = _live(m, "H5")
+        T = 1_000_000.0
+        clk = _Clock(T)
+        m.note_clm_request("H5", T, "why are chats in terminal view")
+        h._last_user_ts = T - 0.5
+
+        def script(t):
+            if abs(t - (T + 0.75)) < 0.13:
+                h._last_agent_audio_ts = t                 # the ack is spoken
+            if abs(t - (T + 1.5)) < 0.13:
+                m.note_clm_request("H5", T + 1.5, "are you gonna tell me now")
+        assert _settle(m, "H5", T, clk, script) == "settled"
+    finally:
+        m.shutdown()

@@ -261,6 +261,7 @@ class _Holder:
         self.sock = None
         self.gate = ptt_stream.UplinkGate()
         self.turn_pcm = ptt_stream.TurnPcmBuffer()
+        self._down = hume_audio.Downsampler()   # downlink FIR: state carries across audio_output chunks
         self.partials = None
         # The Scribe partials fork is EL-only: Hume ships native interim user_messages
         # (verbose_transcription), so the O(T^2) re-STT fork stays forced OFF for hume.
@@ -296,7 +297,7 @@ class _Holder:
         self._rec = None          # HUME-RECOVERY: latest streamed reply awaiting proof Hume spoke it
         self._rec_lock = threading.Lock()
         self._req_q = {}          # SUPERSEDE: CLM request t0 -> normalized user text (recent only)
-        self._latest_req = None   # (t0, normalized text) of the newest CLM request
+        self._latest_req = None   # (t0, normalized text, Arturo audio ts when noted) of the newest request
         # TURN-LATENCY (ios-watch-dev msg_b22a71d8, log-only): the operator's final at the relay ->
         # Arturo's first reply text / first reply audio. This, not generate(), is what he hears.
         self._final_at = None
@@ -499,16 +500,20 @@ class _Holder:
             for t in sorted(self._req_q)[:-8]:
                 del self._req_q[t]
             if self._latest_req is None or request_t0 >= self._latest_req[0]:
-                self._latest_req = (request_t0, q)
+                self._latest_req = (request_t0, q, self._last_agent_audio_ts)
             r = self._rec
-            if r and not r["done"] and r["t0"] < request_t0 and self._req_q.get(r["t0"]) not in (None, q):
+            if r and not r["done"] and self._superseded_locked(r["t0"]):
                 r["done"] = True
                 log.info(f"relay {self.cid}: HUME-RECOVERY superseded pending reply ({len(r['text'])} chars): "
                          f"a newer, different request began")
 
     def _superseded_locked(self, request_t0):
+        """A newer request with DIFFERENT text began with NO Arturo audio since request_t0. Hume
+        merges a growing utterance into one turn only while it has not spoken in between; once
+        Arturo's audio played, the newer request is a new turn (a follow-up), not a supersede."""
         q, lr = self._req_q.get(request_t0), self._latest_req
-        return q is not None and lr is not None and lr[0] > request_t0 and lr[1] != q
+        return (q is not None and lr is not None and lr[0] > request_t0 and lr[1] != q
+                and lr[2] < request_t0)
 
     def superseded_since(self, request_t0):
         """True once a newer CLM request with DIFFERENT user text began on this call."""
@@ -921,7 +926,7 @@ class _Holder:
             if self.m.speaking_enabled:
                 self._speak_on_audio()            # wave-5: hume path speaks too (echo gate)
             try:
-                pcm = hume_audio.wav_to_pcm16k(base64.b64decode(d.get("data") or ""))
+                pcm = self._down.feed(base64.b64decode(d.get("data") or ""))
             except Exception:
                 pcm = b""
             if pcm:
