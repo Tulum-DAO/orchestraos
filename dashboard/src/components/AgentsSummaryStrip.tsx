@@ -17,7 +17,7 @@ export interface AgentsSummaryStripProps {
    *  but not a node in the graph. Rather than hide the busiest pair (it IS the busiest), give
    *  it the affordance it was missing. */
   onSelectBusiest?: () => void;
-  /** New agent. A plain "+" right after the title (Shaw, 2026-10-10: "the new agent button should
+  /** New agent. A plain "+" right after the title (the operator, 2026-10-10: "the new agent button should
    *  be a plus next to the agents title. We're pursuing a minimalist path"). Absent = no "+": the
    *  caller passes it only when the deployment offers New Agent (showNewAgent). */
   onNewAgent?: () => void;

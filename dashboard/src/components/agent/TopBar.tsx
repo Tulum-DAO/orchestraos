@@ -104,7 +104,7 @@ export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen, seat, mode = 'ch
         >
           <Brain size={24} />
         </button>
-        {/* Arturo + the bell END THIS ROW on desktop (Shaw, 2026-10-10: "make all of these line up
+        {/* Arturo + the bell END THIS ROW on desktop (the operator, 2026-10-10: "make all of these line up
             and look like they're from the same package"). Same 40px boxes, same 4px gap, same centre
             line, because they are IN the row; the layout's fixed corner cluster stands down on this
             route. On phones they live in the layout's own top bar above this one. */}
