@@ -145,7 +145,7 @@ def test_relay_unknown_or_ended_call_is_gone():
 
 # ---- replay: vc_97f296f6dc024d1b (phone, 2026-10-06 23:18 ET, the deep_query call) ----
 
-def test_replay_deep_query_call_result_never_lands_over_shaw_or_arturo():
+def test_replay_deep_query_call_result_never_lands_over_the_operator_or_arturo():
     """Journal timeline (s from start): 0.0 the operator asks; deep_query; 64.3 the operator: "Are you gonna
     tell me now?"; 66.0 Arturo replies (~6 s of audio). The gm_command result landing time
     is not logged; replay it landing at 62.0, inside the operator's second question. Gates must hold
