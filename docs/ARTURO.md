@@ -243,6 +243,20 @@ is refused, and the relay never opens a socket.
 So the most a day can cost is 120 minutes at OpenAI's rate. Delegated turns also run Arturo's own brain, billed
 as any text turn is. An out-of-credit or invalid key is shown on the call as "switch vendor in Settings".
 
+## Hume EVI config
+
+`services/arturo/hume/arturo-4mini.config.json` is a starting EVI config for the Hume voice: the custom
+language model is Arturo's `/arturo/v1/chat/completions` (replace `YOUR-PUBLIC-HOST`), a fixed greeting, and
+30-minute timeouts. Create it in Hume, then set `HUME_CONFIG_ID` / `HUME_CONFIG_VERSION` in
+`<data.dir>/.env.secrets`.
+
+- **The voice is a stock Hume library voice** (`{"provider": "HUME_AI", "name": "Ito"}`), so the config works
+  on any Hume account. **Set your own:** another library voice by name, or a voice you made in Hume as
+  `{"provider": "CUSTOM_VOICE", "id": "<your voice id>"}`. Custom voices belong to your account; never commit
+  their ids.
+- Once Arturo runs, the voice picker (`GET /ptt/voices`, `PUT /ptt/voice`) changes the voice per call without
+  editing the config; it lists your own custom voices first.
+
 ## Paths, config keys, env — the index
 
 | thing | where |

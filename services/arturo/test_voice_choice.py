@@ -45,7 +45,7 @@ def test_set_refuses_bad_input(store):
 def test_list_hume_voices_aggregates_and_maps():
     pages = {
         ("CUSTOM_VOICE", 0): {"total_pages": 1, "voices_page": [
-            {"id": "v-frank", "name": "Frank", "provider": "CUSTOM_VOICE"}]},
+            {"id": "v-orla", "name": "Orla", "provider": "CUSTOM_VOICE"}]},
         ("HUME_AI", 0): {"total_pages": 2, "voices_page": [
             {"id": "v-ito", "name": "Ito", "provider": "HUME_AI"}]},
         ("HUME_AI", 1): {"total_pages": 2, "voices_page": [
@@ -55,7 +55,7 @@ def test_list_hume_voices_aggregates_and_maps():
     def fetch(provider, page_number):
         return pages[(provider, page_number)]
     voices = vc.list_hume_voices(fetch=fetch)
-    assert {"id": "v-frank", "name": "Frank", "provider": "custom"} in voices
+    assert {"id": "v-orla", "name": "Orla", "provider": "custom"} in voices
     assert {"id": "v-ito", "name": "Ito", "provider": "hume_library"} in voices
     assert {"id": "v-kora", "name": "Kora", "provider": "hume_library"} in voices
     assert len(voices) == 3
