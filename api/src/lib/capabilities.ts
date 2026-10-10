@@ -15,8 +15,6 @@ import { loadConfig } from './config.js';
 
 /** Where each optional script lives. `code` = the checkout; `data` = the install's data dir. */
 const OPTIONAL = {
-  projectStatus: { root: 'code', parts: ['scripts', 'project-status-api.py'] },  // GET /api/project-status
-  voicePromptSync: { root: 'code', parts: ['voice-agent.py'] },                  // POST /api/voice/sync-prompts
   learningLog: { root: 'code', parts: ['scripts', 'log-interaction.py'] },       // services/learning.ts
   inspectScript: { root: 'data', parts: ['skills', 'inspect-element.js'] },      // GET /api/inspect-feedback/script.js
 } as const;
