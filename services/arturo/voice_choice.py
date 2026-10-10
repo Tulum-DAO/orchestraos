@@ -186,9 +186,12 @@ def short_title(name):
 GROUP_CUSTOM, GROUP_HUME = "Your voices", "Hume voices"   # server-named headings (ios msg_0aa40402 option c)
 
 
-def _row(vid, name, title, recommended, order, group=None):
+def _row(vid, name, title, recommended, order, group=None, provider="hume_library"):
+    # `provider` is a LEGACY v1 field: the App Store client decodes Hume rows as {id, name, provider}. It stays
+    # until the v2 client has shipped everywhere; v2 clients use `group` instead.
     return {"id": vid, "name": name, "title": title, "subtitle": name if name != title else None,
-            "recommended": bool(recommended), "order": int(order), "sample_url": None, "group": group}
+            "recommended": bool(recommended), "order": int(order), "sample_url": None, "group": group,
+            "provider": provider}
 
 
 def voice_rows(vendor, raw=None):
@@ -197,7 +200,8 @@ def voice_rows(vendor, raw=None):
     heading the server names; clients render whatever groups arrive, in `order`. A voice the operator made themselves
     (Hume custom) is its own group, first and recommended; Hume's library follows."""
     if vendor == "openai":
-        return [_row(v, v.capitalize(), v.capitalize(), True, i) for i, v in enumerate(OPENAI_VOICES)]
+        return [_row(v, v.capitalize(), v.capitalize(), True, i, provider="openai")
+                for i, v in enumerate(OPENAI_VOICES)]
     if vendor != "hume":
         raise ValueError(f"no server-side voice list for {vendor!r}")
     raw = cached_hume_voices() if raw is None else raw
@@ -209,7 +213,7 @@ def voice_rows(vendor, raw=None):
             continue
         name = " ".join(name.split())
         if v.get("provider") == "custom":
-            rows.append(_row(vid, name, short_title(name), True, i, GROUP_CUSTOM))
+            rows.append(_row(vid, name, short_title(name), True, i, GROUP_CUSTOM, provider="custom"))
         elif name in curated:
             pos, title = curated[name]
             rows.append(_row(vid, name, title, True, 1000 + pos, GROUP_HUME))

@@ -11,7 +11,7 @@ import pytest
 from services.arturo import openai_live as ol
 from services.arturo import voice_choice as vc
 
-ROW_KEYS = {"id", "name", "title", "subtitle", "recommended", "order", "sample_url", "group"}
+ROW_KEYS = {"id", "name", "title", "subtitle", "recommended", "order", "sample_url", "group", "provider"}
 HUME_RAW = [{"id": f"h{i}", "name": n, "provider": "hume_library"} for i, n in enumerate(
     ["Serene Assistant", "Warm Female Assistant Voice", "Warm American Female", "Comforting Male Conversationalist",
      "Soft Male Conversationalist", "Deep Male Conversational Voice", "Conversational English Guy",
@@ -184,3 +184,13 @@ def test_a_cloned_voice_keeps_its_own_server_named_group_first():
     assert rows[0]["id"] == "c1" and rows[0]["group"] == "Your voices" and rows[0]["recommended"] is True
     assert {r["group"] for r in rows[1:]} == {"Hume voices"}
     assert all(r["group"] is None for r in vc.voice_rows("openai"))
+
+
+def test_the_shipped_client_still_decodes_every_row():
+    """The App Store build decodes Hume rows as {id, name, provider}. Until the v2 client ships, every row keeps
+    those v1 fields with their v1 values, or the shipped Hume picker could decode to an empty list."""
+    raw = [{"id": "c1", "name": "Frank", "provider": "custom"}] + HUME_RAW
+    for r in vc.voice_rows("hume", raw=raw):
+        assert r["provider"] in ("custom", "hume_library")
+    assert vc.voice_rows("hume", raw=raw)[0]["provider"] == "custom"
+    assert {r["provider"] for r in vc.voice_rows("openai")} == {"openai"}

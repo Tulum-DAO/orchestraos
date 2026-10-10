@@ -51,7 +51,8 @@ def test_voices_get_and_voice_get_put(monkeypatch, tmp_path):
     assert j["current"] is None
     # contract v2 (msg_a7cf1484): server-rendered, strictly typed display rows
     assert j["voices"] == [{"id": "v-frank", "name": "Frank", "title": "Frank", "subtitle": None,
-                            "recommended": True, "order": 0, "sample_url": None, "group": "Your voices"}]
+                            "recommended": True, "order": 0, "sample_url": None, "group": "Your voices",
+                            "provider": "custom"}]
     # EL voices are client-side
     assert c.get("/ptt/voices?vendor=elevenlabs", environ_base=loop).status_code == 400
     # PUT persists, echoes the record (no voices list in the PUT response)
@@ -127,3 +128,24 @@ def test_no_vendor_param_on_a_default_install_still_means_hume(monkeypatch, tmp_
     assert c.get("/ptt/voice", environ_base=loop).get_json()["vendor"] == "hume"
     monkeypatch.setattr(vv, "get_vendor", lambda: "openai")          # a vendor WITH a list is still followed
     assert c.get("/ptt/voices", environ_base=loop).get_json()["vendor"] == "openai"
+
+
+def test_the_shipped_client_request_decodes_as_v1_end_to_end(monkeypatch, tmp_path):
+    """gm (PR3): v1 provider-field compat. The App Store build calls GET /ptt/voices with NO ?vendor= and decodes
+    each row as {id: String, name: String, provider: String} with provider custom | hume_library. Through the real
+    route on a default public install (live vendor elevenlabs), every row must decode that way."""
+    monkeypatch.setenv("ARTURO_STREAM_RELAY", "1")
+    mod = _load_proxy()
+    from services.arturo import voice_choice as vc, voice_vendor as vv
+    monkeypatch.setattr(vc, "_default", vc.VoiceChoiceStore(path=tmp_path / "v.json", log_path=tmp_path / "v.log"))
+    monkeypatch.setattr(vc, "list_hume_voices", lambda fetch=None: [
+        {"id": "c1", "name": "Frank", "provider": "custom"},
+        {"id": "h1", "name": "Serene Assistant", "provider": "hume_library"},
+        {"id": "h2", "name": "Some Library Voice", "provider": "hume_library"}])
+    monkeypatch.setattr(vv, "get_vendor", lambda: "elevenlabs")
+    j = mod.app.test_client().get("/ptt/voices", environ_base={"REMOTE_ADDR": "127.0.0.1"}).get_json()
+    assert j["ok"] and len(j["voices"]) == 3
+    for row in j["voices"]:
+        assert isinstance(row["id"], str) and row["id"] and isinstance(row["name"], str) and row["name"]
+        assert row["provider"] in ("custom", "hume_library"), row
+    assert {r["id"]: r["provider"] for r in j["voices"]} == {"c1": "custom", "h1": "hume_library", "h2": "hume_library"}
