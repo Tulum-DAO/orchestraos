@@ -215,7 +215,8 @@ export default function Overview() {
       {/* Header with the New Agent button (it replaced Going Dark, which assumed a
           second machine and a transit flow most installs do not have; the go-dark
           endpoints and the transit banner above are untouched). */}
-      <div className="flex items-center justify-between">
+      {/* md:mr-28: the layout's fixed top-right Arturo + bell cluster (DashboardLayout) floats over this corner on desktop */}
+      <div className="flex items-center justify-between md:mr-28">
         <h1 className="text-2xl font-bold text-neutral-100">Overview</h1>
         {showNewAgent() && <button
           onClick={() => setShowNewAgentModal(true)}

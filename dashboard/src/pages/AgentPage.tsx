@@ -63,34 +63,27 @@ export default function AgentPage() {
     return sendKeyToAgent(agentId, 'escape');
   };
 
-  // THE FLOATING COMPOSER'S HEIGHT, measured. The transcript pads its bottom by it so the last
-  // message is never under the pill, and below 640px the Arturo pill lifts above it (it covered
-  // Send on phones). Published as --composer-h on the chat column and --agent-composer-h on the
-  // root (the Arturo pill lives outside this page); removed when the chat column unmounts.
+  // THE FLOATING COMPOSER'S HEIGHT, measured, published as --composer-h on the chat column: the
+  // transcript pads its bottom by it so the last message is never under the pill. (It used to add
+  // the floating Arturo pill and publish a lift for it; Arturo now lives in the top bar.)
   const chatRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const dock = dockRef.current;
     const col = chatRef.current;
     if (!dock || !col) return;
-    const root = document.documentElement;
     const apply = () => {
       const h = Math.ceil(dock.getBoundingClientRect().height);
       const scroller = col.querySelector<HTMLElement>('[data-testid="transcript-scroll"]');
       // keep a reader who was at the bottom AT the bottom when the pill grows
       const pinned = !!scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
-      // ...plus the Arturo pill, which lifts to sit on top of the dock (arturo.css), so the
-      // transcript clears both. Absent (pane open) = nothing to clear.
-      const arturo = document.querySelector('.arturo-pill');
-      const extra = arturo ? Math.ceil(arturo.getBoundingClientRect().height) + 8 : 0;
-      col.style.setProperty('--composer-h', `${h + extra}px`);
-      root.style.setProperty('--agent-composer-h', `${h}px`);
+      col.style.setProperty('--composer-h', `${h}px`);
       if (scroller && pinned) scroller.scrollTop = scroller.scrollHeight;
     };
     apply();
     const ro = new ResizeObserver(apply);
     ro.observe(dock);
-    return () => { ro.disconnect(); root.style.removeProperty('--agent-composer-h'); };
+    return () => ro.disconnect();
   }, [mode]);
 
   // Load settings from storage on mount

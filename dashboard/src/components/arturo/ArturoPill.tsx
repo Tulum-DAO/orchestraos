@@ -1,7 +1,9 @@
 /**
- * ArturoPill — the always-available "Ask Arturo" pill, bottom-right on EVERY page (track T4, S5/S6).
+ * ArturoPill — Arturo's conversation pane, on EVERY page (track T4, S5/S6). Opened by ArturoButton in
+ * the top bar, next to the bell (Shaw, 2026-10-10: the floating pill that used to open it covered
+ * the text), and anchored under that bar.
  *
- * Tap → a conversation pane anchored bottom-right. It does NOT dim or block the page. Two things the operator asked for on
+ * The pane It does NOT dim or block the page. Two things the operator asked for on
  * 2026-09-18, after using the surface:
  *
  *  1. "swap between Arturo's previous conversations and pick up right where we left off" —
@@ -31,6 +33,7 @@ import { useHandsFreeCall } from '../../hooks/useHandsFreeCall';
 import SpawnedAgentCard from './SpawnedAgentCard';
 import { ModelSelectorSheet } from '../agent/ModelSelectorSheet';
 import { useArturoBrain } from '../../stores/arturoBrain';
+import { useArturoUi } from '../../stores/arturoUi';
 import { brainFromThread, describeTurnError, toWireBrain } from '../../lib/arturoBrain';
 
 interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[]; spawned?: string[]; at: number; live?: boolean; state?: SendState;
@@ -56,7 +59,10 @@ function rememberConv(id: string) {
 export function ArturoPill() {
   const location = useLocation();
   const params = useParams();
-  const [open, setOpen] = useState(false);
+  // Shared with ArturoButton in the top bar (stores/arturoUi).
+  const open = useArturoUi((st) => st.open);
+  const setOpen = useArturoUi((st) => st.setOpen);
+  const setExchanges = useArturoUi((st) => st.setExchanges);
   const [draft, setDraft] = useState('');
   const [turns, setTurns] = useState<PillTurn[]>([]);
   const [busy, setBusy] = useState(false);
@@ -215,32 +221,18 @@ export function ArturoPill() {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open]);
-
-  /** Sit ABOVE whatever the page already docks at the bottom.
-   *  The agent session page docks its own composer there — Inject, the inject-mode toggle and
-   *  the two call buttons — and a pill pinned to bottom:20px lands right on top of them
-   *  (measured: 4 controls covered). Measured at runtime rather than keyed to routes, so a
-   *  page that grows a dock later is handled without touching this file. */
-  // NO RUNTIME DISPLACEMENT (operator ruling 2026-10-06). This used to measure every
-  // bottom-docked strip on the page and lift the pill clear of it, which meant the pill
-  // sat in a different place on every page and JUMPED when a composer appeared. Shaw asked
-  // for one spot, always, at the highest z-index: it now sits ON TOP of a bottom bar rather
-  // than above it, and the corner is fixed in arturo.css.
+  }, [open, setOpen]);
 
   function toggleContextCard() {
     if (ctxOn) dismissContext(convId); else restoreContext(convId);
     setCtxOn(!ctxOn);
   }
 
-  if (!open) {
-    return (
-      <button className="arturo-pill" onClick={() => setOpen(true)} aria-label="Ask Arturo">
-        <Mic className="mic" /> Ask Arturo
-        {turns.length > 0 && <span className="arturo-pill-count">{Math.ceil(turns.length / 2)}</span>}
-      </button>
-    );
-  }
+  // The button's badge: exchanges in this thread.
+  useEffect(() => { setExchanges(Math.ceil(turns.length / 2)); }, [turns.length, setExchanges]);
+
+  // Closed: nothing here. The way in is ArturoButton, in the top bar next to the bell.
+  if (!open) return null;
   return (
     <>
       {/* No backdrop, deliberately (operator, 2026-09-19): the pane must not dim the page and

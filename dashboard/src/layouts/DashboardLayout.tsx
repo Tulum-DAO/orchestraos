@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { CommandPalette } from '../components/CommandPalette';
 import { Outlet, useLocation } from 'react-router-dom';
 import { RouteErrorBoundary } from '../components/RouteErrorBoundary';
@@ -8,6 +8,7 @@ import { useMatch } from 'react-router-dom';
 import { VoiceCallBubble } from '../components/VoiceCallModal';
 import NotificationBell from '../components/NotificationBell';
 import { ArturoPill } from '../components/arturo/ArturoPill';
+import { ArturoButton } from '../components/arturo/ArturoButton';
 import CoachingToast from '../components/CoachingToast';
 import { useOrchestraStore } from '../stores/useOrchestraStore';
 import { initAutoDiscovery } from '../lib/telemetry';
@@ -16,6 +17,21 @@ import NotFound from '../components/NotFound';
 
 export function DashboardLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // THE PHONE TOP BAR'S BOTTOM EDGE, published as --topbar-h: the Arturo pane opens under it, and
+  // the Agents-page chat panel starts below it so the bar (Arturo + the bell) stays usable while
+  // the panel is open (Shaw, 2026-10-10). 0 on desktop, where this bar is hidden.
+  const topbarRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const bar = topbarRef.current;
+    if (!bar) return;
+    const root = document.documentElement;
+    const apply = () => root.style.setProperty('--topbar-h', `${Math.max(0, Math.round(bar.getBoundingClientRect().bottom))}px`);
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(bar);
+    window.addEventListener('resize', apply);
+    return () => { ro.disconnect(); window.removeEventListener('resize', apply); root.style.removeProperty('--topbar-h'); };
+  }, []);
   // A CHAT ROUTE OWNS ITS OWN VERTICAL SPACE. Shaw: the composer bar spanned the full window and
   // cut the sidebar off at the bottom, because it was laid out at the PAGE level rather than
   // inside the chat column. The root cause is here: <main> scrolled and padded every route the
@@ -66,7 +82,7 @@ export function DashboardLayout() {
       {/* Main content */}
       <main className={`flex-1 min-w-0 flex flex-col safe-top safe-bottom ${isChatRoute ? 'overflow-hidden' : 'overflow-y-auto'}`}>
         {/* Mobile header with hamburger */}
-        <div className="sticky top-0 z-20 flex items-center gap-3 border-b border-neutral-800 bg-neutral-950/90 backdrop-blur px-4 py-3 md:hidden">
+        <div ref={topbarRef} className="sticky top-0 z-20 flex items-center gap-3 border-b border-neutral-800 bg-neutral-950/90 backdrop-blur px-4 py-3 md:hidden">
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className="p-1 -ml-1 text-neutral-400 hover:text-white"
@@ -75,7 +91,9 @@ export function DashboardLayout() {
             {sidebarOpen ? <X size={22} /> : <Menu size={22} />}
           </button>
           <span className="text-sm font-bold tracking-tight text-white">orchestraOS</span>
-          <div className="ml-auto">
+          {/* Arturo's one spot, next to the bell, on every page (Shaw, 2026-10-10). */}
+          <div className="ml-auto flex items-center gap-2">
+            {showArturoPill() && <ArturoButton />}
             <NotificationBell />
           </div>
         </div>
@@ -92,7 +110,8 @@ export function DashboardLayout() {
       </main>
 
       {/* Desktop notification bell — fixed top-right */}
-      <div className="hidden md:block fixed top-4 right-4 z-30">
+      <div className="hidden md:flex fixed top-4 right-4 z-30 items-center gap-2">
+        {showArturoPill() && <ArturoButton />}
         <NotificationBell />
       </div>
 
@@ -109,7 +128,7 @@ export function DashboardLayout() {
           nothing until it is opened. */}
       <CommandPalette />
 
-            {/* Arturo pill — always available on every non-home page (T4); replaces the legacy JarvisPanel */}
+      {/* Arturo's pane (T4; replaces the legacy JarvisPanel). Opened by ArturoButton in the top bar. */}
       {showArturoPill() && <ArturoPill />}
     </div>
   );

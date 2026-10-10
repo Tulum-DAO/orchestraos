@@ -27,7 +27,8 @@ export default function Voice() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      {/* md:mr-28: the layout's fixed top-right Arturo + bell cluster (DashboardLayout) floats over this corner on desktop */}
+      <div className="flex items-center justify-between mb-6 md:mr-28">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-3">
             <Phone size={24} />

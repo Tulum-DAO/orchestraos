@@ -427,12 +427,9 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     requestAnimationFrame(() => menuItemsEls()[0]?.focus());
     document.addEventListener('pointerdown', onDown);
     document.addEventListener('keydown', onKey, true);
-    // The Arturo pill (z-75, fixed) would sit on top of this menu; arturo.css hides it while open.
-    document.documentElement.setAttribute('data-composer-menu', 'open');
     return () => {
       document.removeEventListener('pointerdown', onDown);
       document.removeEventListener('keydown', onKey, true);
-      document.documentElement.removeAttribute('data-composer-menu');
     };
   }, [menuOpen]);
   const menuRow = 'w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-left text-foreground hover:bg-muted rounded-lg';
