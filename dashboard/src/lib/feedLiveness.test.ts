@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { feedHealthOf, staleStyleFor, isDegraded, lastSeenLabel, STALE_AFTER_MS, DISCONNECTED_AFTER_MS } from './feedLiveness.ts';
+import {
+  feedHealthOf, staleStyleFor, isDegraded, lastSeenLabel, STALE_AFTER_MS, DISCONNECTED_AFTER_MS,
+  updatingStyleFor, styleForAgentState, FETCH_OUTSTANDING_MS,
+} from './feedLiveness.ts';
 
 const NOW = 1_700_000_000_000;
 const at = (ageMs: number, extra = {}) =>
@@ -92,4 +95,98 @@ test('age is reported for a stale verdict so a caller can say how old', () => {
   assert.equal(at(45_000).lastSeenAt, NOW - 45_000);
   // clock skew (a server ahead of the browser) must not produce a negative age
   assert.equal(feedHealthOf({ dataUpdatedAt: NOW + 5_000, hasData: true, now: NOW }).ageMs, 0);
+});
+
+// ---- THE HIDDEN TAB (Shaw 2026-10-10: every status blank for ~2 min on returning to the tab) ----
+// The browser pauses the poll while the tab is hidden. Coming back after 10 minutes, the last
+// success is 10 minutes old through no fault of the feed: that must read UPDATING (dimmed, last
+// known colours), then LIVE within one fetch, with no grey frame in between.
+
+
+const TEN_MIN = 10 * 60_000;
+const WORKING = { label: 'working', dot: 'bg-orange-500 animate-pulse', text: 'text-orange-300' };
+
+test('hidden 10 min -> visible: every frame until the refresh lands is UPDATING, never grey', () => {
+  const back = NOW;                       // the tab became visible now
+  const last = NOW - TEN_MIN;             // last success before it was hidden
+  const frames = [
+    // the instant it is visible, before the refetch has even started
+    feedHealthOf({ dataUpdatedAt: last, hasData: true, visibleSince: back, now: back }),
+    // the refetch in flight, 1 s and 9 s in
+    feedHealthOf({ dataUpdatedAt: last, hasData: true, isFetching: true, fetchStartedAt: back, visibleSince: back, now: back + 1_000 }),
+    feedHealthOf({ dataUpdatedAt: last, hasData: true, isFetching: true, fetchStartedAt: back, visibleSince: back, now: back + 9_000 }),
+  ];
+  for (const f of frames) {
+    assert.equal(f.health, 'updating');
+    assert.equal(isDegraded(f), false);                       // no "Connection lost" banner
+    assert.equal(staleStyleFor(f), undefined);                // no grey
+  }
+  // the fetch lands: live
+  assert.equal(feedHealthOf({ dataUpdatedAt: back + 1_200, hasData: true, visibleSince: back, now: back + 1_300 }).health, 'live');
+});
+
+test('UPDATING paints the last-known colour DIMMED, without the pulse, and says so', () => {
+  const v = feedHealthOf({ dataUpdatedAt: NOW - TEN_MIN, hasData: true, isFetching: true, fetchStartedAt: NOW, visibleSince: NOW, now: NOW });
+  const s = styleForAgentState(v, WORKING);
+  assert.match(s.dot, /bg-orange-500/);
+  assert.match(s.dot, /opacity-40/);
+  assert.doesNotMatch(s.dot, /animate-pulse/);
+  assert.match(s.label, /status updating…$/);
+  assert.notEqual(s.dot, 'bg-neutral-600');
+  // control: live is untouched, and updatingStyleFor says nothing about other states
+  assert.deepEqual(styleForAgentState(feedHealthOf({ dataUpdatedAt: NOW, hasData: true, now: NOW }), WORKING), WORKING);
+  assert.equal(updatingStyleFor({ health: 'live' }, WORKING), undefined);
+});
+
+test('a FAILING fetch still greys, hidden tab or not', () => {
+  // errored after coming back
+  const err = feedHealthOf({ dataUpdatedAt: NOW - TEN_MIN, hasData: true, isError: true, visibleSince: NOW - 2_000, now: NOW });
+  assert.ok(isDegraded(err));
+  assert.equal(staleStyleFor(err)?.dot, 'bg-neutral-600');
+  // errored on fresh data: stale, not disconnected
+  assert.equal(feedHealthOf({ dataUpdatedAt: NOW - 5_000, hasData: true, isError: true, now: NOW }).health, 'stale');
+});
+
+test('a fetch outstanding longer than FETCH_OUTSTANDING_MS is stale, not "updating" forever', () => {
+  const at = (inFlightMs: number) => feedHealthOf({
+    dataUpdatedAt: NOW - TEN_MIN, hasData: true, isFetching: true,
+    fetchStartedAt: NOW - inFlightMs, visibleSince: NOW - inFlightMs, now: NOW,
+  });
+  assert.equal(at(FETCH_OUTSTANDING_MS).health, 'updating');          // boundary: still waiting
+  assert.ok(isDegraded(at(FETCH_OUTSTANDING_MS + 1)));                // past it: not answering
+  // even over FRESH data, a hung fetch is not live
+  assert.ok(isDegraded(feedHealthOf({ dataUpdatedAt: NOW - 2_000, hasData: true, isFetching: true, fetchStartedAt: NOW - 11_000, now: NOW })));
+});
+
+test('visible all along and no success for a stale window: still the P1 (stale), not updating', () => {
+  // the poller went silent while the operator was LOOKING (visibleSince long ago / unknown)
+  assert.equal(feedHealthOf({ dataUpdatedAt: NOW - 45_000, hasData: true, visibleSince: NOW - TEN_MIN, now: NOW }).health, 'stale');
+  assert.equal(feedHealthOf({ dataUpdatedAt: NOW - 45_000, hasData: true, now: NOW }).health, 'stale');
+  // but back from hidden 5 s ago, the same data is just waiting on the refetch
+  assert.equal(feedHealthOf({ dataUpdatedAt: NOW - 45_000, hasData: true, visibleSince: NOW - 5_000, now: NOW }).health, 'updating');
+});
+
+test('ONE agents poller: no view defines its own (slower) ["agents"] query', async () => {
+  // gm 2026-10-10: a view that renders dots must not sit on a slower observer. Tasks ran its own
+  // 30 s one (with its own copy of the fetcher), Analytics a 15 s one. Everything goes through
+  // hooks/useAgents.ts (3 s) now; a new useQuery(['agents']) anywhere else fails here.
+  const { readdirSync, readFileSync, statSync } = await import('node:fs');
+  const { join, relative } = await import('node:path');
+  const root = new URL('..', import.meta.url).pathname;
+  const own: string[] = [];
+  const walk = (dir: string) => {
+    for (const name of readdirSync(dir)) {
+      const p = join(dir, name);
+      if (statSync(p).isDirectory()) { walk(p); continue; }
+      if (!/\.(ts|tsx)$/.test(name) || /\.test\./.test(name)) continue;
+      const rel = relative(root, p);
+      if (rel === 'hooks/useAgents.ts') continue;
+      const src = readFileSync(p, 'utf8');
+      // invalidate/refetch by key is fine; DEFINING a query with that key is not
+      if (/useQuery\(\s*\{[^}]*queryKey:\s*\[\s*'agents'\s*\]/s.test(src)) own.push(rel);
+    }
+  };
+  walk(root);
+  assert.deepEqual(own, []);
+  assert.match(readFileSync(join(root, 'hooks/useAgents.ts'), 'utf8'), /refetchInterval:\s*3_000/);
 });

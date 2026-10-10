@@ -41,6 +41,17 @@ export function LiveStatusLine({ state, feed, stateAgeS, tool, onResume }: LiveS
     );
   }
 
+  // UPDATING (back from a hidden tab): the state below is minutes old until the refresh lands.
+  // Say that, muted; never the grey "Connection lost", never a stale "Working · 3m".
+  if (feed && feed.health === 'updating') {
+    return (
+      <div className="w-full max-w-[860px] mx-auto flex items-center gap-2 px-3 py-1.5 text-[11px] text-neutral-500" role="status">
+        <Loader2 size={12} className="animate-spin shrink-0 opacity-60" />
+        <span>Status updating…</span>
+      </div>
+    );
+  }
+
   const st: LiveState = normalizeAgentState(state);
   // Capped and centred on the SAME column as the transcript and the composer: three stacked
   // elements with three different widths is the ragged-edge problem one level up.

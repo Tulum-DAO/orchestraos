@@ -17,7 +17,7 @@
 import clsx from 'clsx';
 import { useRecentAgents } from '../stores/recentAgents';
 import { normalizeAgentState, STATE_STYLE } from '../lib/agentStatus';
-import { staleStyleFor, type FeedVerdict } from '../lib/feedLiveness';
+import { staleStyleFor, updatingStyleFor, type FeedVerdict } from '../lib/feedLiveness';
 import { useAgents } from '../hooks/useAgents';
 import { useFeedHealth } from '../hooks/useFeedHealth';
 
@@ -49,9 +49,12 @@ export function chipStateFor(status: string | undefined, hasPendingMenu: boolean
   // every send failed). A colour is a claim about NOW; if the feed is not live we cannot make it.
   const stale = feed && staleStyleFor(feed);
   if (stale) return stale;
+  // UPDATING (back from a hidden tab, refresh in flight): the last-known colour, dimmed.
+  const base = hasPendingMenu ? { ...MENU_BLUE, text: '' } : STATE_STYLE[normalizeAgentState(status)];
+  const updating = feed && updatingStyleFor(feed, { label: base.label, dot: base.dot, text: '' });
+  if (updating) return { dot: updating.dot, label: updating.label };
   if (hasPendingMenu) return MENU_BLUE;        // blue = pending menu ONLY (msg_0c2bd052)
-  const s = STATE_STYLE[normalizeAgentState(status)];
-  return { dot: s.dot, label: s.label };
+  return { dot: base.dot, label: base.label };
 }
 
 export function RecentAgentChips({ currentId }: { currentId: string }) {

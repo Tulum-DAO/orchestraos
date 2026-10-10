@@ -14,7 +14,7 @@ import { subscribeTranscriptStream } from '../../lib/transcriptStream';
 import { GroupedNodeView } from './TranscriptCards';
 import { groupToolRuns, isInterrupted } from '../../lib/toolGroups';
 import { normalizeAgentState, STATE_STYLE, type LiveState } from '../../lib/agentStatus';
-import { staleStyleFor, isDegraded, type FeedVerdict } from '../../lib/feedLiveness';
+import { styleForAgentState, isDegraded, type FeedVerdict } from '../../lib/feedLiveness';
 import OptionsMenuCard, { type PendingMenu } from './OptionsMenuCard';
 
 export type { LiveState };
@@ -46,10 +46,8 @@ interface Props {
 // a fixed STATE_STYLE label — so any unrecognized value (incl. a self-reported
 // multi-KB blob) collapses to the neutral 'unknown' pill.
 function StatePill({ state, feed }: { state: LiveState; feed?: FeedVerdict }) {
-  const stale = feed && staleStyleFor(feed);
-  const s = stale
-    ? { ...stale, text: 'text-neutral-400' }
-    : (STATE_STYLE[state] || STATE_STYLE.unknown);
+  // One rule with every other surface: stale -> grey, updating -> dimmed last-known colour.
+  const s = styleForAgentState(feed, STATE_STYLE[state] || STATE_STYLE.unknown);
   return (
     <span className={`inline-flex items-center gap-1.5 text-[11px] ${s.text}`}>
       <span className={`w-2 h-2 rounded-full ${s.dot}`} />
@@ -123,7 +121,9 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   // No feed prop at all (the fixture harness) means "not fed from a live feed", which must not
   // become "the feed is dead" — it renders as before. Only an ACTUAL non-live verdict suppresses.
   // CONNECTING is not 'not live' — on first paint nothing has been contradicted yet.
-  const live = !feed || !isDegraded(feed);
+  // UPDATING is not live either: the state is minutes old until the refresh lands, so no
+  // "agent is working…" claim from it.
+  const live = !feed || (!isDegraded(feed) && feed.health !== 'updating');
 
   // autoscroll if pinned to bottom
   const onScroll = () => {

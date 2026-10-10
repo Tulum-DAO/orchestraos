@@ -19,9 +19,20 @@
  * for the whole of the first fetch. "We have not asked yet" and "we asked and cannot reach it"
  * are different claims and only the second is an alarm.
  */
-export type FeedHealth = 'connecting' | 'live' | 'stale' | 'disconnected';
+export type FeedHealth = 'connecting' | 'live' | 'updating' | 'stale' | 'disconnected';
 
-/** The feed refetches every 10s. Three missed beats is not a blip. */
+/**
+ * UPDATING (Shaw, 2026-10-10: every status went blank for ~2 min when he came back to the tab).
+ * A hidden tab does not poll: the browser pauses the interval, so on return the last success is
+ * minutes or hours old through no fault of the feed. Old data while a fetch is in flight (or about
+ * to be, right after the tab came back), with no failure, is UPDATING: the last-known colours,
+ * dimmed, never the grey of an outage. Only a fetch that FAILED or has been outstanding longer
+ * than FETCH_OUTSTANDING_MS, or a poller that stayed silent while the tab was VISIBLE, is stale.
+ */
+/** A fetch outstanding this long is not "updating" any more; it is not answering. */
+export const FETCH_OUTSTANDING_MS = 10_000;
+
+/** Ten missed 3 s beats while visible is not a blip. */
 export const STALE_AFTER_MS = 30_000;
 /** Twelve missed beats: the feed is not coming back on its own within a glance. */
 export const DISCONNECTED_AFTER_MS = 120_000;
@@ -35,6 +46,10 @@ export interface FeedState {
   isError?: boolean;
   /** Whether a fetch is in flight right now. Distinguishes "not asked yet" from "cannot reach". */
   isFetching?: boolean;
+  /** When the fetch now in flight started (epoch ms); undefined when none is or it is unknown. */
+  fetchStartedAt?: number;
+  /** When the tab last became visible (epoch ms). 0 / absent = visible all along. */
+  visibleSince?: number;
   now?: number;
 }
 
@@ -54,7 +69,7 @@ export interface FeedVerdict {
  * An error NEVER reads live, even when the data is seconds old: a failing fetch means the next
  * answer is unknown, and "live" is a claim about now, not about then.
  */
-export function feedHealthOf({ dataUpdatedAt = 0, hasData = false, isError = false, isFetching = false, now = Date.now() }: FeedState): FeedVerdict {
+export function feedHealthOf({ dataUpdatedAt = 0, hasData = false, isError = false, isFetching = false, fetchStartedAt, visibleSince = 0, now = Date.now() }: FeedState): FeedVerdict {
   // Never heard anything: CONNECTING only while a fetch is actually in flight and has not yet
   // failed. The moment it errors, or stops being in flight without data, it is disconnected —
   // so this can never become the eternal spinner the old branch was written to prevent.
@@ -62,9 +77,18 @@ export function feedHealthOf({ dataUpdatedAt = 0, hasData = false, isError = fal
     return { health: isFetching && !isError ? 'connecting' : 'disconnected' };
   }
   const ageMs = Math.max(0, now - dataUpdatedAt);
-  if (ageMs >= DISCONNECTED_AFTER_MS) return { health: 'disconnected', ageMs, lastSeenAt: dataUpdatedAt };
-  if (isError || ageMs >= STALE_AFTER_MS) return { health: 'stale', ageMs, lastSeenAt: dataUpdatedAt };
-  return { health: 'live', ageMs, lastSeenAt: dataUpdatedAt };
+  const seen = { ageMs, lastSeenAt: dataUpdatedAt };
+  const degraded = (): FeedVerdict => ({ health: ageMs >= DISCONNECTED_AFTER_MS ? 'disconnected' : 'stale', ...seen });
+  // FAILING: the last fetch errored, or the one in flight has not answered in time.
+  const outstandingMs = isFetching && fetchStartedAt ? Math.max(0, now - fetchStartedAt) : 0;
+  if (isError || outstandingMs > FETCH_OUTSTANDING_MS) return degraded();
+  if (ageMs < STALE_AFTER_MS) return { health: 'live', ...seen };
+  // Old data, nothing failing. A fetch in flight is the refresh arriving.
+  if (isFetching) return { health: 'updating', ...seen };
+  // Nothing in flight. Just back from hidden: the refetch is about to fire, so still updating.
+  // Visible for longer than a stale window with no success: the poller is silent while the
+  // operator is LOOKING, and that is the P1, whatever the reason.
+  return now - visibleSince < STALE_AFTER_MS ? { health: 'updating', ...seen } : degraded();
 }
 
 /** "last seen 16:30". Local time, because the operator reads a clock, not an offset. */
@@ -115,5 +139,20 @@ export function styleForAgentState(
   base: { label: string; dot: string; text: string },
 ): { label: string; dot: string; text: string } {
   const stale = feed && staleStyleFor(feed);
-  return stale ? { ...base, ...stale, text: 'text-neutral-400' } : base;
+  if (stale) return { ...base, ...stale, text: 'text-neutral-400' };
+  const updating = feed && updatingStyleFor(feed, base);
+  return updating ?? base;
+}
+
+/**
+ * UPDATING: the last-known colour, DIMMED and not pulsing (a pulse claims activity now), with
+ * the label saying a refresh is on its way. Never grey: grey means we cannot reach the fleet.
+ */
+export function updatingStyleFor(
+  verdict: FeedVerdict,
+  base: { label: string; dot: string; text: string },
+): { label: string; dot: string; text: string } | undefined {
+  if (verdict.health !== 'updating') return undefined;
+  const calm = (cls: string) => cls.split(/\s+/).filter((c) => c && c !== 'animate-pulse').join(' ');
+  return { label: `${base.label} · status updating…`, dot: `${calm(base.dot)} opacity-40`, text: `${calm(base.text)} opacity-60` };
 }
