@@ -15,10 +15,10 @@ export function indexPage(f: Features = live()): 'arturo' | 'overview' {
   return f.arturo ? 'arturo' : 'overview';
 }
 
-/** Is this location inside a view the deployment hides? "/tasks" hides /tasks and /tasks/…, never
- *  /tasks-archive. Case-insensitive, like the router. */
+/** Is this location (or link target) inside a view the deployment hides? "/tasks" hides /tasks,
+ *  /tasks/… and /tasks?…, never /tasks-archive. Case-insensitive, like the router. */
 export function isViewHidden(pathname: string, hidden: string[] = hiddenViews()): boolean {
-  const p = pathname.toLowerCase().replace(/\/+$/, '') || '/';
+  const p = pathname.split(/[?#]/)[0].toLowerCase().replace(/\/+$/, '') || '/';
   return hidden.some((h) => p === h || p.startsWith(h + '/'));
 }
 

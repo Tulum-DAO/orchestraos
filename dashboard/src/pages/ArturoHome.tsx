@@ -44,6 +44,7 @@ import PairCodeCard from '../components/arturo/PairCodeCard';
 import ToolRun from '../components/arturo/ToolRun';
 import { applyTextDelta, applyToolCall, applyToolResult, groupParts, hasToolParts, type TurnPart } from '../lib/turnParts';
 import { Brain, Settings } from 'lucide-react';
+import { isViewHidden } from '../lib/features';
 
 type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[]; spawned?: string[]; pending?: boolean; streaming?: boolean; state?: SendState;
   /** A streamed turn that ran tools, in the order it happened: text, tool cards, more text. */
@@ -591,7 +592,7 @@ export default function ArturoHome() {
                 <X size={18} />
               </button>
             </div>
-            {DRAWER.map(([label, to]) => <NavLink key={to} to={to} onClick={() => setDrawer(false)}>{label}</NavLink>)}
+            {DRAWER.filter(([, to]) => !isViewHidden(to)).map(([label, to]) => <NavLink key={to} to={to} onClick={() => setDrawer(false)}>{label}</NavLink>)}
             <div className="sect sect-head">
               <span>Conversations</span>
               <button className="drawer-new" onClick={startNewThread}>New</button>

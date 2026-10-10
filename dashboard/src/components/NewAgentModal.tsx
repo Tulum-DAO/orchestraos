@@ -18,6 +18,7 @@ import {
   authedRuntimes, createAgent, freshRuntimes, nameError, openLoginShell, previewName, runtimeLabel,
   type RuntimeRow,
 } from '../lib/newAgent';
+import { isViewHidden } from '../lib/features';
 
 type Phase = 'probing' | 'name' | 'spawning' | 'spawned' | 'login' | 'error';
 
@@ -225,12 +226,12 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
                 <p className="text-xs text-neutral-500">registered seat{created.runtime ? ` · ${created.runtime}` : ''} · tmux {created.session}</p>
               </div>
               <div className="flex gap-2">
-                <button
+                {!isViewHidden('/agents') && <button
                   onClick={() => { onClose(); navigate('/agents'); }}
                   className="px-3 py-1.5 text-sm rounded-lg bg-neutral-800 text-neutral-300 hover:bg-neutral-700 transition-colors"
                 >
                   Agents list
-                </button>
+                </button>}
                 <button onClick={onClose} className="px-3 py-1.5 text-sm rounded-lg bg-neutral-800 text-neutral-300 hover:bg-neutral-700 transition-colors">Done</button>
               </div>
             </div>

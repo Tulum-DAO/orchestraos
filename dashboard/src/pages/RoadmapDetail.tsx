@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { fetchRoadmaps, patchTask, createTask, deleteTask } from '../lib/api';
 import { PriorityBadge } from '../components/PriorityBadge';
+import { isViewHidden } from '../lib/features';
 
 // ── Status config ─────────────────────────────────────────────────────
 
@@ -411,9 +412,11 @@ export default function RoadmapDetail() {
   if (!project) {
     return (
       <div className="p-6">
+        {!isViewHidden('/projects') && (
         <Link to="/projects" className="flex items-center gap-2 text-sm text-neutral-400 hover:text-white mb-4 transition-colors">
           <ArrowLeft size={16} /> Back to Projects
         </Link>
+        )}
         <p className="text-neutral-500">Project not found: {projectSlug}</p>
       </div>
     );
@@ -422,9 +425,11 @@ export default function RoadmapDetail() {
   return (
     <div className="p-6 space-y-6">
       {/* Back link */}
+      {!isViewHidden('/projects') && (
       <Link to="/projects" className="flex items-center gap-2 text-sm text-neutral-400 hover:text-white transition-colors">
         <ArrowLeft size={16} /> Projects
       </Link>
+      )}
 
       {/* Page header */}
       <div className="space-y-3">
@@ -501,7 +506,7 @@ export default function RoadmapDetail() {
               <AlertTriangle size={14} className="text-red-500 shrink-0 mt-0.5" />
               <div>
                 <p className="text-sm text-red-300">{typeof b === 'string' ? b : b.description || b.fact}</p>
-                {b.approval_id && (
+                {b.approval_id && !isViewHidden('/approvals') && (
                   <Link to="/approvals" className="text-xs text-red-400/60 hover:text-red-400 mt-1 inline-block">
                     View related approval &rarr;
                   </Link>

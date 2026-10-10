@@ -97,10 +97,24 @@ test('every gated surface is wired to its helper', () => {
     ['components/agent/ModelSelectorSheet.tsx', /showAddProvider\(\)/],
     ['layouts/DashboardLayout.tsx', /isViewHidden\(location\.pathname\) \? <NotFound \/> : <Outlet \/>/],
     ['components/CommandPalette.tsx', /navItemsFor\(PAGES\)/],
+    // in-page view links (orchestra-builder msg_9b62f71a: every place a view is linked)
+    ['components/agent/Drawer.tsx', /routes\.filter\(\(route\) => !isViewHidden\(route\.path\)\)/],
+    ['pages/ArturoHome.tsx', /DRAWER\.filter\(\(\[, to\]\) => !isViewHidden\(to\)\)/],
+    ['pages/RoadmapDetail.tsx', /!isViewHidden\('\/approvals'\)/],
+    ['components/NotificationBell.tsx', /if \(!isViewHidden\('\/inbox'\)\) navigate\('\/inbox'\)/],
+    ['components/NewAgentModal.tsx', /!isViewHidden\('\/agents'\) && <button/],
   ];
   for (const [file, re] of wiring) assert.match(src(file), re, file);
   // No surface renders its component unconditionally any more.
   assert.doesNotMatch(src('layouts/DashboardLayout.tsx'), /^\s*<ArturoPill \/>/m);
+  // Every link into a view on these pages is gated: no bare navigate('/inbox') / to="/projects" left.
+  assert.doesNotMatch(src('components/NotificationBell.tsx'), /onClick=\{\(\) => \{ navigate\('\/inbox'\)/);
+  assert.equal((src('pages/RoadmapDetail.tsx').match(/!isViewHidden\('\/projects'\)/g) || []).length, 2);
+  // Activity links into views only through ViewLink (plain text when the view is hidden).
+  const activity = src('pages/Activity.tsx');
+  assert.doesNotMatch(activity, /<Link\b[^>]*to=\{`\/(agents|tasks)/s);
+  assert.equal((activity.match(/<ViewLink\b/g) || []).length, 4);
+  assert.match(src('components/ViewLink.tsx'), /if \(isViewHidden\(to\)\) return <span/);
   // The layout renders the route ONLY through the gate.
   assert.doesNotMatch(src('layouts/DashboardLayout.tsx'), /<RouteErrorBoundary label="page"><Outlet \/>/);
   // Every sidebar list goes through navItemsFor: no raw list reaches NavItems / NavSection.
@@ -147,6 +161,9 @@ test('isViewHidden: the view and its sub-paths, never a lookalike', () => {
   assert.equal(isViewHidden('/agents', h), false);
   assert.equal(isViewHidden('/', h), false);
   assert.equal(isViewHidden('/tasks', []), false);           // control: nothing hidden
+  assert.equal(isViewHidden('/tasks?task=t-1', h), true);    // a deep link with a query
+  assert.equal(isViewHidden('/tasks#top', h), true);
+  assert.equal(isViewHidden('/tasks-archive?x=1', h), false);
 });
 
 test('navItemsFor drops hidden views (sidebar and palette), and nothing else', () => {
