@@ -49,13 +49,42 @@ def _fir(factor):
     return firwin(95, 8500, fs=TARGET * factor, window=("kaiser", 7.0))
 
 
+def _fir_enabled():
+    return os.environ.get(FIR_FLAG, "1") != "0" and _have_scipy()
+
+
+def warm():
+    """Import scipy and design the 48 kHz filter now (both cached), so the first audio chunk of the
+    first call does not pay them. Never raises: a broken scipy just leaves the box fallback."""
+    try:
+        if _fir_enabled():
+            _fir(3)
+    except Exception:  # noqa: BLE001 -- warming is an optimisation, never a failure
+        pass
+
+
+_warm_started = False
+
+
+def warm_async():
+    """warm() once per process on a daemon thread (RelayManager calls this at startup)."""
+    global _warm_started
+    if _warm_started:
+        return
+    _warm_started = True
+    import threading
+    threading.Thread(target=warm, name="hume-fir-warm", daemon=True).start()
+
+
 class Downsampler:
     """Hume audio_output WAV chunks -> s16le 16 kHz mono, ONE instance per stream. The FIR's state
     and the decimation phase carry across chunks, so a reply split over many audio_output frames
     is filtered exactly as if it were one piece: no clicks at the chunk edges."""
 
     def __init__(self):
-        self._fir_on = os.environ.get(FIR_FLAG, "1") != "0" and _have_scipy()
+        # Decided on the FIRST chunk, not here: _have_scipy() imports scipy (~1 s cold), and a
+        # Downsampler is built in every relay holder's constructor, on the CONNECT path (R2 follow-up).
+        self._fir_on = None
         self._rate = None
         self._zi = None
         self._n = 0              # input samples consumed at this rate (decimation phase)
@@ -70,6 +99,8 @@ class Downsampler:
         x = np.frombuffer(data[: len(data) - (len(data) % (2 * channels))], "<i2").astype(np.float64)
         if channels > 1:
             x = x.reshape(-1, channels).mean(axis=1)
+        if self._fir_on is None:
+            self._fir_on = _fir_enabled()
         if rate != TARGET:
             if rate % TARGET == 0 and self._fir_on:      # 48k -> 16k: stateful FIR, then decimate
                 from scipy.signal import lfilter

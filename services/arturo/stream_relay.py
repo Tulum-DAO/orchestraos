@@ -1095,6 +1095,9 @@ class RelayManager:
                  refusal_ttl_s=600.0,
                  orphan_end=None, orphan_end_s=None, orphan_sweep_s=10.0,
                  agent_text_enabled=None):
+        # The downlink FIR's scipy import + filter design (~1 s cold) happen in the background now,
+        # so neither a holder's connect nor the first reply chunk waits for them (hume_audio.warm).
+        hume_audio.warm_async()
         self.socket_factory = socket_factory or _default_socket_factory
         self.factories = dict(factories or {})
         self.factories.setdefault("hume", hume_socket_factory)

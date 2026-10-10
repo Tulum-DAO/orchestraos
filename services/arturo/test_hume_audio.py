@@ -164,13 +164,13 @@ def test_without_scipy_the_downlink_falls_back_to_the_box_and_still_works(monkey
     monkeypatch.setitem(sys.modules, "scipy", None)          # `import scipy...` now raises ImportError
     monkeypatch.setitem(sys.modules, "scipy.signal", None)
     try:
-        d = ha.Downsampler()
-        assert d._fir_on is False
+        d = ha.Downsampler()                                   # FIR/box is decided on the first chunk
         pcm = (np.sin(np.arange(4800) * 2 * np.pi * 440 / 48000) * 8000).astype("<i2").tobytes()
         import struct
         hdr = (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt " +
                struct.pack("<IHHIIHH", 16, 1, 1, 48000, 96000, 2, 16) + b"data" + struct.pack("<I", len(pcm)))
         out = d.feed(hdr + pcm)
+        assert d._fir_on is False                              # took the box path, did not raise
         assert len(out) == 1600 * 2                            # 4800 samples at 48 kHz -> 1600 at 16 kHz
     finally:
         ha._have_scipy.cache_clear()
