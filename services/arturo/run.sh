@@ -56,6 +56,10 @@ export ARTURO_SEMANTIC_RECALL="${ARTURO_SEMANTIC_RECALL:-1}"
 export ARTURO_FACTS_RECALL="${ARTURO_FACTS_RECALL:-1}"
 # Durable voice layer dispatcher flag (the operator approved apr_demo0005_0000005): default ON (1)
 export ARTURO_DISPATCHER="${ARTURO_DISPATCHER:-1}"
+# deep_query tier-2 sync analyst (arturo-voice, gm msg_b0b4228c): default OFF (0). 13/13 live runs
+# never answered in-call (12s wall) and cost the operator ~15s of silence before the async fallback.
+# Flip-back: ARTURO_DEEP_QUERY_SYNC=1 services/arturo/run.sh
+export ARTURO_DEEP_QUERY_SYNC="${ARTURO_DEEP_QUERY_SYNC:-0}"
 # Durable ended-once guard flag: default ON (1)
 export ARTURO_ENDED_ONCE="${ARTURO_ENDED_ONCE:-1}"
 # v2/(b) watch stream relay + the operator-directed live-partials (DEC-1788843712854271, gm GO

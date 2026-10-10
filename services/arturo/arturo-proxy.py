@@ -3504,9 +3504,13 @@ def execute_tool(name, args, user_turns=None):
         question = args.get("question", "")
         if not question:
             return "ERROR: deep_query called with an empty question."
-        _ok, _text = _dp.run_analyst(question)
-        if _ok:
-            return _text
+        # arturo-voice (gm msg_b0b4228c): 13/13 live runs never answered in-call (10 hit the
+        # 12s wall), so the sync analyst only bought ~15s of heartbeats before this same async
+        # fallback. Default skips it; ARTURO_DEEP_QUERY_SYNC=1 restores tier 2.
+        if os.environ.get("ARTURO_DEEP_QUERY_SYNC", "0") == "1":
+            _ok, _text = _dp.run_analyst(question)
+            if _ok:
+                return _text
         _dispatch_guarded("async_task", {
             "tool_name": "gm_command",
             "tool_args": {"prompt": question, "timeout": 120},
