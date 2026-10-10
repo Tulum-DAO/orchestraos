@@ -3776,6 +3776,9 @@ def execute_tool(name, args, user_turns=None):
 
         import threading
         _vr_cid = _RELAY_CID_THIS_TURN.get() if _voice_results_on() else None
+        _vr_tok = None
+        if _vr_cid and _voice_results() is not None:
+            _vr_tok = _voice_results().started(_vr_cid, summary)
         def _run_async():
             # VQ-4 verify-after-inject: the async result MUST actually LAND on Telegram. The old
             # path used raw requests.post with `except: pass` — a failed send was swallowed, so
@@ -3817,6 +3820,9 @@ def execute_tool(name, args, user_turns=None):
                     _deliver(_tg_text)
             except Exception as e:
                 _deliver(f"\u274c {summary}\n\nFailed: {e}")
+            finally:
+                if _vr_tok is not None:
+                    _voice_results().finished(_vr_cid, _vr_tok)
 
         # Under this turn's context, so the task keeps the turn's principal: a thread starts with an
         # empty context, and an empty context is a non-fleet turn.
@@ -4861,7 +4867,11 @@ def chat_completions():
             log.error(f"supersede seam error (non-fatal): {_sxe}")
     if _STREAM_RELAY is not None and _voice_results_on():
         try:
-            _RELAY_CID_THIS_TURN.set(_STREAM_RELAY.resolve(_conv_id) if _conv_id else None)
+            _vr_live = _STREAM_RELAY.resolve(_conv_id) if _conv_id else None
+            _RELAY_CID_THIS_TURN.set(_vr_live)
+            _vr_note = _voice_results().context_note(_vr_live) if _vr_live else ""
+            if _vr_note:
+                context += "\n\n" + _vr_note
         except Exception as _vre:
             log.error(f"voice-results cid seam error (non-fatal): {_vre}")
     # Last, after every preamble seam above (semantic recall, facts recall, stream-relay replay), so
@@ -5219,6 +5229,23 @@ def chat_completions():
                     if _fence_after_tool_result(_TEAM_TURN.get()):
                         active_tools = [t for t in _bound_tools() if t["function"]["name"] not in
                                         ({"async_task"} if voice_pass1 else set())]
+
+                    # FAST-ACK (arturo-voice, gm msg_b0b4228c: "acknowledge the request immediately"): a
+                    # round that ONLY dispatched background work has nothing for a second model pass to
+                    # add; speak the tool's own first-person ack now and end the turn.
+                    if (_voice_results_on() and tool_round == 0
+                            and all(n in ("deep_query", "ask_gm") for n in tool_names)
+                            and tool_results and tool_results[0]["content"]
+                            and not tool_results[0]["content"].startswith("ERROR")):
+                        full = tool_results[0]["content"]
+                        yield make_sse_chunk(full)
+                        log.info(f"FAST-ACK: {tool_names} dispatched — spoke the ack, skipped follow-up round")
+                        _log_voice_turn(
+                            user_msg=_user_msg, assistant_msg=full[:500],
+                            tool_calls=all_tool_calls_log, tool_results=all_tool_results_log,
+                            finish_reason="fast_ack",
+                        )
+                        break
 
                     # Ask model: do you need more tools, or are you ready to answer?
                     followup_resp = _turn_brain().complete(

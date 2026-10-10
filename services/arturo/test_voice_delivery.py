@@ -204,6 +204,15 @@ def _proxy(monkeypatch):
     class _VR:
         def submit(self, cid, q, text, tg):
             submitted.append((cid, q, text))
+
+        def started(self, cid, summary):
+            return object()
+
+        def finished(self, cid, tok):
+            pass
+
+        def context_note(self, cid, now=None):
+            return ""
     monkeypatch.setattr(mod, "_voice_results", lambda: _VR())
     # public: actions need a fleet turn (#278); these tests are about routing, not the principal
     from services.arturo.conftest import as_fleet
@@ -309,4 +318,130 @@ def test_clm_endpoint_carries_live_relay_cid_into_async_result(monkeypatch, tmp_
         assert submitted and submitted[0][0] == "CIDE2E", (submitted, delivered)
         assert delivered == []
     finally:
+        m.shutdown()
+
+
+# ---- the operator apr_e18bde55: acknowledge at once, especially when work is already running ----
+
+def test_context_note_lists_running_and_ready_work_per_call():
+    d = _d(FakeRelay(["wait:user-speaking"]))
+    assert d.context_note("c1") == ""
+    tok = d.started("c1", "Deep dive: why chats land in terminal view")
+    note = d.context_note("c1", now=130.0)
+    assert "RUNNING for 30s: why chats land in terminal view" in note
+    assert "Do NOT start the same work again" in note
+    assert d.context_note("c2") == "", "per call"
+    d.finished("c1", tok)
+    sent, tg = _tg()
+    d.submit("c1", "Deep dive: build status", "green", tg)
+    note = d.context_note("c1")
+    assert "RUNNING" not in note and "ANSWER READY" in note and "build status" in note
+
+
+def _e2e(monkeypatch, tmp_path, flag, gm_block=None):
+    if flag:
+        monkeypatch.setenv("ARTURO_VOICE_RESULTS", "1")
+    else:
+        monkeypatch.delenv("ARTURO_VOICE_RESULTS", raising=False)
+    monkeypatch.setenv("ARTURO_VOICE_CALLS_DIR", str(tmp_path / "vc"))
+    mod, delivered, submitted = _proxy(monkeypatch)
+    if gm_block is not None:
+        orig = mod.execute_tool
+        def ex(name, args, user_turns=None):
+            if name == "gm_command":
+                gm_block.wait(5)
+                return "done"
+            return orig(name, args, user_turns)
+        monkeypatch.setattr(mod, "execute_tool", ex)
+    m = _manager()
+    m.feed_audio("CIDACK", b"\x00" * 10)
+    assert _wait(lambda: m._t)
+    monkeypatch.setattr(mod, "_STREAM_RELAY", m)
+    monkeypatch.setattr(mod._REQ_GUARD, "is_duplicate", lambda *a, **k: False)
+    if flag:
+        from services.arturo import voice_delivery as _vdm
+        real = _vdm.VoiceResultDelivery(m, start_thread=False)
+        monkeypatch.setattr(mod, "_voice_results", lambda: real)
+    seen = []
+
+    class _Fn:
+        name = "deep_query"
+        arguments = json.dumps({"question": "why are chats in terminal view"})
+
+    class _TC:
+        id = "tc1"
+        type = "function"
+        function = _Fn()
+
+    class _Completions:
+        def create(self, **kw):
+            seen.append(kw["messages"])
+            first = len(seen) == 1
+
+            class _Msg:
+                tool_calls = [_TC()] if first else None
+                content = None if first else "Model follow-up text."
+
+            class _Choice:
+                finish_reason = "tool_calls" if first else "stop"
+                message = _Msg()
+
+            class _Resp:
+                choices = [_Choice()]
+            return _Resp()
+
+    # public: the brain seam (services/arturo/brain.py) replaced the bare openai client
+    _cmp = _Completions()
+    monkeypatch.setattr(mod.brain, "complete", lambda **kw: _cmp.create(**kw))
+    monkeypatch.setattr(mod, "BEARER_TOKEN", "test-bearer")
+    monkeypatch.setattr(mod, "_call_principal", lambda cid: "fleet")   # a gateway-stamped call (#278/G1')
+    return mod, m, seen
+
+
+def _post(mod, text):
+    c = mod.app.test_client()
+    r = c.post("/v1/chat/completions?custom_session_id=CIDACK",
+               json={"messages": [{"role": "assistant", "content": "Hey the operator, Arturo here."},
+                                  {"role": "user", "content": text}]},
+               headers={"Authorization": f"Bearer {mod.BEARER_TOKEN}"},
+               environ_base={"REMOTE_ADDR": "127.0.0.1"})
+    from services.arturo.test_answered_final_extension import _deltas
+    return "".join(_deltas(r.get_data(as_text=True)))
+
+
+def test_fast_ack_speaks_dispatch_line_without_a_second_model_round(monkeypatch, tmp_path):
+    mod, m, seen = _e2e(monkeypatch, tmp_path, flag=True)
+    try:
+        spoken = _post(mod, "why are chats in terminal view")
+        assert len(seen) == 1, "fast-ack must not spend a follow-up model round"
+        assert "I'll tell you as soon as it's back" in spoken
+        assert "Model follow-up text" not in spoken
+    finally:
+        _join_async()
+        m.shutdown()
+
+
+def test_flag_off_keeps_the_follow_up_round(monkeypatch, tmp_path):
+    mod, m, seen = _e2e(monkeypatch, tmp_path, flag=False)
+    try:
+        spoken = _post(mod, "why are chats in terminal view")
+        assert len(seen) == 2 and "Model follow-up text" in spoken
+    finally:
+        _join_async()
+        m.shutdown()
+
+
+def test_follow_up_turn_sees_the_running_work(monkeypatch, tmp_path):
+    import threading
+    gate = threading.Event()
+    mod, m, seen = _e2e(monkeypatch, tmp_path, flag=True, gm_block=gate)
+    try:
+        _post(mod, "why are chats in terminal view")
+        n = len(seen)
+        _post(mod, "are you gonna tell me now")
+        sys2 = seen[n][0]["content"]
+        assert "BACKGROUND WORK ON THIS CALL" in sys2 and "RUNNING for" in sys2, sys2[-400:]
+    finally:
+        gate.set()
+        _join_async()
         m.shutdown()

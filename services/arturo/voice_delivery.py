@@ -58,10 +58,51 @@ class VoiceResultDelivery:
         self.tick_s = tick_s
         self.clock = clock
         self._q = {}                 # cid -> [item, ...] in arrival order
+        self._running = {}           # cid -> {token: (summary, started_ts)}  (the operator apr_e18bde55)
         self._lock = threading.Lock()
         self._wake = threading.Event()
         self._thread = None
         self._start_thread = start_thread
+
+    def started(self, cid, summary):
+        """Background work began for this call. Returns a token for finished()."""
+        if not cid:
+            return None
+        tok = object()
+        with self._lock:
+            self._running.setdefault(cid, {})[tok] = (summary, self.clock())
+        return tok
+
+    def finished(self, cid, tok):
+        if not cid or tok is None:
+            return
+        with self._lock:
+            r = self._running.get(cid) or {}
+            r.pop(tok, None)
+            if not r:
+                self._running.pop(cid, None)
+
+    def context_note(self, cid, now=None):
+        """the operator (apr_e18bde55): acknowledge at once, especially when work is already running.
+        A per-turn system note so Arturo knows what is in flight for THIS call."""
+        if not cid:
+            return ""
+        now = self.clock() if now is None else now
+        with self._lock:
+            running = list((self._running.get(cid) or {}).values())
+            ready = [it["question"] for it in (self._q.get(cid) or [])]
+        if not running and not ready:
+            return ""
+        lines = ["--- BACKGROUND WORK ON THIS CALL ---"]
+        for summary, t0 in running:
+            lines.append(f"- RUNNING for {int(now - t0)}s: {_topic(summary)}")
+        for q in ready:
+            lines.append(f"- ANSWER READY, will be spoken in the next pause: {_topic(q)}")
+        lines.append("If the operator asks about any of this, acknowledge immediately in one short sentence: "
+                     "say it is still running (or about to be read out) and that you will tell him "
+                     "the moment it lands. Do NOT start the same work again. Otherwise just answer "
+                     "what he is asking now.")
+        return "\n".join(lines)
 
     def submit(self, cid, question, text, telegram_fn):
         """Offer a finished result. telegram_fn() delivers the full Telegram copy; it is called

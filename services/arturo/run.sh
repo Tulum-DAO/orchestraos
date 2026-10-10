@@ -60,8 +60,9 @@ export ARTURO_DISPATCHER="${ARTURO_DISPATCHER:-1}"
 # never answered in-call (12s wall) and cost the operator ~15s of silence before the async fallback.
 # Flip-back: ARTURO_DEEP_QUERY_SYNC=1 services/arturo/run.sh
 export ARTURO_DEEP_QUERY_SYNC="${ARTURO_DEEP_QUERY_SYNC:-0}"
-# Speak async deep_query/ask_gm results back into a live call (arturo-voice, gm msg_b0b4228c):
-# default OFF (0) until the operator says yes on the card. Off = Telegram-only, byte-identical.
+# Speak async deep_query/ask_gm results back into a live call + fast-ack + background-work
+# awareness (arturo-voice, gm msg_b0b4228c): default OFF (0). Opt in: ARTURO_VOICE_RESULTS=1.
+# Off = Telegram-only, byte-identical.
 export ARTURO_VOICE_RESULTS="${ARTURO_VOICE_RESULTS:-0}"
 # Durable ended-once guard flag: default ON (1)
 export ARTURO_ENDED_ONCE="${ARTURO_ENDED_ONCE:-1}"
