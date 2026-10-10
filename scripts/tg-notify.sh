@@ -47,9 +47,22 @@ MSG="${LABEL}${MSG}"
 [ -z "${MSG// }" ] && { echo "tg-notify: empty message" >&2; exit 2; }
 
 # --- creds ---
+# The Telegram chat id: ORCHESTRA_TELEGRAM_CHAT_ID (env, then the file), then the old name SHAW_TELEGRAM_ID
+# (env, then the file), still read so existing installs keep working. Values may be quoted in the file.
+tg_chat_id() {
+  local f="$1" k v
+  for k in ORCHESTRA_TELEGRAM_CHAT_ID SHAW_TELEGRAM_ID; do
+    v="${!k:-}"
+    if [ -z "$v" ] && [ -f "$f" ]; then
+      v="$(grep -E "^${k}=" "$f" | head -1 | cut -d= -f2- | tr -d '[:space:]"'"'"'')"
+    fi
+    if [ -n "$v" ]; then printf '%s' "$v"; return 0; fi
+  done
+  return 1
+}
 [ -f "$ENV_FILE" ] || { echo "tg-notify: creds file missing: $ENV_FILE" >&2; exit 3; }
 TG_TOKEN="$(grep -E '^TELEGRAM_BOT_TOKEN=' "$ENV_FILE" | head -1 | cut -d= -f2- | tr -d '[:space:]')"
-TG_ID="$(grep -E '^SHAW_TELEGRAM_ID=' "$ENV_FILE" | head -1 | cut -d= -f2- | tr -d '[:space:]')"
+TG_ID="$(tg_chat_id "$ENV_FILE")"
 [ -n "$TG_TOKEN" ] && [ -n "$TG_ID" ] || { echo "tg-notify: token/id empty in $ENV_FILE" >&2; exit 3; }
 
 ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }

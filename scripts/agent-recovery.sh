@@ -19,6 +19,20 @@ SCRIPT_DIR="${ORCHESTRA_DIR:-$(cd "$BIN_DIR/.." && pwd)}"   # the DATA dir under
 CODE_DIR="${ORCHESTRA_ROOT:-$(cd "$BIN_DIR/.." && pwd)}"
 source "$BIN_DIR/tmux_session_defaults.sh"   # mouse on per seat session, same as spawn-agent.sh
 STATE_DIR="$SCRIPT_DIR/state"
+
+# The Telegram chat id: ORCHESTRA_TELEGRAM_CHAT_ID (env, then the file), then the old name SHAW_TELEGRAM_ID
+# (env, then the file), still read so existing installs keep working. Values may be quoted in the file.
+tg_chat_id() {
+  local f="$1" k v
+  for k in ORCHESTRA_TELEGRAM_CHAT_ID SHAW_TELEGRAM_ID; do
+    v="${!k:-}"
+    if [ -z "$v" ] && [ -f "$f" ]; then
+      v="$(grep -E "^${k}=" "$f" | head -1 | cut -d= -f2- | tr -d '[:space:]"'"'"'')"
+    fi
+    if [ -n "$v" ]; then printf '%s' "$v"; return 0; fi
+  done
+  return 1
+}
 SESSION_INDEX="$STATE_DIR/agent-sessions.json"
 HANDOFF_DIR="$STATE_DIR/agent-handoffs"
 REGISTRY="$SCRIPT_DIR/registry.json"
@@ -112,7 +126,7 @@ record_attempt_or_quarantine() {
             "$agent_id" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$count" > "$QUARANTINE_DIR/$agent_id.json"
         log "QUARANTINED $agent_id after $count recovery attempts in ${ATTEMPT_WINDOW}s"
         TG_TOKEN=$(grep TELEGRAM_BOT_TOKEN "$SCRIPT_DIR/.env.telegram" 2>/dev/null | cut -d= -f2)
-        TG_ID=$(grep SHAW_TELEGRAM_ID "$SCRIPT_DIR/.env.telegram" 2>/dev/null | cut -d= -f2)
+        TG_ID=$(tg_chat_id "$SCRIPT_DIR/.env.telegram")
         if [ -n "$TG_TOKEN" ] && [ -n "$TG_ID" ]; then
             curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
                 -d chat_id="$TG_ID" \
@@ -505,7 +519,7 @@ while IFS='|' read -r agent_id tmux_name session_id cwd conv_path; do
         if ! already_notified "$agent_id"; then
             crash_log "$agent_id" "$tmux_name" "notified"
             TG_TOKEN=$(grep TELEGRAM_BOT_TOKEN "$SCRIPT_DIR/.env.telegram" 2>/dev/null | cut -d= -f2)
-            TG_ID=$(grep SHAW_TELEGRAM_ID "$SCRIPT_DIR/.env.telegram" 2>/dev/null | cut -d= -f2)
+            TG_ID=$(tg_chat_id "$SCRIPT_DIR/.env.telegram")
             if [ -n "$TG_TOKEN" ] && [ -n "$TG_ID" ]; then
                 LAST_LINE=$(tmux capture-pane -t "$tmux_name" -p 2>/dev/null | tail -3 | head -1 || echo "unknown")
                 curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
@@ -668,7 +682,7 @@ if [ $RECOVERED -gt 0 ] || [ $SKIPPED -gt 0 ]; then
     # Notify the operator
     if [ $RECOVERED -gt 0 ] && ! $DRY_RUN; then
         TG_TOKEN=$(grep TELEGRAM_BOT_TOKEN "$SCRIPT_DIR/.env.telegram" 2>/dev/null | cut -d= -f2)
-        TG_ID=$(grep SHAW_TELEGRAM_ID "$SCRIPT_DIR/.env.telegram" 2>/dev/null | cut -d= -f2)
+        TG_ID=$(tg_chat_id "$SCRIPT_DIR/.env.telegram")
         if [ -n "$TG_TOKEN" ] && [ -n "$TG_ID" ]; then
             curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
                 -d chat_id="$TG_ID" \
