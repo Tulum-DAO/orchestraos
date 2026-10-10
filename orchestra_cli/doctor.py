@@ -364,6 +364,16 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
                                     "Log in to one CLI (claude / codex / agy) or export GEMINI_API_KEY; Arturo still boots, text-only, and answers with this fix"))
         except Exception as e:  # noqa: BLE001
             checks.append(Check("arturo:brain", WARN, f"selection unavailable: {e}"))
+        # The post-call webhook refuses unsigned pushes by default (R3, gm): no secret = transcripts stop. Loud.
+        try:
+            from services.arturo import postcall_auth as _pa
+            w = _pa.startup_warning(data_dir=str(st.data_dir))
+            checks.append(Check("arturo:post-call-secret", WARN, w.split(". Fix:")[0][:140], _pa.FIX, required=False)
+                          if w else Check("arturo:post-call-secret", OK,
+                                          f"{_pa.mode()} (ELEVENLABS_WEBHOOK_SECRET set)" if _pa.mode() == "enforce"
+                                          else "log mode: unsigned pushes accepted (ARTURO_POSTCALL_AUTH=log)"))
+        except Exception as e:  # noqa: BLE001 -- a doctor row never crashes the doctor
+            checks.append(Check("arturo:post-call-secret", WARN, f"status unavailable: {e}", required=False))
     checks.append(Check("runtime:any", OK if any_authed else MISSING,
                         ", ".join(r["id"] for r in results if r["authed"] is True) or "no enabled runtime is installed AND authed",
                         RUNTIME_ANY_REMEDY, required=(login_row is None)))

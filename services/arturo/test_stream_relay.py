@@ -437,10 +437,12 @@ def test_normalize_surface_maps_phone_and_watch():
     assert sr.normalize_surface("watch") == "watch"
 
 
-def test_normalize_surface_defaults_unknown_and_missing_to_watch():
+def test_normalize_surface_missing_is_watch_unknown_is_unknown():
+    # gm msg_c0e18d14 (intentional change): missing = the watch (it sends no header); an unrecognised
+    # value is 'unknown', never silently 'watch' (Quest calls were journaled as watch).
     assert sr.normalize_surface(None) == "watch"
     assert sr.normalize_surface("") == "watch"
-    assert sr.normalize_surface("OrchestraOS/1.86") == "watch"
+    assert sr.normalize_surface("OrchestraOS/1.86") == "unknown"
 
 
 def test_feed_audio_stamps_phone_surface_from_arg(manager):
@@ -454,9 +456,9 @@ def test_feed_audio_defaults_surface_to_watch(manager):
     assert manager.surface("c1") == "watch"
 
 
-def test_feed_audio_unknown_surface_defaults_to_watch(manager):
-    manager.feed_audio("c1", b"\x00" * 10, surface_device="bogus")
-    assert manager.surface("c1") == "watch"
+def test_feed_audio_unknown_surface_is_unknown(manager):
+    manager.feed_audio("c1", b"\x00" * 10, surface_device="bogus")      # gm msg_c0e18d14
+    assert manager.surface("c1") == "unknown"
 
 
 def test_feed_audio_surface_stamped_once_at_creation(manager):

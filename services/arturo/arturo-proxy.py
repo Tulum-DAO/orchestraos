@@ -443,7 +443,15 @@ def _resolve_or_create(non_system, page="", origin="local", conv_id=""):
     from services.arturo.call_journal import find_matching_call, _atomic_write
     has_assistant = any(m.get("role") == "assistant" and m.get("content") for m in non_system)
     if not has_assistant:
-        return None
+        # Capture hole: when the operator talks over the greeting, Hume's history holds
+        # only their words. A conv_id that resolves to a LIVE relay call is a real call, never a probe.
+        _live = False
+        try:
+            _live = bool(conv_id and _STREAM_RELAY is not None and _STREAM_RELAY.resolve(conv_id))
+        except Exception:
+            _live = False
+        if not _live:
+            return None
     incoming = [m["content"] for m in non_system if m.get("role") == "user" and m.get("content")]
     if not incoming:
         return None
@@ -507,7 +515,7 @@ def _resolve_or_create(non_system, page="", origin="local", conv_id=""):
                     _relay_surface, lambda: _call_surface(ARTURO_STATE / "active-surface.json"))
                 if _surf:
                     d["surface"] = _surf
-                if _relay_surface in ("phone", "watch"):
+                if _relay_surface:                   # any relay call (phone/watch/quest/ipad/mac/unknown)
                     d["conv_id"] = _relay_cid
             except Exception:
                 pass
@@ -6824,7 +6832,16 @@ _PLAIN_CONV_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 @app.route("/webhook/post-call", methods=["POST"])
 def post_call_webhook():
     """ElevenLabs post-call webhook — auto-saves transcript to voice memory."""
-    data = request.json or {}
+    # Public over the Funnel, and each push spends the operator's ElevenLabs key: only SIGNED pushes get past here
+    # (gm msg_1fb3f0ee). Checked on the RAW body, before any parsing or fetching; a refusal logs no body content.
+    from services.arturo import postcall_auth as _postcall_auth
+    _allow, _why = _postcall_auth.check(request.get_data(cache=True), request.headers.get(_postcall_auth.HEADER, ""))
+    if _why:
+        log.warning(f"Post-call webhook: {'REFUSED' if not _allow else 'would refuse (log mode)'} ({_why}); "
+                    f"counts={_postcall_auth.counts()}")
+    if not _allow:
+        return jsonify({"status": "refused", "error": "unsigned or invalid signature"}), 401
+    data = request.get_json(silent=True) or {}
     conversation_id = str(data.get("conversation_id", "") or "")
     # The id goes into the ElevenLabs URL, sent WITH the API key (requests normalises "../", so
     # "../../user" fetched /v1/user), AND into the transcript file path (save_transcript:
@@ -6862,7 +6879,18 @@ def root():
     return jsonify({"service": "OrchestraOS Custom-LLM Proxy", "endpoint": "/v1/chat/completions"})
 
 
+def _log_postcall_auth_state():
+    """gm: the R3 upgrade break is LOUD. One plain warning at startup when the post-call webhook will
+    refuse every push (enforce, no ELEVENLABS_WEBHOOK_SECRET)."""
+    from services.arturo import postcall_auth as _pa
+    w = _pa.startup_warning()
+    if w:
+        log.warning(w)
+    return w
+
+
 if __name__ == "__main__":
+    _log_postcall_auth_state()
     ARTURO_STATE.mkdir(parents=True, exist_ok=True)
     ARTURO_LOGS.mkdir(parents=True, exist_ok=True)
     VOICE_CALLS_DIR.mkdir(parents=True, exist_ok=True)

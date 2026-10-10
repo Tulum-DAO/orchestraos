@@ -260,7 +260,9 @@ def test_a_call_that_lost_its_record_says_so_once(R, brain, monkeypatch):
     assert "can no longer run commands" in _system(brain)
     assert brain["offered"][0] <= ALLOWED and brain["ran"] == []
     brain["offered"].clear(); brain["messages"].clear()
-    _clm(R, query=f"?custom_session_id={UUID}")
+    # A NEW turn (different words). An identical re-send is Hume re-asking, which ANSWERED-REPEAT now
+    # catches on this call too: it is journaled since the live-relay guard fix.
+    _clm(R, query=f"?custom_session_id={UUID}", messages=[{"role": "user", "content": "and what about the logs"}])
     assert "can no longer run commands" not in _system(brain), "said once, not every turn"
 
 
