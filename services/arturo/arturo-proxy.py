@@ -5935,27 +5935,49 @@ if _STREAM_RELAY is not None:
     # the operator's Hume voice picker (contract msg_f5b57c9d): same runtime-pref pattern as vendor.
     from services.arturo import voice_choice as _voice_choice
 
+    def _voice_vendor_arg():
+        """?vendor= or, when absent, the LIVE vendor (an old client still reads something sensible). Public: a
+        live vendor with no server-side voice list (elevenlabs, the public default) means hume, as it did before
+        contract v2, so the shipped Hume picker, which sends no ?vendor=, never gets a 400."""
+        from services.arturo import voice_vendor as _vv
+        v = request.args.get("vendor")
+        if v:
+            return str(v)
+        live = _vv.get_vendor()
+        return live if live in _voice_choice.VENDORS else "hume"
+
     @app.route("/ptt/voices", methods=["GET"])
     def ptt_voices_get():
+        """Contract v2 (msg_a7cf1484): server-rendered rows for ANY server-side vendor."""
         if not _relay_loopback_ok():
             return jsonify({"ok": False, "error": "loopback only"}), 403
-        vendor = str(request.args.get("vendor", "hume"))
-        if vendor != "hume":
-            return jsonify({"ok": False,
-                            "error": f"voice listing is hume-only ({vendor} voices are picked client-side)"}), 400
+        vendor = _voice_vendor_arg()
+        if vendor not in _voice_choice.VENDORS:
+            return jsonify({"ok": False, "vendor": vendor, "current": None, "voices": [],
+                            "error": f"no server-side voice list for {vendor}"}), 400
         try:
-            voices = _voice_choice.cached_hume_voices()
+            voices = _voice_choice.voice_rows(vendor)
         except Exception as e:
-            log.error(f"ptt/voices: hume voices fetch failed: {e!r}")
-            return jsonify({"ok": False, "error": f"hume voices unavailable: {e}"}), 502
-        return jsonify({"ok": True, "vendor": "hume",
-                        "current": _voice_choice.get_voice("hume"), "voices": voices}), 200
+            log.error(f"ptt/voices: {vendor} voices fetch failed: {e!r}")
+            return jsonify({"ok": False, "vendor": vendor, "current": _voice_choice.in_effect(vendor),
+                            "voices": [], "error": f"{vendor} voices unavailable: {e}"}), 502
+        return jsonify({"ok": True, "vendor": vendor, "current": _voice_choice.in_effect(vendor),
+                        "voices": voices, "error": None}), 200
 
     @app.route("/ptt/voice", methods=["GET"])
     def ptt_voice_get():
         if not _relay_loopback_ok():
             return jsonify({"ok": False, "error": "loopback only"}), 403
-        return jsonify({"ok": True, **_voice_choice.state("hume")}), 200
+        vendor = _voice_vendor_arg()
+        st = _voice_choice.state(vendor)
+        st["voice_id"] = _voice_choice.in_effect(vendor)
+        title = None
+        if st["voice_id"]:
+            try:
+                title = next((r["title"] for r in _voice_choice.voice_rows(vendor) if r["id"] == st["voice_id"]), None)
+            except Exception:  # noqa: BLE001 — the title is display sugar; the record itself still answers
+                title = None
+        return jsonify({"ok": True, **st, "title": title}), 200
 
     @app.route("/ptt/voice", methods=["PUT"])
     def ptt_voice_put():
@@ -5970,7 +5992,7 @@ if _STREAM_RELAY is not None:
                                          device=_writer_device())
         except ValueError as e:
             return jsonify({"ok": False, "error": str(e)}), 400
-        log.info(f"hume voice -> {st['voice_id']} by {st['changed_by']}")
+        log.info(f"{st['vendor']} voice -> {st['voice_id']} by {st['changed_by']}")
         return jsonify({"ok": True, **st}), 200
 
 

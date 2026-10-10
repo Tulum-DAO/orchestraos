@@ -229,6 +229,8 @@ is refused, and the relay never opens a socket.
 - **Behaviour you will notice:** it greets first, and the greeting yields the moment you talk. Speaking over it
   interrupts it (the relay detects speech by audio energy, `ARTURO_OPENAI_SPEECH_RMS`, default 60). An answer
   you cut off is posted to the transcript, never lost.
+- **Its voice:** pick one of its voices in the voice picker (`GET /ptt/voices?vendor=openai`, `PUT /ptt/voice`;
+  default `marin`). The voice is fixed for a session, so a new pick applies on the next call.
 
 **Cost.** OpenAI bills GPT-Live audio to your key by the minute; check OpenAI's current pricing for
 `gpt-live-1`. Two caps bound what one day can cost:
