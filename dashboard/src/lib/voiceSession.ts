@@ -29,7 +29,7 @@
  * called with an honest first-person reason — never a silent no-op.
  */
 
-import { startDictation, DICTATION_UNAVAILABLE, type DictationHandle } from './dictation.ts';
+import { startDictation, DICTATION_UNAVAILABLE, isTier1DeadError, type DictationHandle } from './dictation.ts';
 
 // ── pure helpers (unit-testable without any real mic/WS) ───────────────────
 
@@ -366,7 +366,14 @@ export class VoiceSession {
         }
       },
       // 'aborted' = we (or a second recognizer) stopped it; 'no-speech' = silence. Neither is a failure.
-      onError: (code) => { if (code !== 'aborted' && code !== 'no-speech') this.cb.onUnavailable?.(`dictation error: ${code}`); },
+      onError: (code) => {
+        if (code === 'aborted' || code === 'no-speech') return;
+        // The recognizer exists but its service is dead (Brave, Chromium without Google keys,
+        // offline). This mic is tier 1 only (it never uploads a clip: that is Arturo's tier 2, behind
+        // the arturo flag), so say what works instead of echoing the browser's code.
+        if (isTier1DeadError(code)) { this.cb.onUnavailable?.(`voice isn't configured yet: ${DICTATION_UNAVAILABLE}`); return; }
+        this.cb.onUnavailable?.(`dictation error: ${code}`);
+      },
     });
     if (!handle) {
       this.cb.onUnavailable?.(`voice isn't configured yet: ${DICTATION_UNAVAILABLE}`);

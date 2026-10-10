@@ -174,3 +174,34 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
   s.stop();
   console.log("PASS: the old call's close during the new call's prompt does not cancel the new call");
 }
+
+// ── 6. composer dictation, recognizer present but its service dead (keyless Chromium, Brave) ──
+// The composer mic (VoiceControls) is tier 1 only: it never uploads a clip anywhere. When the
+// recognizer exists but its backend is unreachable, the reason must say what to do, not echo
+// the browser's error code ("dictation error: network").
+{
+  installBrowser();
+  for (const code of ['network', 'service-not-allowed']) {
+    class DeadRecognizer extends EventTarget {
+      start() { setTimeout(() => this.onerror && this.onerror({ error: code }), 0); }
+      stop() {} abort() {}
+    }
+    globalThis.window.SpeechRecognition = DeadRecognizer;
+    const reasons = [];
+    const s = new VoiceSession({ onUnavailable: (r) => reasons.push(r) });
+    s.startDictation();
+    await tick(); await tick();
+    assert.strictEqual(reasons.length, 1, code);
+    assert.match(reasons[0], /Chrome or Edge/, `${code}: says what to do`);
+    assert.doesNotMatch(reasons[0], /dictation error:/, `${code}: not the raw browser code`);
+    s.stopDictation();
+  }
+  // control: a real failure that is NOT a dead service still reports its code
+  class MicDenied extends EventTarget { start() { setTimeout(() => this.onerror && this.onerror({ error: 'not-allowed' }), 0); } stop() {} abort() {} }
+  globalThis.window.SpeechRecognition = MicDenied;
+  const reasons = [];
+  const s = new VoiceSession({ onUnavailable: (r) => reasons.push(r) });
+  s.startDictation(); await tick(); await tick();
+  assert.deepStrictEqual(reasons, ['dictation error: not-allowed']);
+  console.log('PASS: a dead recognizer service says "Chrome or Edge"; other errors keep their code');
+}
