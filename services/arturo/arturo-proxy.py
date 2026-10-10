@@ -51,6 +51,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 # orchestra-env.sh; defaults to the checkout so a bare run still works.
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", str(_REPO_ROOT)))
+# The Telegram notifier is CODE, so it lives in the repo; ORCHESTRA_DIR is the DATA dir in an install
+# (scripts/orchestra-env.sh sets it from data.dir), where <data>/scripts/tg-notify.sh does not exist.
+# tg-notify.sh reads the token from $ORCHESTRA_DIR/.env.telegram, which callers inherit.
+TG_NOTIFY = _REPO_ROOT / "scripts" / "tg-notify.sh"
 OMNI_DIR = Path(os.environ.get("OMNI_CONTEXT_DIR", str(Path.home() / "scripts" / "omni-context")))
 SECRETS_FILE = ORCHESTRA_DIR / ".env.secrets"
 MAC_IP = os.environ.get("ORCHESTRA_MAC_TAILSCALE_IP", "")
@@ -832,7 +836,7 @@ def _escalate_inject_giveup(call_id):
         msg = (f"Heads up — I couldn't get your last call's transcript into the GM after many tries "
                f"(it stayed busy). The full transcript is saved ({call_id}); ask me to retry it.")
         if _TG_OUTBOX.allow(msg)[0]:
-            subprocess.run(["bash", str(ORCHESTRA_DIR / "scripts" / "tg-notify.sh"),
+            subprocess.run(["bash", str(TG_NOTIFY),
                             "--from", "arturo", msg],
                            capture_output=True, text=True, timeout=60)
     except Exception as _e:
@@ -3736,7 +3740,16 @@ def execute_tool(name, args, user_turns=None):
             "tool_args": {
                 "session_name": f"research-{int(time.time()) % 10000}",
                 "machine": "vps",
-                "prompt": f"Research this topic thoroughly and text the operator the results on Telegram when done:\n\n{query}\n\nUse WebSearch and WebFetch tools. Be concise but comprehensive. Send findings via: curl -s -X POST 'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage' -d chat_id={TELEGRAM_CHAT_ID} --data-urlencode 'text=Research results: {query[:50]}...\\n\\n<your findings>'"
+                # "task", not "prompt": spawn_agent reads only args["task"] (gm audit 2026-10-09 #2);
+                # with "prompt" every research seat spawned with no question at all. The agent reports
+                # through scripts/tg-notify.sh, which reads the bot token from <data dir>/.env.telegram
+                # by reference: the token never appears in the agent's task or transcript. The findings
+                # go in on STDIN, so a quote or "$(" in the spoken query cannot break the command.
+                "task": (f"Research this topic thoroughly and send the operator the results on Telegram when done:\n\n{query}\n\n"
+                         "Use WebSearch and WebFetch tools. Be concise but comprehensive. To send your findings, "
+                         "write the message (a first line 'Research results: <topic>', then your findings) to a "
+                         f"file and pipe it in: ORCHESTRA_DIR={ORCHESTRA_DIR} bash {TG_NOTIFY} --from research < <file> "
+                         "(it reads the bot token by reference; never paste a token into a command)."),
             },
             "summary": f"Web research: {query[:80]}"
         })
@@ -3796,7 +3809,7 @@ def execute_tool(name, args, user_turns=None):
                     return True                    # treat as delivered — don't retry-loop the storm
                 try:
                     r = subprocess.run(
-                        ["bash", str(ORCHESTRA_DIR / "scripts" / "tg-notify.sh"),
+                        ["bash", str(TG_NOTIFY),
                          "--from", "arturo", text],   # message is POSITIONAL (fleet convention)
                         capture_output=True, text=True, timeout=60,
                     )
