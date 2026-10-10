@@ -40,3 +40,33 @@ def test_research_hands_its_query_to_spawn_agent_as_task(monkeypatch):
     assert got[0]["session_name"].startswith("research-")
     assert "SENTINEL" not in task and "api.telegram.org" not in task, "the bot token must never reach the agent"
     assert "tg-notify.sh" in task, "the agent reports through the by-reference notifier"
+
+
+def test_the_notifier_resolves_in_the_repo_even_when_the_data_dir_is_elsewhere(monkeypatch, tmp_path):
+    """In an install ORCHESTRA_DIR is the DATA dir (scripts/orchestra-env.sh sets it from data.dir).
+    <data>/scripts/tg-notify.sh does not exist there, so async_task's Telegram delivery (and a research
+    agent's report) must run the repo's notifier, with ORCHESTRA_DIR pointing at the data dir."""
+    monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path / "data"))
+    spec = importlib.util.spec_from_file_location(
+        "arturo_proxy_notifier", pathlib.Path("services/arturo/arturo-proxy.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.ORCHESTRA_DIR == tmp_path / "data"
+    assert mod.TG_NOTIFY.is_file(), mod.TG_NOTIFY
+    ran, done = [], threading.Event()
+
+    def fake_run(cmd, **kw):
+        ran.append(cmd)
+        done.set()
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(mod._TG_OUTBOX, "allow", lambda text: (True, ""))
+    monkeypatch.setattr(mod, "execute_tool", (lambda orig: (lambda n, a, u=None: "ok" if n == "list_agents" else orig(n, a, u)))(mod.execute_tool))
+    tok = mod._TEAM_TURN.set({"principal": "fleet"})
+    try:
+        mod.execute_tool("async_task", {"tool_name": "list_agents", "tool_args": {}, "summary": "s"})
+        assert done.wait(5), "async_task never delivered"
+    finally:
+        mod._TEAM_TURN.reset(tok)
+    notifier = [c for c in ran if any(str(x).endswith("tg-notify.sh") for x in c)]
+    assert notifier and pathlib.Path(notifier[0][1]).is_file(), notifier

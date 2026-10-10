@@ -51,6 +51,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 # orchestra-env.sh; defaults to the checkout so a bare run still works.
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", str(_REPO_ROOT)))
+# The Telegram notifier is CODE, so it lives in the repo; ORCHESTRA_DIR is the DATA dir in an install
+# (scripts/orchestra-env.sh sets it from data.dir), where <data>/scripts/tg-notify.sh does not exist.
+# tg-notify.sh reads the token from $ORCHESTRA_DIR/.env.telegram, which callers inherit.
+TG_NOTIFY = _REPO_ROOT / "scripts" / "tg-notify.sh"
 OMNI_DIR = Path(os.environ.get("OMNI_CONTEXT_DIR", str(Path.home() / "scripts" / "omni-context")))
 SECRETS_FILE = ORCHESTRA_DIR / ".env.secrets"
 MAC_IP = os.environ.get("ORCHESTRA_MAC_TAILSCALE_IP", "")
@@ -829,7 +833,7 @@ def _escalate_inject_giveup(call_id):
         msg = (f"Heads up — I couldn't get your last call's transcript into the GM after many tries "
                f"(it stayed busy). The full transcript is saved ({call_id}); ask me to retry it.")
         if _TG_OUTBOX.allow(msg)[0]:
-            subprocess.run(["bash", str(ORCHESTRA_DIR / "scripts" / "tg-notify.sh"),
+            subprocess.run(["bash", str(TG_NOTIFY),
                             "--from", "arturo", msg],
                            capture_output=True, text=True, timeout=60)
     except Exception as _e:
@@ -3739,7 +3743,7 @@ def execute_tool(name, args, user_turns=None):
                 # by reference: the token never appears in the agent's task, transcript or a command line.
                 "task": (f"Research this topic thoroughly and send the operator the results on Telegram when done:\n\n{query}\n\n"
                          "Use WebSearch and WebFetch tools. Be concise but comprehensive. Send your findings by running: "
-                         f"bash {ORCHESTRA_DIR / 'scripts' / 'tg-notify.sh'} --from research \"Research results: {query[:50]}...\\n\\n<your findings>\" "
+                         f"ORCHESTRA_DIR={ORCHESTRA_DIR} bash {TG_NOTIFY} --from research \"Research results: {query[:50]}...\\n\\n<your findings>\" "
                          "(it reads the bot token by reference; never paste a token into a command)."),
             },
             "summary": f"Web research: {query[:80]}"
@@ -3800,7 +3804,7 @@ def execute_tool(name, args, user_turns=None):
                     return True                    # treat as delivered — don't retry-loop the storm
                 try:
                     r = subprocess.run(
-                        ["bash", str(ORCHESTRA_DIR / "scripts" / "tg-notify.sh"),
+                        ["bash", str(TG_NOTIFY),
                          "--from", "arturo", text],   # message is POSITIONAL (fleet convention)
                         capture_output=True, text=True, timeout=60,
                     )
