@@ -1196,9 +1196,16 @@ class RelayManager:
             log.info(f"relay {conversation_id}: agent_response counters — "
                      f"partials={h.ar_partials} finals={h.ar_finals}")
         if h.poll_lags:
-            pl = sorted(h.poll_lags)
+            pl = sorted(x[0] if isinstance(x, tuple) else x for x in h.poll_lags)
+            # lag by backlog depth: <=8 audio events pending fits one page; >8 needs extra polls
+            def _p50(v):
+                v = sorted(v)
+                return f"{v[len(v) // 2]:.2f}s(n={len(v)})" if v else "-"
+            shallow = [x[0] for x in h.poll_lags if isinstance(x, tuple) and x[1] <= 8]
+            deep = [x[0] for x in h.poll_lags if isinstance(x, tuple) and x[1] > 8]
             log.info(f"relay {conversation_id}: POLL-LAG audio polls n={len(pl)} "
-                     f"p50={pl[len(pl) // 2]:.2f}s p90={pl[int(0.9 * len(pl))]:.2f}s max={pl[-1]:.2f}s")
+                     f"p50={pl[len(pl) // 2]:.2f}s p90={pl[int(0.9 * len(pl))]:.2f}s max={pl[-1]:.2f}s "
+                     f"by_depth p50 <=8:{_p50(shallow)} >8:{_p50(deep)}")
         # Task 9: ONE usage record per conversation, keyed on _conv_started — resumes/reconnects
         # never split a call; add_seconds is fire-and-forget on alerts so this cannot block end().
         if self.usage is not None and started is not None:

@@ -5675,12 +5675,16 @@ if _STREAM_RELAY is not None:
         # POLL-LAG (ios-watch-dev msg_b22a71d8, log-only): how long the OLDEST event in an
         # audio-carrying page sat in the buffer before this poll served it. Summarised per
         # call at end() — the half of the operator's wait the device cannot see.
+        # The backlog depth at serve time is recorded with each lag so the end-of-call summary
+        # can test ios-watch-dev's prediction (msg_061b3fb6): with 8 audio events per page and a
+        # serial poller, lag should GROW with depth if the cap matters, stay flat if not.
         try:
             if any(e.get("type") == "audio" for e in events):
                 _pt = _STREAM_RELAY.buffer.put_ts(cid, cursor + 1)
                 _h = _STREAM_RELAY._holders.get(cid)
                 if _pt is not None and _h is not None:
-                    _h.poll_lags.append(time.time() - _pt)
+                    _h.poll_lags.append((time.time() - _pt,
+                                         _STREAM_RELAY.buffer.pending_audio(cid, cursor)))
         except Exception as _ple:
             log.error(f"poll-lag instrumentation error (non-fatal): {_ple}")
         return jsonify(body), 200

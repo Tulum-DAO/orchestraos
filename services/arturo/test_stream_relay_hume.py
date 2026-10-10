@@ -423,11 +423,15 @@ def test_turn_latency_and_poll_lag_logged(caplog):
         s.push({"type": "audio_output", "id": "a", "index": 1, "data": base64.b64encode(_wav48()).decode()})
         time.sleep(0.2)
         assert caplog.text.count("TURN-LATENCY final->first_audio=") == 1, "once per turn"
-        m._holders["h1"].poll_lags.extend([0.1, 0.3, 2.0])
+        m._holders["h1"].poll_lags.extend([(0.1, 2), (0.3, 5), (2.0, 20)])
         m.end("h1")
         assert "POLL-LAG audio polls n=3" in caplog.text
+        assert "by_depth p50 <=8:0.30s(n=2) >8:2.00s(n=1)" in caplog.text
     finally:
         m.shutdown()
     b = ptt_stream.EventBuffer(cap=2)
     b.put("c", {"type": "a"}); b.put("c", {"type": "b"}); b.put("c", {"type": "c"})
     assert b.put_ts("c", 1) is None and b.put_ts("c", 3) is not None, "pruned with the cap"
+    b2 = ptt_stream.EventBuffer()
+    b2.put("d", {"type": "audio"}); b2.put("d", {"type": "agent_response"}); b2.put("d", {"type": "audio"})
+    assert b2.pending_audio("d", 0) == 2 and b2.pending_audio("d", 1) == 1

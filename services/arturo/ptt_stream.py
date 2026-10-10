@@ -132,6 +132,14 @@ class EventBuffer:
             s = self._q.get(conversation_id)
             return (s.get("put_ts") or {}).get(cursor) if s else None
 
+    def pending_audio(self, conversation_id, cursor):
+        """How many audio events are queued after `cursor` (POLL-LAG backlog depth)."""
+        with self._lock:
+            s = self._q.get(conversation_id)
+            if not s:
+                return 0
+            return sum(1 for c, e in s["events"] if c > cursor and e.get("type") == "audio")
+
     def drop(self, conversation_id):
         """Forget a conversation's events NOW (end-of-call hygiene: a reused client cid at
         cursor=0 must never replay a dead conversation — ios msg_84512683)."""
