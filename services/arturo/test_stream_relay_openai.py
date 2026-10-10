@@ -269,3 +269,26 @@ def test_user_speech_while_arturo_is_silent_is_not_a_barge_in():
         assert _ev(m, typ="barge_in") == [], "a normal turn must never flush the client's playback"
     finally:
         m.shutdown()
+
+
+def test_user_first_words_are_never_lost_and_a_greeting_yields_to_them():
+    """gm msg_6d4f93d7 (the operator: 'the first turn comes from the user and is nullified'): the operator talking BEFORE Arturo's
+    first audio must not lose their words. If a greeting starts anyway and they keep talking, it yields (barge_in)
+    and the delegation carries EVERYTHING he said, before and during the greeting."""
+    got = []
+    m = _manager(delegate=lambda cid, msgs: (got.append(msgs[-1]["content"]), "Here's what I found.")[1])
+    try:
+        s, h = _live(m)
+        s.push({"type": "session.input_transcript.delta", "delta": " Okay so"})          # user first, Arturo silent
+        assert _wait(lambda: _ev(m, typ="user_partial"))
+        assert _ev(m, typ="barge_in") == []
+        for _ in range(3):
+            s.push(_audio(640))                                                          # a greeting starts anyway
+        assert _wait(lambda: len(_ev(m, typ="audio")) == 3)
+        s.push({"type": "session.input_transcript.delta", "delta": " what is gm doing"})  # they keep talking
+        assert _wait(lambda: _ev(m, typ="barge_in")), "the greeting must yield to them"
+        s.push({"type": "session.delegation.created", "delegation": {"id": "item_U"}})
+        assert _wait(lambda: got)
+        assert got[0] == "Okay so what is gm doing", f"their first words were lost: {got[0]!r}"
+    finally:
+        m.shutdown()
