@@ -67,3 +67,26 @@ def test_BY_EFFECT_a_test_seat_never_lands_in_the_installs_registry(tmp_path):
     assert r.returncode == 0, r.stdout[-2000:]
     assert json.loads((real / "registry.json").read_text())["agents"] == {}, "a test seat reached the install"
     assert sorted(p.name for p in real.iterdir()) == ["registry.json"], "the spawn wrote into the install"
+
+
+# ---- the same class elsewhere (gm condition 3): an unset data dir never means the checkout ------------------
+
+def _clean_env(tmp_path, **extra):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("ORCH")}
+    env.update(HOME=str(tmp_path / "home"), ORCHESTRA_CONFIG=str(tmp_path / "absent.toml"), **extra)
+    return env
+
+
+def test_spawn_agent_default_data_dir_is_the_settings_default_not_the_checkout(tmp_path):
+    line = next(l for l in (ROOT / "spawn-agent.sh").read_text().splitlines() if l.startswith('ORCHESTRA_DIR="${ORCHESTRA_DIR:-'))
+    run = lambda **e: subprocess.run(["bash", "-c", f'SCRIPT_DIR="{ROOT}"; {line}; printf %s "$ORCHESTRA_DIR"'],
+                                     cwd=tmp_path, env=_clean_env(tmp_path, **e), capture_output=True, text=True,
+                                     timeout=30).stdout
+    assert run() == str(tmp_path / "home" / ".orchestra")
+    assert run(ORCHESTRA_DIR="/tmp/mine") == "/tmp/mine" and run(ORCH_DIR="/tmp/old") == "/tmp/old"
+
+
+def test_tg_notify_default_data_dir_is_the_settings_default_not_the_checkout(tmp_path):
+    r = subprocess.run(["bash", str(ROOT / "scripts" / "tg-notify.sh"), "hello"], cwd=tmp_path,
+                       env=_clean_env(tmp_path), capture_output=True, text=True, timeout=30)
+    assert r.returncode == 3 and f"{tmp_path / 'home' / '.orchestra'}/.env.telegram" in r.stderr, r.stderr
