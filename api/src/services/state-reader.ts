@@ -4,7 +4,21 @@ import { loadConfig } from '../lib/config.js';
 
 const ORCHESTRA_DIR = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
 const OMNI_DIR = process.env.OMNI_DIR || path.join(ORCHESTRA_DIR, 'facts');
-const DASHBOARD_V4_DIR = process.env.DASHBOARD_V4_DIR || path.join(ORCHESTRA_DIR, 'dashboard_v4');
+
+/**
+ * THE roadmaps file, for the reader here AND the writer (routes/roadmaps.ts). It is state/roadmaps.json;
+ * the legacy dashboard_v4/roadmaps.json is used only while it is the one that exists. The writer used
+ * to write the legacy file while this reader preferred state/, so a deployment-state update landed
+ * where it was never read again.
+ */
+export function roadmapsFile(): string {
+  // Resolved per call (not the import-time constants): the writer and reader then agree even after
+  // ORCHESTRA_DIR changes, and a test can point it at a temp tree.
+  const data = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
+  const current = path.join(data, 'state', 'roadmaps.json');
+  const legacy = path.join(process.env.DASHBOARD_V4_DIR || path.join(data, 'dashboard_v4'), 'roadmaps.json');
+  return !fs.existsSync(current) && fs.existsSync(legacy) ? legacy : current;
+}
 
 // Excluded state files that are not per-agent state
 const STATE_EXCLUDES = new Set([
@@ -188,9 +202,7 @@ export function getAllHandoffs(): Record<string, string | null> {
 
 // ── Dashboard / Roadmaps ──────────────────────────────────────────────
 export function getRoadmaps(): Record<string, unknown> | null {
-  // Try ORCHESTRA_DIR/state/roadmaps.json first, fall back to DASHBOARD_V4_DIR
-  return readJsonSafe(path.join(ORCHESTRA_DIR, 'state', 'roadmaps.json'))
-    || readJsonSafe(path.join(DASHBOARD_V4_DIR, 'roadmaps.json'));
+  return readJsonSafe(roadmapsFile());   // the same file the deployment-state writer updates
 }
 
 // ── Special State Files ───────────────────────────────────────────────

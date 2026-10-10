@@ -2,9 +2,12 @@ import { Router, type Request, type Response } from 'express';
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { isSafeName, containedPath } from '../lib/agentPaths.js';
+import { dataDir } from '../lib/config.js';
 
 const router = Router();
-const ORCHESTRA = process.env.ORCHESTRA_DIR!;
+// Skills are DATA: installed content (<data>/skills/*.md, state/skills-catalog.json); nothing in the
+// checkout ships them. It had no fallback at all (ORCHESTRA_DIR!), so off `orchestra up` join() got undefined.
+const ORCHESTRA = dataDir();
 const CATALOG_FILE = join(ORCHESTRA, 'state', 'skills-catalog.json');
 
 function loadCatalog() {
