@@ -771,6 +771,19 @@ spawn_agent() {
         python3 "$SCRIPT_DIR/scripts/ensure_cwd_trusted.py" "$cwd" 2>&1 \
             | sed 's/^/[spawn] /' || warn "  trust pre-seed skipped for '$cwd'"
     fi
+    # Codex has the same kind of dialog ("Do you trust the contents of this directory?") and
+    # --yolo does NOT skip it (gate container, codex-cli 0.153.4): the boot instruction landed on
+    # the menu, Codex quit and the seat was a bare shell. Unlike the claude pre-seed this is NOT
+    # fail-soft: an untrusted codex seat never starts, so a refusal stops the spawn here, before
+    # any pane exists, with codex_trust.py's one-line reason.
+    if [[ "$runtime" == "codex" ]]; then
+        local _trust_out
+        if ! _trust_out="$(python3 "$SCRIPT_DIR/scripts/codex_trust.py" "$cwd" 2>&1)"; then
+            err "$agent_id: spawn REFUSED — ${_trust_out}"
+            exit 3
+        fi
+        [[ -n "$_trust_out" ]] && log "  ${_trust_out}"
+    fi
 
     tmux new-session -d -s "$tmux_name" -c "$cwd"
     orch_tmux_session_defaults "$tmux_name"
