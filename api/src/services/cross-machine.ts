@@ -3,6 +3,7 @@ import { readFileSync, statSync, existsSync } from 'fs';
 import { join } from 'path';
 import os from 'os';
 import { getTmuxSessionNames } from './tmux-monitor.js';
+import { CODE_ROOT } from '../lib/codeRoot.js';
 
 const IS_VPS = !os.platform().includes('darwin');
 const ORCHESTRA = process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
@@ -183,12 +184,12 @@ export function spawnAgent(agentId: string, registry: any, task?: string): Promi
   if (!agent) return Promise.resolve({ success: false, output: 'Agent not found in registry' });
 
   const machine = agent.machine || 'vps';
-  const spawnScript = join(ORCHESTRA, 'spawn-agent.sh');
+  const spawnScript = join(CODE_ROOT, 'spawn-agent.sh');   // code, not data (lib/codeRoot.ts)
   const args = task ? [agentId, '--task', task] : [agentId];
 
   if (isThisHost(machine)) {
     return new Promise((resolve) => {
-      execFile('bash', [spawnScript, ...args], { timeout: 30000, cwd: ORCHESTRA }, (err, stdout, stderr) => {
+      execFile('bash', [spawnScript, ...args], { timeout: 30000, cwd: CODE_ROOT }, (err, stdout, stderr) => {
         resolve({ success: !err, output: stdout || stderr || (err?.message || '') });
       });
     });

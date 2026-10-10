@@ -6,9 +6,10 @@
 import { execFile } from 'child_process';
 import { join } from 'path';
 import { loadConfig } from '../lib/config.js';
+import { CODE_ROOT } from '../lib/codeRoot.js';
 
 const ORCHESTRA = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
-const SCRIPT = join(ORCHESTRA, 'scripts', 'log-interaction.py');
+const SCRIPT = join(CODE_ROOT, 'scripts', 'log-interaction.py');   // code, not data (lib/codeRoot.ts)
 
 interface QuickLogParams {
   channel: string;

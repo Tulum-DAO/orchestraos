@@ -33,7 +33,7 @@ from pathlib import Path
 ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR") or os.environ.get("ORCH_DIR") or os.path.expanduser("~/orchestra"))
 # CODE lives in the checkout (this file's parent's parent), never in the data dir.
 CODE_ROOT = Path(os.environ.get("ORCHESTRA_ROOT") or Path(__file__).resolve().parent.parent)
-sys.path.insert(0, str(ORCHESTRA_DIR))
+sys.path.insert(0, str(CODE_ROOT))   # msg_store.py + scripts.identity_store are code, not data
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from msg_store import MessageStore  # noqa: E402
 # G1/G3 charter predicate lives in ONE importable home (lane_charter) so the

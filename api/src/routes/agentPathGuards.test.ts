@@ -66,6 +66,7 @@ async function app() {
   } }));
   writeFileSync(join(orch, 'prompts', 'pm-x.md'), 'original prompt');
   process.env.ORCHESTRA_DIR = orch;
+  process.env.ORCHESTRA_ROOT = orch;   // prompts/ are CODE (the checkout): this temp tree models both
   if (!process.env.ORCHESTRA_CONFIG) {
     process.env.ORCHESTRA_CONFIG = join(new URL('../../..', import.meta.url).pathname, 'orchestra.example.toml');
   }
@@ -145,6 +146,7 @@ test('SWEEP: user ids, skill names, conversation logs, client slugs, agent inbox
   writeFileSync(join(orch, 'state', 'users', 'shaw', 'assumptions.json'), JSON.stringify({ patterns: { x: { can_assume: true } } }));
 
   process.env.ORCHESTRA_DIR = orch;
+  process.env.ORCHESTRA_ROOT = orch;   // prompts/ are CODE (the checkout): this temp tree models both
   if (!process.env.ORCHESTRA_CONFIG) {
     process.env.ORCHESTRA_CONFIG = join(new URL('../../..', import.meta.url).pathname, 'orchestra.example.toml');
   }

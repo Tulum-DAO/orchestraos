@@ -5,10 +5,11 @@ import { execFileSync } from 'child_process';
 import { loadConfig } from '../lib/config.js';
 import { getRegistry } from '../services/state-reader.js';
 import { registeredAgent, inboxDirFor } from '../lib/agentPaths.js';
+import { CODE_ROOT } from '../lib/codeRoot.js';
 
 const router = Router();
 const ORCHESTRA = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
-const BUS = join(ORCHESTRA, 'message_bus.py');
+const BUS = join(CODE_ROOT, 'message_bus.py');   // code, not data (lib/codeRoot.ts)
 
 function urlToClient(pageUrl: string): { slug: string; pmAgent: string } | null {
   const clientsDir = join(ORCHESTRA, 'state', 'clients');

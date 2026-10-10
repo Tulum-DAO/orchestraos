@@ -6,7 +6,8 @@ import { getRegistry, getAllAgentStates, getInboxCounts } from '../services/stat
 import { registeredAgent, promptPathFor, inboxDirFor, isSafeAgentId } from '../lib/agentPaths.js';
 
 // The prompt routes' own root, unchanged from before (they never used state-reader's data dir).
-const PROMPT_ORCH = () => process.env.ORCHESTRA_DIR || join(process.env.HOME!, 'scripts/agent-orchestra');
+// Seat prompts are CODE (prompts/<id>.md in the checkout, read by spawn-agent.sh and seats.py), not data.
+const PROMPT_ORCH = () => process.env.ORCHESTRA_ROOT || CODE_ROOT;   // read per call: tests point it at a temp tree
 import { getTmuxSessionNames, paneCommand } from '../services/tmux-monitor.js';
 import { getUnifiedAgentStatus, spawnAgent, killAgent, getMacStatus, getMacSessionsCache, isThisHost } from '../services/cross-machine.js';
 import { logInteraction } from '../services/learning.js';
@@ -21,6 +22,7 @@ import { readGatewayToken } from '../lib/gateway-token.js';
 import { resolveSpecialKey } from '../lib/special-keys.js';
 import { actingAgent, principal } from '../lib/principal.js';
 import { agentScopeParam, canPrincipalSeeAgent } from '../lib/agent-scope.js';
+import { CODE_ROOT } from '../lib/codeRoot.js';
 
 function macSshTarget(): string {
   const cfg = loadConfig();

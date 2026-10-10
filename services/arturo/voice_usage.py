@@ -11,6 +11,8 @@ from pathlib import Path
 
 ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", Path.home() / "scripts/agent-orchestra"))
 DEFAULT_PATH = ORCHESTRA_DIR / "state/voice-usage.json"
+# CODE (scripts/approval.py) lives in the checkout, never under the data dir (ORCHESTRA_DIR).
+CODE_ROOT = Path(os.environ.get("ORCHESTRA_ROOT") or Path(__file__).resolve().parents[2])
 DEFAULT_CAP = int(os.environ.get("VOICE_DAILY_CAP_MIN", "120"))
 
 
@@ -24,7 +26,7 @@ def _card_alert(message):
     """
     def _run():
         try:
-            subprocess.run(["python3", str(ORCHESTRA_DIR / "scripts/approval.py"), "human-task",
+            subprocess.run(["python3", str(CODE_ROOT / "scripts" / "approval.py"), "human-task",
                             "--from", "arturo-proxy", "--task", message,
                             "--op-key", "voice-usage-" + time.strftime("%Y%m%d") + "-" + message.split()[0].lower(),
                             "--feature", "voice-usage", "--worker-kind", "pane"],

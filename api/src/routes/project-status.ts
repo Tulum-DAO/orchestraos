@@ -3,13 +3,14 @@ import { execFileSync } from 'child_process';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { loadConfig } from '../lib/config.js';
+import { CODE_ROOT } from '../lib/codeRoot.js';
 
 const router = Router();
 const ORCHESTRA = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
 
 router.get('/', (_req: Request, res: Response) => {
   try {
-    const script = join(ORCHESTRA, 'scripts', 'project-status-api.py');
+    const script = join(CODE_ROOT, 'scripts', 'project-status-api.py');   // code, not data (lib/codeRoot.ts)
     const out = execFileSync('python3', [script], {
       timeout: 15000,
       encoding: 'utf-8',

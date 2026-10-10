@@ -845,7 +845,7 @@ spawn_agent() {
         # feature degraded to "no rules" without ever saying why.
         local perm_err=""
         perm_err="$(mktemp)"
-        perm_settings="$(python3 "$SCRIPT_DIR/scripts/spawn_permission_rules.py" "$agent_id" "$cwd" 2>"$perm_err" || true)"
+        perm_settings="$(python3 "$SCRIPT_DIR/scripts/spawn_permission_rules.py" "$agent_id" "$cwd" --orchestra-dir "$ORCHESTRA_DIR" 2>"$perm_err" || true)"
         if [[ -n "$perm_settings" && -f "$perm_settings" ]]; then
             launch_cmd+=" --settings $perm_settings"
             vlog "  Perms: project-local allow-rules -> $perm_settings"
