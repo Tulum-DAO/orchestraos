@@ -7,8 +7,8 @@ fidelity caveat RESOLVES: ``migrate.reproject`` reconstructs the files
 byte-faithfully from the store.
 
 Read-only import (copy into the harness; ob rider), tmp DB + tmp out_dir, nothing
-mutates the live stores (the actual writer rewire + cutover is the the operator-armed
-gate). A committed DIFF-REPORT (empty = proof) backs the the operator-arm card.
+mutates the live stores (the actual writer rewire + cutover is the operator-armed
+gate). A committed DIFF-REPORT (empty = proof) backs the operator-arm card.
 
 RED until ``scripts/identity_store/migrate`` exists.
 """

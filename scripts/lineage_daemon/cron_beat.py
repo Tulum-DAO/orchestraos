@@ -228,11 +228,11 @@ def run_beat(agents, registry, state, *, now=None, orchestra_dir=None,
         approval(seat, graduated_fn=is_graduated_autoretire, confirmed_fn=<S3
         confirmed for THIS rotation>, fallback_fn=default the operator card). Auto-approves
         (no card) ONLY for a cold-verified graduated-T2 seat whose S3 confirmed;
-        EVERY other case falls back to the the operator one-tap card.
+        EVERY other case falls back to the operator one-tap card.
     All three preserve current behavior by construction under the first window: with
     soft_only=True EVERY hard_rotate defers (grade/approve never run), and even if
     flipped, is_graduated_autoretire fails closed (no kill-switch-absent + armed
-    allowlist + strict PASS) so approval_fn falls back to the the operator card. Passing a
+    allowlist + strict PASS) so approval_fn falls back to the operator card. Passing a
     seam directly overrides the factory (tests / future wiring).
 
     `armed_lineages` (injectable, per-lineage arm gate): the set of lineage roots

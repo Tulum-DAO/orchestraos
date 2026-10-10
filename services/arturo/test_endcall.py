@@ -44,7 +44,7 @@ def test_build_full_transcript_is_chronological_and_labeled():
         {"role": "user", "text": "look into the acme build"},
     ]
     t = endcall.build_full_transcript(turns)
-    assert "the operator: what's waiting on me" in t
+    assert "Operator: what's waiting on me" in t
     assert "Arturo: Three approvals." in t
     assert "[tool: gm_command]" in t
     # chronological order preserved
@@ -64,10 +64,10 @@ def test_inject_sends_full_transcript_when_provided():
         captured["text"] = text
         return 200
     ok, _ = endcall.inject_to_gm("gm", "summary", "[voice-call: vc_x /p.json]",
-                                 post=fake_post, transcript="the operator: hello\nArturo: hi", base_delay=0)
+                                 post=fake_post, transcript="Operator: hello\nArturo: hi", base_delay=0)
     assert ok is True
     assert "FULL TRANSCRIPT" in captured["text"]
-    assert "the operator: hello" in captured["text"] and "Arturo: hi" in captured["text"]
+    assert "Operator: hello" in captured["text"] and "Arturo: hi" in captured["text"]
     assert "[voice-call: vc_x /p.json]" in captured["text"]
 
 

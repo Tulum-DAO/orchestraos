@@ -41,7 +41,7 @@ def build_full_transcript(turns, max_chars=6000):
         if role == "tool":
             lines.append(f"[tool: {t.get('tool', '?')}]")
         elif role in ("user", "arturo"):
-            who = "the operator" if role == "user" else "Arturo"
+            who = "Operator" if role == "user" else "Arturo"
             txt = sanitize_summary(t.get("text", "")).replace("\n", " ")
             if txt:
                 lines.append(f"{who}: {txt}")

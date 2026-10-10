@@ -354,7 +354,7 @@ def test_inv7_two_oracles_disagreeing_FAILS(monkeypatch):
     """gm's exact state: it updated the registry, verified with the resolver
     that reads the store IT fed, got ('gm', direct-live) and reported
     all-clear — while the other oracle, defaulting to agent-sessions.json,
-    returned ('gm-gen14'). Both internally correct. The the operator-facing delivery
+    returned ('gm-gen14'). Both internally correct. The operator-facing delivery
     path was routing to the wrong pane the whole time."""
     # ONE resolver, fed each store in turn — resolve_live_head delegates to
     # resolve_delivery_target, so a two-function comparison is vacuous.

@@ -1,4 +1,4 @@
-"""The cutover switch — the single flag the the operator-armed card flips.
+"""The cutover switch — the single flag the operator-armed card flips.
 
 INERT by default: no flag file + env unset => ``is_active`` is False, so every
 rewired writer falls back to its legacy JSON write and nothing changes. The
