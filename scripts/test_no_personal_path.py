@@ -105,6 +105,48 @@ def test_the_account_lint_bites():
     assert not _account_hits("x.md", name + "furt " + name + "ly"), "whole word only"
 
 
+# ---- ANY user's home path (gm: "so the next unknown user is caught too") ------------------------------
+# An absolute /home/<name>/ or /Users/<name>/ in a shipped file names somebody's machine. Allowed: placeholders
+# (/home/<you>/, /home/$USER/, /home/.../), and "orchestra", the product's own install and dev-container user
+# (docs/INSTALL.md, .devcontainer). Tests and fixtures are exempt, as for the markers above.
+# No trailing slash needed (HOME=/home/<name>, a path at line end). A placeholder starts with a character
+# outside the name class (<you>, $USER), so it never matches.
+HOME_PATH = re.compile(r"/(?:home|Users)/([A-Za-z0-9._-]+)")
+ALLOWED_HOME_NAMES = {"orchestra", "..."}
+
+
+def _home_hits(rel, text):
+    out = []
+    for i, line in enumerate(text.splitlines(), 1):
+        for m in HOME_PATH.finditer(line):
+            if m.group(1) not in ALLOWED_HOME_NAMES:
+                out.append(f"{rel}:{i}: {m.group(0)}  {line.strip()[:100]}")
+    return out
+
+
+def test_no_users_home_path_ships():
+    files = _tracked()
+    assert len(files) > 300, "git ls-files returned too little to be a real scan"
+    hits = []
+    for rel in files:
+        if _exempt(rel) or rel == "scripts/test_no_personal_path.py":
+            continue
+        try:
+            hits += _home_hits(rel, (ROOT / rel).read_text(errors="ignore"))
+        except (IsADirectoryError, FileNotFoundError):
+            continue
+    assert not hits, ("a user's home path in shipped files (use <checkout>, <data dir> or /home/<you>/):\n"
+                      + "\n".join(hits))
+
+
+def test_the_home_path_lint_bites():
+    assert _home_hits("x.md", "cd /home/alice/repo") and _home_hits("x.sh", "open /Users/bob/Downloads/")
+    assert _home_hits("x.py", "'/home/" + "zed" + "/.orchestra/'"), "any unknown name, not a list"
+    assert _home_hits("x.sh", "HOME=/home/alice") and _home_hits("x.md", "cd /Users/bob"), "no trailing slash"
+    for ok in ("/home/<you>/repo", "/home/$USER/x", "/home/.../bin/claude", "/home/orchestra/.ssh", "/home/", "~/x"):
+        assert not _home_hits("x.md", ok), ok
+
+
 def test_the_lint_bites():
     # positive control: a marker in a non-exempt path is found (guards against a scan that sees nothing)
     assert not _exempt("scripts/example.py") and _exempt("scripts/test_example.py")

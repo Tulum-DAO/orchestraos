@@ -4,6 +4,7 @@ import { readFileSync } from 'fs';
 import path from 'path';
 import os from 'os';
 import { loadConfig } from '../lib/config.js';
+import { chatIdFromFiles } from '../lib/telegramChatId.js';
 
 const router = Router();
 
@@ -219,10 +220,7 @@ router.post('/notify-telegram', async (req: Request, res: Response) => {
       return;
     }
 
-    let chatId: string | null = null;
-    try {
-      chatId = readFileSync(path.join(ORCHESTRA_DIR, '.shaw_chat_id'), 'utf-8').trim();
-    } catch {}
+    let chatId: string | null = chatIdFromFiles(ORCHESTRA_DIR);
     // ORCHESTRA_TELEGRAM_CHAT_ID; the old name SHAW_TELEGRAM_CHAT_ID is still read.
     if (!chatId) chatId = process.env.ORCHESTRA_TELEGRAM_CHAT_ID || process.env.SHAW_TELEGRAM_CHAT_ID || null;
     if (!chatId) {

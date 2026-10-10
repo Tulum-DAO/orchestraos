@@ -28,8 +28,8 @@ _MODEL_RE = re.compile(r"--model\s+'([^']+)'")
 
 def _project_dir(cwd: str) -> str:
     """Claude Code encodes a cwd into its projects/ dir by replacing '/' and
-    '.' with '-'. e.g. /home/testuser/agent-orchestra ->
-    -home-testuser-agent-orchestra."""
+    '.' with '-'. e.g. /home/<you>/agent-orchestra ->
+    -home-<you>-agent-orchestra."""
     return re.sub(r"[/.]", "-", cwd or "")
 
 
