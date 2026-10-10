@@ -51,3 +51,20 @@ def test_retry_after_an_ambiguous_delivery_does_not_post_again(tmp_path, monkeyp
     ok, att = endcall.inject_to_gm("gm", "s", MARK, post=lambda s, t: posts.append(1) or 200,
                                    base_delay=0, since=five_min_ago - 60)
     assert ok is True and posts == [], "already delivered since the call ended: no second post"
+
+
+def test_evidence_glob_follows_the_gateways_tmp_dir(tmp_path, monkeypatch):
+    """The gateway writes inject files under CHIP_DODGE_TMP_DIR (default /tmp). A hard-coded /tmp
+    glob goes blind the day that env is set, and the sweeper re-delivers (orchestraos-builder
+    msg_5361ec1c). Both sides must read the same variable."""
+    import importlib
+    monkeypatch.setenv("CHIP_DODGE_TMP_DIR", str(tmp_path))
+    try:
+        mod = importlib.reload(endcall)
+        assert mod.INJECT_EVIDENCE_GLOB == os.path.join(str(tmp_path), "agent-inject-*.md")
+        (tmp_path / "agent-inject-1-x.md").write_text(MARK)
+        assert mod.delivered_evidence(MARK, time.time() - 60) is True
+    finally:
+        monkeypatch.delenv("CHIP_DODGE_TMP_DIR")
+        importlib.reload(endcall)
+    assert endcall.INJECT_EVIDENCE_GLOB == "/tmp/agent-inject-*.md"

@@ -84,8 +84,9 @@ def _default_post(session, text):
         return e.code
 
 
-# Each gateway delivery to a seat leaves a /tmp/agent-inject-*.md file with the full text.
-INJECT_EVIDENCE_GLOB = "/tmp/agent-inject-*.md"
+# Each gateway delivery to a seat leaves an agent-inject-*.md file with the full text, under the
+# gateway's CHIP_DODGE_TMP_DIR (default /tmp; watch_gateway.py reads the same variable).
+INJECT_EVIDENCE_GLOB = _os.path.join(_os.environ.get("CHIP_DODGE_TMP_DIR", "/tmp"), "agent-inject-*.md")
 
 
 def delivered_evidence(marker, since):
