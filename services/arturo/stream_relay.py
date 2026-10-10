@@ -24,7 +24,7 @@ import threading
 import time
 from pathlib import Path
 
-from services.arturo import hume_audio, ptt_stream, voice_vendor
+from services.arturo import hume_audio, openai_live, ptt_stream, voice_vendor
 from services.arturo.voice_vendor import _secret
 
 import sys
@@ -225,8 +225,18 @@ def hume_socket_factory(conversation_id, resumed_chat_group_id=None):
     return _Sock()
 
 
+# --- GPT-Live ("openai"; docs/ARTURO.md "GPT-Live") ---
+OPENAI_CALL_CAP_S = openai_live.CALL_CAP_S          # per-call cap (gm: 20 min); the daily cap is voice_usage
+OPENAI_CALL_WARN_S = openai_live.CALL_WARN_S
+OPENAI_SPAN_TAIL_S = 0.8        # seconds of non-speech AUDIO (not wall clock) that close an Arturo speech span
+SUPERSEDE_VENDORS = ("hume", "openai")              # vendors whose CLM requests feed SUPERSEDE / ASYNC-HOLD
+_ACK_RE = re.compile(r"\b(i'?m on it|on it|done|sent|i'?ve (sent|started|messaged|checked|done))\b", re.I)
+
+
 def _encode_uplink(vendor, pcm):
     """One place that knows each vendor's uplink audio frame."""
+    if vendor == "openai":
+        return openai_live.encode_uplink(pcm)
     b64 = base64.b64encode(pcm).decode()
     if vendor == "hume":
         return json.dumps({"type": "audio_input", "data": b64})
@@ -272,6 +282,18 @@ class _Holder:
         self.gate = ptt_stream.UplinkGate()
         self.turn_pcm = ptt_stream.TurnPcmBuffer()
         self._down = hume_audio.Downsampler()   # downlink FIR: state carries across audio_output chunks
+        # GPT-Live state (vendor "openai")
+        self._oa_user = ""            # user words since the last turn boundary (input_transcript deltas)
+        self._oa_out = ""             # Arturo's words in the current speech span (output_transcript deltas)
+        self._oa_out_started = False
+        self._oa_span_open = False    # an Arturo SPEECH span is open (energy, never frame arrival)
+        self._oa_quiet_s = 0.0        # non-speech audio seconds since the last speech frame
+        self._oa_barged = False
+        self._oa_hist = []            # this call's turns, sent to our CLM on each delegation
+        self._oa_answer = None        # the latest delegated answer sent and not yet heard in full
+        self._oa_warned = False
+        self._oa_capped = False
+        self.oa_nondelegated = 0
         self.partials = None
         # The Scribe partials fork is EL-only: Hume ships native interim user_messages
         # (verbose_transcription), so the O(T^2) re-STT fork stays forced OFF for hume.
@@ -351,6 +373,8 @@ class _Holder:
         try:
             if self.vendor == "hume":
                 s = self.m.factories["hume"](self.cid, resumed_chat_group_id=self.chat_group_id)
+            elif self.vendor == "openai":
+                s = self.m.factories["openai"](self.cid)
             else:
                 s = self.m.socket_factory(self.cid)
         except Exception as e:
@@ -472,7 +496,7 @@ class _Holder:
             _msg = f"{self.vendor}: out of credits — add credits or switch vendor"
             self.m.record_vendor_refusal(self.vendor, _msg)
             self.m.buffer.put(self.cid, {"type": "vendor_unavailable", "message": _msg})
-        if self.vendor == "hume":
+        if self.vendor in ("hume", "openai"):
             self._flush_agent_buf()           # never strand a half-coalesced assistant turn
         if s:
             try:
@@ -706,10 +730,23 @@ class _Holder:
         if not self.ensure_socket():
             self._buffer_outage(pcm)
             return
+        frame = _encode_uplink(self.vendor, pcm)
+        sock = self.sock
         try:
-            self.sock.send(_encode_uplink(self.vendor, pcm))
+            sock.send(frame)
         except Exception:
-            self._on_socket_down()
+            with self._lock:
+                current = self.sock
+            if current is sock:
+                self._on_socket_down()
+            elif current is not None:
+                # the socket died and was REPLACED while this send was failing: the failure belongs to the
+                # dead socket, never to its replacement (soak 2026-10-10: one drop became two reconnects)
+                try:
+                    current.send(frame)
+                    return
+                except Exception:
+                    pass                 # the replacement's own reader owns its death
             self._buffer_outage(pcm)
 
     # -- agent_speaking boundary (spec @642abdd9; only when manager.speaking_enabled) --
@@ -835,6 +872,8 @@ class _Holder:
     def _dispatch(self, d, sock):
         if self.vendor == "hume":
             self._dispatch_hume(d, sock)
+        elif self.vendor == "openai":
+            self._dispatch_openai(d, sock)
         else:
             self._dispatch_el(d, sock)
 
@@ -1011,6 +1050,207 @@ class _Holder:
             return
         self.m.buffer.put(self.cid, {"type": t or "unknown"})
 
+    # -- GPT-Live downlink (measured event shapes: docs/ARTURO.md "GPT-Live") --
+    def _dispatch_openai(self, d, sock):
+        """GPT-Live is the VOICE: substantive turns are delegated to OUR CLM (m.openai_delegate), so tools and
+        the allowlist never run here. Output audio is continuous; only SPEECH (energy) frames, plus the short
+        quiet tail inside a span, are forwarded and count as Arturo speaking (gm condition 1)."""
+        t = d.get("type", "")
+        self.m.registry.touch(self.cid)
+        now = time.time()
+        if t == "session.output_audio.delta":
+            try:
+                pcm = base64.b64decode(d.get("delta") or "")
+            except Exception:
+                pcm = b""
+            if not pcm:
+                return
+            if openai_live.is_speech(pcm):
+                self._oa_quiet_s = 0.0
+                forward = True
+            elif self._oa_span_open:
+                self._oa_quiet_s += len(pcm) / BYTES_PER_S
+                forward = self._oa_quiet_s < OPENAI_SPAN_TAIL_S
+            else:
+                forward = False
+            if not forward:
+                if self._oa_span_open:
+                    self._oa_end_span()
+                return
+            if not self._oa_span_open:
+                self._oa_span_open = True
+                self._oa_barged = False
+            self._touch_activity()
+            self._agent_output_seen = True
+            if self.m.speaking_enabled:
+                self._speak_on_audio()
+            if self._span_t0 is None:
+                self._span_t0 = now
+                if self._final_at is not None:
+                    log.info(f"relay {self.cid}: TURN-LATENCY final->first_audio={now - self._final_at:.2f}s")
+                    self._final_at = None
+            self._span_pcm += len(pcm)
+            self._play_until = max(self._play_until, now) + len(pcm) / BYTES_PER_S
+            self._last_agent_audio_ts = now
+            self.m.buffer.put(self.cid, {"type": "audio", "audio": base64.b64encode(pcm).decode()})
+            return
+        if t == "session.output_transcript.delta":
+            delta = d.get("delta") or ""
+            with self._lock:
+                if not self._oa_out_started:
+                    self._oa_out_started = True
+                    self._agent_turn += 1
+                self._oa_out += delta
+                text, turn = self._oa_out.strip(), self._agent_turn
+            if self.m.agent_text_enabled and text:
+                self.ar_partials += 1
+                self.m.buffer.put(self.cid, {"type": "agent_response", "text": text,
+                                             "agent_turn": turn, "partial": True})
+            return
+        if t == "session.input_transcript.delta":
+            delta = d.get("delta") or ""
+            self._last_user_ts = now
+            self._touch_activity()
+            if delta.strip() and self._oa_span_open and not self._oa_barged:
+                self._oa_barge_in()
+            with self._lock:
+                self._oa_user += delta
+                self._rev += 1
+                text, turn, rev = self._oa_user.strip(), self._turn_no, self._rev
+            if text:
+                self.m.buffer.put(self.cid, {"type": "user_partial", "text": text, "turn": turn, "revision": rev})
+            return
+        if t == "session.delegation.created":
+            did = (d.get("delegation") or {}).get("id")
+            with self._lock:
+                q, self._oa_user = self._oa_user.strip(), ""
+                turn = self._turn_no
+                self._turn_no += 1
+                self._rev = 0
+                msgs = list(self._oa_hist) + [{"role": "user", "content": q}]
+                self._oa_hist.append({"role": "user", "content": q})
+            self._final_at = now
+            self._awaiting_reply = True
+            if q:
+                self.m.replay_log(self.cid).add("user", q)
+                self.m.buffer.put(self.cid, {"type": "user_transcript", "text": q, "turn": turn})
+            threading.Thread(target=self._oa_delegate, args=(sock, did, q, msgs), daemon=True,
+                             name=f"openai-deleg-{self.cid[:8]}").start()
+            return
+        if t == "session.usage.updated":
+            secs = float((d.get("usage") or {}).get("seconds") or 0)
+            if secs >= OPENAI_CALL_WARN_S and not self._oa_warned:
+                self._oa_warned = True
+                log.info(f"relay {self.cid}: OPENAI-CAP warning at {secs:.0f}s")
+                self.m.buffer.put(self.cid, {"type": "agent_response", "notice": True,
+                                             "text": "One minute left on this GPT-Live call."})
+            if secs >= OPENAI_CALL_CAP_S and not self._oa_capped:
+                self._oa_capped = True
+                log.warning(f"relay {self.cid}: OPENAI-CAP reached at {secs:.0f}s: closing the session")
+                try:
+                    sock.send(json.dumps({"type": "session.close"}))
+                except Exception:
+                    pass
+                self.m.buffer.put(self.cid, {"type": "vendor_unavailable",
+                                             "message": "GPT-Live call limit reached: call again to continue."})
+            return
+        if t == "session.closed":
+            log.info(f"relay {self.cid}: OPENAI session closed reason={d.get('reason')} "
+                     f"usage_s={(d.get('usage') or {}).get('seconds')}")
+            return
+        if t == "error":
+            err = d.get("error") or {}
+            code = str(err.get("code") or "")
+            log.warning(f"relay {self.cid}: openai error event: {code} {str(err.get('message') or '')[:160]}")
+            if code in ("insufficient_quota", "invalid_api_key", "billing_hard_limit_reached"):
+                _msg = f"openai: {code.replace('_', ' ')}: switch vendor in Settings"
+                self.m.record_vendor_refusal(self.vendor, _msg)
+                if not self._credit_alerted:
+                    self._credit_alerted = True
+                    self.m.buffer.put(self.cid, {"type": "vendor_unavailable", "message": _msg})
+            return
+        # session.started / session.commentary.appended / session.updated: nothing for the app
+
+    def _oa_end_span(self):
+        """An Arturo speech span ended (0.8 s of non-speech audio): finalize the reply text."""
+        span_t0 = self._span_t0
+        self._oa_span_open = False
+        self._oa_quiet_s = 0.0
+        self._log_audio_span("assistant_end")
+        with self._lock:
+            text, self._oa_out, self._oa_out_started = self._oa_out.strip(), "", False
+            user_pending, ans = self._oa_user.strip(), self._oa_answer
+        if text and _ACK_RE.search(text):
+            log.info(f"relay {self.cid}: OPENAI-ACK {text[:80]!r}")
+        if text and user_pending:
+            # answered WITHOUT delegating (gm condition 5): journaled with a flag and counted
+            self.oa_nondelegated += 1
+            log.info(f"relay {self.cid}: OPENAI-NONDELEGATED user={user_pending[:60]!r} reply={text[:60]!r}")
+            with self._lock:
+                self._oa_user = ""
+                self._oa_hist += [{"role": "user", "content": user_pending}, {"role": "assistant", "content": text}]
+            self._oa_journal("user", user_pending, delegated=False)
+            self._oa_journal("arturo", text, delegated=False)
+        if ans and span_t0 and span_t0 >= ans["sent_at"]:
+            self._oa_answer = None                     # its answer was spoken in full
+        if text:
+            with self._lock:
+                self._agent_buf = [text]
+            self._flush_agent_buf()
+        self._awaiting_reply = False
+        self.m.buffer.put(self.cid, {"type": "assistant_end"})
+
+    def _oa_barge_in(self):
+        """User speech during Arturo's speech: synthesize barge_in (GPT-Live sends no interruption event).
+        An answer cut off mid-speech is posted to the transcript, never silently lost (gm condition 3)."""
+        self._oa_barged = True
+        self._log_audio_span("user_interruption", forwarded=True)
+        if self.m.speaking_enabled:
+            self._speak_off()
+        with self._lock:
+            text, self._oa_out, self._oa_out_started = self._oa_out.strip(), "", False
+            ans = self._oa_answer
+        if text:
+            with self._lock:
+                self._agent_buf = [text]
+            self._flush_agent_buf()
+        self.m.buffer.put(self.cid, {"type": "barge_in"})
+        if ans and self._last_agent_audio_ts >= ans["sent_at"]:
+            self._oa_answer = None
+            log.info(f"relay {self.cid}: OPENAI-INTERRUPTED answer for {ans['q'][:60]!r} posted to transcript")
+            self.m.buffer.put(self.cid, {"type": "agent_response", "interrupted": True, "partial": False,
+                                         "text": f"(You cut in before I finished) {ans['answer']}"})
+            self._oa_journal("arturo", ans["answer"], delegated=True, interrupted=True)
+
+    def _oa_delegate(self, sock, did, q, msgs):
+        """Worker: our CLM answers the delegated turn; the reply goes back as commentary on the same id."""
+        ans = ""
+        fn = getattr(self.m, "openai_delegate", None)
+        try:
+            ans = (fn(self.cid, msgs) if fn else "") or ""
+        except Exception as e:  # noqa: BLE001 — a backend failure becomes an explicit spoken "nothing found"
+            log.error(f"relay {self.cid}: openai delegation failed: {e!r}")
+        frames = openai_live.commentary_frames(did, ans)
+        spoken = json.loads(frames[0])["content"] if len(frames) == 1 else ans.strip()
+        try:
+            for f in frames:
+                sock.send(f)
+        except Exception as e:  # noqa: BLE001 — the socket died; the reader's socket_down owns recovery
+            log.warning(f"relay {self.cid}: openai commentary send failed: {e!r}")
+            return
+        with self._lock:
+            self._oa_hist.append({"role": "assistant", "content": spoken})
+        self._oa_answer = {"id": did, "q": q, "answer": spoken, "sent_at": time.time()}
+        log.info(f"relay {self.cid}: OPENAI-DELEGATION {did} answered ({len(spoken)} chars, {len(frames)} append(s))")
+
+    def _oa_journal(self, role, text, **meta):
+        hook = getattr(self.m, "journal_hook", None)
+        if hook:
+            try:
+                hook(self.cid, role, text, **meta)
+            except Exception as e:  # noqa: BLE001 — journaling never breaks the call
+                log.warning(f"relay {self.cid}: openai journal hook failed: {e!r}")
+
     def _dispatch_el(self, d, sock):
         t = d.get("type", "")
         self.m.registry.touch(self.cid)
@@ -1120,6 +1360,9 @@ class RelayManager:
         self.socket_factory = socket_factory or _default_socket_factory
         self.factories = dict(factories or {})
         self.factories.setdefault("hume", hume_socket_factory)
+        self.factories.setdefault("openai", openai_live.openai_socket_factory)
+        self.openai_delegate = None   # (cid, messages) -> reply text: the proxy wires its own CLM endpoint
+        self.journal_hook = None      # (cid, role, text, **meta): the proxy wires its call journal
         # B1 hermeticity pin: a test-injected EL socket_factory with NO vendor plumbing must
         # never read the live vendor file (or touch the network) — pin it to elevenlabs so the
         # 25-test EL baseline stays hermetic even with state/voice-vendor.json={'vendor':'hume'}.
@@ -1323,7 +1566,7 @@ class RelayManager:
             return False
         with self._lock:
             h = self._holders.get(conversation_id)
-        if h is None or h.vendor != "hume":
+        if h is None or h.vendor not in SUPERSEDE_VENDORS:
             return False
         h.note_request(request_t0, user_text)
         return True
@@ -1343,7 +1586,7 @@ class RelayManager:
         while True:
             with self._lock:
                 h = self._holders.get(conversation_id)
-            if h is None or h.vendor != "hume":
+            if h is None or h.vendor not in SUPERSEDE_VENDORS:
                 return "gone"
             if h.superseded_since(request_t0):
                 return "superseded"

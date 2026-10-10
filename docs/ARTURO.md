@@ -213,6 +213,34 @@ What the brain says is the playbook's; what may HAPPEN is pinned in `arturo-prox
 - Any turn that is not a dashboard turn (a paired device, voice, `/ptt`, a raw loopback call)
   runs a fail-closed tool allowlist.
 
+## GPT-Live (OpenAI voice)
+
+A third relay voice vendor (`openai`), next to Hume and ElevenLabs. It is **off until you add a key**:
+without `OPENAI_API_KEY` the vendor picker lists it as unavailable ("missing OPENAI_API_KEY"), selecting it
+is refused, and the relay never opens a socket.
+
+- **Turn it on:** put `OPENAI_API_KEY=...` in `<data.dir>/.env.secrets` (or the environment), then pick
+  GPT-Live in the vendor picker. The key is read per call, so no restart is needed, and it is never logged.
+  It needs the `websockets` package (in `requirements.txt`).
+- **It is only the voice.** GPT-Live gets no tools. Every substantive request is delegated back to Arturo's own
+  `/v1/chat/completions` over loopback, exactly as a Hume call is, so the caller check, the tool allowlist and the
+  call journal apply unchanged. Small talk it may answer itself; those turns are journaled with
+  `delegated: false`.
+- **Behaviour you will notice:** it greets first, and the greeting yields the moment you talk. Speaking over it
+  interrupts it (the relay detects speech by audio energy, `ARTURO_OPENAI_SPEECH_RMS`, default 60). An answer
+  you cut off is posted to the transcript, never lost.
+
+**Cost.** OpenAI bills GPT-Live audio to your key by the minute; check OpenAI's current pricing for
+`gpt-live-1`. Two caps bound what one day can cost:
+
+| cap | default | env |
+|-----|---------|-----|
+| per call | 20 minutes; a one-minute warning, then the session closes ("call again to continue") | `ARTURO_OPENAI_CALL_CAP_S` |
+| per day, per vendor | 120 minutes; one alert at 80% | `VOICE_DAILY_CAP_MIN` |
+
+So the most a day can cost is 120 minutes at OpenAI's rate. Delegated turns also run Arturo's own brain, billed
+as any text turn is. An out-of-credit or invalid key is shown on the call as "switch vendor in Settings".
+
 ## Paths, config keys, env — the index
 
 | thing | where |
@@ -223,7 +251,7 @@ What the brain says is the playbook's; what may HAPPEN is pinned in `arturo-prox
 | API routes | `api/src/routes/arturo.ts`: `POST /api/arturo/text`, `GET /api/arturo/health` |
 | web | `dashboard/src/pages/ArturoHome.tsx`, `dashboard/src/components/arturo/{ArturoPill.tsx,arturo.css}`, `dashboard/src/lib/arturo.ts` |
 | config | `orchestra.toml` `[arturo] enabled / port / brain / runtime_model`; `[runtimes] enabled` (order = brain preference) |
-| secrets | env only (`GEMINI_API_KEY`, `ELEVENLABS_API_KEY`, `CARTESIA_API_KEY`, `HUME_*`), or `<data.dir>/.env.secrets` (`KEY=value` lines, never in the toml) |
+| secrets | env only (`GEMINI_API_KEY`, `ELEVENLABS_API_KEY`, `CARTESIA_API_KEY`, `HUME_*`, `OPENAI_API_KEY`), or `<data.dir>/.env.secrets` (`KEY=value` lines, never in the toml) |
 | logs | `<data.dir>/logs/arturo.log` — `brain: {...}` and `mode: ...` on boot, `COMMISSION:` / `RESULT:` per spawn |
 | tests | `services/arturo/test_brain.py`, `test_commission.py`; `orchestra_cli/tests/test_doctor.py` (`arturo:brain`), `test_settings.py` |
 

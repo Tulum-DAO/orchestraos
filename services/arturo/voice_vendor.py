@@ -26,7 +26,11 @@ DEFAULT_VENDOR = "elevenlabs"
 REQUIRED = {
     "elevenlabs": ["ELEVENLABS_API_KEY"],
     "hume": ["HUME_API_KEY", "HUME_CONFIG_ID", "HUME_CONFIG_VERSION"],
+    "openai": ["OPENAI_API_KEY"],          # GPT-Live: the relay speaks it (docs/ARTURO.md "GPT-Live")
 }
+# The OLD `allowed` / `unavailable` fields stay exactly these two vendors: apps that predate `vendors`
+# read them, and how they'd render an id they have never heard of is untested.
+LEGACY = ("elevenlabs", "hume")
 
 # Vendor picker display contract (gm msg_1935a92a): plain-English copy served to the apps, so a new
 # vendor never needs an app build. Every vendor in REQUIRED has a row; a vendor without its keys is
@@ -34,6 +38,7 @@ REQUIRED = {
 VENDOR_COPY = {
     "elevenlabs": {"title": "ElevenLabs", "subtitle": "Natural voice from ElevenLabs"},
     "hume": {"title": "Hume", "subtitle": "Expressive voice from Hume"},
+    "openai": {"title": "GPT-Live", "subtitle": "OpenAI's live voice: listens while it talks"},
 }
 
 
@@ -97,8 +102,8 @@ class VendorStore:
     def state(self):
         d = self._read()
         un = self.unavailable()
-        d["allowed"] = [v for v in REQUIRED if v not in un]
-        d["unavailable"] = un
+        d["allowed"] = [v for v in LEGACY if v not in un]
+        d["unavailable"] = {v: r for v, r in un.items() if v in LEGACY}
         d["vendors"] = self.vendors(un)
         return d
 
