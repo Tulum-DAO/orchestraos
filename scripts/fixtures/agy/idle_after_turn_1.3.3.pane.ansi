@@ -1,0 +1,24 @@
+
+[90m────────────────────────────────────────────────────────────[39m
+[1m[34m> Run the shell command `sleep 25 && echo done > /tmp/x.txt` and then reply[0m
+[1m[34m  with the single word: finished[0m
+
+[37m○[39m [37mThought for 6.4s[39m [37m(The command involves a 25-second sleep, exceeding the t...)[39m
+[32m●[39m [1m[33mRan[0m [37m(sleep 25 && echo done > /tmp/x.txt)[39m [37m(ctrl+o to expand)[39m
+
+[37m▸ Thought for 18s, 2.0k tokens[39m
+[37m  The framework requires providing an update to the user confirming the back...[39m
+  The command has been launched in the background. Waiting for it to
+  finish...
+
+  finished
+
+[90m────────────────────────────────────────────────────────────────────────────────
+[94m>[39m
+[90m────────────────────────────────────────────────────────────────────────────────
+? for shortcuts[39m                                          [2mGemini 3.8 Flash · high
+
+
+
+
+
