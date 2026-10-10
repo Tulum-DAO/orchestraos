@@ -209,7 +209,8 @@ def default_safety_recheck(canary, orchestra_dir=None):
     import os
     od = orchestra_dir or os.environ.get(
         "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
-    pk_path = os.path.join(od, "scripts", "park-idle.py")
+    from .code_root import code_path
+    pk_path = code_path("scripts", "park-idle.py")   # CODE (checkout); its data comes from ORCHESTRA_DIR
     try:
         spec = importlib.util.spec_from_file_location("park_idle_rt", pk_path)
         pk = importlib.util.module_from_spec(spec)
@@ -264,7 +265,8 @@ def default_approval_gate(canary, successor, *, timeout_s=1800, poll_s=10,
     import time
     od = orchestra_dir or os.environ.get(
         "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
-    sys.path.insert(0, os.path.join(od, "scripts"))
+    from .code_root import code_path
+    sys.path.insert(0, code_path("scripts"))   # approval_schema is CODE (checkout), not under the data dir
     from approval_schema import ApprovalStore
     st = store or ApprovalStore()
     st.migrate()

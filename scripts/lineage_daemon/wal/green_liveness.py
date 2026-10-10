@@ -103,7 +103,8 @@ def claude_green_is_live(root, green_alias, *, wal_dir, orchestra_dir, expected_
 
         # transcript + identity via the shared helpers (bare-sid glob, not slug(cwd))
         import sys
-        _scripts = os.path.join(orchestra_dir, "scripts")
+        from ..code_root import code_path
+        _scripts = code_path("scripts")   # sid_invariants is CODE (checkout); orchestra_dir is DATA
         if os.path.isdir(_scripts) and _scripts not in sys.path:
             sys.path.insert(0, _scripts)
         from sid_invariants import find_transcript, declared_identity

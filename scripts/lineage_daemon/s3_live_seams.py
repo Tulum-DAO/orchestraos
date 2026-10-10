@@ -33,6 +33,8 @@ import os
 import re
 import sys
 
+from .code_root import child_env, code_path   # scripts are CODE (checkout); od is DATA
+
 ORCHESTRA_DIR = os.environ.get(
     "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra"))
 
@@ -51,8 +53,7 @@ def _import_rgm(orchestra_dir=None):
     scripts/ dir first (the same pattern execute.py:267 + graduation_executors.py use)."""
     # rotation_gate_manual is CODE: it lives in the checkout's scripts/, never under the data dir
     # (ORCHESTRA_DIR / orchestra_dir is the DATA dir under `orchestra up` and scripts/run-beat.sh).
-    code_root = os.environ.get("ORCHESTRA_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    scripts_dir = os.path.join(code_root, "scripts")
+    scripts_dir = code_path("scripts")
     if scripts_dir not in sys.path:
         sys.path.insert(0, scripts_dir)
     import rotation_gate_manual as RG
@@ -216,11 +217,11 @@ def _inject_correction(successor, text, nonce, *, orchestra_dir=None,
             import subprocess
             import sys
             subprocess.run(
-                [sys.executable, os.path.join(od, "msg_store.py"), "send",
+                [sys.executable, code_path("msg_store.py"), "send",   # CODE; data via child_env
                  "--from", "lineage-daemon", "--to", succ, "--type", "s3_correction",
                  "--priority", "high", "--subject", f"S3 correction {nc}",
                  "--body", body],
-                capture_output=True, text=True)
+                capture_output=True, text=True, env=child_env(od))
     try:
         send_fn(successor, text, nonce)
     except Exception:  # noqa: BLE001 -- even a durable-send failure must not raise

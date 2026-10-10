@@ -69,8 +69,9 @@ def _db_retire(name: str, reason: str, session_record=None) -> bool:
     retire."""
     if not _cutover_active():
         return False
-    if str(ORCHESTRA_DIR) not in sys.path:
-        sys.path.insert(0, str(ORCHESTRA_DIR))
+    code_root = os.environ.get("ORCHESTRA_ROOT") or str(Path(__file__).resolve().parent.parent)
+    if code_root not in sys.path:   # scripts.identity_store is CODE (checkout), not under ORCHESTRA_DIR
+        sys.path.insert(0, code_root)
     from scripts.identity_store import identity_writer
     return identity_writer.retire_agent(str(ORCHESTRA_DIR), name, reason,
                                         session_record=session_record)

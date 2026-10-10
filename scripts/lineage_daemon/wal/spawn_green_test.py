@@ -188,22 +188,30 @@ def test_no_pane_spawn_surfaces_runner_returncode_and_stderr(tmp_path):
         assert sentinel_err in msg, f"stderr tail must be surfaced, got: {msg}"
 
 
-def test_default_spawn_runner_captures_returncode_and_stderr(tmp_path):
+def test_default_spawn_runner_captures_returncode_and_stderr(tmp_path, monkeypatch):
     """The live default runner must CAPTURE (not discard) spawn-agent.sh's returncode
     and stderr/stdout tails, so a no-pane spawn is diagnosable. Uses a stub
-    spawn-agent.sh that exits non-zero on stderr — no tmux, no agent CLI."""
-    stub = tmp_path / "spawn-agent.sh"
+    spawn-agent.sh that exits non-zero on stderr — no tmux, no agent CLI.
+    spawn-agent.sh is CODE (S2): the stub sits in a fake CHECKOUT (ORCHESTRA_ROOT), and the
+    data dir is a separate temp dir that must reach the script as ORCHESTRA_DIR."""
+    code, data = tmp_path / "code", tmp_path / "data"
+    code.mkdir(); data.mkdir()
+    stub = code / "spawn-agent.sh"
     stub.write_text(
         "#!/bin/sh\n"
         "echo 'stub stdout line' \n"
+        "echo \"stub data dir: $ORCHESTRA_DIR\"\n"
         "echo 'stub stderr: launch failed' 1>&2\n"
         "exit 7\n")
     stub.chmod(0o755)
-    runner = spawn_green._default_spawn_runner(str(tmp_path), timeout_s=10)
+    monkeypatch.setenv("ORCHESTRA_ROOT", str(code))
+    runner = spawn_green._default_spawn_runner(str(data), timeout_s=10)
     res = runner("some-green-alias")
     assert res["returncode"] == 7
     assert "stub stderr: launch failed" in res["stderr_tail"]
     assert "stub stdout line" in res["stdout_tail"]
+    assert f"stub data dir: {data}" in res["stdout_tail"]
+    assert not (data / "logs").exists()      # nothing but the stub ran (the real script makes logs/)
 
 
 def test_spawn_records_pane_id_and_spawned_at_for_liveness_gate(tmp_path):

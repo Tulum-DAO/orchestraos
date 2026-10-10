@@ -23,12 +23,14 @@ import json
 import os
 import subprocess
 
+from .code_root import child_env, code_path   # scripts are CODE (checkout); od is DATA
+
 ORCHESTRA_DIR = os.environ.get(
     "ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra")
 )
 
 
-def _run(cmd, armed):
+def _run(cmd, armed, orchestra_dir=None):
     """Return the planned cmd unrun (armed=False) or run it (armed=True).
 
     Unarmed: {"cmd": cmd, "executed": False} -- NEVER shells out.
@@ -36,7 +38,7 @@ def _run(cmd, armed):
     """
     if not armed:
         return {"cmd": cmd, "executed": False}
-    p = subprocess.run(cmd, capture_output=True, text=True)
+    p = subprocess.run(cmd, capture_output=True, text=True, env=child_env(orchestra_dir))
     return {
         "cmd": cmd,
         "executed": True,
@@ -74,9 +76,9 @@ def plan_register_successor(successor_id, pred_entry, generation, lineage_root,
         "lineage_root": lineage_root,
         "handoff_from": lineage_root,
     })
-    cmd = ["python3", od + "/scripts/registry-update.py",
+    cmd = ["python3", code_path("scripts", "registry-update.py"),
            successor_id, "--json", json.dumps(fields)]
-    return _run(cmd, armed)
+    return _run(cmd, armed, od)
 
 
 def plan_spawn(successor_id, armed=False, orchestra_dir=None) -> dict:
@@ -86,8 +88,8 @@ def plan_spawn(successor_id, armed=False, orchestra_dir=None) -> dict:
     reads the registered role/system_prompt/cwd instead of auto-registering blank.
     """
     od = orchestra_dir or ORCHESTRA_DIR
-    cmd = [od + "/spawn-agent.sh", successor_id]
-    return _run(cmd, armed)
+    cmd = [code_path("spawn-agent.sh"), successor_id]
+    return _run(cmd, armed, od)
 
 
 def plan_inject_init(successor_id, predecessor_id, armed=False,
@@ -129,12 +131,12 @@ def plan_inject_init(successor_id, predecessor_id, armed=False,
         f"pending outbound callbacks, fire each EXACTLY ONCE (mark sent; never "
         f"double-emit)."
     )
-    cmd = ["python3", od + "/msg_store.py", "send",
+    cmd = ["python3", code_path("msg_store.py"), "send",
            "--from", "lineage-daemon", "--to", successor_id,
            "--type", "lineage_init", "--priority", "high",
            "--subject", f"Readback + inherit {predecessor_id}'s work",
            "--body", body]
-    return _run(cmd, armed)
+    return _run(cmd, armed, od)
 
 
 def plan_verify_edge(predecessor_id, successor_id, armed=False,
@@ -147,10 +149,10 @@ def plan_verify_edge(predecessor_id, successor_id, armed=False,
     armed, asserts succeeded_by == successor_id.
     """
     od = orchestra_dir or ORCHESTRA_DIR
-    cmd = ["python3", od + "/scripts/sessions-update.py", predecessor_id]
+    cmd = ["python3", code_path("scripts", "sessions-update.py"), predecessor_id]
     if not armed:
         return {"cmd": cmd, "executed": False}
-    p = subprocess.run(cmd, capture_output=True, text=True)
+    p = subprocess.run(cmd, capture_output=True, text=True, env=child_env(od))
     entry = {}
     try:
         entry = json.loads(p.stdout)
@@ -190,16 +192,16 @@ def plan_repin_canonical(successor_id, canonical, generation,
     canonical_fields = {"name": canonical, "tmux_session": canonical,
                         "generation": generation, "succeeded_by": None}
     rename_cmd = ["tmux", "rename-session", "-t", f"={successor_id}", canonical]
-    registry_cmd = ["python3", od + "/scripts/registry-update.py",
+    registry_cmd = ["python3", code_path("scripts", "registry-update.py"),
                     canonical, "--json", json.dumps(canonical_fields)]
-    sessions_cmd = ["python3", od + "/scripts/sessions-update.py",
+    sessions_cmd = ["python3", code_path("scripts", "sessions-update.py"),
                     canonical, "--json", json.dumps(
                         {"tmux_session": canonical, "generation": generation,
                          "succeeded_by": None})]
     return {
-        "rename": _run(rename_cmd, armed),
-        "registry_repin": _run(registry_cmd, armed),
-        "sessions_repin": _run(sessions_cmd, armed),
+        "rename": _run(rename_cmd, armed, od),
+        "registry_repin": _run(registry_cmd, armed, od),
+        "sessions_repin": _run(sessions_cmd, armed, od),
         "sid": {"note": "capture from successor's live .jsonl (enrich.live_sid) "
                         "or leave for the periodic writer — NEVER guess",
                 "from_id": successor_id},
@@ -210,14 +212,14 @@ def plan_repin_canonical(successor_id, canonical, generation,
 def plan_retire(agent_id, armed=False, orchestra_dir=None) -> dict:
     """Plan (or run) the reversible predecessor retire via park-idle.py."""
     od = orchestra_dir or ORCHESTRA_DIR
-    cmd = ["python3", od + "/scripts/park-idle.py", "--agent", agent_id, "--execute"]
+    cmd = ["python3", code_path("scripts", "park-idle.py"), "--agent", agent_id, "--execute"]
     
     if not armed:
         return {"cmd": cmd, "executed": False}
         
     # Get status before kill to know pid and sid
-    status_cmd = ["python3", od + "/scripts/agent-status.py", agent_id]
-    status_p = subprocess.run(status_cmd, capture_output=True, text=True)
+    status_cmd = ["python3", code_path("scripts", "agent-status.py"), agent_id]
+    status_p = subprocess.run(status_cmd, capture_output=True, text=True, env=child_env(od))
     raw_status = {}
     try:
         raw_status = json.loads(status_p.stdout)
@@ -229,7 +231,7 @@ def plan_retire(agent_id, armed=False, orchestra_dir=None) -> dict:
         pid = raw_status["process"].get("pid")
     sid = raw_status.get("session_id")
     
-    p = subprocess.run(cmd, capture_output=True, text=True)
+    p = subprocess.run(cmd, capture_output=True, text=True, env=child_env(od))
     
     # postcondition verification
     postcondition = False
@@ -321,8 +323,8 @@ def execute_tmux_repin(canonical, alias, successor_sid, armed=False):
         # Get pane active session ID (we'll just use tmux display-message or assume it matches if we can't extract it easily, 
         # wait, the prompt says "Verify the pane's active session ID matches successor_provider_sid". 
         # Can we get the SID from the tmux pane? We can read it from agent-sessions.json or agent-status.py for the canonical name now.
-        status_cmd = ["python3", ORCHESTRA_DIR + "/scripts/agent-status.py", canonical]
-        status_p = subprocess.run(status_cmd, capture_output=True, text=True)
+        status_cmd = ["python3", code_path("scripts", "agent-status.py"), canonical]
+        status_p = subprocess.run(status_cmd, capture_output=True, text=True, env=child_env(ORCHESTRA_DIR))
         raw_status = {}
         try:
             raw_status = json.loads(status_p.stdout)
@@ -376,23 +378,23 @@ def plan_wire_edge(predecessor_id, successor_id, generation,
     """
     od = orchestra_dir or ORCHESTRA_DIR
     pred_succession_cmd = [
-        "python3", od + "/scripts/sessions-update.py",
+        "python3", code_path("scripts", "sessions-update.py"),
         predecessor_id, "--json",
         json.dumps({"succeeded_by": successor_id})]
     succ_succession_cmd = [
-        "python3", od + "/scripts/sessions-update.py",
+        "python3", code_path("scripts", "sessions-update.py"),
         successor_id, "--json",
         json.dumps({"lineage_root": predecessor_id,
                     "handoff_from": predecessor_id})]
     succ_generation_cmd = [
-        "python3", od + "/scripts/registry-update.py",
+        "python3", code_path("scripts", "registry-update.py"),
         successor_id, "--json",
         json.dumps({"generation": generation,
                     "handoff_from": predecessor_id})]
     return {
-        "pred_succession": _run(pred_succession_cmd, armed),
-        "succ_succession": _run(succ_succession_cmd, armed),
-        "succ_generation": _run(succ_generation_cmd, armed),
+        "pred_succession": _run(pred_succession_cmd, armed, od),
+        "succ_succession": _run(succ_succession_cmd, armed, od),
+        "succ_generation": _run(succ_generation_cmd, armed, od),
     }
 
 
@@ -404,10 +406,10 @@ def verify_successor(session, armed=False, orchestra_dir=None) -> dict:
     reports whether the successor is alive.
     """
     od = orchestra_dir or ORCHESTRA_DIR
-    cmd = ["python3", od + "/scripts/agent-status.py", session]
+    cmd = ["python3", code_path("scripts", "agent-status.py"), session]
     if not armed:
         return {"cmd": cmd, "executed": False}
-    p = subprocess.run(cmd, capture_output=True, text=True)
+    p = subprocess.run(cmd, capture_output=True, text=True, env=child_env(od))
     raw = {}
     try:
         raw = json.loads(p.stdout)

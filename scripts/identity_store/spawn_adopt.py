@@ -36,10 +36,11 @@ EXIT_REFUSED = 3
 
 
 def _default_system_prompt(orch, agent_id):
-    """prompts/<id>.md when it exists (the operator 'resume apprvd-pm': a blank system_prompt booted the
+    """prompts/<id>.md (CODE: checked in the checkout, as spawn-agent.sh and seats.py read it) when it exists (the operator 'resume apprvd-pm': a blank system_prompt booted the
     seat on the foundation prompt only), else '' — spawn-agent.sh resolves the same default."""
     rel = os.path.join("prompts", f"{agent_id}.md")
-    return rel if os.path.isfile(os.path.join(orch, rel)) else ""
+    code_root = os.environ.get("ORCHESTRA_ROOT") or _ROOT
+    return rel if os.path.isfile(os.path.join(code_root, rel)) else ""
 
 
 def _orchestra_dir():
@@ -71,7 +72,8 @@ def main(argv=None):
         try:
             import importlib.util
             q_spec = importlib.util.spec_from_file_location(
-                "quota_oracle", os.path.join(orch, "scripts", "quota_oracle.py"))
+                "quota_oracle", os.path.join(os.environ.get("ORCHESTRA_ROOT") or _ROOT,
+                                             "scripts", "quota_oracle.py"))   # CODE, not data
             q_mod = importlib.util.module_from_spec(q_spec)
             q_spec.loader.exec_module(q_mod)
             res_rt, res_md, _ = q_mod.resolve_adaptive_runtime(args.runtime, args.model, args.tier or "T2")
