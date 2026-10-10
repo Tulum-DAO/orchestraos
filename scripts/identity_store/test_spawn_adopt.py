@@ -329,3 +329,64 @@ def test_new_agent_carries_its_parent_and_role_into_the_store_and_projection(orc
     assert _rows(orch, "lead-y")["lineage"]["reports_to"] is None
     row = json.loads((orch / "registry.json").read_text())["agents"]["lead-y"]
     assert "reports_to" not in row and row.get("role") == "pm"
+
+
+# gm msg_5f2169d8 (adaptive model selection, option c): the quota oracle is CODE in the checkout. It
+# fills a MISSING runtime/model on a FIRST spawn only; a respawn whose model is unknown still refuses;
+# an oracle that cannot load refuses with one plain line (stderr + logs/spawn-adopt.log), never silently.
+
+def _checkout_with_oracle(orch, body):
+    code = orch / "checkout"
+    (code / "scripts").mkdir(parents=True)
+    (code / "scripts" / "quota_oracle.py").write_text(body)
+    return code
+
+
+_PICKS_CODEX = ("def resolve_adaptive_runtime(rt, md, tier):\n"
+                "    return 'codex', 'model-from-oracle', {'account': 'acct-1', 'adapted': False}\n")
+
+
+def test_first_spawn_without_a_model_gets_the_oracles_pick_and_logs_it(orch):
+    code = _checkout_with_oracle(orch, _PICKS_CODEX)
+    r = _run(orch, ["fresh-a", "--tier", "T2"], code_root=code)
+    assert r.returncode == 0, r.stderr
+    reg = json.loads((orch / "registry.json").read_text())["agents"]["fresh-a"]
+    assert (reg["runtime"], reg["model"]) == ("codex", "model-from-oracle")
+    assert "picked runtime=codex model=model-from-oracle" in r.stderr
+    assert "picked runtime=codex" in (orch / "logs" / "spawn-adopt.log").read_text()
+
+
+def test_first_spawn_uses_the_real_oracle_from_the_checkout(orch):
+    # no fake checkout: the shipped scripts/quota_oracle.py must load (it used to be looked up under
+    # the DATA dir, where it never exists, so adaptive selection never ran on any install)
+    r = _run(orch, ["fresh-b", "--tier", "T2"])
+    assert r.returncode == 0, r.stderr
+    reg = json.loads((orch / "registry.json").read_text())["agents"]["fresh-b"]
+    assert reg["runtime"] and reg["model"]
+    assert "adaptive model selection picked" in r.stderr
+
+
+def test_respawn_with_an_unknown_model_still_refuses_and_never_asks_the_oracle(orch):
+    code = _checkout_with_oracle(orch, _PICKS_CODEX)
+    r = _run(orch, ["task-q", "--runtime", "claude", "--model", "m", "--tier", "T2"], code_root=code)
+    assert r.returncode == 0, r.stderr
+    _retire_canonical(orch, "task-q")
+    c = _db(orch)
+    try:
+        c.execute("UPDATE generations SET model='unknown' WHERE root='task-q'"); c.commit()
+    finally:
+        c.close()
+    r2 = _run(orch, ["task-q"], code_root=code)
+    assert r2.returncode == 3 and "model" in r2.stderr.lower()
+    assert "picked" not in r2.stderr                          # the oracle was not consulted
+    assert _canon(orch, "task-q")["generation"] == 1          # nothing minted
+
+
+def test_an_oracle_that_cannot_load_refuses_plainly_and_seats_nothing(orch):
+    code = _checkout_with_oracle(orch, "def resolve_adaptive_runtime(:\n")   # SyntaxError
+    r = _run(orch, ["fresh-c", "--tier", "T2"], code_root=code)
+    assert r.returncode == 3
+    line = [l for l in r.stderr.splitlines() if "adaptive model selection is unavailable" in l]
+    assert line and "could not load" in line[0] and "SyntaxError" in line[0]
+    assert "adaptive model selection is unavailable" in (orch / "logs" / "spawn-adopt.log").read_text()
+    assert _canon(orch, "fresh-c") is None                    # no identity minted, no seat

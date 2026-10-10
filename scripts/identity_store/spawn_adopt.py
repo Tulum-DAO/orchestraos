@@ -43,6 +43,44 @@ def _default_system_prompt(orch, agent_id):
     return rel if os.path.isfile(os.path.join(code_root, rel)) else ""
 
 
+class AdaptiveUnavailable(Exception):
+    """The quota oracle could not load or answer: the spawn is refused, never silently skipped."""
+
+
+def _spawn_log(orch, line):
+    """One plain line to stderr AND the data dir's spawn log (logs/spawn-adopt.log): spawn-agent.sh
+    discards this script's stdout and a daemon-driven spawn has no terminal, so stderr alone is lost."""
+    sys.stderr.write(line + "\n")
+    try:
+        os.makedirs(os.path.join(orch, "logs"), exist_ok=True)
+        with open(os.path.join(orch, "logs", "spawn-adopt.log"), "a") as f:
+            f.write(f"{orchestra_db._utcnow()} {line}\n")
+    except OSError:
+        pass                      # the stderr line already went out
+
+
+def _adaptive_pick(args):
+    """Ask the quota oracle (CODE: the checkout's scripts/quota_oracle.py; its quota state is DATA, read
+    from ORCHESTRA_DIR) for a runtime/model. Fills only what is MISSING. Raises AdaptiveUnavailable."""
+    import importlib.util
+    path = os.path.join(os.environ.get("ORCHESTRA_ROOT") or _ROOT, "scripts", "quota_oracle.py")
+    try:
+        spec = importlib.util.spec_from_file_location("quota_oracle", path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"no loader for {path}")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    except (ImportError, OSError, SyntaxError) as e:
+        raise AdaptiveUnavailable(f"the quota oracle could not load ({type(e).__name__}: {e})") from e
+    try:
+        rt, md, meta = mod.resolve_adaptive_runtime(args.runtime, args.model, args.tier or "T2")
+    except Exception as e:  # noqa: BLE001 -- named below, and the spawn is refused
+        raise AdaptiveUnavailable(f"the quota oracle failed ({type(e).__name__}: {e})") from e
+    if not rt or not md:
+        raise AdaptiveUnavailable(f"the quota oracle returned no runtime/model ({rt!r}, {md!r})")
+    return rt, md, meta or {}
+
+
 def _orchestra_dir():
     return os.environ.get("ORCHESTRA_DIR",
                           os.path.expanduser("~/scripts/agent-orchestra"))
@@ -67,20 +105,10 @@ def main(argv=None):
                    help="Adaptively resolve runtime/model via Quota Oracle if unprovided or exhausted")
     args = p.parse_args(argv)
     orch = _orchestra_dir()
-
-    if args.adaptive or (not args.runtime and not args.model):
-        try:
-            import importlib.util
-            q_spec = importlib.util.spec_from_file_location(
-                "quota_oracle", os.path.join(orch, "scripts", "quota_oracle.py"))
-            q_mod = importlib.util.module_from_spec(q_spec)
-            q_spec.loader.exec_module(q_mod)
-            res_rt, res_md, _ = q_mod.resolve_adaptive_runtime(args.runtime, args.model, args.tier or "T2")
-            args.runtime = args.runtime or res_rt
-            args.model = args.model or res_md
-            args.tier = args.tier or "T2"
-        except Exception as e:
-            sys.stderr.write(f"spawn_adopt: adaptive quota resolution notice: {e}\n")
+    # Adaptive selection (quota oracle) runs ONLY on a FIRST spawn, further below: a respawn or
+    # re-establish of a seat whose model is unknown keeps REFUSING (gm msg_5f2169d8: never silently
+    # swap a seat's model). It used to run here for every call, from <data>/scripts/quota_oracle.py,
+    # which never exists on a real install, and its broad except hid that: it never ran at all.
 
     if not cutover.is_active(orch):
         print(json.dumps({"handled": False}))
@@ -169,6 +197,25 @@ def main(argv=None):
                                 (args.agent_id,)).fetchone()[0]
     finally:
         conn.close()
+    if not prev_max and (args.adaptive or (not args.runtime and not args.model)):
+        # FIRST spawn of this name: the quota oracle fills a MISSING runtime/model (an explicit
+        # --adaptive asks it even when one was given; it keeps a healthy requested runtime).
+        try:
+            rt, md, meta = _adaptive_pick(args)
+        except AdaptiveUnavailable as e:
+            _spawn_log(orch, f"spawn_adopt REFUSED for {args.agent_id!r}: adaptive model selection is "
+                             f"unavailable: {e}. Set AGENT_RUNTIME and AGENT_MODEL.")
+            return EXIT_REFUSED
+        if args.adaptive:
+            # the oracle keeps a healthy requested runtime (and the requested model with it); when it
+            # moves the seat to another runtime the model must move too, never a cross-runtime pair
+            args.runtime, args.model = rt, md
+        else:
+            args.runtime, args.model = args.runtime or rt, args.model or md
+        args.tier = args.tier or "T2"
+        _spawn_log(orch, f"spawn_adopt: adaptive model selection picked runtime={args.runtime} "
+                         f"model={args.model} for {args.agent_id!r} "
+                         f"(account={meta.get('account')}, adapted={bool(meta.get('adapted'))})")
     reestablished = False
     if prev_max and args.generation <= prev_max:
         args.generation = prev_max + 1

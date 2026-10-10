@@ -69,6 +69,8 @@ stronger claim, and it is not the one this run supports.
 
 Listed as issues (`T1`–`T12`, `G1`–`G20`), seeded from `docs/HACKATHON_ISSUES.md`.
 
+**Fixed after this release, on main:** adaptive model selection now works on first spawn. `spawn_adopt` looked for the quota oracle under the data dir, where it never exists, so selection never ran. A seat spawned with no runtime and no model now gets the oracle's pick, and the pick is logged. A respawn whose model is unknown still refuses, and an oracle that cannot load refuses the spawn with a plain error. Fixed in PR #377; upgrade or apply that commit if you are on the tag.
+
 **Security fix after this release, on main:** the voice service's post-call webhook now accepts only a plain conversation id and refuses anything else before using it. Fixed in `ec9456c` (PR #369); upgrade or apply that commit if you are on the tag.
 
 **Fixed after this release, on main:** every fresh install of v0.1.0 had an agent chat window that could not send — the inject path read the gateway token from a legacy path that `orchestra init` never writes. Fixed in `1ffb179` (PR #109); upgrade or apply that commit if you are on the tag.
