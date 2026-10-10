@@ -69,7 +69,7 @@ stronger claim, and it is not the one this run supports.
 
 Listed as issues (`T1`–`T12`, `G1`–`G20`), seeded from `docs/HACKATHON_ISSUES.md`.
 
-**Breaking after this release, on main:** Post-call webhook now requires `ELEVENLABS_WEBHOOK_SECRET`; without it ElevenLabs transcript saving stops (401). Set it in ElevenLabs > Agents > Settings > webhook (HMAC) and in `.env.secrets` (or the environment). `orchestra doctor` shows a WARN row (`arturo:post-call-secret`) and Arturo logs one warning at startup until it is set. Escape hatch while you set it: `ARTURO_POSTCALL_AUTH=log` accepts unsigned pushes and counts what it would have refused.
+**Breaking after this release, on main:** Post-call webhook now requires `ELEVENLABS_WEBHOOK_SECRET`; without it ElevenLabs transcript saving stops (401). Set it in ElevenLabs > Agents > Settings > webhook (HMAC) and in `.env.secrets` (or the environment). `orchestra doctor` shows a WARN row (`arturo:post-call-secret`) and Arturo logs one warning at startup until it is set. Escape hatch while you set it: `ARTURO_POSTCALL_AUTH=log` accepts unsigned pushes and counts what it would have refused. A signed push is accepted once: re-sending the same signed push inside its 30-minute window is refused as a replay.
 
 **Removed after this release, on main:** `POST /api/voice/sync-prompts` and the dashboard's **Sync Prompts** button. Nothing in the product shipped the `voice-agent.py` script they ran, so on every install the button failed. No shipped client calls the route.
 

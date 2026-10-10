@@ -42,6 +42,7 @@ def proxy(monkeypatch):
     monkeypatch.setattr(pa, "_secret", lambda k: SECRET if k == pa.SECRET_KEY else "")
     monkeypatch.delenv("ARTURO_POSTCALL_AUTH", raising=False)
     pa.reset_counts()
+    pa.reset_seen()
     mod._t = (fetched, saved)
     return mod
 
@@ -81,6 +82,32 @@ def test_a_bad_signature_is_refused(proxy, case):
     r = _post(proxy, BODY, sig)
     assert r.status_code == 401, case
     assert proxy._t == ([], [])
+
+
+def test_a_replayed_push_is_refused_counted_and_never_spends_the_key(proxy):
+    """gm R3 follow-up: a signature stays valid for 30 min, so a captured push could be re-sent. The second
+    copy of the same (t, signature) is refused with a counted reason; the first was saved exactly once."""
+    sig = _sig(BODY)
+    assert _post(proxy, BODY, sig).status_code == 200
+    r = _post(proxy, BODY, sig)
+    assert r.status_code == 401
+    assert proxy._t[1] == ["conv_abc123"], "the replay reached save_transcript"
+    assert len(proxy._t[0]) == 1, "the replay reached the ElevenLabs fetch"
+    assert pa.counts()["replay"] == 1
+
+
+def test_replay_memory_forgets_outside_the_window_and_stays_bounded(monkeypatch):
+    pa.reset_seen()
+    t = 1791600000
+    assert pa._remember(f"t={t},v0=aa", now=t) is None
+    assert pa._remember(f"t={t},v0=aa", now=t + 60) == "replay"
+    assert pa._remember(f"t={t + 31 * 60},v0=bb", now=t + 31 * 60) is None
+    assert (str(t), "aa") not in pa._seen, "an entry older than the window was kept"
+    monkeypatch.setattr(pa, "MAX_SEEN", 3)
+    for i in range(10):
+        pa._remember(f"t={t + 31 * 60},v0=c{i}", now=t + 31 * 60)
+    assert len(pa._seen) <= 3
+    pa.reset_seen()
 
 
 def test_no_secret_configured_refuses_rather_than_opening_the_door(proxy, monkeypatch):

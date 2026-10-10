@@ -8,12 +8,17 @@ anything older than 30 minutes. The shared secret is read BY REFERENCE at reques
 
 Mode (env ARTURO_POSTCALL_AUTH): "enforce" (default) refuses with 401; "log" lets the push through but counts
 what it would have refused. No secret configured = refuse (enforce): an unconfigured check must never be an
-open door. Refusals are counted and logged with the reason only, never body content."""
+open door. Refusals are counted and logged with the reason only, never body content.
+
+Replay (gm R3 follow-up): a valid signature is good for MAX_AGE_S, so each accepted (t, signature) pair is remembered
+for that window and a repeat is refused as "replay". The memory is in-process and bounded (MAX_SEEN); it is lost
+on restart, which reopens the window only for pushes signed before the restart."""
 import hashlib
 import hmac
 import os
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 
 import sys
@@ -26,8 +31,10 @@ SECRET_KEY = "ELEVENLABS_WEBHOOK_SECRET"  # pragma: allowlist secret (env var na
 HEADER = "ElevenLabs-Signature"
 MAX_AGE_S = 30 * 60          # the SDK's tolerance
 MAX_SKEW_S = 5 * 60          # a timestamp from the future is a forgery or a broken clock
+MAX_SEEN = 4096              # accepted signatures remembered; far above any real post-call rate in 30 min
 
 _counts = {}
+_seen = OrderedDict()        # (t, signature) -> t, oldest first
 _lock = threading.Lock()
 
 
@@ -100,11 +107,27 @@ def check(raw_body, header):
     secret = _secret(SECRET_KEY)
     reason = "no_secret" if not secret else verify(raw_body, header, secret)
     if reason is None:
+        reason = _remember(header)
+    if reason is None:
         return True, None
     with _lock:
         _counts[reason] = _counts.get(reason, 0) + 1
     enforce = os.environ.get("ARTURO_POSTCALL_AUTH", "enforce") != "log"
     return (not enforce), reason
+
+
+def _remember(header, now=None):
+    """None the first time a valid (t, signature) is seen inside the window, "replay" after that."""
+    now = time.time() if now is None else now
+    parts = dict(p.strip().split("=", 1) for p in str(header).split(",") if "=" in p)
+    key = (parts.get("t"), parts.get("v0"))
+    with _lock:
+        while _seen and (next(iter(_seen.values())) < now - MAX_AGE_S or len(_seen) >= MAX_SEEN):
+            _seen.popitem(last=False)
+        if key in _seen:
+            return "replay"
+        _seen[key] = int(key[0])
+    return None
 
 
 def counts():
@@ -115,3 +138,8 @@ def counts():
 def reset_counts():
     with _lock:
         _counts.clear()
+
+
+def reset_seen():
+    with _lock:
+        _seen.clear()
