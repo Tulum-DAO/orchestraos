@@ -1070,21 +1070,25 @@ class _Holder:
 # --- surface stamping (DEC-1789341362142252, X-Surface; UA sub-choice superseded, gm msg_b40c6ccf) ---
 # The phone sends `X-Surface: phone` on every relay request (Sources/RelayClient/RelayTransport.swift:108,
 # set by iOS RelayVoiceEngine.swift:59); the watch sends no header. The gateway forwards X-Surface to
-# the /ptt/stream/audio endpoint, which passes it to feed_audio(surface_device=). Any missing/unknown
-# value stamps `watch` (the pre-change default). Attribution is set ONCE at holder creation.
-_KNOWN_SURFACES = ("phone", "watch")
+# the /ptt/stream/audio endpoint, which passes it to feed_audio(surface_device=). A MISSING header is the
+# watch (it sends none); known values are kept exactly; anything else is 'unknown', never silently 'watch'
+# (gm msg_c0e18d14: Quest calls were journaled as watch). Attribution is set ONCE at holder creation.
+_KNOWN_SURFACES = ("phone", "watch", "quest", "ipad", "mac")
 
 
 def normalize_surface(val):
-    """Map a raw X-Surface header value to a known device; missing/unknown -> 'watch'."""
-    return val if val in _KNOWN_SURFACES else "watch"
+    """Map a raw X-Surface header value to a device: missing -> 'watch'; known -> itself; else 'unknown'."""
+    v = (val or "").strip().lower()
+    if not v:
+        return "watch"
+    return v if v in _KNOWN_SURFACES else "unknown"
 
 
 def journal_surface(relay_surface, active_surface_fallback):
     """Build the journal's surface dict. A relay call (relay_surface in phone/watch) attributes from
     the relay registry and does NOT consult active-surface.json (which stays the watch-only writer);
     a non-relay call (relay_surface None) falls back to the active-surface reader."""
-    if relay_surface in _KNOWN_SURFACES:
+    if relay_surface in _KNOWN_SURFACES or relay_surface == "unknown":
         return {"device": relay_surface, "via": "relay"}
     return active_surface_fallback()
 
