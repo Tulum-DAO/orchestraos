@@ -295,6 +295,8 @@ class _Holder:
         self._last_agent_audio_ts = 0.0   # SUPERSEDE truth check: did the operator actually hear a reply
         self._rec = None          # HUME-RECOVERY: latest streamed reply awaiting proof Hume spoke it
         self._rec_lock = threading.Lock()
+        self._req_q = {}          # SUPERSEDE: CLM request t0 -> normalized user text (recent only)
+        self._latest_req = None   # (t0, normalized text) of the newest CLM request
         # TURN-LATENCY (ios-watch-dev msg_b22a71d8, log-only): the operator's final at the relay ->
         # Arturo's first reply text / first reply audio. This, not generate(), is what he hears.
         self._final_at = None
@@ -481,10 +483,47 @@ class _Holder:
     RECOVERY_QUIET_S = 2.5       # the operator silent at least this long
     RECOVERY_MAX_AGE_S = 20.0    # older than this (from the request) -> drop, never speak
 
+    @staticmethod
+    def _norm_q(text):
+        text = re.sub(r"\{[^}]*\}", " ", text or "")          # Hume prosody tags vary per retry
+        return " ".join(re.sub(r"[^\w\s']", " ", text.lower()).split())
+
+    def note_request(self, request_t0, user_text):
+        """SUPERSEDE (gm msg_2c161950 (ii)): a CLM request began. Hume merges a growing
+        utterance into one turn and re-asks as its finals grow; a reply to an EARLIER, DIFFERENT
+        request is then stale and must never be recovered. An identical re-ask (normalized,
+        prosody stripped) is a retry, not a supersede: ANSWERED-REPEAT may still re-speak it."""
+        q = self._norm_q(user_text)
+        with self._rec_lock:
+            self._req_q[request_t0] = q
+            for t in sorted(self._req_q)[:-8]:
+                del self._req_q[t]
+            if self._latest_req is None or request_t0 >= self._latest_req[0]:
+                self._latest_req = (request_t0, q)
+            r = self._rec
+            if r and not r["done"] and r["t0"] < request_t0 and self._req_q.get(r["t0"]) not in (None, q):
+                r["done"] = True
+                log.info(f"relay {self.cid}: HUME-RECOVERY superseded pending reply ({len(r['text'])} chars): "
+                         f"a newer, different request began")
+
+    def _superseded_locked(self, request_t0):
+        q, lr = self._req_q.get(request_t0), self._latest_req
+        return q is not None and lr is not None and lr[0] > request_t0 and lr[1] != q
+
+    def superseded_since(self, request_t0):
+        """True once a newer CLM request with DIFFERENT user text began on this call."""
+        with self._rec_lock:
+            return self._superseded_locked(request_t0)
+
     def note_reply(self, text, request_t0, streamed_at):
         """The proxy streamed `text` for a CLM request that began at request_t0. Replaces any
-        earlier pending reply: only the LATEST is ever recovered."""
+        earlier pending reply: only the LATEST is ever recovered. A reply whose request was
+        already superseded by a newer, different one is not held at all."""
         with self._rec_lock:
+            if self._superseded_locked(request_t0):
+                log.info(f"relay {self.cid}: HUME-RECOVERY superseded late reply ({len(text)} chars): "
+                         f"a newer, different request began before it streamed")
+                return
             self._rec = {"text": text, "t0": request_t0, "streamed": streamed_at, "done": False}
         t = threading.Timer(self.RECOVERY_WAIT_S + 0.1, self._recovery_timer)
         t.daemon = True
@@ -1250,6 +1289,43 @@ class RelayManager:
             return False
         h.note_reply(text, request_t0, time.time() if streamed_at is None else streamed_at)
         return True
+
+    def note_clm_request(self, conversation_id, request_t0, user_text):
+        """SUPERSEDE entry point for HUME-RECOVERY: called when a Hume CLM request begins."""
+        if os.environ.get("ARTURO_HUME_RECOVERY", "1") != "1":
+            return False
+        with self._lock:
+            h = self._holders.get(conversation_id)
+        if h is None or h.vendor != "hume":
+            return False
+        h.note_request(request_t0, user_text)
+        return True
+
+    # ASYNC-HOLD (gm msg_2c161950 (iii)): background work waits until the turn has settled.
+    ASYNC_HOLD_MIN_S = 2.0       # never dispatch sooner: Hume's next final can follow quickly
+    ASYNC_HOLD_QUIET_S = 2.0     # the operator silent (speech-level uplink / finals) at least this long
+    ASYNC_HOLD_MAX_S = 20.0      # cap: a very long turn still gets its work done
+    ASYNC_HOLD_POLL_S = 0.25
+
+    def wait_turn_settled(self, conversation_id, request_t0, clock=time.time, sleep=time.sleep):
+        """'superseded' | 'settled' | 'timeout' | 'gone'. Blocks the CALLER (a background
+        thread) until the Hume turn that asked for async work has settled. 'superseded' = a
+        newer, DIFFERENT request began: the work was asked for by a fragment, never run it.
+        'gone' = no live Hume holder for the call: nothing to wait on, dispatch at once."""
+        start = clock()
+        while True:
+            with self._lock:
+                h = self._holders.get(conversation_id)
+            if h is None or h.vendor != "hume":
+                return "gone"
+            if h.superseded_since(request_t0):
+                return "superseded"
+            now = clock()
+            if now - start >= self.ASYNC_HOLD_MIN_S and now - h._last_user_ts >= self.ASYNC_HOLD_QUIET_S:
+                return "settled"
+            if now - start >= self.ASYNC_HOLD_MAX_S:
+                return "timeout"
+            sleep(self.ASYNC_HOLD_POLL_S)
 
     def try_speak(self, conversation_id, text, user_quiet_s=2.5, margin_s=0.8, now=None):
         """VOICE-RESULTS: 'spoken' | 'wait:<reason>' | 'gone' (call ended / never live here).

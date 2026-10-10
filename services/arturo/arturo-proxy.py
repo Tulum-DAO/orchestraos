@@ -194,6 +194,9 @@ _TOOLS_THIS_TURN = _contextvars.ContextVar("arturo_tools_this_turn", default=Non
 # VOICE-RESULTS (gm msg_b0b4228c): the live relay conversation this CLM turn belongs to, so an
 # async result can be spoken back into the same call. None = not a live relay call.
 _RELAY_CID_THIS_TURN = _contextvars.ContextVar("arturo_relay_cid_this_turn", default=None)
+# ASYNC-HOLD (gm msg_2c161950 (iii)): (relay cid, request t0) of this Hume CLM turn, so async work
+# it asks for can wait for the turn to settle and be dropped if a longer final supersedes it.
+_HUME_TURN = _contextvars.ContextVar("arturo_hume_turn", default=None)
 _VOICE_RESULTS = None
 
 
@@ -3795,7 +3798,22 @@ def execute_tool(name, args, user_turns=None):
         _vr_tok = None
         if _vr_cid and _voice_results() is not None:
             _vr_tok = _voice_results().started(_vr_cid, summary)
+        _hold = _HUME_TURN.get() if os.environ.get("ARTURO_ASYNC_HOLD", "1") == "1" else None
         def _run_async():
+            if _hold is not None and _STREAM_RELAY is not None:
+                # ASYNC-HOLD (gm msg_2c161950 (iii)): never run work a FRAGMENT final asked for.
+                try:
+                    _settle = _STREAM_RELAY.wait_turn_settled(*_hold)
+                except Exception as _he:
+                    log.error(f"ASYNC-HOLD check failed, dispatching (non-fatal): {_he!r}")
+                    _settle = "error"
+                if _settle == "superseded":
+                    log.warning(f"ASYNC-HOLD cancelled {tool_name} for {summary!r}: a longer, different "
+                                f"final superseded the turn that asked for it")
+                    if _vr_tok is not None:
+                        _voice_results().finished(_vr_cid, _vr_tok)
+                    return
+                log.info(f"ASYNC-HOLD released {tool_name} ({_settle})")
             # VQ-4 verify-after-inject: the async result MUST actually LAND on Telegram. The old
             # path used raw requests.post with `except: pass` — a failed send was swallowed, so
             # Arturo had already said "I'll text you" but nothing arrived (conv_2901). Route through
@@ -4685,6 +4703,17 @@ def chat_completions():
 
     log.info(f"Request: {len(messages)} messages, channel={calling_channel}, stream={want_stream}")
     _req_t0 = time.time()   # HUME-RECOVERY: any Arturo audio after this means Hume spoke a reply
+    _HUME_TURN.set(None)
+    if _is_hume_clm and _conv_id and _STREAM_RELAY is not None:
+        # SUPERSEDE (gm msg_2c161950 (ii)): a newer, different request makes the pending reply
+        # to the earlier fragment stale; HUME-RECOVERY must never re-send it (relay E58F077A).
+        try:
+            _src = _STREAM_RELAY.resolve(_conv_id)
+            if _src:
+                _STREAM_RELAY.note_clm_request(_src, _req_t0, _voice_guards.latest_user_text(messages))
+                _HUME_TURN.set((_src, _req_t0))
+        except Exception as _sre:
+            log.error(f"hume-recovery request note error (non-fatal): {_sre}")
 
     # === GUARDRAIL: Intelligent silence escalation on voice ===
     # Stage 1 (1 silence turn): passes through to generation for contextual proactive suggestions.
