@@ -22,7 +22,6 @@ import { GenChip } from './GenChip';
 import { useRecentAgents } from '../stores/recentAgents';
 import { RecentAgentChips } from './RecentAgentChips';
 import { setArturoFocus } from '../lib/arturo';
-import { useArturoLift } from '../hooks/useArturoLift';
 import { canStopTurn } from '../lib/composerGate';
 
 const PALETTE = [
@@ -114,13 +113,9 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
   const [injectOk, setInjectOk] = useState(false);
   const [useInjectMode, setUseInjectMode] = useState(false);
   const [devMode, setDevMode] = useState(false);
-  // The focused panel's box. On a phone the Arturo pill overlapped its key row; lift it above the
-  // panel's input (chat) or key row (dev) while the panel is open. See hooks/useArturoLift.ts.
-  const panelRef = useRef<HTMLDivElement>(null);
   // The panel's composer draft, held here so the mic's dictation can write into it.
   const [panelDraft, setPanelDraft] = useState('');
   const location = useLocation();
-  useArturoLift(panelRef, devMode ? '[data-testid="panel-actionbar"]' : '[data-testid="composer-pill"]', focused && !!agent.alive);
   const [showAuthFlow, setShowAuthFlow] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [promptContent, setPromptContent] = useState<string | null>(null);
@@ -673,7 +668,11 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
           // light-on-dark in the light theme too, instead of black ink on a black panel.
           "dark fixed inset-0 z-50 bg-black/70 flex overscroll-none",
           devMode ? 'items-stretch justify-center p-0 overflow-hidden' : 'items-center justify-center p-4 max-sm:p-2'
-        )} onClick={() => { setFocused(false); setArturoFocus(null); }}>
+        )}
+          // BELOW THE TOP BAR on phones (Shaw, 2026-10-10): the bar holds Arturo and the bell, and
+          // they must stay usable while this panel is open. --topbar-h is 0 on desktop.
+          style={{ top: 'var(--topbar-h, 0px)' }}
+          onClick={() => { setFocused(false); setArturoFocus(null); }}>
           <div
             className={clsx(
               'bg-neutral-900 flex flex-col shadow-2xl',
@@ -681,8 +680,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                 ? 'w-full rounded-none border-0'
                 : 'border border-neutral-700 rounded-2xl w-full max-w-2xl max-h-[90vh]'
             )}
-            ref={panelRef}
-            style={devMode ? { height: 'var(--vvh, 100vh)' } : undefined}
+            style={devMode ? { height: 'calc(var(--vvh, 100vh) - var(--topbar-h, 0px))' } : undefined}
             onClick={(e) => e.stopPropagation()}
             onTouchStart={onOverlayTouchStart}
             onTouchEnd={onOverlayTouchEnd}

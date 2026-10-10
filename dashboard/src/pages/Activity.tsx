@@ -247,7 +247,8 @@ export default function ActivityPage() {
   return (
     <div className="p-6 space-y-5">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      {/* md:mr-28: the layout's fixed top-right Arturo + bell cluster (DashboardLayout) floats over this corner on desktop */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 md:mr-28">
         <h1 className="text-2xl font-bold text-white">Activity</h1>
         <div className="flex flex-wrap items-center gap-4">
           {/* Date range */}

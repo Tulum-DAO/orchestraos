@@ -27,7 +27,9 @@ export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen, seat, mode = 'ch
     // `justify-between` across THREE children is what put the theme toggle in the middle of the
     // bar with nothing either side of it. The bar now has exactly two groups — the seat identity
     // on the left and every control on the right — so nothing floats unanchored.
-    <div className="sticky top-0 z-20 flex items-center gap-2 px-4 py-3 border-b bg-background border-border safe-top">
+    // md:pr-28: room for the layout's fixed top-right cluster (Arturo + the bell, DashboardLayout),
+    // which otherwise sat on this bar's theme/alarm/brain buttons on desktop.
+    <div className="sticky top-0 z-20 flex items-center gap-2 px-4 md:pr-28 py-3 border-b bg-background border-border safe-top">
       {/* The desktop sidebar is permanently visible (DashboardLayout renders it at md+), so this
           drawer trigger is a SECOND nav entry there. It is the mobile affordance only. */}
       <button
