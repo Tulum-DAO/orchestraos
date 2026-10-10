@@ -226,17 +226,15 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     # voice surface — the wrong axis. Vendor and voice-id are settings for the WHOLE BOX; ending a
     # call is something the caller does to its OWN call. Blast radius, not URL shape.
     ("POST", "/voice-call-ended"): "ptt",
+    # Arturo's voice and voice ENGINE, for every device. Base verb `admin`, but these two rows ALSO
+    # accept `voice` or `ptt`: see ROUTE_ANY_OF below (gm rulings msg_f3c2cec6 + msg_40832c2d).
     ("PUT", "/arturo/ptt/vendor"): "admin",
     ("PUT", "/arturo/ptt/voice"): "admin",
 
 
     # --- admin: fleet-wide effect -----------------------------------------------------
-    # PUT /arturo/ptt/vendor and PUT /arturo/ptt/voice proxy to ONE loopback Arturo service and
-    # take effect on the NEXT conversation — they are process-level settings for the whole box,
-    # not per-caller preferences. That is administration of voice, not use of it, so holding
-    # `voice` must not grant it. Raised here rather than only adding `ptt`, because this closes
-    # the hole for EVERY holder of `voice`, present and future, not just the headset.
-    # The matching GETs stay `read`: reading which vendor is active is harmless.
+    # (PUT /arturo/ptt/vendor and /voice sit above with base `admin`; ROUTE_ANY_OF widens exactly
+    # those two. The GETs stay `read`.)
     ("POST", "/red-alert/report"): "admin",
     ("POST", "/telemetry"): "admin",
     # The only route that MINTS a credential. `admin` so the TABLE states that it is privileged —
@@ -288,6 +286,26 @@ def resolve_principal(request) -> dict | None:
     return {"id": rec["id"], "label": rec.get("label") or "", "scopes": list(rec.get("scopes") or [])}
 
 
+# The ONLY rows that accept more than one verb, listed in full. Not a general widening: a route
+# not named here needs exactly its ROUTE_SCOPES verb. gm ruling msg_40832c2d (2026-10-10, the
+# operator's pick "Let 'voice' change it"): Arturo's voice and voice engine can be changed from
+# any surface and apply to all of them. The operator's Mac holds `voice` but not `ptt`, the Quest
+# holds `ptt` but not `voice`, so both must work, and nothing that worked before (`admin`) loses
+# access. Every write is audited with the caller the gateway resolved (_voice_config_headers).
+# test_gateway_scopes pins this map, and the admin / ptt / voice rows, exactly.
+ROUTE_ANY_OF = {
+    ("PUT", "/arturo/ptt/vendor"): ("voice", "ptt", "admin"),
+    ("PUT", "/arturo/ptt/voice"): ("voice", "ptt", "admin"),
+}
+
+
+def accepted_scopes(method: str, canonical: str) -> tuple:
+    """Every verb that lets a caller through this route: the ROUTE_ANY_OF set when the route is
+    named there, else exactly its ROUTE_SCOPES verb. KeyError for an undeclared route."""
+    key = (method.upper(), canonical)
+    return ROUTE_ANY_OF.get(key) or (ROUTE_SCOPES[key],)
+
+
 def required_scope(request):
     """The verb this request needs. Raises KeyError when the route declares none, which the
     middleware turns into a REFUSAL rather than a free pass."""
@@ -317,9 +335,16 @@ def scope_middleware_factory():
             return await handler(request)
         if principal is None:
             return _json({"ok": False, "error": "unauthorized"}, status=401)
-        if not scopes_allow(principal["scopes"], needed):
-            return _json({"ok": False, "error": "forbidden",
-                          "needed_scope": needed, "scopes": principal["scopes"]}, status=403)
+        canonical = request.match_info.route.resource.canonical
+        accepted = accepted_scopes(request.method, canonical)
+        if not any(scopes_allow(principal["scopes"], v) for v in accepted):
+            # needed_scope stays ONE string (clients show it); a multi-verb route also lists
+            # every verb that would have been accepted.
+            body = {"ok": False, "error": "forbidden",
+                    "needed_scope": accepted[0], "scopes": principal["scopes"]}
+            if len(accepted) > 1:
+                body["accepted_scopes"] = list(accepted)
+            return _json(body, status=403)
         return await handler(request)
 
     return scope_middleware
@@ -4956,6 +4981,16 @@ async def handle_arturo_ptt_stream_end(request):
 ARTURO_PTT_VENDOR_URL = os.environ.get("ARTURO_PTT_VENDOR_URL") or (_loopback("ORCHESTRA_ARTURO_PORT", 5071) + "/ptt/vendor")
 
 
+def _voice_config_headers(request, source_header: str) -> dict:
+    """Upstream headers for a voice / voice-engine read or WRITE, built FRESH (a client's own
+    headers never pass through): JSON, the source tag, and WHO is calling, the same
+    X-Arturo-Principal (+ stamp) an Arturo turn carries (_arturo_principal_headers). Arturo logs
+    it as the writing `device` (by and source stay as they were), never the body. Needed since gm
+    rulings msg_f3c2cec6 / msg_40832c2d let voice / ptt devices make these fleet-wide writes."""
+    return {"Content-Type": "application/json", source_header: "settings",
+            **_arturo_principal_headers(request)}
+
+
 async def handle_arturo_ptt_vendor(request):
     """GET/PUT /arturo/ptt/vendor — runtime voice vendor (spec §4.1). Bearer here, loopback
     upstream; a PUT takes effect on the NEXT conversation, no restart."""
@@ -4967,7 +5002,7 @@ async def handle_arturo_ptt_vendor(request):
     try:
         async with aiohttp.ClientSession() as s:
             async with s.request(request.method, ARTURO_PTT_VENDOR_URL, data=body,
-                                 headers={"Content-Type": "application/json", "X-Vendor-Source": "settings"},
+                                 headers=_voice_config_headers(request, "X-Vendor-Source"),
                                  timeout=aiohttp.ClientTimeout(total=8)) as r:
                 out = await r.json(content_type=None)
                 return _json(out, status=r.status)
@@ -5159,8 +5194,7 @@ async def handle_arturo_ptt_voice(request):
     try:
         async with aiohttp.ClientSession() as s:
             async with s.request(request.method, upstream, data=body,
-                                 headers={"Content-Type": "application/json",
-                                          "X-Voice-Source": "settings"},
+                                 headers=_voice_config_headers(request, "X-Voice-Source"),
                                  timeout=aiohttp.ClientTimeout(total=20)) as r:
                 out = await r.json(content_type=None)
                 return _json(out, status=r.status)

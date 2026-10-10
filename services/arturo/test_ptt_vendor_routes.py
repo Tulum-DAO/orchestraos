@@ -73,3 +73,24 @@ def test_stream_audio_unavailable_vendor_is_503_with_reason(monkeypatch, tmp_pat
     assert r.status_code == 503 and j["error"] == "vendor_unavailable" and "HUME" in j["message"]
     assert "cUnavail" not in mod._STREAM_RELAY._holders
     mod._STREAM_RELAY.shutdown()
+
+
+def test_a_vendor_write_logs_the_writing_DEVICE_from_the_gateway_never_the_body(monkeypatch, tmp_path):
+    """Same rule as the voice write: device = the gateway's X-Arturo-Principal, never the body."""
+    import json as _json
+    monkeypatch.setenv("ARTURO_STREAM_RELAY", "1")
+    mod = _load_proxy()
+    from services.arturo import voice_vendor as vv
+    store = vv.VendorStore(path=tmp_path / "v.json", log_path=tmp_path / "v.log", creds=lambda k: "x")
+    monkeypatch.setattr(vv, "_default", store)
+    c = mod.app.test_client()
+    loop = {"REMOTE_ADDR": "127.0.0.1"}
+    try:
+        assert c.put("/ptt/vendor", json={"vendor": "hume", "by": "quest", "device": "forged"},
+                     headers={"X-Arturo-Principal": "device:q1"}, environ_base=loop).status_code == 200
+        c.put("/ptt/vendor", json={"vendor": "elevenlabs", "by": "local-tool"}, environ_base=loop)
+        log = [_json.loads(x) for x in store.log_path.read_text().splitlines()]
+        assert log[-2]["device"] == "device:q1" and log[-2]["changed_by"] == "quest"
+        assert log[-1]["device"] is None
+    finally:
+        mod._STREAM_RELAY.shutdown()

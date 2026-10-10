@@ -46,7 +46,7 @@ class VoiceChoiceStore:
         d["vendor"] = "hume"
         return d
 
-    def set(self, vendor, voice_id, by="settings", source="settings"):
+    def set(self, vendor, voice_id, by="settings", source="settings", device=None):
         if vendor != "hume":
             raise ValueError("voice choice is server-side for hume only "
                              "(elevenlabs voices are picked client-side)")
@@ -62,7 +62,9 @@ class VoiceChoiceStore:
             tmp.write_text(json.dumps(st))
             tmp.replace(self.path)
             with open(self.log_path, "a") as f:
-                f.write(json.dumps(st) + "\n")
+                # audit: who (by, the client's label), how (source), and WHICH DEVICE (the gateway's
+                # resolved caller, never the body) - gm ruling msg_f3c2cec6 condition 2
+                f.write(json.dumps({**st, "device": device}) + "\n")
         return st
 
 
@@ -147,5 +149,5 @@ def state(vendor="hume"):
     return _default.state(vendor)
 
 
-def set_voice(vendor, voice_id, by="settings", source="settings"):
-    return _default.set(vendor, voice_id, by=by, source=source)
+def set_voice(vendor, voice_id, by="settings", source="settings", device=None):
+    return _default.set(vendor, voice_id, by=by, source=source, device=device)

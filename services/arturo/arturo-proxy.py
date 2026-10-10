@@ -5603,6 +5603,13 @@ if _STREAM_RELAY is not None:
     # Read PER CALL by the relay; a PUT takes effect on the next conversation — no restart.
     from services.arturo import voice_vendor as _voice_vendor
 
+    def _writer_device():
+        """The writing DEVICE for the audit log (gm ruling msg_f3c2cec6, condition 2): the
+        gateway's fresh X-Arturo-Principal (device:<id> / owner:<id> / fleet). Never read from
+        the body, which the client controls. None when absent (a local operator tool)."""
+        p = (request.headers.get("X-Arturo-Principal") or "").strip()
+        return p[:80] or None
+
     @app.route("/ptt/vendor", methods=["GET"])
     def ptt_vendor_get():
         if not _relay_loopback_ok():
@@ -5616,7 +5623,8 @@ if _STREAM_RELAY is not None:
         body = request.get_json(silent=True) or {}
         try:
             st = _voice_vendor.set_vendor(str(body.get("vendor", "")), by=str(body.get("by", "settings"))[:40],
-                                          source=str(request.headers.get("X-Vendor-Source", "settings"))[:40])
+                                          source=str(request.headers.get("X-Vendor-Source", "settings"))[:40],
+                                          device=_writer_device())
         except ValueError as e:
             return jsonify({"ok": False, "error": str(e)}), 400
         log.info(f"voice vendor -> {st['vendor']} by {st['changed_by']}")
@@ -5656,7 +5664,8 @@ if _STREAM_RELAY is not None:
             st = _voice_choice.set_voice(str(body.get("vendor", "")),
                                          str(body.get("voice_id", "")),
                                          by=str(body.get("by", "settings"))[:40],
-                                         source=str(request.headers.get("X-Voice-Source", "settings"))[:40])
+                                         source=str(request.headers.get("X-Voice-Source", "settings"))[:40],
+                                         device=_writer_device())
         except ValueError as e:
             return jsonify({"ok": False, "error": str(e)}), 400
         log.info(f"hume voice -> {st['voice_id']} by {st['changed_by']}")
