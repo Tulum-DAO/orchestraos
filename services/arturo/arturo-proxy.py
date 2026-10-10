@@ -6533,11 +6533,20 @@ def health():
     })
 
 
+_PLAIN_CONV_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
+
+
 @app.route("/webhook/post-call", methods=["POST"])
 def post_call_webhook():
     """ElevenLabs post-call webhook — auto-saves transcript to voice memory."""
     data = request.json or {}
-    conversation_id = data.get("conversation_id", "")
+    conversation_id = str(data.get("conversation_id", "") or "")
+    # The id goes into the ElevenLabs URL, sent WITH the API key (requests normalises "../", so
+    # "../../user" fetched /v1/user), AND into the transcript file path (save_transcript:
+    # VOICE_TRANSCRIPTS_DIR / f"{id}.json"). Only a plain id is used (port of live 5472f8a7a5).
+    if conversation_id and not _PLAIN_CONV_ID_RE.fullmatch(conversation_id):
+        log.warning(f"Post-call webhook: refused a non-plain conversation_id ({len(conversation_id)} chars)")
+        return jsonify({"status": "refused", "error": "conversation_id must be a plain id"}), 400
     log.info(f"Post-call webhook: {conversation_id}")
 
     if conversation_id:
