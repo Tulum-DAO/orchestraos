@@ -72,6 +72,10 @@ export ARTURO_HUME_RECOVERY="${ARTURO_HUME_RECOVERY:-1}"
 # never spoke, answer with that reply verbatim instead of silence (one claim shared with
 # HUME-RECOVERY). Default ON (1). Flip-back: ARTURO_REPEAT_RESPEAK=0 + restart.
 export ARTURO_REPEAT_RESPEAK="${ARTURO_REPEAT_RESPEAK:-1}"
+# PARALLEL RECALL (arturo-voice, gm msg_5dd2ce28): semantic + facts recall run alongside build_context
+# under one shared deadline (ARTURO_RECALL_DEADLINE_MS, default 350); a late block is omitted.
+# Default ON (1). Flip-back: ARTURO_PARALLEL_RECALL=0 + restart (the old serial path, unchanged).
+export ARTURO_PARALLEL_RECALL="${ARTURO_PARALLEL_RECALL:-1}"
 # Durable ended-once guard flag: default ON (1)
 export ARTURO_ENDED_ONCE="${ARTURO_ENDED_ONCE:-1}"
 # v2/(b) watch stream relay + the operator-directed live-partials (DEC-1788843712854271, gm GO
