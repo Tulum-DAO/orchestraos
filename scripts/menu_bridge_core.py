@@ -133,6 +133,12 @@ def should_bridge(
     # AUQ is kind='options' and keeps bridging .
     if isinstance(pending_menu, dict) and pending_menu.get("kind") == "permission":
         return False
+    # CODEX-FAIL-CLOSED (gm msg_325ca9bf): a codex menu (detector stamps menu_family='codex' +
+    # answer_in_terminal) never becomes a durable, device-answerable card. The live status still
+    # shows it, marked "answer in the terminal", and every gateway answer path refuses keys for it.
+    if isinstance(pending_menu, dict) and (pending_menu.get("menu_family") == "codex"
+                                           or pending_menu.get("answer_in_terminal") is True):
+        return False
     if state in _NON_BRIDGE_STATES:
         return False
     return (now - first_seen_ts) >= debounce_s
