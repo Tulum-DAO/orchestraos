@@ -17,6 +17,11 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.abspath(__file__))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
 
 MARKER = "#orchestraos-hook"
 PY = shutil.which("python3") or sys.executable or "python3"
@@ -370,7 +375,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="install/inspect the OrchestraOS Claude Code hooks")
     ap.add_argument("--settings", default=os.path.join(os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")), "settings.json"))
     ap.add_argument("--repo-root", default=str(Path(__file__).resolve().parent.parent))
-    ap.add_argument("--data-dir", default=os.environ.get("ORCHESTRA_DIR") or os.path.expanduser("~/orchestra"))
+    ap.add_argument("--data-dir", default=os.environ.get("ORCHESTRA_DIR") or str(_data_dir()))
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--remove", action="store_true",
                     help=f"remove every row tagged {MARKER} and our status line (a chained one is restored exactly)")

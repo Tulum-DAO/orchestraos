@@ -23,9 +23,20 @@ import sqlite3
 import sys
 import time
 
+
+def _default_data_dir():
+    """The install's data dir when no ORCHESTRA_DIR was baked into the hook command: the ONE default,
+    orchestra_cli.settings.data_dir (data-dir sweep S5), imported from this hook's checkout only then."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if root not in sys.path:
+        sys.path.append(root)
+    from orchestra_cli.settings import data_dir
+    return str(data_dir())
+
+
 # DATA dir (registry.json, state/tasks.db, marker files). `orchestra init` bakes
 # ORCHESTRA_DIR into the installed hook command; the fallback is the default data dir.
-ORCH = os.environ.get("ORCHESTRA_DIR") or os.environ.get("ORCH_DIR") or os.path.expanduser("~/orchestra")
+ORCH = os.environ.get("ORCHESTRA_DIR") or os.environ.get("ORCH_DIR") or _default_data_dir()
 AGE_GATE_S = 30
 MAX_LINES = 12
 QUERY_LIMIT = 50

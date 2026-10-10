@@ -36,8 +36,10 @@ const DEFAULTS = {
   //   instruction (recommended for T0/T1 gm/coordinator seats — their rotation is
   //   supervised/one-tap per the WS3 T0/T1-kill-human-gated rule).
   mode: 'warn_only',
-  // Marks live in the data dir so the fleet beat can read them (not /tmp).
-  mark_dir: path.join(process.env.ORCHESTRA_DIR || process.env.ORCH_DIR || path.join(HOME, 'orchestra'), 'state', 'rotation-self-triggers'),
+  // Marks live in the data dir so the fleet beat can read them (not /tmp). `orchestra init` bakes
+  // ORCHESTRA_DIR into the hook command; the last resort is the product default, ~/.orchestra
+  // (orchestra_cli.settings.DEFAULT_DATA_DIR). It used to be the same path without the dot, a dir nothing else uses.
+  mark_dir: path.join(process.env.ORCHESTRA_DIR || process.env.ORCH_DIR || path.join(HOME, '.orchestra'), 'state', 'rotation-self-triggers'),
 };
 
 function loadConfig() {

@@ -28,8 +28,13 @@ a transcript on disk.
 """
 import os
 import sys
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
 
-ORCHESTRA_DIR = os.environ.get("ORCHESTRA_DIR") or os.path.expanduser("~/orchestra")   # DATA dir
+ORCHESTRA_DIR = os.environ.get("ORCHESTRA_DIR") or str(_data_dir())   # DATA dir
 # CODE lives in the checkout (this file: <root>/scripts/lineage_daemon/auto_grade.py).
 CODE_ROOT = os.environ.get("ORCHESTRA_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _GRADER = os.path.join(CODE_ROOT, "scripts", "rotation_gate_manual.py")

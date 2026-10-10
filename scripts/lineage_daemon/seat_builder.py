@@ -18,6 +18,11 @@ from typing import Callable
 
 from .realtime.daemon import Seat
 from .wal.multiplexer import MuxSeat
+# The ONE data-dir default is orchestra_cli.settings.data_dir (data-dir sweep S5); orchestra_cli
+# lives in this file's checkout, appended (never prepended) so nothing already on the path is shadowed.
+if os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) not in sys.path:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
 
 
 def _ro_open(db_path):
@@ -281,7 +286,7 @@ def build_live_daemon(orchestra_dir=None, *, resolvers=None):
     from .wal.multiplexer import MultiplexedTailer
 
     orchestra_dir = Path(orchestra_dir or os.environ.get(
-        "ORCHESTRA_DIR", os.path.expanduser("~/orchestra")))
+        "ORCHESTRA_DIR", str(_data_dir())))
     r = resolvers or _live_resolvers(orchestra_dir)
 
     _sessions, agents = r.load_stores(orchestra_dir)      # Path, not str (the fix)
