@@ -109,7 +109,9 @@ def test_the_account_lint_bites():
 # An absolute /home/<name>/ or /Users/<name>/ in a shipped file names somebody's machine. Allowed: placeholders
 # (/home/<you>/, /home/$USER/, /home/.../), and "orchestra", the product's own install and dev-container user
 # (docs/INSTALL.md, .devcontainer). Tests and fixtures are exempt, as for the markers above.
-HOME_PATH = re.compile(r"/(?:home|Users)/([^/\s`'\"<>()\[\]{}$*]+)/")
+# No trailing slash needed (HOME=/home/<name>, a path at line end). A placeholder starts with a character
+# outside the name class (<you>, $USER), so it never matches.
+HOME_PATH = re.compile(r"/(?:home|Users)/([A-Za-z0-9._-]+)")
 ALLOWED_HOME_NAMES = {"orchestra", "..."}
 
 
@@ -140,6 +142,7 @@ def test_no_users_home_path_ships():
 def test_the_home_path_lint_bites():
     assert _home_hits("x.md", "cd /home/alice/repo") and _home_hits("x.sh", "open /Users/bob/Downloads/")
     assert _home_hits("x.py", "'/home/" + "zed" + "/.orchestra/'"), "any unknown name, not a list"
+    assert _home_hits("x.sh", "HOME=/home/alice") and _home_hits("x.md", "cd /Users/bob"), "no trailing slash"
     for ok in ("/home/<you>/repo", "/home/$USER/x", "/home/.../bin/claude", "/home/orchestra/.ssh", "/home/", "~/x"):
         assert not _home_hits("x.md", ok), ok
 
