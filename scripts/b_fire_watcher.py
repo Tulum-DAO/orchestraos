@@ -28,6 +28,8 @@ from pathlib import Path
 # Default: this file lives at <repo>/scripts/b_fire_watcher.py, so its
 # grandparent is the repo root — a portable fallback when ORCHESTRA_DIR isn't set.
 ORCH = os.environ.get("ORCHESTRA_DIR") or str(Path(__file__).resolve().parent.parent)
+# CODE (msg_store.py, scripts/*) lives in the checkout; ORCH is the DATA dir under `orchestra up`
+CODE = os.environ.get("ORCHESTRA_ROOT") or str(Path(__file__).resolve().parent.parent)
 BEAT_LOG = os.path.join(ORCH, "logs", "fleet-beat.log")
 ARM_FILE = os.environ.get("SELF_RETIRE_ARMED", os.path.join(ORCH, "state", "self_retire_armed"))
 MARKER = os.path.join(ORCH, "state", ".b-fire-watcher-pinged")
@@ -102,12 +104,12 @@ def _notify_gm_fire(seat, state):
             f"non-strict-PASS; observe (WAL capture + bg_state + first-fire-watch). "
             f"Abort: touch state/FLEET_BEAT_DISABLED. -- b-fire-watcher")
     subprocess.run(
-        ["python3", os.path.join(ORCH, "msg_store.py"), "send",
+        ["python3", os.path.join(CODE, "msg_store.py"), "send",
          "--from", "b-fire-watcher", "--to", "gm",
          "--subject", f"BG FIRE — {seat} -> {state}", "--body", body],
         cwd=ORCH, capture_output=True)
     try:
-        subprocess.run([os.path.join(ORCH, "scripts", "tg-notify.sh"), "--from",
+        subprocess.run([os.path.join(CODE, "scripts", "tg-notify.sh"), "--from",
                         "b-fire-watcher", f"BG FIRE: {seat} -> {state} (first autonomous rotation underway)"],
                        cwd=ORCH, capture_output=True, timeout=20)
     except Exception:
@@ -168,7 +170,7 @@ def _fireable_handoff(seat):
         rev = str(os.path.getmtime(path))
     try:
         import importlib.util
-        ld = os.path.join(ORCH, "scripts", "lineage_daemon")
+        ld = os.path.join(CODE, "scripts", "lineage_daemon")
 
         def _load(name):
             spec = importlib.util.spec_from_file_location(
@@ -215,7 +217,7 @@ def _ping(seat, rev):
             f"(0-rollback / succeeded_by / canonical-advancing / strict comprehension "
             f"PASS). orchestra-builder is watching.")
     subprocess.run(
-        ["python3", os.path.join(ORCH, "msg_store.py"), "send",
+        ["python3", os.path.join(CODE, "msg_store.py"), "send",
          "--from", "b-fire-watcher", "--to", "gm",
          "--subject", f"(B) fire window OPEN — {seat} HARD + richness-complete handoff", "--body", body],
         cwd=ORCH, capture_output=True)

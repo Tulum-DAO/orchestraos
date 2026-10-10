@@ -67,7 +67,8 @@ def _run_hook(sandbox, *, boot: bool):
     # BOOT_MODE/log()) so the extracted hook bytes run exactly as they would in situ.
     harness = (
         'set -uo pipefail\n'
-        f'SCRIPT_DIR="{sandbox}"\n'
+        f'SCRIPT_DIR="{sandbox}"\n'          # the DATA dir
+        f'CODE_DIR="{REPO}"\n'               # the checkout: python -m scripts.* runs from here (S3)
         f'LOG="{sandbox}/hook.log"\n'
         f'BOOT_MODE={"true" if boot else "false"}\n'
         'log() { echo "$*" >> "$LOG"; }\n'

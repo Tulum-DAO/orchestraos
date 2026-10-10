@@ -29,7 +29,7 @@ ORCH = Path(os.environ.get("ORCHESTRA_DIR",
 KILL_SWITCH = Path(os.path.expanduser("~/runtime/CV4_DRIFT_DISABLED"))
 SOAK_DIR = ORCH / "state" / "cv4-soak"
 
-sys.path.insert(0, str(ORCH / "scripts"))
+sys.path.insert(0, str(Path(os.environ.get("ORCHESTRA_ROOT") or Path(__file__).resolve().parents[2]) / "scripts"))   # CODE
 
 
 def _source_planes() -> list[Path]:

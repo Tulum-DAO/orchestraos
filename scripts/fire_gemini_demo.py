@@ -19,8 +19,9 @@ SEAT = "demo-gemini-pred"
 ORCH = os.environ.get("ORCHESTRA_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # BOTH paths: repo-root (so internal `from scripts.X` imports resolve — identity_writer)
 # AND scripts/ (so bare `from lineage_daemon.X` / `from identity_store.X` resolve).
-sys.path.insert(0, os.path.join(ORCH, "scripts"))
-sys.path.insert(0, ORCH)
+CODE = os.environ.get("ORCHESTRA_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # the checkout (ORCH is DATA)
+sys.path.insert(0, os.path.join(CODE, "scripts"))
+sys.path.insert(0, CODE)
 WAL = os.path.join(ORCH, "state", "wal")
 # (iii) check-7 LOSSLESS probe: a real checklist the green ADVANCES (same shape the Claude
 # drill used) so verify_bg_fire measures a lossless resume by effect, never waived.

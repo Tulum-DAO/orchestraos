@@ -42,10 +42,9 @@ def _default_alarm(msg: str) -> None:
     print(f"[readers-db-first ALARM] {msg}", file=sys.stderr)
     try:
         import subprocess
-        od = os.environ.get("ORCHESTRA_DIR", os.path.expanduser(
-            "~/scripts/agent-orchestra"))
         subprocess.run(
-            ["python3", os.path.join(od, "msg_store.py"), "send",
+            ["python3", os.path.join(os.environ.get("ORCHESTRA_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                          "msg_store.py"), "send",   # CODE (checkout); data via ORCHESTRA_DIR
              "--from", "readers-db-first", "--to", "gm", "--type", "alert",
              "--subject", "identity projection skew (readers-db-first)",
              "--body", msg],

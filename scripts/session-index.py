@@ -29,6 +29,8 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR", os.path.expanduser("~/scripts/agent-orchestra")))
+# CODE (msg_store.py, scripts/) lives in the checkout, never under ORCHESTRA_DIR (the DATA dir)
+CODE_ROOT = Path(os.environ.get("ORCHESTRA_ROOT") or Path(__file__).resolve().parent.parent)
 INDEX_FILE = ORCHESTRA_DIR / "state" / "agent-sessions.json"
 REGISTRY_FILE = ORCHESTRA_DIR / "registry.json"
 STATE_DIR = ORCHESTRA_DIR / "state" / "agents"
@@ -648,7 +650,7 @@ def _default_page(event: dict) -> None:
           file=sys.stderr)
     try:
         subprocess.run(
-            ["python3", str(ORCHESTRA_DIR / "msg_store.py"), "send",
+            ["python3", str(CODE_ROOT / "msg_store.py"), "send",
              "--from", "session-index", "--to", "gm", "--type", "task",
              "--subject", f"unregistered live session: {event.get('session')}",
              "--body", json.dumps(event)],

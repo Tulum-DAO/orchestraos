@@ -3529,7 +3529,8 @@ def execute_tool(name, args, user_turns=None):
         # Get hierarchy data for richer context
         hierarchy_agents = []
         try:
-            _sys.path.insert(0, str(ORCHESTRA_DIR))
+            if str(_REPO_ROOT) not in _sys.path:   # msg_store.py is CODE (checkout); never the data dir first
+                _sys.path.insert(0, str(_REPO_ROOT))
             from msg_store import MessageStore
             hierarchy_agents = MessageStore().hierarchy_list(tenant_id="operator")
         except Exception:  # noqa: BLE001 — no hierarchy: the raw session list below
@@ -3939,7 +3940,8 @@ def execute_tool(name, args, user_turns=None):
         if not to_agent or not subject:
             return "to_agent and subject are required."
         try:
-            _sys.path.insert(0, str(ORCHESTRA_DIR))
+            if str(_REPO_ROOT) not in _sys.path:   # msg_store.py is CODE (checkout); never the data dir first
+                _sys.path.insert(0, str(_REPO_ROOT))
             from msg_store import MessageStore
             store = MessageStore()
             msg_id = store.send(
@@ -3957,7 +3959,8 @@ def execute_tool(name, args, user_turns=None):
         if not agent_id:
             return "agent_id is required."
         try:
-            _sys.path.insert(0, str(ORCHESTRA_DIR))
+            if str(_REPO_ROOT) not in _sys.path:   # msg_store.py is CODE (checkout); never the data dir first
+                _sys.path.insert(0, str(_REPO_ROOT))
             from msg_store import MessageStore
             store = MessageStore()
             if conversation_id:
