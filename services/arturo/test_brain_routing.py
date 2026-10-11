@@ -41,6 +41,9 @@ def test_load_model_catalog_reads_model_catalog_static(tmp_path):
     assert set(cat) >= {"claude", "gemini", "codex"}
     raw = json.loads(PROVIDERS.read_text())
     for p in raw["providers"]:
+        if p["id"] not in B.BRAIN_RUNTIMES:
+            assert p["id"] not in cat            # a seat-only runtime (grok) is never a brain
+            continue
         assert cat[p["id"]] == [m["id"] for m in p["model_catalog"]["static"]]
 
 

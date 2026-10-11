@@ -387,6 +387,11 @@ def parse_cli_reply(text: str):
 
 # --- runtime command table ------------------------------------------------------------------
 
+#: The CLI runtimes Arturo can run as its brain. providers.json also declares seat-only
+#: runtimes (grok); those are never offered, validated or picked as a brain.
+BRAIN_RUNTIMES = ("claude", "gemini", "codex")
+
+
 class UnsupportedRuntime(Exception):
     pass
 
@@ -514,7 +519,7 @@ def load_model_catalog(path, live_path=None) -> dict:
     requirement."""
     data = json.loads(Path(path).read_text())
     catalog = {p["id"]: [m["id"] for m in (p.get("model_catalog") or {}).get("static", [])]
-               for p in data.get("providers", [])}
+               for p in data.get("providers", []) if p.get("id") in BRAIN_RUNTIMES}
     live = _load_live_catalog(live_path if live_path is not None
                               else Path(path).parent.parent / "state" / LIVE_CATALOG_FILENAME)
     for provider, ids in live.items():
@@ -820,7 +825,8 @@ def probe_runtimes(repo_root: Path, enabled: Optional[list] = None) -> list:
     try:
         from orchestra_cli.runtime_probe import load_providers, probe_all
         providers = load_providers(Path(repo_root) / "config" / "providers.json")
-        want = enabled or [p["id"] for p in providers]
+        providers = [p for p in providers if p.get("id") in BRAIN_RUNTIMES]
+        want = [r for r in (enabled or [p["id"] for p in providers]) if r in BRAIN_RUNTIMES]
         return probe_all(providers, want)
     except Exception as e:  # noqa: BLE001
         log.error(f"runtime probe failed: {e}")
