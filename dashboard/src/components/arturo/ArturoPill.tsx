@@ -241,6 +241,13 @@ export function ArturoPill() {
     return () => window.removeEventListener('keydown', onKey);
   }, [open, setOpen]);
 
+  // The model picker belongs to this open pane: closing the pane closes it, so it never comes
+  // back on its own the next time Arturo opens. (A tap outside the picker closes it too.)
+  useEffect(() => {
+    if (!open) return;
+    return () => setModelOpen(false);
+  }, [open]);
+
   function toggleContextCard() {
     if (ctxOn) dismissContext(convId); else restoreContext(convId);
     setCtxOn(!ctxOn);
@@ -353,12 +360,13 @@ export function ArturoPill() {
             )}
           </div>
           <div className="cluster">
-            <button className={brainLogo ? 'circle-btn arturo-brain-logo' : 'arturo-context-chip'} onClick={() => setModelOpen(true)}
+            <button className="circle-btn arturo-brain-logo" onClick={() => setModelOpen(true)}
                     title={`Answering on ${brainName}`} aria-label={`Brain: ${brainName}. Change`}>
               {brainLogo
                 // logo_svg is a static, build-time mark from config/providers.json (never user input).
                 ? <span className="logo" aria-hidden="true" dangerouslySetInnerHTML={{ __html: brainLogo.svg }} />
-                : <><Cpu size={12} /> <span className="cc-label">{brainChoice ? brainChoice.label : 'Default brain'}</span></>}
+                // Still loading (or no mark for this provider): just the chip glyph, no text.
+                : <Cpu size={18} aria-hidden="true" />}
             </button>
             <button className={dictMode === 'idle' ? 'circle-btn' : `circle-btn ${dictMode}`}
                     aria-label={dictMode === 'listening' ? 'Stop dictation' : dictMode === 'recording' ? 'Stop recording' : dictMode === 'transcribing' ? 'Transcribing' : 'Dictate'}
@@ -377,7 +385,7 @@ export function ArturoPill() {
         </div>
       </div>
       <ModelSelectorSheet
-        open={modelOpen}
+        open={open && modelOpen}
         onClose={() => setModelOpen(false)}
         selection={brainChoice ? { providerId: brainChoice.provider, modelId: brainChoice.model } : null}
         onPick={(p) => chooseBrain({ provider: p.providerId, model: p.modelId, label: p.modelLabel })}
