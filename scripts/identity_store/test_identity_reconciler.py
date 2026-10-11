@@ -102,6 +102,25 @@ def test_reconciler_hysteresis(od):
     assert _status(od, "deadseat") == "parked"
 
 
+def test_reconciler_never_retires_a_seat_that_was_never_online(od):
+    """A stock install's seats start as `provisioning`. After a reboot (no panes) they must
+    not be retired out from under recovery; once a pane is live they flip to online."""
+    conn = orchestra_db.get_connection(str(od / "state" / "orchestra-registry.db"))
+    _seed_seat(conn, "newseat", status="provisioning", tmux="newseat", sid=None)
+    conn.close()
+    dead = _fns(live_set=set(), child_set=set(), attached_set=set())
+    for _ in range(3):
+        rep = identity_reconciler.liveness_pass(str(od), apply=True, **dead)
+        assert rep["never_online"] == ["newseat"]
+        assert rep["confirmed_retire"] == [] and rep["confirmed_park"] == [] and rep["dead1"] == []
+    assert _status(od, "newseat") == "provisioning"
+    assert "newseat" not in identity_reconciler.load_hysteresis(str(od))
+    live = _fns(live_set={"newseat"}, child_set={"newseat"}, attached_set=set())
+    rep = identity_reconciler.liveness_pass(str(od), apply=True, **live)
+    assert rep["recovered"] == ["newseat"]
+    assert _status(od, "newseat") == "online"
+
+
 def test_reconciler_hysteresis_dry_run_never_persists(od):
     conn = orchestra_db.get_connection(str(od / "state" / "orchestra-registry.db"))
     _seed_seat(conn, "deadseat", status="online", tmux="deadseat", sid="s1")

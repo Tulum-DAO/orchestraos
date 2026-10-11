@@ -77,7 +77,8 @@ Already installed? [Upgrading](docs/UPGRADE.md): `orchestra upgrade`, then
 
 `orchestra up --detach` stops at the next reboot. `orchestra install-unit` installs systemd
 units rendered for your user, checkout and data dir: `orchestra.service` runs the supervisor,
-and `orchestra-recovery.service` resumes your seats from their saved sessions after a boot.
+and `orchestra-recovery.service` resumes your seats from their saved sessions after a boot
+(`orchestra-reconciler.timer` keeps that list of sessions current every 15 minutes).
 `--dry-run` shows exactly what it will do. See
 [Start on boot](docs/INSTALL.md#start-on-boot-systemd) in the install guide.
 

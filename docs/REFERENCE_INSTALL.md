@@ -73,6 +73,7 @@ supervisor and are restarted by a watchdog cron. Pick one model; do not run both
 | `identity_store/orphan_pane_scan.py` | — | `*/15` (flags raw tmux spawns, chip only) |
 | `identity_store/identity_reconciler.py --cron` | — | `*/15` |
 | `agent-recovery.sh --boot` | `orchestra-recovery.service` (`orchestra install-unit`) | `@reboot sleep 45` (re-attaches seats after a reboot) |
+| `identity_reconciler --cron` | `orchestra-reconciler.timer` (`orchestra install-unit`) | `*/15 * * * *` (seat status + the session list recovery reads) |
 | `lineage_daemon/telemetryd.py` | service (`[telemetry] enabled`) | `orchestra-telemetryd.service` (`orchestra install-unit --unit telemetryd`, with `[telemetry] enabled = false` if `orchestra up` also runs) |
 
 A minimal reference crontab (user crontab on the VPS; `cd` into the checkout so
