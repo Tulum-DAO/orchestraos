@@ -59,14 +59,15 @@ export function AgentsSummaryStrip({
     //     "nothing important is hidden" applies to viewport width too.
     <div className="space-y-2 min-w-0">
       <div className="flex items-center gap-2 flex-wrap min-w-0">
-        <h1 className="text-2xl font-bold text-neutral-100">Agents</h1>
+        {/* On a phone the title and + live in the layout's top bar; only the machine shows here. */}
+        <h1 className="hidden md:block text-2xl font-bold text-neutral-100">Agents</h1>
         {onNewAgent && (
           <button
             type="button"
             onClick={onNewAgent}
             aria-label="New agent"
             title="New agent"
-            className="touch-circle shrink-0 rounded-full flex items-center justify-center text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors"
+            className="touch-circle shrink-0 rounded-full hidden md:flex items-center justify-center text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors"
           >
             <Plus size={22} />
           </button>

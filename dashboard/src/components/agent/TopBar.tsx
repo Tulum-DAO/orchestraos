@@ -3,6 +3,8 @@ import { Menu, Sun, Moon, Monitor, Brain, Siren } from 'lucide-react';
 import { HeaderEndSlotContext } from '../../lib/headerSlot';
 import { useTheme } from '../../theme/ThemeProvider';
 import { GenChip } from '../GenChip';
+import { ArturoButton } from '../arturo/ArturoButton';
+import { showArturoPill } from '../../lib/features';
 
 interface TopBarProps {
   onMenuOpen: () => void;
@@ -109,9 +111,11 @@ export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen, seat, mode = 'ch
         >
           <Brain size={24} />
         </button>
-        {/* The shared bell's desktop home (filled by DashboardLayout; empty and hidden on phones,
-            where the bell sits in the layout's own phone bar). */}
-        <div ref={registerEndSlot ?? undefined} data-header-end-slot className="hidden md:flex items-center" />
+        {/* Arturo, on every size: this bar is the only one on an agent page (the layout's phone bar
+            is hidden here), and on desktop Arturo had no button on this page at all. */}
+        {showArturoPill() && <ArturoButton />}
+        {/* The shared bell's home on this page, phone and desktop (filled by DashboardLayout). */}
+        <div ref={registerEndSlot ?? undefined} data-header-end-slot className="flex items-center" />
       </div>
     </div>
   );

@@ -118,7 +118,10 @@ test('every gated surface is wired to its helper', () => {
   // That keeps polling and dropdown state singular.
   assert.equal((layout.match(/<NotificationBell\b/g) ?? []).length, 1, 'one application bell mount');
   const topbar = src('components/agent/TopBar.tsx');
-  assert.doesNotMatch(topbar, /NotificationBell|ArturoButton/, 'agent top bar reserves the shared bell slot');
+  // DISCLOSED test change (Shaw, 2026-10-11): ArturoButton is now allowed here. The agent page's bar
+  // is its only bar (the phone bar is hidden on agent pages), and desktop had no Arturo there at all.
+  // The bell stays singular: still portalled in, never mounted here.
+  assert.doesNotMatch(topbar, /NotificationBell/, 'agent top bar reserves the shared bell slot');
   const bell = src('components/NotificationBell.tsx');
   assert.match(bell, /bg-popover.*text-popover-foreground/, 'dropdown follows the active theme tokens');
   assert.doesNotMatch(bell, /bg-neutral-|text-neutral-|border-neutral-|hover:bg-neutral-/, 'dropdown has no fixed dark surface tokens');

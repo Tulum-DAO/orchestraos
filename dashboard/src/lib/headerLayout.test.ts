@@ -19,7 +19,23 @@ test('bellHost: desktop uses a page header slot when one is mounted, else the co
   assert.equal(bellHost({ desktop: true, pageSlot: false, phoneSlot: true }), 'corner');
 });
 
-test('bellHost: a phone always uses the phone bar (a page slot is hidden there)', () => {
+test('bellHost: on an agent page a phone uses the page header (one bar, not two stacked)', () => {
+  assert.equal(bellHost({ desktop: false, pageSlot: true, phoneSlot: true, chatRoute: true }), 'page');
+  assert.equal(bellHost({ desktop: false, pageSlot: false, phoneSlot: true, chatRoute: true }), 'phone');
+});
+
+test('the phone bar is hidden on agent pages, sits above page headers, and the layout uses the visible height', () => {
+  const layout = src('layouts/DashboardLayout.tsx');
+  assert.match(layout, /isChatRoute \? 'hidden' : 'flex'/);
+  assert.match(layout, /z-\[25\]/);
+  assert.match(layout, /\bh-dvh\b/);
+  const top = src('components/agent/TopBar.tsx');
+  assert.match(top, /<ArturoButton \/>/, 'Arturo is on the agent page bar');
+  assert.doesNotMatch(top, /data-header-end-slot className="hidden/, 'the bell slot shows on phones too');
+  assert.doesNotMatch(src('pages/Agents.tsx'), /"sticky top-0 z-20/, 'the Agents header no longer sticks under the phone bar');
+});
+
+test('bellHost: a phone off an agent page uses the phone bar', () => {
   assert.equal(bellHost({ desktop: false, pageSlot: true, phoneSlot: true }), 'phone');
   assert.equal(bellHost({ desktop: false, pageSlot: false, phoneSlot: true }), 'phone');
   assert.equal(bellHost({ desktop: false, pageSlot: false, phoneSlot: false }), 'corner');
@@ -39,7 +55,7 @@ test('the layout portals its ONE bell into the header slot instead of guessing t
 test('the agent top bar ends with the slot, inside the icon row, and reserves no padding for a fixed bell', () => {
   const topbar = src('components/agent/TopBar.tsx');
   assert.match(topbar, /useContext\(HeaderEndSlotContext\)/);
-  assert.match(topbar, /<div ref=\{registerEndSlot \?\? undefined\} data-header-end-slot className="hidden md:flex items-center" \/>\s*<\/div>\s*<\/div>\s*\);/,
+  assert.match(topbar, /<div ref=\{registerEndSlot \?\? undefined\} data-header-end-slot className="flex items-center" \/>\s*<\/div>\s*<\/div>\s*\);/,
     'the slot is the last child of the controls row');
   assert.doesNotMatch(topbar, /md:pr-12/);
 });

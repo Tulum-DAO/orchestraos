@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { CommandPalette } from '../components/CommandPalette';
 import { Outlet, useLocation } from 'react-router-dom';
 import { RouteErrorBoundary } from '../components/RouteErrorBoundary';
-import { Menu, X } from 'lucide-react';
+import { Menu, X, Plus } from 'lucide-react';
 import { Sidebar } from '../components/Sidebar';
 import { useMatch } from 'react-router-dom';
 import { VoiceCallBubble } from '../components/VoiceCallModal';
@@ -13,10 +13,11 @@ import { ArturoButton } from '../components/arturo/ArturoButton';
 import CoachingToast from '../components/CoachingToast';
 import { useOrchestraStore } from '../stores/useOrchestraStore';
 import { initAutoDiscovery } from '../lib/telemetry';
-import { showArturoPill, isViewHidden } from '../lib/features';
+import { showArturoPill, isViewHidden, showNewAgent } from '../lib/features';
 import NotFound from '../components/NotFound';
 import { HeaderEndSlotContext } from '../lib/headerSlot';
 import { bellHost } from '../lib/bellPlacement';
+import { NEW_AGENT_EVENT } from '../lib/newAgent';
 
 // Tailwind's `md` breakpoint (48rem), read live so the bell follows the bar that is showing.
 const DESKTOP_QUERY = '(min-width: 48rem)';
@@ -67,6 +68,7 @@ export function DashboardLayout() {
   const location = useLocation();
   const page = isViewHidden(location.pathname) ? <NotFound /> : <Outlet />;
   const isChatRoute = !!onAgentWithId || !!onAgentBare;
+  const onAgents = !!useMatch('/agents');
   const activeCall = useOrchestraStore((s) => s.activeCall);
   const endCall = useOrchestraStore((s) => s.endCall);
 
@@ -77,7 +79,9 @@ export function DashboardLayout() {
   const bell = <NotificationBell />;
 
   return (
-    <div className="flex h-screen bg-neutral-950 text-neutral-100">
+    <div className="flex h-screen h-dvh bg-neutral-950 text-neutral-100">
+      {/* h-dvh, not h-screen: on iPhone Safari 100vh includes the strip behind the address bar, so a
+          bottom-docked composer sat under it and could not be typed into (Shaw, 2026-10-11). */}
       {/* Desktop sidebar */}
       <div className="hidden md:block">
         <Sidebar />
@@ -103,7 +107,7 @@ export function DashboardLayout() {
       {/* Main content */}
       <main className={`flex-1 min-w-0 flex flex-col safe-top safe-bottom ${isChatRoute ? 'overflow-hidden' : 'overflow-y-auto'}`}>
         {/* Mobile header with hamburger */}
-        <div ref={topbarRef} className="dark sticky top-0 z-20 flex items-center gap-3 border-b border-neutral-800 bg-neutral-950/90 backdrop-blur px-4 py-3 md:hidden">
+        <div ref={topbarRef} className={`dark sticky top-0 z-[25] items-center gap-3 border-b border-neutral-800 bg-neutral-950/90 backdrop-blur px-4 py-3 md:hidden ${isChatRoute ? 'hidden' : 'flex'}`}>
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className="p-1 -ml-1 text-neutral-400 hover:text-white"
@@ -111,7 +115,20 @@ export function DashboardLayout() {
           >
             {sidebarOpen ? <X size={22} /> : <Menu size={22} />}
           </button>
-          <span className="text-sm font-bold tracking-tight text-white">orchestraOS</span>
+          {/* The page's title lives HERE on a phone, not in a second row under this bar. */}
+          {onAgents ? (
+            <div className="flex items-center gap-1 min-w-0">
+              <span className="text-lg font-bold tracking-tight text-white">Agents</span>
+              {showNewAgent() && (
+                <button type="button" onClick={() => window.dispatchEvent(new Event(NEW_AGENT_EVENT))} aria-label="New agent" title="New agent"
+                  className="touch-circle shrink-0 rounded-full flex items-center justify-center text-neutral-400 hover:text-white hover:bg-neutral-800">
+                  <Plus size={22} />
+                </button>
+              )}
+            </div>
+          ) : (
+            <span className="text-sm font-bold tracking-tight text-white">orchestraOS</span>
+          )}
           {/* Arturo's one spot, then the shared bell's phone home (portalled in below). */}
           <div className="ml-auto flex items-center gap-1">
             {showArturoPill() && <ArturoButton />}
@@ -136,7 +153,7 @@ export function DashboardLayout() {
           header row that is showing (lib/bellPlacement), and only desktop pages without their own
           header keep the fixed top-right corner. */}
       {(() => {
-        const host = bellHost({ desktop, pageSlot: !!pageBellSlot, phoneSlot: !!phoneBellSlot });
+        const host = bellHost({ desktop, pageSlot: !!pageBellSlot, phoneSlot: !!phoneBellSlot, chatRoute: isChatRoute });
         if (host === 'page' && pageBellSlot) return createPortal(bell, pageBellSlot);
         if (host === 'phone' && phoneBellSlot) return createPortal(bell, phoneBellSlot);
         return <div className="fixed right-4 top-[calc(env(safe-area-inset-top)+0.75rem)] z-30 md:top-4">{bell}</div>;
