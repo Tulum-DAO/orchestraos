@@ -351,6 +351,8 @@ export function ArturoPill() {
                 <Focus size={12} /> <span className="cc-label">Use this page</span>
               </button>
             )}
+          </div>
+          <div className="cluster">
             <button className={brainLogo ? 'circle-btn arturo-brain-logo' : 'arturo-context-chip'} onClick={() => setModelOpen(true)}
                     title={`Answering on ${brainName}`} aria-label={`Brain: ${brainName}. Change`}>
               {brainLogo
@@ -358,8 +360,6 @@ export function ArturoPill() {
                 ? <span className="logo" aria-hidden="true" dangerouslySetInnerHTML={{ __html: brainLogo.svg }} />
                 : <><Cpu size={12} /> <span className="cc-label">{brainChoice ? brainChoice.label : 'Default brain'}</span></>}
             </button>
-          </div>
-          <div className="cluster">
             <button className={dictMode === 'idle' ? 'circle-btn' : `circle-btn ${dictMode}`}
                     aria-label={dictMode === 'listening' ? 'Stop dictation' : dictMode === 'recording' ? 'Stop recording' : dictMode === 'transcribing' ? 'Transcribing' : 'Dictate'}
                     aria-pressed={dictating} title={dictateTitle(inCall, dictMode)}
