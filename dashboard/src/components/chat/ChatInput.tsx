@@ -1,12 +1,11 @@
 /**
- * ChatInput — the floating pill composer: attach (+), text, inject/inbox toggle, caller slots
+ * ChatInput — the floating pill composer: attach (+), text, caller slots
  * (model, voice) and a round send button that becomes Stop while the seat is mid-turn.
  */
-import { useState, useRef, useLayoutEffect, useEffect, useId, type ReactNode } from 'react';
+import { useState, useRef, useLayoutEffect, useEffect, type ReactNode } from 'react';
 import { clsx } from 'clsx';
-import { ArrowUp, Loader2, Plus, Paperclip, X, ClipboardList, MoreHorizontal, Check } from 'lucide-react';
+import { ArrowUp, Loader2, Plus, Paperclip, X, ClipboardList, MoreHorizontal } from 'lucide-react';
 import { injectAgentVerified, type InjectResult } from '../../lib/api';
-import { sendToAgent, isDelivered, isQueued, isHeld, describeSendState } from '../../lib/agentSend';
 import { sendPanelHeadline, shouldSendPhoto, clearsComposer, retryText, canForceRetry, composerKeyAction } from '../../lib/composerGate';
 import { logAction } from '../../lib/user-actions';
 import { isLargePaste, fencePaste } from '../../lib/pastedText';
@@ -106,7 +105,6 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
   // Same regression as d3cd511 in AgentCard, missed here. Found by the eslint selector rule
   // added in this commit, in seconds, after a grep and two readings had not.
   const [resultOk, setResultOk] = useState(false);
-  const [injectMode, setInjectMode] = useState(true);
   const [busy, setBusy] = useState<{
     reason?: string; state?: string; activity?: string;
     composer_text?: string; stranded?: { text?: string; age_s?: number };
@@ -200,7 +198,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     // text the gateway just refused (retained in busy.attemptText).
     if (!force && !text.trim() && !pendingImage) return;
     if (force && !canForceRetry(busy?.attemptText, busy?.state, !!pendingImage)) return;
-    logAction(injectMode ? 'chat.inject' : 'chat.message', agentId, text.trim().slice(0, 100));
+    logAction('chat.inject', agentId, text.trim().slice(0, 100));
     setSending(true);
     setResultOk(false);
     setResult(null);
@@ -294,49 +292,36 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
         clearImage();
       }
 
-      if (injectMode) {
-        const res: InjectResult = await injectAgentVerified(agentId, messageText, force);
-        if (res.status === 200 && res.injected) {
-          setBusy(null);
-          setResultOk(true);
-          setResult('Sent');
-          setText('');
-          setPastes([]);
-          pasteIdRef.current = 1;
-        } else if (res.status === 409) {
-          // Refused — surface why + retain the text for a possible force retry.
-          setBusy({
-            reason: res.reason,
-            state: res.state,
-            activity: res.activity,
-            composer_text: res.composer_text,
-            stranded: res.stranded,
-            attemptText: messageText,
-          });
-          setResultOk(false);
-          setResult(null);
-        } else if (res.status === 502) {
-          setResultOk(false);
-          setResult('Delivery unverified — try again');
-        } else {
-          setResultOk(false);
-          setResult('Failed' + (res.error ? ': ' + res.error : ''));
-        }
+      // Every send goes straight into the agent's terminal (the old Now/Inbox picker is gone;
+      // a busy agent still gets the queued/held path through the refusal panel below).
+      const res: InjectResult = await injectAgentVerified(agentId, messageText, force);
+      if (res.status === 200 && res.injected) {
+        setBusy(null);
+        setResultOk(true);
+        setResult('Sent');
+        setText('');
+        setPastes([]);
+        pasteIdRef.current = 1;
+      } else if (res.status === 409) {
+        // Refused — surface why + retain the text for a possible force retry.
+        setBusy({
+          reason: res.reason,
+          state: res.state,
+          activity: res.activity,
+          composer_text: res.composer_text,
+          stranded: res.stranded,
+          attemptText: messageText,
+        });
+        setResultOk(false);
+        setResult(null);
+      } else if (res.status === 502) {
+        setResultOk(false);
+        setResult('Delivery unverified — try again');
       } else {
-        // Durable path — see the note in AgentCard.tsx. messageAgent() wrote to queue/inbox/,
-        // which nothing reads, and still reported success.
-        const res2 = await sendToAgent(agentId, { text: messageText });
-        if (isDelivered(res2) || isQueued(res2) || isHeld(res2)) {
-          setResultOk(true);
-          setResult(describeSendState(res2) || 'Sent');
-          setText('');
-          setPastes([]);
-          pasteIdRef.current = 1;
-        } else {
-          setResultOk(false);
-          setResult('Failed' + (res2.error ? ': ' + res2.error : ''));
-        }
+        setResultOk(false);
+        setResult('Failed' + (res.error ? ': ' + res.error : ''));
       }
+
     } catch (err: any) {
       setResultOk(false);
       setResult('Error: ' + (err.message || 'unknown'));
@@ -398,7 +383,6 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
-  const deliveryLabelId = useId();
   const closeMenu = () => setMenuOpen(false);
   const menuItemsEls = () =>
     Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]') ?? []);
@@ -432,7 +416,6 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
       document.removeEventListener('keydown', onKey, true);
     };
   }, [menuOpen]);
-  const menuRow = 'w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-left text-foreground hover:bg-muted rounded-lg';
 
   return (
     <div
@@ -578,59 +561,31 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
               else if (action === 'stop') { e.preventDefault(); void handleStop(); }
             }}
           />
-          {/* The delivery mode is a REAL control, not debug output — it chooses between typing
-              into the agent's terminal now and queuing to its inbox. Kept, restyled to sit in the
-              pill's right cluster without competing with send. */}
-          <button
-            type="button"
-            onClick={() => setInjectMode(!injectMode)}
-            title={injectMode
-              ? 'Delivering NOW, straight into the agent’s terminal. Click to queue to its inbox instead.'
-              : 'Queuing to the agent’s INBOX, read at its next turn. Click to deliver now instead.'}
-            className="shrink-0 h-9 px-1.5 text-[11px] rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors max-[480px]:hidden"
-          >
-            {injectMode ? 'now' : 'inbox'}
-          </button>
           {leading}
           {/* BELOW 480px: ONE overflow control instead of the delivery toggle + the caller's
               secondary controls, so the text gets the row (at 390px it showed ~13 characters).
               The non-default "inbox" mode shows on the button itself, so folding it never hides
               where a message will go. */}
-          <div ref={menuRef} className="relative shrink-0 min-[480px]:hidden">
+          {menuItems && <div ref={menuRef} className="relative shrink-0 min-[480px]:hidden">
             <button
               ref={menuButtonRef}
               type="button"
               onClick={() => setMenuOpen((o) => !o)}
               aria-haspopup="menu"
               aria-expanded={menuOpen}
-              aria-label={injectMode ? 'More options' : 'More options (queuing to inbox)'}
+              aria-label="More options"
               title="More options"
               className={clsx(roundBtn, 'relative text-foreground/70 hover:text-foreground hover:bg-muted', menuOpen && 'bg-muted text-foreground')}
             >
               <MoreHorizontal size={20} />
-              {!injectMode && <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-amber-400" aria-hidden />}
             </button>
             {menuOpen && (
               <div role="menu" aria-label="More options" onKeyDown={onMenuKeyDown}
                 className="absolute bottom-full right-0 mb-2 w-60 rounded-2xl border border-border bg-card p-1.5 shadow-xl shadow-black/30 z-20">
-                <div role="group" aria-labelledby={deliveryLabelId}>
-                <div id={deliveryLabelId} role="presentation" className="px-3 pt-1.5 pb-1 text-[11px] text-muted-foreground">Delivery</div>
-                <button type="button" role="menuitemradio" aria-checked={injectMode} className={menuRow}
-                  onClick={() => { setInjectMode(true); closeMenu(); }}>
-                  <Check size={15} className={injectMode ? 'opacity-100' : 'opacity-0'} />
-                  <span>Now <span className="text-muted-foreground">· into its terminal</span></span>
-                </button>
-                <button type="button" role="menuitemradio" aria-checked={!injectMode} className={menuRow}
-                  onClick={() => { setInjectMode(false); closeMenu(); }}>
-                  <Check size={15} className={!injectMode ? 'opacity-100' : 'opacity-0'} />
-                  <span>Inbox <span className="text-muted-foreground">· read next turn</span></span>
-                </button>
-                </div>
-                {menuItems && <div role="separator" className="my-1 border-t border-border" />}
                 {menuItems?.(closeMenu)}
               </div>
             )}
-          </div>
+          </div>}
           {trailing}
           {showStop ? (
             <button
