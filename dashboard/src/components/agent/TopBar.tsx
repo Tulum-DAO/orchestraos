@@ -1,15 +1,10 @@
 import { useContext } from 'react';
-import { Menu, Sun, Moon, Monitor, Brain, Siren } from 'lucide-react';
+import { Menu } from 'lucide-react';
 import { HeaderEndSlotContext } from '../../lib/headerSlot';
-import { useTheme } from '../../theme/ThemeProvider';
 import { GenChip } from '../GenChip';
-import { ArturoButton } from '../arturo/ArturoButton';
-import { showArturoPill } from '../../lib/features';
 
 interface TopBarProps {
   onMenuOpen: () => void;
-  onBrainOpen: () => void;
-  onReportOpen?: () => void;
   /** The seat this page belongs to; shown in the middle so the page says whose it is (and hosts the gen chip). */
   seat?: { id: string; generation?: unknown };
   /** Chat (the transcript) or Dev (the seat's live terminal). The toggle shows only with a handler. */
@@ -17,16 +12,9 @@ interface TopBarProps {
   onModeChange?: (mode: 'chat' | 'dev') => void;
 }
 
-export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen, seat, mode = 'chat', onModeChange }: TopBarProps) {
-  const { theme, setTheme } = useTheme();
+export function TopBar({ onMenuOpen, seat, mode = 'chat', onModeChange }: TopBarProps) {
   const registerEndSlot = useContext(HeaderEndSlotContext);
 
-  const cycleTheme = () => {
-    const themes: Array<'light' | 'dark' | 'system'> = ['light', 'dark', 'system'];
-    const currentIndex = themes.indexOf(theme);
-    const nextIndex = (currentIndex + 1) % themes.length;
-    setTheme(themes[nextIndex]);
-  };
 
   return (
     // `justify-between` across THREE children is what put the theme toggle in the middle of the
@@ -78,42 +66,8 @@ export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen, seat, mode = 'ch
             ))}
           </div>
         )}
-        <button
-          onClick={cycleTheme}
-          className="p-2 text-foreground hover:bg-muted rounded-lg transition-colors"
-          aria-label="Toggle theme"
-        >
-          {theme === 'light' && <Sun size={24} />}
-          {theme === 'dark' && <Moon size={24} />}
-          {theme === 'system' && <Monitor size={24} />}
-        </button>
-        {/* Report button — the front door of the RED ALERT / ticket system (the operator 2026-09-18) */}
-        {onReportOpen && (
-          <button
-            onClick={onReportOpen}
-            // NOT permanently red. This is an ACTION the operator can take, not a STATE of the
-            // system: nothing is wrong because the button exists. A red that is always on is
-            // the same defect as a badge that prints the same value on every row — it cannot
-            // distinguish anything, so it stops being read, and then a real alert has no
-            // colour left to use. It wears the alarm colour on hover and focus, at the moment
-            // it is actually about to be used.
-            className="p-2 text-foreground hover:text-red-400 hover:bg-red-500/10 focus-visible:text-red-400 rounded-lg transition-colors"
-            aria-label="Report a problem"
-            title="Report a crash, bug, improvement or suggestion"
-          >
-            <Siren size={24} />
-          </button>
-        )}
-        <button
-          onClick={onBrainOpen}
-          className="p-2 text-foreground hover:bg-muted rounded-lg transition-colors"
-          aria-label="Open brain"
-        >
-          <Brain size={24} />
-        </button>
-        {/* Arturo, on every size: this bar is the only one on an agent page (the layout's phone bar
-            is hidden here), and on desktop Arturo had no button on this page at all. */}
-        {showArturoPill() && <ArturoButton />}
+        {/* Theme, red alert and brain are gone from agent panes (Shaw, 2026-10-11: they did nothing
+            here and crowded the seat name off a phone). The bell sits where the brain was. */}
         {/* The shared bell's home on this page, phone and desktop (filled by DashboardLayout). */}
         <div ref={registerEndSlot ?? undefined} data-header-end-slot className="flex items-center" />
       </div>

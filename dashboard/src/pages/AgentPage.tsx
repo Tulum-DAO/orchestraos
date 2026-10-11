@@ -2,13 +2,10 @@ import { useState, useEffect, useRef } from 'react';
 import { agentRowsFrom } from '../lib/api';
 import { useParams } from 'react-router-dom';
 import { TopBar } from '../components/agent/TopBar';
-import { Drawer } from '../components/agent/Drawer';
-import { BrainModal } from '../components/agent/BrainModal';
 import { Feed } from '../components/agent/Feed';
 import { Composer } from '../components/agent/Composer';
 import { LiveStatusLine } from '../components/chat/LiveStatusLine';
 import { useFeedHealth } from '../hooks/useFeedHealth';
-import { ReportSheet } from '../components/agent/ReportSheet';
 import { useAgentSettings } from '../stores/agentSettings';
 import { spawnAgent } from '../lib/api';
 import { composerGate, canStopTurn } from '../lib/composerGate';
@@ -17,13 +14,11 @@ import WebTerminal from '../components/WebTerminal';
 import ActionBar from '../components/ActionBar';
 import { injectToAgent, sendKeyToAgent } from '../lib/api';
 import { logAction } from '../lib/user-actions';
+import { OPEN_SIDEBAR_EVENT } from '../lib/headerSlot';
 
 export default function AgentPage() {
   const { id } = useParams<{ id?: string }>();
   const agentId = id || 'gm';
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [brainOpen, setBrainOpen] = useState(false);
-  const [reportOpen, setReportOpen] = useState(false);
   const [resuming, setResuming] = useState(false);
   // Chat (transcript + composer) or Dev (the seat's live terminal). It stays put when you move to
   // another seat from the rail, the way a terminal user expects.
@@ -68,6 +63,7 @@ export default function AgentPage() {
   // the floating Arturo pill and publish a lift for it; Arturo now lives in the top bar.)
   const chatRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLDivElement>(null);
+  const keysRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const dock = dockRef.current;
     const col = chatRef.current;
@@ -78,12 +74,24 @@ export default function AgentPage() {
       // keep a reader who was at the bottom AT the bottom when the pill grows
       const pinned = !!scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
       col.style.setProperty('--composer-h', `${h}px`);
+      document.documentElement.style.setProperty('--arturo-lift', `${h}px`);
       if (scroller && pinned) scroller.scrollTop = scroller.scrollHeight;
     };
     apply();
     const ro = new ResizeObserver(apply);
     ro.observe(dock);
-    return () => ro.disconnect();
+    return () => { ro.disconnect(); document.documentElement.style.removeProperty('--arturo-lift'); };
+  }, [mode]);
+  // Dev mode: the floating Arturo sits above the special-keys bar, never on it.
+  useEffect(() => {
+    const keys = keysRef.current;
+    if (mode !== 'dev' || !keys) return;
+    const root = document.documentElement;
+    const apply = () => root.style.setProperty('--arturo-lift', `${Math.ceil(keys.getBoundingClientRect().height)}px`);
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(keys);
+    return () => { ro.disconnect(); root.style.removeProperty('--arturo-lift'); };
   }, [mode]);
 
   // Load settings from storage on mount
@@ -93,24 +101,14 @@ export default function AgentPage() {
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-background text-foreground">
-      {/* Top bar with menu, theme toggle, brain */}
+      {/* Top bar: menu, seat, Chat/Dev, bell */}
       <TopBar
-        onMenuOpen={() => setDrawerOpen(true)}
-        onBrainOpen={() => setBrainOpen(true)}
-        onReportOpen={() => setReportOpen(true)}
+        onMenuOpen={() => window.dispatchEvent(new Event(OPEN_SIDEBAR_EVENT))}
         seat={seat}
         mode={mode}
         onModeChange={changeMode}
       />
 
-      {/* Report sheet — RED ALERT front door (docs/RED_ALERT.md) */}
-      <ReportSheet isOpen={reportOpen} onClose={() => setReportOpen(false)} agentId={agentId} />
-
-      {/* Navigation drawer */}
-      <Drawer isOpen={drawerOpen} onClose={() => setDrawerOpen(false)} />
-
-      {/* Brain modal */}
-      <BrainModal isOpen={brainOpen} onClose={() => setBrainOpen(false)} />
 
       {mode === 'dev' ? (
         <>
@@ -123,7 +121,7 @@ export default function AgentPage() {
             />
           </div>
           {/* special keys (arrows, Esc, Tab, ...): a phone has no keyboard for them */}
-          <div className="px-3 py-2 border-t border-border shrink-0 bg-neutral-950">
+          <div ref={keysRef} className="px-3 py-2 border-t border-border shrink-0 bg-neutral-950">
             <ActionBar
               agentId={agentId}
               outputLines={[]}

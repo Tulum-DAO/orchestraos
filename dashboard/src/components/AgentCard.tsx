@@ -637,7 +637,11 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                 ? 'w-full rounded-none border-0'
                 : 'border border-neutral-700 rounded-2xl w-full max-w-2xl max-h-[90vh]'
             )}
-            style={devMode ? { height: 'calc(var(--vvh, 100vh) - var(--topbar-h, 0px))' } : undefined}
+            // Dev fills the visible screen; Chat is capped to it, so its composer is never below the
+            // fold or under the keyboard (max-h-[90vh] alone counted Safari's toolbar strip).
+            style={devMode
+              ? { height: 'calc(var(--vvh, 100vh) - var(--topbar-h, 0px))' }
+              : { maxHeight: 'calc(var(--vvh, 100dvh) - var(--topbar-h, 0px) - 1rem)' }}
             onClick={(e) => e.stopPropagation()}
             onTouchStart={onOverlayTouchStart}
             onTouchEnd={onOverlayTouchEnd}

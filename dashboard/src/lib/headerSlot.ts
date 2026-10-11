@@ -7,3 +7,6 @@ import { createContext } from 'react';
  * (the QA harness), where a header simply has no slot to fill.
  */
 export const HeaderEndSlotContext = createContext<((el: HTMLElement | null) => void) | null>(null);
+
+/** An agent page's menu button asks DashboardLayout to open its (one) sidebar. */
+export const OPEN_SIDEBAR_EVENT = 'orchestra:open-sidebar';
