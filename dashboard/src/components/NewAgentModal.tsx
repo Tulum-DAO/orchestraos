@@ -15,8 +15,8 @@ import { useNavigate } from 'react-router-dom';
 import WebTerminal from './WebTerminal';
 import SignInLink from './SignInLink';
 import {
-  authedRuntimes, createAgent, freshRuntimes, nameError, openLoginShell, previewName, runtimeLabel,
-  type RuntimeRow,
+  authedRuntimes, createAgent, fetchParents, freshRuntimes, nameError, openLoginShell, parentChoices, previewName, runtimeLabel,
+  type ParentSeat, type RuntimeRow, type SeatKind,
 } from '../lib/newAgent';
 import { isViewHidden } from '../lib/features';
 
@@ -40,7 +40,12 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
   const [role, setRole] = useState('');
   // The General Manager is a different KIND of seat: tier T0, always-on, the gm prompt — the
   // web equivalent of `orchestra spawn <name> --gm`, which is what docs/INSTALL.md tells you to run.
-  const [gm, setGm] = useState(false);
+  const [kind, setKind] = useState<SeatKind>('lead');
+  const gm = kind === 'gm';
+  // Who the new seat reports to. Never a made-up id: the server refuses anything that is not a
+  // registered seat (it used to send 'dashboard', and every Worker was refused).
+  const [seats, setSeats] = useState<ParentSeat[]>([]);
+  const [parent, setParent] = useState('');
   const [error, setError] = useState('');
   const [created, setCreated] = useState<{ id: string; session: string; runtime?: string } | null>(null);
   const [shell, setShell] = useState<{ session: string; hint: string } | null>(null);
@@ -49,7 +54,8 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
 
   useEffect(() => {
     if (!open) return;
-    setPhase('probing'); setError(''); setCreated(null); setShell(null); setName(''); setTask(''); setRole(''); setGm(false);
+    setPhase('probing'); setError(''); setCreated(null); setShell(null); setName(''); setTask(''); setRole(''); setKind('lead'); setParent('');
+    void fetchParents().then((s) => { setSeats(s); const g = parentChoices('lead', s)[0]; setParent(g ? g.id : ''); });
     void probe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -79,7 +85,7 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
     const clean = previewName(name);
     if (!clean || phase === 'spawning') return;
     setPhase('spawning'); setError('');
-    const r = await createAgent(name, task, runtime || undefined, role, gm);
+    const r = await createAgent(name, task, runtime || undefined, role, gm, gm ? null : (parent || null));
     if (r.ok && r.id) {
       setCreated({ id: r.id, session: r.session || r.id, runtime: r.runtime });
       setPhase('spawned');
@@ -89,6 +95,7 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
     if (r.reason === 'no_authed_runtime') { void probe(); return; }   // logged out between probe and submit
     setError(
       r.reason === 'name_taken' ? `"${clean}" already exists — pick another name.`
+      : r.reason === 'unknown_parent' ? 'That lead is not a registered agent any more. Pick another.'
       : r.reason === 'spawn_failed' || r.reason === 'session_missing' ? `The spawn did not complete: ${(r.detail || '').slice(-300)}`
       : r.detail || r.reason || 'Something went wrong.',
     );
@@ -100,7 +107,9 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
   const authed = authedRuntimes(rows);
   const clean = previewName(name);
   const nameProblem = nameError(name, taken || new Set());
-  const canSubmit = !!clean && !nameProblem && phase !== 'spawning';
+  const choices = parentChoices(kind, seats);
+  const needsLead = kind === 'worker';
+  const canSubmit = !!clean && !nameProblem && phase !== 'spawning' && (!needsLead || !!parent);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
@@ -129,21 +138,54 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
             </p>
 
             <div className="mb-3 flex gap-2">
-              {[{ v: false, t: 'Worker', d: 'tier T2' }, { v: true, t: 'General Manager', d: 'tier T0, always on' }].map((k) => (
-                <button
-                  key={String(k.v)}
-                  type="button"
-                  onClick={() => { setGm(k.v); if (k.v && !name.trim()) setName('gm'); }}
-                  aria-pressed={gm === k.v}
-                  className={`flex-1 px-3 py-2 rounded-lg border text-left transition-colors ${gm === k.v
-                    ? 'border-blue-600 bg-blue-600/15 text-neutral-100'
-                    : 'border-neutral-700 bg-neutral-950 text-neutral-400 hover:text-neutral-200'}`}
-                >
-                  <div className="text-sm font-medium">{k.t}</div>
-                  <div className="text-[11px] text-neutral-500">{k.d}</div>
-                </button>
-              ))}
+              {([
+                { v: 'lead', t: 'Lead', d: 'tier T1' },
+                { v: 'worker', t: 'Worker', d: 'tier T2, under a lead' },
+                { v: 'gm', t: 'General Manager', d: 'tier T0, always on' },
+              ] as { v: SeatKind; t: string; d: string }[]).map((k) => {
+                const noLead = k.v === 'worker' && parentChoices('worker', seats).length === 0;
+                return (
+                  <button
+                    key={k.v}
+                    type="button"
+                    disabled={noLead}
+                    title={noLead ? 'A worker reports to a lead. Start a lead first.' : undefined}
+                    onClick={() => {
+                      setKind(k.v);
+                      if (k.v === 'gm' && !name.trim()) setName('gm');
+                      const first = parentChoices(k.v, seats)[0];
+                      setParent(first ? first.id : '');
+                    }}
+                    aria-pressed={kind === k.v}
+                    className={`flex-1 px-3 py-2 rounded-lg border text-left transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${kind === k.v
+                      ? 'border-blue-600 bg-blue-600/15 text-neutral-100'
+                      : 'border-neutral-700 bg-neutral-950 text-neutral-400 hover:text-neutral-200'}`}
+                  >
+                    <div className="text-sm font-medium">{k.t}</div>
+                    <div className="text-[11px] text-neutral-500">{k.d}</div>
+                  </button>
+                );
+              })}
             </div>
+
+            {kind === 'worker' && (
+              <div className="mb-3">
+                <label className="block text-xs uppercase tracking-wider text-neutral-500 mb-1">Reports to</label>
+                <select
+                  value={parent}
+                  onChange={(e) => setParent(e.target.value)}
+                  aria-label="Reports to"
+                  className="bg-neutral-950 border border-neutral-700 text-neutral-300 text-sm rounded-lg px-3 py-2"
+                >
+                  {choices.map((s) => <option key={s.id} value={s.id}>{s.id}{s.tier ? ` (${s.tier})` : ''}</option>)}
+                </select>
+              </div>
+            )}
+            {kind === 'lead' && (
+              <p className="mb-3 text-xs text-neutral-500">
+                {choices.length > 0 ? <>Reports to <code className="text-neutral-300">{parent || choices[0].id}</code>.</> : <>No manager yet, so it starts on its own.</>}
+              </p>
+            )}
 
             <label className="block text-xs uppercase tracking-wider text-neutral-500 mb-1">Name</label>
             <input

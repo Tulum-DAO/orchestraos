@@ -3,7 +3,7 @@
  *   node --experimental-strip-types dashboard/src/lib/newAgent.test.mjs
  */
 import assert from 'node:assert';
-import { authedRuntimes, runtimeLabel, previewName, nameError, freshRuntimes, createAgent, openLoginShell } from './newAgent.ts';
+import { authedRuntimes, runtimeLabel, previewName, nameError, freshRuntimes, createAgent, openLoginShell, parentChoices } from './newAgent.ts';
 
 const row = (id, cli, authed, installed = true) => ({ id, cli, authed, installed });
 
@@ -76,3 +76,13 @@ assert.equal(nameError('Docs Writer', new Set()), null);
 }
 
 console.log('newAgent.test.mjs: all assertions passed');
+
+// --- who a new seat reports to (2026-10-11: the form sent a fake 'dashboard' parent) ------------
+{
+  const seats = [{ id: 'gm', tier: 'T0' }, { id: 'pm-test', tier: 'T1' }, { id: 'dev-test', tier: 'T2' }];
+  assert.deepEqual(parentChoices('worker', seats).map(s => s.id), ['pm-test', 'dev-test']);  // never the GM
+  assert.deepEqual(parentChoices('lead', seats).map(s => s.id), ['gm']);
+  assert.deepEqual(parentChoices('gm', seats), []);
+  assert.deepEqual(parentChoices('worker', []), []);       // empty box: no worker possible
+  assert.deepEqual(parentChoices('lead', []), []);         // empty box: a lead starts on its own
+}
