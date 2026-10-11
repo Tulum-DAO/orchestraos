@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isCommandTool, outputPreview, storedToolDensity, todoItems } from './toolCardDetail.ts';
+import * as detail from './toolCardDetail.ts';
+import { isCommandTool, outputPreview, todoItems } from './toolCardDetail.ts';
 
-test('tool density accepts only the three saved display modes', () => {
-  assert.equal(storedToolDensity(() => 'verbose'), 'verbose');
-  assert.equal(storedToolDensity(() => 'anything else'), 'normal');
+test('there is no tool-density setting to store: the agent pane always renders normal', () => {
+  assert.equal('storedToolDensity' in detail, false);
+  assert.equal('TOOL_DENSITY_STORAGE_KEY' in detail, false);
 });
 
 test('a command preview keeps the first lines and says what is hidden', () => {

@@ -1,14 +1,10 @@
 import type { ToolBlock } from './transcript';
 
+// The agent pane always renders 'normal': groups open, command output as a short preview that
+// expands. The Summary/Normal/Verbose toggle was removed (Shaw, 2026-10-11); the cards keep the
+// prop so a caller can still ask for another level.
 export type ToolDensity = 'summary' | 'normal' | 'verbose';
 
-export const TOOL_DENSITIES: readonly ToolDensity[] = ['summary', 'normal', 'verbose'];
-export const TOOL_DENSITY_STORAGE_KEY = 'orchestra.tool-density';
-
-export function storedToolDensity(read: () => string | null): ToolDensity {
-  const value = read();
-  return TOOL_DENSITIES.includes(value as ToolDensity) ? value as ToolDensity : 'normal';
-}
 
 export function isCommandTool(tool: string): boolean {
   return ['bash', 'run_command', 'exec', 'exec_command', 'shell'].includes(tool.toLowerCase());
