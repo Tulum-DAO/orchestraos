@@ -9,7 +9,6 @@ import { TierBadge } from './TierBadge';
 import { GenerationHistory } from './GenerationHistory';
 import { normalizeAgentState, STATE_STYLE } from '../lib/agentStatus';
 import { getAgentOutput, injectToAgent, sendKeyToAgent } from '../lib/api';
-import { sendToAgent, isDelivered, isQueued, isHeld, describeSendState } from '../lib/agentSend';
 import ActionBar from './ActionBar';
 import WebTerminal from './WebTerminal';
 import TranscriptChatView from './chat/TranscriptChatView';
@@ -111,7 +110,8 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
   // next turn boundary": both are successes, and both rendered RED under the string test.
   // That was a regression I introduced when I switched this box to sendToAgent().
   const [injectOk, setInjectOk] = useState(false);
-  const [useInjectMode, setUseInjectMode] = useState(false);
+  // Sends always go straight into the agent's terminal (the inject/send toggle is gone).
+  const useInjectMode = true;
   const [devMode, setDevMode] = useState(false);
   // The panel's composer draft, held here so the mic's dictation can write into it.
   const [panelDraft, setPanelDraft] = useState('');
@@ -152,7 +152,6 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
       setFocused(true);
       setArturoFocus({ kind: 'agent', id: agent.id, label: agent.name || agent.id });
       setDevMode(true);
-      setUseInjectMode(true);
       if (!focusRequest.viaSwipe) {
         // Entry (chip click / normal open): counts as interaction + re-locks deck
         bumpRecent(agent.id);
@@ -169,7 +168,6 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
     setFocused(true);
     setArturoFocus({ kind: 'agent', id: agent.id, label: agent.name || agent.id });
     setExpanded(false);
-    setUseInjectMode(true);
     logAction('agent.focus', agent.id, agent.name);
     trackRecentAgent(agent.id, agent.name || agent.id, agent.tier);
   };
@@ -178,7 +176,6 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
     setFocused(true);
     setArturoFocus({ kind: 'agent', id: agent.id, label: agent.name || agent.id });
     setDevMode(true);
-    setUseInjectMode(true);
     bumpRecent(agent.id);
     lockDeck(agent.id);
     logAction('agent.mode.dev', agent.id);
@@ -308,37 +305,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
   const handleSend = async () => {
     if (!injectText.trim()) return;
     bumpRecent(agent.id); // the operator-interaction = recency (does NOT re-lock deck)
-    if (useInjectMode) {
-      return handleInject();
-    }
-    logAction('agent.message', agent.id, injectText.trim().slice(0, 100));
-    setInjecting(true);
-    setInjectResult(null);
-    setInjectOk(false);
-    try {
-      // Durable path. This used to call messageAgent() -> POST /api/agents/:id/message,
-      // which wrote a file into queue/inbox/ and returned {sent:true} — a path NO live agent
-      // reads (prompts/infrastructure.md says so outright). The box reported "Sent" and the
-      // instruction vanished. Found by test during the 2D QA pass, reproduced twice.
-      const result = await sendToAgent(agent.id, { text: injectText.trim() });
-      const accepted = isDelivered(result) || isQueued(result) || isHeld(result);
-      setInjectOk(accepted);
-      if (accepted) {
-        // Report what actually happened rather than a flat "Sent": queued and held are real,
-        // distinct outcomes, and flattening them is how the old path got away with lying.
-        // describeSendState() returns '' for a plain delivery, hence the fallback.
-        setInjectResult(describeSendState(result) || 'Sent');
-        setInjectText('');
-      } else {
-        setInjectResult('Error: ' + (describeSendState(result) || result.error || 'send failed'));
-      }
-    } catch (err: any) {
-      setInjectOk(false);
-      setInjectResult('Error: ' + (err.message || 'unknown'));
-    } finally {
-      setInjecting(false);
-      setTimeout(() => setInjectResult(null), 3000);
-    }
+    return handleInject();
   };
 
   return (
@@ -628,17 +595,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                   )}
                 >
                   <Send size={12} />
-                  {injecting ? '...' : useInjectMode ? 'Inject' : 'Send'}
-                </button>
-                <button
-                  onClick={() => setUseInjectMode(!useInjectMode)}
-                  className={clsx(
-                    'text-[10px] px-1.5 py-0.5 rounded transition-colors',
-                    useInjectMode ? 'text-amber-400 bg-amber-500/10' : 'text-neutral-600 hover:text-neutral-400'
-                  )}
-                  title={useInjectMode ? 'Inject mode: types straight into the tmux session' : 'Send mode: durable delivery via msg_store — the agent reads it on its next turn'}
-                >
-                  {useInjectMode ? 'inject' : 'send'}
+                  {injecting ? '...' : 'Send'}
                 </button>
               </div>
             </div>
@@ -724,7 +681,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                 {/* Chat / Dev toggle */}
                 <div className="flex rounded-md border border-neutral-700 overflow-hidden">
                   <button
-                    onClick={() => { setDevMode(false); setUseInjectMode(false); logAction('agent.mode.chat', agent.id); }}
+                    onClick={() => { setDevMode(false); logAction('agent.mode.chat', agent.id); }}
                     className={clsx(
                       'text-[11px] px-2.5 py-1 transition-colors',
                       !devMode ? 'bg-neutral-700 text-neutral-100' : 'text-neutral-500 hover:text-neutral-300'
