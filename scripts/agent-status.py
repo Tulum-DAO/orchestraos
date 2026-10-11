@@ -1623,6 +1623,36 @@ def _fmt_age(seconds: float) -> str:
     return f'{s // 3600}h {(s % 3600) // 60}m'
 
 
+def _grok_status(session: str, proc: dict, now: float) -> dict:
+    """agent-status row for a grok seat. Same top-level shape as
+    the screen path; fail-closed to 'unknown' on any reader error."""
+    try:
+        import grok_context
+        g = grok_context.status_for_pid(proc['pid'])
+    except Exception as e:  # noqa: BLE001 — a reader fault is 'unknown', never a crash
+        g = {'state': 'unknown', 'activity': f'grok reader error: {type(e).__name__}',
+             'model': '', 'context_pct': '', 'context_pct_of_window': None,
+             'sid': None, 'confidence': 'process', 'phase': None}
+    state = g['state']
+    prev = _load_prev(session)
+    since = prev.get('since', now) if prev.get('state') == state else now
+    _persist(session, {'state': state, 'since': since,
+                       'screen_hash': '', 'hash_since': now})
+    return {
+        'session': session, 'state': state, 'activity': g['activity'],
+        'elapsed': '', 'tokens': '', 'tool': '', 'model': g.get('model', ''),
+        'project': '', 'context_pct': g.get('context_pct', ''),
+        'context_pct_of_window': g.get('context_pct_of_window'),
+        'context_pct_of_budget': None,
+        'process': {'pid': proc['pid'], 'cpu': proc['cpu'], 'runtime': 'grok',
+                    'rss_mb': proc['rss_mb'], 'uptime': proc['elapsed']},
+        'screen': {}, 'is_noise': [], 'confidence': g.get('confidence', 'process'),
+        'state_age_s': int(now - since),
+        'runtime': 'grok', 'session_id': g.get('sid'),
+        'menus': 'unsupported (grok)',
+    }
+
+
 def get_agent_status(session: str) -> dict:
     """Full agent status: hooks (tier 0) + process (1) + screen (2) + persisted
     state machine (3). Same shape as v1 plus additive keys."""
@@ -1639,6 +1669,16 @@ def get_agent_status(session: str) -> dict:
         _persist(session, {'state': 'stopped', 'since': now,
                            'screen_hash': '', 'hash_since': now})
         return out
+
+    # --- Grok Build seat -----------------------------
+    # A live `grok` process is read from ITS OWN session store (events.jsonl turn
+    # boundaries, signals.json context), bound by the session UUID spawn pins on its
+    # argv — never from the screen (Grok's TUI chrome is unmeasured: the claude/codex
+    # parsers below would mis-read it) and never from the deriver (its CPU/IO
+    # discriminators have no grok profile). Unreadable => 'unknown', never 'idle'.
+    # Menus/approval cards are not implemented for grok: pending_menu is never reported for grok.
+    if proc.get('runtime') == 'grok':
+        return _grok_status(session, proc, now)
 
     # --- Telemetry-v2 deriver cutover (DEC-1788465233) ---------------------
     # For a LIVE proc, prefer the B1 deriver's fresh status.json — the single

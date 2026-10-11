@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-KNOWN_PROBE_KINDS = ("cli-json", "file-json-key", "file-json-expiry")
+KNOWN_PROBE_KINDS = ("cli-json", "file-json-key", "file-json-expiry", "cli-text")
 
 
 @dataclass
@@ -74,6 +74,19 @@ def _parse_iso_ms(s: str) -> Optional[int]:
     return int(dt.timestamp() * 1000)
 
 
+def cli_text_verdict(stdout: str, probe: dict) -> dict:
+    """The cli-text verdict (twin of cliTextVerdict in runtimes-available.ts). `grok models`
+    answers "You are logged in with ..." / "You are not authenticated." and exits 0 either
+    way, so the TEXT is the answer. Failure is checked first; neither match -> unverified."""
+    import re
+    fail, ok = probe.get("failure_pattern"), probe.get("success_pattern")
+    if fail and re.search(fail, stdout or "", re.M):
+        return {"authed": False, "auth_reason": "signed-out"}
+    if ok and re.search(ok, stdout or "", re.M):
+        return {"authed": True}
+    return {"authed": "unverified", "auth_reason": "auth-probe-no-match"}
+
+
 def run_auth_probe(probe: dict, deps: ProbeDeps) -> dict:
     try:
         kind = probe.get("kind")
@@ -111,6 +124,20 @@ def run_auth_probe(probe: dict, deps: ProbeDeps) -> dict:
             if probe.get("fallback"):
                 return run_auth_probe(probe["fallback"], deps)
             return {"authed": "unverified", "auth_reason": f"auth-probe-missing-key:{key}"}
+
+        if kind == "cli-text":
+            cmd = probe.get("cmd")
+            if not cmd:
+                return {"authed": "unverified", "auth_reason": "no-probe-cmd-configured"}
+            try:
+                out = deps.run_cmd(shlex.split(cmd))
+            except Exception as e:  # noqa: BLE001 — non-zero exit: its stdout may still answer
+                out = getattr(e, "stdout", "") or getattr(e, "output", "") or ""
+                if isinstance(out, bytes):
+                    out = out.decode("utf-8", "replace")
+                if not out.strip():
+                    return {"authed": "unverified", "auth_reason": "auth-probe-cmd-failed"}
+            return cli_text_verdict(out, probe)
 
         if kind == "file-json-key":
             path = deps.expand_home(probe.get("path") or "")

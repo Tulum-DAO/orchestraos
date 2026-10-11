@@ -184,6 +184,102 @@ export function findCodexByDeclaration(agentId: string, dbPath = CODEX_STATE_DB)
   }
 }
 
+// ---- Grok Build (`grok` CLI) -------------------------------------------------------------
+// A grok seat's conversation is $GROK_HOME/sessions/<encoded-cwd>/<uuid>/updates.jsonl. The
+// seat is bound to its session by PROCESS TRUTH: spawn-agent.sh pins the UUID on grok's argv
+// (`-s <uuid>` new, `-r <uuid>` resume), so pane -> grok pid -> argv UUID -> the one session
+// dir with that UUID. No "newest session" guess anywhere (the same rule as
+// scripts/grok_context.py, which the Python side uses; this is its TypeScript twin).
+const GROK_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const GROK_BASENAMES = new Set(['grok', 'grok-linux-x86_64']);
+
+function grokSessionsRoot(): string {
+  return join(process.env.GROK_HOME || join(HOME, '.grok'), 'sessions');
+}
+
+/** The session UUID a grok argv is bound to: -s/--session-id wins, else -r/--resume. A bare
+ *  -r, a title, -c, or no flag is NOT an identity -> null (fail closed). */
+export function grokSidFromArgv(argv: string[]): string | null {
+  if (!argv.length) return null;
+  const base = argv[0].split('/').pop() || '';
+  if (!GROK_BASENAMES.has(base)) return null;
+  const found: Record<string, string> = {};
+  const args = argv.slice(1);
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    for (const [short, long, key] of [['-s', '--session-id', 's'], ['-r', '--resume', 'r']]) {
+      if (a.startsWith(long + '=')) { found[key] ??= a.slice(long.length + 1); }
+      else if (a === short || a === long) {
+        const nxt = args[i + 1];
+        if (nxt !== undefined && !nxt.startsWith('-')) found[key] ??= nxt;
+      }
+    }
+  }
+  for (const key of ['s', 'r']) {
+    if (found[key] !== undefined) return GROK_UUID.test(found[key]) ? found[key] : null;
+  }
+  return null;
+}
+
+/** updates.jsonl for a grok session UUID: exactly one session dir, else null. */
+export function grokUpdatesPath(sid: string, root = grokSessionsRoot()): string | null {
+  if (!GROK_UUID.test(sid)) return null;
+  let hits: string[] = [];
+  try {
+    hits = readdirSync(root).map((d) => join(root, d, sid)).filter((p) => {
+      try { return statSync(p).isDirectory(); } catch { return false; }
+    });
+  } catch { return null; }
+  if (hits.length !== 1) return null;
+  const path = join(hits[0], 'updates.jsonl');
+  return existsSync(path) ? path : null;
+}
+
+function procArgv(pid: string): string[] {
+  try { return readFileSync(`/proc/${pid}/cmdline`).toString().split('\0').filter(Boolean); }
+  catch { return []; }
+}
+
+/** The pane's unique live grok process (pane shell or up to two levels below it), and the
+ *  session UUID on its argv. Two grok processes, or none, -> null. */
+function liveGrokSid(tmuxSession: string): { running: boolean; sid: string | null } {
+  try {
+    const panePid = execFileSync('tmux', ['list-panes', '-t', tmuxSession, '-F', '#{pane_pid}'],
+      { timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim().split('\n')[0];
+    if (!panePid) return { running: false, sid: null };
+    const kids = (pid: string): string[] => {
+      try { return execFileSync('pgrep', ['-P', pid], { timeout: 2000 }).toString().trim().split('\n').filter(Boolean); }
+      catch { return []; }
+    };
+    const isGrok = (pid: string) => GROK_BASENAMES.has((procArgv(pid)[0] || '').split('/').pop() || '');
+    let hits = isGrok(panePid) ? [panePid] : kids(panePid).filter(isGrok);
+    if (!hits.length) for (const k of kids(panePid)) hits = hits.concat(kids(k).filter(isGrok));
+    if (hits.length !== 1) return { running: hits.length > 1, sid: null };
+    return { running: true, sid: grokSidFromArgv(procArgv(hits[0])) };
+  } catch { return { running: false, sid: null }; }
+}
+
+/** A seat that is grok by its own records (runtime field or a grok resume command). */
+function isGrokRow(e: Record<string, any>): boolean {
+  return String(e?.runtime || '').toLowerCase() === 'grok'
+    || /^(\S*\/)?grok\s/.test(String(e?.resume_command || ''));
+}
+
+/** Grok Build writes an ACP-style append-only stream (`method: session/update`).
+ *  The lines are self-describing, so the SSE tail and this route share one sniff. */
+export function looksLikeGrok(lines: string[]): boolean {
+  for (const l of lines.slice(0, 40)) {
+    if (!l.trim()) continue;
+    try {
+      const d = JSON.parse(l);
+      if (d?.method === 'session/update' && typeof d?.params?.update?.sessionUpdate === 'string') {
+        return true;
+      }
+    } catch { /* torn or foreign line */ }
+  }
+  return false;
+}
+
 /** Codex rollout lines are self-describing, so the SSE tail and the poll path cannot disagree
  *  about which parser to use (they call normalizeTranscript independently). */
 export function looksLikeCodex(lines: string[]): boolean {
@@ -353,6 +449,16 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
   const sessions = loadAgentSessions();
   const e = sessions[agentId] || {};
   const tmuxSession = String(e.tmux_session || agentId);
+
+  // 0. Grok: a live grok process on the pane is read from ITS session (argv UUID). A seat that
+  // is grok by its records but has no live process falls back to its stamped session id. A
+  // grok seat never falls through onto a Claude/Codex/Gemini file that shares its cwd.
+  const g = liveGrokSid(tmuxSession);
+  if (g.running || isGrokRow(e)) {
+    const sid = g.sid || (typeof e.session_id === 'string' && GROK_UUID.test(e.session_id) ? e.session_id : null);
+    const path = sid ? grokUpdatesPath(sid) : null;
+    return { path, sid };
+  }
 
   // 0a. Live Gemini/Antigravity process check (inspect active process in tmux pane)
   const gSid = liveGeminiSid(tmuxSession);
@@ -832,16 +938,19 @@ function toolSummary(tool: string, input: Record<string, unknown>): string {
   switch (tool) {
     case 'Bash':
     case 'run_command':
+    case 'run_terminal_command':
       out = s(input.CommandLine || input.command || '');
       break;
     case 'Read':
     case 'view_file':
-      out = shortPath(s(input.AbsolutePath || input.file_path || input.path || ''));
+    case 'read_file':
+      out = shortPath(s(input.AbsolutePath || input.file_path || input.path || input.target_file || ''));
       break;
     case 'Edit':
     case 'replace_file_content':
     case 'Write':
     case 'write_to_file':
+    case 'search_replace':
       out = shortPath(s(input.TargetFile || input.file_path || ''));
       break;
     case 'NotebookEdit':
@@ -853,6 +962,7 @@ function toolSummary(tool: string, input: Record<string, unknown>): string {
       break;
     case 'Grep':
     case 'grep_search':
+    case 'grep':
       out = `${s(input.Query || input.pattern || '')}${input.SearchPath || input.path ? ' in ' + shortPath(s(input.SearchPath || input.path)) : ''}`;
       break;
     case 'Task':
@@ -1003,6 +1113,157 @@ export function buildRenderItems(items: any[]): any[] {
   return nodes;
 }
 
+const GROK_RESULT_CAP = 4000;
+const GROK_TEXT_UPDATES = new Set(['user_message_chunk', 'agent_message_chunk', 'agent_thought_chunk']);
+
+function grokIso(rec: any): string | undefined {
+  const ms = rec?.params?._meta?.agentTimestampMs;
+  const sec = rec?.timestamp;
+  const n = typeof ms === 'number' ? ms : (typeof sec === 'number' ? sec * 1000 : NaN);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  const iso = new Date(n).toISOString();
+  return Number.isNaN(Date.parse(iso)) ? undefined : iso;
+}
+
+/** updates.jsonl user chunks are already the operator's text. chat_history.jsonl
+ *  wraps that text in harness blocks; unwrap <user_query> if a chunk ever carries it. */
+function grokUserText(raw: string): { text: string; system: boolean } {
+  const q = raw.match(/<user_query>\s*([\s\S]*?)\s*<\/user_query>/);
+  if (q && q[1].trim()) return { text: q[1].trim(), system: false };
+  const t = raw.trim();
+  if (/^<(system-reminder|user_info|rules|available_skills|memory-context|dangerous_actions)\b/.test(t)) {
+    return { text: t, system: true };
+  }
+  return { text: t, system: false };
+}
+
+function capGrokResult(text: string): string {
+  const t = text.trim();
+  if (t.length <= GROK_RESULT_CAP) return t;
+  return t.slice(0, GROK_RESULT_CAP) + TRUNC_MARK;
+}
+
+function grokToolName(upd: any): string {
+  const meta = upd?._meta?.['x.ai/tool'];
+  if (meta && typeof meta.name === 'string' && meta.name) return meta.name;
+  return typeof upd?.title === 'string' ? upd.title : '';
+}
+
+function grokToolInput(upd: any): Record<string, unknown> {
+  const raw = upd?.rawInput;
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
+  return {};
+}
+
+function grokContentText(content: any): string {
+  if (!Array.isArray(content)) return '';
+  const parts: string[] = [];
+  for (const c of content) {
+    if (!c || typeof c !== 'object') continue;
+    if (c.type === 'diff') {
+      parts.push(typeof c.path === 'string' && c.path ? `edited ${c.path}` : 'edited');
+    } else if (c.type === 'content' && c.content && typeof c.content.text === 'string') {
+      parts.push(c.content.text);
+    } else if (typeof c.text === 'string') {
+      parts.push(c.text);
+    }
+  }
+  return parts.join('\n');
+}
+
+/** Map Grok `updates.jsonl` onto the flat item grammar. Adjacent text chunks
+ *  coalesce (token streaming). Tool progress updates are dropped; a completed
+ *  update, and a later task_completed for the same id, become the tool result. */
+export function parseGrokUpdates(lines: string[]): any[] {
+  type Rec = { su: string; upd: any; ts: string | undefined; uuid: string };
+  const recs: Rec[] = [];
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const d = JSON.parse(line);
+      const upd = d?.params?.update;
+      if (!upd || typeof upd.sessionUpdate !== 'string') continue;
+      recs.push({
+        su: upd.sessionUpdate,
+        upd,
+        ts: grokIso(d),
+        uuid: String(d?.params?._meta?.eventId || upd.toolCallId || ''),
+      });
+    } catch { /* torn final line while the seat is still writing */ }
+  }
+
+  const merged: Rec[] = [];
+  for (const r of recs) {
+    const prev = merged[merged.length - 1];
+    if (prev && GROK_TEXT_UPDATES.has(r.su) && prev.su === r.su) {
+      const a = typeof prev.upd?.content?.text === 'string' ? prev.upd.content.text : '';
+      const b = typeof r.upd?.content?.text === 'string' ? r.upd.content.text : '';
+      prev.upd = { ...prev.upd, content: { ...(prev.upd?.content || {}), type: 'text', text: a + b } };
+      continue;
+    }
+    merged.push(r);
+  }
+
+  const items: any[] = [];
+  for (const r of merged) {
+    const upd = r.upd || {};
+    if (r.su === 'user_message_chunk' || r.su === 'agent_message_chunk') {
+      const raw = typeof upd?.content?.text === 'string' ? upd.content.text : '';
+      const role = r.su === 'user_message_chunk' ? 'user' : 'assistant';
+      const parsed = role === 'user' ? grokUserText(raw) : { text: raw.trim(), system: false };
+      if (!parsed.text) continue;
+      const it: any = withTs({ kind: 'text', role, text: parsed.text, uuid: r.uuid }, r.ts);
+      if (parsed.system) it.is_system = true;
+      items.push(it);
+      continue;
+    }
+    if (r.su === 'agent_thought_chunk') {
+      const text = typeof upd?.content?.text === 'string' ? upd.content.text.trim() : '';
+      if (!text) continue;
+      items.push(withTs({ kind: 'thinking', role: 'assistant', text, uuid: r.uuid }, r.ts));
+      continue;
+    }
+    if (r.su === 'tool_call') {
+      const id = String(upd.toolCallId || '');
+      items.push(withTs({
+        kind: 'tool_use', role: 'assistant',
+        tool: grokToolName(upd),
+        input: grokToolInput(upd),
+        id,
+        uuid: r.uuid || id,
+      }, r.ts));
+      continue;
+    }
+    if (r.su === 'tool_call_update' && upd.status === 'completed') {
+      const id = String(upd.toolCallId || '');
+      items.push(withTs({
+        kind: 'tool_result', role: 'user',
+        text: capGrokResult(grokContentText(upd.content)),
+        tool_use_id: id,
+        is_error: false,
+        uuid: r.uuid || id,
+      }, r.ts));
+      continue;
+    }
+    if (r.su === 'task_completed') {
+      const snap = upd.task_snapshot || {};
+      const id = String(snap.task_id || '');
+      if (!id) continue;
+      const output = typeof snap.output === 'string' ? snap.output : '';
+      const code = snap.exit_code;
+      const text = capGrokResult([code == null ? '' : `exit: ${code}`, output].filter(Boolean).join('\n'));
+      items.push(withTs({
+        kind: 'tool_result', role: 'user',
+        text,
+        tool_use_id: id,
+        is_error: typeof code === 'number' && code !== 0,
+        uuid: r.uuid || id,
+      }, r.ts));
+    }
+  }
+  return items;
+}
+
 // Pure v2 envelope builder — the seam the conformance fixtures exercise.
 // Detection mirrors the route: 'antigravity-cli' path hint OR content sniff.
 export function normalizeTranscript(
@@ -1024,6 +1285,8 @@ export function normalizeTranscript(
   let items: any[] = [];
   if (isAntigravity) {
     items = normalizeAntigravity(lines);
+  } else if (looksLikeGrok(lines)) {
+    items = parseGrokUpdates(lines);
   } else if (looksLikeCodex(lines)) {
     // Detected from the lines themselves, NOT from a caller-passed hint: transcript-tail.ts (SSE)
     // and this route (poll) call normalizeTranscript independently, and a hint only one of them

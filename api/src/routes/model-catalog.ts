@@ -31,7 +31,7 @@ function shQuote(s: string): string {
 }
 
 export interface ModelProbeConfig {
-  kind: 'tsv-stdout' | 'stdin-json-stream' | 'jsonrpc-stdio';
+  kind: 'tsv-stdout' | 'stdin-json-stream' | 'jsonrpc-stdio' | 'line-regex';
   /** Whole command line, split on spaces (same convention as auth_probe.cmd). */
   cmd: string;
   timeout_ms?: number;
@@ -40,6 +40,12 @@ export interface ModelProbeConfig {
   // preambles such as "Fetching available models...") are skipped.
   id_field?: number;
   label_field?: number;
+
+  // line-regex: one model per stdout line matching `line_re` (capture group 1 = the id); a
+  // matching line that also matches `default_re` is the login's default. Every other line
+  // (a sign-in banner, headings) is skipped. `grok models` prints "  * grok-4.7 (default)".
+  line_re?: string;
+  default_re?: string;
 
   // stdin-json-stream: write `stdin`, then read the one output line whose
   // shallow keys equal `match`.
@@ -194,6 +200,19 @@ function runProbe(cfg: ModelProbeConfig, exec: ProbeExec, notes: string[]): RawM
       const id = fields[idField];
       if (!id) continue;
       rows.push({ id, label: fields[labelField] || undefined });
+    }
+    return rows;
+  }
+
+  if (cfg.kind === 'line-regex') {
+    const stdout = exec(bin, args, { timeoutMs });
+    const lineRe = new RegExp(cfg.line_re || '^\\s*(\\S+)\\s*$');
+    const defRe = cfg.default_re ? new RegExp(cfg.default_re) : null;
+    const rows: RawModel[] = [];
+    for (const line of stdout.split('\n')) {
+      const m = line.match(lineRe);
+      if (!m || !m[1]) continue;
+      rows.push({ id: m[1], ...(defRe && defRe.test(line) ? { isDefault: true } : {}) });
     }
     return rows;
   }

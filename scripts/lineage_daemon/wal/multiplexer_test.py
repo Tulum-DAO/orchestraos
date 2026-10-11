@@ -89,8 +89,11 @@ def test_make_adapter_dispatches_by_runtime():
         assert isinstance(make_adapter("claude", st, "r", 0), ClaudeWalAdapter)
         assert isinstance(make_adapter("codex", st, "r", 0), CodexWalAdapter)
         assert isinstance(make_adapter("gemini", st, "r", 0), GeminiWalAdapter)
-        # unknown runtime fails SAFE to claude (runtime_signatures precedent)
-        assert isinstance(make_adapter("wat", st, "r", 0), ClaudeWalAdapter)
+        # unknown runtime is REFUSED, never tailed by the claude parser (deny-by-default)
+        import pytest
+        for rt in ("wat", "", None, "service", "agy"):
+            with pytest.raises(ValueError, match="deny-by-default"):
+                make_adapter(rt, st, "r", 0)
 
 
 # --- multiplex: one process, N cursors --------------------------------------

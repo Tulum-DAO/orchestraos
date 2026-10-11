@@ -20,7 +20,8 @@ from pathlib import Path
 
 from . import settings as S
 
-DEFAULT_MODEL = {"claude": "claude-opus-5[1m]", "gemini": "gemini-3.7-flash", "codex": "gpt-5.6-terra"}
+DEFAULT_MODEL = {"claude": "claude-opus-5[1m]", "gemini": "gemini-3.7-flash", "codex": "gpt-5.6-terra",
+                 "grok": "grok-4.7"}
 
 
 def _run(argv, env=None, cwd=None) -> int:
@@ -286,7 +287,8 @@ def _refuse_if_runtime_unusable(st: S.Settings, seat: str, runtime: str) -> int 
     if why is None:
         return None
     login = {"codex": "`codex login` (on a server without a browser: `codex login --device-auth`)",
-             "gemini": "`agy` once and complete its sign-in", "claude": "`claude` once and complete its login"}
+             "gemini": "`agy` once and complete its sign-in", "claude": "`claude` once and complete its login",
+             "grok": "`grok login --device-auth` and complete its sign-in"}
     print(f"refusing to spawn {seat} on {runtime}: {why}.\n"
           f"  Install or log in to it (run {login.get(runtime, 'its CLI once')}), or pick another runtime with "
           f"--runtime.\n  `orchestra doctor` shows every runtime it found.", file=sys.stderr)

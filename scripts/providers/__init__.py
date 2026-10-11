@@ -25,10 +25,21 @@ _PROCESS_BASENAME = {
     "claude": "claude",
     "codex": "codex",
     "gemini": "agy",
+    # Grok Build CLI. A static ELF invoked as ~/.local/bin/grok,
+    # so argv[0]'s basename is 'grok'.
+    "grok": "grok",
+}
+
+# Extra argv[0] basenames that are the SAME runtime binary under its installer name
+# (~/.grok/downloads/grok-linux-x86_64 is what ~/.local/bin/grok resolves to). Liveness
+# only; process_basename() still answers the one canonical name.
+_BASENAME_ALIASES = {
+    "grok-linux-x86_64": "grok",
 }
 
 # basename -> provider. Inverted from the above so the two can never drift.
 _RUNTIME_BY_BASENAME = {v: k for k, v in _PROCESS_BASENAME.items()}
+_RUNTIME_BY_BASENAME.update(_BASENAME_ALIASES)
 
 
 def provider_for(agent_id, registry):

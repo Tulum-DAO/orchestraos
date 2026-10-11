@@ -119,7 +119,7 @@ vps_hostname = ""
 # entries to match what you have installed and authenticated; see
 # config/providers.json for the full per-provider probe definitions this list
 # selects from.
-enabled = ["claude", "gemini", "codex"]
+enabled = ["claude", "gemini", "codex", "grok"]
 
 [telemetry]
 # telemetryd: the working/idle/streaming truth behind the agents page and the router's

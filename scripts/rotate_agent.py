@@ -41,7 +41,7 @@ sys.path.insert(0, str(CODE_ROOT / "scripts"))
 
 from registry_lock import registry_lock
 import promote_successor as promoter
-from runtime_signatures import resolve_runtime
+from runtime_signatures import refuse_if_phase2_unsupported, resolve_runtime
 from lineage_daemon.auto_grade import auto_grade_successor
 
 
@@ -933,6 +933,9 @@ def execute_rotation(
 
     # Step 1: Inspect predecessor
     pred = get_agent_registry(seat_name)
+    # Rotation is not implemented for grok: refuse BEFORE any generation is minted or any
+    # successor spawned (Phase2Unsupported is a RuntimeError, like the other refusals here).
+    refuse_if_phase2_unsupported(runtime_override or pred.get("runtime"), "rotation")
     pred_gen = resolve_pred_generation_or_refuse(seat_name, pred)
     succ_gen = pred_gen + 1
     succ_alias = f"{seat_name}-g{succ_gen}"

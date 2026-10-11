@@ -117,14 +117,40 @@ _CODEX = ProviderProfile(
             "idle_placeholder_persists_during_compute": True},
 )
 
-PROFILES = {"claude": _CLAUDE, "gemini": _GEMINI, "codex": _CODEX}
+# grok (Grok Build CLI) — UNMEASURED. An explicit entry so profile_for("grok") never falls
+# back to the claude constants (claude's chrome regexes / hook-recency veto are claude facts,
+# not grok facts). The idle CPU floor, the band and the TUI chrome are not measured, so this
+# is the most conservative shape the deriver supports: the CPU axis is declared UNRELIABLE
+# (bytes + IO-delta decide, like codex), there are no chrome regexes (no pty-signature match
+# can fire), and the hook-recency veto is off (grok seats run with Claude-compat hooks off).
+# agent-status does NOT use this profile for grok: its rows come from grok_context
+# (events.jsonl turn boundaries). This only keeps telemetryd's status.json honest.
+_GROK = ProviderProfile(
+    provider="grok",
+    idle_baseline_core_pct=0.0,            # UNMEASURED (unused: cpu_axis_reliable=False)
+    idle_band_core_pct=(0.0, 0.0),         # UNMEASURED
+    eps_cpu_core_pct=0.6,                  # weak hint only, as codex
+    eps_io_bytes=4096,
+    window_s=2.0,
+    smoothing="median-of-3",
+    cpu_axis_reliable=False,
+    idle_baseline_measured=False,          # unmeasured
+    # Same NUL-led sentinel as runtime_signatures.PROMPT_SIGNATURES["grok"]: it can
+    # never occur in pane text, so nothing keys off an unmeasured glyph.
+    prompt_char="\x00grok-composer-unverified",
+    hook_recency_s=0.0,
+    chrome={},
+)
+
+PROFILES = {"claude": _CLAUDE, "gemini": _GEMINI, "codex": _CODEX, "grok": _GROK}
 DEFAULT = "claude"
 
 
 def profile_for(runtime):
     """Resolve a provider profile; unknown/None fails SAFE to claude (the
     runtime_signatures unknown->claude precedent — never widen a surface for an
-    unrecognized runtime)."""
+    unrecognized runtime). Every declared runtime (claude, gemini/agy, codex, grok)
+    has its OWN entry; only an undeclared runtime reaches the claude fallback."""
     rt = (runtime or "").strip().lower()
     if rt == "agy":
         rt = "gemini"

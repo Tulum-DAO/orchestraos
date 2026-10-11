@@ -415,7 +415,15 @@ class RuntimeRefused(ValueError):
     """A runtime is missing/unknown/non-resumable — refuse, never default."""
 
 
-def resume_command_for(runtime: str, sid: str) -> str:
+import shlex as _shlex
+
+_MODEL_SENTINELS = frozenset({"unknown", "n/a", "none", "null", "-"})
+
+_GROK_UUID_RE = __import__("re").compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def resume_command_for(runtime: str, sid: str, model: str | None = None) -> str:
     """Build the resume command for a seat's runtime — PURE, and it RAISES on a
     missing/unknown/non-resumable runtime (spec §4.1). The historical inline
     branch (promote_successor.py:794-799) DEFAULTED to `claude --resume` when
@@ -426,6 +434,7 @@ def resume_command_for(runtime: str, sid: str) -> str:
       claude          -> claude --resume <sid> ...
       gemini / agy    -> agy --conversation <sid> ...
       codex           -> codex --yolo resume <sid>
+      grok            -> grok --always-approve --minimal --no-alt-screen -r <uuid> [-m grok-*]
       '' / None       -> RuntimeRefused (undeclared)
       service         -> RuntimeRefused (a process, not a resumable seat)
       other           -> RuntimeRefused
@@ -448,6 +457,20 @@ def resume_command_for(runtime: str, sid: str) -> str:
         return f"agy --conversation {sid} --dangerously-skip-permissions"
     if rt == "codex":
         return f"codex --yolo resume {sid}"
+    if rt == "grok":
+        # The SAME shape spawn-agent.sh launches a resumed grok seat
+        # with (grok --help: `-r, --resume [<SESSION_ID_OR_TITLE>]`, `-m, --model`).
+        # Only a grok-* model is passed: a claude/sentinel model on the row must never
+        # reach grok's -m. The sid is UUID-checked because a bare `-r` / a title means
+        # "whatever grok picks", which is not this seat's identity.
+        if not _GROK_UUID_RE.match(sid):
+            raise RuntimeRefused(
+                f"resume_command_for: grok sid {sid!r} is not a session UUID")
+        cmd = f"grok --always-approve --minimal --no-alt-screen -r {sid}"
+        m = (model or "").strip()
+        if m and m.lower() not in _MODEL_SENTINELS and m.lower().startswith("grok"):
+            cmd += f" -m {_shlex.quote(m)}"
+        return cmd
     raise RuntimeRefused(
         f"resume_command_for: unknown runtime {runtime!r} has no "
         f"resume adapter — refuse, never default to claude (spec §4.1)")

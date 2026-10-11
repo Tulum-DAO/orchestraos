@@ -42,7 +42,7 @@ def mr(tmp_path, monkeypatch):
         "cl": {"name": "cl", "runtime": "claude", "model": "claude-opus-5"},
         "old": {"name": "old", "model": "gemini-3.7-flash"},            # no runtime field (legacy row)
         "oldc": {"name": "oldc", "model": "claude-opus-5"},
-        "typo": {"name": "typo", "runtime": "grok"},                     # no signature in this install
+        "typo": {"name": "typo", "runtime": "mistral"},                     # no signature in this install
     }}))
     monkeypatch.setattr(rs, "REGISTRY", reg)
     monkeypatch.setattr(m, "UNKNOWN_RUNTIME_WARNED", tmp_path / "data" / "state" / "warned.json")
@@ -118,7 +118,7 @@ def test_unknown_runtime_value_warns_once_per_seat_and_takes_the_old_path(mr):
     assert mr.routing_runtime("typo") == "claude"
     assert mr.routing_runtime("typo") == "claude"
     warns = [l for l in mr._logs if "typo" in l and "WARNING" in l]
-    assert len(warns) == 1 and "'grok'" in warns[0] and "no prompt signature" in warns[0]
+    assert len(warns) == 1 and "'mistral'" in warns[0] and "no prompt signature" in warns[0]
     # a fresh router process (every cron tick) must not warn again
     mr._logs.clear()
     assert mr.routing_runtime("typo") == "claude"

@@ -91,7 +91,8 @@ def test_recovery_holder_scan_enumerates_each_runtime_and_detects_codex_holder(t
             env=env, capture_output=True, text=True, check=False,
         )
         assert proc.returncode == 0
-        assert calls.read_text().splitlines() == ["-x claude", "-x agy", "-x codex"]
+        assert calls.read_text().splitlines() == ["-x claude", "-x agy", "-x codex",
+                                                  "-x grok", "-x grok-linux-x86_64"]
     finally:
         holder.terminate()
         holder.wait(timeout=5)

@@ -171,6 +171,7 @@ export function prettyModel(id: string): string {
   if (m.startsWith('gemini')) return m.replace('gemini-', 'Gemini ').replace(/-/g, ' ');
   if (m.startsWith('gpt')) return m.toUpperCase().replace(/-/g, ' ');
   if (m === 'codex') return 'Codex';
+  if (m.startsWith('grok')) return m.replace('grok-', 'Grok ').replace(/-/g, ' ').replace(/\b(build|fast)\b/g, (w) => w[0].toUpperCase() + w.slice(1));
   return id;
 }
 

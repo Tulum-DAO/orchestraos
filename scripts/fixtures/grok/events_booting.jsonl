@@ -1,0 +1,5 @@
+{"ts":"2000-01-01T00:00:00.000Z","type":"mcp_config_resolved","servers":[{"name":"mcp0","transport":"stdio","source":"local"},{"name":"mcp1","transport":"stdio","source":"local"},{"name":"mcp2","transport":"http","source":"local"},{"name":"mcp3","transport":"http","source":"local"}],"disabled":[]}
+{"ts":"2000-01-01T00:00:01.000Z","type":"mcp_server_starting","server_name":"mcp0","transport":"http","target":"<scrubbed>","timeout_sec":30}
+{"ts":"2000-01-01T00:00:02.000Z","type":"mcp_server_starting","server_name":"mcp1","transport":"http","target":"<scrubbed>","timeout_sec":30}
+{"ts":"2000-01-01T00:00:03.000Z","type":"mcp_server_starting","server_name":"mcp2","transport":"stdio","target":"<scrubbed>","timeout_sec":30}
+{"ts":"2000-01-01T00:00:04.000Z","type":"mcp_server_starting","server_name":"mcp3","transport":"stdio","target":"<scrubbed>","timeout_sec":30}

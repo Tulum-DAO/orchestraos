@@ -6,7 +6,7 @@ Leg A (spawn_adopt.py) guards only spawns that go through spawn-agent.sh. A raw
 rows — invisible to routing/recovery, orphan/dual-chip on the operator's surface. This
 scanner is the beat-driven detector for that route-around:
 
-    live AGENT-CLI pane (claude/agy/gemini/codex child) whose tmux session name
+    live AGENT-CLI pane (claude/agy/gemini/codex/grok child) whose tmux session name
     resolves to NO identity-store lineage  ->  ALERT gm (chip), debounced.
 
 HARD RULES: chip-only — this module NEVER terminates anything (a false positive
@@ -35,7 +35,10 @@ from scripts.identity_store import orchestra_db  # noqa: E402
 # Agent-CLI basenames: only these child processes make a pane "agent-like".
 # Service panes (python3 watch_gateway.py, node dashboard-proxy.js, bare
 # shells) never flag regardless of session name.
-AGENT_CLI_BASENAMES = ("claude", "agy", "gemini", "codex")
+# ``grok`` is the launcher name
+# (~/.local/bin/grok) and ``grok-linux-x86_64`` the installer's real ELF; argv[0] is whichever
+# it was invoked by. Kept a superset of rotation_engine.adapters.AGENT_BINARIES (tested).
+AGENT_CLI_BASENAMES = ("claude", "agy", "gemini", "codex", "grok", "grok-linux-x86_64")
 
 # Re-alert cadence for a STILL-LIVE orphan (debounce; chip, not a siren).
 ALERT_TTL_S = 6 * 3600

@@ -124,6 +124,13 @@ def _warn_unknown_runtime_once(agent_id: str, value: str) -> None:
         pass   # worst case the warning repeats; never block delivery on bookkeeping
 
 
+#: Runtimes the router ALWAYS resolves, declared or not, armed or not. A grok seat must never
+#: be judged by claude's prompt glyph (the Grok TUI in --minimal mode also draws a '❯'), so
+#: an undeclared grok-* row resolves to grok and its own fail-closed gate (_grok_is_idle)
+#: decides. Every non-grok row is unchanged.
+ALWAYS_RESOLVED_RUNTIMES = frozenset({"grok"})
+
+
 def routing_runtime(agent_id: str, meta: dict | None = None) -> str:
     """The runtime whose signature/idle gate the router applies to ``agent_id``
     (same name and shape as the live grok-phase1 router; DEC-1791656515249463).
@@ -139,7 +146,10 @@ def routing_runtime(agent_id: str, meta: dict | None = None) -> str:
             return rt
         if unknown is not None:
             _warn_unknown_runtime_once(agent_id, unknown)
-    return agent_runtime(agent_id, meta) if gemini_idle_routing_armed() else DEFAULT_RUNTIME
+    rt = agent_runtime(agent_id, meta)
+    if rt in ALWAYS_RESOLVED_RUNTIMES:
+        return rt   # an undeclared grok-* row is judged by grok's own (holding) gate
+    return rt if gemini_idle_routing_armed() else DEFAULT_RUNTIME
 
 
 # Layer B (Bug 2, live-but-unreachable panes): 4-class classifier EXTENDING
@@ -501,6 +511,31 @@ def _hook_says_working_fresh(session: str) -> bool:
             and (time.time() - ts) <= _hook_working_ttl_s())
 
 
+def _grok_is_idle(session: str, sig: dict) -> bool:
+    """Grok idle gate. HOLD-BY-DEFAULT; delivers only when ALL of:
+      1. delivery is armed (env ROUTER_GROK_DELIVERY_ARMED=1 or ~/runtime sentinel),
+      2. the grok composer signature is VERIFIED (runtime_signatures 'verified'),
+      3. the seat's own events.jsonl says its last turn ENDED (grok_context),
+      4. the composer line carries no human-typed text (same input_line_state check).
+    The pane's claude-era hook file is NOT consulted (a pane outlives its occupants).
+    Any failure => False: the row stays pending and note_hold SLA-escalates it."""
+    try:
+        import grok_context
+        ok, why = grok_context.router_idle(
+            session, signature_verified=bool(sig.get("verified", False)))
+    except Exception as e:  # noqa: BLE001 — a reader fault holds, never crashes the cycle
+        ok, why = False, f"grok-reader-error:{type(e).__name__}"
+    if not ok:
+        return False
+    ansi = tmux("capture-pane", "-t", session, "-e", "-p")
+    if ansi.returncode != 0:
+        return False
+    prompt_lines = [l for l in ansi.stdout.split("\n") if sig["prompt_char"] in l]
+    if not prompt_lines:
+        return False
+    return input_line_state(prompt_lines[-1], sig) != "typed"
+
+
 def agent_is_idle(session: str, runtime: str = DEFAULT_RUNTIME) -> bool:
     """Idle = not generating, no human mid-composition, pane stable.
 
@@ -517,6 +552,9 @@ def agent_is_idle(session: str, runtime: str = DEFAULT_RUNTIME) -> bool:
     """
     sig = PROMPT_SIGNATURES.get(runtime, PROMPT_SIGNATURES[DEFAULT_RUNTIME])
     prompt_char = sig["prompt_char"]
+
+    if runtime == "grok":
+        return _grok_is_idle(session, sig)
 
     hs = hook_state(session)
     if hs is not None:
@@ -867,6 +905,19 @@ def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
         cap0 = tmux("capture-pane", "-t", session, "-p")
         if cap0.returncode == 0 and codex_pane_is_busy(cap0.stdout):
             log(f"codex pane {session} is WORKING — busy-hold, no inject (queue-not-submit semantics)")
+            return "stuck"
+
+    # Stage 0.45 (grok busy-hold): re-check the seat's own
+    # events.jsonl right before typing — a turn that started since the idle gate means
+    # the paste would land mid-turn. Holds; never types.
+    if runtime == "grok":
+        try:
+            import grok_context
+            _gst = grok_context.seat_turn_state(session)["state"]
+        except Exception:  # noqa: BLE001
+            _gst = "unknown"
+        if _gst != "idle":
+            log(f"grok pane {session} turn state={_gst} — busy-hold, no inject")
             return "stuck"
 
     # Stage 0.5 (E7 repaste guard): an existing chip means a stranded prior
