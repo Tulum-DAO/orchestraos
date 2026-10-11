@@ -60,6 +60,14 @@ def build_process_table(st: Settings) -> list:
         # approvals surface; the operator's answer is driven back into the pane.
         ProcEntry("menu_bridge", "beat", [py, str(root / "scripts" / "menu_bridge.py"), "--cron"], cwd,
                   interval=60, enabled=st.menu_bridge_enabled, note="in-agent menus -> decision cards ([menus] bridge_enabled)"),
+        # Identity store: when the cutover is armed, the database is the identity truth and the
+        # regenerator daemon rewrites registry.json / agent-sessions.json from it after every
+        # write. Boot recovery used to be the only thing that started it, once, so a crash froze
+        # every reader's view of the fleet. `start-if-armed` is a no-op when the daemon is already
+        # running or the store is not armed.
+        ProcEntry("identity_regenerator", "beat",
+                  [py, "-m", "scripts.identity_store.regenerator", "start-if-armed"], cwd,
+                  interval=60, note="keep the identity projection daemon running (no-op unless armed)"),
         # Telegram channel plugin: inbound long-poll -> gm inbox, cards -> phone with buttons.
         # Off unless [plugins.telegram] enabled = true AND TELEGRAM_BOT_TOKEN is in the env.
         ProcEntry("telegram", "service", [py, str(root / "plugins" / "telegram" / "router.py")], cwd,

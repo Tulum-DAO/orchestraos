@@ -671,6 +671,27 @@ Smoke check: run `orchestra doctor` and look for its `api:health` row (it probes
 your own `[api] port`). Or, on the default port 8888 only:
 `curl -s http://127.0.0.1:8888/api/health` → `{"status":"ok", "db":{"open":true}, ...}`.
 
+### Seat identity (the identity store)
+
+Every seat's identity (its lineage, each generation's session id and model, which generation is
+live, and its status) lives in one SQLite database, `<data>/state/orchestra-registry.db`.
+`registry.json`, `state/agent-sessions.json` and `state/agents/*.json` are read-only projections
+of it that the `identity_regenerator` beat keeps current; never edit them by hand.
+
+`orchestra init` arms the store on a new data dir. On a data dir that already has seats and was
+set up before that (its `orchestra init` / `orchestra upgrade` prints `identity ... not armed`),
+run it once:
+
+```bash
+orchestra identity arm --dry-run   # import into a scratch copy and check nothing would change
+orchestra identity arm             # back up, import, verify zero drift, arm, start the regenerator
+orchestra identity status
+```
+
+It refuses and changes nothing if the import would change what any reader sees. Until a data dir
+is armed, seats are never recorded as `online`, their session ids are never saved, and boot
+recovery has nothing to resume after a reboot.
+
 ### Start on boot (systemd)
 
 `orchestra up --detach` does not survive a reboot. To have the server bring everything back on
