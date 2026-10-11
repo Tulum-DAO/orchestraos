@@ -8,7 +8,8 @@
  * This is the single chat rendering grammar intended to be shared with iOS
  * (ConversationView). Send transport reuses the existing gateway injection.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { isNearBottom } from '../../lib/liveFeedScroll';
 import { buildRenderList, fetchTranscript, type ChatItem } from '../../lib/transcript';
 import { subscribeTranscriptStream } from '../../lib/transcriptStream';
 import { GroupedNodeView } from './TranscriptCards';
@@ -135,16 +136,21 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   // "agent is working…" claim from it.
   const live = !feed || (!isDegraded(feed) && feed.health !== 'updating');
 
-  // autoscroll if pinned to bottom
+  // FOLLOW THE TAIL ONLY WHILE THE READER IS AT IT. A reader who scrolled up stays where they
+  // are when a message lands; one at the bottom is kept there. A layout effect, so a new message
+  // is never painted once at the old position and then jumped.
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    atBottom.current = isNearBottom(el.scrollTop, el.scrollHeight, el.clientHeight, 120);
   };
-  useEffect(() => {
+  // Another seat's transcript (the panel and the page keep this view mounted across seats) opens
+  // at ITS newest message, not wherever the previous one was left.
+  useLayoutEffect(() => { atBottom.current = true; }, [agentId]);
+  useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el && atBottom.current) el.scrollTop = el.scrollHeight;
-  }, [flat.length]);
+  }, [flat.length, agentId]);
 
   return (
     <div className={compact ? 'space-y-2' : 'flex flex-col flex-1 min-h-0'}>
@@ -172,15 +178,19 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
             // CAPPED AND CENTRED (Shaw: prose ran ~1460px wide and the input ~1660px — unreadable,
             // and the right edges of tool cards and user bubbles were 130px apart because each
             // sized itself to a different container). ONE column, one pair of edges, shared with
-            // the composer. `justify-end` anchors the conversation to the BOTTOM like every chat
-            // app, closing the ~400px dead gap between the last message and the composer.
-            : 'flex-1 overflow-y-auto min-h-0 overscroll-y-contain flex flex-col justify-end'
+            // the composer. The column below is anchored to the BOTTOM like every chat app by its
+            // `mt-auto`, NOT by `justify-end` here: in a scrolling flex column `justify-end` makes
+            // the overflow spill out of the TOP edge, where no scrollbar, wheel or touch can reach,
+            // so a transcript taller than the pane could never be scrolled back (Shaw, 2026-10-11).
+            // An auto margin only takes free space, so a short chat still sits on the composer and
+            // a long one overflows downward and scrolls.
+            : 'flex-1 overflow-y-auto min-h-0 overscroll-y-contain flex flex-col'
         }
       >
         {/* --composer-h: the agent page's FLOATING composer height, so the last message clears the
             pill. Unset everywhere else (the Agents-page panel, the harness): 0, i.e. py-4 as before. */}
         <div
-          className={compact ? undefined : "w-full max-w-[860px] mx-auto px-4 pt-4 space-y-2.5"}
+          className={compact ? undefined : "mt-auto w-full max-w-[860px] mx-auto px-4 pt-4 space-y-2.5"}
           style={compact ? undefined : { paddingBottom: 'calc(var(--composer-h, 0px) + 1rem)' }}
         >
         {loading ? (

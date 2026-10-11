@@ -1,4 +1,6 @@
+import { useContext } from 'react';
 import { Menu, Sun, Moon, Monitor, Brain, Siren } from 'lucide-react';
+import { HeaderEndSlotContext } from '../../lib/headerSlot';
 import { useTheme } from '../../theme/ThemeProvider';
 import { GenChip } from '../GenChip';
 
@@ -15,6 +17,7 @@ interface TopBarProps {
 
 export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen, seat, mode = 'chat', onModeChange }: TopBarProps) {
   const { theme, setTheme } = useTheme();
+  const registerEndSlot = useContext(HeaderEndSlotContext);
 
   const cycleTheme = () => {
     const themes: Array<'light' | 'dark' | 'system'> = ['light', 'dark', 'system'];
@@ -46,9 +49,12 @@ export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen, seat, mode = 'ch
       )}
 
 
-      {/* DashboardLayout owns one shared notification bell. Reserve its desktop slot so the
-          fixed control is visually the final member of this row without mounting another poller. */}
-      <div className="ml-auto flex items-center gap-1 md:pr-12">
+      {/* DashboardLayout owns the one shared notification bell (#400) and portals it into the
+          end slot below on desktop, so it is a real member of this row: same flex line, same
+          centre as the icons beside it. (It used to be a FIXED box at top-4, with right padding
+          here reserving room for it; this bar's top padding is env(safe-area-inset-top), not py-3's
+          12px, so the fixed bell sat 16px below the row.) */}
+      <div className="ml-auto flex items-center gap-1">
         {/* Chat / Dev, the same switch the Agents page's panel has: this page is where the rail and
             Arturo send you for a seat, and without it the seat's terminal could not be reached. */}
         {onModeChange && (
@@ -103,6 +109,9 @@ export function TopBar({ onMenuOpen, onBrainOpen, onReportOpen, seat, mode = 'ch
         >
           <Brain size={24} />
         </button>
+        {/* The shared bell's desktop home (filled by DashboardLayout; empty and hidden on phones,
+            where the bell sits in the layout's own phone bar). */}
+        <div ref={registerEndSlot ?? undefined} data-header-end-slot className="hidden md:flex items-center" />
       </div>
     </div>
   );
