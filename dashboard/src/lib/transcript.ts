@@ -124,12 +124,15 @@ export function toolSummary(tool: string, input: Record<string, unknown>): strin
   switch (tool) {
     case 'Bash':
     case 'run_command':
+    case 'run_terminal_command':
       return s(input.CommandLine || input.command || '').split('\n')[0].slice(0, 120);
     case 'Read':
     case 'view_file':
-      return shortPath(s(input.AbsolutePath || input.file_path || input.path || ''));
+    case 'read_file':
+      return shortPath(s(input.AbsolutePath || input.file_path || input.path || input.target_file || ''));
     case 'Edit':
     case 'replace_file_content':
+    case 'search_replace':
       return shortPath(s(input.TargetFile || input.file_path || ''));
     case 'Write':
     case 'write_to_file':
@@ -141,6 +144,7 @@ export function toolSummary(tool: string, input: Record<string, unknown>): strin
       return `${s(input.Pattern || input.pattern || '')}${input.SearchDirectory ? ' in ' + shortPath(s(input.SearchDirectory)) : ''}`;
     case 'Grep':
     case 'grep_search':
+    case 'grep':
       return `${s(input.Query || input.pattern || '')}${input.SearchPath || input.path ? ' in ' + shortPath(s(input.SearchPath || input.path)) : ''}`;
     case 'Task':
     case 'Agent':
@@ -178,9 +182,11 @@ export function toolFilePath(tool: string, input: Record<string, unknown>): stri
   switch (tool) {
     case 'Read':
     case 'view_file':
-      raw = s(input.AbsolutePath || input.file_path || input.path); break;
+    case 'read_file':
+      raw = s(input.AbsolutePath || input.file_path || input.path || input.target_file); break;
     case 'Edit':
     case 'replace_file_content':
+    case 'search_replace':
     case 'Write':
     case 'write_to_file':
       raw = s(input.TargetFile || input.file_path); break;

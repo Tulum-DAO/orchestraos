@@ -1,5 +1,5 @@
 {
- "$schema_note": "Agent Page v1 B2 \u2014 the SELF-HEALING provider/model catalog registry. This file adds UI + probe METADATA only. model_catalog.source='probe' asks the operator's OWN CLI what their login can run (api/src/routes/model-catalog.ts, dispatched on probe.kind \u2014 no provider literals); 'static' is the fallback served when a probe fails, so a broken CLI can never empty the picker. Runtime truth (which ids are valid runtimes) stays scripts/runtime_signatures.py VALID_RUNTIMES = (claude, gemini, codex, service). 'service' is deliberately omitted here \u2014 it is an internal seat kind, never a user-facing model provider. The route (api/src/routes/runtimes-available.ts) must iterate this array generically (dispatch by auth_probe.kind, never by provider id) so it carries zero provider literals in its core logic.",
+ "$schema_note": "Agent Page v1 B2 \u2014 the SELF-HEALING provider/model catalog registry. This file adds UI + probe METADATA only. model_catalog.source='probe' asks the operator's OWN CLI what their login can run (api/src/routes/model-catalog.ts, dispatched on probe.kind \u2014 no provider literals); 'static' is the fallback served when a probe fails, so a broken CLI can never empty the picker. Runtime truth (which ids are valid runtimes) stays scripts/runtime_signatures.py VALID_RUNTIMES = (claude, gemini, codex, service, grok). 'service' is deliberately omitted here \u2014 it is an internal seat kind, never a user-facing model provider. The route (api/src/routes/runtimes-available.ts) must iterate this array generically (dispatch by auth_probe.kind, never by provider id) so it carries zero provider literals in its core logic.",
  "providers": [
   {
    "id": "claude",
@@ -408,6 +408,101 @@
      {
       "id": "gpt-6-astra",
       "label": "GPT-6 Astra",
+      "capabilities": {
+       "text": true,
+       "image": false,
+       "audio": false,
+       "video": false,
+       "context_window": null
+      },
+      "capabilities_unverified": [
+       "image",
+       "audio",
+       "video",
+       "context_window"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "grok",
+   "label": "Grok",
+   "logo_svg": "<svg viewBox=\"0 0 24 24\" xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"24\" height=\"24\" rx=\"5.5\" fill=\"#0A0A0A\"/><path d=\"M15.6 7.3A6 6 0 0 0 7.1 15.8\" fill=\"none\" stroke=\"#fff\" stroke-width=\"1.9\" stroke-linecap=\"round\"/><path d=\"M17.4 9.9A6 6 0 0 1 9.6 17.6\" fill=\"none\" stroke=\"#fff\" stroke-width=\"1.9\" stroke-linecap=\"round\"/><path d=\"M6.2 17.8 18.3 5.7\" stroke=\"#fff\" stroke-width=\"1.9\" stroke-linecap=\"round\"/></svg>",
+   "cli": "grok",
+   "aliases": [],
+   "detect": {
+    "cmd": "which grok"
+   },
+   "auth_probe": {
+    "kind": "cli-text",
+    "cmd": "grok models",
+    "success_pattern": "^You are logged in\\b",
+    "failure_pattern": "^You are not authenticated\\b"
+   },
+   "model_catalog": {
+    "source": "probe",
+    "probe": {
+     "kind": "line-regex",
+     "cmd": "grok models",
+     "line_re": "^\\s*[*-]\\s+(grok-[A-Za-z0-9._-]+)",
+     "default_re": "\\(default\\)",
+     "timeout_ms": 30000
+    },
+    "static": [
+     {
+      "id": "grok-4.7",
+      "label": "Grok 4.7",
+      "capabilities": {
+       "text": true,
+       "image": false,
+       "audio": false,
+       "video": false,
+       "context_window": 256000
+      },
+      "capabilities_unverified": [
+       "image",
+       "audio",
+       "video"
+      ]
+     },
+     {
+      "id": "grok-4.7-build-fast",
+      "label": "Grok 4.7 Build Fast",
+      "capabilities": {
+       "text": true,
+       "image": false,
+       "audio": false,
+       "video": false,
+       "context_window": null
+      },
+      "capabilities_unverified": [
+       "image",
+       "audio",
+       "video",
+       "context_window"
+      ]
+     },
+     {
+      "id": "grok-4.6",
+      "label": "Grok 4.6",
+      "capabilities": {
+       "text": true,
+       "image": false,
+       "audio": false,
+       "video": false,
+       "context_window": null
+      },
+      "capabilities_unverified": [
+       "image",
+       "audio",
+       "video",
+       "context_window"
+      ]
+     },
+     {
+      "id": "grok-4.5",
+      "label": "Grok 4.5",
       "capabilities": {
        "text": true,
        "image": false,

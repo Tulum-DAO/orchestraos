@@ -201,7 +201,7 @@ PGREP_BIN="${PGREP_BIN:-pgrep}"
 # best-effort holder signal, NOT C-R7 lease/process-instance fencing.
 runtime_pids() {
     local comm
-    for comm in claude agy codex; do
+    for comm in claude agy codex grok grok-linux-x86_64; do
         "$PGREP_BIN" -x "$comm" 2>/dev/null || true
     done
 }
@@ -252,6 +252,15 @@ fi
 
 # A resume adapter is only callable after automatic_recovery_runtime accepted
 # its normalized runtime.  Codex intentionally has no path here.
+grok_session_count() {
+    local sid="$1" n=0 d
+    [[ "$sid" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || { echo 0; return; }
+    for d in "${GROK_HOME:-$HOME/.grok}"/sessions/*/"$sid"; do
+        [ -d "$d" ] && n=$((n + 1))
+    done
+    echo "$n"
+}
+
 transcript_exists_in_cwd() {
     local session_id="$1"
     local cwd="$2"
@@ -260,6 +269,12 @@ transcript_exists_in_cwd() {
         local gbrain="${GEMINI_BRAIN_ROOT:-$HOME/.gemini/antigravity-cli/brain}"
         [ -f "$gbrain/$session_id/.system_generated/logs/transcript.jsonl" ] || \
             [ -f "$gbrain/$session_id/transcript.jsonl" ]
+        return $?
+    fi
+    if [ "$runtime" = "grok" ]; then
+        # Grok keys a session by its UUID under $GROK_HOME/sessions/<encoded-cwd>/<uuid>/.
+        # Exactly ONE such dir, else refuse: a bare `grok -r` would pick "the most recent".
+        [ "$(grok_session_count "$session_id")" = "1" ]
         return $?
     fi
     local slug
@@ -491,6 +506,17 @@ while IFS='|' read -r agent_id tmux_name session_id cwd conv_path; do
         fi
 
         log "AUTO-RECOVER: $agent_id (tmux=$tmux_name, session=$session_id, runtime=$runtime)"
+        if [ "$runtime" = "grok" ]; then
+            # Grok resumes through spawn-agent.sh, the one place that knows its launch line
+            # (--minimal --no-alt-screen, -r <uuid>, compat hooks off, the mail watcher).
+            if AGENT_RUNTIME=grok bash "$CODE_DIR/spawn-agent.sh" "$agent_id" --resume "$session_id" >> "$LOG" 2>&1; then
+                RECOVERED=$((RECOVERED + 1))
+            else
+                log "AUTO-RECOVER FAILED: $agent_id (spawn-agent.sh --resume exit $?)"
+                SKIPPED=$((SKIPPED + 1))
+            fi
+            continue
+        fi
         tmux new-session -d -s "$tmux_name" -c "$cwd" 2>/dev/null
         orch_tmux_session_defaults "$tmux_name"
         sleep 1

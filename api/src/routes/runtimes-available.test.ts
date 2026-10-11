@@ -219,7 +219,7 @@ test('the real config/providers.json loads and matches the ProviderConfig shape'
   assert.ok(providers.length >= 3, 'expected claude/gemini/codex at minimum');
   for (const p of providers) {
     assert.ok(p.id && p.label && p.cli, `provider missing core fields: ${JSON.stringify(p)}`);
-    assert.ok(['cli-json', 'file-json-key', 'file-json-expiry'].includes(p.auth_probe.kind));
+    assert.ok(['cli-json', 'file-json-key', 'file-json-expiry', 'cli-text'].includes(p.auth_probe.kind));
   }
 });
 

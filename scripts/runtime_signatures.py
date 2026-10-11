@@ -68,8 +68,51 @@ PROMPT_SIGNATURES = {
         "has_ghost_suggestions": True,
         "idle_footer_re": r"Ask Codex to do anything",
     },
+    # Grok Build CLI (`grok`). Its composer is NOT a verified delivery surface: in the
+    # --minimal mode seats run in it draws a bare '❯' (the same glyph as Claude) with a dim
+    # placeholder, and pane text alone cannot tell the two apart. So prompt_char is a
+    # NUL-led sentinel that can never occur in a tmux capture: every pane-text consumer
+    # (wait_for_tui, boot_inject, the router's composer/typed checks, stuck-injection
+    # cleanup) finds NO prompt and takes its fail-safe branch (not-ready / not-idle /
+    # nothing to clean). Busy/idle comes from the session's own events.jsonl
+    # (scripts/grok_context.py). With "verified": False the router HOLDS grok mail (it stays
+    # pending, never dropped) and the gateway refuses to type into the pane; the seat is woken
+    # for mail by scripts/grok_mail_watch.py, which reads the composer's colours itself.
+    "grok": {
+        "prompt_char": "\x00grok-composer-unverified",
+        "has_ghost_suggestions": False,
+        "idle_footer_re": None,
+        "verified": False,
+        "idle_source": "events.jsonl",
+    },
 }
 DEFAULT_RUNTIME = "claude"
+
+#: Runtimes whose "Phase 2" surfaces (WAL capture, rotation, approval cards / menus) are NOT
+#: implemented. Every one of those entry points refuses these runtimes EXPLICITLY (named
+#: reason) instead of falling through to a claude default. (Automatic resume after a reboot
+#: IS supported for grok: scripts/recovery_runtime.py.)
+PHASE2_UNSUPPORTED_RUNTIMES = frozenset({"grok"})
+
+
+class Phase2Unsupported(RuntimeError):
+    """A Phase-2 surface (WAL capture, rotation, cards, recovery) was asked to act on a
+    runtime that only has see/spawn/message/resume support."""
+
+
+def refuse_if_phase2_unsupported(runtime, surface: str) -> None:
+    """Raise Phase2Unsupported when ``runtime`` has no ``surface`` adapter yet."""
+    rt = (runtime or "").strip().lower()
+    if rt in PHASE2_UNSUPPORTED_RUNTIMES:
+        raise Phase2Unsupported(
+            f"runtime={rt!r} has no {surface} adapter (not implemented for this "
+            f"runtime) — refusing rather than defaulting to claude")
+
+
+def signature_verified(runtime) -> bool:
+    """False only for a signature explicitly marked unverified (grok)."""
+    sig = PROMPT_SIGNATURES.get((runtime or "").strip().lower()) or {}
+    return bool(sig.get("verified", True))
 
 
 def is_claude_stop_hook_seat(runtime: "str | None") -> bool:
@@ -181,6 +224,10 @@ def agent_runtime(agent_id: str, meta: dict | None = None,
         return "claude"
     if rt in ("agy", "gemini") or model.startswith("gemini"):
         return "gemini"
+    if model.startswith("grok"):
+        # An undeclared grok-* row must resolve to grok (whose gate HOLDS), never fail
+        # open to claude's ❯ signature.
+        return "grok"
     return DEFAULT_RUNTIME
 
 
@@ -195,7 +242,9 @@ def agent_runtime(agent_id: str, meta: dict | None = None,
 # resolver, which reads `runtime` ONLY (never `provider`) — every live row's
 # `provider` is redundant with `runtime` (codex-dev-1 carries both), so the alias
 # adds no signal and dropping it removes a second field that could disagree.
-VALID_RUNTIMES = ("claude", "gemini", "codex", "service")
+# 'grok': a Grok Build seat. Like codex it is positive-declaration only: resolve_runtime does
+# not derive it from a grok-* model, so a seat verb needs runtime='grok' on the row.
+VALID_RUNTIMES = ("claude", "gemini", "codex", "service", "grok")
 
 
 class RuntimeResolutionError(ValueError):
@@ -249,7 +298,7 @@ def resolve_runtime(entry, *, agent_id=None, strict=True):
 
 def model_runtime(model) -> "str | None":
     """Runtime a model id POSITIVELY names, or None (no signal). Prefix rules only:
-    claude-* -> claude; gemini-* -> gemini; gpt-* / o<digit>* / codex-* -> codex.
+    claude-* -> claude; gemini-* -> gemini; gpt-* / o<digit>* / codex-* -> codex; grok-* -> grok.
     Never guesses: an unknown family is None, not claude."""
     m = (model or "").strip().lower()
     if not m:
@@ -260,6 +309,8 @@ def model_runtime(model) -> "str | None":
         return "gemini"
     if m.startswith(("gpt-", "codex")) or (len(m) >= 2 and m[0] == "o" and m[1].isdigit()):
         return "codex"
+    if m.startswith("grok"):
+        return "grok"
     return None
 
 

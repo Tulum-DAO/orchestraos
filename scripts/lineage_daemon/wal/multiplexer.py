@@ -36,6 +36,7 @@ systemd User=<operator> unit is the LAST step, installed by root after A/B/B1/C)
 """
 import fcntl
 import os
+import sys
 import time
 import logging
 from dataclasses import dataclass
@@ -74,14 +75,45 @@ def _pid_alive(pid):
     return True
 
 
+#: The runtimes that HAVE a WAL adapter. make_adapter is DENY-BY-DEFAULT over this set
+#: (deny-by-default): anything else raises instead of being tailed by the
+#: claude parser. Must equal seat_builder.WAL_RUNTIMES (asserted in the grok parity suite).
+WAL_ADAPTER_RUNTIMES = ("claude", "codex", "gemini")
+
+
+class UnsupportedWalRuntime(ValueError):
+    """make_adapter was asked for a runtime with no WAL adapter (deny-by-default)."""
+
+
 def make_adapter(runtime, store, lineage_root, generation):
-    """Provider-agnostic adapter dispatch. Unknown runtime fails SAFE to claude
-    (the runtime_signatures unknown->claude precedent)."""
+    """Provider-agnostic adapter dispatch, DENY-BY-DEFAULT.
+
+      claude / codex / gemini -> that provider's adapter
+      grok                    -> refused by name (runtime_signatures.Phase2Unsupported):
+                                 tailing Grok's updates.jsonl with the CLAUDE adapter
+                                 would index garbage under a real lineage (Phase 2)
+      anything else           -> UnsupportedWalRuntime (a ValueError)
+
+    This used to fail OPEN to ClaudeWalAdapter for any unknown runtime (the
+    runtime_signatures unknown->claude precedent). That precedent is right for the router's
+    prompt glyph (it never widens an idle surface) and wrong for capture: a mis-parsed
+    transcript is silent corruption of the WAL. Unreachable today for a non-WAL runtime
+    (seat_builder drops runtime not in WAL_RUNTIMES; WalTailer maps None -> claude), so
+    every existing caller is unchanged; this makes the guarantee local."""
+    _scripts = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if _scripts not in sys.path:
+        sys.path.insert(0, _scripts)
+    from runtime_signatures import refuse_if_phase2_unsupported
+    refuse_if_phase2_unsupported(runtime, "WAL/transcript capture")
+    if runtime == "claude":
+        return ClaudeWalAdapter(store, lineage_root, generation)
     if runtime == "codex":
         return CodexWalAdapter(store, lineage_root, generation)
     if runtime == "gemini":
         return GeminiWalAdapter(store, lineage_root, generation)
-    return ClaudeWalAdapter(store, lineage_root, generation)
+    raise UnsupportedWalRuntime(
+        f"no WAL adapter for runtime {runtime!r}: make_adapter is deny-by-default over "
+        f"{WAL_ADAPTER_RUNTIMES} (grok is refused by name as Phase 2)")
 
 
 @dataclass

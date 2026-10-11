@@ -1,7 +1,10 @@
 """Strict runtime gate for automatic recovery and reincarnation.
 
 This is deliberately narrower than a provider resume adapter.  Automatic
-recovery is safety-qualified for Claude and Gemini/agy unconditionally.  Codex
+recovery is safety-qualified for Claude, Gemini/agy and Grok unconditionally (a
+grok seat resumes ONLY its own pinned session UUID, through spawn-agent.sh
+--resume, and agent-recovery.sh refuses it unless exactly that session exists
+under $GROK_HOME/sessions — never "the most recent session").  Codex
 is admitted ONLY for a specific rotation that presents a fully-satisfied C-R7
 7-condition gate (codex-dev-1 §4): real SID+transcript, complete/fresh instance
 records, live lease+epoch+CAS, exactly-one canonical successor, verified/
@@ -17,6 +20,12 @@ import sys
 from pathlib import Path
 
 from runtime_signatures import RuntimeResolutionError, resolve_runtime
+
+
+#: Runtimes admitted for automatic resume without a further gate. Grok qualifies because its
+#: resume is bound to an exact session UUID (``grok -r <uuid>``): the resumed process carries
+#: that UUID on its argv, which is the same process truth every grok reader binds by.
+UNCONDITIONAL_RUNTIMES = ("claude", "gemini", "grok")
 
 
 class AutomaticRecoveryRefused(RuntimeError):
@@ -49,12 +58,12 @@ def automatic_resume_runtime(entry: dict, *, agent_id: str | None = None,
     """Return a supported automatic-resume runtime or raise.
 
     ``resolve_runtime`` owns normalization and the positive-model fallback.
-    Claude/Gemini are admitted unconditionally (``codex_gate`` never affects
-    them — byte-unchanged).  Codex is admitted ONLY when ``codex_gate`` proves
+    Claude/Gemini/Grok are admitted unconditionally (``codex_gate`` never affects
+    them).  Codex is admitted ONLY when ``codex_gate`` proves
     all seven C-R7 conditions; otherwise the refusal stands (fail-closed).
     """
     runtime = resolve_runtime(entry, agent_id=agent_id, strict=True)
-    if runtime in ("claude", "gemini"):
+    if runtime in UNCONDITIONAL_RUNTIMES:
         return runtime
     if runtime == "codex":
         if _codex_gate_satisfied(codex_gate):

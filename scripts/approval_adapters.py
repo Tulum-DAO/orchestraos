@@ -217,3 +217,15 @@ def codex_create_approval(agent_id, question, *, provider_session_id=None, **kw)
            or os.environ.get("CODEX_SESSION_ID"))
     return create_approval(agent_id, question, provider="codex",
                            provider_session_id=sid, **kw)
+
+
+def grok_create_approval(agent_id, question, *, provider_session_id=None, **kw):
+    """Grok adapter: NOT IMPLEMENTED (approval cards are not implemented for grok).
+
+    Refuses loudly instead of writing a card with an unverifiable identity: a grok seat's
+    session binding (argv -s/-r UUID) and its menu shape are unmeasured, and a card whose
+    answer cannot be routed back into the Grok TUI is the "success that isn't" class.
+    A grok seat that needs a human decision asks over msg_store instead."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from runtime_signatures import refuse_if_phase2_unsupported
+    refuse_if_phase2_unsupported("grok", "approval-card")

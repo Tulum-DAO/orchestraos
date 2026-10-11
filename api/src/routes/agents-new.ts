@@ -27,7 +27,7 @@ import { CODE_ROOT } from '../lib/codeRoot.js';
  *  binary name, so `cli` is optional and falls back to the provider id (they match for
  *  claude/codex; gemini's binary is `agy`). */
 export type RuntimeRow = ProviderResult & { cli?: string };
-const CLI_FOR_ID: Record<string, string> = { claude: 'claude', gemini: 'agy', codex: 'codex' };
+const CLI_FOR_ID: Record<string, string> = { claude: 'claude', gemini: 'agy', codex: 'codex', grok: 'grok' };
 const cliOf = (r: RuntimeRow): string => r.cli || CLI_FOR_ID[r.id] || r.id;
 // state-reader / tmux-monitor are imported LAZILY in the production deps below: they read
 // orchestra.toml at module load, which would make this file un-importable in a unit test.
@@ -46,6 +46,7 @@ const DEFAULT_MODEL_FOR_RUNTIME: Record<string, string> = {
   claude: 'claude-sonnet-5',
   gemini: 'gemini-3.1-pro',
   codex: 'gpt-5.6-terra',
+  grok: 'grok-4.7',
 };
 
 export interface NewAgentDeps {
@@ -106,12 +107,13 @@ export function loginHint(rows: RuntimeRow[], providerId?: string): { cli: strin
   // --device-auth, never a bare `codex login`: the plain form opens a callback server on
   // port 1455 of THIS machine and waits for a browser to reach it, which is impossible when
   // the operator's browser is elsewhere. Device auth prints a code instead.
-  const loginCmd = cli === 'codex' ? 'codex login --device-auth' : cli;
+  // grok: the same reason — `grok login --device-auth` prints a link + code for a phone.
+  const loginCmd = cli === 'codex' ? 'codex login --device-auth' : cli === 'grok' ? 'grok login --device-auth' : cli;
   if (!requested && installed.length === 0) {
     const hint = 'No agent CLI is installed on this machine yet. Install one (e.g. `npm i -g @anthropic-ai/claude-code`), then run it once and log in.';
     return { cli, hint, greeting: `${hint}\n\nInstall one here, run it once to log in, then close this window and try again.` };
   }
-  const extra = cli === 'codex' ? '' : ' then type /login';
+  const extra = cli === 'codex' || cli === 'grok' ? '' : ' then type /login';
   const hint = `\`${cli}\` is installed but not logged in. Run \`${loginCmd}\`${extra} to sign in to your provider.`;
   return {
     cli,

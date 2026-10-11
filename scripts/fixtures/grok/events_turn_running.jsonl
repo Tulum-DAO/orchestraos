@@ -1,0 +1,15 @@
+{"ts":"2000-01-01T00:00:00.000Z","type":"mcp_config_resolved","servers":[{"name":"mcp0","transport":"stdio","source":"local"},{"name":"mcp1","transport":"stdio","source":"local"},{"name":"mcp2","transport":"http","source":"local"},{"name":"mcp3","transport":"http","source":"local"}],"disabled":[]}
+{"ts":"2000-01-01T00:00:01.000Z","type":"mcp_server_starting","server_name":"mcp0","transport":"http","target":"<scrubbed>","timeout_sec":30}
+{"ts":"2000-01-01T00:00:02.000Z","type":"mcp_server_starting","server_name":"mcp1","transport":"http","target":"<scrubbed>","timeout_sec":30}
+{"ts":"2000-01-01T00:00:03.000Z","type":"mcp_server_starting","server_name":"mcp2","transport":"stdio","target":"<scrubbed>","timeout_sec":30}
+{"ts":"2000-01-01T00:00:04.000Z","type":"mcp_server_starting","server_name":"mcp3","transport":"stdio","target":"<scrubbed>","timeout_sec":30}
+{"ts":"2000-01-01T00:00:05.000Z","type":"turn_started","session_id":"0199aaaa-0000-7000-8000-000000000001","turn_number":0,"model_id":"grok-4.7","yolo_mode":false,"conversation_message_count":3,"session_relationship":"primary","schema_version":"1.0"}
+{"ts":"2000-01-01T00:00:06.000Z","type":"mcp_server_connected","server_name":"mcp2","transport":"stdio","tool_count":1,"duration_ms":86,"tools":["tool0"]}
+{"ts":"2000-01-01T00:00:07.000Z","type":"mcp_server_connected","server_name":"mcp3","transport":"stdio","tool_count":4,"duration_ms":88,"tools":["tool0","tool1","tool2","tool3"]}
+{"ts":"2000-01-01T00:00:08.000Z","type":"mcp_server_failed","server_name":"mcp1","transport":"http","target":"<scrubbed>","error_type":"auth_required","error_message":"<scrubbed: MCP auth_required>","duration_ms":252,"timeout_sec":30}
+{"ts":"2000-01-01T00:00:09.000Z","type":"loop_started","loop_index":0}
+{"ts":"2000-01-01T00:00:10.000Z","type":"phase_changed","phase":"waiting_for_model"}
+{"ts":"2000-01-01T00:00:11.000Z","type":"mcp_server_failed","server_name":"mcp0","transport":"http","target":"<scrubbed>","error_type":"auth_required","error_message":"<scrubbed: MCP auth_required>","duration_ms":4264,"timeout_sec":30}
+{"ts":"2000-01-01T00:00:12.000Z","type":"mcp_init_completed","total_servers":4,"succeeded":2,"failed":2,"auth_required":2,"total_tools":5,"duration_ms":4265,"is_reinit":false,"failed_servers":["mcp1","mcp0"]}
+{"ts":"2000-01-01T00:00:13.000Z","type":"first_token"}
+{"ts":"2000-01-01T00:00:14.000Z","type":"phase_changed","phase":"streaming_text"}

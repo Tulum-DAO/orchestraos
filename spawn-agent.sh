@@ -64,6 +64,11 @@ vlog() { [[ "${ORCHESTRA_SPAWN_VERBOSE:-}" == "1" ]] && echo -e "${CYAN}[spawn]$
 CLAUDE_BIN="${ORCHESTRA_CLAUDE_BIN:-}"
 [[ -x "$CLAUDE_BIN" ]] || CLAUDE_BIN="$(command -v claude || echo claude)"
 
+# Grok Build binary. Its installer puts the launcher in ~/.local/bin, which cron/systemd PATHs
+# often do not carry, so that location is tried first; ORCHESTRA_GROK_BIN pins an exact path.
+GROK_BIN="${ORCHESTRA_GROK_BIN:-$HOME/.local/bin/grok}"
+[[ -x "$GROK_BIN" ]] || GROK_BIN="$(command -v grok 2>/dev/null || echo grok)"
+
 # --- Runtime dispatch (spec §4.2 all-model-parity): binary + ready-signature
 # chosen BY the registry `runtime` field, consuming the ONE signature source
 # (scripts/runtime_signatures.py — the SAME table the router idle-gate uses).
@@ -106,9 +111,73 @@ if rt == "service":
 # codex is spawnable as of C-R2 (SPEC_codex-parity-phase2): binary 'codex',
 # bypass flag '--yolo' (NOT --dangerously-skip-permissions), ready-signature
 # from PROMPT_SIGNATURES['codex'] — same one-signature-source as claude/gemini.
+# grok is spawnable: binary 'grok', boot line on argv, pinned -s <uuid>. Its composer is not a
+# verified surface, so no ready-signature is emitted (an empty field) and the grok launch path
+# never pane-greps for one.
 sig = rs.PROMPT_SIGNATURES.get(rt) or {}
-sys.stdout.write(f"{rt}\t{sig.get('prompt_char','')}\n")
+pc = sig.get('prompt_char', '') if rs.signature_verified(rt) else ''
+sys.stdout.write(f"{rt}\t{pc}\n")
 PYEOF
+}
+
+# An explicit AGENT_RUNTIME that DISAGREES with the runtime the seat resolves to is a
+# mis-declared identity, not an override: refuse before any tmux/session work rather than
+# silently launching the resolved runtime (a grok seat whose row said claude was resumed as
+# CLAUDE on a Grok session id). Fix the row, then spawn.
+# $1 agent id, $2 resolved runtime. rc 0 = agree / no AGENT_RUNTIME; rc 3 = refuse.
+runtime_override_check() {
+    local agent_id="$1" resolved="$2"
+    local want="${AGENT_RUNTIME:-}"
+    [[ "$want" == "agy" ]] && want="gemini"
+    if [[ -n "$want" && "$want" != "$resolved" ]]; then
+        err "$agent_id: spawn REFUSED — AGENT_RUNTIME=${AGENT_RUNTIME} but the seat resolves to runtime=$resolved."
+        err "  Correct the identity first: python3 scripts/registry-update.py $agent_id --field runtime=${want}"
+        return 3
+    fi
+    return 0
+}
+
+# --- Grok Build launch line ---------------------------------------------------
+# Pure: prints the command that starts a grok seat. $2 is new|resume; $3 the session UUID
+# (pinned with -s for new, -r for resume — never a bare -r, which would let grok pick a
+# session); $4 an optional grok-* model; $5 the boot line, which rides grok's [PROMPT] argv so
+# nothing is typed into the (unverified) composer.
+#   --always-approve   the seat equivalent of claude's --dangerously-skip-permissions
+#   --minimal          finished blocks go to normal scrollback (the wheel scrolls a transcript)
+#   --no-alt-screen    keep tmux scrollback (same guard as claude's alt-screen kill switch)
+# Refuses (rc 2) a non-UUID session id or an unknown mode.
+build_grok_launch_cmd() {
+    local bin="$1" mode="$2" sid="$3" model="${4:-}" boot="${5:-}"
+    [[ "$sid" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || return 2
+    local cmd="$bin --always-approve --minimal --no-alt-screen"
+    case "$mode" in
+        new)    cmd+=" -s $sid" ;;
+        resume) cmd+=" -r $sid" ;;
+        *) return 2 ;;
+    esac
+    [[ -n "$model" && "$model" == grok* ]] && cmd+=" -m $(printf %q "$model")"
+    [[ -n "$boot" ]] && cmd+=" $(printf %q "$boot")"
+    printf '%s\n' "$cmd"
+}
+
+# Claude/Cursor compatibility OFF for a grok seat, per launch (env only: the user's own
+# ~/.grok/config.toml is never written). Grok otherwise loads the Claude hooks and MCP
+# servers orchestra installs for its Claude seats, and those expect Claude's payloads.
+GROK_SEAT_ENV="GROK_CLAUDE_HOOKS_ENABLED=false GROK_CLAUDE_MCPS_ENABLED=false GROK_CURSOR_HOOKS_ENABLED=false GROK_CURSOR_MCPS_ENABLED=false"
+
+# The grok seat's mail wake (scripts/grok_mail_watch.py): detached, niced, one per seat (a
+# second copy exits on its lock), and it exits by itself once the seat's session is gone.
+# ORCHESTRA_GROK_MAIL_WATCH=0 opts out. Fail-soft: never blocks the spawn.
+start_grok_mail_watch() {
+    local agent_id="$1" session="$2"
+    [[ "${ORCHESTRA_GROK_MAIL_WATCH:-1}" == "0" ]] && { log "  grok: mail watcher off (ORCHESTRA_GROK_MAIL_WATCH=0)"; return 0; }
+    mkdir -p "$ORCHESTRA_DIR/logs" 2>/dev/null || true
+    ( ORCHESTRA_DIR="$ORCHESTRA_DIR" setsid nohup nice -n 19 python3 "$SCRIPT_DIR/scripts/grok_mail_watch.py" \
+          --agent "$agent_id" --session "$session" \
+          >> "$ORCHESTRA_DIR/logs/grok-mail-watch-${agent_id}.log" 2>&1 </dev/null & ) \
+        && log "  grok: mail watcher started (logs/grok-mail-watch-${agent_id}.log)" \
+        || warn "  grok: mail watcher not started for $agent_id"
+    return 0
 }
 
 # --- [1m] model guard (the operator ruling 2026-08-15, feedback_all_models_1m_context) ---
@@ -343,10 +412,21 @@ kill_agent() {
     local tmux_name
     tmux_name=$(get_agent_field "$agent_id" "tmux_session") || { err "Unknown agent: $agent_id"; exit 1; }
 
+    # The kill-time handoff autosnap is a NO-OP for a grok seat: agent_handoff.py parses CLAUDE
+    # pane shapes, so on a grok pane it could only record noise. Grok's own session store keeps
+    # the transcript, and the seat resumes from it (-r <uuid>).
+    local kill_rt="" kill_model=""
+    kill_rt=$(get_agent_field "$agent_id" "runtime" 2>/dev/null) || kill_rt=""
+    kill_model=$(get_agent_field "$agent_id" "model" 2>/dev/null) || kill_model=""
+
     if tmux has-session -t "$tmux_name" 2>/dev/null; then
+        if [[ "$kill_rt" == "grok" || "$kill_model" == grok-* ]]; then
+            log "Handoff: no-op for grok seat $agent_id (its session store keeps the transcript)"
+        else
         # Save handoff context before killing
         log "Saving handoff for $agent_id..."
         python3 "$SCRIPT_DIR/agent_handoff.py" save "$agent_id" >/dev/null 2>&1 || warn "Handoff save failed for $agent_id"
+        fi
 
         # Try graceful shutdown first
         tmux send-keys -t "$tmux_name" "/exit" Enter 2>/dev/null || true
@@ -503,17 +583,19 @@ spawn_agent() {
     # --- Runtime dispatch (§4.2): resolve binary + ready-signature by the
     # declared runtime; REFUSE service/codex/unknown rather than defaulting to
     # claude. Resolved BEFORE any tmux/session work so a refusal writes nothing.
-    local runtime prompt_char dispatch agent_bin
+    local runtime prompt_char dispatch agent_bin grok_sid="" grok_boot=""
     if ! dispatch=$(runtime_dispatch "$agent_id" 2>&1); then
         err "$agent_id: spawn REFUSED — ${dispatch}"
         exit 3
     fi
     runtime="${dispatch%%$'\t'*}"
     prompt_char="${dispatch#*$'\t'}"
+    runtime_override_check "$agent_id" "$runtime" || exit 3
     case "$runtime" in
         claude) agent_bin="$CLAUDE_BIN" ;;
         gemini) agent_bin="$(command -v agy 2>/dev/null || echo agy)" ;;
         codex)  agent_bin="$(command -v codex 2>/dev/null || echo codex)" ;;
+        grok)   agent_bin="$GROK_BIN" ;;
         *) err "$agent_id: unsupported resolved runtime '$runtime' — refusing"; exit 3 ;;
     esac
     # issue #92: a model id that names ANOTHER runtime (claude-sonnet-5 on a codex seat)
@@ -823,6 +905,24 @@ spawn_agent() {
     [[ "$runtime" == "codex" && "${ORCHESTRA_CODEX_UPDATE_CHECK:-}" == "1" ]] \
         && bypass_flag="--yolo --dangerously-bypass-hook-trust"
     local launch_cmd="$agent_bin $bypass_flag"
+    if [[ "$runtime" == "grok" ]]; then
+        # The whole grok line is built here (build_grok_launch_cmd) so the env prefixes below
+        # (data dir, checkout, config, installer-env scrub) wrap it exactly like every runtime.
+        local grok_mode="new"
+        if [[ -n "$resume_sid" ]]; then
+            grok_mode="resume"; grok_sid="$resume_sid"
+            grok_boot="You are $agent_id, resumed (session $resume_sid) after a crash by roster-resume-all. Check your msg_store inbox (python3 $SCRIPT_DIR/msg_store.py inbox --agent $agent_id) and continue your last task."
+        else
+            grok_sid="$(python3 "$SCRIPT_DIR/scripts/grok_context.py" new-sid)"
+            grok_boot="You are $agent_id. Read $init_file and follow all instructions in it."
+        fi
+        if ! launch_cmd="$(build_grok_launch_cmd "$agent_bin" "$grok_mode" "$grok_sid" "$model" "$grok_boot")"; then
+            err "$agent_id: grok launch REFUSED (bad session id '$grok_sid')"
+            tmux kill-session -t "$tmux_name" 2>/dev/null || true
+            exit 3
+        fi
+        launch_cmd="$GROK_SEAT_ENV $launch_cmd"
+    fi
     # Scrollback guard (2026-09-03): claude >=2.1.x renders in the terminal
     # ALTERNATE SCREEN by default, which zeroes tmux scrollback (history_size=0,
     # alternate_on=1) — every pane-capture/copy-mode consumer in the fleet
@@ -847,8 +947,8 @@ spawn_agent() {
     local _scrub="env" _v
     for _v in "${INSTALLER_SESSION_ENV[@]}"; do _scrub+=" -u $_v"; done
     launch_cmd="$_scrub $launch_cmd"
-    if [[ -n "$resume_sid" && "$runtime" != "claude" ]]; then
-        err "$agent_id: --resume is claude-only (runtime=$runtime has no resume adapter here)"
+    if [[ -n "$resume_sid" && "$runtime" != "claude" && "$runtime" != "grok" ]]; then
+        err "$agent_id: --resume is claude/grok-only (runtime=$runtime has no resume adapter here)"
         tmux kill-session -t "$tmux_name" 2>/dev/null || true
         exit 3
     fi
@@ -887,14 +987,29 @@ spawn_agent() {
     elif [[ "$runtime" == "codex" ]]; then
         [[ -n "$model" ]] && launch_cmd+=" --model $model"
         log "  Runtime: codex | Model: ${model:-<config default>}"
+    elif [[ "$runtime" == "grok" ]]; then
+        log "  Runtime: grok | Model: ${model:-<grok default>} | Session: $grok_sid ($grok_mode)"
     else
         log "  Runtime: $runtime | Binary: $agent_bin"
     fi
     tmux send-keys -t "$tmux_name" "$launch_cmd" Enter
 
+    if [[ "$runtime" == "grok" ]]; then
+        # SUBMIT-VERIFY BY EFFECT: the boot line rode argv, so "submitted" means the pinned
+        # session's events.jsonl recorded a turn_started. Read-only poll of $GROK_HOME/sessions;
+        # no keystrokes. A miss is LOUD, not fatal (a first run may still be on a sign-in or
+        # trust screen; agent-status reports 'unknown' meanwhile).
+        if python3 "$SCRIPT_DIR/scripts/grok_context.py" wait-turn "$grok_sid" --timeout 45; then
+            log "  grok: boot prompt accepted (turn started in session $grok_sid)"
+        else
+            warn "  grok: NO turn started for session $grok_sid within 45s — check the pane (sign-in or folder-trust prompt?)"
+        fi
+        start_grok_mail_watch "$agent_id" "$tmux_name"
+    fi
+
     # Wait for the runtime's TUI to be ready (polling, not a blind sleep),
     # using the per-runtime ready-signature from the ONE signature source.
-    if ! wait_for_tui "$tmux_name" "$prompt_char"; then
+    if [[ "$runtime" != "grok" ]] && ! wait_for_tui "$tmux_name" "$prompt_char"; then
         warn "$runtime TUI not ready after 30s in '$tmux_name' — injecting anyway"
     fi
 
@@ -915,7 +1030,9 @@ spawn_agent() {
     # pass"), _resolve_by_declaration falls through to a LIVE PREDECESSOR's session, and
     # promote_successor correctly refuses to promote. Hand-spawned agents were unaffected
     # because their send-keys already carried "You are <id>"; only this path was cut.
-    if [[ -n "$resume_sid" ]]; then
+    if [[ "$runtime" == "grok" ]]; then
+        :   # the boot line already rode grok's argv (above); nothing is typed into the pane
+    elif [[ -n "$resume_sid" ]]; then
         log "  Resume: session $resume_sid (roster/adopt-gated); short wake line, no init file"
         inject_or_fail "$tmux_name" "You are $agent_id, resumed (session $resume_sid) after a crash by roster-resume-all. Check your msg_store inbox (python3 $SCRIPT_DIR/msg_store.py inbox --agent $agent_id) and continue your last task." || exit 1
     else

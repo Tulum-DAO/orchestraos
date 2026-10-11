@@ -2180,6 +2180,32 @@ def _is_prompt_line(line: str) -> bool:
     return False
 
 
+#: Runtimes whose pane composer the gateway must NOT type into until the runtime's prompt
+#: signature is verified (R2). The router already HOLDS grok mail on the same signature; without
+#: this, POST /agent-message (phone/watch, dashboard gatewayInject, boundary_delivery) would
+#: type into a Grok TUI whose composer glyph has never been measured, because
+#: _is_prompt_line accepts any line starting with ❯ / › / >.
+UNVERIFIED_COMPOSER_GUARD_RUNTIMES = frozenset({"grok"})
+
+
+def _composer_signature_verified(runtime) -> bool:
+    """runtime_signatures.signature_verified, FAIL-CLOSED: if the signature table cannot be
+    read, a guarded runtime counts as unverified (refused), never as verified."""
+    try:
+        import runtime_signatures as _rs
+        return bool(_rs.signature_verified(runtime))
+    except Exception:
+        return False
+
+
+def _status_runtime(st) -> str:
+    """The runtime the detector row names (top level, else its process block)."""
+    rt = st.get("runtime") if isinstance(st, dict) else None
+    if not rt and isinstance(st, dict) and isinstance(st.get("process"), dict):
+        rt = st["process"].get("runtime")
+    return (rt or "").strip().lower()
+
+
 def verified_inject(session, text, force=False):
     """Inject text into an agent pane with VERIFIED submit.
 
@@ -2210,6 +2236,17 @@ def verified_inject(session, text, force=False):
                                  "orchestra-builder/terminal, not chat"}
     st = _agent_status().get_agent_status(session)
     state = _STATE_MAP.get(st.get("state"), st.get("state"))
+    # R2: an UNVERIFIED composer is refused before any other gate and regardless of force —
+    # force is the human override for stranded input, not for typing into a TUI whose prompt
+    # has never been verified. Mail is not lost: the router keeps msg_store rows pending (and
+    # scripts/grok_mail_watch.py wakes a grok seat); a direct /agent-message caller gets this
+    # reason back.
+    _rt = _status_runtime(st)
+    if _rt in UNVERIFIED_COMPOSER_GUARD_RUNTIMES and not _composer_signature_verified(_rt):
+        return False, {"reason": "unverified-composer", "state": state, "runtime": _rt,
+                       "activity": (f"{_rt} composer signature is not verified; nothing is "
+                                    "typed into this pane from here (use the terminal, or "
+                                    "send mail: the seat's mail watcher wakes it)")}
     allowed = INJECTABLE_STATES | ({"stranded_input"} if force else set())
     if st.get("state") not in allowed:
         info = {"reason": "busy", "state": state,

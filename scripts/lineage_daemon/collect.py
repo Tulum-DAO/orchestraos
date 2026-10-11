@@ -189,12 +189,18 @@ def _resolve_runtime(reg: dict, model: str) -> str:
         return "gemini"
     if m.startswith("codex"):
         return "codex"
+    if m.startswith("grok"):
+        # An undeclared grok-* row is grok (gated below as unsupported-runtime: Grok
+        # rotation is not implemented), never misread as claude.
+        return "grok"
     return "claude"
 
 
 # Statuses whose rows are NOT live occupants of a seat — a predecessor that has
 # rotated out (retired) or is parked (quiescent) must never be nudged/rotated.
 _INERT_STATUSES = frozenset({"retired", "quiescent"})
+# 'grok' is deliberately ABSENT: Grok rotation is not implemented, so a grok seat skips the
+# beat as "unsupported-runtime" (pinned by tests/parity/test_grok_runtime.py).
 _SUPPORTED_RUNTIMES = frozenset({"claude", "gemini", "codex"})
 # Blue-green default (operator ruling 2026-09-17): ON for Claude seats; Gemini and Codex are
 # EXPERIMENTAL and never armed unless the install opts in with

@@ -625,10 +625,85 @@ def resolve_claude_cid(seat, *, proc_fn=None, candidates_fn=None, verify_fn=None
     return verified[0][0]
 
 
+_TMUX_QUERY_TIMEOUT_S = 15.0
+_TMUX_GLOBAL_TTL_S = 2.0
+_tmux_global_cache = {}
+
+
+def _tmux_global(args):
+    """Memoised GLOBAL tmux query, shared by every seat within one pass. Returns the
+    CompletedProcess, or None when the query could not be made (never cached)."""
+    import subprocess as _sp
+    import time as _t
+    key = tuple(args)
+    now = _t.time()
+    hit = _tmux_global_cache.get(key)
+    if hit is not None and now - hit[0] < _TMUX_GLOBAL_TTL_S:
+        return hit[1]
+    try:
+        r = _sp.run(list(key), capture_output=True, text=True, timeout=_TMUX_QUERY_TIMEOUT_S)
+    except Exception:  # noqa: BLE001 — timeout/OSError: report absence, never cache it
+        return None
+    if getattr(r, "returncode", 1) == 0:
+        _tmux_global_cache[key] = (now, r)   # only a SUCCESS is shared
+    return r
+
+
+def _pane_pid_from_global_list(seat):
+    """Pane pid of tmux session ``seat`` (EXACT name match, so ``seat-g2`` never answers for
+    ``seat``) from ONE memoised global session listing per pass; None when tmux did not
+    answer or the session is absent. resolve_cid_any runs every resolver for every seat, so
+    a per-seat tmux call here would cost a round-trip per seat per pass for non-grok seats.
+    ``#{pane_pid}`` on a session line is its active pane (a seat is one pane)."""
+    r = _tmux_global(["tmux", "list-sessions", "-F", "#{session_name}\t#{pane_pid}"])
+    if r is None or getattr(r, "returncode", 1) != 0:
+        return None
+    for line in (r.stdout or "").splitlines():
+        name, _, pid = line.partition("\t")
+        if name == seat and pid.strip().isdigit():
+            return int(pid.strip())
+    return None
+
+
+def resolve_grok_cid(seat, *, retired_sids_fn=None, resolve_fn=None, pane_pid_fn=None):
+    """Resolve a GROK seat's session id by PROCESS TRUTH.
+
+    spawn-agent.sh pins the id on the CLI's argv (``grok -s <uuid>`` new, ``-r <uuid>``
+    resume), so the seat's own pane -> its unique grok process -> the UUID on its argv ->
+    exactly one $GROK_HOME/sessions/*/<uuid>/ dir is a positive chain with no "newest
+    file" heuristic (scripts/grok_context.resolve_session; every link fails closed).
+    DB-retired generations of the seat root are never returned. Read-only; sid|None.
+
+    Registered for IDENTITY only (spawn_attribute_sid / resolve_cid_any). Grok is NOT in
+    CTX_ADAPTER_REGISTRY, GREEN_PROGRESS_REGISTRY or SOURCE_PATH_REGISTRY: ctx-driven
+    rotation, green progress and WAL capture are Phase 2, so those lookups return None
+    and bg_arm_fleet refuses the seat as runtime-unsupported=grok."""
+    if resolve_fn is None:
+        import sys as _sys
+        import os as _os
+        _here = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+        if _here not in _sys.path:
+            _sys.path.insert(0, _here)
+        import grok_context as _gc
+
+        def resolve_fn(_seat):
+            # The pane pid comes from the ONE memoised global session listing per pass
+            # (exact session_name match), never a per-seat tmux call.
+            return _gc.resolve_session(
+                _seat, pane_pid_fn=pane_pid_fn or _pane_pid_from_global_list)
+    s = resolve_fn(seat)
+    if not s or not s.get("sid"):
+        return None
+    if s["sid"] in _retired_set(seat, retired_sids_fn, "resolve_grok_cid"):
+        return None
+    return s["sid"]
+
+
 CID_RESOLVER_REGISTRY = {
     "claude": resolve_claude_cid,
     "gemini": resolve_gemini_cid,
     "codex": resolve_codex_cid,
+    "grok": resolve_grok_cid,
 }
 
 

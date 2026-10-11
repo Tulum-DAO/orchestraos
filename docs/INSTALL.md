@@ -408,6 +408,19 @@ a seat it launches against a CLI you have not logged in to retries, prints
 `Injection FAILED`, and exits, while the CLI's own sign-in screen waits unread in the
 seat's terminal.
 
+### Optional: Grok Build seats
+
+Grok is a fourth runtime. Install it with `curl -fsSL https://x.ai/cli/install.sh | bash`
+(no sudo; it links `grok` into `~/.local/bin`), then sign in with `grok login --device-auth`
+and follow the link + code from any browser. The dashboard's **Connect Grok** sheet runs the
+same two steps and checks sign-in with `grok models`. Keep `"grok"` in `[runtimes] enabled`
+in `orchestra.toml`, then pick Grok in **New Agent** (or `orchestra agent --runtime grok`).
+Grok seats launch with `--always-approve --minimal --no-alt-screen`, Claude/Cursor hook and
+MCP compatibility off for that seat only, come back on reboot (`--resume` on the same
+session), get mail through a small watcher that nudges the seat when it is idle, and show
+native chat in the dashboard. Rotation, WAL capture and approval cards are not implemented
+for Grok yet and refuse it by name.
+
 ## 1. Clone, init, doctor
 
 **Hand this to your agent** (Claude, ChatGPT, Codex, Gemini or any other), if you'd rather

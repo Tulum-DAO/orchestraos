@@ -33,6 +33,10 @@ import json
 import os
 
 from .bg_state import is_armed, BgStateStore
+
+#: Mirrors runtime_signatures.PHASE2_UNSUPPORTED_RUNTIMES (equality pinned by
+#: tests/parity/test_grok_runtime.py); kept local so this module's import graph is unchanged.
+_PHASE2_UNSUPPORTED_RUNTIMES = frozenset({"grok"})
 from .decide_bg import decide_bg
 from .bg_arm import BgArm
 from .decide_bg import PREWARM_AT  # noqa: F401  (documents the ctx scale for readers)
@@ -910,6 +914,13 @@ def armed_roots(agents, wal_dir, force_roots=None):
     out = []
     for a in agents:
         root = a.get("agent_id")
+        # Blue-green rotation is not implemented for grok. Not even a --manual-override arms a
+        # grok seat (the runtime gate below already skips it for autonomous beats).
+        if root and (a.get("runtime") or "").strip().lower() in _PHASE2_UNSUPPORTED_RUNTIMES:
+            if root in force or is_armed(wal_dir, root):
+                print(f"[bg_beat] runtime-phase2-unsupported: {root} "
+                      f"(runtime={a.get('runtime')}) NOT armed")
+            continue
         # Experimental runtimes (gemini/codex) are never armed for async blue-green unless the
         # install opted in ([rotation] experimental_runtimes) — operator ruling 2026-09-17.
         # The supervised hand-drive allowlist (force_roots) still wins: an operator driving one

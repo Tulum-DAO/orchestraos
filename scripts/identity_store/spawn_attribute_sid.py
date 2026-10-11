@@ -37,6 +37,9 @@ def resume_command_for(runtime, sid):
         return f"claude --resume {sid} --dangerously-skip-permissions"
     if rt == "codex":
         return f"codex --yolo resume {sid}"
+    if rt == "grok":
+        # Same shape spawn-agent.sh resumes a grok seat with (-r <uuid>, never a bare -r).
+        return f"grok --always-approve --minimal --no-alt-screen -r {sid}"
     return None
 
 

@@ -44,7 +44,7 @@ export type ConnectPlan =
   | { kind: 'blocked'; provider: string; detail: string };
 
 /** The binary that actually has to be installed. Gemini's CLI is `agy`, not `gemini`. */
-const CLI_FOR_ID: Record<string, string> = { claude: 'claude', gemini: 'agy', codex: 'codex' };
+const CLI_FOR_ID: Record<string, string> = { claude: 'claude', gemini: 'agy', codex: 'codex', grok: 'grok' };
 export const cliFor = (id: string): string => CLI_FOR_ID[id] || id;
 
 /** How each provider's browser sign-in is started. codex has its own subcommand; the
@@ -52,6 +52,7 @@ export const cliFor = (id: string): string => CLI_FOR_ID[id] || id;
 export function signinCommand(id: string): string {
   const cli = cliFor(id);
   if (id === 'codex') return 'codex login --device-auth';
+  if (id === 'grok') return 'grok login --device-auth';
   if (id === 'claude') return 'claude   (then type /login)';
   return `${cli}   (then follow its sign-in prompt)`;
 }
@@ -78,6 +79,9 @@ export function npmPackage(id: string): string | null {
 export function installShellCommand(id: string): string | null {
   if (npmPackage(id)) return null;
   if (id === 'gemini') return `curl -fsSL https://antigravity.google/cli/install.sh | bash${RELOAD_SUFFIX}`;
+  // Grok Build's own installer (the command its README gives): a standalone binary into
+  // ~/.grok, linked as ~/.local/bin/grok. No root, no npm.
+  if (id === 'grok') return `curl -fsSL https://x.ai/cli/install.sh | bash${RELOAD_SUFFIX}`;
   return null;
 }
 
@@ -105,6 +109,14 @@ export function connectSteps(id: string): string[] {
       'Then sign in with `codex login --device-auth`. Use that flag, not a bare `codex login`: the plain form starts a callback server on port 1455 of THIS machine and waits for your browser to hit it — which cannot happen when your browser is somewhere else. Device auth prints a short code instead and the CLI and browser talk through OpenAI, so no port has to be reachable.',
       'Open the URL it prints, enter the code, and approve. The code is good for about 15 minutes.',
       'Signing in writes ~/.codex/auth.json, which is exactly what this sheet checks. Reopen the sheet, or hit "check again", once it exists.',
+    ];
+  }
+  if (id === 'grok') {
+    return [
+      'The installer puts Grok Build in ~/.grok and links `grok` into ~/.local/bin — no sudo. The `exec bash -l` on the end reloads the shell so `grok` is found straight away.',
+      'Then sign in with `grok login --device-auth`. It prints a link and a short code: open the link on your phone or laptop, sign in with the account that has your Grok subscription, and enter the code. Nothing on this machine has to be reachable from your browser.',
+      'This sheet checks sign-in by running `grok models`, which says "You are logged in" once it worked. Reopen the sheet, or hit "check again".',
+      'Grok seats start with Claude/Cursor hook and MCP compatibility switched off for that seat only; your own ~/.grok/config.toml is never changed.',
     ];
   }
   if (id === 'claude') {

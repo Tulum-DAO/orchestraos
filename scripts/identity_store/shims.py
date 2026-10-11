@@ -55,12 +55,14 @@ class InvalidModel(Exception):
 
 
 # model_reconcile ADDENDUM: which runtimes must carry a real model, and the unknown zoo.
-_LLM_RUNTIMES = ("claude", "codex", "gemini")
+# grok is an LLM seat too: a grok row
+# must never persist ''/'unknown'/NULL. Every declared runtime except service (tested).
+_LLM_RUNTIMES = ("claude", "codex", "gemini", "grok")
 _UNKNOWN_MODELS = (None, "", "unknown")
 
 
 def _assert_model_for_root(conn, root: str, model) -> None:
-    """Write-time gate for generations.model: a claude/codex/gemini seat may never
+    """Write-time gate for generations.model: a claude/codex/gemini/grok seat may never
     persist ''/'unknown'/NULL (that is the exact class model_reconcile exists to close).
     Non-LLM runtimes (service -> 'n/a') are unconstrained here."""
     lin = conn.execute("SELECT runtime FROM lineages WHERE root=?", (root,)).fetchone()

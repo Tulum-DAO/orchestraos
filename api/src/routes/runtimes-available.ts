@@ -66,8 +66,12 @@ export interface StaticModel {
 }
 
 export interface AuthProbeConfig {
-  kind: 'cli-json' | 'file-json-key' | 'file-json-expiry';
+  kind: 'cli-json' | 'file-json-key' | 'file-json-expiry' | 'cli-text';
   cmd?: string;
+  /** cli-text: a stdout line matching this regex means signed in ... */
+  success_pattern?: string;
+  /** ... and one matching this means signed out (checked first). Neither -> unverified. */
+  failure_pattern?: string;
   success_key?: string;
   path?: string;
   key?: string;
@@ -174,6 +178,19 @@ export function salvageCliJsonAnswer(stdout: string, successKey = 'loggedIn'): A
   return null;
 }
 
+/** The cli-text verdict over a CLI's stdout (pure; the Python twin is runtime_probe.py).
+ *  `grok models` answers "You are logged in with ..." or "You are not authenticated." and
+ *  exits 0 either way, so the TEXT is the answer. */
+export function cliTextVerdict(stdout: string, probe: Pick<AuthProbeConfig, 'success_pattern' | 'failure_pattern'>): AuthResult {
+  if (probe.failure_pattern && new RegExp(probe.failure_pattern, 'm').test(stdout)) {
+    return { authed: false, auth_reason: 'signed-out' };
+  }
+  if (probe.success_pattern && new RegExp(probe.success_pattern, 'm').test(stdout)) {
+    return { authed: true };
+  }
+  return { authed: 'unverified', auth_reason: 'auth-probe-no-match' };
+}
+
 function runAuthProbe(probe: AuthProbeConfig): AuthResult {
   try {
     if (probe.kind === 'cli-json') {
@@ -200,6 +217,19 @@ function runAuthProbe(probe: AuthProbeConfig): AuthResult {
       }
       if (probe.fallback) return runAuthProbe(probe.fallback);
       return { authed: 'unverified', auth_reason: `auth-probe-missing-key:${key}` };
+    }
+
+    if (probe.kind === 'cli-text') {
+      if (!probe.cmd) return { authed: 'unverified', auth_reason: 'no-probe-cmd-configured' };
+      const [bin, ...args] = probe.cmd.split(' ');
+      let out: string;
+      try {
+        out = execFileSync(bin, args, { stdio: ['ignore', 'pipe', 'ignore'], timeout: 20000 }).toString();
+      } catch (e) {
+        out = (e as { stdout?: Buffer | string }).stdout?.toString?.() || '';
+        if (!out.trim()) return { authed: 'unverified', auth_reason: 'auth-probe-cmd-failed' };
+      }
+      return cliTextVerdict(out, probe);
     }
 
     if (probe.kind === 'file-json-key') {

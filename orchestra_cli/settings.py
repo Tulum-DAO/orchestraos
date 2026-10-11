@@ -55,7 +55,7 @@ class Settings:
     arturo_brain: str = "auto"          # auto | api | runtime (track T2)
     arturo_runtime_model: str = ""      # optional model flag for the runtime brain
     notify_channel: str = "none"
-    runtimes_enabled: list = field(default_factory=lambda: ["claude", "gemini", "codex"])
+    runtimes_enabled: list = field(default_factory=lambda: ["claude", "gemini", "codex", "grok"])
     beat_enabled: bool = True
     bus_beat_interval: int = 60
     cron_beat_interval: int = 900
@@ -220,7 +220,7 @@ def load_settings(repo_root: Path | None = None, config_path: Path | None = None
         arturo_brain=str(_get(raw, "arturo", "brain", "auto")),
         arturo_runtime_model=str(_get(raw, "arturo", "runtime_model", "")),
         notify_channel=str(_get(raw, "notify", "channel", "none")),
-        runtimes_enabled=list(_get(raw, "runtimes", "enabled", ["claude", "gemini", "codex"])),
+        runtimes_enabled=list(_get(raw, "runtimes", "enabled", ["claude", "gemini", "codex", "grok"])),
         beat_enabled=bool(rot.get("beat_enabled", True)),
         bus_beat_interval=int(rot.get("bus_beat_interval_seconds", 60)),
         cron_beat_interval=int(rot.get("cron_beat_interval_seconds", 900)),
