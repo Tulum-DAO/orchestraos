@@ -248,6 +248,23 @@ export function ArturoPill() {
     return () => setModelOpen(false);
   }, [open]);
 
+  // A tap anywhere outside the pane closes it. The draft and attachments are this component's
+  // state, which outlives the close (only the markup goes), so they are still there on reopen.
+  // Not while the model picker is up (it sits above the pane and closes itself), and not on
+  // the Arturo button, whose own click toggles the pane.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Element | null;
+      if (!t || modelOpen) return;
+      if (panelRef.current?.contains(t) || t.closest('[data-arturo-toggle]')) return;
+      setOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    return () => document.removeEventListener('pointerdown', onDown, true);
+  }, [open, modelOpen, setOpen]);
+
   function toggleContextCard() {
     if (ctxOn) dismissContext(convId); else restoreContext(convId);
     setCtxOn(!ctxOn);
@@ -263,7 +280,7 @@ export function ArturoPill() {
       {/* No backdrop, deliberately (operator, 2026-09-19): the pane must not dim the page and
           must not swallow clicks on it — you keep working while Arturo is open, the way the
           assistant panel in the previous build did. Close with the × or Escape. */}
-      <div className="arturo-pill-panel" role="dialog" aria-label="Ask Arturo">
+      <div ref={panelRef} className="arturo-pill-panel" role="dialog" aria-label="Ask Arturo">
         <div className="arturo-pill-head">
           <span className="who">Arturo</span>
           <span className="spacer" />
@@ -291,7 +308,8 @@ export function ArturoPill() {
         <div className="arturo-pill-thread" ref={scroller}>
           {/* One unwrapped hint, tucked under the head divider; gone the moment the first message is sent
               (Shaw 2026-09-22). No Threads sentence — the Threads button says it. */}
-          {turns.length === 0 && !busy && <p className="empty">Ask about what you are looking at, or anything else.</p>}
+          {/* Hidden (not removed) once typing starts, so the pane keeps its size. */}
+          {turns.length === 0 && !busy && <p className="empty" style={draft ? { visibility: 'hidden' } : undefined}>Ask about what you are looking at, or anything else.</p>}
           {turns.map((t, i) => t.note ? (
             <div key={i} className="row note"><div className="meta">{t.text === STARTING_TEXT ? t.text : `I can't do that yet — ${t.text}.`}</div></div>
           ) : (
@@ -335,7 +353,7 @@ export function ArturoPill() {
             {dictNote && <span className="attach-error">{dictNote}</span>}
           </div>
         )}
-        <textarea ref={ta} rows={1} value={draft} placeholder="Ask Arturo" onChange={(e) => { setDraft(e.target.value); growTa(); }}
+        <textarea ref={ta} rows={1} value={draft} placeholder="Ask Arturo…" onChange={(e) => { setDraft(e.target.value); growTa(); }}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} />
         <div className="ctrl-row">
           {/* The page-context CARD lives HERE, in place of the old "Arturo" chip: it sits
