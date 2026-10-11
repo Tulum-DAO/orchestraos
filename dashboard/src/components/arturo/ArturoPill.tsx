@@ -248,6 +248,23 @@ export function ArturoPill() {
     return () => setModelOpen(false);
   }, [open]);
 
+  // A tap anywhere outside the pane closes it. The draft and attachments are this component's
+  // state, which outlives the close (only the markup goes), so they are still there on reopen.
+  // Not while the model picker is up (it sits above the pane and closes itself), and not on
+  // the Arturo button, whose own click toggles the pane.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Element | null;
+      if (!t || modelOpen) return;
+      if (panelRef.current?.contains(t) || t.closest('[data-arturo-toggle]')) return;
+      setOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    return () => document.removeEventListener('pointerdown', onDown, true);
+  }, [open, modelOpen, setOpen]);
+
   function toggleContextCard() {
     if (ctxOn) dismissContext(convId); else restoreContext(convId);
     setCtxOn(!ctxOn);
@@ -263,7 +280,7 @@ export function ArturoPill() {
       {/* No backdrop, deliberately (operator, 2026-09-19): the pane must not dim the page and
           must not swallow clicks on it — you keep working while Arturo is open, the way the
           assistant panel in the previous build did. Close with the × or Escape. */}
-      <div className="arturo-pill-panel" role="dialog" aria-label="Ask Arturo">
+      <div ref={panelRef} className="arturo-pill-panel" role="dialog" aria-label="Ask Arturo">
         <div className="arturo-pill-head">
           <span className="who">Arturo</span>
           <span className="spacer" />

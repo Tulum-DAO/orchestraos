@@ -12,6 +12,7 @@ export function ArturoButton({ small = false }: { small?: boolean } = {}) {
   const exchanges = useArturoUi((s) => s.exchanges);
   return (
     <button
+      data-arturo-toggle
       type="button"
       onClick={() => setOpen(!open)}
       aria-label={open ? 'Close Arturo' : 'Ask Arturo'}
