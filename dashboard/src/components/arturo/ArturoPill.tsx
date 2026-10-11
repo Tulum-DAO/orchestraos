@@ -291,7 +291,8 @@ export function ArturoPill() {
         <div className="arturo-pill-thread" ref={scroller}>
           {/* One unwrapped hint, tucked under the head divider; gone the moment the first message is sent
               (Shaw 2026-09-22). No Threads sentence — the Threads button says it. */}
-          {turns.length === 0 && !busy && <p className="empty">Ask about what you are looking at, or anything else.</p>}
+          {/* Hidden (not removed) once typing starts, so the pane keeps its size. */}
+          {turns.length === 0 && !busy && <p className="empty" style={draft ? { visibility: 'hidden' } : undefined}>Ask about what you are looking at, or anything else.</p>}
           {turns.map((t, i) => t.note ? (
             <div key={i} className="row note"><div className="meta">{t.text === STARTING_TEXT ? t.text : `I can't do that yet — ${t.text}.`}</div></div>
           ) : (
@@ -335,7 +336,7 @@ export function ArturoPill() {
             {dictNote && <span className="attach-error">{dictNote}</span>}
           </div>
         )}
-        <textarea ref={ta} rows={1} value={draft} placeholder="Ask Arturo" onChange={(e) => { setDraft(e.target.value); growTa(); }}
+        <textarea ref={ta} rows={1} value={draft} placeholder="Ask Arturo…" onChange={(e) => { setDraft(e.target.value); growTa(); }}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} />
         <div className="ctrl-row">
           {/* The page-context CARD lives HERE, in place of the old "Arturo" chip: it sits
