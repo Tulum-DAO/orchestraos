@@ -169,6 +169,17 @@ def seed_demo_registry(registry_path: Path) -> list:
     return added
 
 
+def _record_demo_seats(repo_root: Path, data_dir: Path, added: list) -> None:
+    """An armed store owns registry.json (the regenerator rewrites it), so demo seats seeded
+    into the flat file must go into the database too or they vanish within seconds."""
+    if not added or not (repo_root / "scripts" / "identity_store" / "cutover.py").exists():
+        return
+    from . import identity_cmd as IC
+    reg = json.loads((data_dir / "registry.json").read_text())
+    for aid in added:
+        IC.record_seat(repo_root, data_dir, aid, reg["agents"][aid])
+
+
 def _git_init_data_dir(data_dir: Path, run: Callable) -> bool:
     ignore = data_dir / ".gitignore"
     if not ignore.exists():
@@ -398,6 +409,7 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
     # 5d. --demo: fixture seats + one card of each kind so the dashboard is not empty.
     if demo:
         added = seed_demo_registry(data_dir / "registry.json")
+        _record_demo_seats(repo_root, data_dir, added)
         report.append(Step("demo:registry", bool(added),
                            ("added " + ", ".join(added)) if added else "fixture seats present"))
         seeder = repo_root / "scripts" / "demo_seed_cards.py"

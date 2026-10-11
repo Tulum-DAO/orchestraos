@@ -184,6 +184,63 @@ def arm(repo_root: Path, data_dir: Path, *, dry_run: bool = False, start_regener
     return rep
 
 
+def record_seat(repo_root: Path, data_dir: Path, name: str, row: dict) -> bool:
+    """Put a seat the CLI just wrote into registry.json into the identity database too.
+
+    Once the store is armed, registry.json is a projection: the regenerator rewrites it from the
+    database within ~30 s, so a row that exists only in the flat file (the starter's new seat,
+    `orchestra agent`'s, init's --demo seats) is erased, often before spawn-agent.sh registers it.
+    This imports exactly that one row (never the whole flat file, which may be older than the
+    database for other seats) and projects synchronously. A seat already in the database gets its
+    registry doc updated through the sanctioned writer instead. Returns False when not armed."""
+    cutover, _, migrate, _, orchestra_db, _ = _modules(repo_root)
+    od = str(data_dir)
+    if not cutover.is_active(od):
+        return False
+    from scripts.identity_store import identity_writer, status_vocab
+    # canonical.status only takes the four-value enum (online / parked / provisional / retired).
+    # The CLI's "provisioning" (not started yet) and the demo seats' "offline" are not in it; with
+    # no live process both are parked there, and the reconciler flips the seat to online the first
+    # pass its pane is live. The registry DOC keeps the written status verbatim: the message
+    # router's bootstrap exemption reads "provisioning" from it to let a newborn's orientation in.
+    typed = row
+    if row.get("status") not in status_vocab.STATUS_ENUM:
+        typed = dict(row, status=status_vocab.resolve(row.get("status"), is_live=False))
+    db = Path(data_dir) / DB_REL
+    orchestra_db.init_db(str(db))
+    conn = orchestra_db.get_connection(str(db))
+    try:
+        exists = conn.execute("SELECT 1 FROM canonical WHERE root=?", (name,)).fetchone() is not None
+        doc = conn.execute("SELECT payload_json FROM source_records WHERE file='registry.json' "
+                           "AND kind='agent' AND key=?", (name,)).fetchone()
+        current = json.loads(doc[0]) if doc else {}
+        if not exists:
+            nxt = conn.execute("SELECT COALESCE(MAX(ordinal), -1) + 1 FROM source_records "
+                               "WHERE file='registry.json' AND kind='agent'").fetchone()[0]
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                migrate._store_source(conn, "registry.json", "agent", name, nxt, row)
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            conflicts = []
+            sess = {name: {"model": row["model"]}} if row.get("model") else {}
+            migrate._populate_typed(conn, {name: typed}, sess, {}, conflicts)
+            conn.commit()
+            if conflicts:
+                raise RuntimeError(f"could not record {name} in the identity store: {conflicts}")
+    finally:
+        conn.close()
+    if exists:
+        # a later CLI edit of a registered seat (orchestra agent's reports_to fix-up): its config
+        # only. Status belongs to spawn and the reconciler, never to this re-write.
+        cfg = {k: v for k, v in row.items() if k != "status"}
+        identity_writer.update_registry_agent(od, name, cfg, full_record=dict(current, **cfg))
+    identity_writer.project_now(od)
+    return True
+
+
 def status(repo_root: Path, data_dir: Path) -> dict:
     cutover, freeze, _, monitor, _, _ = _modules(repo_root)
     od = str(data_dir)
