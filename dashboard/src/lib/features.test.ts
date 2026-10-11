@@ -113,8 +113,9 @@ test('every gated surface is wired to its helper', () => {
   const gated = layout.match(/showArturoPill\(\)\s*&&\s*<ArturoButton\b/g) ?? [];
   assert.equal(buttons.length, 1, 'the mobile header has Arturo’s one button');
   assert.equal(gated.length, buttons.length, 'every Arturo circle is behind showArturoPill()');
-  // The bell is mounted exactly once at the layout: CSS position, rather than a second hidden
-  // route-specific component, decides where it appears. That keeps polling and dropdown state singular.
+  // The bell is mounted exactly once at the layout: a portal into the showing header's slot
+  // (lib/bellPlacement), rather than a second route-specific component, decides where it appears.
+  // That keeps polling and dropdown state singular.
   assert.equal((layout.match(/<NotificationBell\b/g) ?? []).length, 1, 'one application bell mount');
   const topbar = src('components/agent/TopBar.tsx');
   assert.doesNotMatch(topbar, /NotificationBell|ArturoButton/, 'agent top bar reserves the shared bell slot');

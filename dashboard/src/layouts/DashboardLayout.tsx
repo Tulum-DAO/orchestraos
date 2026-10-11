@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
 import { CommandPalette } from '../components/CommandPalette';
 import { Outlet, useLocation } from 'react-router-dom';
 import { RouteErrorBoundary } from '../components/RouteErrorBoundary';
@@ -14,9 +15,27 @@ import { useOrchestraStore } from '../stores/useOrchestraStore';
 import { initAutoDiscovery } from '../lib/telemetry';
 import { showArturoPill, isViewHidden } from '../lib/features';
 import NotFound from '../components/NotFound';
+import { HeaderEndSlotContext } from '../lib/headerSlot';
+import { bellHost } from '../lib/bellPlacement';
+
+// Tailwind's `md` breakpoint (48rem), read live so the bell follows the bar that is showing.
+const DESKTOP_QUERY = '(min-width: 48rem)';
+const subscribeDesktop = (cb: () => void) => {
+  const mq = window.matchMedia(DESKTOP_QUERY);
+  mq.addEventListener('change', cb);
+  return () => mq.removeEventListener('change', cb);
+};
+const isDesktopNow = () => window.matchMedia(DESKTOP_QUERY).matches;
 
 export function DashboardLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // THE ONE BELL'S HOME (#400 mounts it once). A page header registers an end slot through
+  // HeaderEndSlotContext (the agent TopBar does); the phone bar below has its own. The bell is
+  // portalled into the slot for the bar that is showing, so the ROW lays it out: same height,
+  // same centre line as its neighbours, whatever that row's padding is.
+  const [pageBellSlot, setPageBellSlot] = useState<HTMLElement | null>(null);
+  const [phoneBellSlot, setPhoneBellSlot] = useState<HTMLElement | null>(null);
+  const desktop = useSyncExternalStore(subscribeDesktop, isDesktopNow, () => true);
   // THE PHONE TOP BAR'S BOTTOM EDGE, published as --topbar-h: the Arturo pane opens under it, and
   // the Agents-page chat panel starts below it so the bar (Arturo + the bell) stays usable while
   // the panel is open (Shaw, 2026-10-10). 0 on desktop, where this bar is hidden.
@@ -55,6 +74,8 @@ export function DashboardLayout() {
     initAutoDiscovery();
   }, []);
 
+  const bell = <NotificationBell />;
+
   return (
     <div className="flex h-screen bg-neutral-950 text-neutral-100">
       {/* Desktop sidebar */}
@@ -91,13 +112,14 @@ export function DashboardLayout() {
             {sidebarOpen ? <X size={22} /> : <Menu size={22} />}
           </button>
           <span className="text-sm font-bold tracking-tight text-white">orchestraOS</span>
-          {/* Arturo's one spot. The one shared bell is fixed beside this bar, so leave room for
-              it instead of mounting a second polling bell on phone chat routes. */}
-          <div className="ml-auto mr-12 flex items-center gap-1">
+          {/* Arturo's one spot, then the shared bell's phone home (portalled in below). */}
+          <div className="ml-auto flex items-center gap-1">
             {showArturoPill() && <ArturoButton />}
+            <div ref={setPhoneBellSlot} data-phone-bell-slot className="flex items-center" />
           </div>
         </div>
         <CoachingToast />
+        <HeaderEndSlotContext.Provider value={setPageBellSlot}>
         {isChatRoute ? (
           <div className="flex-1 min-h-0 flex flex-col">
             <RouteErrorBoundary label="page">{page}</RouteErrorBoundary>
@@ -107,14 +129,18 @@ export function DashboardLayout() {
             <RouteErrorBoundary label="page">{page}</RouteErrorBoundary>
           </div>
         )}
+        </HeaderEndSlotContext.Provider>
       </main>
 
-      {/* One bell for every route. It stays fixed so it is a phone-bar control below md and the
-          final top-bar control on desktop; agent TopBar reserves this same slot. Rendering it
-          once also means one polling loop and one dropdown state. */}
-      <div className="fixed right-4 top-[calc(env(safe-area-inset-top)+0.75rem)] z-30 md:top-4">
-        <NotificationBell />
-      </div>
+      {/* One bell for every route: one polling loop, one dropdown state. It renders INSIDE the
+          header row that is showing (lib/bellPlacement), and only desktop pages without their own
+          header keep the fixed top-right corner. */}
+      {(() => {
+        const host = bellHost({ desktop, pageSlot: !!pageBellSlot, phoneSlot: !!phoneBellSlot });
+        if (host === 'page' && pageBellSlot) return createPortal(bell, pageBellSlot);
+        if (host === 'phone' && phoneBellSlot) return createPortal(bell, phoneBellSlot);
+        return <div className="fixed right-4 top-[calc(env(safe-area-inset-top)+0.75rem)] z-30 md:top-4">{bell}</div>;
+      })()}
 
       {/* Global voice call bubble — persists across page navigation */}
       {activeCall && (

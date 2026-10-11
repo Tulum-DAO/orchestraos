@@ -73,17 +73,21 @@ export default function NotificationBell() {
 
   return (
     <>
-      <div className="relative" ref={dropdownRef}>
+      {/* A FLEX box, not a block: a block wrapper put the inline button on a text line, whose
+          strut made the wrapper taller than the 40px button and nudged it off the row's centre. */}
+      <div className="relative flex shrink-0 items-center" ref={dropdownRef}>
         <button
           onClick={() => setDropdownOpen(!dropdownOpen)}
           // The same icon set as the agent page's top bar (p-2 + a 24px icon = 40px box, the
           // foreground colour), so the bell reads as one of that row, not a smaller grey cousin.
-          className="relative p-2 text-foreground hover:bg-muted rounded-lg transition-colors"
+          className="relative flex items-center justify-center p-2 text-foreground hover:bg-muted rounded-lg transition-colors"
           aria-label="Notifications"
         >
           <Bell size={24} />
           {totalPending > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-red-500 text-white border-2 border-background px-1">
+            // Absolutely positioned over the button's corner: it never takes layout space, so
+            // a count appearing or growing cannot move the bell.
+            <span className="pointer-events-none absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold leading-none rounded-full bg-red-500 text-white border-2 border-background px-1">
               {totalPending}
             </span>
           )}
