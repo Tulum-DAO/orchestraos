@@ -36,6 +36,7 @@ import { useArturoBrain } from '../../stores/arturoBrain';
 import { useArturoUi } from '../../stores/arturoUi';
 import { brainFromThread, describeTurnError, toWireBrain } from '../../lib/arturoBrain';
 import { brainProviderId, type HealthBrain } from '../../lib/brainLogo';
+import { arturoComposerText } from '../../lib/arturoComposer';
 
 interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[]; spawned?: string[]; at: number; live?: boolean; state?: SendState;
   /** A first-person status note (voice not configured, mic denied…) — rendered as a small interleaved
@@ -175,7 +176,7 @@ export function ArturoPill() {
   });
 
   async function send() {
-    const text = draft.trim();
+    const text = arturoComposerText(draft, attachments.length);
     if (!text || busy) return;
     if (dictating) stopDictation();      // the sent text is final; don't re-append into the empty box
     clearDictNote();
@@ -393,7 +394,7 @@ export function ArturoPill() {
             {inCall ? (
               <button className="circle-btn white" aria-label="End call" aria-pressed title="End call"
                       onClick={() => void toggleCall()}><PhoneOff size={18} /></button>
-            ) : draft.trim() ? (
+            ) : arturoComposerText(draft, attachments.length) ? (
               <button className="circle-btn white" aria-label="Send" onClick={() => void send()} disabled={busy}><ArrowUp size={18} /></button>
             ) : (
               <button className="circle-btn white" aria-label={HANDS_FREE} title={handsFreeTitle(handsFreeReady(health))}
