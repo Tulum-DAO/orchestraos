@@ -110,18 +110,16 @@ test('every gated surface is wired to its helper', () => {
   // Arturo's top-bar circle sits in the mobile header and must stay behind the feature flag.
   const layout = src('layouts/DashboardLayout.tsx');
   const buttons = layout.match(/<ArturoButton\b/g) ?? [];
-  const gated = layout.match(/showArturoPill\(\)\s*&&\s*<ArturoButton\b/g) ?? [];
-  assert.equal(buttons.length, 1, 'the mobile header has Arturo’s one button');
+  const gated = layout.match(/showArturoPill\(\)\s*&&\s*(?:\(\s*<div[^>]*>\s*)?<ArturoButton\b/g) ?? [];
+  assert.equal(buttons.length, 1, 'Arturo has one button: the floating one');
   assert.equal(gated.length, buttons.length, 'every Arturo circle is behind showArturoPill()');
   // The bell is mounted exactly once at the layout: a portal into the showing header's slot
   // (lib/bellPlacement), rather than a second route-specific component, decides where it appears.
   // That keeps polling and dropdown state singular.
   assert.equal((layout.match(/<NotificationBell\b/g) ?? []).length, 1, 'one application bell mount');
   const topbar = src('components/agent/TopBar.tsx');
-  // DISCLOSED test change (Shaw, 2026-10-11): ArturoButton is now allowed here. The agent page's bar
-  // is its only bar (the phone bar is hidden on agent pages), and desktop had no Arturo there at all.
-  // The bell stays singular: still portalled in, never mounted here.
-  assert.doesNotMatch(topbar, /NotificationBell/, 'agent top bar reserves the shared bell slot');
+  // Arturo floats from the layout (Shaw, 2026-10-11); the bell stays singular, portalled in.
+  assert.doesNotMatch(topbar, /NotificationBell|ArturoButton/, 'agent top bar reserves the shared bell slot');
   const bell = src('components/NotificationBell.tsx');
   assert.match(bell, /bg-popover.*text-popover-foreground/, 'dropdown follows the active theme tokens');
   assert.doesNotMatch(bell, /bg-neutral-|text-neutral-|border-neutral-|hover:bg-neutral-/, 'dropdown has no fixed dark surface tokens');

@@ -30,7 +30,11 @@ test('the phone bar is hidden on agent pages, sits above page headers, and the l
   assert.match(layout, /z-\[25\]/);
   assert.match(layout, /\bh-dvh\b/);
   const top = src('components/agent/TopBar.tsx');
-  assert.match(top, /<ArturoButton \/>/, 'Arturo is on the agent page bar');
+  assert.doesNotMatch(top, /ArturoButton|Brain|Siren|cycleTheme/, 'the agent bar is menu, seat, Chat/Dev and the bell');
+  assert.match(layout, /<ArturoButton small \/>/, 'Arturo floats, small');
+  assert.match(layout, /--arturo-lift/, 'and is lifted above the composer');
+  assert.match(layout, /var\(--vvh, 100dvh\)/, 'the app is the visible height, so the keyboard never covers the CLI');
+  assert.match(src('pages/AgentPage.tsx'), /OPEN_SIDEBAR_EVENT/, 'the agent menu button opens the one sidebar');
   assert.doesNotMatch(top, /data-header-end-slot className="hidden/, 'the bell slot shows on phones too');
   assert.doesNotMatch(src('pages/Agents.tsx'), /"sticky top-0 z-20/, 'the Agents header no longer sticks under the phone bar');
 });

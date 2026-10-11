@@ -8,6 +8,9 @@ import type { WebSocket as WsType, WebSocketServer as WssType } from 'ws';
 
 // Lazy-load node-pty to avoid crash if not installed
 import { createRequire } from 'module';
+import { execFileSync } from 'node:child_process';
+import path from 'node:path';
+import { CODE_ROOT } from '../lib/codeRoot.js';
 const require_cjs = createRequire(import.meta.url);
 
 let pty: any;
@@ -32,6 +35,7 @@ export function setupTerminalWebSocket(wss: WssType) {
     }
 
     console.log(`[terminal] PTY attaching to tmux session: ${session}`);
+    refreshSessionDefaults(session);
 
     // Use node-pty to spawn tmux attach with a real PTY.
     // -f ignore-size (tmux >=3.2; box runs 3.4): this client must NOT drive the
@@ -93,4 +97,16 @@ export function setupTerminalWebSocket(wss: WssType) {
       }
     });
   });
+}
+
+/** Re-apply scripts/tmux_session_defaults.sh to a seat before attaching. A seat gets its hooks at
+ *  spawn, so a fix to them (2026-10-11: the client-detached hook printed "(null):0: not in a mode"
+ *  on every other Dev open) reached a running seat only on its next spawn. Idempotent, fail-soft,
+ *  and only for names the helper itself accepts. */
+export function refreshSessionDefaults(session: string): void {
+  if (!/^[A-Za-z0-9_-]+$/.test(session)) return;
+  const helper = path.join(CODE_ROOT, 'scripts', 'tmux_session_defaults.sh');
+  try {
+    execFileSync('bash', ['-c', 'source "$1" && orch_tmux_session_defaults "$2"', '_', helper, session], { timeout: 5000, stdio: 'ignore' });
+  } catch { /* never block an attach on it */ }
 }
