@@ -127,7 +127,7 @@ export function ProviderConnectModal({ provider, onClose, onBack, startLoginShel
   const dismiss = onBack || onClose;
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/50" onClick={dismiss}>
+    <div className="fixed inset-0 z-[85] flex items-end justify-center bg-black/50" onClick={dismiss}>
       <div className="w-full max-w-lg max-h-[94vh] flex flex-col rounded-t-2xl bg-background border-t border-border p-4 pb-6"
            role="dialog" aria-label={`Connect ${provider.label}`} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-2 mb-1">

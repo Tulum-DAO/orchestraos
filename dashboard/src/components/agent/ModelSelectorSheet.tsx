@@ -230,8 +230,9 @@ export function ModelSelectorSheet({ open, onClose, selection, onPick, onPickDef
 
   if (!open) return null;
 
+  // z-[80]: above the Arturo pane (z 76), which opens this sheet from its brain button.
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40" onClick={onClose}>
+    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/40" onClick={onClose}>
       <div
         className="w-full max-w-lg rounded-t-2xl bg-background border-t border-border p-4 pb-6"
         onClick={(e) => e.stopPropagation()}
