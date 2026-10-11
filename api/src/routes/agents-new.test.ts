@@ -28,6 +28,7 @@ function makeDeps(over: Partial<NewAgentDeps> & { rows?: any[] } = {}): NewAgent
   const deps: any = {
     probeRuntimes: () => { calls.probes += 1; return over.rows ?? [authedRow('claude', 'claude')]; },
     existingNames: () => new Set<string>(['gm']),
+    registeredAgents: () => ({ gm: 'T0', 'pm-test': 'T1' }),
     spawn: async (args: any) => { calls.spawn.push(args); return { ok: true, output: 'spawned' }; },
     sessionExists: () => true,
     startLoginShell: async (args: any) => { calls.loginShell.push(args); return { ok: true, output: '' }; },
@@ -108,7 +109,7 @@ test('POST /new spawns a registered seat on the authed runtime', async () => {
   assert.equal(r.json.session, 'docs-writer');
   assert.equal(r.json.runtime, 'claude');
   // gm:false is new on this object (the General Manager path); every other field is unchanged.
-  assert.deepEqual((deps as any).calls.spawn[0], { name: 'docs-writer', task: 'write the README', runtime: 'claude', gm: false });
+  assert.deepEqual((deps as any).calls.spawn[0], { name: 'docs-writer', task: 'write the README', runtime: 'claude', gm: false, parent: null });
 });
 
 test('POST /new works with no task', async () => {
@@ -150,7 +151,7 @@ test('POST /new with gm:true spawns the General Manager, not an ordinary worker'
   assert.equal(r.json.gm, true);
   // T0 + always-on + prompts/gm.md are what `orchestra spawn --gm` sets; the route must take that
   // path, because spawn-agent.sh cannot set any of them.
-  assert.deepEqual((deps as any).calls.spawn[0], { name: 'gm', task: 'run the fleet', runtime: 'claude', gm: true });
+  assert.deepEqual((deps as any).calls.spawn[0], { name: 'gm', task: 'run the fleet', runtime: 'claude', gm: true, parent: null });
 });
 
 test('POST /new without gm keeps the ordinary worker path', async () => {
@@ -321,4 +322,55 @@ test('a failed login shell is LOGGED, not only returned in the body', async () =
   assert.equal(warns.length, 1);
   assert.match(warns[0], /shell_failed/);
   assert.match(warns[0], /tmux-1000/, 'the reason the shell failed must reach the log');
+});
+
+// ---- parent (2026-10-11: the form sent PARENT_AGENT_ID=dashboard, and every Worker was refused) ----
+
+test('POST /new with no parent starts a lead: no parent reaches the spawn', async () => {
+  const deps = makeDeps();
+  await post(deps, '/api/agents/new', { name: 'test' });
+  assert.equal((deps as any).calls.spawn[0].parent, null);
+});
+
+test('POST /new passes a registered parent through to the spawn', async () => {
+  const deps = makeDeps();
+  const r = await post(deps, '/api/agents/new', { name: 'test', parent: 'pm-test' });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.parent, 'pm-test');
+  assert.equal((deps as any).calls.spawn[0].parent, 'pm-test');
+});
+
+test('POST /new refuses a parent that is not a registered seat, and never spawns', async () => {
+  const deps = makeDeps();
+  const r = await post(deps, '/api/agents/new', { name: 'test', parent: 'dashboard' });
+  assert.equal(r.status, 400);
+  assert.equal(r.json.reason, 'unknown_parent');
+  assert.equal((deps as any).calls.spawn.length, 0);
+});
+
+test('POST /new with gm:true ignores any parent (a GM is the top of the tree)', async () => {
+  const deps = makeDeps({ existingNames: () => new Set<string>() });
+  await post(deps, '/api/agents/new', { name: 'gm', gm: true, parent: 'pm-test' });
+  assert.equal((deps as any).calls.spawn[0].parent, null);
+});
+
+test('GET /new/parents lists the registered seats with their tier', async () => {
+  const deps = makeDeps();
+  const app = express();
+  app.use('/api/agents', createAgentsNewRouter(deps));
+  const server = app.listen(0);
+  const port = (server.address() as any).port;
+  const json = await new Promise<any>((resolve, reject) => {
+    http.get({ host: '127.0.0.1', port, path: '/api/agents/new/parents' }, (r) => {
+      let d = ''; r.on('data', (c) => (d += c)); r.on('end', () => resolve(JSON.parse(d)));
+    }).on('error', reject);
+  });
+  server.close();
+  assert.deepEqual(json.agents, [{ id: 'gm', tier: 'T0' }, { id: 'pm-test', tier: 'T1' }]);
+});
+
+test('the production spawn never hard-codes a parent', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('./agents-new.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /PARENT_AGENT_ID:\s*'dashboard'/);
 });

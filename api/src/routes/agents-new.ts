@@ -1,7 +1,11 @@
 /**
  * agents-new.ts — the server half of Overview's "New Agent" button.
  *
- *   POST /api/agents/new          {name, task?, runtime?}
+ *   POST /api/agents/new          {name, task?, runtime?, parent?, gm?}
+ *       parent: the registered seat the new one reports to. Omitted, the seat starts as a
+ *          lead (T1) with no parent; under a T0 it is a T1, under a lead it is that lead's T2
+ *          (scripts/tier_rule.py). An unregistered parent is a 400, never a spawn.
+ *   GET  /api/agents/new/parents  -> {agents: [{id, tier}]} the seats a new one can report to
  *       -> a REAL registered seat through the repo's spawn-agent.sh (the same path
  *          Arturo's commission tool uses: AGENT_RUNTIME + AGENT_MODEL so the registry
  *          writer accepts a new row), verified by `tmux has-session`.
@@ -47,7 +51,9 @@ const DEFAULT_MODEL_FOR_RUNTIME: Record<string, string> = {
 export interface NewAgentDeps {
   probeRuntimes: () => RuntimeRow[];
   existingNames: () => Set<string> | Promise<Set<string>>;
-  spawn: (args: { name: string; task: string; runtime: string; gm: boolean }) => Promise<{ ok: boolean; output: string }>;
+  spawn: (args: { name: string; task: string; runtime: string; gm: boolean; parent: string | null }) => Promise<{ ok: boolean; output: string }>;
+  /** Registered seats (registry.json) and their tier: who a new seat may report to. */
+  registeredAgents: () => Record<string, string> | Promise<Record<string, string>>;
   sessionExists: (session: string) => boolean;
   startLoginShell: (args: { session: string; greeting: string }) => Promise<{ ok: boolean; output: string }>;
 }
@@ -150,14 +156,30 @@ export function createAgentsNewRouter(deps: NewAgentDeps): Router {
     // (docs/REFERENCE_INSTALL.md: T0 is the always-on manager seat). Only `orchestra spawn --gm`
     // sets those, so the gm path goes through the CLI rather than spawn-agent.sh.
     const gm = req.body?.gm === true;
-    const result = await deps.spawn({ name, task, runtime: runtime.id, gm });
+    // The parent is a REAL registered seat or nothing. This used to be the literal 'dashboard',
+    // which is not an agent, so spawn-agent.sh's tier rule refused every Worker the form made
+    // (Shaw on the workbench, 2026-10-11). A GM has no parent: it is the top of the tree.
+    const parent = gm ? null : (String(req.body?.parent ?? '').trim() || null);
+    if (parent) {
+      const known = await deps.registeredAgents();
+      if (!Object.prototype.hasOwnProperty.call(known, parent)) {
+        return res.status(400).json({ ok: false, reason: 'unknown_parent', parent });
+      }
+    }
+    const result = await deps.spawn({ name, task, runtime: runtime.id, gm, parent });
     if (!result.ok) {
       return res.status(502).json({ ok: false, reason: 'spawn_failed', detail: result.output.slice(-600) });
     }
     if (!deps.sessionExists(name)) {
       return res.status(502).json({ ok: false, reason: 'session_missing', detail: result.output.slice(-600) });
     }
-    return res.json({ ok: true, id: name, session: name, runtime: runtime.id, task, gm });
+    return res.json({ ok: true, id: name, session: name, runtime: runtime.id, task, gm, parent });
+  });
+
+  router.get('/new/parents', async (_req: Request, res: Response) => {
+    const known = await deps.registeredAgents();
+    const agents = Object.entries(known).map(([id, tier]) => ({ id, tier })).sort((a, b) => a.id.localeCompare(b.id));
+    return res.json({ agents });
   });
 
   router.post('/login-shell', async (req: Request, res: Response) => {
@@ -208,19 +230,31 @@ function realSessionExists(session: string): boolean {
   } catch { return false; }
 }
 
-function realSpawn({ name, task, runtime, gm }: { name: string; task: string; runtime: string; gm: boolean }): Promise<{ ok: boolean; output: string }> {
+async function realRegisteredAgents(): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  try {
+    const { getRegistry } = await import('../services/state-reader.js');
+    const agents = (getRegistry()?.agents || {}) as Record<string, { tier?: unknown }>;
+    for (const [id, row] of Object.entries(agents)) out[id] = String(row?.tier ?? '').toUpperCase();
+  } catch { /* registry unreadable: no parents to offer */ }
+  return out;
+}
+
+function realSpawn({ name, task, runtime, gm, parent }: { name: string; task: string; runtime: string; gm: boolean; parent: string | null }): Promise<{ ok: boolean; output: string }> {
   // `orchestra spawn <seat> --gm` registers T0 + always_on + prompts/gm.md and THEN calls
   // spawn-agent.sh itself; the plain path calls spawn-agent.sh directly, as before.
   const args = gm
     ? [`${ORCHESTRA_ROOT}/bin/orchestra`, 'spawn', name, '--gm']
     : [`${ORCHESTRA_ROOT}/spawn-agent.sh`, name];
   if (task) args.push('--task', task);
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     AGENT_RUNTIME: runtime,
     AGENT_MODEL: DEFAULT_MODEL_FOR_RUNTIME[runtime] || runtime,
-    PARENT_AGENT_ID: 'dashboard',
   };
+  // Unset, not inherited, when there is no parent: the API's own env must never pick one.
+  delete env.PARENT_AGENT_ID;
+  if (parent) env.PARENT_AGENT_ID = parent;
   return new Promise((resolve) => {
     execFile(gm ? args[0] : 'bash', gm ? args.slice(1) : args, { timeout: 120000, cwd: ORCHESTRA_ROOT, env }, (err, stdout, stderr) => {
       resolve({ ok: !err, output: `${stdout || ''}\n${stderr || ''}`.trim() });
@@ -249,6 +283,7 @@ export const productionDeps: NewAgentDeps = {
   probeRuntimes: () => getRuntimesForAuth(),
   existingNames: realExistingNames,
   spawn: realSpawn,
+  registeredAgents: realRegisteredAgents,
   sessionExists: realSessionExists,
   startLoginShell: realStartLoginShell,
 };

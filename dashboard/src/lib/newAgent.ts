@@ -16,7 +16,7 @@ export interface RuntimeRow {
   installed: boolean; authed: boolean | 'unverified'; auth_reason?: string | null;
 }
 export interface NewAgentResult {
-  ok: boolean; id?: string; session?: string; runtime?: string; gm?: boolean;
+  ok: boolean; id?: string; session?: string; runtime?: string; gm?: boolean; parent?: string | null;
   reason?: string; detail?: string; status?: number; runtimes?: RuntimeRow[];
 }
 export interface LoginShellResult {
@@ -73,7 +73,29 @@ export async function freshRuntimes(): Promise<RuntimeRow[]> {
   return [];
 }
 
-export const createAgent = (name: string, task: string, runtime?: string, role?: string, gm?: boolean) =>
-  postJson<NewAgentResult>('/api/agents/new', { name, task, runtime, role: role || undefined, gm: gm || undefined });
+export const createAgent = (name: string, task: string, runtime?: string, role?: string, gm?: boolean, parent?: string | null) =>
+  postJson<NewAgentResult>('/api/agents/new', { name, task, runtime, role: role || undefined, gm: gm || undefined, parent: parent || undefined });
+
+export interface ParentSeat { id: string; tier: string }
+
+/** The registered seats a new one can report to (GET /api/agents/new/parents). */
+export async function fetchParents(): Promise<ParentSeat[]> {
+  try {
+    const res = await fetch('/api/agents/new/parents');
+    if (res.ok) return ((await res.json()).agents || []) as ParentSeat[];
+  } catch { /* offline: no parents to offer */ }
+  return [];
+}
+
+export type SeatKind = 'lead' | 'worker' | 'gm';
+
+/** Who a seat of this kind reports to. A worker (T2) needs a lead: any registered seat that is
+ *  not a T0 (under a T0 the tier rule makes it a T1, i.e. a lead). A lead reports to the GM
+ *  when there is one, otherwise to nobody. A GM reports to nobody. */
+export function parentChoices(kind: SeatKind, seats: ParentSeat[]): ParentSeat[] {
+  if (kind === 'gm') return [];
+  if (kind === 'lead') return seats.filter((s) => s.tier === 'T0');
+  return seats.filter((s) => s.tier !== 'T0');
+}
 
 export const openLoginShell = () => postJson<LoginShellResult>('/api/agents/login-shell', {});
