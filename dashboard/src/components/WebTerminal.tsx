@@ -9,6 +9,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { useRecentAgents } from '../stores/recentAgents';
+import { cliShift } from '../lib/terminalAnchor';
 
 interface WebTerminalProps {
   session: string;
@@ -262,7 +263,31 @@ export default function WebTerminal({ session, machine }: WebTerminalProps) {
     // On desktop: use ResizeObserver normally.
     let resizeObserver: ResizeObserver | null = null;
 
+    // Phone: keep the line being typed into right above the key bar when the keyboard
+    // shrinks the box (the pane itself is not resized, see above).
+    let anchorFrame = 0;
+    const anchor = () => {
+      const el = term.element;
+      const screen = el?.querySelector('.xterm-screen') as HTMLElement | null;
+      if (!el || !screen) return;
+      const shift = cliShift(container.clientHeight, screen.offsetHeight / term.rows,
+        term.buffer.active.cursorY, term.rows);
+      el.style.transform = shift ? `translateY(-${shift}px)` : '';
+    };
+    const scheduleAnchor = () => {
+      if (anchorFrame) return;
+      anchorFrame = requestAnimationFrame(() => { anchorFrame = 0; anchor(); });
+    };
+    const anchorSubs: { dispose: () => void }[] = [];
+
     if (isMobile) {
+      container.style.overflow = 'hidden';
+      anchorSubs.push(term.onCursorMove(scheduleAnchor), term.onRender(scheduleAnchor));
+      resizeObserver = new ResizeObserver(scheduleAnchor);
+      resizeObserver.observe(container);
+      window.visualViewport?.addEventListener('resize', scheduleAnchor);
+      xtermTextarea?.addEventListener('focus', scheduleAnchor);
+
       const handleOrientation = () => {
         const newWidth = window.innerWidth;
         if (newWidth !== lastWidth) {
@@ -296,6 +321,10 @@ export default function WebTerminal({ session, machine }: WebTerminalProps) {
         xtermTextarea.removeEventListener('focus', handleTermFocus);
       }
       window.visualViewport?.removeEventListener('resize', updateVvh);
+      window.visualViewport?.removeEventListener('resize', scheduleAnchor);
+      xtermTextarea?.removeEventListener('focus', scheduleAnchor);
+      anchorSubs.forEach((d) => d.dispose());
+      cancelAnimationFrame(anchorFrame);
       resizeObserver?.disconnect();
       ws.close();
       term.dispose();
