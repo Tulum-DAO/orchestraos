@@ -92,8 +92,56 @@ from runtime_signatures import (  # noqa: E402
     PROMPT_SIGNATURES,
     DEFAULT_RUNTIME,
     agent_runtime,
+    declared_runtime,
+    declared_runtime_disabled,
     gemini_idle_routing_armed,
 )
+# One warning per seat (not per cycle — the router is a fresh process every minute) when a row
+# declares a runtime that has no prompt signature here. Keyed "<agent>=<value>" so a corrected
+# value warns again if it is wrong again.
+UNKNOWN_RUNTIME_WARNED = ORCHESTRA_DIR / "state" / "router-unknown-runtime-warned.json"
+
+
+def _warn_unknown_runtime_once(agent_id: str, value: str) -> None:
+    key = f"{agent_id}={value}"
+    try:
+        seen = json.loads(UNKNOWN_RUNTIME_WARNED.read_text())
+        if not isinstance(seen, list):
+            seen = []
+    except (OSError, ValueError):
+        seen = []
+    if key in seen:
+        return
+    log(f"WARNING {agent_id}: registry runtime '{value}' has no prompt signature in this install; "
+        f"judging its pane as before (claude, or inferred when ROUTER_GEMINI_IDLE_ARMED is set). "
+        f"Known: {', '.join(sorted(PROMPT_SIGNATURES))}")
+    try:
+        UNKNOWN_RUNTIME_WARNED.parent.mkdir(parents=True, exist_ok=True)
+        tmp = UNKNOWN_RUNTIME_WARNED.with_suffix(".tmp")
+        tmp.write_text(json.dumps(sorted(set(seen) | {key})))
+        os.replace(tmp, UNKNOWN_RUNTIME_WARNED)
+    except OSError:
+        pass   # worst case the warning repeats; never block delivery on bookkeeping
+
+
+def routing_runtime(agent_id: str, meta: dict | None = None) -> str:
+    """The runtime whose signature/idle gate the router applies to ``agent_id``
+    (same name and shape as the live grok-phase1 router; DEC-1791656515249463).
+
+    A row that DECLARES a runtime with a known signature (codex, gemini/agy, claude) is always
+    judged by that runtime's signature, armed or not: a Codex '›' or agy '>' pane never shows
+    Claude's '❯', so judging it by claude held its mail forever. Rows with no runtime field keep
+    the historical rule exactly: claude, or the inferred runtime when ROUTER_GEMINI_IDLE_ARMED is
+    set. ROUTER_DECLARED_RUNTIME_DISABLED turns declarations off (today's behaviour)."""
+    if not declared_runtime_disabled():
+        rt, unknown = declared_runtime(agent_id, meta)
+        if rt is not None:
+            return rt
+        if unknown is not None:
+            _warn_unknown_runtime_once(agent_id, unknown)
+    return agent_runtime(agent_id, meta) if gemini_idle_routing_armed() else DEFAULT_RUNTIME
+
+
 # Layer B (Bug 2, live-but-unreachable panes): 4-class classifier EXTENDING
 # this idle-gate (gm ruling 3 — one place judges liveness, no parallel
 # watchdog). SHADOW-ONLY in this build: would-clear jsonl, zero live actions.
@@ -612,10 +660,44 @@ def stuck_own_message(session: str, runtime: str = DEFAULT_RUNTIME) -> str | Non
     _, input_line, ok = pane_split(session, runtime)
     if not ok:
         return None
+    if runtime == "codex":
+        input_line = _codex_composer_block(session) or input_line
     content = input_line.split(prompt_char, 1)[-1].strip().lstrip("\u00a0").strip()
     if content.startswith("[MSG from"):
         return content
     return None
+
+
+def _codex_composer_block(session: str) -> str | None:
+    """The whole Codex composer as ONE string: the last '\u203a' line plus its 2-space-indented
+    continuation lines, up to the blank line above the footer (real capture,
+    fixtures/codex/stuck_marker_0.153.4). Continuations are joined with no separator so a path
+    Codex wrapped at a hyphen ('/tmp/agent-msg-' + 'msg_x.md') comes back whole; the requeue
+    regex needs the full /tmp/agent-msg-<id>.md, which on an 80-column pane lands on line 2."""
+    cap = tmux("capture-pane", "-t", session, "-p", "-S", "-50")
+    if cap.returncode != 0:
+        return None
+    lines = cap.stdout.split("\n")
+    starts = [i for i, l in enumerate(lines) if l.lstrip().startswith("\u203a")]
+    if not starts:
+        return None
+    block = [lines[starts[-1]]]
+    for l in lines[starts[-1] + 1:]:
+        if not l.strip() or not l.startswith("  "):
+            break
+        block.append(l[2:])
+    return "".join(block)
+
+
+def agy_cleanup_armed() -> bool:
+    """ROUTER_AGY_CLEANUP_ARMED=1 (env) or ~/runtime/ROUTER_AGY_CLEANUP_ARMED (file) turns the
+    agy/Gemini stuck-composer cleanup on. Off by default (gm, 2026-10-10)."""
+    if os.environ.get("ROUTER_AGY_CLEANUP_ARMED") == "1":
+        return True
+    try:
+        return (Path.home() / "runtime" / "ROUTER_AGY_CLEANUP_ARMED").exists()
+    except OSError:
+        return False
 
 
 def cleanup_stuck_injection(session: str, store,
@@ -629,6 +711,13 @@ def cleanup_stuck_injection(session: str, store,
     #1b: runtime-signature-aware (default claude ⇒ byte-identical)."""
     stuck = stuck_own_message(session, runtime)
     if not stuck:
+        return False
+    if runtime == "gemini" and not agy_cleanup_armed():
+        # gm ruling 2026-10-10 (msg_65f2bd8b): agy/Gemini seats get the idle gate now, but the
+        # cleanup (the one path that SENDS keys) stays off until the marker gate on human text is
+        # proven on real agy screens and that proof has been reviewed. Zero keys; named reason.
+        log(f"CLEANUP skipped {session}: agy stuck-marker cleanup is not armed "
+            f"(ROUTER_AGY_CLEANUP_ARMED); our line stays until a person clears it")
         return False
     tmux("send-keys", "-t", session, "C-u")
     time.sleep(1)
@@ -1816,12 +1905,10 @@ def main():
             if attached > 0:
                 continue
             # #1b: resolve the session's runtime so cleanup finds OUR stuck line
-            # by the right prompt_char. GATED like delivery — unarmed forces
-            # claude (byte-identical); only an armed gemini pane uses '>'.
-            if gemini_idle_routing_armed():
-                _crt = agent_runtime(agent_for_session(sess, meta) or sess, meta)
-            else:
-                _crt = DEFAULT_RUNTIME
+            # by the right prompt_char, by the same rule as delivery (routing_runtime:
+            # a declared runtime always; undeclared rows as before). Cleanup still only
+            # ever clears a typed line that starts with our own '[MSG from' marker.
+            _crt = routing_runtime(agent_for_session(sess, meta) or sess, meta)
             try:
                 cleanup_stuck_injection(sess, store, _crt)
             except Exception as e:
@@ -1967,14 +2054,11 @@ def main():
             # Per-runtime idle-gate (the operator apr_a72c10f8): resolve the TARGET
             # agent's runtime so an agy/Gemini pane ('>') is recognized as idle,
             # not just Claude's ❯. Resolve from the resolved session's agent when
-            # a forward happened, else the addressed agent; default claude.
-            # GATED: dormant until the operator arms (gemini_idle_routing_armed); UNARMED
-            # forces 'claude' => byte-identical to pre-change behavior (shadow).
-            if gemini_idle_routing_armed():
-                _target_agent = agent_for_session(session, meta) or agent
-                _runtime = agent_runtime(_target_agent, meta)
-            else:
-                _runtime = DEFAULT_RUNTIME
+            # a forward happened, else the addressed agent. routing_runtime: a DECLARED
+            # runtime always (DEC-1791656515249463); undeclared rows keep the old rule
+            # (claude unless ROUTER_GEMINI_IDLE_ARMED), byte-identical to before.
+            _target_agent = agent_for_session(session, meta) or agent
+            _runtime = routing_runtime(_target_agent, meta)
             if not agent_is_idle(session, _runtime):
                 # Layer B (Bug 2) SHADOW: classify live-but-unreachable holds
                 # (survey/permission/stuck-composer/menu) into the would-clear

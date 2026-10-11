@@ -1,0 +1,24 @@
+
+[90m────────────────────────────────────────────────────────────[39m
+[1m[34m> Run the shell command `sleep 25 && echo done > /tmp/x.txt` and then reply[0m
+[1m[34m  with the single word: finished[0m
+
+[37m○[39m [37mThought for 6.4s[39m [37m(The command involves a 25-second sleep, exceeding the t...)[39m
+[33m●[39m [1m[33mRunning[0m [37m(sleep 25 && echo done > /tmp/x.txt)[39m [37m(ctrl+o to expand)[39m
+⣽  [90mThe system mandates one of two actions: either [94mproce[90med with other tasks or...
+└ Tip: Press shift+tab to cycle modes (default, accept-edits, plan).[39m
+[90m────────────────────────────────────────────────────────────────────────────────
+[94m>[39m
+[90m────────────────────────────────────────────────────────────────────────────────
+[39m  [33m●[39m [20:59:10] [94msleep 25 && echo done > /tmp/x.txt[39m [33mrunning[39m
+[90m────────────────────────────────────────────────────────────────────────────────
+esc to cancel[39m                       [2mGemini 3.8 Flash · high · 1 task(s) · /tasks
+
+
+
+
+
+
+
+
+

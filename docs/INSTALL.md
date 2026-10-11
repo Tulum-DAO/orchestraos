@@ -522,6 +522,19 @@ lines (`[arturo]`, `[telemetry]`, `[plugins.*]`); leave those alone. To edit by 
 `nano orchestra.toml`, find `[runtimes]`, and change the `enabled` line just below it (save with
 `Ctrl-O` then Enter; exit with `Ctrl-X`).
 
+**How mail finds a seat's runtime.** The message router delivers to a seat only when its screen is idle,
+and each CLI draws a different prompt (Claude `❯`, Codex `›`, Gemini/agy `>`). It reads the seat's
+`runtime` field in `<data dir>/registry.json`, which `orchestra spawn` and `orchestra agent create`
+always write. A row without a `runtime` field (one you added by hand, or from an older install) is
+judged as Claude, as before; to fix one, add `"runtime": "codex"` (or `"gemini"`, `"claude"`) to it.
+`ROUTER_DECLARED_RUNTIME_DISABLED=1` (or an empty file `~/runtime/ROUTER_DECLARED_RUNTIME_DISABLED`)
+turns this off and judges every seat as Claude again; it exists only as an instant undo.
+One part stays off for Gemini/agy seats for now: if a router line is ever left sitting in an agy
+seat's composer, the router does not clear it (it never sends keys to an agy seat); it logs
+`CLEANUP skipped ... ROUTER_AGY_CLEANUP_ARMED` and the message is delivered again once a person
+clears the line. `ROUTER_AGY_CLEANUP_ARMED=1` (or an empty file `~/runtime/ROUTER_AGY_CLEANUP_ARMED`)
+turns that clearing on; Codex and Claude seats have it on already.
+
 **Your timezone (recommended).** Agents show times in UTC unless you tell them where you are.
 In `orchestra.toml`, under `[operator]`, set `timezone` to your IANA zone name, for example
 `timezone = "America/Cancun"` or `timezone = "Europe/Berlin"` (find yours by searching "IANA

@@ -1,0 +1,23 @@
+
+
+[1;2m› [0mYou are codex-trial. Read /tmp/agent-init-codex-trial.md and follow all
+  instructions in it.
+
+
+[2m• [0mI’ll load the initialization instructions and follow their task-specific
+  guidance.
+
+[2m•[0m [1mExplored[0m
+[2m  └ [0m[38;5;6mRead[39m agent-init-codex-trial.md[2m, [0mcodex-trial.md[2m, [0m_reincarnation-protocol.md[2m,[0m
+         infrastructure.md[2m, [0mMEMORY.md[2m, [0m_agent-protocol.md
+
+[2m────────────────────────────────────────────────────────────────────────────────
+
+• [0mHello — ready and waiting.
+
+[2m────────────────────────────────────────────────────────────────────────────────
+[0m
+
+[1m›[0m [2mAsk Codex to do anything[0m
+
+  [38;2;246;226;183mgpt-5.6-terra default[2m[39m · [0m[38;2;171;223;167m~/orchestraos[39m

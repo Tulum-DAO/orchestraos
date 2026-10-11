@@ -1,0 +1,24 @@
+
+      ▄▀▀▄        Antigravity CLI 1.3.3
+     ▀▀▀▀▀▀       user@example.com (Antigravity Starter Quota)
+    ▀▀▀▀▀▀▀▀      Gemini 3.8 Flash (High)
+   ▄▀▀    ▀▀▄     ~/orchestraos
+  ▄▀▀      ▀▀▄
+
+────────────────────────────────────────────────────────────────────────────────
+> [MSG from gm | medium] (sent 0m ago) router test — Read
+  /tmp/agent-msg-msg_fixture_0001.md and act on it.
+────────────────────────────────────────────────────────────────────────────────
+                                                         Gemini 3.8 Flash · high
+
+
+
+
+
+
+
+
+
+
+
+
