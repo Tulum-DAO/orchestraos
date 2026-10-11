@@ -22,6 +22,7 @@ import { useRecentAgents } from '../stores/recentAgents';
 import { RecentAgentChips } from './RecentAgentChips';
 import { setArturoFocus } from '../lib/arturo';
 import { canStopTurn } from '../lib/composerGate';
+import { AGENT_CARD_TITLE_CLASS } from '../lib/agentCardTitle';
 
 const PALETTE = [
   'bg-amber-600', 'bg-blue-600', 'bg-green-600', 'bg-purple-600',
@@ -329,10 +330,13 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
           onClick={() => { if (agent.alive) openChat(); }}
         >
           <div className="flex items-center gap-2">
+            {/* The browser's default text line box makes the visible glyph sit high beside the
+                centered status dot on phone cards. A tight line box keeps the title optically
+                centered without changing the desktop card's spacing. */}
             <Link
               to={`/agent/${encodeURIComponent(agent.id)}`}
               onClick={(e) => e.stopPropagation()}
-              className="text-neutral-100 font-semibold truncate hover:underline"
+              className={AGENT_CARD_TITLE_CLASS}
               title={agent.name}
             >
               {displayName}
