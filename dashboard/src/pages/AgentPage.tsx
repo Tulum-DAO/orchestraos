@@ -63,7 +63,6 @@ export default function AgentPage() {
   // the floating Arturo pill and publish a lift for it; Arturo now lives in the top bar.)
   const chatRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLDivElement>(null);
-  const keysRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const dock = dockRef.current;
     const col = chatRef.current;
@@ -74,24 +73,12 @@ export default function AgentPage() {
       // keep a reader who was at the bottom AT the bottom when the pill grows
       const pinned = !!scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
       col.style.setProperty('--composer-h', `${h}px`);
-      document.documentElement.style.setProperty('--arturo-lift', `${h}px`);
       if (scroller && pinned) scroller.scrollTop = scroller.scrollHeight;
     };
     apply();
     const ro = new ResizeObserver(apply);
     ro.observe(dock);
-    return () => { ro.disconnect(); document.documentElement.style.removeProperty('--arturo-lift'); };
-  }, [mode]);
-  // Dev mode: the floating Arturo sits above the special-keys bar, never on it.
-  useEffect(() => {
-    const keys = keysRef.current;
-    if (mode !== 'dev' || !keys) return;
-    const root = document.documentElement;
-    const apply = () => root.style.setProperty('--arturo-lift', `${Math.ceil(keys.getBoundingClientRect().height)}px`);
-    apply();
-    const ro = new ResizeObserver(apply);
-    ro.observe(keys);
-    return () => { ro.disconnect(); root.style.removeProperty('--arturo-lift'); };
+    return () => ro.disconnect();
   }, [mode]);
 
   // Load settings from storage on mount
@@ -121,7 +108,7 @@ export default function AgentPage() {
             />
           </div>
           {/* special keys (arrows, Esc, Tab, ...): a phone has no keyboard for them */}
-          <div ref={keysRef} className="px-3 py-2 border-t border-border shrink-0 bg-neutral-950">
+          <div data-arturo-avoid className="px-3 py-2 border-t border-border shrink-0 bg-neutral-950">
             <ActionBar
               agentId={agentId}
               outputLines={[]}
@@ -159,6 +146,7 @@ export default function AgentPage() {
               tool={(seatRow as { tool?: string } | undefined)?.tool}
             />
 
+            <div data-arturo-avoid>
             <Composer
               agentId={agentId}
               seatName={id}
@@ -171,6 +159,7 @@ export default function AgentPage() {
               canStop={canStop}
               onStop={stopTurn}
             />
+            </div>
           </div>
         </div>
         </div>

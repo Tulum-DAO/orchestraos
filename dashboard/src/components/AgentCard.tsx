@@ -628,7 +628,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
         )}
           // BELOW THE TOP BAR on phones (Shaw, 2026-10-10): the bar holds Arturo and the bell, and
           // they must stay usable while this panel is open. --topbar-h is 0 on desktop.
-          style={{ top: 'var(--topbar-h, 0px)' }}
+          style={{ top: 'calc(var(--vv-top, 0px) + var(--topbar-h, 0px))', bottom: 'var(--kb, 0px)' }}
           onClick={() => { setFocused(false); setArturoFocus(null); }}>
           <div
             className={clsx(
@@ -730,6 +730,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                   strandedText={typeof agent.stranded === 'string' ? agent.stranded : agent.stranded?.text}
                   pendingMenu={agent.pending_menu}
                 />
+                <div data-arturo-avoid>
                 <ChatInput
                   agentId={agent.id}
                   attachSupported={(agent.machine || 'vps') === 'vps'}
@@ -753,6 +754,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                   canStop={canStopTurn({ state: agent.status, pendingMenu: agent.pending_menu })}
                   onStop={() => { logAction('agent.stop', agent.id); return sendKeyToAgent(agent.id, 'escape'); }}
                 />
+                </div>
               </div>
             )}
 
@@ -760,7 +762,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                 (Shaw, 2026-10-10). Chat mode has what it needs in the pill: Stop for Esc, and the
                 decision card for menus. */}
             {devMode && (
-            <div data-testid="panel-actionbar" className="px-3 py-2 border-t border-neutral-800 shrink-0 bg-neutral-950">
+            <div data-arturo-avoid data-testid="panel-actionbar" className="px-3 py-2 border-t border-neutral-800 shrink-0 bg-neutral-950">
               <ActionBar
                 agentId={agent.id}
                 outputLines={outputLines}

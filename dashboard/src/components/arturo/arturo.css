@@ -132,13 +132,15 @@
   /* Under the button that opens it: the top bar's bottom edge on phones (--topbar-h, written by
      DashboardLayout), below the desktop bell row (top-4 + a 36px button) from md up. z-index above
      the Agents-page panel (50) and the modals that must not be covered raise themselves. */
-  top:calc(var(--topbar-h, 0px) + 8px); bottom:auto; z-index:76;
+  /* Right above the floating button (FloatingArturo): its lift, its 44px, and a gap, plus the
+     keyboard when one is up. Shaw, 2026-10-11. */
+  top:auto; bottom:calc(var(--kb, 0px) + max(var(--arturo-lift, 0px), env(safe-area-inset-bottom, 0px)) + 56px); z-index:76;
   display:flex; flex-direction:column; max-height:min(60vh, 560px);
   background:#1c1c1c; border:1px solid rgba(255,255,255,0.08); border-radius:22px; padding:10px 12px;
   box-shadow:0 8px 34px rgba(0,0,0,0.55); color:#fff;
   font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter Variable",sans-serif;
 }
-@media (min-width:768px){ .arturo-pill-panel{ top:64px; left:auto; right:24px; width:420px; max-height:min(62vh,620px); } }
+@media (min-width:768px){ .arturo-pill-panel{ top:auto; left:auto; right:24px; width:420px; max-height:min(62vh,620px); } }
 .arturo-pill-head{ display:flex; align-items:center; gap:8px; padding:2px 4px 8px; border-bottom:1px solid rgba(255,255,255,0.07); margin-bottom:8px; }
 .arturo-pill-head .who{ font-size:14px; font-weight:600; }
 .arturo-pill-head .ctx{ font-size:11.5px; color:rgba(255,255,255,0.45); background:rgba(255,255,255,0.06); border-radius:6px; padding:3px 7px; max-width:45%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
