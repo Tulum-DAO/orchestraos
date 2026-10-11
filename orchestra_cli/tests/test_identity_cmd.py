@@ -150,3 +150,59 @@ def test_drift_after_normalizing_restores_the_original_registry(tmp_path, monkey
     with pytest.raises(IC.ArmError):
         IC.arm(REPO, d, start_regenerator=False)
     assert (d / "registry.json").read_text() == before
+
+
+def _project(d):
+    from scripts.identity_store import identity_writer
+    identity_writer.project_now(str(d))
+
+
+def test_a_flat_only_seat_is_erased_by_the_projection_once_armed(tmp_path):
+    """The regression record_seat fixes: after arming, a row written only to registry.json
+    disappears at the next projection (the regenerator runs one at least every 30 s)."""
+    d = _stock_data_dir(tmp_path, seats={})
+    IC.arm(REPO, d, start_regenerator=False)
+    reg = json.loads((d / "registry.json").read_text())
+    reg["agents"]["dev-new"] = {"tier": "T2", "runtime": "codex", "status": "provisioning"}
+    (d / "registry.json").write_text(json.dumps(reg))
+    _project(d)
+    assert "dev-new" not in json.loads((d / "registry.json").read_text())["agents"]
+
+
+def test_record_seat_survives_the_projection(tmp_path):
+    d = _stock_data_dir(tmp_path, seats={})
+    IC.arm(REPO, d, start_regenerator=False)
+    row = {"tier": "T2", "runtime": "codex", "model": "gpt-5.6-terra", "status": "provisioning",
+           "machine": "vps", "tmux_session": "dev-new", "reports_to": "pm-x"}
+    reg = json.loads((d / "registry.json").read_text())
+    reg["agents"]["dev-new"] = row
+    (d / "registry.json").write_text(json.dumps(reg))
+    assert IC.record_seat(REPO, d, "dev-new", row) is True
+    _project(d)
+    agents = json.loads((d / "registry.json").read_text())["agents"]
+    assert agents["dev-new"]["runtime"] == "codex" and agents["dev-new"]["reports_to"] == "pm-x"
+    lin = _rows(d, "SELECT runtime FROM lineages WHERE root='dev-new'")
+    gen = _rows(d, "SELECT g.model FROM canonical c JOIN generations g ON g.id=c.generation_id WHERE c.root='dev-new'")
+    assert lin == [{"runtime": "codex"}] and gen == [{"model": "gpt-5.6-terra"}]
+    # a second write (orchestra agent's reports_to fix-up) updates the same seat
+    row2 = dict(row, reports_to="pm-y")
+    assert IC.record_seat(REPO, d, "dev-new", row2) is True
+    _project(d)
+    assert json.loads((d / "registry.json").read_text())["agents"]["dev-new"]["reports_to"] == "pm-y"
+    assert len(_rows(d, "SELECT root FROM canonical WHERE root='dev-new'")) == 1
+
+
+def test_record_seat_is_a_no_op_when_not_armed(tmp_path):
+    d = _stock_data_dir(tmp_path, seats={})
+    assert IC.record_seat(REPO, d, "x", {"status": "provisioning"}) is False
+    assert not (d / "state" / "orchestra-registry.db").exists()
+
+
+def test_demo_seats_survive_on_a_fresh_armed_init(tmp_path):
+    d = _stock_data_dir(tmp_path, seats={})
+    I._identity_step(REPO, d, fresh=True)                # init arms first ...
+    added = I.seed_demo_registry(d / "registry.json")     # ... then --demo seeds
+    assert added
+    I._record_demo_seats(REPO, d, added)
+    _project(d)
+    assert set(added) <= set(json.loads((d / "registry.json").read_text())["agents"])

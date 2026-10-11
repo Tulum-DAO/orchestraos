@@ -97,7 +97,17 @@ def register_seat(st: S.Settings, seat: str, *, gm: bool, runtime: str | None, m
     reg["agents"][seat] = row
     p.parent.mkdir(parents=True, exist_ok=True)
     S.guard_test_write(p, "registry.json"); tmp = p.with_suffix(".json.tmp"); tmp.write_text(json.dumps(reg, indent=2) + "\n"); os.replace(tmp, p)
+    _record_armed(st, seat, row)
     return row
+
+
+def _record_armed(st: S.Settings, seat: str, row: dict) -> None:
+    """With the identity store armed, registry.json is a projection the regenerator rewrites
+    every few seconds: a row written only there is lost. Record it in the database too."""
+    if not (st.repo_root / "scripts" / "identity_store" / "cutover.py").exists():
+        return
+    from .identity_cmd import record_seat
+    record_seat(st.repo_root, st.data_dir, seat, row)
 
 
 def _local_runtime_facts(st: S.Settings) -> tuple[dict, list]:
@@ -484,6 +494,7 @@ def cmd_agent_create(ns) -> int:
     if ns.parent and row.get("reports_to") != ns.parent:
         p, reg = _registry(st); reg["agents"][name]["reports_to"] = ns.parent; row["reports_to"] = ns.parent
         S.guard_test_write(p, "registry.json"); tmp = p.with_suffix(".json.tmp"); tmp.write_text(json.dumps(reg, indent=2) + "\n"); os.replace(tmp, p)
+        _record_armed(st, name, reg["agents"][name])
     env = S.child_env(st); env["AGENT_RUNTIME"] = row["runtime"]
     if row.get("model"):
         env["AGENT_MODEL"] = row["model"]
