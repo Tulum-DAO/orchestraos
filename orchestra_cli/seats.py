@@ -84,7 +84,10 @@ def register_seat(st: S.Settings, seat: str, *, gm: bool, runtime: str | None, m
     # T0 = the always-on manager seat; below it tier is POSITION (T1 = reports to a T0 or to no one,
     # T2 = reports to a lead), and role says who runs the PM briefing (docs/REFERENCE_INSTALL.md).
     row.setdefault("tier", tier or ("T0" if gm else "T2"))
-    row.setdefault("machine", "local")
+    # "vps" is the codebase's name for THIS host: spawn-agent.sh registers it, boot recovery
+    # resumes only machine == "vps", and the reconcilers skip any other value as remote.
+    # "local" here meant every starter seat was skipped by recovery after a reboot.
+    row.setdefault("machine", "vps")
     row.setdefault("cwd", cwd or str(st.repo_root))
     row.setdefault("tmux_session", seat)
     row.setdefault("system_prompt", prompt or default_prompt)

@@ -37,7 +37,9 @@ def test_process_table_default_shape(tmp_path):
     assert by["dashboard"].port == 8891 and by["dashboard"].argv[-1].endswith("dashboard-proxy.js")
     assert by["arturo"].port == 5071 and by["arturo"].argv[-1].endswith("services/arturo/run.sh")
     beats = {e.name: e.interval for e in table if e.kind == "beat"}
-    assert beats == {"bus_beat": 60, "boundary_delivery": 60, "cron_beat": 900, "router": 60, "approval_resume": 60, "menu_bridge": 60}
+    assert beats == {"bus_beat": 60, "boundary_delivery": 60, "cron_beat": 900, "router": 60, "approval_resume": 60,
+                     "menu_bridge": 60, "identity_regenerator": 60}
+    assert by["identity_regenerator"].argv[-3:] == ["-m", "scripts.identity_store.regenerator", "start-if-armed"]
     assert by["boundary_delivery"].env["BOUNDARY_DELIVER_ARMED"] == "1"
     assert all(e.enabled for e in table if e.name != "telegram")   # telegram is opt-in
     for e in table:

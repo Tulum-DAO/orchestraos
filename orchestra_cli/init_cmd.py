@@ -248,6 +248,23 @@ def _stamp_deps(pkg_dir: Path) -> None:
         pass                                          # no stamp = reinstall next time; never fatal
 
 
+def _identity_step(repo_root: Path, data_dir: Path, *, fresh: bool) -> Step:
+    if not (repo_root / "scripts" / "identity_store" / "cutover.py").exists():
+        return Step("identity", False, "skipped (no scripts/identity_store)")
+    from . import identity_cmd as IC
+    try:
+        if IC.status(repo_root, data_dir)["cutover"]:
+            return Step("identity", False, "armed (state/orchestra-registry.db is the identity truth)")
+        if not fresh:
+            return Step("identity", False, "not armed on this existing data dir: run `orchestra identity arm` "
+                                           "(seats will not be recorded or come back after a reboot until you do)")
+        rep = IC.arm(repo_root, data_dir, start_regenerator=False)
+        return Step("identity", True, f"armed the identity store ({rep['typed_populated']} seats imported); "
+                                      "`orchestra up` keeps its regenerator running")
+    except Exception as e:                      # noqa: BLE001
+        return Step("identity", False, f"arm failed, left unarmed: {e}")
+
+
 def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable = default_run,
              skip_npm: bool = False, skip_venv: bool = False, skip_build: bool = False,
              config_path: Optional[Path] = None, demo: bool = False,
@@ -296,6 +313,7 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
     report.append(Step("data-dir", bool(made), f"{data_dir} ({'created ' + ', '.join(made) if made else 'present'})"))
 
     # 4. seed stores
+    fresh_registry = not (data_dir / "registry.json").exists()
     for rel, payload in (("registry.json", {"agents": {}}), ("state/agent-sessions.json", {}),
                          # menu bridge: in-agent menus -> decision cards, ON by default (the beat
                          # itself is toggled by [menus] bridge_enabled)
@@ -394,6 +412,11 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
             report.append(Step("demo:cards", rc == 0,
                                "approval + menu + questionnaire + human task seeded (idempotent)" if rc == 0
                                else f"demo_seed_cards.py failed rc={rc}"))
+
+    # 5e. identity store: a NEW data dir starts with the database as the identity truth (the
+    # path every seat writer, boot recovery and the reconciler are built and tested on). An
+    # existing, unarmed data dir is left alone: arming one with seats is `orchestra identity arm`.
+    report.append(_identity_step(repo_root, data_dir, fresh=fresh_registry))
 
     # 6. python venv + requirements
     venv = repo_root / ".venv"

@@ -63,7 +63,10 @@ def _populate_typed(conn, agents, sessions, state_by_agent, conflicts):
     for name, adict in agents.items():
         try:
             sess = sessions.get(name, {})
-            runtime = _runtime_from_model(sess.get("model"))
+            # The registry's own runtime wins; guessing from the model is the fallback for old
+            # rows that predate the field (a fresh seat has no session row, so no model at all,
+            # and every one of them used to migrate as claude).
+            runtime = adict.get("runtime") or _runtime_from_model(sess.get("model") or adict.get("model"))
             conn.execute(
                 "INSERT INTO lineages (root, tier, runtime, reports_to, "
                 "always_on, purpose, machine, cwd) VALUES (?,?,?,?,?,?,?,?) "

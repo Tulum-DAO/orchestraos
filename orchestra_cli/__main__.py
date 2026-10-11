@@ -119,6 +119,15 @@ def parse_args(argv=None) -> argparse.Namespace:
     iu.add_argument("--now", action="store_true", help="also start the units now (`systemctl enable --now`)")
     iu.add_argument("--force", action="store_true",
                     help="install even when telemetryd would run twice, or as root")
+    idn = sub.add_parser("identity", help="the identity store (seat identities in state/orchestra-registry.db)")
+    isub = idn.add_subparsers(dest="identity_cmd", required=True)
+    ia = isub.add_parser("arm", help="make the database the identity truth on a data dir that already has seats "
+                                     "(backup, freeze, import, zero-drift check, arm, start the regenerator)")
+    ia.add_argument("--dry-run", action="store_true", help="import into a scratch copy and check the round trip; change nothing")
+    ia.add_argument("--data-dir", help="data dir to arm (default: the one `orchestra up` uses)")
+    ist = isub.add_parser("status", help="is the identity store armed on this data dir")
+    ist.add_argument("--data-dir", help="data dir to check (default: the one `orchestra up` uses)")
+    ist.add_argument("--json", action="store_true")
     s = sub.add_parser("status", help="show the supervisor's process table")
     s.add_argument("--json", action="store_true")
     return p.parse_args(argv)
@@ -248,10 +257,12 @@ def main(argv=None) -> int:
     from .seats import cmd_rotate, cmd_spawn, cmd_agent, cmd_starter
     from .pair_cmd import run_pair, run_devices, run_rotate_fleet_token
     from .install_unit import cmd_install_unit
+    from .identity_cmd import cmd_identity
     return {"init": cmd_init, "doctor": cmd_doctor, "up": cmd_up, "down": cmd_down, "status": cmd_status,
             "spawn": cmd_spawn, "starter": cmd_starter, "agent": cmd_agent, "rotate": cmd_rotate, "upgrade": cmd_upgrade,
             "pair": run_pair, "devices": run_devices,
-            "rotate-gateway-token": run_rotate_fleet_token, "install-unit": cmd_install_unit}[ns.command](ns)
+            "rotate-gateway-token": run_rotate_fleet_token, "install-unit": cmd_install_unit,
+            "identity": cmd_identity}[ns.command](ns)
 
 
 if __name__ == "__main__":
