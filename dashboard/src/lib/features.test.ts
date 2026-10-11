@@ -109,8 +109,8 @@ test('every gated surface is wired to its helper', () => {
   assert.doesNotMatch(src('layouts/DashboardLayout.tsx'), /^\s*<ArturoPill \/>/m);
   // Arturo's top-bar circle sits in the mobile header and must stay behind the feature flag.
   const layout = src('layouts/DashboardLayout.tsx');
-  const buttons = layout.match(/<ArturoButton\b/g) ?? [];
-  const gated = layout.match(/showArturoPill\(\)\s*&&\s*(?:\(\s*<div[^>]*>\s*)?<ArturoButton\b/g) ?? [];
+  const buttons = layout.match(/<FloatingArturo\b/g) ?? [];
+  const gated = layout.match(/showArturoPill\(\)\s*&&\s*<FloatingArturo\b/g) ?? [];
   assert.equal(buttons.length, 1, 'Arturo has one button: the floating one');
   assert.equal(gated.length, buttons.length, 'every Arturo circle is behind showArturoPill()');
   // The bell is mounted exactly once at the layout: a portal into the showing header's slot

@@ -9,7 +9,7 @@ import { useMatch } from 'react-router-dom';
 import { VoiceCallBubble } from '../components/VoiceCallModal';
 import NotificationBell from '../components/NotificationBell';
 import { ArturoPill } from '../components/arturo/ArturoPill';
-import { ArturoButton } from '../components/arturo/ArturoButton';
+import { FloatingArturo } from '../components/arturo/FloatingArturo';
 import CoachingToast from '../components/CoachingToast';
 import { useOrchestraStore } from '../stores/useOrchestraStore';
 import { initAutoDiscovery } from '../lib/telemetry';
@@ -44,17 +44,19 @@ export function DashboardLayout() {
     window.addEventListener(OPEN_SIDEBAR_EVENT, open);
     return () => window.removeEventListener(OPEN_SIDEBAR_EVENT, open);
   }, []);
-  // THE VISIBLE HEIGHT, published as --vvh and used as the app's height: on iPhone the keyboard
-  // shrinks the visual viewport but not 100dvh, so a bottom-docked composer or Dev key bar slid
-  // under the keyboard (Shaw, 2026-10-11). Safari also scrolls the page to show the focused field;
-  // the app already fits, so that scroll is undone.
+  // THE VISIBLE AREA, published as --vvh / --vv-top / --kb. On iPhone the keyboard shrinks the
+  // visual viewport but not 100dvh, and Safari pans the page to show the focused field. The app
+  // root is pinned to the visible area (fixed, top = --vv-top, height = --vvh), so whatever is
+  // docked at its bottom (the composer, the Dev key bar and the CLI line above it) sits right on
+  // the keyboard. --kb is how much of the layout viewport the keyboard covers, for fixed overlays.
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
     const root = document.documentElement;
     const apply = () => {
       root.style.setProperty('--vvh', `${Math.round(vv.height)}px`);
-      if (window.scrollY !== 0) window.scrollTo(0, 0);
+      root.style.setProperty('--vv-top', `${Math.round(vv.offsetTop)}px`);
+      root.style.setProperty('--kb', `${Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop))}px`);
     };
     apply();
     vv.addEventListener('resize', apply);
@@ -65,16 +67,22 @@ export function DashboardLayout() {
   // the Agents-page chat panel starts below it so the bar (Arturo + the bell) stays usable while
   // the panel is open (Shaw, 2026-10-10). 0 on desktop, where this bar is hidden.
   const topbarRef = useRef<HTMLDivElement>(null);
+  const appRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const bar = topbarRef.current;
     if (!bar) return;
     const root = document.documentElement;
-    const apply = () => root.style.setProperty('--topbar-h', `${Math.max(0, Math.round(bar.getBoundingClientRect().bottom))}px`);
+    // Relative to the app root (which follows the visible area), so overlays add --vv-top.
+    const apply = () => {
+      const top = appRef.current ? appRef.current.getBoundingClientRect().top : 0;
+      root.style.setProperty('--topbar-h', `${Math.max(0, Math.round(bar.getBoundingClientRect().bottom - top))}px`);
+    };
     apply();
     const ro = new ResizeObserver(apply);
     ro.observe(bar);
     window.addEventListener('resize', apply);
-    return () => { ro.disconnect(); window.removeEventListener('resize', apply); root.style.removeProperty('--topbar-h'); };
+    window.visualViewport?.addEventListener('resize', apply);
+    return () => { ro.disconnect(); window.removeEventListener('resize', apply); window.visualViewport?.removeEventListener('resize', apply); root.style.removeProperty('--topbar-h'); };
   }, []);
   // A CHAT ROUTE OWNS ITS OWN VERTICAL SPACE. Shaw: the composer bar spanned the full window and
   // cut the sidebar off at the bottom, because it was laid out at the PAGE level rather than
@@ -103,7 +111,7 @@ export function DashboardLayout() {
   const bell = <NotificationBell />;
 
   return (
-    <div className="flex h-screen h-dvh bg-neutral-950 text-neutral-100" style={{ height: 'var(--vvh, 100dvh)' }}>
+    <div ref={appRef} className="fixed inset-x-0 flex h-screen h-dvh bg-neutral-950 text-neutral-100" style={{ top: 'var(--vv-top, 0px)', height: 'var(--vvh, 100dvh)' }}>
       {/* h-dvh, not h-screen: on iPhone Safari 100vh includes the strip behind the address bar, so a
           bottom-docked composer sat under it and could not be typed into (Shaw, 2026-10-11). */}
       {/* Desktop sidebar */}
@@ -195,15 +203,10 @@ export function DashboardLayout() {
           nothing until it is opened. */}
       <CommandPalette />
 
-      {/* ARTURO FLOATS, small, bottom right, on every page (Shaw, 2026-10-11). An agent page lifts
-          it above its composer / Dev key bar with --arturo-lift, so it never covers the CLI. */}
-      {showArturoPill() && (
-        <div className="fixed right-3 z-40" style={{ bottom: 'calc(var(--arturo-lift, 0px) + env(safe-area-inset-bottom) + 12px)' }}>
-          <ArturoButton small />
-        </div>
-      )}
 
-      {/* Arturo's pane (T4; replaces the legacy JarvisPanel). Opened by the floating ArturoButton. */}
+      {showArturoPill() && <FloatingArturo />}
+
+      {/* Arturo's pane (T4; replaces the legacy JarvisPanel). Opens right above the floating button. */}
       {showArturoPill() && <ArturoPill />}
     </div>
   );

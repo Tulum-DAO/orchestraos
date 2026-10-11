@@ -19,7 +19,7 @@ export function ArturoButton({ small = false }: { small?: boolean } = {}) {
       title="Ask Arturo"
       // 40px on desktop, the same box as the top-bar icons beside it; 44px under the touch rule
       // (touch-circle), so never an oval. Its colour, not its size, is what sets it apart.
-      className={`${small ? 'h-10 w-10 shadow-lg shadow-black/40' : 'touch-circle min-[769px]:h-10 min-[769px]:w-10'} relative shrink-0 rounded-full flex items-center justify-center border transition-colors ${
+      className={`${small ? 'touch-circle shadow-lg shadow-black/40' : 'touch-circle min-[769px]:h-10 min-[769px]:w-10'} relative shrink-0 rounded-full flex items-center justify-center border transition-colors ${
         // Arturo's own colour, filled, in both themes: the one control in the row that is not a plain
         // icon. Open adds a ring (the pane below is its).
         open ? 'bg-[#d97757] border-transparent text-white ring-2 ring-[#d97757]/40 ring-offset-2 ring-offset-background' : 'bg-[#d97757] border-transparent text-white hover:bg-[#c96747]'

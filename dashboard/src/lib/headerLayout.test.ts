@@ -31,9 +31,10 @@ test('the phone bar is hidden on agent pages, sits above page headers, and the l
   assert.match(layout, /\bh-dvh\b/);
   const top = src('components/agent/TopBar.tsx');
   assert.doesNotMatch(top, /ArturoButton|Brain|Siren|cycleTheme/, 'the agent bar is menu, seat, Chat/Dev and the bell');
-  assert.match(layout, /<ArturoButton small \/>/, 'Arturo floats, small');
-  assert.match(layout, /--arturo-lift/, 'and is lifted above the composer');
-  assert.match(layout, /var\(--vvh, 100dvh\)/, 'the app is the visible height, so the keyboard never covers the CLI');
+  assert.match(layout, /showArturoPill\(\) && <FloatingArturo \/>/, 'Arturo floats, behind the feature flag');
+  assert.match(layout, /top: 'var\(--vv-top, 0px\)', height: 'var\(--vvh, 100dvh\)'/, 'the app is pinned to the visible area, so the keyboard never covers the CLI');
+  assert.doesNotMatch(layout, /scrollTo\(0, 0\)/, 'and never fights Safari panning to the focused field');
+  assert.equal((src('pages/AgentPage.tsx').match(/data-arturo-avoid/g) ?? []).length, 2, 'composer and Dev key bar are marked');
   assert.match(src('pages/AgentPage.tsx'), /OPEN_SIDEBAR_EVENT/, 'the agent menu button opens the one sidebar');
   assert.doesNotMatch(top, /data-header-end-slot className="hidden/, 'the bell slot shows on phones too');
   assert.doesNotMatch(src('pages/Agents.tsx'), /"sticky top-0 z-20/, 'the Agents header no longer sticks under the phone bar');
@@ -112,4 +113,12 @@ test('Chat mode never mounts the Dev terminal, whose document wheel/touch hack w
     assert.doesNotMatch(chatBranch, /<WebTerminal/, `${file}: no terminal in the chat branch`);
   }
   assert.match(src('components/WebTerminal.tsx'), /if \(!container\.contains\(e\.target as Node\)\) return;\s*e\.preventDefault\(\);/);
+});
+
+test('arturoLift: the button rises above the tallest docked CLI, never below the bottom', async () => {
+  const { arturoLift } = await import('./arturoLift.ts');
+  assert.equal(arturoLift(800, []), 0);
+  assert.equal(arturoLift(800, [700]), 100);
+  assert.equal(arturoLift(800, [740, 650]), 150);
+  assert.equal(arturoLift(800, [900]), 0);
 });

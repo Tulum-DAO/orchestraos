@@ -137,6 +137,24 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   // Another seat's transcript (the panel and the page keep this view mounted across seats) opens
   // at ITS newest message, not wherever the previous one was left.
   useLayoutEffect(() => { atBottom.current = true; }, [agentId]);
+  // Tapping into a composer, or the keyboard shrinking the column, brings the conversation to the
+  // latest message (Shaw, 2026-10-11). The xterm's hidden textarea is the terminal, not a composer.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const toBottom = () => { el.scrollTop = el.scrollHeight; };
+    const onFocus = (e: FocusEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!t || !/^(TEXTAREA|INPUT)$/.test(t.tagName) || t.classList.contains('xterm-helper-textarea') || el.contains(t)) return;
+      atBottom.current = true;
+      toBottom();
+      window.setTimeout(toBottom, 350);   // after the keyboard has finished opening
+    };
+    const ro = new ResizeObserver(() => { if (atBottom.current) toBottom(); });
+    ro.observe(el);
+    document.addEventListener('focusin', onFocus);
+    return () => { ro.disconnect(); document.removeEventListener('focusin', onFocus); };
+  }, []);
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el && atBottom.current) el.scrollTop = el.scrollHeight;
