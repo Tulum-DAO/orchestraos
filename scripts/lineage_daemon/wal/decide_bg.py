@@ -42,7 +42,10 @@ def _effective_thresholds():
 # P1.5 lull band: within [PREWARM_AT, SWAP_AT) a swap may fire EARLY once Blue has been
 # idle at least this long (seconds), so the cutover lands at a lull instead of the 0.80
 # wall (which can fire mid-turn and lose Blue's in-flight WAL-uncommitted work).
-LULL_MIN_IDLE_S = 300
+# A prewarmed, verified Green may take over after one minute of Blue idleness in
+# the 70–80% band. This is intentionally independent of the 80% hard backstop:
+# the latter remains immediate even when Blue is busy.
+LULL_MIN_IDLE_S = 60
 # DEC-1789517918317482 L3 (finished-and-waiting): Blue idle with turn complete for one full
 # beat AND >= 1 PENDING approval card it authored => swap (no ctx floor). Age is OBSERVED
 # idle (bg_beat persists idle_since; never inferred backwards).
