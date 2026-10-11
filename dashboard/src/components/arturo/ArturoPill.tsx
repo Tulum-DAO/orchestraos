@@ -360,12 +360,13 @@ export function ArturoPill() {
             )}
           </div>
           <div className="cluster">
-            <button className={brainLogo ? 'circle-btn arturo-brain-logo' : 'arturo-context-chip'} onClick={() => setModelOpen(true)}
+            <button className="circle-btn arturo-brain-logo" onClick={() => setModelOpen(true)}
                     title={`Answering on ${brainName}`} aria-label={`Brain: ${brainName}. Change`}>
               {brainLogo
                 // logo_svg is a static, build-time mark from config/providers.json (never user input).
                 ? <span className="logo" aria-hidden="true" dangerouslySetInnerHTML={{ __html: brainLogo.svg }} />
-                : <><Cpu size={12} /> <span className="cc-label">{brainChoice ? brainChoice.label : 'Default brain'}</span></>}
+                // Still loading (or no mark for this provider): just the chip glyph, no text.
+                : <Cpu size={18} aria-hidden="true" />}
             </button>
             <button className={dictMode === 'idle' ? 'circle-btn' : `circle-btn ${dictMode}`}
                     aria-label={dictMode === 'listening' ? 'Stop dictation' : dictMode === 'recording' ? 'Stop recording' : dictMode === 'transcribing' ? 'Transcribing' : 'Dictate'}
