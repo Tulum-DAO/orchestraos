@@ -35,6 +35,7 @@ import { ModelSelectorSheet } from '../agent/ModelSelectorSheet';
 import { useArturoBrain } from '../../stores/arturoBrain';
 import { useArturoUi } from '../../stores/arturoUi';
 import { brainFromThread, describeTurnError, toWireBrain } from '../../lib/arturoBrain';
+import { brainProviderId, type HealthBrain } from '../../lib/brainLogo';
 
 interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[]; spawned?: string[]; at: number; live?: boolean; state?: SendState;
   /** A first-person status note (voice not configured, mic denied…) — rendered as a small interleaved
@@ -100,6 +101,23 @@ export function ArturoPill() {
   // that is what makes "what is this agent doing" answerable while you sit in its session.
   const [focus, setFocus] = useState(getArturoFocus);
   useEffect(() => subscribeArturoFocus(() => setFocus(getArturoFocus())), []);
+  // Provider logos for the brain chip (static marks from config/providers.json via the probe).
+  const [logos, setLogos] = useState<Record<string, { svg: string; label: string }>>({});
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/runtimes/available').then((r) => (r.ok ? r.json() : null)).then((j) => {
+      if (!alive || !j?.providers) return;
+      const m: Record<string, { svg: string; label: string }> = {};
+      for (const p of j.providers as { id: string; label?: string; logo_svg?: string }[]) {
+        if (p.logo_svg) m[p.id] = { svg: p.logo_svg, label: p.label || p.id };
+      }
+      setLogos(m);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  const brainProvider = brainProviderId(brainChoice, (health?.brain ?? null) as HealthBrain | null);
+  const brainLogo = brainProvider ? logos[brainProvider] : undefined;
+  const brainName = brainChoice ? brainChoice.label : brainLogo ? `${brainLogo.label} (default)` : 'the default brain';
 
   // ── Live voice mode, IN THIS PANE ──────────────────────────────────
   // The shared call (hooks/useHandsFreeCall → lib/handsFree → lib/voiceSession → /api/voice/live →
@@ -333,10 +351,12 @@ export function ArturoPill() {
                 <Focus size={12} /> <span className="cc-label">Use this page</span>
               </button>
             )}
-            <button className="arturo-context-chip" onClick={() => setModelOpen(true)}
-                    title={brainChoice ? `Answering on ${brainChoice.label}` : 'Answering on the default brain'}
-                    aria-label={brainChoice ? `Brain: ${brainChoice.label}. Change` : 'Brain: default. Change'}>
-              <Cpu size={12} /> <span className="cc-label">{brainChoice ? brainChoice.label : 'Default brain'}</span>
+            <button className={brainLogo ? 'circle-btn arturo-brain-logo' : 'arturo-context-chip'} onClick={() => setModelOpen(true)}
+                    title={`Answering on ${brainName}`} aria-label={`Brain: ${brainName}. Change`}>
+              {brainLogo
+                // logo_svg is a static, build-time mark from config/providers.json (never user input).
+                ? <span className="logo" aria-hidden="true" dangerouslySetInnerHTML={{ __html: brainLogo.svg }} />
+                : <><Cpu size={12} /> <span className="cc-label">{brainChoice ? brainChoice.label : 'Default brain'}</span></>}
             </button>
           </div>
           <div className="cluster">
