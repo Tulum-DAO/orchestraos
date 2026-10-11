@@ -1,0 +1,34 @@
+# OrchestraOS identity reconciler, one pass (rendered by `orchestra install-unit`; part of the
+# default `--unit stack`). Re-run install-unit rather than editing the installed copy.
+#
+# Started every 15 minutes by orchestra-reconciler.timer. One pass of
+# `python3 -m scripts.identity_store.identity_reconciler --cron`:
+#   * a seat whose tmux pane is live is marked `online` (this is what moves a freshly
+#     started seat off `provisioning`),
+#   * a seat dead for two passes in a row is parked (it has a resume command) or retired
+#     (it has none); a seat that has never been `online` is left alone,
+#   * state/agent-sessions.json and registry.json are re-projected from the identity store,
+#     which is the list agent-recovery.sh --boot reads to bring seats back after a reboot.
+# It replaces the reference install's `*/15 * * * * ... identity_reconciler --cron` crontab line.
+[Unit]
+Description=OrchestraOS identity reconciler (one pass)
+Documentation=https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md
+After=orchestra.service
+
+[Service]
+Type=oneshot
+User={{ORCHESTRA_USER}}
+WorkingDirectory={{ORCHESTRA_ROOT}}
+Environment="ORCHESTRA_ROOT={{ORCHESTRA_ROOT}}"
+Environment="ORCHESTRA_CONFIG={{ORCHESTRA_CONFIG}}"
+Environment="ORCHESTRA_DIR={{ORCHESTRA_DIR}}"
+Environment="ORCH_DIR={{ORCHESTRA_DIR}}"
+Environment="PYTHONPATH={{ORCHESTRA_ROOT}}:{{ORCHESTRA_ROOT}}/scripts"
+Environment="PATH={{PATH}}"
+# --skip-guards: the step-7 self-check runs pytest from the data dir, which on a stock install
+# (data dir != checkout) does not hold the guard tests, so it would page on every pass.
+ExecStart="{{PYTHON}}" -m scripts.identity_store.identity_reconciler --cron --dir "{{ORCHESTRA_DIR}}" --skip-guards
+# A pass must never stack on the next one or eat the box (the reference install hit both).
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=10min

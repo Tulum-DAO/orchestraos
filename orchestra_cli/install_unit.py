@@ -14,7 +14,9 @@ the config path, the python interpreter and the PATH. This module fills them in 
 
 Unit sets:
   stack       orchestra.service (`orchestra up` in the foreground) + orchestra-recovery.service
-              (agent-recovery.sh --boot, once, after it). The default: a box that survives reboot.
+              (agent-recovery.sh --boot, once, after it) + orchestra-reconciler.timer/.service
+              (the identity reconciler every 15 min: marks live seats online and keeps the
+              session list recovery reads up to date). The default: a box that survives reboot.
   telemetryd  orchestra-telemetryd.service, the daemon alone, for installs that do NOT run the
               stack under `orchestra up` (or run it with `[telemetry] enabled = false`).
 `orchestra up` already supervises telemetryd, so installing both while telemetry is enabled
@@ -40,10 +42,13 @@ TEMPLATE_DIR_REL = Path("deploy") / "systemd"
 
 # unit set -> unit file names, in install order
 UNIT_SETS = {
-    "stack": ("orchestra.service", "orchestra-recovery.service"),
+    "stack": ("orchestra.service", "orchestra-recovery.service",
+              "orchestra-reconciler.service", "orchestra-reconciler.timer"),
     "telemetryd": ("orchestra-telemetryd.service",),
 }
 STACK_UNIT = "orchestra.service"
+# Units started by a timer, not enabled themselves (they have no [Install] section).
+TIMER_DRIVEN = {"orchestra-reconciler.service"}
 TELEMETRYD_UNIT = "orchestra-telemetryd.service"
 
 PLACEHOLDERS = ("ORCHESTRA_USER", "ORCHESTRA_ROOT", "ORCHESTRA_DIR", "ORCHESTRA_CONFIG",
@@ -253,6 +258,11 @@ class Plan:
     now: bool
     notes: list = field(default_factory=list)
 
+    @property
+    def enable_units(self) -> list:
+        """What `systemctl enable` gets: every unit except the ones a timer starts."""
+        return [u for u in self.units if u not in TIMER_DRIVEN]
+
     def commands(self, sudo: bool) -> list:
         """The shell commands that finish the install from the staged files."""
         pre = ["sudo"] if sudo else []
@@ -260,7 +270,7 @@ class Plan:
                 + [str(self.dest) + "/"]]
         cmds.append(pre + ["systemctl", "daemon-reload"])
         if self.enable:
-            cmds.append(pre + ["systemctl", "enable"] + (["--now"] if self.now else []) + list(self.units))
+            cmds.append(pre + ["systemctl", "enable"] + (["--now"] if self.now else []) + self.enable_units)
         return cmds
 
 
@@ -353,7 +363,7 @@ def execute(plan: Plan, *, dry_run=False, use_sudo=True, euid=None, interactive=
             return 1
     if plan.enable:
         started = "started and " if plan.now else ""
-        out(f"\n{started}enabled: {', '.join(plan.units)} (they start on every boot)")
+        out(f"\n{started}enabled: {', '.join(plan.enable_units)} (they start on every boot)")
         if not plan.now and STACK_UNIT in plan.units:
             out("start now:  orchestra down; sudo systemctl start orchestra orchestra-recovery")
     else:

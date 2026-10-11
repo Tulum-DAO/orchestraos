@@ -1,0 +1,17 @@
+# Runs orchestra-reconciler.service every 15 minutes (rendered by `orchestra install-unit`).
+# A timer never starts a second pass while one is still running.
+[Unit]
+Description=OrchestraOS identity reconciler every 15 minutes
+Documentation=https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md
+
+[Timer]
+# First pass well after boot recovery has had time to resume the seats (it sleeps 45 s,
+# then resumes them one at a time).
+OnBootSec=10min
+OnUnitActiveSec=15min
+RandomizedDelaySec=60
+Persistent=false
+Unit=orchestra-reconciler.service
+
+[Install]
+WantedBy=timers.target

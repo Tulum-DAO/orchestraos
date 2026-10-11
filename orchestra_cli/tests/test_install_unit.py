@@ -70,9 +70,13 @@ def test_parse_install_unit():
 
 def test_every_template_renders_with_no_placeholder_left(tmp_path):
     plan = _plan(tmp_path, ["stack", "telemetryd"], telemetry=False)
-    assert set(plan.rendered) == {"orchestra.service", "orchestra-recovery.service", "orchestra-telemetryd.service"}
+    assert set(plan.rendered) == {"orchestra.service", "orchestra-recovery.service",
+                                  "orchestra-reconciler.service", "orchestra-reconciler.timer",
+                                  "orchestra-telemetryd.service"}
     for unit, text in plan.rendered.items():
         assert "{{" not in text, unit
+        if unit.endswith(".timer"):
+            continue
         svc = _cfg(text)["Service"]
         assert svc["User"] == ME
         assert svc["WorkingDirectory"] == str((tmp_path / "repo").resolve())
@@ -123,6 +127,8 @@ def test_path_adds_bun_and_npm_bins_only_when_they_exist():
 def test_substituted_units_carry_path_with_local_bin(tmp_path):
     plan = _plan(tmp_path, ["stack", "telemetryd"], telemetry=False, home="/home/someone")
     for unit, text in plan.rendered.items():
+        if unit.endswith(".timer"):
+            continue
         path = _env(text)["PATH"].split(":")
         assert "/home/someone/.local/bin" in path, unit
         assert path[-3:] == ["/usr/local/bin", "/usr/bin", "/bin"], unit
@@ -193,7 +199,7 @@ def test_installs_with_sudo_when_dest_is_not_writable(tmp_path):
     assert rc == 0
     assert [c[:3] for c in ran] == [["sudo", "install", "-m"], ["sudo", "systemctl", "daemon-reload"],
                                      ["sudo", "systemctl", "enable"]]
-    assert ran[2][3:] == ["orchestra.service", "orchestra-recovery.service"]
+    assert ran[2][3:] == ["orchestra.service", "orchestra-recovery.service", "orchestra-reconciler.timer"]
     assert (plan.staging / "orchestra.service").read_text() == plan.rendered["orchestra.service"]
 
 
@@ -254,3 +260,25 @@ def test_cli_conflict_exits_2(tmp_path, capsys, monkeypatch):
     rc = M.main(["install-unit", "--unit", "stack", "--unit", "telemetryd", "--dry-run",
                  "--dest", str(tmp_path / "dest")])
     assert rc == 2 and "telemetry" in capsys.readouterr().err
+
+
+def test_reconciler_runs_every_15_minutes_from_a_timer(tmp_path):
+    plan = _plan(tmp_path)
+    timer = _cfg(plan.rendered["orchestra-reconciler.timer"])
+    assert timer["Timer"]["OnUnitActiveSec"] == "15min"
+    assert timer["Timer"]["Unit"] == "orchestra-reconciler.service"
+    assert timer["Install"]["WantedBy"] == "timers.target"
+    svc = _cfg(plan.rendered["orchestra-reconciler.service"])["Service"]
+    assert svc["Type"] == "oneshot"
+    assert svc["ExecStart"].startswith('"/usr/bin/python3" -m scripts.identity_store.identity_reconciler --cron')
+    assert f'--dir "{tmp_path / "data"}"' in svc["ExecStart"]
+    assert _env(plan.rendered["orchestra-reconciler.service"])["ORCHESTRA_DIR"] == str(tmp_path / "data")
+
+
+def test_timer_driven_service_is_installed_but_not_enabled(tmp_path):
+    plan = _plan(tmp_path)
+    assert "orchestra-reconciler.service" in plan.units
+    assert "orchestra-reconciler.service" not in plan.enable_units
+    assert "orchestra-reconciler.timer" in plan.enable_units
+    enable = [c for c in plan.commands(sudo=False) if c[:2] == ["systemctl", "enable"]][0]
+    assert "orchestra-reconciler.timer" in enable and "orchestra-reconciler.service" not in enable

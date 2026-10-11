@@ -377,6 +377,7 @@ def liveness_pass(orchestra_dir, *, apply, wal_dir=None,
 
     hyst = load_hysteresis(orchestra_dir)
     dead1, confirmed_park, confirmed_retire, recovered = [], [], [], []
+    never_online = []
 
     for root in sorted(candidates):
         r = rows[root]
@@ -390,6 +391,14 @@ def liveness_pass(orchestra_dir, *, apply, wal_dir=None,
             hyst.pop(root, None)
             if r["status"] != "online":
                 recovered.append(root)
+            continue
+
+        if r["status"] == "provisioning":
+            # Never been online: a seat still starting up (or one whose first start failed)
+            # has nothing to park and must not be retired out from under its first boot.
+            # It flips to online above the first pass its pane is live.
+            hyst.pop(root, None)
+            never_online.append(root)
             continue
 
         n = hyst.get(root, 0) + 1
@@ -431,6 +440,7 @@ def liveness_pass(orchestra_dir, *, apply, wal_dir=None,
         "dead1": sorted(dead1),
         "confirmed_park": sorted(confirmed_park),
         "confirmed_retire": sorted(confirmed_retire),
+        "never_online": sorted(never_online),
         "recovered": sorted(recovered),
         "applied": bool(apply),
     }

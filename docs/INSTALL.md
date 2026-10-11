@@ -684,7 +684,7 @@ orchestra install-unit --now       # install, enable, and start (or: make instal
 systemctl status orchestra         # active (running)
 ```
 
-You should see `started and enabled: orchestra.service, orchestra-recovery.service`. It installs
+You should see `started and enabled: orchestra.service, orchestra-recovery.service, orchestra-reconciler.timer`. It installs
 two units into `/etc/systemd/system`, rendered from `deploy/systemd/*.service.template` for your
 user, your checkout and your data dir, so you never edit a unit by hand:
 
@@ -692,6 +692,7 @@ user, your checkout and your data dir, so you never edit a unit by hand:
 |---|---|
 | `orchestra.service` | `orchestra up` in the foreground: the same supervisor and children as the table above, restarted if it crashes |
 | `orchestra-recovery.service` | once per boot, after `orchestra.service`: `scripts/agent-recovery.sh --boot` resumes the seats that were running, from their saved sessions |
+| `orchestra-reconciler.timer` + `.service` | every 15 min (first pass 10 min after boot): the identity reconciler marks seats with a live pane `online` and rewrites `state/agent-sessions.json`, the list boot recovery reads. A seat dead two passes in a row is parked (or retired if it has no resume command); a seat that was never online is left alone |
 
 The units run as you, never as root. They carry your `PATH` from the moment you ran
 `install-unit`, plus `~/.local/bin` (where Claude Code installs itself), `~/.bun/bin` and npm's
