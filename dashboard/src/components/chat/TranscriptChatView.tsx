@@ -13,6 +13,7 @@ import { buildRenderList, fetchTranscript, type ChatItem } from '../../lib/trans
 import { subscribeTranscriptStream } from '../../lib/transcriptStream';
 import { GroupedNodeView } from './TranscriptCards';
 import { groupToolRuns, isInterrupted } from '../../lib/toolGroups';
+import { TOOL_DENSITIES, TOOL_DENSITY_STORAGE_KEY, storedToolDensity, type ToolDensity } from '../../lib/toolCardDetail';
 import { normalizeAgentState, STATE_STYLE, type LiveState } from '../../lib/agentStatus';
 import { styleForAgentState, isDegraded, type FeedVerdict } from '../../lib/feedLiveness';
 import OptionsMenuCard, { type PendingMenu } from './OptionsMenuCard';
@@ -39,6 +40,8 @@ interface Props {
   /** The agent page carries its own LiveStatusLine above the composer, so it suppresses this
    *  bar. Two renderings of one fact is how the sidebar and the page came to disagree. */
   hideStatusBar?: boolean;
+  /** The full agent page exposes this; compact panels stay focused on the transcript. */
+  showToolDensityControl?: boolean;
 }
 
 // State vocabulary + colors live in lib/agentStatus (shared with the title dot +
@@ -56,12 +59,19 @@ function StatePill({ state, feed }: { state: LiveState; feed?: FeedVerdict }) {
   );
 }
 
-export default function TranscriptChatView({ agentId, fixtureItems, state = 'unknown', strandedText, pendingMenu, compact, feed, hideStatusBar }: Props) {
+export default function TranscriptChatView({ agentId, fixtureItems, state = 'unknown', strandedText, pendingMenu, compact, feed, hideStatusBar, showToolDensityControl = !compact }: Props) {
   const [items, setItems] = useState<ChatItem[]>(fixtureItems || []);
   const [loading, setLoading] = useState(!fixtureItems);
   const [err, setErr] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
+  const [toolDensity, setToolDensity] = useState<ToolDensity>(() => storedToolDensity(() => {
+    try { return localStorage.getItem(TOOL_DENSITY_STORAGE_KEY); } catch { return null; }
+  }));
+  const changeToolDensity = (density: ToolDensity) => {
+    setToolDensity(density);
+    try { localStorage.setItem(TOOL_DENSITY_STORAGE_KEY, density); } catch { /* session-only when storage is blocked */ }
+  };
 
   // fixture mode: render given items, no polling
   useEffect(() => {
@@ -138,6 +148,18 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
 
   return (
     <div className={compact ? 'space-y-2' : 'flex flex-col flex-1 min-h-0'}>
+      {showToolDensityControl && (
+        <div className="w-full max-w-[860px] mx-auto shrink-0 px-4 py-2 flex justify-end">
+          <div className="flex overflow-hidden rounded-md border border-border text-[11px]" role="group" aria-label="Tool detail">
+            {TOOL_DENSITIES.map((density) => (
+              <button key={density} type="button" onClick={() => changeToolDensity(density)} aria-pressed={toolDensity === density}
+                className={`min-h-9 px-2 capitalize transition-colors ${toolDensity === density ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
+                {density}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <div
         ref={scrollRef}
         onScroll={onScroll}
@@ -170,7 +192,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
           <span className="text-xs text-neutral-600">{err ? `No transcript (${err})` : 'No messages yet'}</span>
         ) : (
           nodes.map((n, i) => (
-            <GroupedNodeView key={n.key} node={n} interrupted={isInterrupted({ isLast: i === nodes.length - 1, state: st })} />
+            <GroupedNodeView key={n.key} node={n} density={toolDensity} interrupted={isInterrupted({ isLast: i === nodes.length - 1, state: st })} />
           ))
         )}
 
