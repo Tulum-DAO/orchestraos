@@ -97,21 +97,23 @@ def register_seat(st: S.Settings, seat: str, *, gm: bool, runtime: str | None, m
     return row
 
 
-def _local_unusable(st: S.Settings) -> dict:
-    """{runtime id: plain reason} for every enabled runtime that LOCAL evidence proves cannot run a
-    seat on this machine. Local only (PR 0, gm condition 3): `which` plus reading the CLI's own
-    login file, no command runs, no network (`claude auth status` makes HTTPS calls, measured), so
-    this is fast and bounded. A runtime is only listed when that evidence is definite:
-      * its CLI is not installed, or
-      * its login is a FILE probe (codex, gemini) and that file says logged out.
-    A command-probed runtime (claude) that is installed is never listed: its only local signal is
-    a fallback file that can be stale either way, so doubt keeps today's behaviour. Any error -> {}
-    (nothing is proven unusable; callers then behave exactly as before)."""
+def _local_runtime_facts(st: S.Settings) -> tuple[dict, list]:
+    """(unusable, logged_in) from LOCAL evidence only (PR 0, gm condition 3): `which` plus reading
+    each CLI's own login file, no command runs, no network (`claude auth status` makes HTTPS calls,
+    measured), so this is fast and bounded.
+      unusable  = {runtime id: plain reason} for every enabled runtime that evidence proves cannot
+                  run a seat here: its CLI is not installed, or its login is a FILE probe (codex,
+                  gemini) and that file says logged out.
+      logged_in = enabled runtime ids, in [runtimes] enabled order, that are installed AND whose
+                  login FILE says logged in (file-proven; claude can never be in it).
+    A command-probed runtime (claude) that is installed is never in either: its only local signal
+    is a fallback file that can be stale either way. Any error -> ({}, []) (nothing is proven;
+    callers then behave exactly as before)."""
     try:
         from . import runtime_probe as RP
         providers = st.repo_root / "config" / "providers.json"
         if not providers.exists():
-            return {}
+            return {}, []
 
         def _no_commands(argv):
             raise RuntimeError("local probe: commands are not run")
@@ -124,9 +126,10 @@ def _local_unusable(st: S.Settings) -> dict:
         import time
         deps = RP.ProbeDeps(which=shutil.which, run_cmd=_no_commands, read_file=_read,
                             now_ms=lambda: int(time.time() * 1000), expand_home=os.path.expanduser)
-        out = {}
+        enabled = st.runtimes_enabled or []
+        out, authed = {}, []
         for p in RP.load_providers(providers):
-            if p["id"] not in (st.runtimes_enabled or []):
+            if p["id"] not in enabled:
                 continue
             if not deps.which(p["cli"]):
                 out[p["id"]] = f"`{p['cli']}` is not installed on this machine"
@@ -136,23 +139,132 @@ def _local_unusable(st: S.Settings) -> dict:
                 if r.get("authed") is False:
                     out[p["id"]] = (f"`{p['cli']}` is installed but not logged in "
                                     f"({r.get('auth_reason')} in {p['auth_probe'].get('path')})")
-        return out
+                elif r.get("authed") is True:
+                    authed.append(p["id"])
+        return out, sorted(authed, key=enabled.index)
     except Exception:  # noqa: BLE001 — no proof of anything; never change the pick on doubt
-        return {}
+        return {}, []
+
+
+def _local_unusable(st: S.Settings) -> dict:
+    """{runtime id: plain reason} for every enabled runtime that LOCAL evidence proves cannot run a
+    seat on this machine (see _local_runtime_facts). An installed claude is never listed."""
+    return _local_runtime_facts(st)[0]
+
+
+# Ways Claude Code can be signed in that ~/.claude/.credentials.json does not show. Any one of
+# them present means "maybe signed in", and the pick stays on claude without running anything.
+_CLAUDE_AUTH_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
+                    "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY")
+_CLAUDE_AUTH_SETTINGS = ("apiKeyHelper", "awsAuthRefresh", "awsCredentialExport")
+CLAUDE_AUTH_STATUS_TIMEOUT_S = 5
+
+
+def _platform() -> str:
+    return sys.platform
+
+
+def _claude_maybe_signed_in_locally() -> str | None:
+    """Why claude MIGHT be signed in by a means a file check cannot rule out, or None when no local
+    signal says so. Never proves "signed out"; it only decides whether asking the CLI is worth it.
+    macOS keeps the login in the Keychain (no file), an API key or token can come from the env or
+    from settings.json (its `env` block, apiKeyHelper, ...), and on Linux the OAuth login is
+    <config dir>/.credentials.json. Anything unreadable counts as a signal: doubt keeps claude."""
+    if _platform() == "darwin":
+        return "macOS keeps Claude's login in the Keychain"
+    for k in _CLAUDE_AUTH_ENV:
+        if os.environ.get(k):
+            return f"{k} is set"
+    cfg = Path(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"))
+    try:
+        if (cfg / ".credentials.json").exists():
+            return f"{cfg / '.credentials.json'} exists"
+    except OSError:
+        return "could not check Claude's credentials file"
+    for name in ("settings.json", "settings.local.json"):
+        try:
+            data = json.loads((cfg / name).read_text())
+        except FileNotFoundError:
+            continue
+        except Exception:  # noqa: BLE001 — unreadable settings: cannot rule a key out
+            return f"{cfg / name} could not be read"
+        if not isinstance(data, dict):
+            return f"{cfg / name} is not a settings object"
+        for key in _CLAUDE_AUTH_SETTINGS:
+            if data.get(key):
+                return f"{key} is set in {cfg / name}"
+        env = data.get("env")
+        if env is not None and not isinstance(env, dict):
+            return f"{cfg / name} has an unreadable env block"
+        for k in _CLAUDE_AUTH_ENV:
+            if (env or {}).get(k):
+                return f"{k} is set in {cfg / name}"
+    return None
+
+
+def _claude_auth_status() -> bool | None:
+    """Claude Code's own answer: True / False only when `claude auth status --json` says so
+    DEFINITIVELY, else None. A logged-out CLI prints {"loggedIn": false, "authMethod": "none", ...}
+    and exits 1 (Claude Code 2.1.295, measured). Bounded by CLAUDE_AUTH_STATUS_TIMEOUT_S; a timeout,
+    a CLI that cannot run, output that is not that JSON, or a "false" that names an auth method is
+    None, and None keeps claude."""
+    try:
+        r = subprocess.run(["claude", "auth", "status", "--json"], capture_output=True, text=True,
+                           timeout=CLAUDE_AUTH_STATUS_TIMEOUT_S, stdin=subprocess.DEVNULL)
+        parsed = json.loads(r.stdout or "")
+    except Exception:  # noqa: BLE001 — timeout, missing CLI, an old CLI without --json, not JSON
+        return None
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("loggedIn"), bool):
+        return None
+    if parsed["loggedIn"]:
+        return True
+    if parsed.get("authMethod", "none") not in (None, "none"):
+        return None                       # "logged out" yet naming a method: not definitive
+    return False
+
+
+def _signed_in_instead_of_claude(st: S.Settings, logged_in: list) -> str | None:
+    """The runtime to use instead of a first-candidate claude, or None to keep claude (today's rule).
+    Only when ALL hold: no local sign of a claude login (_claude_maybe_signed_in_locally, which
+    keeps every macOS, API-key, token and credentials-file install on claude without running
+    anything), ANOTHER enabled runtime is file-proven logged in, and only then `claude auth status`
+    answers definitively that it is signed out. Any doubt or error keeps claude."""
+    others = [rt for rt in logged_in if rt != "claude"]
+    if not others:
+        return None
+    try:
+        if _claude_maybe_signed_in_locally() is not None:
+            return None
+        if _claude_auth_status() is not False:
+            return None
+    except Exception:  # noqa: BLE001 — never change the pick on doubt
+        return None
+    print(f"note: claude is installed but signed out (`claude auth status`); "
+          f"the new seat gets {others[0]}, which is logged in", file=sys.stderr)
+    return others[0]
 
 
 def default_runtime(st: S.Settings) -> str:
     """The runtime a new seat gets when none is named: the first entry of [runtimes] enabled that
-    is not PROVEN unusable here (_local_unusable). With claude installed and listed first this is
-    claude, exactly as before; on a Codex-only box it is codex instead of a claude seat that cannot
-    start. If every enabled runtime is unusable, the old rule (first enabled) stands and the
+    is not PROVEN unusable here (_local_unusable), with one more step for claude.
+
+    claude's login cannot be read from a file everywhere, so an installed claude is never proven
+    unusable locally. When it is the first candidate, it is kept unless _signed_in_instead_of_claude
+    finds it DEFINITIVELY signed out (Linux, no credentials file, no API key or token in the env or
+    settings, `claude auth status` says loggedIn false within 5 s) while another enabled runtime is
+    file-proven logged in; then that runtime is picked. So a Codex-only box that also has the
+    claude CLI installed gets a codex seat, not a claude seat stuck at its first-run screen, and a
+    claude box (macOS, API key, signed in, or nothing else logged in) picks claude exactly as
+    before. If every enabled runtime is unusable, the old rule (first enabled) stands and the
     login refusal explains."""
     enabled = st.runtimes_enabled or ["claude"]
-    unusable = _local_unusable(st)
-    for rt in enabled:
-        if rt not in unusable:
-            return rt
-    return enabled[0]
+    unusable, logged_in = _local_runtime_facts(st)
+    candidates = [rt for rt in enabled if rt not in unusable]
+    if not candidates:
+        return enabled[0]
+    if candidates[0] == "claude":
+        return _signed_in_instead_of_claude(st, logged_in) or "claude"
+    return candidates[0]
 
 
 def _refuse_if_runtime_unusable(st: S.Settings, seat: str, runtime: str) -> int | None:
