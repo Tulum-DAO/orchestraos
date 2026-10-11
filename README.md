@@ -73,6 +73,14 @@ at the point you need it.
 Already installed? [Upgrading](docs/UPGRADE.md): `orchestra upgrade`, then
 `orchestra down && orchestra up --detach`.
 
+## Start on boot
+
+`orchestra up --detach` stops at the next reboot. `orchestra install-unit` installs systemd
+units rendered for your user, checkout and data dir: `orchestra.service` runs the supervisor,
+and `orchestra-recovery.service` resumes your seats from their saved sessions after a boot.
+`--dry-run` shows exactly what it will do. See
+[Start on boot](docs/INSTALL.md#start-on-boot-systemd) in the install guide.
+
 ## What is in the box
 
 - **Seats and generations.** An agent is a seat with a lineage. Each generation is one CLI session (Claude Code, Gemini (Antigravity `agy` CLI), or Codex). When a generation nears its context ceiling it writes a handoff, a successor boots, proves it understood the handoff by answering questions anchored in the predecessor's own state, and is promoted. Rotation is autonomous and on by default for Claude seats; Gemini and Codex are experimental and are not armed unless you set `[rotation] experimental_runtimes = ["gemini", "codex"]`.

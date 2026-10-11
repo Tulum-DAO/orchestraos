@@ -255,6 +255,15 @@ substitutes them; then re-add the unit and its test.
 **Acceptance.** A fresh install enables the unit without hand-editing it, and
 `unit_file_test.py` passes against the substituted file.
 
+**Resolved on main** (systemd unit templates): `deploy/systemd/orchestra-telemetryd.service.template`,
+plus `orchestra.service.template` (`orchestra up` in the foreground) and
+`orchestra-recovery.service.template` (`agent-recovery.sh --boot` once per boot) so a box survives a
+reboot. `orchestra install-unit` (also `make install-unit`) fills in the user, checkout, data dir,
+config, python and `PATH` (with `~/.local/bin`), installs with sudo or prints the commands
+(`--dry-run`, `--print`, `--no-sudo`), and refuses to run telemetryd twice next to `orchestra up`.
+`scripts/lineage_daemon/unit_file_test.py` is back and tests the substituted file; install guide
+"Start on boot (systemd)".
+
 ## G4 · Generic example timezone in test fixtures
 `labels: good-first-issue, size:XS, scrub`
 

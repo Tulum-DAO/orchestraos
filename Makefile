@@ -3,7 +3,7 @@ SHELL := /bin/bash
 ORCHESTRA := ./bin/orchestra
 PREFIX ?= $(HOME)/.local
 
-.PHONY: help init doctor up up-detached down status test install
+.PHONY: help init doctor up up-detached down status test install install-unit
 
 help:
 	@echo "make init      create data dir + orchestra.toml + venv + npm installs + builds (idempotent)"
@@ -12,6 +12,7 @@ help:
 	@echo "make up-detached / make down / make status"
 	@echo "make test      python test suites (per package, like CI)"
 	@echo "make install   symlink bin/orchestra into $(PREFIX)/bin"
+	@echo "make install-unit  systemd units so the stack + seats come back after a reboot (sudo; see docs/INSTALL.md)"
 
 init:
 	$(ORCHESTRA) init
@@ -30,6 +31,11 @@ down:
 
 status:
 	$(ORCHESTRA) status
+
+# Renders deploy/systemd/*.service.template for this user + checkout + data dir and installs them
+# (sudo install + daemon-reload + enable). Extra flags: make install-unit ARGS="--dry-run".
+install-unit:
+	$(ORCHESTRA) install-unit $(ARGS)
 
 # `orchestra init` creates .venv and pip-installs requirements.txt (pytest lives THERE, not
 # in system python). Use the venv when it exists so `make test` works on a bare box after

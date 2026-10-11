@@ -72,8 +72,8 @@ supervisor and are restarted by a watchdog cron. Pick one model; do not run both
 | `approval_notify.py` (push backstop) | — (no push in the minimum path) | `* * * * *` |
 | `identity_store/orphan_pane_scan.py` | — | `*/15` (flags raw tmux spawns, chip only) |
 | `identity_store/identity_reconciler.py --cron` | — | `*/15` |
-| `agent-recovery.sh --boot` | — | `@reboot sleep 45` (re-attaches seats after a reboot) |
-| `lineage_daemon/telemetryd.py` | — | systemd unit (see issue 3 in `HACKATHON_ISSUES.md`: the unit needs templating) |
+| `agent-recovery.sh --boot` | `orchestra-recovery.service` (`orchestra install-unit`) | `@reboot sleep 45` (re-attaches seats after a reboot) |
+| `lineage_daemon/telemetryd.py` | service (`[telemetry] enabled`) | `orchestra-telemetryd.service` (`orchestra install-unit --unit telemetryd`, with `[telemetry] enabled = false` if `orchestra up` also runs) |
 
 A minimal reference crontab (user crontab on the VPS; `cd` into the checkout so
 `orchestra-env.sh` finds `orchestra.toml`):
