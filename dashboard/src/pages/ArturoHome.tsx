@@ -37,6 +37,7 @@ import { hydrateTurns, onboardingConversation, carriesOnboardingMarker, mergeRes
 import WebTerminal from '../components/WebTerminal';
 import { installCommand } from '../lib/providerConnect';
 import { uploadAttachment, attachmentPreamble, describeAttachment, type Attachment } from '../lib/arturoUpload';
+import { arturoComposerText } from '../lib/arturoComposer';
 import { useDictation } from '../components/arturo/useDictation.ts';
 import SpawnedAgentCard from '../components/arturo/SpawnedAgentCard';
 import ChoicesCard from '../components/arturo/ChoicesCard';
@@ -323,7 +324,9 @@ export default function ArturoHome() {
 
   /** Send the composer's text, or `picked`: the words of a card option the operator tapped. */
   async function send(picked?: string) {
-    const text = (picked ?? draft).trim();
+    const text = picked === undefined
+      ? arturoComposerText(draft, attachments.length)
+      : picked.trim();
     if (!text || busy) return;
     const waitFor = opener.current;           // the opener is still running: queue behind it
     if (picked === undefined) {
@@ -572,7 +575,7 @@ export default function ArturoHome() {
             {call.inCall ? (
               <button className="circle-btn white" aria-label="End call" aria-pressed title="End call"
                       onClick={() => void call.toggle({ route: '/' })}><PhoneOff size={18} /></button>
-            ) : draft.trim() ? (
+            ) : arturoComposerText(draft, attachments.length) ? (
               <button className="circle-btn white" aria-label="Send" onClick={() => void send()} disabled={busy}><ArrowUp size={18} /></button>
             ) : (
               <button className="circle-btn white" aria-label={HANDS_FREE} title={handsFreeTitle(handsFreeReady(health))}
