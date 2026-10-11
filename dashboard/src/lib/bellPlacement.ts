@@ -5,12 +5,15 @@
  * tested without a DOM; the layout only supplies the slots that are mounted right now.
  *
  * - desktop, a page header with an end slot (the agent page's TopBar): the end of that row;
- * - phone: the end of the layout's own phone bar (it is on every route);
+ * - phone on an agent page: the page header (the layout's phone bar is hidden there, so the page
+ *   has ONE bar, not two stacked);
+ * - phone elsewhere: the end of the layout's own phone bar;
  * - otherwise (desktop pages without their own header): the fixed top-right corner, as before.
  */
 export type BellHost = 'page' | 'phone' | 'corner';
 
-export function bellHost(opts: { desktop: boolean; pageSlot: boolean; phoneSlot: boolean }): BellHost {
+export function bellHost(opts: { desktop: boolean; pageSlot: boolean; phoneSlot: boolean; chatRoute?: boolean }): BellHost {
   if (opts.desktop) return opts.pageSlot ? 'page' : 'corner';
+  if (opts.chatRoute && opts.pageSlot) return 'page';
   return opts.phoneSlot ? 'phone' : 'corner';
 }

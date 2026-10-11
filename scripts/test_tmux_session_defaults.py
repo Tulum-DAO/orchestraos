@@ -218,3 +218,18 @@ def test_the_attach_guard_is_per_seat_not_global(private_tmux):
     # show-hooks lists every hook NAME, set or not; a set hook prints as name[index].
     assert "client-attached[" in run("show-hooks", "-t", "=seat-x:").stdout
     assert "client-attached[" not in run("show-hooks", "-g").stdout
+
+
+def test_the_detach_hook_only_cancels_a_pane_that_is_in_a_mode(private_tmux):
+    """2026-10-11: an unconditional `send-keys -X cancel` printed "not in a mode" on every other
+    attached client (the dashboard's Dev view) whenever the pane was not scrolled up."""
+    env, run = private_tmux
+    out = _helper(env, "seat-x")
+    assert out.stdout.strip() == "rc=0", out.stderr
+    hooks = run("show-hooks", "-t", "=seat-x:").stdout
+    assert "pane_in_mode" in hooks, hooks
+    # Not in a mode: the hook's command must run clean (the old one exited 1 with the message).
+    assert run("display", "-p", "-t", "=seat-x:", "#{pane_in_mode}").stdout.strip() == "0"
+    r = run("if-shell", "-F", "-t", "=seat-x:", "#{pane_in_mode}",
+            "send-keys -t '=seat-x:' -X cancel", check=False)
+    assert r.returncode == 0 and "not in a mode" not in (r.stdout + r.stderr), r

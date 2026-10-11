@@ -68,9 +68,14 @@ export function buildRenderList(items: ChatItem[]): RenderNode[] {
       const text = it.text?.trim();
       if (!text) continue;
       if (it.role === 'user') {
-        // The very first user text on a spawned session is the system/spawn prompt.
-        const isSystem = !firstUserSeen && (text.length > 800 || /^You are\b/.test(text));
-        firstUserSeen = true;
+        // Not the operator's words, so never a blue bubble: what the server already flagged (codex's
+        // developer brief and its <environment_context>/<multi_agent_mode> envelopes), the spawn
+        // boot line ("You are gm. Read /tmp/agent-init-gm.md ..."), and the first user text of a
+        // spawned session. Codex sends its envelopes FIRST, so "first" alone missed the boot line.
+        const flagged = (it as { is_system?: boolean }).is_system === true;
+        const bootLine = /^You are [\w.-]+\. Read \/tmp\/agent-init-[\w.-]+\.md\b/.test(text);
+        const isSystem = flagged || bootLine || (!firstUserSeen && (text.length > 800 || /^You are\b/.test(text)));
+        if (!flagged) firstUserSeen = true;
         nodes.push({ kind: 'user', text, ts: it.ts, key, isSystem, queued: (it as any).queued === true });
       } else {
         nodes.push({ kind: 'assistant', text, ts: it.ts, key });

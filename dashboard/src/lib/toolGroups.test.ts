@@ -435,3 +435,15 @@ test('the Arturo adapter is a SUBSET of the transcript adapter, with path free t
   }
   assert.ok('tool' in fromPart && 'status' in fromPart, 'the subset must still carry tool and status');
 });
+
+test('codex plumbing and the spawn boot line render as system, never as the operator (2026-10-11)', () => {
+  const items = [
+    { kind: 'text', role: 'user', text: 'There are 4 available concurrency slots ...', is_system: true, uuid: 'a' },
+    { kind: 'text', role: 'user', text: '<multi_agent_mode>no proactive delegation</multi_agent_mode>', is_system: true, uuid: 'b' },
+    { kind: 'text', role: 'user', text: 'You are gm. Read /tmp/agent-init-gm.md and follow all instructions in it.', uuid: 'c' },
+    { kind: 'text', role: 'assistant', text: 'gm ONLINE.', uuid: 'd' },
+    { kind: 'text', role: 'user', text: 'what is next?', uuid: 'e' },
+  ] as unknown as ChatItem[];
+  const users = buildRenderList(items).filter((n): n is Extract<RenderNode, { kind: 'user' }> => n.kind === 'user');
+  assert.deepEqual(users.map((u) => !!u.isSystem), [true, true, true, false]);
+});

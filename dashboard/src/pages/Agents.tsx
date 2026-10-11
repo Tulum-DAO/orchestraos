@@ -23,6 +23,7 @@ import { isFleetMember } from '../lib/topologyLines';
 import { getRecentAgents, loadAndMergeRecentAgents, type RecentAgent } from '../lib/user-actions';
 import { GenChip } from '../components/GenChip';
 import NewAgentModal from '../components/NewAgentModal';
+import { NEW_AGENT_EVENT } from '../lib/newAgent';
 import { showNewAgent } from '../lib/features';
 
 const TIERS = ['For You', 'Recent', 'All', 'T0', 'T1', 'T2', 'T3'] as const;
@@ -39,6 +40,12 @@ export default function Agents() {
   const { data: user } = useUser();
   const queryClient = useQueryClient();
   const [showNewAgentModal, setShowNewAgentModal] = useState(false);
+  // The phone bar's + (DashboardLayout) opens this page's New Agent form.
+  useEffect(() => {
+    const open = () => { if (showNewAgent()) setShowNewAgentModal(true); };
+    window.addEventListener(NEW_AGENT_EVENT, open);
+    return () => window.removeEventListener(NEW_AGENT_EVENT, open);
+  }, []);
   const [tierFilter, setTierFilter] = useState<string>('For You');
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('cards');
@@ -341,7 +348,7 @@ export default function Agents() {
           position:fixed so it stays inside this page's scroll container and cannot end up
           floating over another route's content. The opaque background matters: without it
           the cards scroll visibly through the numbers. */}
-      <div className="sticky top-0 z-20 -mx-6 px-6 pt-1 pb-3 bg-neutral-950 border-b border-neutral-900 space-y-3">
+      <div className="md:sticky md:top-0 md:z-20 -mx-6 px-6 pt-1 pb-3 bg-neutral-950 border-b border-neutral-900 space-y-3">
         <div className="flex flex-col sm:flex-row items-stretch sm:items-start justify-between gap-3 sm:gap-4">
           <div className="min-w-0 flex-1">
             <AgentsSummaryStrip

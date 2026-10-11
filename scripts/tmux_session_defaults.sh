@@ -31,12 +31,15 @@ orch_tmux_session_defaults() {
     # ("no such session"), which the fail-soft below would have hidden: the option would just
     # never be set. A plain "NAME" would prefix-match a neighbour (seat-x -> seat-xy).
     tmux set-option -t "=$session:" mouse on >/dev/null 2>&1 || true
-    # `send-keys -X cancel` leaves scroll mode, and is a harmless "not in a mode" otherwise
-    # (no keystroke reaches the app). The target is quoted for tmux's own command parser.
+    # `send-keys -X cancel` leaves scroll mode. Only when the pane IS in a mode: otherwise tmux
+    # answers "(null):0: not in a mode", and it prints that on every OTHER attached client. The
+    # dashboard's Dev view attaches a new client before the old one detaches, so every other
+    # Chat -> Dev switch showed the error on top of the terminal (Shaw, 2026-10-11).
+    # The target is quoted for tmux's own command parser.
     # Only for names tmux's command parser cannot misread (seat names are not validated
     # upstream); mouse is still set above for any name.
     if [[ "$session" =~ ^[A-Za-z0-9_-]+$ ]]; then
-        tmux set-hook -t "=$session:" client-detached "send-keys -t '=$session:' -X cancel" >/dev/null 2>&1 || true
+        tmux set-hook -t "=$session:" client-detached "if-shell -F -t '=$session:' '#{pane_in_mode}' { send-keys -t '=$session:' -X cancel }" >/dev/null 2>&1 || true
         # A seat must never attach a tmux client inside its own screen (operator finding #10,
         # 2026-10-08): gm's pane ran a nested `tmux attach` (tmux refuses one while TMUX is set;
         # it gets through with TMUX unset, which is tmux's own error hint), its CLI went off

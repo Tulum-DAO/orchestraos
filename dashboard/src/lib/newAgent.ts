@@ -87,6 +87,9 @@ export async function fetchParents(): Promise<ParentSeat[]> {
   return [];
 }
 
+/** The phone top bar's + (DashboardLayout) asks the Agents page to open its New Agent form. */
+export const NEW_AGENT_EVENT = 'orchestra:new-agent';
+
 export type SeatKind = 'lead' | 'worker' | 'gm';
 
 /** Who a seat of this kind reports to. A worker (T2) needs a lead: any registered seat that is
