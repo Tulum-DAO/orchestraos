@@ -1,0 +1,40 @@
+# OrchestraOS seat recovery after a reboot (issue G3).
+#
+# Rendered by `orchestra install-unit` (part of the default `--unit stack`). Re-run it rather
+# than editing the installed copy.
+#
+# Once per boot, after orchestra.service: scripts/agent-recovery.sh --boot resumes every seat
+# that was alive in the last 24 hours, from its saved session and handoff, so the team comes
+# back with its context instead of fresh. It replaces the reference install's crontab line
+# `@reboot sleep 45 && bash <checkout>/scripts/agent-recovery.sh --boot`.
+[Unit]
+Description=OrchestraOS seat recovery after boot (agent-recovery.sh --boot)
+Documentation=https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md
+Wants=network-online.target
+After=network-online.target orchestra.service
+
+[Service]
+Type=oneshot
+# Stay "active (exited)" after the script finishes, so the seats it started are not treated as
+# leftovers of a finished unit.
+RemainAfterExit=yes
+User={{ORCHESTRA_USER}}
+WorkingDirectory={{ORCHESTRA_ROOT}}
+Environment="ORCHESTRA_ROOT={{ORCHESTRA_ROOT}}"
+Environment="ORCHESTRA_CONFIG={{ORCHESTRA_CONFIG}}"
+Environment="ORCHESTRA_DIR={{ORCHESTRA_DIR}}"
+Environment="ORCH_DIR={{ORCHESTRA_DIR}}"
+Environment="PYTHONPATH={{ORCHESTRA_ROOT}}:{{ORCHESTRA_ROOT}}/scripts"
+Environment="PATH={{PATH}}"
+# The reference install's 45 s settle time: networking, Tailscale and the supervisor's first
+# tick are up before seats start talking to them.
+ExecStartPre=/bin/sleep 45
+ExecStart=/bin/bash "{{ORCHESTRA_ROOT}}/scripts/agent-recovery.sh" --boot
+# Resuming a large team takes a while (one seat at a time, each verified).
+TimeoutStartSec=20min
+# The seats (and the tmux server, when this unit starts it) must outlive this oneshot:
+# only the script itself is ever signalled.
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

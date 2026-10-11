@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from . import settings as S
+from .install_unit import DEFAULT_DEST as DEFAULT_UNIT_DEST
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -101,6 +102,23 @@ def parse_args(argv=None) -> argparse.Namespace:
     ug.add_argument("--no-venv", action="store_true", help="passed to init: skip python venv + pip")
     ug.add_argument("--no-npm", action="store_true", help="passed to init: skip npm install (and builds)")
     ug.add_argument("--no-build", action="store_true", help="passed to init: skip api/dashboard builds")
+    iu = sub.add_parser("install-unit",
+                        help="install systemd units so OrchestraOS starts on boot (renders deploy/systemd/*.template)")
+    iu.add_argument("--unit", action="append", choices=["stack", "telemetryd"], default=None,
+                    help="stack (default) = orchestra.service + orchestra-recovery.service; telemetryd = the "
+                         "telemetry daemon alone, for installs not run by `orchestra up`. Repeatable")
+    iu.add_argument("--user", help="user the services run as (default: you; $SUDO_USER under sudo). Never root")
+    iu.add_argument("--data-dir", help="data dir baked into the units (default: the one `orchestra up` uses)")
+    iu.add_argument("--python", help="python interpreter (default: the checkout's .venv, else this python)")
+    iu.add_argument("--dest", default=str(DEFAULT_UNIT_DEST), help="where unit files go (default: %(default)s)")
+    iu.add_argument("--print", action="store_true", help="print the rendered unit files and exit; writes nothing")
+    iu.add_argument("--dry-run", action="store_true", help="show the values and the exact commands; writes nothing")
+    iu.add_argument("--no-sudo", action="store_true",
+                    help="do not run sudo: stage the files under <data>/systemd/ and print the commands to finish")
+    iu.add_argument("--no-enable", action="store_true", help="install the files but do not `systemctl enable` them")
+    iu.add_argument("--now", action="store_true", help="also start the units now (`systemctl enable --now`)")
+    iu.add_argument("--force", action="store_true",
+                    help="install even when telemetryd would run twice, or as root")
     s = sub.add_parser("status", help="show the supervisor's process table")
     s.add_argument("--json", action="store_true")
     return p.parse_args(argv)
@@ -229,10 +247,11 @@ def main(argv=None) -> int:
     ns = parse_args(argv)
     from .seats import cmd_rotate, cmd_spawn, cmd_agent, cmd_starter
     from .pair_cmd import run_pair, run_devices, run_rotate_fleet_token
+    from .install_unit import cmd_install_unit
     return {"init": cmd_init, "doctor": cmd_doctor, "up": cmd_up, "down": cmd_down, "status": cmd_status,
             "spawn": cmd_spawn, "starter": cmd_starter, "agent": cmd_agent, "rotate": cmd_rotate, "upgrade": cmd_upgrade,
             "pair": run_pair, "devices": run_devices,
-            "rotate-gateway-token": run_rotate_fleet_token}[ns.command](ns)
+            "rotate-gateway-token": run_rotate_fleet_token, "install-unit": cmd_install_unit}[ns.command](ns)
 
 
 if __name__ == "__main__":

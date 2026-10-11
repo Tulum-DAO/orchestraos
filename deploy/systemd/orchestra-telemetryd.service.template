@@ -1,0 +1,57 @@
+# OrchestraOS telemetry daemon, standalone (issue G3).
+#
+# Rendered by `orchestra install-unit --unit telemetryd`, which fills in every install-specific
+# value and refuses to leave a placeholder behind. Re-run it rather than editing the installed copy.
+#
+# WHEN TO USE THIS UNIT: only when the rest of the stack is NOT run by `orchestra up` (the
+# reference install's crontab model, docs/REFERENCE_INSTALL.md section 2), or when you run
+# `orchestra up` with `[telemetry] enabled = false`. `orchestra up` (and orchestra.service)
+# already supervise telemetryd as a child. Two daemons on one data dir contend for the same
+# flock (<data>/state/wal/telemetryd.lock): the second exits "lock-held" and, under
+# Restart=on-failure, restarts every few seconds forever. `orchestra install-unit` refuses that
+# combination unless you pass --force.
+#
+# The multiplexed WAL tailer + the real-time overlay (pipe-pane attach sweep, status deriver,
+# token extractor), composed into ONE dual-cadence supervisor
+# (scripts/lineage_daemon/telemetryd.py). It writes <data>/realtime/status.json, which the
+# agents page and the router read. Local only: nothing is sent anywhere.
+#
+# The service runs as the install user, never root: a root daemon at umask 022 would lock the
+# user's readers and writers out of the shared tmux socket, the agent CLI transcripts and the
+# stores, and nothing in capture needs root. Root's only job is to install this file.
+# Rollback: `sudo systemctl disable --now orchestra-telemetryd` (agent-status.py's TTL path
+# resumes on its own).
+[Unit]
+Description=OrchestraOS telemetry daemon (WAL tailer + real-time overlay)
+Documentation=https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md
+After=network.target
+
+[Service]
+Type=simple
+User={{ORCHESTRA_USER}}
+# ORCHESTRA_DIR is the DATA dir (registry.json, state/, logs/); ORCHESTRA_ROOT is the checkout.
+# PYTHONPATH puts the checkout and scripts/ on the path so `-m lineage_daemon.telemetryd`
+# resolves the package (telemetryd uses intra-package relative imports). The same values
+# orchestra_cli.settings.child_env() gives the supervised telemetryd.
+Environment="ORCHESTRA_DIR={{ORCHESTRA_DIR}}"
+Environment="ORCH_DIR={{ORCHESTRA_DIR}}"
+Environment="ORCHESTRA_ROOT={{ORCHESTRA_ROOT}}"
+Environment="ORCHESTRA_CONFIG={{ORCHESTRA_CONFIG}}"
+Environment="ORCHESTRA_REALTIME_DIR={{ORCHESTRA_DIR}}/realtime"
+Environment="PYTHONPATH={{ORCHESTRA_ROOT}}:{{ORCHESTRA_ROOT}}/scripts"
+Environment="PATH={{PATH}}"
+WorkingDirectory={{ORCHESTRA_ROOT}}
+ExecStart="{{PYTHON}}" -m lineage_daemon.telemetryd
+# Event-driven long-runner (well under 1% CPU measured). The flock LivenessLock is released by
+# the kernel on SIGKILL, so a restart after a crash never wedges on a stale lock. SIGTERM
+# triggers a clean should_stop shutdown.
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=15
+# Least privilege: telemetryd only reads and writes the install user's own files.
+NoNewPrivileges=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

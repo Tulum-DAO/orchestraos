@@ -671,6 +671,48 @@ Smoke check: run `orchestra doctor` and look for its `api:health` row (it probes
 your own `[api] port`). Or, on the default port 8888 only:
 `curl -s http://127.0.0.1:8888/api/health` → `{"status":"ok", "db":{"open":true}, ...}`.
 
+### Start on boot (systemd)
+
+`orchestra up --detach` does not survive a reboot. To have the server bring everything back on
+its own, install the systemd units, as your normal user (not with `sudo` in front; it asks for
+your password when it needs it):
+
+```bash
+orchestra install-unit --dry-run   # shows the user, checkout, data dir and the exact commands; changes nothing
+orchestra down                     # stop the supervisor you started by hand
+orchestra install-unit --now       # install, enable, and start (or: make install-unit ARGS=--now)
+systemctl status orchestra         # active (running)
+```
+
+You should see `started and enabled: orchestra.service, orchestra-recovery.service`. It installs
+two units into `/etc/systemd/system`, rendered from `deploy/systemd/*.service.template` for your
+user, your checkout and your data dir, so you never edit a unit by hand:
+
+| unit | what |
+|---|---|
+| `orchestra.service` | `orchestra up` in the foreground: the same supervisor and children as the table above, restarted if it crashes |
+| `orchestra-recovery.service` | once per boot, after `orchestra.service`: `scripts/agent-recovery.sh --boot` resumes the seats that were running, from their saved sessions |
+
+The units run as you, never as root. They carry your `PATH` from the moment you ran
+`install-unit`, plus `~/.local/bin` (where Claude Code installs itself), `~/.bun/bin` and npm's
+global `bin` when those exist, because systemd's own `PATH` finds none of the agent CLIs. If a
+runtime in `[runtimes] enabled` is not on that `PATH`, `install-unit` prints a `WARNING` naming
+it; install the CLI (or fix your `PATH`) and run `orchestra install-unit` again. Run it again too
+after moving the checkout or changing `[data] dir`.
+
+With the units installed, restart with `sudo systemctl restart orchestra` and read logs with
+`journalctl -u orchestra` (each child still logs under `<data>/logs/`). Restarting the stack
+does not stop your seats. `orchestra down` still stops the supervisor, and systemd leaves it
+stopped; start it again with `sudo systemctl start orchestra`, not `orchestra up --detach` (that
+starts a second supervisor systemd does not know about). To remove the units:
+`sudo systemctl disable --now orchestra orchestra-recovery`.
+
+Other flags: `--print` writes the rendered files to the screen; `--no-sudo` writes them under
+`<data>/systemd/` and prints the three commands to finish; `--unit telemetryd` installs the
+telemetry daemon on its own (`orchestra-telemetryd.service`), only for installs that do not run
+`orchestra up`. `orchestra up` already runs telemetryd, so `install-unit` refuses to install both
+unless `[telemetry] enabled = false`.
+
 ### Open the dashboard in your browser, over Tailscale https
 
 The dashboard listens on `127.0.0.1:8891` on the VPS, so it is not reachable from

@@ -1,0 +1,53 @@
+# OrchestraOS, the whole stack, started on boot (issue G3).
+#
+# Rendered by `orchestra install-unit` (the default `--unit stack` installs this file and
+# orchestra-recovery.service). Re-run it rather than editing the installed copy.
+#
+# Runs `orchestra up` in the FOREGROUND: that process IS the supervisor (gateway, api,
+# dashboard, arturo, telemetryd, the beats), so systemd tracks it directly. Never
+# `orchestra up --detach` here: --detach forks a second supervisor into its own session and
+# returns, so systemd would see the main process exit and lose track of the real one.
+#
+# telemetryd is one of the supervisor's children (orchestra_cli/process_table.py). Do not also
+# enable orchestra-telemetryd.service unless orchestra.toml sets `[telemetry] enabled = false`;
+# `orchestra install-unit` refuses the double install.
+#
+# Day to day: `sudo systemctl restart orchestra` restarts the stack; `systemctl status
+# orchestra` / `journalctl -u orchestra` show it. `orchestra status` still works.
+# `orchestra down` stops the supervisor cleanly (exit 0), and Restart=on-failure leaves it
+# stopped; bring it back with `sudo systemctl start orchestra`, not `orchestra up --detach`
+# (that would start a second, unmanaged supervisor).
+[Unit]
+Description=OrchestraOS supervisor (gateway, api, dashboard, arturo, telemetryd, beats)
+Documentation=https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User={{ORCHESTRA_USER}}
+WorkingDirectory={{ORCHESTRA_ROOT}}
+# The values `bin/orchestra` would have set in your shell. ORCHESTRA_DIR is baked so the unit
+# and the data dir agree; re-run `orchestra install-unit` after changing `[data] dir`.
+Environment="ORCHESTRA_ROOT={{ORCHESTRA_ROOT}}"
+Environment="ORCHESTRA_CONFIG={{ORCHESTRA_CONFIG}}"
+Environment="ORCHESTRA_DIR={{ORCHESTRA_DIR}}"
+# Your PATH at install time: systemd's default PATH has no node, tmux-in-~/.local, or agent
+# CLI, and seats spawned from the dashboard inherit this environment.
+Environment="PATH={{PATH}}"
+ExecStart="{{PYTHON}}" -m orchestra_cli up
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+# The supervisor terminates its own children on SIGTERM (10 s grace, then SIGKILL).
+TimeoutStopSec=30
+# Only the supervisor gets the signal. A seat started from the dashboard starts the tmux
+# server inside this unit's cgroup, and the default KillMode=control-group would kill every
+# seat on `systemctl restart orchestra`. Seats are not the supervisor's children; they outlive
+# it, exactly as they outlive `orchestra down`.
+KillMode=process
+# No NoNewPrivileges / ProtectSystem here on purpose: seats inherit this unit's sandbox, and
+# an agent that runs `sudo` (or writes outside your home) would break under it.
+
+[Install]
+WantedBy=multi-user.target
