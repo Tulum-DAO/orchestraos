@@ -6,7 +6,7 @@
  *  - ToolGroupCard    (two or more consecutive calls folded to one line per turn)
  * Assistant prose is rendered by <Markdown/>.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ChevronRight, ChevronDown, FileText, Check } from 'lucide-react';
 import Markdown from './Markdown';
 import { toolSummary, toolFilePath, shortPath, type ToolBlock, type RenderNode } from '../../lib/transcript';
@@ -17,6 +17,7 @@ import {
 import { parseMessageSegments, hasPasteMarkers } from '../../lib/pastedText';
 import { hasVoiceCallMarker, parseVoiceSegments } from '../../lib/voiceCall';
 import VoiceCallCard from './VoiceCallCard';
+import { isCommandTool, outputPreview, todoItems, type ToolDensity } from '../../lib/toolCardDetail';
 
 const RESULT_COLLAPSE_CHARS = 600;
 
@@ -270,12 +271,15 @@ function FilePathChip({ path }: { path: string }) {
   );
 }
 
-export function ToolCard({ block }: { block: ToolBlock }) {
+export function ToolCard({ block, density = 'normal' }: { block: ToolBlock; density?: ToolDensity }) {
   const summary = toolSummary(block.tool, block.input);
   const result = block.result || '';
   const resultLong = result.length > RESULT_COLLAPSE_CHARS;
+  const command = isCommandTool(block.tool);
   const [open, setOpen] = useState(false); // input open
-  const [resOpen, setResOpen] = useState(!resultLong && result.length > 0);
+  const [resOpen, setResOpen] = useState(
+    (density === 'verbose' && result.length > 0) || (!command && !resultLong && result.length > 0),
+  );
   const glyph = TOOL_GLYPH[block.tool] || '•';
   const filePath = toolFilePath(block.tool, block.input);
 
@@ -284,7 +288,9 @@ export function ToolCard({ block }: { block: ToolBlock }) {
   // A header that HOVERS and toggles state but reveals nothing is a dead click: the card
   // looked expandable whenever the input was small, and answered a click with no change.
   // Only the cards that can actually open get the affordance; the rest render as plain rows.
-  const expandable = inputBig || resultLong;
+  const expandable = inputBig || resultLong || (command && result.length > 0);
+  const todos = todoItems(block);
+  const commandPreview = density === 'normal' && command && result.length > 0 ? outputPreview(result) : null;
 
   return (
     <div className="flex justify-start">
@@ -327,10 +333,28 @@ export function ToolCard({ block }: { block: ToolBlock }) {
           </pre>
         )}
 
+        {todos.length > 0 && (
+          <div className="border-t border-neutral-800 px-3 py-1.5 space-y-1">
+            {todos.map((todo, index) => (
+              <div key={`${todo.content}:${index}`} className={`flex items-start gap-2 text-[11px] ${todo.status === 'completed' ? 'text-neutral-500 line-through' : 'text-neutral-300'}`}>
+                <span role="img" aria-label={todo.status} className={todo.status === 'completed' ? 'text-green-400' : todo.status === 'in_progress' ? 'text-amber-400' : 'text-neutral-500'}>
+                  {todo.status === 'completed' ? '✓' : todo.status === 'in_progress' ? '◐' : '○'}
+                </span>
+                {todo.content}
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* result */}
         {result.length > 0 && (
           <div className="border-t border-neutral-800">
-            {!resOpen ? (
+            {commandPreview && !resOpen ? (
+              <button onClick={() => setResOpen(true)} aria-expanded={false} className="w-full px-3 py-1.5 text-left hover:bg-neutral-800/40">
+                <pre className={`overflow-hidden whitespace-pre text-[11px] font-mono ${block.isError ? 'text-red-300' : 'text-neutral-400'}`}>{commandPreview.text}</pre>
+                <span className="text-[10px] text-neutral-500">{commandPreview.hiddenLines > 0 ? `Show ${commandPreview.hiddenLines} more line${commandPreview.hiddenLines === 1 ? '' : 's'}` : 'Show output'}</span>
+              </button>
+            ) : !resOpen ? (
               <button
                 onClick={() => setResOpen(true)}
                 aria-expanded={false}
@@ -341,7 +365,7 @@ export function ToolCard({ block }: { block: ToolBlock }) {
               </button>
             ) : (
               <div>
-                {resultLong && (
+                {(resultLong || command) && (
                   <button
                     onClick={() => setResOpen(false)}
                     aria-expanded
@@ -369,8 +393,9 @@ export function ToolCard({ block }: { block: ToolBlock }) {
  * Expanding shows the per-call ToolCards (and the thinking between them), each of which
  * expands again to its input and output: three levels instead of one card per call.
  */
-export function ToolGroupCard({ group, interrupted = false }: { group: ToolGroupNode; interrupted?: boolean }) {
-  const [open, setOpen] = useState(false);
+export function ToolGroupCard({ group, interrupted = false, density = 'normal' }: { group: ToolGroupNode; interrupted?: boolean; density?: ToolDensity }) {
+  const [open, setOpen] = useState(density !== 'summary');
+  useEffect(() => setOpen(density !== 'summary'), [density]);
   const tools = group.children.filter((c): c is ToolBlock => c.kind === 'tool');
   const s = summarizeTurn(tools.map(fromToolBlock), { interrupted });
   const dur = s.durationMs !== undefined ? formatDuration(s.durationMs) : '';
@@ -401,7 +426,7 @@ export function ToolGroupCard({ group, interrupted = false }: { group: ToolGroup
         </button>
         {open && (
           <div className="border-t border-neutral-800 p-1.5 space-y-1.5 [&>div>div]:max-w-full">
-            {group.children.map((c) => <RenderNodeView key={c.key} node={c} />)}
+            {group.children.map((c) => <RenderNodeView key={c.key} node={c} density={density} />)}
           </div>
         )}
       </div>
@@ -410,14 +435,14 @@ export function ToolGroupCard({ group, interrupted = false }: { group: ToolGroup
 }
 
 /** Like RenderNodeView, plus the folded tool group. */
-export function GroupedNodeView({ node, interrupted }: { node: GroupedNode; interrupted?: boolean }) {
+export function GroupedNodeView({ node, interrupted, density = 'normal' }: { node: GroupedNode; interrupted?: boolean; density?: ToolDensity }) {
   return node.kind === 'tool_group'
-    ? <ToolGroupCard group={node} interrupted={interrupted} />
-    : <RenderNodeView node={node} />;
+    ? <ToolGroupCard group={node} interrupted={interrupted} density={density} />
+    : <RenderNodeView node={node} density={density} />;
 }
 
 /** Dispatch a RenderNode to the right primitive. */
-export function RenderNodeView({ node }: { node: RenderNode }) {
+export function RenderNodeView({ node, density = 'normal' }: { node: RenderNode; density?: ToolDensity }) {
   switch (node.kind) {
     case 'user': {
       if (node.isSystem) return <UserSystem text={node.text} />;
@@ -460,7 +485,7 @@ export function RenderNodeView({ node }: { node: RenderNode }) {
     case 'thinking':
       return <ThinkingCard text={node.text} />;
     case 'tool':
-      return <ToolCard block={node} />;
+      return <ToolCard block={node} density={density} />;
     default:
       return null;
   }
