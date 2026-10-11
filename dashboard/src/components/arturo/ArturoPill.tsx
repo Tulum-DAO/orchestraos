@@ -241,6 +241,13 @@ export function ArturoPill() {
     return () => window.removeEventListener('keydown', onKey);
   }, [open, setOpen]);
 
+  // The model picker belongs to this open pane: closing the pane closes it, so it never comes
+  // back on its own the next time Arturo opens. (A tap outside the picker closes it too.)
+  useEffect(() => {
+    if (!open) return;
+    return () => setModelOpen(false);
+  }, [open]);
+
   function toggleContextCard() {
     if (ctxOn) dismissContext(convId); else restoreContext(convId);
     setCtxOn(!ctxOn);
@@ -377,7 +384,7 @@ export function ArturoPill() {
         </div>
       </div>
       <ModelSelectorSheet
-        open={modelOpen}
+        open={open && modelOpen}
         onClose={() => setModelOpen(false)}
         selection={brainChoice ? { providerId: brainChoice.provider, modelId: brainChoice.model } : null}
         onPick={(p) => chooseBrain({ provider: p.providerId, model: p.modelId, label: p.modelLabel })}
