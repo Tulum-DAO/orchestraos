@@ -23,6 +23,7 @@ def _obs(ctx_pct, state=None, state_age_s=0, death=None):
 # ── lull-swap fires in the band when Blue is idle long enough ──────────────────
 
 def test_lull_swap_fires_when_idle_in_band():
+    assert LULL_MIN_IDLE_S == 60, "the READY-gated 70–80% promotion window is one minute"
     d = decide_bg(_obs(0.74, state="idle", state_age_s=LULL_MIN_IDLE_S))
     assert d["action"] == "swap"
     assert d["reason"] == "ctx:lull-swap"
