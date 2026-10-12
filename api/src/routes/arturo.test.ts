@@ -20,6 +20,7 @@ import { createArturoRouter, GATEWAY_URL, type ArturoDeps } from './arturo.js';
 function makeDeps(over: Partial<ArturoDeps> = {}): ArturoDeps & { urls: string[] } {
   const urls: string[] = [];
   const deps: any = {
+    enabled: () => true,
     token: () => 'test-token',
     fetchJson: async (url: string) => { urls.push(url); return { status: 200, body: { ok: true, threads: [] } }; },
     forwardStream: async (url: string) => { urls.push(url); return { status: 200, body: { ok: true, text: '' } }; },
@@ -90,6 +91,18 @@ test('an unreachable gateway is a 502, not a crash', async () => {
   const r = await get(deps, '/api/arturo/threads');
   assert.equal(r.status, 502);
   assert.equal(r.json.ok, false);
+});
+
+test('a disabled Arturo service is named, not forwarded as an unreachable gateway', async () => {
+  let called = false;
+  const deps = makeDeps({ enabled: () => false, fetchJson: async () => {
+    called = true;
+    return { status: 200, body: { ok: true } };
+  } });
+  const r = await get(deps, '/api/arturo/health');
+  assert.equal(r.status, 503);
+  assert.deepEqual(r.json, { ok: false, error: 'arturo_disabled', disabled: true });
+  assert.equal(called, false, 'a disabled service must not make a gateway request');
 });
 
 test('a missing gateway token never reaches the network', async () => {

@@ -28,7 +28,7 @@ import { useArturoBrain } from '../stores/arturoBrain';
 import { arturoTurn, arturoPrewarm } from '../lib/arturoStream';
 import { brainFromThread, describeTurnError, toWireBrain } from '../lib/arturoBrain';
 import { arturoHealth, runtimesAvailable, brainLabel, greeting, newConversationId,
-  isStarting, waitForArturo, STARTING_TEXT, sendOutcomeText, firstStep, onboardingTurn, onboardingDone,
+  isStarting, isArturoDisabled, waitForArturo, STARTING_TEXT, ARTURO_DISABLED_TEXT, sendOutcomeText, firstStep, onboardingTurn, onboardingDone,
   HANDS_FREE, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, ONBOARDING_OPENER, sendStateLabel,
   type ChoiceCard, type PairCard,
   type ArturoHealth, type RuntimeRow, type SendState } from '../lib/arturo';
@@ -265,6 +265,11 @@ export default function ArturoHome() {
     const id = say('', { pending: true });
     // fresh: the user just logged in and tapped "Check again" — re-probe, never the cache
     let h = await arturoHealth();
+    if (isArturoDisabled(h)) {
+      setHealth(h);
+      patch(id, { pending: false, text: ARTURO_DISABLED_TEXT });
+      return;
+    }
     if (!h.ok && isStarting(h)) {          // G15: booting is not "no CLI"
       patch(id, { pending: false, text: STARTING_TEXT });
       h = await waitForArturo();
@@ -436,8 +441,9 @@ export default function ArturoHome() {
   useEffect(() => { if (dictating) grow(); }, [draft, dictating]);   // live text grows the box
 
   const brain = health?.brain;
+  const arturoDisabled = isArturoDisabled(health);
   // The chip shows the CHOSEN brain when there is one; otherwise what the install defaults to.
-  const model = starting ? 'starting…' : brainChoice ? brainChoice.label : brainLabel(brain);
+  const model = arturoDisabled ? 'turned off' : starting ? 'starting…' : brainChoice ? brainChoice.label : brainLabel(brain);
   const eff = brainChoice ? 'CLI' : brain?.kind === 'runtime' ? 'CLI' : brain?.kind === 'api' ? 'API' : '';
   const empty = turns.length === 0 && !call.inCall;
 
@@ -466,6 +472,7 @@ export default function ArturoHome() {
             <ArturoMark />
             <div className="greet serif">{greeting(name)}</div>
             {starting && <div className="tools" style={{ color: 'rgba(255,255,255,0.45)', fontSize: 13 }}>{STARTING_TEXT}</div>}
+            {arturoDisabled && <div className="tools" style={{ color: 'rgba(255,255,255,0.55)', fontSize: 13 }}>{ARTURO_DISABLED_TEXT}</div>}
           </div>
         ) : turns.map((t, i) => t.role === 'user' ? (
           <div key={t.id} className="turn-user"><div className="bubble-user">{t.text}</div>
@@ -559,19 +566,19 @@ export default function ArturoHome() {
             {dictNote && <span className="attach-error">{dictNote}</span>}
           </div>
         )}
-        <textarea ref={taRef} rows={1} value={draft} placeholder="Ask Arturo"
+        <textarea ref={taRef} rows={1} value={draft} placeholder={arturoDisabled ? 'Arturo is turned off' : 'Ask Arturo'} disabled={arturoDisabled}
           onChange={(e) => { setDraft(e.target.value); grow(); }} onKeyDown={onKey} aria-label="Message Arturo" />
         <div className="ctrl-row">
           <div className="cluster">
             <button className="circle-btn" aria-label="Attach a file" title="Attach a file"
-                    onClick={() => fileInput.current?.click()} disabled={uploading}><Plus size={18} /></button>
+                    onClick={() => fileInput.current?.click()} disabled={uploading || arturoDisabled}><Plus size={18} /></button>
             <button className="model-chip" onClick={() => setModelOpen(true)} aria-label={`Brain: ${model}. Change`} title={`Answering on ${model}`}><b>{model}</b>{eff && <span className="eff">{eff}</span>}</button>
           </div>
           <div className="cluster">
             <button className={dictMode === 'idle' ? 'circle-btn' : `circle-btn ${dictMode}`}
                     aria-label={dictMode === 'listening' ? 'Stop dictation' : dictMode === 'recording' ? 'Stop recording' : dictMode === 'transcribing' ? 'Transcribing' : 'Dictate'}
                     aria-pressed={dictating} title={dictateTitle(call.inCall, dictMode)}
-                    onClick={toggleDictation} disabled={dictateLocked(call.inCall, dictMode)}><Mic size={16} /></button>
+                    onClick={toggleDictation} disabled={dictateLocked(call.inCall, dictMode) || arturoDisabled}><Mic size={16} /></button>
             {call.inCall ? (
               <button className="circle-btn white" aria-label="End call" aria-pressed title="End call"
                       onClick={() => void call.toggle({ route: '/' })}><PhoneOff size={18} /></button>
