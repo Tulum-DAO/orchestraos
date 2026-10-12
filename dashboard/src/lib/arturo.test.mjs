@@ -3,7 +3,7 @@
  *   node --experimental-strip-types dashboard/src/lib/arturo.test.mjs
  */
 import assert from 'node:assert';
-import { isStarting, waitForArturo, contextLine, contextFromLocation, brainLabel, slugify, firstStep, onboardingTurn, toggleChoice, onboardingDone, DICTATE_TITLE, HANDS_FREE, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, DICTATE_IN_CALL, isPageOpener, ONBOARDING_OPENER } from './arturo.ts';
+import { isStarting, isArturoDisabled, waitForArturo, contextLine, contextFromLocation, brainLabel, slugify, firstStep, onboardingTurn, toggleChoice, onboardingDone, DICTATE_TITLE, HANDS_FREE, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, DICTATE_IN_CALL, isPageOpener, ONBOARDING_OPENER } from './arturo.ts';
 
 // --- isStarting: boot-window errors are "starting", real errors are not ------------------
 assert.equal(isStarting({ ok: false, error: 'HTTP 502' }), true);
@@ -13,6 +13,9 @@ assert.equal(isStarting({ ok: false, error: 'gateway unreachable' }), true);
 assert.equal(isStarting({ ok: false, error: 'Failed to fetch' }), true);
 assert.equal(isStarting({ ok: false, status: 502, error: 'gateway token unavailable' }), true);   // API before the gateway wrote its token
 assert.equal(isStarting({ ok: false, status: 502, error: 'anything at all' }), true);
+assert.equal(isStarting({ ok: false, status: 503, error: 'arturo_disabled' }), false, 'an explicit opt-out is not a boot window');
+assert.equal(isArturoDisabled({ ok: false, status: 503, error: 'arturo_disabled', disabled: true }), true);
+assert.equal(isArturoDisabled({ ok: false, status: 503, error: 'gateway unavailable' }), false);
 assert.equal(isStarting({ ok: false, error: 'HTTP 401' }), false);
 assert.equal(isStarting({ ok: false, error: 'HTTP 500' }), false);
 assert.equal(isStarting({ ok: true }), false);

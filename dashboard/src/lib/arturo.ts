@@ -11,7 +11,7 @@
  */
 export interface ArturoBrain { kind: 'api' | 'runtime' | 'none'; runtime?: string; cli?: string; model: string; reason?: string; provider?: string }
 export interface ArturoStt { server: boolean; backend: 'local-whisper' | 'none'; state: 'ready' | 'warming' | 'not-installed' | 'off' | 'error'; reason?: string; install?: string; model?: string }
-export interface ArturoHealth { live?: boolean; onboarded?: boolean; onboarding_conversation?: string | null; operator?: OperatorFacts; ok: boolean; status?: number; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; stt?: ArturoStt; error?: string }
+export interface ArturoHealth { live?: boolean; onboarded?: boolean; onboarding_conversation?: string | null; operator?: OperatorFacts; ok: boolean; status?: number; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; stt?: ArturoStt; disabled?: boolean; error?: string }
 /** A tap-to-pick card the BRAIN wrote with ask_choices: its options, and whether several may be picked.
  *  `note` is the server's own line (the starter team's cost), never the model's. */
 export type ChoiceCard = { options: string[]; multi: boolean; purpose: 'starter_team' | 'devices' | 'other'; note?: string; exclusive?: string };
@@ -229,8 +229,8 @@ export function dictateTitle(inCall: boolean, mode: string): string {
 
 /** The browser's call runs on Gemini Live, so it needs GEMINI_API_KEY (`/health.live`). A server from
  *  before that field said only whether ANY voice key was set; fall back to that. */
-export function handsFreeReady(h: Pick<ArturoHealth, 'live' | 'voice'> | null | undefined): boolean {
-  if (!h) return false;
+export function handsFreeReady(h: Pick<ArturoHealth, 'live' | 'voice' | 'disabled' | 'ok' | 'error'> | null | undefined): boolean {
+  if (!h || isArturoDisabled(h)) return false;
   return typeof h.live === 'boolean' ? h.live : !!h.voice;
 }
 
@@ -305,11 +305,19 @@ const STARTING_RE = /^(HTTP 50[234]|arturo unreachable|gateway unreachable|gatew
 
 export function isStarting(r: { ok: boolean; status?: number; error?: string } | null | undefined): boolean {
   if (!r || r.ok) return false;
+  // A 503 normally means the stack is still coming up, except for the explicit
+  // opt-out returned by /api/arturo/health. That one must never enter polling.
+  if (r.error === 'arturo_disabled') return false;
   if (r.status !== undefined && r.status >= 502 && r.status <= 504) return true;
   return STARTING_RE.test(String(r.error || ''));
 }
 
 export const STARTING_TEXT = 'Still starting — I will retry in a few seconds.';
+export const ARTURO_DISABLED_TEXT = 'Arturo is turned off on this server. Enable [arturo] enabled = true in orchestra.toml, then restart OrchestraOS.';
+
+export function isArturoDisabled(r: { ok: boolean; disabled?: boolean; error?: string } | null | undefined): boolean {
+  return Boolean(r && !r.ok && (r.disabled || r.error === 'arturo_disabled'));
+}
 
 /** Poll /api/arturo/health with backoff (1,2,3,5,5… s) until it answers ok or maxMs elapses.
  *  Resolves the last health seen; check `.ok` on the result. */

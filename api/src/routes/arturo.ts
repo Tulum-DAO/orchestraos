@@ -18,6 +18,7 @@
  */
 import { Router } from 'express';
 import { readFileSync } from 'fs';
+import { loadConfig } from '../lib/config.js';
 
 const GATEWAY_TOKEN_FILE = process.env.WATCH_GATEWAY_TOKEN_FILE
   || `${process.env.HOME}/.config/jarvis/watch-gateway-token`;
@@ -28,6 +29,9 @@ export function gatewayToken(): string {
 }
 
 export interface ArturoDeps {
+  /** Whether this install has opted into Arturo at all. Kept injectable so the
+   * disabled state is tested without reading the host's real configuration. */
+  enabled?: () => boolean;
   /** The gateway bearer. '' means "unavailable" — we never call the gateway without it. */
   token: () => string;
   /** One authed round trip; returns the upstream status so it can be passed through. */
@@ -74,6 +78,7 @@ export function pickContext(raw: unknown): Picked<Record<string, string>> {
 
 export function defaultArturoDeps(): ArturoDeps {
   return {
+    enabled: () => loadConfig().arturoEnabled,
     token: gatewayToken,
     fetchJson: async (url, init, timeoutMs) => {
       const r = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
@@ -240,6 +245,13 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
   });
 
   router.get('/health', async (_req, res) => {
+    // A disabled optional service is neither booting nor unreachable. Returning a
+    // named state lets the home page stop its retry loop and tell the operator
+    // what they configured, rather than showing "starting" forever.
+    if (deps.enabled && !deps.enabled()) {
+      res.status(503).json({ ok: false, error: 'arturo_disabled', disabled: true });
+      return;
+    }
     await forward(res, '/arturo/health', { method: 'GET' }, 6000);
   });
 
