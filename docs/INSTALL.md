@@ -542,11 +542,10 @@ always write. A row without a `runtime` field (one you added by hand, or from an
 judged as Claude, as before; to fix one, add `"runtime": "codex"` (or `"gemini"`, `"claude"`) to it.
 `ROUTER_DECLARED_RUNTIME_DISABLED=1` (or an empty file `~/runtime/ROUTER_DECLARED_RUNTIME_DISABLED`)
 turns this off and judges every seat as Claude again; it exists only as an instant undo.
-One part stays off for Gemini/agy seats for now: if a router line is ever left sitting in an agy
-seat's composer, the router does not clear it (it never sends keys to an agy seat); it logs
-`CLEANUP skipped ... ROUTER_AGY_CLEANUP_ARMED` and the message is delivered again once a person
-clears the line. `ROUTER_AGY_CLEANUP_ARMED=1` (or an empty file `~/runtime/ROUTER_AGY_CLEANUP_ARMED`)
-turns that clearing on; Codex and Claude seats have it on already.
+If a router line is ever left sitting in a seat's composer, the router clears that one line (it is the
+only text it ever clears: a line starting with its own `[MSG from` marker) and delivers the message
+again. `ROUTER_AGY_CLEANUP_DISABLED=1` (or an empty file `~/runtime/ROUTER_AGY_CLEANUP_DISABLED`)
+turns that off for Gemini/agy seats; the line then stays until a person clears it.
 
 **Your timezone (recommended).** Agents show times in UTC unless you tell them where you are.
 In `orchestra.toml`, under `[operator]`, set `timezone` to your IANA zone name, for example

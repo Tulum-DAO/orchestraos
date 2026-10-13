@@ -702,8 +702,55 @@ def stuck_own_message(session: str, runtime: str = DEFAULT_RUNTIME) -> str | Non
         input_line = _codex_composer_block(session) or input_line
     content = input_line.split(prompt_char, 1)[-1].strip().lstrip("\u00a0").strip()
     if content.startswith("[MSG from"):
+        if runtime == "gemini" and not _is_exactly_one_injection(content):
+            # agy's composer is multi-line and pane_split hands back everything under the last
+            # '>' line. Our marker FIRST with a person's text after it (appended, or on a second
+            # line) would pass a start-only gate, and C-u then clears the CURSOR's line: theirs.
+            # So for agy the composer must hold exactly one router injection: the marker at the
+            # start and the template's fixed trailer at the end (orchestraos-builder, #427 review).
+            log(f"CLEANUP skipped {session}: the agy composer holds our marker plus other text "
+                f"(end anchor); zero keys, a person clears it")
+            return None
         return content
     return None
+
+
+# The shape of a router injection (format_injection): the marker, the subject, " — Read
+# /tmp/agent-msg-<id>.md and act on it. To reply: python3 <msg_store> send --from <seat> --to <X>
+# --type reply --subject '<...>' --body 'your reply'". Checked as a whole, not by its two ends.
+_INJECTION_RE = re.compile(
+    r"^\[MSG from \S+ \| \S+\].*? \u2014 Read /tmp/agent-msg-[A-Za-z0-9_]+\.md and act on it\. "
+    r"To reply: python3 \S+ send --from \S+ --to \S+ --type reply --subject '[^']{0,80}' --body 'your reply'$")
+
+
+def _is_exactly_one_injection(content: str) -> bool:
+    """True when the WHOLE composer (every line under the prompt down to the box's bottom border,
+    blank lines included: a blank line is a person's paragraph break, not the end of the composer;
+    whitespace-normalised so an 80-column wrap still matches) is one router injection and nothing
+    else: exactly one marker, and the full template shape from the marker to the trailer. Two
+    injections, a draft under a blank line, words after the trailer, or words inserted after the
+    first sentence all fail. Residual: text a person inserts INSIDE the subject span cannot be
+    told from the subject itself (the subject is free text)."""
+    lines = []
+    for ln in content.split("\n"):
+        st = ln.strip()
+        if _is_agy_box_border(st):
+            break
+        lines.append(st)
+    norm = " ".join(" ".join(lines).split())
+    return norm.count("[MSG from") == 1 and _INJECTION_RE.match(norm) is not None
+
+
+# agy draws its composer box with full-width runs of U+2500 (every real capture under
+# fixtures/agy: 80 of them at 80 columns). A person's "---" or "----" separator is ASCII and
+# short: content, not chrome (codex peer review of #427). Residual: a person typing 20+ box-drawing
+# characters on one line would read as the border.
+_AGY_BORDER_MIN = 20
+
+
+def _is_agy_box_border(stripped_line: str) -> bool:
+    return len(stripped_line) >= _AGY_BORDER_MIN and set(stripped_line) == {"\u2500"}
+
 
 
 def _codex_composer_block(session: str) -> str | None:
@@ -727,13 +774,14 @@ def _codex_composer_block(session: str) -> str | None:
     return "".join(block)
 
 
-def agy_cleanup_armed() -> bool:
-    """ROUTER_AGY_CLEANUP_ARMED=1 (env) or ~/runtime/ROUTER_AGY_CLEANUP_ARMED (file) turns the
-    agy/Gemini stuck-composer cleanup on. Off by default (gm, 2026-10-10)."""
-    if os.environ.get("ROUTER_AGY_CLEANUP_ARMED") == "1":
+def agy_cleanup_disabled() -> bool:
+    """ROUTER_AGY_CLEANUP_DISABLED=1 (env) or ~/runtime/ROUTER_AGY_CLEANUP_DISABLED (file) turns the
+    agy/Gemini stuck-composer cleanup OFF again. On by default since the marker gate on human text
+    was proven on real agy screens (gm, msg_aa56b181); this exists only as an instant undo."""
+    if os.environ.get("ROUTER_AGY_CLEANUP_DISABLED") == "1":
         return True
     try:
-        return (Path.home() / "runtime" / "ROUTER_AGY_CLEANUP_ARMED").exists()
+        return (Path.home() / "runtime" / "ROUTER_AGY_CLEANUP_DISABLED").exists()
     except OSError:
         return False
 
@@ -750,12 +798,11 @@ def cleanup_stuck_injection(session: str, store,
     stuck = stuck_own_message(session, runtime)
     if not stuck:
         return False
-    if runtime == "gemini" and not agy_cleanup_armed():
-        # gm ruling 2026-10-10 (msg_65f2bd8b): agy/Gemini seats get the idle gate now, but the
-        # cleanup (the one path that SENDS keys) stays off until the marker gate on human text is
-        # proven on real agy screens and that proof has been reviewed. Zero keys; named reason.
-        log(f"CLEANUP skipped {session}: agy stuck-marker cleanup is not armed "
-            f"(ROUTER_AGY_CLEANUP_ARMED); our line stays until a person clears it")
+    if runtime == "gemini" and agy_cleanup_disabled():
+        # The undo switch: zero keys, named reason. (The cleanup only ever clears a line that starts
+        # with our own [MSG from marker; proven on real agy typed/stuck screens, fixtures/agy.)
+        log(f"CLEANUP skipped {session}: agy stuck-marker cleanup is disabled "
+            f"(ROUTER_AGY_CLEANUP_DISABLED); our line stays until a person clears it")
         return False
     tmux("send-keys", "-t", session, "C-u")
     time.sleep(1)
