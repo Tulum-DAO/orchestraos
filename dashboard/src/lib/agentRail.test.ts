@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sectionFor, groupForRail, needsYouCount, providersVary, type RailAgent } from './agentRail.ts';
+import { sectionFor, groupForRail, needsYouCount, providersVary, contextLabel, contextHigh, showsContext, type RailAgent } from './agentRail.ts';
 
 const a = (id: string, status?: string, extra: Partial<RailAgent> = {}): RailAgent =>
   ({ id, status, ...extra });
@@ -112,4 +112,43 @@ test('runtime matching is case-insensitive, so CLAUDE and claude are ONE value',
 
 test('an empty rail does not show the badge', () => {
   assert.equal(providersVary([]), false);
+});
+
+test('context label: the detector string is shown as a whole percent, for every runtime', () => {
+  // /api/agents carries context_pct as the detector wrote it: "NN%" (claude from its own meter,
+  // codex from the rollout's token counts) or '' when there is no reading.
+  assert.equal(contextLabel('42%'), '42%');
+  assert.equal(contextLabel('7%'), '7%');
+  assert.equal(contextLabel('100%'), '100%');
+  assert.equal(contextLabel('42'), '42%');
+  assert.equal(contextLabel(' 42% '), '42%');
+  assert.equal(contextLabel(42), '42%');
+  assert.equal(contextLabel(41.6), '42%');
+});
+
+test('context label: no reading is null, never a made-up number', () => {
+  // A blank must not render as 0% (that reads as "empty context", a claim) — the row shows a dash.
+  for (const v of ['', '   ', undefined, null, '--', 'n/a', '%', 'abc%', '-5%', '101%', '1e3', NaN, -1, 101, {}, []]) {
+    assert.equal(contextLabel(v as unknown), null, `contextLabel(${JSON.stringify(v)}) was not null`);
+  }
+});
+
+test('context is high from 80% up, the band where seats rotate', () => {
+  assert.equal(contextHigh('79%'), false);
+  assert.equal(contextHigh('80%'), true);
+  assert.equal(contextHigh('95%'), true);
+  assert.equal(contextHigh(''), false);
+  assert.equal(contextHigh(undefined), false);
+});
+
+test('only a running row shows a context figure; a row that is not running shows none', () => {
+  // 299 of 320 live rows sit under "Not running": a dash on each would be a column of noise, and a
+  // number on a stopped seat is a stale reading presented as current.
+  assert.equal(showsContext(a('x', 'working')), true);
+  assert.equal(showsContext(a('x', 'idle')), true);
+  assert.equal(showsContext(a('x', 'waiting')), true);
+  assert.equal(showsContext(a('x', 'idle', { has_pending_menu: true })), true);
+  for (const st of ['stopped', 'offline', 'crashed', 'retired', 'unknown', undefined]) {
+    assert.equal(showsContext(a('x', st)), false, `status=${st} showed context`);
+  }
 });

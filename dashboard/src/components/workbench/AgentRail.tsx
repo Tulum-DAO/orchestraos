@@ -13,7 +13,7 @@
 import { useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { useAgents } from '../../hooks/useAgents';
-import { groupForRail, providersVary, PROVIDER_ABBR, PROVIDER_LABEL, type RailAgent, type RailGroups } from '../../lib/agentRail';
+import { groupForRail, providersVary, contextLabel, contextHigh, showsContext, PROVIDER_ABBR, PROVIDER_LABEL, type RailAgent, type RailGroups } from '../../lib/agentRail';
 import { agentRowsFrom } from '../../lib/api';
 import { chipStateFor, ActivityDot } from '../RecentAgentChips';
 import { useFeedHealth } from '../../hooks/useFeedHealth';
@@ -31,6 +31,10 @@ function RailRow({ agent, active, onPick, feed, showProvider }: { agent: RailAge
   const provKey = agent.provider?.toLowerCase();
   const prov = showProvider && provKey ? PROVIDER_ABBR[provKey] : undefined;
   const unread = agent.unread ?? 0;
+  // Context used, for every runtime that reports one; a running seat with no reading shows a
+  // dash (unknown), a seat that is not running shows nothing (lib/agentRail.ts showsContext).
+  const ctx = showsContext(agent) ? contextLabel(agent.context_pct) : undefined;
+  const ctxHigh = contextHigh(agent.context_pct);
   return (
     <button
       type="button"
@@ -45,6 +49,15 @@ function RailRow({ agent, active, onPick, feed, showProvider }: { agent: RailAge
     >
       <ActivityDot state={state} />
       <span className="truncate flex-1 min-w-0">{agent.name || agent.id}</span>
+      {ctx !== undefined && (
+        <span
+          className={clsx('shrink-0 text-[10px] tabular-nums', ctxHigh ? 'text-amber-400' : 'text-neutral-500')}
+          title={ctx === null ? 'Context used: no reading' : `Context used: ${ctx}`}
+          data-testid="rail-context"
+        >
+          {ctx ?? '—'}
+        </span>
+      )}
       {prov && (
         <span
           className="shrink-0 text-[10px] font-medium text-neutral-500 tabular-nums"
@@ -77,6 +90,7 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
       has_pending_menu: !!a.has_pending_menu,
       unread: (a.inbox_count as number | undefined) ?? 0,
       provider: a.runtime as string | undefined,
+      context_pct: a.context_pct as string | undefined,
     }));
     // Name order inside a section; the section itself is the priority signal.
     rows.sort((x, y) => (x.name || x.id).localeCompare(y.name || y.id));
