@@ -111,6 +111,7 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("GET", "/people/{person_id}"): "read",
     ("GET", "/pipeline"): "read",
     ("GET", "/briefing"): "read",
+    ("GET", "/away"): "read",
     ("GET", "/voice-memory"): "read",
     ("GET", "/agent-screen"): "read",
     ("GET", "/transcript"): "read",
@@ -2086,6 +2087,31 @@ async def handle_briefing(request):
                                       "answered_at": r.get("answered_at")} for r in answered[:10]],
                   "agents_working": working, "agents_crashed": crashed[:10],
                   "agents_stranded": stranded[:10], "agents_stalled": stalled[:10]})
+
+
+def _away_scan(data: bytes):
+    """The product's own secret scanner (agent_file.scan_secrets), with this gateway's token and the device
+    token hashes, for everything the away card stores or serves."""
+    import agent_file as AF
+    return AF.scan_secrets(data, fleet_token=gateway_token() or "", device_hashes=_agent_file_device_hashes())
+
+
+async def handle_away(request):
+    """GET /away?anchor=action|screen: the "While you were away" card (RFC 0002, scripts/away.py).
+    Read scope. Uses the agents cache, as /briefing does, so it never waits on a fleet scan."""
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    import asyncio
+    import away as AW
+    mode = request.query.get("anchor") or "action"
+    if mode not in ("action", "screen"):
+        return _json({"ok": False, "error": "anchor must be action or screen"}, status=400)
+    agents = _agents_cache["data"] or []
+
+    def _build():
+        store = ApprovalStore(); store.migrate()
+        return AW.build(ORCH_DIR, agents, store.pending_to_notify(), mode=mode, scan=_away_scan)
+    return _json(await asyncio.get_event_loop().run_in_executor(None, _build))
 
 
 # ---------------------------------------------------------------------------
@@ -4248,12 +4274,26 @@ async def handle_agent_message(request):
             except Exception as e:  # noqa: BLE001 — never lie 'held' on a failed durable write
                 return _json({"ok": False, "busy": True, "hold_failed": str(e), **info},
                              status=409)
+            _record_operator_message(request, session, text)
             return _json({"ok": True, "delivered": False, "held": True,
                           "state": "held_for_boundary", "message_id": msg_id},
                          status=200)
         return _json({"ok": False, "busy": True, **info}, status=409)
+    if ok:
+        _record_operator_message(request, session, text)
     return _json({"ok": ok, "delivered": ok, **info},
                  status=200 if ok else 502)
+
+
+def _record_operator_message(request, session, text):
+    """The away card's message anchor (gm msg_71cd9caa): one ledger row per DELIVERED or HELD send, never a
+    refused one. Best effort: a ledger that cannot be written never fails the send that already happened."""
+    try:
+        import away as AW
+        AW.record_message(ORCH_DIR, session, text, device=_answer_device(request),
+                          surface=request.headers.get("X-Surface"), scan=_away_scan)
+    except Exception as e:  # noqa: BLE001 — bookkeeping, never a gate
+        log.warning(f"operator-actions ledger write failed: {e!r}")
 
 
 async def handle_agent_interrupt(request):
@@ -5597,6 +5637,28 @@ async def handle_presence(request):
         data = await request.json()
     except Exception:
         return _json({"ok": False, "error": "bad json"}, status=400)
+    if not isinstance(data, dict):
+        return _json({"ok": False, "error": "bad json"}, status=400)
+    if data.get("foreground") is True:
+        # The away card's "since I last opened any screen" signal (RFC 0002 §5.3): its own file, keyed by the
+        # device token's id, else surface + the client's own id (the web dashboard carries no device token).
+        # Stored: label, surface, time. Debounced in away.record_presence.
+        import away as AW
+        _, principal = _resolved_principal(request)
+        dev_id = (principal or {}).get("id")
+        surface = str(data.get("surface") or request.headers.get("X-Surface") or "")[:16] or None
+        if dev_id and dev_id != "legacy":
+            key, label = f"device:{dev_id}", (principal or {}).get("label") or data.get("label")
+        else:
+            key, label = f"{surface or 'unknown'}:{str(data.get('client_id') or '-')[:64]}", data.get("label")
+        try:
+            AW.record_presence(ORCH_DIR, key, label=label, surface=surface)
+        except OSError as e:
+            return _json({"ok": False, "error": f"write failed: {e}"}, status=500)
+    if "viewing" not in data:
+        # A body without "viewing" says nothing about focus: leave it as it is. It used to CLEAR the stored
+        # focus, so any other presence report would unprotect the agent being watched from park-idle.
+        return _json({"ok": True})
     viewing = data.get("viewing")
     if viewing is not None:
         viewing = str(viewing)[:200].strip() or None
@@ -7195,6 +7257,7 @@ def build_app():
     app.router.add_get("/people/{person_id}", handle_person_detail)
     app.router.add_get("/pipeline", handle_pipeline)
     app.router.add_get("/briefing", handle_briefing)
+    app.router.add_get("/away", handle_away)
     app.router.add_get("/voice-memory", handle_voice_memory)
     app.router.add_post("/agent-message", handle_agent_message)
     app.router.add_post("/agent-interrupt", handle_agent_interrupt)

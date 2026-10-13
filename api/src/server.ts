@@ -17,6 +17,7 @@ import systemRouter from './routes/system.js';
 import memoryRouter from './routes/memory.js';
 import roadmapsRouter from './routes/roadmaps.js';
 import voiceRouter from './routes/voice.js';
+import awayRouter from './routes/away.js';
 import arturoRouter from './routes/arturo.js';
 import agentsNewRouter from './routes/agents-new.js';
 import approvalsRouter from './routes/approvals.js';
@@ -188,6 +189,7 @@ app.use('/api/system', systemRouter);
 app.use('/api/memory', memoryRouter);
 app.use('/api/roadmaps', roadmapsRouter);
 app.use('/api/voice', voiceRouter);
+app.use('/api', awayRouter); // /api/away + /api/presence (RFC 0002, the away card)
 app.use('/api/arturo', arturoRouter);
 app.use('/api/approvals', approvalsRouter);
 app.use('/api/analytics', analyticsRouter);
