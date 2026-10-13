@@ -11,7 +11,7 @@
  */
 import { Router } from 'express';
 import { readGatewayToken } from '../lib/gateway-token.js';
-import { loadConfig } from '../lib/config.js';
+import { gatewayUrl } from '../lib/gateway-url.js';
 
 export interface AwayDeps {
   token: () => string;
@@ -19,21 +19,10 @@ export interface AwayDeps {
   fetchJson: (url: string, init: RequestInit, timeoutMs: number) => Promise<{ status: number; body: any }>;
 }
 
-function defaultGatewayUrl(): string {
-  // #84: the configured gateway, the same rule as agent-send.ts.
-  if (process.env.WATCH_GATEWAY_URL) return process.env.WATCH_GATEWAY_URL;
-  try {
-    const c = loadConfig();
-    return `http://${c.gatewayHost}:${c.gatewayPort}`;
-  } catch {
-    return 'http://127.0.0.1:9091';
-  }
-}
-
 export function defaultAwayDeps(): AwayDeps {
   return {
     token: readGatewayToken,
-    gatewayUrl: defaultGatewayUrl,
+    gatewayUrl: () => gatewayUrl(),
     fetchJson: async (url, init, timeoutMs) => {
       const r = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
       const body = await r.json().catch(() => ({ ok: false, error: 'bad gateway json' }));
