@@ -320,3 +320,17 @@ def test_an_answered_card_whose_agent_still_waits_is_working_not_waiting_on_you(
     newer = [{"id": "apr_2", "from_agent": "gm", "question": "next?", "created_at": _iso(T0 + 5)}]
     assert A.outcome(a, [{"id": "gm", "state": "waiting"}], newer)["state"] == "waiting_on_you"
     assert A.outcome(a, [{"id": "gm", "state": "idle", "last_used_ts": T0 + 9}], [])["state"] == "done"
+
+
+@pytest.mark.parametrize("raw,want", [("ios", "phone"), ("phone", "phone"), ("watch", "watch"), ("web", "web"),
+                                      ("voice", "voice"), ("gateway", "unknown"), ("Quest-channel", "unknown"),
+                                      (None, "unknown")])
+def test_anchor_surface_is_always_one_of_the_rfc_values(raw, want):
+    assert A.norm_surface(raw) == want
+
+
+def test_a_screen_anchor_from_surface_reports_phone_not_ios(data):
+    (data / "state" / "arturo").mkdir()
+    (data / "state" / "arturo" / "active-surface.json").write_text(json.dumps({"devices": {
+        "ios": {"route": "/agents", "updated_at": T0}}}))
+    assert A.build(data, [], [], mode="screen", scan=no_secrets)["anchor"]["surface"] == "phone"

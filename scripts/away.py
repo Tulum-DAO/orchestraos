@@ -79,6 +79,18 @@ def _rows(db, sql, args=()):
         return []
 
 
+_SURFACES = ("voice", "phone", "watch", "web", "unknown")
+_SURFACE_ALIASES = {"ios": "phone", "iphone": "phone", "ipad": "phone"}   # /surface device keys, X-Surface
+
+
+def norm_surface(value):
+    """One of voice | phone | watch | web | unknown (RFC 0002 §5.1). The iOS app's iPhone and iPad builds
+    both report "phone" (and /surface keys them "ios"); anything else unrecognised is "unknown"."""
+    v = str(value or "").strip().lower()
+    v = _SURFACE_ALIASES.get(v, v)
+    return v if v in _SURFACES else "unknown"
+
+
 def _device_label(stamp):
     """'<device_id>:<label>' (answer_device) -> label; None for None or the bare id."""
     if not stamp or ":" not in str(stamp):
@@ -360,6 +372,7 @@ def build(data_dir, agents, pending_cards, *, mode="action", scan, write_brain=N
     moved = moved_since(data_dir, anchor["at"], pending_cards)
     aid = anchor_id(anchor)
     out_anchor = {k: anchor.get(k) for k in ("kind", "surface", "device", "device_source", "said", "target")}
+    out_anchor["surface"] = norm_surface(out_anchor.get("surface"))
     out_anchor["said"] = _safe(out_anchor.get("said"), scan)
     out_anchor.update(id=aid, at=iso(anchor["at"]))
     if anchor["kind"] != "screen":
