@@ -11,6 +11,7 @@ Usage: spawn_attribute_sid.py <agent_id> [--attempts N] [--sleep S]"""
 import argparse
 import json
 import os
+import re
 import sys
 import time
 
@@ -30,12 +31,18 @@ from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
 
 
 
+_SESSION_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
 def resume_command_for(runtime, sid):
     """The runtime's own resume shape (the same strings the swap path finalizes)."""
     rt = (runtime or "claude").lower()
     if rt == "claude":
         return f"claude --resume {sid} --dangerously-skip-permissions"
     if rt == "codex":
+        # UUID only: a bare `codex resume` opens a picker (same rule as spawn-agent.sh).
+        if not _SESSION_UUID_RE.fullmatch(sid or ""):
+            return None
         return f"codex --yolo resume {sid}"
     if rt == "grok":
         # Same shape spawn-agent.sh resumes a grok seat with (-r <uuid>, never a bare -r).

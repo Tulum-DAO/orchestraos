@@ -160,6 +160,33 @@ build_grok_launch_cmd() {
     printf '%s\n' "$cmd"
 }
 
+# Pure: prints the codex `resume <uuid>` argument for a pinned resume. `codex resume` with no
+# session id opens an interactive PICKER (codex-cli 0.153.4), and `--last` takes whatever session
+# is newest, so a seat is only ever resumed by its exact UUID. Refuses (rc 2) anything else.
+# Global flags (--yolo, -c, --model) go BEFORE the subcommand; codex parses them there.
+build_codex_resume_args() {
+    local sid="${1:-}"
+    [[ "$sid" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || return 2
+    printf 'resume %s\n' "$sid"
+}
+
+# Pure: prints the codex-specific TAIL of the launch line: "[--model m] [resume <uuid>]". The
+# branch APPENDS it to the launch_cmd that spawn_agent has already built (binary, bypass flags, the
+# bg green marker, the ORCHESTRA_DIR/data prefix, the installer-session scrub); rebuilding the line
+# in the branch dropped those prefixes (orchestraos-builder, #430 r3/r4). With a sid the tail ENDS
+# in `resume <uuid>`; a non-UUID sid is refused (rc 2) and nothing is printed.
+build_codex_launch_tail() {
+    local model="${1:-}" sid="${2:-}"
+    local tail=""
+    [[ -n "$model" ]] && tail="--model $model"
+    if [[ -n "$sid" ]]; then
+        local args
+        args="$(build_codex_resume_args "$sid")" || return 2
+        tail="${tail:+$tail }$args"
+    fi
+    printf '%s\n' "$tail"
+}
+
 # Claude/Cursor compatibility OFF for a grok seat, per launch (env only: the user's own
 # ~/.grok/config.toml is never written). Grok otherwise loads the Claude hooks and MCP
 # servers orchestra installs for its Claude seats, and those expect Claude's payloads.
@@ -947,8 +974,8 @@ spawn_agent() {
     local _scrub="env" _v
     for _v in "${INSTALLER_SESSION_ENV[@]}"; do _scrub+=" -u $_v"; done
     launch_cmd="$_scrub $launch_cmd"
-    if [[ -n "$resume_sid" && "$runtime" != "claude" && "$runtime" != "grok" ]]; then
-        err "$agent_id: --resume is claude/grok-only (runtime=$runtime has no resume adapter here)"
+    if [[ -n "$resume_sid" && "$runtime" != "claude" && "$runtime" != "codex" && "$runtime" != "grok" ]]; then
+        err "$agent_id: --resume is claude/codex/grok-only (runtime=$runtime has no resume adapter here)"
         tmux kill-session -t "$tmux_name" 2>/dev/null || true
         exit 3
     fi
@@ -985,8 +1012,16 @@ spawn_agent() {
         rm -f "$perm_err"
         log "  Runtime: claude | Model: ${model:-<settings default opus-4-8[1m]>}"
     elif [[ "$runtime" == "codex" ]]; then
-        [[ -n "$model" ]] && launch_cmd+=" --model $model"
-        log "  Runtime: codex | Model: ${model:-<config default>}"
+        # APPEND the codex tail; never rebuild launch_cmd here (its prefixes: bg marker, data dir,
+        # installer-session scrub, were all dropped by an assignment in r3/r4 of #430).
+        local _codex_tail
+        if ! _codex_tail="$(build_codex_launch_tail "$model" "$resume_sid")"; then
+            err "$agent_id: --resume for codex needs the session UUID (got '$resume_sid')"
+            tmux kill-session -t "$tmux_name" 2>/dev/null || true
+            exit 3
+        fi
+        [[ -n "$_codex_tail" ]] && launch_cmd+=" $_codex_tail"
+        log "  Runtime: codex | Model: ${model:-<config default>}${resume_sid:+ | Resume: $resume_sid}"
     elif [[ "$runtime" == "grok" ]]; then
         log "  Runtime: grok | Model: ${model:-<grok default>} | Session: $grok_sid ($grok_mode)"
     else
