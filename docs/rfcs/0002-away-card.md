@@ -127,7 +127,7 @@ It is marked deprecated in its docstring, in favour of `/away`.
 - Device naming: `X-Device-Label` wins; without it the card gets the channel only (`device: null`, `surface: "phone"` rendered as "on iOS"), never a guess.
 - Anchor selection: each source wins when it is newest; ties break deterministically; the legacy fleet token's answers show `device: null`, not a guess.
 - Outcome rule: each of the four states from a fixture, plus `unknown` when the agent is gone.
-- `moved` excludes: retired seats, service panes, events at or before the anchor, cards answered by agents (self-authored gates).
+- `moved` holds only DATED events strictly after the anchor: pending cards for you, tasks done, messages to you, rotations. Seat status is not an event: it goes to `down_now`, which lists registered agent seats that are down now and never an unregistered pane, a service seat (runtime "service") or a long-dead relic. An answer counts as yours only when stamped `answered_by = 'operator'` (agent-authored gates and unstamped older rows do not).
 - `anchor=screen` with no presence returns `null` and never uses `last_seen`.
 - The summary is cached per anchor, regenerated when `moved_count` changes, and falls back to rules with `source: "rules"` when the brain raises.
 - `/briefing`: a retired crashed seat is not counted. `/voice-memory` serves Arturo's file when both exist, and the old one only when Arturo's is absent.

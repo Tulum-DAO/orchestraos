@@ -94,7 +94,9 @@ def _answer_candidate(data_dir):
                  "ORDER BY answered_at DESC LIMIT 50")
     for r in rows:
         # The operator's answers only: a self-authored gate (answered_by=<agent>) or a CLI answer is not you.
-        if r.get("answered_by") not in (None, "", "operator") or r.get("answer_surface") == "agent_cli":
+        # Only rows stamped answered_by='operator' (RFC 0002 §5.2). Older rows carry NULL, and so did agents'
+        # self-authored gates before the R7d stamp existed, so NULL cannot be taken as the operator.
+        if r.get("answered_by") != "operator" or r.get("answer_surface") == "agent_cli":
             continue
         at = epoch(r.get("answered_at"))
         if at is None:
@@ -220,7 +222,9 @@ def outcome(anchor, agents, pending_cards):
     if state == "working":
         return {"state": "working", "link": link}
     if state == "waiting":
-        return {"state": "waiting_on_you", "link": link}
+        # After you ANSWERED its card, an agent still waiting with no newer card has not resumed yet: working
+        # on your answer (RFC §5.2). After a message, a waiting agent is waiting on you.
+        return {"state": "working" if anchor["kind"] == "answer" else "waiting_on_you", "link": link}
     if state == "idle" and (row.get("last_used_ts") or 0) > anchor["at"]:
         return {"state": "done", "link": link}
     return {"state": "unknown", "link": link}
@@ -228,7 +232,9 @@ def outcome(anchor, agents, pending_cards):
 
 # ---- moved since ------------------------------------------------------------------------------------
 
-def moved_since(data_dir, at, agents, pending_cards):
+def moved_since(data_dir, at, pending_cards):
+    """Dated events after the anchor. Seat STATUS (down, retired, service) is not an event and lives in
+    down_now; these are cards, tasks, messages and rotations, each only when strictly after `at`."""
     out = []
     for c in pending_cards:
         t = epoch(c.get("created_at"))
@@ -265,13 +271,15 @@ def moved_since(data_dir, at, agents, pending_cards):
 
 
 def down_now(data_dir, agents):
-    """Registered agent seats that are down NOW. Kept OUT of `moved`: the fleet scan has no crash time, so a
-    seat down since before the anchor would read as news. The card shows these as current state."""
+    """Registered AGENT seats that are down NOW. Kept OUT of `moved`: the fleet scan has no crash time, so a
+    seat down since before the anchor would read as news. A service seat (runtime "service") is never listed:
+    its liveness is its declared probe, not a tmux pane (identity_store/status_reconcile.py). `crashed` is
+    only ever set on registered seats, and long-dead relics read offline (compute_agents)."""
     services = _service_ids(data_dir)
     return [{"kind": "crash", "agent": a.get("id"), "text": f"{a.get('id')} is down", "link": f"/agents/{a.get('id')}"}
             for a in agents
-            if a.get("state") == "crashed" or (a.get("state") == "stopped" and not a.get("unregistered")
-                                               and a.get("id") not in services)]
+            if a.get("id") not in services and (
+                a.get("state") == "crashed" or (a.get("state") == "stopped" and not a.get("unregistered")))]
 
 
 def _service_ids(data_dir):
@@ -349,7 +357,7 @@ def build(data_dir, agents, pending_cards, *, mode="action", scan, write_brain=N
         return {"ok": True, "anchor": None,
                 "reason": "no_presence_yet" if mode == "screen" else "no_action_yet",
                 "moved": [], "moved_count": 0, "down_now": down_now(data_dir, agents), "summary": None}
-    moved = moved_since(data_dir, anchor["at"], agents, pending_cards)
+    moved = moved_since(data_dir, anchor["at"], pending_cards)
     aid = anchor_id(anchor)
     out_anchor = {k: anchor.get(k) for k in ("kind", "surface", "device", "device_source", "said", "target")}
     out_anchor["said"] = _safe(out_anchor.get("said"), scan)

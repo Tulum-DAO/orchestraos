@@ -87,9 +87,10 @@ def test_a_tie_breaks_deterministically_answer_first(data):
     assert A.pick_anchor(data)["kind"] == "answer"
 
 
-def test_agent_and_cli_answers_are_not_the_operator(data):
+def test_agent_cli_and_unstamped_answers_are_not_the_operator(data):
     _answer(data, "apr_self", T0 + 50, by="dev-seat")
     _answer(data, "apr_cli", T0 + 40, surface="agent_cli")
+    _answer(data, "apr_null", T0 + 30, by=None)                # pre-R7d rows: cannot be taken as the operator
     _answer(data, "apr_me", T0)
     assert A.pick_anchor(data)["ref"] == "apr_me"
 
@@ -170,17 +171,19 @@ def test_moved_lists_only_events_after_the_anchor(data):
     con.commit(); con.close()
     cards = [{"id": "apr_a", "from_agent": "dev", "question": "q", "created_at": _iso(T0 + 40)},
              {"id": "apr_b", "from_agent": "dev", "question": "older", "created_at": _iso(T0 - 40)}]
-    moved = A.moved_since(data, T0, [], cards)
+    moved = A.moved_since(data, T0, cards)
     assert [m["kind"] for m in moved] == ["card", "message", "task_done"]
 
 
 def test_down_now_is_registered_agent_seats_and_never_counted_as_moved(data):
-    (data / "registry.json").write_text(json.dumps({"agents": {"svc": {"runtime": "service"}}}))
+    (data / "registry.json").write_text(json.dumps({"agents": {"svc": {"runtime": "service"},
+                                                                "svc2": {"runtime": "service"}}}))
     agents = [{"id": "seat", "state": "crashed"}, {"id": "seat2", "state": "stopped"},
               {"id": "svc", "state": "stopped"},                 # a registered service seat: never down
+              {"id": "svc2", "state": "crashed"},                # ... even when the scan says crashed
               {"id": "proxy", "state": "stopped", "unregistered": True}, {"id": "w", "state": "working"}]
     assert [d["agent"] for d in A.down_now(data, agents)] == ["seat", "seat2"]
-    assert A.moved_since(data, T0, agents, []) == []           # no crash time: not news since the anchor
+    assert A.moved_since(data, T0, []) == []           # no crash time: not news since the anchor
     _ledger(data, T0)
     out = A.build(data, agents, [], scan=no_secrets)
     assert out["moved_count"] == 0 and [d["agent"] for d in out["down_now"]] == ["seat", "seat2"]
@@ -191,7 +194,7 @@ def test_rotations_come_from_the_identity_db(data):
     con.execute("CREATE TABLE generations (root TEXT, generation INT, promoted_at TEXT)")
     con.execute("INSERT INTO generations VALUES ('gm', 104, ?)", (_iso(T0 + 5),))
     con.commit(); con.close()
-    assert [m["text"] for m in A.moved_since(data, T0, [], [])] == ["gm moved to generation 104"]
+    assert [m["text"] for m in A.moved_since(data, T0, [])] == ["gm moved to generation 104"]
 
 
 # ---- summary cache -----------------------------------------------------------------------------------
@@ -308,3 +311,12 @@ def test_a_bare_device_id_stamp_names_no_device(data):
     _ledger(data, T0, device="d_7", surface=None)
     a = A.pick_anchor(data)
     assert a["device"] is None and a["device_source"] == "none"
+
+
+def test_an_answered_card_whose_agent_still_waits_is_working_not_waiting_on_you(data):
+    _answer(data, "apr_1", T0, agent="gm")
+    a = A.pick_anchor(data)
+    assert A.outcome(a, [{"id": "gm", "state": "waiting"}], [])["state"] == "working"
+    newer = [{"id": "apr_2", "from_agent": "gm", "question": "next?", "created_at": _iso(T0 + 5)}]
+    assert A.outcome(a, [{"id": "gm", "state": "waiting"}], newer)["state"] == "waiting_on_you"
+    assert A.outcome(a, [{"id": "gm", "state": "idle", "last_used_ts": T0 + 9}], [])["state"] == "done"

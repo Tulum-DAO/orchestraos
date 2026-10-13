@@ -2069,12 +2069,12 @@ async def handle_briefing(request):
     # A crash is a REGISTERED seat: `crashed` (compute_agents already reads long-dead registry relics as
     # offline) or `stopped` in a registered AGENT seat's pane (its agent process is gone). An unregistered
     # `stopped` pane is a service (a proxy, a dashboard, a bare shell), and so is a registered seat whose
-    # runtime is "service" (it never runs an agent CLI, so the detector always reads it `stopped`; its
-    # liveness is its declared probe, identity_store/status_reconcile.py). Neither is a crash.
+    # runtime is "service" (it never runs an agent CLI, so the detector always reads it `stopped`, and it may
+    # run outside tmux entirely; its liveness is its declared probe, identity_store/status_reconcile.py).
+    # Neither is a crash, whether the scan says `stopped` or `crashed`.
     services = _service_seat_ids()
-    crashed = [a["id"] for a in agents
-               if a["state"] == "crashed"
-               or (a["state"] == "stopped" and not a.get("unregistered") and a["id"] not in services)]
+    crashed = [a["id"] for a in agents if a["id"] not in services and (
+               a["state"] == "crashed" or (a["state"] == "stopped" and not a.get("unregistered")))]
     working = sum(1 for a in agents if a["state"] == "working")
     stranded = [{"id": a["id"], "age_s": a.get("stranded_age_s"),
                  "text": (a.get("stranded_text") or "")[:80]}

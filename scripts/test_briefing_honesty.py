@@ -85,9 +85,10 @@ def _agent(i, state, unregistered=False):
 def test_briefing_crashed_counts_registered_seats_not_service_panes(box, monkeypatch):
     (box / "registry.json").write_text(json.dumps({"agents": {
         "seat-crashed": {"runtime": "claude"}, "seat-died-in-pane": {"runtime": "codex"},
-        "arturo-proxy": {"runtime": "service"}}}))
+        "arturo-proxy": {"runtime": "service"}, "ntfy-relay": {"runtime": "service"}}}))
     monkeypatch.setitem(G._agents_cache, "data", [
         _agent("arturo-proxy", "stopped"),                      # a REGISTERED service seat: never a crash
+        _agent("ntfy-relay", "crashed"),                        # ... not even with no pane (it may run outside tmux)
         _agent("seat-crashed", "crashed"),                      # registered, no pane, last said alive
         _agent("seat-died-in-pane", "stopped"),                 # registered, agent process gone
         _agent("dashboard", "stopped", unregistered=True),      # a service pane
