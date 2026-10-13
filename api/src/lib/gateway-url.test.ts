@@ -33,8 +33,10 @@ test('a config that exists but is invalid throws instead of guessing a port', ()
   assert.throws(() => gatewayUrl({}, invalid, () => true), /missing \[gateway\] port/);
 });
 
-// The lint: the gateway's address is derived in ONE place. Any other source file that reads the gateway env
-// vars or the config's gateway fields, or names the gateway's known ports in code, is deriving its own.
+// The lint: the gateway's address is derived in ONE place. Any other PRODUCT source file (tests are exempt: they
+// stand up fake gateways on ports of their own) that reads the gateway env vars, names the config's gateway
+// fields in any form (property, destructuring, type), or carries the gateway's known port numbers in code, is
+// deriving its own. config.ts is exempt because it defines the fields.
 function codeLines(file: string): Array<[number, string]> {
   return readFileSync(file, 'utf8').split('\n').map((l, i) => [i + 1, l] as [number, string])
     .filter(([, l]) => !/^\s*(\*|\/\/|\/\*)/.test(l));
@@ -51,7 +53,7 @@ test('only lib/gateway-url.ts derives the gateway address', () => {
   for (const f of walk(src)) {
     if (f.endsWith(join('lib', 'gateway-url.ts')) || f.endsWith(join('lib', 'config.ts'))) continue;
     for (const [n, l] of codeLines(f)) {
-      if (/WATCH_GATEWAY_(WS_)?URL|\.gatewayHost\b|\.gatewayPort\b|:(9091|8890)\b/.test(l)) hits.push(`${f.slice(src.length + 1)}:${n}: ${l.trim()}`);
+      if (/WATCH_GATEWAY_(WS_)?URL|\bgateway(Host|Port)\b|\b(9091|8890)\b/.test(l)) hits.push(`${f.slice(src.length + 1)}:${n}: ${l.trim()}`);
     }
   }
   assert.deepEqual(hits, []);
