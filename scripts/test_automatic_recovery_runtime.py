@@ -177,11 +177,13 @@ def test_recovery_lock_is_per_install_not_box_wide(tmp_path):
     assert proc.stdout + proc.stderr == ""                          # another run holds it
 
 
-def test_recovery_lock_one_of_concurrent_runs_proceeds_and_stale_lock_is_replaced(tmp_path):
-    """Same install: of several runs started together, exactly one does the work, and a lock older
-    than 120 s (a dead run's) is replaced. The lock is an exclusive create (noclobber), so no two
-    runs can both take it; that interleaving is microseconds wide and this test cannot force it
-    (it passes against the old check-then-write too), so it checks the outcome only."""
+def test_recovery_lock_one_concurrent_run_proceeds_and_only_a_dead_runs_lock_is_replaced(tmp_path):
+    """Same install: of several runs started together, exactly one does the work. The lock is an
+    exclusive create (noclobber), so no two runs can both take it; that interleaving is
+    microseconds wide and this test cannot force it (it passes against the old check-then-write
+    too), so it checks the outcome only. Then the stale rules, each forced: a live holder keeps
+    the lock however old it is; a dead holder's lock is replaced; while another run is replacing
+    it this one backs off; a dead reclaimer is cleared; an hour-old lock is stale (pid reuse)."""
     orch = _automatic_lifecycle_world(tmp_path, "CoDeX")
     slow = tmp_path / "slow_runtime.py"      # holds the lock long enough for the others to arrive
     slow.write_text(
@@ -199,11 +201,38 @@ def test_recovery_lock_one_of_concurrent_runs_proceeds_and_stale_lock_is_replace
     assert sum("automatic recovery REFUSED" in o for o in outs) == 1, outs
 
     lock = orch / "state" / "agent-recovery.lock"
-    lock.write_text("1\n")
-    old = time.time() - 300
-    os.utime(lock, (old, old))
-    proc = subprocess.run(["bash", RECOVERY_SCRIPT, "--dry-run"],
-                          env=env | {"RECOVERY_RUNTIME_SCRIPT": RUNTIME_HELPER},
-                          capture_output=True, text=True, check=False)
-    assert "automatic recovery REFUSED" in proc.stdout + proc.stderr
-    assert not lock.exists()
+    reclaim = orch / "state" / "agent-recovery.lock.reclaim"
+    fast = env | {"RECOVERY_RUNTIME_SCRIPT": RUNTIME_HELPER}
+
+    def run():
+        p = subprocess.run(["bash", RECOVERY_SCRIPT, "--dry-run"], env=fast,
+                           capture_output=True, text=True, check=False)
+        assert p.returncode == 0
+        return "automatic recovery REFUSED" in p.stdout + p.stderr
+
+    def held_by(pid, age):
+        lock.write_text(f"{pid}\n")
+        t = time.time() - age
+        os.utime(lock, (t, t))
+
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    live = subprocess.Popen(["sleep", "60"])
+    try:
+        held_by(live.pid, 300)        # a long run keeps its lock: age alone is not death
+        assert not run()
+        held_by(dead.pid, 0)          # its holder is gone: replaced at once, released on exit
+        assert run()
+        assert not lock.exists() and not reclaim.exists()
+        held_by(dead.pid, 0)          # another run is replacing the dead lock right now
+        reclaim.write_text("1\n")
+        assert not run()
+        assert lock.read_text() == f"{dead.pid}\n"
+        t = time.time() - 120         # ...unless that reclaimer died too
+        os.utime(reclaim, (t, t))
+        assert run()
+        held_by(live.pid, 4000)       # a pid reused by something else: an hour-old lock is stale
+        assert run()
+    finally:
+        live.kill()
+        live.wait()
