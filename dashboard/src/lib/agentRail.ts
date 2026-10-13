@@ -122,7 +122,7 @@ export function contextLabel(raw: unknown): string | null {
   // Exactly the shape the detector writes (an integer then '%'); a bare number, a decimal or
   // any other text is not a reading from it (codex review, #436).
   if (typeof raw !== 'string') return null;
-  const m = /^\s*(\d{1,3})%\s*$/.exec(raw);
+  const m = /^(\d{1,3})%$/.exec(raw);
   if (!m) return null;
   const n = Number(m[1]);
   return n <= 100 ? `${n}%` : null;

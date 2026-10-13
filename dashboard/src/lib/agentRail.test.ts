@@ -121,13 +121,12 @@ test('context label: the detector string is shown as a whole percent, for every 
   assert.equal(contextLabel('7%'), '7%');
   assert.equal(contextLabel('100%'), '100%');
   assert.equal(contextLabel('0%'), '0%');      // a measured zero is a reading
-  assert.equal(contextLabel(' 42% '), '42%');
 });
 
 test('context label: only the detector shape "NN%" is a reading (codex review, #436)', () => {
   // scripts/agent-status.py writes an integer followed by '%' or ''. Anything else is not a
   // reading from it, so it must not be dressed up as one.
-  for (const v of ['42', '41.6%', '4 2%', '42%%', '42 %x', '0042%', 42, 41.6]) {
+  for (const v of ['42', '41.6%', '4 2%', '42%%', '42 %x', '0042%', ' 42% ', '42% ', ' 42%', 42, 41.6]) {
     assert.equal(contextLabel(v as unknown), null, `contextLabel(${JSON.stringify(v)}) was not null`);
   }
 });
