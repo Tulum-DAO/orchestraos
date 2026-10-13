@@ -12,6 +12,8 @@ import os
 import sys
 import time
 
+import pytest
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 
@@ -54,11 +56,62 @@ def test_is_subagent_rollout_reads_the_real_markers(tmp_path):
     assert CC.is_subagent_rollout(_rollout(str(tmp_path), SUBS[0], True, time.time())) is True
 
 
-def test_an_unreadable_or_metaless_rollout_is_not_called_a_subagent(tmp_path):
-    p = tmp_path / "rollout-x.jsonl"
-    p.write_text("not json\n")
-    assert CC.is_subagent_rollout(str(p)) is False
+def _bad_rollout(home, sid, first_line: bytes, mtime=None):
+    """A rollout whose line 1 is NOT a readable session_meta, followed by a normal boot line."""
+    d = os.path.join(home, ".codex", "sessions", "2026", "10", "13")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, f"rollout-2026-10-13T00-00-00-{sid}.jsonl")
+    boot = json.dumps({"type": "response_item", "payload": {
+        "type": "message", "role": "user",
+        "content": [{"type": "input_text",
+                     "text": f"You are {SEAT}. Read /tmp/agent-init-{SEAT}.md and follow all instructions in it."}]}})
+    with open(p, "wb") as fh:
+        fh.write(first_line + b"\n" + boot.encode() + b"\n")
+    if mtime:
+        os.utime(p, (mtime, mtime))
+    return p
+
+
+BAD_FIRST_LINES = {
+    "not-json": b"not json",
+    "not-meta": json.dumps({"type": "event_msg", "payload": {}}).encode(),
+    "meta-payload-not-a-dict": json.dumps({"type": "session_meta", "payload": ["x"]}).encode(),
+    "json-list": b"[1, 2]",
+    "not-utf8": b'{"type": "session_meta", "payload": {"x": "\xff\xfe"}}',
+    "nested-past-the-parser-limit": b"[" * 100000 + b"]" * 100000,
+    "over-the-size-cap": json.dumps({"type": "session_meta", "payload": {
+        "thread_source": "user", "base_instructions": "x" * (getattr(CC, "_META_CAP_BYTES", 1 << 20) + 10)}}).encode(),
+}
+
+
+@pytest.mark.parametrize("kind", sorted(BAD_FIRST_LINES))
+def test_a_rollout_whose_line_1_cannot_be_classified_is_neither_main_nor_subagent(tmp_path, kind):
+    """codex peer review (#434): an unreadable line 1 cannot prove the file is the seat's MAIN
+    thread, so it is never attributed (fail closed); and reading it never raises."""
+    p = _bad_rollout(str(tmp_path), MAIN, BAD_FIRST_LINES[kind])
+    assert CC.is_subagent_rollout(p) is False
+    assert CC.is_main_rollout(p) is False
+
+
+def test_a_missing_file_is_neither_main_nor_subagent(tmp_path):
     assert CC.is_subagent_rollout(str(tmp_path / "missing.jsonl")) is False
+    assert CC.is_main_rollout(str(tmp_path / "missing.jsonl")) is False
+
+
+@pytest.mark.parametrize("kind", sorted(BAD_FIRST_LINES))
+def test_a_lone_unclassifiable_rollout_open_is_None(tmp_path, monkeypatch, kind):
+    _fake_fds(monkeypatch, [_bad_rollout(str(tmp_path), MAIN, BAD_FIRST_LINES[kind])])
+    assert CC._open_rollout(12345) is None
+
+
+@pytest.mark.parametrize("kind", sorted(BAD_FIRST_LINES))
+def test_the_resolver_never_returns_an_unclassifiable_rollout(tmp_path, monkeypatch, kind):
+    home = str(tmp_path)
+    now = time.time()
+    _rollout(home, MAIN, False, now - 3600)
+    _bad_rollout(home, OTHER, BAD_FIRST_LINES[kind], mtime=now)    # newer, carries the boot line
+    monkeypatch.setenv("HOME", home)
+    assert CA.resolve_codex_cid("dev-codex", retired_sids_fn=lambda seat: set()) == MAIN
 
 
 def test_reconciler_resolver_picks_the_MAIN_thread_not_the_newer_subagents(tmp_path, monkeypatch):

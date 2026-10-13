@@ -81,28 +81,55 @@ def _codex_pid_under(pane_pid: int) -> int | None:
     return hits[0] if len(hits) == 1 else None   # ambiguity => fail closed
 
 
-def is_subagent_rollout(path: str) -> bool:
-    """True when the rollout's session_meta marks it as a SUBAGENT thread.
+# Line 1 of a real rollout (session_meta, with the instructions payload) measured 18-23 KB on 145
+# real rollouts; anything past this cap is not a rollout this reader can vouch for.
+_META_CAP_BYTES = 1024 * 1024
+
+
+def _rollout_kind(path: str) -> str | None:
+    """'main' | 'subagent' from the rollout's line 1 (session_meta), else None.
 
     Codex 0.153 writes one rollout per spawned subagent next to the parent's and keeps it OPEN in
     the same process. A subagent's first user message is the PARENT's boot line, so neither the
-    open FD nor "You are <seat>" can tell them apart. Marked three ways in session_meta:
-    thread_source == 'subagent', source.subagent, parent_thread_id. Unreadable or no
-    session_meta -> False (unchanged)."""
+    open FD nor "You are <seat>" can tell them apart; only session_meta does, three ways:
+    thread_source == 'subagent', a source.subagent key, or parent_thread_id. None = line 1 could
+    not be read as a session_meta (missing file, over the cap, not UTF-8, bad or too-deeply
+    nested JSON, wrong shape): such a file is NEITHER kind, so it is never attributed to a seat.
+    Bounded read; never raises."""
     try:
-        with open(path, errors="ignore") as fh:
-            first = json.loads(fh.readline() or "{}")
-    except (OSError, ValueError):
-        return False
+        with open(path, "rb") as fh:
+            raw = fh.readline(_META_CAP_BYTES + 1)
+    except OSError:
+        return None
+    if len(raw) > _META_CAP_BYTES:
+        return None
+    try:
+        first = json.loads(raw.decode("utf-8"))    # strict: bytes that are not UTF-8 are unreadable
+    except (ValueError, RecursionError):           # (UnicodeDecodeError is a ValueError)
+        return None
     if not isinstance(first, dict) or first.get("type") != "session_meta":
-        return False
-    meta = first.get("payload") or {}
+        return None
+    meta = first.get("payload")
     if not isinstance(meta, dict):
-        return False
+        return None
     src = meta.get("source")
-    return bool(meta.get("thread_source") == "subagent"
-                or (isinstance(src, dict) and "subagent" in src)
-                or meta.get("parent_thread_id"))
+    if (meta.get("thread_source") == "subagent"
+            or (isinstance(src, dict) and "subagent" in src)
+            or (isinstance(src, (list, tuple)) and "subagent" in src)
+            or meta.get("parent_thread_id")):
+        return "subagent"
+    return "main"
+
+
+def is_subagent_rollout(path: str) -> bool:
+    """True when the rollout's session_meta marks it as a SUBAGENT thread (see _rollout_kind)."""
+    return _rollout_kind(path) == "subagent"
+
+
+def is_main_rollout(path: str) -> bool:
+    """True only when line 1 is a readable session_meta that is NOT a subagent thread. A seat's
+    session must PROVE this; an unreadable rollout is never the seat's (fail closed)."""
+    return _rollout_kind(path) == "main"
 
 
 def _open_rollout(pid: int) -> str | None:
@@ -124,8 +151,9 @@ def _open_rollout(pid: int) -> str | None:
                 found.add(target)
     except OSError:
         return None
-    # A subagent's rollout is open in the same process and is never the seat's session.
-    found = {t for t in found if not is_subagent_rollout(t)}
+    # A subagent's rollout is open in the same process and is never the seat's session; nor is
+    # one whose session_meta cannot be read (it cannot prove it is the main thread).
+    found = {t for t in found if is_main_rollout(t)}
     return next(iter(found)) if len(found) == 1 else None
 
 

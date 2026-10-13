@@ -121,7 +121,7 @@ To remove them: `orchestra down`, back up `registry.json`, delete those keys fro
 
 **Fixed after this release, on main:** every fresh install of v0.1.0 had an agent chat window that could not send — the inject path read the gateway token from a legacy path that `orchestra init` never writes. Fixed in `1ffb179` (PR #109); upgrade or apply that commit if you are on the tag.
 
-**Fixed after this release, on main:** a Codex seat's context % is now its own. Codex keeps every subagent's session file open in the seat's process, and the reader took whichever file it listed first, so a seat with subagents could show a subagent's context %. The reader now skips subagent sessions (Codex marks them in each session's first record) and shows `--` rather than guess when a process holds more than one session of its own; the identity resolver skips subagent sessions too.
+**Fixed after this release, on main:** a Codex seat's context % is now its own. Codex keeps every subagent's session file open in the seat's process, and the reader took whichever file it listed first, so a seat with subagents could show a subagent's context %. The reader now counts only a session whose first record proves it is the seat's main thread (Codex marks subagent sessions there; a session whose first record cannot be read is never counted), and shows `--` rather than guess when a process holds more than one; the identity resolver applies the same rule.
 
 ## CI note for this release
 
