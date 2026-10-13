@@ -55,8 +55,13 @@ class DoctorProbes:
 # the pin docs/INSTALL.md and the Dockerfile install; update both with this list at each release.
 # 2.1.295: the release gate + real captures (2026-10-09, menu context for the dashed-frame prompts);
 # 2.1.284: the reference fleet.
-PROVEN_CLI_VERSIONS = {"claude": ("2.1.295", "2.1.284")}
-CLI_PACKAGES = {"claude": "@anthropic-ai/claude-code"}
+PROVEN_CLI_VERSIONS = {
+    "claude": ("2.1.295", "2.1.284"),
+    # codex 0.153.4: the real screen captures the harness is tested against (scripts/fixtures/codex,
+    # trust/update/idle/busy/typed/stuck/menu screens) and the gate-container runs for #394-#401.
+    "codex": ("0.153.4",),
+}
+CLI_PACKAGES = {"claude": "@anthropic-ai/claude-code", "codex": "@openai/codex"}
 _VERSION_RE = re.compile(r"(\d+\.\d+\.\d+)")
 
 
@@ -65,11 +70,11 @@ def cli_version_checks(probes: "DoctorProbes", enabled_ids) -> list:
     plus `cli:autoupdater` when DISABLE_AUTOUPDATER is not set. All advisory (required=False)."""
     rows: list = []
     env_get = probes.env_get or os.environ.get
-    checked_any = False
+    checked = set()
     for rid, proven in PROVEN_CLI_VERSIONS.items():
         if rid not in enabled_ids or not probes.which(rid):
             continue
-        checked_any = True
+        checked.add(rid)
         pin = f"sudo npm install -g {CLI_PACKAGES[rid]}@{proven[0]}"
         try:
             out = probes.run_cmd([rid, "--version"]) or ""
@@ -85,9 +90,24 @@ def cli_version_checks(probes: "DoctorProbes", enabled_ids) -> list:
                               f"{m.group(1)} is not a version this release was proven on ({', '.join(proven)}); "
                               f"the harness reads the CLI's screens and may misread a newer one",
                               pin, required=False))
-    if checked_any and not env_get("DISABLE_AUTOUPDATER"):
+    # DISABLE_AUTOUPDATER is Claude Code's switch. A codex seat is pinned per run instead
+    # (spawn-agent.sh: -c check_for_update_on_startup=false), so a codex-only box gets no such row.
+    if "claude" in checked and not env_get("DISABLE_AUTOUPDATER"):
         rows.append(Check("cli:autoupdater", WARN, "DISABLE_AUTOUPDATER is not set: the CLI can update itself off the pin",
                           "echo 'export DISABLE_AUTOUPDATER=1' >> ~/.bashrc && export DISABLE_AUTOUPDATER=1",
+                          required=False))
+    return rows
+
+
+def hook_layer_checks(probes: "DoctorProbes", enabled_ids) -> list:
+    """One honest row per enabled, installed runtime that has NO hook layer in this repo (today:
+    codex; docs/HOOKS.md). Advisory: without hooks the router and gateway judge the seat from its
+    screen (idle, busy, menus), and there is no Stop event. Nothing more is claimed here."""
+    rows: list = []
+    if "codex" in enabled_ids and probes.which("codex"):
+        rows.append(Check("hooks:codex", INFO,
+                          "no hook layer for Codex yet (docs/HOOKS.md): mail, idle and menus are read from the "
+                          "seat's screen, and there is no Stop event",
                           required=False))
     return rows
 
@@ -328,6 +348,7 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
         checks.append(statusline_check(_hooks, settings_path))
     except Exception as e:  # noqa: BLE001
         checks.append(Check("statusline:claude", WARN, f"status line status unavailable: {e}", required=False))
+    checks.extend(hook_layer_checks(probes, set(st.runtimes_enabled or ())))
     # Channel plugins (plugins/): each reports its own row; disabled = INFO, never a failure.
     try:
         import sys as _sys
