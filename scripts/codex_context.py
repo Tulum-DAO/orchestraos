@@ -28,6 +28,9 @@ import re
 import subprocess
 
 TAIL_BYTES = 131072  # token_count events are frequent; 128KB tail is plenty
+_ROLLOUT_SID_RE = re.compile(
+    r"/\.codex/sessions/.+/rollout-.*-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$")
 
 
 def _pane_pid(session_name: str) -> int | None:
@@ -78,20 +81,52 @@ def _codex_pid_under(pane_pid: int) -> int | None:
     return hits[0] if len(hits) == 1 else None   # ambiguity => fail closed
 
 
+def is_subagent_rollout(path: str) -> bool:
+    """True when the rollout's session_meta marks it as a SUBAGENT thread.
+
+    Codex 0.153 writes one rollout per spawned subagent next to the parent's and keeps it OPEN in
+    the same process. A subagent's first user message is the PARENT's boot line, so neither the
+    open FD nor "You are <seat>" can tell them apart. Marked three ways in session_meta:
+    thread_source == 'subagent', source.subagent, parent_thread_id. Unreadable or no
+    session_meta -> False (unchanged)."""
+    try:
+        with open(path, errors="ignore") as fh:
+            first = json.loads(fh.readline() or "{}")
+    except (OSError, ValueError):
+        return False
+    if not isinstance(first, dict) or first.get("type") != "session_meta":
+        return False
+    meta = first.get("payload") or {}
+    if not isinstance(meta, dict):
+        return False
+    src = meta.get("source")
+    return bool(meta.get("thread_source") == "subagent"
+                or (isinstance(src, dict) and "subagent" in src)
+                or meta.get("parent_thread_id"))
+
+
 def _open_rollout(pid: int) -> str | None:
-    """The rollout JSONL this pid holds OPEN (positive pid->session binding)."""
+    """The one rollout JSONL this pid holds OPEN, else None.
+
+    A process with zero matching FDs is not attributable.  More than one is also
+    not attributable: selecting the first descriptor is an ordering accident,
+    not evidence that either rollout belongs to this live session.
+    """
     fd_dir = f"/proc/{pid}/fd"
+    found = set()
     try:
         for fd in os.listdir(fd_dir):
             try:
                 target = os.readlink(os.path.join(fd_dir, fd))
             except OSError:
                 continue
-            if re.search(r"/\.codex/sessions/.+/rollout-.*\.jsonl$", target):
-                return target
+            if _ROLLOUT_SID_RE.search(target):
+                found.add(target)
     except OSError:
         return None
-    return None
+    # A subagent's rollout is open in the same process and is never the seat's session.
+    found = {t for t in found if not is_subagent_rollout(t)}
+    return next(iter(found)) if len(found) == 1 else None
 
 
 def last_token_event(rollout_path: str, tail_bytes: int = TAIL_BYTES) -> dict | None:
