@@ -175,7 +175,9 @@ def test_moved_lists_only_events_after_the_anchor(data):
 
 
 def test_crashes_are_registered_seats_only_and_carry_no_invented_time(data):
+    (data / "registry.json").write_text(json.dumps({"agents": {"svc": {"runtime": "service"}}}))
     agents = [{"id": "seat", "state": "crashed"}, {"id": "seat2", "state": "stopped"},
+              {"id": "svc", "state": "stopped"},                 # a registered service seat: never a crash
               {"id": "proxy", "state": "stopped", "unregistered": True}, {"id": "w", "state": "working"}]
     moved = A.moved_since(data, T0, agents, [])
     assert [(m["agent"], m["at"]) for m in moved] == [("seat", None), ("seat2", None)]

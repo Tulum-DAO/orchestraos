@@ -259,15 +259,27 @@ def moved_since(data_dir, at, agents, pending_cards):
             out.append({"kind": "rotation", "at": t, "agent": r.get("root"),
                         "text": f"{r.get('root')} moved to generation {r.get('generation')}",
                         "link": f"/agents/{r.get('root')}"})
+    services = _service_ids(data_dir)
     for a in agents:
-        # Crashed NOW: registered seats only (the same rule as /briefing). The fleet scan carries no crash
-        # time, so these are listed as current state, at the request time, not dated guesses.
-        if a.get("state") == "crashed" or (a.get("state") == "stopped" and not a.get("unregistered")):
+        # Crashed NOW: the same rule as /briefing. A registered agent seat that is `crashed`, or `stopped` in
+        # its own pane; never an unregistered pane or a seat whose runtime is "service" (no agent CLI, so it
+        # always reads `stopped`). The fleet scan carries no crash time, so these are current state, undated.
+        if a.get("state") == "crashed" or (a.get("state") == "stopped" and not a.get("unregistered")
+                                           and a.get("id") not in services):
             out.append({"kind": "crash", "at": None, "agent": a.get("id"),
                         "text": f"{a.get('id')} is down", "link": f"/agents/{a.get('id')}"})
     dated = sorted((m for m in out if m["at"] is not None), key=lambda m: m["at"], reverse=True)
     crashes = [m for m in out if m["at"] is None]
     return [dict(m, at=iso(m["at"]) if m["at"] is not None else None) for m in crashes + dated]
+
+
+def _service_ids(data_dir):
+    try:
+        agents = json.loads(open(_p(data_dir, ("registry.json",))).read()).get("agents") or {}
+    except (OSError, ValueError, AttributeError):
+        return set()
+    return {k for k, v in agents.items() if isinstance(v, dict) and v.get("runtime") == "service"} \
+        if isinstance(agents, dict) else set()
 
 
 # ---- summary ----------------------------------------------------------------------------------------
