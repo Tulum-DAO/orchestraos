@@ -2023,11 +2023,17 @@ async def handle_voice_memory(request):
     """GET /voice-memory — Arturo's existing call record (READ-ONLY, additive).
     Serves state/voice-memory.json {recent_transcripts, notes} so the iOS
     Arturo tab opens with the 491-turn relationship history, never day-zero
-    (gm correction 2026-08-16; one-identity ruling)."""
+    (gm correction 2026-08-16; one-identity ruling).
+
+    Arturo writes <data>/state/arturo/voice-memory.json (ARTURO_STATE in arturo-proxy.py). This read
+    the old un-namespaced file, which nothing writes any more, so the card's voice line went stale.
+    Arturo's file first; the old one only when Arturo's is absent (an install that never moved)."""
     if not _authorized(request):
         return _json({"ok": False, "error": "unauthorized"}, status=401)
     try:
-        p = ORCH_DIR / "state" / "voice-memory.json"
+        p = ORCH_DIR / "state" / "arturo" / "voice-memory.json"
+        if not p.exists():
+            p = ORCH_DIR / "state" / "voice-memory.json"
         d = json.loads(p.read_text()) if p.exists() else {}
         return _json({"ok": True,
                       "recent_transcripts": d.get("recent_transcripts") or [],
@@ -2037,8 +2043,17 @@ async def handle_voice_memory(request):
         return _json({"ok": True, "recent_transcripts": [], "notes": []})
 
 
+def _service_seat_ids() -> set:
+    """Registry seats whose runtime is "service" (a proxy or daemon registered as a seat). Empty on any error."""
+    reg = _load_json(ORCH_DIR / "registry.json") or {}
+    agents = reg.get("agents", {}) if isinstance(reg, dict) else {}
+    return {k for k, v in agents.items() if isinstance(v, dict) and v.get("runtime") == "service"} \
+        if isinstance(agents, dict) else set()
+
+
 async def handle_briefing(request):
-    """Deltas for the Arturo 'while you were away' card. ?since=<ISO ts> optional."""
+    """Deltas for the Arturo 'while you were away' card. ?since=<ISO ts> optional.
+    Kept, shape unchanged, for shipped apps; the redesigned card will read /away (RFC 0002)."""
     if not _authorized(request):
         return _json({"ok": False, "error": "unauthorized"}, status=401)
     since = request.query.get("since") or ""
@@ -2050,7 +2065,15 @@ async def handle_briefing(request):
         answered = [r for r in answered if (r.get("answered_at") or "") > since]
     # Use the agents cache (the fleet scan takes ~6s; never block the briefing).
     agents = _agents_cache["data"] or []
-    crashed = [a["id"] for a in agents if a["state"] in ("crashed", "stopped")]
+    # A crash is a REGISTERED seat: `crashed` (compute_agents already reads long-dead registry relics as
+    # offline) or `stopped` in a registered AGENT seat's pane (its agent process is gone). An unregistered
+    # `stopped` pane is a service (a proxy, a dashboard, a bare shell), and so is a registered seat whose
+    # runtime is "service" (it never runs an agent CLI, so the detector always reads it `stopped`; its
+    # liveness is its declared probe, identity_store/status_reconcile.py). Neither is a crash.
+    services = _service_seat_ids()
+    crashed = [a["id"] for a in agents
+               if a["state"] == "crashed"
+               or (a["state"] == "stopped" and not a.get("unregistered") and a["id"] not in services)]
     working = sum(1 for a in agents if a["state"] == "working")
     stranded = [{"id": a["id"], "age_s": a.get("stranded_age_s"),
                  "text": (a.get("stranded_text") or "")[:80]}
