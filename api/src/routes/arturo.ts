@@ -17,12 +17,13 @@
  * browser reload and a service restart.
  */
 import { Router } from 'express';
+import { gatewayUrl } from '../lib/gateway-url.js';
 import { readFileSync } from 'fs';
 import { loadConfig } from '../lib/config.js';
 
 const GATEWAY_TOKEN_FILE = process.env.WATCH_GATEWAY_TOKEN_FILE
   || `${process.env.HOME}/.config/jarvis/watch-gateway-token`;
-export const GATEWAY_URL = process.env.WATCH_GATEWAY_URL || 'http://127.0.0.1:8890';
+export const GATEWAY_URL = gatewayUrl();  // #84 class: env, then [gateway] in orchestra.toml
 
 export function gatewayToken(): string {
   try { return readFileSync(GATEWAY_TOKEN_FILE, 'utf-8').trim(); } catch { return ''; }

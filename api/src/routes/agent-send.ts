@@ -58,6 +58,7 @@ import { actingAgent } from '../lib/principal.js';
 import { gatewayTokenFile } from '../lib/gateway-token.js';
 import { resolveMsgStorePath } from './messages.js';
 import { agentScopeParam } from '../lib/agent-scope.js';
+import { gatewayUrl } from '../lib/gateway-url.js';
 
 const ORCHESTRA_DIR = process.env.ORCHESTRA_DIR || loadConfig().dataDir;   // the same rule as lib/db.ts
 const UPLOADS_DIR = join(ORCHESTRA_DIR, 'state', 'uploads');
@@ -78,16 +79,7 @@ export const MSG_STORE = resolveMsgStorePath(process.env, import.meta.url);
 // init` actually writes the bearer. #84: the default dialled :9091 while a fresh orchestra.toml
 // ships [gateway] port = 8890, so the API dialled a port nothing listens on.
 const GATEWAY_TOKEN_FILE = gatewayTokenFile();
-const GATEWAY_URL = process.env.WATCH_GATEWAY_URL || defaultGatewayUrl();
-
-function defaultGatewayUrl(): string {
-  try {
-    const c = loadConfig();
-    return `http://${c.gatewayHost}:${c.gatewayPort}`;
-  } catch {
-    return 'http://127.0.0.1:9091';
-  }
-}
+const GATEWAY_URL = gatewayUrl();  // lib/gateway-url.ts: env, then [gateway] in orchestra.toml
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'bmp', 'svg']);
 

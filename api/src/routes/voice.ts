@@ -7,7 +7,8 @@ const router = Router();
 // JSONs + auth). Web voice-call cards fetch through here so the browser never
 // needs the gateway token. Read-only; the proxy owns all writes.
 import { readGatewayToken } from '../lib/gateway-token.js';  // #85: honour WATCH_GATEWAY_TOKEN_FILE
-const GATEWAY_URL = process.env.WATCH_GATEWAY_URL || 'http://127.0.0.1:9091';
+import { gatewayUrl } from '../lib/gateway-url.js';
+const GATEWAY_URL = gatewayUrl();  // #84 class: env, then [gateway] in orchestra.toml
 
 // GET /api/voice/call?call_id= → gateway GET /voice-call. Passes the gateway
 // status through so the card can drive its UX: 200 {ok,call}; 404 not-found
