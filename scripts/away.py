@@ -368,9 +368,14 @@ def store_summary(data_dir, aid, moved_count, text, source, *, scan):
 def build(data_dir, agents, pending_cards, *, mode="action", scan, write_brain=None):
     anchor = pick_anchor(data_dir, mode)
     if anchor is None:
-        return {"ok": True, "anchor": None,
-                "reason": "no_presence_yet" if mode == "screen" else "no_action_yet",
-                "moved": [], "moved_count": 0, "down_now": down_now(data_dir, agents), "summary": None}
+        if mode == "screen":
+            return {"ok": True, "anchor": None, "reason": "no_presence_yet",
+                    "moved": [], "moved_count": 0, "down_now": down_now(data_dir, agents), "summary": None}
+        # No action of yours yet (a fresh install): "Welcome back" with everything since the install started
+        # (RFC 0002 §5.2), i.e. every dated event, newest first.
+        moved = moved_since(data_dir, 0.0, pending_cards)
+        return {"ok": True, "anchor": None, "reason": "no_action_yet", "moved": moved[:MOVED_MAX],
+                "moved_count": len(moved), "down_now": down_now(data_dir, agents), "summary": None}
     moved = moved_since(data_dir, anchor["at"], pending_cards)
     aid = anchor_id(anchor)
     out_anchor = {k: anchor.get(k) for k in ("kind", "surface", "device", "device_source", "said", "target")}

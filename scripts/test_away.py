@@ -345,3 +345,10 @@ def test_an_older_operator_answer_is_found_past_many_newer_agent_gates(data):
 
 def test_an_unregistered_crashed_row_is_never_down(data):
     assert A.down_now(data, [{"id": "x", "state": "crashed", "unregistered": True}]) == []
+
+
+def test_with_no_action_yet_the_card_lists_everything_since_install(data):
+    cards = [{"id": "apr_a", "from_agent": "dev", "question": "first question", "created_at": _iso(T0)}]
+    out = A.build(data, [], cards, scan=no_secrets)
+    assert out["anchor"] is None and out["reason"] == "no_action_yet"
+    assert out["moved_count"] == 1 and out["moved"][0]["kind"] == "card"
