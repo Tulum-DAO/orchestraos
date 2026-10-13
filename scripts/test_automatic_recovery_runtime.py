@@ -148,3 +148,29 @@ def test_recovery_script_skips_unresolved_runtime_before_claude_fallback(tmp_pat
     assert "automatic recovery REFUSED" in combined
     assert "WOULD RECOVER: seat" not in combined
 
+
+
+def test_recovery_lock_is_per_install_not_box_wide(tmp_path):
+    """The run lock lives in the install's own state dir.
+
+    It used to be a fixed /tmp/agent-recovery.lock, so any agent-recovery.sh on the box (another
+    install, another checkout's test suite, the cron run) made this one exit 0 silently and these
+    tests fail with empty output. A fresh lock in THIS install blocks; one in another install does not.
+    """
+    orch = _automatic_lifecycle_world(tmp_path, "CoDeX")
+    other = _automatic_lifecycle_world(tmp_path / "other", "CoDeX")
+    env = os.environ | {
+        "ORCHESTRA_DIR": str(orch), "RECOVERY_RUNTIME_SCRIPT": RUNTIME_HELPER,
+    }
+
+    (other / "state" / "agent-recovery.lock").write_text("1\n")
+    proc = subprocess.run(["bash", RECOVERY_SCRIPT, "--dry-run"], env=env,
+                          capture_output=True, text=True, check=False)
+    assert "automatic recovery REFUSED" in proc.stdout + proc.stderr
+    assert not (orch / "state" / "agent-recovery.lock").exists()   # released on exit
+
+    (orch / "state" / "agent-recovery.lock").write_text("1\n")
+    proc = subprocess.run(["bash", RECOVERY_SCRIPT, "--dry-run"], env=env,
+                          capture_output=True, text=True, check=False)
+    assert proc.returncode == 0
+    assert proc.stdout + proc.stderr == ""                          # another run holds it

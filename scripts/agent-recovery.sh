@@ -38,7 +38,9 @@ HANDOFF_DIR="$STATE_DIR/agent-handoffs"
 REGISTRY="$SCRIPT_DIR/registry.json"
 RECOVERY_RUNTIME_SCRIPT="${RECOVERY_RUNTIME_SCRIPT:-$BIN_DIR/recovery_runtime.py}"
 LOG="$SCRIPT_DIR/logs/agent-recovery.log"
-LOCKFILE="/tmp/agent-recovery.lock"
+# One run at a time PER INSTALL: the lock is in this install's state dir. A fixed /tmp path let any
+# other install, checkout or test run on the box make this one exit 0 silently.
+LOCKFILE="$STATE_DIR/agent-recovery.lock"
 
 DRY_RUN=false
 CRON_MODE=false
@@ -76,6 +78,7 @@ crash_log() {
 }
 
 # Prevent concurrent runs
+mkdir -p "$STATE_DIR"
 if [ -f "$LOCKFILE" ]; then
     LOCK_AGE=$(( $(date +%s) - $(stat -c %Y "$LOCKFILE" 2>/dev/null || echo 0) ))
     if [ "$LOCK_AGE" -lt 120 ]; then
