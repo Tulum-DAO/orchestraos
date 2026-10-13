@@ -263,7 +263,9 @@ def _codex_rollout_sid_for_seat(path: Path, seat: str) -> str | None:
     m = _CODEX_ROLLOUT_SID_RE.search(path.name)
     if not m:
         return None
-    boot_head = re.compile(r"^\s*You are ([^\s,:;!?]+)")
+    # A name may contain dots (codex-gm.ops) but never ends in one: spawn-agent.sh types
+    # "You are <seat>. Read ...", and that full stop belongs to the sentence (#429 review).
+    boot_head = re.compile(r"^\s*You are ([^\s,:;!?]*[^\s,:;!?.])")
     read = 0
     try:
         with open(path, "rb") as f:

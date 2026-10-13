@@ -257,3 +257,43 @@ def test_the_claude_and_gemini_branches_are_not_consulted_for_codex(ra, tmp_path
     _rollout(tmp_path / "home", "13", UUID_A, "dev-codex-g2", age_s=60)
     assert ra.extract_active_sid("dev-codex-g2", "codex") == UUID_A
     assert called == []
+
+
+def _spawn_boot_lines(seat):
+    """The boot lines spawn-agent.sh really types into a Codex pane, read from the script itself
+    (both inject_or_fail calls: first boot and roster resume), so the fixture cannot drift from
+    what a seat receives. orchestraos-builder on #429 r5: the real line is "You are <seat>. Read
+    ..." (a full stop), and every hand-written fixture used a comma."""
+    script = (HERE.parent / "spawn-agent.sh").read_text()
+    import re
+    found = re.findall(r'inject_or_fail "\$tmux_name" "(You are \$agent_id[^"]*)"', script)
+    assert len(found) == 2, found      # first boot + resume; a third or a rename must be looked at
+    subs = {"$agent_id": seat, "$init_file": f"/tmp/agent-init-{seat}.md",
+            "$resume_sid": UUID_A, "$SCRIPT_DIR": "/opt/orchestraos/scripts"}
+    out = {}
+    for line in found:
+        for k, v in subs.items():
+            line = line.replace(k, v)
+        assert "$" not in line, line
+        out["resume" if ", resumed (session" in line else "first-boot"] = line
+    assert set(out) == {"first-boot", "resume"}, out
+    return out
+
+
+@pytest.mark.parametrize("which", ["first-boot", "resume"])
+@pytest.mark.parametrize("seat", ["codex-gm", "codex-gm-g7", "codex-gm.ops"])
+def test_the_boot_line_spawn_agent_really_types_is_found(ra, tmp_path, seat, which):
+    home = tmp_path / "home"
+    line = _spawn_boot_lines(seat)[which]
+    _rollout(home, "13", UUID_B, seat, age_s=10, boot=False, extra_rows=[_umsg(line)])
+    assert ra.extract_active_sid(seat, "codex") == UUID_B
+
+
+def test_a_name_with_a_dot_inside_stays_distinct_on_the_real_boot_line(ra, tmp_path):
+    home = tmp_path / "home"
+    _rollout(home, "12", UUID_A, "codex-gm", age_s=3600, boot=False,
+             extra_rows=[_umsg(_spawn_boot_lines("codex-gm")["first-boot"])])
+    _rollout(home, "13", UUID_B, "codex-gm.ops", age_s=10, boot=False,
+             extra_rows=[_umsg(_spawn_boot_lines("codex-gm.ops")["first-boot"])])
+    assert ra.extract_active_sid("codex-gm", "codex") == UUID_A
+    assert ra.extract_active_sid("codex-gm.ops", "codex") == UUID_B
