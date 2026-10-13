@@ -80,6 +80,7 @@ Read scope, the same as `/briefing`. Response:
      "at": "...", "text": "...", "link": "...", "agent": "..."}
   ],
   "moved_count": 7,
+  "down_now": [{"kind": "crash", "agent": "...", "text": "... is down", "link": "..."}],
   "summary": {"text": "...", "anchor_id": "a_...", "generated_at": "...", "source": "brain | rules"}
 }
 ```
@@ -97,11 +98,14 @@ No anchor at all (a fresh install): `anchor: null`, and the card falls back to "
 **Outcome rule** (deterministic, no brain):
 
 - a card answered by you: `done` once the requesting agent has resumed (its state left `waiting` after `answered_at`), else `working`;
-- a prompt or call to an agent: `waiting_on_you` if that agent has a pending card created after the anchor; else `working` if it is working now; else `done` if it went idle after the anchor; else `unknown`.
+- a chat message to an agent: `waiting_on_you` if that agent has a pending card created after the anchor; else `working` if it is working now; else `done` if it went idle after the anchor; else `unknown`.
+- a voice call: taken from its call journal, never inferred (gm msg_8a661e3c): `working` while the journal is live, `done` once it ended, `unknown` otherwise, plus the journal's own summary (secret-scanned). New cards after the call still appear under `moved`.
 
 ### 5.3 "Since I last opened any screen" (`anchor=screen`)
 
-`last_seen` cannot answer this (§3). New, small: **`POST /presence {"foreground": true}`**, sent by a client when its app or tab comes to the foreground. The server stores `foreground_at` per device. `anchor=screen` uses the newest `foreground_at` across your devices. Writes are debounced per device (60 s), because clients send on every foreground. Until a client sends it, `anchor=screen` returns `anchor: null` with `reason: "no_presence_yet"`. It never falls back to `last_seen`.
+`last_seen` cannot answer this (§3). New, small: **`POST /presence {"foreground": true}`**, sent by a client when its app or tab comes to the foreground. The server stores `foreground_at` per device. `anchor=screen` uses the newest `foreground_at` across your devices. Writes are debounced per device (60 s), because clients send on every foreground. It also reads `/surface` (`state/arturo/active-surface.json`), which shipped builds already send on every screen change: a device whose route is non-null was on screen at its `updated_at` (a null route means backgrounded and is ignored). That makes `anchor=screen` useful before any build sends `/presence` (gm msg_71cd9caa, condition 4). Only the newest time is used, so `/surface`'s own write rate needs no debounce here. With neither signal, `anchor=screen` returns `anchor: null` with `reason: "no_presence_yet"`. It never falls back to `last_seen`.
+
+`POST /presence {"foreground": true}` never touches the viewing focus that park-idle reads (a body without `viewing` used to clear it). Without a device token the client must send its own `client_id` (the web dashboard: surface + client_id is the key).
 
 ### 5.4 The summary
 
@@ -124,7 +128,7 @@ It is marked deprecated in its docstring, in favour of `/away`.
 - Device naming: `X-Device-Label` wins; without it the card gets the channel only (`device: null`, `surface: "phone"` rendered as "on iOS"), never a guess.
 - Anchor selection: each source wins when it is newest; ties break deterministically; the legacy fleet token's answers show `device: null`, not a guess.
 - Outcome rule: each of the four states from a fixture, plus `unknown` when the agent is gone.
-- `moved` excludes: retired seats, service panes, events at or before the anchor, cards answered by agents (self-authored gates).
+- `moved` holds only DATED events strictly after the anchor: pending cards for you, tasks done, messages to you, rotations. Seat status is not an event: it goes to `down_now`, which lists registered agent seats that are down now and never an unregistered pane, a service seat (runtime "service"), a seat whose registry status is retired, parked or archived, or a long-dead relic. An answer counts as yours only when stamped `answered_by = 'operator'` (agent-authored gates and unstamped older rows do not).
 - `anchor=screen` with no presence returns `null` and never uses `last_seen`.
 - The summary is cached per anchor, regenerated when `moved_count` changes, and falls back to rules with `source: "rules"` when the brain raises.
 - `/briefing`: a retired crashed seat is not counted. `/voice-memory` serves Arturo's file when both exist, and the old one only when Arturo's is absent.
