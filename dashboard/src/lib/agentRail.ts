@@ -114,23 +114,18 @@ export function providersVary(agents: RailAgent[]): boolean {
  * The context-used figure for a rail row, or null when there is no reading.
  *
  * /api/agents carries the detector's context_pct: "NN%" for every runtime that has a reading
- * (claude from its own meter, codex from the rollout's token counts) and '' otherwise. Only a
- * whole number from 0 to 100 is a reading; anything else is null so the row shows a dash. A blank
- * must never become "0%", which would claim an empty context nobody measured.
+ * (claude from its own meter, codex from the rollout's token counts) and '' otherwise. Only that
+ * shape, 0-100, is a reading; anything else is null so the row shows a dash. A blank must never
+ * become "0%", which would claim an empty context nobody measured.
  */
 export function contextLabel(raw: unknown): string | null {
-  let n: number;
-  if (typeof raw === 'number') {
-    n = raw;
-  } else if (typeof raw === 'string') {
-    const m = /^\s*(\d{1,3}(?:\.\d+)?)\s*%?\s*$/.exec(raw);
-    if (!m) return null;
-    n = Number(m[1]);
-  } else {
-    return null;
-  }
-  if (!Number.isFinite(n) || n < 0 || n > 100) return null;
-  return `${Math.round(n)}%`;
+  // Exactly the shape the detector writes (an integer then '%'); a bare number, a decimal or
+  // any other text is not a reading from it (codex review, #436).
+  if (typeof raw !== 'string') return null;
+  const m = /^\s*(\d{1,3})%\s*$/.exec(raw);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return n <= 100 ? `${n}%` : null;
 }
 
 /** 80% and up is the band where seats rotate, so the figure is marked there. */
