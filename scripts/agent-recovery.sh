@@ -79,14 +79,17 @@ crash_log() {
 
 # Prevent concurrent runs
 mkdir -p "$STATE_DIR"
-if [ -f "$LOCKFILE" ]; then
+# Taken with noclobber (an exclusive create), so two runs can never both see "no lock" and both
+# take it. A lock older than 120 s is a run that died; it is removed and taken once more.
+take_lock() { ( set -C; echo $$ > "$LOCKFILE" ) 2>/dev/null; }
+if ! take_lock; then
     LOCK_AGE=$(( $(date +%s) - $(stat -c %Y "$LOCKFILE" 2>/dev/null || echo 0) ))
     if [ "$LOCK_AGE" -lt 120 ]; then
         exit 0  # Another instance is running
     fi
     rm -f "$LOCKFILE"
+    take_lock || exit 0  # another run took it first
 fi
-echo $$ > "$LOCKFILE"
 trap 'rm -f "$LOCKFILE"' EXIT
 
 # Infrastructure sessions managed by service-watchdog — never touch these

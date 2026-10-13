@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -174,3 +175,35 @@ def test_recovery_lock_is_per_install_not_box_wide(tmp_path):
                           capture_output=True, text=True, check=False)
     assert proc.returncode == 0
     assert proc.stdout + proc.stderr == ""                          # another run holds it
+
+
+def test_recovery_lock_one_of_concurrent_runs_proceeds_and_stale_lock_is_replaced(tmp_path):
+    """Same install: of several runs started together, exactly one does the work, and a lock older
+    than 120 s (a dead run's) is replaced. The lock is an exclusive create (noclobber), so no two
+    runs can both take it; that interleaving is microseconds wide and this test cannot force it
+    (it passes against the old check-then-write too), so it checks the outcome only."""
+    orch = _automatic_lifecycle_world(tmp_path, "CoDeX")
+    slow = tmp_path / "slow_runtime.py"      # holds the lock long enough for the others to arrive
+    slow.write_text(
+        "import sys, time, runpy\n"
+        "time.sleep(2)\n"
+        f"sys.argv[0] = {RUNTIME_HELPER!r}\n"
+        f"runpy.run_path({RUNTIME_HELPER!r}, run_name='__main__')\n"
+    )
+    env = os.environ | {"ORCHESTRA_DIR": str(orch), "RECOVERY_RUNTIME_SCRIPT": str(slow)}
+    procs = [subprocess.Popen(["bash", RECOVERY_SCRIPT, "--dry-run"], env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+             for _ in range(6)]
+    outs = [p.communicate(timeout=60)[0] for p in procs]
+    assert all(p.returncode == 0 for p in procs)
+    assert sum("automatic recovery REFUSED" in o for o in outs) == 1, outs
+
+    lock = orch / "state" / "agent-recovery.lock"
+    lock.write_text("1\n")
+    old = time.time() - 300
+    os.utime(lock, (old, old))
+    proc = subprocess.run(["bash", RECOVERY_SCRIPT, "--dry-run"],
+                          env=env | {"RECOVERY_RUNTIME_SCRIPT": RUNTIME_HELPER},
+                          capture_output=True, text=True, check=False)
+    assert "automatic recovery REFUSED" in proc.stdout + proc.stderr
+    assert not lock.exists()
