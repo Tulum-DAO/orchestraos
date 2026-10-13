@@ -334,3 +334,14 @@ def test_a_screen_anchor_from_surface_reports_phone_not_ios(data):
     (data / "state" / "arturo" / "active-surface.json").write_text(json.dumps({"devices": {
         "ios": {"route": "/agents", "updated_at": T0}}}))
     assert A.build(data, [], [], mode="screen", scan=no_secrets)["anchor"]["surface"] == "phone"
+
+
+def test_an_older_operator_answer_is_found_past_many_newer_agent_gates(data):
+    _answer(data, "apr_me", T0)
+    for i in range(60):
+        _answer(data, f"apr_gate_{i}", T0 + 10 + i, by="dev-seat")
+    assert A.pick_anchor(data)["ref"] == "apr_me"
+
+
+def test_an_unregistered_crashed_row_is_never_down(data):
+    assert A.down_now(data, [{"id": "x", "state": "crashed", "unregistered": True}]) == []

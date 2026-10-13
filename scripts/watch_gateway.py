@@ -2073,8 +2073,8 @@ async def handle_briefing(request):
     # run outside tmux entirely; its liveness is its declared probe, identity_store/status_reconcile.py).
     # Neither is a crash, whether the scan says `stopped` or `crashed`.
     services = _service_seat_ids()
-    crashed = [a["id"] for a in agents if a["id"] not in services and (
-               a["state"] == "crashed" or (a["state"] == "stopped" and not a.get("unregistered")))]
+    crashed = [a["id"] for a in agents
+               if a["id"] not in services and not a.get("unregistered") and a["state"] in ("crashed", "stopped")]
     working = sum(1 for a in agents if a["state"] == "working")
     stranded = [{"id": a["id"], "age_s": a.get("stranded_age_s"),
                  "text": (a.get("stranded_text") or "")[:80]}

@@ -31,7 +31,7 @@ VOICE_CALLS = ("state", "voice-calls")
 PRESENCE_DEBOUNCE_S = 60
 SAID_MAX = 140
 MOVED_MAX = 6
-_JOURNALS_SCANNED = 40
+_JOURNALS_SCANNED = 500     # newest first; stops at the first journal with your words
 _KIND_ORDER = {"answer": 0, "call": 1, "message": 2, "screen": 3}   # deterministic tie-break
 
 
@@ -101,9 +101,11 @@ def _device_label(stamp):
 # ---- anchor candidates ----------------------------------------------------------------------------
 
 def _answer_candidate(data_dir):
+    # Filtered in SQL, so the newest OPERATOR answer is found however many agent gates were answered since.
     rows = _rows(_p(data_dir, ("state", "tasks.db")),
                  "SELECT * FROM approval_requests WHERE status='answered' AND answered_at IS NOT NULL "
-                 "ORDER BY answered_at DESC LIMIT 50")
+                 "AND answered_by='operator' AND COALESCE(answer_surface,'') != 'agent_cli' "
+                 "ORDER BY answered_at DESC LIMIT 20")
     for r in rows:
         # The operator's answers only: a self-authored gate (answered_by=<agent>) or a CLI answer is not you.
         # Only rows stamped answered_by='operator' (RFC 0002 §5.2). Older rows carry NULL, and so did agents'
@@ -290,8 +292,8 @@ def down_now(data_dir, agents):
     services = _service_ids(data_dir)
     return [{"kind": "crash", "agent": a.get("id"), "text": f"{a.get('id')} is down", "link": f"/agents/{a.get('id')}"}
             for a in agents
-            if a.get("id") not in services and (
-                a.get("state") == "crashed" or (a.get("state") == "stopped" and not a.get("unregistered")))]
+            if a.get("id") not in services and not a.get("unregistered")
+            and a.get("state") in ("crashed", "stopped")]
 
 
 def _service_ids(data_dir):
