@@ -80,6 +80,7 @@ Read scope, the same as `/briefing`. Response:
      "at": "...", "text": "...", "link": "...", "agent": "..."}
   ],
   "moved_count": 7,
+  "down_now": [{"kind": "crash", "agent": "...", "text": "... is down", "link": "..."}],
   "summary": {"text": "...", "anchor_id": "a_...", "generated_at": "...", "source": "brain | rules"}
 }
 ```
@@ -101,7 +102,9 @@ No anchor at all (a fresh install): `anchor: null`, and the card falls back to "
 
 ### 5.3 "Since I last opened any screen" (`anchor=screen`)
 
-`last_seen` cannot answer this (§3). New, small: **`POST /presence {"foreground": true}`**, sent by a client when its app or tab comes to the foreground. The server stores `foreground_at` per device. `anchor=screen` uses the newest `foreground_at` across your devices. Writes are debounced per device (60 s), because clients send on every foreground. Until a client sends it, `anchor=screen` returns `anchor: null` with `reason: "no_presence_yet"`. It never falls back to `last_seen`.
+`last_seen` cannot answer this (§3). New, small: **`POST /presence {"foreground": true}`**, sent by a client when its app or tab comes to the foreground. The server stores `foreground_at` per device. `anchor=screen` uses the newest `foreground_at` across your devices. Writes are debounced per device (60 s), because clients send on every foreground. It also reads `/surface` (`state/arturo/active-surface.json`), which shipped builds already send on every screen change: a device whose route is non-null was on screen at its `updated_at` (a null route means backgrounded and is ignored). That makes `anchor=screen` useful before any build sends `/presence` (gm msg_71cd9caa, condition 4). Only the newest time is used, so `/surface`'s own write rate needs no debounce here. With neither signal, `anchor=screen` returns `anchor: null` with `reason: "no_presence_yet"`. It never falls back to `last_seen`.
+
+`POST /presence {"foreground": true}` never touches the viewing focus that park-idle reads (a body without `viewing` used to clear it). Without a device token the client must send its own `client_id` (the web dashboard: surface + client_id is the key).
 
 ### 5.4 The summary
 
