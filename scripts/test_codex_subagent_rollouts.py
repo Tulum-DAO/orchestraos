@@ -79,6 +79,10 @@ BAD_FIRST_LINES = {
     "json-list": b"[1, 2]",
     "not-utf8": b'{"type": "session_meta", "payload": {"x": "\xff\xfe"}}',
     "nested-past-the-parser-limit": b"[" * 100000 + b"]" * 100000,
+    "meta-without-thread-source": json.dumps({"type": "session_meta", "payload": {
+        "id": "x", "source": "cli", "originator": "codex-tui"}}).encode(),
+    "meta-with-an-unknown-thread-source": json.dumps({"type": "session_meta", "payload": {
+        "id": "x", "source": "cli", "thread_source": "automation"}}).encode(),
     "over-the-size-cap": json.dumps({"type": "session_meta", "payload": {
         "thread_source": "user", "base_instructions": "x" * (getattr(CC, "_META_CAP_BYTES", 1 << 20) + 10)}}).encode(),
 }
@@ -91,6 +95,19 @@ def test_a_rollout_whose_line_1_cannot_be_classified_is_neither_main_nor_subagen
     p = _bad_rollout(str(tmp_path), MAIN, BAD_FIRST_LINES[kind])
     assert CC.is_subagent_rollout(p) is False
     assert CC.is_main_rollout(p) is False
+
+
+@pytest.mark.parametrize("source", ["cli", "exec"])
+def test_a_main_thread_is_proven_by_thread_source_user_whatever_its_source(tmp_path, source):
+    """codex peer review (#434 r2): 'main' must be shown positively, not inferred from the absence of
+    subagent markers. Measured on 145 real rollouts (codex 0.148 / 0.150 / 0.153): every main thread
+    has thread_source == 'user'; source is 'cli' (the TUI) or 'exec' (codex exec), so source is not
+    required."""
+    d = tmp_path / "r.jsonl"
+    d.write_text(json.dumps({"type": "session_meta", "payload": {
+        "id": MAIN, "thread_source": "user", "source": source}}) + "\n")
+    assert CC.is_main_rollout(str(d)) is True
+    assert CC.is_subagent_rollout(str(d)) is False
 
 
 def test_a_missing_file_is_neither_main_nor_subagent(tmp_path):

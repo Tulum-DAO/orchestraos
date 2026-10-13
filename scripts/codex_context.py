@@ -92,9 +92,11 @@ def _rollout_kind(path: str) -> str | None:
     Codex 0.153 writes one rollout per spawned subagent next to the parent's and keeps it OPEN in
     the same process. A subagent's first user message is the PARENT's boot line, so neither the
     open FD nor "You are <seat>" can tell them apart; only session_meta does, three ways:
-    thread_source == 'subagent', a source.subagent key, or parent_thread_id. None = line 1 could
+    thread_source == 'subagent', a source.subagent key, or parent_thread_id. 'main' needs
+    thread_source == 'user' and none of those (codex review: shown, not inferred). None = line 1 could
     not be read as a session_meta (missing file, over the cap, not UTF-8, bad or too-deeply
-    nested JSON, wrong shape): such a file is NEITHER kind, so it is never attributed to a seat.
+    nested JSON, wrong shape) or names no known thread kind: such a file is NEITHER kind, so it is
+    never attributed to a seat.
     Bounded read; never raises."""
     try:
         with open(path, "rb") as fh:
@@ -118,7 +120,11 @@ def _rollout_kind(path: str) -> str | None:
             or (isinstance(src, (list, tuple)) and "subagent" in src)
             or meta.get("parent_thread_id")):
         return "subagent"
-    return "main"
+    # A main thread is shown positively: every main thread on 145 real rollouts (codex 0.148,
+    # 0.150, 0.153) carries thread_source == 'user' (source is 'cli' or 'exec', so not checked).
+    if meta.get("thread_source") == "user":
+        return "main"
+    return None
 
 
 def is_subagent_rollout(path: str) -> bool:
