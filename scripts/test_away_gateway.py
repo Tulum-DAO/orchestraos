@@ -141,3 +141,27 @@ def test_foreground_is_stored_in_its_own_file_keyed_by_device_or_web_client(box)
     assert not (box["data"] / "state" / "operator-presence.json").exists()
     status, body = _call(box, "GET", "/away", params={"anchor": "screen"})
     assert body["anchor"]["kind"] == "screen"
+
+
+def test_foreground_with_viewing_in_the_same_body_still_leaves_focus_alone(box):
+    _call(box, "POST", "/presence", body={"viewing": "dev-seat"})
+    before = _focus(box)
+    _call(box, "POST", "/presence", token="dev", body={"foreground": True, "viewing": "someone-else"})
+    assert _focus(box) == before
+
+
+def test_web_presence_without_a_client_id_is_refused(box):
+    status, body = _call(box, "POST", "/presence", body={"foreground": True, "surface": "web"})
+    assert status == 400 and not (box["data"] / "state" / "away-presence.json").exists()
+
+
+def test_ledger_and_presence_writes_run_off_the_event_loop(box, monkeypatch):
+    import threading
+    import away as AW
+    seen = []
+    monkeypatch.setattr(AW, "record_message", lambda *a, **k: seen.append(threading.current_thread().name))
+    monkeypatch.setattr(AW, "record_presence", lambda *a, **k: seen.append(threading.current_thread().name))
+    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False: (True, {}))
+    _call(box, "POST", "/agent-message", token="dev", body={"session": "gm", "text": "hi"})
+    _call(box, "POST", "/presence", token="dev", body={"foreground": True})
+    assert len(seen) == 2 and all(n != "MainThread" for n in seen), seen

@@ -4274,24 +4274,29 @@ async def handle_agent_message(request):
             except Exception as e:  # noqa: BLE001 — never lie 'held' on a failed durable write
                 return _json({"ok": False, "busy": True, "hold_failed": str(e), **info},
                              status=409)
-            _record_operator_message(request, session, text)
+            await _record_operator_message(request, session, text)
             return _json({"ok": True, "delivered": False, "held": True,
                           "state": "held_for_boundary", "message_id": msg_id},
                          status=200)
         return _json({"ok": False, "busy": True, **info}, status=409)
     if ok:
-        _record_operator_message(request, session, text)
+        await _record_operator_message(request, session, text)
     return _json({"ok": ok, "delivered": ok, **info},
                  status=200 if ok else 502)
 
 
-def _record_operator_message(request, session, text):
+async def _record_operator_message(request, session, text):
     """The away card's message anchor (gm msg_71cd9caa): one ledger row per DELIVERED or HELD send, never a
-    refused one. Best effort: a ledger that cannot be written never fails the send that already happened."""
-    try:
+    refused one. Off the event loop (file write, rotation, secret scan). Best effort: a ledger that cannot be
+    written never fails the send that already happened."""
+    import asyncio
+    device, surface = _answer_device(request), request.headers.get("X-Surface")
+
+    def _write():
         import away as AW
-        AW.record_message(ORCH_DIR, session, text, device=_answer_device(request),
-                          surface=request.headers.get("X-Surface"), scan=_away_scan)
+        AW.record_message(ORCH_DIR, session, text, device=device, surface=surface, scan=_away_scan)
+    try:
+        await asyncio.get_event_loop().run_in_executor(None, _write)
     except Exception as e:  # noqa: BLE001 — bookkeeping, never a gate
         log.warning(f"operator-actions ledger write failed: {e!r}")
 
@@ -5642,7 +5647,9 @@ async def handle_presence(request):
     if data.get("foreground") is True:
         # The away card's "since I last opened any screen" signal (RFC 0002 §5.3): its own file, keyed by the
         # device token's id, else surface + the client's own id (the web dashboard carries no device token).
-        # Stored: label, surface, time. Debounced in away.record_presence.
+        # Stored: label, surface, time. Debounced in away.record_presence. A foreground report NEVER touches
+        # the viewing focus, even if the body also carries "viewing": focus is its own report.
+        import asyncio
         import away as AW
         _, principal = _resolved_principal(request)
         dev_id = (principal or {}).get("id")
@@ -5650,11 +5657,18 @@ async def handle_presence(request):
         if dev_id and dev_id != "legacy":
             key, label = f"device:{dev_id}", (principal or {}).get("label") or data.get("label")
         else:
-            key, label = f"{surface or 'unknown'}:{str(data.get('client_id') or '-')[:64]}", data.get("label")
+            client_id = str(data.get("client_id") or "").strip()[:64]
+            if not client_id:
+                # Without a device token the client's own id is the only key; pooling every such client under
+                # one key would make one browser's report stand for all of them.
+                return _json({"ok": False, "error": "client_id required without a device token"}, status=400)
+            key, label = f"{surface or 'unknown'}:{client_id}", data.get("label")
         try:
-            AW.record_presence(ORCH_DIR, key, label=label, surface=surface)
+            await asyncio.get_event_loop().run_in_executor(
+                None, lambda: AW.record_presence(ORCH_DIR, key, label=label, surface=surface))
         except OSError as e:
             return _json({"ok": False, "error": f"write failed: {e}"}, status=500)
+        return _json({"ok": True})
     if "viewing" not in data:
         # A body without "viewing" says nothing about focus: leave it as it is. It used to CLEAR the stored
         # focus, so any other presence report would unprotect the agent being watched from park-idle.

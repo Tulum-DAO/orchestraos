@@ -5,8 +5,9 @@ GET /away is a thin wrapper (scripts/watch_gateway.py handle_away).
 
   anchor   your last real action: an answered card, a voice call, or a chat message (anchor="action"),
            or the last time an app of yours was on screen (anchor="screen")
-  moved    what happened after it: new cards for you, tasks done, rotations, messages to you, and
-           registered seats that are crashed now
+  moved    what happened after it: new cards for you, tasks done, rotations, messages to you (dated only)
+  down_now registered agent seats that are down now: current state, kept apart from `moved` because the
+           fleet scan has no crash time
   summary  one paragraph per anchor, cached; a rules sentence until (or unless) a brain writes one
 
 Nothing here guesses a device. A device is named only from a label the client sent or the
@@ -259,18 +260,18 @@ def moved_since(data_dir, at, agents, pending_cards):
             out.append({"kind": "rotation", "at": t, "agent": r.get("root"),
                         "text": f"{r.get('root')} moved to generation {r.get('generation')}",
                         "link": f"/agents/{r.get('root')}"})
-    services = _service_ids(data_dir)
-    for a in agents:
-        # Crashed NOW: the same rule as /briefing. A registered agent seat that is `crashed`, or `stopped` in
-        # its own pane; never an unregistered pane or a seat whose runtime is "service" (no agent CLI, so it
-        # always reads `stopped`). The fleet scan carries no crash time, so these are current state, undated.
-        if a.get("state") == "crashed" or (a.get("state") == "stopped" and not a.get("unregistered")
-                                           and a.get("id") not in services):
-            out.append({"kind": "crash", "at": None, "agent": a.get("id"),
-                        "text": f"{a.get('id')} is down", "link": f"/agents/{a.get('id')}"})
     dated = sorted((m for m in out if m["at"] is not None), key=lambda m: m["at"], reverse=True)
-    crashes = [m for m in out if m["at"] is None]
-    return [dict(m, at=iso(m["at"]) if m["at"] is not None else None) for m in crashes + dated]
+    return [dict(m, at=iso(m["at"])) for m in dated]
+
+
+def down_now(data_dir, agents):
+    """Registered agent seats that are down NOW. Kept OUT of `moved`: the fleet scan has no crash time, so a
+    seat down since before the anchor would read as news. The card shows these as current state."""
+    services = _service_ids(data_dir)
+    return [{"kind": "crash", "agent": a.get("id"), "text": f"{a.get('id')} is down", "link": f"/agents/{a.get('id')}"}
+            for a in agents
+            if a.get("state") == "crashed" or (a.get("state") == "stopped" and not a.get("unregistered")
+                                               and a.get("id") not in services)]
 
 
 def _service_ids(data_dir):
@@ -347,7 +348,7 @@ def build(data_dir, agents, pending_cards, *, mode="action", scan, write_brain=N
     if anchor is None:
         return {"ok": True, "anchor": None,
                 "reason": "no_presence_yet" if mode == "screen" else "no_action_yet",
-                "moved": [], "moved_count": 0, "summary": None}
+                "moved": [], "moved_count": 0, "down_now": down_now(data_dir, agents), "summary": None}
     moved = moved_since(data_dir, anchor["at"], agents, pending_cards)
     aid = anchor_id(anchor)
     out_anchor = {k: anchor.get(k) for k in ("kind", "surface", "device", "device_source", "said", "target")}
@@ -355,10 +356,13 @@ def build(data_dir, agents, pending_cards, *, mode="action", scan, write_brain=N
     out_anchor.update(id=aid, at=iso(anchor["at"]))
     if anchor["kind"] != "screen":
         out_anchor["outcome"] = outcome(anchor, agents, pending_cards)
+        if out_anchor["outcome"].get("summary") is not None:
+            out_anchor["outcome"]["summary"] = _safe(out_anchor["outcome"]["summary"], scan)
     shown = moved[:MOVED_MAX]
     for m in shown:
         m["text"] = _safe(m["text"], scan) or "(hidden: looked like a secret)"
     return {"ok": True, "anchor": out_anchor, "moved": shown, "moved_count": len(moved),
+            "down_now": down_now(data_dir, agents),
             "summary": summary(data_dir, aid, moved, scan=scan, write_brain=write_brain)}
 
 

@@ -174,13 +174,16 @@ def test_moved_lists_only_events_after_the_anchor(data):
     assert [m["kind"] for m in moved] == ["card", "message", "task_done"]
 
 
-def test_crashes_are_registered_seats_only_and_carry_no_invented_time(data):
+def test_down_now_is_registered_agent_seats_and_never_counted_as_moved(data):
     (data / "registry.json").write_text(json.dumps({"agents": {"svc": {"runtime": "service"}}}))
     agents = [{"id": "seat", "state": "crashed"}, {"id": "seat2", "state": "stopped"},
-              {"id": "svc", "state": "stopped"},                 # a registered service seat: never a crash
+              {"id": "svc", "state": "stopped"},                 # a registered service seat: never down
               {"id": "proxy", "state": "stopped", "unregistered": True}, {"id": "w", "state": "working"}]
-    moved = A.moved_since(data, T0, agents, [])
-    assert [(m["agent"], m["at"]) for m in moved] == [("seat", None), ("seat2", None)]
+    assert [d["agent"] for d in A.down_now(data, agents)] == ["seat", "seat2"]
+    assert A.moved_since(data, T0, agents, []) == []           # no crash time: not news since the anchor
+    _ledger(data, T0)
+    out = A.build(data, agents, [], scan=no_secrets)
+    assert out["moved_count"] == 0 and [d["agent"] for d in out["down_now"]] == ["seat", "seat2"]
 
 
 def test_rotations_come_from_the_identity_db(data):
@@ -291,3 +294,17 @@ def test_no_other_shipped_file_reads_the_ledger():
     out = subprocess.run(["git", "grep", "-l", "operator-actions.jsonl"], cwd=root, capture_output=True, text=True).stdout
     readers = {f for f in out.split() if not f.rsplit("/", 1)[-1].startswith("test_") and not f.startswith("docs/")}
     assert readers == {"scripts/away.py"}, readers
+
+
+def test_a_journal_summary_the_scanner_flags_is_not_served(data):
+    _call(data, "vc_1", T0, ended=T0 + 30, summary="the key is sk-live-ABC")
+    scan = lambda b: "secret" if b"sk-live" in b else None
+    out = A.build(data, [], [], scan=scan)
+    assert out["anchor"]["outcome"]["state"] == "done" and out["anchor"]["outcome"]["summary"] is None
+
+
+def test_a_bare_device_id_stamp_names_no_device(data):
+    """_answer_device stamps a device that has no label as its bare id. The card names no device for it."""
+    _ledger(data, T0, device="d_7", surface=None)
+    a = A.pick_anchor(data)
+    assert a["device"] is None and a["device_source"] == "none"
