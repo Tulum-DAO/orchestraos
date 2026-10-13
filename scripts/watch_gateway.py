@@ -2043,6 +2043,14 @@ async def handle_voice_memory(request):
         return _json({"ok": True, "recent_transcripts": [], "notes": []})
 
 
+def _service_seat_ids() -> set:
+    """Registry seats whose runtime is "service" (a proxy or daemon registered as a seat). Empty on any error."""
+    reg = _load_json(ORCH_DIR / "registry.json") or {}
+    agents = reg.get("agents", {}) if isinstance(reg, dict) else {}
+    return {k for k, v in agents.items() if isinstance(v, dict) and v.get("runtime") == "service"} \
+        if isinstance(agents, dict) else set()
+
+
 async def handle_briefing(request):
     """Deltas for the Arturo 'while you were away' card. ?since=<ISO ts> optional.
     Kept, shape unchanged, for shipped apps; the redesigned card will read /away (RFC 0002)."""
@@ -2058,10 +2066,14 @@ async def handle_briefing(request):
     # Use the agents cache (the fleet scan takes ~6s; never block the briefing).
     agents = _agents_cache["data"] or []
     # A crash is a REGISTERED seat: `crashed` (compute_agents already reads long-dead registry relics as
-    # offline) or `stopped` in a registered seat's pane (its agent process is gone). An unregistered
-    # `stopped` pane is a service (a proxy, a dashboard, a bare shell), never a crash.
+    # offline) or `stopped` in a registered AGENT seat's pane (its agent process is gone). An unregistered
+    # `stopped` pane is a service (a proxy, a dashboard, a bare shell), and so is a registered seat whose
+    # runtime is "service" (it never runs an agent CLI, so the detector always reads it `stopped`; its
+    # liveness is its declared probe, identity_store/status_reconcile.py). Neither is a crash.
+    services = _service_seat_ids()
     crashed = [a["id"] for a in agents
-               if a["state"] == "crashed" or (a["state"] == "stopped" and not a.get("unregistered"))]
+               if a["state"] == "crashed"
+               or (a["state"] == "stopped" and not a.get("unregistered") and a["id"] not in services)]
     working = sum(1 for a in agents if a["state"] == "working")
     stranded = [{"id": a["id"], "age_s": a.get("stranded_age_s"),
                  "text": (a.get("stranded_text") or "")[:80]}

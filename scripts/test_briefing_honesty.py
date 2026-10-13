@@ -67,6 +67,7 @@ def test_voice_memory_falls_back_to_the_old_file_only_when_arturos_is_absent(box
     (box / "state" / "voice-memory.json").write_text(json.dumps(
         {"recent_transcripts": [{"text": "old"}], "notes": []}))
     status, body = _get("/voice-memory")
+    assert status == 200 and body["ok"] is True
     assert body["recent_transcripts"] == [{"text": "old"}]
 
 
@@ -82,7 +83,11 @@ def _agent(i, state, unregistered=False):
 
 
 def test_briefing_crashed_counts_registered_seats_not_service_panes(box, monkeypatch):
+    (box / "registry.json").write_text(json.dumps({"agents": {
+        "seat-crashed": {"runtime": "claude"}, "seat-died-in-pane": {"runtime": "codex"},
+        "arturo-proxy": {"runtime": "service"}}}))
     monkeypatch.setitem(G._agents_cache, "data", [
+        _agent("arturo-proxy", "stopped"),                      # a REGISTERED service seat: never a crash
         _agent("seat-crashed", "crashed"),                      # registered, no pane, last said alive
         _agent("seat-died-in-pane", "stopped"),                 # registered, agent process gone
         _agent("dashboard", "stopped", unregistered=True),      # a service pane
@@ -97,9 +102,15 @@ def test_briefing_crashed_counts_registered_seats_not_service_panes(box, monkeyp
 
 
 def test_briefing_response_shape_is_pinned_for_shipped_apps(box, monkeypatch):
-    monkeypatch.setitem(G._agents_cache, "data", [])
+    """Keys AND value types, on a non-empty fleet, as the shipped iOS app decodes them."""
+    monkeypatch.setitem(G._agents_cache, "data", [
+        _agent("w", "working"), _agent("c", "crashed"),
+        {"id": "s", "state": "stranded", "stranded_age_s": 42, "stranded_text": "half a line"},
+        _agent("t", "stalled")])
     status, body = _get("/briefing")
-    assert status == 200
+    assert status == 200 and body["ok"] is True
     assert set(body) == {"ok", "pending", "answered_since", "agents_working", "agents_crashed",
                          "agents_stranded", "agents_stalled"}
     assert isinstance(body["pending"], int) and isinstance(body["answered_since"], list)
+    assert body["agents_working"] == 1 and body["agents_crashed"] == ["c"] and body["agents_stalled"] == ["t"]
+    assert body["agents_stranded"] == [{"id": "s", "age_s": 42, "text": "half a line"}]
