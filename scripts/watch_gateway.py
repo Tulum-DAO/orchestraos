@@ -2045,10 +2045,14 @@ async def handle_voice_memory(request):
 
 
 def _service_seat_ids() -> set:
-    """Registry seats whose runtime is "service" (a proxy or daemon registered as a seat). Empty on any error."""
+    """Registry seats that are never a crash: runtime "service" (a proxy or daemon registered as a seat), or a
+    registry status of retired/parked/archived. Empty on any error."""
     reg = _load_json(ORCH_DIR / "registry.json") or {}
     agents = reg.get("agents", {}) if isinstance(reg, dict) else {}
-    return {k for k, v in agents.items() if isinstance(v, dict) and v.get("runtime") == "service"} \
+    # Also seats whose own registry status says they are not supposed to run (retired, parked, archived):
+    # a dead pane there is expected, not a crash.
+    return {k for k, v in agents.items() if isinstance(v, dict)
+            and (v.get("runtime") == "service" or v.get("status") in ("retired", "parked", "archived"))} \
         if isinstance(agents, dict) else set()
 
 

@@ -296,13 +296,20 @@ def down_now(data_dir, agents):
             and a.get("state") in ("crashed", "stopped")]
 
 
+_NOT_DOWN_STATUSES = ("retired", "parked", "archived")
+
+
 def _service_ids(data_dir):
+    """Registry seats that can never be "down": runtime "service" (liveness is a declared probe), and seats
+    whose own registry status says they are retired, parked or archived (not supposed to be running)."""
     try:
         agents = json.loads(open(_p(data_dir, ("registry.json",))).read()).get("agents") or {}
     except (OSError, ValueError, AttributeError):
         return set()
-    return {k for k, v in agents.items() if isinstance(v, dict) and v.get("runtime") == "service"} \
-        if isinstance(agents, dict) else set()
+    if not isinstance(agents, dict):
+        return set()
+    return {k for k, v in agents.items() if isinstance(v, dict)
+            and (v.get("runtime") == "service" or v.get("status") in _NOT_DOWN_STATUSES)}
 
 
 # ---- summary ----------------------------------------------------------------------------------------

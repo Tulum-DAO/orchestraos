@@ -177,10 +177,12 @@ def test_moved_lists_only_events_after_the_anchor(data):
 
 def test_down_now_is_registered_agent_seats_and_never_counted_as_moved(data):
     (data / "registry.json").write_text(json.dumps({"agents": {"svc": {"runtime": "service"},
-                                                                "svc2": {"runtime": "service"}}}))
+                                                                "svc2": {"runtime": "service"},
+                                                                "old": {"runtime": "claude", "status": "retired"}}}))
     agents = [{"id": "seat", "state": "crashed"}, {"id": "seat2", "state": "stopped"},
               {"id": "svc", "state": "stopped"},                 # a registered service seat: never down
               {"id": "svc2", "state": "crashed"},                # ... even when the scan says crashed
+              {"id": "old", "state": "stopped"},                 # a retired seat's leftover pane: not down
               {"id": "proxy", "state": "stopped", "unregistered": True}, {"id": "w", "state": "working"}]
     assert [d["agent"] for d in A.down_now(data, agents)] == ["seat", "seat2"]
     assert A.moved_since(data, T0, []) == []           # no crash time: not news since the anchor
