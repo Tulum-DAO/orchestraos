@@ -165,3 +165,14 @@ def test_ledger_and_presence_writes_run_off_the_event_loop(box, monkeypatch):
     _call(box, "POST", "/agent-message", token="dev", body={"session": "gm", "text": "hi"})
     _call(box, "POST", "/presence", token="dev", body={"foreground": True})
     assert len(seen) == 2 and all(n != "MainThread" for n in seen), seen
+
+
+def test_a_ledger_that_cannot_be_written_never_fails_a_delivered_send(box, monkeypatch):
+    import away as AW
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(AW, "record_message", boom)
+    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False: (True, {"verified": True}))
+    status, body = _call(box, "POST", "/agent-message", body={"session": "gm", "text": "still delivered"})
+    assert status == 200 and body["ok"] is True and body["delivered"] is True
