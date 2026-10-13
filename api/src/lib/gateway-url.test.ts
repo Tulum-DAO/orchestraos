@@ -23,19 +23,36 @@ test('the env wins', () => {
   assert.equal(gatewayWsUrl({ WATCH_GATEWAY_WS_URL: 'ws://gw:2' }, cfg(8890)), 'ws://gw:2');
 });
 
-test("an unreadable config falls back to the gateway's own default", () => {
+test("no config file at all: the gateway's own default", () => {
   const broken = () => { throw new Error('no toml'); };
-  assert.equal(gatewayUrl({}, broken), 'http://127.0.0.1:9091');
+  assert.equal(gatewayUrl({}, broken, () => false), 'http://127.0.0.1:9091');
 });
 
-test('no route file dials a literal gateway port', () => {
-  const routes = join(dirname(fileURLToPath(import.meta.url)), '..', 'routes');
+test('a config that exists but is invalid throws instead of guessing a port', () => {
+  const invalid = () => { throw new Error('missing [gateway] port'); };
+  assert.throws(() => gatewayUrl({}, invalid, () => true), /missing \[gateway\] port/);
+});
+
+// The lint: the gateway's address is derived in ONE place. Any other source file that reads the gateway env
+// vars or the config's gateway fields, or names the gateway's known ports in code, is deriving its own.
+function codeLines(file: string): Array<[number, string]> {
+  return readFileSync(file, 'utf8').split('\n').map((l, i) => [i + 1, l] as [number, string])
+    .filter(([, l]) => !/^\s*(\*|\/\/|\/\*)/.test(l));
+}
+
+function walk(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((d) =>
+    d.isDirectory() ? walk(join(dir, d.name)) : d.name.endsWith('.ts') && !d.name.endsWith('.test.ts') ? [join(dir, d.name)] : []);
+}
+
+test('only lib/gateway-url.ts derives the gateway address', () => {
+  const src = join(dirname(fileURLToPath(import.meta.url)), '..');
   const hits: string[] = [];
-  for (const f of readdirSync(routes)) {
-    if (!f.endsWith('.ts') || f.endsWith('.test.ts')) continue;
-    readFileSync(join(routes, f), 'utf8').split('\n').forEach((line, i) => {
-      if (/(https?|wss?):\/\/127\.0\.0\.1:(9091|8890)/.test(line)) hits.push(`${f}:${i + 1}: ${line.trim()}`);
-    });
+  for (const f of walk(src)) {
+    if (f.endsWith(join('lib', 'gateway-url.ts')) || f.endsWith(join('lib', 'config.ts'))) continue;
+    for (const [n, l] of codeLines(f)) {
+      if (/WATCH_GATEWAY_(WS_)?URL|\.gatewayHost\b|\.gatewayPort\b|:(9091|8890)\b/.test(l)) hits.push(`${f.slice(src.length + 1)}:${n}: ${l.trim()}`);
+    }
   }
   assert.deepEqual(hits, []);
 });
