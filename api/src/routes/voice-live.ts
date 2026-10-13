@@ -1,9 +1,10 @@
 /**
  * B3 voice bridge — a NEW WebSocket proxy: browser <-> this Node process <->
- * watch_gateway.py:9091 `/live` (Gemini Live bidi: 16kHz PCM up / 24kHz PCM
+ * watch_gateway.py `/live` (Gemini Live bidi: 16kHz PCM up / 24kHz PCM
  * down / JSON transcript events). The browser NEVER holds the gateway bearer
- * token and NEVER reaches :9091 directly — this file is the only place that
- * reads that token and the only socket that dials out to 127.0.0.1:9091.
+ * token and NEVER reaches the gateway directly — this file is the only place that
+ * reads that token and the only socket that dials out to it (lib/gateway-url.ts:
+ * env, then [gateway] in orchestra.toml).
  * It does not touch watch_gateway.py's own `_authorized`/`handle_gemini_live`
  * gate; it satisfies that gate as a trusted, same-box loopback caller holding
  * the real bearer — the same pattern routes/voice.ts already uses for
@@ -42,7 +43,8 @@ import type { Socket } from 'net';
 // that sets the env after other modules load still picks it up correctly.
 import { gatewayTokenFile } from '../lib/gateway-token.js';
 import { sessionSecret, jwtSecret } from '../lib/shared-secret.js';  // #85: shared reader
-const GATEWAY_WS_URL = process.env.WATCH_GATEWAY_WS_URL || 'ws://127.0.0.1:8890';  // #84: match [gateway] default
+import { gatewayWsUrl } from '../lib/gateway-url.js';
+const GATEWAY_WS_URL = gatewayWsUrl();  // #84 class: env, then [gateway] in orchestra.toml
 export const VOICE_LIVE_PATH = '/api/voice/live';
 
 function getCookie(req: IncomingMessage, name: string): string | null {

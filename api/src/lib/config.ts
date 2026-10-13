@@ -57,7 +57,7 @@ function repoRoot(): string {
   return join(here, '..', '..', '..');
 }
 
-function configPath(): string {
+export function configPath(): string {
   return process.env.ORCHESTRA_CONFIG || join(repoRoot(), 'orchestra.toml');
 }
 
