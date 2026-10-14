@@ -199,7 +199,8 @@ router.post('/:id/answers', async (req: Request, res: Response) => {
 // Handles full lifecycle: save feedback, update index, notify creating agent
 
 router.post('/:id/submit', (req: Request, res: Response) => {
-  if (isLiveId(String(req.params.id))) { res.status(404).json({ error: 'Not found' }); return; }   // live ids: GET /:id + /answers only
+  // A live (qnr_) questionnaire is answered through the gateway, never as a legacy file.
+  if (isLiveId(String(req.params.id))) { res.status(409).json({ error: 'a live questionnaire is answered at POST /api/questionnaires/:id/answers' }); return; }
   // All of the logic, and every guard, lives in submitQuestionnaire (tested end to end there).
   const r = submitQuestionnaire({
     orchestraDir: ORCHESTRA,

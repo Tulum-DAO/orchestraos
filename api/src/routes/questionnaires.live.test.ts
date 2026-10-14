@@ -11,7 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import http from 'node:http';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createQuestionnairesRouter, type QuestionnairesDeps } from './questionnaires.js';
@@ -199,5 +199,8 @@ test('a live id is never served or submitted by the legacy routes, even when the
   const deps = makeDeps({ orchestraDir: d } as any);
   assert.equal((await req(deps, 'GET', '/api/questionnaires/qnr_test_0001/html')).status, 404);
   assert.equal((await req(deps, 'GET', '/api/questionnaires/qnr_test_0001/response')).status, 404);
-  assert.equal((await req(deps, 'POST', '/api/questionnaires/qnr_test_0001/submit', { answers: {} })).status, 404);
+  const sub = await req(deps, 'POST', '/api/questionnaires/qnr_test_0001/submit', { answers: {} });
+  assert.equal(sub.status, 409);
+  assert.match(sub.json.error, /\/answers/);
+  assert.ok(!existsSync(join(d, 'state', 'feedback')), 'nothing written for a live id');
 });

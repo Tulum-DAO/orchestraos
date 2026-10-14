@@ -68,8 +68,8 @@ export function initialAnswers(questions: LiveQuestion[]): Drafts {
     const a = q.answer;
     if (!a) continue;
     const d: Draft = {};
-    // Only an option the form offers: a draft on a hidden (chat) or unknown option would be sent
-    // without the operator seeing it, and the gateway refuses it. Its text is kept.
+    // Only an option the form SHOWS: a saved "chat" (hidden) or unknown option would otherwise be
+    // submitted without the operator ever seeing it (codex review). Dropped = unanswered = visible.
     if (a.option_n && answerableOptions(q).some((o) => o.n === a.option_n)) d.option_n = a.option_n;
     if (a.answer_text) d.answer_text = a.answer_text;
     if (d.option_n || d.answer_text) out[q.n] = d;

@@ -51,8 +51,16 @@ test('a saved draft answer is preloaded', () => {
   assert.deepEqual(initialAnswers(Q), { 3: { option_n: '1' } });
 });
 
-test('a saved draft on a hidden (chat) option is not preloaded, so it is never sent; its text is kept', () => {
-  const q: LiveQuestion[] = [{ ...Q[0], answer: { option_n: '3', answer_text: 'note', state: 'draft' } },
-    { ...Q[2], answer: { option_n: '3', answer_text: null, state: 'draft' } }];
-  assert.deepEqual(initialAnswers(q), { 1: { answer_text: 'note' } });
+test('a saved draft holding a hidden chat option or an unknown option is not carried into the form', () => {
+  const qs: LiveQuestion[] = [
+    { n: 1, prompt: 'p', kind: 'menu', required: 1, answer: { option_n: '3', answer_text: null, state: 'draft' },
+      menu: { options: [{ n: '1', label: 'A', input_kind: 'direct' }, { n: '3', label: 'Chat', input_kind: 'chat' }] } },
+    { n: 2, prompt: 'p', kind: 'menu', required: 1, answer: { option_n: '9', answer_text: null, state: 'draft' },
+      menu: { options: [{ n: '1', label: 'A', input_kind: 'direct' }] } },
+    { n: 3, prompt: 'p', kind: 'menu', required: 1, answer: { option_n: '1', answer_text: null, state: 'draft' },
+      menu: { options: [{ n: '1', label: 'A', input_kind: 'direct' }] } },
+  ] as any;
+  const d = initialAnswers(qs);
+  assert.deepEqual(buildAnswers(d), { '3': { option_n: '1' } });
+  assert.deepEqual(missingRequired(qs, d), [1, 2]);       // shown as unanswered, so Send is blocked
 });
