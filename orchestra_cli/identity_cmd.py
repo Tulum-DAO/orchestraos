@@ -241,30 +241,43 @@ def record_seat(repo_root: Path, data_dir: Path, name: str, row: dict) -> bool:
     return True
 
 
+def stored_seat(repo_root: Path, data_dir: Path, name: str) -> tuple | None:
+    """(registry doc, session doc) for ``name`` as the armed STORE holds them (either may be None),
+    read-only; None when the store is not armed. registry.json / agent-sessions.json are only its
+    projection and can lag, so seat-level decisions read this."""
+    cutover, _, _, _, orchestra_db, _ = _modules(repo_root)
+    if not cutover.is_active(str(data_dir)):
+        return None
+    db = Path(data_dir) / DB_REL
+    if not db.exists():
+        return (None, None)
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5.0)
+    try:
+        def doc(file, kind):
+            r = conn.execute("SELECT payload_json FROM source_records WHERE file=? AND kind=? AND key=?",
+                             (file, kind, name)).fetchone()
+            return json.loads(r[0]) if r else None
+        return doc("registry.json", "agent"), doc("agent-sessions.json", "session")
+    finally:
+        conn.close()
+
+
 def retire_seat_in_store(repo_root: Path, data_dir: Path, name: str, reason: str,
                          retired_fields: dict, flat_entry: dict) -> dict | None:
     """`orchestra retire` under an armed store: the same retire park-idle does, in one transaction
     (canonical pointer dropped, generation kept with retired_at, registry doc removed, the retired
-    session doc kept with its resume fields), then projected at once. The session doc kept is the
-    STORE's own (agent-sessions.json is only its projection and can be stale), with the retired
-    fields added; the flat entry is used only when the store has none. Returns that record, or None
-    when not armed."""
-    cutover, _, _, _, orchestra_db, _ = _modules(repo_root)
+    session doc kept with its resume fields), then projected at once. The retired fields are merged
+    into the STORE's own session doc inside that transaction (agent-sessions.json is only its
+    projection and can be stale); the flat entry is used only when the store has none. Returns the
+    session record as stored, or None when not armed."""
+    cutover, _, _, _, _, _ = _modules(repo_root)
     od = str(data_dir)
     if not cutover.is_active(od):
         return None
     from scripts.identity_store import identity_writer
-    conn = orchestra_db.get_connection(str(Path(data_dir) / DB_REL))
-    try:
-        doc = conn.execute("SELECT payload_json FROM source_records WHERE file='agent-sessions.json' "
-                           "AND kind='session' AND key=?", (name,)).fetchone()
-    finally:
-        conn.close()
-    record = dict(json.loads(doc[0]) if doc else flat_entry)
-    record.update(retired_fields)
-    identity_writer.retire_agent(od, name, reason, session_record=record)
+    identity_writer.retire_agent(od, name, reason, session_fields=retired_fields, session_fallback=flat_entry)
     identity_writer.project_now(od)
-    return record
+    return (stored_seat(repo_root, data_dir, name) or (None, None))[1] or dict(flat_entry, **retired_fields)
 
 
 def status(repo_root: Path, data_dir: Path) -> dict:

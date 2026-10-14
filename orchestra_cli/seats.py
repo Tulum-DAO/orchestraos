@@ -109,6 +109,10 @@ def runtime_mismatch(st: S.Settings, seat: str, requested: str | None) -> str | 
     if not requested:
         return None
     stored = (_registry(st)[1]["agents"].get(seat) or {}).get("runtime")
+    from .identity_cmd import stored_seat
+    in_store = stored_seat(st.repo_root, st.data_dir, seat) if (st.repo_root / "scripts" / "identity_store" / "cutover.py").exists() else None
+    if in_store is not None and in_store[0]:
+        stored = in_store[0].get("runtime") or stored        # the armed store is the truth
     if not stored or stored == requested:
         return None
     return (f"seat {seat} is registered as {stored}, not {requested}; starting it again would run "
@@ -130,6 +134,12 @@ def retire_seat(st: S.Settings, seat: str, *, reason: str = "retired by the oper
     except (OSError, ValueError):
         meta = {}
     row = reg["agents"].get(seat)
+    from .identity_cmd import stored_seat
+    in_store = stored_seat(st.repo_root, st.data_dir, seat) if (st.repo_root / "scripts" / "identity_store" / "cutover.py").exists() else None
+    if in_store is not None:                                # armed: the store is the truth, the files may lag
+        row = in_store[0] or row
+        if in_store[1] and seat not in meta:
+            meta = dict(meta, **{seat: in_store[1]})
     if row is None and seat not in meta:
         raise KeyError(seat)
     retired = {"status": "retired", "retired_at": datetime.now(timezone.utc).isoformat(),

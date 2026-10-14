@@ -213,3 +213,55 @@ def test_armed_retire_keeps_the_stores_session_fields_when_the_flat_projection_i
         c.close()
     assert doc["status"] == "retired" and doc["session_id"] == "sid-1"
     assert doc["resume_command"] == "claude --resume sid-1" and doc["conversation_path"] == str(transcript)
+
+
+# --- codex review round 2: the armed store is the truth, the flat files may lag ------------------
+def _armed(tmp_path, monkeypatch):
+    from orchestra_cli import identity_cmd as IC
+    from orchestra_cli import settings as S
+    data = tmp_path / "data"; data.mkdir()
+    cfg = tmp_path / "orchestra.toml"
+    cfg.write_text(f'[data]\ndir = "{data}"\n[notify]\nchannel = "none"\n')
+    monkeypatch.setenv("ORCHESTRA_CONFIG", str(cfg))
+    monkeypatch.setenv("ORCHESTRA_ROOT", str(CHECKOUT))
+    monkeypatch.setenv("ORCHESTRA_DIR", str(data))
+    _fake_tmux(tmp_path, monkeypatch)
+    _seed(data)
+    IC.arm(CHECKOUT, data, start_regenerator=False)
+    return data, S.load_settings()
+
+
+def test_mismatch_reads_the_store_when_the_registry_projection_lags(tmp_path, monkeypatch):
+    data, st = _armed(tmp_path, monkeypatch)
+    (data / "registry.json").write_text(json.dumps({"agents": {}}))           # projection lags
+    assert "registered as claude" in (SE.runtime_mismatch(st, "grok-gm", "codex") or "")
+    r = {"agents": {"grok-gm": {"runtime": "codex"}}}                          # or misreports it
+    (data / "registry.json").write_text(json.dumps(r))
+    assert "registered as claude" in (SE.runtime_mismatch(st, "grok-gm", "codex") or "")
+
+
+def test_retire_finds_a_seat_only_the_store_still_has(tmp_path, monkeypatch):
+    data, st = _armed(tmp_path, monkeypatch)
+    (data / "registry.json").write_text(json.dumps({"agents": {}}))
+    (data / "state" / "agent-sessions.json").write_text("{}")
+    res = SE.retire_seat(st, "grok-gm", reason="wrong runtime")
+    assert res["armed"] is True and res["session_id"] == "sid-1"
+
+
+def test_retire_agent_merges_into_the_stores_current_session_doc(tmp_path, monkeypatch):
+    data, st = _armed(tmp_path, monkeypatch)
+    from scripts.identity_store import identity_writer, shims, orchestra_db
+    conn = orchestra_db.get_connection(str(data / "state" / "orchestra-registry.db"))
+    try:                                                       # a later update the flat file never saw
+        doc = json.loads(conn.execute("SELECT payload_json FROM source_records WHERE file='agent-sessions.json' "
+                                      "AND kind='session' AND key='grok-gm'").fetchone()[0])
+        conn.execute("BEGIN IMMEDIATE")
+        shims.upsert_document(conn, "agent-sessions.json", "session", "grok-gm", dict(doc, session_id="sid-2"))
+        conn.execute("COMMIT")
+    finally:
+        conn.close()
+    identity_writer.retire_agent(str(data), "grok-gm", "r", session_fields={"status": "retired"},
+                                 session_fallback={"session_id": "stale"})
+    stored = __import__("orchestra_cli.identity_cmd", fromlist=["x"]).stored_seat(CHECKOUT, data, "grok-gm")[1]
+    assert stored["session_id"] == "sid-2" and stored["status"] == "retired"
+    assert stored["resume_command"] == "claude --resume sid-1"
