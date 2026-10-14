@@ -456,6 +456,11 @@ def resume_command_for(runtime: str, sid: str, model: str | None = None) -> str:
     if rt in ("gemini", "agy"):
         return f"agy --conversation {sid} --dangerously-skip-permissions"
     if rt == "codex":
+        # `codex resume` with no id opens a PICKER and --last takes the newest session, so a
+        # seat is only ever resumed by its exact UUID (same rule as spawn-agent.sh).
+        if not _GROK_UUID_RE.fullmatch(sid):
+            raise RuntimeRefused(
+                f"resume_command_for: codex sid {sid!r} is not a session UUID")
         return f"codex --yolo resume {sid}"
     if rt == "grok":
         # The SAME shape spawn-agent.sh launches a resumed grok seat

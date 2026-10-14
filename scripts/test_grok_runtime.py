@@ -387,8 +387,10 @@ def test_resume_command_for_grok():
     assert "-m" not in ps.resume_command_for("grok", SID, "unknown").split()
     with pytest.raises(ps.RuntimeRefused):
         ps.resume_command_for("grok", "my title")
-    # unchanged shapes
-    assert ps.resume_command_for("codex", "s1") == "codex --yolo resume s1"
+    # codex: UUID-checked too (fix/codex-resume-pinned); the shape itself is unchanged
+    assert ps.resume_command_for("codex", SID) == f"codex --yolo resume {SID}"
+    with pytest.raises(ps.RuntimeRefused):
+        ps.resume_command_for("codex", "s1")
 
 
 # =============================================================================

@@ -548,6 +548,8 @@ seat's composer, the router does not clear it (it never sends keys to an agy sea
 clears the line. `ROUTER_AGY_CLEANUP_ARMED=1` (or an empty file `~/runtime/ROUTER_AGY_CLEANUP_ARMED`)
 turns that clearing on; Codex and Claude seats have it on already.
 
+**Resuming a Codex seat.** `spawn-agent.sh <seat> --resume <session uuid>` starts `codex … resume <uuid>` in the seat's pane. The id is the one recorded for the seat (its rollout file is `~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<uuid>.jsonl`); a value that is not a UUID is refused, never passed on, since a bare `codex resume` opens a session picker.
+
 **Your timezone (recommended).** Agents show times in UTC unless you tell them where you are.
 In `orchestra.toml`, under `[operator]`, set `timezone` to your IANA zone name, for example
 `timezone = "America/Cancun"` or `timezone = "Europe/Berlin"` (find yours by searching "IANA
