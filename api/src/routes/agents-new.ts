@@ -242,13 +242,21 @@ async function realRegisteredAgents(): Promise<Record<string, string>> {
   return out;
 }
 
-function realSpawn({ name, task, runtime, gm, parent }: { name: string; task: string; runtime: string; gm: boolean; parent: string | null }): Promise<{ ok: boolean; output: string }> {
-  // `orchestra spawn <seat> --gm` registers T0 + always_on + prompts/gm.md and THEN calls
-  // spawn-agent.sh itself; the plain path calls spawn-agent.sh directly, as before.
+/** The command line a New Agent spawn runs. `orchestra spawn <seat> --gm` registers T0 +
+ *  always_on + prompts/gm.md and THEN calls spawn-agent.sh itself; the plain path calls
+ *  spawn-agent.sh directly. The gm path must name the runtime: `orchestra spawn` takes it from
+ *  --runtime, never from AGENT_RUNTIME, so without the flag a General Manager picked as Grok
+ *  was registered and launched as the first enabled runtime (claude). */
+export function spawnArgv({ name, task, runtime, gm }: { name: string; task: string; runtime: string; gm: boolean }): string[] {
   const args = gm
-    ? [`${ORCHESTRA_ROOT}/bin/orchestra`, 'spawn', name, '--gm']
+    ? [`${ORCHESTRA_ROOT}/bin/orchestra`, 'spawn', name, '--gm', '--runtime', runtime]
     : [`${ORCHESTRA_ROOT}/spawn-agent.sh`, name];
   if (task) args.push('--task', task);
+  return args;
+}
+
+function realSpawn({ name, task, runtime, gm, parent }: { name: string; task: string; runtime: string; gm: boolean; parent: string | null }): Promise<{ ok: boolean; output: string }> {
+  const args = spawnArgv({ name, task, runtime, gm });
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     AGENT_RUNTIME: runtime,

@@ -12,7 +12,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import http from 'node:http';
-import { createAgentsNewRouter, normalizeAgentName, pickRuntime, loginHint, composeTask, type NewAgentDeps } from './agents-new.js';
+import { createAgentsNewRouter, normalizeAgentName, pickRuntime, loginHint, composeTask, spawnArgv, type NewAgentDeps } from './agents-new.js';
 
 function authedRow(id: string, cli: string, authed: boolean | 'unverified' = true) {
   // logo_svg/models are part of ProviderResult; the login paths ignore them, but loginHint
@@ -373,4 +373,18 @@ test('the production spawn never hard-codes a parent', async () => {
   const fs = await import('node:fs');
   const src = fs.readFileSync(new URL('./agents-new.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(src, /PARENT_AGENT_ID:\s*'dashboard'/);
+});
+
+test('a General Manager spawn names its runtime (a Grok gm was launched as claude)', () => {
+  const argv = spawnArgv({ name: 'grok-gm', task: '', runtime: 'grok', gm: true });
+  const i = argv.indexOf('--runtime');
+  assert.ok(argv.includes('--gm'));
+  assert.ok(i > 0, 'gm path must pass --runtime');
+  assert.equal(argv[i + 1], 'grok');
+});
+
+test('a plain spawn keeps spawn-agent.sh argv (runtime travels in AGENT_RUNTIME)', () => {
+  const argv = spawnArgv({ name: 'dev-x', task: 'do it', runtime: 'grok', gm: false });
+  assert.ok(argv[0].endsWith('/spawn-agent.sh'));
+  assert.deepEqual(argv.slice(1), ['dev-x', '--task', 'do it']);
 });
