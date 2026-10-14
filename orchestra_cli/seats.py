@@ -132,23 +132,32 @@ def retire_seat(st: S.Settings, seat: str, *, reason: str = "retired by the oper
     row = reg["agents"].get(seat)
     if row is None and seat not in meta:
         raise KeyError(seat)
-    entry = dict(meta.get(seat) or {})
-    entry.update({"status": "retired", "retired_at": datetime.now(timezone.utc).isoformat(),
-                  "retired_by": "orchestra retire", "retired_reason": reason})
+    retired = {"status": "retired", "retired_at": datetime.now(timezone.utc).isoformat(),
+               "retired_by": "orchestra retire", "retired_reason": reason}
+    entry = dict(meta.get(seat) or {}, **retired)
     from .identity_cmd import retire_seat_in_store
-    armed = retire_seat_in_store(st.repo_root, st.data_dir, seat, reason, entry)
-    if not armed:
+    stored = retire_seat_in_store(st.repo_root, st.data_dir, seat, reason, retired, dict(meta.get(seat) or {}))
+    armed = stored is not None
+    if armed:
+        entry = stored
+    else:
         reg["agents"].pop(seat, None)
         meta[seat] = entry
         S.guard_test_write(p, "registry.json")
         for path, obj in ((p, reg), (sp, meta)):
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(".json.tmp"); tmp.write_text(json.dumps(obj, indent=2) + "\n"); os.replace(tmp, path)
-    sessions = {seat} | ({row["tmux_session"]} if row and row.get("tmux_session") else set())
-    for name in sorted(sessions):
-        subprocess.run(["tmux", "kill-session", "-t", f"={name}"], capture_output=True, check=False)
+    # Stop the seat's OWN session only: its row's tmux_session (the seat name when there is no row),
+    # and never one another registered seat says is its own.
+    target = (row or {}).get("tmux_session") or (meta.get(seat) or {}).get("tmux_session") or seat
+    others = {(r or {}).get("tmux_session") or name for name, r in reg["agents"].items() if name != seat}
+    stopped = []
+    if target not in others:
+        subprocess.run(["tmux", "kill-session", "-t", f"={target}"], capture_output=True, check=False)
+        stopped.append(target)
     return {"seat": seat, "armed": armed, "session_id": entry.get("session_id"),
-            "transcript": entry.get("conversation_path") or None, "tmux": sorted(sessions)}
+            "transcript": entry.get("conversation_path") or None, "tmux": stopped,
+            "tmux_kept": None if stopped else target}
 
 
 def cmd_retire(ns) -> int:
@@ -167,7 +176,9 @@ def cmd_retire(ns) -> int:
         res = retire_seat(st, seat, reason=ns.reason)
     except KeyError:
         print(f"retire refused: no seat named {seat} in {st.data_dir}", file=sys.stderr); return 2
-    print(f"retired {seat}: row removed, tmux session stopped"
+    if res["tmux_kept"]:
+        print(f"warning: tmux session {res['tmux_kept']} is also another seat's; left running", file=sys.stderr)
+    print(f"retired {seat}: row removed" + (", tmux session stopped" if res["tmux"] else "")
           + (f"; session {res['session_id']} kept" if res["session_id"] else "")
           + (f", transcript {res['transcript']}" if res["transcript"] else "") + ".")
     print(f"start it again (any runtime): orchestra spawn {seat} --runtime <runtime>")

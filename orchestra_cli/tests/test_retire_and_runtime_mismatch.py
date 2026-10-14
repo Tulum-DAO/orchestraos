@@ -147,3 +147,69 @@ def test_retire_then_respawn_on_a_new_runtime_with_the_identity_store_armed(tmp_
     canon, doc = db_row()
     assert canon is not None and doc["runtime"] == "grok"
     assert json.loads((data / "registry.json").read_text())["agents"]["grok-gm"]["runtime"] == "grok"
+
+
+# --- codex review round 1 -----------------------------------------------------------------------
+def _kills(tlog):
+    return [l for l in tlog.read_text().splitlines() if l.startswith("kill-session")] if tlog.exists() else []
+
+
+def test_retire_stops_only_the_seats_own_tmux_session(box, tmp_path, monkeypatch):
+    tlog = _fake_tmux(tmp_path, monkeypatch)
+    _seed(box.data)
+    r = json.loads((box.data / "registry.json").read_text())
+    r["agents"]["grok-gm"]["tmux_session"] = "grok-gm-pane"
+    (box.data / "registry.json").write_text(json.dumps(r))
+    assert M.main(["retire", "grok-gm", "--yes"]) == 0
+    assert _kills(tlog) == ["kill-session -t =grok-gm-pane"]      # not "=grok-gm" as well
+
+
+def test_retire_never_stops_a_session_another_seat_owns(box, tmp_path, monkeypatch, capsys):
+    tlog = _fake_tmux(tmp_path, monkeypatch)
+    _seed(box.data)
+    r = json.loads((box.data / "registry.json").read_text())
+    r["agents"]["grok-gm"]["tmux_session"] = "gm"
+    r["agents"]["gm"] = dict(r["agents"]["grok-gm"], name="gm", tmux_session="gm")
+    (box.data / "registry.json").write_text(json.dumps(r))
+    assert M.main(["retire", "grok-gm", "--yes"]) == 0
+    assert _kills(tlog) == []
+    assert "tmux session gm is also another seat's" in capsys.readouterr().err
+    assert "gm" in reg(box) and "grok-gm" not in reg(box)
+
+
+def test_retire_with_no_row_stops_the_session_named_in_its_session_entry(box, tmp_path, monkeypatch):
+    tlog = _fake_tmux(tmp_path, monkeypatch)
+    _seed(box.data)
+    (box.data / "registry.json").write_text(json.dumps({"agents": {}}))
+    s = sessions(box.data); s["grok-gm"]["tmux_session"] = "grok-gm-old"
+    (box.data / "state" / "agent-sessions.json").write_text(json.dumps(s))
+    assert M.main(["retire", "grok-gm", "--yes"]) == 0
+    assert _kills(tlog) == ["kill-session -t =grok-gm-old"]
+
+
+def test_armed_retire_keeps_the_stores_session_fields_when_the_flat_projection_is_stale(tmp_path, monkeypatch):
+    from orchestra_cli import identity_cmd as IC
+    from orchestra_cli import settings as S
+    data = tmp_path / "data"; data.mkdir()
+    cfg = tmp_path / "orchestra.toml"
+    cfg.write_text(f'[data]\ndir = "{data}"\n[notify]\nchannel = "none"\n')
+    monkeypatch.setenv("ORCHESTRA_CONFIG", str(cfg))
+    monkeypatch.setenv("ORCHESTRA_ROOT", str(CHECKOUT))
+    monkeypatch.setenv("ORCHESTRA_DIR", str(data))
+    _fake_tmux(tmp_path, monkeypatch)
+    transcript = tmp_path / "sid-1.jsonl"; transcript.write_text("{}\n")
+    _seed(data, transcript=transcript)
+    IC.arm(CHECKOUT, data, start_regenerator=False)
+    # the projection goes stale: it lost the resume fields the store still holds
+    (data / "state" / "agent-sessions.json").write_text(json.dumps({"grok-gm": {"status": "online"}}))
+    res = SE.retire_seat(S.load_settings(), "grok-gm", reason="wrong runtime")
+    assert res["armed"] is True and res["session_id"] == "sid-1"
+    import sqlite3
+    c = sqlite3.connect(str(data / "state" / "orchestra-registry.db"))
+    try:
+        doc = json.loads(c.execute("SELECT payload_json FROM source_records WHERE file='agent-sessions.json' "
+                                   "AND kind='session' AND key='grok-gm'").fetchone()[0])
+    finally:
+        c.close()
+    assert doc["status"] == "retired" and doc["session_id"] == "sid-1"
+    assert doc["resume_command"] == "claude --resume sid-1" and doc["conversation_path"] == str(transcript)
