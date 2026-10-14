@@ -155,6 +155,9 @@ export interface UnifiedApproval {
   kind?: string | null;
   menu?: CanonicalRow['menu'];
   options?: string[] | null;
+  // The seat that asked, so a card can say who it is from. Additive; null when
+  // the source row does not name one (learning proposals).
+  agent_id?: string | null;
 }
 
 function normalizeProposal(p: any): UnifiedApproval {
@@ -271,6 +274,7 @@ export function normalizeCanonical(r: CanonicalRow): UnifiedApproval {
     kind: r.kind ?? null,
     menu: r.menu ?? null,
     options: r.options ?? null,
+    agent_id: r.from_agent || null,
   };
 }
 
@@ -307,6 +311,7 @@ function normalizeAgentApproval(a: any, filename: string): UnifiedApproval {
     created_at: a.created || a.created_at || a.timestamp || '',
     updated_at: a.resolved_at || a.updated_at || a.created || '',
     source: a.type === 'deployment' ? 'deployment_gate' : 'agent_request',
+    agent_id: a.agent_id || a.from_agent || null,
   };
 }
 
