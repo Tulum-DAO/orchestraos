@@ -307,3 +307,15 @@ def test_armed_respawn_after_retire_ignores_a_stale_flat_row(tmp_path, monkeypat
     assert SE._seat_row(st, "grok-gm") is None
     row = SE.register_seat(st, "grok-gm", gm=False, runtime="grok", model=None, tier="T0", prompt=None)
     assert row["runtime"] == "grok"
+
+
+# --- codex review round 5: armed retire takes the seat's tmux session from the store only ---------
+def test_armed_retire_ignores_a_stale_flat_row_for_the_tmux_target(tmp_path, monkeypatch):
+    data, st = _armed(tmp_path, monkeypatch)
+    tlog = tmp_path / "tmux.log"
+    from scripts.identity_store import identity_writer
+    identity_writer.retire_agent(str(data), "grok-gm", "earlier", session_fields={"tmux_session": "grok-gm-real"})
+    stale = {"agents": {"grok-gm": {"runtime": "claude", "tmux_session": "someone-else"}}}
+    (data / "registry.json").write_text(json.dumps(stale))      # the projection lags with a wrong row
+    SE.retire_seat(st, "grok-gm", reason="again")
+    assert _kills(tlog)[-1:] == ["kill-session -t =grok-gm-real"]
