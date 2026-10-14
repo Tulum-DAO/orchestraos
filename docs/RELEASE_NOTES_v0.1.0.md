@@ -129,6 +129,8 @@ To remove them: `orchestra down`, back up `registry.json`, delete those keys fro
 
 **Fixed after this release, on main:** a Codex seat's context % is now its own. Codex keeps every subagent's session file open in the seat's process, and the reader took whichever file it listed first, so a seat with subagents could show a subagent's context %. The reader now counts only a session whose first record proves it is the seat's main thread (Codex marks subagent sessions there; a session whose first record cannot be read is never counted), and shows `--` rather than guess when a process holds more than one; the identity resolver applies the same rule. Session files written by a Codex older than 0.148, which lack that marker, are not counted; `orchestra doctor` already flags any Codex other than 0.153.4.
 
+**Added after this release, on main:** the dashboard's agent rail shows each running seat's context used (for example `42%`), for Claude and Codex seats alike, from the figure `/api/agents` already carried but nothing displayed. It turns amber from 80%, the band where seats rotate; a running seat with no reading shows `—` (never `0%`); a seat that is not running shows nothing.
+
 ## CI note for this release
 
 GitHub Actions was refused on billing from 2026-09-19 09:52Z; PRs #38–#40 merged on bare-box + CI-identical local evidence (council PASS at `c6b278c`; local run rc 0).

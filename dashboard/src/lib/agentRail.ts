@@ -19,6 +19,8 @@ export interface RailAgent {
   has_pending_menu?: boolean;
   unread?: number;
   provider?: string;
+  /** /api/agents context_pct as the detector wrote it: "NN%" or '' (no reading). */
+  context_pct?: string;
 }
 
 /**
@@ -106,4 +108,37 @@ export function providersVary(agents: RailAgent[]): boolean {
     if (seen.size > 1) return true;
   }
   return false;
+}
+
+/**
+ * The context-used figure for a rail row, or null when there is no reading.
+ *
+ * /api/agents carries the detector's context_pct: "NN%" for every runtime that has a reading
+ * (claude from its own meter, codex from the rollout's token counts) and '' otherwise. Only that
+ * shape, 0-100, is a reading; anything else is null so the row shows a dash. A blank must never
+ * become "0%", which would claim an empty context nobody measured.
+ */
+export function contextLabel(raw: unknown): string | null {
+  // Exactly the shape the detector writes (an integer then '%'); a bare number, a decimal or
+  // any other text is not a reading from it (codex review, #436).
+  if (typeof raw !== 'string') return null;
+  const m = /^(\d{1,3})%$/.exec(raw);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return n <= 100 ? `${n}%` : null;
+}
+
+/** 80% and up is the band where seats rotate, so the figure is marked there. */
+export function contextHigh(raw: unknown): boolean {
+  const l = contextLabel(raw);
+  return l !== null && parseInt(l, 10) >= 80;
+}
+
+/**
+ * Only a row in one of the three running sections shows a context figure. A seat that is not
+ * running has no live context: a number there is a stale reading shown as current, and a dash on
+ * each of the ~300 "Not running" rows would be a column of noise.
+ */
+export function showsContext(a: RailAgent): boolean {
+  return sectionFor(a) !== undefined;
 }
