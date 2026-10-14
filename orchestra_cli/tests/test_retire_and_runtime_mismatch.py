@@ -295,3 +295,15 @@ def test_armed_retire_never_stops_a_session_only_the_store_says_another_seat_own
     (data / "registry.json").write_text(json.dumps({"agents": {"grok-gm": r["agents"]["grok-gm"]}}))  # lags
     SE.retire_seat(S.load_settings(), "grok-gm", reason="r")
     assert _kills(tlog) == []
+
+
+# --- codex review round 4: armed, a seat the store does not hold has no stored runtime ------------
+def test_armed_respawn_after_retire_ignores_a_stale_flat_row(tmp_path, monkeypatch):
+    data, st = _armed(tmp_path, monkeypatch)
+    SE.retire_seat(st, "grok-gm", reason="wrong runtime")
+    stale = {"agents": {"grok-gm": {"runtime": "claude", "tmux_session": "grok-gm"}}}
+    (data / "registry.json").write_text(json.dumps(stale))                     # projection not yet caught up
+    assert SE.runtime_mismatch(st, "grok-gm", "grok") is None
+    assert SE._seat_row(st, "grok-gm") is None
+    row = SE.register_seat(st, "grok-gm", gm=False, runtime="grok", model=None, tier="T0", prompt=None)
+    assert row["runtime"] == "grok"

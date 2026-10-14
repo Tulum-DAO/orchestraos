@@ -51,6 +51,15 @@ def _stored_agents(st: S.Settings) -> dict | None:
     return stored_agents(st.repo_root, st.data_dir)
 
 
+def _seat_row(st: S.Settings, seat: str) -> dict | None:
+    """The seat's row from the source of truth: the armed store (None when it has none, whatever a
+    lagging registry.json says), else registry.json."""
+    stored = _stored_agents(st)
+    if stored is not None:
+        return stored.get(seat)
+    return _registry(st)[1]["agents"].get(seat)
+
+
 def _tier_rule(st: S.Settings):
     scripts = str(st.repo_root / "scripts")
     if scripts not in sys.path:
@@ -69,10 +78,7 @@ def register_seat(st: S.Settings, seat: str, *, gm: bool, runtime: str | None, m
     default worker). Raises tier_rule.TierRefused for an unregistered parent or a T2 request with no
     non-T0 parent; nothing is written then."""
     p, reg = _registry(st)
-    existing = reg["agents"].get(seat)
-    stored = _stored_agents(st)
-    if stored is not None and stored.get(seat):
-        existing = stored[seat]                    # armed: the store's row, not a stale projection
+    existing = _seat_row(st, seat)                 # armed: the store's row, not a stale projection
     row = dict(existing or {})
     if existing is None and not gm:
         T = _tier_rule(st)
@@ -120,11 +126,7 @@ def runtime_mismatch(st: S.Settings, seat: str, requested: str | None) -> str | 
     for the requested runtime and then start on the stored one."""
     if not requested:
         return None
-    stored = (_registry(st)[1]["agents"].get(seat) or {}).get("runtime")
-    from .identity_cmd import stored_seat
-    in_store = stored_seat(st.repo_root, st.data_dir, seat) if (st.repo_root / "scripts" / "identity_store" / "cutover.py").exists() else None
-    if in_store is not None and in_store[0]:
-        stored = in_store[0].get("runtime") or stored        # the armed store is the truth
+    stored = (_seat_row(st, seat) or {}).get("runtime")
     if not stored or stored == requested:
         return None
     return (f"seat {seat} is registered as {stored}, not {requested}; starting it again would run "
@@ -470,7 +472,7 @@ def cmd_spawn(ns) -> int:
     mismatch = runtime_mismatch(st, seat, ns.runtime)
     if mismatch:
         print(f"spawn refused: {mismatch}", file=sys.stderr); return 2
-    runtime = ns.runtime or _registry(st)[1]["agents"].get(seat, {}).get("runtime") or default_runtime(st)
+    runtime = ns.runtime or (_seat_row(st, seat) or {}).get("runtime") or default_runtime(st)
     refused = _refuse_if_runtime_unusable(st, seat, runtime)
     if refused is not None:
         return refused
