@@ -268,6 +268,19 @@ INSTALLER_SESSION_ENV = (
 )
 
 
+def _with_user_bins(path: str) -> str:
+    """PATH with the per-user CLI dirs appended when missing: ~/.local/bin (claude, and grok's link)
+    and the Grok installer's ~/.grok/bin when it exists. The caller's order is kept; the systemd
+    unit gets the same dirs from install_unit.build_path. Without this, a CLI the API or a seat
+    must find (`which grok`, `grok models`) was invisible when the shell's PATH lacked them."""
+    home = os.path.expanduser("~")
+    parts = [p for p in (path or "").split(os.pathsep) if p]
+    for d in (os.path.join(home, ".local", "bin"), os.path.join(home, ".grok", "bin")):
+        if d not in parts and (d.endswith(os.path.join(".local", "bin")) or os.path.isdir(d)):
+            parts.append(d)
+    return os.pathsep.join(parts)
+
+
 def child_env(st: Settings, base: dict | None = None) -> dict:
     """The environment every supervised process (and every beat) receives.
 
@@ -297,6 +310,7 @@ def child_env(st: Settings, base: dict | None = None) -> dict:
         # blue-green: Claude on by default; Gemini/Codex only when the operator opts in
         "ORCHESTRA_ROTATION_EXPERIMENTAL_RUNTIMES": ",".join(st.rotation_experimental_runtimes),
         "PYTHONPATH": os.pathsep.join(py_path),
+        "PATH": _with_user_bins(env.get("PATH", "")),
         "ORCHESTRA_GATEWAY_HOST": st.gateway_host,
         "ORCHESTRA_GATEWAY_PORT": str(st.gateway_port),
         "WATCH_GATEWAY_HOST": st.gateway_host,

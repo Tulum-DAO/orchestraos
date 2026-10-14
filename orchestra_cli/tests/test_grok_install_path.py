@@ -90,3 +90,31 @@ def test_the_service_unit_path_carries_dot_grok_bin_when_it_exists(tmp_path):
     assert f"{home}/.grok/bin" not in without
     with_ = U.build_path("/usr/bin", home, exists=lambda p: p == f"{home}/.grok/bin").split(os.pathsep)
     assert with_.index(f"{home}/.local/bin") < with_.index(f"{home}/.grok/bin") < with_.index("/usr/bin")
+
+
+# --- codex review round 1 -----------------------------------------------------------------------
+def test_an_executable_orchestra_grok_bin_wins_over_every_other_location(tmp_path):
+    _grok_in_dot_grok(tmp_path)
+    lb = tmp_path / ".local" / "bin"; lb.mkdir(parents=True)
+    (lb / "grok").write_text("#!/bin/sh\n"); (lb / "grok").chmod(0o755)
+    pin = tmp_path / "pinned-grok"; pin.write_text("#!/bin/sh\n"); pin.chmod(0o755)
+    lines = [l for l in (CHECKOUT / "spawn-agent.sh").read_text().splitlines()
+             if l.startswith("GROK_BIN=") or (l.startswith("[[") and "GROK_BIN" in l)]
+    r = subprocess.run(["bash", "-c", "\n".join(lines) + '\necho "$GROK_BIN"'], capture_output=True, text=True,
+                       env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin", "ORCHESTRA_GROK_BIN": str(pin)})
+    assert r.stdout.strip() == str(pin)
+
+
+def test_supervised_processes_get_local_bin_and_dot_grok_bin_on_path(tmp_path, monkeypatch):
+    """The API decides "installed" with `which grok` and runs `grok models` on ITS PATH, which under
+    `orchestra up` is the shell's: without ~/.local/bin there, the init link was invisible to it."""
+    from orchestra_cli import settings as S
+    _grok_in_dot_grok(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cfg = tmp_path / "orchestra.toml"; cfg.write_text(f'[data]\ndir = "{tmp_path / "data"}"\n')
+    st = S.load_settings(config_path=cfg)
+    path = S.child_env(st, base={"PATH": "/usr/bin:/bin"})["PATH"].split(os.pathsep)
+    assert path[:2] == ["/usr/bin", "/bin"]                                  # the caller's order is kept
+    assert f"{tmp_path}/.local/bin" in path and f"{tmp_path}/.grok/bin" in path
+    again = S.child_env(st, base={"PATH": f"{tmp_path}/.local/bin:/usr/bin"})["PATH"].split(os.pathsep)
+    assert again.count(f"{tmp_path}/.local/bin") == 1
