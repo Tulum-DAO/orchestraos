@@ -41,6 +41,7 @@ function makeDeps(over: Partial<QuestionnairesDeps> = {}, respond?: (url: string
   const deps: any = {
     orchestraDir: dataDir([{ id: 'old-1', title: 'Old form', status: 'completed', html_file: 'state/questionnaires/old-1.html' }]),
     token: () => 'gw-token',
+    principal: () => ({ username: 'operator', role: 'admin', allowedAgents: '*', clientScope: null, trusted: false }),
     gatewayUrl: () => 'http://gw.test',
     fetchJson: async (url: string, init: RequestInit) => {
       calls.push({ url, init });
@@ -75,6 +76,7 @@ async function req(deps: QuestionnairesDeps, method: string, path: string, body?
         res.on('end', () => resolve({ status: res.statusCode || 0, json: JSON.parse(out || '{}') }));
       });
       r.on('error', reject);
+      r.setTimeout(5000, () => r.destroy(new Error(`no response in 5s: ${method} ${path}`)));  // a broken route fails, never hangs
       if (data) r.write(data);
       r.end();
     });
@@ -161,4 +163,32 @@ test('the legacy html route still serves only legacy items (a live id is never a
   const r = await req(deps, 'GET', '/api/questionnaires/qnr_test_0001/html');
   assert.equal(r.status, 404);
   assert.equal(deps.calls.length, 0);
+});
+
+
+// --- gm's submit-path conditions ------------------------------------------------------------------
+test('answering needs an identity: none is a 401, a client-scoped viewer a 403, and neither is forwarded', async () => {
+  const anon = makeDeps({ principal: () => null });
+  const r1 = await req(anon, 'POST', '/api/questionnaires/qnr_test_0001/answers', { answers: { '1': { option_n: '1' } } });
+  assert.equal(r1.status, 401);
+  const client = makeDeps({ principal: () => ({ username: 'c', role: 'viewer', allowedAgents: 'acme', clientScope: 'acme', trusted: true }) });
+  const r2 = await req(client, 'POST', '/api/questionnaires/qnr_test_0001/answers', { answers: { '1': { option_n: '1' } } });
+  assert.equal(r2.status, 403);
+  assert.equal(anon.calls.length + client.calls.length, 0);
+});
+
+test('with no gateway running, detail and answers say so (502) and the list still works', async () => {
+  const down = makeDeps({ fetchJson: async () => { throw new Error('ECONNREFUSED'); } });
+  const d = await req(down, 'GET', '/api/questionnaires/qnr_test_0001');
+  assert.equal(d.status, 502);
+  assert.equal(d.json.error, 'gateway unreachable');
+  const a = await req(down, 'POST', '/api/questionnaires/qnr_test_0001/answers', { answers: { '1': { option_n: '1' } } });
+  assert.equal(a.status, 502);
+  assert.equal((await req(down, 'GET', '/api/questionnaires')).status, 200);
+});
+
+test('a second submit is not applied twice: the gateway answer (applied false, status) is passed back', async () => {
+  const deps = makeDeps({}, () => ({ status: 200, body: { ok: true, applied: false, id: 'qnr_test_0001', status: 'submitted' } }));
+  const r = await req(deps, 'POST', '/api/questionnaires/qnr_test_0001/answers', { answers: { '1': { option_n: '1' } } });
+  assert.deepEqual(r.json, { ok: true, applied: false, id: 'qnr_test_0001', status: 'submitted' });
 });

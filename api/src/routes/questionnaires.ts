@@ -21,6 +21,7 @@ import { join, dirname } from 'path';
 import { loadConfig } from '../lib/config.js';
 import { readGatewayToken } from '../lib/gateway-token.js';
 import { gatewayUrl } from '../lib/gateway-url.js';
+import { principal as defaultPrincipal, type Principal } from '../lib/principal.js';
 import { submitQuestionnaire } from './questionnaireSubmit.js';
 
 const CODE_ROOT = process.env.ORCHESTRA_ROOT || join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -30,6 +31,8 @@ export interface QuestionnairesDeps {
   token: () => string;
   gatewayUrl: () => string;
   fetchJson: (url: string, init: RequestInit, timeoutMs: number) => Promise<{ status: number; body: any }>;
+  /** Who is calling (lib/principal): null = no identity. Answering needs an operator identity. */
+  principal: (req: Request) => Principal | null;
 }
 
 export function defaultQuestionnairesDeps(): QuestionnairesDeps {
@@ -42,6 +45,7 @@ export function defaultQuestionnairesDeps(): QuestionnairesDeps {
       const body = await r.json().catch(() => ({ ok: false, error: 'bad gateway json' }));
       return { status: r.status, body };
     },
+    principal: defaultPrincipal,
   };
 }
 
@@ -169,6 +173,11 @@ router.get('/:id/response', (req: Request, res: Response) => {
 // own submit (validation, store, resume of the asking agent), surface "web". The gateway's answer
 // (applied, missing, or a 400 naming the bad answer) is passed back as is.
 router.post('/:id/answers', async (req: Request, res: Response) => {
+  // Identity first (lib/principal): with no identity this is a 401, and a client-scoped viewer
+  // cannot answer the operator's questionnaires. Nothing reaches the gateway in either case.
+  const who = deps.principal(req);
+  if (!who) { res.status(401).json({ ok: false, error: 'unauthenticated' }); return; }
+  if (who.clientScope) { res.status(403).json({ ok: false, error: 'a client-scoped user cannot answer questionnaires' }); return; }
   const id = String(req.params.id);
   if (!isLiveId(id)) { res.status(404).json({ ok: false, error: 'not a live questionnaire' }); return; }
   const answers = req.body?.answers;
