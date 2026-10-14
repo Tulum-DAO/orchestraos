@@ -94,10 +94,11 @@ const LIST = { items: [
   item({ id: 'apr_acme', agent_id: 'pm-acme', urgency: 'critical' }),
   item({ id: 'apr_acme_old', agent_id: 'pm-acme', status: 'approved' }),
   item({ id: 'prop_1', type: 'learning', agent_id: null }),
-], total: 4 };
+  item({ id: 'apr_acme_fs', agent_id: 'pm-acme' }),   // a filesystem residual: no one can answer it yet
+], total: 5, canonicalIds: new Set(['apr_gm', 'apr_acme']) };
 
-test('the list: the operator gets everything; a client scope only its pending cards', () => {
-  assert.equal(scopeItems(LIST as any, ADMIN, tags).total, 4);
+test('the list: the operator gets everything; a client scope only its pending canonical cards (the ones it can answer)', () => {
+  assert.equal(scopeItems(LIST as any, ADMIN, tags).total, 5);
   assert.deepEqual(scopeItems(LIST as any, ACME, tags).items.map((i) => i.id), ['apr_acme']);
 });
 

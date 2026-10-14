@@ -342,13 +342,17 @@ router.get('/', (req: Request, res: Response) => {
   res.json(scopeItems(listItems(req), who));
 });
 
+/** A list, plus the ids of its canonical cards (the only ones an answer route can act on). */
+export interface ApprovalList { items: UnifiedApproval[]; total: number; canonicalIds: Set<string> }
+
 /** Everything the operator sees, filtered by ?type, ?urgency and ?status. */
-function listItems(req: Request): { items: UnifiedApproval[]; total: number } {
+function listItems(req: Request): ApprovalList {
   const typeFilter = (req.query.type as string) || 'all';
   const urgencyFilter = req.query.urgency as string | undefined;
   const statusFilter = req.query.status as string | undefined;
 
   const items: UnifiedApproval[] = [];
+  const canonicalIds = new Set<string>();
 
   // --- Learning proposals ---
   if (typeFilter === 'all' || typeFilter === 'learning') {
@@ -385,6 +389,7 @@ function listItems(req: Request): { items: UnifiedApproval[]; total: number } {
       const canonicalKeys = new Set<string>();
       for (const r of canonical) {
         canonicalKeys.add(r.id);
+        canonicalIds.add(r.id);
         if (r.op_key) canonicalKeys.add(r.op_key);
         const normalized = normalizeCanonical(r);
         if (urgencyFilter && normalized.urgency !== urgencyFilter) continue;
@@ -420,19 +425,21 @@ function listItems(req: Request): { items: UnifiedApproval[]; total: number } {
       new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
   );
 
-  return { items, total: items.length };
+  return { items, total: items.length, canonicalIds };
 }
 
-/** What a principal may see of a list: the operator everything; anyone else only the PENDING
- *  agent cards whose asking agent is in scope (lib/approval-scope). No proposals, no archive. */
+/** What a principal may see of a list: the operator everything; anyone else only the pending
+ *  CANONICAL cards whose asking agent is in scope (lib/approval-scope), i.e. exactly the cards its
+ *  /:id guard lets it answer. No proposals, no archive, no filesystem residuals. */
 export function scopeItems(
-  list: { items: UnifiedApproval[]; total: number },
+  list: ApprovalList,
   who: Parameters<typeof canPrincipalSeeCard>[0],
   resolveTags?: Parameters<typeof canPrincipalSeeCard>[2],
 ): { items: UnifiedApproval[]; total: number } {
-  if (isUnscopedAdmin(who)) return list;
+  if (isUnscopedAdmin(who)) return { items: list.items, total: list.total };
   const items = list.items.filter((i) =>
-    i.type !== 'learning' && i.status === 'pending' && canPrincipalSeeCard(who, i.agent_id, resolveTags));
+    i.type === 'agent' && i.status === 'pending' && list.canonicalIds.has(i.id)
+    && canPrincipalSeeCard(who, i.agent_id, resolveTags));
   return { items, total: items.length };
 }
 
