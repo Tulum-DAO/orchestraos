@@ -265,3 +265,33 @@ def test_retire_agent_merges_into_the_stores_current_session_doc(tmp_path, monke
     stored = __import__("orchestra_cli.identity_cmd", fromlist=["x"]).stored_seat(CHECKOUT, data, "grok-gm")[1]
     assert stored["session_id"] == "sid-2" and stored["status"] == "retired"
     assert stored["resume_command"] == "claude --resume sid-1"
+
+
+# --- codex review round 3: the CLI's other reads of the seat rows also use the store when armed --
+def test_register_seat_keeps_the_stores_runtime_over_a_stale_flat_row(tmp_path, monkeypatch):
+    data, st = _armed(tmp_path, monkeypatch)
+    r = json.loads((data / "registry.json").read_text())
+    r["agents"]["grok-gm"]["runtime"] = "codex"                                # the projection is stale
+    (data / "registry.json").write_text(json.dumps(r))
+    assert SE.runtime_mismatch(st, "grok-gm", "claude") is None                # the store says claude
+    row = SE.register_seat(st, "grok-gm", gm=False, runtime="claude", model=None, tier=None, prompt=None)
+    assert row["runtime"] == "claude"                                          # what spawn launches
+
+
+def test_armed_retire_never_stops_a_session_only_the_store_says_another_seat_owns(tmp_path, monkeypatch, capsys):
+    from orchestra_cli import identity_cmd as IC
+    from orchestra_cli import settings as S
+    data = tmp_path / "data"; data.mkdir()
+    cfg = tmp_path / "orchestra.toml"
+    cfg.write_text(f'[data]\ndir = "{data}"\n[notify]\nchannel = "none"\n')
+    monkeypatch.setenv("ORCHESTRA_CONFIG", str(cfg))
+    monkeypatch.setenv("ORCHESTRA_ROOT", str(CHECKOUT))
+    monkeypatch.setenv("ORCHESTRA_DIR", str(data))
+    tlog = _fake_tmux(tmp_path, monkeypatch)
+    row = _seed(data)
+    r = {"agents": {"grok-gm": dict(row, tmux_session="gm"), "gm": dict(row, name="gm", tmux_session="gm")}}
+    (data / "registry.json").write_text(json.dumps(r))
+    IC.arm(CHECKOUT, data, start_regenerator=False)
+    (data / "registry.json").write_text(json.dumps({"agents": {"grok-gm": r["agents"]["grok-gm"]}}))  # lags
+    SE.retire_seat(S.load_settings(), "grok-gm", reason="r")
+    assert _kills(tlog) == []

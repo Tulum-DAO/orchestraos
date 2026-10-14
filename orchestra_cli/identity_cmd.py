@@ -262,6 +262,22 @@ def stored_seat(repo_root: Path, data_dir: Path, name: str) -> tuple | None:
         conn.close()
 
 
+def stored_agents(repo_root: Path, data_dir: Path) -> dict | None:
+    """Every seat row (registry doc) the armed STORE holds, read-only; None when not armed."""
+    cutover, _, _, _, _, _ = _modules(repo_root)
+    if not cutover.is_active(str(data_dir)):
+        return None
+    db = Path(data_dir) / DB_REL
+    if not db.exists():
+        return {}
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5.0)
+    try:
+        return {k: json.loads(v) for k, v in conn.execute(
+            "SELECT key, payload_json FROM source_records WHERE file='registry.json' AND kind='agent'")}
+    finally:
+        conn.close()
+
+
 def retire_seat_in_store(repo_root: Path, data_dir: Path, name: str, reason: str,
                          retired_fields: dict, flat_entry: dict) -> dict | None:
     """`orchestra retire` under an armed store: the same retire park-idle does, in one transaction

@@ -42,6 +42,15 @@ def _registry(st: S.Settings) -> tuple[Path, dict]:
     return p, data
 
 
+def _stored_agents(st: S.Settings) -> dict | None:
+    """The armed identity store's seat rows (registry.json is only their projection and can lag),
+    or None when the store is not armed or not part of this checkout."""
+    if not (st.repo_root / "scripts" / "identity_store" / "cutover.py").exists():
+        return None
+    from .identity_cmd import stored_agents
+    return stored_agents(st.repo_root, st.data_dir)
+
+
 def _tier_rule(st: S.Settings):
     scripts = str(st.repo_root / "scripts")
     if scripts not in sys.path:
@@ -61,6 +70,9 @@ def register_seat(st: S.Settings, seat: str, *, gm: bool, runtime: str | None, m
     non-T0 parent; nothing is written then."""
     p, reg = _registry(st)
     existing = reg["agents"].get(seat)
+    stored = _stored_agents(st)
+    if stored is not None and stored.get(seat):
+        existing = stored[seat]                    # armed: the store's row, not a stale projection
     row = dict(existing or {})
     if existing is None and not gm:
         T = _tier_rule(st)
@@ -160,7 +172,9 @@ def retire_seat(st: S.Settings, seat: str, *, reason: str = "retired by the oper
     # Stop the seat's OWN session only: its row's tmux_session (the seat name when there is no row),
     # and never one another registered seat says is its own.
     target = (row or {}).get("tmux_session") or (meta.get(seat) or {}).get("tmux_session") or seat
-    others = {(r or {}).get("tmux_session") or name for name, r in reg["agents"].items() if name != seat}
+    # a session either the flat rows or (armed) the store's rows give to another seat is not ours
+    others = {(r or {}).get("tmux_session") or name
+              for rows in (reg["agents"], _stored_agents(st) or {}) for name, r in rows.items() if name != seat}
     stopped = []
     if target not in others:
         subprocess.run(["tmux", "kill-session", "-t", f"={target}"], capture_output=True, check=False)
