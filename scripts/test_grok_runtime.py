@@ -599,9 +599,9 @@ def test_spawn_writes_no_grok_config():
     allowed mention is READING the installer's binary: the GROK_BIN pick's `[[ -x ... ]]` test (#443)."""
     lines = [l for l in (ROOT / "spawn-agent.sh").read_text().splitlines() if not l.lstrip().startswith("#")]
     grok_dir = [l for l in lines if ".grok/" in l]
-    assert all(l.startswith("[[") and "GROK_BIN" in l and '-x "$HOME/.grok/bin/grok"' in l
-               and ">" not in l.replace("&&", "").replace("||", "") for l in grok_dir), grok_dir
-    assert len(grok_dir) <= 1, grok_dir
+    read_only = ('[[ -n "$GROK_BIN" ]] || { [[ -x "$HOME/.grok/bin/grok" ]] '
+                 '&& GROK_BIN="$HOME/.grok/bin/grok" || GROK_BIN="grok"; }')
+    assert grok_dir in ([], [read_only]), grok_dir      # exactly that read, nothing else under ~/.grok
     code = "\n".join(lines)
     assert "config.toml" not in code and "requirements.toml" not in code
 
