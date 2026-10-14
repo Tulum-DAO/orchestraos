@@ -13,7 +13,9 @@ When the agent (default `grok-bot`) has pending messages it has not reported yet
 
 with `Authorization: Bearer <key>`. No subject, no body: someone who learns the URL learns only
 that mail is waiting. A failed POST is retried (3 tries, backoff) and the ids stay unreported
-until one is accepted. Each id is reported once.
+until one is accepted. A redirect is never followed (it could carry the key elsewhere). Delivery
+is at least once: an id is reported again if the process stops between the POST and recording
+it, or if the message becomes pending again; a repeated wake is harmless.
 
 ## Turn it on
 
@@ -34,7 +36,8 @@ until one is accepted. Each id is reported once.
    GROKBOT_WEBHOOK_KEY=...
    ```
 
-   The URL must be `https://`. The key is never logged and never goes in `orchestra.toml`.
+   The URL must be `https://`, and the file must stay mode 600 (if anyone else can read it,
+   nothing is posted). The key is never logged and never goes in `orchestra.toml`.
    While either value is a placeholder, nothing is posted.
 4. `orchestra doctor` shows `plugin:grok_bot`: off, on but not configured, or ready.
 

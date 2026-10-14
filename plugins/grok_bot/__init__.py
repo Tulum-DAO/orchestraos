@@ -35,14 +35,18 @@ def status(raw: Optional[dict]) -> dict:
     if not is_enabled(raw):
         return {"ok": True, "level": "INFO", "detail": "disabled ([plugins.grok_bot] enabled = false)",
                 "fix": None}
-    from .webhook import read_env, webhook_config
+    from .webhook import loose_permissions, read_env, webhook_config
     path = _env_path(raw)
+    where = "<data dir>/state/grok-bot-webhook.env"
+    if loose_permissions(path):
+        return {"ok": False, "level": "WARN", "detail": f"{where} is readable by others; nothing is posted",
+                "fix": f"chmod 600 {where}"}
     env = read_env(path)
     if webhook_config(env) is None:
         url = (env.get("GROKBOT_WEBHOOK_URL") or "").strip()
         why = ("its URL is not https" if url and url != "REPLACE_ME" and not url.startswith("https://")
                else "no webhook URL and key set yet")
         return {"ok": False, "level": "WARN", "detail": f"enabled for {agent(raw)}, but {why}; nothing is posted",
-                "fix": f"set the webhook URL and key your bot app gives you in {path} (mode 600)"}
+                "fix": f"set the webhook URL and key your bot app gives you in {where} (mode 600)"}
     return {"ok": True, "level": "OK", "detail": f"posts to an https webhook when {agent(raw)} has new mail",
             "fix": None}

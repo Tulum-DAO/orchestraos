@@ -1,4 +1,4 @@
-"""Grok Bot webhook (public port of the private grok-bot notifier; gm rulings msg_0324aa2a).
+"""Grok Bot webhook: tell an outside bot app that its mailbox has new mail.
 
 One https POST to the bot app's webhook when the agent's mailbox has NEW pending ids: ids and a
 count, never text. Default off; run by `orchestra up` only with [plugins.grok_bot] enabled = true;
@@ -101,7 +101,7 @@ def test_nothing_is_posted_unconfigured_or_with_the_kill_file(tmp_path, monkeypa
 def test_http_error_is_a_status_not_a_crash(monkeypatch):
     def boom(req, timeout=15):
         raise urllib.error.HTTPError(req.full_url, 503, "no", hdrs=None, fp=None)
-    monkeypatch.setattr(hook.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(hook._OPENER, "open", boom)
     assert hook.post_once("https://bot.example/h", "k", {"a": 1}) == 503
 
 
@@ -137,9 +137,10 @@ def test_doctor_row_off_unconfigured_and_ready(tmp_path):
     row = plugin.status(raw)
     assert row["level"] == "WARN" and "your bot app gives you" in row["fix"]
     (tmp_path / "state").mkdir()
-    (tmp_path / "state" / "grok-bot-webhook.env").write_text("GROKBOT_WEBHOOK_URL=http://x/h\nGROKBOT_WEBHOOK_KEY=k\n")
+    env = tmp_path / "state" / "grok-bot-webhook.env"
+    env.write_text("GROKBOT_WEBHOOK_URL=http://x/h\nGROKBOT_WEBHOOK_KEY=k\n"); env.chmod(0o600)
     assert "not https" in plugin.status(raw)["detail"]
-    (tmp_path / "state" / "grok-bot-webhook.env").write_text("GROKBOT_WEBHOOK_URL=https://x/h\nGROKBOT_WEBHOOK_KEY=k\n")
+    env.write_text("GROKBOT_WEBHOOK_URL=https://x/h\nGROKBOT_WEBHOOK_KEY=k\n")
     assert plugin.status(raw)["level"] == "OK"
 
 
@@ -148,3 +149,38 @@ def test_it_is_never_picked_as_the_chat_channel():
     raw = {"plugins": {"grok_bot": {"enabled": True}}}
     assert "grok_bot" not in plugins.KNOWN and "grok_bot" in plugins.NOTIFIERS
     assert plugins.configured_channel(raw) is None
+
+
+# --- codex review round 1 -----------------------------------------------------------------------
+def test_a_redirect_is_never_followed(monkeypatch):
+    """An https webhook that redirects (to http://, or anywhere) must not have its redirect followed (the key would travel with it)."""
+    import http.server, threading
+    hits = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            hits.append((self.path, self.headers.get("Authorization")))
+            self.send_response(302); self.send_header("Location", "/elsewhere"); self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    t = threading.Thread(target=srv.handle_request); t.start()
+    try:
+        code = hook.post_once(f"http://127.0.0.1:{srv.server_port}/hook", "k-secret", {"a": 1}, timeout=5)
+    finally:
+        t.join(5); srv.server_close()
+    assert code == 302 and [h[0] for h in hits] == ["/hook"]     # the redirect target was never requested
+
+
+def test_a_credentials_file_others_can_read_is_not_used(tmp_path, monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(hook, "post_once", lambda *a, **k: calls.append(a) or 204)
+    p = _box(tmp_path)
+    os.chmod(p["env"], 0o644)
+    assert hook.check_once(p, "grok-bot", "operator", set()) == (set(), False) and calls == []
+    row = plugin.status({"data": {"dir": str(tmp_path)}, "plugins": {"grok_bot": {"enabled": True}}})
+    assert row["level"] == "WARN" and "chmod 600" in row["fix"] and str(tmp_path) not in row["fix"]
+    os.chmod(p["env"], 0o600)
+    assert hook.check_once(p, "grok-bot", "operator", set())[0] == {"m1"}

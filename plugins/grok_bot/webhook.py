@@ -13,8 +13,10 @@ carries a subject or a body: a leaked URL learns only that mail is waiting. The 
 answers the mail itself.
 
 Credentials: <data dir>/state/grok-bot-webhook.env (mode 600, created with REPLACE_ME
-placeholders, never overwritten). While either value is still REPLACE_ME, or the URL is not
-https, the process stays up and posts nothing. The key is never logged.
+placeholders, never overwritten). While either value is still REPLACE_ME, the URL is not https, or
+the file is readable by anyone but you, the process stays up and posts nothing. The key is never
+logged, and a redirect is never followed. Delivery is at least once: an id is reported again if the
+process dies between the POST and recording it, or if it becomes pending again later.
 State (ids already posted): <data dir>/state/grok-bot-webhook.json.
 Off: [plugins.grok_bot] enabled = false, or touch <data dir>/state/GROK_BOT_WEBHOOK_DISABLED.
 """
@@ -86,7 +88,19 @@ def ensure_env_file(path: str) -> None:
         os.close(fd)
 
 
+def loose_permissions(path: str) -> bool:
+    """True when the credentials file is readable or writable by anyone but its owner."""
+    try:
+        return bool(os.stat(path).st_mode & 0o077)
+    except OSError:
+        return False
+
+
 def read_env(path: str) -> dict:
+    """The file's KEY=value pairs, or {} when it is missing or its permissions are looser than 600
+    (the key would be exposed; nothing is posted until it is chmod 600)."""
+    if loose_permissions(path):
+        return {}
     vals = {}
     try:
         with open(path) as fh:
@@ -131,15 +145,26 @@ def save_state(path: str, d: dict) -> None:
     os.replace(tmp, path)
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: it could carry the bearer key to an http:// or another host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def post_once(url: str, key: str, payload: dict, timeout: float = 15.0) -> int:
-    """Return the HTTP status, or 0 on a network error. Never logs the key."""
+    """Return the HTTP status, or 0 on a network error. Never logs the key. A redirect is not
+    followed: its 3xx status is returned (not a success), so the ids stay unreported."""
     data = json.dumps(payload).encode()
     req = urllib.request.Request(
         url, data=data, method="POST",
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
                  "User-Agent": "orchestraos-grok-bot-webhook"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _OPENER.open(req, timeout=timeout) as resp:
             resp.read()
             return int(resp.status)
     except urllib.error.HTTPError as e:
@@ -217,7 +242,9 @@ def main(argv=None) -> int:
     p = paths()
     ensure_env_file(p["env"])
     sent = set(load_state(p["state"]).get("sent") or [])
-    if webhook_config(read_env(p["env"])) is None:
+    if loose_permissions(p["env"]):
+        log(f"{p['env']} is readable by others: chmod 600 it; nothing is posted until then")
+    elif webhook_config(read_env(p["env"])) is None:
         log(f"webhook not configured: set the URL and key your bot app gives you in {p['env']}")
     else:
         log(f"watching {p['db']} for {a.agent} (pid {os.getpid()})")
