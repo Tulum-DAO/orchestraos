@@ -16,6 +16,8 @@ import {
 } from '../lib/menuAnswer';
 import MenuAnswerBlock from '../components/chat/MenuAnswerCard';
 import { operatorUserId } from '../lib/runtimeConfig';
+import Markdown from '../components/chat/Markdown';
+import { approvalCardBody, approvalCardAgent } from '../lib/approvalCard';
 
 async function fetchJson<T>(path: string): Promise<T> {
   const res = await fetch(`/api${path}`);
@@ -48,6 +50,7 @@ interface UnifiedApproval {
   kind?: string | null;
   menu?: { options?: MenuOption[]; question?: string; read_only?: boolean; notice?: string } | null;
   options?: string[] | null;
+  agent_id?: string | null;
 }
 
 interface Stats {
@@ -261,6 +264,11 @@ export default function Approvals() {
                     <span className={clsx('text-xs', RISK_COLORS[item.risk_level])}>
                       {item.risk_level} risk
                     </span>
+                    {approvalCardAgent(item) && (
+                      <span className="text-xs text-neutral-400 flex items-center gap-1">
+                        <Bot size={11} /> from <span className="font-mono text-neutral-300">{approvalCardAgent(item)}</span>
+                      </span>
+                    )}
                     {item.qa_verdict && (
                       <span className="text-xs text-neutral-500">
                         QA: <span className={item.qa_verdict === 'APPROVE' ? 'text-green-400' : 'text-amber-400'}>{item.qa_verdict}</span>
@@ -270,6 +278,12 @@ export default function Approvals() {
 
                   {/* Q1: Clean title */}
                   <h3 className="text-sm font-medium text-neutral-100 leading-snug">{item.title}</h3>
+
+                  {approvalCardBody(item) && (
+                    <div className="text-sm text-neutral-300 leading-relaxed max-h-72 overflow-y-auto pr-1">
+                      <Markdown text={approvalCardBody(item)} />
+                    </div>
+                  )}
 
                   {/* Q2: Human-readable mechanism label */}
                   {item.mechanism_label && (

@@ -132,3 +132,10 @@ test('W5 gate: a single-part (non-multipart) menu row is untouched on any client
   assert.equal(out.menu?.read_only, undefined);
   assert.equal(out.menu?.options?.length, 3, 'single-part options stay tappable');
 });
+
+test('normalizeCanonical carries the asking seat and the summary (cards showed neither)', () => {
+  const out = normalizeCanonical(menuRow({ summary: 'Two free signups, then one command.' }));
+  assert.equal(out.agent_id, 'pm-demo');
+  assert.equal(out.description, 'Two free signups, then one command.');
+  assert.equal(normalizeCanonical(menuRow({ from_agent: '' as unknown as string })).agent_id, null);
+});
