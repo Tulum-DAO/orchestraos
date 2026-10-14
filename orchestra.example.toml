@@ -61,6 +61,11 @@ runtime_model = ""
 enabled = true
 interval_seconds = 60
 
+[seats]
+# CPU priority seats start at (`nice -n`), so the API, gateway and dashboard (at 0) stay responsive
+# when a seat runs something heavy. Every program a seat starts inherits it. 0-19; 0 = off.
+nice = 10
+
 [public]
 # The externally-reachable URL for this install (Tailscale hostname, a
 # reverse-proxy domain, or a tunnel URL). Used only for links shown in the UI
