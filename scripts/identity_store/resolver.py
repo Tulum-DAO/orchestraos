@@ -30,27 +30,97 @@ import json
 import os
 import sqlite3
 import sys
+import time
 
 # Fraction of the flat key count below which the DB canonical set is treated as a
 # torn/partial migration (diagnostic alarm; the union still preserves flat keys).
 _COUNT_ANOMALY_FLOOR = 0.5
 
+# The router resolves on every pass (~1/min). An alarm condition is reported once per
+# episode and again at most once a day while it lasts; a resolve that no longer sees it
+# ends the episode. Without this a fresh install sent gm the same alert every minute.
+_ALARM_REMIND_S = 24 * 3600
+_ALARM_STATE_REL = os.path.join("state", "readers-db-first-alarms.json")
+_now = time.time
 
-def _default_alarm(msg: str) -> None:
+
+def _alarm_state(path: str) -> dict:
+    try:
+        with open(path) as f:
+            state = json.load(f)
+        return state if isinstance(state, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_alarm_state(path: str, state: dict) -> None:
+    try:
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w") as f:
+            json.dump(state, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass                     # unrecordable: the next pass alarms again (loud, never silent)
+
+
+def _episodes(orch, active: dict, alarm) -> None:
+    """Report each active condition (kind -> message) once per episode, then at most once per
+    _ALARM_REMIND_S; forget the kinds that are no longer active, so their next occurrence is
+    reported at once."""
+    path = os.path.join(str(orch), _ALARM_STATE_REL)
+    lock = None
+    try:                         # two router passes at once read-modify-write one record
+        import fcntl
+        lock = open(f"{path}.lock", "a")
+        fcntl.flock(lock, fcntl.LOCK_EX)
+    except (OSError, ImportError):
+        if lock is not None:
+            lock.close()
+        lock = None              # no lock: worst case one extra alarm, never a lost one
+    try:
+        _episodes_locked(path, active, alarm)
+    finally:
+        if lock is not None:
+            lock.close()
+
+
+def _episodes_locked(path: str, active: dict, alarm) -> None:
+    state = _alarm_state(path)
+    now = _now()
+    changed = False
+    for kind in [k for k in state if k not in active]:
+        del state[kind]
+        changed = True
+    for kind, msg in active.items():
+        last = state.get(kind, {}).get("last_sent") if isinstance(state.get(kind), dict) else None
+        if isinstance(last, (int, float)) and now - last < _ALARM_REMIND_S:
+            continue
+        if alarm(msg) is False:  # not delivered: not recorded, so the next pass retries
+            continue
+        state[kind] = {"last_sent": now}
+        changed = True
+    if changed:
+        _save_alarm_state(path, state)
+
+
+def _default_alarm(msg: str) -> bool:
     """Incident-grade surfacing: stderr + best-effort gm message. Imported inside so
-    the resolver keeps no hard msg_store dependency (INERT on the unarmed path)."""
+    the resolver keeps no hard msg_store dependency (INERT on the unarmed path).
+    Returns False when the gm message was not delivered, so the episode record does not
+    count it as sent and the next pass tries again."""
     print(f"[readers-db-first ALARM] {msg}", file=sys.stderr)
     try:
         import subprocess
-        subprocess.run(
+        proc = subprocess.run(
             ["python3", os.path.join(os.environ.get("ORCHESTRA_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                           "msg_store.py"), "send",   # CODE (checkout); data via ORCHESTRA_DIR
              "--from", "readers-db-first", "--to", "gm", "--type", "alert",
              "--subject", "identity projection skew (readers-db-first)",
              "--body", msg],
             timeout=10, capture_output=True)
+        return getattr(proc, "returncode", 0) == 0
     except Exception:  # noqa: BLE001 — alarm is best-effort beyond stderr
-        pass
+        return False
 
 
 def _transient_warn(msg: str) -> None:
@@ -91,7 +161,7 @@ def build_agent_meta_db(orch, *, alarm=_default_alarm) -> dict:
             return projector._build_faithful_sessions(snap)
         finally:
             conn.close()
-    except sqlite3.Error as e:
+    except Exception as e:  # noqa: BLE001 — any failure to read the store is "unreadable", never silent
         alarm(f"orchestra-registry.db unreadable ({e!r}) — falling back to the flat "
               f"agent-sessions.json (readers-db-first)")
         return {}
@@ -106,16 +176,24 @@ def load_meta_db_first(orch, flat_meta, *, alarm=_default_alarm) -> dict:
     SILENT (the designed normal path). ``flat_meta`` is the router's usual
     agent-sessions.json dict; this function reads the DB but never the flat file.
     """
-    db_meta = build_agent_meta_db(orch, alarm=alarm)
+    unreadable: list = []
+    db_meta = build_agent_meta_db(orch, alarm=unreadable.append)
+    active = {"db_unreadable": unreadable[-1]} if unreadable else {}
     if not db_meta:
-        alarm("orchestra-registry.db absent/empty under cutover — resolving from the "
-              "flat agent-sessions.json only (readers-db-first fail-safe)")
+        # Both sides empty is a fresh install with no seats yet (`orchestra init` arms the
+        # store with 0 seats): nothing disagrees, so nothing to report.
+        if flat_meta and not unreadable:        # unreadable already says why it is empty
+            active["db_empty"] = ("orchestra-registry.db absent/empty under cutover — resolving "
+                                  "from the flat agent-sessions.json only (readers-db-first fail-safe)")
+        _episodes(orch, active, alarm)
         return dict(flat_meta)
 
     if flat_meta and len(db_meta) < len(flat_meta) * _COUNT_ANOMALY_FLOOR:
-        alarm(f"DB canonical/session count ({len(db_meta)}) is far below the flat "
-              f"key count ({len(flat_meta)}) — possible torn/partial migration; the "
-              f"union preserves flat keys but investigate (readers-db-first)")
+        active["count_below_flat"] = (
+            f"DB canonical/session count ({len(db_meta)}) is far below the flat "
+            f"key count ({len(flat_meta)}) — possible torn/partial migration; the "
+            f"union preserves flat keys but investigate (readers-db-first)")
+    _episodes(orch, active, alarm)
 
     # Per-key DB-wins over a stale flat file is the DESIGNED NORMAL behavior of this
     # fix (the flat files flap on the shared tree; the DB is truth) — NOT an incident.
