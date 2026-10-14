@@ -8,17 +8,17 @@
  * In the default untrusted mode principal() is the configured operator (admin, '*'), so nothing
  * changes there; the untrusted test asserts that.
  */
+// FIRST: the temp data dir, before any module below reads ORCHESTRA_DIR at import.
+import { DATA_DIR } from './approval-scope.fixture.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import http from 'node:http';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import type { Request } from 'express';
 import type { Principal } from './principal.js';
 import { canPrincipalSeeCard, isUnscopedAdmin, makeApprovalScopeParam } from './approval-scope.js';
-import { scopeItems, statsOf } from '../routes/unified-approvals.js';
+import router, { approvalScopeParam, scopeItems, statsOf } from '../routes/unified-approvals.js';
+import { getRegistry } from '../services/state-reader.js';
 
 const P = (over: Partial<Principal>): Principal => ({
   username: 'u', role: 'viewer', allowedAgents: [], clientScope: null, trusted: true, ...over,
@@ -111,21 +111,15 @@ test('stats of a scoped list count only what that caller can see', () => {
 });
 
 // ---- THE WIRING: the real router -----------------------------------------------------------------
-test('the router scopes every /:id route through the one guard (router.param), so a new route is covered too', async () => {
-  const mod = await import('../routes/unified-approvals.js');
-  assert.deepEqual((mod.default as any).params?.id, [mod.approvalScopeParam]);
+test('the router scopes every /:id route through the one guard (router.param), so a new route is covered too', () => {
+  assert.deepEqual((router as any).params?.id, [approvalScopeParam]);
 });
 
 // Without this, unhooking router.param('id') would leave every test above green.
-// The router reads its data dir at import, so each test imports it fresh over an empty temp one.
-function freshDataDir() {
-  const d = mkdtempSync(join(tmpdir(), 'apr-scope-'));
-  // one pending card asked by gm (the operator's), in the frozen filesystem store the list still reads
-  mkdirSync(join(d, 'state', 'approvals', 'pending'), { recursive: true });
-  writeFileSync(join(d, 'state', 'approvals', 'pending', 'apr_gm_fs.json'),
-    JSON.stringify({ id: 'apr_gm_fs', agent_id: 'gm', title: 'Operator card', status: 'pending' }));
-  process.env.ORCHESTRA_DIR = d;
-}
+test('the fence holds: every module reads the temp data dir, not the real one', () => {
+  assert.equal(process.env.ORCHESTRA_DIR, DATA_DIR);
+  assert.deepEqual(Object.keys((getRegistry() as any)?.agents ?? {}), ['fixture-marker']);   // the temp registry
+});
 
 async function call(app: express.Express, method: string, path: string, headers: Record<string, string> = {}) {
   const server = app.listen(0);
@@ -147,8 +141,6 @@ test('the real router: behind a proxy, no identity is a 401 everywhere; a client
   const prev = process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS;
   process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS = '1';
   try {
-    freshDataDir();
-    const router = (await import(`../routes/unified-approvals.js?t=${Date.now()}`)).default;
     const app = express(); app.use(express.json()); app.use('/u', router);
     for (const [m, p] of [['POST', '/u/apr_x/approve'], ['POST', '/u/apr_x/deny'], ['POST', '/u/apr_x/answer'],
                           ['GET', '/u'], ['GET', '/u/stats']] as const) {
@@ -175,8 +167,6 @@ test('the real router, default mode (no proxy): the operator is unchanged — th
   const prev = process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS;
   delete process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS;
   try {
-    freshDataDir();
-    const router = (await import(`../routes/unified-approvals.js?t=${Date.now()}`)).default;
     const app = express(); app.use(express.json()); app.use('/u', router);
     const r = await call(app, 'GET', '/u?type=learning', { 'x-orchestra-user': 'eve', 'x-orchestra-client': 'acme' });
     assert.equal(r.status, 200);
