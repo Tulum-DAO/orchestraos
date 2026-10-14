@@ -139,6 +139,13 @@ bridge_enabled = true
 enabled = false
 allowed_chat_ids = []
 
+[plugins.grok_bot]
+# Tell an outside bot app (your "Grok Bot") that its mailbox has new mail: one https POST with the
+# message ids and count, never the text (plugins/grok_bot/README.md). The webhook URL and key your
+# bot app gives you go in <data dir>/state/grok-bot-webhook.env (mode 600), never in this file.
+enabled = false
+agent = "grok-bot"
+
 [code]
 # GET /agent-file: a paired device with the `code` scope may open a file in the working folder of
 # an agent whose cwd is under one of these roots. Empty = off. A root may not be /, your home dir,
