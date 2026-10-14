@@ -204,3 +204,11 @@ test('a live id is never served or submitted by the legacy routes, even when the
   assert.match(sub.json.error, /\/answers/);
   assert.ok(!existsSync(join(d, 'state', 'feedback')), 'nothing written for a live id');
 });
+
+test('a live id the gateway does not know is a 404, never a legacy entry of the same id', async () => {
+  const d = dataDir([{ id: 'qnr_test_0001', title: 'Collides', status: 'pending', html_file: 'state/questionnaires/c.html' }]);
+  const deps = makeDeps({ orchestraDir: d } as any, () => ({ status: 404, body: { ok: false, error: 'not found' } }));
+  const r = await req(deps, 'GET', '/api/questionnaires/qnr_test_0001');
+  assert.equal(r.status, 404);
+  assert.notEqual(r.json.title, 'Collides');
+});

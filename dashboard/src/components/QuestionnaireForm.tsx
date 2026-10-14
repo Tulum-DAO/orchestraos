@@ -96,7 +96,9 @@ export default function QuestionnaireForm({ id, onDone }: { id: string; onDone?:
                 </span>
               </label>
             ))}
-            {(q.kind === 'free_text' || picked?.input_kind === 'free_text' || opts.length > 0) && (
+            {/* Every question has a text box (text alone is an answer), so a saved draft's text is
+                always on screen, even on a question whose options are all hidden. */}
+            {(
               <textarea
                 rows={q.kind === 'free_text' ? 3 : 2}
                 value={d.answer_text ?? ''}

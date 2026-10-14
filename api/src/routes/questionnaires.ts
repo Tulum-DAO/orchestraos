@@ -106,7 +106,9 @@ router.get('/:id', async (req: Request, res: Response) => {
   if (isLiveId(id)) {
     const g = await gateway(`/questionnaires/${encodeURIComponent(id)}`, { method: 'GET' });
     if (g.status === 200 && g.body?.questionnaire) { res.json({ ...g.body.questionnaire, source: 'live' }); return; }
-    if (g.status !== 404) { res.status(g.status).json(g.body); return; }
+    // A live id is the gateway's alone: its 404 is the answer, never a legacy entry of that id.
+    res.status(g.status === 200 ? 404 : g.status).json(g.status === 200 ? { error: 'Questionnaire not found' } : g.body);
+    return;
   }
   const indexFile = join(ORCHESTRA, 'state', 'questionnaires', 'index.json');
   const questionnaires = readJson(indexFile) || [];
