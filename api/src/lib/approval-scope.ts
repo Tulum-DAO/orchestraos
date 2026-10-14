@@ -8,7 +8,7 @@
  *
  * The rule:
  * - no principal (trusted mode, no identity asserted): 401 on the /:id routes, nothing listed;
- * - an admin with no client scope: every card, every proposal (the operator);
+ * - an admin with no client scope and '*' agents: every card, every proposal (the operator);
  * - anyone else: only a PENDING canonical card whose asking agent they may see, by the same
  *   rule as /api/agents (lib/agent-scope: a client scope sees agents tagged client:<scope>, an
  *   allowlist its members). Learning proposals are fleet-wide, so admin-only.
@@ -22,9 +22,9 @@ import type { NextFunction, Request, Response } from 'express';
 import { principal as defaultPrincipal, type Principal } from './principal.js';
 import { canPrincipalSeeAgent, defaultResolveTags } from './agent-scope.js';
 
-/** The operator: an admin that no client scope narrows. */
+/** The operator: an admin that neither a client scope nor an agent allowlist narrows. */
 export function isUnscopedAdmin(p: Principal | null): boolean {
-  return !!p && p.role === 'admin' && !p.clientScope;
+  return !!p && p.role === 'admin' && !p.clientScope && p.allowedAgents === '*';
 }
 
 /** May this principal see (and so act on) a card asked by `agentId`? */

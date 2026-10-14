@@ -30,6 +30,14 @@ const tags = (id: string) => TAGS[id];
 
 // ---- the rule --------------------------------------------------------------------------------
 
+test("an admin narrowed by an allowlist is not the operator: it sees only its agents' cards", () => {
+  const narrowed = P({ role: 'admin', allowedAgents: ['pm-acme'] });
+  assert.equal(isUnscopedAdmin(narrowed), false);
+  assert.equal(canPrincipalSeeCard(narrowed, 'pm-acme', tags), true);
+  assert.equal(canPrincipalSeeCard(narrowed, 'gm', tags), false);
+  assert.deepEqual(run(narrowed, 'prop_123'), { status: 404, passed: false });
+});
+
 test('the operator (admin, no client scope) sees every card; no principal sees none', () => {
   assert.equal(canPrincipalSeeCard(ADMIN, 'gm', tags), true);
   assert.equal(canPrincipalSeeCard(ADMIN, null, tags), true);
@@ -102,6 +110,11 @@ test('stats of a scoped list count only what that caller can see', () => {
 });
 
 // ---- THE WIRING: the real router -----------------------------------------------------------------
+test('the router scopes every /:id route through the one guard (router.param), so a new route is covered too', async () => {
+  const mod = await import('../routes/unified-approvals.js');
+  assert.deepEqual((mod.default as any).params?.id, [mod.approvalScopeParam]);
+});
+
 // Without this, unhooking router.param('id') would leave every test above green.
 // The router reads its data dir at import, so each test imports it fresh over an empty temp one.
 function freshDataDir() {
@@ -140,7 +153,8 @@ test('the real router: behind a proxy, no identity is a 401 everywhere; a client
                           ['GET', '/u'], ['GET', '/u/stats']] as const) {
       assert.equal((await call(app, m, p)).status, 401, `${m} ${p}`);
     }
-    // a client-scoped caller asking for a card that is not its own gets the 404, not the handler
+    // a client-scoped caller gets the same 404 an unknown id gets (no id oracle); that the guard
+    // ran is pinned by the 401s above and the router.param test, not by this status
     const acme = { 'x-orchestra-user': 'c', 'x-orchestra-role': 'viewer', 'x-orchestra-client': 'acme' };
     const r = await call(app, 'POST', '/u/apr_x/approve', acme);
     assert.equal(r.status, 404);
