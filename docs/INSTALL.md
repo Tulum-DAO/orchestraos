@@ -411,7 +411,10 @@ seat's terminal.
 ### Optional: Grok Build seats
 
 Grok is a fourth runtime. Install it with `curl -fsSL https://x.ai/cli/install.sh | bash`
-(no sudo; it links `grok` into `~/.local/bin`), then sign in with `grok login --device-auth`
+(no sudo). The installer puts `grok` in `~/.grok/bin` and links it into `~/.local/bin` only on
+some systems; `orchestra init` (and `orchestra upgrade`) adds that link when nothing else provides
+`grok`, the service's PATH includes `~/.grok/bin`, and `orchestra doctor` warns (`cli:grok-path`)
+if `grok` is still not on PATH. Then sign in with `grok login --device-auth`
 and follow the link + code from any browser. The dashboard's **Connect Grok** sheet runs the
 same two steps and checks sign-in with `grok models`. Keep `"grok"` in `[runtimes] enabled`
 in `orchestra.toml`, then pick Grok in **New Agent** (or `orchestra agent --runtime grok`).

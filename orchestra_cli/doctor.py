@@ -237,6 +237,17 @@ def statusline_check(hooks_mod, settings_path: Path) -> "Check":
     return Check("statusline:claude", WARN, sl.get("error", "unreadable"), "fix the settings file", required=False)
 
 
+def grok_path_check(which, home) -> "Check | None":
+    """WARN when Grok is installed in its installer's ~/.grok/bin but `grok` is not on PATH: the
+    runtime rows below then say Grok is not installed, and the service cannot start a Grok seat."""
+    real = os.path.join(str(home), ".grok", "bin", "grok")
+    if which("grok") or not (os.path.isfile(real) and os.access(real, os.X_OK)):
+        return None
+    return Check("cli:grok-path", WARN, f"grok is installed at {real} but is not on PATH",
+                 "Run `orchestra init` (links ~/.local/bin/grok to it), or add ~/.grok/bin to PATH",
+                 required=False)
+
+
 def run_doctor(st: Settings, probes: DoctorProbes) -> list:
     checks: list[Check] = []
     root = st.repo_root
@@ -328,6 +339,10 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
                             required=(status == MISSING and login_row is None)))
     # G22: the installed CLI versions against the ones this release was proven on
     checks.extend(cli_version_checks(probes, set(st.runtimes_enabled or ())))
+    if "grok" in (st.runtimes_enabled or ()):
+        grok_row = grok_path_check(probes.which, os.path.expanduser("~"))
+        if grok_row is not None:
+            checks.append(grok_row)
     # Claude Code hooks installed into the user's settings (item: seats act on mail with no keypress)
     try:
         import sys as _sys

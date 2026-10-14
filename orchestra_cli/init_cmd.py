@@ -25,6 +25,28 @@ class Step:
     detail: str
 
 
+def grok_link_step(home: Path, which: Callable[[str], Optional[str]] = None) -> Optional[Step]:
+    """Link ~/.local/bin/grok to the Grok installer's ~/.grok/bin/grok when nothing else provides
+    `grok`. The installer links it into ~/.local/bin only on some systems; without the link the
+    systemd unit's PATH (which always carries ~/.local/bin) and every `which grok` check miss it.
+    None when Grok is not installed there or is already on PATH. An existing ~/.local/bin/grok
+    (file or link, even a broken one) is never touched."""
+    import shutil
+    which = which or shutil.which
+    real = Path(home) / ".grok" / "bin" / "grok"
+    if not (real.is_file() and os.access(real, os.X_OK)) or which("grok"):
+        return None
+    link = Path(home) / ".local" / "bin" / "grok"
+    if os.path.lexists(link):
+        return Step("grok-link", False, f"kept existing {link}")
+    try:
+        link.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(real, link)
+    except OSError as e:
+        return Step("grok-link", False, f"could not link {link} -> {real}: {e} (link it by hand)")
+    return Step("grok-link", True, f"linked {link} -> {real} (the service PATH looks in ~/.local/bin)")
+
+
 def failed_steps(report):
     """The steps that make `orchestra init` exit 1. A step that did nothing on purpose (skipped, declined,
     present) is not one; an installer refusal or error is, and its detail says "failed"."""
@@ -429,6 +451,11 @@ def run_init(repo_root: Path, data_dir: Optional[Path] = None, *, run: Callable 
     # path every seat writer, boot recovery and the reconciler are built and tested on). An
     # existing, unarmed data dir is left alone: arming one with seats is `orchestra identity arm`.
     report.append(_identity_step(repo_root, data_dir, fresh=fresh_registry))
+
+    # 5f. Grok installed only in ~/.grok/bin: link it where the service PATH looks
+    grok = grok_link_step(Path(os.path.expanduser("~")))
+    if grok is not None:
+        report.append(grok)
 
     # 6. python venv + requirements
     venv = repo_root / ".venv"
