@@ -973,7 +973,11 @@ The three seats appear in the dashboard's Agents list in your browser within abo
 
 One seat at a time, later: `orchestra spawn <seat>` registers and launches a single seat.
 Options: `--runtime claude|gemini|codex` (default: first of `[runtimes] enabled`), `--model`,
-`--tier`, `--prompt path/relative/to/checkout`. An existing registry row is kept as-is.
+`--tier`, `--prompt path/relative/to/checkout`. An existing registry row is kept as-is, so a
+`--runtime` that differs from the seat's stored runtime is refused rather than ignored. To move a
+seat to another runtime, retire it first: `orchestra retire <seat>` removes its row and stops its
+tmux session, and keeps its session id and transcript (it asks first; `--yes` skips the question,
+`--reason` is recorded). Then `orchestra spawn <seat> --runtime <runtime>` starts it fresh.
 
 Mail a seat and watch it act with no keypress (the shipped hooks + the router beat under
 `orchestra up`; see docs/HOOKS.md):

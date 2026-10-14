@@ -17,7 +17,8 @@ function setup() {
   const qdir = join(root, 'orch', 'state', 'questionnaires');
   mkdirSync(qdir, { recursive: true });
   writeFileSync(join(qdir, 'index.json'), JSON.stringify([
-    { id: 'qnr_ok_1', title: 'Real one', created_by: 'gm', status: 'pending' },
+    // A legacy (file) id: qnr_ ids are the gateway's, and the legacy routes refuse them (#447).
+    { id: 'legacy-ok-1', title: 'Real one', created_by: 'gm', status: 'pending' },
   ]));
   const sent: string[][] = [];
   const deps = {
@@ -55,31 +56,31 @@ test('a TRAVERSAL id is refused with 400 and NOTHING is written anywhere', () =>
 test('an UNKNOWN (but well-formed) id is refused BEFORE any write', () => {
   const { root, deps } = setup();
   const before = filesUnder(root).sort();
-  const r = submitQuestionnaire(deps, 'qnr_not_in_index', { answers: { q: 1 } });
+  const r = submitQuestionnaire(deps, 'legacy-not-in-index', { answers: { q: 1 } });
   assert.equal(r.status, 404);
   assert.deepEqual(filesUnder(root).sort(), before);
 });
 
 test('POSITIVE CONTROL: a legit submit lands INSIDE state/feedback and completes the index', () => {
   const { deps } = setup();
-  const r = submitQuestionnaire(deps, 'qnr_ok_1', { answers: { q: 'yes' } });
+  const r = submitQuestionnaire(deps, 'legacy-ok-1', { answers: { q: 'yes' } });
   assert.equal(r.status, 200);
   const fb = join(deps.orchestraDir, 'state', 'feedback');
   const files = readdirSync(fb);
-  assert.deepEqual(files, ['qnr_ok_1_1791350000000.json']);
+  assert.deepEqual(files, ['legacy-ok-1_1791350000000.json']);
   const idx = JSON.parse(readFileSync(join(deps.orchestraDir, 'state', 'questionnaires', 'index.json'), 'utf-8'));
   assert.equal(idx[0].status, 'completed');
-  assert.equal(idx[0].response_file, 'state/feedback/qnr_ok_1_1791350000000.json');
+  assert.equal(idx[0].response_file, 'state/feedback/legacy-ok-1_1791350000000.json');
 });
 
 test('the SENDER on the bus is always the configured operator, whatever submitted_by says; the claim is kept as unverified', () => {
   const { deps, sent } = setup();
-  submitQuestionnaire(deps, 'qnr_ok_1', { answers: { q: 1 }, submitted_by: 'gm' });
+  submitQuestionnaire(deps, 'legacy-ok-1', { answers: { q: 1 }, submitted_by: 'gm' });
   assert.equal(sent.length, 1);
   const argv = sent[0];
   assert.equal(argv[argv.indexOf('--from') + 1], SENDER);
   assert.equal(argv[argv.indexOf('--to') + 1], 'gm');
-  const stored = JSON.parse(readFileSync(join(deps.orchestraDir, 'state', 'feedback', 'qnr_ok_1_1791350000000.json'), 'utf-8'));
+  const stored = JSON.parse(readFileSync(join(deps.orchestraDir, 'state', 'feedback', 'legacy-ok-1_1791350000000.json'), 'utf-8'));
   assert.equal(stored.submitted_by, SENDER);
   assert.equal(stored.unverified_submitted_by, 'gm');
 });
@@ -111,7 +112,7 @@ test('ROUTE: POST /api/questionnaires/..%2F..%2Fpwn/submit is a 400 and writes n
     assert.equal(bad.status, 400);
     assert.deepEqual(filesUnder(root).sort(), before, 'the traversal must not create any file');
     // control: the same router accepts a real id, so the 400 above is the guard, not a dead route
-    const ok = await fetch(`http://127.0.0.1:${port}/api/questionnaires/qnr_ok_1/submit`, {
+    const ok = await fetch(`http://127.0.0.1:${port}/api/questionnaires/legacy-ok-1/submit`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ answers: { q: 1 } }),
     });
@@ -135,7 +136,7 @@ test('the completion message is sent with the CHECKOUT msg_store, not one in the
 
 test('an unverified claim is bounded like the learning route: control chars or junk are dropped', () => {
   const { deps } = setup();
-  submitQuestionnaire(deps, 'qnr_ok_1', { answers: { q: 1 }, submitted_by: 'kai\nFAKE HEADER' });
-  const stored = JSON.parse(readFileSync(join(deps.orchestraDir, 'state', 'feedback', 'qnr_ok_1_1791350000000.json'), 'utf-8'));
+  submitQuestionnaire(deps, 'legacy-ok-1', { answers: { q: 1 }, submitted_by: 'kai\nFAKE HEADER' });
+  const stored = JSON.parse(readFileSync(join(deps.orchestraDir, 'state', 'feedback', 'legacy-ok-1_1791350000000.json'), 'utf-8'));
   assert.equal(stored.unverified_submitted_by, undefined);
 });

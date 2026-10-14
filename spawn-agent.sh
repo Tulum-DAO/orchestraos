@@ -31,6 +31,8 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/orchestra-env.sh
 source "$SCRIPT_DIR/scripts/orchestra-env.sh"
+# shellcheck source=scripts/seat_nice.sh
+source "$SCRIPT_DIR/scripts/seat_nice.sh"     # seats run below the services' CPU priority
 # REGISTRY defaults to the checkout's registry.json; env-overridable so the
 # §4.2 dispatch path can be exercised against a scratch/fake registry without
 # a real spawn (the R3 real-artifact gate). Production sets no REGISTRY env.
@@ -1030,6 +1032,8 @@ spawn_agent() {
     else
         log "  Runtime: $runtime | Binary: $agent_bin"
     fi
+    # Outermost, so the CLI and every child it starts run at the seat priority (scripts/seat_nice.sh).
+    launch_cmd="$(seat_nice_prefix)$launch_cmd"
     tmux send-keys -t "$tmux_name" "$launch_cmd" Enter
 
     if [[ "$runtime" == "grok" ]]; then
