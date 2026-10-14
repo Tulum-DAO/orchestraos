@@ -241,6 +241,20 @@ def record_seat(repo_root: Path, data_dir: Path, name: str, row: dict) -> bool:
     return True
 
 
+def retire_seat_in_store(repo_root: Path, data_dir: Path, name: str, reason: str, session_record: dict) -> bool:
+    """`orchestra retire` under an armed store: the same retire park-idle does, in one transaction
+    (canonical pointer dropped, generation kept with retired_at, registry doc removed, the retired
+    session doc kept with its resume fields), then projected at once. False when not armed."""
+    cutover, _, _, _, _, _ = _modules(repo_root)
+    od = str(data_dir)
+    if not cutover.is_active(od):
+        return False
+    from scripts.identity_store import identity_writer
+    identity_writer.retire_agent(od, name, reason, session_record=session_record)
+    identity_writer.project_now(od)
+    return True
+
+
 def status(repo_root: Path, data_dir: Path) -> dict:
     cutover, freeze, _, monitor, _, _ = _modules(repo_root)
     od = str(data_dir)

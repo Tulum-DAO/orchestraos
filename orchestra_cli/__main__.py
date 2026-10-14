@@ -54,6 +54,10 @@ def parse_args(argv=None) -> argparse.Namespace:
                      help="names the PM and worker pm-<project> / dev-<project> (default first-project)")
     stp.add_argument("--runtime", choices=["claude", "gemini", "codex", "grok"], help="default: first of [runtimes] enabled")
     stp.add_argument("--verbose", action="store_true", help="show spawn detail (model-banner checks, generated settings paths)")
+    rtr = sub.add_parser("retire", help="retire a seat: remove its row, stop its tmux session; its session and transcript are kept")
+    rtr.add_argument("seat")
+    rtr.add_argument("--reason", default="retired by the operator", help="recorded on the retired session")
+    rtr.add_argument("--yes", action="store_true", help="do not ask for confirmation")
     sp = sub.add_parser("spawn", help="register + launch a seat in tmux (`--gm` = the General Manager)")
     sp.add_argument("seat")
     sp.add_argument("--gm", action="store_true", help="spawn as the General Manager (prompts/gm.md, tier T0, always-on)")
@@ -254,12 +258,12 @@ def cmd_status(ns) -> int:
 
 def main(argv=None) -> int:
     ns = parse_args(argv)
-    from .seats import cmd_rotate, cmd_spawn, cmd_agent, cmd_starter
+    from .seats import cmd_rotate, cmd_spawn, cmd_agent, cmd_starter, cmd_retire
     from .pair_cmd import run_pair, run_devices, run_rotate_fleet_token
     from .install_unit import cmd_install_unit
     from .identity_cmd import cmd_identity
     return {"init": cmd_init, "doctor": cmd_doctor, "up": cmd_up, "down": cmd_down, "status": cmd_status,
-            "spawn": cmd_spawn, "starter": cmd_starter, "agent": cmd_agent, "rotate": cmd_rotate, "upgrade": cmd_upgrade,
+            "spawn": cmd_spawn, "retire": cmd_retire, "starter": cmd_starter, "agent": cmd_agent, "rotate": cmd_rotate, "upgrade": cmd_upgrade,
             "pair": run_pair, "devices": run_devices,
             "rotate-gateway-token": run_rotate_fleet_token, "install-unit": cmd_install_unit,
             "identity": cmd_identity}[ns.command](ns)
