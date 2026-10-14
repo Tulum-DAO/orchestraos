@@ -12,6 +12,7 @@ not exist yet). Now:
 import importlib.util
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -124,3 +125,85 @@ def test_unreadable_db_alarm_is_deduplicated_too(tmp_path):
     for _ in range(20):
         assert r.load_meta_db_first(str(orch), flat, alarm=alarms.append) == flat
     assert len(alarms) == 1 and "unreadable" in alarms[0]
+
+
+def test_an_undelivered_alarm_is_not_recorded_as_sent(tmp_path):
+    """codex R1 #1: a send that failed must not start the 24 h quiet period."""
+    orch = tmp_path
+    (orch / "state").mkdir()
+    r = _resolver()
+    flat = {"a": {"tmux_session": "a", "status": "online"}}
+    outcomes = [False, False, True]
+    calls = []
+
+    def alarm(msg):
+        calls.append(msg)
+        return outcomes[len(calls) - 1] if len(calls) <= len(outcomes) else True
+
+    for _ in range(10):
+        r.load_meta_db_first(str(orch), flat, alarm=alarm)
+    assert len(calls) == 3                   # retried until delivered, then quiet
+
+
+def test_default_alarm_retries_when_msg_store_exits_nonzero(tmp_path, monkeypatch):
+    orch = tmp_path
+    (orch / "state").mkdir()
+    r = _resolver()
+    sends = []
+
+    class P:
+        def __init__(self, rc):
+            self.returncode = rc
+
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw: sends.append(argv) or P(1 if len(sends) < 3 else 0))
+    flat = {"a": {"tmux_session": "a", "status": "online"}}
+    for _ in range(10):
+        r.load_meta_db_first(str(orch), flat)
+    assert len(sends) == 3
+
+
+def test_any_read_failure_is_reported_as_unreadable(tmp_path, monkeypatch):
+    """codex R1 #3: a non-sqlite failure while reading the store used to escape to the
+    router's generic fallback, which alarms nobody."""
+    orch = tmp_path
+    _seed(orch, {"a": {"tmux_session": "a", "status": "online"}})
+    r = _resolver()
+    from scripts.identity_store import projector
+
+    def boom(*a, **k):
+        raise ValueError("payload is not a session document")
+
+    monkeypatch.setattr(projector, "_build_faithful_sessions", boom)
+    alarms = []
+    flat = {"a": {"tmux_session": "a", "status": "online"}}
+    assert r.load_meta_db_first(str(orch), flat, alarm=alarms.append) == flat
+    assert len(alarms) == 1 and "unreadable" in alarms[0]
+
+
+def _concurrent_pass(orch, out):
+    import fcntl  # noqa: F401  (the platform has it; the resolver uses it)
+    r = _resolver()
+
+    def alarm(msg):
+        with open(out, "a") as f:
+            f.write("x\n")
+        time.sleep(0.05)                     # widen the window two unlocked passes would share
+
+    r.load_meta_db_first(str(orch), {"a": {"tmux_session": "a", "status": "online"}}, alarm=alarm)
+
+
+def test_concurrent_router_passes_alarm_once(tmp_path):
+    """codex R1 #2: router passes that overlap share one record; the read-modify-write is locked."""
+    import multiprocessing as mp
+    orch = tmp_path
+    (orch / "state").mkdir()
+    out = tmp_path / "alarms.txt"
+    ctx = mp.get_context("fork")
+    procs = [ctx.Process(target=_concurrent_pass, args=(str(orch), str(out))) for _ in range(8)]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(30)
+    assert all(p.exitcode == 0 for p in procs)
+    assert out.read_text().count("x") == 1
