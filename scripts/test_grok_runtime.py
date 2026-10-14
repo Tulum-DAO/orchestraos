@@ -595,10 +595,14 @@ def test_spawn_grok_path_types_nothing_into_the_pane():
 
 
 def test_spawn_writes_no_grok_config():
-    """A grok seat installs no hooks/statusline: nothing in spawn writes under ~/.grok."""
-    code = "\n".join(l for l in (ROOT / "spawn-agent.sh").read_text().splitlines()
-                     if not l.lstrip().startswith("#"))
-    assert ".grok/" not in code
+    """A grok seat installs no hooks/statusline: nothing in spawn writes under ~/.grok. The one
+    allowed mention is READING the installer's binary: the GROK_BIN pick's `[[ -x ... ]]` test (#443)."""
+    lines = [l for l in (ROOT / "spawn-agent.sh").read_text().splitlines() if not l.lstrip().startswith("#")]
+    grok_dir = [l for l in lines if ".grok/" in l]
+    assert all(l.startswith("[[") and "GROK_BIN" in l and '-x "$HOME/.grok/bin/grok"' in l
+               and ">" not in l.replace("&&", "").replace("||", "") for l in grok_dir), grok_dir
+    assert len(grok_dir) <= 1, grok_dir
+    code = "\n".join(lines)
     assert "config.toml" not in code and "requirements.toml" not in code
 
 
