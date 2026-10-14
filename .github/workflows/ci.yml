@@ -88,6 +88,8 @@ jobs:
             args: "scripts/focus_registry"
           - name: contract
             args: "contract"
+          - name: plugins
+            args: "plugins"        # channel plugins (plugins/telegram/tests) ran in no group before
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
