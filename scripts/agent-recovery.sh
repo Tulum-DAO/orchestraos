@@ -38,7 +38,9 @@ HANDOFF_DIR="$STATE_DIR/agent-handoffs"
 REGISTRY="$SCRIPT_DIR/registry.json"
 RECOVERY_RUNTIME_SCRIPT="${RECOVERY_RUNTIME_SCRIPT:-$BIN_DIR/recovery_runtime.py}"
 LOG="$SCRIPT_DIR/logs/agent-recovery.log"
-LOCKFILE="/tmp/agent-recovery.lock"
+# One run at a time PER INSTALL: the lock is in this install's state dir. A fixed /tmp path let any
+# other install, checkout or test run on the box make this one exit 0 silently.
+LOCKFILE="$STATE_DIR/agent-recovery.lock"
 
 DRY_RUN=false
 CRON_MODE=false
@@ -76,14 +78,33 @@ crash_log() {
 }
 
 # Prevent concurrent runs
-if [ -f "$LOCKFILE" ]; then
-    LOCK_AGE=$(( $(date +%s) - $(stat -c %Y "$LOCKFILE" 2>/dev/null || echo 0) ))
-    if [ "$LOCK_AGE" -lt 120 ]; then
-        exit 0  # Another instance is running
-    fi
-    rm -f "$LOCKFILE"
+mkdir -p "$STATE_DIR"
+# Taken with noclobber (an exclusive create), so two runs can never both see "no lock" and both
+# take it. The lock holds the run's pid: it is stale only when that process is gone (a long run
+# keeps its lock however long it takes), or after an hour in case the pid was reused.
+take_lock() { ( set -C; echo $$ > "$1" ) 2>/dev/null; }
+file_age() { echo $(( $(date +%s) - $(stat -c %Y "$1" 2>/dev/null || date +%s) )); }
+lock_stale() {
+    local pid
+    pid="$(cat "$LOCKFILE" 2>/dev/null)"
+    [ "$(file_age "$LOCKFILE")" -ge 3600 ] && return 0
+    case "$pid" in
+        ''|*[!0-9]*) [ "$(file_age "$LOCKFILE")" -ge 120 ] ;;   # empty = still being written
+        *) ! ps -p "$pid" >/dev/null 2>&1 ;;
+    esac
+}
+if ! take_lock "$LOCKFILE"; then
+    lock_stale || exit 0  # Another instance is running
+    # Two runs can both find the same dead lock. Only the one holding the short reclaim lock
+    # replaces it, after checking again that it is still the dead one; the other exits quietly.
+    RECLAIM="$LOCKFILE.reclaim"
+    if [ "$(file_age "$RECLAIM")" -ge 60 ]; then rm -f "$RECLAIM"; fi   # a reclaimer that died
+    take_lock "$RECLAIM" || exit 0
+    if lock_stale; then rm -f "$LOCKFILE"; fi
+    take_lock "$LOCKFILE"; GOT_LOCK=$?
+    rm -f "$RECLAIM"
+    [ "$GOT_LOCK" -eq 0 ] || exit 0
 fi
-echo $$ > "$LOCKFILE"
 trap 'rm -f "$LOCKFILE"' EXIT
 
 # Infrastructure sessions managed by service-watchdog — never touch these

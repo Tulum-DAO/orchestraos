@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -148,3 +149,90 @@ def test_recovery_script_skips_unresolved_runtime_before_claude_fallback(tmp_pat
     assert "automatic recovery REFUSED" in combined
     assert "WOULD RECOVER: seat" not in combined
 
+
+
+def test_recovery_lock_is_per_install_not_box_wide(tmp_path):
+    """The run lock lives in the install's own state dir.
+
+    It used to be a fixed /tmp/agent-recovery.lock, so any agent-recovery.sh on the box (another
+    install, another checkout's test suite, the cron run) made this one exit 0 silently and these
+    tests fail with empty output. A fresh lock in THIS install blocks; one in another install does not.
+    """
+    orch = _automatic_lifecycle_world(tmp_path, "CoDeX")
+    other = _automatic_lifecycle_world(tmp_path / "other", "CoDeX")
+    env = os.environ | {
+        "ORCHESTRA_DIR": str(orch), "RECOVERY_RUNTIME_SCRIPT": RUNTIME_HELPER,
+    }
+
+    (other / "state" / "agent-recovery.lock").write_text("1\n")
+    proc = subprocess.run(["bash", RECOVERY_SCRIPT, "--dry-run"], env=env,
+                          capture_output=True, text=True, check=False)
+    assert "automatic recovery REFUSED" in proc.stdout + proc.stderr
+    assert not (orch / "state" / "agent-recovery.lock").exists()   # released on exit
+
+    (orch / "state" / "agent-recovery.lock").write_text("1\n")
+    proc = subprocess.run(["bash", RECOVERY_SCRIPT, "--dry-run"], env=env,
+                          capture_output=True, text=True, check=False)
+    assert proc.returncode == 0
+    assert proc.stdout + proc.stderr == ""                          # another run holds it
+
+
+def test_recovery_lock_one_concurrent_run_proceeds_and_only_a_dead_runs_lock_is_replaced(tmp_path):
+    """Same install: of several runs started together, exactly one does the work. The lock is an
+    exclusive create (noclobber), so no two runs can both take it; that interleaving is
+    microseconds wide and this test cannot force it (it passes against the old check-then-write
+    too), so it checks the outcome only. Then the stale rules, each forced: a live holder keeps
+    the lock however old it is; a dead holder's lock is replaced; while another run is replacing
+    it this one backs off; a dead reclaimer is cleared; an hour-old lock is stale (pid reuse)."""
+    orch = _automatic_lifecycle_world(tmp_path, "CoDeX")
+    slow = tmp_path / "slow_runtime.py"      # holds the lock long enough for the others to arrive
+    slow.write_text(
+        "import sys, time, runpy\n"
+        "time.sleep(2)\n"
+        f"sys.argv[0] = {RUNTIME_HELPER!r}\n"
+        f"runpy.run_path({RUNTIME_HELPER!r}, run_name='__main__')\n"
+    )
+    env = os.environ | {"ORCHESTRA_DIR": str(orch), "RECOVERY_RUNTIME_SCRIPT": str(slow)}
+    procs = [subprocess.Popen(["bash", RECOVERY_SCRIPT, "--dry-run"], env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+             for _ in range(6)]
+    outs = [p.communicate(timeout=60)[0] for p in procs]
+    assert all(p.returncode == 0 for p in procs)
+    assert sum("automatic recovery REFUSED" in o for o in outs) == 1, outs
+
+    lock = orch / "state" / "agent-recovery.lock"
+    reclaim = orch / "state" / "agent-recovery.lock.reclaim"
+    fast = env | {"RECOVERY_RUNTIME_SCRIPT": RUNTIME_HELPER}
+
+    def run():
+        p = subprocess.run(["bash", RECOVERY_SCRIPT, "--dry-run"], env=fast,
+                           capture_output=True, text=True, check=False)
+        assert p.returncode == 0
+        return "automatic recovery REFUSED" in p.stdout + p.stderr
+
+    def held_by(pid, age):
+        lock.write_text(f"{pid}\n")
+        t = time.time() - age
+        os.utime(lock, (t, t))
+
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    live = subprocess.Popen(["sleep", "60"])
+    try:
+        held_by(live.pid, 300)        # a long run keeps its lock: age alone is not death
+        assert not run()
+        held_by(dead.pid, 0)          # its holder is gone: replaced at once, released on exit
+        assert run()
+        assert not lock.exists() and not reclaim.exists()
+        held_by(dead.pid, 0)          # another run is replacing the dead lock right now
+        reclaim.write_text("1\n")
+        assert not run()
+        assert lock.read_text() == f"{dead.pid}\n"
+        t = time.time() - 120         # ...unless that reclaimer died too
+        os.utime(reclaim, (t, t))
+        assert run()
+        held_by(live.pid, 4000)       # a pid reused by something else: an hour-old lock is stale
+        assert run()
+    finally:
+        live.kill()
+        live.wait()
