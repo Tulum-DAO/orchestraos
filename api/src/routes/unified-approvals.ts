@@ -26,8 +26,25 @@ import {
   canonicalAnswer,
   type CanonicalRow,
 } from './_canonical-approvals.js';
+import { principal } from '../lib/principal.js';
+import {
+  isUnscopedAdmin,
+  canPrincipalSeeCard,
+  makeApprovalScopeParam,
+  defaultApprovalScopeDeps,
+} from '../lib/approval-scope.js';
 
 const router = Router();
+
+/** The asking agent of a pending canonical card, for the /:id scope check (lib/approval-scope). */
+function pendingCardAgent(id: string): string | null {
+  return readCanonicalPending().find((r) => r.id === id)?.from_agent ?? null;
+}
+
+// Every /:id route (approve, deny, answer, and any added later) is scoped before its handler
+// runs: no identity is a 401, and a card outside the caller's scope is the route's own 404.
+export const approvalScopeParam = makeApprovalScopeParam(defaultApprovalScopeDeps(pendingCardAgent));
+router.param('id', approvalScopeParam);
 const ORCHESTRA = process.env.ORCHESTRA_DIR || loadConfig().dataDir;
 const DB_PATH = join(ORCHESTRA, 'state', 'learning.db');
 // Frozen filesystem store — dual-READ only (retires when pending/ drains, §2.1).
@@ -320,6 +337,13 @@ function normalizeAgentApproval(a: any, filename: string): UnifiedApproval {
 // ---------------------------------------------------------------------------
 
 router.get('/', (req: Request, res: Response) => {
+  const who = principal(req);
+  if (!who) { res.status(401).json({ error: 'unauthenticated' }); return; }
+  res.json(scopeItems(listItems(req), who));
+});
+
+/** Everything the operator sees, filtered by ?type, ?urgency and ?status. */
+function listItems(req: Request): { items: UnifiedApproval[]; total: number } {
   const typeFilter = (req.query.type as string) || 'all';
   const urgencyFilter = req.query.urgency as string | undefined;
   const statusFilter = req.query.status as string | undefined;
@@ -396,14 +420,50 @@ router.get('/', (req: Request, res: Response) => {
       new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
   );
 
-  res.json({ items, total: items.length });
-});
+  return { items, total: items.length };
+}
+
+/** What a principal may see of a list: the operator everything; anyone else only the PENDING
+ *  agent cards whose asking agent is in scope (lib/approval-scope). No proposals, no archive. */
+export function scopeItems(
+  list: { items: UnifiedApproval[]; total: number },
+  who: Parameters<typeof canPrincipalSeeCard>[0],
+  resolveTags?: Parameters<typeof canPrincipalSeeCard>[2],
+): { items: UnifiedApproval[]; total: number } {
+  if (isUnscopedAdmin(who)) return list;
+  const items = list.items.filter((i) =>
+    i.type !== 'learning' && i.status === 'pending' && canPrincipalSeeCard(who, i.agent_id, resolveTags));
+  return { items, total: items.length };
+}
+
+/** Stats of a scoped list, the shape GET /stats returns. */
+export function statsOf(items: UnifiedApproval[]) {
+  const stats = {
+    by_type: { learning: 0, agent: 0, deployment: 0 },
+    by_urgency: { low: 0, normal: 0, critical: 0 },
+    by_status: { pending: 0, approved: 0, rejected: 0 },
+    total: 0,
+  };
+  for (const i of items) {
+    stats.by_type[i.type] += 1;
+    stats.by_urgency[i.urgency] += 1;
+    if (i.status === 'pending') stats.by_status.pending += 1;
+    else if (i.status === 'approved') stats.by_status.approved += 1;
+    else stats.by_status.rejected += 1;
+  }
+  stats.total = items.length;
+  return stats;
+}
 
 // ---------------------------------------------------------------------------
 // GET /api/approvals/unified/stats — counts by type and urgency
 // ---------------------------------------------------------------------------
 
-router.get('/stats', (_req: Request, res: Response) => {
+router.get('/stats', (req: Request, res: Response) => {
+  const who = principal(req);
+  if (!who) { res.status(401).json({ error: 'unauthenticated' }); return; }
+  if (!isUnscopedAdmin(who)) { res.json(statsOf(scopeItems(listItems(req), who).items)); return; }
+
   const stats = {
     by_type: { learning: 0, agent: 0, deployment: 0 },
     by_urgency: { low: 0, normal: 0, critical: 0 },
