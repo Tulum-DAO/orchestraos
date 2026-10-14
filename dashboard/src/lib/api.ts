@@ -101,6 +101,10 @@ export const fetchRecentMessages = (limit = 50) =>
   get<{ messages: RecentMessageRow[] }>(`/messages/recent?limit=${limit}`);
 
 export const fetchProjects = () => get('/projects');
+// A live (QuestionnaireStore) questionnaire: its questions, and the answers route the phone uses too.
+export const fetchQuestionnaire = <T = any>(id: string) => get<T>(`/questionnaires/${encodeURIComponent(id)}`);
+export const answerQuestionnaire = <T = any>(id: string, answers: Record<string, unknown>) =>
+  post<T>(`/questionnaires/${encodeURIComponent(id)}/answers`, { answers });
 export const fetchProject = (slug: string) => get(`/projects/${slug}`);
 
 export const fetchMe = () => get<{ username: string; role: string; allowed_agents: string | string[] }>('/me');
