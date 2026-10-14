@@ -18,6 +18,8 @@ SCRIPT_DIR="${ORCHESTRA_DIR:-$(cd "$BIN_DIR/.." && pwd)}"   # the DATA dir under
 # CODE (scripts/, python -m scripts.*) lives in the checkout, never under the data dir.
 CODE_DIR="${ORCHESTRA_ROOT:-$(cd "$BIN_DIR/.." && pwd)}"
 source "$BIN_DIR/tmux_session_defaults.sh"   # mouse on per seat session, same as spawn-agent.sh
+source "$BIN_DIR/seat_nice.sh"   # a recovered seat runs at the same CPU priority as a spawned one
+SEAT_NICE="$(seat_nice_prefix)"
 STATE_DIR="$SCRIPT_DIR/state"
 
 # The Telegram chat id: ORCHESTRA_TELEGRAM_CHAT_ID (env, then the file), then the old name SHAW_TELEGRAM_ID
@@ -542,12 +544,12 @@ while IFS='|' read -r agent_id tmux_name session_id cwd conv_path; do
         orch_tmux_session_defaults "$tmux_name"
         sleep 1
         if [ "$runtime" = "gemini" ]; then
-            tmux send-keys -t "$tmux_name" "agy --conversation $session_id --dangerously-skip-permissions" Enter
+            tmux send-keys -t "$tmux_name" "${SEAT_NICE}agy --conversation $session_id --dangerously-skip-permissions" Enter
         else
             MODEL_FLAG=""
             RESUME_MODEL=$(resume_model "$agent_id")
             [ -n "$RESUME_MODEL" ] && MODEL_FLAG=" --model '$RESUME_MODEL'"
-            tmux send-keys -t "$tmux_name" "$CLAUDE_BIN --resume $session_id$MODEL_FLAG --dangerously-skip-permissions" Enter
+            tmux send-keys -t "$tmux_name" "${SEAT_NICE}$CLAUDE_BIN --resume $session_id$MODEL_FLAG --dangerously-skip-permissions" Enter
         fi
         RECOVERED=$((RECOVERED + 1))
         sleep 3
@@ -622,12 +624,12 @@ while IFS='|' read -r agent_id tmux_name session_id cwd conv_path; do
 
     sleep 1
     if [ "$runtime" = "gemini" ]; then
-        tmux send-keys -t "$tmux_name" "agy --conversation $session_id --dangerously-skip-permissions" Enter
+        tmux send-keys -t "$tmux_name" "${SEAT_NICE}agy --conversation $session_id --dangerously-skip-permissions" Enter
     else
         MODEL_FLAG=""
         RESUME_MODEL=$(resume_model "$agent_id")
         [ -n "$RESUME_MODEL" ] && MODEL_FLAG=" --model '$RESUME_MODEL'"
-        tmux send-keys -t "$tmux_name" "$CLAUDE_BIN --resume $session_id$MODEL_FLAG --dangerously-skip-permissions" Enter
+        tmux send-keys -t "$tmux_name" "${SEAT_NICE}$CLAUDE_BIN --resume $session_id$MODEL_FLAG --dangerously-skip-permissions" Enter
     fi
 
     RECOVERED=$((RECOVERED + 1))
