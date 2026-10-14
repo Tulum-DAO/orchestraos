@@ -50,3 +50,9 @@ test('a required question is answered by an option or by text alone; a free_text
 test('a saved draft answer is preloaded', () => {
   assert.deepEqual(initialAnswers(Q), { 3: { option_n: '1' } });
 });
+
+test('a saved draft on a hidden (chat) option is not preloaded, so it is never sent; its text is kept', () => {
+  const q: LiveQuestion[] = [{ ...Q[0], answer: { option_n: '3', answer_text: 'note', state: 'draft' } },
+    { ...Q[2], answer: { option_n: '3', answer_text: null, state: 'draft' } }];
+  assert.deepEqual(initialAnswers(q), { 1: { answer_text: 'note' } });
+});

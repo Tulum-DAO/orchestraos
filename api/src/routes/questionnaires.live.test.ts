@@ -192,3 +192,12 @@ test('a second submit is not applied twice: the gateway answer (applied false, s
   const r = await req(deps, 'POST', '/api/questionnaires/qnr_test_0001/answers', { answers: { '1': { option_n: '1' } } });
   assert.deepEqual(r.json, { ok: true, applied: false, id: 'qnr_test_0001', status: 'submitted' });
 });
+
+test('a live id is never served or submitted by the legacy routes, even when the legacy index holds it', async () => {
+  const d = dataDir([{ id: 'qnr_test_0001', title: 'Collides', status: 'pending', html_file: 'state/questionnaires/c.html' }]);
+  writeFileSync(join(d, 'state', 'questionnaires', 'c.html'), '<html>legacy</html>');
+  const deps = makeDeps({ orchestraDir: d } as any);
+  assert.equal((await req(deps, 'GET', '/api/questionnaires/qnr_test_0001/html')).status, 404);
+  assert.equal((await req(deps, 'GET', '/api/questionnaires/qnr_test_0001/response')).status, 404);
+  assert.equal((await req(deps, 'POST', '/api/questionnaires/qnr_test_0001/submit', { answers: {} })).status, 404);
+});

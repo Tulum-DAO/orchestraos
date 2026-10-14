@@ -127,6 +127,7 @@ router.get('/:id', async (req: Request, res: Response) => {
 
 // GET /api/questionnaires/:id/html — serve the questionnaire HTML
 router.get('/:id/html', (req: Request, res: Response) => {
+  if (isLiveId(String(req.params.id))) { res.status(404).json({ error: 'Not found' }); return; }   // live ids: GET /:id + /answers only
   const indexFile = join(ORCHESTRA, 'state', 'questionnaires', 'index.json');
   const questionnaires = readJson(indexFile) || [];
   const q = questionnaires.find((q: any) => q.id === req.params.id);
@@ -156,6 +157,7 @@ router.get('/:id/html', (req: Request, res: Response) => {
 
 // GET /api/questionnaires/:id/response — get submitted answers
 router.get('/:id/response', (req: Request, res: Response) => {
+  if (isLiveId(String(req.params.id))) { res.status(404).json({ error: 'Not found' }); return; }   // live ids: GET /:id + /answers only
   const indexFile = join(ORCHESTRA, 'state', 'questionnaires', 'index.json');
   const questionnaires = readJson(indexFile) || [];
   const q = questionnaires.find((q: any) => q.id === req.params.id);
@@ -173,8 +175,10 @@ router.get('/:id/response', (req: Request, res: Response) => {
 // own submit (validation, store, resume of the asking agent), surface "web". The gateway's answer
 // (applied, missing, or a 400 naming the bad answer) is passed back as is.
 router.post('/:id/answers', async (req: Request, res: Response) => {
-  // Identity first (lib/principal): with no identity this is a 401, and a client-scoped viewer
-  // cannot answer the operator's questionnaires. Nothing reaches the gateway in either case.
+  // Identity first (lib/principal). Behind an identity proxy (ORCHESTRA_API_TRUST_IDENTITY_HEADERS)
+  // no identity is a 401 and a client-scoped viewer cannot answer the operator's questionnaires;
+  // nothing reaches the gateway in either case. Without a proxy every caller is the configured
+  // operator, as on every other route of this API (see lib/principal.ts).
   const who = deps.principal(req);
   if (!who) { res.status(401).json({ ok: false, error: 'unauthenticated' }); return; }
   if (who.clientScope) { res.status(403).json({ ok: false, error: 'a client-scoped user cannot answer questionnaires' }); return; }
@@ -195,6 +199,7 @@ router.post('/:id/answers', async (req: Request, res: Response) => {
 // Handles full lifecycle: save feedback, update index, notify creating agent
 
 router.post('/:id/submit', (req: Request, res: Response) => {
+  if (isLiveId(String(req.params.id))) { res.status(404).json({ error: 'Not found' }); return; }   // live ids: GET /:id + /answers only
   // All of the logic, and every guard, lives in submitQuestionnaire (tested end to end there).
   const r = submitQuestionnaire({
     orchestraDir: ORCHESTRA,
