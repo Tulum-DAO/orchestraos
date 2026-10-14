@@ -1,4 +1,6 @@
 import { useState, useMemo, useRef } from 'react';
+import QuestionnaireForm from '../components/QuestionnaireForm';
+import { isLiveQuestionnaire } from '../lib/questionnaireForm';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import {
@@ -446,12 +448,16 @@ export default function Inbox() {
 
                 {isExpanded && (
                   <div className="rounded-lg overflow-hidden border border-neutral-700 bg-black">
+                    {isLiveQuestionnaire(q) ? (
+                      <QuestionnaireForm id={q.id} onDone={() => setExpandedId(null)} />
+                    ) : (
                     <iframe
                       src={`/api/questionnaires/${q.id}/html`}
                       className="w-full border-0"
                       style={{ minHeight: '600px' }}
                       title={q.title}
                     />
+                    )}
                   </div>
                 )}
               </div>
