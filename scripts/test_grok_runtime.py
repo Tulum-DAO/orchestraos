@@ -917,3 +917,15 @@ def test_mail_watch_requires_an_agent_and_defaults_the_tenant(monkeypatch):
     src = (ROOT / "scripts" / "grok_mail_watch.py").read_text()
     assert "shaw" not in src.lower()
     assert "ORCHESTRA_TENANT" in src
+
+
+def test_children_reads_proc_without_a_helper_module():
+    """grok_context._children used to import an unpublished `proc_children` module, so on a
+    public install seat_turn_state() was always reader-error and the mail watcher never nudged."""
+    import subprocess as _sp
+    child = _sp.Popen(["sleep", "30"])
+    try:
+        assert child.pid in gc._children(os.getpid())
+    finally:
+        child.kill()
+        child.wait()
