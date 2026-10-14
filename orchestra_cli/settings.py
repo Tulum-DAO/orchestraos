@@ -63,6 +63,8 @@ class Settings:
     boundary_delivery_armed: bool = True
     router_enabled: bool = True
     router_interval: int = 60
+    # [seats] nice: the CPU priority seats start at (scripts/seat_nice.sh validates it; 0 = off)
+    seat_nice: str = "10"
     runtime_dir: Path = Path(DEFAULT_RUNTIME_DIR)
 
     @property
@@ -228,6 +230,7 @@ def load_settings(repo_root: Path | None = None, config_path: Path | None = None
         boundary_delivery_armed=bool(rot.get("boundary_delivery_armed", True)),
         router_enabled=bool(_get(raw, "router", "enabled", True)),
         router_interval=int(_get(raw, "router", "interval_seconds", 60)),
+        seat_nice=str(_get(raw, "seats", "nice", 10)),
         runtime_dir=Path(os.path.expanduser(str(rot.get("runtime_dir", DEFAULT_RUNTIME_DIR)))),
     )
     return st
@@ -321,6 +324,7 @@ def child_env(st: Settings, base: dict | None = None) -> dict:
         "ORCHESTRA_RUNTIMES_ENABLED": ",".join(st.runtimes_enabled),
         "ORCHESTRA_NOTIFY_CHANNEL": st.notify_channel,
         "ORCH_RUNTIME_DIR": str(st.runtime_dir),
+        "ORCHESTRA_SEAT_NICE": st.seat_nice,
         "ORCH_EVENT_STREAM_DIR": str(st.data_dir / "state" / "event-stream"),
         "ORCH_BUS_CURSOR": str(st.data_dir / "state" / "bus-cursor.json"),
         "ORCH_WAKE_COOLDOWN": str(st.data_dir / "state" / "wake-cooldown.json"),
