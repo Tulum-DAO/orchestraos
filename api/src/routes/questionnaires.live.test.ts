@@ -167,13 +167,17 @@ test('the legacy html route still serves only legacy items (a live id is never a
 
 
 // --- gm's submit-path conditions ------------------------------------------------------------------
-test('answering needs an identity: none is a 401, a client-scoped viewer a 403, and neither is forwarded', async () => {
+test('answering needs the operator: no identity is a 401, a client-scoped or non-admin caller a 403, none is forwarded', async () => {
   const anon = makeDeps({ principal: () => null });
   const r1 = await req(anon, 'POST', '/api/questionnaires/qnr_test_0001/answers', { answers: { '1': { option_n: '1' } } });
   assert.equal(r1.status, 401);
   const client = makeDeps({ principal: () => ({ username: 'c', role: 'viewer', allowedAgents: 'acme', clientScope: 'acme', trusted: true }) });
   const r2 = await req(client, 'POST', '/api/questionnaires/qnr_test_0001/answers', { answers: { '1': { option_n: '1' } } });
   assert.equal(r2.status, 403);
+  const viewer = makeDeps({ principal: () => ({ username: 'v', role: 'viewer', allowedAgents: '*', clientScope: null, trusted: true }) });
+  const r3 = await req(viewer, 'POST', '/api/questionnaires/qnr_test_0001/answers', { answers: { '1': { option_n: '1' } } });
+  assert.equal(r3.status, 403);   // not the operator: no admin role, even with no client scope
+  assert.equal(viewer.calls.length, 0);
   assert.equal(anon.calls.length + client.calls.length, 0);
 });
 

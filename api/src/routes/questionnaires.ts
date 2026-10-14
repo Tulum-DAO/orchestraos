@@ -178,12 +178,12 @@ router.get('/:id/response', (req: Request, res: Response) => {
 // (applied, missing, or a 400 naming the bad answer) is passed back as is.
 router.post('/:id/answers', async (req: Request, res: Response) => {
   // Identity first (lib/principal). Behind an identity proxy (ORCHESTRA_API_TRUST_IDENTITY_HEADERS)
-  // no identity is a 401 and a client-scoped viewer cannot answer the operator's questionnaires;
-  // nothing reaches the gateway in either case. Without a proxy every caller is the configured
-  // operator, as on every other route of this API (see lib/principal.ts).
+  // no identity is a 401, and only the operator (an admin no client scope narrows) may answer the
+  // operator's questionnaires; nothing reaches the gateway otherwise. Without a proxy every caller
+  // is the configured operator, as on every other route of this API (see lib/principal.ts).
   const who = deps.principal(req);
   if (!who) { res.status(401).json({ ok: false, error: 'unauthenticated' }); return; }
-  if (who.clientScope) { res.status(403).json({ ok: false, error: 'a client-scoped user cannot answer questionnaires' }); return; }
+  if (who.role !== 'admin' || who.clientScope) { res.status(403).json({ ok: false, error: 'only the operator can answer questionnaires' }); return; }
   const id = String(req.params.id);
   if (!isLiveId(id)) { res.status(404).json({ ok: false, error: 'not a live questionnaire' }); return; }
   const answers = req.body?.answers;
