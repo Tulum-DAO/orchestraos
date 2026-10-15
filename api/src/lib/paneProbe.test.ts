@@ -88,6 +88,16 @@ test('CACHE: 20 polls inside the TTL = ONE tmux call and one /proc scan; after t
   assert.equal(h.calls.tmux, 2);
 });
 
+test('CACHE: a rotated Gemini (its process gone) is not served from the cache, inside the TTL', () => {
+  const h = host(TWO_PANES, GEMINI_HOST);
+  assert.equal(liveGeminiSid('seat'), CID);
+  const NEXT = 'cccccccc-0000-4000-8000-00000000000c';
+  delete h.procs['301'];                                       // the old gemini exited; a new one started
+  h.procs['100'].tasks['101'] = '302';
+  h.procs['302'] = { tasks: { '302': '' }, fds: { '5': `/home/x/.gemini/antigravity-cli/brain/${NEXT}/x.jsonl` } };
+  assert.equal(liveGeminiSid('seat'), NEXT);
+});
+
 test('CACHE: a dead pane process is asked of tmux again at once, inside the TTL', () => {
   const h = host(TWO_PANES, GEMINI_HOST);
   paneInfo('seat');

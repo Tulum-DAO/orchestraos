@@ -10,7 +10,11 @@
  *    A missing hook-event file is NOT staleness: codex/gemini panes never write one.
  *  - the pane's children come from /proc/<pid>/task/<tid>/children (every thread, as pgrep -P saw them),
  *    a file read, not a fork.
- *  - a resolved Gemini conversation id is cached per session for TTL_MS too (hits only).
+ *  - a resolved Gemini conversation id is cached per session for TTL_MS too (hits only), and only
+ *    while the process that has it open is alive.
+ *  - what the cache does NOT notice inside TTL_MS: the active pane switching while the old pane's
+ *    process lives on, or a tmux session name reused while its old first pane is still alive. Either
+ *    shows at most TTL_MS late; the pane's process dying is noticed at once.
  * `deps` is swappable so tests count tmux calls; production uses the real ones.
  */
 import { execFileSync } from 'child_process';
@@ -36,7 +40,7 @@ const REAL: PaneDeps = {
 
 let deps: PaneDeps = REAL;
 const panes = new Map<string, { at: number; panePid: string | null; paneId: string | null }>();
-const geminiSids = new Map<string, { at: number; sid: string }>();
+const geminiSids = new Map<string, { at: number; sid: string; pid: string }>();
 
 /** Tests only: swap the deps (null = real) and start from empty caches. */
 export function setPaneProbeDeps(d: PaneDeps | null): void {
@@ -89,7 +93,9 @@ export function childPids(pid: string): string[] | null {
 /** Live Antigravity / Gemini conversation id, from the fds of the pane's child processes. */
 export function liveGeminiSid(tmuxSession: string): string | null {
   const hit = geminiSids.get(tmuxSession);
-  if (hit && deps.now() - hit.at < TTL_MS) return hit.sid;
+  // A hit holds only while the process that had the conversation open is alive: a rotated or
+  // restarted Gemini is looked up again at once, never served for the rest of the TTL.
+  if (hit && deps.now() - hit.at < TTL_MS && alive(hit.pid)) return hit.sid;
   geminiSids.delete(tmuxSession);
   const { panePid } = paneInfo(tmuxSession);
   if (!panePid) return null;
@@ -101,7 +107,7 @@ export function liveGeminiSid(tmuxSession: string): string | null {
     for (const fd of fds) {
       try {
         const m = deps.readLink(`/proc/${pid}/fd/${fd}`).match(/antigravity-cli\/(?:presence|brain)\/([0-9a-f-]{36})/);
-        if (m && m[1]) { geminiSids.set(tmuxSession, { at: deps.now(), sid: m[1] }); return m[1]; }
+        if (m && m[1]) { geminiSids.set(tmuxSession, { at: deps.now(), sid: m[1], pid }); return m[1]; }
       } catch { /* fd closed */ }
     }
   }
