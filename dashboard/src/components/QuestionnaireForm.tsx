@@ -11,13 +11,15 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Loader2 } from 'lucide-react';
 import { answerQuestionnaire, fetchQuestionnaire } from '../lib/api';
 import {
-  answerableOptions, buildAnswers, missingRequired, initialAnswers,
+  answerableOptions, buildAnswers, missingRequired, initialAnswers, questionnaireSummary,
   type Drafts, type LiveQuestion,
 } from '../lib/questionnaireForm';
+import Markdown from './chat/Markdown';
 
 interface LiveDetail {
   id: string;
   title: string;
+  summary?: string | null;
   status: string;
   questions: LiveQuestion[];
 }
@@ -74,6 +76,11 @@ export default function QuestionnaireForm({ id, onDone }: { id: string; onDone?:
 
   return (
     <div className="space-y-4 p-4 bg-neutral-950" data-testid="qnr-form">
+      {questionnaireSummary(data) && (
+        <div className="text-sm text-neutral-300 leading-relaxed max-h-72 overflow-y-auto pr-1" data-testid="qnr-summary">
+          <Markdown text={questionnaireSummary(data)} />
+        </div>
+      )}
       {data.questions.map((q) => {
         const d = drafts[q.n] ?? {};
         const opts = answerableOptions(q);
