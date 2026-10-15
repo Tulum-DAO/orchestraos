@@ -370,7 +370,7 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
         if str(root) not in _sys.path:
             _sys.path.insert(0, str(root))
         import plugins as _plugins  # noqa: WPS433
-        for name in _plugins.KNOWN:
+        for name in tuple(_plugins.KNOWN) + tuple(getattr(_plugins, "NOTIFIERS", ())):
             mod = _plugins.load(name)
             if mod is None:
                 checks.append(Check(f"plugin:{name}", INFO, "not installed", None))
