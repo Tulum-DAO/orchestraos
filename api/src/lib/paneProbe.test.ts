@@ -14,7 +14,9 @@ import { paneInfo, liveGeminiSid, childPids, setPaneProbeDeps, TTL_MS, type Pane
 const CID = 'aaaaaaaa-0000-4000-8000-00000000000a';
 
 /** A fake host: tmux answers `rows`, /proc holds `procs` (pid -> {tasks: tid -> children, fds}). */
-function host(rows: string, procs: Record<string, { tasks: Record<string, string>; fds?: Record<string, string> }>) {
+function host(rows: string, fixture: Record<string, { tasks: Record<string, string>; fds?: Record<string, string> }>) {
+  // A copy: tests kill and add processes, and must never change the fixture a later test reads.
+  const procs = structuredClone(fixture);
   const calls = { tmux: 0, children: 0 };
   let t = 1_000_000;
   const d: PaneDeps = {
