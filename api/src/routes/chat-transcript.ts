@@ -10,10 +10,9 @@
  * concurrently-maintained detector code. Mounted at /api/agents in server.ts.
  */
 import { Router, type Request, type Response } from 'express';
-import { readFileSync, existsSync, readdirSync, statSync, openSync, readSync, closeSync, readlinkSync } from 'fs';
+import { readFileSync, existsSync, readdirSync, statSync, openSync, readSync, closeSync } from 'fs';
 import { join } from 'path';
 import { isSafeAgentId } from '../lib/agentPaths.js';
-import { execFileSync } from 'child_process';
 import { LIVE_CARDS, mergeQueuedItems } from '../services/queued-merge.js';
 import { homedir } from 'os';
 import Database from 'better-sqlite3';
@@ -21,6 +20,7 @@ import { agentScopeParam } from '../lib/agent-scope.js';
 import { expandChipDodge } from '../lib/chipDodge.js';
 import { sessionOwners } from '../services/identity-store-reader.js';
 import { dataDir } from '../lib/config.js';
+import { paneInfo, forgetPane, childPids, procArgv, liveGeminiSid } from '../lib/paneProbe.js';
 
 const router = Router();
 // Every /:id route on this router is scoped to the caller's principal — the same rule GET /
@@ -38,46 +38,18 @@ function loadAgentSessions(): Record<string, any> {
   catch { return {}; }
 }
 
-// Live Antigravity / Gemini conversation ID extracted directly from pane process fds
-function liveGeminiSid(tmuxSession: string): string | null {
-  try {
-    const panePid = execFileSync('tmux',
-      ['list-panes', '-t', tmuxSession, '-F', '#{pane_pid}'],
-      { timeout: 2000 }).toString().trim().split('\n')[0];
-    if (!panePid) return null;
-    let childPids: string[] = [];
-    try {
-      childPids = execFileSync('pgrep', ['-P', panePid], { timeout: 2000 })
-        .toString().trim().split('\n').filter(Boolean);
-    } catch {
-      return null;
-    }
-    for (const pid of childPids) {
-      try {
-        const fds = readdirSync(`/proc/${pid}/fd`);
-        for (const fd of fds) {
-          try {
-            const link = readlinkSync(`/proc/${pid}/fd/${fd}`);
-            const m = link.match(/antigravity-cli\/(?:presence|brain)\/([0-9a-f-]{36})/);
-            if (m && m[1]) return m[1];
-          } catch {}
-        }
-      } catch {}
-    }
-  } catch {}
-  return null;
-}
+// Live Antigravity / Gemini conversation id (pane child fds) and the pane id for the hook file both
+// come from lib/paneProbe.ts: one cached tmux call per session per 10 s, /proc instead of pgrep
+// (every transcript poll used to fork tmux + pgrep per seat).
 
 // Tier-0 sid resolution: the pane's hook-event file (state-event-hook.py writes
 // the LIVE session_id on every Stop/PreToolUse).
 function hookEventSid(tmuxSession: string): { sid: string | null; cwd: string | null } {
+  const { paneId } = paneInfo(tmuxSession);
+  if (!paneId) return { sid: null, cwd: null };
   try {
-    const pane = execFileSync('tmux',
-      ['display-message', '-t', tmuxSession, '-p', '#{pane_id}'],
-      { timeout: 3000 }).toString().trim().replace('%', '');
-    if (!pane) return { sid: null, cwd: null };
     const ev = JSON.parse(readFileSync(
-      join(ORCH_DIR, 'state', 'agent-events', 'panes', `${pane}.json`), 'utf-8'));
+      join(ORCH_DIR, 'state', 'agent-events', 'panes', `${paneId}.json`), 'utf-8'));
     const sid = typeof ev.session_id === 'string' && ev.session_id.length >= 36
       ? ev.session_id : null;
     return { sid, cwd: typeof ev.cwd === 'string' ? ev.cwd : null };
@@ -235,22 +207,14 @@ export function grokUpdatesPath(sid: string, root = grokSessionsRoot()): string 
   return existsSync(path) ? path : null;
 }
 
-function procArgv(pid: string): string[] {
-  try { return readFileSync(`/proc/${pid}/cmdline`).toString().split('\0').filter(Boolean); }
-  catch { return []; }
-}
-
 /** The pane's unique live grok process (pane shell or up to two levels below it), and the
  *  session UUID on its argv. Two grok processes, or none, -> null. */
 function liveGrokSid(tmuxSession: string): { running: boolean; sid: string | null } {
   try {
-    const panePid = execFileSync('tmux', ['list-panes', '-t', tmuxSession, '-F', '#{pane_pid}'],
-      { timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim().split('\n')[0];
+    // The cached pane (lib/paneProbe) and /proc children: no tmux or pgrep fork per poll.
+    const { panePid } = paneInfo(tmuxSession);
     if (!panePid) return { running: false, sid: null };
-    const kids = (pid: string): string[] => {
-      try { return execFileSync('pgrep', ['-P', pid], { timeout: 2000 }).toString().trim().split('\n').filter(Boolean); }
-      catch { return []; }
-    };
+    const kids = (pid: string): string[] => childPids(pid) ?? [];
     const isGrok = (pid: string) => GROK_BASENAMES.has((procArgv(pid)[0] || '').split('/').pop() || '');
     let hits = isGrok(panePid) ? [panePid] : kids(panePid).filter(isGrok);
     if (!hits.length) for (const k of kids(panePid)) hits = hits.concat(kids(k).filter(isGrok));
@@ -460,11 +424,16 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
     return { path, sid };
   }
 
-  // 0a. Live Gemini/Antigravity process check (inspect active process in tmux pane)
-  const gSid = liveGeminiSid(tmuxSession);
+  // 0a. Live Gemini/Antigravity process check (inspect active process in tmux pane). Only a seat
+  // that can be Gemini pays for it: a Gemini seat as step 6 defines one (runtime gemini/agy, or a
+  // gemini-/agy- name), or a seat whose records name no runtime.
+  const runtime = String(e.runtime || '').toLowerCase();
+  const geminiSeat = runtime === 'gemini' || runtime === 'agy' || agentId.startsWith('gemini') || agentId.startsWith('agy');
+  const gSid = !runtime || geminiSeat ? liveGeminiSid(tmuxSession) : null;
   if (gSid) {
     const gPath = join(GEMINI_BRAIN, gSid, '.system_generated', 'logs', 'transcript.jsonl');
     if (existsSync(gPath)) return { path: gPath, sid: gSid };
+    forgetPane(tmuxSession);
   }
 
   // 0c. Codex: the seat's own declaration in ~/.codex/state_5.sqlite. Checked before the Claude
@@ -527,8 +496,7 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
 
   // 6. A Gemini/Antigravity seat (by its recorded runtime, or a gemini-/agy- name): search the
   //    Antigravity brains by declaration
-  const runtime = String(e.runtime || '').toLowerCase();
-  if (runtime === 'gemini' || runtime === 'agy' || agentId.startsWith('gemini') || agentId.startsWith('agy')) {
+  if (geminiSeat) {
     const gHit = findGeminiByDeclaration(agentId);
     if (gHit) return gHit;
   }
