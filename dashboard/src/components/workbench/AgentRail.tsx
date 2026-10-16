@@ -19,7 +19,7 @@ import { chipStateFor, ActivityDot } from '../RecentAgentChips';
 import { useFeedHealth } from '../../hooks/useFeedHealth';
 import { isDegraded, lastSeenLabel, type FeedVerdict } from '../../lib/feedLiveness';
 import UsageLine from './UsageLine';
-import { asChip, contextLeftLabel, contextLeftLow, providerTitle, railStatus, type AgentChip } from '../../lib/agentChip';
+import { asChip, contextLeftLabel, contextLeftLow, providerTitle, railStatus, railPendingMenu, type AgentChip } from '../../lib/agentChip';
 import { useProviderMarks, type ProviderMarks } from '../../hooks/useProviderMarks';
 
 const SECTIONS: { key: keyof Omit<RailGroups, 'other'>; label: string; badge?: boolean }[] = [
@@ -109,8 +109,10 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
       name: a.name as string | undefined,
       // The gateway's chip decides the dot and the section when there is one (lib/agentChip.ts
       // railStatus), so a seat waiting on a card it filed needs you here too.
+      // With a chip, the chip ALONE decides: its needs_you already counts a pending menu, and the
+      // API's own flag could otherwise outrank a chip that says working or down.
       status: railStatus(asChip(a.chip), a.status as string | undefined),
-      has_pending_menu: !!a.has_pending_menu,
+      has_pending_menu: railPendingMenu(asChip(a.chip), !!a.has_pending_menu),
       chip: asChip(a.chip),
       unread: (a.inbox_count as number | undefined) ?? 0,
       provider: a.runtime as string | undefined,

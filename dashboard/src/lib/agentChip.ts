@@ -55,3 +55,8 @@ export function railStatus(c: AgentChip | undefined, detector: string | undefine
     default: return detector;
   }
 }
+
+/** The rail row's pending-menu flag: with a chip, the chip's status has already counted it. */
+export function railPendingMenu(c: AgentChip | undefined, detectorFlag: boolean): boolean {
+  return c ? false : detectorFlag;
+}

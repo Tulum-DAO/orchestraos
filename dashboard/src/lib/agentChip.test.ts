@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { asChip, chipNeedsYou, contextLeftLabel, contextLeftLow, providerTitle, railStatus } from './agentChip.ts';
+import { asChip, chipNeedsYou, contextLeftLabel, contextLeftLow, providerTitle, railStatus, railPendingMenu } from './agentChip.ts';
 import { sectionFor } from './agentRail.ts';
 
 const FIXTURE = JSON.parse(readFileSync(new URL('../../../contract/fixtures/agent-chips.json', import.meta.url), 'utf8'));
@@ -37,4 +37,12 @@ test('the rail follows the chip, so the dashboard says what every surface says',
   assert.equal(railStatus({ status: 'needs_you' }, 'stranded'), 'stranded');
   assert.equal(railStatus({ status: 'working' }, 'idle'), 'working');
   assert.equal(railStatus(undefined, 'stalled'), 'stalled');                  // no chip: detector stands
+});
+
+test('with a chip, a stale detector menu flag cannot outrank it', () => {
+  // codex R2: sectionFor puts has_pending_menu first, so it must not ride along with a chip.
+  const row = { id: 'x', status: railStatus({ status: 'working' }, 'working'),
+                has_pending_menu: railPendingMenu({ status: 'working' }, true) };
+  assert.equal(sectionFor(row), 'working');
+  assert.equal(railPendingMenu(undefined, true), true);                      // no chip: the flag stands
 });
