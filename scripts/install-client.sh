@@ -260,23 +260,57 @@ dash="https://$(tailscale status --json 2>/dev/null | python3 -c 'import json,sy
 
 # The end-to-end proof: one card the client answers on the dashboard. It goes through everything at
 # once (Tailscale, the dashboard, the API, the card store), and the client sees it work themselves.
-# Filed once; its id is kept so a re-run checks the same card.
+# Filed once; its id is kept so a re-run checks the same card. Only a person's answer counts (Approve
+# or Deny: either one went through the whole path). A card that is gone or was closed without an
+# answer (retired, expired) is filed again; a lost id file finds the pending card instead of filing a
+# second one.
 WELCOME_ID_FILE="$HOME/.orchestra/.install-client-welcome-card"
+WELCOME_Q="Welcome to OrchestraOS! Tap Approve to finish setup."
 approval() { ( cd "$CHECKOUT" && "$CHECKOUT/.venv/bin/python" scripts/approval.py "$@" ); }
-welcome_answered() {
-  [ -s "$WELCOME_ID_FILE" ] || return 1
-  approval get "$(cat "$WELCOME_ID_FILE")" 2>/dev/null | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("status") not in (None, "pending") else 1)' 2>/dev/null
+# answered | pending | gone
+welcome_state() {
+  [ -s "$WELCOME_ID_FILE" ] || { echo gone; return; }
+  # `get` exits 1 for a card the store does not have; read it first so pipefail cannot add a line.
+  local row; row=$(approval get "$(cat "$WELCOME_ID_FILE")" 2>/dev/null) || true
+  printf '%s' "$row" | python3 -c '
+import json, sys
+try:
+    row = json.load(sys.stdin)
+except ValueError:
+    row = {}
+st = row.get("status")
+if st in ("answered", "resumed") and row.get("answered_at"):
+    print("answered")
+elif st == "pending":
+    print("pending")
+else:
+    print("gone")' 2>/dev/null || echo gone
 }
-if ! welcome_answered; then
+# The id of a pending welcome card already filed by an earlier run, if any.
+pending_welcome() {
+  approval pending 2>/dev/null | WELCOME_Q="$WELCOME_Q" python3 -c '
+import json, os, sys
+try:
+    rows = json.load(sys.stdin)
+except ValueError:
+    rows = []
+ids = [r.get("id") for r in rows if isinstance(r, dict) and r.get("from_agent") == "setup"
+       and r.get("question") == os.environ["WELCOME_Q"] and str(r.get("id", "")).startswith("apr_")]
+print(ids[0] if ids else "")' 2>/dev/null
+}
+if [ "$(welcome_state)" != answered ]; then
   resume 10
-  if [ ! -s "$WELCOME_ID_FILE" ]; then
-    id=$(approval request --from setup --worker-kind node --options "approve,deny" --risk low --reversibility easy \
-           --feature "setup" --summary "Your OrchestraOS server is set up. Tap Approve to finish the setup on the server." \
-           "Welcome to OrchestraOS! Tap Approve to finish setup." 2>/dev/null | tail -1)
+  if [ "$(welcome_state)" = gone ]; then
+    id=$(pending_welcome)
+    if [ -z "$id" ]; then
+      id=$(approval request --from setup --worker-kind node --options "approve,deny" --risk low --reversibility easy \
+             --feature "setup" --summary "Your OrchestraOS server is set up. Tap Approve to finish the setup on the server." \
+             "$WELCOME_Q" 2>/dev/null | tail -1)
+    fi
     case "$id" in apr_*) mkdir -p "$(dirname "$WELCOME_ID_FILE")"; printf '%s\n' "$id" > "$WELCOME_ID_FILE" ;;
       *) fail 10 "the welcome card could not be created" "run: orchestra doctor, and fix the rows it marks MISSING" ;; esac
   fi
-  welcome_answered || stop_for_person 10 "one last check that you can reach your agents from your own device." \
+  [ "$(welcome_state)" = answered ] || stop_for_person 10 "one last check that you can reach your agents from your own device." \
     "On your phone or computer (with Tailscale on), open:  $dash" \
     "Go to Approvals, find \"Welcome to OrchestraOS!\" and tap Approve."
 fi

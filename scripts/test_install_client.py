@@ -55,8 +55,18 @@ echo "venv-python $*" >> "$S/calls"
 [ "$1" = "-c" ] && { [ -f "$S/segno" ] && exit 0 || exit 1; }
 [ "$2" = "pip" ] && { touch "$S/segno"; exit 0; }
 case "$1 $2" in
-  *approval.py\ request) echo "apr_welcome_0001"; exit 0;;
-  *approval.py\ get) [ -f "$S/welcome_answered" ] && echo '{"status": "resolved"}' || echo '{"status": "pending"}'; exit 0;;
+  *approval.py\ request) n=$(( $(cat "$S/cards" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$S/cards"
+                         echo "apr_welcome_000$n"; exit 0;;
+  # The card store's real shapes: a person's answer is status answered (resumed once acked) with
+  # answered_at; a card closed without an answer is retired/expired; a reset store says not found.
+  *approval.py\ get) id="$3"
+    [ -f "$S/gone_$id" ] && { echo "{\"error\": \"not found\", \"id\": \"$id\"}"; exit 1; }
+    [ -f "$S/status_$id" ] && { echo "{\"status\": \"$(cat "$S/status_$id")\"}"; exit 0; }
+    [ -f "$S/welcome_answered" ] && echo '{"status": "answered", "answered_at": "2026-10-16T17:00:00Z"}' \
+      || echo '{"status": "pending"}'; exit 0;;
+  *approval.py\ pending) if [ -f "$S/listed_pending" ]; then
+      echo '[{"id": "apr_welcome_0001", "from_agent": "setup", "status": "pending", "question": "Welcome to OrchestraOS! Tap Approve to finish setup."}]'
+    else echo '[]'; fi; exit 0;;
 esac
 exit 0
 '''
@@ -321,3 +331,47 @@ def test_the_welcome_card_is_a_plain_approval_the_dashboard_button_can_answer(bo
     box.run()
     req = [c for c in box.calls() if "approval.py request" in c]
     assert req and "--options approve,deny" in req[0], req
+
+
+def test_a_card_closed_without_an_answer_does_not_finish_setup_and_is_filed_again(box):
+    # codex R5: retired or expired is not a person's answer; a status other than pending is not proof.
+    box.set("ts_signin", "claude_login")
+    assert box.run().returncode == 3
+    (box.state / "status_apr_welcome_0001").write_text("retired")
+    r = box.run()
+    assert r.returncode == 3 and "Setup complete" not in r.stdout, r.stdout
+    assert sum("approval.py request" in c for c in box.calls()) == 2          # a fresh card to answer
+    assert (box.path / "home" / ".orchestra" / ".install-client-welcome-card").read_text().strip() \
+        == "apr_welcome_0002"
+    box.set("welcome_answered")
+    assert box.run().returncode == 0
+
+
+def test_a_card_the_store_no_longer_has_is_filed_again(box):
+    box.set("ts_signin", "claude_login")
+    assert box.run().returncode == 3
+    (box.state / "gone_apr_welcome_0001").touch()
+    r = box.run()
+    assert r.returncode == 3 and "Welcome" in r.stdout, r.stdout
+    assert sum("approval.py request" in c for c in box.calls()) == 2
+
+
+def test_a_lost_id_file_finds_the_pending_card_instead_of_filing_a_second(box):
+    box.set("ts_signin", "claude_login")
+    assert box.run().returncode == 3
+    (box.path / "home" / ".orchestra" / ".install-client-welcome-card").unlink()
+    box.set("listed_pending")
+    r = box.run()
+    assert r.returncode == 3, r.stdout
+    assert sum("approval.py request" in c for c in box.calls()) == 1          # still ONE card
+    assert (box.path / "home" / ".orchestra" / ".install-client-welcome-card").read_text().strip() \
+        == "apr_welcome_0001"
+
+
+def test_only_an_answer_with_its_time_counts(box):
+    # A person's tap (Approve or Deny) stamps answered_at; a bare status is not proof of one.
+    box.set("ts_signin", "claude_login")
+    assert box.run().returncode == 3
+    (box.state / "status_apr_welcome_0001").write_text("answered")
+    r = box.run()
+    assert r.returncode == 3 and "Setup complete" not in r.stdout, r.stdout
