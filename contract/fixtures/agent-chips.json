@@ -9,6 +9,7 @@
   },
   "chip": {
    "name": "gm",
+   "kind": "agent",
    "provider": "claude",
    "model_label": "Opus 5.5",
    "status": "working",
@@ -25,6 +26,7 @@
   },
   "chip": {
    "name": "ios-watch-dev",
+   "kind": "agent",
    "provider": "codex",
    "model_label": "GPT-5.6 Terra",
    "status": "needs_you",
@@ -43,6 +45,7 @@
   "pending_cards": 1,
   "chip": {
    "name": "ops",
+   "kind": "agent",
    "provider": "grok",
    "model_label": "Grok 4.7",
    "status": "needs_you",
@@ -59,6 +62,7 @@
   },
   "chip": {
    "name": "research",
+   "kind": "agent",
    "provider": "gemini",
    "model_label": "Gemini 3.8 Flash (High)",
    "status": "idle",
@@ -75,6 +79,7 @@
   "registry_runtime": "claude",
   "chip": {
    "name": "old-seat",
+   "kind": "agent",
    "provider": "claude",
    "model_label": "Fable 5.1",
    "status": "down",
@@ -91,9 +96,45 @@
   "registry_runtime": null,
   "chip": {
    "name": "builder",
+   "kind": "agent",
    "provider": null,
    "model_label": null,
    "status": "down",
+   "context_left_pct": null
+  }
+ },
+ {
+  "row": {
+   "id": "watch-gateway",
+   "state": "idle",
+   "raw_state": "service",
+   "provider": null,
+   "model": null
+  },
+  "registry_runtime": "service",
+  "chip": {
+   "name": "watch-gateway",
+   "kind": "service",
+   "provider": null,
+   "model_label": null,
+   "status": "idle",
+   "context_left_pct": null
+  }
+ },
+ {
+  "row": {
+   "id": "remote-seat",
+   "state": "external",
+   "provider": null,
+   "model": "claude-opus-5-5"
+  },
+  "registry_runtime": "claude",
+  "chip": {
+   "name": "remote-seat",
+   "kind": "external",
+   "provider": "claude",
+   "model_label": "Opus 5.5",
+   "status": null,
    "context_left_pct": null
   }
  }

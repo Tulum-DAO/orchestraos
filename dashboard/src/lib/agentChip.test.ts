@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { asChip, chipNeedsYou, contextLeftLabel, contextLeftLow, providerTitle, railStatus, railPendingMenu } from './agentChip.ts';
+import { asChip, chipNeedsYou, contextLeftLabel, contextLeftLow, providerTitle, railStatus, railPendingMenu, kindLabel } from './agentChip.ts';
 import { sectionFor } from './agentRail.ts';
 
 const FIXTURE = JSON.parse(readFileSync(new URL('../../../contract/fixtures/agent-chips.json', import.meta.url), 'utf8'));
@@ -45,4 +45,13 @@ test('with a chip, a stale detector menu flag cannot outrank it', () => {
                 has_pending_menu: railPendingMenu({ status: 'working' }, true) };
   assert.equal(sectionFor(row), 'working');
   assert.equal(railPendingMenu(undefined, true), true);                      // no chip: the flag stands
+});
+
+test('services and external seats are labelled, and external claims no state', () => {
+  const byName = Object.fromEntries(FIXTURE.map((c: any) => [c.chip.name, c.chip]));
+  assert.equal(kindLabel(byName['watch-gateway']), 'Service');
+  assert.equal(kindLabel(byName['remote-seat']), 'External');
+  assert.equal(kindLabel(byName.gm), null);
+  assert.ok(asChip(byName['remote-seat']));
+  assert.equal(railStatus(byName['remote-seat'], 'external'), 'external');   // never turned into down
 });

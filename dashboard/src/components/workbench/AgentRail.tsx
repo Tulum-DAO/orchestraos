@@ -19,7 +19,7 @@ import { chipStateFor, ActivityDot } from '../RecentAgentChips';
 import { useFeedHealth } from '../../hooks/useFeedHealth';
 import { isDegraded, lastSeenLabel, type FeedVerdict } from '../../lib/feedLiveness';
 import UsageLine from './UsageLine';
-import { asChip, contextLeftLabel, contextLeftLow, providerTitle, railStatus, railPendingMenu, type AgentChip } from '../../lib/agentChip';
+import { asChip, contextLeftLabel, contextLeftLow, providerTitle, railStatus, railPendingMenu, kindLabel, type AgentChip } from '../../lib/agentChip';
 import { useProviderMarks, type ProviderMarks } from '../../hooks/useProviderMarks';
 
 const SECTIONS: { key: keyof Omit<RailGroups, 'other'>; label: string; badge?: boolean }[] = [
@@ -42,7 +42,9 @@ function RailRow({ agent, active, onPick, feed, showProvider, marks }: { agent: 
   // Context used, for every runtime that reports one; a running seat with no reading shows a
   // dash (unknown), a seat that is not running shows nothing (lib/agentRail.ts showsContext).
   // With a chip: context LEFT of the window ("92% left"), amber when 20% or less is left.
-  const ctx = showsContext(agent)
+  // A service or an external seat has no context to show; its kind says what it is instead.
+  const kind = kindLabel(chip);
+  const ctx = kind ? undefined : showsContext(agent)
     ? (chip ? contextLeftLabel(chip) : contextLabel(agent.context_pct)) : undefined;
   const ctxHigh = chip ? contextLeftLow(chip) : contextHigh(agent.context_pct);
   return (
@@ -69,6 +71,12 @@ function RailRow({ agent, active, onPick, feed, showProvider, marks }: { agent: 
         />
       )}
       <span className="truncate flex-1 min-w-0">{agent.name || agent.id}</span>
+      {kind && (
+        <span className="shrink-0 text-[10px] text-neutral-500" data-testid="rail-kind"
+              title={kind === 'Service' ? 'A service: it takes no messages' : 'Run elsewhere: not checked from here'}>
+          {kind}
+        </span>
+      )}
       {ctx !== undefined && (
         <span
           className={clsx('shrink-0 text-[10px] tabular-nums', ctxHigh ? 'text-amber-400' : 'text-neutral-500')}

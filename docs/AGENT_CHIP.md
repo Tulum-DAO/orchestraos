@@ -18,6 +18,7 @@ works it out on its own and two screens never disagree.
 ```json
 {
   "name": "gm",
+  "kind": "agent",
   "provider": "claude",
   "model_label": "Opus 5.5",
   "status": "working",
@@ -28,9 +29,10 @@ works it out on its own and two screens never disagree.
 | field | meaning |
 |---|---|
 | `name` | Our seat name (`gm`, `ios-watch-dev`, ...). The provider is the logo, never the name. |
+| `kind` | `agent`; `service`: a proxy or daemon registered as a seat (it takes no messages: draw "Service" and no message box, whatever its dot); `external`: run elsewhere, so its liveness is not knowable here (`status` is `null`: draw "External" and no live dot, never red). |
 | `provider` | `claude`, `codex`, `gemini`, `grok`, or `null`. Taken from the live process, else the registry, so a stopped seat keeps its logo. `null` means no logo. |
 | `model_label` | A short model name for a tooltip or a tap (`Opus 5.5`, `GPT-5.6 Terra`, `Grok 4.7`). From the model id and the labels in `config/providers.json`; an id with no known label is shown as it is. `null` when the model is unknown. |
-| `status` | `needs_you`: a permission prompt, a pending menu, a pending card this seat filed, or an unsent draft. `working`. `idle`: at the prompt. `down`: crashed, stalled, stopped, not running, or a state the gateway does not know (never drawn as alive). |
+| `status` | `needs_you`: a permission prompt, a pending menu, a pending card this seat filed, or an unsent draft. `working`. `idle`: at the prompt. `down`: crashed, stalled, stopped, not running, or a state the gateway does not know (never drawn as alive). `null` only for `kind: external`. |
 | `context_left_pct` | 0-100, the share of the model's context window still free. `null` when there is no reading: draw nothing, never `0%` or `100%`. |
 
 ## Drawing it
@@ -52,6 +54,6 @@ works it out on its own and two screens never disagree.
 
 `contract/fixtures/agent-chips.json` holds `/agents`-shaped rows and the chip the gateway returns
 for each one: working, waiting on a prompt, waiting on a card, no context reading, a stopped seat
-with its registry provider, and a crashed seat with no provider. The gateway's tests and the
+with its registry provider, a crashed seat with no provider, a service, and an external seat. The gateway's tests and the
 dashboard's tests both read it, so it always matches the code. Native clients should decode it in
 their own tests.

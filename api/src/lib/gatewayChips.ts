@@ -10,9 +10,11 @@ import { gatewayUrl } from './gateway-url.js';
 
 export interface Chip {
   name: string;
+  kind: 'agent' | 'service' | 'external';
   provider: string | null;
   model_label: string | null;
-  status: 'working' | 'needs_you' | 'idle' | 'down';
+  /** null only for kind external: its liveness is not knowable here. */
+  status: 'working' | 'needs_you' | 'idle' | 'down' | null;
   context_left_pct: number | null;
 }
 
@@ -45,7 +47,8 @@ export function chipsFromAgents(body: any): Map<string, Chip> {
   const out = new Map<string, Chip>();
   for (const r of Array.isArray(body?.agents) ? body.agents : []) {
     const c = r?.chip;
-    if (typeof r?.id !== 'string' || !c || typeof c !== 'object' || !STATUSES.has(c.status)) continue;
+    if (typeof r?.id !== 'string' || !c || typeof c !== 'object') continue;
+    if (!(STATUSES.has(c.status) || (c.kind === 'external' && c.status === null))) continue;
     out.set(r.id, c as Chip);
   }
   return out;

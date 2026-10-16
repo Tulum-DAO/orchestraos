@@ -3,10 +3,14 @@
 Computed ONCE in the gateway (/agents rows gain `chip`), so the dashboard, iOS, iPad, Watch and the
 Mac grid render the same thing from one source (docs/AGENT_CHIP.md):
 
-    {"name": "gm", "provider": "claude", "model_label": "Opus 5.5",
-     "status": "working" | "needs_you" | "idle" | "down", "context_left_pct": 92 | null}
+    {"name": "gm", "kind": "agent" | "service" | "external", "provider": "claude",
+     "model_label": "Opus 5.5", "status": "working" | "needs_you" | "idle" | "down" | null,
+     "context_left_pct": 92 | null}
 
 * name     : OUR seat name. The provider is the badge, never the name.
+* kind     : agent; service (a proxy or daemon registered as a seat: it takes no messages, so a
+             client draws "Service" and no message box); external (operated elsewhere: its
+             liveness is not knowable here, so status is null, never down).
 * provider : claude | codex | gemini | grok | null. The live process's runtime, else the registry's
              runtime, so a stopped seat still gets its badge. Draw it with the logo of that id in
              config/providers.json (`logo_svg`): ONE mark set for every surface.
@@ -97,11 +101,24 @@ def context_left(used_of_window) -> int | None:
     return int(round(100 - used_of_window))
 
 
+def chip_kind(row: dict, registry_runtime=None) -> str:
+    raw = row.get("raw_state")
+    if row.get("state") == "external" or raw == "external":
+        return "external"
+    if registry_runtime == "service" or raw == "service":
+        return "service"
+    return "agent"
+
+
 def chip_for(row: dict, registry_runtime=None, pending_cards: int = 0) -> dict:
+    kind = chip_kind(row, registry_runtime)
+    status = None if kind == "external" else \
+        chip_status(row.get("state"), bool(row.get("has_pending_menu")), pending_cards)
     return {
         "name": row.get("id"),
+        "kind": kind,
         "provider": provider_id(row.get("provider"), registry_runtime),
         "model_label": model_label(row.get("model")),
-        "status": chip_status(row.get("state"), bool(row.get("has_pending_menu")), pending_cards),
+        "status": status,
         "context_left_pct": context_left(row.get("context_pct_of_window")),
     }

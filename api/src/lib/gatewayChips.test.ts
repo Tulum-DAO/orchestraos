@@ -70,3 +70,11 @@ test('no gateway token means no call and no chips', async () => {
   assert.equal(calls.length, 0);
   assert.equal(src.current().size, 0);
 });
+
+test('an external chip (status null) is kept; a null status on anything else is not', () => {
+  const m = chipsFromAgents({ agents: [
+    { id: 'remote', chip: { name: 'remote', kind: 'external', status: null } },
+    { id: 'bad', chip: { name: 'bad', kind: 'agent', status: null } },
+  ] });
+  assert.deepEqual([...m.keys()], ['remote']);
+});

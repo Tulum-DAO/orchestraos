@@ -5,6 +5,7 @@
  */
 export interface AgentChip {
   name?: string;
+  kind?: 'agent' | 'service' | 'external' | string;
   provider?: string | null;
   model_label?: string | null;
   status?: 'working' | 'needs_you' | 'idle' | 'down' | string;
@@ -16,7 +17,7 @@ export const LOW_CONTEXT_LEFT = 20;
 export function asChip(v: unknown): AgentChip | undefined {
   if (!v || typeof v !== 'object') return undefined;
   const c = v as AgentChip;
-  return typeof c.status === 'string' ? c : undefined;
+  return typeof c.status === 'string' || (c.kind === 'external' && c.status === null) ? c : undefined;
 }
 
 export function chipNeedsYou(c: AgentChip | undefined): boolean {
@@ -47,6 +48,8 @@ export function providerTitle(providerLabel: string, c: AgentChip | undefined): 
  */
 export function railStatus(c: AgentChip | undefined, detector: string | undefined): string | undefined {
   if (!c) return detector;
+  // External: not checked here. No live state is claimed; the detector's word (if any) stands.
+  if (c.kind === 'external') return detector;
   switch (c.status) {
     case 'needs_you': return detector === 'waiting' || detector === 'stranded' ? detector : 'waiting';
     case 'working': return 'working';
@@ -59,4 +62,11 @@ export function railStatus(c: AgentChip | undefined, detector: string | undefine
 /** The rail row's pending-menu flag: with a chip, the chip's status has already counted it. */
 export function railPendingMenu(c: AgentChip | undefined, detectorFlag: boolean): boolean {
   return c ? false : detectorFlag;
+}
+
+/** What stands in for "N% left" on a row that is not an agent: services and external seats. */
+export function kindLabel(c: AgentChip | undefined): string | null {
+  if (c?.kind === 'service') return 'Service';
+  if (c?.kind === 'external') return 'External';
+  return null;
 }

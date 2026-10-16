@@ -83,8 +83,8 @@ def test_gateway_stamps_a_chip_on_every_row(monkeypatch):
              "context_pct_of_window": 8},
             {"id": "ops", "state": "idle", "provider": None, "model": None}]
     G._stamp_chips(rows, {"ops": {"runtime": "grok"}})
-    assert rows[0]["chip"] == {"name": "gm", "provider": "claude", "model_label": "Opus 5.5",
-                               "status": "working", "context_left_pct": 92}
+    assert rows[0]["chip"] == {"name": "gm", "kind": "agent", "provider": "claude",
+                               "model_label": "Opus 5.5", "status": "working", "context_left_pct": 92}
     assert rows[1]["chip"]["provider"] == "grok" and rows[1]["chip"]["status"] == "needs_you"
 
 
@@ -103,3 +103,18 @@ def test_pending_card_counts_are_cached_between_refreshes(monkeypatch):
     for _ in range(5):
         assert G._pending_cards_by_author() == {"ops": 1}
     assert len(calls) == 1
+
+
+def test_a_service_seat_is_a_service_not_a_free_agent():
+    # macos-dev: a proxy registered as a seat reads idle, i.e. a green "talk to it" dot, but it takes
+    # no messages. kind says so; clients draw "Service" and no message box.
+    c = C.chip_for({"id": "watch-gateway", "state": "idle"}, registry_runtime="service")
+    assert c["kind"] == "service" and c["provider"] is None
+    assert C.chip_for({"id": "x", "state": "idle", "raw_state": "service"})["kind"] == "service"
+
+
+def test_an_external_seat_is_not_checked_here_never_down():
+    # macos-dev: operated elsewhere, liveness not knowable here; red down would assert it is dead.
+    c = C.chip_for({"id": "remote", "state": "external"}, registry_runtime="claude")
+    assert c["kind"] == "external" and c["status"] is None and c["provider"] == "claude"
+    assert C.chip_for({"id": "gm", "state": "working"})["kind"] == "agent"
