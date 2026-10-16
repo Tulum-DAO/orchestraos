@@ -19,6 +19,8 @@ import { chipStateFor, ActivityDot } from '../RecentAgentChips';
 import { useFeedHealth } from '../../hooks/useFeedHealth';
 import { isDegraded, lastSeenLabel, type FeedVerdict } from '../../lib/feedLiveness';
 import UsageLine from './UsageLine';
+import { asChip, contextLeftLabel, contextLeftLow, providerTitle, chipNeedsYou, type AgentChip } from '../../lib/agentChip';
+import { useProviderMarks, type ProviderMarks } from '../../hooks/useProviderMarks';
 
 const SECTIONS: { key: keyof Omit<RailGroups, 'other'>; label: string; badge?: boolean }[] = [
   { key: 'needsYou', label: 'Needs you', badge: true },
@@ -27,15 +29,22 @@ const SECTIONS: { key: keyof Omit<RailGroups, 'other'>; label: string; badge?: b
 ];
 
 
-function RailRow({ agent, active, onPick, feed, showProvider }: { agent: RailAgent; active: boolean; onPick: (id: string) => void; feed: FeedVerdict; showProvider: boolean }) {
+function RailRow({ agent, active, onPick, feed, showProvider, marks }: { agent: RailAgent & { chip?: AgentChip }; active: boolean; onPick: (id: string) => void; feed: FeedVerdict; showProvider: boolean; marks: ProviderMarks }) {
   const state = chipStateFor(agent.status, !!agent.has_pending_menu, feed);
-  const provKey = agent.provider?.toLowerCase();
-  const prov = showProvider && provKey ? PROVIDER_ABBR[provKey] : undefined;
+  const chip = agent.chip;
+  const provKey = (chip?.provider || agent.provider)?.toLowerCase();
+  // The gateway's chip names the provider by its logo on every row (names are ours, the mark says
+  // who runs it). Without a chip, or before the marks load, the old two-letter badge stands in.
+  const mark = chip && provKey ? marks[provKey] : undefined;
+  const prov = !mark && (chip ? !!provKey : showProvider) && provKey ? PROVIDER_ABBR[provKey] : undefined;
+  const provName = (provKey && (marks[provKey]?.label || PROVIDER_LABEL[provKey])) || agent.provider || '';
   const unread = agent.unread ?? 0;
   // Context used, for every runtime that reports one; a running seat with no reading shows a
   // dash (unknown), a seat that is not running shows nothing (lib/agentRail.ts showsContext).
-  const ctx = showsContext(agent) ? contextLabel(agent.context_pct) : undefined;
-  const ctxHigh = contextHigh(agent.context_pct);
+  // With a chip: context LEFT of the window ("92% left"), amber when 20% or less is left.
+  const ctx = showsContext(agent)
+    ? (chip ? contextLeftLabel(chip) : contextLabel(agent.context_pct)) : undefined;
+  const ctxHigh = chip ? contextLeftLow(chip) : contextHigh(agent.context_pct);
   return (
     <button
       type="button"
@@ -49,11 +58,21 @@ function RailRow({ agent, active, onPick, feed, showProvider }: { agent: RailAge
       title={`${agent.name || agent.id} — ${state.label}`}
     >
       <ActivityDot state={state} />
+      {mark && (
+        <span
+          className="shrink-0 inline-flex w-3.5 h-3.5 [&>svg]:w-full [&>svg]:h-full text-neutral-300"
+          title={providerTitle(provName, chip)}
+          aria-label={providerTitle(provName, chip)}
+          role="img"
+          data-testid="rail-provider-mark"
+          dangerouslySetInnerHTML={{ __html: mark.svg }}
+        />
+      )}
       <span className="truncate flex-1 min-w-0">{agent.name || agent.id}</span>
       {ctx !== undefined && (
         <span
           className={clsx('shrink-0 text-[10px] tabular-nums', ctxHigh ? 'text-amber-400' : 'text-neutral-500')}
-          title={ctx === null ? 'Context used: no reading' : `Context used: ${ctx}`}
+          title={ctx === null ? 'Context: no reading' : chip ? `Context: ${ctx}` : `Context used: ${ctx}`}
           data-testid="rail-context"
         >
           {ctx ?? '—'}
@@ -62,7 +81,7 @@ function RailRow({ agent, active, onPick, feed, showProvider }: { agent: RailAge
       {prov && (
         <span
           className="shrink-0 text-[10px] font-medium text-neutral-500 tabular-nums"
-          title={`Runs on ${(provKey && PROVIDER_LABEL[provKey]) || agent.provider}`}
+          title={providerTitle(provName, chip)}
         >
           {prov}
         </span>
@@ -79,6 +98,7 @@ function RailRow({ agent, active, onPick, feed, showProvider }: { agent: RailAge
 export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (id: string) => void }) {
   const { data, isError } = useAgents();
   const feed = useFeedHealth();
+  const marks = useProviderMarks();
   const [showOther, setShowOther] = useState(false);
 
   const groups = useMemo(() => {
@@ -88,7 +108,9 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
       id: String(a.id),
       name: a.name as string | undefined,
       status: a.status as string | undefined,
-      has_pending_menu: !!a.has_pending_menu,
+      // A seat waiting on a card it filed needs you too (the gateway chip's needs_you).
+      has_pending_menu: !!a.has_pending_menu || chipNeedsYou(asChip(a.chip)),
+      chip: asChip(a.chip),
       unread: (a.inbox_count as number | undefined) ?? 0,
       provider: a.runtime as string | undefined,
       context_pct: a.context_pct as string | undefined,
@@ -171,7 +193,7 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
             ) : (
               <div className="flex flex-col">
                 {rows.map((a) => (
-                  <RailRow key={a.id} agent={a} active={a.id === currentId} onPick={onPick} feed={feed} showProvider={badgesVary} />
+                  <RailRow key={a.id} agent={a} active={a.id === currentId} onPick={onPick} feed={feed} showProvider={badgesVary} marks={marks} />
                 ))}
               </div>
             )}
@@ -200,7 +222,7 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
           {showOther && (
             <div className="flex flex-col">
               {groups.other.map((a) => (
-                <RailRow key={a.id} agent={a} active={a.id === currentId} onPick={onPick} feed={feed} showProvider={badgesVary} />
+                <RailRow key={a.id} agent={a} active={a.id === currentId} onPick={onPick} feed={feed} showProvider={badgesVary} marks={marks} />
               ))}
             </div>
           )}

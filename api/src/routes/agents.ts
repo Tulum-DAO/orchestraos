@@ -24,6 +24,7 @@ import { actingAgent, principal } from '../lib/principal.js';
 import { agentScopeParam, canPrincipalSeeAgent } from '../lib/agent-scope.js';
 import { CODE_ROOT } from '../lib/codeRoot.js';
 import { gatewayUrl } from '../lib/gateway-url.js';
+import { gatewayChips } from '../lib/gatewayChips.js';
 
 function macSshTarget(): string {
   const cfg = loadConfig();
@@ -409,6 +410,13 @@ router.get('/', async (_req: Request, res: Response) => {
         const n = genCounts[baseAgentId(a.id)];
         if (n) a.generations_total = n;
       }
+    }
+
+    // The one status chip every surface draws, computed by the gateway (lib/gatewayChips.ts).
+    const chips = gatewayChips.current();
+    for (const a of visibleAgents) {
+      const c = chips.get(baseAgentId(a.id)) || chips.get(a.id);
+      if (c) (a as any).chip = c;
     }
 
     const visibleOnline = visibleAgents.filter((a) => a.tmux_alive).length;
