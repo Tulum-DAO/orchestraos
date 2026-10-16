@@ -2,7 +2,7 @@
 
 The Claude inputs are a real Claude Code 2.1.284 status-line capture (session id and paths removed),
 taken on a scratch session: the first redraw has no rate_limits block, a later one does. The Codex
-line is a real rollout token_count event with its numbers kept and nothing identifying in it.
+line is a real rollout token_count event with its numbers kept; its clock is a round synthetic one.
 """
 import json
 import os
@@ -25,7 +25,7 @@ CLAUDE_WITH_LIMITS = dict(CLAUDE_FIRST_REDRAW, rate_limits={
     "seven_day": {"used_percentage": 80, "resets_at": 1792490400},
 })
 CODEX_EVENT = {
-    "timestamp": "2026-10-16T17:03:51.207Z", "type": "event_msg",
+    "timestamp": "2026-10-16T17:00:00Z", "type": "event_msg",
     "payload": {"type": "token_count", "info": None, "rate_limits": {
         "limit_id": "codex", "limit_name": None,
         "primary": {"used_percent": 1.0, "window_minutes": 300, "resets_at": 1792185347},
@@ -33,7 +33,7 @@ CODEX_EVENT = {
         "credits": {"has_credits": False, "unlimited": False, "balance": "0"},
         "plan_type": "team", "rate_limit_reached_type": None}},
 }
-CODEX_AT = 1792170231
+CODEX_AT = 1792170000
 
 
 def _rollout(dirpath, name, events, mtime=None):
