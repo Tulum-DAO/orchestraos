@@ -112,9 +112,10 @@ def test_a_read_only_device_cannot_deliver_now(monkeypatch, tmp_path):
 
 
 class _Req(dict):
-    def __init__(self, body=None, query=None, principal=None):
+    def __init__(self, body=None, query=None, principal=None, actor=None):
         super().__init__()
-        self._body, self.query, self.method, self.headers = body, query or {}, "POST", {}
+        self._body, self.query, self.method = body, query or {}, "POST"
+        self.headers = {"X-Actor": actor} if actor else {}
         if principal is not None:
             self["principal"] = principal
 
@@ -128,6 +129,7 @@ def _gw(monkeypatch, tmp_path, sessions=("gm",)):
     monkeypatch.setattr(G, "_protected_refusal", lambda req, s: None)
     kicks = []
     monkeypatch.setattr(G, "_kick_router", lambda: kicks.append(1) or True)
+    monkeypatch.setattr(G, "_last_kick", {"at": -1e18})
     monkeypatch.setattr(G, "_waiting_for", lambda s: {"count": 1, "messages": [], "reason": "x"})
     return kicks
 
@@ -142,10 +144,10 @@ def test_deliver_now_writes_a_waiver_naming_who_pressed_it_and_kicks_the_router(
 
 def test_deliver_now_refuses_an_unknown_or_protected_session(monkeypatch, tmp_path):
     _gw(monkeypatch, tmp_path)
-    resp = _run(G.handle_deliver_now(_Req({"session": "nope"}, principal={"id": "d", "scopes": ["*"]})))
+    resp = _run(G.handle_deliver_now(_Req({"session": "nope"}, principal={"id": "d", "scopes": ["message"]})))
     assert resp.status == 404 and D.active_waiver(tmp_path, "nope") is None
     monkeypatch.setattr(G, "_protected_refusal", lambda req, s: {"ok": False, "error": "protected"})
-    resp = _run(G.handle_deliver_now(_Req({"session": "gm"}, principal={"id": "d", "scopes": ["*"]})))
+    resp = _run(G.handle_deliver_now(_Req({"session": "gm"}, principal={"id": "d", "scopes": ["message"]})))
     assert resp.status == 403 and D.active_waiver(tmp_path, "gm") is None
 
 
@@ -154,3 +156,22 @@ def test_held_reports_the_waiting_mail_and_any_waiver(monkeypatch, tmp_path):
     req = _Req(query={"session": "gm"}, principal={"id": "d", "scopes": ["read"]})
     body = json.loads(_run(G.handle_held(req)).body)
     assert body["count"] == 1 and body["waiver"] is None
+
+
+def test_only_a_person_presses_deliver_now(monkeypatch, tmp_path):
+    # codex R1: the bare fleet token (what agents hold) with no actor, or an automation actor,
+    # must not create a waiver; the dashboard (operator:web) and a paired device may.
+    _gw(monkeypatch, tmp_path)
+    legacy = {"id": "legacy", "label": "fleet", "scopes": ["*"]}
+    assert _run(G.handle_deliver_now(_Req({"session": "gm"}, principal=legacy))).status == 403
+    assert _run(G.handle_deliver_now(_Req({"session": "gm"}, principal=legacy, actor="automation:bot"))).status == 403
+    assert D.active_waiver(tmp_path, "gm") is None
+    resp = _run(G.handle_deliver_now(_Req({"session": "gm"}, principal=legacy, actor="operator:web:shaw")))
+    assert resp.status == 200 and D.active_waiver(tmp_path, "gm")["by"] == "operator:web:shaw"
+
+
+def test_presses_start_at_most_one_router_pass_per_30_s(monkeypatch, tmp_path):
+    kicks = _gw(monkeypatch, tmp_path)
+    for _ in range(5):
+        _run(G.handle_deliver_now(_Req({"session": "gm"}, principal={"id": "d1", "label": "phone", "scopes": ["message"]})))
+    assert kicks == [1]

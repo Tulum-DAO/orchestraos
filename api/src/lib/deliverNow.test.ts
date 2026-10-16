@@ -33,6 +33,9 @@ test('deliver-now posts only the session', async () => {
   await deliverNow(d, 'gm');
   assert.equal(calls[0].url, 'http://gw.test/deliver-now');
   assert.deepEqual(JSON.parse(String(calls[0].init.body)), { session: 'gm' });
+  assert.equal((calls[0].init.headers as any)['X-Actor'], 'operator:web');   // the gateway wants a person's surface
+  await deliverNow(d, 'gm', 'shaw');
+  assert.equal((calls[1].init.headers as any)['X-Actor'], 'operator:web:shaw');
 });
 
 test('no gateway token is a 502 and no call', async () => {

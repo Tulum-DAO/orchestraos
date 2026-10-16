@@ -691,7 +691,8 @@ router.post('/:id/deliver-now', async (req: Request, res: Response) => {
   const session = sessionFor(getRegistry(), String(req.params.id));
   if (!session) { res.status(404).json({ error: 'Agent not found' }); return; }
   try {
-    const { status, body } = await deliverNow(defaultDeliverNowDeps(), session);
+    const who = principal(req)?.username;
+    const { status, body } = await deliverNow(defaultDeliverNowDeps(), session, who ? String(who).slice(0, 48) : undefined);
     res.status(status).json(body);
   } catch (err: any) {
     res.status(502).json({ ok: false, error: 'gateway unreachable', detail: err?.message });

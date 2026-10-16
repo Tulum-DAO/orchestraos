@@ -4331,6 +4331,21 @@ def _kick_router():
         return False
 
 
+KICK_DEBOUNCE_S = 30
+_last_kick = {"at": -1e18}
+
+
+def _kick_router_debounced():
+    """At most one router start per KICK_DEBOUNCE_S, however often the button is pressed; the
+    waiver itself is written on every press and the cron pass picks it up regardless."""
+    import time as _time
+    now = _time.monotonic()
+    if now - _last_kick["at"] < KICK_DEBOUNCE_S:
+        return False
+    _last_kick["at"] = now
+    return _kick_router()
+
+
 async def handle_deliver_now(request):
     """POST /deliver-now {session} -> waive the soft delivery gates for that session for five
     minutes (scripts/deliver_now.py) and run a router pass. Hard gates still hold; the reply
@@ -4352,13 +4367,21 @@ async def handle_deliver_now(request):
     from scripts import deliver_now
     _cls, _name = _parse_actor(request)
     _, principal = _resolved_principal(request)
-    by = (principal or {}).get("label") or (principal or {}).get("id") or _name or _cls or "unknown"
+    # A person presses this: a paired device's own token, or a caller that says it is a person's
+    # surface (the dashboard's API sends X-Actor: operator:web). The bare fleet token with no
+    # actor, or an automation actor, is refused: agents send mail, they do not waive its waits.
+    is_device = bool(principal) and principal.get("id") not in (None, "legacy")
+    if _cls == "automation" or not (is_device or _cls in ("operator", "interactive", "app")):
+        return _json({"ok": False, "error": "deliver-now is pressed by a person: send X-Actor "
+                      "operator|interactive|app, or use a paired device"}, status=403)
+    by = (principal or {}).get("label") if is_device else None
+    by = by or (f"{_cls}:{_name}" if _name else _cls) or "unknown"
     try:
         waiver = deliver_now.write_waiver(ORCH_DIR, session, by)
     except ValueError:
         return _json({"ok": False, "error": "bad session"}, status=400)
     import asyncio
-    kicked = _kick_router()
+    kicked = _kick_router_debounced()
     out = await asyncio.get_event_loop().run_in_executor(None, _waiting_for, session)
     return _json({"ok": True, "waiver": waiver, "router_started": kicked, **out})
 

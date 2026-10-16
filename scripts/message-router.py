@@ -2192,7 +2192,10 @@ def main():
             # cycle; digested rows fail store.claim below when the loop reaches
             # them (delivered => not pending). Fresh rows + single-stale fall
             # through to the normal path unchanged.
-            if session not in _digest_attempted and is_digest_session(session):
+            # A Deliver-now mid-turn delivery goes through the singles path only, where the
+            # composer is re-checked right before the claim; the digest path injects without it.
+            if "mid-turn" not in _dn_waived and session not in _digest_attempted \
+                    and is_digest_session(session):
                 _digest_attempted.add(session)
                 try:
                     _dcfg = digest_config()
@@ -2207,6 +2210,13 @@ def main():
                         delivered_to.add(session)
                 except Exception as e:  # noqa: BLE001 — digest never sinks the cycle
                     log(f"[digest] error for {session}: {e} — singles path continues")
+
+            # Deliver now, mid-turn: look again right before claiming. Typing or a permission
+            # prompt that started since the first look means hold, not paste.
+            if "mid-turn" in _dn_waived and not claude_mid_turn_safe(session):
+                log(f"DELIVER-NOW recheck {msg['id']} -> {session}: composer no longer safe, holding")
+                note_hold(hold_state, session, msg, "not-idle", now, queue_n=_qdepth.get(agent), dl_batch=_dl_batch)
+                continue
 
             if not store.claim(msg["id"]):
                 continue  # raced with another router instance

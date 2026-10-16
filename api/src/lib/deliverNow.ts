@@ -39,12 +39,13 @@ export async function held(deps: DeliverNowDeps, session: string) {
     { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, 10000);
 }
 
-export async function deliverNow(deps: DeliverNowDeps, session: string) {
+export async function deliverNow(deps: DeliverNowDeps, session: string, by?: string) {
   const token = deps.token();
   if (!token) return { status: 502, body: { ok: false, error: 'gateway token unavailable' } };
   return deps.fetchJson(`${deps.gatewayUrl()}/deliver-now`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    // The gateway accepts a press only from a person's surface; this is the dashboard's.
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Actor': `operator:web${by ? ':' + by : ''}` },
     body: JSON.stringify({ session }),
   }, 10000);
 }
