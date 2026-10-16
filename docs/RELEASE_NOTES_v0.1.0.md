@@ -143,6 +143,8 @@ To remove them: `orchestra down`, back up `registry.json`, delete those keys fro
 
 **Added after this release, on main:** the dashboard's agent rail shows each running seat's context used (for example `42%`), for Claude and Codex seats alike, from the figure `/api/agents` already carried but nothing displayed. It turns amber from 80%, the band where seats rotate; a running seat with no reading shows `—` (never `0%`); a seat that is not running shows nothing.
 
+**Added after this release, on main:** a plan-usage meter. The agent rail's top line shows how much of each AI plan's limit is used, for example `Codex 41% 5 h · Claude 68% weekly`, with when each window resets on hover. It reads only local files: Codex's own rollout logs, and the usage block Claude Code passes the OrchestraOS status line (recorded under `<data dir>/state/usage/`, once per Claude login). It never guesses: a provider with no reading shows `—` and says why (Gemini and Grok report none yet), and a reading older than 30 minutes is dimmed with the time it was taken. Paired devices read it from the gateway's `GET /usage` with the `usage` scope; `read` alone does not show it. Added in PR #453.
+
 ## CI note for this release
 
 GitHub Actions was refused on billing from 2026-09-19 09:52Z; PRs #38–#40 merged on bare-box + CI-identical local evidence (council PASS at `c6b278c`; local run rc 0).

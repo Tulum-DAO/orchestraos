@@ -106,6 +106,9 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("GET", "/history"): "read",
     ("GET", "/approvals/{id}"): "read",
     ("GET", "/agents"): "read",
+    # Plan usage per provider (scripts/usage_meter.py). Its own verb, reserved in pairing for it:
+    # how much of a paid plan is left is not something every read-only device needs.
+    ("GET", "/usage"): "usage",
     ("GET", "/projects"): "read",
     ("GET", "/people"): "read",
     ("GET", "/people/{person_id}"): "read",
@@ -1862,6 +1865,40 @@ def _refresh_agents_cache():
         _agents_cache["refreshing"] = False
 
 
+USAGE_CACHE_S = 60
+_usage_cache = {"rows": None, "at": 0.0}
+
+
+def _usage_rows_cached():
+    """usage_meter rows for the enabled runtimes, recomputed at most every USAGE_CACHE_S."""
+    import time as _time
+    if _usage_cache["rows"] is not None and _time.time() - _usage_cache["at"] < USAGE_CACHE_S:
+        return _usage_cache["rows"]
+    from scripts import usage_meter
+    from orchestra_cli.settings import load_settings
+    try:
+        enabled = load_settings().runtimes_enabled
+    except Exception:  # noqa: BLE001 — an unreadable toml is doctor's to report; show every provider
+        enabled = None
+    rows = usage_meter.usage_rows(ORCH_DIR, providers=enabled)
+    _usage_cache["rows"], _usage_cache["at"] = rows, _time.time()
+    return rows
+
+
+def _may_see_usage(request) -> bool:
+    from scripts.device_tokens import scopes_allow
+    resolved, principal = _resolved_principal(request)
+    if not resolved:
+        return False
+    return principal is not None and scopes_allow(principal.get("scopes"), "usage")
+
+
+async def handle_usage(request):
+    import asyncio
+    rows = await asyncio.get_event_loop().run_in_executor(None, _usage_rows_cached)
+    return _json({"ok": True, "usage": rows, "as_of": _usage_cache["at"]})
+
+
 async def handle_agents(request):
     """Stale-while-revalidate: never block a request on the ~6s fleet scan.
     Revalidation fires on the TTL OR when registry.json mtime changes (a
@@ -1881,8 +1918,12 @@ async def handle_agents(request):
             await asyncio.get_event_loop().run_in_executor(None, _refresh_agents_cache)
         else:
             asyncio.get_event_loop().run_in_executor(None, _refresh_agents_cache)
-    return _json({"ok": True, "agents": _agents_cache["data"] or [],
-                  "as_of": _agents_cache["at"]})
+    body = {"ok": True, "agents": _agents_cache["data"] or [], "as_of": _agents_cache["at"]}
+    # The same rows as GET /usage, for a caller that holds the usage verb: /agents itself is a
+    # read route, and read alone does not show plan usage.
+    if _may_see_usage(request):
+        body["usage"] = await asyncio.get_event_loop().run_in_executor(None, _usage_rows_cached)
+    return _json(body)
 
 
 def _iter_clients():
@@ -7270,6 +7311,7 @@ def build_app():
     app.router.add_get("/approvals/{id}", handle_approval_detail)
     app.router.add_post("/approvals/{id}/discard", handle_approval_discard)
     app.router.add_get("/agents", handle_agents)
+    app.router.add_get("/usage", handle_usage)
     app.router.add_get("/projects", handle_projects)
     app.router.add_get("/people", handle_people)
     app.router.add_get("/people/{person_id}", handle_person_detail)
