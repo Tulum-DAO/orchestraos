@@ -233,8 +233,14 @@ if [ -z "${ORCH_INSTALL_SKIP_PHONE:-}" ] && ! paired; then
   say "Step 10 of $TOTAL needs you: your phone needs a one-time code to reach your agents."
   say "    A code appears below for one minute. In the OrchestraOS app, choose Pair and scan it."
   say "    No app yet? Skip this: open $dash in your phone's browser (Tailscale on)."
+  # An earlier code that was never scanned left an active device record behind (pair writes it
+  # before the scan). Revoke those first, so re-runs do not pile up unused devices.
+  ( cd "$CHECKOUT" && orchestra devices 2>/dev/null ) | awk '$2 == "my-phone" && / never +active$/ {print $1}' |
+    while read -r stale; do ( cd "$CHECKOUT" && orchestra devices --revoke "$stale" >/dev/null 2>&1 ) || true; done
   # read + approve: the phone sees your agents and answers their cards (docs/ONBOARDING.md step 2).
-  ( cd "$CHECKOUT" && orchestra pair --scopes read,approve --label my-phone ) || true
+  ( cd "$CHECKOUT" && orchestra pair --scopes read,approve --label my-phone ) \
+    || fail 10 "the pairing code could not be made (the lines above say why)" \
+            "do what those lines say, or send the output of  orchestra doctor --share  to whoever helps you"
   paired || stop_for_person 10 "the phone has not used its code yet." \
     "If the app says it is connected, run the line again to finish." \
     "If the minute ran out, run the line again for a new code." \

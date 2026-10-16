@@ -55,10 +55,12 @@ case "$1" in
         chmod +x .venv/bin/python;;
   install-unit) touch "$S/unit";;
   spawn) touch "$S/gm"; [ -f "$S/spawn_fails" ] && { rm -f "$S/spawn_fails"; exit 1; };;
-  devices) [ -f "$S/minted" ] && echo "dev_unused         my-phone               read,approve                       never                active"
+  devices) [ "$2" = "--revoke" ] && { rm -f "$S/minted"; echo "Revoked $3."; exit 0; }
+           [ -f "$S/minted" ] && echo "dev_unused         my-phone               read,approve                       never                active"
            [ -f "$S/paired" ] && echo "dev_abc123         my-phone               read,approve                       2026-10-16 15:00 UTC active"
            echo "Note: ...";;
-  pair) touch "$S/minted"; echo "[QR CODE]";;
+  pair) [ -f "$S/pair_fails" ] && { echo "Run the tailscale serve step from docs/ONBOARDING.md"; exit 2; }
+        touch "$S/minted"; echo "[QR CODE]";;
   doctor) [ "$2" = "--share" ] && echo "--- orchestra doctor --share ---" || echo "CHECK STATUS";;
 esac
 exit 0
@@ -230,3 +232,21 @@ def test_a_failed_first_spawn_is_cleared_and_retried_not_counted_as_running(box)
     calls = box.calls()
     assert "tmux kill-session -t gm" in calls
     assert sum(c.startswith("orchestra spawn gm --gm") for c in calls) == 2
+
+
+def test_a_new_code_revokes_the_previous_unscanned_one_so_unused_devices_do_not_pile_up(box):
+    box.set("ts_signin", "claude_login")
+    assert box.run().returncode == 3                                # first code minted, not scanned
+    r = box.run()                                                   # second try
+    assert r.returncode == 3
+    calls = box.calls()
+    assert "orchestra devices --revoke dev_unused" in calls, calls
+    assert sum(c.startswith("orchestra pair") for c in calls) == 2
+
+
+def test_when_the_code_cannot_be_made_the_client_gets_the_reason_not_a_scan_hint(box):
+    box.set("ts_signin", "claude_login", "pair_fails")
+    r = box.run()
+    assert r.returncode == 4, r.stdout
+    assert "the pairing code could not be made" in r.stdout
+    assert "has not used its code" not in r.stdout

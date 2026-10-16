@@ -12,10 +12,10 @@ SECRETS = ("/home/alice", "alice", "100.101.102.103", "box-7.tail1234.ts.net", "
 
 def rows():
     return [
-        D.Check("cli:claude", D.OK, detail="2.1.295 at /home/alice/.local/bin/claude"),
-        D.Check("auth:claude", D.MISSING, detail="loggedIn false for alice", remedy="run claude, sign in"),
-        D.Check("port:8891", D.OK, detail="owned by pid 4242 (alice)"),
-        D.Check("tailscale", D.WARN, detail="box-7.tail1234.ts.net 100.101.102.103", required=False),
+        D.Check("runtime:claude", D.OK, detail="2.1.295 at /home/alice/.local/bin/claude"),
+        D.Check("runtime:login", D.MISSING, detail="loggedIn false for alice", remedy="run claude, sign in"),
+        D.Check("port:gateway", D.OK, detail="owned by pid 4242 (alice)"),
+        D.Check("dashboard:https", D.WARN, detail="box-7.tail1234.ts.net 100.101.102.103", required=False),
         D.Check("seat:sk-ant-oat01-XYZ", D.OK),                     # a name that is not a plain check name
         D.Check("gateway token", D.OK, detail="abcd1234-ef56 in /home/alice/.orchestra/token"),
     ]
@@ -23,9 +23,9 @@ def rows():
 
 def test_the_block_carries_name_status_and_required_only():
     out = D.render_share(rows(), facts={"release": "152c0a6", "os": "Ubuntu 24.04", "ram_gb": 4, "disk_free_gb": 61})
-    assert "cli:claude OK" in out
-    assert "auth:claude MISSING (required)" in out
-    assert "tailscale WARN" in out
+    assert "runtime:claude OK" in out
+    assert "runtime:login MISSING (required)" in out
+    assert "dashboard:https WARN" in out and "port:gateway OK" in out
     assert "release 152c0a6" in out and "Ubuntu 24.04" in out and "ram 4 GB" in out
 
 
@@ -35,10 +35,33 @@ def test_nothing_identifying_ever_appears():
         assert s not in out, s
 
 
-def test_a_name_outside_the_plain_pattern_is_replaced_not_printed():
+def test_only_known_check_names_are_printed():
     out = D.render_share(rows(), facts={})
     assert "seat:sk-ant" not in out
-    assert out.count("(unnamed check)") == 2                      # the token-shaped name and the one with a space
+    assert out.count("(other check)") == 2                        # the token-shaped name and the one with a space
+
+
+def test_a_lowercase_token_shaped_name_never_prints():
+    # codex review of #452: a character pattern alone let a lowercase token-shaped name through.
+    for name in ("seat:sk-ant-oat01-abcdefgh", "ghp_abcdefghijklmnop", "tail1234", "alice", "box-7"):
+        out = D.render_share([D.Check(name, D.OK)], facts={})
+        assert name not in out, (name, out)
+
+
+def test_a_family_name_keeps_its_family_but_an_unknown_suffix_is_hidden():
+    out = D.render_share([D.Check("plugin:my-secret-bot", D.OK), D.Check("port:gateway", D.OK),
+                          D.Check("runtime:claude", D.OK), D.Check("cli:codex-version", D.WARN)], facts={})
+    assert "plugin:(other) OK" in out and "my-secret-bot" not in out
+    assert "port:gateway OK" in out and "runtime:claude OK" in out and "cli:codex-version WARN" in out
+
+
+def test_every_fixed_name_doctor_writes_is_shareable():
+    import re
+    src = open(D.__file__).read()
+    names = set(re.findall(r'Check\("([^"]+)"', src))
+    assert names, "no fixed names found"
+    out = D.render_share([D.Check(n, D.OK) for n in sorted(names)], facts={})
+    assert "(other" not in out, [l for l in out.splitlines() if "(other" in l]
 
 
 def test_facts_are_allowlisted_too():

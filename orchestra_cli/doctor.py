@@ -679,7 +679,56 @@ def render_json(checks: list) -> str:
 #: `--share`: what may leave the box. Built by ALLOWLIST, never by redacting: a row gives its name,
 #: status and whether it is required; details and remedies (paths, users, hosts, ports, tokens) never
 #: appear, so a row added later cannot leak through a field nobody thought to redact.
-_SHARE_NAME = re.compile(r"^[a-z][a-z0-9_.:-]{0,39}$")
+_SHARE_FAMILY = re.compile(r"^(port|runtime|cli|plugin|python|root|api|dashboard):(.+)$")
+
+
+def _share_name(name: str) -> str:
+    """A check's name as `--share` prints it. FIXED vocabulary, not a character pattern (a lowercase
+    token is a perfectly plain-looking word): a fixed name doctor writes prints as is; a family name
+    (port:, runtime:, ...) prints its family, and its suffix only when the suffix is a word this code
+    itself defines; anything else is "(other check)"."""
+    if name in _share_static() or name in _SHARE_TOOLS:
+        return name
+    m = _SHARE_FAMILY.match(name or "")
+    if not m:
+        return "(other check)"
+    fam, suffix = m.groups()
+    if fam == "cli" and suffix.endswith("-version"):
+        known = suffix[: -len("-version")] in _share_runtimes()
+    elif fam in ("root", "api", "dashboard"):
+        known = suffix in ("node_modules", "build")
+    else:
+        known = suffix in {"port": {"gateway", "api", "dashboard", "arturo"}, "runtime": _share_runtimes(),
+                           "plugin": _share_plugins(), "python": {"flask", "openai", "aiohttp"}}.get(fam, set())
+    return f"{fam}:{suffix if known else '(other)'}"
+
+
+def _share_static() -> set:
+    """Every fixed name this module writes (read from its own source, so a new check is covered)."""
+    global _SHARE_STATIC
+    if _SHARE_STATIC is None:
+        try:
+            _SHARE_STATIC = set(re.findall(r'Check\("([^"]+)"', Path(__file__).read_text()))
+        except OSError:
+            _SHARE_STATIC = set()
+    return _SHARE_STATIC
+
+
+_SHARE_STATIC = None
+#: Rows named from a loop rather than a literal (the tool checks above).
+_SHARE_TOOLS = {"tmux", "node", "npm", "git", "python"}
+
+
+def _share_runtimes() -> set:
+    return set(PROVEN_CLI_VERSIONS) | set(CLI_PACKAGES) | {"claude", "codex", "gemini", "grok", "agy", "login", "any"}
+
+
+def _share_plugins() -> set:
+    try:
+        import plugins as _p  # noqa: WPS433 — the checkout's plugin registry, as the plugin rows use it
+        return set(getattr(_p, "KNOWN", ()) or ())
+    except Exception:  # noqa: BLE001 — no plugin registry: every plugin suffix is "(other)"
+        return set()
 _SHARE_FACTS = (("release", "release {}"), ("os", "{}"), ("ram_gb", "ram {} GB"), ("disk_free_gb", "disk free {} GB"))
 
 
@@ -692,7 +741,7 @@ def render_share(checks: list, facts: dict) -> str:
     if head:
         lines.append(" | ".join(head))
     for c in checks:
-        name = c.name if _SHARE_NAME.match(c.name or "") else "(unnamed check)"
+        name = _share_name(c.name)
         req = " (required)" if c.required and c.status == MISSING else ""
         lines.append(f"{name} {c.status}{req}")
     lines.append(f"result: {'OK' if exit_code(checks) == 0 else 'NOT READY'}")
