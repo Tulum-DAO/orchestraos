@@ -339,6 +339,8 @@ done_ 10 "your first agent is running, and you reached it from your own device"
 
 say ""
 say "Setup complete. Your agents run on this server, and keep working when your laptop is closed."
+say "Next: open your dashboard ($dash) and read 'Your first day with OrchestraOS':"
+say "    https://github.com/Tulum-DAO/orchestraos/blob/main/docs/CLIENT_GETTING_STARTED.md"
 ( cd "$CHECKOUT" && orchestra doctor ) || true
 say ""
 say "If someone is helping you, send them this block (it holds no passwords, addresses or names):"

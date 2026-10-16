@@ -78,6 +78,9 @@ you have done it, run `bash install-client.sh` again (or paste the line from ste
 The last screen says **Setup complete** and shows a table of checks (every row OK). Your first agent,
 the General Manager, is running: open the dashboard to see it and talk to it.
 
+**Next: [Your first day with OrchestraOS](CLIENT_GETTING_STARTED.md)**: opening your dashboard,
+talking to your General Manager, answering its questions, adding agents, and keeping it up to date.
+
 **Later, when you have the OrchestraOS phone app:** run
 `ORCH_INSTALL_PAIR_PHONE=1 bash install-client.sh`. A code appears for one minute; in the app,
 choose **Pair** and scan it.
