@@ -40,9 +40,11 @@ works it out on its own and two screens never disagree.
   surface: draw it small (about 14 px), as identification only. Do not recolour or redraw it.
 - **Status dot:** one colour per `status`, the same on every surface (the dashboard's existing
   colours, `STATE_STYLE` in `dashboard/src/lib/agentStatus.ts`): `needs_you` amber
-  with a ring, pulsing; `working` orange, pulsing; `idle` green; `down` red (the dashboard keeps a
-  seat that is simply not running grey, in its collapsed "Not running" list). Working and
-  needs-you must never look alike.
+  with a ring, pulsing; `working` orange, pulsing; `idle` green; `down` red. Working and needs-you
+  must never look alike. The dashboard, which also has the detector's finer state, keeps two
+  shades inside the same status: an unsent draft is purple (still under Needs you), and a seat
+  that is simply not running is grey (in its collapsed "Not running" list, where hundreds of red
+  dots would say nothing). The section is always the chip's.
 - **Context:** `92% left`. Amber at 20% left or less.
 - **Model:** on hover or tap, `Runs on Claude · Opus 5.5`.
 
