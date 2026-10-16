@@ -17,8 +17,9 @@ You need:
   delete the server at any time to stop paying.
 - **A paid plan for one AI tool**: Claude Pro or Max (the default), or ChatGPT Plus or Pro for Codex.
   Your agents use your plan. You sign in to it yourself; no password ever goes into our setup.
-- **Your phone.** You will install the free Tailscale app on it, and the OrchestraOS app if you have it.
-  No app yet? The browser on your phone works too.
+- **Your phone or computer.** You will install the free Tailscale app on it, and open your dashboard
+  in its browser. (The OrchestraOS phone app is not in the App Store yet; the dashboard does everything
+  meanwhile.)
 
 ## 1. Rent the server
 
@@ -66,14 +67,19 @@ you have done it, run `bash install-client.sh` again (or paste the line from ste
   devices reach your agents; nothing is put on the public internet.
 - **Step 7, sign in to your AI plan.** Type `claude`, follow the link it shows, sign in, then type
   `/exit`. (For Codex: `codex login`.)
-- **Step 10, connect your phone.** A code appears for one minute. In the OrchestraOS app, choose
-  **Pair** and scan it. No app yet? Run `ORCH_INSTALL_SKIP_PHONE=1 bash install-client.sh` and use
-  the dashboard address it shows in your phone's browser (with Tailscale on).
+- **Step 10, say hello.** The setup shows your dashboard's address (it ends in `.ts.net`). Open it in
+  your phone's or computer's browser, with Tailscale on. Go to **Approvals**, find
+  **"Welcome to OrchestraOS!"** and tap **Approve**. That one tap proves everything works: your
+  device reaches your server over your private network, and your answer reaches it.
 
 ## 4. Done
 
-The last screen says **Setup complete**, shows a table of checks (every row OK), and starts your
-first agent, the General Manager. Open the app (or the dashboard) to see it and talk to it.
+The last screen says **Setup complete** and shows a table of checks (every row OK). Your first agent,
+the General Manager, is running: open the dashboard to see it and talk to it.
+
+**Later, when you have the OrchestraOS phone app:** run
+`ORCH_INSTALL_PAIR_PHONE=1 bash install-client.sh`. A code appears for one minute; in the app,
+choose **Pair** and scan it.
 
 ## If someone is helping you
 

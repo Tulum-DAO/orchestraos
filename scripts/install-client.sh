@@ -15,7 +15,7 @@
 #
 # Tests stub every command through PATH (scripts/test_install_client.py). ORCH_INSTALL_* variables
 # exist for those tests, except two a person may use: ORCH_INSTALL_RUNTIME=codex (sign in with a
-# ChatGPT plan instead of Claude) and ORCH_INSTALL_SKIP_PHONE=1 (no app yet: finish without pairing).
+# ChatGPT plan instead of Claude) and ORCH_INSTALL_PAIR_PHONE=1 (pair the phone app, once you have it).
 set -uo pipefail
 
 CLAUDE_PIN="2.1.295"            # = docs/INSTALL.md "Pin the agent CLI version" (a test keeps them equal)
@@ -256,18 +256,40 @@ if [ ! -f "$FIRST_AGENT_MARK" ] || ! tmux has-session -t gm 2>/dev/null; then
   ( cd "$CHECKOUT" && orchestra spawn gm --gm ) || fail 10 "the first agent did not start" "run: orchestra doctor, and check the sign-in row (step 7)"
   mkdir -p "$(dirname "$FIRST_AGENT_MARK")" && date -u +%FT%TZ > "$FIRST_AGENT_MARK"
 fi
-# `orchestra pair` makes the device record at once, before any phone scans it; a phone that used
-# its code has been SEEN. So "paired" = an active device whose LAST SEEN is not "never".
-paired() { ( cd "$CHECKOUT" && orchestra devices 2>/dev/null ) | grep -E ' active$' | grep -vqE ' never +active$'; }
-if [ -z "${ORCH_INSTALL_SKIP_PHONE:-}" ] && ! paired; then
+dash="https://$(tailscale status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null)/"
+
+# The end-to-end proof: one card the client answers on the dashboard. It goes through everything at
+# once (Tailscale, the dashboard, the API, the card store), and the client sees it work themselves.
+# Filed once; its id is kept so a re-run checks the same card.
+WELCOME_ID_FILE="$HOME/.orchestra/.install-client-welcome-card"
+approval() { ( cd "$CHECKOUT" && "$CHECKOUT/.venv/bin/python" scripts/approval.py "$@" ); }
+welcome_answered() {
+  [ -s "$WELCOME_ID_FILE" ] || return 1
+  approval get "$(cat "$WELCOME_ID_FILE")" 2>/dev/null | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("status") not in (None, "pending") else 1)' 2>/dev/null
+}
+if ! welcome_answered; then
   resume 10
-  dash="https://$(tailscale status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null)/"
+  if [ ! -s "$WELCOME_ID_FILE" ]; then
+    id=$(approval request --from setup --worker-kind node --options "Approve" --risk low --reversibility easy \
+           --feature "setup" --summary "Your OrchestraOS server is set up. Tap Approve to finish the setup on the server." \
+           "Welcome to OrchestraOS! Tap Approve to finish setup." 2>/dev/null | tail -1)
+    case "$id" in apr_*) mkdir -p "$(dirname "$WELCOME_ID_FILE")"; printf '%s\n' "$id" > "$WELCOME_ID_FILE" ;;
+      *) fail 10 "the welcome card could not be created" "run: orchestra doctor, and fix the rows it marks MISSING" ;; esac
+  fi
+  welcome_answered || stop_for_person 10 "one last check that you can reach your agents from your own device." \
+    "On your phone or computer (with Tailscale on), open:  $dash" \
+    "Go to Approvals, find \"Welcome to OrchestraOS!\" and tap Approve."
+fi
+
+# Phone app pairing: opt in with ORCH_INSTALL_PAIR_PHONE=1 once you have the app (it is not in the
+# App Store yet). `orchestra pair` makes the device record before any phone scans it; a phone that
+# used its code has been SEEN, so "paired" = an active device whose LAST SEEN is not "never".
+paired() { ( cd "$CHECKOUT" && orchestra devices 2>/dev/null ) | grep -E ' active$' | grep -vqE ' never +active$'; }
+if [ -n "${ORCH_INSTALL_PAIR_PHONE:-}" ] && ! paired; then
   say ""
-  say "Step 10 of $TOTAL needs you: your phone needs a one-time code to reach your agents."
-  say "    A code appears below for one minute. In the OrchestraOS app, choose Pair and scan it."
-  say "    No app yet? Skip this: open $dash in your phone's browser (Tailscale on)."
-  # An earlier code that was never scanned left an active device record behind (pair writes it
-  # before the scan). Revoke those first, so re-runs do not pile up unused devices.
+  say "Pairing your phone app: a code appears below for one minute. In the OrchestraOS app, choose Pair and scan it."
+  # An earlier code that was never scanned left an active device record behind. Revoke those first,
+  # so re-runs do not pile up unused devices.
   ( cd "$CHECKOUT" && orchestra devices 2>/dev/null ) | awk '$2 == "my-phone" && / never +active$/ {print $1}' |
     while read -r stale; do ( cd "$CHECKOUT" && orchestra devices --revoke "$stale" >/dev/null 2>&1 ) || true; done
   # read + approve: the phone sees your agents and answers their cards (docs/ONBOARDING.md step 2).
@@ -276,11 +298,10 @@ if [ -z "${ORCH_INSTALL_SKIP_PHONE:-}" ] && ! paired; then
             "do what those lines say, or send the output of  orchestra doctor --share  to whoever helps you"
   paired || stop_for_person 10 "the phone has not used its code yet." \
     "If the app says it is connected, run the line again to finish." \
-    "If the minute ran out, run the line again for a new code." \
-    "Using the browser instead? Run:  ORCH_INSTALL_SKIP_PHONE=1 bash install-client.sh"
+    "If the minute ran out, run the line again for a new code."
 fi
-if [ -n "${ORCH_INSTALL_SKIP_PHONE:-}" ]; then done_ 10 "your first agent is running (phone skipped: use the dashboard)"
-else done_ 10 "your first agent is running and your phone is paired"; fi
+done_ 10 "your first agent is running, and you reached it from your own device"
+
 
 say ""
 say "Setup complete. Your agents run on this server, and keep working when your laptop is closed."

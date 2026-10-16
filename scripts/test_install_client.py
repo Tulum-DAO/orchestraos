@@ -50,11 +50,21 @@ STUBS = {
     "su": 'exit 0',
 }
 # `orchestra` arrives via `make install` (as on a real box), so it is not on PATH before step 8.
+VENV_PYTHON = r'''#!/usr/bin/env bash
+echo "venv-python $*" >> "$S/calls"
+[ "$1" = "-c" ] && { [ -f "$S/segno" ] && exit 0 || exit 1; }
+[ "$2" = "pip" ] && { touch "$S/segno"; exit 0; }
+case "$1 $2" in
+  *approval.py\ request) echo "apr_welcome_0001"; exit 0;;
+  *approval.py\ get) [ -f "$S/welcome_answered" ] && echo '{"status": "resolved"}' || echo '{"status": "pending"}'; exit 0;;
+esac
+exit 0
+'''
 ORCHESTRA = r'''#!/usr/bin/env bash
 echo "orchestra $*" >> "$S/calls"
 case "$1" in
   init) printf '[runtimes]\nenabled = ["gemini"]\n' > orchestra.toml; mkdir -p api/dist .venv/bin; touch api/dist/server.js
-        printf '#!/usr/bin/env bash\necho "venv-python $*" >> "$S/calls"\n[ "$1" = "-c" ] && { [ -f "$S/segno" ] && exit 0 || exit 1; }\n[ "$2" = "pip" ] && touch "$S/segno"; exit 0\n' > .venv/bin/python
+        cp "$S/venv_python_impl" .venv/bin/python
         chmod +x .venv/bin/python;;
   install-unit) touch "$S/unit";;
   spawn) touch "$S/gm"; [ -f "$S/spawn_fails" ] && { rm -f "$S/spawn_fails"; exit 1; };;
@@ -80,6 +90,7 @@ def box(tmp_path):
         p.write_text(f'#!/usr/bin/env bash\necho "{name} $*" >> "$S/calls"\n{body}\n')
         p.chmod(p.stat().st_mode | stat.S_IEXEC)
     (s / "orchestra_impl").write_text(ORCHESTRA)
+    (s / "venv_python_impl").write_text(VENV_PYTHON)
     osr = tmp_path / "os-release"
     osr.write_text('ID=ubuntu\nVERSION_ID="24.04"\n')
     mem = tmp_path / "meminfo"
@@ -117,22 +128,23 @@ def test_a_client_walks_through_every_stop_and_ends_complete(box):
     assert "Step 7 of 10 needs you" in r.stdout and "Type:  claude" in r.stdout
     box.set("claude_login")
     r = box.run()
-    assert r.returncode == 3, r.stdout                            # now stops at pairing the phone
-    assert "Step 9 of 10 done" in r.stdout and "[QR CODE]" in r.stdout and "Step 10 of 10 needs you" in r.stdout
-    assert "https://box.example.ts.net/" in r.stdout              # the dashboard fallback for no app
-    box.set("paired")
+    assert r.returncode == 3, r.stdout                            # now stops at the welcome card
+    assert "Step 9 of 10 done" in r.stdout and "Step 10 of 10 needs you" in r.stdout
+    assert "https://box.example.ts.net/" in r.stdout and "Approve" in r.stdout
+    assert "[QR CODE]" not in r.stdout                            # no app for clients yet: no pairing by default
+    box.set("welcome_answered")
     r = box.run()
     assert r.returncode == 0, r.stdout
     assert "Setup complete" in r.stdout and "--- orchestra doctor --share ---" in r.stdout
     served = (box.state / "ts_serve").read_text()
     assert "127.0.0.1:8891" in served and "127.0.0.1:8890" in served      # dashboard + the phone's gateway
-    assert any(c.startswith("orchestra pair --scopes read,approve") for c in box.calls())
+    assert sum("approval.py request" in c for c in box.calls()) == 1      # one welcome card, filed once
     toml = (box.path / "home" / "orchestraos" / "orchestra.toml").read_text()
     assert 'enabled = ["claude"]' in toml
 
 
 def test_a_re_run_after_setup_changes_nothing(box):
-    box.set("ts_signin", "claude_login", "paired")
+    box.set("ts_signin", "claude_login", "welcome_answered")
     assert box.run().returncode == 0
     (box.state / "calls").unlink()
     r = box.run()
@@ -202,31 +214,41 @@ def test_the_pins_match_the_install_guide_and_doctor():
 
 
 def test_a_minted_but_never_scanned_code_is_not_a_paired_phone(box):
-    box.set("ts_signin", "claude_login")
-    r = box.run()
+    box.set("ts_signin", "claude_login", "welcome_answered")
+    r = box.run(ORCH_INSTALL_PAIR_PHONE="1")
     assert r.returncode == 3 and "has not used its code yet" in r.stdout, r.stdout
     assert (box.state / "minted").exists()
-    r = box.run()                                                   # the unscanned device still blocks
+    r = box.run(ORCH_INSTALL_PAIR_PHONE="1")                                                   # the unscanned device still blocks
     assert r.returncode == 3 and "Step 10 of 10 needs you" in r.stdout
-    assert r.stdout.index("needs you") < r.stdout.index("[QR CODE]")   # instructions before the code clears
+    assert r.stdout.index("Pairing your phone app") < r.stdout.index("[QR CODE]")   # instructions before the code clears
 
 
-def test_a_client_without_the_app_can_finish_on_the_dashboard(box):
-    box.set("ts_signin", "claude_login")
-    r = box.run(ORCH_INSTALL_SKIP_PHONE="1")
+def test_by_default_there_is_no_phone_pairing_the_dashboard_is_the_way_in(box):
+    box.set("ts_signin", "claude_login", "welcome_answered")
+    r = box.run()
     assert r.returncode == 0, r.stdout
-    assert "phone skipped: use the dashboard" in r.stdout
     assert not any(c.startswith("orchestra pair") for c in box.calls())
 
 
+def test_the_welcome_card_must_be_answered_before_setup_is_complete(box):
+    box.set("ts_signin", "claude_login")
+    assert box.run().returncode == 3
+    r = box.run()                                                   # still not answered: same stop, no second card
+    assert r.returncode == 3 and "Welcome" in r.stdout
+    assert sum("approval.py request" in c for c in box.calls()) == 1
+    box.set("welcome_answered")
+    r = box.run()
+    assert r.returncode == 0 and "Setup complete" in r.stdout, r.stdout
+
+
 def test_the_qr_encoder_is_installed_so_the_phone_can_scan(box):
-    box.set("ts_signin", "claude_login", "paired")
+    box.set("ts_signin", "claude_login", "welcome_answered")
     assert box.run().returncode == 0
     assert any(c.startswith("venv-python -m pip install") and "segno" in c for c in box.calls())
 
 
 def test_a_failed_first_spawn_is_cleared_and_retried_not_counted_as_running(box):
-    box.set("ts_signin", "claude_login", "paired", "spawn_fails")
+    box.set("ts_signin", "claude_login", "welcome_answered", "spawn_fails")
     r = box.run()
     assert r.returncode == 4 and "the first agent did not start" in r.stdout, r.stdout
     assert (box.state / "gm").exists()                              # the failed spawn left its pane
@@ -238,9 +260,9 @@ def test_a_failed_first_spawn_is_cleared_and_retried_not_counted_as_running(box)
 
 
 def test_a_new_code_revokes_the_previous_unscanned_one_so_unused_devices_do_not_pile_up(box):
-    box.set("ts_signin", "claude_login")
-    assert box.run().returncode == 3                                # first code minted, not scanned
-    r = box.run()                                                   # second try
+    box.set("ts_signin", "claude_login", "welcome_answered")
+    assert box.run(ORCH_INSTALL_PAIR_PHONE="1").returncode == 3                                # first code minted, not scanned
+    r = box.run(ORCH_INSTALL_PAIR_PHONE="1")                                                   # second try
     assert r.returncode == 3
     calls = box.calls()
     assert "orchestra devices --revoke dev_unused" in calls, calls
@@ -248,8 +270,8 @@ def test_a_new_code_revokes_the_previous_unscanned_one_so_unused_devices_do_not_
 
 
 def test_when_the_code_cannot_be_made_the_client_gets_the_reason_not_a_scan_hint(box):
-    box.set("ts_signin", "claude_login", "pair_fails")
-    r = box.run()
+    box.set("ts_signin", "claude_login", "welcome_answered", "pair_fails")
+    r = box.run(ORCH_INSTALL_PAIR_PHONE="1")
     assert r.returncode == 4, r.stdout
     assert "the pairing code could not be made" in r.stdout
     assert "has not used its code" not in r.stdout
