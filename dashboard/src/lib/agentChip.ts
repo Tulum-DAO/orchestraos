@@ -39,3 +39,19 @@ export function contextLeftLow(c: AgentChip | undefined): boolean {
 export function providerTitle(providerLabel: string, c: AgentChip | undefined): string {
   return c?.model_label ? `Runs on ${providerLabel} · ${c.model_label}` : `Runs on ${providerLabel}`;
 }
+
+/**
+ * The rail's state for a row, from the chip when there is one, so the dashboard's dot and section
+ * say what every other surface says. The detector's finer state is kept where it is the same kind
+ * (waiting vs stranded; crashed vs stopped vs offline), and the one-truth colours stay STATE_STYLE.
+ */
+export function railStatus(c: AgentChip | undefined, detector: string | undefined): string | undefined {
+  if (!c) return detector;
+  switch (c.status) {
+    case 'needs_you': return detector === 'waiting' || detector === 'stranded' ? detector : 'waiting';
+    case 'working': return 'working';
+    case 'idle': return 'idle';
+    case 'down': return detector === 'stopped' || detector === 'offline' ? detector : 'crashed';
+    default: return detector;
+  }
+}

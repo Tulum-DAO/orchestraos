@@ -1,8 +1,9 @@
 /**
  * The gateway computes each agent's status chip ONCE (scripts/agent_chip.py, docs/AGENT_CHIP.md);
  * /api/agents attaches it by id so the dashboard draws exactly what iOS, the Watch and the Mac grid
- * draw. Never blocks a poll: it serves the last good answer and refreshes in the background, and a
- * gateway that is down just means rows carry no chip (the rail falls back to its own fields).
+ * draw. Never blocks a poll: it serves the last good answer (for at most CHIP_MAX_AGE_MS) and
+ * refreshes in the background; a gateway that is down means rows carry no chip and the rail falls
+ * back to its own fields.
  */
 import { readGatewayToken } from './gateway-token.js';
 import { gatewayUrl } from './gateway-url.js';
@@ -23,6 +24,8 @@ export interface ChipDeps {
 }
 
 export const CHIP_TTL_MS = 5000;
+/** Older than this, the last good answer is dropped: a chip that old is not what the seat is doing. */
+export const CHIP_MAX_AGE_MS = 30000;
 const STATUSES = new Set(['working', 'needs_you', 'idle', 'down']);
 
 export function defaultChipDeps(): ChipDeps {
@@ -63,12 +66,14 @@ export function createChipSource(deps: ChipDeps = defaultChipDeps()) {
     } catch { /* keep the last good answer */ }
   }
 
-  /** The current chips; kicks a background refresh when older than CHIP_TTL_MS. */
+  /** The current chips; kicks a background refresh when older than CHIP_TTL_MS, and returns none
+   * once the last good answer is older than CHIP_MAX_AGE_MS (the gateway has been down that long). */
   function current(): Map<string, Chip> {
-    if (deps.now() - at > CHIP_TTL_MS && !inflight) {
+    const age = deps.now() - at;
+    if (age > CHIP_TTL_MS && !inflight) {
       inflight = refresh().finally(() => { inflight = null; });
     }
-    return chips;
+    return age > CHIP_MAX_AGE_MS ? new Map() : chips;
   }
 
   return { current, refresh };

@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { chipsFromAgents, createChipSource, CHIP_TTL_MS, type ChipDeps } from './gatewayChips.js';
+import { chipsFromAgents, createChipSource, CHIP_TTL_MS, CHIP_MAX_AGE_MS, type ChipDeps } from './gatewayChips.js';
 
 const FIXTURE = JSON.parse(readFileSync(new URL('../../../contract/fixtures/agent-chips.json', import.meta.url), 'utf8'));
 const BODY = { ok: true, agents: FIXTURE.map((c: any) => ({ id: c.row.id, chip: c.chip })) };
@@ -41,7 +41,17 @@ test('the first poll does not wait for the gateway; the next one has the chips',
   assert.equal(src.current().get('gm')?.status, 'working');
 });
 
-test('a gateway that goes down keeps the last good chips', async () => {
+test('a gateway down longer than CHIP_MAX_AGE_MS means no chips, not old ones', async () => {
+  const clock = { t: 0 };
+  let up = true;
+  const { d } = deps({ clock, fetchJson: async () => { if (!up) throw new Error('down'); return { status: 200, body: BODY }; } });
+  const src = createChipSource(d);
+  await src.refresh();
+  up = false; clock.t += CHIP_MAX_AGE_MS + 1;
+  assert.equal(src.current().size, 0);
+});
+
+test('a gateway that goes down briefly keeps the last good chips', async () => {
   const clock = { t: 0 };
   let up = true;
   const { d } = deps({ clock, fetchJson: async () => { if (!up) throw new Error('down'); return { status: 200, body: BODY }; } });

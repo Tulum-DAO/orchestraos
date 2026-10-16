@@ -19,7 +19,7 @@ import { chipStateFor, ActivityDot } from '../RecentAgentChips';
 import { useFeedHealth } from '../../hooks/useFeedHealth';
 import { isDegraded, lastSeenLabel, type FeedVerdict } from '../../lib/feedLiveness';
 import UsageLine from './UsageLine';
-import { asChip, contextLeftLabel, contextLeftLow, providerTitle, chipNeedsYou, type AgentChip } from '../../lib/agentChip';
+import { asChip, contextLeftLabel, contextLeftLow, providerTitle, railStatus, type AgentChip } from '../../lib/agentChip';
 import { useProviderMarks, type ProviderMarks } from '../../hooks/useProviderMarks';
 
 const SECTIONS: { key: keyof Omit<RailGroups, 'other'>; label: string; badge?: boolean }[] = [
@@ -107,9 +107,10 @@ export function AgentRail({ currentId, onPick }: { currentId?: string; onPick: (
     const rows: RailAgent[] = (agentRowsFrom(data) ?? []).map((a: Record<string, unknown>) => ({
       id: String(a.id),
       name: a.name as string | undefined,
-      status: a.status as string | undefined,
-      // A seat waiting on a card it filed needs you too (the gateway chip's needs_you).
-      has_pending_menu: !!a.has_pending_menu || chipNeedsYou(asChip(a.chip)),
+      // The gateway's chip decides the dot and the section when there is one (lib/agentChip.ts
+      // railStatus), so a seat waiting on a card it filed needs you here too.
+      status: railStatus(asChip(a.chip), a.status as string | undefined),
+      has_pending_menu: !!a.has_pending_menu,
       chip: asChip(a.chip),
       unread: (a.inbox_count as number | undefined) ?? 0,
       provider: a.runtime as string | undefined,

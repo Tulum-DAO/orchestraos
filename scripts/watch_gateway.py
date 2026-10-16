@@ -1684,8 +1684,24 @@ def compute_agents():
     return out
 
 
+PENDING_CARDS_CACHE_S = 15
+_pending_cards_cache = {"at": -1e18, "counts": {}}
+
+
 def _pending_cards_by_author() -> dict:
-    """seat -> count of its pending cards (waiting on Shaw). Fail-open: no store, no counts."""
+    """seat -> count of its pending cards (waiting on Shaw), read at most every
+    PENDING_CARDS_CACHE_S so the /agents refresh does not query the card store each time."""
+    import time as _time
+    now = _time.monotonic()
+    if now - _pending_cards_cache["at"] < PENDING_CARDS_CACHE_S:
+        return _pending_cards_cache["counts"]
+    _pending_cards_cache["counts"] = _read_pending_cards_by_author()
+    _pending_cards_cache["at"] = now
+    return _pending_cards_cache["counts"]
+
+
+def _read_pending_cards_by_author() -> dict:
+    """Fail-open: no store, no counts (the chip falls back to the detector's state)."""
     try:
         store = ApprovalStore(); store.migrate()
         counts: dict = {}

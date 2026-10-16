@@ -23,10 +23,18 @@ FIXTURE = os.path.join(os.path.dirname(__file__), "..", "contract", "fixtures", 
     ("stalled", False, 0, "down"),
     ("offline", False, 0, "down"),
     ("stopped", False, 0, "down"),
-    (None, False, 0, "idle"),
+    (None, False, 0, "down"),                    # unknown is never "alive at the prompt"
+    ("some-new-state", False, 0, "down"),
 ])
+
 def test_status(state, menu, cards, want):
     assert C.chip_status(state, menu, cards) == want
+
+
+def test_every_state_the_gateway_emits_is_mapped_on_purpose():
+    for st in set(G._STATE_MAP.values()) | {"crashed", "offline"}:
+        assert C.chip_status(st) in {"working", "needs_you", "idle", "down"}, st
+    assert C.chip_status("idle") == "idle" and C.chip_status("working") == "working"
 
 
 @pytest.mark.parametrize("model,label", [
@@ -85,4 +93,13 @@ def test_a_broken_card_store_never_breaks_the_chips(monkeypatch):
         def __init__(self, *a, **k):
             raise RuntimeError("no db")
     monkeypatch.setattr(G, "ApprovalStore", Boom)
-    assert G._pending_cards_by_author() == {}
+    assert G._read_pending_cards_by_author() == {}
+
+
+def test_pending_card_counts_are_cached_between_refreshes(monkeypatch):
+    calls = []
+    monkeypatch.setattr(G, "_read_pending_cards_by_author", lambda: calls.append(1) or {"ops": 1})
+    monkeypatch.setattr(G, "_pending_cards_cache", {"at": -1e18, "counts": {}})
+    for _ in range(5):
+        assert G._pending_cards_by_author() == {"ops": 1}
+    assert len(calls) == 1

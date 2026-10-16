@@ -30,7 +30,7 @@ works it out on its own and two screens never disagree.
 | `name` | Our seat name (`gm`, `ios-watch-dev`, ...). The provider is the logo, never the name. |
 | `provider` | `claude`, `codex`, `gemini`, `grok`, or `null`. Taken from the live process, else the registry, so a stopped seat keeps its logo. `null` means no logo. |
 | `model_label` | A short model name for a tooltip or a tap (`Opus 5.5`, `GPT-5.6 Terra`, `Grok 4.7`). From the model id and the labels in `config/providers.json`; an id with no known label is shown as it is. `null` when the model is unknown. |
-| `status` | `needs_you`: a permission prompt, a pending menu, or a pending card this seat filed. `down`: crashed, stalled, stopped or not running. `working`. `idle`: anything else. |
+| `status` | `needs_you`: a permission prompt, a pending menu, a pending card this seat filed, or an unsent draft. `working`. `idle`: at the prompt. `down`: crashed, stalled, stopped, not running, or a state the gateway does not know (never drawn as alive). |
 | `context_left_pct` | 0-100, the share of the model's context window still free. `null` when there is no reading: draw nothing, never `0%` or `100%`. |
 
 ## Drawing it
@@ -40,8 +40,9 @@ works it out on its own and two screens never disagree.
   surface: draw it small (about 14 px), as identification only. Do not recolour or redraw it.
 - **Status dot:** one colour per `status`, the same on every surface (the dashboard's existing
   colours, `STATE_STYLE` in `dashboard/src/lib/agentStatus.ts`): `needs_you` amber
-  with a ring, pulsing; `working` orange, pulsing; `idle` green; `down` red. Working and needs-you
-  must never look alike.
+  with a ring, pulsing; `working` orange, pulsing; `idle` green; `down` red (the dashboard keeps a
+  seat that is simply not running grey, in its collapsed "Not running" list). Working and
+  needs-you must never look alike.
 - **Context:** `92% left`. Amber at 20% left or less.
 - **Model:** on hover or tap, `Runs on Claude · Opus 5.5`.
 

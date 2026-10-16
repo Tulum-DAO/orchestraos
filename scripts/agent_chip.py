@@ -13,8 +13,8 @@ Mac grid render the same thing from one source (docs/AGENT_CHIP.md):
 * model    : a short label for hover/tap, from the model id (never invented: an id we cannot
              shorten is shown as it is).
 * status   : needs_you = a permission prompt, a pending menu, or a pending card this seat filed
-             (waiting on Shaw); down = crashed / stalled / stranded / offline / stopped; working;
-             else idle.
+             (waiting on Shaw), or stranded; working; idle; down = crashed / stalled / offline /
+             stopped, or any state this module does not know (never drawn as alive).
 * context_left_pct : 100 - context used of the WINDOW, or null when there is no reading. Never 0 or
              100 for "unknown".
 """
@@ -80,11 +80,13 @@ def model_label(model) -> str | None:
 def chip_status(state, has_pending_menu=False, pending_cards=0) -> str:
     if has_pending_menu or (pending_cards or 0) > 0 or state in NEEDS_YOU:
         return "needs_you"
-    if state in DOWN:
-        return "down"
     if state == "working":
         return "working"
-    return "idle"
+    if state == "idle":
+        return "idle"
+    # crashed / stalled / offline / stopped, and anything this module does not know: "we cannot
+    # tell" must never draw as alive at the prompt.
+    return "down"
 
 
 def context_left(used_of_window) -> int | None:

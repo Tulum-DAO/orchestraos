@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { asChip, chipNeedsYou, contextLeftLabel, contextLeftLow, providerTitle } from './agentChip.ts';
+import { asChip, chipNeedsYou, contextLeftLabel, contextLeftLow, providerTitle, railStatus } from './agentChip.ts';
+import { sectionFor } from './agentRail.ts';
 
 const FIXTURE = JSON.parse(readFileSync(new URL('../../../contract/fixtures/agent-chips.json', import.meta.url), 'utf8'));
 
@@ -24,4 +25,16 @@ test('low context left turns amber at 20% or less', () => {
 test('a malformed chip is no chip', () => {
   for (const v of [null, 'x', {}, { status: 3 }]) assert.equal(asChip(v), undefined);
   for (const v of [NaN, -1, 101, '50' as any]) assert.equal(contextLeftLabel({ context_left_pct: v }), null);
+});
+
+test('the rail follows the chip, so the dashboard says what every surface says', () => {
+  // codex R1: a chip that says down must not draw as working (a stalled seat sat in Working).
+  assert.equal(railStatus({ status: 'down' }, 'stalled'), 'crashed');
+  assert.equal(sectionFor({ id: 'x', status: railStatus({ status: 'down' }, 'stalled') }), undefined);
+  assert.equal(railStatus({ status: 'down' }, 'offline'), 'offline');
+  assert.equal(railStatus({ status: 'needs_you' }, 'idle'), 'waiting');       // waiting on its own card
+  assert.equal(sectionFor({ id: 'x', status: railStatus({ status: 'needs_you' }, 'idle') }), 'needsYou');
+  assert.equal(railStatus({ status: 'needs_you' }, 'stranded'), 'stranded');
+  assert.equal(railStatus({ status: 'working' }, 'idle'), 'working');
+  assert.equal(railStatus(undefined, 'stalled'), 'stalled');                  // no chip: detector stands
 });
