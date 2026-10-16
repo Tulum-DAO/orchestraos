@@ -917,7 +917,7 @@ def codex_pane_is_busy(pane_text: str) -> bool:
     return ("\u25e6 Working" in txt) or ("tab to queue message" in txt)
 
 
-def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
+def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME, pre_paste=None) -> str:
     """Inject with three-stage verification. Returns:
       'submitted'  — text confirmed in scrollback, input line clear
       'stuck'      — text landed in input line but Enter never took (left as-is)
@@ -963,6 +963,12 @@ def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
     if ok0 and composer_has_stranded_chip(line0):
         log(f"stranded paste-chip in {session} composer — E7 guard: no repaste, holding")
         return "stuck"
+
+    # Stage 0.55 (Deliver now, mid-turn): the caller's last look, right before any key is sent.
+    # 'held' = nothing was typed into the pane; the caller returns the row to pending.
+    if pre_paste is not None and not pre_paste():
+        log(f"DELIVER-NOW pre-paste check failed in {session} -- nothing typed, holding")
+        return "held"
 
     # Stage 0.6 (De-duplication guard): if the probe text is ALREADY in the input
     # line/composer from a previous unsubmitted attempt, never paste another duplicate copy!
@@ -2227,7 +2233,15 @@ def main():
                 text = f"[fwd from {forwarded_from}] " + text
                 merge_forwarded_meta(store, msg["id"], forwarded_from)
                 log(f"FORWARD {msg['id']}: {agent} -> {session} ({reason}, from={forwarded_from})")
-            result = inject(session, text, _runtime)
+            result = inject(session, text, _runtime,
+                            pre_paste=(lambda: claude_mid_turn_safe(session))
+                            if "mid-turn" in _dn_waived else None)
+            if result == "held":
+                with store._conn() as conn:
+                    conn.execute("UPDATE messages SET status='pending' WHERE id=? AND status='processing'",
+                                 (msg["id"],))
+                note_hold(hold_state, session, msg, "not-idle", now, queue_n=_qdepth.get(agent), dl_batch=_dl_batch)
+                continue
             if result in ("submitted", "stuck"):
                 close_park_episode(hold_state, session)   # target took mail: episode over
             if result == "submitted":
