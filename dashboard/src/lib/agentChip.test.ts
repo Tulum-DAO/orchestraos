@@ -53,5 +53,7 @@ test('services and external seats are labelled, and external claims no state', (
   assert.equal(kindLabel(byName['remote-seat']), 'External');
   assert.equal(kindLabel(byName.gm), null);
   assert.ok(asChip(byName['remote-seat']));
-  assert.equal(railStatus(byName['remote-seat'], 'external'), 'external');   // never turned into down
+  for (const det of ['external', 'stopped', 'crashed', 'working', undefined]) {
+    assert.equal(railStatus(byName['remote-seat'], det), 'unknown', String(det));  // never down, never live
+  }
 });

@@ -29,6 +29,7 @@ export const CHIP_TTL_MS = 5000;
 /** Older than this, the last good answer is dropped: a chip that old is not what the seat is doing. */
 export const CHIP_MAX_AGE_MS = 30000;
 const STATUSES = new Set(['working', 'needs_you', 'idle', 'down']);
+const KINDS = new Set(['agent', 'service', 'external']);
 
 export function defaultChipDeps(): ChipDeps {
   return {
@@ -47,7 +48,7 @@ export function chipsFromAgents(body: any): Map<string, Chip> {
   const out = new Map<string, Chip>();
   for (const r of Array.isArray(body?.agents) ? body.agents : []) {
     const c = r?.chip;
-    if (typeof r?.id !== 'string' || !c || typeof c !== 'object') continue;
+    if (typeof r?.id !== 'string' || !c || typeof c !== 'object' || !KINDS.has(c.kind)) continue;
     if (!(STATUSES.has(c.status) || (c.kind === 'external' && c.status === null))) continue;
     out.set(r.id, c as Chip);
   }

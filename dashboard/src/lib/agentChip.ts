@@ -48,8 +48,9 @@ export function providerTitle(providerLabel: string, c: AgentChip | undefined): 
  */
 export function railStatus(c: AgentChip | undefined, detector: string | undefined): string | undefined {
   if (!c) return detector;
-  // External: not checked here. No live state is claimed; the detector's word (if any) stands.
-  if (c.kind === 'external') return detector;
+  // External: not checked here, so no live state at all: the neutral 'unknown' (STATE_STYLE's
+  // grey "—"), whatever a stale detector says. Never drawn as down or as live.
+  if (c.kind === 'external') return 'unknown';
   switch (c.status) {
     case 'needs_you': return detector === 'waiting' || detector === 'stranded' ? detector : 'waiting';
     case 'working': return 'working';

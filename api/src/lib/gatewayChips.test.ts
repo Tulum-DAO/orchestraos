@@ -75,6 +75,8 @@ test('an external chip (status null) is kept; a null status on anything else is 
   const m = chipsFromAgents({ agents: [
     { id: 'remote', chip: { name: 'remote', kind: 'external', status: null } },
     { id: 'bad', chip: { name: 'bad', kind: 'agent', status: null } },
+    { id: 'odd', chip: { name: 'odd', kind: 'robot', status: 'idle' } },
+    { id: 'nokind', chip: { name: 'nokind', status: 'idle' } },
   ] });
   assert.deepEqual([...m.keys()], ['remote']);
 });
