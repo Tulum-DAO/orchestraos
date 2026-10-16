@@ -4,7 +4,8 @@ Your agents will run on a server you rent, not on your laptop. They keep working
 is closed, and you follow them and answer their questions from your phone.
 
 This page is for you if you have never used a terminal. It takes about 30 minutes. One line does
-most of the work; you do the few things only you can do: pay, sign in, and scan a code.
+most of the work; you do the few things only you can do: pay, sign in, and tap Approve once on
+your dashboard at the end.
 
 If something goes wrong at any point, you lose nothing: run the same line again and it carries on
 from where it stopped.

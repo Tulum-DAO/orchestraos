@@ -2,8 +2,8 @@
 
 > **Fast path for a fresh Ubuntu 24.04 server:** [docs/CLIENT_SETUP.md](CLIENT_SETUP.md) runs this
 > whole guide as one resumable line (`scripts/install-client.sh`), stopping only where you have to
-> sign in or scan a code. This page stays the reference, and the way through when that line cannot fix
-> something.
+> sign in or approve the welcome card on your dashboard. This page stays the reference, and the way
+> through when that line cannot fix something.
 
 > **Never rented a server, made an ssh key, or used Terminal?** Start with
 > [docs/FROM_SCRATCH.md](FROM_SCRATCH.md). It takes you from your computer (Mac, Windows or Linux) to logged in on your own server
