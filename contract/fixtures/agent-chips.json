@@ -1,0 +1,100 @@
+[
+ {
+  "row": {
+   "id": "gm",
+   "state": "working",
+   "provider": "claude",
+   "model": "claude-opus-5-5",
+   "context_pct_of_window": 8
+  },
+  "chip": {
+   "name": "gm",
+   "provider": "claude",
+   "model_label": "Opus 5.5",
+   "status": "working",
+   "context_left_pct": 92
+  }
+ },
+ {
+  "row": {
+   "id": "ios-watch-dev",
+   "state": "waiting",
+   "provider": "codex",
+   "model": "gpt-5.6-terra",
+   "context_pct_of_window": 41
+  },
+  "chip": {
+   "name": "ios-watch-dev",
+   "provider": "codex",
+   "model_label": "GPT-5.6 Terra",
+   "status": "needs_you",
+   "context_left_pct": 59
+  }
+ },
+ {
+  "row": {
+   "id": "ops",
+   "state": "idle",
+   "provider": null,
+   "model": "grok-4.7",
+   "context_pct_of_window": null
+  },
+  "registry_runtime": "grok",
+  "pending_cards": 1,
+  "chip": {
+   "name": "ops",
+   "provider": "grok",
+   "model_label": "Grok 4.7",
+   "status": "needs_you",
+   "context_left_pct": null
+  }
+ },
+ {
+  "row": {
+   "id": "research",
+   "state": "idle",
+   "provider": "gemini",
+   "model": "gemini-3.8-flash-high",
+   "context_pct_of_window": null
+  },
+  "chip": {
+   "name": "research",
+   "provider": "gemini",
+   "model_label": "Gemini 3.8 Flash (High)",
+   "status": "idle",
+   "context_left_pct": null
+  }
+ },
+ {
+  "row": {
+   "id": "old-seat",
+   "state": "offline",
+   "provider": null,
+   "model": "claude-fable-5-1"
+  },
+  "registry_runtime": "claude",
+  "chip": {
+   "name": "old-seat",
+   "provider": "claude",
+   "model_label": "Fable 5.1",
+   "status": "down",
+   "context_left_pct": null
+  }
+ },
+ {
+  "row": {
+   "id": "builder",
+   "state": "crashed",
+   "provider": null,
+   "model": null
+  },
+  "registry_runtime": null,
+  "chip": {
+   "name": "builder",
+   "provider": null,
+   "model_label": null,
+   "status": "down",
+   "context_left_pct": null
+  }
+ }
+]

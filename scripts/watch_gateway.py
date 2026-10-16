@@ -1676,11 +1676,36 @@ def compute_agents():
         return ev if _hook_event_is_current(ev, agent_start.get(sess), sess in agent_start) else None
 
     _stamp_recency_and_subagents(out, _pane_event)
+    _stamp_chips(out, {name: meta for name, meta in sess_meta.values()})
 
     rank = {"waiting": 0, "stranded": 1, "stalled": 2, "crashed": 3, "stopped": 4,
             "working": 5, "idle": 6, "offline": 7}
     out.sort(key=lambda a: (rank.get(a["state"], 9), -a.get("last_used_ts", 0), a["id"]))
     return out
+
+
+def _pending_cards_by_author() -> dict:
+    """seat -> count of its pending cards (waiting on Shaw). Fail-open: no store, no counts."""
+    try:
+        store = ApprovalStore(); store.migrate()
+        counts: dict = {}
+        for r in store.pending_to_notify():
+            a = r.get("from_agent")
+            if a:
+                counts[a] = counts.get(a, 0) + 1
+        return counts
+    except Exception:  # noqa: BLE001 — the chip falls back to the detector's state
+        return {}
+
+
+def _stamp_chips(rows, meta_by_name):
+    """Add the one status chip every surface draws (scripts/agent_chip.py, docs/AGENT_CHIP.md)."""
+    from scripts.agent_chip import chip_for
+    cards = _pending_cards_by_author()
+    for r in rows:
+        meta = meta_by_name.get(r.get("id")) or {}
+        r["chip"] = chip_for(r, registry_runtime=meta.get("runtime"),
+                             pending_cards=cards.get(r.get("id"), 0))
 
 
 SUBAGENT_STALE_S = 15 * 60
