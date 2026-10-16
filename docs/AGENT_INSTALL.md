@@ -12,6 +12,10 @@ The commands themselves live in two tested guides. Each phase below names the se
 
 - From scratch: https://github.com/Tulum-DAO/orchestraos/blob/main/docs/FROM_SCRATCH.md
 - Install guide: https://github.com/Tulum-DAO/orchestraos/blob/main/docs/INSTALL.md
+- One-line setup for a fresh Ubuntu 24.04 server: https://github.com/Tulum-DAO/orchestraos/blob/main/docs/CLIENT_SETUP.md
+  (`scripts/install-client.sh` runs INSTALL.md's minimum path, resumable, and stops at each
+  [PERSON ONLY] step with what to do). Prefer it on a fresh server; use the guides above when it stops on
+  something it cannot fix.
 
 Use their commands exactly. Don't rewrite them from memory. If you can run commands, fetch
 pages raw rather than through a tool that summarises them, for example
