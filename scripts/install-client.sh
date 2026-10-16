@@ -199,27 +199,41 @@ if [ "$(systemctl is-active orchestra 2>/dev/null)" != "active" ]; then
 fi
 # Put the dashboard (443) and the phone's gateway (8445, docs/ONBOARDING.md step 4) on your private
 # network: tailnet only, never Funnel. A port that already serves something else is never replaced.
-served_on() {   # the "/" proxy target https port $1 serves on this tailnet, or nothing
-  tailscale serve status --json 2>/dev/null | python3 -c '
+served_on() {   # what https port $1 serves on this tailnet: nothing, PROXY <target>, or FUNNEL <target>; exit 2 = unreadable
+  local js
+  js=$(tailscale serve status --json 2>/dev/null) || return 2
+  printf '%s' "$js" | python3 -c '
 import json, sys
 port = sys.argv[1]
 try:
-    web = json.load(sys.stdin).get("Web") or {}
+    doc = json.loads(sys.stdin.read() or "{}")
 except Exception:
-    sys.exit(0)
-for hostport, w in web.items():
-    if hostport.rsplit(":", 1)[-1] == port:
-        print((((w or {}).get("Handlers") or {}).get("/") or {}).get("Proxy") or "something else")
-        break' "$1" 2>/dev/null
+    sys.exit(2)
+funnel = doc.get("AllowFunnel") or {}
+# Top-level entries, and those of named Tailscale Services (Services.<name>.Web).
+webs = [doc.get("Web") or {}] + [(svc or {}).get("Web") or {} for svc in (doc.get("Services") or {}).values()]
+for web in webs:
+    for hostport, w in web.items():
+        if hostport.rsplit(":", 1)[-1] == port:
+            target = (((w or {}).get("Handlers") or {}).get("/") or {}).get("Proxy") or "something-else"
+            print(("FUNNEL " if funnel.get(hostport) else "PROXY ") + target)
+            sys.exit(0)' "$1"
 }
 serve_port() {
-  local port="$1" target="$2" what="$3" cur
-  cur=$(served_on "$port")
-  [ "$cur" = "$target" ] && return 0
-  if [ -n "$cur" ]; then
-    fail 9 "https port $port on your private network already serves something else, which the $what was going to use; this setup will not replace it" \
-         "if you set that up yourself, keep it and send whoever helps you the output of  tailscale serve status"
+  local port="$1" target="$2" what="$3" cur rc
+  cur=$(served_on "$port"); rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail 9 "this setup could not read what your private network already serves, so it will not change it" \
+         "run  tailscale serve status  to check Tailscale is running, then try again"
   fi
+  case "$cur" in
+    "PROXY $target") return 0 ;;
+    "FUNNEL "*) fail 9 "https port $port is open to the public internet (Tailscale Funnel); OrchestraOS must stay on your private network" \
+                     "turn Funnel off for it with  tailscale funnel --https=$port off , then try again" ;;
+    "") ;;
+    *) fail 9 "https port $port on your private network already serves something else, which the $what was going to use; this setup will not replace it" \
+            "if you set that up yourself, keep it and send whoever helps you the output of  tailscale serve status" ;;
+  esac
   tailscale serve --bg --https="$port" "$target" >/dev/null 2>&1 \
     || fail 9 "the $what could not be put on your private network" "open the Tailscale admin page, turn on HTTPS certificates, then try again"
 }

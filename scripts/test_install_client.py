@@ -29,7 +29,8 @@ STUBS = {
                  'status) if [ "$2" = "--json" ]; then [ -f "$S/ts_running" ] && echo \'{"BackendState":"Running","Self":{"DNSName":"box.example.ts.net."}}\' '
                  '|| echo \'{"BackendState":"NeedsLogin"}\'; fi;; '
                  'up) [ -f "$S/ts_signin" ] && touch "$S/ts_running" || { echo "To authenticate, visit: https://login.example/x"; exit 1; };; '
-                 'serve) if [ "$2" = "status" ]; then python3 -c "import json,sys; w={}; '
+                 'serve) if [ "$2" = "status" ]; then [ -f "$S/serve_json" ] && { cat "$S/serve_json"; exit 0; }; '
+                 '[ -f "$S/serve_broken" ] && exit 1; python3 -c "import json,sys; w={}; '
                  '[w.__setitem__(\'box.example.ts.net:\'+l.split()[0], {\'Handlers\': {\'/\': {\'Proxy\': l.split()[1]}}}) for l in open(sys.argv[1])]; '
                  'print(json.dumps({\'Web\': w}))" "$S/ts_serve" 2>/dev/null || echo "{}"; '
                  'else p="${3#--https=}"; echo "$p ${*: -1}" >> "$S/ts_serve"; fi;; esac; exit 0',
@@ -262,3 +263,30 @@ def test_a_port_already_serving_something_else_is_never_replaced(box):
     assert "already serves something else" in r.stdout and "443" in r.stdout
     assert not any(c.startswith("tailscale serve --bg") for c in box.calls())
     assert (box.state / "ts_serve").read_text() == "443 http://127.0.0.1:3000\n"
+
+
+def _serve_json(box, doc):
+    (box.state / "serve_json").write_text(json.dumps(doc))
+    box.set("ts_signin", "claude_login")
+    r = box.run()
+    return r
+
+
+def test_a_named_tailscale_service_on_the_port_is_seen_and_not_replaced(box):
+    r = _serve_json(box, {"Services": {"svc:myapp": {"Web": {"svc-myapp.example.ts.net:443":
+                    {"Handlers": {"/": {"Proxy": "http://127.0.0.1:3000"}}}}}}})
+    assert r.returncode == 4 and "already serves something else" in r.stdout, r.stdout
+    assert not any(c.startswith("tailscale serve --bg") for c in box.calls())
+
+
+def test_our_own_port_with_funnel_on_is_refused_as_public(box):
+    r = _serve_json(box, {"Web": {"box.example.ts.net:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8891"}}}},
+                          "AllowFunnel": {"box.example.ts.net:443": True}})
+    assert r.returncode == 4 and "public internet" in r.stdout, r.stdout
+
+
+def test_when_serve_status_cannot_be_read_it_stops_instead_of_guessing(box):
+    box.set("serve_broken", "ts_signin", "claude_login")
+    r = box.run()
+    assert r.returncode == 4 and "could not read" in r.stdout, r.stdout
+    assert not any(c.startswith("tailscale serve --bg") for c in box.calls())
