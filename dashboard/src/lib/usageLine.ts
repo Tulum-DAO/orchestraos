@@ -57,7 +57,10 @@ export function usageParts(rows: unknown, now: Date = new Date()): UsagePart[] {
     const win = (r.window && WINDOWS[r.window]) || r.window || '';
     const resets = typeof r.resets_at === 'number' && r.resets_at > 0 ? `, resets ${clock(r.resets_at, now)}` : '';
     const asOf = r.stale && typeof r.as_of === 'number' ? `, as of ${clock(r.as_of, now)}` : '';
-    const text = `${who} ${Math.round(r.used_pct)}% ${win}`.trim();
+    // A stale reading says its time IN the text, not only on hover: a phone has no hover, and a
+    // dimmed number alone still reads as now.
+    const seen = r.stale && typeof r.as_of === 'number' ? ` (as of ${clock(r.as_of, now)})` : '';
+    const text = `${who} ${Math.round(r.used_pct)}% ${win}`.trim() + seen;
     parts.push({ key: `${r.provider}:${r.account || ''}:${r.window || ''}`, text,
                  title: `${who}: ${Math.round(r.used_pct)}% of the ${win} limit used${resets}${asOf}`,
                  stale: !!r.stale, high: r.used_pct >= 80, missing: false });

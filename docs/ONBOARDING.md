@@ -206,7 +206,7 @@ Confirm the `gateway` row has a live pid again.
   | `voice` | Live voice mode and dictation through the server, audio only (every call spends provider credit). Typing to Arturo is `message` |
   | `ptt` | push-to-talk to Arturo from a headset or Watch: lookups, and messages to agents marked unverified |
   | `admin` | file red-alert reports, post telemetry |
-  | `usage` | nothing yet: reserved for reading usage later, so a device paired now needs no re-pair |
+  | `usage` | see how much of each AI plan's limit is used (`GET /usage`, and the same rows on `/agents`): the 5-hour and weekly windows Claude Code and Codex report. `read` alone does not show it |
   | `owner` | this device is yours: its push-to-talk calls (with `ptt`) get Arturo's full tools, like the dashboard, instead of lookups only. Typed turns are unchanged |
   | `code` | open a file in the working folder of an agent you allowlisted under `[code] roots` in orchestra.toml (off until you list a root). Dotfiles, logs, keys, databases, transcripts and anything secret-shaped are refused; every fetch is audited. Only the host can grant it, and the gateway's own bearer does not have it. Behind a reverse proxy, keep any public (Funnel) entry off the gateway port: the proxy hides the caller's address |
 

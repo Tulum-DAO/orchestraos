@@ -37,7 +37,11 @@ CODEX_AT = 1792170231
 
 
 def _rollout(dirpath, name, events, mtime=None):
-    p = dirpath / name
+    from datetime import date
+    day = date.fromtimestamp(mtime if mtime is not None else NOW)
+    folder = dirpath / f"{day.year:04d}" / f"{day.month:02d}" / f"{day.day:02d}"
+    folder.mkdir(parents=True, exist_ok=True)
+    p = folder / name
     p.write_text("".join(json.dumps(e) + "\n" for e in events))
     if mtime is not None:
         os.utime(p, (mtime, mtime))
@@ -77,13 +81,16 @@ def test_two_logins_are_two_accounts(tmp_path):
     assert {r["account"] for r in U.claude_rows(NOW, tmp_path)} == {"default", "work"}
 
 
-def test_account_label_comes_from_the_config_dir(monkeypatch):
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/home/x/.claude-work/")
-    assert U.claude_account() == ".claude-work"
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/home/x/bad name")
-    assert U.claude_account() == "default"
-    monkeypatch.delenv("CLAUDE_CONFIG_DIR")
-    assert U.claude_account() == "default"
+@pytest.mark.parametrize("cfg,label", [
+    ("/home/x/.claude-work/", "work"), ("/home/x/.claude", "default"), ("/home/x/claude_alt", "alt"),
+    ("/srv/profiles/ops", "ops"), ("/home/x/bad name", "default"), (None, "default"),
+])
+def test_account_is_a_plain_label_never_a_path(monkeypatch, cfg, label):
+    if cfg is None:
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    else:
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", cfg)
+    assert U.claude_account() == label
 
 
 def test_an_old_reading_is_stale_not_current(tmp_path):
@@ -184,3 +191,20 @@ def test_agents_carries_usage_only_for_a_caller_holding_usage(monkeypatch):
     assert "usage" not in _agents_body(monkeypatch, ["read"])
     assert _agents_body(monkeypatch, ["read", "usage"])["usage"] == [{"provider": "codex", "used_pct": 1.0}]
     assert "usage" in _agents_body(monkeypatch, ["*"])
+
+
+def test_only_event_msg_token_counts_are_readings(tmp_path):
+    wrong = json.loads(json.dumps(CODEX_EVENT))
+    wrong["type"] = "response_item"
+    _rollout(tmp_path, "rollout-a.jsonl", [wrong], mtime=NOW)
+    assert U.codex_rows(NOW, tmp_path)[0]["used_pct"] is None
+
+
+def test_codex_reads_only_the_lookback_day_folders(tmp_path):
+    # A rollout filed under an old day folder is never opened, even with a fresh mtime.
+    old = tmp_path / "2025" / "01" / "01"
+    old.mkdir(parents=True)
+    p = old / "rollout-old.jsonl"
+    p.write_text(json.dumps(CODEX_EVENT) + "\n")
+    os.utime(p, (NOW, NOW))
+    assert U.codex_rows(NOW, tmp_path)[0]["used_pct"] is None

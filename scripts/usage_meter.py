@@ -89,7 +89,9 @@ def latest_codex_rate_limits(path) -> tuple[dict, int] | None:
             d = json.loads(line)
         except ValueError:
             continue
-        p = d.get("payload") if isinstance(d, dict) else None
+        if not isinstance(d, dict) or d.get("type") != "event_msg":
+            continue
+        p = d.get("payload")
         if not isinstance(p, dict) or p.get("type") != "token_count":
             continue
         rl = p.get("rate_limits")
@@ -100,20 +102,28 @@ def latest_codex_rate_limits(path) -> tuple[dict, int] | None:
 
 
 def _codex_rollouts(sessions_dir: Path, now: float) -> list[Path]:
+    """The newest rollouts, read from the per-day folders Codex keeps (sessions/YYYY/MM/DD) for the
+    lookback only, so a refresh never walks a long-lived sessions tree. Day folders are in local
+    time, so one extra day on each side covers any time zone."""
+    from datetime import date, timedelta
+    days = int(CODEX_LOOKBACK_S // 86400) + 2
+    today = date.fromtimestamp(now)
     found = []
-    try:
-        for root, _dirs, files in os.walk(sessions_dir):
-            for name in files:
-                if name.startswith("rollout-") and name.endswith(".jsonl"):
-                    p = Path(root) / name
-                    try:
-                        m = p.stat().st_mtime
-                    except OSError:
-                        continue
-                    if now - m <= CODEX_LOOKBACK_S:
-                        found.append((m, p))
-    except OSError:
-        return []
+    for i in range(-1, days):
+        d = today - timedelta(days=i)
+        folder = sessions_dir / f"{d.year:04d}" / f"{d.month:02d}" / f"{d.day:02d}"
+        try:
+            entries = list(os.scandir(folder))
+        except OSError:
+            continue
+        for e in entries:
+            if e.name.startswith("rollout-") and e.name.endswith(".jsonl") and e.is_file():
+                try:
+                    m = e.stat().st_mtime
+                except OSError:
+                    continue
+                if now - m <= CODEX_LOOKBACK_S:
+                    found.append((m, Path(e.path)))
     found.sort(reverse=True)
     return [p for _m, p in found[:CODEX_MAX_FILES]]
 
@@ -149,10 +159,14 @@ def claude_usage_dir(data_dir: Path) -> Path:
 
 
 def claude_account() -> str:
-    """The account label for this Claude login: the config dir's name, else 'default'."""
+    """A plain-words label for this Claude login, never a path: the config dir's name without its
+    dots and "claude" ("~/.claude-work" -> "work"); "default" for the usual ~/.claude."""
     cfg = os.environ.get("CLAUDE_CONFIG_DIR", "").rstrip("/")
-    name = os.path.basename(cfg) if cfg else "default"
-    return name if _ACCOUNT_RE.match(name) else "default"
+    name = os.path.basename(cfg).lstrip(".") if cfg else ""
+    if name.lower().startswith("claude"):
+        name = name[len("claude"):]
+    name = name.strip("-_. ")
+    return name if name and _ACCOUNT_RE.match(name) else "default"
 
 
 def claude_record_from_statusline(d: dict, now: float) -> dict | None:

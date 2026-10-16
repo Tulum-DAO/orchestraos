@@ -25,6 +25,7 @@ test('a stale reading says when it was taken', () => {
   const p = usageParts([{ provider: 'claude', window: 'weekly', used_pct: 80, as_of: 1792160000, stale: true }], NOW);
   assert.equal(p[0].stale, true);
   assert.match(p[0].title, /as of /);
+  assert.match(p[0].text, /^Claude 80% weekly \(as of .+\)$/);   // visible, not only on hover
   assert.equal(p[0].high, true);
 });
 
