@@ -29,8 +29,10 @@ STUBS = {
                  'status) if [ "$2" = "--json" ]; then [ -f "$S/ts_running" ] && echo \'{"BackendState":"Running","Self":{"DNSName":"box.example.ts.net."}}\' '
                  '|| echo \'{"BackendState":"NeedsLogin"}\'; fi;; '
                  'up) [ -f "$S/ts_signin" ] && touch "$S/ts_running" || { echo "To authenticate, visit: https://login.example/x"; exit 1; };; '
-                 'serve) if [ "$2" = "status" ]; then cat "$S/ts_serve" 2>/dev/null; '
-                 'else echo "|-- / proxy ${*: -1}" >> "$S/ts_serve"; fi;; esac; exit 0',
+                 'serve) if [ "$2" = "status" ]; then python3 -c "import json,sys; w={}; '
+                 '[w.__setitem__(\'box.example.ts.net:\'+l.split()[0], {\'Handlers\': {\'/\': {\'Proxy\': l.split()[1]}}}) for l in open(sys.argv[1])]; '
+                 'print(json.dumps({\'Web\': w}))" "$S/ts_serve" 2>/dev/null || echo "{}"; '
+                 'else p="${3#--https=}"; echo "$p ${*: -1}" >> "$S/ts_serve"; fi;; esac; exit 0',
     "npm": 'case "$*" in *claude-code@*) echo "${*##*@}" > "$S/claude_ver";; *codex@*) echo "${*##*@}" > "$S/codex_ver";; esac',
     "claude": 'case "$1" in --version) [ -f "$S/claude_ver" ] && echo "$(cat "$S/claude_ver") (Claude Code)" || exit 127;; '
               'auth) [ -f "$S/claude_login" ] && echo \'{"loggedIn": true}\' || echo \'{"loggedIn": false}\';; esac',
@@ -250,3 +252,13 @@ def test_when_the_code_cannot_be_made_the_client_gets_the_reason_not_a_scan_hint
     assert r.returncode == 4, r.stdout
     assert "the pairing code could not be made" in r.stdout
     assert "has not used its code" not in r.stdout
+
+
+def test_a_port_already_serving_something_else_is_never_replaced(box):
+    (box.state / "ts_serve").write_text("443 http://127.0.0.1:3000\n")      # the client's own app
+    box.set("ts_signin", "claude_login")
+    r = box.run()
+    assert r.returncode == 4, r.stdout
+    assert "already serves something else" in r.stdout and "443" in r.stdout
+    assert not any(c.startswith("tailscale serve --bg") for c in box.calls())
+    assert (box.state / "ts_serve").read_text() == "443 http://127.0.0.1:3000\n"

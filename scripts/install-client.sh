@@ -197,15 +197,34 @@ if [ "$(systemctl is-active orchestra 2>/dev/null)" != "active" ]; then
   say "Starting OrchestraOS and setting it to start again after a reboot."
   ( cd "$CHECKOUT" && orchestra install-unit --now ) || fail 9 "OrchestraOS did not start" "run: orchestra doctor, and fix the rows it marks MISSING"
 fi
-if ! tailscale serve status 2>/dev/null | grep -q '127.0.0.1:8891'; then
-  tailscale serve --bg --https=443 http://127.0.0.1:8891 >/dev/null 2>&1 \
-    || fail 9 "the dashboard could not be put on your private network" "open the Tailscale admin page, turn on HTTPS certificates, then try again"
-fi
-# The phone app talks to the gateway (8890), on its own https port (docs/ONBOARDING.md step 4).
-if ! tailscale serve status 2>/dev/null | grep -q '127.0.0.1:8890'; then
-  tailscale serve --bg --https=8445 http://127.0.0.1:8890 >/dev/null 2>&1 \
-    || fail 9 "the phone address could not be put on your private network" "open the Tailscale admin page, turn on HTTPS certificates, then try again"
-fi
+# Put the dashboard (443) and the phone's gateway (8445, docs/ONBOARDING.md step 4) on your private
+# network: tailnet only, never Funnel. A port that already serves something else is never replaced.
+served_on() {   # the "/" proxy target https port $1 serves on this tailnet, or nothing
+  tailscale serve status --json 2>/dev/null | python3 -c '
+import json, sys
+port = sys.argv[1]
+try:
+    web = json.load(sys.stdin).get("Web") or {}
+except Exception:
+    sys.exit(0)
+for hostport, w in web.items():
+    if hostport.rsplit(":", 1)[-1] == port:
+        print((((w or {}).get("Handlers") or {}).get("/") or {}).get("Proxy") or "something else")
+        break' "$1" 2>/dev/null
+}
+serve_port() {
+  local port="$1" target="$2" what="$3" cur
+  cur=$(served_on "$port")
+  [ "$cur" = "$target" ] && return 0
+  if [ -n "$cur" ]; then
+    fail 9 "https port $port on your private network already serves something else, which the $what was going to use; this setup will not replace it" \
+         "if you set that up yourself, keep it and send whoever helps you the output of  tailscale serve status"
+  fi
+  tailscale serve --bg --https="$port" "$target" >/dev/null 2>&1 \
+    || fail 9 "the $what could not be put on your private network" "open the Tailscale admin page, turn on HTTPS certificates, then try again"
+}
+serve_port 443 http://127.0.0.1:8891 dashboard
+serve_port 8445 http://127.0.0.1:8890 "phone app's address"
 done_ 9 "OrchestraOS is running and starts again after a reboot"
 
 # ---- 10. Your first agent and your phone [person] ------------------------------------------------
