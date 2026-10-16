@@ -270,7 +270,7 @@ welcome_answered() {
 if ! welcome_answered; then
   resume 10
   if [ ! -s "$WELCOME_ID_FILE" ]; then
-    id=$(approval request --from setup --worker-kind node --options "Approve" --risk low --reversibility easy \
+    id=$(approval request --from setup --worker-kind node --options "approve,deny" --risk low --reversibility easy \
            --feature "setup" --summary "Your OrchestraOS server is set up. Tap Approve to finish the setup on the server." \
            "Welcome to OrchestraOS! Tap Approve to finish setup." 2>/dev/null | tail -1)
     case "$id" in apr_*) mkdir -p "$(dirname "$WELCOME_ID_FILE")"; printf '%s\n' "$id" > "$WELCOME_ID_FILE" ;;

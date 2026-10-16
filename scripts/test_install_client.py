@@ -312,3 +312,12 @@ def test_when_serve_status_cannot_be_read_it_stops_instead_of_guessing(box):
     r = box.run()
     assert r.returncode == 4 and "could not read" in r.stdout, r.stdout
     assert not any(c.startswith("tailscale serve --bg") for c in box.calls())
+
+
+def test_the_welcome_card_is_a_plain_approval_the_dashboard_button_can_answer(box):
+    # Found in the container run: --options "Approve" made a MENU row, which the dashboard's Approve
+    # route refuses ("menu rows answer via answer=='option' only").
+    box.set("ts_signin", "claude_login")
+    box.run()
+    req = [c for c in box.calls() if "approval.py request" in c]
+    assert req and "--options approve,deny" in req[0], req
