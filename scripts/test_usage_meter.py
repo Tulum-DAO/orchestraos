@@ -208,3 +208,14 @@ def test_codex_reads_only_the_lookback_day_folders(tmp_path):
     p.write_text(json.dumps(CODEX_EVENT) + "\n")
     os.utime(p, (NOW, NOW))
     assert U.codex_rows(NOW, tmp_path)[0]["used_pct"] is None
+
+
+def test_the_hook_records_usage_when_claude_code_runs_it(tmp_path):
+    # As Claude Code runs it: its own process, another working directory, a bare environment.
+    import subprocess, sys
+    hook = os.path.join(os.path.dirname(os.path.abspath(U.__file__)), "..", "hooks", "statusline.py")
+    r = subprocess.run([sys.executable, os.path.abspath(hook)], input=json.dumps(CLAUDE_WITH_LIMITS),
+                       capture_output=True, text=True, cwd=str(tmp_path), timeout=30,
+                       env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "ORCHESTRA_DIR": str(tmp_path)})
+    assert r.returncode == 0 and r.stdout.strip(), r.stderr
+    assert (tmp_path / "state" / "usage" / "claude-default.json").is_file(), r.stderr
