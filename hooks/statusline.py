@@ -9,7 +9,10 @@ This command does two things with it:
    (scripts/context_reading.py) and the rotation engine (lineage_daemon/wal/ctx_adapters.py) read
    it; without it a public install has no context reading at all. The path comes from
    ctx_adapters.ctx_bridge_path, the one resolver every reader uses.
-2. Prints the status line. CHAINED (the user already had one and said yes): the user's own command
+2. Records the plan usage Claude Code reports (its `rate_limits` block: the 5 h and weekly windows)
+   in <data dir>/state/usage/claude-<account>.json, for scripts/usage_meter.py. Only when the block
+   is there: the first redraw of a session has none, and an absent block is never written as 0.
+3. Prints the status line. CHAINED (the user already had one and said yes): the user's own command
    gets the identical stdin bytes and its output is printed unchanged. Otherwise a minimal line:
    model | project | meter of the WINDOW, labeled "used".
 
@@ -69,6 +72,19 @@ def write_reading(d: dict, now: float | None = None) -> str | None:
     return path
 
 
+def write_usage(d: dict, now: float | None = None) -> str | None:
+    """Record Claude Code's rate_limits block for usage_meter; the path written, or None."""
+    import usage_meter
+    rec = usage_meter.claude_record_from_statusline(d, time.time() if now is None else now)
+    if rec is None:
+        return None
+    root = os.path.dirname(_SCRIPTS)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from orchestra_cli.settings import data_dir
+    return str(usage_meter.write_claude_record(rec, data_dir(), usage_meter.claude_account()))
+
+
 def render_minimal(d: dict) -> str:
     model = ((d.get("model") or {}).get("display_name") or "Claude").strip()
     cwd = (d.get("workspace") or {}).get("current_dir") or d.get("cwd") or ""
@@ -105,6 +121,10 @@ def main(argv=None) -> int:
         write_reading(d)
     except OSError:
         pass                         # the reading is best-effort; the line still prints
+    try:
+        write_usage(d)
+    except Exception:  # noqa: BLE001 — usage is best-effort too; never blank the line
+        pass
     out = None
     if argv:
         try:

@@ -531,12 +531,12 @@ def test_holding_voice_does_NOT_imply_ptt_and_vice_versa(monkeypatch, tmp_path):
     assert G.ROUTE_SCOPES[("GET", "/live")] == "voice", "the richer surface still needs voice"
 
 
-def test_no_route_consumes_usage_yet():
-    """`usage` is minted ahead of its consumer on purpose. When a route starts requiring it,
-    delete this test in the same change and say which route, so the verb never gates something
-    silently."""
+def test_usage_gates_exactly_the_usage_route():
+    """`usage` was minted ahead of its consumer; its first route is GET /usage (plan usage per
+    provider, scripts/usage_meter.py), and /agents adds the same rows only for a caller holding it
+    (scripts/test_usage_meter.py). A second route taking this verb is a decision: add it here."""
     assert "usage" in VERBS
-    assert "usage" not in set(G.ROUTE_SCOPES.values())
+    assert {k for k, v in G.ROUTE_SCOPES.items() if v == "usage"} == {("GET", "/usage")}
 
 
 def test_a_stored_verb_this_gateway_does_not_know_is_inert_not_a_lockout(monkeypatch, tmp_path):
