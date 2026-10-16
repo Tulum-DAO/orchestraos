@@ -674,3 +674,57 @@ def render_table(checks: list) -> str:
 def render_json(checks: list) -> str:
     return json.dumps({"ok": exit_code(checks) == 0,
                        "checks": [c.__dict__ for c in checks]}, indent=1)
+
+
+#: `--share`: what may leave the box. Built by ALLOWLIST, never by redacting: a row gives its name,
+#: status and whether it is required; details and remedies (paths, users, hosts, ports, tokens) never
+#: appear, so a row added later cannot leak through a field nobody thought to redact.
+_SHARE_NAME = re.compile(r"^[a-z][a-z0-9_.:-]{0,39}$")
+_SHARE_FACTS = (("release", "release {}"), ("os", "{}"), ("ram_gb", "ram {} GB"), ("disk_free_gb", "disk free {} GB"))
+
+
+def render_share(checks: list, facts: dict) -> str:
+    """A short block a client can paste to whoever helps them, so an install can be checked without
+    anyone logging in to their server. No IPs, hostnames, usernames, paths, tokens or session ids."""
+    lines = ["--- orchestra doctor --share ---"]
+    head = [tmpl.format(facts[k]) for k, tmpl in _SHARE_FACTS
+            if isinstance(facts.get(k), (int, str)) and _SHARE_FACT_OK.match(str(facts[k]))]
+    if head:
+        lines.append(" | ".join(head))
+    for c in checks:
+        name = c.name if _SHARE_NAME.match(c.name or "") else "(unnamed check)"
+        req = " (required)" if c.required and c.status == MISSING else ""
+        lines.append(f"{name} {c.status}{req}")
+    lines.append(f"result: {'OK' if exit_code(checks) == 0 else 'NOT READY'}")
+    lines.append("--- end ---")
+    return "\n".join(lines)
+
+
+_SHARE_FACT_OK = re.compile(r"^[A-Za-z0-9 ._-]{1,32}$")
+
+
+def share_facts(st) -> dict:
+    """The few facts `--share` prints, each read from a fixed source and later allowlisted again."""
+    import shutil
+    import subprocess
+    facts: dict = {}
+    try:
+        facts["release"] = subprocess.run(["git", "-C", str(st.repo_root), "rev-parse", "--short", "HEAD"],
+                                          capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:  # noqa: BLE001 — a fact we cannot read is left out
+        pass
+    try:
+        kv = dict(l.split("=", 1) for l in Path("/etc/os-release").read_text().splitlines() if "=" in l)
+        facts["os"] = f"{kv.get('NAME', '').strip('\"').split()[0]} {kv.get('VERSION_ID', '').strip('\"')}".strip()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        kb = next(int(l.split()[1]) for l in Path("/proc/meminfo").read_text().splitlines() if l.startswith("MemTotal:"))
+        facts["ram_gb"] = round(kb / 1024 / 1024)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        facts["disk_free_gb"] = shutil.disk_usage(str(st.data_dir if Path(st.data_dir).exists() else Path.home())).free // 2**30
+    except Exception:  # noqa: BLE001
+        pass
+    return facts
