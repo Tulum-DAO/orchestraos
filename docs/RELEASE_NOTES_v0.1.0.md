@@ -145,6 +145,8 @@ To remove them: `orchestra down`, back up `registry.json`, delete those keys fro
 
 **Added after this release, on main:** a plan-usage meter. The agent rail's top line shows how much of each AI plan's limit is used, for example `Codex 41% 5 h · Claude 68% weekly`, with when each window resets on hover. It reads only local files: Codex's own rollout logs, and the usage block Claude Code passes the OrchestraOS status line (recorded under `<data dir>/state/usage/`, once per Claude login). It never guesses: a provider with no reading shows `—` and says why (Gemini and Grok report none yet), and a reading older than 30 minutes is dimmed with the time it was taken. Paired devices read it from the gateway's `GET /usage` with the `usage` scope; `read` alone does not show it. Added in PR #453.
 
+**Added after this release, on main:** one status chip per agent, the same on every screen. The gateway's `/agents` rows carry a `chip` (seat name, provider, short model name, status `working` / `needs_you` / `idle` / `down`, context left), and `/api/agents` copies it to the dashboard. The agent rail now shows each seat's provider logo on every row (from the one mark set in `config/providers.json`), the model on hover, and context as `92% left` (amber at 20% or less; no reading shows `—`, never 0%). A seat waiting on a card it filed counts as needing you. The contract and a test fixture for native clients are in [docs/AGENT_CHIP.md](AGENT_CHIP.md). Added in PR #454.
+
 ## CI note for this release
 
 GitHub Actions was refused on billing from 2026-09-19 09:52Z; PRs #38–#40 merged on bare-box + CI-identical local evidence (council PASS at `c6b278c`; local run rc 0).
