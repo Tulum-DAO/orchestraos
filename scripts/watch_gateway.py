@@ -106,6 +106,8 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("GET", "/history"): "read",
     ("GET", "/approvals/{id}"): "read",
     ("GET", "/agents"): "read",
+    # Mail waiting for an agent and why (scripts/deliver_now.py): seeing it is read.
+    ("GET", "/held"): "read",
     # Plan usage per provider (scripts/usage_meter.py). Its own verb, reserved in pairing for it:
     # how much of a paid plan is left is not something every read-only device needs.
     ("GET", "/usage"): "usage",
@@ -184,6 +186,8 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("POST", "/menu-submit"): "approve",
     # --- message ---------------------------------------------------------------------
     ("POST", "/agent-message"): "message",
+    # Releasing waiting mail early sends it, so it takes the same verb as sending.
+    ("POST", "/deliver-now"): "message",
     ("POST", "/upload"): "message",
     # Read a sent file back for chat previews. HEAD is its own method to the middleware, so it is
     # declared too, or it would 403 as "route declares no scope".
@@ -4277,6 +4281,111 @@ def _hold_for_boundary(session, text, actor, origin="app"):
     )
 
 
+def _waiting_for(session):
+    """deliver_now.waiting_summary for a session: its pending mail (addressed to the session or
+    to the agent registered on it) and the router's latest hold reason."""
+    from scripts import deliver_now
+    reg = _load_json(ORCH_DIR / "registry.json") or {}
+    name, _meta = _resolve_sess_meta(reg.get("agents", {}) if isinstance(reg, dict) else {}) \
+        .get(session, (session, {}))
+    store = _held_store()
+    with store._conn() as conn:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT id, from_agent, subject, created_at FROM messages WHERE status='pending' "
+            "AND to_agent IN (?, ?) ORDER BY created_at ASC LIMIT 50", [session, name]).fetchall()]
+    holds = _load_json(ORCH_DIR / "state" / "message-router-holds.json") or {}
+    return deliver_now.waiting_summary(rows, holds if isinstance(holds, dict) else {}, session)
+
+
+async def handle_held(request):
+    """GET /held?session=<s> -> {ok, count, messages, reason, waiver}."""
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    session = str(request.query.get("session", "")).strip()
+    if not session:
+        return _json({"ok": False, "error": "session required"}, status=400)
+    refusal = _protected_refusal(request, session)
+    if refusal is not None:
+        return _json(refusal, status=403)
+    from scripts import deliver_now
+    import asyncio
+    try:
+        out = await asyncio.get_event_loop().run_in_executor(None, _waiting_for, session)
+        waiver = deliver_now.active_waiver(ORCH_DIR, session)
+    except ValueError:
+        return _json({"ok": False, "error": "bad session"}, status=400)
+    return _json({"ok": True, **out, "waiver": waiver})
+
+
+def _kick_router():
+    """One router pass now instead of at the next cron minute. Its own lock makes this a no-op
+    while a pass is already running; the waiver lasts 5 minutes either way."""
+    import subprocess
+    router = os.path.join(os.path.dirname(os.path.abspath(__file__)), "message-router.py")
+    try:
+        subprocess.Popen([sys.executable, router], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True, env={**os.environ, "ORCHESTRA_DIR": str(ORCH_DIR)})
+        return True
+    except OSError:
+        return False
+
+
+KICK_DEBOUNCE_S = 30
+_last_kick = {"at": -1e18}
+
+
+def _kick_router_debounced():
+    """At most one router start per KICK_DEBOUNCE_S, however often the button is pressed; the
+    waiver itself is written on every press and the cron pass picks it up regardless."""
+    import time as _time
+    now = _time.monotonic()
+    if now - _last_kick["at"] < KICK_DEBOUNCE_S:
+        return False
+    _last_kick["at"] = now
+    return _kick_router()
+
+
+async def handle_deliver_now(request):
+    """POST /deliver-now {session} -> waive the soft delivery gates for that session for five
+    minutes (scripts/deliver_now.py) and run a router pass. Hard gates still hold; the reply
+    says what is still waiting and why."""
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        return _json({"ok": False, "error": "bad json"}, status=400)
+    session = str((data or {}).get("session", "")).strip()
+    if not session:
+        return _json({"ok": False, "error": "session required"}, status=400)
+    refusal = _protected_refusal(request, session)
+    if refusal is not None:
+        return _json(refusal, status=403)
+    if session not in _tmux_session_names():
+        return _json({"ok": False, "error": "no such session"}, status=404)
+    from scripts import deliver_now
+    _cls, _name = _parse_actor(request)
+    _, principal = _resolved_principal(request)
+    # A person presses this: a paired device's own token, or a caller that says it is a person's
+    # surface (the dashboard's API sends X-Actor: operator:web). The bare fleet token with no
+    # actor, or an automation actor, is refused: agents send mail, they do not waive its waits.
+    is_device = bool(principal) and principal.get("id") not in (None, "legacy")
+    if _cls == "automation" or not (is_device or _cls in ("operator", "interactive", "app")):
+        return _json({"ok": False, "error": "deliver-now is pressed by a person: send X-Actor "
+                      "operator|interactive|app, or use a paired device"}, status=403)
+    by = (principal or {}).get("label") if is_device else None
+    by = by or (f"{_cls}:{_name}" if _name else _cls) or "unknown"
+    try:
+        waiver = deliver_now.write_waiver(ORCH_DIR, session, by)
+    except ValueError:
+        return _json({"ok": False, "error": "bad session"}, status=400)
+    import asyncio
+    kicked = _kick_router_debounced()
+    out = await asyncio.get_event_loop().run_in_executor(None, _waiting_for, session)
+    return _json({"ok": True, "waiver": waiver, "router_started": kicked, **out})
+
+
 async def handle_agent_message(request):
     """POST /agent-message {session, text, accepts?:["held"]} -> verified inject,
     or (mid-turn working + accepts:["held"]) a durable-first accept-and-hold."""
@@ -7311,6 +7420,8 @@ def build_app():
     app.router.add_get("/approvals/{id}", handle_approval_detail)
     app.router.add_post("/approvals/{id}/discard", handle_approval_discard)
     app.router.add_get("/agents", handle_agents)
+    app.router.add_get("/held", handle_held)
+    app.router.add_post("/deliver-now", handle_deliver_now)
     app.router.add_get("/usage", handle_usage)
     app.router.add_get("/projects", handle_projects)
     app.router.add_get("/people", handle_people)
