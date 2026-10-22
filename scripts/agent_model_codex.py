@@ -218,7 +218,12 @@ def read_keys(path: Path) -> dict:
 def write_keys(path: Path, before: dict) -> bool:
     """Put KEYS' top-level lines back exactly as `before` had them (every occurrence, its own
     bytes and line ending; absent -> removed), leaving every other line as it is now. Temp
-    file + rename, mode kept, read back."""
+    file + rename, mode kept, read back.
+
+    A key line goes back IN PLACE of the line that replaced it, so a file whose last line is
+    that key keeps having no final newline. Only a key that VANISHED from the file entirely (codex
+    never does this: a pick rewrites the values) is re-added at the top, with a line ending so it
+    cannot run into the next line."""
     path = Path(path)
     try:
         text = _read(path)
