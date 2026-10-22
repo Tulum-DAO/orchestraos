@@ -121,6 +121,7 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("GET", "/agent-screen"): "read",
     ("GET", "/transcript"): "read",
     ("GET", "/red-alert/reports"): "read",
+    ("GET", "/runtimes/available"): "read",
     ("GET", "/questionnaires"): "read",
     ("GET", "/questionnaires/{id}"): "read",
     ("GET", "/events"): "read",
@@ -245,6 +246,11 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     # (PUT /arturo/ptt/vendor and /voice sit above with base `admin`; ROUTE_ANY_OF widens exactly
     # those two. The GETs stay `read`.)
     ("POST", "/red-alert/report"): "admin",
+    # New Agent from a paired device (the web form's "+", ported to iOS/macOS): creating a seat
+    # and probing CLIs are fleet-wide acts; the parent list names every registered seat.
+    ("POST", "/agents/new"): "admin",
+    ("GET", "/agents/new/parents"): "admin",
+    ("POST", "/runtimes/available/refresh"): "admin",
     ("POST", "/telemetry"): "admin",
     # The only route that MINTS a credential. `admin` so the TABLE states that it is privileged —
     # I first wrote it as _PUBLIC "because the handler checks the principal", and
@@ -5554,6 +5560,89 @@ async def handle_red_alert_report(request):
     return _json(payload, status=status)
 
 
+# --- New Agent from a paired device (iOS/macOS "+", the web form's #392/#413 flow) ---------------
+# Thin front door to the API's own routes (api/src/routes/agents-new.ts, runtimes-available.ts): the
+# phone has ONE base and ONE bearer (this gateway). The API answers; the gateway only decides WHO
+# may ask, and what a DEVICE may create: a worker under a registered parent. No orphan seat and no
+# GM from a device (the web form keeps both, for a fresh install's first agent).
+async def _new_agent_api(method: str, path: str, body=None):
+    """Loopback hop to the API; returns (status, json). Patched in tests."""
+    import aiohttp
+    async with aiohttp.ClientSession() as s:
+        if method == "POST":
+            # A create runs spawn-agent.sh and waits for the session: allow for a slow CLI start.
+            async with s.post(f"{API_URL}{path}", json=body or {},
+                              timeout=aiohttp.ClientTimeout(total=150)) as r:
+                return r.status, await r.json(content_type=None)
+        async with s.get(f"{API_URL}{path}", timeout=aiohttp.ClientTimeout(total=30)) as r:
+            return r.status, await r.json(content_type=None)
+
+
+async def _new_agent_forward(method, path, body=None):
+    try:
+        status, payload = await _new_agent_api(method, path, body)
+    except Exception as e:  # noqa: BLE001
+        return _json({"ok": False, "error": f"api unreachable: {e}"}, status=502)
+    return _json(payload, status=status)
+
+
+def _new_agent_refusal(request):
+    """None, or the 401/403 for a caller that may not create or probe: a person's surface only
+    (a paired device's own token, or X-Actor operator|interactive|app), never an automation."""
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    if not _is_person_surface(request):
+        return _json({"ok": False, "error": "a new agent is created by a person: send X-Actor "
+                      "operator|interactive|app, or use a paired device"}, status=403)
+    return None
+
+
+async def handle_runtimes_available(request):
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    return await _new_agent_forward("GET", "/api/runtimes/available")
+
+
+async def handle_runtimes_available_refresh(request):
+    refusal = _new_agent_refusal(request)
+    if refusal is not None:
+        return refusal
+    return await _new_agent_forward("POST", "/api/runtimes/available/refresh")
+
+
+async def handle_agents_new_parents(request):
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    return await _new_agent_forward("GET", "/api/agents/new/parents")
+
+
+async def handle_agents_new(request):
+    """POST /agents/new {name, task?, runtime?, role?, parent} -> the API's answer, verbatim
+    (200 {ok,id,session,...}; 400/409/502 {reason}). From a device the parent is REQUIRED (a
+    registered seat; the API checks it) and a GM is refused: the seat joins an existing tree."""
+    refusal = _new_agent_refusal(request)
+    if refusal is not None:
+        return refusal
+    try:
+        data = await request.json()
+    except Exception:
+        return _json({"ok": False, "error": "bad json"}, status=400)
+    if not isinstance(data, dict):
+        return _json({"ok": False, "error": "bad json"}, status=400)
+    if data.get("gm"):
+        return _json({"ok": False, "reason": "gm_not_from_device",
+                      "error": "a General Manager is created from the web form, not a device"}, status=400)
+    parent = data.get("parent")
+    if not isinstance(parent, str) or not parent.strip():
+        return _json({"ok": False, "reason": "parent_required",
+                      "error": "a new agent reports to an existing one: choose its parent"}, status=400)
+    body = {"parent": parent.strip()}
+    for k in ("name", "task", "runtime", "role"):
+        if isinstance(data.get(k), str):
+            body[k] = data[k]
+    return await _new_agent_forward("POST", "/api/agents/new", body)
+
+
 async def handle_red_alert_reports(request):
     if not _authorized(request):
         return _json({"ok": False, "error": "unauthorized"}, status=401)
@@ -7970,6 +8059,10 @@ def build_app():
     app.router.add_get("/upload/{name}", handle_upload_get)   # + HEAD (aiohttp allow_head)
     app.router.add_post("/red-alert/report", handle_red_alert_report)
     app.router.add_get("/red-alert/reports", handle_red_alert_reports)
+    app.router.add_get("/runtimes/available", handle_runtimes_available)
+    app.router.add_post("/runtimes/available/refresh", handle_runtimes_available_refresh)
+    app.router.add_get("/agents/new/parents", handle_agents_new_parents)
+    app.router.add_post("/agents/new", handle_agents_new)
     app.router.add_post("/arturo/ptt", handle_arturo_ptt)
     app.router.add_post("/arturo/text", handle_arturo_text)
     app.router.add_post("/arturo/text/stream", handle_arturo_text_stream)
