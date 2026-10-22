@@ -388,3 +388,22 @@ test('a plain spawn keeps spawn-agent.sh argv (runtime travels in AGENT_RUNTIME)
   assert.ok(argv[0].endsWith('/spawn-agent.sh'));
   assert.deepEqual(argv.slice(1), ['dev-x', '--task', 'do it']);
 });
+
+
+test('POST /new refuses the name of a future blue-green copy of a registered seat (409)', async () => {
+  for (const name of ['pm-test-g5', 'pm-test-gen12', 'gm-g2']) {
+    const deps = makeDeps();
+    const r = await post(deps, '/api/agents/new', { name, parent: 'gm' });
+    assert.equal(r.status, 409, name);
+    assert.equal(r.json.reason, 'name_reserved_for_copy', name);
+    assert.equal((deps as any).calls.spawn.length, 0, name);
+  }
+});
+
+test('a -g<N> name of a seat that is NOT registered, or a name that only looks close, is free', async () => {
+  for (const name of ['other-g5', 'pm-test-g', 'pm-test-gx5', 'pm-test-5', 'pm-testg5']) {
+    const deps = makeDeps();
+    const r = await post(deps, '/api/agents/new', { name, parent: 'gm' });
+    assert.equal(r.status, 200, name);
+  }
+});

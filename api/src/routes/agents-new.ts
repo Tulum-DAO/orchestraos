@@ -68,6 +68,14 @@ export function normalizeAgentName(raw: unknown): { name: string; error?: string
   return { name };
 }
 
+/** A blue-green copy of a registered seat runs as `<root>-g<N>` (or `<root>-gen<N>`), and the
+ *  registry never lists it before it exists. A new agent may not take such a name: the copy's own
+ *  spawn would then collide with it. Returns the root it would shadow, or null. */
+export function shadowedRoot(name: string, registered: Record<string, unknown>): string | null {
+  const m = /^(.+)-(?:g|gen)\d+$/.exec(name);
+  return m && Object.prototype.hasOwnProperty.call(registered, m[1]) ? m[1] : null;
+}
+
 /** First authed runtime (catalog order = the operator's [runtimes] enabled order), or the
  *  requested one when it is authed. `unverified` is never treated as usable (W1). */
 export function pickRuntime(rows: RuntimeRow[], requested: string | undefined): { id: string; cli: string } | null {
@@ -147,6 +155,10 @@ export function createAgentsNewRouter(deps: NewAgentDeps): Router {
     const taken = await deps.existingNames();
     if (taken.has(name)) {
       return res.status(409).json({ ok: false, reason: 'name_taken', name });
+    }
+    const shadows = shadowedRoot(name, await deps.registeredAgents());
+    if (shadows) {
+      return res.status(409).json({ ok: false, reason: 'name_reserved_for_copy', name, root: shadows });
     }
 
     // The registry has no role column; a role is the first line of the seat's first task, which
