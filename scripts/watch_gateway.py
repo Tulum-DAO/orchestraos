@@ -5091,12 +5091,20 @@ def _apply_pending_one(f, session, now):
     def close(outcome, reason=None):
         AMP.resolve(f, session, since, outcome, reason=reason, now=now)
         return outcome if not reason else f"{outcome}: {reason}"
+
+    def wait():
+        """It keeps waiting, whatever for (a busy agent, an identity that cannot be read): a pick
+        waiting past STALE_AFTER_S is reported once (codex R4 on #475)."""
+        if (AMP.view(e, now) or {}).get("stale") and not e.get("reported"):
+            _report_stale_model_switch(session, e)
+            AMP.mark_reported(f, session, since)
+        return None
     if session not in _tmux_session_names():
         return close("failed", "the agent is no longer running")
     root, meta, runtime, current = _seat_for_session(session)
     sids = _seat_session_ids(session, meta)
     if not sids:
-        return None                    # cannot tell it is the same agent right now: never apply blind
+        return wait()                  # cannot tell it is the same agent right now: never apply blind
     if set(e.get("sids") or []) != set(sids):
         # EXACTLY the identity recorded when it was asked: an overlap is not enough (a stale pane
         # event next to a rotated seat's new id would match the old one; codex R2 on #475).
@@ -5106,10 +5114,7 @@ def _apply_pending_one(f, session, now):
         return close("failed", "the agent moved to a new session before its turn ended")
     st = (_agent_status().get_agent_status(session) or {}).get("state")
     if st not in INJECTABLE_STATES:
-        if (AMP.view(e, now) or {}).get("stale") and not e.get("reported"):
-            _report_stale_model_switch(session, e)
-            AMP.mark_reported(f, session, since)
-        return None
+        return wait()
     if e.get("model") == current:
         return close("switched")
     orch_root = _orchestra_root()
@@ -5123,7 +5128,7 @@ def _apply_pending_one(f, session, now):
     if status == 200:
         return close("switched")
     if status == 409:
-        return None                    # a turn started first: wait for the next idle moment
+        return wait()                  # a turn started first: wait for the next idle moment
     return close("failed", str(body.get("detail") or body.get("error") or f"HTTP {status}"))
 
 

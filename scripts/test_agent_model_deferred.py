@@ -310,6 +310,7 @@ def test_an_unreadable_record_is_never_overwritten(seat):
     '{"pending": {"dev": {"model": "x"}}, "last": {}}',
     '{"pending": {"dev": {"model": "x", "since": "t", "since_ts": 1, "sids": "abc"}}, "last": {}}',
     '{"pending": {}, "last": {"dev": {"model": "x", "at": "t", "outcome": "maybe"}}}',
+    '{"pending": {"dev": {"model": "x", "since": "t", "since_ts": 1e9999, "sids": []}}, "last": {}}',
 ])
 def test_a_malformed_ENTRY_is_a_damaged_record_too(seat, bad):
     """Valid JSON with a broken entry: refused like a corrupt file, and left as it is (codex R3)."""
@@ -318,3 +319,15 @@ def test_a_malformed_ENTRY_is_a_damaged_record_too(seat, bad):
     f.write_text(bad)
     status, _ = _put(SONNET)
     assert status == 503 and f.read_text() == bad and seat["live"] == []
+
+
+def test_a_pick_waiting_on_an_unreadable_identity_is_still_reported_once(seat, monkeypatch):
+    _put(SONNET)
+    monkeypatch.setattr(G, "_seat_session_ids", lambda s, meta=None: [])
+    seat["det"].state = "idle"
+    said = []
+    monkeypatch.setattr(G, "_report_stale_model_switch", lambda s, e: said.append(s))
+    later = AMP.get(AMP.state_path(G.ORCH_DIR), "dev")["since_ts"] + AMP.STALE_AFTER_S + 1
+    G._apply_pending_model_switches(now=later)
+    G._apply_pending_model_switches(now=later + 60)
+    assert said == ["dev"] and seat["live"] == []

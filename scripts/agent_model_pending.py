@@ -13,6 +13,7 @@ The file survives a gateway restart.
 """
 import fcntl
 import json
+import math
 import os
 import time
 from contextlib import contextmanager
@@ -66,6 +67,7 @@ def _valid_pending(e):
     """Every field a pending pick is read by: a malformed one is a damaged record, never data."""
     return (isinstance(e, dict) and isinstance(e.get("model"), str) and e["model"]
             and isinstance(e.get("since"), str) and isinstance(e.get("since_ts"), (int, float))
+            and not isinstance(e.get("since_ts"), bool) and math.isfinite(e["since_ts"])
             and isinstance(e.get("sids"), list) and all(isinstance(x, str) for x in e["sids"]))
 
 
