@@ -2795,6 +2795,10 @@ def _verified_inject_locked(session, text, force=False, idle_only=False):
         if r.returncode != 0:
             inject_journal.clear(session)          # nothing was typed
             return False, {"reason": "send_failed", "state": state}
+        try:
+            inject_journal.mark_typed(session)     # only now may a next-start reconcile press Enter
+        except OSError as e:
+            print(f"[watch_gateway] inject journal mark failed for {session}: {e}", file=sys.stderr)
         _time.sleep(INJECT_INGEST_WAIT_S)
 
         for attempt in (1, 2):

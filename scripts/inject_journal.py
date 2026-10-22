@@ -44,6 +44,23 @@ def record(session, text, marker):
     os.replace(tmp, p)
 
 
+def mark_typed(session):
+    """Second phase, right after the keystrokes went out: only a row marked typed may ever get an
+    Enter from the reconcile. A process killed between record() and its send leaves an UNMARKED
+    row; a person could later type the identical text and park it, and the reconcile must never
+    submit that. An unmarked row is reported, never pressed."""
+    p = _path(session)
+    try:
+        row = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return False
+    row["typed"] = True
+    tmp = p.with_suffix(f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(row))
+    os.replace(tmp, p)
+    return True
+
+
 def clear(session):
     try:
         _path(session).unlink()
@@ -126,6 +143,11 @@ def _reconcile_one(row, session, text, read_composer, press_enter, report, verif
         if (seen or "").strip():
             report(session, "not-ours", row)            # something else is there: never touched
         return "not-ours"
+    if row.get("typed") is not True:
+        # Recorded but never durably marked typed: the process may have died before its keystrokes,
+        # so this text may be a person's own identical draft. Reported, never pressed.
+        report(session, "left-untouched", row)
+        return "left-untouched"
     if row.get("reconcile_attempted_at"):
         # One Enter per row, ever (never a retry loop across restarts). The row STAYS as evidence
         # until our text leaves the composer (codex r2).

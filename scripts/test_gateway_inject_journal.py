@@ -41,6 +41,7 @@ def jdir(tmp_path, monkeypatch):
 # ------------------------------------------------------------------ the pure reconcile
 def _seed(session, marker):
     J.record(session, marker + " and more", marker)
+    J.mark_typed(session)              # the keystrokes went out: an actionable row
 
 
 def test_reconcile_submits_our_text_and_verifies(jdir, monkeypatch):
@@ -334,7 +335,7 @@ def test_reconcile_never_enters_our_text_with_a_persons_words_appended(jdir):
 
 def test_reconcile_runs_under_the_pane_lock_and_keeps_the_row_when_busy(jdir):
     from contextlib import contextmanager
-    J.record("gm", "hello", "hello")
+    J.record("gm", "hello", "hello"); J.mark_typed("gm")
     @contextmanager
     def busy(session):
         yield False
@@ -440,7 +441,7 @@ def test_clear_own_never_runs_with_a_client_attached_REAL_tmux(tmp_path, viewer)
 
 def test_reconcile_marks_the_row_BEFORE_pressing_enter(jdir, monkeypatch):
     monkeypatch.setattr(J.time, "sleep", lambda s: None)
-    J.record("gm", "hello", "hello")
+    J.record("gm", "hello", "hello"); J.mark_typed("gm")
     seen = {}
     def enter(session):
         seen["marked_at_enter"] = bool(J.rows()[0].get("reconcile_attempted_at"))
@@ -454,14 +455,14 @@ def test_reconcile_marks_the_row_BEFORE_pressing_enter(jdir, monkeypatch):
 
 
 def test_reconcile_no_enter_when_the_mark_cannot_be_written(jdir, monkeypatch):
-    J.record("gm", "hello", "hello")
+    J.record("gm", "hello", "hello"); J.mark_typed("gm")
     monkeypatch.setattr(J, "_mark_attempted", lambda *a: (_ for _ in ()).throw(OSError("ro")))
     out = J.reconcile(lambda s: "hello", lambda s: pytest.fail("Enter without a durable mark"), lambda *a: None)
     assert out == [("gm", "unreadable")]
 
 
 def test_reconcile_failed_enter_unmarks_the_row_for_a_later_retry(jdir, monkeypatch):
-    J.record("gm", "hello", "hello")
+    J.record("gm", "hello", "hello"); J.mark_typed("gm")
     out = J.reconcile(lambda s: "hello", lambda s: False, lambda *a: None)
     assert out == [("gm", "unreadable")]
     assert not J.rows()[0].get("reconcile_attempted_at")      # the next start may try once
@@ -471,3 +472,33 @@ def test_ownership_is_exact_a_spacing_edit_is_not_ours():
     assert J.is_ours("hello world", "hello world")
     assert J.is_ours("  hello world ", "hello world")
     assert not J.is_ours("hello  world", "hello world")
+
+
+def test_a_row_never_marked_typed_is_reported_and_NEVER_pressed(jdir, monkeypatch):
+    """codex R4/R5 on #472: the process died after record() and before its keystrokes. A person may
+    later type the identical text, park it and detach: the reconcile must never submit that draft."""
+    monkeypatch.setattr(J.time, "sleep", lambda s: None)
+    J.record("gm", "deploy", "deploy")                    # recorded, never marked typed
+    pressed, reports = [], []
+    out = J.reconcile(lambda s: "deploy", pressed.append, lambda *a: reports.append(a[1]))
+    assert out == [("gm", "left-untouched")] and pressed == [] and reports == ["left-untouched"]
+
+
+def test_verified_inject_marks_the_row_typed_only_after_its_keystrokes(jdir, monkeypatch):
+    seen = []
+
+    def tmux(*a, timeout=5):
+        if a[0] == "send-keys" and "-l" in a:
+            seen.append(("typing", [r.get("typed") for r in J.rows()]))
+        if a[0] == "send-keys" and a[-1] == "Enter":
+            seen.append(("enter", [r.get("typed") for r in J.rows()]))
+        return types.SimpleNamespace(returncode=0, stdout=IDLE if a[0] == "capture-pane" else "")
+    monkeypatch.setattr(G, "_tmux", tmux)
+    monkeypatch.setattr(G, "_agent_status", lambda: types.SimpleNamespace(
+        get_agent_status=lambda s: {"state": "idle", "activity": "", "process": {"runtime": "claude"}}))
+    monkeypatch.setattr(G, "INJECT_INGEST_WAIT_S", 0.0)
+    import time as _t
+    monkeypatch.setattr(_t, "sleep", lambda s: None)
+    G.verified_inject("gm", "hello there")
+    assert seen[0] == ("typing", [None])                  # recorded, not yet typed
+    assert seen[1] == ("enter", [True])                   # marked once the keystrokes went out

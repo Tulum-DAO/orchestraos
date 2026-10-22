@@ -77,6 +77,10 @@ def _nudge_unlocked(session: str, text: str, *, force: bool = False, settle: flo
         inject_journal.clear(session)
         print(f"nudge_pane: send-keys failed for {session}; NOT SENT", file=sys.stderr)
         return RC_NOT_SENT
+    try:
+        inject_journal.mark_typed(session)       # only a typed row may get a reconcile Enter
+    except OSError:
+        pass
     time.sleep(settle)
     # The FIRST Enter too only on our own text: the composer must show our nudge (or, wrapped, its
     # first row). A menu that came up, or anything else, gets no Enter; the row stays as evidence.
