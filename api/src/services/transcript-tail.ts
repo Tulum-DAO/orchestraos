@@ -43,6 +43,21 @@ export interface TailEvent {
 type Resolver = () => { path: string | null; sid: string | null };
 type Subscriber = (ev: TailEvent) => void;
 
+/** Item identity for aligning two windows of the same log (usage excluded: that is what changed). */
+const itemKey = (it: any): string =>
+  JSON.stringify([it?.kind, it?.role, it?.uuid, it?.id, it?.tool_use_id, String(it?.text ?? '').slice(0, 200)]);
+
+/** How far `next` slid relative to `prev` (index in next = index in prev + shift), found by
+ *  locating prev's last item in next; null when it cannot be found. 0 below the cap. */
+export function alignShift(prev: any[], next: any[]): number | null {
+  if (!prev.length) return 0;
+  const last = prev.length - 1;
+  const key = itemKey(prev[last]);
+  if (next.length > last && itemKey(next[last]) === key) return 0;
+  for (let j = next.length - 1; j >= 0; j--) if (itemKey(next[j]) === key) return j - last;
+  return null;
+}
+
 export class TranscriptTailer {
   private agentId: string;
   private resolve: Resolver;
@@ -53,6 +68,7 @@ export class TranscriptTailer {
   private path: string | null = null;
   private fileSize = -1;
   private items: any[] = [];
+  private rev = 0;           // bumped when an already-sent item changes (see sidTag)
 
   constructor(opts: { agentId: string; resolve: Resolver; limit?: number }) {
     this.agentId = opts.agentId;
@@ -65,7 +81,7 @@ export class TranscriptTailer {
   }
 
   /** Re-resolve + re-read the transcript. Returns what changed. */
-  private refresh(): { rotated: boolean; grewFrom: number | null } {
+  private refresh(): { rotated: boolean; grewFrom: number | null; restated?: boolean } {
     const { path, sid } = this.resolve();
     const prevSid = this.sid;
     const prevCount = this.items.length;
@@ -96,18 +112,40 @@ export class TranscriptTailer {
       lines, this.agentId, sid, TAIL_ITEM_CAP, path.includes('antigravity-cli'));
 
     const truncated = !rotated && env.items.length < prevCount;
+    // Codex reports a response's tokens after its items: `usage` can land on an item a delta
+    // already carried. Deltas only append, so a usage change on a sent item is re-sent as a
+    // (non-reset) snapshot. Only the last few sent items can gain one. At the item cap the window
+    // slides, so old and new are aligned on the last sent item, never compared by bare index.
+    let restated = false;
+    if (!rotated && !truncated && path === this.path && prevCount > 0) {
+      const shift = alignShift(this.items, env.items);
+      if (shift === null) restated = true;               // cannot line them up: re-send everything
+      else {
+        for (let i = prevCount - 1; i >= Math.max(0, prevCount - 20); i--) {
+          if (JSON.stringify(this.items[i]?.usage) !== JSON.stringify(env.items[i + shift]?.usage)) { restated = true; break; }
+        }
+      }
+    }
     this.sid = sid;
     this.path = path;
     this.fileSize = size;
     this.items = env.items;
 
-    if (rotated || truncated) return { rotated: true, grewFrom: null };
-    if (env.items.length > prevCount) return { rotated: false, grewFrom: prevCount };
-    return { rotated: false, grewFrom: null };
+    if (rotated || truncated) return { rotated: true, grewFrom: null, restated: false };
+    if (restated) { this.rev++; return { rotated: false, grewFrom: null, restated: true }; }
+    if (env.items.length > prevCount) return { rotated: false, grewFrom: prevCount, restated: false };
+    return { rotated: false, grewFrom: null, restated: false };
+  }
+
+  /** The session tag in event ids: the sid, plus a revision once an already-sent item changed
+   *  (late usage), so a client resuming from an older id is no longer "caught up" and gets a
+   *  snapshot. Ids stay opaque to clients (they only echo Last-Event-ID). */
+  private sidTag(): string {
+    return `${this.sid ?? ''}${this.rev ? `~${this.rev}` : ''}`;
   }
 
   private eventId(): string {
-    return `${this.sid ?? ''}:${this.items.length}`;
+    return `${this.sidTag()}:${this.items.length}`;
   }
 
   private snapshot(reset = false): TailEvent {
@@ -148,7 +186,7 @@ export class TranscriptTailer {
       const i = lastEventId.lastIndexOf(':');
       const sid = i >= 0 ? lastEventId.slice(0, i) : '';
       const offset = i >= 0 ? Number(lastEventId.slice(i + 1)) : NaN;
-      if (sid && sid === this.sid && Number.isInteger(offset) && offset >= 0 && offset <= this.items.length) {
+      if (sid && sid === this.sidTag() && Number.isInteger(offset) && offset >= 0 && offset <= this.items.length) {
         resumed = true;
         if (offset < this.items.length) cb(this.delta(offset));
       }
@@ -161,9 +199,10 @@ export class TranscriptTailer {
   /** One poll-tail beat: re-read, broadcast delta / reset-snapshot as needed. */
   tick(): void {
     if (this.subs.size === 0) return;
-    const { rotated, grewFrom } = this.refresh();
-    if (rotated) {
-      const ev = this.snapshot(true);
+    const { rotated, grewFrom, restated } = this.refresh();
+    if (rotated || restated) {
+      // reset only for a new session or a shrunk log; a late usage update is a plain snapshot.
+      const ev = this.snapshot(rotated);
       for (const cb of this.subs) cb(ev);
       return;
     }

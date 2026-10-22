@@ -19,7 +19,13 @@
       "ts": "2026-08-27T10:00:01.000Z",
       "uuid": "u2",
       "model": "claude-opus-5-5",
-      "audience": "agent"
+      "audience": "agent",
+      "usage": {
+        "input_tokens": 10203,
+        "output_tokens": 88,
+        "cache_read_input_tokens": 9000,
+        "cache_creation_input_tokens": 1200
+      }
     },
     {
       "kind": "text",
@@ -70,7 +76,13 @@
       "ts": "2026-08-27T10:00:05.000Z",
       "uuid": "u6",
       "model": "claude-opus-5-5",
-      "audience": "agent"
+      "audience": "agent",
+      "usage": {
+        "input_tokens": 10401,
+        "output_tokens": 21,
+        "cache_read_input_tokens": 10400,
+        "cache_creation_input_tokens": 0
+      }
     },
     {
       "kind": "tool_result",
