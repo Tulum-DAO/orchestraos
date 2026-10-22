@@ -5182,6 +5182,12 @@ def _apply_pending_one(f, session, now):
     status, body = _switch_model_now(session, e["model"], root, meta, runtime, current, catalog,
                                      desc, e.get("by") or "deferred")
     if status == 200:
+        # Residual, accepted (codex R18 on #475): a gateway that DIES between these keystrokes and
+        # the record below (and whose registry write also failed) leaves the pick pending, and the
+        # next start types the same /model into the same idle agent again. A marker written BEFORE
+        # typing cannot close it: after a crash it cannot say whether the keys went out, and reading
+        # it as "switched" would record a switch that never happened. Typing the same model twice is
+        # the safe side: idle-only, confirmed by the CLI's own line, same result.
         try:
             return close("switched")
         except AMP.LockBusy:
