@@ -476,9 +476,18 @@ def switch_live(*, model: str, settings_path: Path, send, find_jsonl, title: str
             if restored:
                 with contextlib.suppress(FileNotFoundError):
                     _journal(settings_path).unlink()
+        # Last look before the lock is released (gm): the pane must be back at its prompt, not
+        # still asking. A question left on screen is reported, never a success.
+        still_asking = None
+        if sent and capture is not None:
+            with contextlib.suppress(Exception):
+                still_asking = switch_dialog(capture() or "")
         if not restored:
             return 500, {"ok": False, "error": "host default model not restored",
                          "switched": bool(res and res[0] == "set"), **({"detail": err} if err else {})}
+        if still_asking is not None:
+            return 502, {"ok": False, "error": "the agent is still asking to confirm the switch",
+                         "detail": still_asking, "switched": bool(res and res[0] == "set")}
         if result is not None:
             return result
         if res is None:

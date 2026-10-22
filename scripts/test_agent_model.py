@@ -565,3 +565,13 @@ def test_the_real_dialog_text_parses():
     assert AM.switch_dialog(DIALOG.format(name="Sonnet 5.5")) == "Sonnet 5.5"
     assert AM.switch_dialog("❯ 1. Yes, switch to X\n") is None                 # half a dialog is not one
     assert AM.switch_dialog("❯ ") is None
+
+
+def test_a_pane_still_asking_at_the_end_is_never_a_success(tmp_path):
+    """Neither "1" nor "2" lands (a frozen pane): the last screen read before the lock is released
+    still shows the question, so the answer says so."""
+    c = _dialog_setup(tmp_path)
+    c.keys = lambda k: c.keyed.append(k)                 # keys reach nothing
+    status, body = _dialog_run(c)
+    assert status == 502 and body["error"] == "the agent is still asking to confirm the switch"
+    assert body["detail"] == "Opus 5.5" and c.keyed == ["1", "2"]
