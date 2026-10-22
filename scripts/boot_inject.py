@@ -124,6 +124,11 @@ def _codex_boot_busy(pane: str) -> bool:
     return "esc to interrupt" in tail
 
 
+#: Outcomes where nothing of ours reached the composer: no journal row may outlive them (a row there
+#: would be false evidence a later reconcile could attribute to someone's matching text).
+_NOTHING_TYPED = ("refused-canonical", "no-receipt", "codex-busy", "stranded-chip")
+
+
 def boot_inject(session, text, runtime=DEFAULT_RUNTIME, **kw):
     """_boot_inject_unlocked under the ONE cross-process pane lock all typers share (pane_lock.py,
     gm msg_2291dee3). Another typer holding the pane past 8 s -> ('failed', 'pane-locked'): nothing
@@ -137,7 +142,7 @@ def boot_inject(session, text, runtime=DEFAULT_RUNTIME, **kw):
             except OSError:
                 return "failed", "journal-unwritable"
             outcome = _boot_inject_unlocked(session, text, runtime, **kw)
-            if outcome[0] == "submitted" or outcome[1] in ("refused-canonical", "no-receipt"):
+            if outcome[0] == "submitted" or outcome[1] in _NOTHING_TYPED:
                 inject_journal.clear(session)     # submitted, or nothing of ours was typed
             return outcome
     except pane_lock.PaneBusy:

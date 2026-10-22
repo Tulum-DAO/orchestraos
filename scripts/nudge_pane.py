@@ -80,10 +80,12 @@ def _nudge_unlocked(session: str, text: str, *, force: bool = False, settle: flo
     for _ in range(3):
         time.sleep(1.5)
         line = composer_line(session)
-        if not line or line not in text:
-            inject_journal.clear(session)
+        if not line:                         # an EMPTY composer is the only proof of a submit; other
+            inject_journal.clear(session)    # text there (a menu, someone's words) proves nothing
             print(f"nudge_pane: submitted to {session}: {text[:70]!r}")
             return 0
+        if not inject_journal.is_ours(line, text) and line not in text:
+            break                            # not our text any more: never press Enter on it
         tmux("send-keys", "-t", session, "Enter")          # bare retry, never re-send text
     # CLEAR-OWN (gm msg_2291dee3): a nudge is machine text its caller re-sends next cycle, so our own
     # unsubmitted nudge is cleared (C-u, verified) instead of left in the composer. Only when the

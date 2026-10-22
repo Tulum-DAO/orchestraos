@@ -2887,6 +2887,10 @@ def _read_composer_typed(session):
     or an empty one; else the composer's TYPED text (dim ghost suggestions excluded)."""
     if _tmux("has-session", "-t", f"={session}").returncode != 0:
         return None
+    # A person attached to the pane may be typing: the reconcile presses nothing there. 'ERROR:'
+    # keeps the row as evidence for the next start and reports it.
+    if (_tmux("list-clients", "-t", _st(session)).stdout or "").strip():
+        return "ERROR:a client is attached to this pane"
     raw = _capture_pane(session, lines=0, ansi=True)
     if raw is None:
         return "ERROR:capture failed"
