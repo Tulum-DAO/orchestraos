@@ -43,3 +43,13 @@ test('Codex items take the model of the turn_context they ran under', () => {
     [['text', 'gpt-5.6-luna'], ['tool_use', 'gpt-5.6-terra'], ['text', 'gpt-5.6-terra']]);
   assert.equal(items.find((i: any) => i.role === 'user').model, undefined);
 });
+
+test('a Codex turn_context with no model makes the model unknown, not the previous one', () => {
+  const rec = (ordinal: number, type: string, payload: any) => JSON.stringify({ ordinal, type, timestamp: '2026-10-22T05:00:00Z', payload });
+  const say = (ordinal: number, text: string) => rec(ordinal, 'response_item', { type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] });
+  const items = parseCodexRollout([
+    rec(1, 'turn_context', { model: 'gpt-5.6-luna' }), say(2, 'one'),
+    rec(3, 'turn_context', {}), say(4, 'two'),
+  ]);
+  assert.deepEqual(items.map((i: any) => i.model), ['gpt-5.6-luna', undefined]);
+});

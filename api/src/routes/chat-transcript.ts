@@ -322,12 +322,13 @@ export function parseCodexRollout(lines: string[]): any[] {
   recs.sort((a, b) => a.ordinal - b.ordinal);
 
   const items: any[] = [];
-  // turn_context carries the model each turn ran on; assistant items take the latest one.
+  // turn_context carries the model each turn ran on; assistant items take the latest one. A
+  // turn_context with no model makes it unknown again (absent), never the previous turn's.
   let codexModel: string | undefined;
   for (const r of recs) {
     if (r.type === 'turn_context') {
       const m = r.payload?.model;
-      if (typeof m === 'string' && m) codexModel = m;
+      codexModel = typeof m === 'string' && m ? m : undefined;
       continue;
     }
     if (r.type !== 'response_item') continue;     // event_msg/token_usage_record/world_state = telemetry
