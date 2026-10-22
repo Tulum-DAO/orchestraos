@@ -302,6 +302,23 @@ def test_grok_main_CALL_SITE_types_only_through_the_locked_nudge(monkeypatch, tm
     assert calls == [("nudge", True)]
 
 
+def test_grok_main_the_read_under_the_lock_decides_not_the_early_one(monkeypatch, tmp_path):
+    """main() reads the pane once early (unlocked; it can only skip) and again under the lock: a
+    blocker that appears between the two still stops the typing."""
+    reads, typed = [], []
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setattr(GMW, "Inotify", lambda *a: types.SimpleNamespace(wait=lambda t: set()))
+    monkeypatch.setattr(GMW, "pending_ids", lambda db, agent, tenant: ["msg_1"])
+    monkeypatch.setattr(GMW, "KILL", str(tmp_path / "no-kill"))
+    def blocker(s, q):
+        reads.append(_held_elsewhere(s))
+        return None if len(reads) == 1 else "composer-has-text"   # clear early, busy under the lock
+    monkeypatch.setattr(GMW, "pane_blocker", blocker)
+    monkeypatch.setattr(GMW, "nudge", lambda *a: typed.append(a) or True)
+    assert GMW.main(["--once", "--agent", "grok-gm", "--db", str(tmp_path / "tasks.db")]) == 0
+    assert reads == [False, True] and typed == []
+
+
 # ------------------------------------------------------------------ red_alert_watch
 def _repair_report():
     return {"id": "ra_x", "class": "pane_dead", "card_id": None, "status": "open"}

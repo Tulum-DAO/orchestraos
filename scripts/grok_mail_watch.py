@@ -370,6 +370,8 @@ def main(argv=None) -> int:
             if a.once:
                 return 0
             continue
+        # An early, unlocked read: it can only SKIP a nudge. The read that decides to type is the one
+        # nudge_locked repeats under the pane lock.
         why = pane_blocker(session, a.client_quiet_s)
         if why:
             if why != last_blocker:
