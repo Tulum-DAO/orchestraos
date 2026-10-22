@@ -63,3 +63,79 @@ def test_verified_inject_refuses_over_an_ANSI_draft_mid_turn(monkeypatch):
     ok, info = G.verified_inject("tgt", "hello")
     assert not ok and info["reason"] == "busy" and info["composer_text"]
     assert not [c for c in calls if c[0] == "send-keys"]
+
+
+# ─────────────────────────────── codex R1 on #471
+class _DetState:
+    def __init__(self, state, menu=None):
+        self.r = {"state": state, "activity": "x", "process": {}}
+        if menu:
+            self.r["pending_menu"] = menu
+
+    def get_agent_status(self, sess):
+        return self.r
+
+
+def _env(monkeypatch, state, screens):
+    calls, seq = [], list(screens)
+
+    def tmux(*a, timeout=5):
+        calls.append(a)
+        out = (seq.pop(0) if len(seq) > 1 else seq[0]) if a[0] == "capture-pane" else ""
+        return types.SimpleNamespace(returncode=0, stdout=out)
+    monkeypatch.setattr(G, "_tmux", tmux)
+    monkeypatch.setattr(G, "_agent_status", lambda: _DetState(state))
+    monkeypatch.setattr(G, "INJECT_INGEST_WAIT_S", 0.0)
+    import time as _t
+    monkeypatch.setattr(_t, "sleep", lambda s: None)
+    return calls
+
+
+def _typed(calls):
+    return [c for c in calls if c[0] == "send-keys" and "-l" in c]
+
+
+def test_a_fresh_menu_is_refused_even_with_force_and_no_pending_menu_flag(monkeypatch):
+    """The detector read idle a moment before the menu came up: no pending_menu. A selected
+    menu row ("❯ 1. Yes") is not a composer, so nothing is typed, force or not."""
+    menu = "Do you want to proceed?\n❯ 1. Yes\n  2. No\n"
+    for force in (False, True):
+        calls = _env(monkeypatch, "idle", [menu])
+        ok, info = G.verified_inject("tgt", "hello", force)
+        assert not ok and info["reason"] == "busy", (force, info)
+        assert not _typed(calls)
+
+
+def test_a_draft_whose_first_row_is_empty_is_still_the_operators():
+    screen = f"{SPIN}\n❯ \n  second row of a draft the operator is typing\n──────\n"
+    assert G._typed_on_prompt_line(screen) == "second row of a draft the operator is typing"
+
+
+def test_a_swallowed_Enter_on_a_WRAPPED_message_is_not_reported_delivered(monkeypatch):
+    """Our 40-char marker wraps across two rows of the box: a marker read row by row is never
+    found, and a swallowed Enter would read as delivered."""
+    text = "please re-run the whole migration suite and report back"
+    pre = "out\n❯ \n──────\n"
+    stuck = "out\n❯ please re-run the whole migr\n  ation suite and report back\n──────\n"
+    calls = _env(monkeypatch, "idle", [pre, stuck])
+    ok, info = G.verified_inject("tgt", text)
+    assert not ok and info["reason"] == "unverified_submit", info
+
+
+def test_the_model_switcher_never_types_into_a_working_agent(monkeypatch):
+    """/model typed mid-turn is QUEUED and runs after the switcher restored the host setting: the
+    CLI would rewrite the host default unwatched. idle_only refuses it, by state and by screen."""
+    calls = _env(monkeypatch, "working", [f"{SPIN}\n❯ \n"])
+    ok, info = G.verified_inject("tgt", "/model claude-sonnet-5-5", False, idle_only=True)
+    assert not ok and info["reason"] == "busy" and not _typed(calls)
+    calls = _env(monkeypatch, "working", ["  ⎿ a subagent is running\n❯ \n"])   # by state only, no spinner
+    ok, info = G.verified_inject("tgt", "/model claude-sonnet-5-5", False, idle_only=True)
+    assert not ok and info["reason"] == "busy" and not _typed(calls)
+    calls = _env(monkeypatch, "idle", [f"{SPIN}\n❯ \n"])          # detector lags: screen shows a turn
+    ok, info = G.verified_inject("tgt", "/model claude-sonnet-5-5", False, idle_only=True)
+    assert not ok and info["reason"] == "busy" and not _typed(calls)
+
+
+def test_the_agent_model_handler_sends_idle_only():
+    src = (Path(__file__).resolve().parent / "watch_gateway.py").read_text()
+    assert "send=lambda text: verified_inject(session, text, False, idle_only=True)" in src

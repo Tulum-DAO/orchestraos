@@ -102,7 +102,7 @@ def test_gateway_verified_inject_runs_its_whole_call_under_the_lock(monkeypatch)
     G = _gateway()
     seen = []
     monkeypatch.setattr(G, "_verified_inject_locked",
-                        lambda s, t, f=False: seen.append(_held_elsewhere(s)) or (True, {"state": "idle"}))
+                        lambda s, t, f=False, i=False: seen.append(_held_elsewhere(s)) or (True, {"state": "idle"}))
     assert G.verified_inject("gm", "hello") == (True, {"state": "idle"})
     assert seen == [True]
 

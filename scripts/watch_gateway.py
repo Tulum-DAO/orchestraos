@@ -2344,7 +2344,32 @@ def _pane_has_composer(pane_text: str) -> bool:
     This is the positive half of the new gate. A menu/permission prompt REPLACES the composer,
     and a dead pane has none, so the same check covers both refusals without asking what the
     agent is busy doing."""
-    return any(_is_prompt_line(ln) for ln in (pane_text or "").splitlines())
+    return any(_is_prompt_line(ln) and not _MENU_ROW_RE.match(ln)
+               for ln in (pane_text or "").splitlines())
+
+
+def _bottom_composer_rows(pane_text: str) -> str:
+    """The bottom-most prompt line plus the rows under it up to a rule line (a draft or our own
+    text wrapped across rows), joined; '' when no prompt line is on screen."""
+    rows = (pane_text or "").splitlines()
+    idx = [i for i, ln in enumerate(rows) if _is_prompt_line(ln)]
+    if not idx:
+        return ""
+    out = [rows[idx[-1]]]
+    for row in rows[idx[-1] + 1:]:
+        t = row.replace("\xa0", " ").strip()
+        if t and set(t) <= set("─━-═"):
+            break
+        if t:
+            out.append(t)
+    return " ".join(out)
+
+
+#: A menu's SELECTED option renders with a prompt glyph ("❯ 1. Yes", "> 1. Yes"), which
+#: _is_prompt_line takes for a composer. Such a row is never counted as one, so a menu that came
+#: up after the detector's last read (its pending_menu flag stale or absent) is still refused,
+#: force included. A draft that itself starts "1. " is refused the same way: the safe side.
+_MENU_ROW_RE = re.compile(r"^\s*[❯›\u203a>]\s*\d+\.\s")
 
 
 def _typed_on_prompt_line(pre_raw: str):
@@ -2355,14 +2380,37 @@ def _typed_on_prompt_line(pre_raw: str):
     into) would let a send paste over a draft the operator is typing."""
     from scripts.composer_state import classify_input_line, _infer_runtime, PROMPT_SIGNATURES
     raw_lines = (pre_raw or "").splitlines()
-    comp = [ln for ln in raw_lines if _is_prompt_line(_strip_ansi(ln))]
-    if not comp:
+    stripped = [_strip_ansi(ln) for ln in raw_lines]
+    # The whole input box first: the detector's box finder reads every wrapped row of a draft
+    # (each with the same SGR rule), so a draft whose first row is empty is still seen.
+    find_chrome = getattr(_agent_status(), "_find_chrome", None)
+    if callable(find_chrome):
+        try:
+            chrome = find_chrome(stripped, raw_lines)
+        except Exception:  # noqa: BLE001 — the box finder only; fall back to the prompt line
+            chrome = None
+        if chrome and isinstance(chrome.get("composer_text"), str):
+            return chrome["composer_text"].strip()
+    idx = [i for i, ln in enumerate(stripped) if _is_prompt_line(ln)]
+    if not idx:
         return None
+    i = idx[-1]
     rt = _infer_runtime(pre_raw) or "claude"
-    state, typed = classify_input_line(comp[-1], PROMPT_SIGNATURES.get(rt))
+    state, typed = classify_input_line(raw_lines[i], PROMPT_SIGNATURES.get(rt))
     if state == "unknown":     # the line has no prompt glyph this runtime's reader knows: say what it shows
-        return _strip_ansi(comp[-1]).strip().lstrip("❯>›\u203a").strip()
-    return typed if state == "typed" else ""
+        typed = stripped[i].strip().lstrip("❯>›\u203a").strip()
+    elif state != "typed":
+        typed = ""
+    # No box found: rows under the prompt line up to a rule are the draft's wrapped rows. Any text
+    # there counts as typed (a dim ghost there would also refuse: the safe side).
+    more = []
+    for row in stripped[i + 1:]:
+        t = row.replace("\xa0", " ").strip()
+        if t and set(t) <= set("─━-═"):
+            break
+        if t:
+            more.append(t)
+    return " ".join([typed] + more).strip() if (typed or more) else ""
 
 
 def _tmux(*args, timeout=5):
@@ -2550,7 +2598,7 @@ def _status_runtime(st) -> str:
     return (rt or "").strip().lower()
 
 
-def verified_inject(session, text, force=False):
+def verified_inject(session, text, force=False, idle_only=False):
     """_verified_inject_locked under the ONE cross-process pane lock (pane_lock.py) for the WHOLE
     call, gates included: the composer read that protects the operator's typed text must not race another
     typer's in-flight burst (measured in test_pane_lock_race: read outside the lock, a router paste
@@ -2560,10 +2608,10 @@ def verified_inject(session, text, force=False):
         if not _pane_held:
             return False, {"reason": "busy", "state": "busy",
                            "activity": "another sender is typing into this pane"}
-        return _verified_inject_locked(session, text, force)
+        return _verified_inject_locked(session, text, force, idle_only)
 
 
-def _verified_inject_locked(session, text, force=False):
+def _verified_inject_locked(session, text, force=False, idle_only=False):
     """Inject text into an agent pane with VERIFIED submit.
 
     Returns (ok, info). The merge-3 failure class = Enter swallowed by the
@@ -2610,6 +2658,11 @@ def _verified_inject_locked(session, text, force=False):
     # stopped, crashed and offline all fall through to the refusal below.
     allowed = (INJECTABLE_STATES | MID_TURN_STATES | STALLED_STATES
                | ({"stranded_input", "queued_input"} if force else set()))
+    # idle_only: a slash command must RUN now, not queue. /model typed mid-turn is queued by the
+    # CLI and runs when the turn ends: after the model switcher has already restored the host
+    # setting and let go of its lock, so the CLI would rewrite the host default unwatched.
+    if idle_only:
+        allowed = set(INJECTABLE_STATES)
     if st.get("state") not in allowed:
         info = {"reason": "busy", "state": state,
                 "activity": st.get("activity") or ""}
@@ -2650,6 +2703,9 @@ def _verified_inject_locked(session, text, force=False):
     # A LIVE TURN IS NO LONGER A REFUSAL (see MID_TURN_STATES): it is MEASURED here, because the
     # submit verification below needs to know whether the turn predates our Enter.
     turn_already_running = _pane_shows_active_turn(pre)
+    if idle_only and turn_already_running:      # the detector said idle; the screen says otherwise
+        return False, {"reason": "busy", "state": "working",
+                       "activity": "A turn is running; this needs an idle agent"}
     # THE POSITIVE GATE: no composer on screen = nothing accepts input. This refuses a
     # menu/permission prompt whose detector state lagged behind the screen, and a pane that is
     # not a CLI prompt at all, without asking whether the agent is busy.
@@ -2697,8 +2753,7 @@ def _verified_inject_locked(session, text, force=False):
             # Submitted messages ALSO render as "❯ text" or "> text" in scrollback — only the
             # BOTTOM-MOST prompt line is the live composer. Submit is verified when that
             # line no longer holds the text (or a new turn visibly started).
-            composer_lines = [ln for ln in pane.splitlines() if _is_prompt_line(ln)]
-            last_composer = composer_lines[-1] if composer_lines else ""
+            last_composer = _bottom_composer_rows(pane)
             live_composer = last_composer
             try:
                 find_chrome_fn = getattr(_agent_status(), "_find_chrome", None)
@@ -2709,7 +2764,11 @@ def _verified_inject_locked(session, text, force=False):
             except Exception:
                 pass
 
-            still_in_composer = bool(marker) and marker in live_composer
+            # Whitespace-blind: a marker wrapped across rows comes back with a space or a row
+            # break inside it, and must still read as our text in the box.
+            _flat = lambda v: "".join(str(v or "").split())
+            still_in_composer = bool(marker) and (_flat(marker) in _flat(live_composer)
+                                                  or _flat(marker) in _flat(last_composer))
             # defensive (task #16): a chip in the composer = payload landed but
             # unsubmitted — keep retrying Enter, never read it as submitted.
             if any(p in live_composer or p in last_composer for p in ("[Pasted text", "[Pasted Content", "[Pasted")):
@@ -4820,7 +4879,7 @@ async def handle_agent_model(request):
         status, body = await loop.run_in_executor(None, lambda: AMC.switch_live(
             model=model, config_path=AMC.codex_home() / "config.toml",
             lock_path=AM.claude_settings_path(),
-            send=lambda text: verified_inject(session, text, False), keys=_keys,
+            send=lambda text: verified_inject(session, text, False, idle_only=True), keys=_keys,
             capture=lambda: _tmux("capture-pane", "-p", "-t", _st(session)).stdout,
             rollout=_seat_codex_rollout(session, meta)))
         if status != 200:
@@ -4832,7 +4891,7 @@ async def handle_agent_model(request):
             # Claude asks to confirm a switch on a seat with history; the switch answers it.
             capture=lambda: _tmux("capture-pane", "-p", "-t", _st(session)).stdout,
             keys=lambda k: _tmux("send-keys", "-t", _st(session), "-l", str(k)),
-            send=lambda text: verified_inject(session, text, False),
+            send=lambda text: verified_inject(session, text, False, idle_only=True),
             find_jsonl=lambda: _seat_transcript_path(session, meta)))
         if status != 200:
             # Name the models, so a client's words say which one the agent is on (ios-watch-dev).

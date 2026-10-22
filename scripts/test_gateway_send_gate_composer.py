@@ -155,8 +155,11 @@ def test_a_pending_menu_is_refused_even_when_it_LOOKS_like_a_composer(monkeypatc
         "Claude needs your permission to run Bash\n"
         " > 1. Yes\n"
         "   2. No, tell Claude what to do differently\n")
-    assert G._pane_has_composer(menu_that_looks_like_a_composer), (
-        "fixture must reproduce the hazard: this screen DOES read as having a composer")
+    assert G._is_prompt_line(" > 1. Yes"), (
+        "fixture must reproduce the hazard: the selected option reads as a prompt line")
+    # Since codex R1 on #471 the composer gate also ignores a selected menu row, so the menu is
+    # refused by BOTH mechanisms; this test still pins the pending_menu half.
+    assert not G._pane_has_composer(menu_that_looks_like_a_composer)
     t = _Tmux([menu_that_looks_like_a_composer])
     monkeypatch.setattr(G, "_tmux", t)
     monkeypatch.setattr(G, "INJECT_INGEST_WAIT_S", 0.0)
