@@ -4487,6 +4487,9 @@ async def handle_agent_model(request):
         status, body = await loop.run_in_executor(None, lambda: AM.switch_live(
             model=model, settings_path=AM.claude_settings_path(),
             title=next((r["title"] for r in catalog if r["id"] == model), None),
+            # Claude asks to confirm a switch on a seat with history; the switch answers it.
+            capture=lambda: _tmux("capture-pane", "-p", "-t", session).stdout,
+            keys=lambda k: _tmux("send-keys", "-t", session, "-l", str(k)),
             send=lambda text: verified_inject(session, text, False),
             find_jsonl=lambda: _seat_transcript_path(session)))
         if status != 200:
