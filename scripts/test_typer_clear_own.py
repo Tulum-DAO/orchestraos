@@ -106,7 +106,7 @@ def test_nudge_clears_its_own_unsubmitted_nudge(monkeypatch, tmp_path):
     monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
     nudge = "continue please"
     # before: empty; then our text stays through 3 checks; then the clear leaves it empty
-    keys = _nudge_rig(monkeypatch, ["", nudge, nudge, nudge, nudge, ""])
+    keys = _nudge_rig(monkeypatch, ["", nudge, nudge, nudge, nudge, nudge, ""])
     assert NP._nudge_unlocked("seat", nudge) == 1
     assert ("send-keys", "-t", "seat", "C-u") in keys
     import inject_journal as J
@@ -158,7 +158,7 @@ def test_the_startup_reconcile_presses_nothing_while_a_client_is_attached(monkey
     assert [r["session"] for r in J.rows()] == ["gm"]          # kept as evidence for the next start
 
 
-@pytest.mark.parametrize("stage", ["codex-busy", "stranded-chip", "no-receipt", "refused-canonical"])
+@pytest.mark.parametrize("stage", ["codex-busy", "stranded-chip", "refused-canonical"])
 def test_boot_inject_leaves_no_row_when_it_typed_nothing(monkeypatch, tmp_path, stage):
     import boot_inject as BI
     import inject_journal as J
@@ -171,7 +171,7 @@ def test_boot_inject_leaves_no_row_when_it_typed_nothing(monkeypatch, tmp_path, 
 def test_nudge_does_not_call_someone_elses_text_a_submit(monkeypatch, tmp_path):
     monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
     nudge = "continue please"
-    keys = _nudge_rig(monkeypatch, ["", "Do you want to proceed? 1. Yes"])
+    keys = _nudge_rig(monkeypatch, ["", nudge, "Do you want to proceed? 1. Yes"])
     assert NP._nudge_unlocked("seat", nudge) == 1               # never "submitted"
     assert [k for k in keys if k[-1] == "Enter"] == [("send-keys", "-t", "seat", "Enter")]   # no Enter on it
     import inject_journal as J
@@ -182,7 +182,7 @@ def test_nudge_does_not_call_someone_elses_text_a_submit(monkeypatch, tmp_path):
 def test_nudge_presses_no_second_Enter_on_a_menu_row_that_is_a_substring_of_the_nudge(monkeypatch, tmp_path):
     monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
     nudge = "please pick 1. Yes and continue"
-    keys = _nudge_rig(monkeypatch, ["", "1. Yes"])
+    keys = _nudge_rig(monkeypatch, ["", nudge, "1. Yes"])      # ours after typing, then a menu row
     assert NP._nudge_unlocked("seat", nudge) == 1
     assert [k for k in keys if k[-1] == "Enter"] == [("send-keys", "-t", "seat", "Enter")]
 
@@ -192,3 +192,29 @@ def test_nudge_never_types_onto_existing_text_even_a_substring_of_the_nudge(monk
     keys = _nudge_rig(monkeypatch, ["continue"])                  # a person's draft: "continue"
     assert NP._nudge_unlocked("seat", "continue please") == 2
     assert not [k for k in keys if k[0] == "send-keys"]
+
+
+# ------------------------------------------------------------------ codex R3 on #472
+def test_nudge_presses_NO_first_Enter_when_the_composer_does_not_show_our_nudge(monkeypatch, tmp_path):
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+    keys = _nudge_rig(monkeypatch, ["", "Do you want to proceed?"])     # a menu came up while typing
+    assert NP._nudge_unlocked("seat", "continue please") == 1
+    assert not [k for k in keys if k[-1] == "Enter"]
+    import inject_journal as J
+    assert [r["session"] for r in J.rows()] == ["seat"]
+
+
+def test_nudge_first_Enter_is_pressed_on_a_WRAPPED_nudge_showing_its_first_row(monkeypatch, tmp_path):
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+    keys = _nudge_rig(monkeypatch, ["", "continue please, and then", ""])
+    assert NP._nudge_unlocked("seat", "continue please, and then report what changed") == 0
+    assert [k for k in keys if k[-1] == "Enter"]
+
+
+def test_boot_inject_keeps_the_row_when_the_paste_may_have_landed_unseen(monkeypatch, tmp_path):
+    import boot_inject as BI
+    import inject_journal as J
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+    monkeypatch.setattr(BI, "_boot_inject_unlocked", lambda *a, **k: ("failed", "no-receipt"))
+    BI.boot_inject("pm-x", "hello")
+    assert [r["session"] for r in J.rows()] == ["pm-x"]

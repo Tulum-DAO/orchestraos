@@ -126,7 +126,8 @@ def _codex_boot_busy(pane: str) -> bool:
 
 #: Outcomes where nothing of ours reached the composer: no journal row may outlive them (a row there
 #: would be false evidence a later reconcile could attribute to someone's matching text).
-_NOTHING_TYPED = ("refused-canonical", "no-receipt", "codex-busy", "stranded-chip")
+_NOTHING_TYPED = ("refused-canonical", "codex-busy", "stranded-chip")   # NOT no-receipt: a paste may
+# have landed unobserved; the row stays, and the reconcile clears it untouched if it is not ours
 
 
 def boot_inject(session, text, runtime=DEFAULT_RUNTIME, **kw):

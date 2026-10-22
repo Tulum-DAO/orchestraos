@@ -48,7 +48,9 @@ def test_nudge_row_exists_while_typed_and_clears_on_submit(monkeypatch):
         return R()
     monkeypatch.setattr(N, "tmux", tmux)
     monkeypatch.setattr(N, "attached", lambda s: False)
-    monkeypatch.setattr(N, "composer_line", lambda s: "")
+    # a real pane: our nudge shows in the composer once typed, and leaves it at the Enter
+    monkeypatch.setattr(N, "composer_line",
+                        lambda s: "" if (not calls or "row_at_enter" in state) else "continue please")
     monkeypatch.setattr(N, "pane_readable", lambda s: True, raising=False)
     monkeypatch.setattr(N, "fence_check", lambda *a, **k: None, raising=False)
     monkeypatch.setattr(N.time, "sleep", lambda s: None)

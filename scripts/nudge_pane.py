@@ -78,6 +78,12 @@ def _nudge_unlocked(session: str, text: str, *, force: bool = False, settle: flo
         print(f"nudge_pane: send-keys failed for {session}; NOT SENT", file=sys.stderr)
         return RC_NOT_SENT
     time.sleep(settle)
+    # The FIRST Enter too only on our own text: the composer must show our nudge (or, wrapped, its
+    # first row). A menu that came up, or anything else, gets no Enter; the row stays as evidence.
+    line = composer_line(session)
+    if not (line and text.strip().startswith(line.strip())):
+        print(f"nudge_pane: {session}'s composer does not show our nudge after typing; no Enter", file=sys.stderr)
+        return 1
     tmux("send-keys", "-t", session, "Enter")
     for _ in range(3):
         time.sleep(1.5)
