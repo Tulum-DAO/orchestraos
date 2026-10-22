@@ -143,3 +143,21 @@ def test_an_empty_root_is_never_written(box):
     rows = _rows("empty-seat")
     G._stamp_lineage(rows, REG)
     assert "root" not in rows[0] and "lineage_role" not in rows[0]
+
+
+def test_a_green_whose_session_two_canonical_roots_claim_says_nothing(box):
+    db = sqlite3.connect(box / "state" / "orchestra-registry.db")
+    db.execute("UPDATE canonical SET tmux_session='builder-g9' WHERE root='solo'")   # 2nd pointer, same session
+    db.commit()
+    db.close()
+    rows = _rows("builder-g9")
+    G._stamp_lineage(rows, REG)
+    assert "lineage_role" not in rows[0] and "root" not in rows[0]
+
+
+def test_the_spawn_fence_is_not_rounded_down(box, monkeypatch):
+    _green_file(box, green_pane_id="%40", green_spawned_at=999.9)         # no session id
+    monkeypatch.setattr(G, "_pane_sessions", lambda: {"%40": ("builder-g9", 994)})   # 5.9 s older
+    rows = _rows("builder-g9")
+    G._stamp_lineage(rows, REG)
+    assert rows[0].get("lineage_role") != "green"

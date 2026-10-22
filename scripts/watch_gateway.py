@@ -1765,17 +1765,17 @@ def _stamp_lineage(rows, reg_agents):
         if want_sid and sids:
             checks.append(want_sid in sids)
         if isinstance(spawned, (int, float)) and isinstance(created, int):
-            checks.append(created >= int(spawned) - 5)
+            checks.append(created >= spawned - 5)
         if checks and all(checks):
             greens.setdefault(sess, set()).add((root, d["state"].lower()))
     for r in rows:
         sess = r.get("tmux_session") or ""
         g, c = greens.get(sess, set()), {root for root, _s in canon.get(sess, ())}
         if g:
-            if len(g) == 1 and _name(next(iter(g))[0]):
+            if len(g) == 1 and len(c) <= 1 and _name(next(iter(g))[0]):
                 root, state = next(iter(g))
                 r["root"], r["lineage_role"], r["lineage_state"] = root, "green", state
-            continue                                    # two roots claim this green: say nothing
+            continue                                    # two roots claim this green or its session: say nothing
         if c:
             if len(c) == 1 and _name(next(iter(c))):
                 r["root"], r["lineage_role"] = next(iter(c)), "canonical"
