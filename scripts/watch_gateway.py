@@ -4460,9 +4460,15 @@ def _seat_transcript_path(session, meta=None):
 
 
 def _seat_codex_rollout(session, meta=None):
-    """The Codex rollout the seat is writing, from the pane's or the seat's session id."""
+    """The Codex rollout the seat is writing: the seat record's session id first (rotation
+    writes the live rollout's uuid there, and codex hooks record none in pane events), then the
+    pane's."""
     from scripts import agent_model_codex as AMC
-    for sid in _seat_session_ids(session, meta):
+    sids = _seat_session_ids(session, meta)
+    own = (meta or {}).get("session_id")
+    if own in sids:
+        sids = [own] + [x for x in sids if x != own]
+    for sid in sids:
         p = AMC.rollout_for_sid(sid)
         if p:
             return p

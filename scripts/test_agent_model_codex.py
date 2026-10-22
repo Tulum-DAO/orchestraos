@@ -38,6 +38,8 @@ EFFORT_SCREEN = """\
   Press enter to confirm or esc to go back
 """
 
+THREAD = "00000000-0000-7000-8000-000000000460"
+
 CONFIG = '''model = "gpt-5.6-terra"
 model_context_window = 872000
 model_reasoning_effort = "medium"
@@ -53,11 +55,12 @@ class FakeCodex:
         self.config = tmp_path / "codex" / "config.toml"
         self.config.parent.mkdir(parents=True)
         self.config.write_text(CONFIG)
-        self.rollout = tmp_path / "rollout.jsonl"
+        self.rollout = tmp_path / f"rollout-2026-10-22T03-30-18-{THREAD}.jsonl"
         self.rollout.write_text(json.dumps({"type": "turn_context", "payload": {"model": "gpt-5.6-luna", "effort": "low"}}) + "\n"
                                 + json.dumps({"type": "event_msg", "payload": {"type": "thread_settings_applied",
-                                              "thread_settings": {"model": "gpt-5.6-terra"}}}) + "\n")
+                                              "thread_id": THREAD, "thread_settings": {"model": "gpt-5.6-terra"}}}) + "\n")
         self.picker, self.busy, self.applies, self.opens = picker, busy, applies, opens
+        self.thread = THREAD
         self.screen, self.sent, self.keyed, self.chosen = "› Ask Codex to do anything\n", [], [], None
         self.lock = tmp_path / "claude" / "settings.json"
 
@@ -86,7 +89,7 @@ class FakeCodex:
             self.config.write_text(text)
             with open(self.rollout, "a") as f:
                 f.write(json.dumps({"type": "event_msg", "payload": {"type": "thread_settings_applied",
-                        "thread_settings": {"model": self.applies or self.chosen}}}) + "\n")
+                        "thread_id": self.thread, "thread_settings": {"model": self.applies or self.chosen}}}) + "\n")
             self.screen = f"• Model changed to {self.chosen} {effort}\n› Ask Codex to do anything\n"
 
     def capture(self):
@@ -164,7 +167,7 @@ def test_only_the_two_top_level_keys_are_put_back(tmp_path):
     p = tmp_path / "config.toml"
     p.write_text(CONFIG)
     before = C.read_keys(p)
-    assert before == {"model": 'model = "gpt-5.6-terra"\n', "model_reasoning_effort": 'model_reasoning_effort = "medium"\n'}
+    assert before == {"model": ['model = "gpt-5.6-terra"\n'], "model_reasoning_effort": ['model_reasoning_effort = "medium"\n']}
     later = CONFIG.replace('model = "gpt-5.6-terra"', 'model = "gpt-5.6-luna"', 1).replace('"medium"', '"low"', 1)
     later += '\n[projects."/tmp/new"]\ntrust_level = "trusted"\n'          # someone else's new line stays
     p.write_text(later)
@@ -176,7 +179,7 @@ def test_only_the_two_top_level_keys_are_put_back(tmp_path):
 def test_a_key_that_was_absent_goes_away_and_one_that_vanished_comes_back(tmp_path):
     p = tmp_path / "config.toml"
     p.write_text('model = "x"\n[t]\na = 1\n')
-    assert C.write_keys(p, {"model_reasoning_effort": 'model_reasoning_effort = "low"\n'})
+    assert C.write_keys(p, {"model_reasoning_effort": ['model_reasoning_effort = "low"\n']})
     assert p.read_text() == 'model_reasoning_effort = "low"\n[t]\na = 1\n'
 
 
@@ -229,3 +232,85 @@ def test_an_open_effort_picker_gets_one_escape_per_menu(tmp_path, monkeypatch):
     assert status == 502 and body["error"] == "switch failed"
     assert c.keyed == ["3", "Escape", "Escape"] and "Select" not in c.screen
     assert c.config.read_text() == CONFIG
+
+
+# --- codex R1 on #460 ------------------------------------------------------------------------
+
+def test_a_picker_that_is_not_at_the_bottom_is_not_open():
+    """An old picker still on screen above the composer (it closed) is not a live menu: a digit
+    sent then would land in the composer."""
+    stale = MODELS_SCREEN + "• Model changed to gpt-5.6-terra low\n› Ask Codex to do anything\n"
+    assert C.model_rows(stale) is None and not C.picker_live(stale)
+    assert C.effort_rows(EFFORT_SCREEN.format(model="m") + "› Ask Codex\n", "m") is None
+
+
+def test_a_stale_picker_on_screen_types_no_digit(tmp_path):
+    c = FakeCodex(tmp_path, picker=MODELS_SCREEN + "› Ask Codex to do anything\n")
+    status, body = c.run()
+    assert status == 502 and body["error"] == "the model picker did not open" and c.keyed == []
+
+
+def test_a_two_digit_row_is_never_typed(tmp_path):
+    c = FakeCodex(tmp_path, picker=MODELS_SCREEN.replace("3. gpt-5.6-terra", "12. gpt-5.6-terra"))
+    status, body = c.run("gpt-5.6-terra")
+    assert status == 422 and body["row"] == "12" and c.keyed == ["Escape"]
+
+
+def test_a_lost_effort_key_still_closes_the_menus(tmp_path):
+    c = FakeCodex(tmp_path)
+    real = c.keys
+
+    def keys(k):
+        if k == "1" and "Select Reasoning Level" in c.screen:       # the effort key is lost
+            c.keyed.append(k)
+            return
+        if k == "Escape" and "Select Reasoning Level" in c.screen:
+            c.keyed.append(k)
+            c.screen = MODELS_SCREEN
+            return
+        real(k)
+    c.keys = keys
+    status, body = c.run("gpt-5.6-terra")
+    assert status == 502 and body["error"] == "unconfirmed"
+    assert c.keyed == ["3", "1", "Escape", "Escape"] and not C.picker_live(c.screen)
+
+
+def test_an_event_for_another_thread_never_confirms(tmp_path):
+    c = FakeCodex(tmp_path)
+    c.thread = "01a10000-0000-7000-8000-000000000000"      # codex logs the pick under another thread
+    status, body = c.run("gpt-5.6-terra")
+    assert status == 502 and body["error"] == "unconfirmed"
+    assert c.config.read_text() == CONFIG
+
+
+@pytest.mark.parametrize("text", [
+    'model = "gpt-5.6-terra"\r\nmodel_reasoning_effort = "medium"\r\n[t]\r\na = 1\r\n',      # CRLF
+    'model_reasoning_effort = "medium"\nmodel = "gpt-5.6-terra"',                           # no final newline
+    'model = "a"\nmodel = "b"\nmodel_reasoning_effort = "high"\n',                           # a key twice
+    'arr = [\n  [1, 2],\n]\nmodel = "gpt-5.6-terra"\n[t]\nmodel = "inner"\n',               # array of arrays
+])
+def test_the_restore_is_byte_for_byte(tmp_path, text):
+    p = tmp_path / "config.toml"
+    p.write_bytes(text.encode())
+    before = C.read_keys(p)
+    changed = text.replace('"gpt-5.6-terra"', '"gpt-5.6-luna"').replace('"medium"', '"low"').replace('"a"', '"z"')
+    p.write_bytes(changed.encode())
+    assert C.write_keys(p, before)
+    assert p.read_bytes() == text.encode()
+
+
+def test_keys_after_a_multiline_array_are_still_top_level():
+    lines = 'arr = [\n  [1, 2],\n]\nmodel = "x"\n[t]\nmodel = "y"\n'.splitlines(keepends=True)
+    assert C._top_level_lines(lines) == [True, False, False, True, False, False]
+
+
+def test_the_codex_locator_prefers_the_seat_record(monkeypatch, tmp_path):
+    home = tmp_path / "codex"
+    for sid in ("01a10000-0000-7000-8000-000000000001", "01a10000-0000-7000-8000-000000000002"):
+        d = home / "sessions" / "2026" / "10" / "22"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"rollout-2026-10-22T00-00-00-{sid}.jsonl").write_text("{}\n")
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setattr(G, "_pane_session_ids", lambda s: ["01a10000-0000-7000-8000-000000000001"])
+    p = G._seat_codex_rollout("cx", {"session_id": "01a10000-0000-7000-8000-000000000002"})
+    assert p.name.endswith("000000000002.jsonl")

@@ -52,8 +52,21 @@ def rollout_for_sid(sid: str, home: Path | None = None) -> Path | None:
 
 # --- the picker on screen ---------------------------------------------------------------------
 
+PICKER_FOOTER = "Press enter to confirm or esc to go back"
+
+
+def picker_live(screen: str) -> bool:
+    """A picker is OPEN only while its footer is the screen's last non-empty line: an open
+    picker replaces the composer at the bottom, and once it closes the composer is back there.
+    A picker still visible higher up (or in an old capture) is not open."""
+    lines = [ln for ln in (screen or "").splitlines() if ln.strip()]
+    return bool(lines) and PICKER_FOOTER in lines[-1]
+
+
 def _section(screen: str, title_re: str) -> list[str] | None:
-    """The lines after the LAST line matching `title_re` (the picker is drawn below the chat)."""
+    """The lines after the LAST line matching `title_re`, only while that picker is open."""
+    if not picker_live(screen):
+        return None
     lines = screen.splitlines()
     idx = [i for i, ln in enumerate(lines) if re.search(title_re, ln)]
     return lines[idx[-1] + 1:] if idx else None
@@ -120,9 +133,18 @@ def current_effort(rollout: Path) -> str | None:
     return eff if isinstance(eff, str) else None
 
 
+def rollout_thread_id(rollout: Path) -> str | None:
+    """The thread this rollout belongs to: the uuid in its file name."""
+    m = re.search(r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$",
+                  str(rollout))
+    return m.group(1).lower() if m else None
+
+
 def applied_after(rollout: Path, offset: int, model: str):
-    """"set" when a thread_settings_applied for `model` was written after `offset`, "other:<id>"
-    for one naming another model, None for nothing yet (or a file that shrank)."""
+    """"set" when a thread_settings_applied for `model`, for THIS rollout's thread, was written
+    after `offset`; "other:<id>" for one naming another model; None for nothing yet (or a file
+    that shrank). An event for another thread never counts."""
+    thread = rollout_thread_id(rollout)
     try:
         with open(rollout, "rb") as f:
             f.seek(0, os.SEEK_END)
@@ -140,6 +162,8 @@ def applied_after(rollout: Path, offset: int, model: str):
             continue
         p = d.get("payload") if isinstance(d, dict) else None
         if d.get("type") == "event_msg" and isinstance(p, dict) and p.get("type") == "thread_settings_applied":
+            if not thread or str(p.get("thread_id") or "").lower() != thread:
+                continue
             got = (p.get("thread_settings") or {}).get("model")
             if got == model:
                 return "set"
@@ -149,60 +173,78 @@ def applied_after(rollout: Path, offset: int, model: str):
 
 # --- config.toml: two top-level keys, line by line ----------------------------------------------
 
-def _top_level_span(lines: list[str]) -> int:
-    """Index of the first table header: top-level keys live above it."""
-    for i, ln in enumerate(lines):
-        if re.match(r"^\s*\[", ln):
-            return i
-    return len(lines)
+_STRINGS = re.compile(r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"(?:\\.|[^"\\])*"|\'[^\']*\'')
+_HEADER = re.compile(r"^\s*\[\[?[^\[\]=]+\]\]?\s*(#.*)?$")      # [table] / [[array]]; values are excluded by depth
+
+
+def _read(path: Path) -> str:
+    """The file's text with its line endings exactly as stored (no newline translation)."""
+    with open(path, newline="") as f:
+        return f.read()
+
+
+def _top_level_lines(lines: list[str]) -> list[bool]:
+    """For each line: is it a TOP-LEVEL line (above the first table header, and not inside a
+    multi-line value)? A `[` that opens a line inside an open array is a value, not a header."""
+    out, depth, top = [], 0, True
+    for ln in lines:
+        bare = _STRINGS.sub('""', ln.rstrip("\r\n"))
+        bare = bare.split("#", 1)[0]
+        if top and depth == 0 and _HEADER.match(ln.rstrip("\r\n")):
+            top = False
+        out.append(top and depth == 0)
+        depth = max(0, depth + bare.count("[") - bare.count("]") + bare.count("{") - bare.count("}"))
+    return out
+
+
+def _key_of(ln: str):
+    return next((k for k in KEYS if re.match(rf"^\s*{re.escape(k)}\s*=", ln)), None)
 
 
 def read_keys(path: Path) -> dict:
-    """{key: the raw line} for KEYS among config.toml's top-level lines (absent keys omitted)."""
+    """{key: [its top-level lines, byte for byte, in order]} for KEYS (absent keys omitted)."""
     try:
-        lines = Path(path).read_text().splitlines(keepends=True)
+        lines = _read(path).splitlines(keepends=True)
     except FileNotFoundError:
         return {}
-    out = {}
-    for ln in lines[:_top_level_span(lines)]:
-        for k in KEYS:
-            if re.match(rf"^\s*{re.escape(k)}\s*=", ln) and k not in out:
-                out[k] = ln if ln.endswith("\n") else ln + "\n"
+    out: dict = {}
+    for ln, top in zip(lines, _top_level_lines(lines)):
+        k = _key_of(ln) if top else None
+        if k:
+            out.setdefault(k, []).append(ln)
     return out
 
 
 def write_keys(path: Path, before: dict) -> bool:
-    """Put KEYS' top-level lines back exactly as `before` had them (absent -> removed), leaving
-    every other line as it is now. Temp file + rename, mode kept, read back."""
+    """Put KEYS' top-level lines back exactly as `before` had them (every occurrence, its own
+    bytes and line ending; absent -> removed), leaving every other line as it is now. Temp
+    file + rename, mode kept, read back."""
     path = Path(path)
     try:
-        text = path.read_text()
+        text = _read(path)
     except FileNotFoundError:
         if not before:
             return True
         text = ""
     lines = text.splitlines(keepends=True)
-    if lines and not lines[-1].endswith("\n"):
-        lines[-1] += "\n"
-    top = _top_level_span(lines)
-    kept, placed = [], set()
-    for i, ln in enumerate(lines):
-        key = next((k for k in KEYS if i < top and re.match(rf"^\s*{re.escape(k)}\s*=", ln)), None)
-        if key is None:
+    pending = {k: list(v) for k, v in before.items() if k in KEYS}
+    kept = []
+    for ln, top in zip(lines, _top_level_lines(lines)):
+        k = _key_of(ln) if top else None
+        if k is None:
             kept.append(ln)
-        elif key in before and key not in placed:
-            kept.append(before[key])
-            placed.add(key)
-    missing = [before[k] for k in KEYS if k in before and k not in placed]
-    kept = missing + kept
-    new = "".join(kept)
+        elif pending.get(k):
+            kept.append(pending[k].pop(0))
+    nl = "\r\n" if "\r\n" in text else "\n"
+    missing = [ln if ln.endswith(("\n", "\r")) else ln + nl for k in KEYS for ln in pending.get(k, [])]
+    new = "".join(missing + kept)
     if new != text:
         mode = None
         with contextlib.suppress(FileNotFoundError):
             mode = path.stat().st_mode & 0o7777
         fd, tmp = tempfile.mkstemp(prefix=".config.", suffix=".tmp", dir=str(path.parent))
         try:
-            with os.fdopen(fd, "w") as f:
+            with os.fdopen(fd, "w", newline="") as f:
                 f.write(new)
             if mode is not None:
                 os.chmod(tmp, mode)
@@ -211,7 +253,7 @@ def write_keys(path: Path, before: dict) -> bool:
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(tmp)
             raise
-    return read_keys(path) == before
+    return read_keys(path) == {k: v for k, v in before.items() if k in KEYS and v}
 
 
 def _journal(config: Path) -> Path:
@@ -276,7 +318,7 @@ def switch_live(*, model: str, config_path: Path, lock_path: Path, send, keys, c
         before = read_keys(config_path)
         _write_journal(config_path, before)
         effort_now = current_effort(rollout)
-        res, typed, picker_open = None, False, False
+        res, typed = None, False
         try:
             ok, info = send("/model")
             typed = bool(ok)
@@ -288,12 +330,15 @@ def switch_live(*, model: str, config_path: Path, lock_path: Path, send, keys, c
                     result = (502, {"ok": False, "error": "not sent", "detail": info})
             else:
                 rows = _wait_screen(capture, model_rows, screen_timeout_s, sleep, clock)
-                picker_open = rows is not None
                 if rows is None:
                     result = (502, {"ok": False, "error": "the model picker did not open"})
                 elif model not in rows:
                     result = (422, {"ok": False, "error": "not in this agent's model picker",
                                     "offered": sorted(rows)})
+                elif len(rows[model]) != 1:
+                    # A two-digit row would go in as two keys: the first picks another row.
+                    result = (422, {"ok": False, "error": "this model's picker row cannot be "
+                                    "picked with one key", "row": rows[model]})
                 else:
                     keys(rows[model])
                     eff = _wait_screen(capture, lambda s: effort_rows(s, model), screen_timeout_s,
@@ -302,8 +347,9 @@ def switch_live(*, model: str, config_path: Path, lock_path: Path, send, keys, c
                         result = (502, {"ok": False, "error": "the effort picker did not open"})
                     else:
                         digit, label = pick_effort(eff, effort_now)
+                        if len(digit) != 1:
+                            raise LookupError(f"effort row {digit} cannot be picked with one key")
                         keys(digit)
-                        picker_open = False
                         res = _wait_screen(lambda: applied_after(rollout, offset, model),
                                            lambda r: r or None, timeout_s, sleep, clock)
                         result = None
@@ -311,16 +357,15 @@ def switch_live(*, model: str, config_path: Path, lock_path: Path, send, keys, c
         except Exception as e:  # noqa: BLE001 — answered, never raised past the restore
             result = (502, {"ok": False, "error": "switch failed", "detail": repr(e)[:300]})
         finally:
-            if picker_open:                       # never leave the agent sitting in a menu
+            if typed:                             # never leave the agent sitting in a menu
                 with contextlib.suppress(Exception):
-                    # One Escape per picker still on screen, re-read each time: an Escape on
-                    # the empty composer primes codex's "edit previous message" (seen by effect).
-                    for _ in range(2):
+                    # Escape only while a picker is OPEN on screen, re-read each time: an Escape
+                    # on the empty composer primes codex's "edit previous message" (seen by effect).
+                    for _ in range(3):
+                        if not picker_live(capture() or ""):
+                            break
                         keys("Escape")
                         sleep(0.3)
-                        scr = capture() or ""
-                        if model_rows(scr) is None and not re.search(r"Select Reasoning Level", scr):
-                            break
             restored, err = _restore(config_path, before)
             if restored and typed:
                 with contextlib.suppress(Exception):
