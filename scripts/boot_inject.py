@@ -126,7 +126,7 @@ def _codex_boot_busy(pane: str) -> bool:
 
 #: Outcomes where nothing of ours reached the composer: no journal row may outlive them (a row there
 #: would be false evidence a later reconcile could attribute to someone's matching text).
-_NOTHING_TYPED = ("refused-canonical", "codex-busy", "stranded-chip")   # NOT no-receipt: a paste may
+_NOTHING_TYPED = ("refused-canonical", "codex-busy", "stranded-chip", "client-attached")   # NOT no-receipt: a paste may
 # have landed unobserved; the row stays (unmarked = report-only at the reconcile)
 
 
@@ -144,12 +144,6 @@ def boot_inject(session, text, runtime=DEFAULT_RUNTIME, **kw):
     was typed, so the caller's normal retry applies."""
     import pane_lock
     import inject_journal
-    # A person attached to the pane may be typing: nothing is typed over them (the same rule as the
-    # gateway's clear-own and the reconcile). The caller's normal retry applies.
-    _tmux = kw.get("tmux_fn") or _real_tmux
-    rc, out = _tmux("list-clients", "-t", f"={session}:")
-    if rc == 0 and (out or "").strip():
-        return "failed", "client-attached"
     try:
         with pane_lock.pane_lock(session, wait_s=8.0):
             try:   # typed-not-entered row: no row, no typing
@@ -209,6 +203,14 @@ def _boot_inject_unlocked(session, text, runtime=DEFAULT_RUNTIME, *, allow_canon
                 return "stuck", "codex-busy"
             sleep_fn(1.0)
             waited += 1.0
+
+    # A person attached to the pane may be typing: nothing is typed over them (the same rule as the
+    # gateway's clear-own and the reconcile). Checked HERE, under the pane lock and after any busy
+    # wait, right before the first keystroke; the caller's normal retry applies.
+    rc_c, clients = tmux_fn("list-clients", "-t", _target(session))
+    if rc_c == 0 and (clients or "").strip():
+        log("a client is attached to this pane: nothing typed")
+        return "failed", "client-attached"
 
     _, line0, ok0 = split()
     if ok0 and composer_has_stranded_chip(line0):

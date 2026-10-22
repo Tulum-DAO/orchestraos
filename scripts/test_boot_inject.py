@@ -346,3 +346,16 @@ def test_a_person_attached_to_the_pane_gets_nothing_typed_over_them():
     out = B.boot_inject("pm-x", TEXT, tmux_fn=p, sleep_fn=lambda s: None, log_fn=lambda m: None)
     assert out == ("failed", "client-attached")
     assert not [c for c in p.calls if c[0] in ("paste-buffer", "send-keys", "set-buffer")]
+
+
+def test_a_person_who_attaches_DURING_the_codex_busy_wait_still_gets_nothing_typed():
+    """codex R8 on #472: the check runs right before the first keystroke, after any busy wait."""
+    p = CodexPane(busy_captures=2)
+    def attach_late(*a, **k):
+        if a[0] == "list-clients":                 # nobody before the wait could have been seen;
+            return 0, ("/dev/pts/4: cx\n" if p.busy_left == 0 else "")   # attached by the time we type
+        return p(*a, **k)
+    out = B.boot_inject("cx", TEXT, "codex", tmux_fn=attach_late, sleep_fn=lambda s: None,
+                        log_fn=lambda m: None)
+    assert out == ("failed", "client-attached")
+    assert not [c for c in p.calls if c[0] in ("paste-buffer", "set-buffer")]
