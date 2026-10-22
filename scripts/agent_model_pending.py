@@ -40,6 +40,11 @@ class StateUnreadable(Exception):
     replace every pending pick and outcome with nothing (codex R2 on #475)."""
 
 
+class LockBusy(Exception):
+    """Another switch for this agent (in this or another gateway process) still holds its lock
+    after the caller's bounded wait. Nothing was read or changed."""
+
+
 def _read(path):
     """The record; empty only when the file does not exist yet."""
     try:
@@ -162,11 +167,15 @@ def mark_reported(path, session, since):
 
 
 @contextmanager
-def session_lock(path, session):
+def session_lock(path, session, timeout=None):
     """ONE lock per tmux session for every model-switch decision, across threads AND processes (an
     old gateway still finishing a pass while a new one starts; codex R12 on #475): an flock on a
     file next to the record, opened afresh per acquisition so threads of one process exclude each
-    other too. Held across the read, the identity check, the switch and the resolve."""
+    other too. Held across the read, the identity check, the switch and the resolve.
+
+    `timeout` bounds the wait (seconds): past it LockBusy is raised and nothing ran. Every gateway
+    caller passes one, so no executor thread waits on another process forever and a shutdown that
+    joins its threads never hangs on a lock (codex R13 on #475). None waits without a bound."""
     name = str(session)
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", name) or "_"
     if safe != name or safe.startswith("."):
@@ -174,7 +183,18 @@ def session_lock(path, session):
     d = Path(path).with_name(Path(path).name + ".locks")
     d.mkdir(parents=True, exist_ok=True)
     with open(d / f"{safe}.lock", "a") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
+        if timeout is None:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+        else:
+            deadline = time.monotonic() + max(0.0, float(timeout))
+            while True:
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise LockBusy(f"another model switch for {name} is still in progress")
+                    time.sleep(0.05)
         try:
             yield
         finally:

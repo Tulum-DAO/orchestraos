@@ -4926,16 +4926,29 @@ async def handle_agent_model(request):
         log.error(f"agent-model: {e}")
         return _json({"ok": False, "error": "the record of waiting switches cannot be read; nothing "
                       "changed", "detail": str(e)}, status=503)
+    except AMP.LockBusy as e:
+        log.warning(f"agent-model: {e}")
+        return _json({"ok": False, "error": "another model switch for this agent is still in "
+                      "progress; nothing changed, try again", "detail": str(e)}, status=503)
     return _json(body, status=status)
 
 
-def _model_switch_lock(session):
+#: Bounded waits for the per-agent switch lock (codex R13 on #475): a PUT waits for a switch in
+#: progress, then answers 503 with nothing changed; a deferred pass skips that agent until its next
+#: pass (the pick stays in the file). No executor thread ever waits on the lock without a bound, so
+#: a shutdown that joins its threads never hangs on another process's switch.
+MODEL_SWITCH_PUT_LOCK_WAIT_S = 20.0
+MODEL_SWITCH_PASS_LOCK_WAIT_S = 2.0
+
+
+def _model_switch_lock(session, timeout):
     """ONE lock per tmux session for every model-switch decision: a PUT (cancel, defer, switch) and
     the deferred applier's whole apply, across threads and gateway processes. A cancel or a newer
     pick therefore either lands before the applier reads the pick, or after the switch it was
-    racing finished; never in between (codex R1, R12 on #475)."""
+    racing finished; never in between (codex R1, R12 on #475). The wait is bounded: past `timeout`
+    AMP.LockBusy is raised and nothing ran (R13)."""
     from scripts import agent_model_pending as AMP
-    return AMP.session_lock(AMP.state_path(ORCH_DIR), session)
+    return AMP.session_lock(AMP.state_path(ORCH_DIR), session, timeout=timeout)
 
 
 def _put_model(session, model, catalog, by):
@@ -4944,7 +4957,7 @@ def _put_model(session, model, catalog, by):
     from scripts import agent_model as AM
     from scripts import agent_model_pending as AMP
     pend_file = AMP.state_path(ORCH_DIR)
-    with _model_switch_lock(session):
+    with _model_switch_lock(session, MODEL_SWITCH_PUT_LOCK_WAIT_S):
         root, meta, runtime, current = _seat_for_session(session)
         desc = AM.describe(runtime, current, catalog, AM.off_runtimes())
         if model not in desc["allowed"]:
@@ -5057,19 +5070,25 @@ def _report_stale_model_switch(session, entry):
                 f"{entry.get('since')} is still waiting for the agent's turn to end")
 
 
-def _apply_pending_model_switches(now=None):
+def _apply_pending_model_switches(now=None, stop=None):
     """One pass over the deferred switches: each idle agent's is applied through the normal
     locked path; a busy agent's waits (reported once when stale); an agent that is gone, rotated
     to a new session, or whose switch fails, has its pick closed in `last` with the reason, so the
-    operator's pick never vanishes without a word. Returns [(session, outcome)]."""
+    operator's pick never vanishes without a word. `stop` (a threading.Event the app's shutdown
+    sets) ends the pass before its next agent (codex R13 on #475). Returns [(session, outcome)]."""
     import time as _t
     from scripts import agent_model_pending as AMP
     f = AMP.state_path(ORCH_DIR)
     now = _t.time() if now is None else now
     out = []
     for session in list(AMP.pending_sessions(f)):
-        with _model_switch_lock(session):
-            r = _apply_pending_one(f, session, now)
+        if stop is not None and stop.is_set():
+            break                      # shutting down: the rest wait in the file for the next start
+        try:
+            with _model_switch_lock(session, MODEL_SWITCH_PASS_LOCK_WAIT_S):
+                r = _apply_pending_one(f, session, now)
+        except AMP.LockBusy:
+            continue                   # a switch for it is in progress elsewhere: the next pass decides
         if r:
             out.append((session, r))
     return out
@@ -5147,7 +5166,8 @@ async def _pending_model_switch_loop(app):
     while not stop.is_set():
         try:
             # The whole pass, the file read included, runs off the event loop (codex R6 on #475).
-            await loop.run_in_executor(None, _apply_pending_model_switches)
+            await loop.run_in_executor(None, _apply_pending_model_switches, None,
+                                       app["_pending_model_switch_stop"])
         except Exception as e:  # noqa: BLE001 — one bad pass never stops the loop
             log.error(f"agent-model: deferred switch pass failed: {e!r}")
         try:
@@ -5158,12 +5178,16 @@ async def _pending_model_switch_loop(app):
 
 async def _start_pending_model_switches(app):
     import asyncio
+    app["_pending_model_switch_stop"] = _threading.Event()
     app["_pending_model_switch_task"] = asyncio.ensure_future(_pending_model_switch_loop(app))
 
 
 async def _stop_pending_model_switches(app):
     """The loop ends when shutdown sets the stop event; cancel it too, so a restart never waits on
     a pass in progress (a pass is resumable: its pick stays in the file until it is closed)."""
+    stop = app.get("_pending_model_switch_stop")
+    if stop is not None:
+        stop.set()                     # a pass in its executor thread stops before its next agent
     task = app.get("_pending_model_switch_task")
     if task is not None and not task.done():
         task.cancel()

@@ -404,3 +404,117 @@ def test_another_gateway_process_holding_the_agents_lock_makes_the_pass_wait(sea
     th.join(10)
     child.wait(10)
     assert seat["live"] == [SONNET] and time.monotonic() - t0 >= 1.0
+
+
+# ------------------------------------------------------------------ codex R13 on #475
+def _hold_lock_in_child(f, session, seconds):
+    """Another gateway process holding the agent's switch lock: returns the child once it holds it."""
+    import subprocess
+    import sys
+    import textwrap
+    child = subprocess.Popen([sys.executable, "-c", textwrap.dedent(f"""
+        import sys, time
+        sys.path.insert(0, {str(Path(AMP.__file__).resolve().parents[1])!r})
+        from scripts import agent_model_pending as AMP
+        with AMP.session_lock({str(f)!r}, {session!r}):
+            print("held", flush=True)
+            time.sleep({seconds})
+    """)], stdout=subprocess.PIPE, text=True)
+    assert child.stdout.readline().strip() == "held"
+    return child
+
+
+def test_the_lock_wait_is_bounded_and_raises_LockBusy_with_nothing_run(tmp_path):
+    import time
+    f = tmp_path / "pending.json"
+    child = _hold_lock_in_child(f, "dev", 10)
+    try:
+        ran, t0 = [], time.monotonic()
+        with pytest.raises(AMP.LockBusy):
+            with AMP.session_lock(f, "dev", timeout=0.3):
+                ran.append(1)
+        assert ran == [] and 0.3 <= time.monotonic() - t0 < 2
+        with AMP.session_lock(f, "other", timeout=0.3):              # another agent's lock is free
+            ran.append(2)
+        assert ran == [2]
+    finally:
+        child.kill()
+        child.wait(10)
+
+
+def test_a_pass_skips_an_agent_whose_lock_is_held_past_its_bound_and_keeps_the_pick(seat, monkeypatch):
+    import time
+    monkeypatch.setattr(G, "MODEL_SWITCH_PASS_LOCK_WAIT_S", 0.3)
+    _put(SONNET)
+    seat["det"].state = "idle"
+    child = _hold_lock_in_child(AMP.state_path(G.ORCH_DIR), "dev", 10)
+    try:
+        t0 = time.monotonic()
+        assert G._apply_pending_model_switches() == []
+        assert time.monotonic() - t0 < 2 and seat["live"] == []
+        assert _get()["pending"]["model"] == SONNET                  # still waiting, not closed
+    finally:
+        child.kill()
+        child.wait(10)
+    assert G._apply_pending_model_switches() == [("dev", "switched")]   # the next pass applies it
+    assert seat["live"] == [SONNET]
+
+
+def test_a_put_while_another_switch_holds_the_lock_is_503_and_changes_nothing(seat, monkeypatch):
+    monkeypatch.setattr(G, "MODEL_SWITCH_PUT_LOCK_WAIT_S", 0.3)
+    child = _hold_lock_in_child(AMP.state_path(G.ORCH_DIR), "dev", 10)
+    try:
+        status, b = _put(SONNET)
+    finally:
+        child.kill()
+        child.wait(10)
+    assert status == 503 and "still in progress" in b["error"]
+    assert seat["live"] == [] and _get()["pending"] is None
+
+
+def test_a_pass_stops_before_its_next_agent_once_shutdown_set_the_flag(seat, monkeypatch):
+    _put(SONNET)
+    seat["det"].state = "idle"
+    import threading
+    stop = threading.Event()
+    stop.set()
+    assert G._apply_pending_model_switches(stop=stop) == [] and seat["live"] == []
+    assert _get()["pending"]["model"] == SONNET                      # kept for the next start
+
+
+def test_a_shutdown_never_waits_on_a_lock_another_process_holds(tmp_path, monkeypatch):
+    """The real app, the real pass, the agent's lock held by another process for 20 s: shutdown AND
+    the executor join (asyncio.run waits for every executor thread) end within the pass's bounded
+    wait, never the other process's 20 s."""
+    import asyncio
+    import time
+    from aiohttp.test_utils import TestServer
+    from scripts.test_events_shutdown import _NoStore
+    monkeypatch.setenv("AGENT_MODEL_PENDING_FILE", str(tmp_path / "pending.json"))
+    monkeypatch.setattr(G, "ApprovalStore", _NoStore)
+    entered = []
+    real_lock = G._model_switch_lock
+    monkeypatch.setattr(G, "_model_switch_lock", lambda s, timeout: (entered.append(timeout), real_lock(s, timeout))[1])
+    monkeypatch.setattr(G, "_apply_pending_one", lambda f, s, now: None)   # type nothing
+    f = AMP.state_path(G.ORCH_DIR)
+    AMP.put(f, "dev", SONNET)
+    child = _hold_lock_in_child(f, "dev", 20)
+
+    async def go():
+        server = TestServer(G.build_app())
+        await server.start_server()
+        for _ in range(100):
+            if entered:
+                break
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(0.2)                                     # the pass is now waiting on the lock
+        await asyncio.wait_for(server.close(), timeout=10)
+    try:
+        t0 = time.monotonic()
+        asyncio.run(go())
+        took = time.monotonic() - t0
+    finally:
+        child.kill()
+        child.wait(10)
+    assert entered and entered[0] == G.MODEL_SWITCH_PASS_LOCK_WAIT_S
+    assert took < G.MODEL_SWITCH_PASS_LOCK_WAIT_S + 4, took
