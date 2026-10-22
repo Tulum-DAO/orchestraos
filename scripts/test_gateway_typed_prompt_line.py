@@ -181,3 +181,17 @@ def test_the_menu_row_rule_covers_every_selected_row_the_detectors_menu_parser_r
         assert G._MENU_ROW_RE.match(r), r                                       # so it is not a composer
     for r in ["❯ hello", "❯ ", "> fix the 1. thing", "› write the tests"]:
         assert not G._MENU_ROW_RE.match(r), r
+
+
+def test_quoted_esc_to_interrupt_RIGHT_above_the_prompt_does_not_block_an_idle_switch(monkeypatch):
+    for quote in ("docs say: press esc to interrupt", "  ⎿ press esc to cancel to stop it"):
+        screen = f"output\n{quote}\n──────\n❯ \n──────\n"
+        assert not G._turn_above_composer(screen), quote
+        calls = _env(monkeypatch, "idle", [screen, "──────\n❯ \n──────\n"])
+        ok, info = G.verified_inject("tgt", "/model claude-sonnet-5-5", False, idle_only=True)
+        assert ok, (quote, info)
+
+
+def test_a_real_spinner_right_above_the_prompt_is_a_turn():
+    assert G._turn_above_composer(f"{SPIN}\n──────\n❯ \n──────\n")
+    assert G._turn_above_composer("◦ Working (12s • esc to interrupt)\n\n› \n")

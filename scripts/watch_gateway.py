@@ -2359,7 +2359,17 @@ def _turn_above_composer(pane_text: str) -> bool:
     idx = [i for i, ln in enumerate(rows) if _is_prompt_line(ln)]
     if not idx:
         return _pane_shows_active_turn(pane_text)
-    return _pane_shows_active_turn("\n".join(rows[max(0, idx[-1] - 6):idx[-1]]))
+    # GLYPH-ANCHORED only, no bare-phrase fallback: a spinner line STARTS with its glyph
+    # (Claude ✻…, Codex ◦ Working), while quoted output never does.
+    for ln in rows[max(0, idx[-1] - 6):idx[-1]]:
+        t = _strip_ansi(ln).strip()
+        if t[:1] in _SPINNER_GLYPHS and ("esc to interrupt" in t or "esc to cancel" in t
+                                         or any(c in t for c in "⣾⣽⣻⢿⡿⣟⣯⣷")):
+            return True
+    return False
+
+
+_SPINNER_GLYPHS = "✻✽✶✳✢✺✹✸✷⚹·*+⣾⣽⣻⢿⡿⣟⣯⣷●▸◦•"
 
 
 def _bottom_composer_rows(pane_text: str) -> str:
