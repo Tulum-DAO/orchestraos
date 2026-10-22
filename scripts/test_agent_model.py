@@ -687,3 +687,94 @@ def test_a_busy_refusal_never_keys_a_dialog_that_is_not_ours(tmp_path):
     c.send = send
     status, _body = _dialog_run(c)
     assert status == 409 and c.keyed == []
+
+
+def test_a_dialog_already_open_before_the_send_is_refused_and_nothing_is_typed(tmp_path):
+    """Codex r1 on #464: a question already on screen is not ours (a person's own /model, another
+    caller's): the switch must not type into it, upgrade it, or answer it."""
+    c = _dialog_setup(tmp_path)
+    c.screen = DIALOG.format(name="Opus 5.5")
+
+    def send(text):
+        c.sent.append(text)
+        return False, {"reason": "unverified_submit"}
+    c.send = send
+    status, body = _dialog_run(c)
+    assert status == 409 and body["error"] == "busy" and c.sent == [] and c.keyed == []
+    assert json.loads(c.settings.read_text())["model"] == "opus"
+
+
+def test_a_dialog_that_opens_late_after_an_unverified_send_is_still_answered(tmp_path):
+    """Codex r1 on #464: the dialog can render after the send check gave up."""
+    c = _dialog_setup(tmp_path)
+    real_send = c.send
+    reads = {"n": 0}
+
+    def send(text):
+        real_send(text)
+        c.screen = "❯ /model claude-opus-5-5\n"               # not drawn yet
+        return False, {"reason": "unverified_submit", "cleared": False}
+    real_capture = c.capture
+
+    def capture():
+        reads["n"] += 1
+        if reads["n"] == 4:                                    # appears a little later
+            c.screen = DIALOG.format(name="Opus 5.5")
+        return real_capture()
+    c.send, c.capture = send, capture
+    status, body = _dialog_run(c)
+    assert status == 200 and c.keyed == ["1"] and "Yes, switch" not in c.screen
+
+
+def test_an_unverified_send_whose_text_was_cleared_waits_for_nothing(tmp_path):
+    c = _dialog_setup(tmp_path)
+    naps = []
+
+    def send(text):
+        return False, {"reason": "unverified_submit", "cleared": True}
+    c.send = send
+    status, body = AM.switch_live(model="claude-opus-5-5", settings_path=c.settings, send=c.send,
+                                  find_jsonl=lambda: c.jsonl, capture=c.capture, keys=c.keys, timeout_s=0.05,
+                                  sleep=naps.append, now=lambda: "2026-10-22T00:00:00.000Z")
+    assert status == 502 and body["error"] == "not sent" and c.keyed == [] and naps == []
+
+
+def test_an_unverified_send_on_a_seat_without_history_that_switched_is_a_success(tmp_path):
+    """No dialog without history: `/model` switches at once. A misreading send check must not turn
+    a real switch into "not sent"; the CLI's own line decides."""
+    s = _settings(tmp_path, {"model": "opus", "hooks": {}})
+    j = tmp_path / "t.jsonl"
+    j.write_text("")
+    c = FakeClaude(s, j)
+    real_send = c.send
+
+    def send(text):
+        real_send(text)
+        return False, {"reason": "unverified_submit", "cleared": False}
+    status, body = AM.switch_live(model="claude-opus-5-5", settings_path=s, send=send, find_jsonl=lambda: j,
+                                  capture=lambda: "❯ \n", keys=lambda _k: None, timeout_s=0.05,
+                                  sleep=lambda _s: None, now=lambda: "2026-10-22T00:00:00.000Z")
+    assert status == 200 and body["display"] == "Opus 5.5"
+    assert json.loads(s.read_text())["model"] == "opus"
+
+
+def test_an_unverified_send_never_answered_still_takes_back_a_late_save(tmp_path):
+    s = _settings(tmp_path, {"model": "opus", "hooks": {}})
+    j = tmp_path / "t.jsonl"
+    j.write_text("")
+
+    def send(text):
+        return False, {"reason": "unverified_submit", "cleared": False}
+
+    naps = []
+
+    def sleep(sec):
+        naps.append(sec)
+        if sec == 5.0:                                         # lands during the second look
+            s.write_text(json.dumps({"model": "claude-opus-5-5", "hooks": {}}))
+    status, body = AM.switch_live(model="claude-opus-5-5", settings_path=s, send=send, find_jsonl=lambda: j,
+                                  capture=lambda: "❯ \n", keys=lambda _k: None, timeout_s=0, sleep=sleep,
+                                  now=lambda: "2026-10-22T00:00:00.000Z")
+    assert status == 502 and body["error"] == "not sent"
+    assert 5.0 in naps                                         # the second look ran: the text may have landed
+    assert json.loads(s.read_text())["model"] == "opus"

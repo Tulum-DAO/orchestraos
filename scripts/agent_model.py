@@ -450,18 +450,25 @@ def switch_live(*, model: str, settings_path: Path, send, find_jsonl, title: str
         res, sent, typed, note = None, False, False, None
         try:
             since = now()
-            typed = True        # from here on the pane may hold our text or the dialog it opened
-            ok, info = send(f"/model {model}")
-            # A send verifier can read the open confirm dialog as text still in the composer
-            # (one measured 2026-10-22 did): the dialog on screen proves the text landed.
-            if not ok and (info or {}).get("reason") != "busy" and capture is not None \
-                    and switch_dialog(capture() or "") is not None:
-                ok = True
-            sent = typed = bool(ok)     # a refused send typed nothing: no key for a dialog not ours
-            if not ok:
-                if (info or {}).get("reason") == "busy":
+            asking = switch_dialog(capture() or "") if capture is not None else None
+            if asking is not None:
+                # A question already on screen is not ours (a person's own /model, another
+                # caller's): never type into it, and never answer it.
+                ok, info = False, {"reason": "busy", "asking": asking}
+            else:
+                typed = True    # from here on the pane may hold our text or the dialog it opened
+                ok, info = send(f"/model {model}")
+            info = info or {}
+            # Typed unless the sender says nothing was typed (busy) or it took our text back. A
+            # send verifier can read the open confirm dialog as text still in the composer (one
+            # measured 2026-10-22 did), so an unverified send that may have typed still waits for
+            # the CLI's own answer, dialog included; only a confirming line makes it a success.
+            maybe_typed = info.get("reason") != "busy" and not info.get("cleared")
+            sent, typed = bool(ok), bool(ok) or maybe_typed
+            if not typed:
+                if info.get("reason") == "busy":
                     result = (409, {"ok": False, "error": "busy",
-                                    **{k: v for k, v in (info or {}).items() if k != "reason"}})
+                                    **{k: v for k, v in info.items() if k != "reason"}})
                 else:
                     result = (502, {"ok": False, "error": "not sent", "detail": info})
             else:
@@ -474,7 +481,9 @@ def switch_live(*, model: str, settings_path: Path, send, find_jsonl, title: str
                 # (then the write may still land): give a late write time to land first.
                 sleep(settle_s)
                 if not note:
-                    result = None
+                    # An unverified send the CLI never answered stays what the sender said.
+                    result = None if sent or res is not None else (
+                        502, {"ok": False, "error": "not sent", "detail": info})
         except Exception as e:  # noqa: BLE001 — answered, never raised past the restore
             result = (502, {"ok": False, "error": "switch failed", "detail": repr(e)[:300],
                             "sent": sent})
