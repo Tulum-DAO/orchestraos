@@ -631,3 +631,25 @@ def test_a_shutdown_never_waits_on_a_record_lock_another_process_holds(tmp_path,
         child.kill()
         child.wait(10)
     assert entered and took < AMP.RECORD_LOCK_WAIT_S + 4, took
+
+
+# ------------------------------------------------------------------ codex R15 on #475
+def test_a_switched_pick_whose_seat_did_not_keep_it_and_whose_outcome_was_unwritable_is_typed_once(seat, monkeypatch):
+    """The switch typed, the seat's stored model did NOT change (registry write failed), and the
+    outcome could not be written: the next pass closes it from memory, never types it again."""
+    monkeypatch.setattr(AMP, "RECORD_LOCK_WAIT_S", 0.3)
+    monkeypatch.setattr(G, "_APPLIED_UNRECORDED", {})
+    from identity_store import identity_writer as IW
+    monkeypatch.setattr(IW, "update_session", lambda d, root, f: False)       # the seat keeps opus
+    _put(SONNET)
+    seat["det"].state = "idle"
+    child = _hold_record_lock_in_child(AMP.state_path(G.ORCH_DIR), 10)
+    try:
+        assert G._apply_pending_model_switches() == []
+        assert seat["live"] == [SONNET]
+    finally:
+        child.kill()
+        child.wait(10)
+    assert G._apply_pending_model_switches() == [("dev", "switched")]
+    assert seat["live"] == [SONNET] and G._APPLIED_UNRECORDED == {}
+    assert _get()["last_switch"]["outcome"] == "switched"

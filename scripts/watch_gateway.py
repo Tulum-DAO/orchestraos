@@ -5095,6 +5095,12 @@ def _apply_pending_model_switches(now=None, stop=None):
     return out
 
 
+#: Picks this gateway already switched whose outcome could not be written yet (the record's lock was
+#: busy): {(session, since): outcome}. The next pass closes them from here and never types them
+#: again, even when the seat's stored model did not keep the switch (codex R15 on #475).
+_APPLIED_UNRECORDED = {}
+_APPLIED_UNRECORDED_GUARD = _threading.Lock()
+
 #: Detector states with no turn that will end: a deferred pick there is closed, never kept waiting.
 _SWITCH_TERMINAL_STATES = {"stopped", "crashed", "offline"}
 
@@ -5112,7 +5118,14 @@ def _apply_pending_one(f, session, now):
 
     def close(outcome, reason=None):
         AMP.resolve(f, session, since, outcome, reason=reason, now=now)
+        with _APPLIED_UNRECORDED_GUARD:
+            _APPLIED_UNRECORDED.pop((session, since), None)
         return outcome if not reason else f"{outcome}: {reason}"
+
+    with _APPLIED_UNRECORDED_GUARD:
+        done = _APPLIED_UNRECORDED.get((session, since))
+    if done:
+        return close(done)             # already switched by an earlier pass: record it, type nothing
 
     def wait():
         """It keeps waiting, whatever for (a busy agent, an identity that cannot be read): a pick
@@ -5153,7 +5166,12 @@ def _apply_pending_one(f, session, now):
     status, body = _switch_model_now(session, e["model"], root, meta, runtime, current, catalog,
                                      desc, e.get("by") or "deferred")
     if status == 200:
-        return close("switched")
+        try:
+            return close("switched")
+        except AMP.LockBusy:
+            with _APPLIED_UNRECORDED_GUARD:
+                _APPLIED_UNRECORDED[(session, since)] = "switched"
+            raise
     if status == 409:
         return wait()                  # a turn started first: wait for the next idle moment
     return close("failed", str(body.get("detail") or body.get("error") or f"HTTP {status}"))
