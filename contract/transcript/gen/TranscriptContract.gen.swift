@@ -82,6 +82,7 @@ struct TextItem: Codable, Equatable {
     let text: String
     let is_system: Bool?
     let queued: Bool?
+    let model: String?
     let ts: String?
     let uuid: String?
 }
@@ -90,6 +91,7 @@ struct ThinkingItem: Codable, Equatable {
     let kind: String
     let role: String
     let text: String
+    let model: String?
     let ts: String?
     let uuid: String?
 }
@@ -102,6 +104,7 @@ struct ToolUseItem: Codable, Equatable {
     let summary: String
     let input_full: String?
     let id: String?
+    let model: String?
     let ts: String?
     let uuid: String?
 }

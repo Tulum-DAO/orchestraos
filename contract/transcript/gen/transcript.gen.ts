@@ -19,6 +19,7 @@ export interface TextItem {
   text: string;
   is_system?: boolean;
   queued?: boolean;
+  model?: string;
   ts?: string;
   uuid?: string;
 }
@@ -27,6 +28,7 @@ export interface ThinkingItem {
   kind: 'thinking';
   role: 'assistant';
   text: string;
+  model?: string;
   ts?: string;
   uuid?: string;
 }
@@ -39,6 +41,7 @@ export interface ToolUseItem {
   summary: string;
   input_full?: string;
   id?: string;
+  model?: string;
   ts?: string;
   uuid?: string;
 }

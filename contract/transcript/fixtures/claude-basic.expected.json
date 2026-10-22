@@ -16,14 +16,16 @@
       "role": "assistant",
       "text": "I should list the directory first.",
       "ts": "2026-08-27T10:00:01.000Z",
-      "uuid": "u2"
+      "uuid": "u2",
+      "model": "claude-opus-5-5"
     },
     {
       "kind": "text",
       "role": "assistant",
       "text": "Starting the fixture task.",
       "ts": "2026-08-27T10:00:02.000Z",
-      "uuid": "u3"
+      "uuid": "u3",
+      "model": "claude-opus-5-5"
     },
     {
       "kind": "tool_use",
@@ -36,7 +38,8 @@
       "summary": "ls -la /tmp",
       "id": "T1",
       "ts": "2026-08-27T10:00:03.000Z",
-      "uuid": "u4"
+      "uuid": "u4",
+      "model": "claude-opus-5-5"
     },
     {
       "kind": "tool_result",
@@ -60,7 +63,8 @@
       "input_full": "file_path: /tmp/demo.ts\nold_string: old\n── new_string ──\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;",
       "id": "T2",
       "ts": "2026-08-27T10:00:05.000Z",
-      "uuid": "u6"
+      "uuid": "u6",
+      "model": "claude-opus-5-5"
     },
     {
       "kind": "tool_result",
@@ -88,7 +92,8 @@
       "summary": "~/notes.md",
       "id": "T3",
       "ts": "2026-08-27T10:00:09.000Z",
-      "uuid": "u9"
+      "uuid": "u9",
+      "model": "claude-opus-5-5"
     }
   ],
   "render_items": [

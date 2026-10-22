@@ -51,6 +51,7 @@
           "type": "boolean",
           "description": "ADDITIVE v2 (queued-native-render, DEC-1789392107605493): true when this user turn is a still-pending phone/watch message merged from the msg_store hold queue (B1) — render a 'queued' chip; it resolves to the real turn on delivery. Older clients ignore this flag and render a normal user bubble."
         },
+        "model": { "type": "string", "description": "ADDITIVE v2 (#458): the model that wrote this agent item (Claude: the entry's message.model, never \"<synthetic>\"; Codex: the model of the turn_context it ran under). Absent on user items and when unknown. Clients mark where it changes." },
         "ts": { "type": "string", "description": "ISO-8601 timestamp (both runtimes emit ISO strings)." },
         "uuid": { "type": "string" }
       }
@@ -62,6 +63,7 @@
         "kind": { "const": "thinking" },
         "role": { "const": "assistant" },
         "text": { "type": "string" },
+        "model": { "type": "string", "description": "ADDITIVE v2 (#458): the model that wrote this agent item (Claude: the entry's message.model, never \"<synthetic>\"; Codex: the model of the turn_context it ran under). Absent on user items and when unknown. Clients mark where it changes." },
         "ts": { "type": "string" },
         "uuid": { "type": "string" }
       }
@@ -86,6 +88,7 @@
           "description": "ADDITIVE v2: full multi-line text of the tool args (the code/diff a user sees on expand). Present ONLY when input was truncated. Format: per key in arg order, single-line values as 'key: value', multi-line values as '── key ──\\n<value>', joined by newlines."
         },
         "id": { "type": "string" },
+        "model": { "type": "string", "description": "ADDITIVE v2 (#458): the model that wrote this agent item (Claude: the entry's message.model, never \"<synthetic>\"; Codex: the model of the turn_context it ran under). Absent on user items and when unknown. Clients mark where it changes." },
         "ts": { "type": "string" },
         "uuid": { "type": "string" }
       }

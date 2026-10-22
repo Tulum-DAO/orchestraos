@@ -23,7 +23,8 @@
       "role": "assistant",
       "text": "I should run git status to check the repo state.",
       "ts": "2026-08-27T10:00:03Z",
-      "uuid": "step-4-think"
+      "uuid": "step-4-think",
+      "model": "gpt-5.6-terra"
     },
     {
       "kind": "tool_use",
@@ -35,7 +36,8 @@
       "summary": "git status",
       "id": "call_123",
       "ts": "2026-08-27T10:00:04Z",
-      "uuid": "step-5-call"
+      "uuid": "step-5-call",
+      "model": "gpt-5.6-terra"
     },
     {
       "kind": "tool_result",
@@ -51,7 +53,8 @@
       "role": "assistant",
       "text": "The tree is clean.",
       "ts": "2026-08-27T10:00:06Z",
-      "uuid": "step-7-msg"
+      "uuid": "step-7-msg",
+      "model": "gpt-5.6-terra"
     }
   ],
   "render_items": [

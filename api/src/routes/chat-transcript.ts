@@ -322,8 +322,17 @@ export function parseCodexRollout(lines: string[]): any[] {
   recs.sort((a, b) => a.ordinal - b.ordinal);
 
   const items: any[] = [];
+  // turn_context carries the model each turn ran on; assistant items take the latest one. A
+  // turn_context with no model makes it unknown again (absent), never the previous turn's.
+  let codexModel: string | undefined;
   for (const r of recs) {
-    if (r.type !== 'response_item') continue;     // event_msg/token_usage_record/world_state/turn_context = telemetry
+    if (r.type === 'turn_context') {
+      const m = r.payload?.model;
+      codexModel = typeof m === 'string' && m ? m : undefined;
+      continue;
+    }
+    if (r.type !== 'response_item') continue;     // event_msg/token_usage_record/world_state = telemetry
+    const before = items.length;
     const p = r.payload || {};
     const uuid = String(p.id || `${r.ordinal}`);
     switch (p.type) {
@@ -380,6 +389,7 @@ export function parseCodexRollout(lines: string[]): any[] {
       }
       default: break;                              // compacted/unknown: not conversation
     }
+    if (codexModel) for (let i = before; i < items.length; i++) if (items[i].role === 'assistant') items[i].model = codexModel;
   }
   return items;
 }
@@ -749,9 +759,15 @@ function normalizeClaudeEntry(o: any): any[] {
   const uuid = o.uuid;
   const content = msg.content;
   const items: any[] = [];
+  // Which model wrote this assistant entry (Claude Code records it on every one; "<synthetic>" is
+  // its own placeholder for harness-made turns, not a model). Clients draw "Model changed" where it
+  // changes. Additive: absent = unknown.
+  const model = role === 'assistant' && typeof msg.model === 'string' && msg.model && msg.model !== '<synthetic>'
+    ? msg.model : undefined;
+  const stamp = (it: any) => { if (model && it.role === 'assistant') it.model = model; return it; };
   if (typeof content === 'string') {
     const text = role === 'user' ? sanitizeClaudeUserText(content) : content;
-    if (text) items.push({ kind: 'text', role, text, ts, uuid });
+    if (text) items.push(stamp({ kind: 'text', role, text, ts, uuid }));
     return items;
   }
   for (const b of content || []) {
@@ -759,14 +775,14 @@ function normalizeClaudeEntry(o: any): any[] {
     switch (b.type) {
       case 'text': {
         const text = role === 'user' ? sanitizeClaudeUserText(b.text || '') : (b.text || '');
-        if (text) items.push({ kind: 'text', role, text, ts, uuid });
+        if (text) items.push(stamp({ kind: 'text', role, text, ts, uuid }));
         break;
       }
       case 'thinking':
-        items.push({ kind: 'thinking', role, text: b.thinking || '', ts, uuid });
+        items.push(stamp({ kind: 'thinking', role, text: b.thinking || '', ts, uuid }));
         break;
       case 'tool_use':
-        items.push({ kind: 'tool_use', role: 'assistant', tool: b.name || '', input: b.input || {}, id: b.id, ts, uuid });
+        items.push(stamp({ kind: 'tool_use', role: 'assistant', tool: b.name || '', input: b.input || {}, id: b.id, ts, uuid }));
         break;
       case 'tool_result': {
         let c = b.content;
@@ -1007,6 +1023,7 @@ function enrichItems(items: any[]): any[] {
       if (truncated) out.input_full = inputFullText(input);
       // Same reason as withTs(): an own `ts` holding undefined is not an absent `ts`.
       out.id = it.id; out.uuid = it.uuid;
+      if (it.model) out.model = it.model;      // the model that made the call (additive)
       withTs(out, it.ts);
       return out;
     }
