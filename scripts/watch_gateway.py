@@ -2379,10 +2379,12 @@ def _bottom_composer_rows(pane_text: str) -> str:
     return " ".join(out)
 
 
-#: A menu's SELECTED option renders with a prompt glyph ("❯ 1. Yes", "> 1. Yes"), which
-#: _is_prompt_line takes for a composer. Such a row is never counted as one, so a menu that came
-#: up after the detector's last read (its pending_menu flag stale or absent) is still refused,
-#: force included. A draft that itself starts "1. " is refused the same way: the safe side.
+#: A menu's SELECTED option renders with a prompt glyph ("❯ 1. Yes", "> 1. Yes", Codex "› 1. ..."),
+#: which _is_prompt_line takes for a composer. Such a row is never counted as one, so a menu that
+#: came up after the detector's last read (its pending_menu flag stale or absent) is still refused,
+#: force included. The shapes are exactly the ones the detector's menu parser reads
+#: (agent-status.py _MENU_OPT_RE, _CODEX_SELECTOR_RE; pinned by a test): a menu drawn any other way
+#: is invisible to pending_menu as well. A draft that itself starts "1. " is refused: the safe side.
 _MENU_ROW_RE = re.compile(r"^\s*[❯›\u203a>]\s*\d+\.\s")
 
 

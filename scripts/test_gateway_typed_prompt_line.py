@@ -163,3 +163,21 @@ def test_quoted_esc_to_interrupt_in_old_output_does_not_block_an_idle_model_swit
     ok, info = G.verified_inject("tgt", "/model claude-sonnet-5-5", False, idle_only=True)
     assert ok, info
     assert _typed(calls)
+
+
+def test_the_menu_row_rule_covers_every_selected_row_the_detectors_menu_parser_reads():
+    """_MENU_ROW_RE and the detector's menu parser must agree: a selected row the parser reads as
+    a menu option is never a composer here. (A shape the parser does not read is invisible to
+    pending_menu too; widening one without the other is the drift this pins.)"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "agent_status_pin", Path(__file__).resolve().parent / "agent-status.py")
+    A = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(A)
+    rows = ["❯ 1. Yes", "> 2. No, tell Claude what to do differently", "  ❯ 12. Something",
+            "› 1. gpt-5.6-terra", "› 3. low"]
+    for r in rows:
+        assert A._MENU_OPT_RE.match(r) or A._CODEX_SELECTOR_RE.match(r), r     # the parser reads it
+        assert G._MENU_ROW_RE.match(r), r                                       # so it is not a composer
+    for r in ["❯ hello", "❯ ", "> fix the 1. thing", "› write the tests"]:
+        assert not G._MENU_ROW_RE.match(r), r
