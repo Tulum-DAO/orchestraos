@@ -189,3 +189,64 @@ test('a merged synthetic after the divider never joins the previous generation\'
   assert.equal(items[2].exchange, undefined);
   assert.equal(items[1].exchange, undefined);
 });
+
+test('order is by position: a previous-tail item written after the swap stays above the divider', () => {
+  // the retiring blue keeps writing after promoted_at (measured: g38 sent mail 27 s after its swap)
+  const late = JSON.stringify({
+    type: 'assistant', uuid: 'o4', timestamp: '2026-10-22T11:16:23Z',
+    message: { id: 'm-o4', role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'late old reply' }] },
+  });
+  const env = normalizeTranscript(CUR_LINES, SEAT, CUR, 150, false, false, prevOf([...OLD_LINES, late]));
+  assert.deepEqual(env.items.map((i: any) => i.uuid), ['o1', 'o2', 'o3', 'o4', `rot:${CUR}`, 'c1', 'c2']);
+  assert.ok(env.items[3].ts > env.items[4].ts, 'its ts is later than the divider and it still sits above it');
+});
+
+// A predecessor whose file is NOT in the lineage's project dir: only a path its row names can find it.
+function predecessorRow(sid: string, conversationPath: string | null) {
+  store([[2, SEAT, 87, sid, '2026-10-21T00:00:00Z', SWAP], [3, SEAT, 2, CUR, SWAP, null]], [[SEAT, 3]]);
+  const db = new Database(DB);
+  db.prepare('UPDATE generations SET conversation_path = ? WHERE id = 2').run(conversationPath);
+  db.close();
+}
+
+test('a path a row names is used only when it is that session\'s own file under its runtime\'s directory', () => {
+  const ELSE = '22222222-2222-4333-8444-0000000000dd';
+  const otherDir = join(home, '.claude', 'projects', '-other');
+  mkdirSync(otherDir, { recursive: true });
+  writeFileSync(join(otherDir, `${OTHER}.jsonl`), OLD_LINES.join('\n'));      // another seat's conversation
+  writeFileSync(join(otherDir, `${ELSE}.jsonl`), OLD_LINES.join('\n'));       // the predecessor's own, elsewhere
+  mkdirSync(join(root, 'outside'), { recursive: true });
+  writeFileSync(join(root, 'outside', `${ELSE}.jsonl`), OLD_LINES.join('\n')); // right name, wrong place
+  try {
+    predecessorRow(ELSE, join(otherDir, `${OTHER}.jsonl`));
+    assert.equal(resolvePreviousTranscript(SEAT, CUR), null, 'another seat\'s file');
+    predecessorRow(ELSE, join(root, 'outside', `${ELSE}.jsonl`));
+    assert.equal(resolvePreviousTranscript(SEAT, CUR), null, 'outside ~/.claude/projects');
+    predecessorRow(ELSE, join(otherDir, '..', '-other', `${ELSE}.jsonl`));
+    assert.equal(resolvePreviousTranscript(SEAT, CUR)?.path, join(otherDir, `${ELSE}.jsonl`), 'its own file: used');
+  } finally {
+    store(NORMAL, [[SEAT, 3], ['zz-other-seat', 4]]);
+  }
+});
+
+test('a Codex predecessor is read from its own rollout under ~/.codex/sessions, never a path elsewhere', () => {
+  const CX = '22222222-2222-4333-8444-0000000000ee';
+  const sessions = join(home, '.codex', 'sessions', '2026', '10', '22');
+  mkdirSync(sessions, { recursive: true });
+  const own = join(sessions, `rollout-2026-10-22T10-00-00-${CX}.jsonl`);
+  writeFileSync(own, OLD_LINES.join('\n'));
+  const db = new Database(join(home, '.codex', 'state_5.sqlite'));
+  db.exec('CREATE TABLE IF NOT EXISTS threads (id TEXT PRIMARY KEY, rollout_path TEXT)');
+  db.prepare('INSERT OR REPLACE INTO threads VALUES (?, ?)').run(CX, own);
+  db.close();
+  try {
+    predecessorRow(CX, null);
+    assert.equal(resolvePreviousTranscript(SEAT, CUR)?.path, own);
+    const db2 = new Database(join(home, '.codex', 'state_5.sqlite'));
+    db2.prepare('UPDATE threads SET rollout_path = ? WHERE id = ?').run(join(projects, `${CUR}.jsonl`), CX);
+    db2.close();
+    assert.equal(resolvePreviousTranscript(SEAT, CUR), null, 'a rollout path pointing at another conversation');
+  } finally {
+    store(NORMAL, [[SEAT, 3], ['zz-other-seat', 4]]);
+  }
+});

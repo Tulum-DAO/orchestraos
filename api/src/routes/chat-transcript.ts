@@ -10,8 +10,8 @@
  * concurrently-maintained detector code. Mounted at /api/agents in server.ts.
  */
 import { Router, type Request, type Response } from 'express';
-import { readFileSync, existsSync, readdirSync, statSync, openSync, readSync, closeSync } from 'fs';
-import { join } from 'path';
+import { readFileSync, existsSync, readdirSync, statSync, openSync, readSync, closeSync, realpathSync } from 'fs';
+import { join, basename, sep } from 'path';
 import { isSafeAgentId } from '../lib/agentPaths.js';
 import { LIVE_CARDS, mergeQueuedItems } from '../services/queued-merge.js';
 import { tagAudience, tagSynthetics } from '../lib/audience.js';
@@ -598,10 +598,25 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
  *  seat's current conversation, so a rotation keeps the thread. Only when `sid` is the current head
  *  of `agentId`'s lineage and the generation it took over from has a file this box can read:
  *  Claude by the lineage's project dir (else the row's conversation_path), Codex by its thread's
- *  rollout, Gemini by its brain log. Anything else: null, and the chat is the current file alone. */
+ *  rollout, Gemini by its brain log; a path a row names only when it is that session's own file
+ *  (ownFile). Anything else: null, and the chat is the current file alone. */
 export interface PreviousTranscript { path: string; antigravity: boolean; divider: Record<string, unknown> }
 
 const SESSION_ID = /^[0-9A-Za-z][0-9A-Za-z_-]{0,127}$/;   // a DB value going into a path: no separators
+const CODEX_SESSIONS = join(HOME, '.codex', 'sessions');
+
+/** A path a DB row names is used only when it is that session's OWN file under its runtime's own
+ *  directory (symlinks resolved), so a wrong or hostile row cannot hand this public route another
+ *  seat's conversation, or any other file. */
+function ownFile(p: string | null, root: string, isOwnName: (name: string) => boolean): string | null {
+  if (!p) return null;
+  try {
+    const real = realpathSync(p);
+    return real.startsWith(realpathSync(root) + sep) && isOwnName(basename(real)) ? real : null;
+  } catch {
+    return null;
+  }
+}
 
 function codexRolloutFor(sid: string, dbPath = CODEX_STATE_DB): string | null {
   if (!existsSync(dbPath)) return null;
@@ -625,8 +640,8 @@ export function resolvePreviousTranscript(agentId: string, sid: string | null): 
   const gemini = join(GEMINI_BRAIN, from, '.system_generated', 'logs', 'transcript.jsonl');
   const candidates = [
     p.cwd ? join(CLAUDE_PROJECTS, String(p.cwd).replace(/[/.]/g, '-'), `${from}.jsonl`) : null,
-    p.conversation_path,
-    codexRolloutFor(from),
+    ownFile(p.conversation_path, CLAUDE_PROJECTS, (n) => n === `${from}.jsonl`),
+    ownFile(codexRolloutFor(from), CODEX_SESSIONS, (n) => n.startsWith('rollout-') && n.endsWith(`-${from}.jsonl`)),
     gemini,
   ];
   const path = candidates.find((c): c is string => !!c && existsSync(c));
