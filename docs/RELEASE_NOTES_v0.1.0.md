@@ -168,6 +168,8 @@ To remove them: `orchestra down`, back up `registry.json`, delete those keys fro
 
 **Fixed after this release, on main:** the stitched chat also finds a previous generation that ran in another directory than its seat's, whose record names no conversation file: its own file is looked for under any `~/.claude/projects` directory, with the same own-file check (#473).
 
+**Added after this release, on main:** create a new agent from the phone or the Mac app, as from the web form's `+`. The gateway passes four routes to the API's own: `GET /runtimes/available` (which AI providers are installed and signed in; `read`), `POST /runtimes/available/refresh`, `GET /agents/new/parents` (the registered agents a new one can report to) and `POST /agents/new {name, task?, runtime?, role?, parent}`, answered by the API as the web form is (`200` with the new session, or `400`/`409`/`502` with a `reason`). Creating, refreshing and listing parents need `admin` and a person: a paired device, or a surface that says it is one (`X-Actor` operator, interactive or app); the bare fleet token that agents hold, or an automation, gets `403`. `X-Actor` is the caller's own word, as for the model switch. From a device the new agent always joins an existing tree: `parent` is required (`400 parent_required`; the API checks it is a registered agent) and a General Manager is refused (`400 gm_not_from_device`); the web form keeps both for a fresh install's first agent. The agent is created the way the web form creates one, through `spawn-agent.sh`.
+
 ## CI note for this release
 
 GitHub Actions was refused on billing from 2026-09-19 09:52Z; PRs #38–#40 merged on bare-box + CI-identical local evidence (council PASS at `c6b278c`; local run rc 0).
