@@ -106,6 +106,7 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("GET", "/history"): "read",
     ("GET", "/approvals/{id}"): "read",
     ("GET", "/agents"): "read",
+    ("GET", "/agent-model"): "read",
     # Plan usage per provider (scripts/usage_meter.py). Its own verb, reserved in pairing for it:
     # how much of a paid plan is left is not something every read-only device needs.
     ("GET", "/usage"): "usage",
@@ -184,6 +185,9 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("POST", "/menu-submit"): "approve",
     # --- message ---------------------------------------------------------------------
     ("POST", "/agent-message"): "message",
+    # Switch an agent's model (scripts/agent_model.py). A person's surface only, checked in the
+    # handler: the scope alone would let the fleet token agents hold switch any seat.
+    ("PUT", "/agent-model"): "message",
     ("POST", "/upload"): "message",
     # Read a sent file back for chat previews. HEAD is its own method to the middleware, so it is
     # declared too, or it would 403 as "route declares no scope".
@@ -4383,6 +4387,139 @@ async def handle_agent_interrupt(request):
                   "hook_cleared": hook_cleared})
 
 
+def _orchestra_root():
+    from pathlib import Path as _P
+    return _P(os.environ.get("ORCHESTRA_ROOT", str(_P(__file__).resolve().parents[1])))
+
+
+def _seat_for_session(session):
+    """(root name, registry record, runtime, current model id) for a live tmux session. The
+    runtime is the live process's when the detector knows it, else the record's."""
+    reg = _load_json(ORCH_DIR / "registry.json") or {}
+    name, meta = _resolve_sess_meta(reg.get("agents", {}) if isinstance(reg, dict) else {}).get(
+        session, (session, {}))
+    st = _agent_status().get_agent_status(session) or {}
+    runtime = (st.get("process") or {}).get("runtime") or meta.get("runtime") or None
+    return name, meta, runtime, _str_or_none(meta.get("model"))
+
+
+def _seat_transcript_path(session):
+    """The Claude transcript the pane is writing: its session id from the pane-events file,
+    then <config dir>/projects/*/<sid>.jsonl. None until both are known."""
+    from scripts import agent_model as AM
+    r = _tmux("list-panes", "-t", session, "-F", "#{pane_id}")
+    if r.returncode != 0:
+        return None
+    projects = AM.claude_settings_path().parent / "projects"
+    for pane in r.stdout.split():
+        ev = _load_json(ORCH_DIR / "state" / "agent-events" / "panes" / f"{pane.lstrip('%')}.json") or {}
+        sid = ev.get("session_id") if isinstance(ev, dict) else None
+        if isinstance(sid, str) and re.fullmatch(r"[0-9a-fA-F-]{36}", sid):
+            hits = sorted(projects.glob(f"*/{sid}.jsonl"), key=lambda q: q.stat().st_mtime)
+            if hits:
+                return hits[-1]
+    return None
+
+
+def _is_person_surface(request):
+    """A paired device's own token, or a caller that says it is a person's surface (X-Actor
+    operator|interactive|app). The bare fleet token alone, or an automation actor, is not:
+    agents hold that token. Same rule as Deliver now."""
+    cls, _name = _parse_actor(request)
+    _ran, principal = _resolved_principal(request)
+    is_device = bool(principal) and principal.get("id") not in (None, "legacy")
+    if cls == "automation":
+        return False
+    return is_device or cls in ("operator", "interactive", "app")
+
+
+async def handle_agent_model(request):
+    """GET /agent-model?session= -> which models this agent can switch to (the Arturo engine
+    picker's shape: every row, available or not with a reason). PUT /agent-model {session,
+    model} -> switch it: Claude live (`/model` typed into the idle pane, confirmed by the CLI's
+    own "Set model to" line, the host's default model put back), every other runtime at its
+    next rotation. scripts/agent_model.py has the why."""
+    import asyncio
+    from scripts import agent_model as AM
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    if request.method == "PUT":
+        try:
+            data = await request.json()
+        except Exception:
+            return _json({"ok": False, "error": "bad json"}, status=400)
+        if not isinstance(data, dict):
+            return _json({"ok": False, "error": "bad json"}, status=400)
+        session = str(data.get("session", "")).strip()
+        model = str(data.get("model", "")).strip()
+        if not session or not model:
+            return _json({"ok": False, "error": "session and model required"}, status=400)
+    else:
+        session = request.query.get("session", "").strip()
+        if not session:
+            return _json({"ok": False, "error": "session required"}, status=400)
+    if session not in _tmux_session_names():
+        return _json({"ok": False, "error": "no such session"}, status=404)
+    loop = asyncio.get_event_loop()
+    root, _meta, runtime, current = await loop.run_in_executor(None, _seat_for_session, session)
+    orch_root = _orchestra_root()
+    catalog = await loop.run_in_executor(
+        None, AM.load_catalog, (runtime or "").lower(), orch_root / "config" / "providers.json",
+        orch_root / "state")
+    desc = AM.describe(runtime, current, catalog, AM.off_runtimes())
+    if request.method != "PUT":
+        return _json({"ok": True, "session": session, **desc})
+
+    if not _is_person_surface(request):
+        return _json({"ok": False, "error": "a model is switched by a person: send X-Actor "
+                      "operator|interactive|app, or use a paired device"}, status=403)
+    refusal = _protected_refusal(request, session)
+    if refusal is not None:
+        return _json(refusal, status=403)
+    if model not in desc["allowed"]:
+        why = desc["unavailable"].get(model) or "not offered for this agent"
+        return _json({"ok": False, "error": why}, status=422)
+    if model == current:
+        return _json({"ok": True, "model": model, "changed": False,
+                      "switching": "switched" if desc["how"] == "live" else "next_rotation"})
+
+    if desc["how"] == "live":
+        status, body = await loop.run_in_executor(None, lambda: AM.switch_live(
+            model=model, settings_path=AM.claude_settings_path(),
+            title=next((r["title"] for r in catalog if r["id"] == model), None),
+            send=lambda text: verified_inject(session, text, False),
+            find_jsonl=lambda: _seat_transcript_path(session)))
+        if status != 200:
+            # Name the models, so a client's words say which one the agent is on (ios-watch-dev).
+            return _json({**body, "model": model, "current": current}, status=status)
+    else:
+        body = {"ok": True, "model": model, "switching": "next_rotation"}
+
+    # The seat's stored model: what its next spawn passes as --model, and what rotation
+    # thresholds read. For a next-rotation switch it IS the switch, so a failed write is an
+    # error. A live switch already happened and cannot be safely undone: the response says the
+    # seat did not keep it, and the next spawn would come back on the old model.
+    def _store():
+        from identity_store import identity_writer
+        return identity_writer.update_session(str(ORCH_DIR), root, {"model": model})
+    try:
+        stored = bool(await loop.run_in_executor(None, _store))
+    except Exception as e:  # noqa: BLE001
+        log.error(f"agent-model: registry write failed for {root}: {e!r}")
+        stored = False
+    by = _parse_actor(request)[1] or ((_resolved_principal(request)[1] or {}).get("label")) or "?"
+    log.info(f"AGENT-MODEL {session} ({root}) {current} -> {model} {body.get('switching')} by {by} stored={stored}")
+    body["stored"] = stored
+    if not stored:
+        if body.get("switching") != "switched":
+            return _json({"ok": False, "error": "not stored", "model": model, "current": current,
+                          "detail": "the seat's model could not be written; nothing changed"},
+                         status=502)
+        body["warning"] = ("switched now, but the seat did not keep the new model: its next "
+                           "spawn will start on the old one")
+    return _json(body)
+
+
 async def handle_agent_menu_capture(request):
     """POST /agent-menu-capture {session} -> the full multi-part menu payload.
 
@@ -7321,6 +7458,8 @@ def build_app():
     app.router.add_get("/voice-memory", handle_voice_memory)
     app.router.add_post("/agent-message", handle_agent_message)
     app.router.add_post("/agent-interrupt", handle_agent_interrupt)
+    app.router.add_get("/agent-model", handle_agent_model)
+    app.router.add_put("/agent-model", handle_agent_model)
     app.router.add_post("/presence", handle_presence)
     app.router.add_put("/push/token", handle_push_token_put)
     app.router.add_delete("/push/token", handle_push_token_delete)
