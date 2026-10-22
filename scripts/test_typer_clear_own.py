@@ -501,3 +501,35 @@ def test_boot_inject_never_enters_our_prompt_with_a_persons_words_appended(monke
     assert TB.run(p) == ("stuck", "not-exactly-ours")
     assert p.pastes == 0 and p.enters == 0
     assert [(r["text"], r.get("typed")) for r in J.rows()] == [(TB.TEXT, True)]
+
+
+# ------------------------------------------------------------------ codex R16 on #472: no composer, no paste
+MENU = "Select model\n  1. Default (recommended)\n> 2. Sonnet\n  3. Haiku\nEnter to confirm · Esc to exit"
+
+
+def test_router_pastes_nothing_when_the_screen_shows_no_prompt_line(monkeypatch, tmp_path):
+    import inject_journal as J
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+    keys = []
+    R = _router()
+    monkeypatch.setattr(R, "fence_check", lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(R, "exit_copy_mode", lambda s: None)
+    monkeypatch.setattr(R, "pane_split", lambda s, rt=None: ([], "", False))
+    monkeypatch.setattr(R, "tmux", lambda *a, **k: keys.append(a) or types.SimpleNamespace(
+        returncode=0, stdout=MENU.replace("> ", "  ") if a[0] == "capture-pane" else ""))
+    monkeypatch.setattr(R.time, "sleep", lambda s: None)
+    assert R.inject("pm-x", TEXT) == "held"
+    assert not [k for k in keys if k[0] in ("paste-buffer", "set-buffer", "send-keys")]
+    assert J.rows() == []
+
+
+def test_boot_inject_types_nothing_when_the_screen_shows_no_prompt_line(monkeypatch, tmp_path):
+    import test_boot_inject as TB
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+
+    class NoComposer(TB.Pane):
+        def render(self):
+            return "\n".join(self.scroll + [MENU.replace("> ", "  ")])
+    p = NoComposer()
+    assert TB.run(p) == ("failed", "no-composer")
+    assert p.pastes == 0 and p.enters == 0

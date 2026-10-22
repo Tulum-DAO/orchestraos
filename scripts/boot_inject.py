@@ -226,8 +226,11 @@ def _boot_inject_unlocked(session, text, runtime=DEFAULT_RUNTIME, *, allow_canon
         rc_e, ansi = tmux_fn("capture-pane", "-p", "-e", "-t", _target(session))
         prompts = [l for l in (ansi or "").split("\n") if prompt_char in l] if rc_e == 0 else None
         from composer_state import classify_input_line
-        if prompts is None or (prompts and classify_input_line(prompts[-1], sig)[0] == "typed"):
-            log("the input line already holds typed text (or could not be read): nothing typed")
+        if not prompts:     # unreadable, or no prompt line at all (a menu, a TUI still drawing)
+            log("no composer on screen (or the screen could not be read): nothing typed")
+            return "failed", "no-composer"
+        if classify_input_line(prompts[-1], sig)[0] == "typed":
+            log("the input line already holds typed text: nothing typed")
             return "stuck", "composer-occupied"
     else:
         # The composer starts like our prompt: Enter only when it is EXACTLY our earlier, recorded

@@ -938,13 +938,14 @@ def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
 
 def _input_line_typed(session: str, runtime: str = DEFAULT_RUNTIME) -> bool:
     """True when the bottom input line holds real typed text (composer_state's SGR rule: a dim
-    ghost suggestion is not typed). A capture that fails reads as typed: hold, never clobber."""
+    ghost suggestion is not typed). A capture that fails, or a screen with no prompt line at all (a
+    menu, a TUI still drawing), reads as typed: hold, never paste into what is not a composer."""
     sig = PROMPT_SIGNATURES.get(runtime, PROMPT_SIGNATURES[DEFAULT_RUNTIME])
     ansi = tmux("capture-pane", "-t", session, "-e", "-p")
     if ansi.returncode != 0:
         return True
     prompt_lines = [l for l in (ansi.stdout or "").split("\n") if sig["prompt_char"] in l]
-    return bool(prompt_lines) and input_line_state(prompt_lines[-1], sig) == "typed"
+    return not prompt_lines or input_line_state(prompt_lines[-1], sig) == "typed"
 
 
 def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, journal=None) -> str:
