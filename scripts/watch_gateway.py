@@ -1680,11 +1680,27 @@ def compute_agents():
         return ev if _hook_event_is_current(ev, agent_start.get(sess), sess in agent_start) else None
 
     _stamp_recency_and_subagents(out, _pane_event)
+    _stamp_last_user_message(out)
 
     rank = {"waiting": 0, "stranded": 1, "stalled": 2, "crashed": 3, "stopped": 4,
             "working": 5, "idle": 6, "offline": 7}
     out.sort(key=lambda a: (rank.get(a["state"], 9), -a.get("last_used_ts", 0), a["id"]))
     return out
+
+
+def _stamp_last_user_message(rows):
+    """last_user_message_at (ISO) on each row: the newest message a person sent that agent
+    through the gateway (scripts/away.py last_person_message_at). Clients sort the Agents list
+    by it. Absent when there is none. Never fails /agents."""
+    try:
+        import away as AW
+        last = AW.last_person_message_at(ORCH_DIR)
+    except Exception:  # noqa: BLE001
+        return
+    for r in rows:
+        at = last.get(r.get("tmux_session") or "") or last.get(r.get("id") or "")
+        if at:
+            r["last_user_message_at"] = at
 
 
 SUBAGENT_STALE_S = 15 * 60
@@ -4334,6 +4350,18 @@ async def handle_agent_message(request):
                  status=200 if ok else 502)
 
 
+def _is_person_surface(request):
+    """A paired device's own token, or a caller that says it is a person's surface (X-Actor
+    operator|interactive|app). The bare fleet token alone, or an automation actor, is not:
+    agents and automation hold that token."""
+    cls, _name = _parse_actor(request)
+    _ran, principal = _resolved_principal(request)
+    is_device = bool(principal) and principal.get("id") not in (None, "legacy")
+    if cls == "automation":
+        return False
+    return is_device or cls in ("operator", "interactive", "app")
+
+
 async def _record_operator_message(request, session, text):
     """The away card's message anchor (gm msg_71cd9caa): one ledger row per DELIVERED or HELD send, never a
     refused one. Off the event loop (file write, rotation, secret scan). Best effort: a ledger that cannot be
@@ -4341,9 +4369,12 @@ async def _record_operator_message(request, session, text):
     import asyncio
     device, surface = _answer_device(request), request.headers.get("X-Surface")
 
+    person = _is_person_surface(request)
+
     def _write():
         import away as AW
-        AW.record_message(ORCH_DIR, session, text, device=device, surface=surface, scan=_away_scan)
+        AW.record_message(ORCH_DIR, session, text, device=device, surface=surface, scan=_away_scan,
+                          person=person)
     try:
         await asyncio.get_event_loop().run_in_executor(None, _write)
     except Exception as e:  # noqa: BLE001 — bookkeeping, never a gate

@@ -430,7 +430,7 @@ def record_presence(data_dir, key, *, label=None, surface=None, now=None):
 LEDGER_MAX_BYTES = 2 * 1024 * 1024
 
 
-def record_message(data_dir, target, said, *, device=None, surface=None, scan, now=None):
+def record_message(data_dir, target, said, *, device=None, surface=None, scan, now=None, person=None):
     """Append one operator chat send to the operator-actions ledger (gm msg_71cd9caa). The gateway calls it
     ONLY after a DELIVERED or HELD /agent-message. `said` is cut to SAID_MAX and secret-scanned: a flagged
     excerpt is stored as null, never in part. `device` is the gateway's "<device_id>:<label>" (None for the
@@ -445,6 +445,8 @@ def record_message(data_dir, target, said, *, device=None, surface=None, scan, n
         pass
     row = {"kind": "message", "at": iso(time.time() if now is None else now), "target": str(target)[:200],
            "said": _safe(_trim(said), scan), "device": device, "surface": _trim(surface, 16) if surface else None}
+    if person is not None:
+        row["person"] = bool(person)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
         os.write(fd, (json.dumps(row) + "\n").encode("utf-8"))
@@ -452,3 +454,41 @@ def record_message(data_dir, target, said, *, device=None, surface=None, scan, n
         os.close(fd)
     os.chmod(path, 0o600)
     return row
+
+
+LAST_SENT_TAIL_BYTES = 512 * 1024
+
+
+def last_person_message_at(data_dir):
+    """{target: ISO time} of the newest message a PERSON sent each agent through the gateway (a
+    paired device, or a surface that says it is a person's). Agent mail never passes here, and a
+    send by automation is marked person:false. A row written before that mark counts only when it
+    carries a device or a surface, which automation never sends. Reads the ledger's tail only."""
+    path = _p(data_dir, LEDGER)
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - LAST_SENT_TAIL_BYTES))
+            raw = f.read().decode("utf-8", "replace")
+    except OSError:
+        return {}
+    out = {}
+    lines = raw.splitlines()
+    if size > LAST_SENT_TAIL_BYTES and lines:
+        lines = lines[1:]                     # the first line of a tail read is cut
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(e, dict) or e.get("kind") != "message":
+            continue
+        person = e.get("person")
+        if person is False or (person is None and not (e.get("device") or e.get("surface"))):
+            continue
+        at, target = e.get("at"), e.get("target")
+        if isinstance(at, str) and isinstance(target, str) and epoch(at) is not None:
+            if target not in out or epoch(at) > epoch(out[target]):
+                out[target] = at
+    return out

@@ -354,3 +354,25 @@ def test_with_no_action_yet_the_card_lists_everything_since_install(data):
     out = A.build(data, [], cards, scan=no_secrets)
     assert out["anchor"] is None and out["reason"] == "no_action_yet"
     assert out["moved_count"] == 1 and out["moved"][0]["kind"] == "card"
+
+
+def test_last_person_message_is_the_newest_person_send_per_agent(tmp_path):
+    data = tmp_path
+    (data / "state").mkdir()
+    A.record_message(data, "gm", "old", scan=no_secrets, now=T0, person=True)
+    A.record_message(data, "gm", "newer", scan=no_secrets, now=T0 + 60, person=True)
+    A.record_message(data, "gm", "automation later", scan=no_secrets, now=T0 + 120, person=False)
+    A.record_message(data, "dev", "a device, before the person mark", device="d_1:iPhone", scan=no_secrets, now=T0 + 5)
+    A.record_message(data, "bot", "no device, no surface, no mark", scan=no_secrets, now=T0 + 9)
+    got = A.last_person_message_at(data)
+    assert got == {"gm": A.iso(T0 + 60), "dev": A.iso(T0 + 5)}
+
+
+def test_last_person_message_reads_only_the_tail_and_skips_its_cut_line(tmp_path, monkeypatch):
+    (tmp_path / "state").mkdir()
+    monkeypatch.setattr(A, "LAST_SENT_TAIL_BYTES", 300)
+    for i in range(20):
+        A.record_message(tmp_path, f"a{i}", "x" * 20, scan=no_secrets, now=T0 + i, person=True)
+    got = A.last_person_message_at(tmp_path)
+    assert "a19" in got and "a0" not in got
+    assert A.last_person_message_at(tmp_path / "nowhere") == {}

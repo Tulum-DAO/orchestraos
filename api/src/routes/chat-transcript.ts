@@ -1275,7 +1275,8 @@ export function normalizeTranscript(
   }
   let windowed = enrichItems(items).slice(-limit);
   // queued-native-render (P1): merge still-pending phone/watch held turns (B1) +
-  // processed-batch divs (B2) from msg_store, interleaved by ts. POLL-ONLY —
+  // processed-batch divs (B2) from msg_store, at their delivery positions (never by ts:
+  // the log's own order is the delivery order). POLL-ONLY —
   // the SSE tailer never sets includeQueued, so its monotonic-append delta stays
   // free of the ephemeral B1 synthetics (§3e/A1). Fail-open inside mergeQueuedItems.
   if (includeQueued) {
