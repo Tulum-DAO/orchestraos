@@ -1,0 +1,120 @@
+"""Deferred model switches (the operator, 2026-10-22: "switching a busy agent is fine").
+
+A model switch is typed into an agent's pane (`/model`, or Codex's picker), and typing it into a
+WORKING agent queues it: it would run after the switcher restored the host's default model and
+let go of its lock, so the CLI would rewrite that default unwatched. So a switch asked for while
+the agent is busy is RECORDED here instead, and the gateway applies it the moment the agent is
+idle, through the same locked path an idle switch takes. Nothing is ever typed into a turn.
+
+One pending switch per tmux session; a newer pick replaces it, picking the current model cancels
+it. The result of every deferred switch (applied, or failed with a reason) is kept as the
+session's `last`, so a client can say "switched at 13:42" or "could not switch: <reason>".
+The file survives a gateway restart.
+"""
+import fcntl
+import json
+import os
+import time
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+
+#: A switch still waiting this long, with the agent still busy, is reported once (never dropped).
+STALE_AFTER_S = 15 * 60
+
+
+def state_path(orch_dir):
+    return Path(os.environ.get("AGENT_MODEL_PENDING_FILE")
+                or Path(orch_dir) / "state" / "agent-model-pending.json")
+
+
+def _iso(ts):
+    return datetime.fromtimestamp(ts, timezone.utc).isoformat()
+
+
+def _read(path):
+    try:
+        data = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    return {"pending": dict(data.get("pending") or {}), "last": dict(data.get("last") or {})}
+
+
+@contextmanager
+def _locked(path):
+    """The whole read-modify-write under one flock, written by temp + rename."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_name(path.name + ".lock"), "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        data = _read(path)
+        yield data
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(data))
+        os.replace(tmp, path)
+
+
+def put(path, session, model, *, current=None, sids=(), by=None, now=None):
+    """Record (or replace) the session's pending switch. Returns the entry."""
+    ts = time.time() if now is None else now
+    entry = {"model": model, "from": current, "since": _iso(ts), "since_ts": ts,
+             "sids": [s for s in sids if s], "by": by}
+    with _locked(path) as data:
+        data["pending"][session] = entry
+    return entry
+
+
+def cancel(path, session):
+    """Drop the session's pending switch (the operator picked the model it is already on).
+    Returns the dropped entry, or None."""
+    with _locked(path) as data:
+        return data["pending"].pop(session, None)
+
+
+def get(path, session):
+    return _read(path)["pending"].get(session)
+
+
+def last(path, session):
+    return _read(path)["last"].get(session)
+
+
+def pending_sessions(path):
+    return dict(_read(path)["pending"])
+
+
+def view(entry, now=None):
+    """The client's form of a pending entry: {model, since, stale}."""
+    if not entry:
+        return None
+    ts = time.time() if now is None else now
+    return {"model": entry.get("model"), "since": entry.get("since"),
+            "stale": ts - float(entry.get("since_ts") or ts) >= STALE_AFTER_S}
+
+
+def resolve(path, session, since, outcome, *, model=None, reason=None, now=None):
+    """Close the pending switch recorded at `since` with outcome 'switched' or 'failed'. A switch
+    the operator replaced meanwhile (a different `since`) is left alone: returns False."""
+    ts = time.time() if now is None else now
+    with _locked(path) as data:
+        cur = data["pending"].get(session)
+        if not cur or cur.get("since") != since:
+            return False
+        data["pending"].pop(session, None)
+        rec = {"model": model or cur.get("model"), "at": _iso(ts), "outcome": outcome}
+        if reason:
+            rec["reason"] = reason
+        data["last"][session] = rec
+        return True
+
+
+def mark_reported(path, session, since):
+    """Remember that a stale switch was reported, so it is reported once."""
+    with _locked(path) as data:
+        cur = data["pending"].get(session)
+        if cur and cur.get("since") == since:
+            cur["reported"] = True
+            return True
+        return False
