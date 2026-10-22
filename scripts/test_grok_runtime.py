@@ -538,7 +538,7 @@ def test_router_inject_busy_holds_a_grok_turn(router, monkeypatch):
     def no_paste(*a, **k):
         raise AssertionError("must not reach the paste stages")
     monkeypatch.setattr(router, "pane_split", no_paste)
-    assert router.inject("zz-grok", "hello", "grok") == "stuck"
+    assert router.inject("zz-grok", "hello", "grok") == "held"      # nothing typed: re-queued, never "delivered"
 
 
 # =============================================================================

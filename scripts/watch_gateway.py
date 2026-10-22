@@ -43,6 +43,7 @@ from questionnaire_schema import QuestionnaireStore
 import approval_resume
 import questionnaire_resume
 import pane_lock
+import inject_journal
 import logging
 import inspect
 # Module logger for the voice-lane endcall/fallback paths (fixes the `log` NameError:
@@ -2713,6 +2714,12 @@ def _verified_inject_locked(session, text, force=False, idle_only=False):
                 "activity": st.get("activity") or ""}
         if isinstance(st.get("stranded"), dict):
             info["stranded"] = st["stranded"]      # surface text + age honestly
+        if st.get("state") in ("stranded_input", "queued_input"):
+            # The FULL composer text (stranded.text stops at 200): the exact string a device can
+            # echo back to submit or clear it.
+            full = _typed_on_prompt_line(_capture_pane(session, lines=0, ansi=True) or "")
+            if full:
+                info["composer_text"] = full
         return False, info
 
     # SECOND, INDEPENDENT MENU REFUSAL. The composer-presence check below does NOT hold this line
@@ -2768,7 +2775,7 @@ def _verified_inject_locked(session, text, force=False, idle_only=False):
         if typed:
             return False, {"reason": "busy", "state": state,
                            "activity": "Composer has unsubmitted text",
-                           "composer_text": typed[:120]}
+                           "composer_text": typed}       # FULL: a device echoes it back exactly
 
     # task #16: over-threshold payloads dodge the paste-chip mechanically —
     # the pane receives a one-line banner + /tmp pointer, never a chippable body.
@@ -2781,16 +2788,46 @@ def _verified_inject_locked(session, text, force=False, idle_only=False):
     # concurrent /agent-suggest (two-phase Tab->Enter) or /agent-key on the
     # same pane so their keystrokes can't interleave.
     with _session_send_lock(session):
+        # TYPED-NOT-ENTERED JOURNAL (gm msg_40dcd58a): the row exists from just before the text is
+        # typed until the submit is verified, so a process killed in between (crash, SIGKILL, a
+        # respawn-pane -k) leaves evidence the next start reconciles (reconcile_inject_journal).
+        # A forced send skips the typed-text guard, so it could append to a half-sent message an
+        # earlier process left (its row still marked typed) and overwrite that row: the evidence
+        # the next start needs. Refuse instead; the person clears or sends that text first.
+        _left = inject_journal.row_for(session)
+        if force and isinstance(_left, dict) and _left.get("typed") is True:
+            return False, {"reason": "busy", "state": state,
+                           "activity": "A message an earlier gateway typed but never entered is "
+                                       "recorded for this pane; send or clear it first",
+                           "composer_text": _left.get("text") or ""}
+        try:
+            inject_journal.record(session, text, marker)
+        except OSError as e:   # FAIL CLOSED: an unjournaled inject is unrecoverable if the process
+            # dies before Enter, so nothing is typed.
+            print(f"[watch_gateway] inject journal write failed for {session}: {e}", file=sys.stderr)
+            return False, {"reason": "journal_unwritable", "state": state, "detail": str(e)}
         r = _tmux("send-keys", "-t", _st(session), "-l", text)
         if r.returncode != 0:
+            inject_journal.clear(session)          # nothing was typed
             return False, {"reason": "send_failed", "state": state}
+        try:
+            inject_journal.mark_typed(session)     # only now may a next-start reconcile press Enter
+        except OSError as e:
+            print(f"[watch_gateway] inject journal mark failed for {session}: {e}", file=sys.stderr)
         _time.sleep(INJECT_INGEST_WAIT_S)
 
         for attempt in (1, 2):
             if attempt > 1:
-                # On retry, check if still idle/unsubmitted before sending another Enter
+                # On retry, check if still idle/unsubmitted before sending another Enter. OUR OWN
+                # unsubmitted text reads stranded_input/queued_input, which `allowed` admits only
+                # under force, so the retry would give up on exactly the state its first swallowed
+                # Enter created. Our text still in the live composer is the evidence that the
+                # retry Enter is ours to press.
                 st_retry = _agent_status().get_agent_status(session)
-                if st_retry.get("state") not in allowed:
+                own_text_waiting = (st_retry.get("state") in ("stranded_input", "queued_input")
+                                    and inject_journal.is_ours(
+                                        live_composer.strip().lstrip("❯>›\u203a"), text))
+                if st_retry.get("state") not in allowed and not own_text_waiting:
                     break
             _tmux("send-keys", "-t", _st(session), "Enter")
             _time.sleep(2.5 if attempt == 1 else 2.0)
@@ -2827,14 +2864,92 @@ def _verified_inject_locked(session, text, force=False, idle_only=False):
                             or any(c in pane for c in "⣾⣽⣻⢿⡿⣟⣯⣷"))
             turn_started_now = turn_visible and not turn_already_running
             if turn_started_now or not still_in_composer:
+                inject_journal.clear(session)
                 ok_info = {"state": state, "attempts": attempt}
                 if _chip_pointer:
                     ok_info["chip_dodge_pointer"] = _chip_pointer
                 return True, ok_info
-        fail_info = {"reason": "unverified_submit", "state": state}
+        # CLEAR-OWN, NEVER DROP (gm msg_2291dee3): our text still in the composer after both Enters
+        # = not submitted. Clear exactly that (C-u), verify, and hand the words back to the caller
+        # (text_returned; /agent-message holds them for the boundary when the client accepts
+        # "held"). Someone else's text, or a clear we cannot verify, is left alone and the journal
+        # row stays for the next start's reconcile.
+        def _composer_now():
+            scr = _strip_ansi(_capture_pane(session, lines=0) or "")
+            cl = [ln for ln in scr.splitlines() if _is_prompt_line(ln)]
+            return (cl[-1] if cl else "").strip().lstrip("❯>›\u203a").strip()
+        cleared = False
+        # HUMAN-SAFE: no tmux primitive clears "only if unchanged", so a person typing straight
+        # into the pane could add words between our read and C-u. One can only type into a pane
+        # through an ATTACHED client: with one attached we never clear; the text stays in front of
+        # them, the journal row stays, and the caller is told.
+        viewer = _client_attached(session)
+        if not viewer and inject_journal.is_ours(_composer_now(), text):   # EXACT: nothing of anyone else's
+            _tmux("send-keys", "-t", _st(session), "C-u")
+            _time.sleep(0.5)
+            cleared = not _composer_now().strip()
+        if cleared:
+            inject_journal.clear(session)
+        fail_info = {"reason": "unverified_submit", "state": state, "cleared": cleared}
+        if viewer:
+            fail_info["not_cleared_because"] = "a client is attached to this pane"
+        if cleared:
+            fail_info["text_returned"] = text
         if _chip_pointer:
             fail_info["chip_dodge_pointer"] = _chip_pointer
         return False, fail_info
+
+
+def _client_attached(session) -> bool:
+    """True when a client is attached to the pane, OR when tmux cannot say (fail closed): a person
+    may be typing there, so nothing presses Enter or clears it."""
+    r = _tmux("list-clients", "-t", _st(session))
+    return r.returncode != 0 or bool((r.stdout or "").strip())
+
+
+def _read_composer_typed(session):
+    """For the startup reconcile: None = session not in tmux; 'ERROR:<why>' = could not read, or no
+    composer on screen (a menu/permission prompt replaces it: nothing may be pressed, and the row
+    stays as the only evidence of our text, codex R19); '' = an empty composer; else the composer's
+    TYPED text (dim ghost suggestions excluded)."""
+    if _tmux("has-session", "-t", f"={session}").returncode != 0:
+        return None
+    # A person attached to the pane may be typing: the reconcile presses nothing there. 'ERROR:'
+    # keeps the row as evidence for the next start and reports it.
+    if _client_attached(session):
+        return "ERROR:a client is attached to this pane (or that could not be checked)"
+    raw = _capture_pane(session, lines=0, ansi=True)
+    if raw is None:
+        return "ERROR:capture failed"
+    if not _pane_has_composer(_strip_ansi(raw)):
+        return "ERROR:no composer on screen (a menu or prompt replaces it)"
+    typed = _typed_on_prompt_line(raw)
+    return "ERROR:no prompt line on screen" if typed is None else typed
+
+
+def _report_inject_reconcile(session, outcome, row):
+    line = (f"[watch_gateway] inject-journal reconcile: {outcome} session={session} "
+            f"typed_at={row.get('typed_at')} text_head={(row.get('text_head') or '')[:80]!r}")
+    print(line, file=sys.stderr)
+    if outcome in ("left-untouched", "unreadable"):
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+            from msg_store import MessageStore
+            MessageStore().send(
+                from_agent="watch-gateway", to_agent="gm", type="report", priority="high",
+                subject=f"gateway restart: half-sent message in {session} needs a person ({outcome})",
+                body=(f"{line}\nA message the gateway had typed but not entered when it last stopped "
+                      "is still in that composer and was NOT submitted. It was left untouched."))
+        except Exception as e:  # noqa: BLE001 — msg_store send only; the stderr line above stands
+            print(f"[watch_gateway] reconcile report mail failed: {e}", file=sys.stderr)
+
+
+def reconcile_inject_journal():
+    """Startup, BEFORE the port binds: resolve injects a previous process typed but never entered."""
+    def _enter(session):
+        return _tmux("send-keys", "-t", _st(session), "Enter").returncode == 0
+    return inject_journal.reconcile(_read_composer_typed, _enter, _report_inject_reconcile,
+                                    lock=_pane_guard)
 
 
 # ---------------------------------------------------------------------------
@@ -4720,6 +4835,22 @@ async def handle_agent_message(request):
                           "state": "held_for_boundary", "message_id": msg_id},
                          status=200)
         return _json({"ok": False, "busy": True, **info}, status=409)
+    if not ok and info.get("reason") == "unverified_submit" and info.get("cleared"):
+        # Our words were cleared out of the composer unsubmitted (gm msg_2291dee3): never drop them.
+        # A "held"-capable client gets them delivered at the next boundary; any other client gets
+        # them back in text_returned to show or resend.
+        if held_supported:
+            _cls, _name = _parse_actor(request)
+            origin = str(data.get("source") or "app").strip() or "app"
+            try:
+                msg_id = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: _hold_for_boundary(session, text, _name or _cls, origin))
+                await _record_operator_message(request, session, text)
+                return _json({"ok": True, "delivered": False, "held": True, "cleared": True,
+                              "state": "held_for_boundary", "message_id": msg_id}, status=200)
+            except Exception as e:  # noqa: BLE001 — the durable write only; text_returned still goes back
+                info = {**info, "hold_failed": str(e)}
+        return _json({"ok": False, "delivered": False, **info}, status=502)
     if ok:
         await _record_operator_message(request, session, text)
     return _json({"ok": ok, "delivered": ok, **info},
@@ -8549,6 +8680,12 @@ def main():
         arturo_stamp.ensure(_data_dir())      # Arturo's principal stamp secret, made on first start
     except Exception as e:  # noqa: BLE001 — without it Arturo simply never sees a fleet turn
         print(f"[watch_gateway] arturo stamp secret not created: {e}", file=sys.stderr)
+    try:
+        done = reconcile_inject_journal()
+        if done:
+            print(f"[watch_gateway] inject-journal reconcile: {done}", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001 — reconcile only: never keep the gateway down for it
+        print(f"[watch_gateway] inject-journal reconcile failed: {e!r}", file=sys.stderr)
     app = build_app()
     print(f"[watch_gateway] listening on http://{GATEWAY_HOST}:{GATEWAY_PORT}", file=sys.stderr)
     web.run_app(app, host=GATEWAY_HOST, port=GATEWAY_PORT, print=None)

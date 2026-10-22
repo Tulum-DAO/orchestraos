@@ -899,16 +899,60 @@ def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
     wait_s = max(0.0, min(ROUTER_PANE_LOCK_WAIT_S, remaining))
     try:
         with pane_lock.pane_lock(session, wait_s=wait_s):
-            return _inject_unlocked(session, text, runtime)
+            import inject_journal
+            # Typed-not-entered journal: _inject_unlocked writes the row only once every guard has
+            # passed, right before it pastes (an earlier row would overwrite a crash's leftover row
+            # whose text a guard is about to find still in the composer), and marks it typed when
+            # the paste is confirmed. Only a row THIS call wrote is ever cleared here.
+            rec = []
+            res = _inject_unlocked(session, text, runtime, journal=rec)
+            if rec and res in ("submitted", "held"):
+                # submitted, or nothing was pasted. 'failed' KEEPS its row: a paste can land unseen
+                # (an unmarked row is report-only at the reconcile); 'stuck' keeps it as evidence.
+                inject_journal.clear(session)
+            if res == "stuck":
+                # CLEAR-OWN, NEVER STRAND (gm msg_2291dee3): Enter was swallowed. When the input line
+                # holds exactly our text and no client is attached (a person could be typing), clear
+                # it with C-u, verify, and hand the row back to pending: the words are delivered on a
+                # later tick instead of sitting in the composer.
+                import inject_journal
+                _, line, ok = pane_split(session, runtime)
+                _lc = tmux("list-clients", "-t", f"={session}:")
+                viewer = _lc.returncode != 0 or bool((_lc.stdout or "").strip())   # fail closed
+                own = (not viewer and ok
+                       and inject_journal.is_ours(line.strip().lstrip("❯>›\u203a"), text))   # EXACT
+                if own:
+                    tmux("send-keys", "-t", session, "C-u")
+                    time.sleep(0.5)
+                    _, line2, ok2 = pane_split(session, runtime)
+                    if ok2 and not line2.strip().lstrip("❯>›\u203a").strip():
+                        if rec:
+                            inject_journal.clear(session)
+                        log(f"{session}: Enter swallowed; cleared our own text, row goes back to pending")
+                        return "cleared"
+            return res
     except pane_lock.PaneBusy:
         log(f"{session}: another sender holds the pane lock — held for the next tick")
         return "held"
 
 
-def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
+def _input_line_typed(session: str, runtime: str = DEFAULT_RUNTIME) -> bool:
+    """True when the bottom input line holds real typed text (composer_state's SGR rule: a dim
+    ghost suggestion is not typed). A capture that fails, or a screen with no prompt line at all (a
+    menu, a TUI still drawing), reads as typed: hold, never paste into what is not a composer."""
+    sig = PROMPT_SIGNATURES.get(runtime, PROMPT_SIGNATURES[DEFAULT_RUNTIME])
+    ansi = tmux("capture-pane", "-t", session, "-e", "-p")
+    if ansi.returncode != 0:
+        return True
+    prompt_lines = [l for l in (ansi.stdout or "").split("\n") if sig["prompt_char"] in l]
+    return not prompt_lines or input_line_state(prompt_lines[-1], sig) == "typed"
+
+
+def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, journal=None) -> str:
     """Inject with three-stage verification. Returns:
       'submitted'  — text confirmed in scrollback, input line clear
       'stuck'      — text landed in input line but Enter never took (left as-is)
+      'held'       — the pane was busy (a working codex / grok turn) before anything was typed
       'failed'     — text never landed at all
 
     Visibility alone is NOT submission: a swallowed Enter leaves the message
@@ -930,7 +974,7 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME) ->
         cap0 = tmux("capture-pane", "-t", session, "-p")
         if cap0.returncode == 0 and codex_pane_is_busy(cap0.stdout):
             log(f"codex pane {session} is WORKING — busy-hold, no inject (queue-not-submit semantics)")
-            return "stuck"
+            return "held"     # nothing typed: the row goes back to pending ("stuck" marked it delivered)
 
     # Stage 0.45 (grok busy-hold): re-check the seat's own
     # events.jsonl right before typing — a turn that started since the idle gate means
@@ -943,7 +987,7 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME) ->
             _gst = "unknown"
         if _gst != "idle":
             log(f"grok pane {session} turn state={_gst} — busy-hold, no inject")
-            return "stuck"
+            return "held"     # nothing typed: the row goes back to pending ("stuck" marked it delivered)
 
     # Stage 0.5 (E7 repaste guard): an existing chip means a stranded prior
     # paste — never add another, never Enter on unattributed content.
@@ -955,6 +999,23 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME) ->
     # Stage 0.6 (De-duplication guard): if the probe text is ALREADY in the input
     # line/composer from a previous unsubmitted attempt, never paste another duplicate copy!
     if ok0 and probe[:30] in line0:
+        # ...only when the line is EXACTLY our earlier, recorded attempt (a typed row for this very
+        # text). Our words with a person's appended, another message's half-sent text, or a draft
+        # no typer recorded would all go out under our name. Held; nothing pressed.
+        import inject_journal
+        if not inject_journal.owns_line(session, line0.strip().lstrip("❯>›\u203a"), text):
+            log(f"{session}: the input line starts like our message but is not exactly our recorded attempt — held")
+            return "held"
+        # The text is ours: this call takes the row over (written and marked typed, as the text is
+        # already on the line), so a submit clears it and 'stuck' keeps it. No row, no Enter.
+        if journal is not None:
+            try:
+                inject_journal.record(session, text, text[:40])
+                inject_journal.mark_typed(session)
+                journal.append(True)
+            except OSError as e:
+                log(f"{session}: inject journal write failed ({e}); held, nothing pressed")
+                return "held"
         log(f"probe already present in {session} input line — skipping repaste, retrying submit")
         for attempt in (1, 2, 3):
             tmux("send-keys", "-t", session, "Enter")
@@ -968,6 +1029,24 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME) ->
             time.sleep(1)
         return "stuck"
 
+    # Someone's real typed text (not a dim ghost) on the input line: never paste onto it. It may be
+    # a person's draft, or the text of an earlier half-sent message whose journal row this paste
+    # would replace. Held; nothing typed.
+    if _input_line_typed(session, runtime):
+        log(f"{session}: the input line holds typed text — held, nothing pasted")
+        return "held"
+
+    # Every guard has passed: the journal row is written now, before the first keystroke. No row,
+    # no paste ('held'). `journal` (a list) tells the caller that this call wrote it.
+    if journal is not None:
+        try:
+            import inject_journal
+            inject_journal.record(session, text, text[:40])
+            journal.append(True)
+        except OSError as e:
+            log(f"{session}: inject journal write failed ({e}); held, nothing pasted")
+            return "held"
+
     # Stage 1: receipt — paste and confirm it landed (literal text OR new chip)
     landed = False
     for attempt in (1, 2):
@@ -979,6 +1058,11 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME) ->
         _, input_line, ok = pane_split(session, runtime)
         if ok and paste_receipt_ok(input_line, probe, chips_before):
             landed = True
+            try:
+                import inject_journal
+                inject_journal.mark_typed(session)   # our text is in the composer now
+            except OSError:
+                pass
             break
         log(f"paste attempt {attempt} not in input line of {session}")
         time.sleep(1)
@@ -1177,11 +1261,12 @@ def deliver_stale_digest(session, store, rows, cfg, *, inject_fn,
         return 0
     text = compose_digest(claimed, store)
     res = inject_fn(session, text, runtime)
-    if res == "held":
-        # Another sender held the pane: nothing was typed. Re-open the rows with their retry budget
+    if res in ("held", "cleared"):
+        # Nothing was delivered and nothing of ours is left in the composer (another sender held
+        # the pane, or our swallowed text was cleared). Re-open the rows with their retry budget
         # intact (fail() would spend it); the singles path or the next tick takes them.
         for r in claimed:
-            store.defer(r["id"], error="digest: another sender held the pane; deferred")
+            store.defer(r["id"], error=f"digest: {res}; deferred")
         return 0
     if res == "submitted":
         now_iso = _digest_now()
@@ -2222,6 +2307,11 @@ def main():
                     f"line (Enter swallowed). Press Enter in that session or clear it. "
                     f"Msg: {(msg.get('subject') or msg['id'])[:60]}"
                 )
+            elif result == "cleared":
+                # Enter swallowed, our own text cleared under the pane lock. Nothing is left in the
+                # composer and nothing was delivered: re-open the row for a later tick.
+                store.defer(msg["id"], error="router: Enter swallowed; own text cleared, re-queued")
+                log(f"CLEARED {msg['id']} -> {agent}: Enter swallowed, own text cleared, row re-queued")
             elif result == "held":
                 # Another sender held the pane: nothing was typed, so this is neither a delivery
                 # nor a failure and must not use retry budget. Re-open the claimed row.

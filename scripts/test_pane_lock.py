@@ -144,7 +144,7 @@ def test_router_inject_is_held_and_types_nothing_while_another_sender_holds_the_
 def test_router_inject_runs_under_the_lock(monkeypatch):
     R = _router()
     seen = []
-    monkeypatch.setattr(R, "_inject_unlocked", lambda s, t, rt=None: seen.append(_held_elsewhere(s)) or "submitted")
+    monkeypatch.setattr(R, "_inject_unlocked", lambda s, t, rt=None, **k: seen.append(_held_elsewhere(s)) or "submitted")
     assert R.inject("pm-x", "hello") == "submitted"
     assert seen == [True]
 
@@ -259,7 +259,7 @@ def _hold(session):
 def test_boot_inject_runs_under_the_lock_and_passes_its_options(monkeypatch):
     seen = []
     monkeypatch.setattr(BI, "_boot_inject_unlocked",
-                        lambda s, t, rt, **kw: seen.append((_held_elsewhere(s), rt, kw)) or ("submitted", "ok"))
+                        lambda s, t, rt, journal=None, **kw: seen.append((_held_elsewhere(s), rt, kw)) or ("submitted", "ok"))
     assert BI.boot_inject("pm-x", "hello", "codex", allow_canonical=True) == ("submitted", "ok")
     assert seen == [(True, "codex", {"allow_canonical": True})]
 
