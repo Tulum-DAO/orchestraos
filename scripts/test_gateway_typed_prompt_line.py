@@ -210,3 +210,14 @@ def test_mid_turn_is_accepted_only_for_runtimes_proven_to_queue(monkeypatch):
             assert info.get("reason") != "busy", (rt, info)
         else:
             assert not ok and info["reason"] == "busy" and not _typed(calls), (rt, info)
+
+
+# ─────────────────────────────── codex R7 on #471 + a live capture
+def test_an_INDENTED_glyph_line_above_the_prompt_is_quoted_output_not_a_turn():
+    assert not G._turn_above_composer("  ✻ quoted: press esc to interrupt\n──────\n❯ \n──────\n")
+
+
+def test_the_real_claude_spinner_without_an_esc_hint_is_a_turn():
+    """Captured from a live Claude pane mid-turn (2026-10-22): the spinner line has no esc hint."""
+    line = "* Fermenting… (1h 14m 31s · ↓ 78.0k tokens · thought for 3s)"
+    assert G._turn_above_composer(f"output\n{line}\n\n──────\n❯ \n──────\n")

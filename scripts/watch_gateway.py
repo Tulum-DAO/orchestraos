@@ -2365,17 +2365,22 @@ def _turn_above_composer(pane_text: str) -> bool:
     idx = [i for i, ln in enumerate(rows) if _is_prompt_line(ln)]
     if not idx:
         return _pane_shows_active_turn(pane_text)
-    # GLYPH-ANCHORED only, no bare-phrase fallback: a spinner line STARTS with its glyph
-    # (Claude ✻…, Codex ◦ Working), while quoted output never does.
+    # GLYPH-ANCHORED at COLUMN 0, no bare-phrase fallback: the CLI draws its spinner line from the
+    # first column (measured on a live Claude pane: "* Fermenting… (1h 14m 31s · ↓ 78.0k tokens ·
+    # …)", which carries no esc hint at all), while quoted output is indented or starts otherwise.
     for ln in rows[max(0, idx[-1] - 6):idx[-1]]:
-        t = _strip_ansi(ln).strip()
+        t = _strip_ansi(ln).rstrip()
         if t[:1] in _SPINNER_GLYPHS and ("esc to interrupt" in t or "esc to cancel" in t
-                                         or any(c in t for c in "⣾⣽⣻⢿⡿⣟⣯⣷")):
+                                         or any(c in t for c in "⣾⣽⣻⢿⡿⣟⣯⣷")
+                                         or _SPINNER_GERUND_RE.match(t)):
             return True
     return False
 
 
 _SPINNER_GLYPHS = "✻✽✶✳✢✺✹✸✷⚹·*+⣾⣽⣻⢿⡿⣟⣯⣷●▸◦•"
+#: The detector's spinner shape (agent-status.py _SPINNER_LINE_RE): a glyph, then a capitalised
+#: gerund ending in an ellipsis ("✻ Sautéing…", "* Fermenting…", Codex "• Working").
+_SPINNER_GERUND_RE = re.compile(r"^[" + re.escape(_SPINNER_GLYPHS) + r"]\s*[A-Z][a-zà-ÿ]+ing\S*(…|\.\.\.|\s*\()")
 
 
 def _bottom_composer_rows(pane_text: str) -> str:
