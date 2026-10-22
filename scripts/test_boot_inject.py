@@ -35,6 +35,8 @@ class Pane:
         cmd = args[0]
         if cmd == "capture-pane":
             return 0, self.render()
+        if cmd == "list-clients":
+            return 0, getattr(self, "attached", "")     # "" = nobody attached to the pane
         if cmd == "display-message":
             return 0, ("1" if self.in_mode else "0") if "#{pane_in_mode}" in args else "0"
         if cmd == "set-buffer":
@@ -336,3 +338,11 @@ def test_ORCHESTRA_CODEX_UPDATE_CHECK_keeps_the_update_check_on_for_seats():
                          env={k: v for k, v in os.environ.items() if k != "ORCHESTRA_CODEX_UPDATE_CHECK"}).stdout.strip()
     assert off == "--yolo --dangerously-bypass-hook-trust -c check_for_update_on_startup=false"
     assert on == "--yolo --dangerously-bypass-hook-trust"
+
+
+def test_a_person_attached_to_the_pane_gets_nothing_typed_over_them():
+    p = Pane()
+    p.attached = "/dev/pts/4: pm-x [80x24 xterm] (utf8)\n"
+    out = B.boot_inject("pm-x", TEXT, tmux_fn=p, sleep_fn=lambda s: None, log_fn=lambda m: None)
+    assert out == ("failed", "client-attached")
+    assert not [c for c in p.calls if c[0] in ("paste-buffer", "send-keys", "set-buffer")]

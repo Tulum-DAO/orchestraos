@@ -136,6 +136,12 @@ def boot_inject(session, text, runtime=DEFAULT_RUNTIME, **kw):
     was typed, so the caller's normal retry applies."""
     import pane_lock
     import inject_journal
+    # A person attached to the pane may be typing: nothing is typed over them (the same rule as the
+    # gateway's clear-own and the reconcile). The caller's normal retry applies.
+    _tmux = kw.get("tmux_fn") or _real_tmux
+    rc, out = _tmux("list-clients", "-t", f"={session}:")
+    if rc == 0 and (out or "").strip():
+        return "failed", "client-attached"
     try:
         with pane_lock.pane_lock(session, wait_s=8.0):
             try:   # typed-not-entered row: no row, no typing

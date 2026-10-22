@@ -85,7 +85,7 @@ def _nudge_unlocked(session: str, text: str, *, force: bool = False, settle: flo
     # The FIRST Enter too only on our own text: the composer must show our nudge (or, wrapped, its
     # first row). A menu that came up, or anything else, gets no Enter; the row stays as evidence.
     line = composer_line(session)
-    if not (line and text.strip().startswith(line.strip())):
+    if not inject_journal.is_ours(line, text):
         print(f"nudge_pane: {session}'s composer does not show our nudge after typing; no Enter", file=sys.stderr)
         return 1
     tmux("send-keys", "-t", session, "Enter")

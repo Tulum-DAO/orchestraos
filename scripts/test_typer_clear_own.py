@@ -204,11 +204,13 @@ def test_nudge_presses_NO_first_Enter_when_the_composer_does_not_show_our_nudge(
     assert [r["session"] for r in J.rows()] == ["seat"]
 
 
-def test_nudge_first_Enter_is_pressed_on_a_WRAPPED_nudge_showing_its_first_row(monkeypatch, tmp_path):
+def test_nudge_first_Enter_needs_EXACTLY_our_text_a_prefix_is_not_enough(monkeypatch, tmp_path):
+    """A composer showing only part of our nudge (wrapped, or changed) gets no Enter: the caller
+    re-sends next cycle. Ownership is exact everywhere."""
     monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
-    keys = _nudge_rig(monkeypatch, ["", "continue please, and then", ""])
-    assert NP._nudge_unlocked("seat", "continue please, and then report what changed") == 0
-    assert [k for k in keys if k[-1] == "Enter"]
+    keys = _nudge_rig(monkeypatch, ["", "continue please, and then"])
+    assert NP._nudge_unlocked("seat", "continue please, and then report what changed") == 1
+    assert not [k for k in keys if k[-1] == "Enter"]
 
 
 def test_boot_inject_keeps_the_row_when_the_paste_may_have_landed_unseen(monkeypatch, tmp_path):
@@ -218,3 +220,27 @@ def test_boot_inject_keeps_the_row_when_the_paste_may_have_landed_unseen(monkeyp
     monkeypatch.setattr(BI, "_boot_inject_unlocked", lambda *a, **k: ("failed", "no-receipt"))
     BI.boot_inject("pm-x", "hello")
     assert [r["session"] for r in J.rows()] == ["pm-x"]
+
+
+# ------------------------------------------------------------------ codex R6 on #472: the router journals too
+def test_router_journals_before_it_pastes_and_clears_on_every_outcome_but_stuck(monkeypatch, tmp_path):
+    import inject_journal as J
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+    R = _router()
+    monkeypatch.setattr(R, "tmux", lambda *a, **k: types.SimpleNamespace(returncode=0, stdout=""))
+    monkeypatch.setattr(R, "pane_split", lambda s, rt=None: ([], "❯ someone else's line", True))
+    seen = []
+    for res in ("submitted", "failed", "held", "stuck"):
+        monkeypatch.setattr(R, "_inject_unlocked",
+                            lambda *a, res=res, **k: seen.append([r["session"] for r in J.rows()]) or res)
+        assert R.inject("pm-x", TEXT) == res
+        assert ([r["session"] for r in J.rows()] == ["pm-x"]) is (res == "stuck"), res
+    assert seen == [["pm-x"]] * 4                                   # a row existed while it typed
+
+
+def test_router_pastes_nothing_when_the_journal_cannot_be_written(monkeypatch):
+    import inject_journal as J
+    R = _router()
+    monkeypatch.setattr(J, "record", lambda *a, **k: (_ for _ in ()).throw(OSError("ro")))
+    monkeypatch.setattr(R, "_inject_unlocked", lambda *a, **k: pytest.fail("pasted without a row"))
+    assert R.inject("pm-x", TEXT) == "held"

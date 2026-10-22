@@ -233,8 +233,13 @@ def test_RACE_kill_mid_inject_then_restart_reconcile_submits_never_strands(tmp_p
         child = subprocess.Popen([sys.executable, str(tmp_path / "child.py"), str(HERE)], env=env,
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         jfile = tmp_path / "journal" / "emu.json"
-        for _ in range(200):                       # wait until the text is TYPED (row + composer)
-            if jfile.exists() and "124 pending cards" in tm("capture-pane", "-t", "=emu:", "-p").stdout:
+        def _typed_mark():
+            try:
+                return json.loads(jfile.read_text()).get("typed") is True
+            except (OSError, ValueError):
+                return False
+        for _ in range(200):                       # wait until the text is TYPED (marked row + composer)
+            if _typed_mark() and "124 pending cards" in tm("capture-pane", "-t", "=emu:", "-p").stdout:
                 break
             time.sleep(0.05)
         os.kill(child.pid, signal.SIGKILL)         # the crash: between send-keys -l and Enter

@@ -899,7 +899,18 @@ def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
     wait_s = max(0.0, min(ROUTER_PANE_LOCK_WAIT_S, remaining))
     try:
         with pane_lock.pane_lock(session, wait_s=wait_s):
+            import inject_journal
+            # Typed-not-entered journal: a row from before the paste until the outcome is known,
+            # marked typed once the paste is confirmed in the composer (_inject_unlocked). A crash
+            # in between leaves evidence the gateway's next start reconciles. No row, no paste.
+            try:
+                inject_journal.record(session, text, text[:40])
+            except OSError as e:
+                log(f"{session}: inject journal write failed ({e}); held, nothing pasted")
+                return "held"
             res = _inject_unlocked(session, text, runtime)
+            if res != "stuck":
+                inject_journal.clear(session)      # submitted, or nothing of ours is in the composer
             if res == "stuck":
                 # CLEAR-OWN, NEVER STRAND (gm msg_2291dee3): Enter was swallowed. When the input line
                 # holds exactly our text and no client is attached (a person could be typing), clear
@@ -915,6 +926,7 @@ def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
                     time.sleep(0.5)
                     _, line2, ok2 = pane_split(session, runtime)
                     if ok2 and not line2.strip().lstrip("❯>›\u203a").strip():
+                        inject_journal.clear(session)
                         log(f"{session}: Enter swallowed; cleared our own text, row goes back to pending")
                         return "cleared"
             return res
@@ -998,6 +1010,11 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME) ->
         _, input_line, ok = pane_split(session, runtime)
         if ok and paste_receipt_ok(input_line, probe, chips_before):
             landed = True
+            try:
+                import inject_journal
+                inject_journal.mark_typed(session)   # our text is in the composer now
+            except OSError:
+                pass
             break
         log(f"paste attempt {attempt} not in input line of {session}")
         time.sleep(1)
