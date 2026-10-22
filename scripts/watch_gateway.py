@@ -7165,12 +7165,18 @@ async def handle_events(request):
         if stop is None:
             return await task
         waiter = asyncio.ensure_future(stop.wait())
-        done, _ = await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
-        if task in done:
-            waiter.cancel()
-            return task.result()
-        task.cancel()
-        raise _EventsStopped()
+        try:
+            await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
+            if task.done():
+                return task.result()
+            raise _EventsStopped()
+        finally:
+            # Never leave either behind (a client gone mid-wait cancels this handler; a stop
+            # waiter left pending would live as long as the app), and collect a loser's error.
+            for f in (task, waiter):
+                if not f.done():
+                    f.cancel()
+            await asyncio.gather(task, waiter, return_exceptions=True)
 
     last = None
     last_beat = 0.0

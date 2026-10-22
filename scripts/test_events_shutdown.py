@@ -114,3 +114,25 @@ def test_shutting_down_one_app_leaves_another_apps_stream_running(box):
         return line, alive
     line, alive = asyncio.run(go())
     assert line.startswith(b"data: ") and alive
+
+
+def test_a_client_that_goes_away_leaves_no_task_behind(box):
+    """Codex r2 on #465: a handler cancelled mid-wait must cancel and collect both of its race tasks
+    (the stop waiter would otherwise stay pending for the app's whole life)."""
+    async def go():
+        server = TestServer(G.build_app())
+        client = TestClient(server)
+        await client.start_server()
+        before = {t for t in asyncio.all_tasks()}
+        r = await _open(client)
+        assert (await r.content.readline()).startswith(b"data: ")
+        r.close()                                              # the phone goes away
+        for _ in range(100):
+            await asyncio.sleep(0.02)
+            left = [t for t in asyncio.all_tasks() - before
+                    if not t.done() and "wait" in repr(t.get_coro())]
+            if not left:
+                break
+        await client.close()
+        return left
+    assert asyncio.run(go()) == []
