@@ -627,3 +627,21 @@ def test_journal_rows_of_distinct_sessions_never_share_a_file(monkeypatch, tmp_p
     assert J._path("pm-x").name == "pm-x.json"                 # a safe name keeps its file (no migration)
     J.clear("a/b")
     assert J.row_for("a_b") and J.row_for("a/b") is None
+
+
+# ------------------------------------------------------------------ codex R21 on #472: one Enter per row, ever
+def test_a_resubmit_never_re_arms_a_row_the_reconcile_already_pressed(monkeypatch, tmp_path):
+    import inject_journal as J
+    import test_boot_inject as TB
+    J_ = _half_sent(monkeypatch, tmp_path, TEXT)
+    J._mark_attempted("pm-x", J.row_for("pm-x"))              # the reconcile's one Enter, unverified
+    keys = []
+    R = _router_on(monkeypatch, f"❯ {TEXT}", keys)
+    assert R.inject("pm-x", TEXT) == "held"
+    assert not [k for k in keys if k[0] in ("paste-buffer", "send-keys")]
+    assert J_.row_for("pm-x").get("reconcile_attempted_at")   # the marker survives
+    J.clear("pm-x"); J.record("pm-x", TB.TEXT, TB.TEXT[:40]); J.mark_typed("pm-x")
+    J._mark_attempted("pm-x", J.row_for("pm-x"))
+    p = TB.Pane(preexisting=TB.TEXT)
+    assert TB.run(p) == ("stuck", "not-exactly-ours")
+    assert p.enters == 0 and J.row_for("pm-x").get("reconcile_attempted_at")

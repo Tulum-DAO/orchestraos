@@ -114,10 +114,12 @@ def owns_line(session, composer, text):
     """May a typer press Enter on `composer` as its own earlier, unsubmitted `text`? Only when the
     composer holds EXACTLY that text (is_ours) and this session's row records that same text and is
     marked typed: the reconcile's rule. A substring or prefix match would also press Enter on a
-    person's words appended to ours, or on an identical draft no typer recorded (codex R15)."""
+    person's words appended to ours, or on an identical draft no typer recorded (codex R15). A row
+    the startup reconcile already pressed its one Enter on is never re-armed: that Enter was not
+    verified, the person has been told, and the text is theirs to send or clear now (codex R21)."""
     row = row_for(session)
     return (isinstance(row, dict) and row.get("typed") is True and row.get("text") == text
-            and is_ours(composer, text))
+            and not row.get("reconcile_attempted_at") and is_ours(composer, text))
 
 
 def reconcile(read_composer, press_enter, report, now=None, verify_wait_s=2.5, lock=None):
