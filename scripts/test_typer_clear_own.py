@@ -533,3 +533,27 @@ def test_boot_inject_types_nothing_when_the_screen_shows_no_prompt_line(monkeypa
     p = NoComposer()
     assert TB.run(p) == ("failed", "no-composer")
     assert p.pastes == 0 and p.enters == 0
+
+
+# ------------------------------------------------------------------ codex R17 on #472: the nudger too
+def test_nudge_types_nothing_when_the_screen_shows_no_prompt_line(monkeypatch, tmp_path):
+    import inject_journal as J
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+    keys = []
+    monkeypatch.setattr(NP, "tmux", lambda *a: keys.append(a) or types.SimpleNamespace(
+        returncode=0, stdout=MENU.replace("> ", "  ") if a[0] == "capture-pane" else "", stderr=""))
+    monkeypatch.setattr(NP, "attached", lambda s: False)
+    assert NP.composer_line("seat") is None                 # no prompt line: no composer, not "empty"
+    assert NP._nudge_unlocked("seat", "continue please") == 2
+    assert not [k for k in keys if k[0] == "send-keys"]
+    assert J.rows() == []
+
+
+def test_nudge_does_not_call_a_vanished_prompt_a_submit(monkeypatch, tmp_path):
+    """After the Enter a menu replaced the composer: that is not the empty composer a submit leaves."""
+    import inject_journal as J
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+    keys = _nudge_rig(monkeypatch, ["", "continue please", None])
+    assert NP._nudge_unlocked("seat", "continue please") == 1
+    assert [r["text"] for r in J.rows()] == ["continue please"]          # kept as evidence
+    assert not [k for k in keys if k[-1] == "C-u"]

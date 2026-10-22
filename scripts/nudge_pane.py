@@ -26,12 +26,15 @@ def tmux(*args) -> subprocess.CompletedProcess:
     return subprocess.run(["tmux", *args], capture_output=True, text=True)
 
 
-def composer_line(session: str) -> str:
+def composer_line(session: str):
+    """The composer's text ('' = an empty composer), or None when there is no composer to read: the
+    capture failed, or no prompt line is on screen (a menu, a TUI still drawing). None is never
+    'empty': nothing is typed into it, and a vanished prompt is no proof of a submit."""
     cap = tmux("capture-pane", "-p", "-t", session)
     if cap.returncode != 0:
-        return ""
+        return None
     lines = [l for l in cap.stdout.splitlines() if "❯" in l or l.lstrip().startswith(">")]
-    return lines[-1].split("❯", 1)[-1].strip() if lines else ""
+    return lines[-1].split("❯", 1)[-1].strip() if lines else None
 
 
 def attached(session: str) -> bool:
@@ -61,6 +64,9 @@ def _nudge_unlocked(session: str, text: str, *, force: bool = False, settle: flo
         print(f"nudge_pane: a client is attached to {session}; refusing (use --force if you own that client)", file=sys.stderr)
         return 2
     before = composer_line(session)
+    if before is None:
+        print(f"nudge_pane: no composer on {session}'s screen (or it could not be read); refusing", file=sys.stderr)
+        return 2
     if before:
         # ANY text in the composer refuses: typing would append to it. (A substring of our nudge
         # used to pass, which could be a person's draft or a menu row such as "1. Yes".)
@@ -92,7 +98,7 @@ def _nudge_unlocked(session: str, text: str, *, force: bool = False, settle: flo
     for _ in range(3):
         time.sleep(1.5)
         line = composer_line(session)
-        if not line:                         # an EMPTY composer is the only proof of a submit; other
+        if line == "":                       # an EMPTY composer is the only proof of a submit; other
             inject_journal.clear(session)    # text there (a menu, someone's words) proves nothing
             print(f"nudge_pane: submitted to {session}: {text[:70]!r}")
             return 0
@@ -106,7 +112,7 @@ def _nudge_unlocked(session: str, text: str, *, force: bool = False, settle: flo
     if not attached(session) and inject_journal.is_ours(line, text):
         tmux("send-keys", "-t", session, "C-u")
         time.sleep(0.5)
-        if not composer_line(session):
+        if composer_line(session) == "":
             inject_journal.clear(session)
             print(f"nudge_pane: {session} did not submit; cleared our own nudge (re-sent next cycle)",
                   file=sys.stderr)
