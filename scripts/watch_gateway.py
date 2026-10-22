@@ -7088,6 +7088,13 @@ async def handle_surface_post(request):
 
 EVENTS_TICK_S = 2.0        # digest check cadence
 EVENTS_KEEPALIVE_S = 15.0  # comment frame so funnel/NAT never idles us out
+#: Set by on_shutdown: an open /events stream (the phone keeps one) ends at its next tick, so the
+#: SIGTERM drain never waits on it. Without it a restart stopped half way (2026-10-22).
+_EVENTS_STOPPING = [False]
+
+
+async def _events_on_shutdown(app):
+    _EVENTS_STOPPING[0] = True
 
 
 def _events_digest(store):
@@ -7134,7 +7141,7 @@ async def handle_events(request):
     last = None
     last_beat = 0.0
     try:
-        while True:
+        while not _EVENTS_STOPPING[0]:
             digest = await asyncio.get_event_loop().run_in_executor(None, _events_digest, store)
             now = time.time()
             if digest != last:
@@ -7464,6 +7471,7 @@ def build_app():
     # silently 413 every photo (SPEC_ios-attach §B.1). Cap + small overhead.
     app = web.Application(client_max_size=UPLOAD_MAX_BYTES + 1024 * 1024,
                           middlewares=[scope_middleware_factory()])
+    app.on_shutdown.append(_events_on_shutdown)
     app.router.add_get("/pending-approvals", handle_pending)
     app.router.add_post("/approval-answers", handle_answer)
     app.router.add_get("/history", handle_history)
