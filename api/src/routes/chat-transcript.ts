@@ -11,7 +11,7 @@
  */
 import { Router, type Request, type Response } from 'express';
 import { readFileSync, existsSync, readdirSync, statSync, openSync, readSync, closeSync, realpathSync } from 'fs';
-import { join, basename, sep } from 'path';
+import { join, basename, relative, sep } from 'path';
 import { isSafeAgentId } from '../lib/agentPaths.js';
 import { LIVE_CARDS, mergeQueuedItems } from '../services/queued-merge.js';
 import { tagAudience, tagSynthetics } from '../lib/audience.js';
@@ -605,14 +605,16 @@ export interface PreviousTranscript { path: string; antigravity: boolean; divide
 const SESSION_ID = /^[0-9A-Za-z][0-9A-Za-z_-]{0,127}$/;   // a DB value going into a path: no separators
 const CODEX_SESSIONS = join(HOME, '.codex', 'sessions');
 
-/** A path a DB row names is used only when it is that session's OWN file under its runtime's own
- *  directory (symlinks resolved), so a wrong or hostile row cannot hand this public route another
- *  seat's conversation, or any other file. */
-function ownFile(p: string | null, root: string, isOwnName: (name: string) => boolean): string | null {
+/** Every candidate file is used only when, symlinks resolved, it is that session's OWN file under
+ *  its runtime's own directory (`isOwn` sees the path relative to it), so a wrong or hostile row, or
+ *  a link planted where the file should be, cannot hand this public route another seat's
+ *  conversation, or any other file. */
+function ownFile(p: string | null, root: string, isOwn: (rel: string) => boolean): string | null {
   if (!p) return null;
   try {
     const real = realpathSync(p);
-    return real.startsWith(realpathSync(root) + sep) && isOwnName(basename(real)) ? real : null;
+    const base = realpathSync(root);
+    return real.startsWith(base + sep) && isOwn(relative(base, real)) ? real : null;
   } catch {
     return null;
   }
@@ -637,14 +639,15 @@ export function resolvePreviousTranscript(agentId: string, sid: string | null): 
   const p = predecessorOf(sid);
   if (!p || lineageOf(p.root) !== lineageOf(agentId) || !SESSION_ID.test(p.from_session)) return null;
   const from = p.from_session;
-  const gemini = join(GEMINI_BRAIN, from, '.system_generated', 'logs', 'transcript.jsonl');
+  const claudeOwn = (rel: string) => basename(rel) === `${from}.jsonl`;
+  const geminiLog = join(from, '.system_generated', 'logs', 'transcript.jsonl');
   const candidates = [
-    p.cwd ? join(CLAUDE_PROJECTS, String(p.cwd).replace(/[/.]/g, '-'), `${from}.jsonl`) : null,
-    ownFile(p.conversation_path, CLAUDE_PROJECTS, (n) => n === `${from}.jsonl`),
-    ownFile(codexRolloutFor(from), CODEX_SESSIONS, (n) => n.startsWith('rollout-') && n.endsWith(`-${from}.jsonl`)),
-    gemini,
+    p.cwd ? ownFile(join(CLAUDE_PROJECTS, String(p.cwd).replace(/[/.]/g, '-'), `${from}.jsonl`), CLAUDE_PROJECTS, claudeOwn) : null,
+    ownFile(p.conversation_path, CLAUDE_PROJECTS, claudeOwn),
+    ownFile(codexRolloutFor(from), CODEX_SESSIONS, (rel) => /^rollout-.*\.jsonl$/.test(basename(rel)) && basename(rel).endsWith(`-${from}.jsonl`)),
+    ownFile(join(GEMINI_BRAIN, geminiLog), GEMINI_BRAIN, (rel) => rel === geminiLog),
   ];
-  const path = candidates.find((c): c is string => !!c && existsSync(c));
+  const path = candidates.find((c): c is string => !!c);
   if (!path) return null;
   return {
     path,

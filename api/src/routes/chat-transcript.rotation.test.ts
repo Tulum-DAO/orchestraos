@@ -8,7 +8,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import Database from 'better-sqlite3';
@@ -246,6 +246,23 @@ test('a Codex predecessor is read from its own rollout under ~/.codex/sessions, 
     db2.prepare('UPDATE threads SET rollout_path = ? WHERE id = ?').run(join(projects, `${CUR}.jsonl`), CX);
     db2.close();
     assert.equal(resolvePreviousTranscript(SEAT, CUR), null, 'a rollout path pointing at another conversation');
+  } finally {
+    store(NORMAL, [[SEAT, 3], ['zz-other-seat', 4]]);
+  }
+});
+
+test('a link planted where the predecessor\'s file should be is never followed out of its own file', () => {
+  const LNK = '22222222-2222-4333-8444-0000000000ff';
+  const LNK2 = '22222222-2222-4333-8444-000000000100';
+  mkdirSync(join(root, 'outside'), { recursive: true });
+  writeFileSync(join(root, 'outside', 'secret.jsonl'), OLD_LINES.join('\n'));
+  symlinkSync(join(root, 'outside', 'secret.jsonl'), join(projects, `${LNK}.jsonl`));   // out of ~/.claude/projects
+  symlinkSync(join(projects, `${CUR}.jsonl`), join(projects, `${LNK2}.jsonl`));          // at another conversation
+  try {
+    predecessorRow(LNK, null);
+    assert.equal(resolvePreviousTranscript(SEAT, CUR), null, 'a link out of the projects dir');
+    predecessorRow(LNK2, null);
+    assert.equal(resolvePreviousTranscript(SEAT, CUR), null, 'a link at another session\'s file');
   } finally {
     store(NORMAL, [[SEAT, 3], ['zz-other-seat', 4]]);
   }
