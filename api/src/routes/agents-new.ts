@@ -176,7 +176,8 @@ export function createAgentsNewRouter(deps: NewAgentDeps): Router {
     const parent = gm ? null : (String(req.body?.parent ?? '').trim() || null);
     if (parent) {
       const known = await deps.registeredAgents();
-      if (!Object.prototype.hasOwnProperty.call(known, parent)) {
+      // The same seats GET /new/parents lists: a copy of a registered seat is not a parent (codex R2 on #477).
+      if (!Object.prototype.hasOwnProperty.call(known, parent) || shadowedRoot(parent, known)) {
         return res.status(400).json({ ok: false, reason: 'unknown_parent', parent });
       }
     }
@@ -264,12 +265,19 @@ async function realRegisteredAgents(): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   try {
     const { getRegistry } = await import('../services/state-reader.js');
-    const agents = (getRegistry()?.agents || {}) as Record<string, Record<string, unknown>>;
-    for (const [id, row] of Object.entries(agents)) {
-      if (isEarlierGeneration(row)) continue;
-      out[id] = String(row?.tier ?? '').toUpperCase();
-    }
+    return registeredFromRegistry((getRegistry()?.agents || {}) as Record<string, Record<string, unknown>>);
   } catch { /* registry unreadable: no parents to offer */ }
+  return out;
+}
+
+/** registry.json's agents -> {seat id: TIER}, leaving out earlier generations (the rows GET
+ *  /new/parents and POST /new both work from). */
+export function registeredFromRegistry(agents: Record<string, Record<string, unknown>>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [id, row] of Object.entries(agents || {})) {
+    if (isEarlierGeneration(row)) continue;
+    out[id] = String(row?.tier ?? '').toUpperCase();
+  }
   return out;
 }
 

@@ -445,3 +445,32 @@ test('an earlier generation in the registry is not a seat', async () => {
   assert.equal(isEarlierGeneration({ status: 'retired' }), true);
   assert.equal(isEarlierGeneration(null), false);
 });
+
+
+test('POST /new refuses a copy of a registered seat as the parent, as GET /new/parents hides it (400)', async () => {
+  const deps = makeDeps({ registeredAgents: () => ({ gm: 'T0', 'pm-test': 'T1', 'pm-test-g3': 'T1' }) });
+  const r = await post(deps, '/api/agents/new', { name: 'worker-9', parent: 'pm-test-g3' });
+  assert.equal(r.status, 400);
+  assert.equal(r.json.reason, 'unknown_parent');
+  assert.equal((deps as any).calls.spawn.length, 0);
+  const ok = await post(makeDeps({ registeredAgents: () => ({ gm: 'T0', 'pm-test': 'T1', 'pm-test-g3': 'T1' }) }),
+                        '/api/agents/new', { name: 'worker-9', parent: 'pm-test' });
+  assert.equal(ok.status, 200);
+});
+
+test('the production registry read leaves earlier generations out of BOTH the parent list and POST /new', async () => {
+  const { registeredFromRegistry } = await import('./agents-new.js');
+  const known = registeredFromRegistry({
+    gm: { tier: 't0', status: 'online' },
+    'pm-test': { tier: 'T1', status: 'parked' },
+    'old-lead': { tier: 'T1', status: 'parked', succeeded_by: 'old-lead-gen2' },
+    'gone-lead': { tier: 'T1', status: 'retired' },
+    'moved-lead': { tier: 'T1', superseded_at: '2026-10-01T00:00:00Z' },
+  });
+  assert.deepEqual(known, { gm: 'T0', 'pm-test': 'T1' });
+  const json = await getParents(known);
+  assert.deepEqual(json.agents.map((a: any) => a.id), ['gm', 'pm-test']);
+  const r = await post(makeDeps({ registeredAgents: () => known }), '/api/agents/new', { name: 'w-1', parent: 'old-lead' });
+  assert.equal(r.status, 400);
+  assert.equal(r.json.reason, 'unknown_parent');
+});
