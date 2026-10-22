@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { TranscriptTailer, type TailEvent } from './transcript-tail.js';
+import { TranscriptTailer, alignShift, type TailEvent } from './transcript-tail.js';
 
 const rec = (ordinal: number, type: string, payload: any) =>
   JSON.stringify({ ordinal, type, timestamp: '2026-10-22T05:00:00Z', payload }) + '\n';
@@ -25,8 +25,9 @@ test('a Codex token_count that lands on an already-sent item reaches streaming c
     total_token_usage: { total_tokens: 105 }, last_token_usage: { input_tokens: 100, output_tokens: 5 } } }));
   t.tick();
   const last = got[got.length - 1];
-  assert.ok(got.length === 2, 'the usage change is broadcast');
+  assert.equal(got.length as number, 2, 'the usage change is broadcast');
   assert.equal(last.type, 'snapshot');
+  assert.equal(last.reset, undefined, 'a late usage update is not a session reset');
   assert.equal(last.items.find((i: any) => i.text === 'done')?.usage?.output_tokens, 5);
   t.tick();
   assert.equal(got.length, 2, 'and only once');
@@ -66,4 +67,27 @@ test('a client that missed the restated snapshot gets it on resume (the event id
   assert.equal(back.length, 1);
   assert.equal(back[0].type, 'snapshot');
   assert.equal(back[0].items.find((i: any) => i.text === 'done')?.usage?.output_tokens, 5);
+});
+
+test('at the item cap the window slides, and a late usage on the last sent item still goes out', () => {
+  const f = join(mkdtempSync(join(tmpdir(), 'tail-usage-')), 'rollout.jsonl');
+  let body = rec(0, 'session_meta', { id: 's' });
+  for (let i = 1; i <= 2003; i++) body += rec(i, 'response_item', { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: `m${i}` }] });
+  writeFileSync(f, body);
+  const t = new TranscriptTailer({ agentId: 'cx', resolve: () => ({ path: f, sid: 's' }) });
+  const got: TailEvent[] = [];
+  t.subscribe((ev) => got.push(ev));
+  appendFileSync(f, rec(2004, 'event_msg', { type: 'token_count', info: {
+    total_token_usage: { total_tokens: 105 }, last_token_usage: { input_tokens: 100, output_tokens: 5 } } }));
+  t.tick();
+  assert.equal(got.length, 2);
+  assert.equal(got[1].items.find((i: any) => i.text === 'm2003')?.usage?.output_tokens, 5);
+});
+
+test('alignShift lines two windows of one log up on the last sent item', () => {
+  const it = (n: number) => ({ kind: 'text', role: 'assistant', uuid: `u${n}`, text: `m${n}` });
+  const prev = [1, 2, 3].map(it);
+  assert.equal(alignShift(prev, [1, 2, 3, 4].map(it)), 0);
+  assert.equal(alignShift(prev, [2, 3, 4].map(it)), -1);           // slid by one at the cap
+  assert.equal(alignShift(prev, [7, 8].map(it)), null);
 });
