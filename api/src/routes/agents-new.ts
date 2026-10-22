@@ -42,8 +42,10 @@ const RESERVED = new Set(['all', 'none', 'new', 'arturo', 'self', 'system']);
 
 // A new registry row must carry a resolvable runtime AND model or the flock-safe writer
 // refuses it (spawn-agent.sh R4 invariant). Same table Arturo's commission path uses.
-const DEFAULT_MODEL_FOR_RUNTIME: Record<string, string> = {
-  claude: 'claude-sonnet-5',
+// A new Claude seat starts on Opus 5.5 with the 1M context (Shaw 2026-10-22, gm msg_36317761);
+// claude-sonnet-5 was an old default.
+export const DEFAULT_MODEL_FOR_RUNTIME: Record<string, string> = {
+  claude: 'claude-opus-5-5[1m]',
   gemini: 'gemini-3.1-pro',
   codex: 'gpt-5.6-terra',
   grok: 'grok-4.7',

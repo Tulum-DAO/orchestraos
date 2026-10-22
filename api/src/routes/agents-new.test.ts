@@ -474,3 +474,12 @@ test('the production registry read leaves earlier generations out of BOTH the pa
   assert.equal(r.status, 400);
   assert.equal(r.json.reason, 'unknown_parent');
 });
+
+
+test('a new Claude seat starts on Opus 5.5 with the 1M context, the same as a commissioned one', async () => {
+  const { DEFAULT_MODEL_FOR_RUNTIME } = await import('./agents-new.js');
+  assert.equal(DEFAULT_MODEL_FOR_RUNTIME.claude, 'claude-opus-5-5[1m]');
+  const fs = await import('node:fs');
+  const arturo = fs.readFileSync(new URL('../../../services/arturo/arturo-proxy.py', import.meta.url), 'utf8');
+  assert.match(arturo, /_DEFAULT_MODEL_FOR_RUNTIME = \{"claude": "claude-opus-5-5\[1m\]"/);
+});
