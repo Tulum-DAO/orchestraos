@@ -4912,42 +4912,76 @@ async def handle_agent_model(request):
     if model not in desc["allowed"]:
         why = desc["unavailable"].get(model) or "not offered for this agent"
         return _json({"ok": False, "error": why}, status=422)
-    from scripts import agent_model_pending as AMP
-    pend_file = AMP.state_path(ORCH_DIR)
     by = _parse_actor(request)[1] or ((_resolved_principal(request)[1] or {}).get("label")) or "?"
-    if model == current:
-        # Picking the model it is already on cancels a switch still waiting for the turn to end.
-        cancelled = await loop.run_in_executor(None, AMP.cancel, pend_file, session)
-        body = {"ok": True, "model": model, "changed": False,
-                "switching": "switched" if desc["how"] == "live" else "next_rotation"}
-        if cancelled:
-            body.update(pending=None, cancelled=True)
-        return _json(body)
-
-    if desc["how"] == "live":
-        # A busy agent's switch is DEFERRED, never typed into its turn: recorded, then applied
-        # the moment it is idle (_apply_pending_model_switches). The detector's state decides
-        # first; the idle-only send's own screen check catches a turn the detector has not seen.
-        st = (_agent_status().get_agent_status(session) or {}).get("state")
-        if st in MID_TURN_STATES | STALLED_STATES:
-            return _json(await loop.run_in_executor(
-                None, _defer_model_switch, session, model, current, meta, by), status=202)
     status, body = await loop.run_in_executor(
-        None, lambda: _switch_model_now(session, model, root, meta, runtime, current, catalog, desc, by))
-    if desc["how"] == "live" and status == 409 and body.get("state") in MID_TURN_STATES | STALLED_STATES:
-        return _json(await loop.run_in_executor(
-            None, _defer_model_switch, session, model, current, meta, by), status=202)
-    if status == 200:
-        # This pick is now the agent's model: an older pick still waiting would undo it.
-        await loop.run_in_executor(None, AMP.cancel, pend_file, session)
+        None, lambda: _put_model(session, model, catalog, by))
     return _json(body, status=status)
 
 
-def _defer_model_switch(session, model, current, meta, by):
-    """Record a busy agent's switch (a newer pick replaces an older one); the 202 body."""
+_MODEL_SWITCH_LOCKS = {}
+_MODEL_SWITCH_LOCKS_GUARD = _threading.Lock()
+
+
+def _model_switch_lock(session):
+    """ONE lock per tmux session for every model-switch decision in this gateway: a PUT (cancel,
+    defer, switch) and the deferred applier's whole apply. A cancel or a newer pick therefore
+    either lands before the applier reads the pick, or after the switch it was racing finished;
+    never in between (codex R1 on #475)."""
+    with _MODEL_SWITCH_LOCKS_GUARD:
+        return _MODEL_SWITCH_LOCKS.setdefault(session, _threading.Lock())
+
+
+def _put_model(session, model, catalog, by):
+    """PUT /agent-model's decision, under the session's switch lock, on a fresh read of the seat
+    (an apply that finished while this waited has changed its model). (status, body)."""
+    from scripts import agent_model as AM
     from scripts import agent_model_pending as AMP
-    entry = AMP.put(AMP.state_path(ORCH_DIR), session, model, current=current,
-                    sids=_seat_session_ids(session, meta), by=by)
+    pend_file = AMP.state_path(ORCH_DIR)
+    with _model_switch_lock(session):
+        root, meta, runtime, current = _seat_for_session(session)
+        desc = AM.describe(runtime, current, catalog, AM.off_runtimes())
+        if model not in desc["allowed"]:
+            return 422, {"ok": False, "error": desc["unavailable"].get(model) or "not offered for this agent"}
+        if model == current:
+            # Picking the model it is already on cancels a switch still waiting for the turn to end.
+            dropped = AMP.cancel(pend_file, session)
+            body = {"ok": True, "model": model, "changed": False,
+                    "switching": "switched" if desc["how"] == "live" else "next_rotation"}
+            if dropped:
+                log.info(f"AGENT-MODEL {session} pending -> {dropped.get('model')} CANCELLED by {by}")
+                body.update(pending=None, cancelled=True)
+            return 200, body
+        sids = _seat_session_ids(session, meta) if desc["how"] == "live" else []
+        if desc["how"] == "live":
+            # A busy agent's switch is DEFERRED, never typed into its turn: recorded, then applied
+            # the moment it is idle (_apply_pending_model_switches). The detector's state decides
+            # first; the idle-only send's own screen check catches a turn the detector has not seen.
+            # Deferred only when this session's identity is known: the applier must be able to
+            # tell that it is still the same agent (a rotation reuses the tmux name).
+            st = (_agent_status().get_agent_status(session) or {}).get("state")
+            if st in MID_TURN_STATES | STALLED_STATES and sids:
+                return 202, _defer_model_switch(session, model, current, sids, by)
+        status, body = _switch_model_now(session, model, root, meta, runtime, current, catalog, desc, by)
+        if (desc["how"] == "live" and status == 409 and sids
+                and body.get("state") in MID_TURN_STATES | STALLED_STATES):
+            return 202, _defer_model_switch(session, model, current, sids, by)
+        if status == 200:
+            # This pick is now the agent's model: an older pick still waiting would undo it.
+            dropped = AMP.cancel(pend_file, session)
+            if dropped:
+                log.info(f"AGENT-MODEL {session} pending -> {dropped.get('model')} REPLACED by an idle switch")
+        return status, body
+
+
+def _defer_model_switch(session, model, current, sids, by):
+    """Record a busy agent's switch (a newer pick replaces an older one); the 202 body. Called
+    under the session's switch lock."""
+    from scripts import agent_model_pending as AMP
+    f = AMP.state_path(ORCH_DIR)
+    old = AMP.get(f, session)
+    if old:
+        log.info(f"AGENT-MODEL {session} pending -> {old.get('model')} REPLACED by {model} ({by})")
+    entry = AMP.put(f, session, model, current=current, sids=sids, by=by)
     log.info(f"AGENT-MODEL {session} {current} -> {model} PENDING (busy) by {by}")
     return {"ok": True, "status": "pending", "applies": "at turn end", "model": model,
             "current": current, "pending_since": entry["since"]}
@@ -5022,50 +5056,61 @@ def _apply_pending_model_switches(now=None):
     to a new session, or whose switch fails, has its pick closed in `last` with the reason, so the
     operator's pick never vanishes without a word. Returns [(session, outcome)]."""
     import time as _t
-    from scripts import agent_model as AM
     from scripts import agent_model_pending as AMP
     f = AMP.state_path(ORCH_DIR)
     now = _t.time() if now is None else now
     out = []
-    for session, e in AMP.pending_sessions(f).items():
-        since = e.get("since")
-
-        def close(outcome, reason=None):
-            AMP.resolve(f, session, since, outcome, reason=reason, now=now)
-            out.append((session, outcome if not reason else f"{outcome}: {reason}"))
-        if session not in _tmux_session_names():
-            close("failed", "the agent is no longer running")
-            continue
-        root, meta, runtime, current = _seat_for_session(session)
-        sids = _seat_session_ids(session, meta)
-        if e.get("sids") and sids and not set(e["sids"]) & set(sids):
-            close("failed", "the agent moved to a new session before its turn ended")
-            continue
-        st = (_agent_status().get_agent_status(session) or {}).get("state")
-        if st not in INJECTABLE_STATES:
-            if (AMP.view(e, now) or {}).get("stale") and not e.get("reported"):
-                _report_stale_model_switch(session, e)
-                AMP.mark_reported(f, session, since)
-            continue
-        if e.get("model") == current:
-            close("switched")
-            continue
-        orch_root = _orchestra_root()
-        catalog = AM.load_catalog((runtime or "").lower(), orch_root / "config" / "providers.json",
-                                  orch_root / "state")
-        desc = AM.describe(runtime, current, catalog, AM.off_runtimes())
-        if e.get("model") not in desc["allowed"] or desc["how"] != "live":
-            close("failed", desc["unavailable"].get(e.get("model")) or "no longer offered for this agent")
-            continue
-        status, body = _switch_model_now(session, e["model"], root, meta, runtime, current, catalog,
-                                         desc, e.get("by") or "deferred")
-        if status == 200:
-            close("switched")
-        elif status == 409:
-            continue                       # a turn started first: wait for the next idle moment
-        else:
-            close("failed", str(body.get("detail") or body.get("error") or f"HTTP {status}"))
+    for session in list(AMP.pending_sessions(f)):
+        with _model_switch_lock(session):
+            r = _apply_pending_one(f, session, now)
+        if r:
+            out.append((session, r))
     return out
+
+
+def _apply_pending_one(f, session, now):
+    """Apply or close one session's pick, under its switch lock (held by the caller). The pick is
+    re-read here, so one the operator cancelled or replaced meanwhile is never typed. Returns the
+    outcome, or None when it keeps waiting."""
+    from scripts import agent_model as AM
+    from scripts import agent_model_pending as AMP
+    e = AMP.get(f, session)
+    if not e:
+        return None
+    since = e.get("since")
+
+    def close(outcome, reason=None):
+        AMP.resolve(f, session, since, outcome, reason=reason, now=now)
+        return outcome if not reason else f"{outcome}: {reason}"
+    if session not in _tmux_session_names():
+        return close("failed", "the agent is no longer running")
+    root, meta, runtime, current = _seat_for_session(session)
+    sids = _seat_session_ids(session, meta)
+    if not sids:
+        return None                    # cannot tell it is the same agent right now: never apply blind
+    if not set(e.get("sids") or []) & set(sids):
+        return close("failed", "the agent moved to a new session before its turn ended")
+    st = (_agent_status().get_agent_status(session) or {}).get("state")
+    if st not in INJECTABLE_STATES:
+        if (AMP.view(e, now) or {}).get("stale") and not e.get("reported"):
+            _report_stale_model_switch(session, e)
+            AMP.mark_reported(f, session, since)
+        return None
+    if e.get("model") == current:
+        return close("switched")
+    orch_root = _orchestra_root()
+    catalog = AM.load_catalog((runtime or "").lower(), orch_root / "config" / "providers.json",
+                              orch_root / "state")
+    desc = AM.describe(runtime, current, catalog, AM.off_runtimes())
+    if e.get("model") not in desc["allowed"] or desc["how"] != "live":
+        return close("failed", desc["unavailable"].get(e.get("model")) or "no longer offered for this agent")
+    status, body = _switch_model_now(session, e["model"], root, meta, runtime, current, catalog,
+                                     desc, e.get("by") or "deferred")
+    if status == 200:
+        return close("switched")
+    if status == 409:
+        return None                    # a turn started first: wait for the next idle moment
+    return close("failed", str(body.get("detail") or body.get("error") or f"HTTP {status}"))
 
 
 async def _pending_model_switch_loop(app):

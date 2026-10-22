@@ -200,3 +200,60 @@ def test_the_gateway_runs_the_applier_and_a_shutdown_ends_it_promptly(tmp_path, 
     took = asyncio.run(go())
     assert applied, "the loop ran a pass while a pick was pending"
     assert took < 3
+
+
+# ------------------------------------------------------------------ codex R1 on #475
+def test_a_pick_cancelled_after_the_pass_listed_it_is_never_typed(seat, monkeypatch):
+    """The pass lists the pending picks, then the operator cancels one before its turn: the apply
+    re-reads it under the session's switch lock and types nothing."""
+    _put(SONNET)
+    listed = dict(AMP.pending_sessions(AMP.state_path(G.ORCH_DIR)))
+    _put(OPUS)                                                     # cancel
+    monkeypatch.setattr(AMP, "pending_sessions", lambda f: listed)
+    seat["det"].state = "idle"
+    assert G._apply_pending_model_switches() == []
+    assert seat["live"] == []
+
+
+def test_a_pick_replaced_after_the_pass_listed_it_applies_the_NEW_pick(seat, monkeypatch):
+    _put(SONNET)
+    listed = dict(AMP.pending_sessions(AMP.state_path(G.ORCH_DIR)))
+    _put(HAIKU)                                                    # replace while still busy
+    monkeypatch.setattr(AMP, "pending_sessions", lambda f: listed)
+    seat["det"].state = "idle"
+    assert G._apply_pending_model_switches() == [("dev", "switched")]
+    assert seat["live"] == [HAIKU]
+
+
+def test_the_session_lock_is_held_for_the_whole_apply(seat, monkeypatch):
+    """A PUT for the same agent cannot slip in while the switch is being typed."""
+    _put(SONNET)
+    seat["det"].state = "idle"
+    held = []
+
+    def switch(**kw):
+        lk = G._model_switch_lock("dev")
+        got = lk.acquire(blocking=False)
+        if got:
+            lk.release()                       # never leave it held for the tests that follow
+        held.append(not got)
+        return 200, {"ok": True, "model": kw["model"], "switching": "switched"}
+    monkeypatch.setattr(AM, "switch_live", switch)
+    G._apply_pending_model_switches()
+    assert held == [True]
+
+
+def test_a_busy_agent_whose_identity_is_unknown_is_refused_not_deferred(seat, monkeypatch):
+    """No session id to tell a rotation apart: today's 409, nothing recorded, nothing typed."""
+    monkeypatch.setattr(G, "_seat_session_ids", lambda s, meta=None: [])
+    monkeypatch.setattr(AM, "switch_live", lambda **kw: (409, {"ok": False, "error": "busy", "state": "working"}))
+    status, b = _put(SONNET)
+    assert status == 409 and _get()["pending"] is None
+
+
+def test_an_apply_never_runs_blind_when_the_identity_cannot_be_read(seat, monkeypatch):
+    _put(SONNET)
+    seat["det"].state = "idle"
+    monkeypatch.setattr(G, "_seat_session_ids", lambda s, meta=None: [])
+    assert G._apply_pending_model_switches() == []
+    assert seat["live"] == [] and _get()["pending"]["model"] == SONNET   # waits; stale report covers it
