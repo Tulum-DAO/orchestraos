@@ -369,10 +369,16 @@ _DIALOG_NO = re.compile(r"^\s*(?:[❯›>]\s*)?2\.\s+No, go back\s*$", re.M)
 
 
 def switch_dialog(screen: str) -> str | None:
-    """The model a "Switching to X ... 1. Yes, switch to X / 2. No, go back" dialog on screen
-    offers, else None."""
-    yes = _DIALOG_YES.search(screen or "")
-    return yes.group(1) if yes and _DIALOG_NO.search(screen or "") else None
+    """The model an OPEN "1. Yes, switch to X / 2. No, go back" dialog offers, else None.
+
+    Open = its "2. No, go back" line is the screen's LAST non-empty line, with "1. Yes" right
+    above it: an open dialog replaces the prompt at the bottom of the pane. The same text higher
+    up (scrollback, an answered dialog) is not open, and no key is ever sent for it."""
+    lines = [ln for ln in (screen or "").splitlines() if ln.strip()]
+    if len(lines) < 2 or not _DIALOG_NO.match(lines[-1]):
+        return None
+    yes = _DIALOG_YES.match(lines[-2])
+    return yes.group(1) if yes else None
 
 
 def _wait_answer(path0, since, offset, model, title, capture, keys, timeout_s, sleep,
@@ -386,16 +392,20 @@ def _wait_answer(path0, since, offset, model, title, capture, keys, timeout_s, s
         res = scan_switch_result(path0, since, offset)
         if res is not None:
             return res, None
+        late = clock() >= deadline
         if capture is not None and keys is not None and not answered:
             offered = switch_dialog(capture() or "")
-            if offered is not None:
+            # Read again right before the key: the key goes only to a dialog seen on two reads.
+            if offered is not None and switch_dialog(capture() or "") == offered:
                 answered = True
-                if display_matches(offered, model, title):
+                if display_matches(offered, model, title) and not late:
                     keys("1")
                 else:
+                    # Another model, or too late to wait for the save inside the lock: go back.
                     keys("2")
-                    return None, f"other_dialog:{offered}"
-        if clock() >= deadline:
+                    return None, (f"other_dialog:{offered}" if not display_matches(offered, model, title)
+                                  else None)
+        if late:
             return None, None
         sleep(0.25)
 

@@ -575,3 +575,30 @@ def test_a_pane_still_asking_at_the_end_is_never_a_success(tmp_path):
     status, body = _dialog_run(c)
     assert status == 502 and body["error"] == "the agent is still asking to confirm the switch"
     assert body["detail"] == "Opus 5.5" and c.keyed == ["1", "2"]
+
+
+def test_dialog_text_that_is_not_at_the_bottom_is_not_open():
+    answered_above = DIALOG.format(name="Sonnet 5.5") + "  ⎿  Set model to Sonnet 5.5\n❯ \n"
+    assert AM.switch_dialog(answered_above) is None
+    assert AM.switch_dialog(DIALOG.format(name="Sonnet 5.5") + "\n\n") == "Sonnet 5.5"   # blank lines below are fine
+
+
+def test_a_stale_dialog_above_the_prompt_gets_no_key(tmp_path):
+    c = _dialog_setup(tmp_path)
+    real_send = c.send
+
+    def send(text):
+        out = real_send(text)
+        c.screen = DIALOG.format(name="Opus 5.5") + "  ⎿  something else\n❯ \n"     # not open
+        return out
+    c.send = send
+    status, body = _dialog_run(c)
+    assert c.keyed == [] and status == 502 and body["error"] == "unconfirmed"
+
+
+def test_a_dialog_seen_after_the_deadline_is_declined_not_accepted(tmp_path):
+    c = _dialog_setup(tmp_path)
+    status, body = AM.switch_live(model="claude-opus-5-5", settings_path=c.settings, send=c.send,
+                                  find_jsonl=lambda: c.jsonl, capture=c.capture, keys=c.keys, timeout_s=0,
+                                  sleep=lambda _s: None, now=lambda: "2026-10-22T00:00:00.000Z")
+    assert c.keyed == ["2"] and status == 502 and json.loads(c.settings.read_text())["model"] == "opus"
