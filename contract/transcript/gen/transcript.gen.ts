@@ -14,6 +14,8 @@ export type ChatItem =
   | QueuedBatchItem;
 
 export interface TextItem {
+  audience?: 'user' | 'agent';
+  exchange?: string;
   kind: 'text';
   role: 'user' | 'assistant';
   text: string;
@@ -25,6 +27,8 @@ export interface TextItem {
 }
 
 export interface ThinkingItem {
+  audience?: 'user' | 'agent';
+  exchange?: string;
   kind: 'thinking';
   role: 'assistant';
   text: string;
@@ -34,6 +38,8 @@ export interface ThinkingItem {
 }
 
 export interface ToolUseItem {
+  audience?: 'user' | 'agent';
+  exchange?: string;
   kind: 'tool_use';
   role: 'assistant';
   tool: string;
@@ -47,6 +53,8 @@ export interface ToolUseItem {
 }
 
 export interface ToolResultItem {
+  audience?: 'user' | 'agent';
+  exchange?: string;
   kind: 'tool_result';
   role: 'user';
   text: string;
@@ -63,6 +71,8 @@ export interface BatchEntry {
 }
 
 export interface QueuedBatchItem {
+  audience?: 'user' | 'agent';
+  exchange?: string;
   kind: 'queued_batch';
   count: number;
   entries: BatchEntry[];
@@ -78,6 +88,8 @@ export type RenderItem =
   | RenderQueuedBatch;
 
 export interface RenderUser {
+  audience?: 'user' | 'agent';
+  exchange?: string;
   kind: 'user';
   text: string;
   is_system?: boolean;
@@ -87,6 +99,8 @@ export interface RenderUser {
 }
 
 export interface RenderAssistant {
+  audience?: 'user' | 'agent';
+  exchange?: string;
   kind: 'assistant';
   text: string;
   ts?: string;
@@ -94,6 +108,8 @@ export interface RenderAssistant {
 }
 
 export interface RenderThinking {
+  audience?: 'user' | 'agent';
+  exchange?: string;
   kind: 'thinking';
   text: string;
   ts?: string;
@@ -101,6 +117,8 @@ export interface RenderThinking {
 }
 
 export interface RenderTool {
+  audience?: 'user' | 'agent';
+  exchange?: string;
   kind: 'tool';
   tool: string;
   summary: string;
@@ -113,6 +131,8 @@ export interface RenderTool {
 }
 
 export interface RenderQueuedBatch {
+  audience?: 'user' | 'agent';
+  exchange?: string;
   kind: 'queued_batch';
   count: number;
   entries: BatchEntry[];

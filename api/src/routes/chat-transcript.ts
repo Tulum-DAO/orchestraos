@@ -14,6 +14,7 @@ import { readFileSync, existsSync, readdirSync, statSync, openSync, readSync, cl
 import { join } from 'path';
 import { isSafeAgentId } from '../lib/agentPaths.js';
 import { LIVE_CARDS, mergeQueuedItems } from '../services/queued-merge.js';
+import { tagAudience, tagSynthetics } from '../lib/audience.js';
 import { homedir } from 'os';
 import Database from 'better-sqlite3';
 import { agentScopeParam } from '../lib/agent-scope.js';
@@ -1041,6 +1042,13 @@ function enrichItems(items: any[]): any[] {
 // Server-side pairing (schema render_items[]): tool_result attached under its
 // tool_use, empties dropped, order preserved. Replaces the duplicated web
 // buildRenderList() / iOS buildRows() logic — clients do node -> view only.
+/** audience/exchange ride along onto the render node built from an item. */
+function withAudience(node: any, it: any): any {
+  if (it?.audience !== undefined) node.audience = it.audience;
+  if (it?.exchange !== undefined) node.exchange = it.exchange;
+  return node;
+}
+
 export function buildRenderItems(items: any[]): any[] {
   const resultById = new Map<string, { text: string; is_error: boolean }>();
   for (const it of items) {
@@ -1063,12 +1071,12 @@ export function buildRenderItems(items: any[]): any[] {
         if (it.queued) node.queued = true;
         if (it.ts !== undefined) node.ts = it.ts;
         node.key = key;
-        nodes.push(node);
+        nodes.push(withAudience(node, it));
       } else {
         const node: any = { kind: 'assistant', text };
         if (it.ts !== undefined) node.ts = it.ts;
         node.key = key;
-        nodes.push(node);
+        nodes.push(withAudience(node, it));
       }
       continue;
     }
@@ -1078,7 +1086,7 @@ export function buildRenderItems(items: any[]): any[] {
       const node: any = { kind: 'thinking', text };
       if (it.ts !== undefined) node.ts = it.ts;
       node.key = key;
-      nodes.push(node);
+      nodes.push(withAudience(node, it));
       continue;
     }
     if (it.kind === 'queued_batch') {
@@ -1086,7 +1094,7 @@ export function buildRenderItems(items: any[]): any[] {
       const node: any = { kind: 'queued_batch', count: it.count ?? (Array.isArray(it.entries) ? it.entries.length : 0), entries: it.entries || [] };
       if (it.ts !== undefined) node.ts = it.ts;
       node.key = it.key || key;
-      nodes.push(node);
+      nodes.push(withAudience(node, it));
       continue;
     }
     if (it.kind === 'tool_use') {
@@ -1096,7 +1104,7 @@ export function buildRenderItems(items: any[]): any[] {
       if (paired) { node.result = paired.text; node.is_error = paired.is_error; }
       if (it.ts !== undefined) node.ts = it.ts;
       node.key = key;
-      nodes.push(node);
+      nodes.push(withAudience(node, it));
     }
   }
   return nodes;
@@ -1290,7 +1298,9 @@ export function normalizeTranscript(
     // show ONCE, and the real turn is the one that wins.
     items = dedupeQueuedCommands(items);
   }
-  let windowed = enrichItems(items).slice(-limit);
+  // audience/exchange (the chat fold): tagged on the WHOLE log, so a turn whose opener falls
+  // outside the window keeps its tags.
+  let windowed = tagAudience(enrichItems(items)).slice(-limit);
   // queued-native-render (P1): merge still-pending phone/watch held turns (B1) +
   // processed-batch divs (B2) from msg_store, at their delivery positions (never by ts:
   // the log's own order is the delivery order). POLL-ONLY —
@@ -1302,7 +1312,7 @@ export function normalizeTranscript(
     // The batch wins: it knows who sent it.
     windowed = dropQueuedCommandsCoveredByBatches(windowed);
   }
-  windowed = settleIngestedQueuedCommands(windowed);
+  windowed = tagSynthetics(settleIngestedQueuedCommands(windowed));
   return {
     agent_id: agentId,
     session_id: sessionId,

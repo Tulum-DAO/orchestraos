@@ -40,6 +40,8 @@
       "type": "object",
       "required": ["kind", "role", "text"],
       "properties": {
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, and the closing reply of a turn he or a job he set off opened); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened)." },
+        "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "text" },
         "role": { "enum": ["user", "assistant"] },
         "text": { "type": "string" },
@@ -60,6 +62,8 @@
       "type": "object",
       "required": ["kind", "role", "text"],
       "properties": {
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, and the closing reply of a turn he or a job he set off opened); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened)." },
+        "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "thinking" },
         "role": { "const": "assistant" },
         "text": { "type": "string" },
@@ -72,6 +76,8 @@
       "type": "object",
       "required": ["kind", "role", "tool", "input", "summary"],
       "properties": {
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, and the closing reply of a turn he or a job he set off opened); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened)." },
+        "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "tool_use" },
         "role": { "const": "assistant" },
         "tool": { "type": "string" },
@@ -97,6 +103,8 @@
       "type": "object",
       "required": ["kind", "role", "text"],
       "properties": {
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, and the closing reply of a turn he or a job he set off opened); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened)." },
+        "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "tool_result" },
         "role": { "const": "user" },
         "text": { "type": "string" },
@@ -121,6 +129,8 @@
       "description": "ADDITIVE v2 (queued-native-render, DEC-1789392107605493): one processed batch of agent-bound queued mail (B2). Collapsed-by-default, expands to the entries list (newest→oldest). Older clients: unknown kind is skipped gracefully (buildRows default:continue), so the batch simply doesn't render — no blank, no crash.",
       "required": ["kind", "count", "entries", "key"],
       "properties": {
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, and the closing reply of a turn he or a job he set off opened); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened)." },
+        "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "queued_batch" },
         "count": { "type": "integer", "description": "Number of entries (== entries.length)." },
         "entries": {
@@ -146,6 +156,8 @@
       "type": "object",
       "required": ["kind", "text", "key"],
       "properties": {
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, and the closing reply of a turn he or a job he set off opened); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened)." },
+        "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "user" },
         "text": { "type": "string" },
         "is_system": { "type": "boolean" },
@@ -158,6 +170,8 @@
       "type": "object",
       "required": ["kind", "text", "key"],
       "properties": {
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, and the closing reply of a turn he or a job he set off opened); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened)." },
+        "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "assistant" },
         "text": { "type": "string" },
         "ts": { "type": "string" },
@@ -168,6 +182,8 @@
       "type": "object",
       "required": ["kind", "text", "key"],
       "properties": {
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, and the closing reply of a turn he or a job he set off opened); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened)." },
+        "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "thinking" },
         "text": { "type": "string" },
         "ts": { "type": "string" },
@@ -178,6 +194,8 @@
       "type": "object",
       "required": ["kind", "tool", "summary", "input", "key"],
       "properties": {
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, and the closing reply of a turn he or a job he set off opened); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened)." },
+        "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "tool" },
         "tool": { "type": "string" },
         "summary": { "type": "string" },
@@ -194,6 +212,8 @@
       "description": "Server-paired render node for a processed queued batch (B2). Same data as QueuedBatchItem; clients render with a trivial node->view switch (expandable, entries newest→oldest).",
       "required": ["kind", "count", "entries", "key"],
       "properties": {
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, and the closing reply of a turn he or a job he set off opened); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened)." },
+        "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
         "kind": { "const": "queued_batch" },
         "count": { "type": "integer" },
         "entries": {

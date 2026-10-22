@@ -9,14 +9,17 @@
       "text": "You are codex-dev-1, a parity tester. Read your instructions.",
       "is_system": true,
       "ts": "2026-08-27T10:00:01Z",
-      "uuid": "step-2-msg"
+      "uuid": "step-2-msg",
+      "audience": "agent"
     },
     {
       "kind": "text",
       "role": "user",
       "text": "Please check the status.",
       "ts": "2026-08-27T10:00:02Z",
-      "uuid": "step-3-msg"
+      "uuid": "step-3-msg",
+      "audience": "user",
+      "exchange": "step-3-msg"
     },
     {
       "kind": "thinking",
@@ -24,7 +27,9 @@
       "text": "I should run git status to check the repo state.",
       "ts": "2026-08-27T10:00:03Z",
       "uuid": "step-4-think",
-      "model": "gpt-5.6-terra"
+      "model": "gpt-5.6-terra",
+      "audience": "agent",
+      "exchange": "step-3-msg"
     },
     {
       "kind": "tool_use",
@@ -37,7 +42,9 @@
       "id": "call_123",
       "ts": "2026-08-27T10:00:04Z",
       "uuid": "step-5-call",
-      "model": "gpt-5.6-terra"
+      "model": "gpt-5.6-terra",
+      "audience": "agent",
+      "exchange": "step-3-msg"
     },
     {
       "kind": "tool_result",
@@ -46,7 +53,9 @@
       "tool_use_id": "call_123",
       "is_error": false,
       "ts": "2026-08-27T10:00:05Z",
-      "uuid": "step-6-result"
+      "uuid": "step-6-result",
+      "audience": "agent",
+      "exchange": "step-3-msg"
     },
     {
       "kind": "text",
@@ -54,7 +63,9 @@
       "text": "The tree is clean.",
       "ts": "2026-08-27T10:00:06Z",
       "uuid": "step-7-msg",
-      "model": "gpt-5.6-terra"
+      "model": "gpt-5.6-terra",
+      "audience": "user",
+      "exchange": "step-3-msg"
     }
   ],
   "render_items": [
@@ -63,19 +74,24 @@
       "text": "You are codex-dev-1, a parity tester. Read your instructions.",
       "is_system": true,
       "ts": "2026-08-27T10:00:01Z",
-      "key": "step-2-msg:0"
+      "key": "step-2-msg:0",
+      "audience": "agent"
     },
     {
       "kind": "user",
       "text": "Please check the status.",
       "ts": "2026-08-27T10:00:02Z",
-      "key": "step-3-msg:1"
+      "key": "step-3-msg:1",
+      "audience": "user",
+      "exchange": "step-3-msg"
     },
     {
       "kind": "thinking",
       "text": "I should run git status to check the repo state.",
       "ts": "2026-08-27T10:00:03Z",
-      "key": "step-4-think:2"
+      "key": "step-4-think:2",
+      "audience": "agent",
+      "exchange": "step-3-msg"
     },
     {
       "kind": "tool",
@@ -87,13 +103,17 @@
       "result": "On branch main\nnothing to commit, working tree clean",
       "is_error": false,
       "ts": "2026-08-27T10:00:04Z",
-      "key": "step-5-call:3"
+      "key": "step-5-call:3",
+      "audience": "agent",
+      "exchange": "step-3-msg"
     },
     {
       "kind": "assistant",
       "text": "The tree is clean.",
       "ts": "2026-08-27T10:00:06Z",
-      "key": "step-7-msg:5"
+      "key": "step-7-msg:5",
+      "audience": "user",
+      "exchange": "step-3-msg"
     }
   ]
 }
