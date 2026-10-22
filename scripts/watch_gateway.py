@@ -7088,6 +7088,31 @@ async def handle_surface_post(request):
 
 EVENTS_TICK_S = 2.0        # digest check cadence
 EVENTS_KEEPALIVE_S = 15.0  # comment frame so funnel/NAT never idles us out
+_EVENTS_STOP_KEY = None
+
+
+def _events_stop_key():
+    """The app's own shutdown signal for /events streams (an aiohttp AppKey, made on first use:
+    aiohttp is imported lazily here). Per app, never per process: a test or a second app in the
+    same process keeps its streams when another app stops."""
+    global _EVENTS_STOP_KEY
+    if _EVENTS_STOP_KEY is None:
+        import asyncio
+        from aiohttp import web
+        _EVENTS_STOP_KEY = web.AppKey("events_stop", asyncio.Event)
+    return _EVENTS_STOP_KEY
+
+
+async def _events_on_shutdown(app):
+    """An open /events stream (the phone keeps one) must never hold the SIGTERM drain: without
+    this a restart stopped half way on 2026-10-22, the gateway refusing connections until killed."""
+    stop = app.get(_events_stop_key())
+    if stop is not None:
+        stop.set()
+
+
+class _EventsStopped(Exception):
+    pass
 
 
 def _events_digest(store):
@@ -7131,24 +7156,48 @@ async def handle_events(request):
     })
     await resp.prepare(request)
     store = ApprovalStore(); store.migrate()
+    stop = request.app.get(_events_stop_key())
+
+    async def until_stop(aw):
+        """`aw`, unless shutdown starts first: a digest still in the executor or a write blocked
+        on a slow client must not hold the drain either, so every wait races the app's stop."""
+        task = asyncio.ensure_future(aw)
+        if stop is None:
+            return await task
+        waiter = asyncio.ensure_future(stop.wait())
+        try:
+            await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
+            if task.done():
+                return task.result()
+            raise _EventsStopped()
+        finally:
+            # Never leave either behind (a client gone mid-wait cancels this handler; a stop
+            # waiter left pending would live as long as the app), and collect a loser's error.
+            for f in (task, waiter):
+                if not f.done():
+                    f.cancel()
+            await asyncio.gather(task, waiter, return_exceptions=True)
+
     last = None
     last_beat = 0.0
     try:
-        while True:
-            digest = await asyncio.get_event_loop().run_in_executor(None, _events_digest, store)
+        while not (stop is not None and stop.is_set()):
+            digest = await until_stop(asyncio.get_event_loop().run_in_executor(None, _events_digest, store))
             now = time.time()
             if digest != last:
                 last = digest
                 pending_n = digest.split("|", 1)[0]
                 n = len(pending_n.split(",")) if pending_n else 0
-                await resp.write(
-                    f"data: {json.dumps({'changed': True, 'pending': n, 'ts': now})}\n\n".encode())
+                await until_stop(resp.write(
+                    f"data: {json.dumps({'changed': True, 'pending': n, 'ts': now})}\n\n".encode()))
             elif now - last_beat >= EVENTS_KEEPALIVE_S:
-                await resp.write(b": keepalive\n\n")
+                await until_stop(resp.write(b": keepalive\n\n"))
                 last_beat = now
             if digest != last or last_beat == 0.0:
                 last_beat = now
-            await asyncio.sleep(EVENTS_TICK_S)
+            await until_stop(asyncio.sleep(EVENTS_TICK_S))
+    except _EventsStopped:
+        pass   # the gateway is shutting down
     except (ConnectionResetError, asyncio.CancelledError):
         pass   # client went away — normal lifecycle, not an error
     return resp
@@ -7459,11 +7508,14 @@ async def handle_gemini_live(request):
 
 
 def build_app():
+    import asyncio
     from aiohttp import web
     # client_max_size MUST cover uploads — aiohttp's default is 1MB and would
     # silently 413 every photo (SPEC_ios-attach §B.1). Cap + small overhead.
     app = web.Application(client_max_size=UPLOAD_MAX_BYTES + 1024 * 1024,
                           middlewares=[scope_middleware_factory()])
+    app[_events_stop_key()] = asyncio.Event()
+    app.on_shutdown.append(_events_on_shutdown)
     app.router.add_get("/pending-approvals", handle_pending)
     app.router.add_post("/approval-answers", handle_answer)
     app.router.add_get("/history", handle_history)
