@@ -341,8 +341,12 @@ export function parseCodexRollout(lines: string[]): any[] {
       if (typeof total === 'number') lastTotal = total;
       let at = -1;
       for (let i = items.length - 1; i >= usedFrom; i--) if (items[i].role === 'assistant') { at = i; break; }
-      if (at >= 0) { items[at].usage = addUsage(carried, usage); carried = undefined; }
-      else carried = addUsage(carried, usage);
+      if (at >= 0) {
+        let u = addUsage(items[at].usage, usage);
+        if (carried) u = addUsage(u, carried);
+        items[at].usage = u;
+        carried = undefined;
+      } else carried = addUsage(carried, usage);
       usedFrom = items.length;
       continue;
     }
@@ -410,6 +414,12 @@ export function parseCodexRollout(lines: string[]): any[] {
       default: break;                              // compacted/unknown: not conversation
     }
     if (codexModel) for (let i = before; i < items.length; i++) if (items[i].role === 'assistant') items[i].model = codexModel;
+    // Tokens carried from a call that drew nothing go on the next agent item as soon as it exists
+    // (its own count, if one follows, adds to them), so they never wait on a count that may not come.
+    if (carried) {
+      const i = items.findIndex((it, k) => k >= before && it.role === 'assistant');
+      if (i >= 0) { items[i].usage = addUsage(items[i].usage, carried); carried = undefined; }
+    }
   }
   return items;
 }
@@ -1324,15 +1334,14 @@ export function normalizeTranscript(
         const msg = o?.message;
         const id = o?.type === 'assistant' && typeof msg?.id === 'string' ? msg.id : '';
         const first = got.find((it) => it.role === 'assistant');
-        if (id && !counted.has(id)) {
-          const usage = usageFromClaude(msg.usage);
-          if (usage && waiting && waiting.id !== id) { carried = addUsage(carried, waiting.usage); waiting = undefined; }
-          if (usage && first) {
-            first.usage = addUsage(carried, usage);
-            carried = waiting = undefined;
-            counted.add(id);
-          } else if (usage) waiting = { id, usage };
-        }
+        // A new assistant line from another reply ends the waiting reply: its tokens are carried.
+        if (waiting && o?.type === 'assistant' && waiting.id !== id) { carried = addUsage(carried, waiting.usage); waiting = undefined; }
+        const usage = id && !counted.has(id) ? usageFromClaude(msg.usage) : undefined;
+        if (first && (usage || carried)) {
+          first.usage = usage ? addUsage(carried, usage) : carried;
+          carried = undefined;
+          if (usage) { counted.add(id); waiting = undefined; }
+        } else if (usage) waiting = { id, usage };
         items.push(...got);
       } catch { /* skip bad line */ }
     }

@@ -53,6 +53,7 @@ export class TranscriptTailer {
   private path: string | null = null;
   private fileSize = -1;
   private items: any[] = [];
+  private rev = 0;           // bumped when an already-sent item changes (see sidTag)
 
   constructor(opts: { agentId: string; resolve: Resolver; limit?: number }) {
     this.agentId = opts.agentId;
@@ -111,13 +112,21 @@ export class TranscriptTailer {
     this.fileSize = size;
     this.items = env.items;
 
+    if (restated) this.rev++;
     if (rotated || truncated || restated) return { rotated: true, grewFrom: null };
     if (env.items.length > prevCount) return { rotated: false, grewFrom: prevCount };
     return { rotated: false, grewFrom: null };
   }
 
+  /** The session tag in event ids: the sid, plus a revision once an already-sent item changed
+   *  (late usage), so a client resuming from an older id is no longer "caught up" and gets a
+   *  snapshot. Ids stay opaque to clients (they only echo Last-Event-ID). */
+  private sidTag(): string {
+    return `${this.sid ?? ''}${this.rev ? `~${this.rev}` : ''}`;
+  }
+
   private eventId(): string {
-    return `${this.sid ?? ''}:${this.items.length}`;
+    return `${this.sidTag()}:${this.items.length}`;
   }
 
   private snapshot(reset = false): TailEvent {
@@ -158,7 +167,7 @@ export class TranscriptTailer {
       const i = lastEventId.lastIndexOf(':');
       const sid = i >= 0 ? lastEventId.slice(0, i) : '';
       const offset = i >= 0 ? Number(lastEventId.slice(i + 1)) : NaN;
-      if (sid && sid === this.sid && Number.isInteger(offset) && offset >= 0 && offset <= this.items.length) {
+      if (sid && sid === this.sidTag() && Number.isInteger(offset) && offset >= 0 && offset <= this.items.length) {
         resumed = true;
         if (offset < this.items.length) cb(this.delta(offset));
       }

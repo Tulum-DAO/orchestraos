@@ -82,14 +82,14 @@ test('a Codex response carries its token_count on its last agent item; Codex inp
     cache_read_input_tokens: 11008, cache_creation_input_tokens: 0 });
 });
 
-test('a repeated Codex token_count (same running total) is not counted again; one with nothing new is dropped', () => {
+test('a repeated Codex token_count (same running total) is not counted again; one with nothing new carries to the next item', () => {
   const last = { input_tokens: 100, cached_input_tokens: 0, output_tokens: 5, total_tokens: 105 };
   const items = parseCodexRollout([
     say(1, 'one'), count(2, last, 105), count(3, last, 105),     // a rate-limit-only repeat
-    count(4, { input_tokens: 7, output_tokens: 1, total_tokens: 8 }, 113),   // no new item: nowhere to put it
+    count(4, { input_tokens: 7, output_tokens: 1, total_tokens: 8 }, 113),   // no new item: carried
     say(5, 'two'),
   ]);
-  assert.deepEqual(items.map((i: any) => i.usage?.output_tokens), [5, undefined]);
+  assert.deepEqual(items.map((i: any) => i.usage?.output_tokens), [5, 1]);
 });
 
 test('an old token_count re-sent after a new agent item does not take that item; its own count does', () => {
@@ -135,4 +135,30 @@ test('a Claude reply that drew nothing carries its tokens to the next reply\'s f
   const u = items.find((i: any) => i.usage).usage;
   assert.equal(u.output_tokens, U1.output_tokens + U2.output_tokens);
   assert.equal(u.cache_read_input_tokens, U1.cache_read_input_tokens + U2.cache_read_input_tokens);
+});
+
+test('carried Claude tokens go on the next drawn agent item even when that reply has no usage of its own', () => {
+  const lines = [entry('user', 'go'),
+    ...reply('msg_empty', U2, [{ type: 'text', text: '' }]),
+    entry('assistant', [{ type: 'text', text: 'shown' }], { id: 'msg_nousage', model: 'claude-opus-5-5' })];
+  const { items } = normalizeTranscript(lines, 'gm', 's', 150) as any;
+  assert.equal(items.find((i: any) => i.text === 'shown')?.usage?.output_tokens, U2.output_tokens);
+});
+
+test('carried Codex tokens go on the next agent item even when no later count arrives', () => {
+  const reasoning = (o: number) => rec(o, 'response_item', { type: 'reasoning', summary: [], encrypted_content: 'x' });
+  const items = parseCodexRollout([
+    reasoning(1), count(2, { input_tokens: 120, output_tokens: 30 }, 150),
+    say(3, 'two'),
+  ]);
+  assert.equal(items[0].usage?.output_tokens, 30);
+});
+
+test('a carried Codex amount and the item\'s own later count add up on the same item', () => {
+  const reasoning = (o: number) => rec(o, 'response_item', { type: 'reasoning', summary: [], encrypted_content: 'x' });
+  const items = parseCodexRollout([
+    reasoning(1), count(2, { input_tokens: 120, output_tokens: 30 }, 150),
+    say(3, 'two'), count(4, { input_tokens: 200, output_tokens: 9 }, 359),
+  ]);
+  assert.deepEqual(items.map((i: any) => i.usage?.output_tokens), [39]);
 });

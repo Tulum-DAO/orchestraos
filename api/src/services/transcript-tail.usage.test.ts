@@ -46,3 +46,24 @@ test('plain growth with no usage change is still a delta, not a snapshot', () =>
   assert.equal(got[1].type, 'delta');
   assert.deepEqual(got[1].items.map((i: any) => i.text), ['two']);
 });
+
+test('a client that missed the restated snapshot gets it on resume (the event id carries a revision)', () => {
+  const f = join(mkdtempSync(join(tmpdir(), 'tail-usage-')), 'rollout.jsonl');
+  writeFileSync(f, rec(1, 'session_meta', { id: 's' })
+    + rec(2, 'response_item', { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'done' }] }));
+  const t = new TranscriptTailer({ agentId: 'cx', resolve: () => ({ path: f, sid: 's' }) });
+  const first: TailEvent[] = [];
+  const unsub = t.subscribe((ev) => first.push(ev));
+  const lastSeen = first[first.length - 1].id;                 // then this client drops
+  unsub();
+  appendFileSync(f, rec(3, 'event_msg', { type: 'token_count', info: {
+    total_token_usage: { total_tokens: 105 }, last_token_usage: { input_tokens: 100, output_tokens: 5 } } }));
+  const keep: TailEvent[] = [];
+  t.subscribe((ev) => keep.push(ev));                          // another client keeps the tailer ticking
+  t.tick();
+  const back: TailEvent[] = [];
+  t.subscribe((ev) => back.push(ev), lastSeen);
+  assert.equal(back.length, 1);
+  assert.equal(back[0].type, 'snapshot');
+  assert.equal(back[0].items.find((i: any) => i.text === 'done')?.usage?.output_tokens, 5);
+});
