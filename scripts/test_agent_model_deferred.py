@@ -698,7 +698,7 @@ def test_the_applied_marker_is_shared_so_another_gateways_put_decides_on_the_rea
     f = AMP.state_path(G.ORCH_DIR)
     _put(SONNET)
     since = AMP.get(f, "dev")["since"]
-    AMP.mark_applied(f, "dev", since, SONNET)                     # what the other process left
+    AMP.mark_applied(f, "dev", since, SONNET, [SID])                     # what the other process left
     seat["det"].state = "idle"
     status, b = _put(OPUS)
     assert status == 200 and seat["live"] == [OPUS]
@@ -711,13 +711,14 @@ def test_a_pass_after_a_restart_records_a_marked_pick_and_types_nothing(seat):
     """The marker survives a restart (it is a file): the next pass records the pick, types nothing."""
     f = AMP.state_path(G.ORCH_DIR)
     _put(SONNET)
-    AMP.mark_applied(f, "dev", AMP.get(f, "dev")["since"], SONNET)
+    AMP.mark_applied(f, "dev", AMP.get(f, "dev")["since"], SONNET, [SID])
     seat["det"].state = "idle"
     assert G._apply_pending_model_switches() == [("dev", "switched")]
     assert seat["live"] == [] and AMP.applied_mark(f, "dev") is None
 
 
-@pytest.mark.parametrize("bad", ["{", "[]", '{"since": 1, "model": "x"}'])
+@pytest.mark.parametrize("bad", ["{", "[]", '{"since": 1, "model": "x", "sids": []}',
+                                 '{"since": "t", "model": "x"}', '{"since": "t", "model": "x", "sids": [1]}'])
 def test_a_damaged_applied_marker_is_unreadable_never_none(tmp_path, bad):
     f = tmp_path / "pending.json"
     AMP._session_file(f, "dev", "applied").write_text(bad)
@@ -733,3 +734,20 @@ def test_one_agents_damaged_marker_never_stops_the_pass_for_the_others(seat, mon
     seat["det"].state = "idle"
     assert ("dev", "switched") in G._apply_pending_model_switches()
     assert seat["live"] == [SONNET] and AMP.get(f, "other")["model"] == HAIKU
+
+
+# ------------------------------------------------------------------ codex R20 on #475
+def test_a_marker_from_before_a_rotation_never_overrides_the_new_agents_model(seat, monkeypatch):
+    """A pass switched SID-A to SONNET and could not record it; dev then rotated to SID-B, on
+    OPUS. The operator asks for SONNET: the old pick is recorded, and SID-B IS switched (the
+    marker's model is not SID-B's)."""
+    f = AMP.state_path(G.ORCH_DIR)
+    _put(SONNET)
+    AMP.mark_applied(f, "dev", AMP.get(f, "dev")["since"], SONNET, [SID])
+    sid_b = "99999999-2222-4333-8444-555555555555"
+    monkeypatch.setattr(G, "_seat_session_ids", lambda s, meta=None: [sid_b])
+    seat["det"].state = "idle"
+    status, b = _put(SONNET)
+    assert status == 200 and seat["live"] == [SONNET], "the new agent is switched, not skipped"
+    assert AMP.applied_mark(f, "dev") is None
+    assert _get()["last_switch"]["outcome"] == "switched"

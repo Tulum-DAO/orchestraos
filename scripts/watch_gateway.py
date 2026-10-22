@@ -4960,8 +4960,10 @@ def _put_model(session, model, catalog, by):
     with _model_switch_lock(session, MODEL_SWITCH_PUT_LOCK_WAIT_S):
         applied = _settle_applied_unrecorded(pend_file, session)
         root, meta, runtime, current = _seat_for_session(session)
-        if applied:
-            current = applied          # its seat may not have kept that switch; the agent is on it
+        if applied and applied[1] and applied[1] == set(_seat_session_ids(session, meta)):
+            # Still the agent that switch was typed into (a rotation since then is a new agent on
+            # its own model): it is on that model even if its seat did not keep the switch.
+            current = applied[0]
         desc = AM.describe(runtime, current, catalog, AM.off_runtimes())
         if model not in desc["allowed"]:
             return 422, {"ok": False, "error": desc["unavailable"].get(model) or "not offered for this agent"}
@@ -5104,9 +5106,10 @@ def _apply_pending_model_switches(now=None, stop=None):
 
 def _settle_applied_unrecorded(f, session):
     """Under the session's switch lock: record "switched" for a pick a gateway already switched
-    but could not record (AMP.applied_mark, shared by every gateway process). Returns the model the
-    agent is on by that switch, else None. A PUT calls it first so it decides against the agent's
-    real model (codex R16, R17 on #475); LockBusy propagates with the marker kept."""
+    but could not record (AMP.applied_mark, shared by every gateway process). Returns (model, sids):
+    the model that switch put on the agent with that identity, else None. A PUT calls it first and
+    takes that model as current only while the session still has EXACTLY that identity (codex R16,
+    R17, R20 on #475); LockBusy propagates with the marker kept."""
     from scripts import agent_model_pending as AMP
     m = AMP.applied_mark(f, session)
     if not m:
@@ -5115,7 +5118,7 @@ def _settle_applied_unrecorded(f, session):
     if e and e.get("since") == m["since"]:
         AMP.resolve(f, session, m["since"], "switched")
     AMP.clear_applied(f, session)
-    return m["model"]
+    return m["model"], set(m["sids"])
 
 
 #: Detector states with no turn that will end: a deferred pick there is closed, never kept waiting.
@@ -5191,7 +5194,7 @@ def _apply_pending_one(f, session, now):
         try:
             return close("switched")
         except AMP.LockBusy:
-            AMP.mark_applied(f, session, since, e.get("model"))
+            AMP.mark_applied(f, session, since, e.get("model"), sids)
             raise
     if status == 409:
         return wait()                  # a turn started first: wait for the next idle moment

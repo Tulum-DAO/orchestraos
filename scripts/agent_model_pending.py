@@ -225,15 +225,17 @@ def _session_file(path, session, suffix):
 # one marker file per session, written and read only under that session's switch lock, so every
 # gateway process sees it and it survives a restart (codex R15-R17 on #475). The next pass, or the
 # next PUT for that agent, records the outcome from it and never types the pick again.
-def mark_applied(path, session, since, model):
+def mark_applied(path, session, since, model, sids=()):
+    """`sids`: the session identity the switch was typed into, so a reader can tell whether the
+    session still runs that agent (a rotation reuses the tmux name; codex R20 on #475)."""
     f = _session_file(path, session, "applied")
     tmp = f.with_name(f"{f.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps({"since": since, "model": model}))
+    tmp.write_text(json.dumps({"since": since, "model": model, "sids": sorted(set(sids or ()))}))
     os.replace(tmp, f)
 
 
 def applied_mark(path, session):
-    """{since, model} or None. A damaged marker raises StateUnreadable (never read as none)."""
+    """{since, model, sids} or None. A damaged marker raises StateUnreadable (never read as none)."""
     f = _session_file(path, session, "applied")
     try:
         raw = f.read_text()
@@ -245,7 +247,8 @@ def applied_mark(path, session):
         m = json.loads(raw)
     except ValueError as e:
         raise StateUnreadable(f"{f}: not JSON ({e})") from e
-    if not (isinstance(m, dict) and isinstance(m.get("since"), str) and isinstance(m.get("model"), str)):
+    if not (isinstance(m, dict) and isinstance(m.get("since"), str) and isinstance(m.get("model"), str)
+            and isinstance(m.get("sids"), list) and all(isinstance(x, str) for x in m["sids"])):
         raise StateUnreadable(f"{f}: not an applied-switch marker")
     return m
 
