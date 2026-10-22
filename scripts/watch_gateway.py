@@ -4422,21 +4422,56 @@ def _seat_for_session(session):
     return name, meta, runtime, _str_or_none(meta.get("model"))
 
 
-def _seat_transcript_path(session):
-    """The Claude transcript the pane is writing: its session id from the pane-events file,
-    then <config dir>/projects/*/<sid>.jsonl. None until both are known."""
-    from scripts import agent_model as AM
+def _pane_session_ids(session):
+    """The CLI session ids the pane-events files (written by the shipped hooks) carry for this
+    tmux session's panes."""
     r = _tmux("list-panes", "-t", session, "-F", "#{pane_id}")
     if r.returncode != 0:
-        return None
-    projects = AM.claude_settings_path().parent / "projects"
+        return []
+    out = []
     for pane in r.stdout.split():
         ev = _load_json(ORCH_DIR / "state" / "agent-events" / "panes" / f"{pane.lstrip('%')}.json") or {}
         sid = ev.get("session_id") if isinstance(ev, dict) else None
         if isinstance(sid, str) and re.fullmatch(r"[0-9a-fA-F-]{36}", sid):
-            hits = sorted(projects.glob(f"*/{sid}.jsonl"), key=lambda q: q.stat().st_mtime)
-            if hits:
-                return hits[-1]
+            out.append(sid)
+    return out
+
+
+def _seat_session_ids(session, meta=None):
+    """The pane's session ids, then the seat record's (Codex hooks record no session id; the
+    seat row carries the rollout's uuid)."""
+    out = _pane_session_ids(session)
+    sid = (meta or {}).get("session_id")
+    if isinstance(sid, str) and re.fullmatch(r"[0-9a-fA-F-]{36}", sid) and sid not in out:
+        out.append(sid)
+    return out
+
+
+def _seat_transcript_path(session, meta=None):
+    """The Claude transcript the pane is writing: <config dir>/projects/*/<sid>.jsonl for the
+    pane's (or the seat's) session id. None until both are known."""
+    from scripts import agent_model as AM
+    projects = AM.claude_settings_path().parent / "projects"
+    for sid in _seat_session_ids(session, meta):
+        hits = sorted(projects.glob(f"*/{sid}.jsonl"), key=lambda q: q.stat().st_mtime)
+        if hits:
+            return hits[-1]
+    return None
+
+
+def _seat_codex_rollout(session, meta=None):
+    """The Codex rollout the seat is writing: the seat record's session id first (rotation
+    writes the live rollout's uuid there, and codex hooks record none in pane events), then the
+    pane's."""
+    from scripts import agent_model_codex as AMC
+    sids = _seat_session_ids(session, meta)
+    own = (meta or {}).get("session_id")
+    if own in sids:
+        sids = [own] + [x for x in sids if x != own]
+    for sid in sids:
+        p = AMC.rollout_for_sid(sid)
+        if p:
+            return p
     return None
 
 
@@ -4480,7 +4515,7 @@ async def handle_agent_model(request):
     if session not in _tmux_session_names():
         return _json({"ok": False, "error": "no such session"}, status=404)
     loop = asyncio.get_event_loop()
-    root, _meta, runtime, current = await loop.run_in_executor(None, _seat_for_session, session)
+    root, meta, runtime, current = await loop.run_in_executor(None, _seat_for_session, session)
     orch_root = _orchestra_root()
     catalog = await loop.run_in_executor(
         None, AM.load_catalog, (runtime or "").lower(), orch_root / "config" / "providers.json",
@@ -4502,7 +4537,23 @@ async def handle_agent_model(request):
         return _json({"ok": True, "model": model, "changed": False,
                       "switching": "switched" if desc["how"] == "live" else "next_rotation"})
 
-    if desc["how"] == "live":
+    if desc["how"] == "live" and (runtime or "").lower() == "codex":
+        from scripts import agent_model_codex as AMC
+
+        def _keys(k):
+            if k == "Escape":
+                _tmux("send-keys", "-t", session, "Escape")
+            else:
+                _tmux("send-keys", "-t", session, "-l", str(k))
+        status, body = await loop.run_in_executor(None, lambda: AMC.switch_live(
+            model=model, config_path=AMC.codex_home() / "config.toml",
+            lock_path=AM.claude_settings_path(),
+            send=lambda text: verified_inject(session, text, False), keys=_keys,
+            capture=lambda: _tmux("capture-pane", "-p", "-t", session).stdout,
+            rollout=_seat_codex_rollout(session, meta)))
+        if status != 200:
+            return _json({**body, "model": model, "current": current}, status=status)
+    elif desc["how"] == "live":
         status, body = await loop.run_in_executor(None, lambda: AM.switch_live(
             model=model, settings_path=AM.claude_settings_path(),
             title=next((r["title"] for r in catalog if r["id"] == model), None),
@@ -4510,7 +4561,7 @@ async def handle_agent_model(request):
             capture=lambda: _tmux("capture-pane", "-p", "-t", session).stdout,
             keys=lambda k: _tmux("send-keys", "-t", session, "-l", str(k)),
             send=lambda text: verified_inject(session, text, False),
-            find_jsonl=lambda: _seat_transcript_path(session)))
+            find_jsonl=lambda: _seat_transcript_path(session, meta)))
         if status != 200:
             # Name the models, so a client's words say which one the agent is on (ios-watch-dev).
             return _json({**body, "model": model, "current": current}, status=status)

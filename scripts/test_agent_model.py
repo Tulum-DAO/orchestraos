@@ -62,11 +62,12 @@ def test_off_runtimes_is_an_install_setting():
 ROWS = [{"id": "a", "title": "A"}, {"id": "b", "title": "B"}]
 
 
-def test_claude_switches_live_and_codex_at_the_next_rotation():
+def test_claude_and_codex_switch_live_and_gemini_at_the_next_rotation():
     d = AM.describe("claude", "a", ROWS, {})
     assert d["how"] == "live" and d["allowed"] == ["a", "b"] and d["unavailable"] == {}
     assert all(m["available"] for m in d["models"]) and d["model"] == "a"
-    assert AM.describe("codex", None, ROWS, {})["how"] == "next_rotation"
+    assert AM.describe("codex", None, ROWS, {})["how"] == "live"
+    assert AM.describe("gemini", None, ROWS, {})["how"] == "next_rotation"
 
 
 @pytest.mark.parametrize("runtime,off,reason", [
@@ -315,8 +316,8 @@ def test_a_model_not_offered_is_422_and_the_same_model_is_a_no_op(gw):
     assert gw["live"] == [] and gw["stored"] == []
 
 
-def test_codex_is_stored_for_the_next_rotation_and_nothing_is_typed(gw, monkeypatch):
-    monkeypatch.setattr(G, "_seat_for_session", lambda s: ("cx", {}, "codex", "gpt-5.6-terra"))
+def test_gemini_is_stored_for_the_next_rotation_and_nothing_is_typed(gw, monkeypatch):
+    monkeypatch.setattr(G, "_seat_for_session", lambda s: ("cx", {}, "gemini", "gpt-5.6-terra"))
     monkeypatch.setattr(AM, "load_catalog", lambda rt, p, st: [{"id": "gpt-5.6-terra", "title": "T"},
                                                               {"id": "gpt-5.6-luna", "title": "L"}])
     r = _run(G.handle_agent_model(_Req("PUT", {"session": "dev", "model": "gpt-5.6-luna"}, actor="operator:web")))
@@ -422,7 +423,7 @@ def test_a_restore_that_cannot_happen_is_a_500_not_an_exception(tmp_path):
 
 
 def test_a_next_rotation_switch_that_is_not_stored_is_an_error(gw, monkeypatch):
-    monkeypatch.setattr(G, "_seat_for_session", lambda s: ("cx", {}, "codex", "gpt-5.6-terra"))
+    monkeypatch.setattr(G, "_seat_for_session", lambda s: ("cx", {}, "gemini", "gpt-5.6-terra"))
     monkeypatch.setattr(AM, "load_catalog", lambda rt, p, st: [{"id": "gpt-5.6-terra", "title": "T"},
                                                               {"id": "gpt-5.6-luna", "title": "L"}])
     import identity_store.identity_writer as IW
