@@ -103,6 +103,16 @@ def is_ours(composer, text):
     return bool(t) and (composer or "").strip() == t     # EXACT (codex r5): spacing edits are edits
 
 
+def owns_line(session, composer, text):
+    """May a typer press Enter on `composer` as its own earlier, unsubmitted `text`? Only when the
+    composer holds EXACTLY that text (is_ours) and this session's row records that same text and is
+    marked typed: the reconcile's rule. A substring or prefix match would also press Enter on a
+    person's words appended to ours, or on an identical draft no typer recorded (codex R15)."""
+    row = row_for(session)
+    return (isinstance(row, dict) and row.get("typed") is True and row.get("text") == text
+            and is_ours(composer, text))
+
+
 def reconcile(read_composer, press_enter, report, now=None, verify_wait_s=2.5, lock=None):
     """Resolve every leftover row. Returns [(session, outcome)].
 

@@ -110,9 +110,18 @@ def test_a_preexisting_chip_is_never_pasted_onto_or_entered():
 
 
 def test_our_own_earlier_strand_is_submitted_not_repasted():
+    import inject_journal
+    inject_journal.record("pm-x", TEXT, TEXT[:40]); inject_journal.mark_typed("pm-x")   # our attempt
     p = Pane(preexisting=TEXT)
     assert run(p) == ("submitted", "enter-1")
     assert p.pastes == 0
+
+
+def test_an_identical_draft_no_typer_recorded_is_never_entered():
+    """codex R15 on #472: without a typed row for this text, the composer is not provably ours."""
+    p = Pane(preexisting=TEXT)
+    assert run(p) == ("stuck", "not-exactly-ours")
+    assert p.pastes == 0 and p.enters == 0
 
 
 def test_copy_mode_is_exited_first():

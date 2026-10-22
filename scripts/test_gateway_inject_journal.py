@@ -238,10 +238,16 @@ def test_RACE_kill_mid_inject_then_restart_reconcile_submits_never_strands(tmp_p
                 return json.loads(jfile.read_text()).get("typed") is True
             except (OSError, ValueError):
                 return False
-        for _ in range(200):                       # wait until the text is TYPED (marked row + composer)
+        # Wait until the text is TYPED (marked row + composer). The child imports the whole gateway
+        # first, which on a loaded runner can take well over 10 s: wait long, and fail on the wait
+        # itself, never by killing a child that has not typed yet.
+        deadline, typed = time.monotonic() + 90, False
+        while time.monotonic() < deadline and child.poll() is None:
             if _typed_mark() and "124 pending cards" in tm("capture-pane", "-t", "=emu:", "-p").stdout:
+                typed = True
                 break
             time.sleep(0.05)
+        assert typed, "the child never typed its text (it exited, or 90 s passed)"
         os.kill(child.pid, signal.SIGKILL)         # the crash: between send-keys -l and Enter
         child.wait(timeout=10)
         time.sleep(0.3)

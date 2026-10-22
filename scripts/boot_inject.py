@@ -230,14 +230,13 @@ def _boot_inject_unlocked(session, text, runtime=DEFAULT_RUNTIME, *, allow_canon
             log("the input line already holds typed text (or could not be read): nothing typed")
             return "stuck", "composer-occupied"
     else:
-        # The composer starts like our prompt, but a row marked typed records a DIFFERENT message:
-        # that text may be an earlier half-sent message, not ours. Entering it or replacing its
-        # row loses the evidence the next start needs. Nothing typed, nothing pressed.
+        # The composer starts like our prompt: Enter only when it is EXACTLY our earlier, recorded
+        # attempt (a typed row for this very text). Our words with a person's appended, another
+        # message's half-sent text, or a draft no typer recorded: nothing typed, nothing pressed.
         import inject_journal
-        left = inject_journal.row_for(session)
-        if isinstance(left, dict) and left.get("typed") is True and left.get("text") != text:
-            log("the composer may hold an earlier half-sent message (its row is recorded): nothing pressed")
-            return "stuck", "half-sent-row"
+        if not inject_journal.owns_line(session, line0.strip().lstrip("❯>›\u203a"), text):
+            log("the composer starts like our prompt but is not exactly our recorded attempt: nothing pressed")
+            return "stuck", "not-exactly-ours"
 
     # Every guard has passed: the typed-not-entered row is written now. No row, no typing.
     if journal is not None:

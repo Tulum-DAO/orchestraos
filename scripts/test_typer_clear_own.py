@@ -463,7 +463,7 @@ def test_boot_inject_presses_nothing_on_our_prefix_while_a_different_message_is_
     older = TB.TEXT + " plus an older tail"
     J = _half_sent(monkeypatch, tmp_path, older)
     p = TB.Pane(preexisting=older)
-    assert TB.run(p) == ("stuck", "half-sent-row")
+    assert TB.run(p) == ("stuck", "not-exactly-ours")
     assert p.pastes == 0 and p.enters == 0
     assert [r["text"] for r in J.rows()] == [older]
 
@@ -472,3 +472,32 @@ def test_boot_inject_still_resubmits_its_own_recorded_strand(monkeypatch, tmp_pa
     import test_boot_inject as TB
     _half_sent(monkeypatch, tmp_path, TB.TEXT)                  # control: the row is OUR prompt
     assert TB.run(TB.Pane(preexisting=TB.TEXT)) == ("submitted", "enter-1")
+
+
+# ------------------------------------------------------------------ codex R15 on #472: exact recorded ownership
+def test_router_never_enters_our_text_with_a_persons_words_appended(monkeypatch, tmp_path):
+    J = _half_sent(monkeypatch, tmp_path, TEXT)                 # our attempt IS recorded...
+    keys = []
+    R = _router_on(monkeypatch, f"❯ {TEXT} and the operator's addition", keys)   # ...but they added to it
+    assert R.inject("pm-x", TEXT) == "held"
+    assert not [k for k in keys if k[0] in ("paste-buffer", "send-keys")]
+    assert [(r["text"], r.get("typed")) for r in J.rows()] == [(TEXT, True)]
+
+
+def test_router_never_enters_an_identical_line_no_typer_recorded(monkeypatch, tmp_path):
+    import inject_journal as J
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+    keys = []
+    R = _router_on(monkeypatch, f"❯ {TEXT}", keys)
+    assert R.inject("pm-x", TEXT) == "held"
+    assert not [k for k in keys if k[0] in ("paste-buffer", "send-keys")]
+    assert J.rows() == []
+
+
+def test_boot_inject_never_enters_our_prompt_with_a_persons_words_appended(monkeypatch, tmp_path):
+    import test_boot_inject as TB
+    J = _half_sent(monkeypatch, tmp_path, TB.TEXT)
+    p = TB.Pane(preexisting=TB.TEXT + " and the operator's addition")
+    assert TB.run(p) == ("stuck", "not-exactly-ours")
+    assert p.pastes == 0 and p.enters == 0
+    assert [(r["text"], r.get("typed")) for r in J.rows()] == [(TB.TEXT, True)]

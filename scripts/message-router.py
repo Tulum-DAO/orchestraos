@@ -998,12 +998,12 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, jo
     # Stage 0.6 (De-duplication guard): if the probe text is ALREADY in the input
     # line/composer from a previous unsubmitted attempt, never paste another duplicate copy!
     if ok0 and probe[:30] in line0:
-        # ...unless a row marked typed records a DIFFERENT message: the line may be that earlier
-        # half-sent message, not ours. Pressing Enter on it would send it under our name. Held.
+        # ...only when the line is EXACTLY our earlier, recorded attempt (a typed row for this very
+        # text). Our words with a person's appended, another message's half-sent text, or a draft
+        # no typer recorded would all go out under our name. Held; nothing pressed.
         import inject_journal
-        _left = inject_journal.row_for(session)
-        if isinstance(_left, dict) and _left.get("typed") is True and _left.get("text") != text:
-            log(f"{session}: the input line may hold an earlier half-sent message (row recorded) — held")
+        if not inject_journal.owns_line(session, line0.strip().lstrip("❯>›\u203a"), text):
+            log(f"{session}: the input line starts like our message but is not exactly our recorded attempt — held")
             return "held"
         # The text is ours: this call takes the row over (written and marked typed, as the text is
         # already on the line), so a submit clears it and 'stuck' keeps it. No row, no Enter.
