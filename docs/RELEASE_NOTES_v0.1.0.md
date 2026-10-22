@@ -164,7 +164,7 @@ To remove them: `orchestra down`, back up `registry.json`, delete those keys fro
 
 **Added after this release, on main:** after a rotation the chat keeps its thread. `GET /api/agents/:id/transcript` now shows the end of the previous generation's conversation, then one divider item, then the current generation, with `limit` counted across both. The divider is `{kind: "rotation", role: "system", uuid: "rot:<new session>", ts, from_generation, to_generation, from_session, to_session}` (and a matching `rotation` render node), always drawn in the conversation, never folded. The previous generation is the one the identity database retired at the very moment the current one was promoted, never "the next lower number" (numbers can reset); its log is found by its session id (Claude project dir, Codex rollout, Gemini brain log) and read only when the current log does not fill the window. No such generation, or no log for it on this box: the chat is the current generation alone, as before. The live stream and the Markdown export are unchanged. Declared in the transcript.v2 contract. Added in PR #469.
 
-**Fixed after this release, on main:** in a chat with no message from you at all (only agent mail, hooks or the spawn brief), the newest reply is drawn instead of folded into the strip, so the agent's latest words always show (#NNN).
+**Fixed after this release, on main:** in a chat with no message from you at all (only agent mail, hooks or the spawn brief), the newest reply is drawn instead of folded into the strip, so the agent's latest words always show (#474).
 
 ## CI note for this release
 
