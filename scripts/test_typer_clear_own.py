@@ -557,3 +557,41 @@ def test_nudge_does_not_call_a_vanished_prompt_a_submit(monkeypatch, tmp_path):
     assert NP._nudge_unlocked("seat", "continue please") == 1
     assert [r["text"] for r in J.rows()] == ["continue please"]          # kept as evidence
     assert not [k for k in keys if k[-1] == "C-u"]
+
+
+# ------------------------------------------------------------------ codex R18 on #472 (declined, pinned)
+# An empty prompt line left above a menu: the menu's SELECTED row carries the prompt glyph itself, so
+# the bottom-most prompt line is that row ("❯ 1. Yes", read as typed text) and every typer holds.
+OLD_PROMPT_THEN_MENU = "❯ \n\nDo you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel"
+
+
+def test_router_holds_on_a_menu_below_an_old_empty_prompt(monkeypatch, tmp_path):
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+    keys = []
+    R = _router_on(monkeypatch, "❯ 1. Yes", keys)
+    monkeypatch.setattr(R, "tmux", lambda *a, **k: keys.append(a) or types.SimpleNamespace(
+        returncode=0, stdout=OLD_PROMPT_THEN_MENU if a[0] == "capture-pane" else ""))
+    assert R.inject("pm-x", TEXT) == "held"
+    assert not [k for k in keys if k[0] in ("paste-buffer", "set-buffer", "send-keys")]
+
+
+def test_boot_inject_types_nothing_on_a_menu_below_an_old_empty_prompt(monkeypatch, tmp_path):
+    import test_boot_inject as TB
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+
+    class Menu(TB.Pane):
+        def render(self):
+            return "\n".join(self.scroll + OLD_PROMPT_THEN_MENU.split("\n"))
+    p = Menu()
+    assert TB.run(p)[0] in ("stuck", "failed")
+    assert p.pastes == 0 and p.enters == 0
+
+
+def test_nudge_types_nothing_on_a_menu_below_an_old_empty_prompt(monkeypatch, tmp_path):
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+    keys = []
+    monkeypatch.setattr(NP, "tmux", lambda *a: keys.append(a) or types.SimpleNamespace(
+        returncode=0, stdout=OLD_PROMPT_THEN_MENU if a[0] == "capture-pane" else "", stderr=""))
+    monkeypatch.setattr(NP, "attached", lambda s: False)
+    assert NP._nudge_unlocked("seat", "continue please") == 2
+    assert not [k for k in keys if k[0] == "send-keys"]
