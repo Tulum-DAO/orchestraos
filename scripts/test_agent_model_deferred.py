@@ -352,3 +352,13 @@ def test_no_record_read_runs_on_the_event_loop(seat, monkeypatch):
     monkeypatch.setattr(AMP, "get", lambda f, s: where.append(threading.current_thread() is threading.main_thread()) or real_get(f, s))
     _get()
     assert where and not any(where)
+
+
+@pytest.mark.parametrize("state", ["stopped", "crashed", "offline"])
+def test_an_agent_whose_cli_is_gone_closes_the_pick_with_the_reason(seat, state):
+    """The tmux session is still there but the agent stopped or crashed: no turn will end, so the
+    pick is closed now with its reason, never kept waiting (codex R8 on #475)."""
+    _put(SONNET)
+    seat["det"].state = state
+    assert G._apply_pending_model_switches() == [("dev", f"failed: the agent {state} before its turn ended")]
+    assert seat["live"] == [] and _get()["pending"] is None

@@ -5079,6 +5079,10 @@ def _apply_pending_model_switches(now=None):
     return out
 
 
+#: Detector states with no turn that will end: a deferred pick there is closed, never kept waiting.
+_SWITCH_TERMINAL_STATES = {"stopped", "crashed", "offline"}
+
+
 def _apply_pending_one(f, session, now):
     """Apply or close one session's pick, under its switch lock (held by the caller). The pick is
     re-read here, so one the operator cancelled or replaced meanwhile is never typed. Returns the
@@ -5115,6 +5119,10 @@ def _apply_pending_one(f, session, now):
         # SAME seat's successor, idle by then: the seat the operator asked about, not another agent.
         return close("failed", "the agent moved to a new session before its turn ended")
     st = (_agent_status().get_agent_status(session) or {}).get("state")
+    if st in _SWITCH_TERMINAL_STATES:
+        # Not a turn that will end: the CLI is gone from the pane. Its next start is a new session
+        # on the seat's stored model; the pick is closed with the reason (codex R8 on #475).
+        return close("failed", f"the agent {st} before its turn ended")
     if st not in INJECTABLE_STATES:
         return wait()
     if e.get("model") == current:
