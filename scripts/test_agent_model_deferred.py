@@ -316,6 +316,7 @@ def test_an_unreadable_record_is_never_overwritten(seat):
     '{"pending": {"dev": {"model": "x", "since": "t", "since_ts": 1e9999, "sids": []}}, "last": {}}',
     '{"pending": {"dev": {"model": "x", "since": "t", "since_ts": 1, "sids": [], "reported": "yes"}}, "last": {}}',
     '{"pending": {"dev": {"model": "x", "since": "t", "since_ts": 1, "sids": [], "by": 7}}, "last": {}}',
+    '{"pending": {}, "last": {"dev": {"model": "x", "at": "t", "outcome": "failed", "reason": {}}}}',
 ])
 def test_a_malformed_ENTRY_is_a_damaged_record_too(seat, bad):
     """Valid JSON with a broken entry: refused like a corrupt file, and left as it is (codex R3)."""

@@ -75,7 +75,8 @@ def _valid_pending(e):
 
 def _valid_last(e):
     return (isinstance(e, dict) and isinstance(e.get("model"), str) and isinstance(e.get("at"), str)
-            and e.get("outcome") in ("switched", "failed"))
+            and e.get("outcome") in ("switched", "failed")
+            and (e.get("reason") is None or isinstance(e.get("reason"), str)))
 
 
 @contextmanager
