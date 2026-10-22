@@ -4929,17 +4929,13 @@ async def handle_agent_model(request):
     return _json(body, status=status)
 
 
-_MODEL_SWITCH_LOCKS = {}
-_MODEL_SWITCH_LOCKS_GUARD = _threading.Lock()
-
-
 def _model_switch_lock(session):
-    """ONE lock per tmux session for every model-switch decision in this gateway: a PUT (cancel,
-    defer, switch) and the deferred applier's whole apply. A cancel or a newer pick therefore
-    either lands before the applier reads the pick, or after the switch it was racing finished;
-    never in between (codex R1 on #475)."""
-    with _MODEL_SWITCH_LOCKS_GUARD:
-        return _MODEL_SWITCH_LOCKS.setdefault(session, _threading.Lock())
+    """ONE lock per tmux session for every model-switch decision: a PUT (cancel, defer, switch) and
+    the deferred applier's whole apply, across threads and gateway processes. A cancel or a newer
+    pick therefore either lands before the applier reads the pick, or after the switch it was
+    racing finished; never in between (codex R1, R12 on #475)."""
+    from scripts import agent_model_pending as AMP
+    return AMP.session_lock(AMP.state_path(ORCH_DIR), session)
 
 
 def _put_model(session, model, catalog, by):

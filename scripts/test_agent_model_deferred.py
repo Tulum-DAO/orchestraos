@@ -5,6 +5,8 @@ PUT /agent-model on a working agent -> 202 pending, nothing typed; the gateway a
 moment the agent is idle, through the same locked path; a newer pick replaces it, the current
 model cancels it; every applied or failed pick lands in `last_switch` with its reason.
 """
+from pathlib import Path
+
 import pytest
 
 import scripts.agent_model as AM
@@ -372,3 +374,33 @@ def test_a_gone_cli_with_no_readable_identity_is_still_closed(seat, monkeypatch)
     seat["det"].state = "crashed"
     monkeypatch.setattr(G, "_seat_session_ids", lambda s, meta=None: [])
     assert G._apply_pending_model_switches() == [("dev", "failed: the agent crashed before its turn ended")]
+
+
+def test_another_gateway_process_holding_the_agents_lock_makes_the_pass_wait(seat, monkeypatch):
+    """Two gateway processes (an old one finishing a pass while a new one starts) never both apply
+    a pick: the lock is a file lock shared across processes (codex R12 on #475)."""
+    import subprocess
+    import sys
+    import textwrap
+    import threading
+    import time
+    _put(SONNET)
+    seat["det"].state = "idle"
+    f = AMP.state_path(G.ORCH_DIR)
+    child = subprocess.Popen([sys.executable, "-c", textwrap.dedent(f"""
+        import sys, time
+        sys.path.insert(0, {str(Path(AMP.__file__).resolve().parents[1])!r})
+        from scripts import agent_model_pending as AMP
+        with AMP.session_lock({str(f)!r}, "dev"):
+            print("held", flush=True)
+            time.sleep(1.5)
+    """)], stdout=subprocess.PIPE, text=True)
+    assert child.stdout.readline().strip() == "held"
+    t0 = time.monotonic()
+    done = threading.Event()
+    th = threading.Thread(target=lambda: (G._apply_pending_model_switches(), done.set()))
+    th.start()
+    assert not done.wait(0.5) and seat["live"] == []                 # waiting on the other process
+    th.join(10)
+    child.wait(10)
+    assert seat["live"] == [SONNET] and time.monotonic() - t0 >= 1.0

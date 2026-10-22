@@ -12,8 +12,10 @@ session's `last`, so a client can say "switched at 13:42" or "could not switch: 
 The file survives a gateway restart.
 """
 import fcntl
+import hashlib
 import json
 import math
+import re
 import os
 import time
 from contextlib import contextmanager
@@ -157,3 +159,23 @@ def mark_reported(path, session, since):
             cur["reported"] = True
             return True
         return False
+
+
+@contextmanager
+def session_lock(path, session):
+    """ONE lock per tmux session for every model-switch decision, across threads AND processes (an
+    old gateway still finishing a pass while a new one starts; codex R12 on #475): an flock on a
+    file next to the record, opened afresh per acquisition so threads of one process exclude each
+    other too. Held across the read, the identity check, the switch and the resolve."""
+    name = str(session)
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", name) or "_"
+    if safe != name or safe.startswith("."):
+        safe = f"{safe}~{hashlib.sha256(name.encode()).hexdigest()[:12]}"
+    d = Path(path).with_name(Path(path).name + ".locks")
+    d.mkdir(parents=True, exist_ok=True)
+    with open(d / f"{safe}.lock", "a") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
