@@ -42,6 +42,7 @@ from approval_schema import ApprovalStore
 from questionnaire_schema import QuestionnaireStore
 import approval_resume
 import questionnaire_resume
+import pane_lock
 import logging
 import inspect
 # Module logger for the voice-lane endcall/fallback paths (fixes the `log` NameError:
@@ -2296,11 +2297,44 @@ def _tmux(*args, timeout=5):
     return subprocess.run(["tmux", *args], capture_output=True, text=True, timeout=timeout)
 
 
+def _st(session):
+    """A tmux target that matches this session NAME EXACTLY (gm P1, 2026-10-06).
+
+    `-t NAME` resolves exact-first, then by PREFIX, then fnmatch. So while the root session
+    exists the bare name is correct — and the moment it does NOT, every read and every
+    KEYSTROKE aimed at NAME lands in NAME-gN: the green. That window is real and routine; it is
+    the husk-killed-before-rename gap during a blue/green swap.
+    PROVEN LIVE before the fix, with only `obg75prefix-g9` alive and no `obg75prefix`:
+      _capture_pane("obg75prefix")                    -> "I AM THE GREEN PANE"
+      _tmux("send-keys","-t","obg75prefix","-l",...)  -> landed in the GREEN's pane, rc 0
+    A refused send is recoverable; a keystroke typed into the wrong agent is not.
+
+    ⚠ THE TRAILING COLON IS LOAD-BEARING, AND '=NAME' ALONE IS A TRAP THAT LOOKS LIKE A FIX.
+    For a PANE target (capture-pane, send-keys) this tmux parses a bare '=NAME' as a pane NAME
+    and fails for EVERY session, present or absent:
+        capture-pane -t '=watch-gateway'   -> can't find pane: =watch-gateway   (session LIVE)
+        capture-pane -t '=obg75prefix-g9'  -> can't find pane                   (session LIVE)
+    I shipped exactly that for a few minutes and read its blanket failure as "the leak is
+    closed" — a false negative that would have blinded every capture and silenced every
+    keystroke in this gateway had it reached a restart. The colon makes the session component
+    exact-matched instead, MEASURED in all four directions:
+        '=NAME:'  on a live session        -> reads it / the keystroke lands
+        '=NAME:'  with only NAME-gN alive   -> "can't find session", nothing lands
+        'NAME:'   with only NAME-gN alive   -> reads the GREEN  (so '=' is what closes it)
+    `list-panes -t '=NAME'` (a SESSION target) does accept the bare form, which is what the one
+    list-panes call here uses.
+    """
+    s = str(session or "")
+    if s.startswith("="):
+        return s if ":" in s else f"{s}:"
+    return f"={s}" if ":" in s else f"={s}:"
+
+
 def _capture_pane(session, lines=60, ansi=False):
     """lines>0 includes scrollback (content reads); lines=0 = visible screen
     ONLY — required for any liveness/guard check, because old spinner frames
     ('esc to interrupt') persist in scrollback after a turn ends."""
-    args = ["capture-pane", "-t", session, "-p"]
+    args = ["capture-pane", "-t", _st(session), "-p"]
     if lines > 0:
         args += ["-S", f"-{lines}"]
     if ansi:
@@ -2326,6 +2360,30 @@ import threading as _threading
 
 _SEND_LOCKS_GUARD = _threading.Lock()
 _SEND_LOCKS: dict = {}
+
+
+#: Cross-process pane lock wait (pane_lock.py, gm msg_2291dee3). Taken only on executor threads.
+PANE_LOCK_WAIT_S = float(os.environ.get("WATCH_GATEWAY_PANE_LOCK_WAIT_S", "8.0"))
+
+
+from contextlib import contextmanager as _contextmanager
+
+
+@_contextmanager
+def _pane_guard(session):
+    """The CROSS-PROCESS half of the send lock (the threading lock below is in-process only).
+    Yields True when held, False when another typer (router, approval_resume, nudge) kept the pane
+    past PANE_LOCK_WAIT_S. Never on the event loop: every caller runs in an executor thread."""
+    cm = pane_lock.pane_lock(session, wait_s=PANE_LOCK_WAIT_S)
+    try:
+        cm.__enter__()
+    except pane_lock.PaneBusy:
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        cm.__exit__(None, None, None)
 
 
 def _session_send_lock(session):
@@ -2420,6 +2478,19 @@ def _status_runtime(st) -> str:
 
 
 def verified_inject(session, text, force=False):
+    """_verified_inject_locked under the ONE cross-process pane lock (pane_lock.py) for the WHOLE
+    call, gates included: the composer read that protects the operator's typed text must not race another
+    typer's in-flight burst (measured in test_pane_lock_race: read outside the lock, a router paste
+    mid-delivery looked like the operator's draft). Busy past PANE_LOCK_WAIT_S -> 'busy', nothing typed.
+    Runs on executor threads only (the /agent-message handler, approval_resume's cron)."""
+    with _pane_guard(session) as _pane_held:
+        if not _pane_held:
+            return False, {"reason": "busy", "state": "busy",
+                           "activity": "another sender is typing into this pane"}
+        return _verified_inject_locked(session, text, force)
+
+
+def _verified_inject_locked(session, text, force=False):
     """Inject text into an agent pane with VERIFIED submit.
 
     Returns (ok, info). The merge-3 failure class = Enter swallowed by the
@@ -2486,7 +2557,7 @@ def verified_inject(session, text, force=False):
     # Auto-dismiss modal rating prompts (e.g. Antigravity "How's the CLI experience so far? [0] Skip")
     if any("How's the CLI experience so far" in ln or "[0] Skip" in ln for ln in pre.splitlines()):
         with _session_send_lock(session):
-            _tmux("send-keys", "-t", session, "0")
+            _tmux("send-keys", "-t", _st(session), "0")
             _time.sleep(0.5)
             pre_raw = _capture_pane(session, lines=0, ansi=True) or ""
             pre = _strip_ansi(pre_raw)
@@ -2522,7 +2593,7 @@ def verified_inject(session, text, force=False):
     # concurrent /agent-suggest (two-phase Tab->Enter) or /agent-key on the
     # same pane so their keystrokes can't interleave.
     with _session_send_lock(session):
-        r = _tmux("send-keys", "-t", session, "-l", text)
+        r = _tmux("send-keys", "-t", _st(session), "-l", text)
         if r.returncode != 0:
             return False, {"reason": "send_failed", "state": state}
         _time.sleep(INJECT_INGEST_WAIT_S)
@@ -2533,7 +2604,7 @@ def verified_inject(session, text, force=False):
                 st_retry = _agent_status().get_agent_status(session)
                 if st_retry.get("state") not in allowed:
                     break
-            _tmux("send-keys", "-t", session, "Enter")
+            _tmux("send-keys", "-t", _st(session), "Enter")
             _time.sleep(2.5 if attempt == 1 else 2.0)
             pane = _strip_ansi(_capture_pane(session, lines=0) or "")   # visible only
             # Submitted messages ALSO render as "❯ text" or "> text" in scrollback — only the
@@ -2625,6 +2696,14 @@ def _accepted_matches(typed, suggestion_text) -> bool:
 
 
 def suggest_accept(session, suggestion_text):
+    """Cross-process pane lock around _suggest_accept_inner (pane_lock.py)."""
+    with _pane_guard(session) as held:
+        if not held:
+            return 409, {"ok": False, "error": "another sender is typing into this pane"}
+        return _suggest_accept_inner(session, suggestion_text)
+
+
+def _suggest_accept_inner(session, suggestion_text):
     """Two-phase accept of the current ghost suggestion. Returns (status, body).
     Holds the per-session send mutex for the whole Tab->verify->Enter->verify
     sequence (F3). Fail-closed: any ambiguity -> refuse BEFORE Enter."""
@@ -2656,7 +2735,7 @@ def suggest_accept(session, suggestion_text):
             return 409, {"ok": False, "error": "composer has typed text",
                          "composer_text": typed[:120]}
         # (§3b.4a) Tab accepts the ghost into the composer (NOT a digit).
-        r = _tmux("send-keys", "-t", session, "Tab")
+        r = _tmux("send-keys", "-t", _st(session), "Tab")
         if r.returncode != 0:
             _audit_suggest({"session": session, "suggestion_text": suggestion_text,
                             "ts": _time.time(), "outcome": "send_failed_tab",
@@ -2676,7 +2755,7 @@ def suggest_accept(session, suggestion_text):
         # (§3b.4c) Enter + verified-submit (retry once — Enter-swallow hazard).
         marker = suggestion_text.strip().splitlines()[0][:40] if suggestion_text.strip() else ""
         for attempt in (1, 2):
-            _tmux("send-keys", "-t", session, "Enter")
+            _tmux("send-keys", "-t", _st(session), "Enter")
             _time.sleep(0.8 if attempt == 1 else 1.6)
             pane = _strip_ansi(_capture_pane(session, lines=0) or "")
             comp = [ln for ln in pane.splitlines() if _is_prompt_line(ln)]
@@ -2848,17 +2927,17 @@ def menu_resume_keypress(session, key, expect_question=None, commit=True):
     if not _ledger_menu_matches(session, expect_question, menu=cur):
         return False, {"reason": "menu_gone"}
     if _is_gemini_session(session) or _is_codex_session(session):
-        r = _tmux("send-keys", "-t", session, key, "Enter")
+        r = _tmux("send-keys", "-t", _st(session), key, "Enter")
         if r.returncode != 0:
             return False, {"reason": "send_failed"}
         return True, {"sent": key}
     # Claude Code branch.
     if not commit:
-        r = _tmux("send-keys", "-t", session, key)   # open the field; do NOT commit
+        r = _tmux("send-keys", "-t", _st(session), key)   # open the field; do NOT commit
         if r.returncode != 0:
             return False, {"reason": "send_failed"}
         return True, {"sent": key}
-    r = _tmux("send-keys", "-t", session, key, "Enter")  # select + commit
+    r = _tmux("send-keys", "-t", _st(session), key, "Enter")  # select + commit
     if r.returncode != 0:
         return False, {"reason": "send_failed"}
     import time as _time
@@ -2885,12 +2964,12 @@ def menu_resume_free_text(session, key, text, expect_question=None):
         info.setdefault("phase", 1)
         return False, info
     _time.sleep(MENU_FIELD_OPEN_WAIT_S)          # let the text field open
-    r = _tmux("send-keys", "-t", session, "-l", text)
+    r = _tmux("send-keys", "-t", _st(session), "-l", text)
     if r.returncode != 0:
         return False, {"reason": "send_failed", "phase": 2}
     _time.sleep(INJECT_INGEST_WAIT_S)
     for attempt in (1, 2):
-        r = _tmux("send-keys", "-t", session, "Enter")
+        r = _tmux("send-keys", "-t", _st(session), "Enter")
         if r.returncode != 0:
             return False, {"reason": "send_failed", "phase": 3}
         _time.sleep(0.8 if attempt == 1 else 1.6)
@@ -2941,8 +3020,8 @@ def permission_respond(session, text, *, armed=False, read_fn=None, key_fn=None,
     import time as _time
     settle_s = MENU_FIELD_OPEN_WAIT_S if settle_s is None else settle_s
     read_fn = read_fn or (lambda: _current_menu(session))
-    key_fn = key_fn or (lambda k: _tmux("send-keys", "-t", session, k).returncode == 0)
-    type_fn = type_fn or (lambda t: _tmux("send-keys", "-t", session, "-l", t).returncode == 0)
+    key_fn = key_fn or (lambda k: _tmux("send-keys", "-t", _st(session), k).returncode == 0)
+    type_fn = type_fn or (lambda t: _tmux("send-keys", "-t", _st(session), "-l", t).returncode == 0)
     menu = read_fn()
     if not isinstance(menu, dict):
         return False, {"reason": "menu_gone"}
@@ -3030,7 +3109,7 @@ def menu_capture_walk(session, *, read_fn=None, key_fn=None, settle_s=0.8,
     Pure over read_fn (-> parsed pending_menu|None) / key_fn (sends one key)."""
     import time as _time
     read_fn = read_fn or (lambda: _current_menu(session))
-    key_fn = key_fn or (lambda k: _tmux("send-keys", "-t", session, k).returncode == 0)
+    key_fn = key_fn or (lambda k: _tmux("send-keys", "-t", _st(session), k).returncode == 0)
 
     def _run():
         parts = []
@@ -3291,7 +3370,7 @@ def _session_pane_text(session):
     """Raw pane text of the session (ANSI-stripped) — used to verify the agy
     write-in value, which renders on a "Your answer:" line the menu parser does
     NOT fold into the options dict."""
-    cp = _tmux("capture-pane", "-p", "-t", session)
+    cp = _tmux("capture-pane", "-p", "-t", _st(session))
     return cp.stdout if getattr(cp, "returncode", 1) == 0 else ""
 
 
@@ -3334,9 +3413,9 @@ def menu_submit_agy(session, *, answers, armed=False, read_fn=None, key_fn=None,
     a 'Your answer:' line, NOT in the parsed options); defaults to a raw pane scan."""
     import time as _time
     read_fn = read_fn or (lambda: _current_menu(session))
-    key_fn = key_fn or (lambda k: _tmux("send-keys", "-t", session, k).returncode == 0)
+    key_fn = key_fn or (lambda k: _tmux("send-keys", "-t", _st(session), k).returncode == 0)
     type_fn = type_fn or (
-        lambda txt: _tmux("send-keys", "-t", session, "-l", txt).returncode == 0)
+        lambda txt: _tmux("send-keys", "-t", _st(session), "-l", txt).returncode == 0)
     if text_present_fn is None:
         def text_present_fn(t):
             # ANCHORED to the 'Your answer:' field (F6 congruence): an unanchored
@@ -3638,9 +3717,9 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
     menu gone / unreadable -> honest failure, nothing further pressed."""
     import time as _time
     read_fn = read_fn or (lambda: _current_menu(session))
-    key_fn = key_fn or (lambda k: _tmux("send-keys", "-t", session, k).returncode == 0)
+    key_fn = key_fn or (lambda k: _tmux("send-keys", "-t", _st(session), k).returncode == 0)
     type_fn = type_fn or (
-        lambda txt: _tmux("send-keys", "-t", session, "-l", txt).returncode == 0)
+        lambda txt: _tmux("send-keys", "-t", _st(session), "-l", txt).returncode == 0)
     # SHAPE-GATE FIRST: before the family probe, before the lock, before any read --
     # a malformed ns must cost ZERO keypresses on either menu family.
     answers, _bad_ns = _normalize_ns(answers)
@@ -4176,7 +4255,7 @@ def menu_submit(session, *, expect_question=None, dry_run=True,
     SEPARATE the operator arm-go — never auto-fired."""
     import time as _time
     read_fn = read_fn or (lambda: _current_menu(session))
-    key_fn = key_fn or (lambda k: _tmux("send-keys", "-t", session, k).returncode == 0)
+    key_fn = key_fn or (lambda k: _tmux("send-keys", "-t", _st(session), k).returncode == 0)
 
     menu = read_fn()
     if not isinstance(menu, dict):
@@ -4487,7 +4566,7 @@ async def handle_agent_interrupt(request):
     if st.get("state") not in ("working", "thinking"):
         return _json({"ok": False, "error": "not mid-turn",
                       "state": _STATE_MAP.get(st.get("state"), st.get("state"))}, status=409)
-    r = _tmux("send-keys", "-t", session, "Escape")
+    r = _tmux("send-keys", "-t", _st(session), "Escape")
     # Stop-button linger fix (the operator field report 2026-08-18): a user interrupt
     # never fires the CLI Stop hook, so the pane's hook event stays 'working'
     # and the detector reports "Active turn" for up to HOOK_WORKING_TTL_S
@@ -4524,7 +4603,7 @@ def _seat_for_session(session):
 def _pane_session_ids(session):
     """The CLI session ids the pane-events files (written by the shipped hooks) carry for this
     tmux session's panes."""
-    r = _tmux("list-panes", "-t", session, "-F", "#{pane_id}")
+    r = _tmux("list-panes", "-t", f"={session}", "-F", "#{pane_id}")
     if r.returncode != 0:
         return []
     out = []
@@ -4641,14 +4720,14 @@ async def handle_agent_model(request):
 
         def _keys(k):
             if k == "Escape":
-                _tmux("send-keys", "-t", session, "Escape")
+                _tmux("send-keys", "-t", _st(session), "Escape")
             else:
-                _tmux("send-keys", "-t", session, "-l", str(k))
+                _tmux("send-keys", "-t", _st(session), "-l", str(k))
         status, body = await loop.run_in_executor(None, lambda: AMC.switch_live(
             model=model, config_path=AMC.codex_home() / "config.toml",
             lock_path=AM.claude_settings_path(),
             send=lambda text: verified_inject(session, text, False), keys=_keys,
-            capture=lambda: _tmux("capture-pane", "-p", "-t", session).stdout,
+            capture=lambda: _tmux("capture-pane", "-p", "-t", _st(session)).stdout,
             rollout=_seat_codex_rollout(session, meta)))
         if status != 200:
             return _json({**body, "model": model, "current": current}, status=status)
@@ -4657,8 +4736,8 @@ async def handle_agent_model(request):
             model=model, settings_path=AM.claude_settings_path(),
             title=next((r["title"] for r in catalog if r["id"] == model), None),
             # Claude asks to confirm a switch on a seat with history; the switch answers it.
-            capture=lambda: _tmux("capture-pane", "-p", "-t", session).stdout,
-            keys=lambda k: _tmux("send-keys", "-t", session, "-l", str(k)),
+            capture=lambda: _tmux("capture-pane", "-p", "-t", _st(session)).stdout,
+            keys=lambda k: _tmux("send-keys", "-t", _st(session), "-l", str(k)),
             send=lambda text: verified_inject(session, text, False),
             find_jsonl=lambda: _seat_transcript_path(session, meta)))
         if status != 200:
@@ -6245,9 +6324,9 @@ async def handle_agent_key(request):
                          status=428)
         armed = os.environ.get("PERM_RESPOND_ARMED") == "1"
         import asyncio
-        _st = await asyncio.get_event_loop().run_in_executor(
+        _st_now = await asyncio.get_event_loop().run_in_executor(
             None, _agent_status().get_agent_status, session)
-        _pm = _st.get("pending_menu") if isinstance(_st, dict) else None
+        _pm = _st_now.get("pending_menu") if isinstance(_st_now, dict) else None
         if not isinstance(_pm, dict):                # never skip the check on a missed read
             return _json({"ok": False, "reason": "menu_gone"}, status=409)
         if _pm.get("kind") != "permission":          # respond answers permission prompts only
@@ -6469,8 +6548,8 @@ async def handle_agent_key(request):
             if (_pm2.get("kind"), _menu_key(session, _pm2)) != _checked:
                 return "changed"
             if _is_gemini_session(session):
-                return _tmux("send-keys", "-t", session, key, "Enter")
-            return _tmux("send-keys", "-t", session, key)
+                return _tmux("send-keys", "-t", _st(session), key, "Enter")
+            return _tmux("send-keys", "-t", _st(session), key)
 
     r = await asyncio.get_event_loop().run_in_executor(None, _send_locked)
     if r == "gone":

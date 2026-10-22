@@ -207,6 +207,23 @@ def pane_blocker(session: str, client_quiet: float):
     return None
 
 
+def nudge_locked(session: str, text: str, verify_s: float, client_quiet: float,
+                 lock_wait_s: float = 2.0):
+    """The blocker read and the type -> Enter -> verify burst under the ONE cross-process pane lock
+    every typer shares (pane_lock.py, gm msg_ede7b24a): the read that says the composer is empty must
+    not race a gateway/router burst. Returns (ok, blocker); blocker 'pane-locked' = another sender is
+    typing, nothing typed, the caller retries like any other blocker."""
+    import pane_lock
+    try:
+        with pane_lock.pane_lock(session, wait_s=lock_wait_s):
+            why = pane_blocker(session, client_quiet)
+            if why:
+                return False, why
+            return nudge(session, text, verify_s), None
+    except pane_lock.PaneBusy:
+        return False, "pane-locked"
+
+
 def nudge(session: str, text: str, verify_s: float) -> bool:
     before = turn_state(session).get("turn_number")
     if tmux("send-keys", "-t", session, "-l", text).returncode != 0:
@@ -366,7 +383,14 @@ def main(argv=None) -> int:
                 f"Read: python3 {os.path.join(ROOT, 'msg_store.py')} inbox --agent {a.agent} - "
                 f"then reply/ack each.")
         t0 = time.time()
-        ok = nudge(session, text, a.verify_s)
+        ok, why = nudge_locked(session, text, a.verify_s, a.client_quiet_s)
+        if why:                                   # blocked under the lock: hold, not a failed attempt
+            if why != last_blocker:
+                log(f"{len(fresh)} new pending for {a.agent}; holding nudge ({why})")
+                last_blocker = why
+            if a.once:
+                return 0
+            continue
         if ok:
             nudged |= set(ids)
             attempts = 0

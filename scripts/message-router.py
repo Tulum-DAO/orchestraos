@@ -156,6 +156,16 @@ def routing_runtime(agent_id: str, meta: dict | None = None) -> str:
 # this idle-gate (gm ruling 3 — one place judges liveness, no parallel
 # watchdog). SHADOW-ONLY in this build: would-clear jsonl, zero live actions.
 import pane_reachability  # noqa: E402
+import pane_lock  # noqa: E402
+
+#: Cross-process pane lock wait for a router delivery (pane_lock.py, gm msg_2291dee3). Short on
+#: purpose: a pane another typer holds is HELD for the next tick (row stays pending) instead of
+#: stretching this cron past its slot.
+ROUTER_PANE_LOCK_WAIT_S = float(os.environ.get("ROUTER_PANE_LOCK_WAIT_S", "2.0"))
+#: Whole-RUN budget for lock waits (codex r1: a per-injection wait still stacks across many panes).
+#: Once a run is this old, a pane another typer holds is HELD immediately, no waiting at all.
+ROUTER_RUN_LOCK_BUDGET_S = float(os.environ.get("ROUTER_RUN_LOCK_BUDGET_S", "40"))
+_RUN_STARTED = time.monotonic()
 
 
 # Sessions that are infrastructure, never message targets
@@ -881,6 +891,21 @@ def codex_pane_is_busy(pane_text: str) -> bool:
 
 
 def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
+    """_inject_unlocked under the ONE cross-process pane lock every typer shares (pane_lock.py):
+    the gateway, approval_resume, the nudger and the watchers take the same lock, so two senders
+    never glue or split each other's text in one pane. Adds one outcome:
+      'held'    — another typer holds the pane past the wait; nothing was typed, next tick."""
+    remaining = ROUTER_RUN_LOCK_BUDGET_S - (time.monotonic() - _RUN_STARTED)
+    wait_s = max(0.0, min(ROUTER_PANE_LOCK_WAIT_S, remaining))
+    try:
+        with pane_lock.pane_lock(session, wait_s=wait_s):
+            return _inject_unlocked(session, text, runtime)
+    except pane_lock.PaneBusy:
+        log(f"{session}: another sender holds the pane lock — held for the next tick")
+        return "held"
+
+
+def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
     """Inject with three-stage verification. Returns:
       'submitted'  — text confirmed in scrollback, input line clear
       'stuck'      — text landed in input line but Enter never took (left as-is)
@@ -1151,7 +1176,14 @@ def deliver_stale_digest(session, store, rows, cfg, *, inject_fn,
             store.fail(r["id"], error="digest: batch collapsed under claim race")
         return 0
     text = compose_digest(claimed, store)
-    if inject_fn(session, text, runtime) == "submitted":
+    res = inject_fn(session, text, runtime)
+    if res == "held":
+        # Another sender held the pane: nothing was typed. Re-open the rows with their retry budget
+        # intact (fail() would spend it); the singles path or the next tick takes them.
+        for r in claimed:
+            store.defer(r["id"], error="digest: another sender held the pane; deferred")
+        return 0
+    if res == "submitted":
         now_iso = _digest_now()
         for r in claimed:
             store.deliver(r["id"])
@@ -2190,6 +2222,11 @@ def main():
                     f"line (Enter swallowed). Press Enter in that session or clear it. "
                     f"Msg: {(msg.get('subject') or msg['id'])[:60]}"
                 )
+            elif result == "held":
+                # Another sender held the pane: nothing was typed, so this is neither a delivery
+                # nor a failure and must not use retry budget. Re-open the claimed row.
+                store.defer(msg["id"], error="router: another sender held the pane; deferred")
+                log(f"HELD {msg['id']} -> {agent}: another sender held the pane; row re-queued")
             else:
                 store.fail(msg["id"], error="router: paste never landed after 2 attempts")
                 with store._conn() as conn:

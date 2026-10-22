@@ -16,6 +16,7 @@ Prefer msg_store for anything durable; this is only the wake.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -38,7 +39,24 @@ def attached(session: str) -> bool:
     return out.returncode == 0 and bool(out.stdout.strip())
 
 
+RC_NOT_SENT = 3     # another sender held the pane: nothing typed
+
+
 def nudge(session: str, text: str, *, force: bool = False, settle: float = 0.6) -> int:
+    """_nudge_unlocked under the ONE cross-process pane lock all typers share (pane_lock.py, gm
+    msg_2291dee3). Another typer holding the pane past 5 s -> RC_NOT_SENT (nothing typed; the
+    caller nudges again next cycle)."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import pane_lock
+        with pane_lock.pane_lock(session, wait_s=5.0):
+            return _nudge_unlocked(session, text, force=force, settle=settle)
+    except pane_lock.PaneBusy:
+        print(f"nudge_pane: another sender holds {session}'s pane lock; NOT SENT", file=sys.stderr)
+        return RC_NOT_SENT
+
+
+def _nudge_unlocked(session: str, text: str, *, force: bool = False, settle: float = 0.6) -> int:
     if attached(session) and not force:
         print(f"nudge_pane: a client is attached to {session}; refusing (use --force if you own that client)", file=sys.stderr)
         return 2
