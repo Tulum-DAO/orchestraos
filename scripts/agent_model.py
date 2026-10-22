@@ -447,11 +447,17 @@ def switch_live(*, model: str, settings_path: Path, send, find_jsonl, title: str
                          "detail": "this agent's transcript was not found, so a switch could not "
                                    "be confirmed; nothing was typed"}
         _write_journal(settings_path, before)
-        res, sent, note = None, False, None
+        res, sent, typed, note = None, False, False, None
         try:
             since = now()
+            typed = True        # from here on the pane may hold our text or the dialog it opened
             ok, info = send(f"/model {model}")
-            sent = bool(ok)
+            # A send verifier can read the open confirm dialog as text still in the composer
+            # (one measured 2026-10-22 did): the dialog on screen proves the text landed.
+            if not ok and (info or {}).get("reason") != "busy" and capture is not None \
+                    and switch_dialog(capture() or "") is not None:
+                ok = True
+            sent = typed = bool(ok)     # a refused send typed nothing: no key for a dialog not ours
             if not ok:
                 if (info or {}).get("reason") == "busy":
                     result = (409, {"ok": False, "error": "busy",
@@ -473,13 +479,13 @@ def switch_live(*, model: str, settings_path: Path, send, find_jsonl, title: str
             result = (502, {"ok": False, "error": "switch failed", "detail": repr(e)[:300],
                             "sent": sent})
         finally:
-            if sent and capture is not None and keys is not None:
+            if typed and capture is not None and keys is not None:
                 with contextlib.suppress(Exception):    # never leave the pane in the dialog
                     if switch_dialog(capture() or "") is not None:
                         keys("2")
                         sleep(0.5)
             restored, err = _restore(settings_path, before)
-            if restored and sent:
+            if restored and typed:
                 with contextlib.suppress(Exception):    # a save later than the settle
                     sleep(recheck_s)
                 restored, err = _restore(settings_path, before)
@@ -489,7 +495,7 @@ def switch_live(*, model: str, settings_path: Path, send, find_jsonl, title: str
         # Last look before the lock is released (gm): the pane must be back at its prompt, not
         # still asking. A question left on screen is reported, never a success.
         still_asking = None
-        if sent and capture is not None:
+        if typed and capture is not None:
             with contextlib.suppress(Exception):
                 still_asking = switch_dialog(capture() or "")
         if not restored:

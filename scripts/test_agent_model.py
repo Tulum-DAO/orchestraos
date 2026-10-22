@@ -602,3 +602,88 @@ def test_a_dialog_seen_after_the_deadline_is_declined_not_accepted(tmp_path):
                                   find_jsonl=lambda: c.jsonl, capture=c.capture, keys=c.keys, timeout_s=0,
                                   sleep=lambda _s: None, now=lambda: "2026-10-22T00:00:00.000Z")
     assert c.keyed == ["2"] and status == 502 and json.loads(c.settings.read_text())["model"] == "opus"
+
+
+# --- a send verifier that reads the open dialog as "not submitted" (measured 2026-10-22) ---
+
+LIVE_DIALOG_SCREEN = """❯ reply with just the word ok
+● ok
+✻ Crunched for 2s · done 5:11 AM
+❯ /model claude-opus-5-5
+──────────────────────────────────────────────────
+  Switch model?
+  Your next response will be slower and use more tokens
+  This conversation is cached for the current model. Switching to Opus 5.5 means the full history gets re-read on your next message.
+  ❯ 1. Yes, switch to Opus 5.5
+    2. No, go back
+
+"""
+
+
+def test_the_live_screen_measured_on_a_real_seat_is_an_open_dialog():
+    assert AM.switch_dialog(LIVE_DIALOG_SCREEN) == "Opus 5.5"
+
+
+def test_a_send_reported_unverified_while_the_dialog_is_open_still_answers_it(tmp_path):
+    """A gateway's verified_inject read the open dialog as text still in the composer and
+    answered unverified_submit: the switch called it unsent and left the pane in the dialog."""
+    c = _dialog_setup(tmp_path)
+    real_send = c.send
+
+    def send(text):
+        real_send(text)
+        c.screen = LIVE_DIALOG_SCREEN
+        return False, {"reason": "unverified_submit", "state": "idle", "cleared": False}
+    c.send = send
+    status, body = _dialog_run(c)
+    assert status == 200 and body["display"] == "Opus 5.5"
+    assert c.keyed == ["1"] and "Yes, switch" not in c.screen
+    assert json.loads(c.settings.read_text())["model"] == "opus"
+
+
+def test_a_send_reported_unverified_offering_another_model_is_answered_no(tmp_path):
+    c = _dialog_setup(tmp_path, offer="Fable 5.1")
+    real_send = c.send
+
+    def send(text):
+        real_send(text)
+        return False, {"reason": "unverified_submit"}
+    c.send = send
+    status, body = _dialog_run(c)
+    assert status == 502 and body["detail"] == "Fable 5.1" and c.keyed == ["2"]
+
+
+def test_an_unverified_send_with_no_dialog_is_still_not_sent_and_gets_no_key(tmp_path):
+    c = _dialog_setup(tmp_path)
+
+    def send(text):
+        c.sent.append(text)                                   # the text never left the composer
+        return False, {"reason": "unverified_submit", "cleared": True}
+    c.send = send
+    status, body = _dialog_run(c)
+    assert status == 502 and body["error"] == "not sent" and c.keyed == []
+    assert json.loads(c.settings.read_text())["model"] == "opus"
+
+
+def test_a_send_that_raises_after_opening_the_dialog_never_leaves_it_open(tmp_path):
+    c = _dialog_setup(tmp_path)
+    real_send = c.send
+
+    def send(text):
+        real_send(text)
+        raise RuntimeError("tmux went away mid-verify")
+    c.send = send
+    status, body = _dialog_run(c)
+    assert status == 502 and body["error"] == "switch failed"
+    assert c.keyed == ["2"] and "Yes, switch" not in c.screen
+
+
+def test_a_busy_refusal_never_keys_a_dialog_that_is_not_ours(tmp_path):
+    c = _dialog_setup(tmp_path)
+    c.screen = DIALOG.format(name="Opus 5.5")                # someone else's question, already open
+
+    def send(text):
+        return False, {"reason": "busy"}                       # nothing typed
+    c.send = send
+    status, _body = _dialog_run(c)
+    assert status == 409 and c.keyed == []
