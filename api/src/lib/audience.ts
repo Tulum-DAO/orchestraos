@@ -6,7 +6,8 @@
  * - `audience: "user"` = drawn in the conversation: the operator's own messages, the FIRST and the
  *   CLOSING reply of a turn he opened (Shaw 2026-10-22 03:58 ET: "the first response at least to my
  *   message ... then the div, which is collapsible. And then the most recent message"), and only the
- *   closing reply of a job he set off (a <task-notification>).
+ *   closing reply of a job he set off (a <task-notification>). In a log with no turn he opened at
+ *   all, the newest reply is drawn too.
  * - `audience: "agent"` = folded into the strip: tools, thinking, intermediate replies, and every
  *   turn something else opened (mail, a hook, lineage, the spawn brief), replies included.
  * - `exchange` = the uuid of the operator message the item belongs to (the latest one at or before
@@ -79,6 +80,14 @@ export function tagAudience(items: any[]): any[] {
       if (exchange) it.exchange = exchange;
     }
     i = end;
+  }
+  // No turn the operator opened anywhere in this log (only mail, hooks, the spawn brief): the
+  // newest reply is still drawn, never folded (Shaw, iOS 334: "if there are no recorded turns,
+  // display the most recent message"). One rule, server-side, so every client draws the same.
+  if (!exchange) {
+    for (let k = items.length - 1; k >= 0; k--) {
+      if (items[k]?.kind === 'text' && items[k].role === 'assistant') { items[k].audience = 'user'; break; }
+    }
   }
   return items;
 }
