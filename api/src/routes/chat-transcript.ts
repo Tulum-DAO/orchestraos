@@ -21,6 +21,10 @@ import { expandChipDodge } from '../lib/chipDodge.js';
 import { sessionOwners } from '../services/identity-store-reader.js';
 import { dataDir } from '../lib/config.js';
 import { paneInfo, forgetPane, childPids, procArgv, liveGeminiSid } from '../lib/paneProbe.js';
+import { transcriptMarkdown, DEFAULT_LAST_TURNS } from '../lib/transcriptMarkdown.js';
+import { getRegistry } from '../services/state-reader.js';
+import { principal } from '../lib/principal.js';
+import { readGatewayToken } from '../lib/gateway-token.js';
 
 const router = Router();
 // Every /:id route on this router is scoped to the caller's principal — the same rule GET /
@@ -1322,6 +1326,44 @@ router.get('/:id/transcript', (req: Request, res: Response) => {
     res.json(normalizeTranscript(lines, agentId, sid, limit, path.includes('antigravity-cli'), true));
   } catch (err) {
     res.json({ agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: String(err) });
+  }
+});
+
+// GET /api/agents/:id/transcript.md?last=<turns>&tools=full -> the conversation as a Markdown file
+// (lib/transcriptMarkdown.ts): turns with times, tool calls one line each, thinking never, every
+// piece through the secret redactor. Same agent-scope check as /transcript (router.param above).
+router.get('/:id/transcript.md', (req: Request, res: Response) => {
+  const agentId = String(req.params.id);
+  const last = Math.max(1, Math.min(parseInt(String(req.query.last)) || DEFAULT_LAST_TURNS, 500));
+  const tools = req.query.tools === 'full' ? 'full' : 'summary';
+  let path: string | null = null;
+  let sid: string | null = null;
+  try {
+    ({ path, sid } = resolveTranscriptPath(agentId));
+  } catch {
+    path = null;
+  }
+  if (!path) { res.status(404).type('text/plain').send('No conversation found for this agent.'); return; }
+  try {
+    const lines = readFileSync(path, 'utf-8').split('\n');
+    const { items } = normalizeTranscript(lines, agentId, sid, 2000, path.includes('antigravity-cli'), true);
+    const reg = (getRegistry() as any)?.agents?.[agentId];
+    const { markdown } = transcriptMarkdown(items as any[], {
+      agent: agentId,
+      model: typeof reg?.model === 'string' ? reg.model : null,
+      exportedBy: principal(req)?.username ?? null,
+      lastTurns: last,
+      tools,
+      exactSecrets: [readGatewayToken()].filter(Boolean),
+    });
+    const day = new Date().toISOString().slice(0, 10);
+    const file = `${agentId.replace(/[^A-Za-z0-9._-]/g, '_')}-${day}.md`;
+    res.status(200).type('text/markdown; charset=utf-8')
+      .set('Content-Disposition', `attachment; filename="${file}"`)
+      .set('Cache-Control', 'no-store')
+      .send(markdown);
+  } catch (err) {
+    res.status(500).type('text/plain').send(`Could not export: ${String(err).slice(0, 200)}`);
   }
 });
 
