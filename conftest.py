@@ -40,6 +40,9 @@ _FENCE_ROOT = _tempfile.mkdtemp(prefix="orchestra-test-data-")
 os.environ["ORCHESTRA_DIR"] = os.environ["ORCH_DIR"] = os.path.join(_FENCE_ROOT, "data")
 os.environ["ORCHESTRA_CONFIG"] = os.path.join(_FENCE_ROOT, "no-orchestra.toml")
 os.makedirs(os.environ["ORCHESTRA_DIR"], exist_ok=True)
+# pane_lock.py flocks live under ~/runtime/locks. A test locking pane "gm" would contend with a real
+# router's lock for gm on the same box (and could hold its mail). A fresh dir per test process.
+os.environ["PANE_LOCK_DIR"] = os.path.join(_FENCE_ROOT, "pane-locks")
 
 _WORKTREE_SCRIPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts")
 sys.path.insert(0, _WORKTREE_SCRIPTS)

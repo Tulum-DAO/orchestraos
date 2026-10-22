@@ -124,7 +124,19 @@ def _codex_boot_busy(pane: str) -> bool:
     return "esc to interrupt" in tail
 
 
-def boot_inject(session, text, runtime=DEFAULT_RUNTIME, *, allow_canonical=False,
+def boot_inject(session, text, runtime=DEFAULT_RUNTIME, **kw):
+    """_boot_inject_unlocked under the ONE cross-process pane lock all typers share (pane_lock.py,
+    gm msg_2291dee3). Another typer holding the pane past 8 s -> ('failed', 'pane-locked'): nothing
+    was typed, so the caller's normal retry applies."""
+    import pane_lock
+    try:
+        with pane_lock.pane_lock(session, wait_s=8.0):
+            return _boot_inject_unlocked(session, text, runtime, **kw)
+    except pane_lock.PaneBusy:
+        return "failed", "pane-locked"
+
+
+def _boot_inject_unlocked(session, text, runtime=DEFAULT_RUNTIME, *, allow_canonical=False,
                 tmux_fn=_real_tmux, sleep_fn=time.sleep, log_fn=None, canonical_live_fn=None):
     """Type `text` into `session` and verify by effect. Returns (outcome, stage):
     outcome in {'submitted', 'stuck', 'failed'}; stage names where it ended."""
