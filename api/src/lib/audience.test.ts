@@ -1,0 +1,74 @@
+/**
+ * The chat fold's tags (ios-watch-dev msg_1491bb2c): what is drawn in the conversation (user)
+ * vs folded into the strip (agent), and which operator message each item belongs to (exchange).
+ */
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { tagAudience, tagSynthetics, openerKind } from './audience.js';
+
+let n = 0;
+const u = (text: string, extra: any = {}) => ({ kind: 'text', role: 'user', text, uuid: `u${++n}`, ...extra });
+const a = (text: string) => ({ kind: 'text', role: 'assistant', text, uuid: `a${++n}` });
+const tool = () => ({ kind: 'tool_use', role: 'assistant', tool: 'Bash', input: {}, summary: 'ls', id: `t${++n}`, uuid: `t${n}` });
+const res = () => ({ kind: 'tool_result', role: 'user', text: 'ok', uuid: `r${++n}` });
+const think = () => ({ kind: 'thinking', role: 'assistant', text: 'hmm', uuid: `k${++n}` });
+const tags = (xs: any[]) => xs.map((x) => `${x.uuid}:${x.audience}${x.exchange ? '@' + x.exchange : ''}`);
+
+test('an operator turn: his message and the closing reply are drawn, everything between folds', () => {
+  const m = u('fix the card');
+  const xs = [m, think(), a('looking'), tool(), res(), a('done: the card answers now')];
+  tagAudience(xs);
+  assert.deepEqual(xs.map((x) => x.audience), ['user', 'agent', 'agent', 'agent', 'agent', 'user']);
+  assert.ok(xs.every((x) => x.exchange === m.uuid));
+});
+
+test('a turn mail or a hook opened is the strip, its reply included', () => {
+  for (const opener of ['[MSG from gm | high] (sent 1m ago) do X', 'Stop hook feedback:\n[QUEUE-DIGEST] 1 pending',
+                        '[APPROVAL RESOLVED apr_1] answered', '[WAL DELTA] hydrate']) {
+    const xs = [u('earlier from the operator'), a('ok'), u(opener), tool(), res(), a('handled the mail')];
+    tagAudience(xs);
+    assert.deepEqual(xs.slice(2).map((x) => x.audience), ['agent', 'agent', 'agent', 'agent'], opener);
+    assert.equal(xs[1].audience, 'user');
+    assert.ok(xs.slice(2).every((x) => x.exchange === xs[0].uuid), 'it stays inside his exchange');
+  }
+});
+
+test('a job he set off reports back: the notification folds, its closing reply is drawn', () => {
+  const xs = [u('<task-notification>\n<task-id>b1</task-id> completed</task-notification>'), a('reading it'), a('the build passed')];
+  tagAudience(xs);
+  assert.deepEqual(xs.map((x) => x.audience), ['agent', 'agent', 'user']);
+  assert.equal(openerKind(xs[0]), 'notification');
+});
+
+test('the spawn brief and anything before the first opener fold', () => {
+  const xs = [a('stray'), u('You are gm. Read your init', { is_system: true }), a('ready')];
+  tagAudience(xs);
+  assert.deepEqual(xs.map((x) => x.audience), ['agent', 'agent', 'agent']);
+  assert.ok(xs.every((x) => x.exchange === undefined));
+});
+
+test('a message he sends mid-turn opens its own exchange', () => {
+  const first = u('start the build');
+  const second = u('also check the logs', { queued: true });
+  const xs = [first, tool(), res(), second, a('build started, logs clean')];
+  tagAudience(xs);
+  assert.deepEqual(tags(xs).map((t) => t.split(':')[1]), [`user@${first.uuid}`, `agent@${first.uuid}`, `agent@${first.uuid}`,
+                                                          `user@${second.uuid}`, `user@${second.uuid}`]);
+});
+
+test('slash commands and their output are dev rows, never his speech', () => {
+  const xs = [u('<command-name>/model</command-name>'), u('<local-command-stdout>Set model to Opus 5.5</local-command-stdout>')];
+  tagAudience(xs);
+  assert.deepEqual(xs.map((x) => x.audience), ['agent', 'agent']);
+});
+
+test('synthetic rows after the merge: a pending message is his, agent mail folds in the current exchange', () => {
+  const xs: any[] = [u('hello'), a('hi')];
+  tagAudience(xs);
+  xs.push({ kind: 'queued_batch', entries: [], key: 'msg:1' }, u('still waiting', { uuid: 'queued:9', queued: true }));
+  tagSynthetics(xs);
+  assert.equal(xs[2].audience, 'agent');
+  assert.equal(xs[2].exchange, xs[0].uuid);
+  assert.equal(xs[3].audience, 'user');
+  assert.equal(xs[3].exchange, 'queued:9');
+});

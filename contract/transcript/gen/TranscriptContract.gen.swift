@@ -77,6 +77,8 @@ enum ChatItem: Codable, Equatable {
 }
 
 struct TextItem: Codable, Equatable {
+    let audience: String?
+    let exchange: String?
     let kind: String
     let role: String
     let text: String
@@ -88,6 +90,8 @@ struct TextItem: Codable, Equatable {
 }
 
 struct ThinkingItem: Codable, Equatable {
+    let audience: String?
+    let exchange: String?
     let kind: String
     let role: String
     let text: String
@@ -97,6 +101,8 @@ struct ThinkingItem: Codable, Equatable {
 }
 
 struct ToolUseItem: Codable, Equatable {
+    let audience: String?
+    let exchange: String?
     let kind: String
     let role: String
     let tool: String
@@ -110,6 +116,8 @@ struct ToolUseItem: Codable, Equatable {
 }
 
 struct ToolResultItem: Codable, Equatable {
+    let audience: String?
+    let exchange: String?
     let kind: String
     let role: String
     let text: String
@@ -126,6 +134,8 @@ struct BatchEntry: Codable, Equatable {
 }
 
 struct QueuedBatchItem: Codable, Equatable {
+    let audience: String?
+    let exchange: String?
     let kind: String
     let count: Int
     let entries: [BatchEntry]
@@ -169,6 +179,8 @@ enum RenderItem: Codable, Equatable {
 }
 
 struct RenderUser: Codable, Equatable {
+    let audience: String?
+    let exchange: String?
     let kind: String
     let text: String
     let is_system: Bool?
@@ -178,6 +190,8 @@ struct RenderUser: Codable, Equatable {
 }
 
 struct RenderAssistant: Codable, Equatable {
+    let audience: String?
+    let exchange: String?
     let kind: String
     let text: String
     let ts: String?
@@ -185,6 +199,8 @@ struct RenderAssistant: Codable, Equatable {
 }
 
 struct RenderThinking: Codable, Equatable {
+    let audience: String?
+    let exchange: String?
     let kind: String
     let text: String
     let ts: String?
@@ -192,6 +208,8 @@ struct RenderThinking: Codable, Equatable {
 }
 
 struct RenderTool: Codable, Equatable {
+    let audience: String?
+    let exchange: String?
     let kind: String
     let tool: String
     let summary: String
@@ -204,6 +222,8 @@ struct RenderTool: Codable, Equatable {
 }
 
 struct RenderQueuedBatch: Codable, Equatable {
+    let audience: String?
+    let exchange: String?
     let kind: String
     let count: Int
     let entries: [BatchEntry]
