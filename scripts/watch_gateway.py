@@ -1681,11 +1681,86 @@ def compute_agents():
 
     _stamp_recency_and_subagents(out, _pane_event)
     _stamp_last_user_message(out)
+    _stamp_lineage(out, reg_agents)
 
     rank = {"waiting": 0, "stranded": 1, "stalled": 2, "crashed": 3, "stopped": 4,
             "working": 5, "idle": 6, "offline": 7}
     out.sort(key=lambda a: (rank.get(a["state"], 9), -a.get("last_used_ts", 0), a["id"]))
     return out
+
+
+def _pane_sessions():
+    """{pane_id: session_name} for every live tmux pane."""
+    r = _tmux("list-panes", "-a", "-F", "#{pane_id} #{session_name}")
+    out = {}
+    for line in (r.stdout or "").splitlines():
+        pane, _, name = line.partition(" ")
+        if pane and name:
+            out[pane] = name
+    return out
+
+
+def _stamp_lineage(rows, reg_agents):
+    """root + lineage_role (canonical | green | retired) + lineage_state (a green's: prewarming |
+    ready) on /agents rows, so the apps can nest a standby green under its seat and label an old
+    generation (ios-watch-dev msg_cba15fe1, gm msg_b7f14aab). From the identity DB and the
+    blue-green state files only, never from a seat's name; a row nothing proves is left as it is
+    (absent = draw as today). Never fails /agents.
+
+    - green: state/wal/<root>.bg.json in PREWARMING or READY whose meta.green_pane_id is this
+      row's pane (a SOLO file can keep an old pane id: never a green).
+    - canonical: the canonical pointer's tmux_session (a provisional one is not a seat yet).
+    - retired: the row's registry session_id is a generation with retired_at set that is not its
+      root's canonical generation."""
+    import sqlite3
+    canon, canon_gen, gen_by_sid = {}, {}, {}
+    try:
+        conn = sqlite3.connect(f"file:{ORCH_DIR / 'state' / 'orchestra-registry.db'}?mode=ro", uri=True, timeout=2)
+        try:
+            for root, gid, sess, status in conn.execute(
+                    "SELECT root, generation_id, tmux_session, status FROM canonical"):
+                canon_gen[root] = gid
+                if sess and status != "provisional":
+                    canon[sess] = root
+            for gid, root, sid, retired in conn.execute(
+                    "SELECT id, root, session_id, retired_at FROM generations WHERE session_id IS NOT NULL"):
+                gen_by_sid[sid] = (gid, root, retired)
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — no identity DB: nothing to say
+        return
+    greens, panes = {}, None
+    try:
+        files = sorted((ORCH_DIR / "state" / "wal").glob("*.bg.json"))
+    except OSError:
+        files = []
+    for f in files:
+        d = _load_json(f)
+        if not isinstance(d, dict) or d.get("state") not in ("PREWARMING", "READY"):
+            continue
+        pane, root = (d.get("meta") or {}).get("green_pane_id"), d.get("root")
+        if not (isinstance(pane, str) and pane and isinstance(root, str) and root):
+            continue
+        if panes is None:
+            try:
+                panes = _pane_sessions()
+            except Exception:  # noqa: BLE001
+                panes = {}
+        sess = panes.get(pane)
+        if sess:
+            greens[sess] = (root, d["state"].lower())
+    for r in rows:
+        sess = r.get("tmux_session") or ""
+        if sess in greens:
+            r["root"], r["lineage_role"], r["lineage_state"] = greens[sess][0], "green", greens[sess][1]
+        elif sess in canon:
+            r["root"], r["lineage_role"] = canon[sess], "canonical"
+        else:
+            meta = reg_agents.get(r.get("id") or "") if isinstance(reg_agents, dict) else None
+            sid = meta.get("session_id") if isinstance(meta, dict) else None
+            g = gen_by_sid.get(sid) if isinstance(sid, str) and sid else None
+            if g and g[2] and canon_gen.get(g[1]) != g[0]:
+                r["root"], r["lineage_role"] = g[1], "retired"
 
 
 def _stamp_last_user_message(rows):
