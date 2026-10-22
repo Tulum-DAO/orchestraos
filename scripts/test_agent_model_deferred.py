@@ -191,14 +191,24 @@ def test_the_gateway_runs_the_applier_and_a_shutdown_ends_it_promptly(tmp_path, 
     # The REAL pass runs; the record read inside it says which thread it is on.
     monkeypatch.setattr(AMP, "pending_sessions", lambda f: (
         applied.append(threading.current_thread() is threading.main_thread()) or real_sessions(f)))
-    monkeypatch.setattr(G, "_apply_pending_one", lambda f, s, now: None)   # read only: type nothing
-    AMP.put(AMP.state_path(G.ORCH_DIR), "dev", SONNET)
+    # The REAL apply runs too (codex R19 on #475): an idle claude seat, only the typing stubbed.
+    typed = []
+    monkeypatch.setattr(G, "_tmux_session_names", lambda: {"dev"})
+    monkeypatch.setattr(G, "_agent_status", lambda: _Det("idle"))
+    monkeypatch.setattr(G, "_seat_for_session", lambda s: ("dev", {}, "claude", OPUS))
+    monkeypatch.setattr(G, "_seat_session_ids", lambda s, meta=None: [SID])
+    monkeypatch.setattr(AM, "load_catalog", lambda rt, p, st: [
+        {"id": OPUS, "title": "Opus 5.5"}, {"id": SONNET, "title": "Sonnet 5.5"}])
+    monkeypatch.setattr(G, "_switch_model_now", lambda session, model, *a: (
+        typed.append((session, model)) or (200, {"ok": True, "model": model})))
+    f = AMP.state_path(G.ORCH_DIR)
+    AMP.put(f, "dev", SONNET, current=OPUS, sids=[SID])
 
     async def go():
         server = TestServer(G.build_app())
         await server.start_server()
-        for _ in range(50):
-            if applied:
+        for _ in range(100):
+            if AMP.last(f, "dev"):
                 break
             await asyncio.sleep(0.05)
         t0 = time.monotonic()
@@ -207,6 +217,8 @@ def test_the_gateway_runs_the_applier_and_a_shutdown_ends_it_promptly(tmp_path, 
     took = asyncio.run(go())
     assert applied, "the loop ran a pass while a pick was pending"
     assert not any(applied), "every pass, the record read included, runs off the event loop"
+    assert typed == [("dev", SONNET)], "the app's own loop applied the pick, once"
+    assert AMP.get(f, "dev") is None and AMP.last(f, "dev")["outcome"] == "switched"
     assert took < 3
 
 
