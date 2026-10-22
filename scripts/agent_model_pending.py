@@ -32,13 +32,26 @@ def _iso(ts):
     return datetime.fromtimestamp(ts, timezone.utc).isoformat()
 
 
+class StateUnreadable(Exception):
+    """The record exists but cannot be read. Never treated as empty: a write after that would
+    replace every pending pick and outcome with nothing (codex R2 on #475)."""
+
+
 def _read(path):
+    """The record; empty only when the file does not exist yet."""
     try:
-        data = json.loads(Path(path).read_text())
-    except (OSError, ValueError):
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
+        raw = Path(path).read_text()
+    except FileNotFoundError:
+        return {"pending": {}, "last": {}}
+    except OSError as e:
+        raise StateUnreadable(f"{path}: {e}") from e
+    try:
+        data = json.loads(raw)
+    except ValueError as e:
+        raise StateUnreadable(f"{path}: not JSON ({e})") from e
+    if not isinstance(data, dict) or not isinstance(data.get("pending", {}), dict) \
+            or not isinstance(data.get("last", {}), dict):
+        raise StateUnreadable(f"{path}: not a pending-switch record")
     return {"pending": dict(data.get("pending") or {}), "last": dict(data.get("last") or {})}
 
 

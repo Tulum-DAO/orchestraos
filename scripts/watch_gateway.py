@@ -4900,8 +4900,11 @@ async def handle_agent_model(request):
     if request.method != "PUT":
         from scripts import agent_model_pending as AMP
         f = AMP.state_path(ORCH_DIR)
-        return _json({"ok": True, "session": session, **desc,
-                      "pending": AMP.view(AMP.get(f, session)), "last_switch": AMP.last(f, session)})
+        try:
+            extra = {"pending": AMP.view(AMP.get(f, session)), "last_switch": AMP.last(f, session)}
+        except AMP.StateUnreadable as e:
+            extra = {"pending": None, "last_switch": None, "pending_error": str(e)}
+        return _json({"ok": True, "session": session, **desc, **extra})
 
     if not _is_person_surface(request):
         return _json({"ok": False, "error": "a model is switched by a person: send X-Actor "
@@ -4913,8 +4916,14 @@ async def handle_agent_model(request):
         why = desc["unavailable"].get(model) or "not offered for this agent"
         return _json({"ok": False, "error": why}, status=422)
     by = _parse_actor(request)[1] or ((_resolved_principal(request)[1] or {}).get("label")) or "?"
-    status, body = await loop.run_in_executor(
-        None, lambda: _put_model(session, model, catalog, by))
+    from scripts import agent_model_pending as AMP
+    try:
+        status, body = await loop.run_in_executor(
+            None, lambda: _put_model(session, model, catalog, by))
+    except AMP.StateUnreadable as e:
+        log.error(f"agent-model: {e}")
+        return _json({"ok": False, "error": "the record of waiting switches cannot be read; nothing "
+                      "changed", "detail": str(e)}, status=503)
     return _json(body, status=status)
 
 
@@ -5088,7 +5097,9 @@ def _apply_pending_one(f, session, now):
     sids = _seat_session_ids(session, meta)
     if not sids:
         return None                    # cannot tell it is the same agent right now: never apply blind
-    if not set(e.get("sids") or []) & set(sids):
+    if set(e.get("sids") or []) != set(sids):
+        # EXACTLY the identity recorded when it was asked: an overlap is not enough (a stale pane
+        # event next to a rotated seat's new id would match the old one; codex R2 on #475).
         return close("failed", "the agent moved to a new session before its turn ended")
     st = (_agent_status().get_agent_status(session) or {}).get("state")
     if st not in INJECTABLE_STATES:

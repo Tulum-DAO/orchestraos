@@ -225,22 +225,40 @@ def test_a_pick_replaced_after_the_pass_listed_it_applies_the_NEW_pick(seat, mon
     assert seat["live"] == [HAIKU]
 
 
-def test_the_session_lock_is_held_for_the_whole_apply(seat, monkeypatch):
-    """A PUT for the same agent cannot slip in while the switch is being typed."""
-    _put(SONNET)
-    seat["det"].state = "idle"
-    held = []
+def test_a_put_that_arrives_mid_apply_waits_and_then_decides_on_the_fresh_model(seat, monkeypatch):
+    """A real concurrent PUT while the applier is typing the switch: it blocks on the agent's switch
+    lock, and once the apply is done it reads the seat afresh: the model it asked for is already
+    the agent's, so it changes nothing and types nothing (codex R2 on #475)."""
+    import threading
+    import time
+    model = {"now": OPUS}
+    monkeypatch.setattr(G, "_seat_for_session", lambda s: ("dev", {}, "claude", model["now"]))
+    entered, release = threading.Event(), threading.Event()
+    calls = []
 
     def switch(**kw):
-        lk = G._model_switch_lock("dev")
-        got = lk.acquire(blocking=False)
-        if got:
-            lk.release()                       # never leave it held for the tests that follow
-        held.append(not got)
+        calls.append(kw["model"])
+        entered.set()
+        release.wait(5)
+        model["now"] = kw["model"]
         return 200, {"ok": True, "model": kw["model"], "switching": "switched"}
     monkeypatch.setattr(AM, "switch_live", switch)
-    G._apply_pending_model_switches()
-    assert held == [True]
+    _put(SONNET)                                                   # busy: pending
+    seat["det"].state = "idle"
+    applier = threading.Thread(target=G._apply_pending_model_switches)
+    applier.start()
+    assert entered.wait(5)                                         # the apply is typing now
+    got = {}
+    put = threading.Thread(target=lambda: got.update(r=G._put_model("dev", SONNET, AM.load_catalog("claude", None, None), "app:ios")))
+    put.start()
+    time.sleep(0.3)
+    assert put.is_alive() and not got                              # blocked on the switch lock
+    release.set()
+    applier.join(5)
+    put.join(5)
+    status, body = got["r"]
+    assert status == 200 and body["changed"] is False              # fresh read: already sonnet
+    assert calls == [SONNET]                                       # typed once, by the applier
 
 
 def test_a_busy_agent_whose_identity_is_unknown_is_refused_not_deferred(seat, monkeypatch):
@@ -257,3 +275,31 @@ def test_an_apply_never_runs_blind_when_the_identity_cannot_be_read(seat, monkey
     monkeypatch.setattr(G, "_seat_session_ids", lambda s, meta=None: [])
     assert G._apply_pending_model_switches() == []
     assert seat["live"] == [] and _get()["pending"]["model"] == SONNET   # waits; stale report covers it
+
+
+def test_mixed_identity_evidence_is_a_new_session_not_a_match(seat, monkeypatch):
+    """A stale pane event next to a rotated seat's new id overlaps the recorded identity: it must
+    be EXACTLY the recorded identity, or the pick is closed (codex R2 on #475)."""
+    _put(SONNET)                                                   # recorded identity: {SID}
+    new_sid = "99999999-2222-4333-8444-555555555555"
+    monkeypatch.setattr(G, "_seat_session_ids", lambda s, meta=None: [SID, new_sid])
+    seat["det"].state = "idle"
+    assert G._apply_pending_model_switches() == [("dev", "failed: the agent moved to a new session before its turn ended")]
+    assert seat["live"] == []
+
+
+def test_an_unreadable_record_is_never_overwritten(seat):
+    """A corrupt record is not "nothing pending": a PUT refuses (503) and leaves it as it is, a
+    pass changes nothing, and GET says the record cannot be read."""
+    f = AMP.state_path(G.ORCH_DIR)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("{ not json")
+    status, b = _put(SONNET)
+    assert status == 503 and seat["live"] == []
+    assert f.read_text() == "{ not json"
+    import pytest as _pt
+    with _pt.raises(AMP.StateUnreadable):
+        G._apply_pending_model_switches()
+    assert f.read_text() == "{ not json"
+    g = _get()
+    assert g["pending"] is None and "pending_error" in g
