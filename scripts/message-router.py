@@ -936,6 +936,17 @@ def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
         return "held"
 
 
+def _input_line_typed(session: str, runtime: str = DEFAULT_RUNTIME) -> bool:
+    """True when the bottom input line holds real typed text (composer_state's SGR rule: a dim
+    ghost suggestion is not typed). A capture that fails reads as typed: hold, never clobber."""
+    sig = PROMPT_SIGNATURES.get(runtime, PROMPT_SIGNATURES[DEFAULT_RUNTIME])
+    ansi = tmux("capture-pane", "-t", session, "-e", "-p")
+    if ansi.returncode != 0:
+        return True
+    prompt_lines = [l for l in (ansi.stdout or "").split("\n") if sig["prompt_char"] in l]
+    return bool(prompt_lines) and input_line_state(prompt_lines[-1], sig) == "typed"
+
+
 def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, journal=None) -> str:
     """Inject with three-stage verification. Returns:
       'submitted'  — text confirmed in scrollback, input line clear
@@ -987,6 +998,13 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, jo
     # Stage 0.6 (De-duplication guard): if the probe text is ALREADY in the input
     # line/composer from a previous unsubmitted attempt, never paste another duplicate copy!
     if ok0 and probe[:30] in line0:
+        # ...unless a row marked typed records a DIFFERENT message: the line may be that earlier
+        # half-sent message, not ours. Pressing Enter on it would send it under our name. Held.
+        import inject_journal
+        _left = inject_journal.row_for(session)
+        if isinstance(_left, dict) and _left.get("typed") is True and _left.get("text") != text:
+            log(f"{session}: the input line may hold an earlier half-sent message (row recorded) — held")
+            return "held"
         log(f"probe already present in {session} input line — skipping repaste, retrying submit")
         for attempt in (1, 2, 3):
             tmux("send-keys", "-t", session, "Enter")
@@ -999,6 +1017,13 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, jo
                 return "submitted"
             time.sleep(1)
         return "stuck"
+
+    # Someone's real typed text (not a dim ghost) on the input line: never paste onto it. It may be
+    # a person's draft, or the text of an earlier half-sent message whose journal row this paste
+    # would replace. Held; nothing typed.
+    if _input_line_typed(session, runtime):
+        log(f"{session}: the input line holds typed text — held, nothing pasted")
+        return "held"
 
     # Every guard has passed: the journal row is written now, before the first keystroke. No row,
     # no paste ('held'). `journal` (a list) tells the caller that this call wrote it.

@@ -337,3 +337,30 @@ def test_nudge_refuses_when_attachment_cannot_be_checked(monkeypatch):
         returncode=1 if a[0] == "list-clients" else 0, stdout="", stderr=""))
     assert NP._nudge_unlocked("seat", "continue please") == 2
     assert not [k for k in keys if k[0] == "send-keys"]
+
+
+# ------------------------------------------------------------------ codex R13 on #472
+def test_router_never_pastes_onto_typed_text_and_keeps_a_leftover_row(monkeypatch, tmp_path):
+    import inject_journal as J
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+    J.record("pm-x", "the half-sent one", "the half-sent one"); J.mark_typed("pm-x")
+    R = _router()
+    keys = []
+    monkeypatch.setattr(R, "fence_check", lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(R, "exit_copy_mode", lambda s: None)
+    monkeypatch.setattr(R, "pane_split", lambda s, rt=None: ([], "❯ the half-sent one", True))
+    monkeypatch.setattr(R, "tmux", lambda *a, **k: keys.append(a) or types.SimpleNamespace(
+        returncode=0, stdout="❯ the half-sent one\n" if a[0] == "capture-pane" else ""))
+    assert R.inject("pm-x", TEXT) == "held"
+    assert not [k for k in keys if k[0] in ("paste-buffer", "set-buffer", "send-keys")]
+    assert [(r["text"], r.get("typed")) for r in J.rows()] == [("the half-sent one", True)]
+
+
+def test_boot_inject_never_types_onto_typed_text(monkeypatch, tmp_path):
+    import boot_inject as BI
+    import test_boot_inject as TB
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+    p = TB.Pane(preexisting="a draft someone is writing")
+    assert BI.boot_inject("pm-x", TB.TEXT, tmux_fn=p, sleep_fn=lambda s: None,
+                          log_fn=lambda m: None) == ("stuck", "composer-occupied")
+    assert not [c for c in p.calls if c[0] in ("paste-buffer", "set-buffer")]

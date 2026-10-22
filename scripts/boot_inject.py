@@ -126,7 +126,8 @@ def _codex_boot_busy(pane: str) -> bool:
 
 #: Outcomes where nothing of ours reached the composer: no journal row may outlive them (a row there
 #: would be false evidence a later reconcile could attribute to someone's matching text).
-_NOTHING_TYPED = ("refused-canonical", "codex-busy", "stranded-chip", "client-attached")   # NOT no-receipt: a paste may
+_NOTHING_TYPED = ("refused-canonical", "codex-busy", "stranded-chip", "client-attached",
+                  "composer-occupied")   # NOT no-receipt: a paste may
 # have landed unobserved; the row stays (unmarked = report-only at the reconcile)
 
 
@@ -217,6 +218,26 @@ def _boot_inject_unlocked(session, text, runtime=DEFAULT_RUNTIME, *, allow_canon
     if ok0 and composer_has_stranded_chip(line0):
         log("a paste chip is ALREADY in the composer: not pasting onto it, not pressing Enter on it")
         return "stuck", "stranded-chip"
+
+    # Someone's real typed text (not a dim ghost) on the input line, and not our own earlier attempt:
+    # never type onto it. It may be a person's draft, or an earlier half-sent message whose journal
+    # row this call would replace. Nothing typed.
+    if not (ok0 and probe[:30] in line0):
+        rc_e, ansi = tmux_fn("capture-pane", "-p", "-e", "-t", _target(session))
+        prompts = [l for l in (ansi or "").split("\n") if prompt_char in l] if rc_e == 0 else None
+        from composer_state import classify_input_line
+        if prompts is None or (prompts and classify_input_line(prompts[-1], sig)[0] == "typed"):
+            log("the input line already holds typed text (or could not be read): nothing typed")
+            return "stuck", "composer-occupied"
+    else:
+        # The composer starts like our prompt, but a row marked typed records a DIFFERENT message:
+        # that text may be an earlier half-sent message, not ours. Entering it or replacing its
+        # row loses the evidence the next start needs. Nothing typed, nothing pressed.
+        import inject_journal
+        left = inject_journal.row_for(session)
+        if isinstance(left, dict) and left.get("typed") is True and left.get("text") != text:
+            log("the composer may hold an earlier half-sent message (its row is recorded): nothing pressed")
+            return "stuck", "half-sent-row"
 
     # Every guard has passed: the typed-not-entered row is written now. No row, no typing.
     if journal is not None:
