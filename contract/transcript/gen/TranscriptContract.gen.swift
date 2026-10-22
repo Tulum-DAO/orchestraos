@@ -85,6 +85,7 @@ struct TextItem: Codable, Equatable {
     let is_system: Bool?
     let queued: Bool?
     let model: String?
+    let usage: TokenUsage?
     let ts: String?
     let uuid: String?
 }
@@ -96,6 +97,7 @@ struct ThinkingItem: Codable, Equatable {
     let role: String
     let text: String
     let model: String?
+    let usage: TokenUsage?
     let ts: String?
     let uuid: String?
 }
@@ -111,6 +113,7 @@ struct ToolUseItem: Codable, Equatable {
     let input_full: String?
     let id: String?
     let model: String?
+    let usage: TokenUsage?
     let ts: String?
     let uuid: String?
 }
@@ -125,6 +128,13 @@ struct ToolResultItem: Codable, Equatable {
     let is_error: Bool?
     let ts: String?
     let uuid: String?
+}
+
+struct TokenUsage: Codable, Equatable {
+    let input_tokens: Int
+    let output_tokens: Int
+    let cache_read_input_tokens: Int?
+    let cache_creation_input_tokens: Int?
 }
 
 struct BatchEntry: Codable, Equatable {

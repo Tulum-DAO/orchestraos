@@ -22,6 +22,7 @@ export interface TextItem {
   is_system?: boolean;
   queued?: boolean;
   model?: string;
+  usage?: TokenUsage;
   ts?: string;
   uuid?: string;
 }
@@ -33,6 +34,7 @@ export interface ThinkingItem {
   role: 'assistant';
   text: string;
   model?: string;
+  usage?: TokenUsage;
   ts?: string;
   uuid?: string;
 }
@@ -48,6 +50,7 @@ export interface ToolUseItem {
   input_full?: string;
   id?: string;
   model?: string;
+  usage?: TokenUsage;
   ts?: string;
   uuid?: string;
 }
@@ -62,6 +65,13 @@ export interface ToolResultItem {
   is_error?: boolean;
   ts?: string;
   uuid?: string;
+}
+
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
 }
 
 export interface BatchEntry {

@@ -19,6 +19,7 @@ import { homedir } from 'os';
 import Database from 'better-sqlite3';
 import { agentScopeParam } from '../lib/agent-scope.js';
 import { expandChipDodge } from '../lib/chipDodge.js';
+import { usageFromClaude, usageFromCodex } from '../lib/tokenUsage.js';
 import { sessionOwners } from '../services/identity-store-reader.js';
 import { dataDir } from '../lib/config.js';
 import { paneInfo, forgetPane, childPids, procArgv, liveGeminiSid } from '../lib/paneProbe.js';
@@ -326,7 +327,23 @@ export function parseCodexRollout(lines: string[]): any[] {
   // turn_context carries the model each turn ran on; assistant items take the latest one. A
   // turn_context with no model makes it unknown again (absent), never the previous turn's.
   let codexModel: string | undefined;
+  // token_count (event_msg) follows each model response: its last_token_usage goes on that
+  // response's last agent item. A repeat with the same running total (Codex re-sends it with rate
+  // limits) is not counted again, and one with no new agent item since the last is dropped.
+  let usedFrom = 0, lastTotal: number | undefined;
   for (const r of recs) {
+    if (r.type === 'event_msg' && r.payload?.type === 'token_count') {
+      const info = r.payload.info;
+      const total = info?.total_token_usage?.total_tokens;
+      const usage = usageFromCodex(info?.last_token_usage);
+      if (!usage || (typeof total === 'number' && total === lastTotal)) continue;
+      if (typeof total === 'number') lastTotal = total;
+      let at = -1;
+      for (let i = items.length - 1; i >= usedFrom; i--) if (items[i].role === 'assistant') { at = i; break; }
+      if (at >= 0) items[at].usage = usage;
+      usedFrom = items.length;
+      continue;
+    }
     if (r.type === 'turn_context') {
       const m = r.payload?.model;
       codexModel = typeof m === 'string' && m ? m : undefined;
@@ -1025,6 +1042,7 @@ function enrichItems(items: any[]): any[] {
       // Same reason as withTs(): an own `ts` holding undefined is not an absent `ts`.
       out.id = it.id; out.uuid = it.uuid;
       if (it.model) out.model = it.model;      // the model that made the call (additive)
+      if (it.usage) out.usage = it.usage;      // tokens its reply spent, OTel terms (additive)
       withTs(out, it.ts);
       return out;
     }
@@ -1290,9 +1308,24 @@ export function normalizeTranscript(
     // passes is how the two lanes drift apart.
     items = parseCodexRollout(lines);
   } else {
+    // Claude Code writes each block of one API reply as its own line, every line repeating the
+    // reply's usage: it goes ONCE per reply (message.id), on the reply's first drawn item. First,
+    // not last: the SSE tailer only appends, and an item already sent never moves its usage.
+    const counted = new Set<string>();
     for (const line of lines) {
       if (!line.trim()) continue;
-      try { items.push(...normalizeClaudeEntry(JSON.parse(line))); } catch { /* skip bad line */ }
+      try {
+        const o = JSON.parse(line);
+        const got = normalizeClaudeEntry(o);
+        const msg = o?.message;
+        const id = o?.type === 'assistant' && typeof msg?.id === 'string' ? msg.id : '';
+        const first = got.find((it) => it.role === 'assistant');
+        if (id && first && !counted.has(id)) {
+          const usage = usageFromClaude(msg.usage);
+          if (usage) { first.usage = usage; counted.add(id); }
+        }
+        items.push(...got);
+      } catch { /* skip bad line */ }
     }
     // Whole-file pass: a queued message the log later recorded as a real user turn must
     // show ONCE, and the real turn is the one that wins.
