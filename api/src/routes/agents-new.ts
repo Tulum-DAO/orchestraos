@@ -192,8 +192,18 @@ export function createAgentsNewRouter(deps: NewAgentDeps): Router {
 
   router.get('/new/parents', async (_req: Request, res: Response) => {
     const known = await deps.registeredAgents();
-    const agents = Object.entries(known).map(([id, tier]) => ({ id, tier })).sort((a, b) => a.id.localeCompare(b.id));
-    return res.json({ agents });
+    // Seats only: a blue-green copy or an earlier generation (`<root>-g<N>`, `<root>-gen<N>`) is
+    // not one, and a new agent cannot report to it (ios-watch-dev: 382 of 534 rows were copies).
+    const rows: Array<{ id: string; tier: string; default?: boolean }> = Object.entries(known)
+      .filter(([id]) => !shadowedRoot(id, known))
+      .map(([id, tier]) => ({ id, tier }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+    // The fleet manager is the default a client offers for a lead: the T0 named gm, else the
+    // only T0. Marked here so no client guesses it from names; none when it is ambiguous.
+    const t0 = rows.filter((r) => r.tier === 'T0');
+    const def = rows.find((r) => r.id === 'gm' && r.tier === 'T0') || (t0.length === 1 ? t0[0] : undefined);
+    if (def) def.default = true;
+    return res.json({ agents: rows });
   });
 
   router.post('/login-shell', async (req: Request, res: Response) => {
@@ -244,12 +254,21 @@ function realSessionExists(session: string): boolean {
   } catch { return false; }
 }
 
+/** A registry row that is an earlier generation of a seat, not a seat: replaced (succeeded_by /
+ *  superseded_at) or retired. It is no one's parent and does not reserve copy names. */
+export function isEarlierGeneration(row: Record<string, unknown> | null | undefined): boolean {
+  return !!(row && (row.superseded_at || row.succeeded_by || String(row.status ?? '') === 'retired'));
+}
+
 async function realRegisteredAgents(): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   try {
     const { getRegistry } = await import('../services/state-reader.js');
-    const agents = (getRegistry()?.agents || {}) as Record<string, { tier?: unknown }>;
-    for (const [id, row] of Object.entries(agents)) out[id] = String(row?.tier ?? '').toUpperCase();
+    const agents = (getRegistry()?.agents || {}) as Record<string, Record<string, unknown>>;
+    for (const [id, row] of Object.entries(agents)) {
+      if (isEarlierGeneration(row)) continue;
+      out[id] = String(row?.tier ?? '').toUpperCase();
+    }
   } catch { /* registry unreadable: no parents to offer */ }
   return out;
 }

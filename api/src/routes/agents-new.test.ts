@@ -366,7 +366,7 @@ test('GET /new/parents lists the registered seats with their tier', async () => 
     }).on('error', reject);
   });
   server.close();
-  assert.deepEqual(json.agents, [{ id: 'gm', tier: 'T0' }, { id: 'pm-test', tier: 'T1' }]);
+  assert.deepEqual(json.agents, [{ id: 'gm', tier: 'T0', default: true }, { id: 'pm-test', tier: 'T1' }]);
 });
 
 test('the production spawn never hard-codes a parent', async () => {
@@ -406,4 +406,42 @@ test('a -g<N> name of a seat that is NOT registered, or a name that only looks c
     const r = await post(deps, '/api/agents/new', { name, parent: 'gm' });
     assert.equal(r.status, 200, name);
   }
+});
+
+
+async function getParents(known: Record<string, string>) {
+  const deps = makeDeps({ registeredAgents: () => known });
+  const app = express();
+  app.use('/api/agents', createAgentsNewRouter(deps));
+  const server = app.listen(0);
+  const port = (server.address() as any).port;
+  try {
+    return await new Promise<any>((resolve, reject) => {
+      http.get({ host: '127.0.0.1', port, path: '/api/agents/new/parents' }, (r) => {
+        let d = ''; r.on('data', (c) => (d += c)); r.on('end', () => resolve(JSON.parse(d)));
+      }).on('error', reject);
+    });
+  } finally { server.close(); }
+}
+
+test('GET /new/parents lists seats only: copies and earlier generations of a registered seat are not parents', async () => {
+  const json = await getParents({ gm: 'T0', 'gm-gen89': '', 'pm-test': 'T1', 'pm-test-g3': 'T1', 'other-g2': 'T2' });
+  assert.deepEqual(json.agents.map((a: any) => a.id), ['gm', 'other-g2', 'pm-test']);
+});
+
+test('GET /new/parents marks the fleet manager: gm when it is a T0, else the only T0, else none', async () => {
+  const pick = (j: any) => j.agents.filter((a: any) => a.default).map((a: any) => a.id);
+  assert.deepEqual(pick(await getParents({ 'codex-gm': 'T0', gm: 'T0', 'grok-gm': 'T0', lead: 'T1' })), ['gm']);
+  assert.deepEqual(pick(await getParents({ 'codex-gm': 'T0', lead: 'T1' })), ['codex-gm']);
+  assert.deepEqual(pick(await getParents({ 'codex-gm': 'T0', 'grok-gm': 'T0' })), []);
+  assert.deepEqual(pick(await getParents({ gm: 'T1', lead: 'T1' })), []);
+});
+
+test('an earlier generation in the registry is not a seat', async () => {
+  const { isEarlierGeneration } = await import('./agents-new.js');
+  assert.equal(isEarlierGeneration({ tier: 'T1', status: 'online' }), false);
+  assert.equal(isEarlierGeneration({ status: 'parked', succeeded_by: 'x-gen2' }), true);
+  assert.equal(isEarlierGeneration({ status: 'parked', superseded_at: '2026-10-01T00:00:00Z' }), true);
+  assert.equal(isEarlierGeneration({ status: 'retired' }), true);
+  assert.equal(isEarlierGeneration(null), false);
 });
