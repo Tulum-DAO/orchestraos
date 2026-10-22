@@ -68,7 +68,9 @@ def _valid_pending(e):
     return (isinstance(e, dict) and isinstance(e.get("model"), str) and e["model"]
             and isinstance(e.get("since"), str) and isinstance(e.get("since_ts"), (int, float))
             and not isinstance(e.get("since_ts"), bool) and math.isfinite(e["since_ts"])
-            and isinstance(e.get("sids"), list) and all(isinstance(x, str) for x in e["sids"]))
+            and isinstance(e.get("sids"), list) and all(isinstance(x, str) for x in e["sids"])
+            and isinstance(e.get("reported", False), bool)
+            and all(e.get(k) is None or isinstance(e.get(k), str) for k in ("by", "from")))
 
 
 def _valid_last(e):
@@ -124,8 +126,10 @@ def view(entry, now=None):
     if not entry:
         return None
     ts = time.time() if now is None else now
+    since_ts = entry.get("since_ts")
+    since_ts = ts if since_ts is None else float(since_ts)      # 0 is a time, not "missing"
     return {"model": entry.get("model"), "since": entry.get("since"),
-            "stale": ts - float(entry.get("since_ts") or ts) >= STALE_AFTER_S}
+            "stale": ts - since_ts >= STALE_AFTER_S}
 
 
 def resolve(path, session, since, outcome, *, model=None, reason=None, now=None):

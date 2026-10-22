@@ -311,6 +311,8 @@ def test_an_unreadable_record_is_never_overwritten(seat):
     '{"pending": {"dev": {"model": "x", "since": "t", "since_ts": 1, "sids": "abc"}}, "last": {}}',
     '{"pending": {}, "last": {"dev": {"model": "x", "at": "t", "outcome": "maybe"}}}',
     '{"pending": {"dev": {"model": "x", "since": "t", "since_ts": 1e9999, "sids": []}}, "last": {}}',
+    '{"pending": {"dev": {"model": "x", "since": "t", "since_ts": 1, "sids": [], "reported": "yes"}}, "last": {}}',
+    '{"pending": {"dev": {"model": "x", "since": "t", "since_ts": 1, "sids": [], "by": 7}}, "last": {}}',
 ])
 def test_a_malformed_ENTRY_is_a_damaged_record_too(seat, bad):
     """Valid JSON with a broken entry: refused like a corrupt file, and left as it is (codex R3)."""
@@ -331,3 +333,7 @@ def test_a_pick_waiting_on_an_unreadable_identity_is_still_reported_once(seat, m
     G._apply_pending_model_switches(now=later)
     G._apply_pending_model_switches(now=later + 60)
     assert said == ["dev"] and seat["live"] == []
+
+
+def test_a_pick_stamped_at_epoch_zero_is_stale_not_fresh():
+    assert AMP.view({"model": "x", "since": "t", "since_ts": 0}, now=AMP.STALE_AFTER_S + 1)["stale"] is True
