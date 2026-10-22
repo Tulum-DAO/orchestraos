@@ -518,3 +518,116 @@ def test_a_shutdown_never_waits_on_a_lock_another_process_holds(tmp_path, monkey
         child.wait(10)
     assert entered and entered[0] == G.MODEL_SWITCH_PASS_LOCK_WAIT_S
     assert took < G.MODEL_SWITCH_PASS_LOCK_WAIT_S + 4, took
+
+
+# ------------------------------------------------------------------ codex R14 on #475
+def _hold_record_lock_in_child(f, seconds):
+    """Another process (a suspended writer, say) holding the pending record's own lock."""
+    import subprocess
+    import sys
+    import textwrap
+    lock = Path(f).with_name(Path(f).name + ".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    child = subprocess.Popen([sys.executable, "-c", textwrap.dedent(f"""
+        import fcntl, time
+        with open({str(lock)!r}, "a") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            print("held", flush=True)
+            time.sleep({seconds})
+    """)], stdout=subprocess.PIPE, text=True)
+    assert child.stdout.readline().strip() == "held"
+    return child
+
+
+def test_a_record_writer_waits_a_bounded_time_then_LockBusy_with_nothing_written(tmp_path, monkeypatch):
+    import time
+    monkeypatch.setattr(AMP, "RECORD_LOCK_WAIT_S", 0.3)
+    f = tmp_path / "pending.json"
+    AMP.put(f, "dev", SONNET)
+    before = f.read_text()
+    child = _hold_record_lock_in_child(f, 10)
+    try:
+        for write in (lambda: AMP.put(f, "dev", HAIKU), lambda: AMP.cancel(f, "dev"),
+                      lambda: AMP.resolve(f, "dev", AMP.get(f, "dev")["since"], "switched"),
+                      lambda: AMP.mark_reported(f, "dev", AMP.get(f, "dev")["since"])):
+            t0 = time.monotonic()
+            with pytest.raises(AMP.LockBusy):
+                write()
+            assert time.monotonic() - t0 < 2
+        assert f.read_text() == before
+    finally:
+        child.kill()
+        child.wait(10)
+
+
+def test_a_pass_whose_outcome_cannot_be_recorded_records_it_next_pass_without_typing_again(seat, monkeypatch):
+    monkeypatch.setattr(AMP, "RECORD_LOCK_WAIT_S", 0.3)
+    # The seat's model is what its last switch stored (the gw fixture's stays on opus otherwise).
+    monkeypatch.setattr(G, "_seat_for_session", lambda s: (
+        "dev", {}, "claude", (seat["stored"][-1][1]["model"] if seat["stored"] else OPUS)))
+    _put(SONNET)
+    seat["det"].state = "idle"
+    child = _hold_record_lock_in_child(AMP.state_path(G.ORCH_DIR), 10)
+    try:
+        assert G._apply_pending_model_switches() == []           # switched, outcome not writable yet
+        assert seat["live"] == [SONNET]
+    finally:
+        child.kill()
+        child.wait(10)
+    assert G._apply_pending_model_switches() == [("dev", "switched")]
+    assert seat["live"] == [SONNET]                              # closed, never typed twice
+    assert _get()["pending"] is None and _get()["last_switch"]["outcome"] == "switched"
+
+
+def test_an_idle_put_whose_older_pick_cannot_be_dropped_is_503_with_nothing_typed(seat, monkeypatch):
+    """The older pick is dropped BEFORE the switch: a record that cannot be written is a 503 with
+    nothing typed, never a switch whose older pick survives to undo it later."""
+    monkeypatch.setattr(AMP, "RECORD_LOCK_WAIT_S", 0.3)
+    _put(SONNET)
+    seat["det"].state = "idle"
+    child = _hold_record_lock_in_child(AMP.state_path(G.ORCH_DIR), 10)
+    try:
+        status, b = _put(HAIKU)
+    finally:
+        child.kill()
+        child.wait(10)
+    assert status == 503 and seat["live"] == []
+    assert _get()["pending"]["model"] == SONNET                  # untouched
+
+
+def test_a_shutdown_never_waits_on_a_record_lock_another_process_holds(tmp_path, monkeypatch):
+    """The real app; the pass, under the agent's switch lock, blocks writing the record that another
+    process holds locked for 20 s: shutdown AND the executor join end within the record bound."""
+    import asyncio
+    import time
+    from aiohttp.test_utils import TestServer
+    from scripts.test_events_shutdown import _NoStore
+    monkeypatch.setenv("AGENT_MODEL_PENDING_FILE", str(tmp_path / "pending.json"))
+    monkeypatch.setattr(G, "ApprovalStore", _NoStore)
+    f = AMP.state_path(G.ORCH_DIR)
+    AMP.put(f, "dev", SONNET)
+    entered = []
+
+    def one(f_, s, now):
+        entered.append(1)
+        AMP.resolve(f_, s, AMP.get(f_, s)["since"], "switched")    # blocks on the held record lock
+    monkeypatch.setattr(G, "_apply_pending_one", one)
+    child = _hold_record_lock_in_child(f, 20)
+
+    async def go():
+        server = TestServer(G.build_app())
+        await server.start_server()
+        for _ in range(100):
+            if entered:
+                break
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(0.2)
+        await asyncio.wait_for(server.close(), timeout=10)
+    try:
+        t0 = time.monotonic()
+        asyncio.run(go())
+        took = time.monotonic() - t0
+    finally:
+        child.kill()
+        child.wait(10)
+    assert entered and took < AMP.RECORD_LOCK_WAIT_S + 4, took

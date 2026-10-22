@@ -4981,15 +4981,16 @@ def _put_model(session, model, catalog, by):
             st = (_agent_status().get_agent_status(session) or {}).get("state")
             if st in MID_TURN_STATES | STALLED_STATES and sids:
                 return 202, _defer_model_switch(session, model, current, sids, by)
+        # A newer pick replaces an older one still waiting (as a deferred pick does), dropped BEFORE
+        # the switch: a record that cannot be written now (LockBusy) is then a 503 with nothing
+        # typed, never a switch whose older pick survives to undo it later (codex R14 on #475).
+        dropped = AMP.cancel(pend_file, session) if AMP.get(pend_file, session) else None
+        if dropped:
+            log.info(f"AGENT-MODEL {session} pending -> {dropped.get('model')} REPLACED by {model} ({by})")
         status, body = _switch_model_now(session, model, root, meta, runtime, current, catalog, desc, by)
         if (desc["how"] == "live" and status == 409 and sids
                 and body.get("state") in MID_TURN_STATES | STALLED_STATES):
             return 202, _defer_model_switch(session, model, current, sids, by)
-        if status == 200:
-            # This pick is now the agent's model: an older pick still waiting would undo it.
-            dropped = AMP.cancel(pend_file, session)
-            if dropped:
-                log.info(f"AGENT-MODEL {session} pending -> {dropped.get('model')} REPLACED by an idle switch")
         return status, body
 
 

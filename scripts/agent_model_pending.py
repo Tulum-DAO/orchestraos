@@ -86,13 +86,37 @@ def _valid_last(e):
             and (e.get("reason") is None or isinstance(e.get("reason"), str)))
 
 
+#: The record's own lock is held only for one read-modify-write; a writer waits at most this long
+#: for it, then raises LockBusy with nothing written (codex R14 on #475).
+RECORD_LOCK_WAIT_S = 5.0
+
+
+def _flock(fh, timeout, busy):
+    """flock(LOCK_EX) on `fh`: blocking when `timeout` is None, else polled up to `timeout`
+    seconds, then LockBusy(busy)."""
+    if timeout is None:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        return
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    while True:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise LockBusy(busy)
+            time.sleep(0.05)
+
+
 @contextmanager
-def _locked(path):
-    """The whole read-modify-write under one flock, written by temp + rename."""
+def _locked(path, timeout=None):
+    """The whole read-modify-write under one flock, written by temp + rename. The wait is bounded
+    (RECORD_LOCK_WAIT_S unless given): past it LockBusy, nothing read or written (codex R14)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path.with_name(path.name + ".lock"), "a") as lk:
-        fcntl.flock(lk, fcntl.LOCK_EX)
+        _flock(lk, RECORD_LOCK_WAIT_S if timeout is None else timeout,
+               f"{path}: the record is locked by another writer")
         data = _read(path)
         yield data
         tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
@@ -183,18 +207,7 @@ def session_lock(path, session, timeout=None):
     d = Path(path).with_name(Path(path).name + ".locks")
     d.mkdir(parents=True, exist_ok=True)
     with open(d / f"{safe}.lock", "a") as fh:
-        if timeout is None:
-            fcntl.flock(fh, fcntl.LOCK_EX)
-        else:
-            deadline = time.monotonic() + max(0.0, float(timeout))
-            while True:
-                try:
-                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    if time.monotonic() >= deadline:
-                        raise LockBusy(f"another model switch for {name} is still in progress")
-                    time.sleep(0.05)
+        _flock(fh, timeout, f"another model switch for {name} is still in progress")
         try:
             yield
         finally:
