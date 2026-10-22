@@ -44,6 +44,14 @@ def record(session, text, marker):
     os.replace(tmp, p)
 
 
+def row_for(session):
+    """The session's current row, or None."""
+    try:
+        return json.loads(_path(session).read_text())
+    except (OSError, ValueError):
+        return None
+
+
 def mark_typed(session):
     """Second phase, right after the keystrokes went out: only a row marked typed may ever get an
     Enter from the reconcile. A process killed between record() and its send leaves an UNMARKED

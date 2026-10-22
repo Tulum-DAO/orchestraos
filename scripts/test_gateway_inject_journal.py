@@ -507,3 +507,21 @@ def test_verified_inject_marks_the_row_typed_only_after_its_keystrokes(jdir, mon
     G.verified_inject("gm", "hello there")
     assert seen[0] == ("typing", [None])                  # recorded, not yet typed
     assert seen[1] == ("enter", [True])                   # marked once the keystrokes went out
+
+
+def test_a_forced_send_never_overwrites_a_half_sent_row(jdir, monkeypatch):
+    """codex R12 on #472: force skips the typed-text guard; it must not append to an earlier
+    gateway's half-sent text and replace the row the next start needs."""
+    J.record("gm", "the half-sent one", "the half-sent one"); J.mark_typed("gm")
+    calls = []
+
+    def tmux(*a, timeout=5):
+        calls.append(a)
+        return types.SimpleNamespace(returncode=0, stdout="out\n❯ the half-sent one\n" if a[0] == "capture-pane" else "")
+    monkeypatch.setattr(G, "_tmux", tmux)
+    monkeypatch.setattr(G, "_agent_status", lambda: types.SimpleNamespace(
+        get_agent_status=lambda s: {"state": "stranded_input", "activity": "", "process": {"runtime": "claude"}}))
+    ok, info = G.verified_inject("gm", "something new", True)
+    assert not ok and info["reason"] == "busy" and info["composer_text"] == "the half-sent one"
+    assert not [c for c in calls if c[0] == "send-keys"]
+    assert [(r["text"], r.get("typed")) for r in J.rows()] == [("the half-sent one", True)]

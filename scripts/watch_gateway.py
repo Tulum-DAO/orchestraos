@@ -2785,6 +2785,15 @@ def _verified_inject_locked(session, text, force=False, idle_only=False):
         # TYPED-NOT-ENTERED JOURNAL (gm msg_40dcd58a): the row exists from just before the text is
         # typed until the submit is verified, so a process killed in between (crash, SIGKILL, a
         # respawn-pane -k) leaves evidence the next start reconciles (reconcile_inject_journal).
+        # A forced send skips the typed-text guard, so it could append to a half-sent message an
+        # earlier process left (its row still marked typed) and overwrite that row: the evidence
+        # the next start needs. Refuse instead; the person clears or sends that text first.
+        _left = inject_journal.row_for(session)
+        if force and isinstance(_left, dict) and _left.get("typed") is True:
+            return False, {"reason": "busy", "state": state,
+                           "activity": "A message an earlier gateway typed but never entered is "
+                                       "recorded for this pane; send or clear it first",
+                           "composer_text": _left.get("text") or ""}
         try:
             inject_journal.record(session, text, marker)
         except OSError as e:   # FAIL CLOSED: an unjournaled inject is unrecoverable if the process
