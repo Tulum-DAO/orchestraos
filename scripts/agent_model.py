@@ -5,6 +5,8 @@ How a switch happens depends on the runtime:
 - Claude switches LIVE: the gateway types `/model <id>` into the idle pane (the verified send),
   and the CLI answers with a `<local-command-stdout>Set model to ...` line in the seat's
   transcript. That line is the confirmation; nothing else is.
+- Codex switches live too, through its picker (scripts/agent_model_codex.py): `/model <id>`
+  with an argument is NOT a command there (the model answers it as a prompt).
 - Every other runtime records the new model on the seat and takes it at its next rotation
   (spawn passes the stored model). The response says so; nothing is typed into the pane.
 
@@ -37,7 +39,8 @@ LIVE_CATALOG = "model-catalog-live.json"
 RESPONSE_CACHE = "runtimes-available-cache.json"
 
 # Runtimes whose pane can be switched in place. Everything else waits for its next rotation.
-LIVE_RUNTIMES = {"claude"}
+# Codex switches through its picker (scripts/agent_model_codex.py), never `/model <id>`.
+LIVE_RUNTIMES = {"claude", "codex"}
 # grok seats do not rotate yet (rotate_agent refuses them), so a stored model would never apply.
 NO_SWITCH = {"grok": "this runtime cannot switch models yet"}
 
