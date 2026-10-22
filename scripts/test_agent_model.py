@@ -440,3 +440,23 @@ def test_a_live_switch_the_seat_did_not_keep_says_so(gw, monkeypatch):
     r = _run(G.handle_agent_model(_Req("PUT", {"session": "dev", "model": "claude-sonnet-5-5"}, actor="app:ios")))
     b = _body(r)
     assert r.status == 200 and b["switching"] == "switched" and b["stored"] is False and "warning" in b
+
+
+def test_an_unknown_transcript_means_nothing_is_typed(tmp_path):
+    c = _setup(tmp_path)
+    status, body = AM.switch_live(model="claude-opus-5-5", settings_path=c.settings, send=c.send,
+                                  find_jsonl=lambda: None, timeout_s=0, sleep=lambda _s: None)
+    assert status == 502 and body["error"] == "unconfirmable" and c.sent == []
+    assert not (c.settings.parent / AM.JOURNAL_NAME).exists()
+
+
+def test_a_send_that_raises_is_a_502_and_the_default_still_comes_back(tmp_path):
+    c = _setup(tmp_path)
+
+    def send(text):
+        c._save("claude-opus-5-5")             # the CLI saved, then the send path blew up
+        raise RuntimeError("tmux went away")
+    status, body = AM.switch_live(model="claude-opus-5-5", settings_path=c.settings, send=send,
+                                  find_jsonl=lambda: c.jsonl, timeout_s=0, sleep=lambda _s: None)
+    assert status == 502 and body["error"] == "switch failed" and "tmux went away" in body["detail"]
+    assert json.loads(c.settings.read_text())["model"] == "opus"

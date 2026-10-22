@@ -367,8 +367,8 @@ def switch_live(*, model: str, settings_path: Path, send, find_jsonl, title: str
     and the next switch (under the same lock) restores a journal it finds. A save that lands
     late is caught by a second look `recheck_s` after the restore.
 
-    Returns (status, body): 200 switched, 409 busy, 502 unsent / unconfirmed / refused / a
-    different model confirmed, 500 when the host setting could not be put back (the body says
+    Returns (status, body): 200 switched, 409 busy, 502 unconfirmable / unsent / failed /
+    unconfirmed / refused / a different model confirmed, 500 when the host setting could not be put back (the body says
     whether the switch itself happened)."""
     if not valid_model_id(model):
         return 400, {"ok": False, "error": "bad model id"}
@@ -379,11 +379,18 @@ def switch_live(*, model: str, settings_path: Path, send, find_jsonl, title: str
             before = read_model_key(settings_path)
         except Exception as e:  # noqa: BLE001 — never guess what to put back
             return 500, {"ok": False, "error": "host settings unreadable", "detail": repr(e)}
+        # Only lines appended after the send may confirm it, so the transcript must be known (and
+        # its size read) BEFORE anything is typed. Unknown -> nothing is typed at all.
+        path0 = find_jsonl()
+        offset = file_size(path0)
+        if offset is None:
+            return 502, {"ok": False, "error": "unconfirmable",
+                         "detail": "this agent's transcript was not found, so a switch could not "
+                                   "be confirmed; nothing was typed"}
         _write_journal(settings_path, before)
         res, sent = None, False
         try:
-            since, path0 = now(), find_jsonl()
-            offset = file_size(path0)
+            since = now()
             ok, info = send(f"/model {model}")
             sent = bool(ok)
             if not ok:
@@ -393,11 +400,14 @@ def switch_live(*, model: str, settings_path: Path, send, find_jsonl, title: str
                 else:
                     result = (502, {"ok": False, "error": "not sent", "detail": info})
             else:
-                res = wait_for_switch(find_jsonl, since, offset, timeout_s=timeout_s, sleep=sleep)
+                res = wait_for_switch(lambda: path0, since, offset, timeout_s=timeout_s, sleep=sleep)
                 # The CLI writes the setting before it prints, unless its own save timed out
                 # (then the write may still land): give a late write time to land first.
                 sleep(settle_s)
                 result = None
+        except Exception as e:  # noqa: BLE001 — answered, never raised past the restore
+            result = (502, {"ok": False, "error": "switch failed", "detail": repr(e)[:300],
+                            "sent": sent})
         finally:
             restored, err = _restore(settings_path, before)
             if restored and sent:
