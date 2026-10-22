@@ -11,6 +11,7 @@ types and deletes it after a verified submit; (3) at startup the gateway reconci
 our text still in the composer -> one Enter, verified; not verified -> left untouched and REPORTED.
 Text we did not type is never touched (prefix match on what we typed).
 """
+import hashlib
 import json
 import os
 import re
@@ -27,7 +28,13 @@ def journal_dir():
 
 
 def _path(session):
-    safe = re.sub(r"[^A-Za-z0-9._-]", "_", str(session)) or "_"
+    """One file per session. A name that is already filename-safe is the file name itself; any
+    other name also carries a hash of the real name, so two sessions ('a/b', 'a_b') never share a
+    row and overwrite each other's evidence (codex R19). '~' never occurs in a safe name."""
+    name = str(session)
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", name) or "_"
+    if safe != name or safe.startswith("."):
+        safe = f"{safe}~{hashlib.sha256(name.encode()).hexdigest()[:12]}"
     return journal_dir() / f"{safe}.json"
 
 
@@ -117,8 +124,9 @@ def reconcile(read_composer, press_enter, report, now=None, verify_wait_s=2.5, l
     """Resolve every leftover row. Returns [(session, outcome)].
 
     read_composer(session) -> None (session gone), 'ERROR:<why>' (could not read), or the
-                              composer's TYPED text ('' = empty). It must return None/'' when no
-                              composer is on screen (a menu replaces it: never press Enter there).
+                              composer's TYPED text ('' = empty). It must return 'ERROR:' when no
+                              composer is on screen (a menu replaces it: never press Enter there,
+                              and the row is the only evidence of our text, so it is kept).
     press_enter(session)   -> sends ONE Enter; returns False when the key could not be sent.
     report(session, outcome, row) -> called for every outcome that a person should hear about.
     lock(session) -> context manager yielding True when the pane lock is held (False = another typer

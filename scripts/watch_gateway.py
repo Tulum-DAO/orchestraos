@@ -2902,9 +2902,10 @@ def _client_attached(session) -> bool:
 
 
 def _read_composer_typed(session):
-    """For the startup reconcile: None = session not in tmux; 'ERROR:<why>' = could not read;
-    '' = no composer on screen (a menu/permission prompt replaces it, so nothing may be pressed)
-    or an empty one; else the composer's TYPED text (dim ghost suggestions excluded)."""
+    """For the startup reconcile: None = session not in tmux; 'ERROR:<why>' = could not read, or no
+    composer on screen (a menu/permission prompt replaces it: nothing may be pressed, and the row
+    stays as the only evidence of our text, codex R19); '' = an empty composer; else the composer's
+    TYPED text (dim ghost suggestions excluded)."""
     if _tmux("has-session", "-t", f"={session}").returncode != 0:
         return None
     # A person attached to the pane may be typing: the reconcile presses nothing there. 'ERROR:'
@@ -2915,8 +2916,9 @@ def _read_composer_typed(session):
     if raw is None:
         return "ERROR:capture failed"
     if not _pane_has_composer(_strip_ansi(raw)):
-        return ""
-    return _typed_on_prompt_line(raw) or ""
+        return "ERROR:no composer on screen (a menu or prompt replaces it)"
+    typed = _typed_on_prompt_line(raw)
+    return "ERROR:no prompt line on screen" if typed is None else typed
 
 
 def _report_inject_reconcile(session, outcome, row):

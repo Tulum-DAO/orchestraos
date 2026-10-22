@@ -595,3 +595,35 @@ def test_nudge_types_nothing_on_a_menu_below_an_old_empty_prompt(monkeypatch, tm
     monkeypatch.setattr(NP, "attached", lambda s: False)
     assert NP._nudge_unlocked("seat", "continue please") == 2
     assert not [k for k in keys if k[0] == "send-keys"]
+
+
+# ------------------------------------------------------------------ codex R19 on #472
+def test_reconcile_keeps_the_row_when_a_menu_replaces_the_composer(monkeypatch, tmp_path):
+    """No composer on screen is not 'our text is gone': the row is the only evidence, so it stays."""
+    import watch_gateway as G
+    import inject_journal as J
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+    J.record("gm", "our message", "our message"); J.mark_typed("gm")
+    keys = []
+    screen = "some output\n\nDo you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel\n"
+
+    def tmux(*a, **k):
+        keys.append(a)
+        return types.SimpleNamespace(returncode=0, stdout=screen if a[0] == "capture-pane" else "")
+    monkeypatch.setattr(G, "_tmux", tmux)
+    assert G.reconcile_inject_journal() == [("gm", "unreadable")]
+    assert not [k for k in keys if k[0] == "send-keys"]
+    assert [(r["text"], r.get("typed")) for r in J.rows()] == [("our message", True)]
+
+
+def test_journal_rows_of_distinct_sessions_never_share_a_file(monkeypatch, tmp_path):
+    import inject_journal as J
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+    names = ["a/b", "a_b", "a b", "a:b", ".a", "_a", "pm-x"]
+    for n in names:
+        J.record(n, f"text of {n}", n)
+    assert sorted(r["session"] for r in J.rows()) == sorted(names)
+    assert all(J.row_for(n)["text"] == f"text of {n}" for n in names)
+    assert J._path("pm-x").name == "pm-x.json"                 # a safe name keeps its file (no migration)
+    J.clear("a/b")
+    assert J.row_for("a_b") and J.row_for("a/b") is None
