@@ -152,7 +152,9 @@ async function realGatewayInject(session: string, text: string, force = false): 
   try {
     const resp = await fetch(`${GATEWAY_URL}/agent-message`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json',
+        // A person typed this (the web chat): the gateway counts it as the operator's own message.
+        'X-Actor': 'operator:web' },
       // accepts:['held'] lets the gateway durable-hold the cases it must — a menu or
       // permission prompt on screen, or a pane that is not running — rather than 409-ing
       // them back to us. It no longer holds a plain mid-turn 'working' seat: that injects.
