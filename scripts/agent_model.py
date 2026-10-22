@@ -286,10 +286,11 @@ def scan_switch_result(jsonl_path: Path, since_iso: str, start_offset: int | Non
         with open(jsonl_path, "rb") as f:
             f.seek(0, os.SEEK_END)
             size = f.tell()
-            if start_offset is not None and 0 <= start_offset <= size:
+            if start_offset is not None:
+                if not 0 <= start_offset <= size:
+                    return None             # the file shrank: no line can be proven new
                 f.seek(start_offset)
             else:
-                start_offset = None
                 f.seek(max(0, size - tail_bytes))
             raw = f.read().decode("utf-8", "replace")
     except OSError:
@@ -411,7 +412,8 @@ def switch_live(*, model: str, settings_path: Path, send, find_jsonl, title: str
         finally:
             restored, err = _restore(settings_path, before)
             if restored and sent:
-                sleep(recheck_s)                        # a save later than the settle
+                with contextlib.suppress(Exception):    # a save later than the settle
+                    sleep(recheck_s)
                 restored, err = _restore(settings_path, before)
             if restored:
                 with contextlib.suppress(FileNotFoundError):

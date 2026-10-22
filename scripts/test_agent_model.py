@@ -460,3 +460,30 @@ def test_a_send_that_raises_is_a_502_and_the_default_still_comes_back(tmp_path):
                                   find_jsonl=lambda: c.jsonl, timeout_s=0, sleep=lambda _s: None)
     assert status == 502 and body["error"] == "switch failed" and "tmux went away" in body["detail"]
     assert json.loads(c.settings.read_text())["model"] == "opus"
+
+
+def test_a_transcript_that_shrank_confirms_nothing(tmp_path):
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "user", "timestamp": "2099-01-01T00:00:00.000Z", "message": {
+        "content": "<local-command-stdout>Set model to `Opus 5.5`</local-command-stdout>"}}) + "\n")
+    assert AM.scan_switch_result(j, "2026-10-22T00:00:00.000Z", AM.file_size(j) + 500) is None
+
+
+def test_a_recheck_sleep_that_raises_still_restores(tmp_path):
+    c = _setup(tmp_path)
+    calls = []
+
+    def sleep(_s):
+        calls.append(_s)
+        if len(calls) == 2:
+            raise RuntimeError("interrupted")
+    status, _ = AM.switch_live(model="claude-opus-5-5", settings_path=c.settings, send=c.send,
+                               find_jsonl=lambda: c.jsonl, timeout_s=0, sleep=sleep,
+                               now=lambda: "2026-10-22T00:00:00.000Z")
+    assert status == 200 and json.loads(c.settings.read_text())["model"] == "opus"
+
+
+def test_a_failed_switch_names_the_models(gw, monkeypatch):
+    monkeypatch.setattr(AM, "switch_live", lambda **kw: (502, {"ok": False, "error": "unconfirmed"}))
+    r = _run(G.handle_agent_model(_Req("PUT", {"session": "dev", "model": "claude-sonnet-5-5"}, actor="app:ios")))
+    assert r.status == 502 and _body(r)["model"] == "claude-sonnet-5-5" and _body(r)["current"] == "claude-opus-5-5"

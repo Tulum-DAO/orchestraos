@@ -4490,7 +4490,8 @@ async def handle_agent_model(request):
             send=lambda text: verified_inject(session, text, False),
             find_jsonl=lambda: _seat_transcript_path(session)))
         if status != 200:
-            return _json(body, status=status)
+            # Name the models, so a client's words say which one the agent is on (ios-watch-dev).
+            return _json({**body, "model": model, "current": current}, status=status)
     else:
         body = {"ok": True, "model": model, "switching": "next_rotation"}
 
@@ -4511,8 +4512,9 @@ async def handle_agent_model(request):
     body["stored"] = stored
     if not stored:
         if body.get("switching") != "switched":
-            return _json({"ok": False, "error": "not stored", "detail": "the seat's model could "
-                          "not be written; nothing changed"}, status=502)
+            return _json({"ok": False, "error": "not stored", "model": model, "current": current,
+                          "detail": "the seat's model could not be written; nothing changed"},
+                         status=502)
         body["warning"] = ("switched now, but the seat did not keep the new model: its next "
                            "spawn will start on the old one")
     return _json(body)
