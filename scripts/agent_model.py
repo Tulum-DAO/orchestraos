@@ -447,15 +447,28 @@ def switch_live(*, model: str, settings_path: Path, send, find_jsonl, title: str
                          "detail": "this agent's transcript was not found, so a switch could not "
                                    "be confirmed; nothing was typed"}
         _write_journal(settings_path, before)
-        res, sent, note = None, False, None
+        res, sent, typed, note = None, False, False, None
         try:
             since = now()
-            ok, info = send(f"/model {model}")
-            sent = bool(ok)
-            if not ok:
-                if (info or {}).get("reason") == "busy":
+            asking = switch_dialog(capture() or "") if capture is not None else None
+            if asking is not None:
+                # A question already on screen is not ours (a person's own /model, another
+                # caller's): never type into it, and never answer it.
+                ok, info = False, {"reason": "busy", "asking": asking}
+            else:
+                typed = True    # from here on the pane may hold our text or the dialog it opened
+                ok, info = send(f"/model {model}")
+            info = info or {}
+            # Typed unless the sender says nothing was typed (busy) or it took our text back. A
+            # send verifier can read the open confirm dialog as text still in the composer (one
+            # measured 2026-10-22 did), so an unverified send that may have typed still waits for
+            # the CLI's own answer, dialog included; only a confirming line makes it a success.
+            maybe_typed = info.get("reason") != "busy" and not info.get("cleared")
+            sent, typed = bool(ok), bool(ok) or maybe_typed
+            if not typed:
+                if info.get("reason") == "busy":
                     result = (409, {"ok": False, "error": "busy",
-                                    **{k: v for k, v in (info or {}).items() if k != "reason"}})
+                                    **{k: v for k, v in info.items() if k != "reason"}})
                 else:
                     result = (502, {"ok": False, "error": "not sent", "detail": info})
             else:
@@ -468,18 +481,20 @@ def switch_live(*, model: str, settings_path: Path, send, find_jsonl, title: str
                 # (then the write may still land): give a late write time to land first.
                 sleep(settle_s)
                 if not note:
-                    result = None
+                    # An unverified send the CLI never answered stays what the sender said.
+                    result = None if sent or res is not None else (
+                        502, {"ok": False, "error": "not sent", "detail": info})
         except Exception as e:  # noqa: BLE001 — answered, never raised past the restore
             result = (502, {"ok": False, "error": "switch failed", "detail": repr(e)[:300],
                             "sent": sent})
         finally:
-            if sent and capture is not None and keys is not None:
+            if typed and capture is not None and keys is not None:
                 with contextlib.suppress(Exception):    # never leave the pane in the dialog
                     if switch_dialog(capture() or "") is not None:
                         keys("2")
                         sleep(0.5)
             restored, err = _restore(settings_path, before)
-            if restored and sent:
+            if restored and typed:
                 with contextlib.suppress(Exception):    # a save later than the settle
                     sleep(recheck_s)
                 restored, err = _restore(settings_path, before)
@@ -489,7 +504,7 @@ def switch_live(*, model: str, settings_path: Path, send, find_jsonl, title: str
         # Last look before the lock is released (gm): the pane must be back at its prompt, not
         # still asking. A question left on screen is reported, never a success.
         still_asking = None
-        if sent and capture is not None:
+        if typed and capture is not None:
             with contextlib.suppress(Exception):
                 still_asking = switch_dialog(capture() or "")
         if not restored:
