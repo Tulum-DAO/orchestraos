@@ -10,8 +10,8 @@
  * concurrently-maintained detector code. Mounted at /api/agents in server.ts.
  */
 import { Router, type Request, type Response } from 'express';
-import { readFileSync, existsSync, readdirSync, statSync, openSync, readSync, closeSync } from 'fs';
-import { join } from 'path';
+import { readFileSync, existsSync, readdirSync, statSync, openSync, readSync, closeSync, realpathSync } from 'fs';
+import { join, basename, relative, sep } from 'path';
 import { isSafeAgentId } from '../lib/agentPaths.js';
 import { LIVE_CARDS, mergeQueuedItems } from '../services/queued-merge.js';
 import { tagAudience, tagSynthetics } from '../lib/audience.js';
@@ -20,7 +20,7 @@ import Database from 'better-sqlite3';
 import { agentScopeParam } from '../lib/agent-scope.js';
 import { expandChipDodge } from '../lib/chipDodge.js';
 import { usageFromClaude, usageFromCodex, addUsage, type TokenUsage } from '../lib/tokenUsage.js';
-import { sessionOwners } from '../services/identity-store-reader.js';
+import { sessionOwners, predecessorOf } from '../services/identity-store-reader.js';
 import { dataDir } from '../lib/config.js';
 import { paneInfo, forgetPane, childPids, procArgv, liveGeminiSid } from '../lib/paneProbe.js';
 import { transcriptMarkdown, DEFAULT_LAST_TURNS } from '../lib/transcriptMarkdown.js';
@@ -594,6 +594,72 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
   return { path: null, sid };
 }
 
+/** The stitched chat (ios-watch-dev msg_41c00a45, Shaw-approved): what the poll route puts above a
+ *  seat's current conversation, so a rotation keeps the thread. Only when `sid` is the current head
+ *  of `agentId`'s lineage and the generation it took over from has a file this box can read:
+ *  Claude by the lineage's project dir (else the row's conversation_path), Codex by its thread's
+ *  rollout, Gemini by its brain log; a path a row names only when it is that session's own file
+ *  (ownFile). Anything else: null, and the chat is the current file alone. */
+export interface PreviousTranscript { path: string; antigravity: boolean; divider: Record<string, unknown> }
+
+const SESSION_ID = /^[0-9A-Za-z][0-9A-Za-z_-]{0,127}$/;   // a DB value going into a path: no separators
+const CODEX_SESSIONS = join(HOME, '.codex', 'sessions');
+
+/** Every candidate file is used only when, symlinks resolved, it is that session's OWN file under
+ *  its runtime's own directory (`isOwn` sees the path relative to it), so a wrong or hostile row, or
+ *  a link planted where the file should be, cannot hand this public route another seat's
+ *  conversation, or any other file. */
+function ownFile(p: string | null, root: string, isOwn: (rel: string) => boolean): string | null {
+  if (!p) return null;
+  try {
+    const real = realpathSync(p);
+    const base = realpathSync(root);
+    return real.startsWith(base + sep) && isOwn(relative(base, real)) ? real : null;
+  } catch {
+    return null;
+  }
+}
+
+function codexRolloutFor(sid: string, dbPath = CODEX_STATE_DB): string | null {
+  if (!existsSync(dbPath)) return null;
+  let db: any = null;
+  try {
+    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    const r = db.prepare('SELECT rollout_path FROM threads WHERE id = ?').get(sid) as { rollout_path?: string } | undefined;
+    return r && typeof r.rollout_path === 'string' && r.rollout_path ? r.rollout_path : null;
+  } catch {
+    return null;
+  } finally {
+    try { db?.close(); } catch {}
+  }
+}
+
+export function resolvePreviousTranscript(agentId: string, sid: string | null): PreviousTranscript | null {
+  if (!sid) return null;
+  const p = predecessorOf(sid);
+  if (!p || lineageOf(p.root) !== lineageOf(agentId) || !SESSION_ID.test(p.from_session)) return null;
+  const from = p.from_session;
+  const claudeOwn = (rel: string) => basename(rel) === `${from}.jsonl`;
+  const geminiLog = join(from, '.system_generated', 'logs', 'transcript.jsonl');
+  const candidates = [
+    p.cwd ? ownFile(join(CLAUDE_PROJECTS, String(p.cwd).replace(/[/.]/g, '-'), `${from}.jsonl`), CLAUDE_PROJECTS, claudeOwn) : null,
+    ownFile(p.conversation_path, CLAUDE_PROJECTS, claudeOwn),
+    ownFile(codexRolloutFor(from), CODEX_SESSIONS, (rel) => /^rollout-.*\.jsonl$/.test(basename(rel)) && basename(rel).endsWith(`-${from}.jsonl`)),
+    ownFile(join(GEMINI_BRAIN, geminiLog), GEMINI_BRAIN, (rel) => rel === geminiLog),
+  ];
+  const path = candidates.find((c): c is string => !!c);
+  if (!path) return null;
+  return {
+    path,
+    antigravity: path.includes('antigravity-cli'),
+    divider: {
+      kind: 'rotation', role: 'system', uuid: `rot:${sid}`, ts: p.promoted_at,
+      from_generation: p.from_generation, to_generation: p.to_generation,
+      from_session: from, to_session: sid,
+    },
+  };
+}
+
 function cleanArgs(args: any): Record<string, unknown> {
   if (!args || typeof args !== 'object') return (args as Record<string, unknown>) || {};
   const cleaned: Record<string, unknown> = {};
@@ -1119,6 +1185,17 @@ export function buildRenderItems(items: any[]): any[] {
       nodes.push(withAudience(node, it));
       continue;
     }
+    if (it.kind === 'rotation') {
+      // The stitched chat's divider: drawn like a date line between two generations.
+      const node: any = {
+        kind: 'rotation', from_generation: it.from_generation, to_generation: it.to_generation,
+        from_session: it.from_session, to_session: it.to_session,
+      };
+      if (it.ts !== undefined) node.ts = it.ts;
+      node.key = it.uuid || key;
+      nodes.push(withAudience(node, it));
+      continue;
+    }
     if (it.kind === 'queued_batch') {
       // B2 processed-batch div (queued-native-render): passthrough as a render node.
       const node: any = { kind: 'queued_batch', count: it.count ?? (Array.isArray(it.entries) ? it.entries.length : 0), entries: it.entries || [] };
@@ -1291,16 +1368,9 @@ export function parseGrokUpdates(lines: string[]): any[] {
   return items;
 }
 
-// Pure v2 envelope builder — the seam the conformance fixtures exercise.
-// Detection mirrors the route: 'antigravity-cli' path hint OR content sniff.
-export function normalizeTranscript(
-  lines: string[],
-  agentId: string,
-  sessionId: string | null,
-  limit = 150,
-  antigravityHint = false,
-  includeQueued = false,
-): { agent_id: string; session_id: string | null; grammar_version: number; items: any[]; render_items: any[] } {
+// One log's items: parsed by the grammar its lines show, whole-file passes applied, then tagged
+// (audience/exchange) on the WHOLE log.
+function logItems(lines: string[], antigravityHint: boolean): any[] {
   const isAntigravity = antigravityHint ||
     lines.some((l) => {
       try {
@@ -1351,7 +1421,31 @@ export function normalizeTranscript(
   }
   // audience/exchange (the chat fold): tagged on the WHOLE log, so a turn whose opener falls
   // outside the window keeps its tags.
-  let windowed = tagAudience(enrichItems(items)).slice(-limit);
+  return tagAudience(enrichItems(items));
+}
+
+// Pure v2 envelope builder — the seam the conformance fixtures exercise.
+// Detection mirrors the route: 'antigravity-cli' path hint OR content sniff.
+export function normalizeTranscript(
+  lines: string[],
+  agentId: string,
+  sessionId: string | null,
+  limit = 150,
+  antigravityHint = false,
+  includeQueued = false,
+  previous: { lines: () => string[]; antigravity: boolean; divider: Record<string, unknown> } | null = null,
+): { agent_id: string; session_id: string | null; grammar_version: number; items: any[]; render_items: any[] } {
+  let all = logItems(lines, antigravityHint);
+  // The stitched chat: after a rotation, the previous generation's tail, ONE divider, then this
+  // generation, with `limit` across the joined list. Each log is parsed and tagged on its own (its
+  // own spawn brief, its own exchanges); the divider is drawn in the conversation, never inside a
+  // strip. The previous log is read only when this one alone does not fill the window.
+  if (previous && all.length < limit) {
+    let before: any[] | null = null;
+    try { before = logItems(previous.lines(), previous.antigravity); } catch { before = null; }  // unreadable: this log alone
+    if (before) all = [...before, { ...previous.divider, audience: 'user' }, ...all];
+  }
+  let windowed = all.slice(-limit);
   // queued-native-render (P1): merge still-pending phone/watch held turns (B1) +
   // processed-batch divs (B2) from msg_store, at their delivery positions (never by ts:
   // the log's own order is the delivery order). POLL-ONLY —
@@ -1402,7 +1496,16 @@ router.get('/:id/transcript', (req: Request, res: Response) => {
     // misclassifying their Claude JSONL as Antigravity and yielding 0 items.
     // Real Gemini brain logs always live under .gemini/antigravity-cli/brain/,
     // so 'antigravity-cli' + the content sniff in normalizeTranscript cover them.
-    res.json(normalizeTranscript(lines, agentId, sid, limit, path.includes('antigravity-cli'), true));
+    // The stitched chat: the generation this one took over from, above it. Fail-open: anything
+    // wrong with the previous file and the chat is this file alone, as before.
+    let previous: { lines: () => string[]; antigravity: boolean; divider: Record<string, unknown> } | null = null;
+    try {
+      const prev = resolvePreviousTranscript(agentId, sid);
+      if (prev && prev.path !== path) {
+        previous = { lines: () => readFileSync(prev.path, 'utf-8').split('\n'), antigravity: prev.antigravity, divider: prev.divider };
+      }
+    } catch { previous = null; }
+    res.json(normalizeTranscript(lines, agentId, sid, limit, path.includes('antigravity-cli'), true, previous));
   } catch (err) {
     res.json({ agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: String(err) });
   }

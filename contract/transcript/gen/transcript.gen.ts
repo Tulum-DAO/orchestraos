@@ -11,7 +11,8 @@ export type ChatItem =
   | ThinkingItem
   | ToolUseItem
   | ToolResultItem
-  | QueuedBatchItem;
+  | QueuedBatchItem
+  | RotationItem;
 
 export interface TextItem {
   audience?: 'user' | 'agent';
@@ -90,12 +91,26 @@ export interface QueuedBatchItem {
   key: string;
 }
 
+export interface RotationItem {
+  audience?: 'user' | 'agent';
+  exchange?: string;
+  kind: 'rotation';
+  role: 'system';
+  uuid: string;
+  ts?: string;
+  from_generation: number;
+  to_generation: number;
+  from_session: string;
+  to_session: string;
+}
+
 export type RenderItem =
   | RenderUser
   | RenderAssistant
   | RenderThinking
   | RenderTool
-  | RenderQueuedBatch;
+  | RenderQueuedBatch
+  | RenderRotation;
 
 export interface RenderUser {
   audience?: 'user' | 'agent';
@@ -147,6 +162,18 @@ export interface RenderQueuedBatch {
   count: number;
   entries: BatchEntry[];
   ts?: string;
+  key: string;
+}
+
+export interface RenderRotation {
+  audience?: 'user' | 'agent';
+  exchange?: string;
+  kind: 'rotation';
+  ts?: string;
+  from_generation: number;
+  to_generation: number;
+  from_session: string;
+  to_session: string;
   key: string;
 }
 

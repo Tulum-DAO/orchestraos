@@ -48,6 +48,7 @@ enum ChatItem: Codable, Equatable {
     case toolUse(ToolUseItem)
     case toolResult(ToolResultItem)
     case queuedBatch(QueuedBatchItem)
+    case rotation(RotationItem)
     case unknown
 
     private enum KindKey: String, CodingKey { case kind }
@@ -60,6 +61,7 @@ enum ChatItem: Codable, Equatable {
         case "tool_use": self = .toolUse(try ToolUseItem(from: decoder))
         case "tool_result": self = .toolResult(try ToolResultItem(from: decoder))
         case "queued_batch": self = .queuedBatch(try QueuedBatchItem(from: decoder))
+        case "rotation": self = .rotation(try RotationItem(from: decoder))
         default: self = .unknown
         }
     }
@@ -71,6 +73,7 @@ enum ChatItem: Codable, Equatable {
         case .toolUse(let v): try v.encode(to: encoder)
         case .toolResult(let v): try v.encode(to: encoder)
         case .queuedBatch(let v): try v.encode(to: encoder)
+        case .rotation(let v): try v.encode(to: encoder)
         case .unknown: break
         }
     }
@@ -153,6 +156,19 @@ struct QueuedBatchItem: Codable, Equatable {
     let key: String
 }
 
+struct RotationItem: Codable, Equatable {
+    let audience: String?
+    let exchange: String?
+    let kind: String
+    let role: String
+    let uuid: String
+    let ts: String?
+    let from_generation: Int
+    let to_generation: Int
+    let from_session: String
+    let to_session: String
+}
+
 /// Discriminated on `kind`. Unknown kinds decode to .unknown (graceful degradation).
 enum RenderItem: Codable, Equatable {
     case user(RenderUser)
@@ -160,6 +176,7 @@ enum RenderItem: Codable, Equatable {
     case thinking(RenderThinking)
     case tool(RenderTool)
     case queuedBatch(RenderQueuedBatch)
+    case rotation(RenderRotation)
     case unknown
 
     private enum KindKey: String, CodingKey { case kind }
@@ -172,6 +189,7 @@ enum RenderItem: Codable, Equatable {
         case "thinking": self = .thinking(try RenderThinking(from: decoder))
         case "tool": self = .tool(try RenderTool(from: decoder))
         case "queued_batch": self = .queuedBatch(try RenderQueuedBatch(from: decoder))
+        case "rotation": self = .rotation(try RenderRotation(from: decoder))
         default: self = .unknown
         }
     }
@@ -183,6 +201,7 @@ enum RenderItem: Codable, Equatable {
         case .thinking(let v): try v.encode(to: encoder)
         case .tool(let v): try v.encode(to: encoder)
         case .queuedBatch(let v): try v.encode(to: encoder)
+        case .rotation(let v): try v.encode(to: encoder)
         case .unknown: break
         }
     }
@@ -238,6 +257,18 @@ struct RenderQueuedBatch: Codable, Equatable {
     let count: Int
     let entries: [BatchEntry]
     let ts: String?
+    let key: String
+}
+
+struct RenderRotation: Codable, Equatable {
+    let audience: String?
+    let exchange: String?
+    let kind: String
+    let ts: String?
+    let from_generation: Int
+    let to_generation: Int
+    let from_session: String
+    let to_session: String
     let key: String
 }
 
