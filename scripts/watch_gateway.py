@@ -4900,10 +4900,12 @@ async def handle_agent_model(request):
     if request.method != "PUT":
         from scripts import agent_model_pending as AMP
         f = AMP.state_path(ORCH_DIR)
-        try:
-            extra = {"pending": AMP.view(AMP.get(f, session)), "last_switch": AMP.last(f, session)}
-        except AMP.StateUnreadable as e:
-            extra = {"pending": None, "last_switch": None, "pending_error": str(e)}
+        def _read():       # file I/O: off the event loop
+            try:
+                return {"pending": AMP.view(AMP.get(f, session)), "last_switch": AMP.last(f, session)}
+            except AMP.StateUnreadable as e:
+                return {"pending": None, "last_switch": None, "pending_error": str(e)}
+        extra = await loop.run_in_executor(None, _read)
         return _json({"ok": True, "session": session, **desc, **extra})
 
     if not _is_person_surface(request):
@@ -5135,13 +5137,12 @@ def _apply_pending_one(f, session, now):
 async def _pending_model_switch_loop(app):
     """Every 5 s, apply the deferred switches whose agents went idle (off the event loop)."""
     import asyncio
-    from scripts import agent_model_pending as AMP
     stop = app[_events_stop_key()]
     loop = asyncio.get_event_loop()
     while not stop.is_set():
         try:
-            if AMP.pending_sessions(AMP.state_path(ORCH_DIR)):
-                await loop.run_in_executor(None, _apply_pending_model_switches)
+            # The whole pass, the file read included, runs off the event loop (codex R6 on #475).
+            await loop.run_in_executor(None, _apply_pending_model_switches)
         except Exception as e:  # noqa: BLE001 — one bad pass never stops the loop
             log.error(f"agent-model: deferred switch pass failed: {e!r}")
         try:

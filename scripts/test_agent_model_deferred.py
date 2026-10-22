@@ -184,7 +184,9 @@ def test_the_gateway_runs_the_applier_and_a_shutdown_ends_it_promptly(tmp_path, 
     monkeypatch.setenv("AGENT_MODEL_PENDING_FILE", str(tmp_path / "pending.json"))
     monkeypatch.setattr(G, "ApprovalStore", _NoStore)
     applied = []
-    monkeypatch.setattr(G, "_apply_pending_model_switches", lambda now=None: applied.append(1) or [])
+    import threading
+    monkeypatch.setattr(G, "_apply_pending_model_switches",
+                        lambda now=None: applied.append(threading.current_thread() is threading.main_thread()) or [])
     AMP.put(AMP.state_path(G.ORCH_DIR), "dev", SONNET)
 
     async def go():
@@ -199,6 +201,7 @@ def test_the_gateway_runs_the_applier_and_a_shutdown_ends_it_promptly(tmp_path, 
         return time.monotonic() - t0
     took = asyncio.run(go())
     assert applied, "the loop ran a pass while a pick was pending"
+    assert not any(applied), "every pass, the record read included, runs off the event loop"
     assert took < 3
 
 
@@ -337,3 +340,14 @@ def test_a_pick_waiting_on_an_unreadable_identity_is_still_reported_once(seat, m
 
 def test_a_pick_stamped_at_epoch_zero_is_stale_not_fresh():
     assert AMP.view({"model": "x", "since": "t", "since_ts": 0}, now=AMP.STALE_AFTER_S + 1)["stale"] is True
+
+
+def test_no_record_read_runs_on_the_event_loop(seat, monkeypatch):
+    """GET /agent-model and the 5 s pass read the record off the event loop: a stalled
+    filesystem never stalls the gateway (codex R6 on #475)."""
+    import threading
+    where = []
+    real_get = AMP.get
+    monkeypatch.setattr(AMP, "get", lambda f, s: where.append(threading.current_thread() is threading.main_thread()) or real_get(f, s))
+    _get()
+    assert where and not any(where)
