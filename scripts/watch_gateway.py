@@ -2320,6 +2320,12 @@ MID_TURN_STATES = {"working", "thinking"}
 # instead of implying a normal turn end.
 STALLED_STATES = {"stalled"}
 
+#: Runtimes PROVEN to queue a message typed during a turn and run it at the turn's end: Claude Code
+#: (above), and Codex (Enter into a working Codex pane queues to the next tool boundary: verified,
+#: message-router.py codex_pane_is_busy). A mid-turn or stalled pane of any other runtime (Gemini,
+#: Grok, one the detector cannot name) is refused as before until the same is shown for it.
+MID_TURN_QUEUE_RUNTIMES = {"claude", "codex"}
+
 
 def _pane_shows_active_turn(pane_text: str) -> bool:
     """True if the VISIBLE screen shows a live turn (spinner glyph + esc hint).
@@ -2689,6 +2695,8 @@ def _verified_inject_locked(session, text, force=False, idle_only=False):
     # setting and let go of its lock, so the CLI would rewrite the host default unwatched.
     if idle_only:
         allowed = set(INJECTABLE_STATES)
+    elif _status_runtime(st) not in MID_TURN_QUEUE_RUNTIMES:
+        allowed -= MID_TURN_STATES | STALLED_STATES
     if st.get("state") not in allowed:
         info = {"reason": "busy", "state": state,
                 "activity": st.get("activity") or ""}

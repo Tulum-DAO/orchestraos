@@ -55,7 +55,7 @@ def _env(monkeypatch, state, captures, activity="Running a subagent"):
     monkeypatch.setattr(G, "_tmux", t)
     monkeypatch.setattr(G, "INJECT_INGEST_WAIT_S", 0.0)
     monkeypatch.setattr(G, "_agent_status",
-                        lambda: _Det({"state": state, "activity": activity, "process": {}}))
+                        lambda: _Det({"state": state, "activity": activity, "process": {"runtime": "claude"}}))
     import time as _t
     monkeypatch.setattr(_t, "sleep", lambda s: None)
     return t
@@ -167,7 +167,7 @@ def test_a_pending_menu_is_refused_even_when_it_LOOKS_like_a_composer(monkeypatc
     monkeypatch.setattr(_t, "sleep", lambda s: None)
     # detector state LAGS at 'working' while the menu is already on screen
     monkeypatch.setattr(G, "_agent_status", lambda: _Det(
-        {"state": "working", "activity": "x", "process": {},
+        {"state": "working", "activity": "x", "process": {"runtime": "claude"},
          "pending_menu": {"question": "run Bash?", "options": [{"n": "1", "label": "Yes"}]}}))
     ok, info = G.verified_inject("tgt", "hello")
     assert not ok and info["reason"] == "busy"

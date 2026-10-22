@@ -48,7 +48,7 @@ def test_the_whole_screen_classifier_would_have_missed_the_draft():
 
 class _Det:
     def get_agent_status(self, sess):
-        return {"state": "working", "activity": "x", "process": {}}
+        return {"state": "working", "activity": "x", "process": {"runtime": "claude"}}
 
 
 def test_verified_inject_refuses_over_an_ANSI_draft_mid_turn(monkeypatch):
@@ -68,7 +68,7 @@ def test_verified_inject_refuses_over_an_ANSI_draft_mid_turn(monkeypatch):
 # ─────────────────────────────── codex R1 on #471
 class _DetState:
     def __init__(self, state, menu=None):
-        self.r = {"state": state, "activity": "x", "process": {}}
+        self.r = {"state": state, "activity": "x", "process": {"runtime": "claude"}}
         if menu:
             self.r["pending_menu"] = menu
 
@@ -195,3 +195,18 @@ def test_quoted_esc_to_interrupt_RIGHT_above_the_prompt_does_not_block_an_idle_s
 def test_a_real_spinner_right_above_the_prompt_is_a_turn():
     assert G._turn_above_composer(f"{SPIN}\n──────\n❯ \n──────\n")
     assert G._turn_above_composer("◦ Working (12s • esc to interrupt)\n\n› \n")
+
+
+# ─────────────────────────────── codex R6 on #471
+def test_mid_turn_is_accepted_only_for_runtimes_proven_to_queue(monkeypatch):
+    screen = f"{SPIN}\n❯ \n"
+    for rt, accepted in (("claude", True), ("codex", True), ("gemini", False), ("grok", False), ("", False)):
+        calls = _env(monkeypatch, "working", [screen, f"{SPIN}\n❯ \n"])
+        monkeypatch.setattr(G, "_agent_status", lambda rt=rt: types.SimpleNamespace(
+            get_agent_status=lambda s: {"state": "working", "activity": "x", "process": {"runtime": rt}}))
+        monkeypatch.setattr(G, "_composer_signature_verified", lambda r: True)
+        ok, info = G.verified_inject("tgt", "hello")
+        if accepted:
+            assert info.get("reason") != "busy", (rt, info)
+        else:
+            assert not ok and info["reason"] == "busy" and not _typed(calls), (rt, info)

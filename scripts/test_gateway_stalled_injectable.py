@@ -44,7 +44,7 @@ def _env(monkeypatch, state, captures, activity="unchanged for 10 min"):
     monkeypatch.setattr(G, "_tmux", t)
     monkeypatch.setattr(G, "INJECT_INGEST_WAIT_S", 0.0)
     monkeypatch.setattr(G, "_agent_status",
-                        lambda: _Det({"state": state, "activity": activity, "process": {}}))
+                        lambda: _Det({"state": state, "activity": activity, "process": {"runtime": "claude"}}))
     import time as _t
     monkeypatch.setattr(_t, "sleep", lambda s: None)
     return t
