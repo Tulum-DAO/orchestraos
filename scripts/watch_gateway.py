@@ -2289,7 +2289,80 @@ async def handle_away(request):
 # ---------------------------------------------------------------------------
 
 INJECT_INGEST_WAIT_S = float(os.environ.get("WATCH_GATEWAY_INGEST_WAIT", "1.0"))
-INJECTABLE_STATES = {"idle"}          # never mid-turn (working/thinking), never stopped
+INJECTABLE_STATES = {"idle"}          # never stopped/crashed/offline, never a menu
+# Operator P1 2026-10-06 (gm ruling msg_627b54e3, with orchestraos-builder msg_57b0fe6f): the send
+# gate turns on COMPOSER-ACCEPTS-INPUT, not on state=working. Claude Code QUEUES input mid-turn
+# natively and consumes it at turn end, so refusing a working pane invented a problem the CLI
+# does not have — the operator could not message a seat that was running a subagent, while typing the
+# same text into that pane by hand worked fine.
+# The gate is now three facts about the SCREEN, none of them about being busy:
+#   1. a prompt box is PRESENT (there is a composer to queue into), AND
+#   2. no pending menu/permission prompt (those REPLACE the composer and need the operator), AND
+#   3. the pane is ALIVE (stopped/crashed/offline panes are refused by the state gate below).
+# The operator's own unsubmitted typed text stays sacred, mid-turn included.
+MID_TURN_STATES = {"working", "thinking"}
+
+# gm RULING 2026-10-07 (msg_1e8a5f91, on orchestraos-builder msg_bd9bd202): `stalled` JOINS the
+# mid-turn set. It is not a dead state — agent-status.py derives it FROM working by a timer
+# (`STALL_S = 600`: working + an unchanged screen + no hook events for ten minutes), so it is a
+# live process sitting at a prompt where the CLI queues input natively, exactly like `working`.
+#
+# It was grouped with stopped/crashed/offline below, which is the sibling-of-a-fixed-class miss:
+# the gate was opened for working/thinking under gm msg_627b54e3 because refusing a working pane
+# "invented a problem the CLI does not have", and the state DERIVED from working by a 600 s timer
+# was not opened with it. Refusing it recreated the unreachable-seat P1 on exactly the seats most
+# likely to need a nudge, AND the web composer already promised the operator it would be queued —
+# so web and gateway disagreed, which is how ios-watch-dev found it.
+#
+# Kept as its OWN set rather than folded into MID_TURN_STATES, because the two are not the same
+# claim: mid-turn means a turn is running, stalled means we have not seen one move for 600 s. The
+# answer carries `state` either way, so a client can say "queued — the agent looks stalled"
+# instead of implying a normal turn end.
+STALLED_STATES = {"stalled"}
+
+
+def _pane_shows_active_turn(pane_text: str) -> bool:
+    """True if the VISIBLE screen shows a live turn (spinner glyph + esc hint).
+
+    GLYPH-ANCHORED (audit F1): a quoted "esc to interrupt" in agent OUTPUT must not read as a
+    live turn forever. Extracted from verified_inject's inline guard so the submit verification
+    can ask the same question of the PRE-inject screen — see the trap documented there.
+    """
+    for ln in (pane_text or "").splitlines():
+        if ln.strip()[:1] in "✻✽✶✳✢✺✹✸✷⚹·*+⣾⣽⣻⢿⡿⣟⣯⣷●▸" and (
+                "esc to interrupt" in ln or "esc to cancel" in ln
+                or any(c in ln for c in "⣾⣽⣻⢿⡿⣟⣯⣷")):
+            return True
+        if "esc to cancel" in ln or "esc to interrupt" in ln:
+            return True
+    return False
+
+
+def _pane_has_composer(pane_text: str) -> bool:
+    """True if a prompt box is on the VISIBLE screen — i.e. the composer accepts input.
+
+    This is the positive half of the new gate. A menu/permission prompt REPLACES the composer,
+    and a dead pane has none, so the same check covers both refusals without asking what the
+    agent is busy doing."""
+    return any(_is_prompt_line(ln) for ln in (pane_text or "").splitlines())
+
+
+def _typed_on_prompt_line(pre_raw: str):
+    """The operator's TYPED text on the live composer line (dim ghosts excluded), '' when none,
+    None when no prompt line is on screen. Reads the bottom-most prompt line itself with
+    composer_state's line reader, NOT the whole-screen classifier: that one reads any screen with a
+    working marker as 'submitted' and reports no typed text, which mid-turn (now a state we type
+    into) would let a send paste over a draft the operator is typing."""
+    from scripts.composer_state import classify_input_line, _infer_runtime, PROMPT_SIGNATURES
+    raw_lines = (pre_raw or "").splitlines()
+    comp = [ln for ln in raw_lines if _is_prompt_line(_strip_ansi(ln))]
+    if not comp:
+        return None
+    rt = _infer_runtime(pre_raw) or "claude"
+    state, typed = classify_input_line(comp[-1], PROMPT_SIGNATURES.get(rt))
+    if state == "unknown":     # the line has no prompt glyph this runtime's reader knows: say what it shows
+        return _strip_ansi(comp[-1]).strip().lstrip("❯>›\u203a").strip()
+    return typed if state == "typed" else ""
 
 
 def _tmux(*args, timeout=5):
@@ -2531,13 +2604,28 @@ def _verified_inject_locked(session, text, force=False):
                        "activity": (f"{_rt} composer signature is not verified; nothing is "
                                     "typed into this pane from here (use the terminal, or "
                                     "send mail: the seat's mail watcher wakes it)")}
-    allowed = INJECTABLE_STATES | ({"stranded_input"} if force else set())
+    # ENUMERATE THE SAFE CASES AND DENY THE REST: idle, plus mid-turn (the CLI queues), plus
+    # stalled (mid-turn that stopped moving — still a live prompt, see STALLED_STATES), plus
+    # the composer-holds classes only under an explicit human force. waiting_permission,
+    # stopped, crashed and offline all fall through to the refusal below.
+    allowed = (INJECTABLE_STATES | MID_TURN_STATES | STALLED_STATES
+               | ({"stranded_input", "queued_input"} if force else set()))
     if st.get("state") not in allowed:
         info = {"reason": "busy", "state": state,
                 "activity": st.get("activity") or ""}
         if isinstance(st.get("stranded"), dict):
             info["stranded"] = st["stranded"]      # surface text + age honestly
         return False, info
+
+    # SECOND, INDEPENDENT MENU REFUSAL. The composer-presence check below does NOT hold this line
+    # on its own: _is_prompt_line treats a leading '>' as a prompt, and a permission menu renders
+    # its selected option as "> 1. Yes" (measured live), so a real menu screen passes it.
+    # pending_menu is the detector's own menu witness, independent of both the state map and the
+    # screen heuristic, so a menu has to clear BOTH mechanisms.
+    pending_menu = st.get("pending_menu")
+    if isinstance(pending_menu, dict) and pending_menu:
+        return False, {"reason": "busy", "state": "waiting",
+                       "activity": "Menu/permission prompt is pending — needs the operator"}
 
     # Startup grace gate: require process uptime >= 10.0s so CLI readline/ink raw mode listeners are attached.
     uptime_fn = getattr(_agent_status(), "get_process_uptime_s", None)
@@ -2547,10 +2635,7 @@ def _verified_inject_locked(session, text, force=False):
             return False, {"reason": "initializing", "state": state, "uptime_s": uptime_s,
                            "activity": f"Agent process is initializing ({uptime_s}s < 10s)"}
 
-    # Belt-and-braces mid-turn guard (2026-08-09 incident: an unknown spinner
-    # gerund made the detector read a mid-turn pane as idle). GLYPH-ANCHORED:
-    # real spinner lines start with a spinner glyph; a quoted "esc to interrupt"
-    # in agent output must not permanently block a finished agent (audit F1).
+    # The pre-inject screen: what the gates below and the submit witness read.
     pre_raw = _capture_pane(session, lines=0, ansi=True) or ""
     pre = _strip_ansi(pre_raw)
 
@@ -2562,21 +2647,23 @@ def _verified_inject_locked(session, text, force=False):
             pre_raw = _capture_pane(session, lines=0, ansi=True) or ""
             pre = _strip_ansi(pre_raw)
 
-    if any((ln.strip()[:1] in "✻✽✶✳✢✺✹✸✷⚹·*+⣾⣽⣻⢿⡿⣟⣯⣷●▸" and ("esc to interrupt" in ln or "esc to cancel" in ln or any(c in ln for c in "⣾⣽⣻⢿⡿⣟⣯⣷")))
-           or "esc to cancel" in ln
-           or "esc to interrupt" in ln
-           for ln in pre.splitlines()):
-        return False, {"reason": "busy", "state": "working", "activity": "Active turn"}
+    # A LIVE TURN IS NO LONGER A REFUSAL (see MID_TURN_STATES): it is MEASURED here, because the
+    # submit verification below needs to know whether the turn predates our Enter.
+    turn_already_running = _pane_shows_active_turn(pre)
+    # THE POSITIVE GATE: no composer on screen = nothing accepts input. This refuses a
+    # menu/permission prompt whose detector state lagged behind the screen, and a pane that is
+    # not a CLI prompt at all, without asking whether the agent is busy.
+    if not _pane_has_composer(pre):
+        return False, {"reason": "busy", "state": state,
+                       "activity": ("No composer accepting input on screen "
+                                    "(menu/permission prompt, or not a live CLI prompt)")}
     # NEVER paste over typed-but-unsubmitted input (standing the operator rule: he
-    # sometimes types directly into agent sessions — that text is sacred).
-    # Dim-styled ghost suggestions are NOT typed input and do not block (the
-    # detector's composer_typed_text does the style walk when available).
+    # sometimes types directly into agent sessions — that text is sacred), mid-turn included.
+    # Dim-styled ghost suggestions are NOT typed input and do not block.
     if not force:
-        # composer_state is the ONE SGR-aware reader (gm ghost-suggestion commission):
-        # it reads the bottom prompt line of the -e capture and returns the TYPED text
-        # only ('' for a dim ghost / placeholder / empty / working). pre_raw is -e.
-        from scripts.composer_state import composer_text
-        typed = composer_text(pre_raw, runtime=None) or ""  # runtime inferred from glyph
+        # composer_state is the ONE SGR-aware reader (gm ghost-suggestion commission), asked
+        # about the live prompt line itself so a working screen does not hide a draft.
+        typed = _typed_on_prompt_line(pre_raw) or ""
         if typed:
             return False, {"reason": "busy", "state": state,
                            "activity": "Composer has unsubmitted text",
@@ -2627,8 +2714,15 @@ def _verified_inject_locked(session, text, force=False):
             # unsubmitted — keep retrying Enter, never read it as submitted.
             if any(p in live_composer or p in last_composer for p in ("[Pasted text", "[Pasted Content", "[Pasted")):
                 still_in_composer = True
-            turn_started = "esc to interrupt" in pane or "esc to cancel" in pane or any(c in pane for c in "⣾⣽⣻⢿⡿⣟⣯⣷")
-            if turn_started or not still_in_composer:
+            # ⚠ A VISIBLE TURN IS A FALSE WITNESS MID-TURN. A turn that was ALREADY running before
+            # we typed is not evidence that our Enter landed: keying success on it would report a
+            # swallowed Enter as a successful send, which is the merge-3 class this verified
+            # submit exists to catch. Mid-turn, the only honest witness is that the composer
+            # CLEARED (the text left the box / became a queued entry).
+            turn_visible = ("esc to interrupt" in pane or "esc to cancel" in pane
+                            or any(c in pane for c in "⣾⣽⣻⢿⡿⣟⣯⣷"))
+            turn_started_now = turn_visible and not turn_already_running
+            if turn_started_now or not still_in_composer:
                 ok_info = {"state": state, "attempts": attempt}
                 if _chip_pointer:
                     ok_info["chip_dodge_pointer"] = _chip_pointer
