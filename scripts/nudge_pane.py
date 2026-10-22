@@ -64,16 +64,39 @@ def _nudge_unlocked(session: str, text: str, *, force: bool = False, settle: flo
     if before and before not in text:
         print(f"nudge_pane: composer of {session} already holds text {before[:60]!r}; refusing", file=sys.stderr)
         return 2
-    tmux("send-keys", "-t", session, text)
+    import inject_journal                        # typed-not-entered row; no row, no typing
+    try:
+        inject_journal.record(session, text, text[:40])
+    except OSError as e:
+        print(f"nudge_pane: journal write failed for {session}: {e}; NOT SENT", file=sys.stderr)
+        return RC_NOT_SENT
+    typed = tmux("send-keys", "-t", session, text)
+    if typed.returncode != 0:
+        inject_journal.clear(session)
+        print(f"nudge_pane: send-keys failed for {session}; NOT SENT", file=sys.stderr)
+        return RC_NOT_SENT
     time.sleep(settle)
     tmux("send-keys", "-t", session, "Enter")
     for _ in range(3):
         time.sleep(1.5)
         line = composer_line(session)
         if not line or line not in text:
+            inject_journal.clear(session)
             print(f"nudge_pane: submitted to {session}: {text[:70]!r}")
             return 0
         tmux("send-keys", "-t", session, "Enter")          # bare retry, never re-send text
+    # CLEAR-OWN (gm msg_2291dee3): a nudge is machine text its caller re-sends next cycle, so our own
+    # unsubmitted nudge is cleared (C-u, verified) instead of left in the composer. Only when the
+    # composer holds exactly OUR text and no client is attached; anything else is never touched.
+    line = composer_line(session)
+    if not attached(session) and inject_journal.is_ours(line, text):
+        tmux("send-keys", "-t", session, "C-u")
+        time.sleep(0.5)
+        if not composer_line(session):
+            inject_journal.clear(session)
+            print(f"nudge_pane: {session} did not submit; cleared our own nudge (re-sent next cycle)",
+                  file=sys.stderr)
+            return 1
     print(f"nudge_pane: {session} did not submit; text still in composer", file=sys.stderr)
     return 1
 

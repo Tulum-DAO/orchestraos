@@ -129,9 +129,17 @@ def boot_inject(session, text, runtime=DEFAULT_RUNTIME, **kw):
     gm msg_2291dee3). Another typer holding the pane past 8 s -> ('failed', 'pane-locked'): nothing
     was typed, so the caller's normal retry applies."""
     import pane_lock
+    import inject_journal
     try:
         with pane_lock.pane_lock(session, wait_s=8.0):
-            return _boot_inject_unlocked(session, text, runtime, **kw)
+            try:   # typed-not-entered row: no row, no typing
+                inject_journal.record(session, text, text[:40])
+            except OSError:
+                return "failed", "journal-unwritable"
+            outcome = _boot_inject_unlocked(session, text, runtime, **kw)
+            if outcome[0] == "submitted" or outcome[1] in ("refused-canonical", "no-receipt"):
+                inject_journal.clear(session)     # submitted, or nothing of ours was typed
+            return outcome
     except pane_lock.PaneBusy:
         return "failed", "pane-locked"
 

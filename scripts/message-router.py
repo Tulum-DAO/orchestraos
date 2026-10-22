@@ -899,7 +899,25 @@ def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
     wait_s = max(0.0, min(ROUTER_PANE_LOCK_WAIT_S, remaining))
     try:
         with pane_lock.pane_lock(session, wait_s=wait_s):
-            return _inject_unlocked(session, text, runtime)
+            res = _inject_unlocked(session, text, runtime)
+            if res == "stuck":
+                # CLEAR-OWN, NEVER STRAND (gm msg_2291dee3): Enter was swallowed. When the input line
+                # holds exactly our text and no client is attached (a person could be typing), clear
+                # it with C-u, verify, and hand the row back to pending: the words are delivered on a
+                # later tick instead of sitting in the composer.
+                import inject_journal
+                _, line, ok = pane_split(session, runtime)
+                viewer = bool((tmux("list-clients", "-t", f"={session}:").stdout or "").strip())
+                own = (not viewer and ok
+                       and inject_journal.is_ours(line.strip().lstrip("❯>›\u203a"), text))   # EXACT
+                if own:
+                    tmux("send-keys", "-t", session, "C-u")
+                    time.sleep(0.5)
+                    _, line2, ok2 = pane_split(session, runtime)
+                    if ok2 and not line2.strip().lstrip("❯>›\u203a").strip():
+                        log(f"{session}: Enter swallowed; cleared our own text, row goes back to pending")
+                        return "cleared"
+            return res
     except pane_lock.PaneBusy:
         log(f"{session}: another sender holds the pane lock — held for the next tick")
         return "held"
@@ -909,6 +927,7 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME) ->
     """Inject with three-stage verification. Returns:
       'submitted'  — text confirmed in scrollback, input line clear
       'stuck'      — text landed in input line but Enter never took (left as-is)
+      'held'       — the pane was busy (a working codex / grok turn) before anything was typed
       'failed'     — text never landed at all
 
     Visibility alone is NOT submission: a swallowed Enter leaves the message
@@ -930,7 +949,7 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME) ->
         cap0 = tmux("capture-pane", "-t", session, "-p")
         if cap0.returncode == 0 and codex_pane_is_busy(cap0.stdout):
             log(f"codex pane {session} is WORKING — busy-hold, no inject (queue-not-submit semantics)")
-            return "stuck"
+            return "held"     # nothing typed: the row goes back to pending ("stuck" marked it delivered)
 
     # Stage 0.45 (grok busy-hold): re-check the seat's own
     # events.jsonl right before typing — a turn that started since the idle gate means
@@ -943,7 +962,7 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME) ->
             _gst = "unknown"
         if _gst != "idle":
             log(f"grok pane {session} turn state={_gst} — busy-hold, no inject")
-            return "stuck"
+            return "held"     # nothing typed: the row goes back to pending ("stuck" marked it delivered)
 
     # Stage 0.5 (E7 repaste guard): an existing chip means a stranded prior
     # paste — never add another, never Enter on unattributed content.
@@ -1177,11 +1196,12 @@ def deliver_stale_digest(session, store, rows, cfg, *, inject_fn,
         return 0
     text = compose_digest(claimed, store)
     res = inject_fn(session, text, runtime)
-    if res == "held":
-        # Another sender held the pane: nothing was typed. Re-open the rows with their retry budget
+    if res in ("held", "cleared"):
+        # Nothing was delivered and nothing of ours is left in the composer (another sender held
+        # the pane, or our swallowed text was cleared). Re-open the rows with their retry budget
         # intact (fail() would spend it); the singles path or the next tick takes them.
         for r in claimed:
-            store.defer(r["id"], error="digest: another sender held the pane; deferred")
+            store.defer(r["id"], error=f"digest: {res}; deferred")
         return 0
     if res == "submitted":
         now_iso = _digest_now()
@@ -2222,6 +2242,11 @@ def main():
                     f"line (Enter swallowed). Press Enter in that session or clear it. "
                     f"Msg: {(msg.get('subject') or msg['id'])[:60]}"
                 )
+            elif result == "cleared":
+                # Enter swallowed, our own text cleared under the pane lock. Nothing is left in the
+                # composer and nothing was delivered: re-open the row for a later tick.
+                store.defer(msg["id"], error="router: Enter swallowed; own text cleared, re-queued")
+                log(f"CLEARED {msg['id']} -> {agent}: Enter swallowed, own text cleared, row re-queued")
             elif result == "held":
                 # Another sender held the pane: nothing was typed, so this is neither a delivery
                 # nor a failure and must not use retry budget. Re-open the claimed row.
