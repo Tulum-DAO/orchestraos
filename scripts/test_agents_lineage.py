@@ -39,11 +39,13 @@ def box(tmp_path, monkeypatch):
     db.close()
     wal = tmp_path / "state" / "wal"
     (wal / "builder.bg.json").write_text(json.dumps(
-        {"state": "READY", "root": "builder", "meta": {"green_pane_id": "%40", "green_session_id": "sid-green"}}))
+        {"state": "READY", "root": "builder",
+         "meta": {"green_pane_id": "%40", "green_session_id": "sid-green", "green_spawned_at": 1000.0}}))
     (wal / "other.bg.json").write_text(json.dumps(          # a stale link: SOLO keeps an old pane id
         {"state": "SOLO", "root": "other", "meta": {"green_pane_id": "%41"}}))
     monkeypatch.setattr(G, "ORCH_DIR", tmp_path)
-    monkeypatch.setattr(G, "_pane_sessions", lambda: {"%40": "builder-g9", "%41": "other-g2"})
+    # pane -> (session, session_created epoch)
+    monkeypatch.setattr(G, "_pane_sessions", lambda: {"%40": ("builder-g9", 1001), "%41": ("other-g2", 900)})
     return tmp_path
 
 
@@ -96,3 +98,48 @@ def test_a_provisional_canonical_pointer_is_not_a_seat_yet(box):
     rows = _rows("solo")
     G._stamp_lineage(rows, REG)
     assert "lineage_role" not in rows[0]
+
+
+def _green_file(box, **meta):
+    (box / "state" / "wal" / "builder.bg.json").write_text(json.dumps({"state": "READY", "root": "builder", "meta": meta}))
+
+
+def test_a_reused_pane_id_whose_session_id_differs_is_not_the_green(box):
+    _green_file(box, green_pane_id="%40", green_session_id="sid-someone-else", green_spawned_at=1000.0)
+    rows = _rows("builder-g9")
+    G._stamp_lineage(rows, REG)
+    assert rows[0].get("lineage_role") != "green"
+
+
+def test_a_pane_older_than_the_green_spawn_is_not_the_green(box):
+    _green_file(box, green_pane_id="%40", green_spawned_at=5000.0)       # no session id; session created 1001
+    rows = _rows("builder-g9")
+    G._stamp_lineage(rows, REG)
+    assert rows[0].get("lineage_role") != "green"
+
+
+def test_a_green_link_nothing_can_verify_is_not_used(box):
+    _green_file(box, green_pane_id="%40")                                  # no session id, no spawn time
+    rows = _rows("builder-g9")
+    G._stamp_lineage(rows, REG)
+    assert rows[0].get("lineage_role") != "green"
+
+
+def test_two_roots_claiming_one_session_say_nothing(box):
+    (box / "state" / "wal" / "solo.bg.json").write_text(json.dumps(
+        {"state": "READY", "root": "solo", "meta": {"green_pane_id": "%40", "green_session_id": "sid-green", "green_spawned_at": 1000.0}}))
+    rows = _rows("builder-g9")
+    G._stamp_lineage(rows, REG)
+    assert "lineage_role" not in rows[0] and "root" not in rows[0]
+
+
+def test_an_empty_root_is_never_written(box):
+    db = sqlite3.connect(box / "state" / "orchestra-registry.db")
+    db.execute("INSERT INTO lineages(root, tier, runtime, machine, cwd) VALUES ('', 'T1', 'claude', 'vps', '/x')")
+    db.execute("INSERT INTO generations(id, root, generation, session_id, model) VALUES (9, '', 1, 'sid-empty', 'm')")
+    db.execute("INSERT INTO canonical VALUES ('', 9, 'empty-seat', 'online')")
+    db.commit()
+    db.close()
+    rows = _rows("empty-seat")
+    G._stamp_lineage(rows, REG)
+    assert "root" not in rows[0] and "lineage_role" not in rows[0]

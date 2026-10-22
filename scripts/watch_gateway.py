@@ -1690,13 +1690,13 @@ def compute_agents():
 
 
 def _pane_sessions():
-    """{pane_id: session_name} for every live tmux pane."""
-    r = _tmux("list-panes", "-a", "-F", "#{pane_id} #{session_name}")
+    """{pane_id: (session_name, session_created epoch or None)} for every live tmux pane."""
+    r = _tmux("list-panes", "-a", "-F", "#{pane_id} #{session_created} #{session_name}")
     out = {}
     for line in (r.stdout or "").splitlines():
-        pane, _, name = line.partition(" ")
-        if pane and name:
-            out[pane] = name
+        parts = line.split(" ", 2)
+        if len(parts) == 3 and parts[0] and parts[2]:
+            out[parts[0]] = (parts[2], int(parts[1]) if parts[1].isdigit() else None)
     return out
 
 
@@ -1704,27 +1704,36 @@ def _stamp_lineage(rows, reg_agents):
     """root + lineage_role (canonical | green | retired) + lineage_state (a green's: prewarming |
     ready) on /agents rows, so the apps can nest a standby green under its seat and label an old
     generation (ios-watch-dev msg_cba15fe1, gm msg_b7f14aab). From the identity DB and the
-    blue-green state files only, never from a seat's name; a row nothing proves is left as it is
-    (absent = draw as today). Never fails /agents.
+    blue-green state files only, never from a seat's name. A row nothing proves, or that two
+    roots claim, is left as it is (absent = draw as today). Never fails /agents.
 
     - green: state/wal/<root>.bg.json in PREWARMING or READY whose meta.green_pane_id is this
-      row's pane (a SOLO file can keep an old pane id: never a green).
+      row's pane AND that can be checked: its green_session_id is the session id of the
+      generation behind this tmux session, and/or the tmux session is not older than
+      green_spawned_at (tmux reuses pane ids after a server restart). A SOLO file can keep an
+      old pane id: never a green.
     - canonical: the canonical pointer's tmux_session (a provisional one is not a seat yet).
     - retired: the row's registry session_id is a generation with retired_at set that is not its
       root's canonical generation."""
     import sqlite3
-    canon, canon_gen, gen_by_sid = {}, {}, {}
+
+    def _name(v):
+        return v if isinstance(v, str) and v else None
+
+    canon, canon_gen, gen_by_sid, gen_sid = {}, {}, {}, {}
     try:
         conn = sqlite3.connect(f"file:{ORCH_DIR / 'state' / 'orchestra-registry.db'}?mode=ro", uri=True, timeout=2)
         try:
+            for gid, root, sid, retired in conn.execute(
+                    "SELECT id, root, session_id, retired_at FROM generations"):
+                gen_sid[gid] = sid
+                if sid:
+                    gen_by_sid[sid] = (gid, root, retired)
             for root, gid, sess, status in conn.execute(
                     "SELECT root, generation_id, tmux_session, status FROM canonical"):
                 canon_gen[root] = gid
                 if sess and status != "provisional":
-                    canon[sess] = root
-            for gid, root, sid, retired in conn.execute(
-                    "SELECT id, root, session_id, retired_at FROM generations WHERE session_id IS NOT NULL"):
-                gen_by_sid[sid] = (gid, root, retired)
+                    canon.setdefault(sess, set()).add((root, gen_sid.get(gid)))
         finally:
             conn.close()
     except Exception:  # noqa: BLE001 — no identity DB: nothing to say
@@ -1738,29 +1747,44 @@ def _stamp_lineage(rows, reg_agents):
         d = _load_json(f)
         if not isinstance(d, dict) or d.get("state") not in ("PREWARMING", "READY"):
             continue
-        pane, root = (d.get("meta") or {}).get("green_pane_id"), d.get("root")
-        if not (isinstance(pane, str) and pane and isinstance(root, str) and root):
+        meta = d.get("meta") if isinstance(d.get("meta"), dict) else {}
+        pane, root = _name(meta.get("green_pane_id")), _name(d.get("root"))
+        if not (pane and root):
             continue
         if panes is None:
             try:
                 panes = _pane_sessions()
             except Exception:  # noqa: BLE001
                 panes = {}
-        sess = panes.get(pane)
-        if sess:
-            greens[sess] = (root, d["state"].lower())
+        sess, created = panes.get(pane, (None, None))
+        if not sess:
+            continue
+        want_sid, spawned = _name(meta.get("green_session_id")), meta.get("green_spawned_at")
+        sids = {s for _r, s in canon.get(sess, ())} - {None}
+        checks = []
+        if want_sid and sids:
+            checks.append(want_sid in sids)
+        if isinstance(spawned, (int, float)) and isinstance(created, int):
+            checks.append(created >= int(spawned) - 5)
+        if checks and all(checks):
+            greens.setdefault(sess, set()).add((root, d["state"].lower()))
     for r in rows:
         sess = r.get("tmux_session") or ""
-        if sess in greens:
-            r["root"], r["lineage_role"], r["lineage_state"] = greens[sess][0], "green", greens[sess][1]
-        elif sess in canon:
-            r["root"], r["lineage_role"] = canon[sess], "canonical"
-        else:
-            meta = reg_agents.get(r.get("id") or "") if isinstance(reg_agents, dict) else None
-            sid = meta.get("session_id") if isinstance(meta, dict) else None
-            g = gen_by_sid.get(sid) if isinstance(sid, str) and sid else None
-            if g and g[2] and canon_gen.get(g[1]) != g[0]:
-                r["root"], r["lineage_role"] = g[1], "retired"
+        g, c = greens.get(sess, set()), {root for root, _s in canon.get(sess, ())}
+        if g:
+            if len(g) == 1 and _name(next(iter(g))[0]):
+                root, state = next(iter(g))
+                r["root"], r["lineage_role"], r["lineage_state"] = root, "green", state
+            continue                                    # two roots claim this green: say nothing
+        if c:
+            if len(c) == 1 and _name(next(iter(c))):
+                r["root"], r["lineage_role"] = next(iter(c)), "canonical"
+            continue
+        meta = reg_agents.get(r.get("id") or "") if isinstance(reg_agents, dict) else None
+        sid = _name(meta.get("session_id")) if isinstance(meta, dict) else None
+        gen = gen_by_sid.get(sid) if sid else None
+        if gen and gen[2] and _name(gen[1]) and canon_gen.get(gen[1]) != gen[0]:
+            r["root"], r["lineage_role"] = gen[1], "retired"
 
 
 def _stamp_last_user_message(rows):
