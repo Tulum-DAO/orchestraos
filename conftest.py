@@ -43,6 +43,9 @@ os.makedirs(os.environ["ORCHESTRA_DIR"], exist_ok=True)
 # pane_lock.py flocks live under ~/runtime/locks. A test locking pane "gm" would contend with a real
 # router's lock for gm on the same box (and could hold its mail). A fresh dir per test process.
 os.environ["PANE_LOCK_DIR"] = os.path.join(_FENCE_ROOT, "pane-locks")
+# Deferred model switches (scripts/agent_model_pending.py): a real gateway applies every pending
+# row by typing into that pane, so a test run never writes where a real gateway reads.
+os.environ["AGENT_MODEL_PENDING_FILE"] = os.path.join(_FENCE_ROOT, "agent-model-pending.json")
 
 _WORKTREE_SCRIPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts")
 sys.path.insert(0, _WORKTREE_SCRIPTS)

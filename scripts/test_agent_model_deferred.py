@@ -1,0 +1,753 @@
+"""A busy agent's model switch is DEFERRED, never typed into its turn (the operator: "switching a
+busy agent is fine"; gm ruling 2026-10-22; contract agreed with ios-watch-dev).
+
+PUT /agent-model on a working agent -> 202 pending, nothing typed; the gateway applies it the
+moment the agent is idle, through the same locked path; a newer pick replaces it, the current
+model cancels it; every applied or failed pick lands in `last_switch` with its reason.
+"""
+from pathlib import Path
+
+import pytest
+
+import scripts.agent_model as AM
+import scripts.agent_model_pending as AMP
+import scripts.watch_gateway as G
+from scripts.test_agent_model import _Req, _body, gw  # noqa: F401  (fixture)
+from scripts.test_gateway_scopes import _run
+
+SONNET, OPUS, HAIKU = "claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-4-5-20251001"
+SID = "11111111-2222-4333-8444-555555555555"
+
+
+class _Det:
+    def __init__(self, state):
+        self.state = state
+
+    def get_agent_status(self, s):
+        return {"state": self.state, "activity": "", "process": {}}
+
+
+@pytest.fixture
+def seat(gw, monkeypatch, tmp_path):
+    """The gw fixture's seat 'dev' (claude, on opus), a fenced pending file, a settable state."""
+    monkeypatch.setenv("AGENT_MODEL_PENDING_FILE", str(tmp_path / "pending.json"))
+    det = _Det("working")
+    monkeypatch.setattr(G, "_agent_status", lambda: det)
+    monkeypatch.setattr(G, "_seat_session_ids", lambda s, meta=None: [SID])
+    monkeypatch.setattr(AM, "load_catalog", lambda rt, p, st: [
+        {"id": OPUS, "title": "Opus 5.5"}, {"id": SONNET, "title": "Sonnet 5.5"}, {"id": HAIKU, "title": "Haiku"}])
+    gw["det"], gw["file"] = det, tmp_path / "pending.json"
+    return gw
+
+
+def _put(model, actor="app:ios"):
+    r = _run(G.handle_agent_model(_Req("PUT", {"session": "dev", "model": model}, actor=actor)))
+    return r.status, _body(r)
+
+
+def _get():
+    return _body(_run(G.handle_agent_model(_Req("GET", query={"session": "dev"}))))
+
+
+def test_a_busy_agent_gets_202_pending_and_nothing_is_typed(seat):
+    status, b = _put(SONNET)
+    assert status == 202
+    assert b["status"] == "pending" and b["applies"] == "at turn end"
+    assert b["model"] == SONNET and b["current"] == OPUS and b["pending_since"]
+    assert seat["live"] == [] and seat["stored"] == []            # nothing typed, nothing stored yet
+    g = _get()
+    assert g["pending"] == {"model": SONNET, "since": b["pending_since"], "stale": False}
+    assert g["last_switch"] is None
+
+
+def test_a_stalled_agent_is_deferred_too(seat):
+    seat["det"].state = "stalled"
+    assert _put(SONNET)[0] == 202 and seat["live"] == []
+
+
+def test_a_newer_pick_replaces_the_pending_one(seat):
+    _put(SONNET)
+    status, b = _put(HAIKU)
+    assert status == 202 and _get()["pending"]["model"] == HAIKU
+
+
+def test_picking_the_current_model_cancels_the_pending_switch(seat):
+    _put(SONNET)
+    status, b = _put(OPUS)
+    assert status == 200 and b["changed"] is False and b["cancelled"] is True and b["pending"] is None
+    assert _get()["pending"] is None and seat["live"] == []
+    status, b = _put(OPUS)                                         # nothing pending: today's answer
+    assert status == 200 and "cancelled" not in b
+
+
+def test_it_applies_when_the_agent_goes_idle_through_the_normal_path(seat):
+    _put(SONNET)
+    assert G._apply_pending_model_switches() == []                 # still working: waits
+    assert seat["live"] == []
+    seat["det"].state = "idle"
+    assert G._apply_pending_model_switches() == [("dev", "switched")]
+    assert seat["live"] == [SONNET] and seat["stored"] == [("dev", {"model": SONNET})]
+    g = _get()
+    assert g["pending"] is None
+    assert g["last_switch"]["model"] == SONNET and g["last_switch"]["outcome"] == "switched"
+
+
+def test_a_turn_that_starts_first_keeps_it_pending(seat, monkeypatch):
+    _put(SONNET)
+    seat["det"].state = "idle"
+    monkeypatch.setattr(AM, "switch_live", lambda **kw: (409, {"ok": False, "error": "busy", "state": "working"}))
+    assert G._apply_pending_model_switches() == []
+    assert _get()["pending"]["model"] == SONNET
+
+
+def test_a_failed_apply_is_closed_with_its_reason_never_silently(seat, monkeypatch):
+    _put(SONNET)
+    seat["det"].state = "idle"
+    monkeypatch.setattr(AM, "switch_live", lambda **kw: (502, {"ok": False, "error": "unconfirmable",
+                                                              "detail": "no confirming line"}))
+    assert G._apply_pending_model_switches() == [("dev", "failed: no confirming line")]
+    g = _get()
+    assert g["pending"] is None
+    assert g["last_switch"] == {"model": SONNET, "at": g["last_switch"]["at"], "outcome": "failed",
+                                "reason": "no confirming line"}
+
+
+def test_a_rotation_before_the_turn_ends_closes_the_pick_with_a_reason(seat, monkeypatch):
+    _put(SONNET)
+    monkeypatch.setattr(G, "_seat_session_ids", lambda s, meta=None: ["99999999-2222-4333-8444-555555555555"])
+    seat["det"].state = "idle"
+    out = G._apply_pending_model_switches()
+    assert out == [("dev", "failed: the agent moved to a new session before its turn ended")]
+    assert seat["live"] == [] and _get()["last_switch"]["outcome"] == "failed"
+
+
+def test_an_agent_that_is_gone_closes_the_pick(seat, monkeypatch):
+    _put(SONNET)
+    monkeypatch.setattr(G, "_tmux_session_names", lambda: set())
+    assert G._apply_pending_model_switches() == [("dev", "failed: the agent is no longer running")]
+
+
+def test_a_stale_switch_is_reported_once_and_kept(seat, monkeypatch):
+    _, b = _put(SONNET)
+    said = []
+    monkeypatch.setattr(G, "_report_stale_model_switch", lambda s, e: said.append((s, e["model"])))
+    later = AMP.get(AMP.state_path(G.ORCH_DIR), "dev")["since_ts"] + AMP.STALE_AFTER_S + 1
+    G._apply_pending_model_switches(now=later)
+    G._apply_pending_model_switches(now=later + 60)
+    assert said == [("dev", SONNET)]                               # once
+    assert AMP.view(AMP.get(AMP.state_path(G.ORCH_DIR), "dev"), now=later)["stale"] is True
+
+
+def test_an_idle_switch_that_screen_finds_mid_turn_is_deferred(seat, monkeypatch):
+    """The detector said idle, the idle-only send saw a turn on screen: 409 busy -> 202 pending."""
+    seat["det"].state = "idle"
+    monkeypatch.setattr(AM, "switch_live", lambda **kw: (409, {"ok": False, "error": "busy", "state": "working"}))
+    status, b = _put(SONNET)
+    assert status == 202 and b["status"] == "pending"
+
+
+def test_an_idle_switch_that_happens_drops_an_older_pending_pick(seat):
+    _put(HAIKU)                                                    # busy: pending haiku
+    seat["det"].state = "idle"
+    status, b = _put(SONNET)                                       # idle now: switched at once
+    assert status == 200 and b["switching"] == "switched"
+    assert _get()["pending"] is None                               # haiku would have undone it
+
+
+def test_a_runtime_that_switches_at_rotation_is_never_pending(seat, monkeypatch):
+    monkeypatch.setattr(G, "_seat_for_session", lambda s: ("gm", {}, "gemini", "g-1"))
+    monkeypatch.setattr(AM, "load_catalog", lambda rt, p, st: [{"id": "g-1", "title": "a"}, {"id": "g-2", "title": "b"}])
+    status, b = _put("g-2", actor="operator:web")
+    assert status == 200 and b["switching"] == "next_rotation" and _get()["pending"] is None
+
+
+def test_the_pending_file_survives_a_restart_and_a_replaced_pick_is_not_closed(tmp_path):
+    f = tmp_path / "p.json"
+    first = AMP.put(f, "s", "a", now=100.0)
+    AMP.put(f, "s", "b", now=200.0)                                # replaced before the apply finished
+    assert AMP.resolve(f, "s", first["since"], "switched") is False
+    assert AMP.get(f, "s")["model"] == "b"                         # read back from disk
+    assert AMP.cancel(f, "s")["model"] == "b" and AMP.get(f, "s") is None
+
+
+def test_the_test_run_never_writes_the_live_pending_file():
+    import os
+    assert os.environ.get("AGENT_MODEL_PENDING_FILE"), "conftest fences the pending file"
+    assert "orchestra-test-data-" in os.environ["AGENT_MODEL_PENDING_FILE"] or "pytest" in os.environ["AGENT_MODEL_PENDING_FILE"]
+
+
+def test_the_gateway_runs_the_applier_and_a_shutdown_ends_it_promptly(tmp_path, monkeypatch):
+    """A real app run: the loop starts with the app, applies a pending pick of an idle agent, and
+    shutdown ends it in about a second (the restart must never wait on it, see #465)."""
+    import asyncio
+    import time
+    from aiohttp.test_utils import TestServer
+    from scripts.test_events_shutdown import _NoStore
+    monkeypatch.setenv("AGENT_MODEL_PENDING_FILE", str(tmp_path / "pending.json"))
+    monkeypatch.setattr(G, "ApprovalStore", _NoStore)
+    applied = []
+    import threading
+    real_sessions = AMP.pending_sessions
+    # The REAL pass runs; the record read inside it says which thread it is on.
+    monkeypatch.setattr(AMP, "pending_sessions", lambda f: (
+        applied.append(threading.current_thread() is threading.main_thread()) or real_sessions(f)))
+    # The REAL apply runs too (codex R19 on #475): an idle claude seat, only the typing stubbed.
+    typed = []
+    monkeypatch.setattr(G, "_tmux_session_names", lambda: {"dev"})
+    monkeypatch.setattr(G, "_agent_status", lambda: _Det("idle"))
+    monkeypatch.setattr(G, "_seat_for_session", lambda s: ("dev", {}, "claude", OPUS))
+    monkeypatch.setattr(G, "_seat_session_ids", lambda s, meta=None: [SID])
+    monkeypatch.setattr(AM, "load_catalog", lambda rt, p, st: [
+        {"id": OPUS, "title": "Opus 5.5"}, {"id": SONNET, "title": "Sonnet 5.5"}])
+    monkeypatch.setattr(G, "_switch_model_now", lambda session, model, *a: (
+        typed.append((session, model)) or (200, {"ok": True, "model": model})))
+    f = AMP.state_path(G.ORCH_DIR)
+    AMP.put(f, "dev", SONNET, current=OPUS, sids=[SID])
+
+    async def go():
+        server = TestServer(G.build_app())
+        await server.start_server()
+        for _ in range(100):
+            if AMP.last(f, "dev"):
+                break
+            await asyncio.sleep(0.05)
+        t0 = time.monotonic()
+        await asyncio.wait_for(server.close(), timeout=10)
+        return time.monotonic() - t0
+    took = asyncio.run(go())
+    assert applied, "the loop ran a pass while a pick was pending"
+    assert not any(applied), "every pass, the record read included, runs off the event loop"
+    assert typed == [("dev", SONNET)], "the app's own loop applied the pick, once"
+    assert AMP.get(f, "dev") is None and AMP.last(f, "dev")["outcome"] == "switched"
+    assert took < 3
+
+
+# ------------------------------------------------------------------ codex R1 on #475
+def test_a_pick_cancelled_after_the_pass_listed_it_is_never_typed(seat, monkeypatch):
+    """The pass lists the pending picks, then the operator cancels one before its turn: the apply
+    re-reads it under the session's switch lock and types nothing."""
+    _put(SONNET)
+    listed = dict(AMP.pending_sessions(AMP.state_path(G.ORCH_DIR)))
+    _put(OPUS)                                                     # cancel
+    monkeypatch.setattr(AMP, "pending_sessions", lambda f: listed)
+    seat["det"].state = "idle"
+    assert G._apply_pending_model_switches() == []
+    assert seat["live"] == []
+
+
+def test_a_pick_replaced_after_the_pass_listed_it_applies_the_NEW_pick(seat, monkeypatch):
+    _put(SONNET)
+    listed = dict(AMP.pending_sessions(AMP.state_path(G.ORCH_DIR)))
+    _put(HAIKU)                                                    # replace while still busy
+    monkeypatch.setattr(AMP, "pending_sessions", lambda f: listed)
+    seat["det"].state = "idle"
+    assert G._apply_pending_model_switches() == [("dev", "switched")]
+    assert seat["live"] == [HAIKU]
+
+
+def test_a_put_that_arrives_mid_apply_waits_and_then_decides_on_the_fresh_model(seat, monkeypatch):
+    """A real concurrent PUT while the applier is typing the switch: it blocks on the agent's switch
+    lock, and once the apply is done it reads the seat afresh: the model it asked for is already
+    the agent's, so it changes nothing and types nothing (codex R2 on #475)."""
+    import threading
+    import time
+    model = {"now": OPUS}
+    monkeypatch.setattr(G, "_seat_for_session", lambda s: ("dev", {}, "claude", model["now"]))
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+
+    def switch(**kw):
+        calls.append(kw["model"])
+        entered.set()
+        release.wait(5)
+        model["now"] = kw["model"]
+        return 200, {"ok": True, "model": kw["model"], "switching": "switched"}
+    monkeypatch.setattr(AM, "switch_live", switch)
+    _put(SONNET)                                                   # busy: pending
+    seat["det"].state = "idle"
+    applier = threading.Thread(target=G._apply_pending_model_switches)
+    applier.start()
+    assert entered.wait(5)                                         # the apply is typing now
+    got = {}
+    put = threading.Thread(target=lambda: got.update(r=G._put_model("dev", SONNET, AM.load_catalog("claude", None, None), "app:ios")))
+    put.start()
+    time.sleep(0.3)
+    assert put.is_alive() and not got                              # blocked on the switch lock
+    release.set()
+    applier.join(5)
+    put.join(5)
+    status, body = got["r"]
+    assert status == 200 and body["changed"] is False              # fresh read: already sonnet
+    assert calls == [SONNET]                                       # typed once, by the applier
+
+
+def test_a_busy_agent_whose_identity_is_unknown_is_refused_not_deferred(seat, monkeypatch):
+    """No session id to tell a rotation apart: today's 409, nothing recorded, nothing typed."""
+    monkeypatch.setattr(G, "_seat_session_ids", lambda s, meta=None: [])
+    monkeypatch.setattr(AM, "switch_live", lambda **kw: (409, {"ok": False, "error": "busy", "state": "working"}))
+    status, b = _put(SONNET)
+    assert status == 409 and _get()["pending"] is None
+
+
+def test_an_apply_never_runs_blind_when_the_identity_cannot_be_read(seat, monkeypatch):
+    _put(SONNET)
+    seat["det"].state = "idle"
+    monkeypatch.setattr(G, "_seat_session_ids", lambda s, meta=None: [])
+    assert G._apply_pending_model_switches() == []
+    assert seat["live"] == [] and _get()["pending"]["model"] == SONNET   # waits; stale report covers it
+
+
+def test_mixed_identity_evidence_is_a_new_session_not_a_match(seat, monkeypatch):
+    """A stale pane event next to a rotated seat's new id overlaps the recorded identity: it must
+    be EXACTLY the recorded identity, or the pick is closed (codex R2 on #475)."""
+    _put(SONNET)                                                   # recorded identity: {SID}
+    new_sid = "99999999-2222-4333-8444-555555555555"
+    monkeypatch.setattr(G, "_seat_session_ids", lambda s, meta=None: [SID, new_sid])
+    seat["det"].state = "idle"
+    assert G._apply_pending_model_switches() == [("dev", "failed: the agent moved to a new session before its turn ended")]
+    assert seat["live"] == []
+
+
+def test_an_unreadable_record_is_never_overwritten(seat):
+    """A corrupt record is not "nothing pending": a PUT refuses (503) and leaves it as it is, a
+    pass changes nothing, and GET says the record cannot be read."""
+    f = AMP.state_path(G.ORCH_DIR)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("{ not json")
+    status, b = _put(SONNET)
+    assert status == 503 and seat["live"] == []
+    assert f.read_text() == "{ not json"
+    import pytest as _pt
+    with _pt.raises(AMP.StateUnreadable):
+        G._apply_pending_model_switches()
+    assert f.read_text() == "{ not json"
+    g = _get()
+    assert g["pending"] is None and "pending_error" in g
+
+
+@pytest.mark.parametrize("bad", [
+    '{"pending": {"dev": null}, "last": {}}',
+    '{"pending": {"dev": {"model": "x"}}, "last": {}}',
+    '{"pending": {"dev": {"model": "x", "since": "t", "since_ts": 1, "sids": "abc"}}, "last": {}}',
+    '{"pending": {}, "last": {"dev": {"model": "x", "at": "t", "outcome": "maybe"}}}',
+    '{"pending": {"dev": {"model": "x", "since": "t", "since_ts": 1e9999, "sids": []}}, "last": {}}',
+    '{"pending": {"dev": {"model": "x", "since": "t", "since_ts": 1, "sids": [], "reported": "yes"}}, "last": {}}',
+    '{"pending": {"dev": {"model": "x", "since": "t", "since_ts": 1, "sids": [], "by": 7}}, "last": {}}',
+    '{"pending": {}, "last": {"dev": {"model": "x", "at": "t", "outcome": "failed", "reason": {}}}}',
+])
+def test_a_malformed_ENTRY_is_a_damaged_record_too(seat, bad):
+    """Valid JSON with a broken entry: refused like a corrupt file, and left as it is (codex R3)."""
+    f = AMP.state_path(G.ORCH_DIR)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(bad)
+    status, _ = _put(SONNET)
+    assert status == 503 and f.read_text() == bad and seat["live"] == []
+
+
+def test_a_pick_waiting_on_an_unreadable_identity_is_still_reported_once(seat, monkeypatch):
+    _put(SONNET)
+    monkeypatch.setattr(G, "_seat_session_ids", lambda s, meta=None: [])
+    seat["det"].state = "idle"
+    said = []
+    monkeypatch.setattr(G, "_report_stale_model_switch", lambda s, e: said.append(s))
+    later = AMP.get(AMP.state_path(G.ORCH_DIR), "dev")["since_ts"] + AMP.STALE_AFTER_S + 1
+    G._apply_pending_model_switches(now=later)
+    G._apply_pending_model_switches(now=later + 60)
+    assert said == ["dev"] and seat["live"] == []
+
+
+def test_a_pick_stamped_at_epoch_zero_is_stale_not_fresh():
+    assert AMP.view({"model": "x", "since": "t", "since_ts": 0}, now=AMP.STALE_AFTER_S + 1)["stale"] is True
+
+
+def test_get_reads_the_record_off_the_event_loop(seat, monkeypatch):
+    """GET /agent-model reads pending/last_switch off the event loop: a stalled filesystem never
+    stalls the gateway (codex R6 on #475). The 5 s pass: the app-run test above."""
+    import threading
+    where = []
+    real_get = AMP.get
+    monkeypatch.setattr(AMP, "get", lambda f, s: where.append(threading.current_thread() is threading.main_thread()) or real_get(f, s))
+    _get()
+    assert where and not any(where)
+
+
+@pytest.mark.parametrize("state", ["stopped", "crashed", "offline"])
+def test_an_agent_whose_cli_is_gone_closes_the_pick_with_the_reason(seat, state):
+    """The tmux session is still there but the agent stopped or crashed: no turn will end, so the
+    pick is closed now with its reason, never kept waiting (codex R8 on #475)."""
+    _put(SONNET)
+    seat["det"].state = state
+    assert G._apply_pending_model_switches() == [("dev", f"failed: the agent {state} before its turn ended")]
+    assert seat["live"] == [] and _get()["pending"] is None
+
+
+def test_a_gone_cli_with_no_readable_identity_is_still_closed(seat, monkeypatch):
+    _put(SONNET)
+    seat["det"].state = "crashed"
+    monkeypatch.setattr(G, "_seat_session_ids", lambda s, meta=None: [])
+    assert G._apply_pending_model_switches() == [("dev", "failed: the agent crashed before its turn ended")]
+
+
+def test_another_gateway_process_holding_the_agents_lock_makes_the_pass_wait(seat, monkeypatch):
+    """Two gateway processes (an old one finishing a pass while a new one starts) never both apply
+    a pick: the lock is a file lock shared across processes (codex R12 on #475)."""
+    import subprocess
+    import sys
+    import textwrap
+    import threading
+    import time
+    _put(SONNET)
+    seat["det"].state = "idle"
+    f = AMP.state_path(G.ORCH_DIR)
+    child = subprocess.Popen([sys.executable, "-c", textwrap.dedent(f"""
+        import sys, time
+        sys.path.insert(0, {str(Path(AMP.__file__).resolve().parents[1])!r})
+        from scripts import agent_model_pending as AMP
+        with AMP.session_lock({str(f)!r}, "dev"):
+            print("held", flush=True)
+            time.sleep(1.5)
+    """)], stdout=subprocess.PIPE, text=True)
+    assert child.stdout.readline().strip() == "held"
+    t0 = time.monotonic()
+    done = threading.Event()
+    th = threading.Thread(target=lambda: (G._apply_pending_model_switches(), done.set()))
+    th.start()
+    assert not done.wait(0.5) and seat["live"] == []                 # waiting on the other process
+    th.join(10)
+    child.wait(10)
+    assert seat["live"] == [SONNET] and time.monotonic() - t0 >= 1.0
+
+
+# ------------------------------------------------------------------ codex R13 on #475
+def _hold_lock_in_child(f, session, seconds):
+    """Another gateway process holding the agent's switch lock: returns the child once it holds it."""
+    import subprocess
+    import sys
+    import textwrap
+    child = subprocess.Popen([sys.executable, "-c", textwrap.dedent(f"""
+        import sys, time
+        sys.path.insert(0, {str(Path(AMP.__file__).resolve().parents[1])!r})
+        from scripts import agent_model_pending as AMP
+        with AMP.session_lock({str(f)!r}, {session!r}):
+            print("held", flush=True)
+            time.sleep({seconds})
+    """)], stdout=subprocess.PIPE, text=True)
+    assert child.stdout.readline().strip() == "held"
+    return child
+
+
+def test_the_lock_wait_is_bounded_and_raises_LockBusy_with_nothing_run(tmp_path):
+    import time
+    f = tmp_path / "pending.json"
+    child = _hold_lock_in_child(f, "dev", 10)
+    try:
+        ran, t0 = [], time.monotonic()
+        with pytest.raises(AMP.LockBusy):
+            with AMP.session_lock(f, "dev", timeout=0.3):
+                ran.append(1)
+        assert ran == [] and 0.3 <= time.monotonic() - t0 < 2
+        with AMP.session_lock(f, "other", timeout=0.3):              # another agent's lock is free
+            ran.append(2)
+        assert ran == [2]
+    finally:
+        child.kill()
+        child.wait(10)
+
+
+def test_a_pass_skips_an_agent_whose_lock_is_held_past_its_bound_and_keeps_the_pick(seat, monkeypatch):
+    import time
+    monkeypatch.setattr(G, "MODEL_SWITCH_PASS_LOCK_WAIT_S", 0.3)
+    _put(SONNET)
+    seat["det"].state = "idle"
+    child = _hold_lock_in_child(AMP.state_path(G.ORCH_DIR), "dev", 10)
+    try:
+        t0 = time.monotonic()
+        assert G._apply_pending_model_switches() == []
+        assert time.monotonic() - t0 < 2 and seat["live"] == []
+        assert _get()["pending"]["model"] == SONNET                  # still waiting, not closed
+    finally:
+        child.kill()
+        child.wait(10)
+    assert G._apply_pending_model_switches() == [("dev", "switched")]   # the next pass applies it
+    assert seat["live"] == [SONNET]
+
+
+def test_a_put_while_another_switch_holds_the_lock_is_503_and_changes_nothing(seat, monkeypatch):
+    monkeypatch.setattr(G, "MODEL_SWITCH_PUT_LOCK_WAIT_S", 0.3)
+    child = _hold_lock_in_child(AMP.state_path(G.ORCH_DIR), "dev", 10)
+    try:
+        status, b = _put(SONNET)
+    finally:
+        child.kill()
+        child.wait(10)
+    assert status == 503 and "still in progress" in b["error"]
+    assert seat["live"] == [] and _get()["pending"] is None
+
+
+def test_a_pass_stops_before_its_next_agent_once_shutdown_set_the_flag(seat, monkeypatch):
+    _put(SONNET)
+    seat["det"].state = "idle"
+    import threading
+    stop = threading.Event()
+    stop.set()
+    assert G._apply_pending_model_switches(stop=stop) == [] and seat["live"] == []
+    assert _get()["pending"]["model"] == SONNET                      # kept for the next start
+
+
+def test_a_shutdown_never_waits_on_a_lock_another_process_holds(tmp_path, monkeypatch):
+    """The real app, the real pass, the agent's lock held by another process for 20 s: shutdown AND
+    the executor join (asyncio.run waits for every executor thread) end within the pass's bounded
+    wait, never the other process's 20 s."""
+    import asyncio
+    import time
+    from aiohttp.test_utils import TestServer
+    from scripts.test_events_shutdown import _NoStore
+    monkeypatch.setenv("AGENT_MODEL_PENDING_FILE", str(tmp_path / "pending.json"))
+    monkeypatch.setattr(G, "ApprovalStore", _NoStore)
+    entered = []
+    real_lock = G._model_switch_lock
+    monkeypatch.setattr(G, "_model_switch_lock", lambda s, timeout: (entered.append(timeout), real_lock(s, timeout))[1])
+    monkeypatch.setattr(G, "_apply_pending_one", lambda f, s, now: None)   # type nothing
+    f = AMP.state_path(G.ORCH_DIR)
+    AMP.put(f, "dev", SONNET)
+    child = _hold_lock_in_child(f, "dev", 20)
+
+    async def go():
+        server = TestServer(G.build_app())
+        await server.start_server()
+        for _ in range(100):
+            if entered:
+                break
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(0.2)                                     # the pass is now waiting on the lock
+        await asyncio.wait_for(server.close(), timeout=10)
+    try:
+        t0 = time.monotonic()
+        asyncio.run(go())
+        took = time.monotonic() - t0
+    finally:
+        child.kill()
+        child.wait(10)
+    assert entered and entered[0] == G.MODEL_SWITCH_PASS_LOCK_WAIT_S
+    assert took < G.MODEL_SWITCH_PASS_LOCK_WAIT_S + 4, took
+
+
+# ------------------------------------------------------------------ codex R14 on #475
+def _hold_record_lock_in_child(f, seconds):
+    """Another process (a suspended writer, say) holding the pending record's own lock."""
+    import subprocess
+    import sys
+    import textwrap
+    lock = Path(f).with_name(Path(f).name + ".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    child = subprocess.Popen([sys.executable, "-c", textwrap.dedent(f"""
+        import fcntl, time
+        with open({str(lock)!r}, "a") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            print("held", flush=True)
+            time.sleep({seconds})
+    """)], stdout=subprocess.PIPE, text=True)
+    assert child.stdout.readline().strip() == "held"
+    return child
+
+
+def test_a_record_writer_waits_a_bounded_time_then_LockBusy_with_nothing_written(tmp_path, monkeypatch):
+    import time
+    monkeypatch.setattr(AMP, "RECORD_LOCK_WAIT_S", 0.3)
+    f = tmp_path / "pending.json"
+    AMP.put(f, "dev", SONNET)
+    before = f.read_text()
+    child = _hold_record_lock_in_child(f, 10)
+    try:
+        for write in (lambda: AMP.put(f, "dev", HAIKU), lambda: AMP.cancel(f, "dev"),
+                      lambda: AMP.resolve(f, "dev", AMP.get(f, "dev")["since"], "switched"),
+                      lambda: AMP.mark_reported(f, "dev", AMP.get(f, "dev")["since"])):
+            t0 = time.monotonic()
+            with pytest.raises(AMP.LockBusy):
+                write()
+            assert time.monotonic() - t0 < 2
+        assert f.read_text() == before
+    finally:
+        child.kill()
+        child.wait(10)
+
+
+def test_a_pass_whose_outcome_cannot_be_recorded_records_it_next_pass_without_typing_again(seat, monkeypatch):
+    monkeypatch.setattr(AMP, "RECORD_LOCK_WAIT_S", 0.3)
+    # The seat's model is what its last switch stored (the gw fixture's stays on opus otherwise).
+    monkeypatch.setattr(G, "_seat_for_session", lambda s: (
+        "dev", {}, "claude", (seat["stored"][-1][1]["model"] if seat["stored"] else OPUS)))
+    _put(SONNET)
+    seat["det"].state = "idle"
+    child = _hold_record_lock_in_child(AMP.state_path(G.ORCH_DIR), 10)
+    try:
+        assert G._apply_pending_model_switches() == []           # switched, outcome not writable yet
+        assert seat["live"] == [SONNET]
+    finally:
+        child.kill()
+        child.wait(10)
+    assert G._apply_pending_model_switches() == [("dev", "switched")]
+    assert seat["live"] == [SONNET]                              # closed, never typed twice
+    assert _get()["pending"] is None and _get()["last_switch"]["outcome"] == "switched"
+
+
+def test_an_idle_put_whose_older_pick_cannot_be_dropped_is_503_with_nothing_typed(seat, monkeypatch):
+    """The older pick is dropped BEFORE the switch: a record that cannot be written is a 503 with
+    nothing typed, never a switch whose older pick survives to undo it later."""
+    monkeypatch.setattr(AMP, "RECORD_LOCK_WAIT_S", 0.3)
+    _put(SONNET)
+    seat["det"].state = "idle"
+    child = _hold_record_lock_in_child(AMP.state_path(G.ORCH_DIR), 10)
+    try:
+        status, b = _put(HAIKU)
+    finally:
+        child.kill()
+        child.wait(10)
+    assert status == 503 and seat["live"] == []
+    assert _get()["pending"]["model"] == SONNET                  # untouched
+
+
+def test_a_shutdown_never_waits_on_a_record_lock_another_process_holds(tmp_path, monkeypatch):
+    """The real app; the pass, under the agent's switch lock, blocks writing the record that another
+    process holds locked for 20 s: shutdown AND the executor join end within the record bound."""
+    import asyncio
+    import time
+    from aiohttp.test_utils import TestServer
+    from scripts.test_events_shutdown import _NoStore
+    monkeypatch.setenv("AGENT_MODEL_PENDING_FILE", str(tmp_path / "pending.json"))
+    monkeypatch.setattr(G, "ApprovalStore", _NoStore)
+    f = AMP.state_path(G.ORCH_DIR)
+    AMP.put(f, "dev", SONNET)
+    entered = []
+
+    def one(f_, s, now):
+        entered.append(1)
+        AMP.resolve(f_, s, AMP.get(f_, s)["since"], "switched")    # blocks on the held record lock
+    monkeypatch.setattr(G, "_apply_pending_one", one)
+    child = _hold_record_lock_in_child(f, 20)
+
+    async def go():
+        server = TestServer(G.build_app())
+        await server.start_server()
+        for _ in range(100):
+            if entered:
+                break
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(0.2)
+        await asyncio.wait_for(server.close(), timeout=10)
+    try:
+        t0 = time.monotonic()
+        asyncio.run(go())
+        took = time.monotonic() - t0
+    finally:
+        child.kill()
+        child.wait(10)
+    assert entered and took < AMP.RECORD_LOCK_WAIT_S + 4, took
+
+
+# ------------------------------------------------------------------ codex R15 on #475
+def test_a_switched_pick_whose_seat_did_not_keep_it_and_whose_outcome_was_unwritable_is_typed_once(seat, monkeypatch):
+    """The switch typed, the seat's stored model did NOT change (registry write failed), and the
+    outcome could not be written: the next pass closes it from memory, never types it again."""
+    monkeypatch.setattr(AMP, "RECORD_LOCK_WAIT_S", 0.3)
+    from identity_store import identity_writer as IW
+    monkeypatch.setattr(IW, "update_session", lambda d, root, f: False)       # the seat keeps opus
+    _put(SONNET)
+    seat["det"].state = "idle"
+    child = _hold_record_lock_in_child(AMP.state_path(G.ORCH_DIR), 10)
+    try:
+        assert G._apply_pending_model_switches() == []
+        assert seat["live"] == [SONNET]
+    finally:
+        child.kill()
+        child.wait(10)
+    assert G._apply_pending_model_switches() == [("dev", "switched")]
+    assert seat["live"] == [SONNET] and AMP.applied_mark(AMP.state_path(G.ORCH_DIR), "dev") is None
+    assert _get()["last_switch"]["outcome"] == "switched"
+
+
+# ------------------------------------------------------------------ codex R16 on #475
+def test_a_put_right_after_an_unrecorded_switch_decides_on_the_model_the_agent_is_really_on(seat, monkeypatch):
+    """Switched to SONNET by a pass, registry write failed, outcome unwritable. The operator then
+    asks for OPUS (which the seat record still names): it is a real switch back, typed; the
+    applied pick is recorded "switched", never left without an outcome."""
+    monkeypatch.setattr(AMP, "RECORD_LOCK_WAIT_S", 0.3)
+    from identity_store import identity_writer as IW
+    monkeypatch.setattr(IW, "update_session", lambda d, root, f: False)       # the seat keeps opus
+    _put(SONNET)
+    seat["det"].state = "idle"
+    child = _hold_record_lock_in_child(AMP.state_path(G.ORCH_DIR), 10)
+    try:
+        assert G._apply_pending_model_switches() == []
+    finally:
+        child.kill()
+        child.wait(10)
+    status, b = _put(OPUS)
+    assert status == 200 and seat["live"] == [SONNET, OPUS]                  # typed back, not a no-op
+    assert AMP.applied_mark(AMP.state_path(G.ORCH_DIR), "dev") is None
+    g = _get()
+    assert g["pending"] is None and g["last_switch"]["outcome"] == "switched"
+    assert g["last_switch"]["model"] == SONNET
+
+
+# ------------------------------------------------------------------ codex R17 on #475
+def test_the_applied_marker_is_shared_so_another_gateways_put_decides_on_the_real_model(seat, monkeypatch):
+    """ANOTHER gateway process switched dev to SONNET and could not record it (its marker is on
+    disk, not in this process). A PUT for OPUS here is a real switch back, typed, and SONNET is
+    recorded "switched"; the marker is gone."""
+    f = AMP.state_path(G.ORCH_DIR)
+    _put(SONNET)
+    since = AMP.get(f, "dev")["since"]
+    AMP.mark_applied(f, "dev", since, SONNET, [SID])                     # what the other process left
+    seat["det"].state = "idle"
+    status, b = _put(OPUS)
+    assert status == 200 and seat["live"] == [OPUS]
+    g = _get()
+    assert g["pending"] is None and g["last_switch"]["outcome"] == "switched"
+    assert g["last_switch"]["model"] == SONNET and AMP.applied_mark(f, "dev") is None
+
+
+def test_a_pass_after_a_restart_records_a_marked_pick_and_types_nothing(seat):
+    """The marker survives a restart (it is a file): the next pass records the pick, types nothing."""
+    f = AMP.state_path(G.ORCH_DIR)
+    _put(SONNET)
+    AMP.mark_applied(f, "dev", AMP.get(f, "dev")["since"], SONNET, [SID])
+    seat["det"].state = "idle"
+    assert G._apply_pending_model_switches() == [("dev", "switched")]
+    assert seat["live"] == [] and AMP.applied_mark(f, "dev") is None
+
+
+@pytest.mark.parametrize("bad", ["{", "[]", '{"since": 1, "model": "x", "sids": []}',
+                                 '{"since": "t", "model": "x"}', '{"since": "t", "model": "x", "sids": [1]}'])
+def test_a_damaged_applied_marker_is_unreadable_never_none(tmp_path, bad):
+    f = tmp_path / "pending.json"
+    AMP._session_file(f, "dev", "applied").write_text(bad)
+    with pytest.raises(AMP.StateUnreadable):
+        AMP.applied_mark(f, "dev")
+
+
+def test_one_agents_damaged_marker_never_stops_the_pass_for_the_others(seat, monkeypatch):
+    f = AMP.state_path(G.ORCH_DIR)
+    _put(SONNET)
+    AMP.put(f, "other", HAIKU)
+    AMP._session_file(f, "other", "applied").write_text("{")
+    seat["det"].state = "idle"
+    assert ("dev", "switched") in G._apply_pending_model_switches()
+    assert seat["live"] == [SONNET] and AMP.get(f, "other")["model"] == HAIKU
+
+
+# ------------------------------------------------------------------ codex R20 on #475
+def test_a_marker_from_before_a_rotation_never_overrides_the_new_agents_model(seat, monkeypatch):
+    """A pass switched SID-A to SONNET and could not record it; dev then rotated to SID-B, on
+    OPUS. The operator asks for SONNET: the old pick is recorded, and SID-B IS switched (the
+    marker's model is not SID-B's)."""
+    f = AMP.state_path(G.ORCH_DIR)
+    _put(SONNET)
+    AMP.mark_applied(f, "dev", AMP.get(f, "dev")["since"], SONNET, [SID])
+    sid_b = "99999999-2222-4333-8444-555555555555"
+    monkeypatch.setattr(G, "_seat_session_ids", lambda s, meta=None: [sid_b])
+    seat["det"].state = "idle"
+    status, b = _put(SONNET)
+    assert status == 200 and seat["live"] == [SONNET], "the new agent is switched, not skipped"
+    assert AMP.applied_mark(f, "dev") is None
+    assert _get()["last_switch"]["outcome"] == "switched"
