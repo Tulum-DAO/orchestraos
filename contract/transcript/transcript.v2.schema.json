@@ -32,7 +32,8 @@
         { "$ref": "#/$defs/ThinkingItem" },
         { "$ref": "#/$defs/ToolUseItem" },
         { "$ref": "#/$defs/ToolResultItem" },
-        { "$ref": "#/$defs/QueuedBatchItem" }
+        { "$ref": "#/$defs/QueuedBatchItem" },
+        { "$ref": "#/$defs/RotationItem" }
       ],
       "discriminator": { "propertyName": "kind" }
     },
@@ -156,13 +157,31 @@
         "key": { "type": "string", "description": "STABLE id 'batch:<batch_id>' for list diffing and the parent-owned expand binding." }
       }
     },
+    "RotationItem": {
+      "type": "object",
+      "description": "ADDITIVE v2 (stitched chat, ios-watch-dev msg_41c00a45): ONE divider between the previous generation's tail and the current generation. The poll route emits it only when the seat's current head took over from a generation whose log this box can read; items above it are the previous generation's. audience is always user (drawn in the conversation, never inside a strip) and it has no exchange. Older clients: unknown kind is skipped.",
+      "required": ["kind", "role", "uuid", "from_generation", "to_generation", "from_session", "to_session"],
+      "properties": {
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, and the closing reply of a turn he or a job he set off opened); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened). The closing reply of the turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
+        "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
+        "kind": { "const": "rotation" },
+        "role": { "const": "system" },
+        "uuid": { "type": "string", "description": "rot:<to_session>" },
+        "ts": { "type": "string", "description": "When the current generation took over (its promoted_at, ISO 8601)." },
+        "from_generation": { "type": "integer", "description": "The previous generation's number. Numbers can reset: display only, never compare." },
+        "to_generation": { "type": "integer", "description": "The current generation's number." },
+        "from_session": { "type": "string", "description": "The previous generation's session id." },
+        "to_session": { "type": "string", "description": "The current generation's session id." }
+      }
+    },
     "RenderItem": {
       "oneOf": [
         { "$ref": "#/$defs/RenderUser" },
         { "$ref": "#/$defs/RenderAssistant" },
         { "$ref": "#/$defs/RenderThinking" },
         { "$ref": "#/$defs/RenderTool" },
-        { "$ref": "#/$defs/RenderQueuedBatch" }
+        { "$ref": "#/$defs/RenderQueuedBatch" },
+        { "$ref": "#/$defs/RenderRotation" }
       ],
       "discriminator": { "propertyName": "kind" }
     },
@@ -235,6 +254,22 @@
           "items": { "$ref": "#/$defs/BatchEntry" }
         },
         "ts": { "type": "string" },
+        "key": { "type": "string" }
+      }
+    },
+    "RenderRotation": {
+      "type": "object",
+      "description": "Server-paired render node for the stitched chat's divider. Same data as RotationItem; draw it like a date line (\"Rotated · gen 36 → 37 · 12:05 AM\").",
+      "required": ["kind", "from_generation", "to_generation", "from_session", "to_session", "key"],
+      "properties": {
+        "audience": { "enum": ["user", "agent"], "description": "ADDITIVE v2 (chat fold): user = drawn in the conversation (the operator's messages, and the closing reply of a turn he or a job he set off opened); agent = folded into the strip between his message and the reply (tools, thinking, intermediate replies, every turn mail/hooks/lineage/init opened). The closing reply of the turn still running is provisional: a later reply in the same turn takes it over (the poll route re-tags; an SSE delta does not re-send older items, so a streaming client re-reads tags on its next snapshot)." },
+        "exchange": { "type": "string", "description": "ADDITIVE v2 (chat fold): uuid of the operator message this item belongs to (the latest one at or before it); absent before his first." },
+        "kind": { "const": "rotation" },
+        "ts": { "type": "string", "description": "When the current generation took over (its promoted_at, ISO 8601)." },
+        "from_generation": { "type": "integer", "description": "The previous generation's number. Numbers can reset: display only, never compare." },
+        "to_generation": { "type": "integer", "description": "The current generation's number." },
+        "from_session": { "type": "string", "description": "The previous generation's session id." },
+        "to_session": { "type": "string", "description": "The current generation's session id." },
         "key": { "type": "string" }
       }
     }

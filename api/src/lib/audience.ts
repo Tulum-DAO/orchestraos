@@ -91,6 +91,7 @@ export function tagAudience(items: any[]): any[] {
 export function tagSynthetics(items: any[]): any[] {
   let exchange: string | undefined;
   for (const it of items) {
+    if (it.kind === 'rotation') { exchange = undefined; continue; }   // a new generation: no strip spans it
     if (it.audience === undefined) {
       if (it.kind === 'text' && it.role === 'user' && it.queued) {
         it.audience = 'user';
