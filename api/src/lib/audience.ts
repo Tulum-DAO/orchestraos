@@ -3,8 +3,10 @@
  * chose (ios-watch-dev msg_1491bb2c, 2026-10-22). Every surface draws the same conversation: the
  * operator's message, ONE folded strip for everything that happened in between, the reply to him.
  *
- * - `audience: "user"` = drawn in the conversation: the operator's own messages, and the CLOSING
- *   reply of a turn the operator opened (or a job he set off, a <task-notification>).
+ * - `audience: "user"` = drawn in the conversation: the operator's own messages, the FIRST and the
+ *   CLOSING reply of a turn he opened (Shaw 2026-10-22 03:58 ET: "the first response at least to my
+ *   message ... then the div, which is collapsible. And then the most recent message"), and only the
+ *   closing reply of a job he set off (a <task-notification>).
  * - `audience: "agent"` = folded into the strip: tools, thinking, intermediate replies, and every
  *   turn something else opened (mail, a hook, lineage, the spawn brief), replies included.
  * - `exchange` = the uuid of the operator message the item belongs to (the latest one at or before
@@ -61,14 +63,18 @@ export function tagAudience(items: any[]): any[] {
     if (kind === 'person' && opener.uuid) exchange = String(opener.uuid);
     let end = i + 1;
     while (end < items.length && !isOpener(items[end])) end++;
-    // The turn's closing reply: its last assistant text.
-    let closing = -1;
-    for (let k = end - 1; k > i; k--) {
-      if (items[k]?.kind === 'text' && items[k].role === 'assistant') { closing = k; break; }
+    // The turn's first and closing replies: its first and last assistant text.
+    let first = -1, closing = -1;
+    for (let k = i + 1; k < end; k++) {
+      if (items[k]?.kind === 'text' && items[k].role === 'assistant') {
+        if (first < 0) first = k;
+        closing = k;
+      }
     }
     for (let k = i; k < end; k++) {
       const it = items[k];
-      const shown = (k === i && kind === 'person') || (k === closing && kind !== 'machine');
+      const shown = (k === i && kind === 'person') || (k === first && kind === 'person')
+        || (k === closing && kind !== 'machine');
       it.audience = shown ? 'user' : 'agent';
       if (exchange) it.exchange = exchange;
     }
