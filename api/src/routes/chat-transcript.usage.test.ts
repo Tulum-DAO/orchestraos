@@ -102,3 +102,14 @@ test('an old token_count re-sent after a new agent item does not take that item;
   ]);
   assert.deepEqual(items.map((i: any) => i.usage?.output_tokens), [5, 9]);
 });
+
+test('a 5-line Claude reply contributes its usage exactly once (gm)', () => {
+  const lines = [entry('user', 'go'), ...reply('msg_5', U1, [
+    { type: 'thinking', thinking: 'a' }, { type: 'text', text: 'b' },
+    { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } },
+    { type: 'tool_use', id: 't2', name: 'Read', input: { file_path: '/x' } }, { type: 'text', text: 'c' }])];
+  const { items } = normalizeTranscript(lines, 'gm', 's', 150) as any;
+  assert.equal(items.filter((i: any) => i.role === 'assistant').length, 5);
+  assert.equal(items.filter((i: any) => i.usage).length, 1);
+  assert.equal(items.reduce((s: number, i: any) => s + (i.usage?.output_tokens || 0), 0), U1.output_tokens);
+});
