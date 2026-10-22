@@ -638,7 +638,6 @@ def test_a_switched_pick_whose_seat_did_not_keep_it_and_whose_outcome_was_unwrit
     """The switch typed, the seat's stored model did NOT change (registry write failed), and the
     outcome could not be written: the next pass closes it from memory, never types it again."""
     monkeypatch.setattr(AMP, "RECORD_LOCK_WAIT_S", 0.3)
-    monkeypatch.setattr(G, "_APPLIED_UNRECORDED", {})
     from identity_store import identity_writer as IW
     monkeypatch.setattr(IW, "update_session", lambda d, root, f: False)       # the seat keeps opus
     _put(SONNET)
@@ -651,7 +650,7 @@ def test_a_switched_pick_whose_seat_did_not_keep_it_and_whose_outcome_was_unwrit
         child.kill()
         child.wait(10)
     assert G._apply_pending_model_switches() == [("dev", "switched")]
-    assert seat["live"] == [SONNET] and G._APPLIED_UNRECORDED == {}
+    assert seat["live"] == [SONNET] and AMP.applied_mark(AMP.state_path(G.ORCH_DIR), "dev") is None
     assert _get()["last_switch"]["outcome"] == "switched"
 
 
@@ -661,7 +660,6 @@ def test_a_put_right_after_an_unrecorded_switch_decides_on_the_model_the_agent_i
     asks for OPUS (which the seat record still names): it is a real switch back, typed; the
     applied pick is recorded "switched", never left without an outcome."""
     monkeypatch.setattr(AMP, "RECORD_LOCK_WAIT_S", 0.3)
-    monkeypatch.setattr(G, "_APPLIED_UNRECORDED", {})
     from identity_store import identity_writer as IW
     monkeypatch.setattr(IW, "update_session", lambda d, root, f: False)       # the seat keeps opus
     _put(SONNET)
@@ -674,7 +672,52 @@ def test_a_put_right_after_an_unrecorded_switch_decides_on_the_model_the_agent_i
         child.wait(10)
     status, b = _put(OPUS)
     assert status == 200 and seat["live"] == [SONNET, OPUS]                  # typed back, not a no-op
-    assert G._APPLIED_UNRECORDED == {}
+    assert AMP.applied_mark(AMP.state_path(G.ORCH_DIR), "dev") is None
     g = _get()
     assert g["pending"] is None and g["last_switch"]["outcome"] == "switched"
     assert g["last_switch"]["model"] == SONNET
+
+
+# ------------------------------------------------------------------ codex R17 on #475
+def test_the_applied_marker_is_shared_so_another_gateways_put_decides_on_the_real_model(seat, monkeypatch):
+    """ANOTHER gateway process switched dev to SONNET and could not record it (its marker is on
+    disk, not in this process). A PUT for OPUS here is a real switch back, typed, and SONNET is
+    recorded "switched"; the marker is gone."""
+    f = AMP.state_path(G.ORCH_DIR)
+    _put(SONNET)
+    since = AMP.get(f, "dev")["since"]
+    AMP.mark_applied(f, "dev", since, SONNET)                     # what the other process left
+    seat["det"].state = "idle"
+    status, b = _put(OPUS)
+    assert status == 200 and seat["live"] == [OPUS]
+    g = _get()
+    assert g["pending"] is None and g["last_switch"]["outcome"] == "switched"
+    assert g["last_switch"]["model"] == SONNET and AMP.applied_mark(f, "dev") is None
+
+
+def test_a_pass_after_a_restart_records_a_marked_pick_and_types_nothing(seat):
+    """The marker survives a restart (it is a file): the next pass records the pick, types nothing."""
+    f = AMP.state_path(G.ORCH_DIR)
+    _put(SONNET)
+    AMP.mark_applied(f, "dev", AMP.get(f, "dev")["since"], SONNET)
+    seat["det"].state = "idle"
+    assert G._apply_pending_model_switches() == [("dev", "switched")]
+    assert seat["live"] == [] and AMP.applied_mark(f, "dev") is None
+
+
+@pytest.mark.parametrize("bad", ["{", "[]", '{"since": 1, "model": "x"}'])
+def test_a_damaged_applied_marker_is_unreadable_never_none(tmp_path, bad):
+    f = tmp_path / "pending.json"
+    AMP._session_file(f, "dev", "applied").write_text(bad)
+    with pytest.raises(AMP.StateUnreadable):
+        AMP.applied_mark(f, "dev")
+
+
+def test_one_agents_damaged_marker_never_stops_the_pass_for_the_others(seat, monkeypatch):
+    f = AMP.state_path(G.ORCH_DIR)
+    _put(SONNET)
+    AMP.put(f, "other", HAIKU)
+    AMP._session_file(f, "other", "applied").write_text("{")
+    seat["det"].state = "idle"
+    assert ("dev", "switched") in G._apply_pending_model_switches()
+    assert seat["live"] == [SONNET] and AMP.get(f, "other")["model"] == HAIKU

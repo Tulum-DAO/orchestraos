@@ -201,14 +201,57 @@ def session_lock(path, session, timeout=None):
     caller passes one, so no executor thread waits on another process forever and a shutdown that
     joins its threads never hangs on a lock (codex R13 on #475). None waits without a bound."""
     name = str(session)
-    safe = re.sub(r"[^A-Za-z0-9._-]", "_", name) or "_"
-    if safe != name or safe.startswith("."):
-        safe = f"{safe}~{hashlib.sha256(name.encode()).hexdigest()[:12]}"
-    d = Path(path).with_name(Path(path).name + ".locks")
-    d.mkdir(parents=True, exist_ok=True)
-    with open(d / f"{safe}.lock", "a") as fh:
+    with open(_session_file(path, session, "lock"), "a") as fh:
         _flock(fh, timeout, f"another model switch for {name} is still in progress")
         try:
             yield
         finally:
             fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _session_file(path, session, suffix):
+    """<record>.locks/<session>.<suffix>: a file-safe name, distinct per session (a hash suffix
+    when the name had to be changed)."""
+    name = str(session)
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", name) or "_"
+    if safe != name or safe.startswith("."):
+        safe = f"{safe}~{hashlib.sha256(name.encode()).hexdigest()[:12]}"
+    d = Path(path).with_name(Path(path).name + ".locks")
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"{safe}.{suffix}"
+
+
+# A pick a gateway SWITCHED whose outcome it could not write yet (the record's lock was busy):
+# one marker file per session, written and read only under that session's switch lock, so every
+# gateway process sees it and it survives a restart (codex R15-R17 on #475). The next pass, or the
+# next PUT for that agent, records the outcome from it and never types the pick again.
+def mark_applied(path, session, since, model):
+    f = _session_file(path, session, "applied")
+    tmp = f.with_name(f"{f.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps({"since": since, "model": model}))
+    os.replace(tmp, f)
+
+
+def applied_mark(path, session):
+    """{since, model} or None. A damaged marker raises StateUnreadable (never read as none)."""
+    f = _session_file(path, session, "applied")
+    try:
+        raw = f.read_text()
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        raise StateUnreadable(f"{f}: {e}") from e
+    try:
+        m = json.loads(raw)
+    except ValueError as e:
+        raise StateUnreadable(f"{f}: not JSON ({e})") from e
+    if not (isinstance(m, dict) and isinstance(m.get("since"), str) and isinstance(m.get("model"), str)):
+        raise StateUnreadable(f"{f}: not an applied-switch marker")
+    return m
+
+
+def clear_applied(path, session):
+    try:
+        _session_file(path, session, "applied").unlink()
+    except FileNotFoundError:
+        pass

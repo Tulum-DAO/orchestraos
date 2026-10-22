@@ -5093,38 +5093,30 @@ def _apply_pending_model_switches(now=None, stop=None):
                 r = _apply_pending_one(f, session, now)
         except AMP.LockBusy:
             continue                   # a switch for it is in progress elsewhere: the next pass decides
+        except AMP.StateUnreadable as e:
+            # One agent's damaged marker never stops the others; its pick waits, typed never.
+            log.error(f"agent-model: {session}: {e}")
+            continue
         if r:
             out.append((session, r))
     return out
 
 
-#: Picks this gateway already switched whose outcome could not be written yet (the record's lock was
-#: busy): {(session, since): model}. The next pass, or the next PUT for that agent, closes them
-#: from here and never types them again, even when the seat's stored model did not keep the switch
-#: (codex R15, R16 on #475).
-_APPLIED_UNRECORDED = {}
-_APPLIED_UNRECORDED_GUARD = _threading.Lock()
-
-
 def _settle_applied_unrecorded(f, session):
-    """Under the session's switch lock: record "switched" for a pick this gateway already switched
-    but could not record. Returns the model the agent is on by that switch, else None. A PUT calls
-    it first so it decides against the agent's real model (codex R16 on #475); LockBusy propagates
-    with the memory kept."""
+    """Under the session's switch lock: record "switched" for a pick a gateway already switched
+    but could not record (AMP.applied_mark, shared by every gateway process). Returns the model the
+    agent is on by that switch, else None. A PUT calls it first so it decides against the agent's
+    real model (codex R16, R17 on #475); LockBusy propagates with the marker kept."""
     from scripts import agent_model_pending as AMP
-    with _APPLIED_UNRECORDED_GUARD:
-        mine = [(k, m) for k, m in _APPLIED_UNRECORDED.items() if k[0] == session]
-    if not mine:
+    m = AMP.applied_mark(f, session)
+    if not m:
         return None
     e = AMP.get(f, session)
-    applied = None
-    for (s_, since), model in mine:
-        if e and e.get("since") == since:
-            AMP.resolve(f, session, since, "switched")
-        applied = model
-        with _APPLIED_UNRECORDED_GUARD:
-            _APPLIED_UNRECORDED.pop((s_, since), None)
-    return applied
+    if e and e.get("since") == m["since"]:
+        AMP.resolve(f, session, m["since"], "switched")
+    AMP.clear_applied(f, session)
+    return m["model"]
+
 
 #: Detector states with no turn that will end: a deferred pick there is closed, never kept waiting.
 _SWITCH_TERMINAL_STATES = {"stopped", "crashed", "offline"}
@@ -5143,14 +5135,13 @@ def _apply_pending_one(f, session, now):
 
     def close(outcome, reason=None):
         AMP.resolve(f, session, since, outcome, reason=reason, now=now)
-        with _APPLIED_UNRECORDED_GUARD:
-            _APPLIED_UNRECORDED.pop((session, since), None)
+        if mark:
+            AMP.clear_applied(f, session)
         return outcome if not reason else f"{outcome}: {reason}"
 
-    with _APPLIED_UNRECORDED_GUARD:
-        done = (session, since) in _APPLIED_UNRECORDED
-    if done:
-        return close("switched")       # already switched by an earlier pass: record it, type nothing
+    mark = AMP.applied_mark(f, session)
+    if mark and mark["since"] == since:
+        return close("switched")       # a gateway already switched it: record it, type nothing
 
     def wait():
         """It keeps waiting, whatever for (a busy agent, an identity that cannot be read): a pick
@@ -5194,8 +5185,7 @@ def _apply_pending_one(f, session, now):
         try:
             return close("switched")
         except AMP.LockBusy:
-            with _APPLIED_UNRECORDED_GUARD:
-                _APPLIED_UNRECORDED[(session, since)] = e.get("model")
+            AMP.mark_applied(f, session, since, e.get("model"))
             raise
     if status == 409:
         return wait()                  # a turn started first: wait for the next idle moment
