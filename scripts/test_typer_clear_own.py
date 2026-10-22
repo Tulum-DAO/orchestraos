@@ -176,3 +176,19 @@ def test_nudge_does_not_call_someone_elses_text_a_submit(monkeypatch, tmp_path):
     assert [k for k in keys if k[-1] == "Enter"] == [("send-keys", "-t", "seat", "Enter")]   # no Enter on it
     import inject_journal as J
     assert [r["session"] for r in J.rows()] == ["seat"]        # evidence kept
+
+
+# ------------------------------------------------------------------ codex R2 on #472
+def test_nudge_presses_no_second_Enter_on_a_menu_row_that_is_a_substring_of_the_nudge(monkeypatch, tmp_path):
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+    nudge = "please pick 1. Yes and continue"
+    keys = _nudge_rig(monkeypatch, ["", "1. Yes"])
+    assert NP._nudge_unlocked("seat", nudge) == 1
+    assert [k for k in keys if k[-1] == "Enter"] == [("send-keys", "-t", "seat", "Enter")]
+
+
+def test_nudge_never_types_onto_existing_text_even_a_substring_of_the_nudge(monkeypatch, tmp_path):
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+    keys = _nudge_rig(monkeypatch, ["continue"])                  # a person's draft: "continue"
+    assert NP._nudge_unlocked("seat", "continue please") == 2
+    assert not [k for k in keys if k[0] == "send-keys"]

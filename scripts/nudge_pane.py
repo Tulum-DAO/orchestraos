@@ -61,7 +61,9 @@ def _nudge_unlocked(session: str, text: str, *, force: bool = False, settle: flo
         print(f"nudge_pane: a client is attached to {session}; refusing (use --force if you own that client)", file=sys.stderr)
         return 2
     before = composer_line(session)
-    if before and before not in text:
+    if before:
+        # ANY text in the composer refuses: typing would append to it. (A substring of our nudge
+        # used to pass, which could be a person's draft or a menu row such as "1. Yes".)
         print(f"nudge_pane: composer of {session} already holds text {before[:60]!r}; refusing", file=sys.stderr)
         return 2
     import inject_journal                        # typed-not-entered row; no row, no typing
@@ -84,8 +86,8 @@ def _nudge_unlocked(session: str, text: str, *, force: bool = False, settle: flo
             inject_journal.clear(session)    # text there (a menu, someone's words) proves nothing
             print(f"nudge_pane: submitted to {session}: {text[:70]!r}")
             return 0
-        if not inject_journal.is_ours(line, text) and line not in text:
-            break                            # not our text any more: never press Enter on it
+        if not inject_journal.is_ours(line, text):
+            break                            # not EXACTLY our text: never press Enter on it
         tmux("send-keys", "-t", session, "Enter")          # bare retry, never re-send text
     # CLEAR-OWN (gm msg_2291dee3): a nudge is machine text its caller re-sends next cycle, so our own
     # unsubmitted nudge is cleared (C-u, verified) instead of left in the composer. Only when the
