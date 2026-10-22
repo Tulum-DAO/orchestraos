@@ -364,3 +364,58 @@ def test_boot_inject_never_types_onto_typed_text(monkeypatch, tmp_path):
     assert BI.boot_inject("pm-x", TB.TEXT, tmux_fn=p, sleep_fn=lambda s: None,
                           log_fn=lambda m: None) == ("stuck", "composer-occupied")
     assert not [c for c in p.calls if c[0] in ("paste-buffer", "set-buffer")]
+
+
+# ------------------------------------------------------------------ R13 follow-up: our prefix, another message's row
+def _router_on(monkeypatch, line, keys):
+    R = _router()
+    monkeypatch.setattr(R, "fence_check", lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(R, "exit_copy_mode", lambda s: None)
+    monkeypatch.setattr(R, "pane_split", lambda s, rt=None: ([], line, True))
+    monkeypatch.setattr(R, "tmux", lambda *a, **k: keys.append(a) or types.SimpleNamespace(
+        returncode=0, stdout=f"{line}\n" if a[0] == "capture-pane" else ""))
+    monkeypatch.setattr(R.time, "sleep", lambda s: None)
+    return R
+
+
+def _half_sent(monkeypatch, tmp_path, text):
+    import inject_journal as J
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+    J.record("pm-x", text, text[:40]); J.mark_typed("pm-x")
+    return J
+
+
+def test_router_presses_nothing_on_our_prefix_while_a_different_message_is_recorded(monkeypatch, tmp_path):
+    """The line starts like our message, but a row marked typed records another one: the line may
+    be that earlier half-sent message. No Enter (it would go out under our name); the row stays."""
+    older = TEXT[:50] + " and an older tail"
+    J = _half_sent(monkeypatch, tmp_path, older)
+    keys = []
+    R = _router_on(monkeypatch, f"❯ {older}", keys)
+    assert R.inject("pm-x", TEXT) == "held"
+    assert not [k for k in keys if k[0] in ("paste-buffer", "send-keys")]
+    assert [r["text"] for r in J.rows()] == [older]
+
+
+def test_router_still_resubmits_its_own_recorded_strand(monkeypatch, tmp_path):
+    _half_sent(monkeypatch, tmp_path, TEXT)                     # control: the row is OUR message
+    keys = []
+    R = _router_on(monkeypatch, f"❯ {TEXT}", keys)
+    R.inject("pm-x", TEXT)
+    assert ("send-keys", "-t", "pm-x", "Enter") in keys
+
+
+def test_boot_inject_presses_nothing_on_our_prefix_while_a_different_message_is_recorded(monkeypatch, tmp_path):
+    import test_boot_inject as TB
+    older = TB.TEXT + " plus an older tail"
+    J = _half_sent(monkeypatch, tmp_path, older)
+    p = TB.Pane(preexisting=older)
+    assert TB.run(p) == ("stuck", "half-sent-row")
+    assert p.pastes == 0 and p.enters == 0
+    assert [r["text"] for r in J.rows()] == [older]
+
+
+def test_boot_inject_still_resubmits_its_own_recorded_strand(monkeypatch, tmp_path):
+    import test_boot_inject as TB
+    _half_sent(monkeypatch, tmp_path, TB.TEXT)                  # control: the row is OUR prompt
+    assert TB.run(TB.Pane(preexisting=TB.TEXT)) == ("submitted", "enter-1")
