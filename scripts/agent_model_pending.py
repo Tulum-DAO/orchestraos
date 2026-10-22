@@ -52,7 +52,26 @@ def _read(path):
     if not isinstance(data, dict) or not isinstance(data.get("pending", {}), dict) \
             or not isinstance(data.get("last", {}), dict):
         raise StateUnreadable(f"{path}: not a pending-switch record")
-    return {"pending": dict(data.get("pending") or {}), "last": dict(data.get("last") or {})}
+    pending, last = dict(data.get("pending") or {}), dict(data.get("last") or {})
+    for session, e in pending.items():
+        if not _valid_pending(e):
+            raise StateUnreadable(f"{path}: pending entry for {session!r} is malformed")
+    for session, e in last.items():
+        if not _valid_last(e):
+            raise StateUnreadable(f"{path}: last entry for {session!r} is malformed")
+    return {"pending": pending, "last": last}
+
+
+def _valid_pending(e):
+    """Every field a pending pick is read by: a malformed one is a damaged record, never data."""
+    return (isinstance(e, dict) and isinstance(e.get("model"), str) and e["model"]
+            and isinstance(e.get("since"), str) and isinstance(e.get("since_ts"), (int, float))
+            and isinstance(e.get("sids"), list) and all(isinstance(x, str) for x in e["sids"]))
+
+
+def _valid_last(e):
+    return (isinstance(e, dict) and isinstance(e.get("model"), str) and isinstance(e.get("at"), str)
+            and e.get("outcome") in ("switched", "failed"))
 
 
 @contextmanager

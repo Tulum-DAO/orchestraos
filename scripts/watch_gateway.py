@@ -5100,6 +5100,9 @@ def _apply_pending_one(f, session, now):
     if set(e.get("sids") or []) != set(sids):
         # EXACTLY the identity recorded when it was asked: an overlap is not enough (a stale pane
         # event next to a rotated seat's new id would match the old one; codex R2 on #475).
+        # Residual, accepted: a rotation that lands between this check and the keystrokes (the
+        # rotation engine is another process; no gateway lock can close it) gives the pick to the
+        # SAME seat's successor, idle by then: the seat the operator asked about, not another agent.
         return close("failed", "the agent moved to a new session before its turn ended")
     st = (_agent_status().get_agent_status(session) or {}).get("state")
     if st not in INJECTABLE_STATES:

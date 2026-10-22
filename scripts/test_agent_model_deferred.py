@@ -303,3 +303,18 @@ def test_an_unreadable_record_is_never_overwritten(seat):
     assert f.read_text() == "{ not json"
     g = _get()
     assert g["pending"] is None and "pending_error" in g
+
+
+@pytest.mark.parametrize("bad", [
+    '{"pending": {"dev": null}, "last": {}}',
+    '{"pending": {"dev": {"model": "x"}}, "last": {}}',
+    '{"pending": {"dev": {"model": "x", "since": "t", "since_ts": 1, "sids": "abc"}}, "last": {}}',
+    '{"pending": {}, "last": {"dev": {"model": "x", "at": "t", "outcome": "maybe"}}}',
+])
+def test_a_malformed_ENTRY_is_a_damaged_record_too(seat, bad):
+    """Valid JSON with a broken entry: refused like a corrupt file, and left as it is (codex R3)."""
+    f = AMP.state_path(G.ORCH_DIR)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(bad)
+    status, _ = _put(SONNET)
+    assert status == 503 and f.read_text() == bad and seat["live"] == []
