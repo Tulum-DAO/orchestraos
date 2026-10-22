@@ -47,6 +47,9 @@ os.environ["PANE_LOCK_DIR"] = os.path.join(_FENCE_ROOT, "pane-locks")
 # the NEXT gateway start reconciles leftover rows by pressing Enter in those panes. A test run must
 # never leave rows where a real gateway reads them. A fresh dir per test process.
 os.environ["WATCH_GATEWAY_INJECT_JOURNAL_DIR"] = os.path.join(_FENCE_ROOT, "inject-journal")
+# Deferred model switches (scripts/agent_model_pending.py): a real gateway applies every pending
+# row by typing into that pane, so a test run never writes where a real gateway reads.
+os.environ["AGENT_MODEL_PENDING_FILE"] = os.path.join(_FENCE_ROOT, "agent-model-pending.json")
 
 _WORKTREE_SCRIPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts")
 sys.path.insert(0, _WORKTREE_SCRIPTS)
