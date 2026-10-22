@@ -368,11 +368,15 @@ def test_last_person_message_is_the_newest_person_send_per_agent(tmp_path):
     assert got == {"gm": A.iso(T0 + 60), "dev": A.iso(T0 + 5)}
 
 
-def test_last_person_message_reads_only_the_tail_and_skips_its_cut_line(tmp_path, monkeypatch):
+def test_last_person_message_finds_an_old_one_and_the_rotated_file(tmp_path):
     (tmp_path / "state").mkdir()
-    monkeypatch.setattr(A, "LAST_SENT_TAIL_BYTES", 300)
-    for i in range(20):
-        A.record_message(tmp_path, f"a{i}", "x" * 20, scan=no_secrets, now=T0 + i, person=True)
+    A.record_message(tmp_path, "old-agent", "long ago", scan=no_secrets, now=T0, person=True)
+    led = tmp_path / "state" / "operator-actions.jsonl"
+    os.replace(led, str(led) + ".1")                                 # rotated away
+    for i in range(500):
+        A.record_message(tmp_path, f"a{i % 7}", "x" * 200, scan=no_secrets, now=T0 + 10 + i, person=True)
     got = A.last_person_message_at(tmp_path)
-    assert "a19" in got and "a0" not in got
+    assert got["old-agent"] == A.iso(T0) and got["a0"] == A.iso(T0 + 10 + 497)
+    A.record_message(tmp_path, "old-agent", "again", scan=no_secrets, now=T0 + 9999, person=True)
+    assert A.last_person_message_at(tmp_path)["old-agent"] == A.iso(T0 + 9999)     # the cache follows a send
     assert A.last_person_message_at(tmp_path / "nowhere") == {}

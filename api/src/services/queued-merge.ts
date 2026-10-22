@@ -237,14 +237,19 @@ export function placeByDelivery(items: any[], pending: any[], batches: any[], li
     if (!Number.isNaN(n)) last = n;
     times.push(last);
   }
+  // Each logged message anchors at most ONE card: two batches sharing an opening must not both
+  // claim the first message that matches.
+  const used = new Set<number>();
   for (const card of live) {
     const anchor = LIVE_ANCHOR.get(card);
-    put(anchor ? items.indexOf(anchor) : -1, card);
+    const at = anchor ? items.indexOf(anchor) : -1;
+    if (at >= 0) used.add(at);
+    put(at, card);
   }
   const byTime = [...batches].sort((x, y) => (Date.parse(String(x.ts)) || 0) - (Date.parse(String(y.ts)) || 0));
   for (const batch of byTime) {
-    const at = items.findIndex((it) => batchCovers(batch, it));
-    if (at >= 0) { put(at, batch); continue; }
+    const at = items.findIndex((it, i) => !used.has(i) && batchCovers(batch, it));
+    if (at >= 0) { used.add(at); put(at, batch); continue; }
     const t = Date.parse(String(batch.ts ?? ''));
     put(Number.isNaN(t) ? -1 : times.findIndex((x) => x > t), batch);
   }

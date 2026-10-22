@@ -64,3 +64,12 @@ test('a batch the log does not show goes between items by its time, moving none 
   const late = placeByDelivery(log, [], [batch('2026-10-22T07:00:00.000Z', 'short', 'msg:late')], []);
   assert.deepEqual(ids(late), ['a', 'b', 'c', 'msg:late']);
 });
+
+test('two batches sharing an opening each take their own logged message', () => {
+  const open = 'a status update from pm-x that opens the same way every single time: ';
+  const log = [user('q1', '2026-01-01T10:00:01.000Z', open + 'first', true), say('a', '2026-01-01T10:00:02.000Z', 'x'),
+               user('q2', '2026-01-01T10:00:03.000Z', open + 'second', true)];
+  const b1 = batch('2026-01-01T10:00:05.000Z', open + 'first', 'msg:b1');
+  const b2 = batch('2026-01-01T10:00:06.000Z', open + 'second', 'msg:b2');
+  assert.deepEqual(ids(placeByDelivery(log, [], [b1, b2], [])), ['msg:b1', 'q1', 'a', 'msg:b2', 'q2']);
+});
