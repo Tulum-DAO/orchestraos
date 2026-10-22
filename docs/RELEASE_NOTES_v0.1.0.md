@@ -166,6 +166,8 @@ To remove them: `orchestra down`, back up `registry.json`, delete those keys fro
 
 **Fixed after this release, on main:** two senders can no longer type into one agent at the same moment. Everything that types a message into an agent's pane (the gateway's message send and suggestion accept, the message router, the nudger, `boot_inject`, the Grok mail nudge and the RED ALERT repairs) now holds one shared lock per pane (`scripts/pane_lock.py`, a file lock under `~/runtime/locks`, `PANE_LOCK_DIR` to move it) for its whole read, type, Enter and check. Before, a router delivery and a phone message in the same second could glue into one prompt or split each other. A sender that cannot get the lock types nothing: the gateway answers `busy`, the router keeps the message pending without using a retry (`held`), the nudger exits 3. Not under the lock yet: the gateway's single key presses (menu answers, `/agent-key`, the model switch's keys, `/agent-interrupt`). The gateway also addresses every pane by its exact session name (`=NAME:`): a bare name also matches a longer one by prefix, so during a blue-green swap a keystroke for `NAME` could land in `NAME-g2`. Added in PR #470.
 
+**Fixed after this release, on main:** the stitched chat also finds a previous generation that ran in another directory than its seat's, whose record names no conversation file: its own file is looked for under any `~/.claude/projects` directory, with the same own-file check (#NNN).
+
 ## CI note for this release
 
 GitHub Actions was refused on billing from 2026-09-19 09:52Z; PRs #38–#40 merged on bare-box + CI-identical local evidence (council PASS at `c6b278c`; local run rc 0).
