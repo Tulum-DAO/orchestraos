@@ -96,12 +96,22 @@ export class TranscriptTailer {
       lines, this.agentId, sid, TAIL_ITEM_CAP, path.includes('antigravity-cli'));
 
     const truncated = !rotated && env.items.length < prevCount;
+    // Codex reports a response's tokens after its items: `usage` can land on an item a delta
+    // already carried. Deltas only append, so a usage change on a sent item is re-sent as a
+    // snapshot (only the last few sent items can gain one).
+    let restated = false;
+    // Only while nothing was cut from the front (below the cap): then the same index is the same item.
+    if (!rotated && !truncated && path === this.path && env.items.length < TAIL_ITEM_CAP) {
+      for (let i = prevCount - 1; i >= Math.max(0, prevCount - 20); i--) {
+        if (JSON.stringify(this.items[i]?.usage) !== JSON.stringify(env.items[i]?.usage)) { restated = true; break; }
+      }
+    }
     this.sid = sid;
     this.path = path;
     this.fileSize = size;
     this.items = env.items;
 
-    if (rotated || truncated) return { rotated: true, grewFrom: null };
+    if (rotated || truncated || restated) return { rotated: true, grewFrom: null };
     if (env.items.length > prevCount) return { rotated: false, grewFrom: prevCount };
     return { rotated: false, grewFrom: null };
   }

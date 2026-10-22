@@ -113,3 +113,26 @@ test('a 5-line Claude reply contributes its usage exactly once (gm)', () => {
   assert.equal(items.filter((i: any) => i.usage).length, 1);
   assert.equal(items.reduce((s: number, i: any) => s + (i.usage?.output_tokens || 0), 0), U1.output_tokens);
 });
+
+test('a Codex call that drew nothing carries its tokens to the next agent item (the sum stays the total)', () => {
+  const reasoning = (o: number) => rec(o, 'response_item', { type: 'reasoning', summary: [], encrypted_content: 'x' });
+  const items = parseCodexRollout([
+    say(1, 'one'), count(2, { input_tokens: 100, cached_input_tokens: 40, output_tokens: 5 }, 105),
+    reasoning(3), count(4, { input_tokens: 120, cached_input_tokens: 100, output_tokens: 30 }, 255),   // drew nothing
+    say(5, 'two'), count(6, { input_tokens: 200, cached_input_tokens: 150, output_tokens: 9 }, 464),
+  ]);
+  assert.deepEqual(items.map((i: any) => i.usage), [
+    { input_tokens: 100, output_tokens: 5, cache_read_input_tokens: 40 },
+    { input_tokens: 320, output_tokens: 39, cache_read_input_tokens: 250 },
+  ]);
+});
+
+test('a Claude reply that drew nothing carries its tokens to the next reply\'s first item', () => {
+  const lines = [entry('user', 'go'),
+    ...reply('msg_empty', U2, [{ type: 'text', text: '' }]),
+    ...reply('msg_next', U1, [{ type: 'text', text: 'shown' }])];
+  const { items } = normalizeTranscript(lines, 'gm', 's', 150) as any;
+  const u = items.find((i: any) => i.usage).usage;
+  assert.equal(u.output_tokens, U1.output_tokens + U2.output_tokens);
+  assert.equal(u.cache_read_input_tokens, U1.cache_read_input_tokens + U2.cache_read_input_tokens);
+});

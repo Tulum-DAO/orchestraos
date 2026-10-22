@@ -19,7 +19,7 @@ import { homedir } from 'os';
 import Database from 'better-sqlite3';
 import { agentScopeParam } from '../lib/agent-scope.js';
 import { expandChipDodge } from '../lib/chipDodge.js';
-import { usageFromClaude, usageFromCodex } from '../lib/tokenUsage.js';
+import { usageFromClaude, usageFromCodex, addUsage, type TokenUsage } from '../lib/tokenUsage.js';
 import { sessionOwners } from '../services/identity-store-reader.js';
 import { dataDir } from '../lib/config.js';
 import { paneInfo, forgetPane, childPids, procArgv, liveGeminiSid } from '../lib/paneProbe.js';
@@ -329,8 +329,9 @@ export function parseCodexRollout(lines: string[]): any[] {
   let codexModel: string | undefined;
   // token_count (event_msg) follows each model response: its last_token_usage goes on that
   // response's last agent item. A repeat with the same running total (Codex re-sends it with rate
-  // limits) is not counted again, and one with no new agent item since the last is dropped.
-  let usedFrom = 0, lastTotal: number | undefined;
+  // limits) is not counted again. A call that drew nothing (encrypted reasoning only) carries its
+  // tokens to the next agent item, so a sum over items stays the true total.
+  let usedFrom = 0, lastTotal: number | undefined, carried: TokenUsage | undefined;
   for (const r of recs) {
     if (r.type === 'event_msg' && r.payload?.type === 'token_count') {
       const info = r.payload.info;
@@ -340,7 +341,8 @@ export function parseCodexRollout(lines: string[]): any[] {
       if (typeof total === 'number') lastTotal = total;
       let at = -1;
       for (let i = items.length - 1; i >= usedFrom; i--) if (items[i].role === 'assistant') { at = i; break; }
-      if (at >= 0) items[at].usage = usage;
+      if (at >= 0) { items[at].usage = addUsage(carried, usage); carried = undefined; }
+      else carried = addUsage(carried, usage);
       usedFrom = items.length;
       continue;
     }
@@ -1312,6 +1314,8 @@ export function normalizeTranscript(
     // reply's usage: it goes ONCE per reply (message.id), on the reply's first drawn item. First,
     // not last: the SSE tailer only appends, and an item already sent never moves its usage.
     const counted = new Set<string>();
+    // A reply none of whose lines drew anything carries its tokens to the next reply's first item.
+    let waiting: { id: string; usage: TokenUsage } | undefined, carried: TokenUsage | undefined;
     for (const line of lines) {
       if (!line.trim()) continue;
       try {
@@ -1320,9 +1324,14 @@ export function normalizeTranscript(
         const msg = o?.message;
         const id = o?.type === 'assistant' && typeof msg?.id === 'string' ? msg.id : '';
         const first = got.find((it) => it.role === 'assistant');
-        if (id && first && !counted.has(id)) {
+        if (id && !counted.has(id)) {
           const usage = usageFromClaude(msg.usage);
-          if (usage) { first.usage = usage; counted.add(id); }
+          if (usage && waiting && waiting.id !== id) { carried = addUsage(carried, waiting.usage); waiting = undefined; }
+          if (usage && first) {
+            first.usage = addUsage(carried, usage);
+            carried = waiting = undefined;
+            counted.add(id);
+          } else if (usage) waiting = { id, usage };
         }
         items.push(...got);
       } catch { /* skip bad line */ }

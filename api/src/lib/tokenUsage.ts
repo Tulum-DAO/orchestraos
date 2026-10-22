@@ -33,3 +33,13 @@ export function usageFromCodex(u: any): TokenUsage | undefined {
   if (created !== undefined) out.cache_creation_input_tokens = created;
   return out;
 }
+
+/** a + b, key by key (a key present on either side is present in the sum). */
+export function addUsage(a: TokenUsage | undefined, b: TokenUsage): TokenUsage {
+  if (!a) return b;
+  const out: TokenUsage = { input_tokens: a.input_tokens + b.input_tokens, output_tokens: a.output_tokens + b.output_tokens };
+  for (const k of ['cache_read_input_tokens', 'cache_creation_input_tokens'] as const) {
+    if (a[k] !== undefined || b[k] !== undefined) out[k] = (a[k] ?? 0) + (b[k] ?? 0);
+  }
+  return out;
+}
