@@ -5107,6 +5107,12 @@ def _apply_pending_one(f, session, now):
         return None
     if session not in _tmux_session_names():
         return close("failed", "the agent is no longer running")
+    st = (_agent_status().get_agent_status(session) or {}).get("state")
+    if st in _SWITCH_TERMINAL_STATES:
+        # Not a turn that will end: the CLI is gone from the pane. Its next start is a new session
+        # on the seat's stored model; the pick is closed with the reason (codex R8 on #475). Before
+        # the identity check: closing types nothing, and a gone CLI may leave no identity (R9).
+        return close("failed", f"the agent {st} before its turn ended")
     root, meta, runtime, current = _seat_for_session(session)
     sids = _seat_session_ids(session, meta)
     if not sids:
@@ -5118,11 +5124,6 @@ def _apply_pending_one(f, session, now):
         # rotation engine is another process; no gateway lock can close it) gives the pick to the
         # SAME seat's successor, idle by then: the seat the operator asked about, not another agent.
         return close("failed", "the agent moved to a new session before its turn ended")
-    st = (_agent_status().get_agent_status(session) or {}).get("state")
-    if st in _SWITCH_TERMINAL_STATES:
-        # Not a turn that will end: the CLI is gone from the pane. Its next start is a new session
-        # on the seat's stored model; the pick is closed with the reason (codex R8 on #475).
-        return close("failed", f"the agent {st} before its turn ended")
     if st not in INJECTABLE_STATES:
         return wait()
     if e.get("model") == current:

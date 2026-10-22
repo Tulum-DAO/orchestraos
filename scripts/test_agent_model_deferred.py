@@ -362,3 +362,10 @@ def test_an_agent_whose_cli_is_gone_closes_the_pick_with_the_reason(seat, state)
     seat["det"].state = state
     assert G._apply_pending_model_switches() == [("dev", f"failed: the agent {state} before its turn ended")]
     assert seat["live"] == [] and _get()["pending"] is None
+
+
+def test_a_gone_cli_with_no_readable_identity_is_still_closed(seat, monkeypatch):
+    _put(SONNET)
+    seat["det"].state = "crashed"
+    monkeypatch.setattr(G, "_seat_session_ids", lambda s, meta=None: [])
+    assert G._apply_pending_model_switches() == [("dev", "failed: the agent crashed before its turn ended")]
