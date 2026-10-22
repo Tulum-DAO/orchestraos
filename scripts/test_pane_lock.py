@@ -193,15 +193,17 @@ def test_msg_store_defer_reopens_only_a_claimed_row(tmp_path):
     import msg_store
     db = str(tmp_path / "bus.db")
     c = sqlite3.connect(db)
-    c.execute("CREATE TABLE messages (id TEXT PRIMARY KEY, status TEXT, attempted_at TEXT, error TEXT)")
-    c.execute("INSERT INTO messages VALUES ('m1', 'pending', NULL, NULL)")
+    c.execute("CREATE TABLE messages (id TEXT PRIMARY KEY, status TEXT, attempted_at TEXT, error TEXT, "
+              "retry_count INTEGER DEFAULT 0, max_retries INTEGER DEFAULT 5)")
+    c.execute("INSERT INTO messages (id, status, retry_count, max_retries) VALUES ('m1', 'pending', 2, 5)")
     c.commit(); c.close()
     s = msg_store.MessageStore(db_path=db)
     assert s.defer("m1") is False                       # pending: nothing to release
     assert s.claim("m1") is True
     assert s.defer("m1", error="held") is True
-    row = sqlite3.connect(db).execute("SELECT status, attempted_at, error FROM messages").fetchone()
-    assert row == ("pending", None, "held")             # back in the queue, retry budget untouched
+    row = sqlite3.connect(db).execute(
+        "SELECT status, attempted_at, error, retry_count, max_retries FROM messages").fetchone()
+    assert row == ("pending", None, "held", 2, 5)       # back in the queue, retry budget untouched
     assert s.claim("m1") is True
 
 
