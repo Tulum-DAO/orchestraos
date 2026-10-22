@@ -53,6 +53,7 @@ const isOpener = (it: any) => it?.kind === 'text' && it.role === 'user';
 export function tagAudience(items: any[]): any[] {
   let i = 0;
   let exchange: string | undefined;
+  let personTurn = false;
   // Items before the first opener belong to no turn: the strip.
   while (i < items.length && !isOpener(items[i])) {
     items[i].audience = 'agent';
@@ -61,6 +62,7 @@ export function tagAudience(items: any[]): any[] {
   while (i < items.length) {
     const opener = items[i];
     const kind = openerKind(opener);
+    if (kind === 'person') personTurn = true;
     if (kind === 'person' && opener.uuid) exchange = String(opener.uuid);
     let end = i + 1;
     while (end < items.length && !isOpener(items[end])) end++;
@@ -84,7 +86,7 @@ export function tagAudience(items: any[]): any[] {
   // No turn the operator opened anywhere in this log (only mail, hooks, the spawn brief): the
   // newest reply is still drawn, never folded (Shaw, iOS 334: "if there are no recorded turns,
   // display the most recent message"). One rule, server-side, so every client draws the same.
-  if (!exchange) {
+  if (!personTurn) {
     for (let k = items.length - 1; k >= 0; k--) {
       if (items[k]?.kind === 'text' && items[k].role === 'assistant') { items[k].audience = 'user'; break; }
     }

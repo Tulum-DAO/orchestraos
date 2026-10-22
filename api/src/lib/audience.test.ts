@@ -119,3 +119,10 @@ test('a log WITH an operator turn keeps the fold: a later reply to mail stays fo
   tagAudience(xs);
   assert.deepEqual(xs.map((x) => x.audience), ['user', 'user', 'agent', 'agent']);
 });
+
+test('an operator turn whose message has no uuid still counts: the no-turn rule never fires', () => {
+  const m = { kind: 'text', role: 'user', text: 'fix the card' };              // no uuid on his message
+  const xs: any[] = [m, a('done'), u('[MSG from gm | low] fyi'), a('noted')];
+  tagAudience(xs);
+  assert.deepEqual(xs.map((x) => x.audience), ['user', 'user', 'agent', 'agent']);
+});
