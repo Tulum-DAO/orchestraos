@@ -139,3 +139,27 @@ def test_the_model_switcher_never_types_into_a_working_agent(monkeypatch):
 def test_the_agent_model_handler_sends_idle_only():
     src = (Path(__file__).resolve().parent / "watch_gateway.py").read_text()
     assert "send=lambda text: verified_inject(session, text, False, idle_only=True)" in src
+
+
+# ─────────────────────────────── codex R2 on #471
+def test_a_fresh_menu_under_an_old_prompt_line_in_scrollback_is_still_refused(monkeypatch):
+    menu = "❯ an earlier request, already sent\n  ⎿ reply\nDo you want to proceed?\n❯ 1. Yes\n  2. No\n"
+    assert not G._pane_has_composer(menu)
+    for force in (False, True):
+        calls = _env(monkeypatch, "idle", [menu])
+        ok, info = G.verified_inject("tgt", "hello", force)
+        assert not ok and info["reason"] == "busy", (force, info)
+        assert not _typed(calls)
+
+
+def test_a_normal_composer_under_old_prompt_lines_still_accepts():
+    assert G._pane_has_composer("❯ 1. an old numbered message\n  ⎿ ok\n──────\n❯ \n──────\n")
+
+
+def test_quoted_esc_to_interrupt_in_old_output_does_not_block_an_idle_model_switch(monkeypatch):
+    screen = ("  the docs say: press esc to interrupt a turn\n  ⎿ done\n" + "x\n" * 8
+              + "──────\n❯ \n──────\n")
+    calls = _env(monkeypatch, "idle", [screen, "──────\n❯ \n──────\n"])
+    ok, info = G.verified_inject("tgt", "/model claude-sonnet-5-5", False, idle_only=True)
+    assert ok, info
+    assert _typed(calls)

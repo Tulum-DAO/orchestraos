@@ -2324,9 +2324,9 @@ STALLED_STATES = {"stalled"}
 def _pane_shows_active_turn(pane_text: str) -> bool:
     """True if the VISIBLE screen shows a live turn (spinner glyph + esc hint).
 
-    GLYPH-ANCHORED (audit F1): a quoted "esc to interrupt" in agent OUTPUT must not read as a
-    live turn forever. Extracted from verified_inject's inline guard so the submit verification
-    can ask the same question of the PRE-inject screen — see the trap documented there.
+    A spinner glyph with the esc hint (audit F1), plus a bare "esc to interrupt"/"esc to cancel"
+    anywhere: that fallback can read QUOTED output as a turn, which only ever makes the submit
+    witness stricter. Anything that must not refuse on quoted output reads _turn_above_composer.
     """
     for ln in (pane_text or "").splitlines():
         if ln.strip()[:1] in "✻✽✶✳✢✺✹✸✷⚹·*+⣾⣽⣻⢿⡿⣟⣯⣷●▸" and (
@@ -2344,8 +2344,22 @@ def _pane_has_composer(pane_text: str) -> bool:
     This is the positive half of the new gate. A menu/permission prompt REPLACES the composer,
     and a dead pane has none, so the same check covers both refusals without asking what the
     agent is busy doing."""
-    return any(_is_prompt_line(ln) and not _MENU_ROW_RE.match(ln)
-               for ln in (pane_text or "").splitlines())
+    # Only the BOTTOM-MOST prompt line can be the live composer (submitted messages in scrollback
+    # also start with a prompt glyph); when that line is a selected menu row, there is none.
+    prompts = [ln for ln in (pane_text or "").splitlines() if _is_prompt_line(ln)]
+    return bool(prompts) and not _MENU_ROW_RE.match(prompts[-1])
+
+
+def _turn_above_composer(pane_text: str) -> bool:
+    """A live turn drawn right above the input box (where the CLI draws its spinner), not anywhere
+    on screen: agent OUTPUT higher up that merely quotes "esc to interrupt" must not make an idle
+    agent look busy. For idle_only; the submit witness keeps the whole-screen read, where a false
+    'already running' can only make it stricter."""
+    rows = (pane_text or "").splitlines()
+    idx = [i for i, ln in enumerate(rows) if _is_prompt_line(ln)]
+    if not idx:
+        return _pane_shows_active_turn(pane_text)
+    return _pane_shows_active_turn("\n".join(rows[max(0, idx[-1] - 6):idx[-1]]))
 
 
 def _bottom_composer_rows(pane_text: str) -> str:
@@ -2703,7 +2717,7 @@ def _verified_inject_locked(session, text, force=False, idle_only=False):
     # A LIVE TURN IS NO LONGER A REFUSAL (see MID_TURN_STATES): it is MEASURED here, because the
     # submit verification below needs to know whether the turn predates our Enter.
     turn_already_running = _pane_shows_active_turn(pre)
-    if idle_only and turn_already_running:      # the detector said idle; the screen says otherwise
+    if idle_only and _turn_above_composer(pre):   # the detector said idle; the screen says otherwise
         return False, {"reason": "busy", "state": "working",
                        "activity": "A turn is running; this needs an idle agent"}
     # THE POSITIVE GATE: no composer on screen = nothing accepts input. This refuses a
