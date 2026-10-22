@@ -358,7 +358,50 @@ def _restore(settings_path: Path, before) -> tuple[bool, str | None]:
         return False, repr(e)
 
 
+# Claude Code 2.1.284, a seat WITH history (measured 2026-10-22 on a scratch seat): `/model <id>`
+# does not switch at once. It asks first, then saves and prints "Set model to ..." on "1":
+#   This conversation is cached for the current model. Switching to Sonnet 5.5 means the full
+#   history gets re-read on your next message.
+#   ❯ 1. Yes, switch to Sonnet 5.5
+#     2. No, go back
+_DIALOG_YES = re.compile(r"^\s*(?:[❯›>]\s*)?1\.\s+Yes, switch to\s+(.+?)\s*$", re.M)
+_DIALOG_NO = re.compile(r"^\s*(?:[❯›>]\s*)?2\.\s+No, go back\s*$", re.M)
+
+
+def switch_dialog(screen: str) -> str | None:
+    """The model a "Switching to X ... 1. Yes, switch to X / 2. No, go back" dialog on screen
+    offers, else None."""
+    yes = _DIALOG_YES.search(screen or "")
+    return yes.group(1) if yes and _DIALOG_NO.search(screen or "") else None
+
+
+def _wait_answer(path0, since, offset, model, title, capture, keys, timeout_s, sleep,
+                 clock=time.monotonic):
+    """Wait for the CLI's answer to `/model`, answering its confirm dialog on the way: "1" when it
+    offers the requested model, "2" (No, go back) when it offers anything else.
+    Returns (result, note): result as scan_switch_result; note "other_dialog:<name>" when a
+    dialog for another model was declined."""
+    deadline, answered = clock() + timeout_s, False
+    while True:
+        res = scan_switch_result(path0, since, offset)
+        if res is not None:
+            return res, None
+        if capture is not None and keys is not None and not answered:
+            offered = switch_dialog(capture() or "")
+            if offered is not None:
+                answered = True
+                if display_matches(offered, model, title):
+                    keys("1")
+                else:
+                    keys("2")
+                    return None, f"other_dialog:{offered}"
+        if clock() >= deadline:
+            return None, None
+        sleep(0.25)
+
+
 def switch_live(*, model: str, settings_path: Path, send, find_jsonl, title: str | None = None,
+                capture=None, keys=None,
                 timeout_s: float = 10.0, settle_s: float = 3.0, recheck_s: float = 5.0,
                 sleep=time.sleep, now=utc_iso_now):
     """Type `/model <model>` with `send(text) -> (ok, info)` under the host lock, wait for the
@@ -367,6 +410,11 @@ def switch_live(*, model: str, settings_path: Path, send, find_jsonl, title: str
     Crash safety: the snapshot is journaled beside the settings file before anything is typed,
     and the next switch (under the same lock) restores a journal it finds. A save that lands
     late is caught by a second look `recheck_s` after the restore.
+
+    With `capture()` (the pane's text) and `keys(k)` (one literal key), the confirm dialog a seat
+    with history shows is answered INSIDE the lock ("1" for the requested model, else "2"), so the
+    CLI's save lands before the restore; and a dialog still on screen when the switch ends is
+    answered "2" (No, go back): a pane is never left sitting in it.
 
     Returns (status, body): 200 switched, 409 busy, 502 unconfirmable / unsent / failed /
     unconfirmed / refused / a different model confirmed, 500 when the host setting could not be put back (the body says
@@ -389,7 +437,7 @@ def switch_live(*, model: str, settings_path: Path, send, find_jsonl, title: str
                          "detail": "this agent's transcript was not found, so a switch could not "
                                    "be confirmed; nothing was typed"}
         _write_journal(settings_path, before)
-        res, sent = None, False
+        res, sent, note = None, False, None
         try:
             since = now()
             ok, info = send(f"/model {model}")
@@ -401,15 +449,25 @@ def switch_live(*, model: str, settings_path: Path, send, find_jsonl, title: str
                 else:
                     result = (502, {"ok": False, "error": "not sent", "detail": info})
             else:
-                res = wait_for_switch(lambda: path0, since, offset, timeout_s=timeout_s, sleep=sleep)
+                res, note = _wait_answer(path0, since, offset, model, title, capture, keys,
+                                         timeout_s, sleep)
+                if note:
+                    result = (502, {"ok": False, "error": "the agent offered a different model",
+                                    "detail": note.split(":", 1)[1]})
                 # The CLI writes the setting before it prints, unless its own save timed out
                 # (then the write may still land): give a late write time to land first.
                 sleep(settle_s)
-                result = None
+                if not note:
+                    result = None
         except Exception as e:  # noqa: BLE001 — answered, never raised past the restore
             result = (502, {"ok": False, "error": "switch failed", "detail": repr(e)[:300],
                             "sent": sent})
         finally:
+            if sent and capture is not None and keys is not None:
+                with contextlib.suppress(Exception):    # never leave the pane in the dialog
+                    if switch_dialog(capture() or "") is not None:
+                        keys("2")
+                        sleep(0.5)
             restored, err = _restore(settings_path, before)
             if restored and sent:
                 with contextlib.suppress(Exception):    # a save later than the settle

@@ -487,3 +487,81 @@ def test_a_failed_switch_names_the_models(gw, monkeypatch):
     monkeypatch.setattr(AM, "switch_live", lambda **kw: (502, {"ok": False, "error": "unconfirmed"}))
     r = _run(G.handle_agent_model(_Req("PUT", {"session": "dev", "model": "claude-sonnet-5-5"}, actor="app:ios")))
     assert r.status == 502 and _body(r)["model"] == "claude-sonnet-5-5" and _body(r)["current"] == "claude-opus-5-5"
+
+
+# --- the confirm dialog (Claude Code 2.1.284, a seat with history; measured 2026-10-22) --------
+
+DIALOG = """  Your next response will be slower and use more tokens
+  This conversation is cached for the current model. Switching to {name} means the full history gets re-read on your next message.
+  ❯ 1. Yes, switch to {name}
+    2. No, go back
+"""
+
+
+class DialogClaude(FakeClaude):
+    """A seat with history: `/model` opens the dialog; "1" saves and prints, "2" goes back."""
+
+    def __init__(self, *a, offer="Opus 5.5", lose_keys=False, **k):
+        super().__init__(*a, **k)
+        self.offer, self.lose_keys, self.screen, self.keyed = offer, lose_keys, "❯ \n", []
+
+    def send(self, text):
+        self.sent.append(text)
+        self._pending = text.split(" ", 1)[1]
+        self.screen = DIALOG.format(name=self.offer)
+        return True, {}
+
+    def keys(self, k):
+        self.keyed.append(k)
+        if self.lose_keys and k == "1":
+            return
+        if k == "1" and "Yes, switch to" in self.screen:
+            self._save(self._pending)
+            with open(self.jsonl, "a") as f:
+                f.write(json.dumps({"type": "user", "timestamp": "2099-01-01T00:00:00.000Z", "message": {
+                    "content": f"<local-command-stdout>Set model to `{self.offer}` and saved as your default for new sessions</local-command-stdout>"}}) + "\n")
+        self.screen = "❯ \n"
+
+    def capture(self):
+        return self.screen
+
+
+def _dialog_setup(tmp_path, **kw):
+    s = _settings(tmp_path, {"model": "opus", "hooks": {}})
+    j = tmp_path / "t.jsonl"
+    j.write_text("")
+    return DialogClaude(s, j, **kw)
+
+
+def _dialog_run(c):
+    return AM.switch_live(model="claude-opus-5-5", settings_path=c.settings, send=c.send, find_jsonl=lambda: c.jsonl,
+                          capture=c.capture, keys=c.keys, timeout_s=0.05, sleep=lambda _s: None,
+                          now=lambda: "2026-10-22T00:00:00.000Z")
+
+
+def test_the_confirm_dialog_is_answered_yes_for_the_model_asked_and_the_default_still_comes_back(tmp_path):
+    c = _dialog_setup(tmp_path)
+    status, body = _dialog_run(c)
+    assert status == 200 and body["display"] == "Opus 5.5"
+    assert c.keyed == ["1"] and "Yes, switch" not in c.screen
+    assert json.loads(c.settings.read_text())["model"] == "opus"        # the save came inside the lock
+
+
+def test_a_dialog_offering_another_model_is_answered_no(tmp_path):
+    c = _dialog_setup(tmp_path, offer="Fable 5.1")
+    status, body = _dialog_run(c)
+    assert status == 502 and body == {"ok": False, "error": "the agent offered a different model", "detail": "Fable 5.1"}
+    assert c.keyed == ["2"] and json.loads(c.settings.read_text())["model"] == "opus"
+
+
+def test_a_dialog_still_open_at_the_end_is_answered_no_never_left(tmp_path):
+    c = _dialog_setup(tmp_path, lose_keys=True)                          # the "1" never lands
+    status, body = _dialog_run(c)
+    assert status == 502 and body["error"] == "unconfirmed"
+    assert c.keyed == ["1", "2"] and "Yes, switch" not in c.screen
+
+
+def test_the_real_dialog_text_parses():
+    assert AM.switch_dialog(DIALOG.format(name="Sonnet 5.5")) == "Sonnet 5.5"
+    assert AM.switch_dialog("❯ 1. Yes, switch to X\n") is None                 # half a dialog is not one
+    assert AM.switch_dialog("❯ ") is None
