@@ -4350,18 +4350,6 @@ async def handle_agent_message(request):
                  status=200 if ok else 502)
 
 
-def _is_person_surface(request):
-    """A paired device's own token, or a caller that says it is a person's surface (X-Actor
-    operator|interactive|app). The bare fleet token alone, or an automation actor, is not:
-    agents and automation hold that token."""
-    cls, _name = _parse_actor(request)
-    _ran, principal = _resolved_principal(request)
-    is_device = bool(principal) and principal.get("id") not in (None, "legacy")
-    if cls == "automation":
-        return False
-    return is_device or cls in ("operator", "interactive", "app")
-
-
 async def _record_operator_message(request, session, text):
     """The away card's message anchor (gm msg_71cd9caa): one ledger row per DELIVERED or HELD send, never a
     refused one. Off the event loop (file write, rotation, secret scan). Best effort: a ledger that cannot be
