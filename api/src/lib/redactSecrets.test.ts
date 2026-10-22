@@ -15,6 +15,8 @@ const SHAPES: [string, string][] = [
   ['Slack token', 'xox' + 'b-' + fill(20, '1')],
   ['AWS key', 'AKIA' + fill(16, 'Q')],
   ['Google key', 'AIza' + fill(35, 'd')],
+  ['Google OAuth secret', 'GOCSPX-' + fill(28, 'o')],
+  ['Google OAuth token', 'ya29.' + fill(40, 'p')],
   ['JWT', 'eyJ' + fill(20, 'e') + '.' + fill(20, 'f') + '.' + fill(20, 'g')],
 ];
 

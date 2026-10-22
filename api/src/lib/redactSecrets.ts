@@ -26,6 +26,8 @@ const RULES: Rule[] = [
   { kind: 'Slack token', re: /\bxox[abprs]-[A-Za-z0-9-]{10,}/g },
   { kind: 'AWS key', re: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g },
   { kind: 'Google key', re: /\bAIza[A-Za-z0-9_-]{35}\b/g },
+  { kind: 'Google OAuth secret', re: /\bGOCSPX-[A-Za-z0-9_-]{20,}/g },
+  { kind: 'Google OAuth token', re: /\bya29\.[A-Za-z0-9_-]{20,}/g },
   { kind: 'JWT', re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g },
   // "Authorization: Bearer <token>" and the like: keep the word, drop the token.
   { kind: 'bearer token', re: /\b(Bearer)\s+[A-Za-z0-9._~+/=-]{16,}/gi, keep: (m) => `${m[1]} ` },
