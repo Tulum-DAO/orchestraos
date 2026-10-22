@@ -217,7 +217,10 @@ def test_boot_inject_keeps_the_row_when_the_paste_may_have_landed_unseen(monkeyp
     import boot_inject as BI
     import inject_journal as J
     monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
-    monkeypatch.setattr(BI, "_boot_inject_unlocked", lambda *a, **k: ("failed", "no-receipt"))
+    def no_receipt(s, t, rt=None, journal=None, **k):
+        J.record(s, t, t[:40]); journal.append(True)
+        return "failed", "no-receipt"
+    monkeypatch.setattr(BI, "_boot_inject_unlocked", no_receipt)
     BI.boot_inject("pm-x", "hello")
     assert [r["session"] for r in J.rows()] == ["pm-x"]
 
@@ -232,8 +235,11 @@ def test_router_journals_before_it_pastes_and_clears_on_every_outcome_but_stuck(
     seen = []
     for res in ("submitted", "failed", "held", "stuck"):
         J.clear("pm-x")
-        monkeypatch.setattr(R, "_inject_unlocked",
-                            lambda *a, res=res, **k: seen.append([r["session"] for r in J.rows()]) or res)
+        def typed(s, t, rt=None, journal=None, res=res):
+            J.record(s, t, t[:40]); journal.append(True)       # as the real one does, before pasting
+            seen.append([r["session"] for r in J.rows()])
+            return res
+        monkeypatch.setattr(R, "_inject_unlocked", typed)
         assert R.inject("pm-x", TEXT) == res
         # kept on 'stuck' (our text is there) and 'failed' (a paste may have landed unseen)
         assert ([r["session"] for r in J.rows()] == ["pm-x"]) is (res in ("stuck", "failed")), res
@@ -243,9 +249,35 @@ def test_router_journals_before_it_pastes_and_clears_on_every_outcome_but_stuck(
 def test_router_pastes_nothing_when_the_journal_cannot_be_written(monkeypatch):
     import inject_journal as J
     R = _router()
+    keys = []
     monkeypatch.setattr(J, "record", lambda *a, **k: (_ for _ in ()).throw(OSError("ro")))
-    monkeypatch.setattr(R, "_inject_unlocked", lambda *a, **k: pytest.fail("pasted without a row"))
+    monkeypatch.setattr(R, "fence_check", lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(R, "exit_copy_mode", lambda s: None)
+    monkeypatch.setattr(R, "pane_split", lambda s, rt=None: ([], "❯ ", True))
+    monkeypatch.setattr(R, "tmux", lambda *a, **k: keys.append(a) or types.SimpleNamespace(returncode=0, stdout=""))
     assert R.inject("pm-x", TEXT) == "held"
+    assert not [k for k in keys if k[0] in ("paste-buffer", "set-buffer", "send-keys")]
+
+
+def test_a_refusal_before_typing_never_touches_a_leftover_row(monkeypatch, tmp_path):
+    """codex R11 on #472: a crash left a typed row whose text a guard now finds in the composer.
+    The new attempt refuses before typing and must leave that row (the evidence) alone."""
+    import inject_journal as J
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+    J.record("pm-x", "the half-sent one", "the half-sent one"); J.mark_typed("pm-x")
+    R = _router()
+    monkeypatch.setattr(R, "fence_check", lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(R, "exit_copy_mode", lambda s: None)
+    monkeypatch.setattr(R, "tmux", lambda *a, **k: types.SimpleNamespace(
+        returncode=0, stdout="◦ Working (3s • esc to interrupt)\n› \n" if a[0] == "capture-pane" else ""))
+    assert R.inject("pm-x", TEXT, "codex") == "held"           # refused before typing
+    assert [(r["text"], r.get("typed")) for r in J.rows()] == [("the half-sent one", True)]
+    import boot_inject as BI
+    import test_boot_inject as TB
+    p = TB.Pane(chip=True, preexisting="[Pasted text #1 +3 lines]")
+    assert BI.boot_inject("pm-x", "hello", tmux_fn=p, sleep_fn=lambda s: None,
+                          log_fn=lambda m: None)[1] == "stranded-chip"
+    assert [(r["text"], r.get("typed")) for r in J.rows()] == [("the half-sent one", True)]
 
 
 def test_boot_inject_marks_its_row_typed_once_the_paste_is_confirmed(monkeypatch, tmp_path):

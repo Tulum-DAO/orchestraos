@@ -146,12 +146,12 @@ def boot_inject(session, text, runtime=DEFAULT_RUNTIME, **kw):
     import inject_journal
     try:
         with pane_lock.pane_lock(session, wait_s=8.0):
-            try:   # typed-not-entered row: no row, no typing
-                inject_journal.record(session, text, text[:40])
-            except OSError:
-                return "failed", "journal-unwritable"
-            outcome = _boot_inject_unlocked(session, text, runtime, **kw)
-            if outcome[0] == "submitted" or outcome[1] in _NOTHING_TYPED:
+            # The row is written inside _boot_inject_unlocked once every guard has passed, right
+            # before it types (an earlier row would overwrite a crash's leftover evidence). Only a
+            # row THIS call wrote is ever cleared here.
+            rec = []
+            outcome = _boot_inject_unlocked(session, text, runtime, journal=rec, **kw)
+            if rec and (outcome[0] == "submitted" or outcome[1] in _NOTHING_TYPED):
                 inject_journal.clear(session)     # submitted, or nothing of ours was typed
             return outcome
     except pane_lock.PaneBusy:
@@ -159,7 +159,8 @@ def boot_inject(session, text, runtime=DEFAULT_RUNTIME, **kw):
 
 
 def _boot_inject_unlocked(session, text, runtime=DEFAULT_RUNTIME, *, allow_canonical=False,
-                tmux_fn=_real_tmux, sleep_fn=time.sleep, log_fn=None, canonical_live_fn=None):
+                tmux_fn=_real_tmux, sleep_fn=time.sleep, log_fn=None, canonical_live_fn=None,
+                journal=None):
     """Type `text` into `session` and verify by effect. Returns (outcome, stage):
     outcome in {'submitted', 'stuck', 'failed'}; stage names where it ended."""
     log = log_fn or (lambda m: print(f"[boot_inject] {session}: {m}", file=sys.stderr, flush=True))
@@ -216,6 +217,15 @@ def _boot_inject_unlocked(session, text, runtime=DEFAULT_RUNTIME, *, allow_canon
     if ok0 and composer_has_stranded_chip(line0):
         log("a paste chip is ALREADY in the composer: not pasting onto it, not pressing Enter on it")
         return "stuck", "stranded-chip"
+
+    # Every guard has passed: the typed-not-entered row is written now. No row, no typing.
+    if journal is not None:
+        try:
+            import inject_journal
+            inject_journal.record(session, text, text[:40])
+            journal.append(True)
+        except OSError:
+            return "failed", "journal-unwritable"
 
     if not (ok0 and probe[:30] in line0):
         landed = False

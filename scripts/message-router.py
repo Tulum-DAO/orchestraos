@@ -900,16 +900,13 @@ def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
     try:
         with pane_lock.pane_lock(session, wait_s=wait_s):
             import inject_journal
-            # Typed-not-entered journal: a row from before the paste until the outcome is known,
-            # marked typed once the paste is confirmed in the composer (_inject_unlocked). A crash
-            # in between leaves evidence the gateway's next start reconciles. No row, no paste.
-            try:
-                inject_journal.record(session, text, text[:40])
-            except OSError as e:
-                log(f"{session}: inject journal write failed ({e}); held, nothing pasted")
-                return "held"
-            res = _inject_unlocked(session, text, runtime)
-            if res in ("submitted", "held"):
+            # Typed-not-entered journal: _inject_unlocked writes the row only once every guard has
+            # passed, right before it pastes (an earlier row would overwrite a crash's leftover row
+            # whose text a guard is about to find still in the composer), and marks it typed when
+            # the paste is confirmed. Only a row THIS call wrote is ever cleared here.
+            rec = []
+            res = _inject_unlocked(session, text, runtime, journal=rec)
+            if rec and res in ("submitted", "held"):
                 # submitted, or nothing was pasted. 'failed' KEEPS its row: a paste can land unseen
                 # (an unmarked row is report-only at the reconcile); 'stuck' keeps it as evidence.
                 inject_journal.clear(session)
@@ -929,7 +926,8 @@ def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
                     time.sleep(0.5)
                     _, line2, ok2 = pane_split(session, runtime)
                     if ok2 and not line2.strip().lstrip("❯>›\u203a").strip():
-                        inject_journal.clear(session)
+                        if rec:
+                            inject_journal.clear(session)
                         log(f"{session}: Enter swallowed; cleared our own text, row goes back to pending")
                         return "cleared"
             return res
@@ -938,7 +936,7 @@ def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
         return "held"
 
 
-def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
+def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, journal=None) -> str:
     """Inject with three-stage verification. Returns:
       'submitted'  — text confirmed in scrollback, input line clear
       'stuck'      — text landed in input line but Enter never took (left as-is)
@@ -1001,6 +999,17 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME) ->
                 return "submitted"
             time.sleep(1)
         return "stuck"
+
+    # Every guard has passed: the journal row is written now, before the first keystroke. No row,
+    # no paste ('held'). `journal` (a list) tells the caller that this call wrote it.
+    if journal is not None:
+        try:
+            import inject_journal
+            inject_journal.record(session, text, text[:40])
+            journal.append(True)
+        except OSError as e:
+            log(f"{session}: inject journal write failed ({e}); held, nothing pasted")
+            return "held"
 
     # Stage 1: receipt — paste and confirm it landed (literal text OR new chip)
     landed = False

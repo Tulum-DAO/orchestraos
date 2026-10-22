@@ -20,7 +20,8 @@ def fence(tmp_path, monkeypatch):
 
 def test_boot_inject_row_cleared_on_submit_kept_on_stuck(monkeypatch):
     seen = {}
-    def fake(session, text, runtime, **kw):
+    def fake(session, text, runtime, journal=None, **kw):
+        J.record(session, text, text[:40]); journal.append(True)     # as the real one does, after its guards
         seen["row_while_typing"] = [r["session"] for r in J.rows()]
         return seen["out"]
     monkeypatch.setattr(B, "_boot_inject_unlocked", fake)
@@ -34,8 +35,11 @@ def test_boot_inject_row_cleared_on_submit_kept_on_stuck(monkeypatch):
 
 def test_boot_inject_refuses_when_the_row_cannot_be_written(monkeypatch):
     monkeypatch.setattr(J, "record", lambda *a, **k: (_ for _ in ()).throw(OSError("ro")))
-    monkeypatch.setattr(B, "_boot_inject_unlocked", lambda *a, **k: pytest.fail("typed without a row"))
-    assert B.boot_inject("pm-x", "hello") == ("failed", "journal-unwritable")
+    import test_boot_inject as TB
+    p = TB.Pane()
+    assert B.boot_inject("pm-x", "hello", tmux_fn=p, sleep_fn=lambda s: None,
+                         log_fn=lambda m: None) == ("failed", "journal-unwritable")
+    assert not [c for c in p.calls if c[0] in ("paste-buffer", "set-buffer", "send-keys")]
 
 
 def test_nudge_row_exists_while_typed_and_clears_on_submit(monkeypatch):
