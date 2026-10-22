@@ -320,6 +320,11 @@ def switch_live(*, model: str, config_path: Path, lock_path: Path, send, keys, c
         effort_now = current_effort(rollout)
         res, typed = None, False
         try:
+            # Only events written after THIS point can confirm: read the offset right before
+            # the send, under the lock (the size read above only proves the rollout exists).
+            offset = AM.file_size(rollout)
+            if offset is None:
+                raise FileNotFoundError(f"rollout vanished: {rollout}")
             ok, info = send("/model")
             typed = bool(ok)
             if not ok:

@@ -452,7 +452,9 @@ def switch_live(*, model: str, settings_path: Path, send, find_jsonl, title: str
         _write_journal(settings_path, before)
         res, sent, typed, note = None, False, False, None
         try:
-            since = now()
+            since, offset = now(), file_size(path0)     # right before the send: only later lines count
+            if offset is None:
+                raise FileNotFoundError(f"transcript vanished: {path0}")
             asking = switch_dialog(capture() or "") if capture is not None else None
             if asking is not None:
                 # A question already on screen is not ours (a person's own /model, another

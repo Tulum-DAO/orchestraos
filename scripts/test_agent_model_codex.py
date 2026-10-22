@@ -314,3 +314,24 @@ def test_the_codex_locator_prefers_the_seat_record(monkeypatch, tmp_path):
     monkeypatch.setattr(G, "_pane_session_ids", lambda s: ["01a10000-0000-7000-8000-000000000001"])
     p = G._seat_codex_rollout("cx", {"session_id": "01a10000-0000-7000-8000-000000000002"})
     assert p.name.endswith("000000000002.jsonl")
+
+
+def test_an_event_written_before_the_send_does_not_confirm(tmp_path, monkeypatch):
+    """A thread_settings_applied for the same model landing between the existence check and the
+    send (someone else's pick) is not this switch's confirmation."""
+    c = FakeCodex(tmp_path)
+    real_lock = AM.host_model_lock
+
+    import contextlib
+
+    @contextlib.contextmanager
+    def lock_then_event(path):
+        with open(c.rollout, "a") as f:                # lands while we wait for the lock
+            f.write(json.dumps({"type": "event_msg", "payload": {"type": "thread_settings_applied",
+                    "thread_id": THREAD, "thread_settings": {"model": "gpt-5.6-terra"}}}) + "\n")
+        with real_lock(path):
+            yield
+    monkeypatch.setattr(AM, "host_model_lock", lock_then_event)
+    c.applies = "gpt-5.6-sol"                          # the switch itself logs another model
+    status, body = c.run("gpt-5.6-terra")
+    assert status == 502 and body["error"] == "a different model was confirmed"
