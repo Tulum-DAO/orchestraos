@@ -70,7 +70,7 @@ writeFileSync(join(projects, `${CUR}.jsonl`), CUR_LINES.join('\n') + '\n');
 writeFileSync(join(orch, 'state', 'agents', `${SEAT}.json`), JSON.stringify({ session_id: CUR, cwd: '/repo' }));
 
 // imported after HOME / ORCHESTRA_DIR point at the fixture
-const { normalizeTranscript, resolvePreviousTranscript, default: router } = await import('./chat-transcript.js');
+const { normalizeTranscript, resolvePreviousTranscript, claudeProjectScans, default: router } = await import('./chat-transcript.js');
 const { predecessorOf } = await import('../services/identity-store-reader.js');
 const { tagSynthetics } = await import('../lib/audience.js');
 
@@ -292,3 +292,26 @@ test('a predecessor that ran in another directory is found under any project dir
   }
 });
 
+
+test('a poll whose current log fills the window never looks for the previous file (no directory scan)', async () => {
+  const elsewhere = join(home, '.claude', 'projects', '-elsewhere');
+  mkdirSync(elsewhere, { recursive: true });
+  fsRename(join(projects, `${OLD}.jsonl`), join(elsewhere, `${OLD}.jsonl`));   // only the scan finds it
+  const express = (await import('express')).default;
+  const a = express();
+  a.use('/api/agents', router);
+  const server = a.listen(0);
+  try {
+    const base = `http://127.0.0.1:${(server.address() as any).port}`;
+    const before = claudeProjectScans();
+    const two = await (await fetch(`${base}/api/agents/${SEAT}/transcript?limit=2`)).json() as any;
+    assert.deepEqual(two.items.map((i: any) => i.uuid), ['c1', 'c2']);
+    assert.equal(claudeProjectScans(), before, 'the window was full: no scan');
+    const all = await (await fetch(`${base}/api/agents/${SEAT}/transcript`)).json() as any;
+    assert.deepEqual(all.items.map((i: any) => i.uuid), ['o1', 'o2', 'o3', `rot:${CUR}`, 'c1', 'c2']);
+    assert.equal(claudeProjectScans(), before + 1, 'read only when needed, scanned once');
+  } finally {
+    server.close();
+    fsRename(join(elsewhere, `${OLD}.jsonl`), join(projects, `${OLD}.jsonl`));
+  }
+});
