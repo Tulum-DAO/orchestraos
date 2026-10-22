@@ -359,3 +359,14 @@ def test_a_person_who_attaches_DURING_the_codex_busy_wait_still_gets_nothing_typ
                         log_fn=lambda m: None)
     assert out == ("failed", "client-attached")
     assert not [c for c in p.calls if c[0] in ("paste-buffer", "set-buffer")]
+
+
+def test_an_attachment_check_that_fails_types_nothing():
+    p = Pane()
+    def broken(*a, **k):
+        if a[0] == "list-clients":
+            return 1, ""                            # tmux could not answer
+        return p(*a, **k)
+    out = B.boot_inject("pm-x", TEXT, tmux_fn=broken, sleep_fn=lambda s: None, log_fn=lambda m: None)
+    assert out == ("failed", "client-attached")
+    assert not [c for c in p.calls if c[0] in ("paste-buffer", "set-buffer")]

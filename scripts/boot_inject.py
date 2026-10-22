@@ -208,8 +208,8 @@ def _boot_inject_unlocked(session, text, runtime=DEFAULT_RUNTIME, *, allow_canon
     # gateway's clear-own and the reconcile). Checked HERE, under the pane lock and after any busy
     # wait, right before the first keystroke; the caller's normal retry applies.
     rc_c, clients = tmux_fn("list-clients", "-t", _target(session))
-    if rc_c == 0 and (clients or "").strip():
-        log("a client is attached to this pane: nothing typed")
+    if rc_c != 0 or (clients or "").strip():     # attached, or we cannot tell: fail closed
+        log("a client is attached to this pane (or the check failed): nothing typed")
         return "failed", "client-attached"
 
     _, line0, ok0 = split()
