@@ -634,6 +634,20 @@ function codexRolloutFor(sid: string, dbPath = CODEX_STATE_DB): string | null {
   }
 }
 
+/** `<projects>/<any dir>/<sid>.jsonl`, the session's own file (ownFile), newest first if a copy
+ *  sits in more than one project dir. */
+function claudeFileAnywhere(sid: string, isOwn: (rel: string) => boolean): string | null {
+  let dirs: string[];
+  try { dirs = readdirSync(CLAUDE_PROJECTS); } catch { return null; }
+  const hits: { p: string; m: number }[] = [];
+  for (const d of dirs) {
+    const own = ownFile(join(CLAUDE_PROJECTS, d, `${sid}.jsonl`), CLAUDE_PROJECTS, isOwn);
+    if (own) { try { hits.push({ p: own, m: statSync(own).mtimeMs }); } catch { /* gone */ } }
+  }
+  hits.sort((a, b) => b.m - a.m);
+  return hits.length ? hits[0].p : null;
+}
+
 export function resolvePreviousTranscript(agentId: string, sid: string | null): PreviousTranscript | null {
   if (!sid) return null;
   const p = predecessorOf(sid);
@@ -641,13 +655,19 @@ export function resolvePreviousTranscript(agentId: string, sid: string | null): 
   const from = p.from_session;
   const claudeOwn = (rel: string) => basename(rel) === `${from}.jsonl`;
   const geminiLog = join(from, '.system_generated', 'logs', 'transcript.jsonl');
-  const candidates = [
-    p.cwd ? ownFile(join(CLAUDE_PROJECTS, String(p.cwd).replace(/[/.]/g, '-'), `${from}.jsonl`), CLAUDE_PROJECTS, claudeOwn) : null,
-    ownFile(p.conversation_path, CLAUDE_PROJECTS, claudeOwn),
-    ownFile(codexRolloutFor(from), CODEX_SESSIONS, (rel) => /^rollout-.*\.jsonl$/.test(basename(rel)) && basename(rel).endsWith(`-${from}.jsonl`)),
-    ownFile(join(GEMINI_BRAIN, geminiLog), GEMINI_BRAIN, (rel) => rel === geminiLog),
+  // Tried in order, each only when the ones before found nothing (the directory scan is the last
+  // Claude resort): the lineage's project dir, the path the row names, then ANY project dir (a
+  // generation may have run in another directory than the lineage's, and its row may name no
+  // path), then Codex's rollout and Gemini's brain log.
+  const candidates: (() => string | null)[] = [
+    () => p.cwd ? ownFile(join(CLAUDE_PROJECTS, String(p.cwd).replace(/[/.]/g, '-'), `${from}.jsonl`), CLAUDE_PROJECTS, claudeOwn) : null,
+    () => ownFile(p.conversation_path, CLAUDE_PROJECTS, claudeOwn),
+    () => claudeFileAnywhere(from, claudeOwn),
+    () => ownFile(codexRolloutFor(from), CODEX_SESSIONS, (rel) => /^rollout-.*\.jsonl$/.test(basename(rel)) && basename(rel).endsWith(`-${from}.jsonl`)),
+    () => ownFile(join(GEMINI_BRAIN, geminiLog), GEMINI_BRAIN, (rel) => rel === geminiLog),
   ];
-  const path = candidates.find((c): c is string => !!c);
+  let path: string | null = null;
+  for (const c of candidates) { path = c(); if (path) break; }
   if (!path) return null;
   return {
     path,
