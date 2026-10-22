@@ -185,8 +185,11 @@ def test_the_gateway_runs_the_applier_and_a_shutdown_ends_it_promptly(tmp_path, 
     monkeypatch.setattr(G, "ApprovalStore", _NoStore)
     applied = []
     import threading
-    monkeypatch.setattr(G, "_apply_pending_model_switches",
-                        lambda now=None: applied.append(threading.current_thread() is threading.main_thread()) or [])
+    real_sessions = AMP.pending_sessions
+    # The REAL pass runs; the record read inside it says which thread it is on.
+    monkeypatch.setattr(AMP, "pending_sessions", lambda f: (
+        applied.append(threading.current_thread() is threading.main_thread()) or real_sessions(f)))
+    monkeypatch.setattr(G, "_apply_pending_one", lambda f, s, now: None)   # read only: type nothing
     AMP.put(AMP.state_path(G.ORCH_DIR), "dev", SONNET)
 
     async def go():
@@ -343,9 +346,9 @@ def test_a_pick_stamped_at_epoch_zero_is_stale_not_fresh():
     assert AMP.view({"model": "x", "since": "t", "since_ts": 0}, now=AMP.STALE_AFTER_S + 1)["stale"] is True
 
 
-def test_no_record_read_runs_on_the_event_loop(seat, monkeypatch):
-    """GET /agent-model and the 5 s pass read the record off the event loop: a stalled
-    filesystem never stalls the gateway (codex R6 on #475)."""
+def test_get_reads_the_record_off_the_event_loop(seat, monkeypatch):
+    """GET /agent-model reads pending/last_switch off the event loop: a stalled filesystem never
+    stalls the gateway (codex R6 on #475). The 5 s pass: the app-run test above."""
     import threading
     where = []
     real_get = AMP.get
