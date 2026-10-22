@@ -9,6 +9,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import boot_inject as B  # noqa: E402
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _own_journal(monkeypatch, tmp_path):
+    """boot_inject reads the session's journal row (a typed row for another text refuses), so a row
+    an earlier test left in the run's shared fence dir must never reach these tests."""
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "journal"))
 
 TEXT = "You are pm-x. Read /tmp/agent-init-pm-x.md and follow all instructions in it."
 LONG = "\n".join(f"line {i} of a long handoff" for i in range(16))

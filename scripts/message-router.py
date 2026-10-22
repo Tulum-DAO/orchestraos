@@ -1005,6 +1005,16 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, jo
         if isinstance(_left, dict) and _left.get("typed") is True and _left.get("text") != text:
             log(f"{session}: the input line may hold an earlier half-sent message (row recorded) — held")
             return "held"
+        # The text is ours: this call takes the row over (written and marked typed, as the text is
+        # already on the line), so a submit clears it and 'stuck' keeps it. No row, no Enter.
+        if journal is not None:
+            try:
+                inject_journal.record(session, text, text[:40])
+                inject_journal.mark_typed(session)
+                journal.append(True)
+            except OSError as e:
+                log(f"{session}: inject journal write failed ({e}); held, nothing pressed")
+                return "held"
         log(f"probe already present in {session} input line — skipping repaste, retrying submit")
         for attempt in (1, 2, 3):
             tmux("send-keys", "-t", session, "Enter")

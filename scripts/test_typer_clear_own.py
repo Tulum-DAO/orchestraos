@@ -405,6 +405,59 @@ def test_router_still_resubmits_its_own_recorded_strand(monkeypatch, tmp_path):
     assert ("send-keys", "-t", "pm-x", "Enter") in keys
 
 
+def _submits_on_enter(monkeypatch, R, keys):
+    """The pane's line holds TEXT until an Enter, then it is in the scrollback and the line is empty."""
+    state = {"sent": False}
+
+    def split(s, rt=None):
+        return ([f"> {TEXT}"], "❯ ", True) if state["sent"] else ([], f"❯ {TEXT}", True)
+
+    def tmux(*a, **k):
+        keys.append(a)
+        if a[0] == "send-keys" and a[-1] == "Enter":
+            state["sent"] = True
+        return types.SimpleNamespace(returncode=0, stdout="")
+    monkeypatch.setattr(R, "pane_split", split)
+    monkeypatch.setattr(R, "tmux", tmux)
+
+
+def test_router_resubmitting_its_own_strand_clears_that_row(monkeypatch, tmp_path):
+    """codex R14 on #472: the resubmit path pressed Enter without taking the row over, so a submit
+    left the old row behind; a later draft with the same words could get the restart's Enter."""
+    J = _half_sent(monkeypatch, tmp_path, TEXT)
+    keys = []
+    R = _router_on(monkeypatch, f"❯ {TEXT}", keys)
+    _submits_on_enter(monkeypatch, R, keys)
+    assert R.inject("pm-x", TEXT) == "submitted"
+    assert J.rows() == []
+
+
+def test_router_resubmit_that_sticks_keeps_a_typed_row(monkeypatch, tmp_path):
+    J = _half_sent(monkeypatch, tmp_path, TEXT)
+    keys = []
+    R = _router_on(monkeypatch, f"❯ {TEXT}", keys)
+    monkeypatch.setattr(R, "tmux", lambda *a, **k: keys.append(a) or types.SimpleNamespace(
+        returncode=1 if a[0] == "list-clients" else 0, stdout=""))   # attached check fails: no C-u
+    assert R.inject("pm-x", TEXT) == "stuck"
+    assert [(r["text"], r.get("typed")) for r in J.rows()] == [(TEXT, True)]
+
+
+def test_router_resubmit_presses_nothing_when_the_journal_cannot_be_written(monkeypatch, tmp_path):
+    import inject_journal as J
+    keys = []
+    R = _router_on(monkeypatch, f"❯ {TEXT}", keys)
+    monkeypatch.setattr(J, "record", lambda *a, **k: (_ for _ in ()).throw(OSError("ro")))
+    assert R.inject("pm-x", TEXT) == "held"
+    assert not [k for k in keys if k[0] == "send-keys"]
+
+
+def test_boot_inject_resubmitting_its_own_strand_clears_that_row(monkeypatch, tmp_path):
+    import test_boot_inject as TB
+    J = _half_sent(monkeypatch, tmp_path, TB.TEXT)
+    assert TB.run(TB.Pane(preexisting=TB.TEXT)) == ("submitted", "enter-1")
+    assert J.rows() == []
+
+
 def test_boot_inject_presses_nothing_on_our_prefix_while_a_different_message_is_recorded(monkeypatch, tmp_path):
     import test_boot_inject as TB
     older = TB.TEXT + " plus an older tail"
