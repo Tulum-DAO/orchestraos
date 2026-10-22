@@ -14,11 +14,14 @@ const res = () => ({ kind: 'tool_result', role: 'user', text: 'ok', uuid: `r${++
 const think = () => ({ kind: 'thinking', role: 'assistant', text: 'hmm', uuid: `k${++n}` });
 const tags = (xs: any[]) => xs.map((x) => `${x.uuid}:${x.audience}${x.exchange ? '@' + x.exchange : ''}`);
 
-test('an operator turn: his message and the closing reply are drawn, everything between folds', () => {
+test('an operator turn: his message, the FIRST reply and the closing reply are drawn, the rest folds', () => {
+  // Shaw, 2026-10-22 03:58 ET: "I would expect to see the first response at least to my message that I
+  // sent ... and then the div, which is collapsible. And then the most recent message."
   const m = u('fix the card');
-  const xs = [m, think(), a('looking'), tool(), res(), a('done: the card answers now')];
+  const xs = [m, think(), a('looking'), tool(), res(), a('still on it'), tool(), res(), a('done: the card answers now')];
   tagAudience(xs);
-  assert.deepEqual(xs.map((x) => x.audience), ['user', 'agent', 'agent', 'agent', 'agent', 'user']);
+  assert.deepEqual(xs.map((x) => x.audience),
+    ['user', 'agent', 'user', 'agent', 'agent', 'agent', 'agent', 'agent', 'user']);
   assert.ok(xs.every((x) => x.exchange === m.uuid));
 });
 
@@ -71,4 +74,27 @@ test('synthetic rows after the merge: a pending message is his, agent mail folds
   assert.equal(xs[2].exchange, xs[0].uuid);
   assert.equal(xs[3].audience, 'user');
   assert.equal(xs[3].exchange, 'queued:9');
+});
+
+
+test('one reply in his turn is drawn once (it is both the first and the last)', () => {
+  const xs = [u('status?'), think(), a('all green')];
+  tagAudience(xs);
+  assert.deepEqual(xs.map((x) => x.audience), ['user', 'agent', 'user']);
+});
+
+test('a job he set off still shows only its closing reply (not its first)', () => {
+  const xs = [u('<task-notification>\n<task-id>b2</task-id> completed</task-notification>'), a('reading it'), tool(), res(), a('the build passed')];
+  tagAudience(xs);
+  assert.deepEqual(xs.map((x) => x.audience), ['agent', 'agent', 'agent', 'agent', 'user']);
+});
+
+test('a hook the route hides never turns the reply he waited for into a step (ios-watch-dev hidden-hook case)', () => {
+  // The stop-hook digest is isMeta and dropped by the route, so his turn simply runs on: the
+  // first reply after his message is still his first reply, the latest still the closing one.
+  const m = u('ship it');
+  const xs = [m, a('shipping now'), tool(), res(), a('handled the queue digest'), a('shipped: #467 is merged')];
+  tagAudience(xs);
+  assert.deepEqual(xs.map((x) => x.audience), ['user', 'user', 'agent', 'agent', 'agent', 'user']);
+  assert.ok(xs.every((x) => x.exchange === m.uuid));
 });
