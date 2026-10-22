@@ -920,7 +920,8 @@ def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
                 # later tick instead of sitting in the composer.
                 import inject_journal
                 _, line, ok = pane_split(session, runtime)
-                viewer = bool((tmux("list-clients", "-t", f"={session}:").stdout or "").strip())
+                _lc = tmux("list-clients", "-t", f"={session}:")
+                viewer = _lc.returncode != 0 or bool((_lc.stdout or "").strip())   # fail closed
                 own = (not viewer and ok
                        and inject_journal.is_ours(line.strip().lstrip("❯>›\u203a"), text))   # EXACT
                 if own:

@@ -2868,7 +2868,7 @@ def _verified_inject_locked(session, text, force=False, idle_only=False):
         # into the pane could add words between our read and C-u. One can only type into a pane
         # through an ATTACHED client: with one attached we never clear; the text stays in front of
         # them, the journal row stays, and the caller is told.
-        viewer = bool((_tmux("list-clients", "-t", _st(session)).stdout or "").strip())
+        viewer = _client_attached(session)
         if not viewer and inject_journal.is_ours(_composer_now(), text):   # EXACT: nothing of anyone else's
             _tmux("send-keys", "-t", _st(session), "C-u")
             _time.sleep(0.5)
@@ -2885,6 +2885,13 @@ def _verified_inject_locked(session, text, force=False, idle_only=False):
         return False, fail_info
 
 
+def _client_attached(session) -> bool:
+    """True when a client is attached to the pane, OR when tmux cannot say (fail closed): a person
+    may be typing there, so nothing presses Enter or clears it."""
+    r = _tmux("list-clients", "-t", _st(session))
+    return r.returncode != 0 or bool((r.stdout or "").strip())
+
+
 def _read_composer_typed(session):
     """For the startup reconcile: None = session not in tmux; 'ERROR:<why>' = could not read;
     '' = no composer on screen (a menu/permission prompt replaces it, so nothing may be pressed)
@@ -2893,8 +2900,8 @@ def _read_composer_typed(session):
         return None
     # A person attached to the pane may be typing: the reconcile presses nothing there. 'ERROR:'
     # keeps the row as evidence for the next start and reports it.
-    if (_tmux("list-clients", "-t", _st(session)).stdout or "").strip():
-        return "ERROR:a client is attached to this pane"
+    if _client_attached(session):
+        return "ERROR:a client is attached to this pane (or that could not be checked)"
     raw = _capture_pane(session, lines=0, ansi=True)
     if raw is None:
         return "ERROR:capture failed"

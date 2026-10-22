@@ -259,3 +259,49 @@ def test_boot_inject_marks_its_row_typed_once_the_paste_is_confirmed(monkeypatch
     out = BI.boot_inject("pm-x", TB.TEXT, tmux_fn=p, sleep_fn=lambda s: None, log_fn=lambda m: None)
     assert out[0] == "stuck"
     assert [r.get("typed") for r in J.rows()] == [True]
+
+
+# ------------------------------------------------------------------ codex R10 on #472: fail closed everywhere
+def test_gateway_treats_an_unanswerable_attachment_check_as_attached(monkeypatch):
+    import watch_gateway as G
+    monkeypatch.setattr(G, "_tmux", lambda *a, **k: types.SimpleNamespace(
+        returncode=1 if a[0] == "list-clients" else 0, stdout=""))
+    assert G._client_attached("gm") is True
+    monkeypatch.setattr(G, "_tmux", lambda *a, **k: types.SimpleNamespace(returncode=0, stdout=""))
+    assert G._client_attached("gm") is False
+
+
+def test_reconcile_presses_nothing_when_attachment_cannot_be_checked(monkeypatch, tmp_path):
+    import watch_gateway as G
+    import inject_journal as J
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+    J.record("gm", "our message", "our message"); J.mark_typed("gm")
+    keys = []
+
+    def tmux(*a, **k):
+        keys.append(a)
+        rc = 1 if a[0] == "list-clients" else 0
+        return types.SimpleNamespace(returncode=rc, stdout="❯ our message\n" if a[0] == "capture-pane" else "")
+    monkeypatch.setattr(G, "_tmux", tmux)
+    assert G.reconcile_inject_journal() == [("gm", "unreadable")]
+    assert not [k for k in keys if k[0] == "send-keys"]
+
+
+def test_router_never_clears_when_attachment_cannot_be_checked(monkeypatch):
+    R = _router()
+    keys = []
+    monkeypatch.setattr(R, "_inject_unlocked", lambda *a, **k: "stuck")
+    monkeypatch.setattr(R, "pane_split", lambda s, rt=None: ([], f"❯ {TEXT}", True))
+    monkeypatch.setattr(R, "tmux", lambda *a, **k: keys.append(a) or types.SimpleNamespace(
+        returncode=1 if a[0] == "list-clients" else 0, stdout=""))
+    monkeypatch.setattr(R.time, "sleep", lambda s: None)
+    assert R.inject("pm-x", TEXT) == "stuck"
+    assert not [k for k in keys if k[-1] == "C-u"]
+
+
+def test_nudge_refuses_when_attachment_cannot_be_checked(monkeypatch):
+    keys = []
+    monkeypatch.setattr(NP, "tmux", lambda *a: keys.append(a) or types.SimpleNamespace(
+        returncode=1 if a[0] == "list-clients" else 0, stdout="", stderr=""))
+    assert NP._nudge_unlocked("seat", "continue please") == 2
+    assert not [k for k in keys if k[0] == "send-keys"]

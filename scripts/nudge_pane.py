@@ -36,7 +36,7 @@ def composer_line(session: str) -> str:
 
 def attached(session: str) -> bool:
     out = tmux("list-clients", "-t", session)
-    return out.returncode == 0 and bool(out.stdout.strip())
+    return out.returncode != 0 or bool(out.stdout.strip())     # cannot tell = attached (fail closed)
 
 
 RC_NOT_SENT = 3     # another sender held the pane: nothing typed
