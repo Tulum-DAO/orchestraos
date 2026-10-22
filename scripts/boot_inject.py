@@ -127,7 +127,15 @@ def _codex_boot_busy(pane: str) -> bool:
 #: Outcomes where nothing of ours reached the composer: no journal row may outlive them (a row there
 #: would be false evidence a later reconcile could attribute to someone's matching text).
 _NOTHING_TYPED = ("refused-canonical", "codex-busy", "stranded-chip")   # NOT no-receipt: a paste may
-# have landed unobserved; the row stays, and the reconcile clears it untouched if it is not ours
+# have landed unobserved; the row stays (unmarked = report-only at the reconcile)
+
+
+def _mark_typed(session):
+    try:
+        import inject_journal
+        inject_journal.mark_typed(session)
+    except OSError:
+        pass
 
 
 def boot_inject(session, text, runtime=DEFAULT_RUNTIME, **kw):
@@ -218,6 +226,7 @@ def _boot_inject_unlocked(session, text, runtime=DEFAULT_RUNTIME, *, allow_canon
             _, line, ok = split()
             if ok and paste_receipt_ok(line, probe, chips_before):
                 landed = True
+                _mark_typed(session)       # our text is in the composer: a reconcile may now Enter it
                 break
             log(f"paste attempt {attempt}: not in the composer")
             sleep_fn(1.0)
@@ -226,6 +235,7 @@ def _boot_inject_unlocked(session, text, runtime=DEFAULT_RUNTIME, *, allow_canon
             return "failed", "no-receipt"
     else:
         log("the prompt is already in the composer (earlier attempt): submitting it, not re-pasting")
+        _mark_typed(session)
 
     for attempt in range(1, FIRST_ENTERS + 1):
         enter()

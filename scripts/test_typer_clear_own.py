@@ -231,10 +231,12 @@ def test_router_journals_before_it_pastes_and_clears_on_every_outcome_but_stuck(
     monkeypatch.setattr(R, "pane_split", lambda s, rt=None: ([], "❯ someone else's line", True))
     seen = []
     for res in ("submitted", "failed", "held", "stuck"):
+        J.clear("pm-x")
         monkeypatch.setattr(R, "_inject_unlocked",
                             lambda *a, res=res, **k: seen.append([r["session"] for r in J.rows()]) or res)
         assert R.inject("pm-x", TEXT) == res
-        assert ([r["session"] for r in J.rows()] == ["pm-x"]) is (res == "stuck"), res
+        # kept on 'stuck' (our text is there) and 'failed' (a paste may have landed unseen)
+        assert ([r["session"] for r in J.rows()] == ["pm-x"]) is (res in ("stuck", "failed")), res
     assert seen == [["pm-x"]] * 4                                   # a row existed while it typed
 
 
@@ -244,3 +246,16 @@ def test_router_pastes_nothing_when_the_journal_cannot_be_written(monkeypatch):
     monkeypatch.setattr(J, "record", lambda *a, **k: (_ for _ in ()).throw(OSError("ro")))
     monkeypatch.setattr(R, "_inject_unlocked", lambda *a, **k: pytest.fail("pasted without a row"))
     assert R.inject("pm-x", TEXT) == "held"
+
+
+def test_boot_inject_marks_its_row_typed_once_the_paste_is_confirmed(monkeypatch, tmp_path):
+    """codex R7 on #472: an unmarked row is report-only, so a boot prompt killed after its paste
+    must be marked or the reconcile could never submit it."""
+    import boot_inject as BI
+    import inject_journal as J
+    import test_boot_inject as TB
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+    p = TB.Pane(swallow=99)                                  # the Enter never takes: stuck, row kept
+    out = BI.boot_inject("pm-x", TB.TEXT, tmux_fn=p, sleep_fn=lambda s: None, log_fn=lambda m: None)
+    assert out[0] == "stuck"
+    assert [r.get("typed") for r in J.rows()] == [True]

@@ -909,8 +909,10 @@ def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
                 log(f"{session}: inject journal write failed ({e}); held, nothing pasted")
                 return "held"
             res = _inject_unlocked(session, text, runtime)
-            if res != "stuck":
-                inject_journal.clear(session)      # submitted, or nothing of ours is in the composer
+            if res in ("submitted", "held"):
+                # submitted, or nothing was pasted. 'failed' KEEPS its row: a paste can land unseen
+                # (an unmarked row is report-only at the reconcile); 'stuck' keeps it as evidence.
+                inject_journal.clear(session)
             if res == "stuck":
                 # CLEAR-OWN, NEVER STRAND (gm msg_2291dee3): Enter was swallowed. When the input line
                 # holds exactly our text and no client is attached (a person could be typing), clear
