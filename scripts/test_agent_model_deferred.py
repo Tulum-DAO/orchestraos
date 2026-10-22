@@ -653,3 +653,28 @@ def test_a_switched_pick_whose_seat_did_not_keep_it_and_whose_outcome_was_unwrit
     assert G._apply_pending_model_switches() == [("dev", "switched")]
     assert seat["live"] == [SONNET] and G._APPLIED_UNRECORDED == {}
     assert _get()["last_switch"]["outcome"] == "switched"
+
+
+# ------------------------------------------------------------------ codex R16 on #475
+def test_a_put_right_after_an_unrecorded_switch_decides_on_the_model_the_agent_is_really_on(seat, monkeypatch):
+    """Switched to SONNET by a pass, registry write failed, outcome unwritable. The operator then
+    asks for OPUS (which the seat record still names): it is a real switch back, typed; the
+    applied pick is recorded "switched", never left without an outcome."""
+    monkeypatch.setattr(AMP, "RECORD_LOCK_WAIT_S", 0.3)
+    monkeypatch.setattr(G, "_APPLIED_UNRECORDED", {})
+    from identity_store import identity_writer as IW
+    monkeypatch.setattr(IW, "update_session", lambda d, root, f: False)       # the seat keeps opus
+    _put(SONNET)
+    seat["det"].state = "idle"
+    child = _hold_record_lock_in_child(AMP.state_path(G.ORCH_DIR), 10)
+    try:
+        assert G._apply_pending_model_switches() == []
+    finally:
+        child.kill()
+        child.wait(10)
+    status, b = _put(OPUS)
+    assert status == 200 and seat["live"] == [SONNET, OPUS]                  # typed back, not a no-op
+    assert G._APPLIED_UNRECORDED == {}
+    g = _get()
+    assert g["pending"] is None and g["last_switch"]["outcome"] == "switched"
+    assert g["last_switch"]["model"] == SONNET
