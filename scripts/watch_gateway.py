@@ -253,6 +253,10 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("GET", "/agents/new/parents"): "admin",
     ("POST", "/runtimes/available/refresh"): "admin",
     ("POST", "/telemetry"): "admin",
+    # A live terminal into a seat's pane (the Mac's Dev mode, the web's xterm through the gateway):
+    # unlimited keystrokes, so the shell-grade verb. The handler ALSO requires `inject` (it presses
+    # keys) and refuses the fleet bearer outright: that credential identifies no device to audit.
+    ("GET", "/terminal/ws"): "admin",
     # The only route that MINTS a credential. `admin` so the TABLE states that it is privileged —
     # I first wrote it as _PUBLIC "because the handler checks the principal", and
     # test_the_only_public_routes_are_the_three_that_must_be caught it, correctly: a route whose
@@ -8415,6 +8419,226 @@ async def handle_gemini_live(request):
     return ws
 
 
+# ---- GET /terminal/ws: the live terminal relay (the Mac's Dev mode) ---------------------------------
+# The API serves the web's terminal on /ws/terminal (node-pty, `tmux attach -f ignore-size`) behind a
+# browser-origin check only, loopback-only. A native app holds one base and one bearer (this gateway),
+# so this route is its way in: refuse before the upgrade, connect upstream as the local API's
+# same-origin peer (never with the client's bearer), then pass frames verbatim both ways (text = keystrokes or the resize JSON,
+# binary = bytes). It is a shell into a seat, hence: device token with admin + inject, a session that
+# GET /agents lists, no Funnel / off-tailnet peer, one socket per (device, session), a gateway-wide cap,
+# an idle close, and an operator-actions ledger row at open and close that never carries a keystroke.
+TERMINAL_HEARTBEAT_S = 20.0
+TERMINAL_IDLE_S = 60 * 60.0          # the web has no idle close; 10 min would cut a reader off
+TERMINAL_MAX_SESSIONS = 8
+TERMINAL_MAX_MSG = 1 << 20
+TERMINAL_SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+_TERMINAL_SESSIONS: dict = {}        # (device id, session) -> 1; reserved BEFORE any await
+_TERMINAL_LIVE: set = set()          # (device ws, upstream ws) pairs being relayed
+
+
+def _terminal_known_sessions():
+    """The tmux sessions GET /agents lists (compute_agents): the only names a terminal may attach to.
+    Never an arbitrary tmux name; a listing that fails names nothing."""
+    try:
+        rows = compute_agents()
+    except Exception as e:  # noqa: BLE001 — fail closed
+        log.warning(f"terminal: agents listing failed: {e!r}")
+        return set()
+    return {r.get("tmux_session") for r in rows if isinstance(r, dict) and r.get("tmux_session")}
+
+
+def _terminal_upstream_url(query):
+    """ws(s)://<API host>/ws/terminal with ONLY session, cols and rows: a token-shaped or any other
+    client param never reaches the API's logs."""
+    from urllib.parse import urlencode
+    base = API_URL.rstrip("/")
+    scheme, host = ("wss", base[len("https://"):]) if base.startswith("https://") else ("ws", base.split("://", 1)[-1])
+    q = [(k, query[k]) for k in ("session", "cols", "rows") if query.get(k)]
+    return f"{scheme}://{host}/ws/terminal" + (("?" + urlencode(q)) if q else "")
+
+
+async def _record_terminal_event(request, session, event, code=None, reason=None):
+    """One operator-actions ledger row per open and per close (away.record_terminal), off the loop.
+    Best effort: a ledger that cannot be written never closes a terminal that is already open."""
+    import asyncio
+    device, surface = _answer_device(request), request.headers.get("X-Surface")
+    person = _is_person_surface(request)
+
+    def _write():
+        import away as AW
+        AW.record_terminal(ORCH_DIR, session, event, device=device, surface=surface, person=person,
+                           code=code, reason=reason)
+    try:
+        await asyncio.get_event_loop().run_in_executor(None, _write)
+    except Exception as e:  # noqa: BLE001 — bookkeeping, never a gate
+        log.warning(f"operator-actions ledger write failed: {e!r}")
+
+
+async def _ws_relay(dev_ws, up_ws, idle_s):
+    """Shovel frames until one side ends, then close the other with that side's code + reason (the
+    device vanished -> 1001 upstream; the API dropped abnormally -> 1011 to the device), or both with
+    1000 "idle" after idle_s with no frame either way. Returns (who ended, code, reason)."""
+    import aiohttp
+    import asyncio
+    loop = asyncio.get_running_loop()
+    last = [loop.time()]
+    ended = {}
+
+    async def shovel(src, dst, name):
+        reason, code = "", None
+        while True:                      # not `async for`: it swallows the CLOSE frame and its reason
+            msg = await src.receive()
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                last[0] = loop.time()
+                await dst.send_str(msg.data)
+            elif msg.type == aiohttp.WSMsgType.BINARY:
+                last[0] = loop.time()
+                await dst.send_bytes(msg.data)
+            elif msg.type == aiohttp.WSMsgType.CLOSE:
+                code, reason = msg.data, msg.extra or ""     # from the frame: close_code lags it
+                break
+            elif msg.type in (aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                break
+        ended.setdefault("by", (name, code if code is not None else src.close_code, reason))
+
+    async def idle():
+        while True:
+            left = idle_s - (loop.time() - last[0])
+            if left <= 0:
+                ended.setdefault("by", ("idle", 1000, "idle"))
+                return
+            await asyncio.sleep(left)
+
+    tasks = [asyncio.ensure_future(shovel(dev_ws, up_ws, "device")),
+             asyncio.ensure_future(shovel(up_ws, dev_ws, "api")),
+             asyncio.ensure_future(idle())]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for t in tasks:
+            t.cancel()
+    by, code, reason = ended.get("by", ("device", None, ""))
+    msg = (reason if isinstance(reason, bytes) else str(reason or "")).encode("utf-8", "replace") \
+        if not isinstance(reason, bytes) else reason
+    if by == "idle":
+        for s in (dev_ws, up_ws):
+            if not s.closed:
+                await s.close(code=1000, message=b"idle")
+    elif by == "device":
+        if not up_ws.closed:
+            await up_ws.close(code=code if code and code not in (1005, 1006) else 1001, message=msg)
+    else:
+        if not dev_ws.closed:
+            await dev_ws.close(code=code if code and code not in (1005, 1006) else 1011, message=msg)
+    return by, code, (reason.decode("utf-8", "replace") if isinstance(reason, bytes) else reason)
+
+
+async def _terminal_close_all(code, reason):
+    """Close every live terminal (shutdown): the device gets the code, and the relay then closes
+    its upstream the usual way."""
+    for dev_ws, _up in list(_TERMINAL_LIVE):
+        if not dev_ws.closed:
+            try:
+                await dev_ws.close(code=code, message=str(reason).encode())
+            except Exception:  # noqa: BLE001 — a socket already gone
+                pass
+
+
+async def _terminal_on_shutdown(app):
+    await _terminal_close_all(1001, "shutdown")
+
+
+async def handle_terminal_ws(request):
+    """GET /terminal/ws?session=<tmux>&cols=<n>&rows=<n> -> WebSocket upgrade, relayed to the API's
+    /ws/terminal. Every refusal is an HTTP status BEFORE the upgrade: 401 no principal, 403 fleet bearer /
+    no inject / protected session, 404 Funnel / off-tailnet peer / unknown session, 400 bad session or
+    not an upgrade, 409 this device already has this seat open, 429 cap, upstream refusal forwarded,
+    502 API unreachable."""
+    import aiohttp
+    import asyncio
+    from aiohttp import web
+    from scripts.device_tokens import scopes_allow
+    ran, principal = _resolved_principal(request)
+    if not ran or not principal:                 # defence in depth; the middleware refused first
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    dev = principal.get("id")
+    if not dev or dev == "legacy":
+        return _json({"ok": False, "error": "a paired device token is required here: the fleet bearer "
+                                            "identifies no device to audit"}, status=403)
+    if not scopes_allow(principal.get("scopes"), "inject"):
+        return _json({"ok": False, "error": "forbidden", "needed_scope": "inject",
+                      "scopes": principal.get("scopes")}, status=403)
+    if request.headers.get("Tailscale-Funnel-Request"):
+        return _json({"ok": False, "error": "not found"}, status=404)
+    if not _agent_file_peer_ok(_agent_file_peer(request)):
+        return _json({"ok": False, "error": "not found"}, status=404)
+    session = (request.query.get("session") or "").strip()
+    if not TERMINAL_SESSION_RE.match(session):
+        return _json({"ok": False, "error": "session required: letters, digits, _ and - (1-80)"}, status=400)
+    if session not in _terminal_known_sessions():
+        return _json({"ok": False, "error": "no such session"}, status=404)
+    refusal = _protected_refusal(request, session)
+    if refusal:
+        return _json(refusal, status=403)
+    # Validate the handshake BEFORE any upstream session: a malformed but authenticated request must
+    # not open a PTY on the API that the prepare then refuses.
+    if not web.WebSocketResponse().can_prepare(request).ok:
+        return _json({"ok": False, "error": "not a valid WebSocket upgrade"}, status=400)
+    key = (str(dev), session)
+    if key in _TERMINAL_SESSIONS:
+        return _json({"ok": False, "error": "a terminal is already open for this device and session"},
+                     status=409)
+    if len(_TERMINAL_SESSIONS) >= TERMINAL_MAX_SESSIONS:
+        return _json({"ok": False, "error": "too many open terminals"}, status=429)
+    _TERMINAL_SESSIONS[key] = 1                  # reserve before any await, so two upgrades cannot race
+    who = _answer_device(request)
+    try:
+        client = aiohttp.ClientSession()
+        try:
+            try:
+                # The public API refuses a non-browser/no-Origin terminal upgrade.  The gateway is
+                # its local, authenticated relay, so identify this loopback hop as such.  This is
+                # NOT client authentication: the paired-device token was checked above and must
+                # never be forwarded to the API.
+                up = await client.ws_connect(_terminal_upstream_url(request.query),
+                                             headers={"Origin": "http://127.0.0.1:8888"},
+                                             max_msg_size=TERMINAL_MAX_MSG, autoping=True,
+                                             timeout=aiohttp.ClientWSTimeout(ws_close=5))
+            except aiohttp.WSServerHandshakeError as e:
+                st = e.status if 400 <= (e.status or 0) <= 599 else 502
+                return _json({"ok": False, "error": f"the API refused the terminal ({e.status})"}, status=st)
+            except (aiohttp.ClientError, OSError, asyncio.TimeoutError) as e:
+                log.warning(f"terminal: API unreachable: {e}")
+                return _json({"ok": False, "error": "API unreachable"}, status=502)
+            ws = web.WebSocketResponse(heartbeat=TERMINAL_HEARTBEAT_S, max_msg_size=TERMINAL_MAX_MSG)
+            opened = False
+            close_code, close_reason = None, None
+            try:
+                await ws.prepare(request)
+                opened = True
+                _TERMINAL_LIVE.add((ws, up))
+                log.info(f"TERMINAL open {session} by {who}")
+                await _record_terminal_event(request, session, "open")
+                by, close_code, close_reason = await _ws_relay(ws, up, TERMINAL_IDLE_S)
+                log.info(f"TERMINAL close {session} by {who}: {by} {close_code} {close_reason!r}")
+            finally:
+                _TERMINAL_LIVE.discard((ws, up))
+                if not up.closed:
+                    await up.close()
+                # A disconnect may cancel the relay pump while aiohttp tears the request down.
+                # Once an open was recorded, always write exactly one matching close row; it is
+                # the audit proof for a shell that bypasses verified-inject.
+                if opened:
+                    await _record_terminal_event(request, session, "close",
+                                                 code=close_code if close_code is not None else ws.close_code,
+                                                 reason=close_reason)
+            return ws
+        finally:
+            await client.close()
+    finally:
+        _TERMINAL_SESSIONS.pop(key, None)
+
+
 def build_app():
     import asyncio
     from aiohttp import web
@@ -8424,6 +8648,7 @@ def build_app():
                           middlewares=[scope_middleware_factory()])
     app[_events_stop_key()] = asyncio.Event()
     app.on_shutdown.append(_events_on_shutdown)
+    app.on_shutdown.append(_terminal_on_shutdown)
     app.on_startup.append(_start_pending_model_switches)
     app.on_cleanup.append(_stop_pending_model_switches)
     app.router.add_get("/pending-approvals", handle_pending)
@@ -8432,6 +8657,7 @@ def build_app():
     app.router.add_get("/approvals/{id}", handle_approval_detail)
     app.router.add_post("/approvals/{id}/discard", handle_approval_discard)
     app.router.add_get("/agents", handle_agents)
+    app.router.add_get("/terminal/ws", handle_terminal_ws)
     app.router.add_get("/usage", handle_usage)
     app.router.add_get("/projects", handle_projects)
     app.router.add_get("/people", handle_people)

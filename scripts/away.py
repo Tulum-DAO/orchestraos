@@ -456,6 +456,37 @@ def record_message(data_dir, target, said, *, device=None, surface=None, scan, n
     return row
 
 
+def record_terminal(data_dir, target, event, *, device=None, surface=None, person=None, code=None,
+                    reason=None, now=None):
+    """Append one live-terminal open or close (GET /terminal/ws) to the operator-actions ledger: who
+    (`device` "<id>:<label>", `surface`, `person`) attached to which seat and when, and at the close its
+    code. The socket bypasses the verified-inject path (/agent-message's read-back), so these rows are
+    the only trace of it. Never a keystroke or a byte of output: the row has no text field at all."""
+    path = _p(data_dir, LEDGER)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        if os.path.getsize(path) >= LEDGER_MAX_BYTES:
+            os.replace(path, path + ".1")
+    except OSError:
+        pass
+    row = {"kind": "terminal", "event": "close" if event == "close" else "open",
+           "at": iso(time.time() if now is None else now), "target": str(target)[:200],
+           "device": device, "surface": _trim(surface, 16) if surface else None}
+    if person is not None:
+        row["person"] = bool(person)
+    if code is not None:
+        row["code"] = int(code)
+    if reason:
+        row["reason"] = _trim(str(reason), 64)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.write(fd, (json.dumps(row) + "\n").encode("utf-8"))
+    finally:
+        os.close(fd)
+    os.chmod(path, 0o600)
+    return row
+
+
 _LAST_SENT_CACHE: dict = {}
 
 
