@@ -335,3 +335,12 @@ def test_gm_command_runs_the_relay_from_the_checkout(mod, monkeypatch, tmp_path)
     out = mod.execute_tool("gm_command", {"prompt": "what is the fleet status"})
     assert seen["argv"][:2] == ["bash", str(code / "jarvis-gm-query.sh")]
     assert "fleet is fine" in out
+
+
+def test_a_commissioned_claude_seat_is_spawned_on_opus_5_5_1m(mod, monkeypatch):
+    """Shaw 2026-10-22: a new Claude seat starts on claude-opus-5-5[1m], the same default as the New
+    Agent form. (A runtime brain's own model, when set, still wins, as before.)"""
+    monkeypatch.setattr(mod, "RUNTIME_MODEL", None, raising=False)
+    plan = mod.commission_plan("x", "y", runtime="claude", repo_root=pathlib.Path("/r"))
+    assert plan.env["AGENT_MODEL"] == "claude-opus-5-5[1m]" and plan.env["AGENT_RUNTIME"] == "claude"
+    assert mod.commission_plan("x", "y", runtime="codex", repo_root=pathlib.Path("/r")).env["AGENT_MODEL"] == "gpt-5.6-terra"

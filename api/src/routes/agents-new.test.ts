@@ -476,10 +476,12 @@ test('the production registry read leaves earlier generations out of BOTH the pa
 });
 
 
-test('a new Claude seat starts on Opus 5.5 with the 1M context, the same as a commissioned one', async () => {
-  const { DEFAULT_MODEL_FOR_RUNTIME } = await import('./agents-new.js');
-  assert.equal(DEFAULT_MODEL_FOR_RUNTIME.claude, 'claude-opus-5-5[1m]');
-  const fs = await import('node:fs');
-  const arturo = fs.readFileSync(new URL('../../../services/arturo/arturo-proxy.py', import.meta.url), 'utf8');
-  assert.match(arturo, /_DEFAULT_MODEL_FOR_RUNTIME = \{"claude": "claude-opus-5-5\[1m\]"/);
+test('a new Claude seat is spawned on Opus 5.5 with the 1M context (AGENT_MODEL for spawn-agent.sh)', async () => {
+  const { spawnEnv } = await import('./agents-new.js');
+  const env = spawnEnv({ HOME: '/h', AGENT_MODEL: 'inherited-model' } as NodeJS.ProcessEnv, 'claude', 'gm');
+  assert.equal(env.AGENT_MODEL, 'claude-opus-5-5[1m]');
+  assert.equal(env.AGENT_RUNTIME, 'claude');
+  assert.equal(env.PARENT_AGENT_ID, 'gm');
+  assert.equal(spawnEnv({} as NodeJS.ProcessEnv, 'codex', null).AGENT_MODEL, 'gpt-5.6-terra');   // others unchanged
+  assert.equal(spawnEnv({ PARENT_AGENT_ID: 'leak' } as NodeJS.ProcessEnv, 'claude', null).PARENT_AGENT_ID, undefined);
 });
