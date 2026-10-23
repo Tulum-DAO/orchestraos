@@ -115,6 +115,15 @@ test('Chat mode never mounts the Dev terminal, whose document wheel/touch hack w
   assert.match(src('components/WebTerminal.tsx'), /if \(!container\.contains\(e\.target as Node\)\) return;\s*e\.preventDefault\(\);/);
 });
 
+test('Dev terminal may shrink inside the bounded modal instead of clipping its key row', () => {
+  const card = src('components/AgentCard.tsx');
+  const terminal = src('components/WebTerminal.tsx');
+  assert.match(card, /w-full min-h-0 rounded-none border-0/);
+  assert.match(card, /flex flex-1 min-h-0 flex-col overflow-hidden bg-black/);
+  assert.match(terminal, /h-full min-h-0 w-full flex-1 bg-black overscroll-contain/);
+  assert.match(terminal, /style=\{\{ minHeight: 0,/);
+});
+
 test('arturoLift: the button rises above the tallest docked CLI, never below the bottom', async () => {
   const { arturoLift } = await import('./arturoLift.ts');
   assert.equal(arturoLift(800, []), 0);

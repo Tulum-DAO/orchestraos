@@ -344,8 +344,12 @@ export default function WebTerminal({ session, machine }: WebTerminalProps) {
       // a terminal that silently loses a keystroke to a UI overlay is a worse bug than having
       // no palette. Without the attribute that refusal is dead code.
       data-terminal="true"
-      className="w-full h-full bg-black overscroll-contain"
-      style={{ minHeight: '200px', padding: 0, margin: 0 }}
+      className="h-full min-h-0 w-full flex-1 bg-black overscroll-contain"
+      // The AgentCard modal is a bounded column: header + terminal + key row.  A fixed
+      // terminal minimum lets the xterm pane push the key row below a narrow WebOS viewport,
+      // leaving the cursor mid-window after scroll.  It must be allowed to shrink with the
+      // visible viewport; xterm owns the terminal's internal scroll/copy-mode behavior.
+      style={{ minHeight: 0, padding: 0, margin: 0 }}
     />
   );
 }

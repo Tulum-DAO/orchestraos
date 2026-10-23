@@ -638,7 +638,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
             className={clsx(
               'bg-neutral-900 flex flex-col shadow-2xl',
               devMode
-                ? 'w-full rounded-none border-0'
+                ? 'w-full min-h-0 rounded-none border-0'
                 : 'border border-neutral-700 rounded-2xl w-full max-w-2xl max-h-[90vh]'
             )}
             // Dev fills the visible screen; Chat is capped to it, so its composer is never below the
@@ -721,7 +721,7 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
             {/* Output area — Chat or Dev mode */}
             {devMode ? (
               /* Dev Mode: real terminal via xterm.js + WebSocket */
-              <div className="flex-1 min-h-0 bg-black overflow-hidden">
+              <div className="flex flex-1 min-h-0 flex-col overflow-hidden bg-black">
                 <WebTerminal session={agent.tmux_session || agent.id.replace('unregistered:', '')} machine={agent.machine || 'mac'} />
               </div>
             ) : (
