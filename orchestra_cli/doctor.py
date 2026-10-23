@@ -674,3 +674,106 @@ def render_table(checks: list) -> str:
 def render_json(checks: list) -> str:
     return json.dumps({"ok": exit_code(checks) == 0,
                        "checks": [c.__dict__ for c in checks]}, indent=1)
+
+
+#: `--share`: what may leave the box. Built by ALLOWLIST, never by redacting: a row gives its name,
+#: status and whether it is required; details and remedies (paths, users, hosts, ports, tokens) never
+#: appear, so a row added later cannot leak through a field nobody thought to redact.
+_SHARE_FAMILY = re.compile(r"^(port|runtime|cli|plugin|python|root|api|dashboard):(.+)$")
+
+
+def _share_name(name: str) -> str:
+    """A check's name as `--share` prints it. FIXED vocabulary, not a character pattern (a lowercase
+    token is a perfectly plain-looking word): a fixed name doctor writes prints as is; a family name
+    (port:, runtime:, ...) prints its family, and its suffix only when the suffix is a word this code
+    itself defines; anything else is "(other check)"."""
+    if name in _share_static() or name in _SHARE_TOOLS:
+        return name
+    m = _SHARE_FAMILY.match(name or "")
+    if not m:
+        return "(other check)"
+    fam, suffix = m.groups()
+    if fam == "cli" and suffix.endswith("-version"):
+        known = suffix[: -len("-version")] in _share_runtimes()
+    elif fam in ("root", "api", "dashboard"):
+        known = suffix in ("node_modules", "build")
+    else:
+        known = suffix in {"port": {"gateway", "api", "dashboard", "arturo"}, "runtime": _share_runtimes(),
+                           "plugin": _share_plugins(), "python": {"flask", "openai", "aiohttp"}}.get(fam, set())
+    return f"{fam}:{suffix if known else '(other)'}"
+
+
+def _share_static() -> set:
+    """Every fixed name this module writes (read from its own source, so a new check is covered)."""
+    global _SHARE_STATIC
+    if _SHARE_STATIC is None:
+        try:
+            _SHARE_STATIC = set(re.findall(r'Check\("([^"]+)"', Path(__file__).read_text()))
+        except OSError:
+            _SHARE_STATIC = set()
+    return _SHARE_STATIC
+
+
+_SHARE_STATIC = None
+#: Rows named from a loop rather than a literal (the tool checks above).
+_SHARE_TOOLS = {"tmux", "node", "npm", "git", "python"}
+
+
+def _share_runtimes() -> set:
+    return set(PROVEN_CLI_VERSIONS) | set(CLI_PACKAGES) | {"claude", "codex", "gemini", "grok", "agy", "login", "any"}
+
+
+def _share_plugins() -> set:
+    try:
+        import plugins as _p  # noqa: WPS433 — the checkout's plugin registry, as the plugin rows use it
+        return set(getattr(_p, "KNOWN", ()) or ())
+    except Exception:  # noqa: BLE001 — no plugin registry: every plugin suffix is "(other)"
+        return set()
+_SHARE_FACTS = (("release", "release {}"), ("os", "{}"), ("ram_gb", "ram {} GB"), ("disk_free_gb", "disk free {} GB"))
+
+
+def render_share(checks: list, facts: dict) -> str:
+    """A short block a client can paste to whoever helps them, so an install can be checked without
+    anyone logging in to their server. No IPs, hostnames, usernames, paths, tokens or session ids."""
+    lines = ["--- orchestra doctor --share ---"]
+    head = [tmpl.format(facts[k]) for k, tmpl in _SHARE_FACTS
+            if isinstance(facts.get(k), (int, str)) and _SHARE_FACT_OK.match(str(facts[k]))]
+    if head:
+        lines.append(" | ".join(head))
+    for c in checks:
+        name = _share_name(c.name)
+        req = " (required)" if c.required and c.status == MISSING else ""
+        lines.append(f"{name} {c.status}{req}")
+    lines.append(f"result: {'OK' if exit_code(checks) == 0 else 'NOT READY'}")
+    lines.append("--- end ---")
+    return "\n".join(lines)
+
+
+_SHARE_FACT_OK = re.compile(r"^[A-Za-z0-9 ._-]{1,32}$")
+
+
+def share_facts(st) -> dict:
+    """The few facts `--share` prints, each read from a fixed source and later allowlisted again."""
+    import shutil
+    import subprocess
+    facts: dict = {}
+    try:
+        facts["release"] = subprocess.run(["git", "-C", str(st.repo_root), "rev-parse", "--short", "HEAD"],
+                                          capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:  # noqa: BLE001 — a fact we cannot read is left out
+        pass
+    try:
+        kv = dict(l.split("=", 1) for l in Path("/etc/os-release").read_text().splitlines() if "=" in l)
+        facts["os"] = f"{kv.get('NAME', '').strip('\"').split()[0]} {kv.get('VERSION_ID', '').strip('\"')}".strip()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        kb = next(int(l.split()[1]) for l in Path("/proc/meminfo").read_text().splitlines() if l.startswith("MemTotal:"))
+        facts["ram_gb"] = round(kb / 1024 / 1024)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        facts["disk_free_gb"] = shutil.disk_usage(str(st.data_dir if Path(st.data_dir).exists() else Path.home())).free // 2**30
+    except Exception:  # noqa: BLE001
+        pass
+    return facts
