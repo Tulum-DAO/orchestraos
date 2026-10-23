@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
 const { execFileSync } = require("child_process");
+const crypto = require("crypto");
 const { WebSocketServer } = require("ws");
 const { wsOriginDecision } = require("./dashboard-ws-origin");
 let pty = null;
@@ -97,7 +98,32 @@ function wsAllowed(req) {
   if (!d.allow) console.warn("[ws] refused " + req.url.split("?")[0] + " from origin " + req.headers.origin + " (" + d.reason + ")");
   return d.allow;
 }
-const wss = new WebSocketServer({ server, path: "/ws/terminal", verifyClient: (info) => wsAllowed(info.req) });
+function cookie(req, name) {
+  const m = (req.headers.cookie || "").match(new RegExp("(?:^|;)\\s*" + name + "=([^;]+)"));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+function sessionSecret() {
+  if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
+  try { return fs.readFileSync(path.join(process.env.ORCHESTRA_DIR || "", "state", "session-secret"), "utf8").trim() || null; }
+  catch { return null; }
+}
+function terminalSessionAllowed(req) {
+  const token = cookie(req, "orchestra_session");
+  const secret = sessionSecret();
+  if (!token || !secret) return false;
+  const dot = token.indexOf(".");
+  if (dot < 1) return false;
+  const body = token.slice(0, dot), sig = token.slice(dot + 1);
+  const expected = crypto.createHmac("sha256", secret).update(body).digest("base64url");
+  if (sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return false;
+  try { const p = JSON.parse(Buffer.from(body, "base64url").toString()); return typeof p.exp === "number" && p.exp >= Date.now(); }
+  catch { return false; }
+}
+const wss = new WebSocketServer({ server, path: "/ws/terminal", verifyClient: (info) => {
+  if (!wsAllowed(info.req)) return false;
+  if (!terminalSessionAllowed(info.req)) { console.warn("[ws] refused /ws/terminal: authenticated session required"); return false; }
+  return true;
+} });
 wss.on("connection", (ws, req) => {
   const url = new URL(req.url, "http://localhost");
   const session = url.searchParams.get("session");
