@@ -55,6 +55,9 @@ def test_proxy_wires_the_check_into_both_upgrade_paths():
     assert 'path: "/ws/terminal", verifyClient: (info) => {' in src
     assert 'if (!wsAllowed(info.req)) return false;' in src
     assert 'terminalSessionAllowed(info.req)' in src
+    assert 'registeredTerminalSession' in src
+    assert 'if (!wsAllowed(info.req)) return false;' in src
+    assert 'authenticated session required' in src
 
 
 def test_public_pair_exchange_is_the_only_gateway_route_the_dashboard_proxies():
