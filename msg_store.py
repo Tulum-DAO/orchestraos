@@ -62,9 +62,77 @@ from typing import Optional
 if os.path.dirname(os.path.abspath(__file__)) not in sys.path:
     sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+from orchestra_cli import settings as _settings  # noqa: E402
 
 ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR") or os.environ.get("ORCH_DIR") or str(_data_dir()))
 DB_PATH = ORCHESTRA_DIR / "state" / "tasks.db"
+
+
+def _kick_target(db_path):
+    """The router this send may kick, or None. A kick happens ONLY for the installed bus:
+
+    - this checkout is the code root (ORCHESTRA_ROOT, if set, names this same tree), and it
+      is configured (its orchestra.toml exists) with the router enabled;
+    - the store's db is the CONFIGURED data dir's tasks.db, resolved WITHOUT the
+      ORCHESTRA_DIR/ORCH_DIR env, so a store pointed elsewhere by env (a test, a proof
+      worktree, a scratch dir) never kicks and a scratch DB can never drive real panes.
+    Any doubt returns None: the kick is an optimisation, the beat is the delivery path."""
+    code_root = Path(__file__).resolve().parent
+    if _settings.repo_root_from_env().resolve() != code_root:
+        return None
+    st = _settings.load_settings(code_root)
+    if not st.config_exists or not st.router_enabled:
+        return None
+    bus = Path(_data_dir(include_env=False)) / "state" / "tasks.db"
+    if os.path.realpath(str(db_path)) != os.path.realpath(str(bus)):
+        return None
+    router = code_root / "scripts" / "message-router.py"
+    if not router.is_file():
+        return None
+    return code_root, router, Path(_data_dir(include_env=False))
+
+
+def _kick_suppressed() -> bool:
+    return bool(os.environ.get("PYTEST_CURRENT_TEST") or "pytest" in sys.modules
+                or os.environ.get("MSG_STORE_NO_KICK"))
+
+
+def kick_router_after_send(db_path) -> None:
+    """Best-effort, non-blocking delivery pass right after a durable message commit.
+
+    The router beat remains the recovery path. This only removes its first-look latency
+    (up to one beat interval) for a fresh message. It starts exactly the command the beat
+    runs (`message-router.py --cron`), detached, so the sender never waits on it. The
+    router's own lockfile keeps one pass at a time; where `flock` exists, kicks are also
+    serialised among themselves so a burst of sends starts at most one extra pass.
+    A failure here must never make send() fail or wait.
+
+    Never kicks: under pytest, with MSG_STORE_NO_KICK set, or from any store that is not
+    the installed bus (see _kick_target)."""
+    if _kick_suppressed():
+        return
+    try:
+        target = _kick_target(db_path)
+        if target is None:
+            return
+        code_root, router, data = target
+        import shutil
+        import subprocess
+        import tempfile
+        cmd = [sys.executable, str(router), "--cron"]
+        if shutil.which("flock"):
+            lock = os.path.join(tempfile.gettempdir(), "orchestra-router-kick.lock")
+            cmd = ["flock", "-n", lock] + cmd
+        env = {k: v for k, v in os.environ.items() if k not in ("ORCH_DIR", "MSG_DB_PATH")}
+        env["ORCHESTRA_DIR"] = str(data)        # the router reads exactly the bus we wrote
+        logf = code_root / "logs" / "message-router.log"
+        sink = open(logf, "ab") if logf.parent.is_dir() else open(os.devnull, "wb")
+        with sink:
+            subprocess.Popen(cmd, cwd=str(code_root), env=env,
+                             stdin=subprocess.DEVNULL, stdout=sink, stderr=sink,
+                             start_new_session=True, close_fds=True)
+    except Exception:      # noqa: BLE001 — a kick must never cost a send
+        pass
 
 
 def _now():
@@ -576,6 +644,7 @@ class MessageStore:
                  _now(), json.dumps(sorted(set([from_agent, to_agent])))]
             )
             conn.commit()
+            kick_router_after_send(self.db_path)
             return msg_id
         finally:
             conn.close()
