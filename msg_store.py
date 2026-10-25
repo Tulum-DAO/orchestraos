@@ -51,6 +51,7 @@ Usage:
 import sqlite3
 import json
 import os
+import re
 import sys
 import hashlib
 import argparse
@@ -261,6 +262,37 @@ def sender_verdict(from_agent, to_agent, body, caller=_UNSET):
             # qualifier, because a row from an agent to itself is a contradiction
             # rather than a delivery.
             "suspect": bool(impersonated or self_addressed)}
+
+
+_SEAT_ALIAS_SUFFIX = re.compile(r"-(?:gen|g)\d+$")
+
+
+def _canon_seat(name):
+    """Collapse a rotation alias to its canonical agent name: both `-genN` and `-gN`
+    suffixes are in use (`<name>-genN` and `<name>-gN` both map to `<name>`).
+    `sender_verdict.impersonated` is a raw string compare, so an agent writing as its OWN
+    alias reads as impersonation and is not."""
+    return _SEAT_ALIAS_SUFFIX.sub("", (name or "").strip())
+
+
+def _narrow_impersonation_refusal(sv, from_agent):
+    """Arm the INTERSECTION: impersonated AND trivial body.
+
+    A --from that does not match the caller is not always wrong. A helper relaying an
+    operator's words is real, and services send under ROLE identities (the approval loop
+    delivering a decision answer, the questionnaire loop, the identity reconciler).
+    Refusing every mismatch would break the approvals resume path.
+    An EMPTY body under someone else's name is never right: measured over the shadow log
+    before arming, every row matching this conjunction was junk, none was an agent writing
+    as its own alias, and every role-identity row carried a real body.
+    NO BYPASS FLAG EXISTS ON PURPOSE: a legitimate relay carries CONTENT, so it never
+    reaches this branch. An EMPTY relay under another name is indistinguishable from the
+    accident this guard exists to stop, so it is refused too. The addressability kill file
+    still disarms it, like every other refusal in this module.
+    """
+    if not sv or not sv["trivial_body"] or not sv["impersonated"]:
+        return False
+    return _canon_seat(sv["caller"]) != _canon_seat(from_agent)
 
 
 def _impersonation_armed() -> bool:
@@ -506,6 +538,30 @@ class MessageStore:
             # actual culprit (a caller writing under someone else's identity),
             # where self-addressed only describes the row's shape. gm's rows are
             # both, and "you are not who you claim" is the more useful error.
+            # The shadow row is written BEFORE any refusal, so an armed refusal is still
+            # recorded. The line format is unchanged because it is parsed; an armed
+            # refusal adds a second, distinct line.
+            _addressability_log(
+                f"[impersonation-shadow] WOULD REFUSE {msg_id}: {_why} "
+                f"(to={to_agent}, self_addressed={_sv['self_addressed']}, "
+                f"trivial_body={_sv['trivial_body']})")
+
+            # ARMED NARROWLY, and by DEFAULT (no env flag). See _narrow_impersonation_refusal.
+            if (_narrow_impersonation_refusal(_sv, from_agent)
+                    and not ADDRESSABILITY_KILL_FILE.exists()):
+                _addressability_log(
+                    f"[impersonation] REFUSED {msg_id}: {_why} (to={to_agent}, "
+                    f"trivial_body=True); narrow arm, no row written")
+                raise ImpersonatedSender(
+                    f"IMPERSONATED SENDER, REFUSED: the calling pane is "
+                    f"'{_sv['caller']}' but --from claims '{from_agent}', and the body is "
+                    f"empty. No row was written.\n"
+                    f"This is almost always a leftover send fragment in a compound shell "
+                    f"command. Send as yourself: use --from {_sv['caller']}, and put ONE "
+                    f"send per command.\n"
+                    f"A relay under another identity stays legal when it carries real "
+                    f"content; only an EMPTY body under someone else's name is refused.")
+
             if _impersonation_armed() and _sv["impersonated"]:
                 raise ImpersonatedSender(
                     f"IMPERSONATED SENDER: {_why}. A row written under another "
@@ -517,10 +573,6 @@ class MessageStore:
                     f"not a delivery. If you are deliberately planting a row to "
                     f"verify the delivery path, pass allow_self_addressed=True so "
                     f"the exception is recorded rather than silent.")
-            _addressability_log(
-                f"[impersonation-shadow] WOULD REFUSE {msg_id}: {_why} "
-                f"(to={to_agent}, self_addressed={_sv['self_addressed']}, "
-                f"trivial_body={_sv['trivial_body']})")
 
         # leg-4 act 3: classify the DESTINATION (never the sender) before writing.
         try:
