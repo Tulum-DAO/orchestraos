@@ -52,6 +52,8 @@ LOCKFILE = Path("/tmp/message-router.lock")
 STALE_HOURS = 48          # pending older than this -> expired at startup
 COOLDOWN_SECONDS = 60     # min gap between injections into the same agent
 ATTACHED_IDLE_TTL = 600   # attached pane holds mail only while active within this
+CLIENT_ACTIVE_TTL_S = 120  # an attached CLIENT counts as a present human only while its
+                           # OWN #{client_activity} (its last input) is younger than this
                           # window; past it, deliver (fixed 2026-08-15: a mere
                           # attached client used to freeze mail FOREVER — a
                           # persistent terminal on gm/ob starved it for hours)
@@ -80,6 +82,25 @@ HOLD_FILE_LEGACY = Path("/tmp/message-router-holds.json")
 HOLD_LOG_THROTTLE_S = 600     # log each (session|reason) hold at most once / 10min
 HOLD_SLA_S = 900              # a row held past this escalates (guard-a, backstop)
 HOLD_ESCALATE_REPEAT_S = 1800 # re-escalate a still-held row no more than this often
+# DOWN-seat anchors + page throttle, persisted beside the holds.
+DOWN_FILE = ORCHESTRA_DIR / "state" / "message-router-downs.json"
+
+# --- DOWN seats --------------------------------------------------------------------------
+# A seat whose agent CLI EXITS leaves a LIVE tmux pane at a shell prompt. agent_is_idle reads
+# that as not-idle (no composer -> False, fail-safe), so the row was held every cycle, silently,
+# for as long as nobody looked. The state detector already answers this case (state='stopped',
+# "No claude process running"); the hold path just never asked. DOWN is NOT a hold reason: it
+# is a PAGE, because nobody is coming to read the held mail.
+DOWN_PAGE_REPEAT_S = 1800     # re-page a still-down seat no more than this often
+# Fatigue control for the UNCONDITIONAL owner hop: the hop is never weakened (a dead agent
+# cannot be detected at send time), so duplicate NOTIFICATION is suppressed instead, keyed to
+# the CONDITION. Detection and the agent hop keep running at full rate.
+OWNER_DEDUP_S = 6 * 3600      # an UNCHANGED condition re-notifies the owner no sooner than this
+# A detector outage must NOT page every seat as DOWN (a paging storm trains everyone to ignore
+# pages), but "the detector is broken" must not be silent either. After this many CONSECUTIVE
+# cycles in which every probe errored, ONE page says the DOWN detector itself is blind.
+DOWN_DETECTOR_BLIND_CYCLES = 5
+DETECTOR_KEY = "_detector"   # bookkeeping row in down_state; '_' so it is never a seat
 QUEUE_ALERT_AFTER_S = 3600      # alert on mail queued >1h (before 48h silent expiry)
 QUEUE_ALERT_EVERY_S = 6 * 3600  # re-alert cadence per stuck message
 # Per-runtime prompt signatures + runtime resolution live in ONE importable home
@@ -95,6 +116,7 @@ from runtime_signatures import (  # noqa: E402
     declared_runtime,
     declared_runtime_disabled,
     gemini_idle_routing_armed,
+    grok_composer_line_state,
 )
 # One warning per seat (not per cycle — the router is a fresh process every minute) when a row
 # declares a runtime that has no prompt signature here. Keyed "<agent>=<value>" so a corrected
@@ -213,6 +235,82 @@ def tmux(*args, timeout=10):
     return subprocess.run(["tmux", *args], capture_output=True, text=True, timeout=timeout)
 
 
+# --- Escalation seam ------------------------------------------------------------------------
+# WHO hears an alarm about a seat is answered by ONE implementation,
+# scripts/identity_store/alarm_routing.escalation_targets; the router imports it and keeps NO
+# local copy (a fallback that reads a different source is a second rule that disagrees).
+# CONTRACT, asserted HERE at import by BINDING the call this router makes, rather than counting
+# parameters (binding keeps passing when someone adds a defaulted argument):
+#     escalation_targets(seat) -> list[str]   (OWNER_CHANNEL last, the seat never in it)
+# An ABSENT module and a BROKEN contract are different states and never share a code path: the
+# first is known with a defined behaviour, the second is a bug and must be loud.
+#: The terminal hop: a CHANNEL sentinel rendered to Telegram, never a msg_store recipient.
+OWNER_CHANNEL = "owner:tg"
+_OI_IMPORT_ERROR = None
+_OI_CONTRACT_ERROR = None
+try:
+    from scripts.identity_store.alarm_routing import (  # noqa: F401
+        escalation_targets as _oi_escalation_targets)
+except ImportError as _e:          # absent module ONLY — never a catch-all here
+    _oi_escalation_targets = None
+    _OI_IMPORT_ERROR = repr(_e)
+else:
+    try:
+        import inspect as _inspect
+        _inspect.signature(_oi_escalation_targets).bind("probe-seat")
+    except TypeError as _e:
+        _OI_CONTRACT_ERROR = (
+            f"alarm_routing.escalation_targets does not accept the call this router makes, "
+            f"escalation_targets(<seat>): {_e}")
+    except (ValueError, AttributeError) as _e:
+        _OI_CONTRACT_ERROR = f"could not verify the escalation contract: {_e!r}"
+
+
+class EscalationSeamUnavailable(RuntimeError):
+    """The one escalation implementation could not be IMPORTED — a known state. Callers page
+    the owner channel naming it, and never guess a chain from a second rule."""
+
+
+class EscalationSeamBroken(RuntimeError):
+    """The seam imported but does not match the agreed contract — a BUG, deliberately a
+    different exception from Unavailable so the two can never share a handler."""
+
+
+def escalation_targets(seat: str) -> list[str]:
+    """WHO to tell about `seat`, answered ONLY by alarm_routing.escalation_targets (DB-first:
+    lineages.reports_to). The seam returns the finished list — agents first, the owner channel
+    last, the named seat never present. NO broad except here: a contract error must be loud.
+    Raises EscalationSeamUnavailable (absent) or EscalationSeamBroken (wrong shape); the caller
+    pages the owner channel naming whichever it was. `seat` is dropped from the result
+    regardless."""
+    if _OI_CONTRACT_ERROR:
+        raise EscalationSeamBroken(_OI_CONTRACT_ERROR)
+    if _oi_escalation_targets is None:
+        raise EscalationSeamUnavailable(
+            f"scripts.identity_store.alarm_routing is not importable: {_OI_IMPORT_ERROR}")
+    chain = _oi_escalation_targets(seat)
+    if not isinstance(chain, list):
+        # The RETURN TYPE is contract too; a signature cannot express it, so it is checked here.
+        raise EscalationSeamBroken(
+            f"alarm_routing.escalation_targets returned {type(chain).__name__}, expected list")
+    return [t for t in chain if t != seat]
+
+
+def _send_page(to: str, subject: str, body: str) -> None:
+    """Deliver one page. OWNER_CHANNEL is a CHANNEL sentinel, not an agent id: it is rendered to
+    Telegram, never written to msg_store as a recipient. Raises on a failed agent send so the
+    caller can count a dead hop as one more reason to reach the owner."""
+    if to == OWNER_CHANNEL:
+        telegram(f"{subject}\n{body}")
+        return
+    r = subprocess.run([sys.executable, str(CODE_ROOT / "msg_store.py"), "send",
+                        "--from", "message-router", "--to", to,
+                        "--subject", subject, "--body", body],
+                       capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        raise RuntimeError(f"msg_store send exited {r.returncode}: {(r.stderr or '').strip()[:200]}")
+
+
 def live_sessions() -> set:
     r = tmux("list-sessions", "-F", "#{session_name}")
     if r.returncode != 0:
@@ -245,6 +343,39 @@ def hold_for_attached(attached: int, idle_secs: float,
     starved gm/ob for hours (2026-08-15). Typed-composer / busy protection is
     separate (agent_is_idle), so delivering to an idle-past-ttl pane is safe."""
     return attached > 0 and idle_secs < ttl
+
+
+def client_presence() -> dict:
+    """session -> seconds since the NEWEST input from any client attached to it (one global
+    `tmux list-clients` per cycle). Presence is per CLIENT input, not #{session_activity}:
+    session activity also moves on the agent's OWN output, so a persistent viewer (a
+    dashboard terminal's `tmux attach`) on a busy pane read as a human mid-conversation and
+    froze that agent's mail. tmux updates client_activity only on that client's input, so a
+    viewer that is not typing stops holding mail after CLIENT_ACTIVE_TTL_S."""
+    r = tmux("list-clients", "-F", "#{client_session}|#{client_activity}")
+    out = {}
+    if r.returncode != 0:
+        return out
+    now = time.time()
+    for line in (r.stdout or "").strip().split("\n"):
+        name, _, act = line.rpartition("|")
+        try:
+            age = now - int(act)
+        except ValueError:
+            continue
+        if name and (name not in out or age < out[name]):
+            out[name] = age
+    return out
+
+
+def attached_presence_hold(client_age: dict, session: str, now: float):
+    """The hold detail string when a client attached to `session` typed within
+    CLIENT_ACTIVE_TTL_S (a human is plausibly mid-conversation), else None (deliver)."""
+    age = client_age.get(session)
+    if age is None or not hold_for_attached(1, age, ttl=CLIENT_ACTIVE_TTL_S):
+        return None
+    rel = time.strftime("%H:%M:%SZ", time.gmtime(now + CLIENT_ACTIVE_TTL_S - age))
+    return f"attached client typed {int(age)}s ago (<{CLIENT_ACTIVE_TTL_S}s), releases ~{rel}"
 
 
 def agent_tmux_session(agent_id: str) -> str:
@@ -685,7 +816,129 @@ def reachability_probe(session: str, runtime: str, agent: str, msg_id: str):
         return None   # observability must never break delivery
 
 
+# --- Deliver now (scripts/deliver_now.py) -----------------------------------------
+# A person pressed "Deliver now" for this session (the gateway's POST /deliver-now wrote the
+# waiver; agents never do). It waives only the SOFT gates below: cooldown, attached-active,
+# breathe window, and a Claude turn in progress (Claude Code queues typed input mid-turn). The
+# HARD gates stay: typed-but-unsent text, a permission prompt or any screen without an empty
+# composer, a stranded paste chip, Codex/Grok mid-turn (inject() re-checks those itself).
+
+def deliver_now_waiver(session: str):
+    try:
+        import deliver_now
+        return deliver_now.active_waiver(ORCHESTRA_DIR, session)
+    except Exception:  # noqa: BLE001 — no waiver is the safe answer
+        return None
+
+
+def claude_mid_turn_safe(session: str) -> bool:
+    """A Claude pane mid-turn may take a typed message (it queues it) only when its composer is on
+    screen, empty, and holds no stranded chip, and no hook says it is waiting on a permission.
+    A permission dialog replaces the composer, so "no composer visible" refuses it too."""
+    hs = hook_state(session)
+    if hs is not None and hs[0] == "waiting_permission":
+        return False
+    _, line, ok = pane_split(session, "claude")
+    if not ok:
+        return False
+    if composer_has_stranded_chip(line):
+        return False
+    ansi = tmux("capture-pane", "-t", session, "-e", "-p")
+    if ansi.returncode != 0:
+        return False
+    sig = PROMPT_SIGNATURES["claude"]
+    prompt_lines = [l for l in ansi.stdout.split("\n") if sig["prompt_char"] in l]
+    if not prompt_lines:
+        return False
+    return input_line_state(prompt_lines[-1], sig) != "typed"
+
+
+# --- Stuck machine-nudge submission ---------------------------------------------------
+# A machine-authored nudge typed into a pane with `tmux send-keys "<text>" Enter` in ONE call
+# arrives as a single burst; the claude composer classifies the burst as a paste and inserts the \r as a
+# literal newline, so the line sits in the composer unsubmitted. The seat then reads as not-idle
+# (typed-text guard) and EVERY message to it is held until someone presses Enter. These shapes
+# are never typed by a person, so an unattached pane holding one gets a bare Enter from us.
+BOT_NUDGE_PATTERNS = (
+    re.compile(r"^\[MSG from", re.I),
+    re.compile(r"^check (your )?inbox\b", re.I),
+    re.compile(r"^drain your inbox\b", re.I),
+    re.compile(r"^you are (promoted|the (newly promoted )?canonical)\b", re.I),
+    re.compile(r"^read /tmp/agent-(msg|init)-[\w.-]+\.md\b", re.I),
+    # The longer wake form, with the assigned work appended after the command: an
+    # end-of-line-only rule misses it and leaves our own text blocking the seat.
+    re.compile(r"^read your durable inbox with:\s*python3\s+\S*msg_store\.py\s+inbox\s+--agent\s+\S+\b", re.I),
+    re.compile(r"python3 ~?/?\S*msg_store\.py inbox --agent \S+\s*$", re.I),
+)
+
+# Runtimes whose composer is a single line we can read whole. agy's composer is multi-line and
+# pane_split hands back everything under the last '>' line, so a person's text after a nudge
+# would be submitted with it: never press Enter there.
+_BOT_NUDGE_RUNTIMES = ("claude", "codex")
+
+
+def is_bot_nudge_text(text: str) -> bool:
+    t = (text or "").strip()
+    return bool(t) and any(p.search(t) for p in BOT_NUDGE_PATTERNS)
+
+
+def stuck_bot_nudge(session: str, runtime: str = DEFAULT_RUNTIME) -> str | None:
+    """A TYPED (non-dim) composer line that matches a known machine-authored nudge shape.
+    Ghost suggestions (dim) and human drafts are never matched; runtimes outside
+    _BOT_NUDGE_RUNTIMES (agy, grok, unknown) are never matched."""
+    if runtime not in _BOT_NUDGE_RUNTIMES:
+        return None
+    sig = PROMPT_SIGNATURES.get(runtime, PROMPT_SIGNATURES[DEFAULT_RUNTIME])
+    prompt_char = sig["prompt_char"]
+    ansi = tmux("capture-pane", "-t", session, "-e", "-p")
+    if ansi.returncode != 0:
+        return None
+    prompt_lines = [l for l in ansi.stdout.split("\n") if prompt_char in l]
+    if not prompt_lines or input_line_state(prompt_lines[-1], sig) != "typed":
+        return None
+    _, input_line, ok = pane_split(session, runtime)
+    if not ok:
+        return None
+    if runtime == "codex":
+        input_line = _codex_composer_block(session) or input_line
+    content = input_line.split(prompt_char, 1)[-1].strip().lstrip("\u00a0").strip()
+    return content if is_bot_nudge_text(content) else None
+
+
+def submit_stuck_bot_nudge(session: str, runtime: str = DEFAULT_RUNTIME) -> bool:
+    """Press ONE bare Enter on a stuck bot nudge (never re-send text), verify it left the
+    composer, log by effect. Caller guarantees the pane is unattached."""
+    stuck = stuck_bot_nudge(session, runtime)
+    if not stuck:
+        return False
+    tmux("send-keys", "-t", session, "Enter")
+    time.sleep(1.5)
+    if stuck_bot_nudge(session, runtime):
+        log(f"STUCK-NUDGE {session}: Enter did not submit {stuck[:60]!r}; leaving for next cycle")
+        return False
+    log(f"STUCK-NUDGE {session}: submitted a machine nudge left unsubmitted in the composer: {stuck[:80]!r}")
+    return True
+
+
 # --- Stuck-injection self-cleanup ---------------------------------------------
+
+def _grok_live_composer_is_typed(session: str, sig: dict) -> bool:
+    """True only when router delivery into grok is armed AND the live grok composer holds
+    typed text. Grok's prompt glyph is also Claude's, and the stuck-injection pass runs before
+    the idle gate and sends C-u / Enter, so an unarmed grok pane must match nothing. Any reader
+    or capture failure => False (never type)."""
+    try:
+        import grok_context
+        armed = grok_context.delivery_armed()
+    except Exception:  # noqa: BLE001 — a reader fault must not type
+        return False
+    if not armed:
+        return False
+    ansi = tmux("capture-pane", "-t", session, "-e", "-p")
+    if ansi.returncode != 0:
+        return False
+    return grok_composer_line_state(ansi.stdout, sig) == "typed"
+
 
 def stuck_own_message(session: str, runtime: str = DEFAULT_RUNTIME) -> str | None:
     """If the input line holds a TYPED (non-dim) line that starts with our own
@@ -696,6 +949,8 @@ def stuck_own_message(session: str, runtime: str = DEFAULT_RUNTIME) -> str | Non
     #1b: runtime-signature-aware — finds the input line by the runtime's
     prompt_char (default claude ⇒ byte-identical)."""
     sig = PROMPT_SIGNATURES.get(runtime, PROMPT_SIGNATURES[DEFAULT_RUNTIME])
+    if runtime == "grok" and not _grok_live_composer_is_typed(session, sig):
+        return None
     prompt_char = sig["prompt_char"]
     ansi = tmux("capture-pane", "-t", session, "-e", "-p")
     if ansi.returncode != 0:
@@ -1031,7 +1286,34 @@ def _submitted(session: str, runtime: str, scrollback, input_line: str, probe: s
     return False
 
 
-def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME, msg_id=None) -> str:
+def fence_check(session: str, **kw):
+    """Log-only pane fence (scripts/lineage_daemon/wal/fence.py): is `session` the canonical pane
+    of its lineage? A mismatch is RECORDED in fencing_violations, never blocked, so a retired
+    pane that is still receiving mail becomes a number instead of a surprise. Lazy import and
+    fail-soft: the fence can never stop a delivery."""
+    try:
+        _here = os.path.dirname(os.path.abspath(__file__))     # scripts/
+        if _here not in sys.path:
+            sys.path.insert(0, _here)
+        from lineage_daemon.wal.fence import check_pane
+        return check_pane(session, **kw)
+    except Exception:  # noqa: BLE001 — observe only
+        return None
+
+
+def codex_idle_release(runtime: str, visibly_idle: bool) -> bool:
+    """Codex-only equivalent of Claude's end-of-turn queue release.
+
+    Codex emits no Claude-style Stop-hook queue release, so its mail always waited out the
+    full breathe window after every turn. Once its own idle prompt is visibly back, that turn
+    boundary is treated like Claude's release: only the quiet/breathe delay is skipped. The
+    attached-client guard, the cooldown and the once-only claim still apply."""
+    return runtime == "codex" and bool(visibly_idle)
+
+
+# Delivery model: see docs/DELIVERY.md
+def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME, pre_paste=None,
+           msg_id=None) -> str:
     """_inject_unlocked under the ONE cross-process pane lock every typer shares (pane_lock.py):
     the gateway, approval_resume, the nudger and the watchers take the same lock, so two senders
     never glue or split each other's text in one pane. Adds one outcome:
@@ -1046,9 +1328,12 @@ def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME, msg_id=None)
             # whose text a guard is about to find still in the composer), and marks it typed when
             # the paste is confirmed. Only a row THIS call wrote is ever cleared here.
             rec = []
-            # msg_id only when known, so the unlocked call keeps its original signature otherwise.
-            _mid = {"msg_id": msg_id} if msg_id is not None else {}
-            res = _inject_unlocked(session, text, runtime, journal=rec, **_mid)
+            # Deliver now's pre-paste look and the row id ride along only when given, so the plain
+            # call is unchanged.
+            _kw = {"pre_paste": pre_paste} if pre_paste is not None else {}
+            if msg_id is not None:
+                _kw["msg_id"] = msg_id
+            res = _inject_unlocked(session, text, runtime, journal=rec, **_kw)
             if rec and res in ("submitted", "held"):
                 # submitted, or nothing was pasted. 'failed' KEEPS its row: a paste can land unseen
                 # (an unmarked row is report-only at the reconcile); 'stuck' keeps it as evidence.
@@ -1092,7 +1377,7 @@ def _input_line_typed(session: str, runtime: str = DEFAULT_RUNTIME) -> bool:
 
 
 def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, journal=None,
-                     msg_id=None) -> str:
+                     pre_paste=None, msg_id=None) -> str:
     """Inject with three-stage verification. Returns:
       'submitted'  — text confirmed in scrollback, input line clear
       'stuck'      — text landed in input line but Enter never took (left as-is)
@@ -1107,6 +1392,7 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, jo
     verification target the RIGHT input line on an agy/Gemini pane (default
     claude ⇒ byte-identical).
     """
+    fence_check(session, seam="router")        # record only; delivery unchanged
     probe = text[:60]
 
     # Stage 0: exit copy-mode if active (else the paste/Enter gets swallowed)
@@ -1141,6 +1427,12 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, jo
             log(f"stranded paste-chip in {session} composer — E7 guard: no repaste, holding")
             return "stuck"
         _ghost_path(session, "0.5", msg_id, "chip is a ghost, not a stranded paste")
+
+    # Stage 0.55 (Deliver now, mid-turn): the caller's last look, right before any key is sent.
+    # 'held' = nothing was typed into the pane; the caller returns the row to pending.
+    if pre_paste is not None and not pre_paste():
+        log(f"DELIVER-NOW pre-paste check failed in {session} -- nothing typed, holding")
+        return "held"
 
     # Stage 0.6 (De-duplication guard): if the probe text is ALREADY in the input
     # line/composer from a previous unsubmitted attempt, never paste another duplicate copy!
@@ -1344,6 +1636,59 @@ def _hook_surfaced(row) -> bool:
         return bool(isinstance(m, dict) and m.get("surfaced_by"))
     except (ValueError, TypeError):
         return False
+
+
+# Double delivery: a pending row the Stop-hook digest already SHOWED the agent (the hook stamps
+# metadata surfaced_by + hook_surfaced_at) could ALSO be typed into the pane by this loop before
+# the agent acked it, so the agent saw it twice. _hook_surfaced gated only the router's own digest
+# path. A shown, still-pending row now waits HOOK_SURFACED_GRACE_S from its LAST surfacing; past
+# that it is injected once as before, so an agent that ignored the digest still gets it. A hook
+# digest is a NOTICE, not proof an agent consumed the row, so the grace is short: a long grace
+# combined with the hook restamping on every Stop would turn into a permanent inbox sink.
+# Unreadable stamps deliver as before (never lose mail). Critical rows are never deferred.
+HOOK_SURFACED_GRACE_S = int(os.environ.get("ROUTER_HOOK_SURFACED_GRACE_S", "30"))
+
+
+def _hook_surfaced_at(row):
+    """The row's hook_surfaced_at as an aware datetime, or None when absent or unreadable."""
+    meta = row.get("metadata")
+    try:
+        m = json.loads(meta) if isinstance(meta, str) else (meta or {})
+        if not isinstance(m, dict) or not m.get("hook_surfaced_at"):
+            return None, m if isinstance(m, dict) else {}
+        at = datetime.fromisoformat(str(m["hook_surfaced_at"]).replace("Z", "+00:00"))
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=timezone.utc)
+        return at, m
+    except (ValueError, TypeError, AttributeError):
+        return None, {}
+
+
+def hook_surfaced_defer(row, now: float):
+    """(surfaced_by, seconds_left) when a Stop hook showed this pending row less than
+    HOOK_SURFACED_GRACE_S ago and it is not critical; else None (inject as before)."""
+    if row.get("priority") == "critical":
+        return None
+    at, m = _hook_surfaced_at(row)
+    if at is None or not m.get("surfaced_by"):
+        return None
+    age = max(0.0, now - at.timestamp())
+    if age >= HOOK_SURFACED_GRACE_S:
+        return None
+    return str(m["surfaced_by"]), int(HOOK_SURFACED_GRACE_S - age)
+
+
+def hook_surfaced_ready(row, now: float) -> bool:
+    """Whether a hook-only notice exhausted its short duplicate grace.
+
+    An expired notice bypasses the breathe window; otherwise the fresh hook/pane activity
+    that came with the notice would turn a short grace into an indefinite delivery hold."""
+    if row.get("priority") == "critical":
+        return False
+    at, _m = _hook_surfaced_at(row)
+    if at is None:
+        return False
+    return now - at.timestamp() >= HOOK_SURFACED_GRACE_S
 
 
 def partition_for_digest(rows, age_min):
@@ -1666,6 +2011,223 @@ def save_cooldowns(cd: dict):
     COOLDOWN_FILE.write_text(json.dumps(cd))
 
 
+def load_downs() -> dict:
+    """DOWN-seat anchors + page throttle. Persisted so an outage's age and its page throttle
+    survive a router restart; a fresh anchor each cycle would page forever claiming '0m down'.
+    Unreadable/absent => {} (an outage simply re-anchors)."""
+    try:
+        d = json.loads(DOWN_FILE.read_text())
+        return d if isinstance(d, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_downs(d: dict):
+    """Persist DOWN state. Fail-soft: losing this file costs a re-anchor, never mail."""
+    try:
+        DOWN_FILE.parent.mkdir(parents=True, exist_ok=True)
+        DOWN_FILE.write_text(json.dumps(d, indent=1))
+    except OSError as e:
+        log(f"[down-state] persist failed (non-fatal): {e}")
+
+
+def _detector_status(session: str) -> dict:
+    """The state detector's answer for a session, or {} when it cannot be consulted.
+    Separate seam so tests inject it and the DOWN probe never re-implements liveness."""
+    import importlib
+    A = importlib.import_module("agent-status")
+    return A.get_agent_status(session) or {}
+
+
+def seat_is_down(session: str, cache: dict | None = None,
+                 errors: list | None = None) -> bool:
+    """True when the seat's agent process IS GONE while its tmux pane survives (a clean exit
+    leaves a shell prompt; every pane-existence check reads healthy and agent_is_idle says
+    'not-idle' forever).
+
+    The detector is the witness, never the pane: state=='stopped', or an explicit
+    process.running False.
+
+    FAIL-SAFE IN THE OTHER DIRECTION than agent_is_idle: an unreadable detector returns False
+    (not down). agent_is_idle fails toward HOLD because a wrong delivery clobbers a live pane;
+    this fails toward NOT-PAGING because a wrong page wakes people at night and a paging storm
+    on a detector outage trains everyone to ignore pages. A probe error is appended to `errors`
+    so a BLIND detector is itself paged once (note_detector_health).
+
+    `cache` is a per-cycle dict: a stopped seat with N queued rows costs ONE probe, not N."""
+    if cache is not None and session in cache:
+        return cache[session]
+    down = False
+    try:
+        st = _detector_status(session)
+        proc = st.get("process") or {}
+        down = st.get("state") == "stopped" or proc.get("running") is False
+    except Exception as e:  # noqa: BLE001 — never let a detector fault page or crash the router
+        down = False
+        if errors is not None:
+            errors.append((session, repr(e)))
+    if cache is not None:
+        cache[session] = down
+    return down
+
+
+def mark_seat_down(down_state: dict, seat: str, now: float) -> float:
+    """Anchor the outage at the FIRST cycle the router saw it, persisted. Never inferred from a
+    process start: a resumed seat must not inherit a stale age. Returns the anchor."""
+    rec = down_state.setdefault(seat, {})
+    if not rec.get("first_seen"):
+        rec["first_seen"] = now
+    return rec["first_seen"]
+
+
+def _fmt_down(seconds: float) -> str:
+    s = int(max(0, seconds))
+    h, m = s // 3600, (s % 3600) // 60
+    return f"{h}h{m:02d}m" if h else f"{m}m"
+
+
+def clear_seat_down(down_state: dict, seat: str, now: float | None = None,
+                    send_clear: bool = True) -> None:
+    """The seat answered again: drop the anchor so its held rows retry normally and a LATER
+    outage gets a fresh age. If the owner was told this outage STARTED, tell them ONCE that it
+    ENDED: an alarm that never says it is over is the mirror failure of a silent one."""
+    rec = down_state.pop(seat, None)
+    if not send_clear or not rec or not rec.get("owner_paged_at"):
+        return
+    now = time.time() if now is None else now
+    down_for = _fmt_down(now - rec.get("first_seen", now))
+    try:
+        _send_page(OWNER_CHANNEL,
+                   f"[RECOVERED] {seat}: answering again after {down_for}",
+                   f"{seat} is back: the detector reads it live again, so the messages held "
+                   f"for it are retried now. It was down {down_for}. You are told because you "
+                   f"were told it went down.")
+    except Exception as e:  # noqa: BLE001 — a failed clear-page must never break the cycle
+        log(f"[down-page] clear-page for {seat} failed: {e}")
+
+
+def _identity_note(seat: str, agent: str | None) -> str:
+    """The probe measures the SESSION (what has a pane); the count is the AGENT's mail. They
+    diverge only on a forwarded row, and a reader must not be surprised by that."""
+    if not agent or agent == seat:
+        return ""
+    return (f"NOTE: the pane is the session '{seat}'; the queued mail is addressed to the agent "
+            f"'{agent}'. The probe measures the pane, the count is the agent's mail.\n")
+
+
+def page_seat_down(down_state: dict, seat: str, held: int, now: float,
+                   first_seen_down: float, agent: str | None = None) -> bool:
+    """PAGE that `seat` is down, to its escalation — never to itself. Carries the facts so the
+    reader can act on one read. Throttled per seat, but NEVER latched off: a still-down seat
+    pages again every DOWN_PAGE_REPEAT_S, because two alarms and then silence IS the defect.
+    Paging is not delivery: the caller leaves every row PENDING. Returns True if it paged."""
+    rec = down_state.setdefault(seat, {})
+    if now - rec.get("paged_at", 0) < DOWN_PAGE_REPEAT_S:
+        return False
+    rec["paged_at"] = now
+    down_for = _fmt_down(now - first_seen_down)
+    subject = f"[DOWN] {seat}: agent process is gone, {held} message(s) held ({down_for})"
+    body = (f"{seat} is DOWN: the state detector reads it stopped (no agent process running) "
+            f"while its tmux pane is still alive, typically at a shell prompt.\n"
+            f"Down for: {down_for} (first seen by the router at "
+            f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(first_seen_down))}).\n"
+            f"Held messages for {seat}: {held} — all still PENDING, nothing acknowledged; "
+            f"they are retried the moment it answers again.\n"
+            f"Nudges to a DOWN seat type into its SHELL, so do not nudge it.\n"
+            f"{_identity_note(seat, agent)}"
+            f"Resume, if that is the call (a person decides, not the router): clear the shell "
+            f"line first (tmux send-keys -t {seat}: C-c then C-u), then send the seat's resume "
+            f"command, with Enter as a SEPARATE send-keys.")
+    # THE OWNER HOP IS UNCONDITIONAL: a delivery that looks healthy is not evidence anyone
+    # heard it. Fatigue is controlled by deduping the CHANNEL on the condition, never by
+    # weakening the hop. NO broad except around escalation_targets: an ABSENT seam and a
+    # BROKEN contract are distinct states, both named to the owner rather than swallowed.
+    seam_error = None
+    try:
+        chain = list(escalation_targets(seat))
+    except EscalationSeamUnavailable as e:
+        seam_error = f"the escalation seam is unavailable — {e}"
+        chain = []
+        log(f"[down-page] escalation seam unavailable for {seat}: {e}")
+    except EscalationSeamBroken as e:
+        seam_error = f"the escalation seam is BROKEN (contract mismatch) — {e}"
+        chain = []
+        log(f"[down-page] escalation seam broken for {seat}: {e}")
+    except Exception as e:  # noqa: BLE001 — the seam RAISED at runtime (an unreadable DB, say).
+        # Arity is asserted at import and the return shape raises EscalationSeamBroken above,
+        # so neither lands here; escalation must never require a working seam to reach the owner.
+        seam_error = f"the escalation seam RAISED at runtime — {e!r}"
+        chain = []
+        log(f"[down-page] escalation seam raised for {seat}: {e!r}")
+    agent_hops = [t for t in chain if t != OWNER_CHANNEL]
+    failures = []
+    for to in agent_hops:
+        try:
+            _send_page(to, subject, body)
+        except Exception as e:  # noqa: BLE001 — a dead hop is one MORE reason to reach the owner
+            failures.append(f"{to}: {e}")
+            log(f"[down-page] send to {to} failed for {seat}: {e}")
+    fingerprint = f"down:{seat}:{int(first_seen_down)}"
+    last = rec.get("owner_paged_at", 0) if rec.get("owner_fingerprint") == fingerprint else 0
+    if now - last >= OWNER_DEDUP_S:
+        owner_body = body
+        if seam_error:
+            owner_body += (f"\n\nESCALATION FAILURE: {seam_error}\nNobody else could be told: "
+                           f"the router cannot resolve WHO owns {seat} until that is fixed.")
+        elif failures:
+            owner_body += (f"\n\nThe agent hop FAILED ({'; '.join(failures)}) — you may be "
+                           f"the only one who knows.")
+        elif agent_hops:
+            owner_body += (f"\n\nAlso told: {', '.join(agent_hops)}. You are told regardless, "
+                           f"because a delivery that looks healthy is not evidence anyone "
+                           f"heard it.")
+        try:
+            _send_page(OWNER_CHANNEL, subject, owner_body)
+            rec["owner_paged_at"] = now
+            rec["owner_fingerprint"] = fingerprint
+        except Exception as e:  # noqa: BLE001
+            log(f"[down-page] terminal hop failed for {seat}: {e}")
+    return True
+
+
+def note_detector_health(down_state: dict, probed: int, errored: int, now: float,
+                         last_error: str | None) -> bool:
+    """Track whether the DOWN detector itself is working, and page ONCE when it is not.
+
+    A cycle counts as BLIND only when it probed at least one seat and EVERY probe errored: one
+    seat's probe failing is a seat problem, not a detector outage, and must never page. After
+    DOWN_DETECTOR_BLIND_CYCLES consecutive blind cycles, one page — to gm and the owner channel,
+    naming the error — says the detector is blind. One page about the DETECTOR, never one per
+    seat. Throttled like every other page and never latched off. Returns True if it paged."""
+    rec = down_state.setdefault(DETECTOR_KEY, {})
+    blind = probed > 0 and errored >= probed
+    if not blind:
+        rec["consecutive"] = 0
+        return False
+    rec["consecutive"] = rec.get("consecutive", 0) + 1
+    rec["last_error"] = last_error or rec.get("last_error")
+    if rec["consecutive"] < DOWN_DETECTOR_BLIND_CYCLES:
+        return False
+    if now - rec.get("paged_at", 0) < DOWN_PAGE_REPEAT_S:
+        return False
+    rec["paged_at"] = now
+    subject = (f"[DOWN-DETECTOR BLIND] agent-status unreadable for "
+               f"{rec['consecutive']} consecutive router cycles")
+    body = (f"The router's DOWN probe cannot read the state detector: every one of "
+            f"{probed} probe(s) errored, for {rec['consecutive']} consecutive cycles.\n"
+            f"Last error: {rec.get('last_error')}\n"
+            f"CONSEQUENCE: while the detector is blind the router CANNOT tell a DOWN seat from "
+            f"a busy one, so it falls back to holding mail silently. Mail is queued, not lost.\n"
+            f"This is ONE page about the detector, not one per seat, by design.\n"
+            f"Check: python3 scripts/agent-status.py <any-seat>")
+    for to in ["gm", OWNER_CHANNEL]:
+        try:
+            _send_page(to, subject, body)
+        except Exception as e:  # noqa: BLE001 — the terminal hop is last, never swallowed
+            log(f"[down-detector] send to {to} failed: {e}")
+    return True
+
+
 def load_holds() -> dict:
     """Durable state, with a one-time migration from the legacy /tmp path. The
     durable file WINS when both exist (it is the newer writer); the legacy file is
@@ -1919,6 +2481,36 @@ def _registry_db_path() -> str:
     return str(ORCHESTRA_DIR / "state" / "orchestra-registry.db")
 
 
+def is_service_target(agent: str, cache: dict | None = None, db_path=None) -> bool:
+    """True when `agent`'s LINEAGE runtime is 'service'.
+
+    A service seat has no agent CLI in its pane (for example a shell an operator reaches over
+    SSH that reads its mail from msg_store itself). Typing into its pane would land in a
+    shell, and the not-idle hold path would read 'no agent process' as an outage and keep
+    escalating. Its rows stay PENDING for their own reader and age out at 48 h like any
+    other row.
+
+    Read-only, once per agent per cycle (`cache`). FAIL-OPEN to False (normal delivery) on
+    any read error: a DB hiccup must never silently stop delivery to a real agent."""
+    if cache is not None and agent in cache:
+        return cache[agent]
+    svc = False
+    try:
+        import sqlite3 as _sq
+        dbp = db_path or _registry_db_path()
+        con = _sq.connect(f"file:{dbp}?mode=ro", uri=True)
+        try:
+            row = con.execute("SELECT runtime FROM lineages WHERE root=?", (agent,)).fetchone()
+        finally:
+            con.close()
+        svc = bool(row) and row[0] == "service"
+    except Exception:  # noqa: BLE001 - fail-open, see docstring
+        svc = False
+    if cache is not None:
+        cache[agent] = svc
+    return svc
+
+
 def _target_rotated_within(session: str, now: float, window_s: float = 900) -> bool:
     """True iff the target's canonical seat had a generation PROMOTED within window_s
     (gm msg_86bcc168 item 5: never terminate mail within 15 min of a rotation of the
@@ -1978,7 +2570,7 @@ def close_park_episode(hold_state, session) -> int:
 
 
 def note_hold(hold_state, session, msg, reason, now, queue_n=None,
-              dead_letter_fn=None, notify_fn=None, dl_batch=None, park_fn=None):
+              dead_letter_fn=None, notify_fn=None, dl_batch=None, park_fn=None, detail=None):
     """R2: record a held row so it is NEVER silent. (1) Throttled log: each
     (session|reason) at most once / HOLD_LOG_THROTTLE_S — a persistent hold stays
     visible without per-minute spam. (2) SLA escalation (guard-a generalized to
@@ -1992,8 +2584,9 @@ def note_hold(hold_state, session, msg, reason, now, queue_n=None,
         # oldest row, which read as oldest-starves-younger in gm's trace; carry
         # the recipient's queue depth so a hold is visibly whole-queue.
         depth = f", {queue_n} queued for this recipient" if queue_n else ""
+        extra = f"; {detail}" if detail else ""
         log(f"HELD {session} :: {reason} (msg {msg['id']}, "
-            f"age {int(_msg_age_s(msg, now))}s{depth} — not delivered this cycle)")
+            f"age {int(_msg_age_s(msg, now))}s{depth}{extra} — not delivered this cycle)")
         rec["logged_at"] = now
     # leg-4 latent defect (a): escalation + dead-letter state is PER MESSAGE, not
     # per (session|reason) bucket. The bucket latch meant that once one row
@@ -2177,6 +2770,7 @@ def merge_forwarded_meta(store, msg_id: str, forwarded_from: str) -> None:
 
 # --- Main ---------------------------------------------------------------------
 
+# Delivery model: see docs/DELIVERY.md
 def main():
     # Lock (stale after 5 min)
     if LOCKFILE.exists():
@@ -2208,9 +2802,14 @@ def main():
 
         sessions = live_sessions()
         sess_info = session_info()
+        client_age = client_presence()   # one `tmux list-clients` per cycle
         cooldowns = load_cooldowns()
         alerts = load_alerts()
         hold_state = load_holds()      # R2: throttled hold-log + SLA-escalate state
+        # DOWN-seat anchors + page throttle, persisted beside the holds so an outage's age
+        # survives router restarts (a fresh anchor every cycle would page forever claiming
+        # '0m down').
+        down_state = load_downs()
         meta = load_agent_meta()
         # Recipient status for the charter bumper's bootstrap exemption
         # (provisioning newborns are being oriented, not dispatched).
@@ -2239,6 +2838,10 @@ def main():
                 cleanup_stuck_injection(sess, store, _crt)
             except Exception as e:
                 log(f"cleanup error in {sess}: {e}")
+            try:
+                submit_stuck_bot_nudge(sess, _crt)
+            except Exception as e:
+                log(f"stuck-nudge error in {sess}: {e}")
 
         with store._conn() as conn:
             rows = conn.execute(
@@ -2253,8 +2856,13 @@ def main():
             _qdepth[_pm["to_agent"]] = _qdepth.get(_pm["to_agent"], 0) + 1
 
         delivered_to = set()   # keyed on RESOLVED SESSION (not to_agent) — see below
+        _svc_cache = {}        # agent -> lineage runtime is 'service' (once per cycle)
         _digest_attempted = set()  # DEC-1787031444: one digest attempt per session/cycle
         _dl_batch = {}             # leg-4 act 2: (sender, target-class) -> [ids]
+        # DOWN probe cache: one detector call per recipient per cycle (a stopped seat with N
+        # queued rows must not cost N probes). Cleared every cycle by scope.
+        _down_cache = {}
+        _down_errors = []          # (session, error) per failed probe THIS cycle
         for msg in pending:
             agent = msg["to_agent"]
 
@@ -2311,14 +2919,41 @@ def main():
             if session not in sessions:
                 continue  # head not running on this machine; message stays queued
 
+            # SERVICE TARGET: a lineage whose runtime is 'service' (a shell pane by design) is
+            # never typed into, and it is decided BEFORE every hold path (attached-active,
+            # breathe-window, not-idle), because a note_hold escalates on its SLA too.
+            # The row stays PENDING for the seat's own reader (msg_store) and ages out at 48 h.
+            _svc_agent = agent_for_session(session, meta) or agent
+            if is_service_target(_svc_agent, cache=_svc_cache):
+                if _svc_cache.get(f"logged:{_svc_agent}") is None:
+                    _svc_cache[f"logged:{_svc_agent}"] = True
+                    log(f"SERVICE {session} :: held for its own reader "
+                        f"(lineage runtime=service; no tmux delivery, no hold escalation) "
+                        f"{_qdepth.get(agent, 1)} pending")
+                continue
+
+            # The agent's Stop hook already SHOWED this row and it is not acked yet: do not type
+            # it in too. Past the grace window it is injected once as before. Before the
+            # throttle, so it never spends this cycle's slot.
+            _hs = hook_surfaced_defer(msg, now)
+            if _hs:
+                log(f"SKIP-HOOK-SURFACED {msg['id']} -> {agent}: shown by {_hs[0]}, unacked; "
+                    f"injecting in {_hs[1]}s if still pending")
+                continue
+            _hook_release = hook_surfaced_ready(msg, now)
+
             # THROTTLE: key delivered_to + cooldowns on the RESOLVED SESSION.
             # After forwarding, v1-forwarded mail and v2-native mail share the same
             # session; keying on to_agent would double-inject into the head in one
             # cycle (second lands mid-render of the first). (spec round-1 fix)
             if session in delivered_to:
                 continue  # one message per session per cycle
+            _dn = deliver_now_waiver(session)
+            _dn_waived = []
             if now - cooldowns.get(session, 0) < COOLDOWN_SECONDS:
-                continue
+                if not _dn:
+                    continue
+                _dn_waived.append("cooldown")
 
             # SELF-FORWARD GUARD: a reply FROM the live head addressed to its own
             # retired predecessor must not loop back into the head as self-mail.
@@ -2342,12 +2977,33 @@ def main():
             # Never interject. Also back off if the session had activity in the
             # last 10 minutes (active conversation cadence).
             attached, idle_secs = sess_info.get(session, (0, 1e9))
-            if hold_for_attached(attached, idle_secs) and msg.get("priority") != "critical":
-                note_hold(hold_state, session, msg, "attached-active", now, queue_n=_qdepth.get(agent), dl_batch=_dl_batch)
-                continue  # attached + active within TTL: human plausibly mid-convo.
+            # Per-runtime idle-gate: resolve the TARGET agent's runtime so an agy/Gemini
+            # pane ('>') is recognized as idle, not just Claude's ❯. Resolve from the
+            # resolved session's agent when a forward happened, else the addressed agent.
+            # routing_runtime: a DECLARED runtime always; undeclared rows keep the old rule
+            # (claude unless ROUTER_GEMINI_IDLE_ARMED), byte-identical to before.
+            # Resolved here, before the breathe window, so a codex pane whose idle prompt
+            # is visibly back can skip the quiet-wait (codex_idle_release). One probe per
+            # row: the idle gate below reuses it for codex.
+            _target_agent = agent_for_session(session, meta) or agent
+            _runtime = routing_runtime(_target_agent, meta)
+            _codex_idle_release = codex_idle_release(
+                _runtime, agent_is_idle(session, _runtime) if _runtime == "codex" else False)
+            # Presence = an attached client whose OWN input is < CLIENT_ACTIVE_TTL_S old
+            # (client_presence), not session activity, which the agent's own output moves.
+            _presence = attached_presence_hold(client_age, session, now)
+            if _presence and msg.get("priority") != "critical" and _dn:
+                _dn_waived.append("attached-active")
+            elif _presence and msg.get("priority") != "critical":
+                note_hold(hold_state, session, msg, "attached-active", now, queue_n=_qdepth.get(agent),
+                          dl_batch=_dl_batch, detail=_presence)
+                continue  # a client is actively typing: human plausibly mid-convo.
                 # Past the TTL a persistent-but-idle attach no longer freezes mail
                 # (2026-08-15 fix). Typed-input clobber protection is agent_is_idle.
-            if idle_secs < BREATHE_WINDOW_S and not _breathe_exempt(msg):
+            if (idle_secs < BREATHE_WINDOW_S and not _breathe_exempt(msg) and not _hook_release
+                    and not _codex_idle_release and _dn):
+                _dn_waived.append("breathe-window")
+            elif idle_secs < BREATHE_WINDOW_S and not _breathe_exempt(msg) and not _hook_release and not _codex_idle_release:
                 # #15 leg-3: a PARKED-IDLE target has nothing breathing — skip
                 # the quiet-wait. SHADOW unless armed: emit [parked-exempt-
                 # shadow] beside the hold so v3 can diff shadow lines against
@@ -2377,15 +3033,29 @@ def main():
                 # row was queued FOR this turn boundary). Still idle-gated
                 # (agent_is_idle below) + attach-guarded + cooldown'd + once-only.
 
-            # Per-runtime idle-gate (the operator apr_a72c10f8): resolve the TARGET
-            # agent's runtime so an agy/Gemini pane ('>') is recognized as idle,
-            # not just Claude's ❯. Resolve from the resolved session's agent when
-            # a forward happened, else the addressed agent. routing_runtime: a DECLARED
-            # runtime always (DEC-1791656515249463); undeclared rows keep the old rule
-            # (claude unless ROUTER_GEMINI_IDLE_ARMED), byte-identical to before.
-            _target_agent = agent_for_session(session, meta) or agent
-            _runtime = routing_runtime(_target_agent, meta)
-            if not agent_is_idle(session, _runtime):
+            # Per-runtime idle-gate: _runtime was resolved above (before the breathe window).
+            _idle = (_codex_idle_release if _runtime == "codex"
+                    else agent_is_idle(session, _runtime))
+            if not _idle:
+                # DOWN BEFORE NOT-IDLE. A seat whose agent exited leaves a live pane at a shell
+                # prompt: agent_is_idle says not-idle forever and the row was held silently.
+                # Ask the detector — ONCE per recipient per cycle (_down_cache) — and when it
+                # says the process is gone, PAGE the seat's escalation instead of holding. The
+                # row stays PENDING and is retried when it answers.
+                if seat_is_down(session, cache=_down_cache, errors=_down_errors):
+                    _anchor = mark_seat_down(down_state, session, now)
+                    if page_seat_down(down_state, session, _qdepth.get(agent, 1), now, _anchor,
+                                      agent=agent):
+                        log(f"DOWN {session} :: agent process gone, paged its escalation "
+                            f"({_qdepth.get(agent, 1)} held, down "
+                            f"{_fmt_down(now - _anchor)}) — rows stay pending")
+                    continue
+                # It answered: a previous outage is over, so its rows are retried normally
+                # from here and a LATER outage gets a fresh anchor.
+                clear_seat_down(down_state, session)
+            if not _idle and _dn and _runtime == "claude" and claude_mid_turn_safe(session):
+                _dn_waived.append("mid-turn")
+            elif not _idle:
                 # Layer B (Bug 2) SHADOW: classify live-but-unreachable holds
                 # (survey/permission/stuck-composer/menu) into the would-clear
                 # log. Never raises, never alters the hold. Per-episode
@@ -2395,10 +3065,22 @@ def main():
                 continue  # stays queued; retried next cycle (RCA: this was the
                 # 7h-silent branch — now logged + SLA-escalated via note_hold)
 
+            if _dn_waived:
+                log(f"DELIVER-NOW {msg['id']} -> {session}: pressed by {_dn.get('by')} at "
+                    f"{_dn.get('at')}; waived {', '.join(_dn_waived)}")
+                try:
+                    store.stamp_metadata(msg["id"], deliver_now_by=_dn.get("by"),
+                                         deliver_now_waived=_dn_waived)
+                except Exception:  # noqa: BLE001 — the log line is the record
+                    pass
+
             # Idle-gate PASSED => the pane VISIBLY recovered — end any active
             # pane-reachability episode so a future re-stuck re-arms exactly
             # ONE would-clear (gm state-transition ruling msg_d4237aac).
             # Cheap no-op when no episode file exists; never sinks delivery.
+            # An idle pane also ends any DOWN outage on record for it (the recovered notice
+            # goes out once, and a later outage gets a fresh anchor).
+            clear_seat_down(down_state, session)
             try:
                 pane_reachability.note_recovered(session)
             except Exception:
@@ -2410,7 +3092,10 @@ def main():
             # cycle; digested rows fail store.claim below when the loop reaches
             # them (delivered => not pending). Fresh rows + single-stale fall
             # through to the normal path unchanged.
-            if session not in _digest_attempted and is_digest_session(session):
+            # A Deliver-now mid-turn delivery goes through the singles path only, where the
+            # composer is re-checked right before the claim; the digest path injects without it.
+            if "mid-turn" not in _dn_waived and session not in _digest_attempted \
+                    and is_digest_session(session):
                 _digest_attempted.add(session)
                 try:
                     _dcfg = digest_config()
@@ -2426,6 +3111,13 @@ def main():
                 except Exception as e:  # noqa: BLE001 — digest never sinks the cycle
                     log(f"[digest] error for {session}: {e} — singles path continues")
 
+            # Deliver now, mid-turn: look again right before claiming. Typing or a permission
+            # prompt that started since the first look means hold, not paste.
+            if "mid-turn" in _dn_waived and not claude_mid_turn_safe(session):
+                log(f"DELIVER-NOW recheck {msg['id']} -> {session}: composer no longer safe, holding")
+                note_hold(hold_state, session, msg, "not-idle", now, queue_n=_qdepth.get(agent), dl_batch=_dl_batch)
+                continue
+
             if not store.claim(msg["id"]):
                 continue  # raced with another router instance
 
@@ -2435,7 +3127,9 @@ def main():
                 text = f"[fwd from {forwarded_from}] " + text
                 merge_forwarded_meta(store, msg["id"], forwarded_from)
                 log(f"FORWARD {msg['id']}: {agent} -> {session} ({reason}, from={forwarded_from})")
-            result = inject(session, text, _runtime, msg_id=msg["id"])
+            result = inject(session, text, _runtime, msg_id=msg["id"],
+                            pre_paste=(lambda: claude_mid_turn_safe(session))
+                            if "mid-turn" in _dn_waived else None)
             if result in ("submitted", "stuck"):
                 close_park_episode(hold_state, session)   # target took mail: episode over
             if result == "submitted":
@@ -2475,6 +3169,10 @@ def main():
                 # nor a failure and must not use retry budget. Re-open the claimed row.
                 store.defer(msg["id"], error="router: another sender held the pane; deferred")
                 log(f"HELD {msg['id']} -> {agent}: another sender held the pane; row re-queued")
+                if _dn_waived:
+                    # Deliver now: nothing was typed (busy pane, pane lock, or the pre-paste look
+                    # failed). Record the hold so the agent's page says what it is still waiting for.
+                    note_hold(hold_state, session, msg, "not-idle", now, queue_n=_qdepth.get(agent), dl_batch=_dl_batch)
             else:
                 store.fail(msg["id"], error="router: paste never landed after 2 attempts")
                 with store._conn() as conn:
@@ -2498,6 +3196,16 @@ def main():
         save_cooldowns(cooldowns)
         save_alerts(alerts)
         save_holds(hold_state)
+        # Is the DOWN probe itself working? Count this cycle BEFORE persisting so a blind
+        # detector pages once instead of silently restoring hold-forever. _down_cache holds
+        # one entry per distinct recipient probed this cycle.
+        try:
+            note_detector_health(down_state, probed=len(_down_cache),
+                                 errored=len({s for s, _ in _down_errors}), now=now,
+                                 last_error=(_down_errors[-1][1] if _down_errors else None))
+        except Exception as e:  # noqa: BLE001 — bookkeeping must never break a cycle
+            log(f"[down-detector] health accounting failed (non-fatal): {e}")
+        save_downs(down_state)
     finally:
         LOCKFILE.unlink(missing_ok=True)
 

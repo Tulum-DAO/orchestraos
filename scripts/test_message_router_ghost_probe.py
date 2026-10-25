@@ -187,4 +187,4 @@ def test_no_ghost_path_line_on_the_typed_duplicate_path(monkeypatch, tmp_path):
 def test_delivery_loop_passes_the_message_id_to_inject():
     # Structural: the delivery loop is not unit-drivable; without msg_id every line says msg=?
     src = open(os.path.join(_here, "message-router.py")).read()
-    assert 'inject(session, text, _runtime, msg_id=msg["id"])' in src
+    assert 'inject(session, text, _runtime, msg_id=msg["id"],' in src
