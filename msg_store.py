@@ -313,6 +313,10 @@ def _addressability_verdict(target: str):
         return None
 
 
+class HeldAckRefused(RuntimeError):
+    """Someone tried to ack an UNDELIVERED held_message. See MessageStore.acknowledge."""
+
+
 class MessageStore:
     def __init__(self, db_path=None):
         # MSG_DB_PATH env mirror (F4 fix, spec §3.1): scopes the message bus the
@@ -859,18 +863,50 @@ class MessageStore:
         """Mark message as acknowledged (agent confirmed receipt). Returns True
         iff a row was actually updated — acking an unknown id must NEVER be a
         silent success (replay-flood class: the agent believes it acked, the
-        router re-injects forever; self-caught in the 2026-08-18 edge campaign,
-        msg_22587546)."""
+        router re-injects forever; self-caught in the 2026-08-18 edge campaign).
+
+        RAISES HeldAckRefused for an UNDELIVERED type='held_message' row. Such a row is a
+        person's own message, accepted mid-turn by the gateway and parked for delivery at the
+        target's turn boundary. Acking it acks the gateway's delivery handle, not a message
+        anyone received: the row leaves 'pending', the router's candidate query
+        (`WHERE status='pending'`) never sees it again, and the message is silently cancelled
+        by an agent tidying its inbox.
+
+        The discriminator is DELIVERY STATE, not caller identity: the router acks a held row
+        only after deliver(), so by then it is 'delivered' and passes; every premature ack hits
+        a row that was never delivered and is refused. No new argument, and nothing a caller
+        can assert about itself. Scope is held_message only: agents ack ordinary pending rows
+        directly from their inbox, and that flow is unchanged.
+        """
         conn = self._conn()
         try:
+            # ONE compare-and-set, so a concurrent deliver() cannot land between a check and
+            # the update.
             result = conn.execute(
-                "UPDATE messages SET status = 'acknowledged', acknowledged_at = ? WHERE id = ?",
+                "UPDATE messages SET status = 'acknowledged', acknowledged_at = ? "
+                "WHERE id = ? AND (type IS NULL OR type != 'held_message' "
+                "                  OR status = 'delivered' OR delivered_at IS NOT NULL)",
                 [_now(), msg_id]
             )
             conn.commit()
-            return result.rowcount > 0
+            if result.rowcount > 0:
+                return True
+            # rowcount 0 is two different outcomes. Read-only, and only after the CAS already
+            # declined, so it decides nothing and cannot race.
+            row = conn.execute("SELECT type, status, delivered_at FROM messages WHERE id = ?",
+                               [msg_id]).fetchone()
         finally:
             conn.close()
+        if row is None:
+            return False                      # unknown id: never a silent success
+        if row["type"] == "held_message":
+            raise HeldAckRefused(
+                f"refusing to ack {msg_id}: it is a held_message that has NOT been delivered "
+                f"(status={row['status']!r}, delivered_at={row['delivered_at']!r}). It is a "
+                f"message parked for delivery at your turn boundary, not mail you received; "
+                f"acking it cancels that delivery. The router acks it itself once it has been "
+                f"delivered.")
+        return False
 
     def archive(self, msg_id: str):
         """Mark message as archived (fully processed)."""
@@ -1748,7 +1784,12 @@ def main():
         print(json.dumps({"replied": True, "id": result}, default=str))
 
     elif args.command == "ack":
-        ok = store.acknowledge(args.message_id)
+        try:
+            ok = store.acknowledge(args.message_id)
+        except HeldAckRefused as e:
+            # NON-ZERO: a drain script must not read a refused ack as a clean one.
+            print(json.dumps({"acknowledged": False, "id": args.message_id, "error": str(e)}))
+            sys.exit(1)
         out = {"acknowledged": bool(ok), "id": args.message_id}
         if not ok:
             out["error"] = "no such message"
