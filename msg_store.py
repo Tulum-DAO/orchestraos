@@ -691,7 +691,11 @@ class MessageStore:
         """Record the receiver's disposition on a row (§9.6-B.5,
         DEC-1787032722): acted / queued / declined(+reason). Returns False on
         an unknown id (the #13 ack lesson — never ok:true on a ghost row).
-        Raises ValueError on an invalid disposition or a reason-less decline."""
+        Raises ValueError on an invalid disposition or a reason-less decline.
+
+        NOTE: this does NOT stop delivery. It stamps RECEIVER metadata and leaves status
+        'pending', so the router still delivers the row; `declined` reads like a refusal and
+        is not one. To withdraw a row you SENT, use retract()."""
         if disposition not in self.DISPOSITIONS:
             raise ValueError(f"disposition must be one of {self.DISPOSITIONS}, "
                              f"got {disposition!r}")
@@ -711,6 +715,60 @@ class MessageStore:
             kv["disposition_reason"] = reason
         self.stamp_metadata(msg_id, **kv)
         return True
+
+    def retract(self, msg_id: str, sender: str, reason: str) -> bool:
+        """Withdraw a PENDING row YOU SENT so the router never delivers it.
+
+        WHAT ACTUALLY STOPS DELIVERY, and why this is a status change rather than a new flag:
+        the router's candidate query is `WHERE status='pending'` and its CAS gate is claim()'s
+        `WHERE id=? AND status='pending'`. Moving the row out of 'pending' therefore stops it
+        through two mechanisms that already exist; a new column would have stopped nothing,
+        which is exactly dispose()'s failure mode.
+
+        ONE ATOMIC CAS does all three refusals, so there is no read-then-write window in which
+        the router could claim the row between the check and the update:
+            not the sender          -> False (you may not retract someone else's message)
+            not pending             -> False, ABOVE ALL ALREADY DELIVERED: a retract must never
+                                       claim to have stopped something that already arrived
+            unknown id              -> False (never ok:true on a ghost row)
+        The CLI turns every False into a NON-ZERO EXIT so a script cannot read a failed retract
+        as a successful stop.
+        """
+        if not (reason and reason.strip()):
+            raise ValueError("a retract requires a reason")
+        conn = self._conn()
+        try:
+            cur = conn.execute(
+                "UPDATE messages SET status='retracted', error=? "
+                "WHERE id=? AND from_agent=? AND status='pending'",
+                [f"retracted by {sender}: {reason}", msg_id, sender])
+            conn.commit()
+            if cur.rowcount == 0:
+                return False
+        finally:
+            conn.close()
+        self.stamp_metadata(msg_id, retracted_at=_now(), retracted_by=sender,
+                            retract_reason=reason)
+        return True
+
+    def retract_refusal(self, msg_id: str, sender: str) -> str:
+        """Why a retract was refused, for the CLI's error line. READ-ONLY, and only ever called
+        AFTER the CAS already declined, so it never decides anything and cannot race."""
+        conn = self._conn()
+        try:
+            row = conn.execute("SELECT from_agent, status, delivered_at FROM messages"
+                               " WHERE id = ?", [msg_id]).fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return "no such message"
+        if row["from_agent"] != sender:
+            return (f"not your message: it was sent by {row['from_agent']!r}, "
+                    f"not {sender!r}; only the sender may retract")
+        if row["status"] == "delivered" or row["delivered_at"]:
+            return (f"ALREADY DELIVERED at {row['delivered_at']}; a retract cannot unsend "
+                    f"a message that arrived")
+        return f"not pending (status={row['status']!r}); only a pending row can be retracted"
 
     def disposition_stats(self, sender: str = None, tenant_id: str = "operator") -> dict:
         """Per-sender disposition stats over drive-class rows (§9.6-B.6): the
@@ -1712,6 +1770,14 @@ def main():
     p.add_argument("--by", required=True)
     p.add_argument("--reason", default=None)
 
+    # retract: the sender-side withdrawal (dispose() records a receiver disposition and does
+    # not stop delivery).
+    p = sub.add_parser("retract")
+    p.add_argument("--id", "--message-id", dest="message_id", required=True)
+    p.add_argument("--from", dest="from_agent", required=True,
+                   help="the SENDER; only the sender may retract its own row")
+    p.add_argument("--reason", required=True)
+
     # disposition-stats (§9.6-B.6)
     p = sub.add_parser("disposition-stats")
     p.add_argument("--sender", default=None)
@@ -1809,6 +1875,20 @@ def main():
                "disposition": args.disposition}
         if not ok:
             out["error"] = "no such message"
+        print(json.dumps(out))
+
+    elif args.command == "retract":
+        try:
+            ok = store.retract(args.message_id, sender=args.from_agent, reason=args.reason)
+        except ValueError as e:
+            print(json.dumps({"retracted": False, "id": args.message_id, "error": str(e)}))
+            sys.exit(1)
+        out = {"retracted": bool(ok), "id": args.message_id}
+        if not ok:
+            # NON-ZERO so a caller cannot read a failed retract as a stop.
+            out["error"] = store.retract_refusal(args.message_id, args.from_agent)
+            print(json.dumps(out))
+            sys.exit(1)
         print(json.dumps(out))
 
     elif args.command == "disposition-stats":
