@@ -988,6 +988,16 @@ def codex_pane_is_busy(pane_text: str) -> bool:
     return ("\u25e6 Working" in txt) or ("tab to queue message" in txt)
 
 
+def codex_idle_release(runtime: str, visibly_idle: bool) -> bool:
+    """Codex-only equivalent of Claude's end-of-turn queue release.
+
+    Codex emits no Claude-style Stop-hook queue release, so its mail always waited out the
+    full breathe window after every turn. Once its own idle prompt is visibly back, that turn
+    boundary is treated like Claude's release: only the quiet/breathe delay is skipped. The
+    attached-client guard, the cooldown and the once-only claim still apply."""
+    return runtime == "codex" and bool(visibly_idle)
+
+
 def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
     """_inject_unlocked under the ONE cross-process pane lock every typer shares (pane_lock.py):
     the gateway, approval_resume, the nudger and the watchers take the same lock, so two senders
@@ -2282,12 +2292,25 @@ def main():
             # Never interject. Also back off if the session had activity in the
             # last 10 minutes (active conversation cadence).
             attached, idle_secs = sess_info.get(session, (0, 1e9))
+            # Per-runtime idle-gate: resolve the TARGET agent's runtime so an agy/Gemini
+            # pane ('>') is recognized as idle, not just Claude's ❯. Resolve from the
+            # resolved session's agent when a forward happened, else the addressed agent.
+            # routing_runtime: a DECLARED runtime always; undeclared rows keep the old rule
+            # (claude unless ROUTER_GEMINI_IDLE_ARMED), byte-identical to before.
+            # Resolved here, before the breathe window, so a codex pane whose idle prompt
+            # is visibly back can skip the quiet-wait (codex_idle_release). One probe per
+            # row: the idle gate below reuses it for codex.
+            _target_agent = agent_for_session(session, meta) or agent
+            _runtime = routing_runtime(_target_agent, meta)
+            _codex_idle_release = codex_idle_release(
+                _runtime, agent_is_idle(session, _runtime) if _runtime == "codex" else False)
             if hold_for_attached(attached, idle_secs) and msg.get("priority") != "critical":
                 note_hold(hold_state, session, msg, "attached-active", now, queue_n=_qdepth.get(agent), dl_batch=_dl_batch)
                 continue  # attached + active within TTL: human plausibly mid-convo.
                 # Past the TTL a persistent-but-idle attach no longer freezes mail
                 # (2026-08-15 fix). Typed-input clobber protection is agent_is_idle.
-            if idle_secs < BREATHE_WINDOW_S and not _breathe_exempt(msg):
+            if (idle_secs < BREATHE_WINDOW_S and not _breathe_exempt(msg)
+                    and not _codex_idle_release):
                 # #15 leg-3: a PARKED-IDLE target has nothing breathing — skip
                 # the quiet-wait. SHADOW unless armed: emit [parked-exempt-
                 # shadow] beside the hold so v3 can diff shadow lines against
@@ -2317,15 +2340,9 @@ def main():
                 # row was queued FOR this turn boundary). Still idle-gated
                 # (agent_is_idle below) + attach-guarded + cooldown'd + once-only.
 
-            # Per-runtime idle-gate (the operator apr_a72c10f8): resolve the TARGET
-            # agent's runtime so an agy/Gemini pane ('>') is recognized as idle,
-            # not just Claude's ❯. Resolve from the resolved session's agent when
-            # a forward happened, else the addressed agent. routing_runtime: a DECLARED
-            # runtime always (DEC-1791656515249463); undeclared rows keep the old rule
-            # (claude unless ROUTER_GEMINI_IDLE_ARMED), byte-identical to before.
-            _target_agent = agent_for_session(session, meta) or agent
-            _runtime = routing_runtime(_target_agent, meta)
-            if not agent_is_idle(session, _runtime):
+            # Per-runtime idle-gate: _runtime was resolved above (before the breathe window).
+            if not (_codex_idle_release if _runtime == "codex"
+                    else agent_is_idle(session, _runtime)):
                 # Layer B (Bug 2) SHADOW: classify live-but-unreachable holds
                 # (survey/permission/stuck-composer/menu) into the would-clear
                 # log. Never raises, never alters the hold. Per-episode
