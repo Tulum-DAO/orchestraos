@@ -24,6 +24,8 @@ import { actingAgent, principal } from '../lib/principal.js';
 import { agentScopeParam, canPrincipalSeeAgent } from '../lib/agent-scope.js';
 import { CODE_ROOT } from '../lib/codeRoot.js';
 import { gatewayUrl } from '../lib/gateway-url.js';
+import { gatewayChips } from '../lib/gatewayChips.js';
+import { sessionFor, held, deliverNow, defaultDeliverNowDeps } from '../lib/deliverNow.js';
 
 function macSshTarget(): string {
   const cfg = loadConfig();
@@ -411,6 +413,13 @@ router.get('/', async (_req: Request, res: Response) => {
       }
     }
 
+    // The one status chip every surface draws, computed by the gateway (lib/gatewayChips.ts).
+    const chips = gatewayChips.current();
+    for (const a of visibleAgents) {
+      const c = chips.get(baseAgentId(a.id)) || chips.get(a.id);
+      if (c) (a as any).chip = c;
+    }
+
     const visibleOnline = visibleAgents.filter((a) => a.tmux_alive).length;
 
     res.json({
@@ -676,6 +685,30 @@ function sendToTmux(session: string, machine: string, text: string) {
 }
 
 // POST /api/agents/:id/inject — send text into running tmux session, poll for output
+// Mail waiting for this agent, and "Deliver now" (lib/deliverNow.ts, scripts/deliver_now.py).
+router.get('/:id/held', async (req: Request, res: Response) => {
+  const session = sessionFor(getRegistry(), String(req.params.id));
+  if (!session) { res.status(404).json({ error: 'Agent not found' }); return; }
+  try {
+    const { status, body } = await held(defaultDeliverNowDeps(), session);
+    res.status(status).json(body);
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: 'gateway unreachable', detail: err?.message });
+  }
+});
+
+router.post('/:id/deliver-now', async (req: Request, res: Response) => {
+  const session = sessionFor(getRegistry(), String(req.params.id));
+  if (!session) { res.status(404).json({ error: 'Agent not found' }); return; }
+  try {
+    const who = principal(req)?.username;
+    const { status, body } = await deliverNow(defaultDeliverNowDeps(), session, who ? String(who).slice(0, 48) : undefined);
+    res.status(status).json(body);
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: 'gateway unreachable', detail: err?.message });
+  }
+});
+
 router.post('/:id/inject', async (req: Request, res: Response) => {
   const { text } = req.body;
   if (!text) { res.status(400).json({ error: 'text required' }); return; }
