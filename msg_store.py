@@ -453,6 +453,7 @@ class MessageStore:
         finally:
             conn.close()
 
+    # Delivery model: see docs/DELIVERY.md
     def send(self, from_agent: str, to_agent: str, type: str,
              subject: str = None, body: str = None, priority: str = "medium",
              task_id: str = None, conversation_id: str = None, parent_id: str = None,
