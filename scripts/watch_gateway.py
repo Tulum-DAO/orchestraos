@@ -258,8 +258,8 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("POST", "/runtimes/available/refresh"): "admin",
     ("POST", "/telemetry"): "admin",
     # A live terminal into a seat's pane (the Mac's Dev mode, the web's xterm through the gateway):
-    # unlimited keystrokes, so the shell-grade verb. The handler ALSO requires `inject` (it presses
-    # keys) and refuses the fleet bearer outright: that credential identifies no device to audit.
+    # unlimited keystrokes, so the shell-grade admin verb. The handler refuses the fleet bearer
+    # outright: that credential identifies no device to audit.
     ("GET", "/terminal/ws"): "admin",
     # The only route that MINTS a credential. `admin` so the TABLE states that it is privileged —
     # I first wrote it as _PUBLIC "because the handler checks the principal", and
@@ -8573,8 +8573,8 @@ async def handle_gemini_live(request):
 # The API serves the web's terminal on /ws/terminal (node-pty, `tmux attach -f ignore-size`) behind a
 # browser-origin check only, loopback-only. A native app holds one base and one bearer (this gateway),
 # so this route is its way in: refuse before the upgrade, connect upstream as the local API's
-# same-origin peer (never with the client's bearer), then pass frames verbatim both ways (text = keystrokes or the resize JSON,
-# binary = bytes). It is a shell into a seat, hence: device token with admin + inject, a session that
+# credentialed local peer (never with the client's bearer), then pass frames verbatim both ways (text = keystrokes or the resize JSON,
+# binary = bytes). It is a shell into a seat, hence: paired device token with admin, a session that
 # GET /agents lists, no Funnel / off-tailnet peer, one socket per (device, session), a gateway-wide cap,
 # an idle close, and an operator-actions ledger row at open and close that never carries a keystroke.
 TERMINAL_HEARTBEAT_S = 20.0
@@ -8715,9 +8715,6 @@ async def handle_terminal_ws(request):
     if not dev or dev == "legacy":
         return _json({"ok": False, "error": "a paired device token is required here: the fleet bearer "
                                             "identifies no device to audit"}, status=403)
-    if not scopes_allow(principal.get("scopes"), "inject"):
-        return _json({"ok": False, "error": "forbidden", "needed_scope": "inject",
-                      "scopes": principal.get("scopes")}, status=403)
     if request.headers.get("Tailscale-Funnel-Request"):
         return _json({"ok": False, "error": "not found"}, status=404)
     if not _agent_file_peer_ok(_agent_file_peer(request)):
@@ -8746,12 +8743,12 @@ async def handle_terminal_ws(request):
         client = aiohttp.ClientSession()
         try:
             try:
-                # The public API refuses a non-browser/no-Origin terminal upgrade.  The gateway is
-                # its local, authenticated relay, so identify this loopback hop as such.  This is
-                # NOT client authentication: the paired-device token was checked above and must
-                # never be forwarded to the API.
+                # The API accepts this hop only with its reference-held relay credential.  This
+                # is NOT client authentication: the paired-device token was checked above and is
+                # never forwarded.
+                from scripts import terminal_relay_secret
                 up = await client.ws_connect(_terminal_upstream_url(request.query),
-                                             headers={"Origin": "http://127.0.0.1:8888"},
+                                             headers={"X-Orchestra-Terminal-Relay": terminal_relay_secret.ensure()},
                                              max_msg_size=TERMINAL_MAX_MSG, autoping=True,
                                              timeout=aiohttp.ClientWSTimeout(ws_close=5))
             except aiohttp.WSServerHandshakeError as e:
