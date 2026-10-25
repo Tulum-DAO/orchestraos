@@ -1,0 +1,177 @@
+/**
+ * RED-first: the approve/deny/answer routes of /api/approvals/unified had no check of their own.
+ *
+ * Under a trusted identity proxy a principal scoped to one client could answer ANY card by id,
+ * the operator's included, and the list and stats showed every card to everyone. These pin the
+ * one rule (lib/approval-scope.ts) and that the real router applies it.
+ *
+ * In the default untrusted mode principal() is the configured operator (admin, '*'), so nothing
+ * changes there; the untrusted test asserts that.
+ */
+// FIRST: the temp data dir, before any module below reads ORCHESTRA_DIR at import.
+import { DATA_DIR } from './approval-scope.fixture.js';
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import express from 'express';
+import http from 'node:http';
+import type { Request } from 'express';
+import type { Principal } from './principal.js';
+import { canPrincipalSeeCard, isUnscopedAdmin, makeApprovalScopeParam } from './approval-scope.js';
+import router, { approvalScopeParam, scopeItems, statsOf } from '../routes/unified-approvals.js';
+import { getRegistry } from '../services/state-reader.js';
+
+const P = (over: Partial<Principal>): Principal => ({
+  username: 'u', role: 'viewer', allowedAgents: [], clientScope: null, trusted: true, ...over,
+});
+const ADMIN = P({ role: 'admin', allowedAgents: '*' });
+const ACME = P({ clientScope: 'acme', allowedAgents: 'acme' });
+const TAGS: Record<string, string[]> = { 'pm-acme': ['client:acme'], 'pm-other': ['client:other'], gm: [] };
+const tags = (id: string) => TAGS[id];
+
+// ---- the rule --------------------------------------------------------------------------------
+
+test("an admin narrowed by an allowlist is not the operator: it sees only its agents' cards", () => {
+  const narrowed = P({ role: 'admin', allowedAgents: ['pm-acme'] });
+  assert.equal(isUnscopedAdmin(narrowed), false);
+  assert.equal(canPrincipalSeeCard(narrowed, 'pm-acme', tags), true);
+  assert.equal(canPrincipalSeeCard(narrowed, 'gm', tags), false);
+  assert.deepEqual(run(narrowed, 'prop_123'), { status: 404, passed: false });
+});
+
+test('the operator (admin, no client scope) sees every card; no principal sees none', () => {
+  assert.equal(canPrincipalSeeCard(ADMIN, 'gm', tags), true);
+  assert.equal(canPrincipalSeeCard(ADMIN, null, tags), true);
+  assert.equal(canPrincipalSeeCard(null, 'pm-acme', tags), false);
+});
+
+test("a client scope sees only its own client's cards, even when its role says admin", () => {
+  assert.equal(canPrincipalSeeCard(ACME, 'pm-acme', tags), true);
+  assert.equal(canPrincipalSeeCard(ACME, 'gm', tags), false);
+  assert.equal(canPrincipalSeeCard(ACME, 'pm-other', tags), false);
+  assert.equal(canPrincipalSeeCard(ACME, null, tags), false);
+  assert.equal(isUnscopedAdmin(P({ role: 'admin', clientScope: 'acme' })), false);
+  assert.equal(canPrincipalSeeCard(P({ role: 'admin', clientScope: 'acme' }), 'gm', tags), false);
+});
+
+// ---- the /:id guard ----------------------------------------------------------------------------
+
+function run(p: Principal | null, id: string, owners: Record<string, string> = { apr_acme: 'pm-acme', apr_gm: 'gm' }) {
+  const guard = makeApprovalScopeParam({
+    principal: () => p, pendingCardAgent: (i) => owners[i] ?? null, resolveTags: tags,
+  });
+  let status = 0; let passed = false;
+  const res: any = { status(s: number) { status = s; return res; }, json() { return res; } };
+  guard({ headers: {} } as Request, res, () => { passed = true; }, id);
+  return { status, passed };
+}
+
+test('no identity is a 401, and nothing reaches the handler', () => {
+  assert.deepEqual(run(null, 'apr_gm'), { status: 401, passed: false });
+});
+
+test("a client-scoped viewer answers its own client's card, and gets the route's 404 for any other", () => {
+  assert.deepEqual(run(ACME, 'apr_acme'), { status: 0, passed: true });
+  assert.deepEqual(run(ACME, 'apr_gm'), { status: 404, passed: false });           // the operator's card
+  assert.deepEqual(run(ACME, 'prop_123'), { status: 404, passed: false });         // a learning proposal
+  assert.deepEqual(run(ACME, 'apr_nope'), { status: 404, passed: false });         // unknown: same answer
+});
+
+test('the operator acts on anything, known or not (the handler answers unknown ids itself)', () => {
+  assert.deepEqual(run(ADMIN, 'apr_gm'), { status: 0, passed: true });
+  assert.deepEqual(run(ADMIN, 'prop_123'), { status: 0, passed: true });
+  assert.deepEqual(run(ADMIN, 'apr_nope'), { status: 0, passed: true });
+});
+
+// ---- the list and stats -------------------------------------------------------------------------
+
+const item = (over: any) => ({
+  id: 'x', type: 'agent', urgency: 'normal', status: 'pending', title: '', description: '', risk_level: 'low',
+  evidence_summary: '', qa_verdict: null, sandbox_result: null, onepager_url: null, created_at: '', updated_at: '',
+  source: 'agent_request', agent_id: 'gm', ...over,
+});
+const LIST = { items: [
+  item({ id: 'apr_gm', agent_id: 'gm' }),
+  item({ id: 'apr_acme', agent_id: 'pm-acme', urgency: 'critical' }),
+  item({ id: 'apr_acme_old', agent_id: 'pm-acme', status: 'approved' }),
+  item({ id: 'prop_1', type: 'learning', agent_id: null }),
+  item({ id: 'apr_acme_fs', agent_id: 'pm-acme' }),   // a filesystem residual: no one can answer it yet
+], total: 5, canonicalIds: new Set(['apr_gm', 'apr_acme']) };
+
+test('the list: the operator gets everything; a client scope only its pending canonical cards (the ones it can answer)', () => {
+  assert.equal(scopeItems(LIST as any, ADMIN, tags).total, 5);
+  assert.deepEqual(scopeItems(LIST as any, ACME, tags).items.map((i) => i.id), ['apr_acme']);
+});
+
+test('stats of a scoped list count only what that caller can see', () => {
+  const s = statsOf(scopeItems(LIST as any, ACME, tags).items);
+  assert.equal(s.total, 1);
+  assert.equal(s.by_status.pending, 1);
+  assert.equal(s.by_urgency.critical, 1);
+  assert.equal(s.by_type.learning, 0);
+});
+
+// ---- THE WIRING: the real router -----------------------------------------------------------------
+test('the router scopes every /:id route through the one guard (router.param), so a new route is covered too', () => {
+  assert.deepEqual((router as any).params?.id, [approvalScopeParam]);
+});
+
+// Without this, unhooking router.param('id') would leave every test above green.
+test('the fence holds: every module reads the temp data dir, not the real one', () => {
+  assert.equal(process.env.ORCHESTRA_DIR, DATA_DIR);
+  assert.deepEqual(Object.keys((getRegistry() as any)?.agents ?? {}), ['fixture-marker']);   // the temp registry
+});
+
+async function call(app: express.Express, method: string, path: string, headers: Record<string, string> = {}) {
+  const server = app.listen(0);
+  try {
+    const port = (server.address() as any).port;
+    return await new Promise<{ status: number; body: any }>((resolve, reject) => {
+      const r = http.request({ host: '127.0.0.1', port, method, path, headers: { 'content-type': 'application/json', ...headers } }, (res) => {
+        let out = ''; res.on('data', (c) => (out += c));
+        res.on('end', () => resolve({ status: res.statusCode || 0, body: JSON.parse(out || '{}') }));
+      });
+      r.on('error', reject);
+      r.setTimeout(10000, () => r.destroy(new Error(`no response in 10s: ${method} ${path}`)));
+      r.end(method === 'POST' ? JSON.stringify({ reason: 'r', option_n: '1' }) : undefined);
+    });
+  } finally { server.close(); }
+}
+
+test('the real router: behind a proxy, no identity is a 401 everywhere; a client scope never sees or answers an operator card', async () => {
+  const prev = process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS;
+  process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS = '1';
+  try {
+    const app = express(); app.use(express.json()); app.use('/u', router);
+    for (const [m, p] of [['POST', '/u/apr_x/approve'], ['POST', '/u/apr_x/deny'], ['POST', '/u/apr_x/answer'],
+                          ['GET', '/u'], ['GET', '/u/stats']] as const) {
+      assert.equal((await call(app, m, p)).status, 401, `${m} ${p}`);
+    }
+    // a client-scoped caller gets the same 404 an unknown id gets (no id oracle); that the guard
+    // ran is pinned by the 401s above and the router.param test, not by this status
+    const acme = { 'x-orchestra-user': 'c', 'x-orchestra-role': 'viewer', 'x-orchestra-client': 'acme' };
+    const r = await call(app, 'POST', '/u/apr_x/approve', acme);
+    assert.equal(r.status, 404);
+    // the list and stats: the operator sees the gm card, the client-scoped caller does not
+    const op = { 'x-orchestra-user': 'op', 'x-orchestra-role': 'admin', 'x-orchestra-allowed-agents': '*' };
+    assert.ok((await call(app, 'GET', '/u?type=agent', op)).body.items.some((i: any) => i.id === 'apr_gm_fs'));
+    assert.deepEqual((await call(app, 'GET', '/u?type=agent', acme)).body.items, []);
+    assert.equal((await call(app, 'GET', '/u/stats', acme)).body.total, 0);
+    assert.ok((await call(app, 'GET', '/u/stats', op)).body.by_type.agent >= 1);
+  } finally {
+    if (prev === undefined) delete process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS;
+    else process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS = prev;
+  }
+});
+
+test('the real router, default mode (no proxy): the operator is unchanged — the list answers 200', async () => {
+  const prev = process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS;
+  delete process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS;
+  try {
+    const app = express(); app.use(express.json()); app.use('/u', router);
+    const r = await call(app, 'GET', '/u?type=learning', { 'x-orchestra-user': 'eve', 'x-orchestra-client': 'acme' });
+    assert.equal(r.status, 200);
+    assert.ok(Array.isArray(r.body.items));
+  } finally {
+    if (prev !== undefined) process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS = prev;
+  }
+});

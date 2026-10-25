@@ -27,7 +27,7 @@ def mr(tmp_path, monkeypatch):
     (tmp_path / "home").mkdir()
     monkeypatch.delenv("ROUTER_GEMINI_IDLE_ARMED", raising=False)
     monkeypatch.delenv("ROUTER_DECLARED_RUNTIME_DISABLED", raising=False)
-    monkeypatch.delenv("ROUTER_AGY_CLEANUP_ARMED", raising=False)
+    monkeypatch.delenv("ROUTER_AGY_CLEANUP_DISABLED", raising=False)
     monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path / "data"))
     (tmp_path / "data" / "state").mkdir(parents=True)
     spec = importlib.util.spec_from_file_location("message_router_pr1", HERE / "message-router.py")
@@ -46,6 +46,7 @@ def mr(tmp_path, monkeypatch):
     }}))
     monkeypatch.setattr(rs, "REGISTRY", reg)
     monkeypatch.setattr(m, "UNKNOWN_RUNTIME_WARNED", tmp_path / "data" / "state" / "warned.json")
+    m.CODE_ROOT = Path("/home/user/orchestraos")   # the path the synthetic agy screens were generated with
     m.time.sleep = lambda s: None
     m.hook_state = lambda s: None
     m._logs = []
@@ -69,10 +70,20 @@ def screen(m, name, sent=None):
     m.tmux = tmux
 
 
+FIXTURE_MSG = {"id": "msg_fixture_0001", "from_agent": "gm", "to_agent": "ax", "type": "task",
+               "priority": "medium", "subject": "router test", "body": "router test body",
+               "created_at": "2026-10-13T12:00:00+00:00", "parent_id": None, "metadata": None}
+
+
 class _Store:
-    """Records the requeue UPDATE's args."""
-    def __init__(self):
+    """Records the requeue UPDATE's args and serves the outstanding message by id (what the
+    agy cleanup rebuilds the exact injection from)."""
+    def __init__(self, msgs=None):
         self.sql = []
+        self.msgs = {FIXTURE_MSG["id"]: dict(FIXTURE_MSG)} if msgs is None else msgs
+
+    def get(self, msg_id):
+        return self.msgs.get(msg_id)
 
     def _conn(self):
         store = self
@@ -218,8 +229,10 @@ def test_cleanup_never_touches_an_idle_busy_or_menu_agy_pane(mr, fixture):
 
 
 def _agy_stuck_then_idle(mr, sent):
-    """The real stuck-marker agy screen; after any key, the real idle-after-turn screen."""
-    screen(mr, "agy/stuck_marker_1.3.3.pane", sent)
+    """One complete router injection in the agy composer (SYNTHETIC screen on the real chrome;
+    the real stuck_marker capture holds a TRUNCATED injection, which the end anchor refuses);
+    after any key, the real idle-after-turn screen."""
+    screen(mr, "agy/stuck_full_injection_1.3.3.pane", sent)
     idle = (FIX / "agy/idle_after_turn_1.3.3.pane.txt").read_text()
     idle_a = (FIX / "agy/idle_after_turn_1.3.3.pane.ansi").read_text()
     stuck_tmux = mr.tmux
@@ -231,48 +244,138 @@ def _agy_stuck_then_idle(mr, sent):
     mr.tmux = tmux
 
 
-def test_agy_cleanup_is_off_by_default_even_on_our_own_stuck_line(mr):
-    """gm ruling (msg_65f2bd8b): for declared agy/gemini rows the cleanup, the one router path that
-    SENDS keys, stays off until its proof is reviewed. The marker is found (so the idle gate still
-    reads the pane as not idle), but zero keys go out and the log names the reason."""
+def test_agy_cleanup_clears_our_wrapped_line_and_requeues_the_full_msg_id(mr):
+    """ON by default (gm msg_aa56b181, once the marker gate was proven on real agy screens). agy wraps
+    the router line at a space (80 columns), so the msg path is whole on line 2. One C-u clears it
+    (observed on the real CLI) and the id is requeued."""
     sent = []
     _agy_stuck_then_idle(mr, sent)
     rt = mr.routing_runtime("ax")
     stuck = mr.stuck_own_message("s", rt)
     assert stuck and stuck.startswith("[MSG from gm") and "/tmp/agent-msg-msg_fixture_0001.md" in stuck
     st = _Store()
-    assert mr.cleanup_stuck_injection("s", st, rt) is False
-    assert sent == [] and st.sql == []
-    assert any("CLEANUP skipped" in l and "ROUTER_AGY_CLEANUP_ARMED" in l for l in mr._logs), mr._logs
+    assert mr.cleanup_stuck_injection("s", st, rt) is True
+    assert sent == [("send-keys", "-t", "s", "C-u")]
+    assert st.sql == [("msg_fixture_0001",)]
 
 
 @pytest.mark.parametrize("how", ["env", "file"])
-def test_armed_agy_cleanup_clears_our_wrapped_line_and_requeues_the_full_msg_id(mr, monkeypatch, how):
-    """agy wraps the router line at a space (80 columns), so the msg path is whole on line 2. One C-u
-    clears it (observed on the real CLI) and the id is requeued. Only when armed."""
+def test_disabled_agy_cleanup_sends_nothing_even_on_our_own_stuck_line(mr, monkeypatch, how):
+    """The undo switch: the marker is still found (so the pane still reads not-idle), but zero keys go
+    out and the log names the reason."""
     if how == "env":
-        monkeypatch.setenv("ROUTER_AGY_CLEANUP_ARMED", "1")
+        monkeypatch.setenv("ROUTER_AGY_CLEANUP_DISABLED", "1")
     else:
         (mr._home / "runtime").mkdir(exist_ok=True)
-        (mr._home / "runtime" / "ROUTER_AGY_CLEANUP_ARMED").touch()
+        (mr._home / "runtime" / "ROUTER_AGY_CLEANUP_DISABLED").touch()
     sent = []
     _agy_stuck_then_idle(mr, sent)
+    st = _Store()
+    assert mr.cleanup_stuck_injection("s", st, mr.routing_runtime("ax")) is False
+    assert sent == [] and st.sql == []
+    assert any("CLEANUP skipped" in l and "ROUTER_AGY_CLEANUP_DISABLED" in l for l in mr._logs), mr._logs
+
+
+@pytest.mark.parametrize("fixture", ["agy/stuck_plus_appended_1.3.3.pane", "agy/stuck_plus_second_line_1.3.3.pane",
+                                     "agy/stuck_plus_blank_and_draft_1.3.3.pane", "agy/stuck_two_injections_1.3.3.pane",
+                                     "agy/stuck_interior_edit_1.3.3.pane", "agy/stuck_plus_separator_and_draft_1.3.3.pane"])
+def test_agy_cleanup_sends_nothing_when_a_person_typed_after_our_marker(mr, fixture):
+    """SYNTHETIC screens (real agy chrome, see fixtures/agy/README.md): our marker first, then a
+    person's text (same line / a second line / a draft under a blank line), or two injections run
+    together, or words inserted inside the injection. A start-only gate passed all of these and
+    C-u would clear the cursor's line, the person's. Whole-composer check: zero keys, named reason."""
+    sent = []
+    screen(mr, fixture, sent)
+    rt = mr.routing_runtime("ax")
+    assert mr.stuck_own_message("s", rt) is None
+    assert mr.cleanup_stuck_injection("s", _Store(), rt) is False
+    assert sent == []
+    assert any("CLEANUP skipped" in l and "end anchor" in l for l in mr._logs), mr._logs
+
+
+@pytest.mark.parametrize("fixture", ["agy/stuck_subject_edited_1.3.3.pane", "agy/stuck_words_before_read_1.3.3.pane",
+                                     "agy/stuck_plus_indented_border_and_draft_1.3.3.pane",
+                                     "agy/stuck_bracket_in_subject_1.3.3.pane", "agy/stuck_sent_token_in_subject_1.3.3.pane",
+                                     "agy/stuck_edited_store_path_1.3.3.pane"])
+def test_agy_cleanup_sends_nothing_unless_the_composer_is_exactly_the_outstanding_injection(mr, fixture):
+    """codex peer review, round 3: the shape check accepts an edit inside the subject span or
+    words before " — Read", and an indented run of box characters typed by a person. The cleanup
+    now rebuilds THIS message's injection from the store and requires equality (marker, the stored
+    subject, the fixed tail); the border must start at column 0. SYNTHETIC screens (README)."""
+    sent = []
+    screen(mr, fixture, sent)
+    rt = mr.routing_runtime("ax")
+    assert mr.cleanup_stuck_injection("s", _Store(), rt) is False
+    assert sent == []
+    assert any("CLEANUP skipped" in l and ("outstanding injection" in l or "end anchor" in l) for l in mr._logs), mr._logs
+
+
+def test_agy_cleanup_sends_nothing_when_the_message_is_gone_or_there_is_no_store(mr):
+    """No message to rebuild from = not provably ours: zero keys, even on a perfect-looking screen."""
+    for store in (_Store(msgs={}), None):
+        sent = []
+        screen(mr, "agy/stuck_full_injection_1.3.3.pane", sent)
+        assert mr.cleanup_stuck_injection("s", store, mr.routing_runtime("ax")) is False
+        assert sent == []
+
+
+def test_agy_cleanup_clears_one_complete_wrapped_injection(mr):
+    """SYNTHETIC (real chrome): the full injection template wrapped over three lines, nothing
+    appended: the end anchor matches through the wrap and one C-u clears it."""
+    sent = []
+    screen(mr, "agy/stuck_full_injection_1.3.3.pane", sent)
+    idle = (FIX / "agy/idle_after_turn_1.3.3.pane.txt").read_text()
+    stuck_tmux = mr.tmux
+
+    def tmux(*args):
+        if sent:
+            return types.SimpleNamespace(returncode=0, stdout=idle, stderr="")
+        return stuck_tmux(*args)
+    mr.tmux = tmux
     st = _Store()
     assert mr.cleanup_stuck_injection("s", st, mr.routing_runtime("ax")) is True
     assert sent == [("send-keys", "-t", "s", "C-u")]
     assert st.sql == [("msg_fixture_0001",)]
 
 
-def test_armed_agy_cleanup_still_never_clears_human_typed_text(mr, monkeypatch):
-    monkeypatch.setenv("ROUTER_AGY_CLEANUP_ARMED", "1")
+def test_a_truncated_injection_in_the_real_capture_gets_zero_keys(mr):
+    """The REAL stuck_marker capture is a router line without the template's trailer (typed short
+    for the capture). Not exactly one injection -> fail closed: found by the marker, zero keys."""
+    sent = []
+    screen(mr, "agy/stuck_marker_1.3.3.pane", sent)
+    rt = mr.routing_runtime("ax")
+    assert mr.stuck_own_message("s", rt) is None
+    assert mr.cleanup_stuck_injection("s", None, rt) is False
+    assert sent == []
+
+
+def test_the_box_border_is_a_long_run_of_box_drawing_characters_only(mr):
+    """A person's "---" (ASCII, short) is content; agy's border is 80 x U+2500 in every real capture."""
+    assert mr._is_agy_box_border("\u2500" * 80) is True
+    assert mr._is_agy_box_border("\u2500" * 20) is True
+    assert mr._is_agy_box_border("---") is False
+    assert mr._is_agy_box_border("-" * 80) is False
+    assert mr._is_agy_box_border("\u2500" * 19) is False
+    assert mr._is_agy_box_border("\u2500" * 30 + "x") is False
+
+
+def test_the_end_anchor_is_agy_only_today(mr):
+    """Codex keeps the approved start-only gate in this PR (a separate call for all runtimes)."""
+    sent = []
+    screen(mr, "codex/stuck_marker_0.153.4.pane", sent)
+    assert mr.stuck_own_message("s", mr.routing_runtime("cx"))
+
+
+def test_agy_cleanup_still_never_clears_human_typed_text(mr):
     sent = []
     screen(mr, "agy/typed_1.3.3.pane", sent)
     assert mr.cleanup_stuck_injection("s", None, mr.routing_runtime("ax")) is False
     assert sent == []
 
 
-def test_the_agy_cleanup_arm_does_not_touch_codex(mr):
-    """Codex cleanup is proven on real screens and ships on; the agy arm is not consulted for it."""
+def test_the_agy_cleanup_switch_does_not_touch_codex(mr, monkeypatch):
+    """The undo switch is agy-only: codex cleanup still clears its own line with it set."""
+    monkeypatch.setenv("ROUTER_AGY_CLEANUP_DISABLED", "1")
     sent = []
     screen(mr, "codex/stuck_marker_0.153.4.pane", sent)
     assert mr.stuck_own_message("s", mr.routing_runtime("cx"))

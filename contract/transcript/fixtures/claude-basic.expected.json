@@ -9,21 +9,32 @@
       "text": "You are fixture-agent, a T2 agent. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol.",
       "is_system": true,
       "ts": "2026-08-27T10:00:00.000Z",
-      "uuid": "u1"
+      "uuid": "u1",
+      "audience": "agent"
     },
     {
       "kind": "thinking",
       "role": "assistant",
       "text": "I should list the directory first.",
       "ts": "2026-08-27T10:00:01.000Z",
-      "uuid": "u2"
+      "uuid": "u2",
+      "model": "claude-opus-5-5",
+      "audience": "agent",
+      "usage": {
+        "input_tokens": 10203,
+        "output_tokens": 88,
+        "cache_read_input_tokens": 9000,
+        "cache_creation_input_tokens": 1200
+      }
     },
     {
       "kind": "text",
       "role": "assistant",
       "text": "Starting the fixture task.",
       "ts": "2026-08-27T10:00:02.000Z",
-      "uuid": "u3"
+      "uuid": "u3",
+      "model": "claude-opus-5-5",
+      "audience": "agent"
     },
     {
       "kind": "tool_use",
@@ -36,7 +47,9 @@
       "summary": "ls -la /tmp",
       "id": "T1",
       "ts": "2026-08-27T10:00:03.000Z",
-      "uuid": "u4"
+      "uuid": "u4",
+      "model": "claude-opus-5-5",
+      "audience": "agent"
     },
     {
       "kind": "tool_result",
@@ -45,7 +58,8 @@
       "tool_use_id": "T1",
       "is_error": false,
       "ts": "2026-08-27T10:00:04.000Z",
-      "uuid": "u5"
+      "uuid": "u5",
+      "audience": "agent"
     },
     {
       "kind": "tool_use",
@@ -60,7 +74,15 @@
       "input_full": "file_path: /tmp/demo.ts\nold_string: old\n── new_string ──\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;\nconst x = 1;",
       "id": "T2",
       "ts": "2026-08-27T10:00:05.000Z",
-      "uuid": "u6"
+      "uuid": "u6",
+      "model": "claude-opus-5-5",
+      "audience": "agent",
+      "usage": {
+        "input_tokens": 10401,
+        "output_tokens": 21,
+        "cache_read_input_tokens": 10400,
+        "cache_creation_input_tokens": 0
+      }
     },
     {
       "kind": "tool_result",
@@ -69,14 +91,17 @@
       "tool_use_id": "T2",
       "is_error": true,
       "ts": "2026-08-27T10:00:06.000Z",
-      "uuid": "u7"
+      "uuid": "u7",
+      "audience": "agent"
     },
     {
       "kind": "text",
       "role": "user",
       "text": "ship it",
       "ts": "2026-08-27T10:00:08.000Z",
-      "uuid": "u8"
+      "uuid": "u8",
+      "audience": "user",
+      "exchange": "u8"
     },
     {
       "kind": "tool_use",
@@ -88,7 +113,10 @@
       "summary": "~/notes.md",
       "id": "T3",
       "ts": "2026-08-27T10:00:09.000Z",
-      "uuid": "u9"
+      "uuid": "u9",
+      "model": "claude-opus-5-5",
+      "audience": "agent",
+      "exchange": "u8"
     }
   ],
   "render_items": [
@@ -97,19 +125,22 @@
       "text": "You are fixture-agent, a T2 agent. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol. Follow the reincarnation protocol.",
       "is_system": true,
       "ts": "2026-08-27T10:00:00.000Z",
-      "key": "u1:0"
+      "key": "u1:0",
+      "audience": "agent"
     },
     {
       "kind": "thinking",
       "text": "I should list the directory first.",
       "ts": "2026-08-27T10:00:01.000Z",
-      "key": "u2:1"
+      "key": "u2:1",
+      "audience": "agent"
     },
     {
       "kind": "assistant",
       "text": "Starting the fixture task.",
       "ts": "2026-08-27T10:00:02.000Z",
-      "key": "u3:2"
+      "key": "u3:2",
+      "audience": "agent"
     },
     {
       "kind": "tool",
@@ -122,7 +153,8 @@
       "result": "total 0\n",
       "is_error": false,
       "ts": "2026-08-27T10:00:03.000Z",
-      "key": "u4:3"
+      "key": "u4:3",
+      "audience": "agent"
     },
     {
       "kind": "tool",
@@ -137,13 +169,16 @@
       "result": "String not found",
       "is_error": true,
       "ts": "2026-08-27T10:00:05.000Z",
-      "key": "u6:5"
+      "key": "u6:5",
+      "audience": "agent"
     },
     {
       "kind": "user",
       "text": "ship it",
       "ts": "2026-08-27T10:00:08.000Z",
-      "key": "u8:7"
+      "key": "u8:7",
+      "audience": "user",
+      "exchange": "u8"
     },
     {
       "kind": "tool",
@@ -153,7 +188,9 @@
         "file_path": "/home/testuser/notes.md"
       },
       "ts": "2026-08-27T10:00:09.000Z",
-      "key": "u9:8"
+      "key": "u9:8",
+      "audience": "agent",
+      "exchange": "u8"
     }
   ]
 }

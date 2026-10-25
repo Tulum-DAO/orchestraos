@@ -82,6 +82,7 @@ pairs = {
     "WATCH_GATEWAY_URL": ("http://%s:%s" % (gateway.get("host"), gateway.get("port"))) if gateway.get("port") else "",
     "WATCH_GATEWAY_TOKEN_FILE": (data_dir + "/state/watch-gateway-token"),
     "ORCH_RUNTIME_DIR": rotation.get("runtime_dir", ""),
+    "ORCHESTRA_SEAT_NICE": str(cfg.get("seats", {}).get("nice", "")),
 }
 if notify.get("channel") == "telegram":
     tg = notify.get("telegram", {})

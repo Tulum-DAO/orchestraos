@@ -12,6 +12,7 @@ does exactly what it does today (INERT). When active, the op writes the
 transactional store via the DB shims and returns True (handled) — the projector
 regenerates the JSON artifacts, so the legacy write is skipped.
 """
+import json
 import os
 
 from scripts.identity_store import cutover, freeze, orchestra_db, shims
@@ -106,7 +107,8 @@ def finalize_archive(orchestra_dir, root, generation, resume_command) -> bool:
     return True
 
 
-def retire_agent(orchestra_dir, agent_id, reason=None, session_record=None) -> bool:
+def retire_agent(orchestra_dir, agent_id, reason=None, session_record=None,
+                 session_fields=None, session_fallback=None) -> bool:
     """park-idle retire in DB terms, faithful to the legacy shape — ALL in one txn:
       * drop the canonical pointer (agent leaves the active roster — the legacy
         registry pop = the resurrection gate) while PRESERVING the generation row
@@ -116,6 +118,10 @@ def retire_agent(orchestra_dir, agent_id, reason=None, session_record=None) -> b
       * PERSIST the retired session document (``session_record`` — park-idle KEEPS
         agent-sessions with status=retired + resume_command + session_id, DP-A2), so
         the retired-but-resumable state survives cutover.
+    ``session_fields`` (orchestra retire): instead of a whole ``session_record``, merge these fields
+    into the store's CURRENT session document, read inside the same transaction so a concurrent
+    update is never overwritten by an older copy; ``session_fallback`` is used only when the store
+    has no session document for the agent.
     Returns True iff handled."""
     freeze.barrier(orchestra_dir)
     if not cutover.is_active(orchestra_dir):
@@ -131,6 +137,11 @@ def retire_agent(orchestra_dir, agent_id, reason=None, session_record=None) -> b
                              (orchestra_db._utcnow(), reason, row["generation_id"]))
                 conn.execute("DELETE FROM canonical WHERE root=?", (agent_id,))
             shims.remove_document(conn, "registry.json", "agent", agent_id)
+            if session_fields is not None:
+                doc = conn.execute("SELECT payload_json FROM source_records WHERE file='agent-sessions.json' "
+                                   "AND kind='session' AND key=?", (agent_id,)).fetchone()
+                session_record = dict(json.loads(doc[0]) if doc else (session_fallback or {}))
+                session_record.update(session_fields)
             if session_record is not None:
                 shims.upsert_document(conn, "agent-sessions.json", "session",
                                       agent_id, session_record)
