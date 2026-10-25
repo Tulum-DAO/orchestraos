@@ -1333,6 +1333,59 @@ def _hook_surfaced(row) -> bool:
         return False
 
 
+# Double delivery: a pending row the Stop-hook digest already SHOWED the agent (the hook stamps
+# metadata surfaced_by + hook_surfaced_at) could ALSO be typed into the pane by this loop before
+# the agent acked it, so the agent saw it twice. _hook_surfaced gated only the router's own digest
+# path. A shown, still-pending row now waits HOOK_SURFACED_GRACE_S from its LAST surfacing; past
+# that it is injected once as before, so an agent that ignored the digest still gets it. A hook
+# digest is a NOTICE, not proof an agent consumed the row, so the grace is short: a long grace
+# combined with the hook restamping on every Stop would turn into a permanent inbox sink.
+# Unreadable stamps deliver as before (never lose mail). Critical rows are never deferred.
+HOOK_SURFACED_GRACE_S = int(os.environ.get("ROUTER_HOOK_SURFACED_GRACE_S", "30"))
+
+
+def _hook_surfaced_at(row):
+    """The row's hook_surfaced_at as an aware datetime, or None when absent or unreadable."""
+    meta = row.get("metadata")
+    try:
+        m = json.loads(meta) if isinstance(meta, str) else (meta or {})
+        if not isinstance(m, dict) or not m.get("hook_surfaced_at"):
+            return None, m if isinstance(m, dict) else {}
+        at = datetime.fromisoformat(str(m["hook_surfaced_at"]).replace("Z", "+00:00"))
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=timezone.utc)
+        return at, m
+    except (ValueError, TypeError, AttributeError):
+        return None, {}
+
+
+def hook_surfaced_defer(row, now: float):
+    """(surfaced_by, seconds_left) when a Stop hook showed this pending row less than
+    HOOK_SURFACED_GRACE_S ago and it is not critical; else None (inject as before)."""
+    if row.get("priority") == "critical":
+        return None
+    at, m = _hook_surfaced_at(row)
+    if at is None or not m.get("surfaced_by"):
+        return None
+    age = max(0.0, now - at.timestamp())
+    if age >= HOOK_SURFACED_GRACE_S:
+        return None
+    return str(m["surfaced_by"]), int(HOOK_SURFACED_GRACE_S - age)
+
+
+def hook_surfaced_ready(row, now: float) -> bool:
+    """Whether a hook-only notice exhausted its short duplicate grace.
+
+    An expired notice bypasses the breathe window; otherwise the fresh hook/pane activity
+    that came with the notice would turn a short grace into an indefinite delivery hold."""
+    if row.get("priority") == "critical":
+        return False
+    at, _m = _hook_surfaced_at(row)
+    if at is None:
+        return False
+    return now - at.timestamp() >= HOOK_SURFACED_GRACE_S
+
+
 def partition_for_digest(rows, age_min):
     """(fresh, stale) — stale = age > age_min, never critical, never
     hook-surfaced (those are excluded entirely: already presented). Both lists
@@ -2343,6 +2396,16 @@ def main():
                         f"{_qdepth.get(agent, 1)} pending")
                 continue
 
+            # The agent's Stop hook already SHOWED this row and it is not acked yet: do not type
+            # it in too. Past the grace window it is injected once as before. Before the
+            # throttle, so it never spends this cycle's slot.
+            _hs = hook_surfaced_defer(msg, now)
+            if _hs:
+                log(f"SKIP-HOOK-SURFACED {msg['id']} -> {agent}: shown by {_hs[0]}, unacked; "
+                    f"injecting in {_hs[1]}s if still pending")
+                continue
+            _hook_release = hook_surfaced_ready(msg, now)
+
             # THROTTLE: key delivered_to + cooldowns on the RESOLVED SESSION.
             # After forwarding, v1-forwarded mail and v2-native mail share the same
             # session; keying on to_agent would double-inject into the head in one
@@ -2385,9 +2448,9 @@ def main():
                 continue  # attached + active within TTL: human plausibly mid-convo.
                 # Past the TTL a persistent-but-idle attach no longer freezes mail
                 # (2026-08-15 fix). Typed-input clobber protection is agent_is_idle.
-            if idle_secs < BREATHE_WINDOW_S and not _breathe_exempt(msg) and _dn:
+            if idle_secs < BREATHE_WINDOW_S and not _breathe_exempt(msg) and not _hook_release and _dn:
                 _dn_waived.append("breathe-window")
-            elif idle_secs < BREATHE_WINDOW_S and not _breathe_exempt(msg):
+            elif idle_secs < BREATHE_WINDOW_S and not _breathe_exempt(msg) and not _hook_release:
                 # #15 leg-3: a PARKED-IDLE target has nothing breathing — skip
                 # the quiet-wait. SHADOW unless armed: emit [parked-exempt-
                 # shadow] beside the hold so v3 can diff shadow lines against
