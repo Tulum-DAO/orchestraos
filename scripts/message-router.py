@@ -97,6 +97,7 @@ from runtime_signatures import (  # noqa: E402
     declared_runtime,
     declared_runtime_disabled,
     gemini_idle_routing_armed,
+    grok_composer_line_state,
 )
 # One warning per seat (not per cycle — the router is a fresh process every minute) when a row
 # declares a runtime that has no prompt signature here. Keyed "<agent>=<value>" so a corrected
@@ -213,6 +214,82 @@ def telegram(text):
 
 def tmux(*args, timeout=10):
     return subprocess.run(["tmux", *args], capture_output=True, text=True, timeout=timeout)
+
+
+# --- Escalation seam ------------------------------------------------------------------------
+# WHO hears an alarm about a seat is answered by ONE implementation,
+# scripts/identity_store/alarm_routing.escalation_targets; the router imports it and keeps NO
+# local copy (a fallback that reads a different source is a second rule that disagrees).
+# CONTRACT, asserted HERE at import by BINDING the call this router makes, rather than counting
+# parameters (binding keeps passing when someone adds a defaulted argument):
+#     escalation_targets(seat) -> list[str]   (OWNER_CHANNEL last, the seat never in it)
+# An ABSENT module and a BROKEN contract are different states and never share a code path: the
+# first is known with a defined behaviour, the second is a bug and must be loud.
+#: The terminal hop: a CHANNEL sentinel rendered to Telegram, never a msg_store recipient.
+OWNER_CHANNEL = "owner:tg"
+_OI_IMPORT_ERROR = None
+_OI_CONTRACT_ERROR = None
+try:
+    from scripts.identity_store.alarm_routing import (  # noqa: F401
+        escalation_targets as _oi_escalation_targets)
+except ImportError as _e:          # absent module ONLY — never a catch-all here
+    _oi_escalation_targets = None
+    _OI_IMPORT_ERROR = repr(_e)
+else:
+    try:
+        import inspect as _inspect
+        _inspect.signature(_oi_escalation_targets).bind("probe-seat")
+    except TypeError as _e:
+        _OI_CONTRACT_ERROR = (
+            f"alarm_routing.escalation_targets does not accept the call this router makes, "
+            f"escalation_targets(<seat>): {_e}")
+    except (ValueError, AttributeError) as _e:
+        _OI_CONTRACT_ERROR = f"could not verify the escalation contract: {_e!r}"
+
+
+class EscalationSeamUnavailable(RuntimeError):
+    """The one escalation implementation could not be IMPORTED — a known state. Callers page
+    the owner channel naming it, and never guess a chain from a second rule."""
+
+
+class EscalationSeamBroken(RuntimeError):
+    """The seam imported but does not match the agreed contract — a BUG, deliberately a
+    different exception from Unavailable so the two can never share a handler."""
+
+
+def escalation_targets(seat: str) -> list[str]:
+    """WHO to tell about `seat`, answered ONLY by alarm_routing.escalation_targets (DB-first:
+    lineages.reports_to). The seam returns the finished list — agents first, the owner channel
+    last, the named seat never present. NO broad except here: a contract error must be loud.
+    Raises EscalationSeamUnavailable (absent) or EscalationSeamBroken (wrong shape); the caller
+    pages the owner channel naming whichever it was. `seat` is dropped from the result
+    regardless."""
+    if _OI_CONTRACT_ERROR:
+        raise EscalationSeamBroken(_OI_CONTRACT_ERROR)
+    if _oi_escalation_targets is None:
+        raise EscalationSeamUnavailable(
+            f"scripts.identity_store.alarm_routing is not importable: {_OI_IMPORT_ERROR}")
+    chain = _oi_escalation_targets(seat)
+    if not isinstance(chain, list):
+        # The RETURN TYPE is contract too; a signature cannot express it, so it is checked here.
+        raise EscalationSeamBroken(
+            f"alarm_routing.escalation_targets returned {type(chain).__name__}, expected list")
+    return [t for t in chain if t != seat]
+
+
+def _send_page(to: str, subject: str, body: str) -> None:
+    """Deliver one page. OWNER_CHANNEL is a CHANNEL sentinel, not an agent id: it is rendered to
+    Telegram, never written to msg_store as a recipient. Raises on a failed agent send so the
+    caller can count a dead hop as one more reason to reach the owner."""
+    if to == OWNER_CHANNEL:
+        telegram(f"{subject}\n{body}")
+        return
+    r = subprocess.run([sys.executable, str(CODE_ROOT / "msg_store.py"), "send",
+                        "--from", "message-router", "--to", to,
+                        "--subject", subject, "--body", body],
+                       capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        raise RuntimeError(f"msg_store send exited {r.returncode}: {(r.stderr or '').strip()[:200]}")
 
 
 def live_sessions() -> set:
@@ -720,7 +797,62 @@ def reachability_probe(session: str, runtime: str, agent: str, msg_id: str):
         return None   # observability must never break delivery
 
 
+# --- Deliver now (scripts/deliver_now.py) -----------------------------------------
+# A person pressed "Deliver now" for this session (the gateway's POST /deliver-now wrote the
+# waiver; agents never do). It waives only the SOFT gates below: cooldown, attached-active,
+# breathe window, and a Claude turn in progress (Claude Code queues typed input mid-turn). The
+# HARD gates stay: typed-but-unsent text, a permission prompt or any screen without an empty
+# composer, a stranded paste chip, Codex/Grok mid-turn (inject() re-checks those itself).
+
+def deliver_now_waiver(session: str):
+    try:
+        import deliver_now
+        return deliver_now.active_waiver(ORCHESTRA_DIR, session)
+    except Exception:  # noqa: BLE001 — no waiver is the safe answer
+        return None
+
+
+def claude_mid_turn_safe(session: str) -> bool:
+    """A Claude pane mid-turn may take a typed message (it queues it) only when its composer is on
+    screen, empty, and holds no stranded chip, and no hook says it is waiting on a permission.
+    A permission dialog replaces the composer, so "no composer visible" refuses it too."""
+    hs = hook_state(session)
+    if hs is not None and hs[0] == "waiting_permission":
+        return False
+    _, line, ok = pane_split(session, "claude")
+    if not ok:
+        return False
+    if composer_has_stranded_chip(line):
+        return False
+    ansi = tmux("capture-pane", "-t", session, "-e", "-p")
+    if ansi.returncode != 0:
+        return False
+    sig = PROMPT_SIGNATURES["claude"]
+    prompt_lines = [l for l in ansi.stdout.split("\n") if sig["prompt_char"] in l]
+    if not prompt_lines:
+        return False
+    return input_line_state(prompt_lines[-1], sig) != "typed"
+
+
 # --- Stuck-injection self-cleanup ---------------------------------------------
+
+def _grok_live_composer_is_typed(session: str, sig: dict) -> bool:
+    """True only when router delivery into grok is armed AND the live grok composer holds
+    typed text. Grok's prompt glyph is also Claude's, and the stuck-injection pass runs before
+    the idle gate and sends C-u / Enter, so an unarmed grok pane must match nothing. Any reader
+    or capture failure => False (never type)."""
+    try:
+        import grok_context
+        armed = grok_context.delivery_armed()
+    except Exception:  # noqa: BLE001 — a reader fault must not type
+        return False
+    if not armed:
+        return False
+    ansi = tmux("capture-pane", "-t", session, "-e", "-p")
+    if ansi.returncode != 0:
+        return False
+    return grok_composer_line_state(ansi.stdout, sig) == "typed"
+
 
 def stuck_own_message(session: str, runtime: str = DEFAULT_RUNTIME) -> str | None:
     """If the input line holds a TYPED (non-dim) line that starts with our own
@@ -731,6 +863,8 @@ def stuck_own_message(session: str, runtime: str = DEFAULT_RUNTIME) -> str | Non
     #1b: runtime-signature-aware — finds the input line by the runtime's
     prompt_char (default claude ⇒ byte-identical)."""
     sig = PROMPT_SIGNATURES.get(runtime, PROMPT_SIGNATURES[DEFAULT_RUNTIME])
+    if runtime == "grok" and not _grok_live_composer_is_typed(session, sig):
+        return None
     prompt_char = sig["prompt_char"]
     ansi = tmux("capture-pane", "-t", session, "-e", "-p")
     if ansi.returncode != 0:
@@ -1023,7 +1157,18 @@ def codex_pane_is_busy(pane_text: str) -> bool:
     return ("\u25e6 Working" in txt) or ("tab to queue message" in txt)
 
 
-def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
+def codex_idle_release(runtime: str, visibly_idle: bool) -> bool:
+    """Codex-only equivalent of Claude's end-of-turn queue release.
+
+    Codex emits no Claude-style Stop-hook queue release, so its mail always waited out the
+    full breathe window after every turn. Once its own idle prompt is visibly back, that turn
+    boundary is treated like Claude's release: only the quiet/breathe delay is skipped. The
+    attached-client guard, the cooldown and the once-only claim still apply."""
+    return runtime == "codex" and bool(visibly_idle)
+
+
+# Delivery model: see docs/DELIVERY.md
+def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME, pre_paste=None) -> str:
     """_inject_unlocked under the ONE cross-process pane lock every typer shares (pane_lock.py):
     the gateway, approval_resume, the nudger and the watchers take the same lock, so two senders
     never glue or split each other's text in one pane. Adds one outcome:
@@ -1038,7 +1183,9 @@ def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
             # whose text a guard is about to find still in the composer), and marks it typed when
             # the paste is confirmed. Only a row THIS call wrote is ever cleared here.
             rec = []
-            res = _inject_unlocked(session, text, runtime, journal=rec)
+            # Deliver now's pre-paste look rides along only when given, so the plain call is unchanged.
+            _kw = {"pre_paste": pre_paste} if pre_paste is not None else {}
+            res = _inject_unlocked(session, text, runtime, journal=rec, **_kw)
             if rec and res in ("submitted", "held"):
                 # submitted, or nothing was pasted. 'failed' KEEPS its row: a paste can land unseen
                 # (an unmarked row is report-only at the reconcile); 'stuck' keeps it as evidence.
@@ -1081,7 +1228,8 @@ def _input_line_typed(session: str, runtime: str = DEFAULT_RUNTIME) -> bool:
     return not prompt_lines or input_line_state(prompt_lines[-1], sig) == "typed"
 
 
-def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, journal=None) -> str:
+def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, journal=None,
+                     pre_paste=None) -> str:
     """Inject with three-stage verification. Returns:
       'submitted'  — text confirmed in scrollback, input line clear
       'stuck'      — text landed in input line but Enter never took (left as-is)
@@ -1128,6 +1276,12 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, jo
     if ok0 and composer_has_stranded_chip(line0):
         log(f"stranded paste-chip in {session} composer — E7 guard: no repaste, holding")
         return "stuck"
+
+    # Stage 0.55 (Deliver now, mid-turn): the caller's last look, right before any key is sent.
+    # 'held' = nothing was typed into the pane; the caller returns the row to pending.
+    if pre_paste is not None and not pre_paste():
+        log(f"DELIVER-NOW pre-paste check failed in {session} -- nothing typed, holding")
+        return "held"
 
     # Stage 0.6 (De-duplication guard): if the probe text is ALREADY in the input
     # line/composer from a previous unsubmitted attempt, never paste another duplicate copy!
@@ -1319,6 +1473,59 @@ def _hook_surfaced(row) -> bool:
         return bool(isinstance(m, dict) and m.get("surfaced_by"))
     except (ValueError, TypeError):
         return False
+
+
+# Double delivery: a pending row the Stop-hook digest already SHOWED the agent (the hook stamps
+# metadata surfaced_by + hook_surfaced_at) could ALSO be typed into the pane by this loop before
+# the agent acked it, so the agent saw it twice. _hook_surfaced gated only the router's own digest
+# path. A shown, still-pending row now waits HOOK_SURFACED_GRACE_S from its LAST surfacing; past
+# that it is injected once as before, so an agent that ignored the digest still gets it. A hook
+# digest is a NOTICE, not proof an agent consumed the row, so the grace is short: a long grace
+# combined with the hook restamping on every Stop would turn into a permanent inbox sink.
+# Unreadable stamps deliver as before (never lose mail). Critical rows are never deferred.
+HOOK_SURFACED_GRACE_S = int(os.environ.get("ROUTER_HOOK_SURFACED_GRACE_S", "30"))
+
+
+def _hook_surfaced_at(row):
+    """The row's hook_surfaced_at as an aware datetime, or None when absent or unreadable."""
+    meta = row.get("metadata")
+    try:
+        m = json.loads(meta) if isinstance(meta, str) else (meta or {})
+        if not isinstance(m, dict) or not m.get("hook_surfaced_at"):
+            return None, m if isinstance(m, dict) else {}
+        at = datetime.fromisoformat(str(m["hook_surfaced_at"]).replace("Z", "+00:00"))
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=timezone.utc)
+        return at, m
+    except (ValueError, TypeError, AttributeError):
+        return None, {}
+
+
+def hook_surfaced_defer(row, now: float):
+    """(surfaced_by, seconds_left) when a Stop hook showed this pending row less than
+    HOOK_SURFACED_GRACE_S ago and it is not critical; else None (inject as before)."""
+    if row.get("priority") == "critical":
+        return None
+    at, m = _hook_surfaced_at(row)
+    if at is None or not m.get("surfaced_by"):
+        return None
+    age = max(0.0, now - at.timestamp())
+    if age >= HOOK_SURFACED_GRACE_S:
+        return None
+    return str(m["surfaced_by"]), int(HOOK_SURFACED_GRACE_S - age)
+
+
+def hook_surfaced_ready(row, now: float) -> bool:
+    """Whether a hook-only notice exhausted its short duplicate grace.
+
+    An expired notice bypasses the breathe window; otherwise the fresh hook/pane activity
+    that came with the notice would turn a short grace into an indefinite delivery hold."""
+    if row.get("priority") == "critical":
+        return False
+    at, _m = _hook_surfaced_at(row)
+    if at is None:
+        return False
+    return now - at.timestamp() >= HOOK_SURFACED_GRACE_S
 
 
 def partition_for_digest(rows, age_min):
@@ -1894,6 +2101,36 @@ def _registry_db_path() -> str:
     return str(ORCHESTRA_DIR / "state" / "orchestra-registry.db")
 
 
+def is_service_target(agent: str, cache: dict | None = None, db_path=None) -> bool:
+    """True when `agent`'s LINEAGE runtime is 'service'.
+
+    A service seat has no agent CLI in its pane (for example a shell an operator reaches over
+    SSH that reads its mail from msg_store itself). Typing into its pane would land in a
+    shell, and the not-idle hold path would read 'no agent process' as an outage and keep
+    escalating. Its rows stay PENDING for their own reader and age out at 48 h like any
+    other row.
+
+    Read-only, once per agent per cycle (`cache`). FAIL-OPEN to False (normal delivery) on
+    any read error: a DB hiccup must never silently stop delivery to a real agent."""
+    if cache is not None and agent in cache:
+        return cache[agent]
+    svc = False
+    try:
+        import sqlite3 as _sq
+        dbp = db_path or _registry_db_path()
+        con = _sq.connect(f"file:{dbp}?mode=ro", uri=True)
+        try:
+            row = con.execute("SELECT runtime FROM lineages WHERE root=?", (agent,)).fetchone()
+        finally:
+            con.close()
+        svc = bool(row) and row[0] == "service"
+    except Exception:  # noqa: BLE001 - fail-open, see docstring
+        svc = False
+    if cache is not None:
+        cache[agent] = svc
+    return svc
+
+
 def _target_rotated_within(session: str, now: float, window_s: float = 900) -> bool:
     """True iff the target's canonical seat had a generation PROMOTED within window_s
     (gm msg_86bcc168 item 5: never terminate mail within 15 min of a rotation of the
@@ -2153,6 +2390,7 @@ def merge_forwarded_meta(store, msg_id: str, forwarded_from: str) -> None:
 
 # --- Main ---------------------------------------------------------------------
 
+# Delivery model: see docs/DELIVERY.md
 def main():
     # Lock (stale after 5 min)
     if LOCKFILE.exists():
@@ -2230,6 +2468,7 @@ def main():
             _qdepth[_pm["to_agent"]] = _qdepth.get(_pm["to_agent"], 0) + 1
 
         delivered_to = set()   # keyed on RESOLVED SESSION (not to_agent) — see below
+        _svc_cache = {}        # agent -> lineage runtime is 'service' (once per cycle)
         _digest_attempted = set()  # DEC-1787031444: one digest attempt per session/cycle
         _dl_batch = {}             # leg-4 act 2: (sender, target-class) -> [ids]
         for msg in pending:
@@ -2288,14 +2527,41 @@ def main():
             if session not in sessions:
                 continue  # head not running on this machine; message stays queued
 
+            # SERVICE TARGET: a lineage whose runtime is 'service' (a shell pane by design) is
+            # never typed into, and it is decided BEFORE every hold path (attached-active,
+            # breathe-window, not-idle), because a note_hold escalates on its SLA too.
+            # The row stays PENDING for the seat's own reader (msg_store) and ages out at 48 h.
+            _svc_agent = agent_for_session(session, meta) or agent
+            if is_service_target(_svc_agent, cache=_svc_cache):
+                if _svc_cache.get(f"logged:{_svc_agent}") is None:
+                    _svc_cache[f"logged:{_svc_agent}"] = True
+                    log(f"SERVICE {session} :: held for its own reader "
+                        f"(lineage runtime=service; no tmux delivery, no hold escalation) "
+                        f"{_qdepth.get(agent, 1)} pending")
+                continue
+
+            # The agent's Stop hook already SHOWED this row and it is not acked yet: do not type
+            # it in too. Past the grace window it is injected once as before. Before the
+            # throttle, so it never spends this cycle's slot.
+            _hs = hook_surfaced_defer(msg, now)
+            if _hs:
+                log(f"SKIP-HOOK-SURFACED {msg['id']} -> {agent}: shown by {_hs[0]}, unacked; "
+                    f"injecting in {_hs[1]}s if still pending")
+                continue
+            _hook_release = hook_surfaced_ready(msg, now)
+
             # THROTTLE: key delivered_to + cooldowns on the RESOLVED SESSION.
             # After forwarding, v1-forwarded mail and v2-native mail share the same
             # session; keying on to_agent would double-inject into the head in one
             # cycle (second lands mid-render of the first). (spec round-1 fix)
             if session in delivered_to:
                 continue  # one message per session per cycle
+            _dn = deliver_now_waiver(session)
+            _dn_waived = []
             if now - cooldowns.get(session, 0) < COOLDOWN_SECONDS:
-                continue
+                if not _dn:
+                    continue
+                _dn_waived.append("cooldown")
 
             # SELF-FORWARD GUARD: a reply FROM the live head addressed to its own
             # retired predecessor must not loop back into the head as self-mail.
@@ -2319,16 +2585,33 @@ def main():
             # Never interject. Also back off if the session had activity in the
             # last 10 minutes (active conversation cadence).
             attached, idle_secs = sess_info.get(session, (0, 1e9))
+            # Per-runtime idle-gate: resolve the TARGET agent's runtime so an agy/Gemini
+            # pane ('>') is recognized as idle, not just Claude's ❯. Resolve from the
+            # resolved session's agent when a forward happened, else the addressed agent.
+            # routing_runtime: a DECLARED runtime always; undeclared rows keep the old rule
+            # (claude unless ROUTER_GEMINI_IDLE_ARMED), byte-identical to before.
+            # Resolved here, before the breathe window, so a codex pane whose idle prompt
+            # is visibly back can skip the quiet-wait (codex_idle_release). One probe per
+            # row: the idle gate below reuses it for codex.
+            _target_agent = agent_for_session(session, meta) or agent
+            _runtime = routing_runtime(_target_agent, meta)
+            _codex_idle_release = codex_idle_release(
+                _runtime, agent_is_idle(session, _runtime) if _runtime == "codex" else False)
             # Presence = an attached client whose OWN input is < CLIENT_ACTIVE_TTL_S old
             # (client_presence), not session activity, which the agent's own output moves.
             _presence = attached_presence_hold(client_age, session, now)
-            if _presence and msg.get("priority") != "critical":
+            if _presence and msg.get("priority") != "critical" and _dn:
+                _dn_waived.append("attached-active")
+            elif _presence and msg.get("priority") != "critical":
                 note_hold(hold_state, session, msg, "attached-active", now, queue_n=_qdepth.get(agent),
                           dl_batch=_dl_batch, detail=_presence)
                 continue  # a client is actively typing: human plausibly mid-convo.
                 # Past the TTL a persistent-but-idle attach no longer freezes mail
                 # (2026-08-15 fix). Typed-input clobber protection is agent_is_idle.
-            if idle_secs < BREATHE_WINDOW_S and not _breathe_exempt(msg):
+            if (idle_secs < BREATHE_WINDOW_S and not _breathe_exempt(msg) and not _hook_release
+                    and not _codex_idle_release and _dn):
+                _dn_waived.append("breathe-window")
+            elif idle_secs < BREATHE_WINDOW_S and not _breathe_exempt(msg) and not _hook_release and not _codex_idle_release:
                 # #15 leg-3: a PARKED-IDLE target has nothing breathing — skip
                 # the quiet-wait. SHADOW unless armed: emit [parked-exempt-
                 # shadow] beside the hold so v3 can diff shadow lines against
@@ -2358,15 +2641,12 @@ def main():
                 # row was queued FOR this turn boundary). Still idle-gated
                 # (agent_is_idle below) + attach-guarded + cooldown'd + once-only.
 
-            # Per-runtime idle-gate (the operator apr_a72c10f8): resolve the TARGET
-            # agent's runtime so an agy/Gemini pane ('>') is recognized as idle,
-            # not just Claude's ❯. Resolve from the resolved session's agent when
-            # a forward happened, else the addressed agent. routing_runtime: a DECLARED
-            # runtime always (DEC-1791656515249463); undeclared rows keep the old rule
-            # (claude unless ROUTER_GEMINI_IDLE_ARMED), byte-identical to before.
-            _target_agent = agent_for_session(session, meta) or agent
-            _runtime = routing_runtime(_target_agent, meta)
-            if not agent_is_idle(session, _runtime):
+            # Per-runtime idle-gate: _runtime was resolved above (before the breathe window).
+            _idle = (_codex_idle_release if _runtime == "codex"
+                    else agent_is_idle(session, _runtime))
+            if not _idle and _dn and _runtime == "claude" and claude_mid_turn_safe(session):
+                _dn_waived.append("mid-turn")
+            elif not _idle:
                 # Layer B (Bug 2) SHADOW: classify live-but-unreachable holds
                 # (survey/permission/stuck-composer/menu) into the would-clear
                 # log. Never raises, never alters the hold. Per-episode
@@ -2375,6 +2655,15 @@ def main():
                 note_hold(hold_state, session, msg, "not-idle", now, queue_n=_qdepth.get(agent), dl_batch=_dl_batch)
                 continue  # stays queued; retried next cycle (RCA: this was the
                 # 7h-silent branch — now logged + SLA-escalated via note_hold)
+
+            if _dn_waived:
+                log(f"DELIVER-NOW {msg['id']} -> {session}: pressed by {_dn.get('by')} at "
+                    f"{_dn.get('at')}; waived {', '.join(_dn_waived)}")
+                try:
+                    store.stamp_metadata(msg["id"], deliver_now_by=_dn.get("by"),
+                                         deliver_now_waived=_dn_waived)
+                except Exception:  # noqa: BLE001 — the log line is the record
+                    pass
 
             # Idle-gate PASSED => the pane VISIBLY recovered — end any active
             # pane-reachability episode so a future re-stuck re-arms exactly
@@ -2391,7 +2680,10 @@ def main():
             # cycle; digested rows fail store.claim below when the loop reaches
             # them (delivered => not pending). Fresh rows + single-stale fall
             # through to the normal path unchanged.
-            if session not in _digest_attempted and is_digest_session(session):
+            # A Deliver-now mid-turn delivery goes through the singles path only, where the
+            # composer is re-checked right before the claim; the digest path injects without it.
+            if "mid-turn" not in _dn_waived and session not in _digest_attempted \
+                    and is_digest_session(session):
                 _digest_attempted.add(session)
                 try:
                     _dcfg = digest_config()
@@ -2407,6 +2699,13 @@ def main():
                 except Exception as e:  # noqa: BLE001 — digest never sinks the cycle
                     log(f"[digest] error for {session}: {e} — singles path continues")
 
+            # Deliver now, mid-turn: look again right before claiming. Typing or a permission
+            # prompt that started since the first look means hold, not paste.
+            if "mid-turn" in _dn_waived and not claude_mid_turn_safe(session):
+                log(f"DELIVER-NOW recheck {msg['id']} -> {session}: composer no longer safe, holding")
+                note_hold(hold_state, session, msg, "not-idle", now, queue_n=_qdepth.get(agent), dl_batch=_dl_batch)
+                continue
+
             if not store.claim(msg["id"]):
                 continue  # raced with another router instance
 
@@ -2416,7 +2715,9 @@ def main():
                 text = f"[fwd from {forwarded_from}] " + text
                 merge_forwarded_meta(store, msg["id"], forwarded_from)
                 log(f"FORWARD {msg['id']}: {agent} -> {session} ({reason}, from={forwarded_from})")
-            result = inject(session, text, _runtime)
+            result = inject(session, text, _runtime,
+                            pre_paste=(lambda: claude_mid_turn_safe(session))
+                            if "mid-turn" in _dn_waived else None)
             if result in ("submitted", "stuck"):
                 close_park_episode(hold_state, session)   # target took mail: episode over
             if result == "submitted":
@@ -2456,6 +2757,10 @@ def main():
                 # nor a failure and must not use retry budget. Re-open the claimed row.
                 store.defer(msg["id"], error="router: another sender held the pane; deferred")
                 log(f"HELD {msg['id']} -> {agent}: another sender held the pane; row re-queued")
+                if _dn_waived:
+                    # Deliver now: nothing was typed (busy pane, pane lock, or the pre-paste look
+                    # failed). Record the hold so the agent's page says what it is still waiting for.
+                    note_hold(hold_state, session, msg, "not-idle", now, queue_n=_qdepth.get(agent), dl_batch=_dl_batch)
             else:
                 store.fail(msg["id"], error="router: paste never landed after 2 attempts")
                 with store._conn() as conn:

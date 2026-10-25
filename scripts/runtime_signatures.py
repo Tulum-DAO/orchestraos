@@ -12,6 +12,7 @@ Consumers: message-router.py (idle-gate), and later spawn-agent dispatch (§4.2)
 """
 import json
 import os
+import re
 from pathlib import Path
 
 import sys
@@ -113,6 +114,48 @@ def signature_verified(runtime) -> bool:
     """False only for a signature explicitly marked unverified (grok)."""
     sig = PROMPT_SIGNATURES.get((runtime or "").strip().lower()) or {}
     return bool(sig.get("verified", True))
+
+
+# CSI, including SGR. A pane captured with tmux -e leads the prompt with ESC[0m and may wrap
+# footer characters in SGR; matching the raw bytes would read the composer as absent.
+_CSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def _strip_csi(text: str) -> str:
+    return _CSI_RE.sub("", text or "")
+
+
+def grok_composer_line_state(capture: str, sig: dict | None = None) -> str:
+    """Classify the live Grok composer. Returns 'empty', 'typed', or 'absent'.
+
+    The live composer is the last line that is only the prompt char, or the last line that
+    starts with the prompt char and has more text, whose next non-empty line matches the
+    signature's idle_footer_re. CSI/SGR is stripped before either comparison, because the
+    router captures with tmux -e. A prompt glyph that appears only in scrollback, with no
+    footer under it, is 'absent' and must not read as a composer. A signature with no footer
+    pattern, or with a sentinel prompt (the unverified default), is always 'absent'. This does
+    not decide busy vs idle: the footer stays on screen during a turn."""
+    sig = sig if sig is not None else PROMPT_SIGNATURES["grok"]
+    prompt = sig.get("prompt_char") or ""
+    footer_re = sig.get("idle_footer_re") or ""
+    if not prompt or not footer_re or "\x00" in prompt:
+        return "absent"
+    lines = (capture or "").splitlines()
+    found = None
+    for i, line in enumerate(lines):
+        stripped = _strip_csi(line).strip()
+        if not stripped.startswith(prompt):
+            continue
+        nxt = ""
+        for later in lines[i + 1:]:
+            later_s = _strip_csi(later).strip()
+            if later_s:
+                nxt = later_s
+                break
+        if not re.search(footer_re, nxt):
+            continue
+        found = "empty" if stripped == prompt else "typed"
+    return found or "absent"
 
 
 def is_claude_stop_hook_seat(runtime: "str | None") -> bool:
