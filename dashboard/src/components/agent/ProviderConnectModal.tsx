@@ -128,7 +128,7 @@ export function ProviderConnectModal({ provider, onClose, onBack, startLoginShel
 
   return (
     <div className="fixed inset-0 z-[85] flex items-end justify-center bg-black/50" onClick={dismiss}>
-      <div className="w-full max-w-lg max-h-[94vh] flex flex-col rounded-t-2xl bg-background border-t border-border p-4 pb-6"
+      <div className="w-full max-w-lg h-[94vh] min-h-0 flex flex-col overflow-hidden rounded-t-2xl bg-background border-t border-border p-4 pb-6"
            role="dialog" aria-label={`Connect ${provider.label}`} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-2 mb-1">
           {onBack && (
@@ -248,10 +248,15 @@ export function ProviderConnectModal({ provider, onClose, onBack, startLoginShel
                   <p className="text-foreground/45">Sign in there, then paste the code it gives you back into the terminal below.</p>
                 )}
                 {opened && (
-                  <div className="rounded-lg overflow-hidden border border-border h-[62vh] min-h-[340px]"
+                  <>
+                  {/* Keep the live login cursor pinned in the visible modal. The surrounding
+                      instructions can scroll, but a terminal that captured the wheel while
+                      sitting halfway down that scroller made its own input unreachable. */}
+                  <div className="sticky bottom-0 shrink-0 h-[min(62vh,calc(94vh-12rem))] min-h-[220px] rounded-lg overflow-hidden border border-border bg-background"
                        data-testid="connect-terminal">
                     <WebTerminal session={opened} machine="vps" />
                   </div>
+                  </>
                 )}
                 {error && <p className="text-red-400/90">Could not open a terminal: {error}</p>}
                 <p className="text-foreground/45">{plan.kind === 'login-shell' ? plan.detail : ''}</p>
