@@ -1694,6 +1694,7 @@ def compute_agents():
     _stamp_recency_and_subagents(out, _pane_event)
     _stamp_last_user_message(out)
     _stamp_lineage(out, reg_agents)
+    _stamp_chips(out, {name: meta for name, meta in sess_meta.values()})
 
     rank = {"waiting": 0, "stranded": 1, "stalled": 2, "crashed": 3, "stopped": 4,
             "working": 5, "idle": 6, "offline": 7}
@@ -1812,6 +1813,46 @@ def _stamp_last_user_message(rows):
         at = last.get(r.get("tmux_session") or "") or last.get(r.get("id") or "")
         if at:
             r["last_user_message_at"] = at
+
+
+PENDING_CARDS_CACHE_S = 15
+_pending_cards_cache = {"at": -1e18, "counts": {}}
+
+
+def _pending_cards_by_author() -> dict:
+    """seat -> count of its pending cards (waiting on a person), read at most every
+    PENDING_CARDS_CACHE_S so the /agents refresh does not query the card store each time."""
+    import time as _time
+    now = _time.monotonic()
+    if now - _pending_cards_cache["at"] < PENDING_CARDS_CACHE_S:
+        return _pending_cards_cache["counts"]
+    _pending_cards_cache["counts"] = _read_pending_cards_by_author()
+    _pending_cards_cache["at"] = now
+    return _pending_cards_cache["counts"]
+
+
+def _read_pending_cards_by_author() -> dict:
+    """Fail-open: no store, no counts (the chip falls back to the detector's state)."""
+    try:
+        store = ApprovalStore(); store.migrate()
+        counts: dict = {}
+        for r in store.pending_to_notify():
+            a = r.get("from_agent")
+            if a:
+                counts[a] = counts.get(a, 0) + 1
+        return counts
+    except Exception:  # noqa: BLE001 — the chip falls back to the detector's state
+        return {}
+
+
+def _stamp_chips(rows, meta_by_name):
+    """Add the one status chip every surface draws (scripts/agent_chip.py, docs/AGENT_CHIP.md)."""
+    from scripts.agent_chip import chip_for
+    cards = _pending_cards_by_author()
+    for r in rows:
+        meta = meta_by_name.get(r.get("id")) or {}
+        r["chip"] = chip_for(r, registry_runtime=meta.get("runtime"),
+                             pending_cards=cards.get(r.get("id"), 0))
 
 
 SUBAGENT_STALE_S = 15 * 60
