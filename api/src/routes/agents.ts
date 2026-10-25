@@ -24,6 +24,7 @@ import { actingAgent, principal } from '../lib/principal.js';
 import { agentScopeParam, canPrincipalSeeAgent } from '../lib/agent-scope.js';
 import { CODE_ROOT } from '../lib/codeRoot.js';
 import { gatewayUrl } from '../lib/gateway-url.js';
+import { gatewayChips } from '../lib/gatewayChips.js';
 import { sessionFor, held, deliverNow, defaultDeliverNowDeps } from '../lib/deliverNow.js';
 
 function macSshTarget(): string {
@@ -412,6 +413,13 @@ router.get('/', async (_req: Request, res: Response) => {
       }
     }
 
+    // The one status chip every surface draws, computed by the gateway (lib/gatewayChips.ts).
+    const chips = gatewayChips.current();
+    for (const a of visibleAgents) {
+      const c = chips.get(baseAgentId(a.id)) || chips.get(a.id);
+      if (c) (a as any).chip = c;
+    }
+
     const visibleOnline = visibleAgents.filter((a) => a.tmux_alive).length;
 
     res.json({
@@ -607,7 +615,9 @@ async function gatewayInject(session: string, text: string, force: boolean):
   if (!token) throw new Error('gateway token unavailable');
   const resp = await fetch(`${GATEWAY_URL}/agent-message`, {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json',
+      // A person typed this (the dashboard terminal): the gateway counts it as the operator's.
+      'X-Actor': 'operator:web' },
     body: JSON.stringify({ session, text, force }),
     signal: AbortSignal.timeout(25000),
   });

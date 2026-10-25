@@ -231,7 +231,7 @@ def test_transport_keypress_commits_with_enter_and_verifies(monkeypatch):
     ok, info = G.menu_resume_keypress("acme-dev", "2", expect_question="Which color?")
     assert ok and info.get("verified") is True
     sk = [c for c in fake.calls if c[0] == "send-keys"]
-    assert sk == [("send-keys", "-t", "acme-dev", "2", "Enter")]   # digit + Enter, one send
+    assert sk == [("send-keys", "-t", "=acme-dev:", "2", "Enter")]   # digit + Enter, one send
 
 
 def test_transport_keypress_never_answers_a_permission_prompt(monkeypatch):
@@ -264,7 +264,7 @@ def test_free_text_answer_never_sends_a_second_enter_into_a_permission_prompt(mo
     ok, info = G.menu_resume_free_text("acme-dev", "4", "my answer", expect_question=q)
     assert ok and info["attempts"] == 1
     assert [c for c in fake.calls if c[0] == "send-keys" and "Enter" in c] == \
-        [("send-keys", "-t", "acme-dev", "Enter")]
+        [("send-keys", "-t", "=acme-dev:", "Enter")]
 
 
 def test_transport_keypress_unverified_when_menu_stays(monkeypatch):
@@ -284,7 +284,7 @@ def test_transport_keypress_free_text_phase1_is_digit_only(monkeypatch):
                                       commit=False)
     assert ok
     sk = [c for c in fake.calls if c[0] == "send-keys"]
-    assert sk == [("send-keys", "-t", "acme-dev", "4")]   # digit only, NO Enter, NO verify
+    assert sk == [("send-keys", "-t", "=acme-dev:", "4")]   # digit only, NO Enter, NO verify
 
 
 def test_transport_keypress_menu_gone(monkeypatch):
@@ -319,9 +319,9 @@ def test_transport_free_text_three_phase(monkeypatch):
                                        expect_question="Which color?")
     assert ok
     sk = [c for c in fake.calls if c[0] == "send-keys"]
-    assert sk[0] == ("send-keys", "-t", "acme-dev", "3")                 # digit
-    assert sk[1] == ("send-keys", "-t", "acme-dev", "-l", "typed body")  # literal text
-    assert sk[2] == ("send-keys", "-t", "acme-dev", "Enter")             # submit
+    assert sk[0] == ("send-keys", "-t", "=acme-dev:", "3")                 # digit
+    assert sk[1] == ("send-keys", "-t", "=acme-dev:", "-l", "typed body")  # literal text
+    assert sk[2] == ("send-keys", "-t", "=acme-dev:", "Enter")             # submit
 
 
 def test_transport_free_text_unresolved_menu_fails(monkeypatch):

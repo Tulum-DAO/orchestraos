@@ -346,6 +346,7 @@ def mail_correction(card_id: str, text: str) -> None:
 # ---------------------------------------------------------------------------
 # repairs (live, tmux) — each returns (ok, detail); ok only by effect
 # ---------------------------------------------------------------------------
+REPAIR_LOCK_WAIT_S = 8.0     # same wait as the gateway; the watchdog ticks every 60 s
 def tmux(*a) -> subprocess.CompletedProcess:
     return subprocess.run(["tmux", *a], capture_output=True, text=True)
 
@@ -528,8 +529,17 @@ def handle(seat: str, session: str, r: dict, ev: dict, *, dry: bool) -> None:
         if not fn:
             RA.record_attempt(rid, action=d["fix"] or "none", ok=False, detail="no executor for this fix")
             return
-        RA.update(rid, by="watchdog", note=f"repairing ({d.get('reason')})", status="repairing")
-        ok, detail = fn(seat, session, ev)
+        # Under the ONE cross-process pane lock every typer shares (pane_lock.py, gm msg_ede7b24a): a
+        # repair's keys must not glue into a gateway/router burst. A busy pane is NOT a failed repair
+        # (that would count toward escalation): skip, next tick retries.
+        import pane_lock
+        try:
+            with pane_lock.pane_lock(session, wait_s=REPAIR_LOCK_WAIT_S):
+                RA.update(rid, by="watchdog", note=f"repairing ({d.get('reason')})", status="repairing")
+                ok, detail = fn(seat, session, ev)
+        except pane_lock.PaneBusy:
+            log(f"REPAIR {rid} {seat} {d['fix']} deferred: another sender is typing into the pane (next tick)")
+            return
         RA.record_attempt(rid, action=d["fix"], ok=ok, detail=detail)
         log(f"REPAIR {rid} {seat} {d['fix']} ok={ok} {detail}")
         if r.get("card_id"):

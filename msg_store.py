@@ -821,6 +821,28 @@ class MessageStore:
         finally:
             conn.close()
 
+    def defer(self, msg_id: str, error: str = None) -> bool:
+        """Release a router claim without treating a normal hold as a failure.
+
+        ``claim()`` prevents two router passes from injecting the same row.  A
+        pane can nevertheless become busy in the few milliseconds between the
+        idle check and paste.  That is neither delivery nor a failed delivery:
+        the row must remain pending, with its retry budget intact.  In
+        particular, never map this state to ``delivered`` -- no agent has seen
+        the text yet.
+        """
+        conn = self._conn()
+        try:
+            result = conn.execute(
+                "UPDATE messages SET status = 'pending', attempted_at = NULL, error = ? "
+                "WHERE id = ? AND status = 'processing'",
+                [error, msg_id],
+            )
+            conn.commit()
+            return result.rowcount > 0
+        finally:
+            conn.close()
+
     def deliver(self, msg_id: str):
         """Mark message as delivered (injected into agent's tmux)."""
         conn = self._conn()

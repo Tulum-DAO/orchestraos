@@ -718,9 +718,14 @@ def test_gemini_agent_is_idle_returns_true_when_settled_with_shortcuts(monkeypat
     assert mr.agent_is_idle("gemini-test", runtime="gemini") is True
 
 
-def test_inject_skips_repaste_when_probe_already_in_input_line(monkeypatch):
+def test_inject_skips_repaste_when_probe_already_in_input_line(monkeypatch, tmp_path):
     msg_text = "[MSG from sender | medium] Test probe message"
     probe = msg_text[:60]
+    # Our earlier attempt is recorded (a typed row for this very text): only then is the line ours
+    # to submit (codex R15 on #472; an unrecorded identical line is held).
+    import inject_journal
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "j"))
+    inject_journal.record("gemini-test", msg_text, msg_text[:40]); inject_journal.mark_typed("gemini-test")
     
     pastes = []
     keys = []
