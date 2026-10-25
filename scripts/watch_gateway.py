@@ -4833,6 +4833,7 @@ def _hold_for_boundary(session, text, actor, origin="app"):
     )
 
 
+# Delivery model: see docs/DELIVERY.md
 async def handle_agent_message(request):
     """POST /agent-message {session, text, accepts?:["held"]} -> verified inject,
     or (mid-turn working + accepts:["held"]) a durable-first accept-and-hold."""

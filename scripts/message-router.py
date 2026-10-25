@@ -988,6 +988,7 @@ def codex_pane_is_busy(pane_text: str) -> bool:
     return ("\u25e6 Working" in txt) or ("tab to queue message" in txt)
 
 
+# Delivery model: see docs/DELIVERY.md
 def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
     """_inject_unlocked under the ONE cross-process pane lock every typer shares (pane_lock.py):
     the gateway, approval_resume, the nudger and the watchers take the same lock, so two senders
@@ -2117,6 +2118,7 @@ def merge_forwarded_meta(store, msg_id: str, forwarded_from: str) -> None:
 
 # --- Main ---------------------------------------------------------------------
 
+# Delivery model: see docs/DELIVERY.md
 def main():
     # Lock (stale after 5 min)
     if LOCKFILE.exists():
