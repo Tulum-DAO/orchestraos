@@ -128,9 +128,17 @@ function terminalSessionAllowed(req) {
   try { const p = JSON.parse(Buffer.from(body, "base64url").toString()); return typeof p.exp === "number" && p.exp >= Date.now(); }
   catch { return false; }
 }
+function registeredTerminalSession(session) {
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(session || "")) return false;
+  try {
+    const reg = JSON.parse(fs.readFileSync(path.join(process.env.ORCHESTRA_DIR || "", "registry.json"), "utf8"));
+    return Object.values(reg.agents || {}).some((a) => a && (a.tmux_session === session || a.name === session));
+  } catch { return false; }
+}
 const wss = new WebSocketServer({ server, path: "/ws/terminal", verifyClient: (info) => {
   if (!wsAllowed(info.req)) return false;
   if (!terminalSessionAllowed(info.req)) { console.warn("[ws] refused /ws/terminal: authenticated session required"); return false; }
+  if (!registeredTerminalSession(new URL(info.req.url, "http://localhost").searchParams.get("session"))) { console.warn("[ws] refused /ws/terminal: registered session required"); return false; }
   return true;
 } });
 wss.on("connection", (ws, req) => {

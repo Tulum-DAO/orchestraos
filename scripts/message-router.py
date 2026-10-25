@@ -685,6 +685,43 @@ def reachability_probe(session: str, runtime: str, agent: str, msg_id: str):
         return None   # observability must never break delivery
 
 
+# --- Deliver now (scripts/deliver_now.py) -----------------------------------------
+# A person pressed "Deliver now" for this session (the gateway's POST /deliver-now wrote the
+# waiver; agents never do). It waives only the SOFT gates below: cooldown, attached-active,
+# breathe window, and a Claude turn in progress (Claude Code queues typed input mid-turn). The
+# HARD gates stay: typed-but-unsent text, a permission prompt or any screen without an empty
+# composer, a stranded paste chip, Codex/Grok mid-turn (inject() re-checks those itself).
+
+def deliver_now_waiver(session: str):
+    try:
+        import deliver_now
+        return deliver_now.active_waiver(ORCHESTRA_DIR, session)
+    except Exception:  # noqa: BLE001 — no waiver is the safe answer
+        return None
+
+
+def claude_mid_turn_safe(session: str) -> bool:
+    """A Claude pane mid-turn may take a typed message (it queues it) only when its composer is on
+    screen, empty, and holds no stranded chip, and no hook says it is waiting on a permission.
+    A permission dialog replaces the composer, so "no composer visible" refuses it too."""
+    hs = hook_state(session)
+    if hs is not None and hs[0] == "waiting_permission":
+        return False
+    _, line, ok = pane_split(session, "claude")
+    if not ok:
+        return False
+    if composer_has_stranded_chip(line):
+        return False
+    ansi = tmux("capture-pane", "-t", session, "-e", "-p")
+    if ansi.returncode != 0:
+        return False
+    sig = PROMPT_SIGNATURES["claude"]
+    prompt_lines = [l for l in ansi.stdout.split("\n") if sig["prompt_char"] in l]
+    if not prompt_lines:
+        return False
+    return input_line_state(prompt_lines[-1], sig) != "typed"
+
+
 # --- Stuck-injection self-cleanup ---------------------------------------------
 
 def stuck_own_message(session: str, runtime: str = DEFAULT_RUNTIME) -> str | None:
@@ -989,7 +1026,7 @@ def codex_pane_is_busy(pane_text: str) -> bool:
 
 
 # Delivery model: see docs/DELIVERY.md
-def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
+def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME, pre_paste=None) -> str:
     """_inject_unlocked under the ONE cross-process pane lock every typer shares (pane_lock.py):
     the gateway, approval_resume, the nudger and the watchers take the same lock, so two senders
     never glue or split each other's text in one pane. Adds one outcome:
@@ -1004,7 +1041,9 @@ def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
             # whose text a guard is about to find still in the composer), and marks it typed when
             # the paste is confirmed. Only a row THIS call wrote is ever cleared here.
             rec = []
-            res = _inject_unlocked(session, text, runtime, journal=rec)
+            # Deliver now's pre-paste look rides along only when given, so the plain call is unchanged.
+            _kw = {"pre_paste": pre_paste} if pre_paste is not None else {}
+            res = _inject_unlocked(session, text, runtime, journal=rec, **_kw)
             if rec and res in ("submitted", "held"):
                 # submitted, or nothing was pasted. 'failed' KEEPS its row: a paste can land unseen
                 # (an unmarked row is report-only at the reconcile); 'stuck' keeps it as evidence.
@@ -1047,7 +1086,8 @@ def _input_line_typed(session: str, runtime: str = DEFAULT_RUNTIME) -> bool:
     return not prompt_lines or input_line_state(prompt_lines[-1], sig) == "typed"
 
 
-def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, journal=None) -> str:
+def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, journal=None,
+                     pre_paste=None) -> str:
     """Inject with three-stage verification. Returns:
       'submitted'  — text confirmed in scrollback, input line clear
       'stuck'      — text landed in input line but Enter never took (left as-is)
@@ -1094,6 +1134,12 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, jo
     if ok0 and composer_has_stranded_chip(line0):
         log(f"stranded paste-chip in {session} composer — E7 guard: no repaste, holding")
         return "stuck"
+
+    # Stage 0.55 (Deliver now, mid-turn): the caller's last look, right before any key is sent.
+    # 'held' = nothing was typed into the pane; the caller returns the row to pending.
+    if pre_paste is not None and not pre_paste():
+        log(f"DELIVER-NOW pre-paste check failed in {session} -- nothing typed, holding")
+        return "held"
 
     # Stage 0.6 (De-duplication guard): if the probe text is ALREADY in the input
     # line/composer from a previous unsubmitted attempt, never paste another duplicate copy!
@@ -2259,8 +2305,12 @@ def main():
             # cycle (second lands mid-render of the first). (spec round-1 fix)
             if session in delivered_to:
                 continue  # one message per session per cycle
+            _dn = deliver_now_waiver(session)
+            _dn_waived = []
             if now - cooldowns.get(session, 0) < COOLDOWN_SECONDS:
-                continue
+                if not _dn:
+                    continue
+                _dn_waived.append("cooldown")
 
             # SELF-FORWARD GUARD: a reply FROM the live head addressed to its own
             # retired predecessor must not loop back into the head as self-mail.
@@ -2284,12 +2334,16 @@ def main():
             # Never interject. Also back off if the session had activity in the
             # last 10 minutes (active conversation cadence).
             attached, idle_secs = sess_info.get(session, (0, 1e9))
-            if hold_for_attached(attached, idle_secs) and msg.get("priority") != "critical":
+            if hold_for_attached(attached, idle_secs) and msg.get("priority") != "critical" and _dn:
+                _dn_waived.append("attached-active")
+            elif hold_for_attached(attached, idle_secs) and msg.get("priority") != "critical":
                 note_hold(hold_state, session, msg, "attached-active", now, queue_n=_qdepth.get(agent), dl_batch=_dl_batch)
                 continue  # attached + active within TTL: human plausibly mid-convo.
                 # Past the TTL a persistent-but-idle attach no longer freezes mail
                 # (2026-08-15 fix). Typed-input clobber protection is agent_is_idle.
-            if idle_secs < BREATHE_WINDOW_S and not _breathe_exempt(msg):
+            if idle_secs < BREATHE_WINDOW_S and not _breathe_exempt(msg) and _dn:
+                _dn_waived.append("breathe-window")
+            elif idle_secs < BREATHE_WINDOW_S and not _breathe_exempt(msg):
                 # #15 leg-3: a PARKED-IDLE target has nothing breathing — skip
                 # the quiet-wait. SHADOW unless armed: emit [parked-exempt-
                 # shadow] beside the hold so v3 can diff shadow lines against
@@ -2327,7 +2381,10 @@ def main():
             # (claude unless ROUTER_GEMINI_IDLE_ARMED), byte-identical to before.
             _target_agent = agent_for_session(session, meta) or agent
             _runtime = routing_runtime(_target_agent, meta)
-            if not agent_is_idle(session, _runtime):
+            _idle = agent_is_idle(session, _runtime)
+            if not _idle and _dn and _runtime == "claude" and claude_mid_turn_safe(session):
+                _dn_waived.append("mid-turn")
+            elif not _idle:
                 # Layer B (Bug 2) SHADOW: classify live-but-unreachable holds
                 # (survey/permission/stuck-composer/menu) into the would-clear
                 # log. Never raises, never alters the hold. Per-episode
@@ -2336,6 +2393,15 @@ def main():
                 note_hold(hold_state, session, msg, "not-idle", now, queue_n=_qdepth.get(agent), dl_batch=_dl_batch)
                 continue  # stays queued; retried next cycle (RCA: this was the
                 # 7h-silent branch — now logged + SLA-escalated via note_hold)
+
+            if _dn_waived:
+                log(f"DELIVER-NOW {msg['id']} -> {session}: pressed by {_dn.get('by')} at "
+                    f"{_dn.get('at')}; waived {', '.join(_dn_waived)}")
+                try:
+                    store.stamp_metadata(msg["id"], deliver_now_by=_dn.get("by"),
+                                         deliver_now_waived=_dn_waived)
+                except Exception:  # noqa: BLE001 — the log line is the record
+                    pass
 
             # Idle-gate PASSED => the pane VISIBLY recovered — end any active
             # pane-reachability episode so a future re-stuck re-arms exactly
@@ -2352,7 +2418,10 @@ def main():
             # cycle; digested rows fail store.claim below when the loop reaches
             # them (delivered => not pending). Fresh rows + single-stale fall
             # through to the normal path unchanged.
-            if session not in _digest_attempted and is_digest_session(session):
+            # A Deliver-now mid-turn delivery goes through the singles path only, where the
+            # composer is re-checked right before the claim; the digest path injects without it.
+            if "mid-turn" not in _dn_waived and session not in _digest_attempted \
+                    and is_digest_session(session):
                 _digest_attempted.add(session)
                 try:
                     _dcfg = digest_config()
@@ -2368,6 +2437,13 @@ def main():
                 except Exception as e:  # noqa: BLE001 — digest never sinks the cycle
                     log(f"[digest] error for {session}: {e} — singles path continues")
 
+            # Deliver now, mid-turn: look again right before claiming. Typing or a permission
+            # prompt that started since the first look means hold, not paste.
+            if "mid-turn" in _dn_waived and not claude_mid_turn_safe(session):
+                log(f"DELIVER-NOW recheck {msg['id']} -> {session}: composer no longer safe, holding")
+                note_hold(hold_state, session, msg, "not-idle", now, queue_n=_qdepth.get(agent), dl_batch=_dl_batch)
+                continue
+
             if not store.claim(msg["id"]):
                 continue  # raced with another router instance
 
@@ -2377,7 +2453,9 @@ def main():
                 text = f"[fwd from {forwarded_from}] " + text
                 merge_forwarded_meta(store, msg["id"], forwarded_from)
                 log(f"FORWARD {msg['id']}: {agent} -> {session} ({reason}, from={forwarded_from})")
-            result = inject(session, text, _runtime)
+            result = inject(session, text, _runtime,
+                            pre_paste=(lambda: claude_mid_turn_safe(session))
+                            if "mid-turn" in _dn_waived else None)
             if result in ("submitted", "stuck"):
                 close_park_episode(hold_state, session)   # target took mail: episode over
             if result == "submitted":
@@ -2417,6 +2495,10 @@ def main():
                 # nor a failure and must not use retry budget. Re-open the claimed row.
                 store.defer(msg["id"], error="router: another sender held the pane; deferred")
                 log(f"HELD {msg['id']} -> {agent}: another sender held the pane; row re-queued")
+                if _dn_waived:
+                    # Deliver now: nothing was typed (busy pane, pane lock, or the pre-paste look
+                    # failed). Record the hold so the agent's page says what it is still waiting for.
+                    note_hold(hold_state, session, msg, "not-idle", now, queue_n=_qdepth.get(agent), dl_batch=_dl_batch)
             else:
                 store.fail(msg["id"], error="router: paste never landed after 2 attempts")
                 with store._conn() as conn:
