@@ -1859,6 +1859,36 @@ def _registry_db_path() -> str:
     return str(ORCHESTRA_DIR / "state" / "orchestra-registry.db")
 
 
+def is_service_target(agent: str, cache: dict | None = None, db_path=None) -> bool:
+    """True when `agent`'s LINEAGE runtime is 'service'.
+
+    A service seat has no agent CLI in its pane (for example a shell an operator reaches over
+    SSH that reads its mail from msg_store itself). Typing into its pane would land in a
+    shell, and the not-idle hold path would read 'no agent process' as an outage and keep
+    escalating. Its rows stay PENDING for their own reader and age out at 48 h like any
+    other row.
+
+    Read-only, once per agent per cycle (`cache`). FAIL-OPEN to False (normal delivery) on
+    any read error: a DB hiccup must never silently stop delivery to a real agent."""
+    if cache is not None and agent in cache:
+        return cache[agent]
+    svc = False
+    try:
+        import sqlite3 as _sq
+        dbp = db_path or _registry_db_path()
+        con = _sq.connect(f"file:{dbp}?mode=ro", uri=True)
+        try:
+            row = con.execute("SELECT runtime FROM lineages WHERE root=?", (agent,)).fetchone()
+        finally:
+            con.close()
+        svc = bool(row) and row[0] == "service"
+    except Exception:  # noqa: BLE001 - fail-open, see docstring
+        svc = False
+    if cache is not None:
+        cache[agent] = svc
+    return svc
+
+
 def _target_rotated_within(session: str, now: float, window_s: float = 900) -> bool:
     """True iff the target's canonical seat had a generation PROMOTED within window_s
     (gm msg_86bcc168 item 5: never terminate mail within 15 min of a rotation of the
@@ -2193,6 +2223,7 @@ def main():
             _qdepth[_pm["to_agent"]] = _qdepth.get(_pm["to_agent"], 0) + 1
 
         delivered_to = set()   # keyed on RESOLVED SESSION (not to_agent) — see below
+        _svc_cache = {}        # agent -> lineage runtime is 'service' (once per cycle)
         _digest_attempted = set()  # DEC-1787031444: one digest attempt per session/cycle
         _dl_batch = {}             # leg-4 act 2: (sender, target-class) -> [ids]
         for msg in pending:
@@ -2250,6 +2281,19 @@ def main():
                 continue
             if session not in sessions:
                 continue  # head not running on this machine; message stays queued
+
+            # SERVICE TARGET: a lineage whose runtime is 'service' (a shell pane by design) is
+            # never typed into, and it is decided BEFORE every hold path (attached-active,
+            # breathe-window, not-idle), because a note_hold escalates on its SLA too.
+            # The row stays PENDING for the seat's own reader (msg_store) and ages out at 48 h.
+            _svc_agent = agent_for_session(session, meta) or agent
+            if is_service_target(_svc_agent, cache=_svc_cache):
+                if _svc_cache.get(f"logged:{_svc_agent}") is None:
+                    _svc_cache[f"logged:{_svc_agent}"] = True
+                    log(f"SERVICE {session} :: held for its own reader "
+                        f"(lineage runtime=service; no tmux delivery, no hold escalation) "
+                        f"{_qdepth.get(agent, 1)} pending")
+                continue
 
             # THROTTLE: key delivered_to + cooldowns on the RESOLVED SESSION.
             # After forwarding, v1-forwarded mail and v2-native mail share the same
