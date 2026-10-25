@@ -95,6 +95,7 @@ from runtime_signatures import (  # noqa: E402
     declared_runtime,
     declared_runtime_disabled,
     gemini_idle_routing_armed,
+    grok_composer_line_state,
 )
 # One warning per seat (not per cycle — the router is a fresh process every minute) when a row
 # declares a runtime that has no prompt signature here. Keyed "<agent>=<value>" so a corrected
@@ -800,6 +801,24 @@ def claude_mid_turn_safe(session: str) -> bool:
 
 # --- Stuck-injection self-cleanup ---------------------------------------------
 
+def _grok_live_composer_is_typed(session: str, sig: dict) -> bool:
+    """True only when router delivery into grok is armed AND the live grok composer holds
+    typed text. Grok's prompt glyph is also Claude's, and the stuck-injection pass runs before
+    the idle gate and sends C-u / Enter, so an unarmed grok pane must match nothing. Any reader
+    or capture failure => False (never type)."""
+    try:
+        import grok_context
+        armed = grok_context.delivery_armed()
+    except Exception:  # noqa: BLE001 — a reader fault must not type
+        return False
+    if not armed:
+        return False
+    ansi = tmux("capture-pane", "-t", session, "-e", "-p")
+    if ansi.returncode != 0:
+        return False
+    return grok_composer_line_state(ansi.stdout, sig) == "typed"
+
+
 def stuck_own_message(session: str, runtime: str = DEFAULT_RUNTIME) -> str | None:
     """If the input line holds a TYPED (non-dim) line that starts with our own
     '[MSG from' marker, it's a router injection whose Enter was swallowed —
@@ -809,6 +828,8 @@ def stuck_own_message(session: str, runtime: str = DEFAULT_RUNTIME) -> str | Non
     #1b: runtime-signature-aware — finds the input line by the runtime's
     prompt_char (default claude ⇒ byte-identical)."""
     sig = PROMPT_SIGNATURES.get(runtime, PROMPT_SIGNATURES[DEFAULT_RUNTIME])
+    if runtime == "grok" and not _grok_live_composer_is_typed(session, sig):
+        return None
     prompt_char = sig["prompt_char"]
     ansi = tmux("capture-pane", "-t", session, "-e", "-p")
     if ansi.returncode != 0:
