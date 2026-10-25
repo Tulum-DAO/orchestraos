@@ -31,6 +31,8 @@ def parse_args(argv=None) -> argparse.Namespace:
 
     d = sub.add_parser("doctor", help="check CLIs+auth, ports, tmux, config keys, builds, rotation beat")
     d.add_argument("--json", action="store_true")
+    d.add_argument("--share", action="store_true",
+                   help="a short block to paste to whoever helps you: check names and OK/MISSING only, no paths, hosts, users or tokens")
 
     u = sub.add_parser("up", help="run gateway + api + dashboard + arturo + beats under one supervisor")
     u.add_argument("--dry-run", action="store_true", help="print the process table and exit")
@@ -166,7 +168,10 @@ def cmd_doctor(ns) -> int:
     from . import doctor as D
     st = _settings()
     checks = D.run_doctor(st, D.default_probes(st))
-    print(D.render_json(checks) if ns.json else D.render_table(checks))
+    if getattr(ns, "share", False):
+        print(D.render_share(checks, D.share_facts(st)))
+    else:
+        print(D.render_json(checks) if ns.json else D.render_table(checks))
     return D.exit_code(checks)
 
 

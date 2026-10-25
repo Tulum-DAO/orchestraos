@@ -25,9 +25,12 @@ def test_process_table_default_shape(tmp_path):
     st = _settings(tmp_path)
     table = PT.build_process_table(st)
     by = {e.name: e for e in table}
-    assert [e.name for e in table if e.kind == "service"] == ["gateway", "api", "dashboard", "arturo", "telemetryd", "telegram"]
+    assert [e.name for e in table if e.kind == "service"] == ["gateway", "api", "dashboard", "arturo", "telemetryd", "telegram",
+                                                              "grok_bot_webhook"]
     # Tier 0 item 6: the Telegram channel plugin is in the table but OFF by default
     assert by["telegram"].enabled is False and by["telegram"].argv[-1].endswith("plugins/telegram/router.py")
+    # the Grok Bot webhook (plugins/grok_bot) likewise: present, OFF unless [plugins.grok_bot] enabled
+    assert by["grok_bot_webhook"].enabled is False
     # Tier 0 item 4: the telemetry daemon (working/idle truth for the agents page) and the
     # in-agent menu bridge (AskUserQuestion widget -> decision card) run under the supervisor
     assert by["telemetryd"].argv[-2:] == ["-m", "lineage_daemon.telemetryd"] and by["telemetryd"].port is None
@@ -41,7 +44,7 @@ def test_process_table_default_shape(tmp_path):
                      "menu_bridge": 60, "identity_regenerator": 60}
     assert by["identity_regenerator"].argv[-3:] == ["-m", "scripts.identity_store.regenerator", "start-if-armed"]
     assert by["boundary_delivery"].env["BOUNDARY_DELIVER_ARMED"] == "1"
-    assert all(e.enabled for e in table if e.name != "telegram")   # telegram is opt-in
+    assert all(e.enabled for e in table if e.name not in ("telegram", "grok_bot_webhook"))   # both opt-in
     for e in table:
         assert e.cwd == str(st.repo_root)
 
