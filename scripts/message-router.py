@@ -2570,8 +2570,7 @@ def main():
             if (idle_secs < BREATHE_WINDOW_S and not _breathe_exempt(msg) and not _hook_release
                     and not _codex_idle_release and _dn):
                 _dn_waived.append("breathe-window")
-            elif (idle_secs < BREATHE_WINDOW_S and not _breathe_exempt(msg) and not _hook_release
-                    and not _codex_idle_release):
+            elif idle_secs < BREATHE_WINDOW_S and not _breathe_exempt(msg) and not _hook_release and not _codex_idle_release:
                 # #15 leg-3: a PARKED-IDLE target has nothing breathing — skip
                 # the quiet-wait. SHADOW unless armed: emit [parked-exempt-
                 # shadow] beside the hold so v3 can diff shadow lines against
@@ -2603,7 +2602,7 @@ def main():
 
             # Per-runtime idle-gate: _runtime was resolved above (before the breathe window).
             _idle = (_codex_idle_release if _runtime == "codex"
-                     else agent_is_idle(session, _runtime))
+                    else agent_is_idle(session, _runtime))
             if not _idle and _dn and _runtime == "claude" and claude_mid_turn_safe(session):
                 _dn_waived.append("mid-turn")
             elif not _idle:
