@@ -2,6 +2,7 @@ import { useContext } from 'react';
 import { Menu } from 'lucide-react';
 import { HeaderEndSlotContext } from '../../lib/headerSlot';
 import { GenChip } from '../GenChip';
+import { ExportMenu } from './ExportMenu';
 
 interface TopBarProps {
   onMenuOpen: () => void;
@@ -66,6 +67,8 @@ export function TopBar({ onMenuOpen, seat, mode = 'chat', onModeChange }: TopBar
             ))}
           </div>
         )}
+        {/* Export the conversation as Markdown (one icon; chat view only). */}
+        {seat && mode === 'chat' && <ExportMenu agentId={seat.id} />}
         {/* Theme, red alert and brain are gone from agent panes (Shaw, 2026-10-11: they did nothing
             here and crowded the seat name off a phone). The bell sits where the brain was. */}
         {/* The shared bell's home on this page, phone and desktop (filled by DashboardLayout). */}
