@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Public OrchestraOS terminal-relay deployment/proof runner.
 # Default is a read-only dry run.  --live is intentionally explicit and must be
-# run as the public OrchestraOS service owner after Shaw approval + GM GO.
+# run as the public OrchestraOS service owner, once the deployment is approved.
 set -euo pipefail
 
 LIVE=0
@@ -64,8 +64,8 @@ say "--- scratch proof plan ---"
 run tmux new-session -d -s "$SCRATCH" 'printf "TERMINAL-RELAY-SCRATCH\\n"; exec bash'
 say "Positive (paired Mac only): WSS $SERVE_URL/terminal/ws?session=$SCRATCH&cols=80&rows=24 -> 101, ANSI/banner, type 'echo MACKEY-TYPED-OK' once; capture only $SCRATCH."
 say "Negative: fleet bearer -> 403; missing/wrong paired token -> 401/403; bad/unregistered session -> 400/404; duplicate -> 409; cap -> 429; Funnel/off-tailnet -> 404."
-say "Verify ledger: $DATA/state/operator-actions.jsonl has terminal open/close for $SCRATCH, no keystrokes/output."
-say "Rollback (GM GO only): stop approved public service scope, git -C $ROOT checkout <previous-merged-sha>, rebuild/init, restart same scope. Do not alter Tailscale Serve/Funnel."
+say "Verify the operator-actions ledger under $DATA/state has terminal open/close for $SCRATCH, no keystrokes/output."
+say "Rollback (only when a rollback is approved): stop approved public service scope, git -C $ROOT checkout <previous-merged-sha>, rebuild/init, restart same scope. Do not alter Tailscale Serve/Funnel."
 if (( LIVE )); then
   say "STOP after scratch setup: human paired-device proof is required; script never reads or logs device credentials."
 fi
