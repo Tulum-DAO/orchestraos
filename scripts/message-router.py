@@ -988,7 +988,50 @@ def codex_pane_is_busy(pane_text: str) -> bool:
     return ("\u25e6 Working" in txt) or ("tab to queue message" in txt)
 
 
-def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
+def composer_is_ghost(session: str, runtime: str = DEFAULT_RUNTIME) -> bool:
+    """True iff the input line shows ONLY a dim ghost suggestion (input_line_state == 'ghost').
+
+    The plain pane_split read cannot tell a ghost from typed text. After a delivery, Claude
+    suggests the LAST submitted message back as a dim ghost, and automated senders often start
+    every message with the same 30 characters (their `[MSG from ... | high]` envelope), so the
+    next delivery's probe "matched" the ghost: Stage 0.6 skipped the paste and pressed Enter
+    on an empty composer forever, and the message never arrived. A ghost is NOT content: it
+    counts as empty here. Fail-safe: any read failure => False (keep the conservative guards)."""
+    sig = PROMPT_SIGNATURES.get(runtime, PROMPT_SIGNATURES[DEFAULT_RUNTIME])
+    ansi = tmux("capture-pane", "-t", session, "-e", "-p")
+    if ansi.returncode != 0:
+        return False
+    prompt_lines = [l for l in (ansi.stdout or "").split("\n") if sig["prompt_char"] in l]
+    return bool(prompt_lines) and input_line_state(prompt_lines[-1], sig) == "ghost"
+
+
+def _ghost_path(session: str, stage: str, msg_id, outcome: str) -> None:
+    """One line each time a ghost check DECIDES a delivery: without it a ghost-path delivery
+    reads exactly like a normal ACK in the log. grep GHOST-PATH."""
+    log(f"GHOST-PATH {session} stage={stage} msg={msg_id or '?'} -> {outcome}")
+
+
+def _submitted(session: str, runtime: str, scrollback, input_line: str, probe: str,
+               stage: str = "2", msg_id=None) -> bool:
+    """submit_ok, plus: a GHOST-only composer after Enter means our TYPED text left it (a failed
+    submit leaves typed text, not a dim ghost), so the ghost of the message just sent, which
+    shares the probe prefix, must not read as "still in the input line" and force a STUCK and a
+    duplicate re-delivery next cycle. Still requires the content in scrollback. Only safe because
+    Stage 1 never accepts a ghost as a paste receipt.
+    NEVER SPLIT from the Stage 1 ghost guard in _inject_unlocked(): with this rule and WITHOUT
+    that guard, an unlanded paste over a matching ghost returns 'submitted' = SILENT LOST MAIL.
+    Change both or neither."""
+    if submit_ok(scrollback, input_line, probe):
+        return True
+    p = probe[:30]
+    in_scrollback = any(p in l for l in scrollback) or any(_PASTE_CHIP_RE.search(l) for l in scrollback)
+    if in_scrollback and composer_is_ghost(session, runtime):
+        _ghost_path(session, stage, msg_id, "submitted (ghost of the sent text)")
+        return True
+    return False
+
+
+def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME, msg_id=None) -> str:
     """_inject_unlocked under the ONE cross-process pane lock every typer shares (pane_lock.py):
     the gateway, approval_resume, the nudger and the watchers take the same lock, so two senders
     never glue or split each other's text in one pane. Adds one outcome:
@@ -1003,7 +1046,9 @@ def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
             # whose text a guard is about to find still in the composer), and marks it typed when
             # the paste is confirmed. Only a row THIS call wrote is ever cleared here.
             rec = []
-            res = _inject_unlocked(session, text, runtime, journal=rec)
+            # msg_id only when known, so the unlocked call keeps its original signature otherwise.
+            _mid = {"msg_id": msg_id} if msg_id is not None else {}
+            res = _inject_unlocked(session, text, runtime, journal=rec, **_mid)
             if rec and res in ("submitted", "held"):
                 # submitted, or nothing was pasted. 'failed' KEEPS its row: a paste can land unseen
                 # (an unmarked row is report-only at the reconcile); 'stuck' keeps it as evidence.
@@ -1046,7 +1091,8 @@ def _input_line_typed(session: str, runtime: str = DEFAULT_RUNTIME) -> bool:
     return not prompt_lines or input_line_state(prompt_lines[-1], sig) == "typed"
 
 
-def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, journal=None) -> str:
+def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, journal=None,
+                     msg_id=None) -> str:
     """Inject with three-stage verification. Returns:
       'submitted'  — text confirmed in scrollback, input line clear
       'stuck'      — text landed in input line but Enter never took (left as-is)
@@ -1091,12 +1137,19 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, jo
     # paste — never add another, never Enter on unattributed content.
     _, line0, ok0 = pane_split(session, runtime)
     if ok0 and composer_has_stranded_chip(line0):
-        log(f"stranded paste-chip in {session} composer — E7 guard: no repaste, holding")
-        return "stuck"
+        if not composer_is_ghost(session, runtime):
+            log(f"stranded paste-chip in {session} composer — E7 guard: no repaste, holding")
+            return "stuck"
+        _ghost_path(session, "0.5", msg_id, "chip is a ghost, not a stranded paste")
 
     # Stage 0.6 (De-duplication guard): if the probe text is ALREADY in the input
     # line/composer from a previous unsubmitted attempt, never paste another duplicate copy!
-    if ok0 and probe[:30] in line0:
+    # A dim ghost suggestion that happens to start like our text is not an earlier attempt.
+    dup = ok0 and probe[:30] in line0
+    if dup and composer_is_ghost(session, runtime):
+        _ghost_path(session, "0.6", msg_id, "ghost is not our text, pasting")
+        dup = False
+    if dup:
         # ...only when the line is EXACTLY our earlier, recorded attempt (a typed row for this very
         # text). Our words with a person's appended, another message's half-sent text, or a draft
         # no typer recorded would all go out under our name. Held; nothing pressed.
@@ -1122,7 +1175,7 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, jo
             if not ok:
                 time.sleep(1)
                 continue
-            if submit_ok(scrollback, input_line, probe):
+            if _submitted(session, runtime, scrollback, input_line, probe, "0.6", msg_id):
                 return "submitted"
             time.sleep(1)
         return "stuck"
@@ -1154,14 +1207,21 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, jo
         tmux("paste-buffer", "-b", "msg-router", "-t", session, "-d")
         time.sleep(0.7)
         _, input_line, ok = pane_split(session, runtime)
+        # A matching DIM ghost is not a receipt: "landed" over a ghost-only composer means the
+        # paste never arrived, and accepting it would ACK mail that was never delivered.
+        # NEVER SPLIT from _submitted()'s ghost rule (Stage 2): removing THIS guard while that
+        # rule stays makes an unlanded paste return 'submitted' = SILENT LOST MAIL.
+        # Change both or neither.
         if ok and paste_receipt_ok(input_line, probe, chips_before):
-            landed = True
-            try:
-                import inject_journal
-                inject_journal.mark_typed(session)   # our text is in the composer now
-            except OSError:
-                pass
-            break
+            if not composer_is_ghost(session, runtime):
+                landed = True
+                try:
+                    import inject_journal
+                    inject_journal.mark_typed(session)   # our text is in the composer now
+                except OSError:
+                    pass
+                break
+            _ghost_path(session, "1", msg_id, "receipt refused (composer is a ghost)")
         log(f"paste attempt {attempt} not in input line of {session}")
         time.sleep(1)
     if not landed:
@@ -1175,7 +1235,7 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, jo
         if not ok:
             time.sleep(1)
             continue
-        if submit_ok(scrollback, input_line, probe):
+        if _submitted(session, runtime, scrollback, input_line, probe, "2", msg_id):
             return "submitted"
         if probe[:30] in input_line or count_paste_chips(input_line) > 0:
             log(f"Enter swallowed in {session} (attempt {attempt}) — retrying Enter")
@@ -2375,7 +2435,7 @@ def main():
                 text = f"[fwd from {forwarded_from}] " + text
                 merge_forwarded_meta(store, msg["id"], forwarded_from)
                 log(f"FORWARD {msg['id']}: {agent} -> {session} ({reason}, from={forwarded_from})")
-            result = inject(session, text, _runtime)
+            result = inject(session, text, _runtime, msg_id=msg["id"])
             if result in ("submitted", "stuck"):
                 close_park_episode(hold_state, session)   # target took mail: episode over
             if result == "submitted":
