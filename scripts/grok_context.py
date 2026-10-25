@@ -143,10 +143,37 @@ def _cmdline(pid: int):
     return [p.decode(errors="replace") for p in raw.split(b"\x00") if p]
 
 
-def _children(pid: int):
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from proc_children import children_of
-    return [int(x) for x in children_of(pid)]
+def _children(pid: int) -> list[int]:
+    """Direct children of `pid`, from /proc (Linux). This used to import a `proc_children`
+    module that was never published, so on a public install every call raised
+    ModuleNotFoundError, seat_turn_state() answered reader-error, and grok_mail_watch held
+    every nudge forever."""
+    out: list[int] = []
+    base = f"/proc/{int(pid)}/task"
+    try:
+        tids = os.listdir(base)
+    except OSError:
+        tids = []
+    for tid in tids:
+        try:
+            with open(f"{base}/{tid}/children") as fh:
+                out.extend(int(x) for x in fh.read().split())
+        except OSError:
+            pass
+    if out:
+        return sorted(set(out))
+    # No /proc/<pid>/task/*/children (kernel without CONFIG_PROC_CHILDREN): scan ppids.
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/stat") as fh:
+                ppid = int(fh.read().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            continue
+        if ppid == int(pid):
+            out.append(int(name))
+    return sorted(out)
 
 
 def grok_pid_under(pane_pid: int, *, cmdline_fn=None, children_fn=None) -> int | None:

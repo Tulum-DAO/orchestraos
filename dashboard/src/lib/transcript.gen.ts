@@ -11,27 +11,38 @@ export type ChatItem =
   | ThinkingItem
   | ToolUseItem
   | ToolResultItem
-  | QueuedBatchItem;
+  | QueuedBatchItem
+  | RotationItem;
 
 export interface TextItem {
+  audience?: 'user' | 'agent';
+  exchange?: string;
   kind: 'text';
   role: 'user' | 'assistant';
   text: string;
   is_system?: boolean;
   queued?: boolean;
+  model?: string;
+  usage?: TokenUsage;
   ts?: string;
   uuid?: string;
 }
 
 export interface ThinkingItem {
+  audience?: 'user' | 'agent';
+  exchange?: string;
   kind: 'thinking';
   role: 'assistant';
   text: string;
+  model?: string;
+  usage?: TokenUsage;
   ts?: string;
   uuid?: string;
 }
 
 export interface ToolUseItem {
+  audience?: 'user' | 'agent';
+  exchange?: string;
   kind: 'tool_use';
   role: 'assistant';
   tool: string;
@@ -39,11 +50,15 @@ export interface ToolUseItem {
   summary: string;
   input_full?: string;
   id?: string;
+  model?: string;
+  usage?: TokenUsage;
   ts?: string;
   uuid?: string;
 }
 
 export interface ToolResultItem {
+  audience?: 'user' | 'agent';
+  exchange?: string;
   kind: 'tool_result';
   role: 'user';
   text: string;
@@ -53,6 +68,13 @@ export interface ToolResultItem {
   uuid?: string;
 }
 
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+}
+
 export interface BatchEntry {
   agent: string;
   sent_ts: string;
@@ -60,6 +82,8 @@ export interface BatchEntry {
 }
 
 export interface QueuedBatchItem {
+  audience?: 'user' | 'agent';
+  exchange?: string;
   kind: 'queued_batch';
   count: number;
   entries: BatchEntry[];
@@ -67,14 +91,30 @@ export interface QueuedBatchItem {
   key: string;
 }
 
+export interface RotationItem {
+  audience?: 'user' | 'agent';
+  exchange?: string;
+  kind: 'rotation';
+  role: 'system';
+  uuid: string;
+  ts?: string;
+  from_generation: number;
+  to_generation: number;
+  from_session: string;
+  to_session: string;
+}
+
 export type RenderItem =
   | RenderUser
   | RenderAssistant
   | RenderThinking
   | RenderTool
-  | RenderQueuedBatch;
+  | RenderQueuedBatch
+  | RenderRotation;
 
 export interface RenderUser {
+  audience?: 'user' | 'agent';
+  exchange?: string;
   kind: 'user';
   text: string;
   is_system?: boolean;
@@ -84,6 +124,8 @@ export interface RenderUser {
 }
 
 export interface RenderAssistant {
+  audience?: 'user' | 'agent';
+  exchange?: string;
   kind: 'assistant';
   text: string;
   ts?: string;
@@ -91,6 +133,8 @@ export interface RenderAssistant {
 }
 
 export interface RenderThinking {
+  audience?: 'user' | 'agent';
+  exchange?: string;
   kind: 'thinking';
   text: string;
   ts?: string;
@@ -98,6 +142,8 @@ export interface RenderThinking {
 }
 
 export interface RenderTool {
+  audience?: 'user' | 'agent';
+  exchange?: string;
   kind: 'tool';
   tool: string;
   summary: string;
@@ -110,10 +156,24 @@ export interface RenderTool {
 }
 
 export interface RenderQueuedBatch {
+  audience?: 'user' | 'agent';
+  exchange?: string;
   kind: 'queued_batch';
   count: number;
   entries: BatchEntry[];
   ts?: string;
+  key: string;
+}
+
+export interface RenderRotation {
+  audience?: 'user' | 'agent';
+  exchange?: string;
+  kind: 'rotation';
+  ts?: string;
+  from_generation: number;
+  to_generation: number;
+  from_session: string;
+  to_session: string;
   key: string;
 }
 

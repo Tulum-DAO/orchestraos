@@ -31,6 +31,8 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/orchestra-env.sh
 source "$SCRIPT_DIR/scripts/orchestra-env.sh"
+# shellcheck source=scripts/seat_nice.sh
+source "$SCRIPT_DIR/scripts/seat_nice.sh"     # seats run below the services' CPU priority
 # REGISTRY defaults to the checkout's registry.json; env-overridable so the
 # §4.2 dispatch path can be exercised against a scratch/fake registry without
 # a real spawn (the R3 real-artifact gate). Production sets no REGISTRY env.
@@ -64,10 +66,13 @@ vlog() { [[ "${ORCHESTRA_SPAWN_VERBOSE:-}" == "1" ]] && echo -e "${CYAN}[spawn]$
 CLAUDE_BIN="${ORCHESTRA_CLAUDE_BIN:-}"
 [[ -x "$CLAUDE_BIN" ]] || CLAUDE_BIN="$(command -v claude || echo claude)"
 
-# Grok Build binary. Its installer puts the launcher in ~/.local/bin, which cron/systemd PATHs
-# often do not carry, so that location is tried first; ORCHESTRA_GROK_BIN pins an exact path.
+# Grok Build binary. Its installer puts the launcher in ~/.grok/bin and links it into ~/.local/bin
+# only on some systems; cron/systemd PATHs often carry neither. So: ORCHESTRA_GROK_BIN (an exact
+# path), ~/.local/bin/grok, PATH, then the installer's own ~/.grok/bin/grok (`orchestra init` links
+# that into ~/.local/bin when nothing else provides grok).
 GROK_BIN="${ORCHESTRA_GROK_BIN:-$HOME/.local/bin/grok}"
-[[ -x "$GROK_BIN" ]] || GROK_BIN="$(command -v grok 2>/dev/null || echo grok)"
+[[ -x "$GROK_BIN" ]] || GROK_BIN="$(command -v grok 2>/dev/null || true)"
+[[ -n "$GROK_BIN" ]] || { [[ -x "$HOME/.grok/bin/grok" ]] && GROK_BIN="$HOME/.grok/bin/grok" || GROK_BIN="grok"; }
 
 # --- Runtime dispatch (spec §4.2 all-model-parity): binary + ready-signature
 # chosen BY the registry `runtime` field, consuming the ONE signature source
@@ -1027,6 +1032,8 @@ spawn_agent() {
     else
         log "  Runtime: $runtime | Binary: $agent_bin"
     fi
+    # Outermost, so the CLI and every child it starts run at the seat priority (scripts/seat_nice.sh).
+    launch_cmd="$(seat_nice_prefix)$launch_cmd"
     tmux send-keys -t "$tmux_name" "$launch_cmd" Enter
 
     if [[ "$runtime" == "grok" ]]; then

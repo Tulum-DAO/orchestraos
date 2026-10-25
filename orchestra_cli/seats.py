@@ -42,6 +42,24 @@ def _registry(st: S.Settings) -> tuple[Path, dict]:
     return p, data
 
 
+def _stored_agents(st: S.Settings) -> dict | None:
+    """The armed identity store's seat rows (registry.json is only their projection and can lag),
+    or None when the store is not armed or not part of this checkout."""
+    if not (st.repo_root / "scripts" / "identity_store" / "cutover.py").exists():
+        return None
+    from .identity_cmd import stored_agents
+    return stored_agents(st.repo_root, st.data_dir)
+
+
+def _seat_row(st: S.Settings, seat: str) -> dict | None:
+    """The seat's row from the source of truth: the armed store (None when it has none, whatever a
+    lagging registry.json says), else registry.json."""
+    stored = _stored_agents(st)
+    if stored is not None:
+        return stored.get(seat)
+    return _registry(st)[1]["agents"].get(seat)
+
+
 def _tier_rule(st: S.Settings):
     scripts = str(st.repo_root / "scripts")
     if scripts not in sys.path:
@@ -60,7 +78,7 @@ def register_seat(st: S.Settings, seat: str, *, gm: bool, runtime: str | None, m
     default worker). Raises tier_rule.TierRefused for an unregistered parent or a T2 request with no
     non-T0 parent; nothing is written then."""
     p, reg = _registry(st)
-    existing = reg["agents"].get(seat)
+    existing = _seat_row(st, seat)                 # armed: the store's row, not a stale projection
     row = dict(existing or {})
     if existing is None and not gm:
         T = _tier_rule(st)
@@ -100,6 +118,97 @@ def register_seat(st: S.Settings, seat: str, *, gm: bool, runtime: str | None, m
     S.guard_test_write(p, "registry.json"); tmp = p.with_suffix(".json.tmp"); tmp.write_text(json.dumps(reg, indent=2) + "\n"); os.replace(tmp, p)
     _record_armed(st, seat, row)
     return row
+
+
+def runtime_mismatch(st: S.Settings, seat: str, requested: str | None) -> str | None:
+    """The refusal for an explicit --runtime that disagrees with the seat's stored row, else None.
+    register_seat keeps an existing row verbatim, so without this the seat would pass the checks
+    for the requested runtime and then start on the stored one."""
+    if not requested:
+        return None
+    stored = (_seat_row(st, seat) or {}).get("runtime")
+    if not stored or stored == requested:
+        return None
+    return (f"seat {seat} is registered as {stored}, not {requested}; starting it again would run "
+            f"{stored}. To change its runtime: `orchestra retire {seat}` (keeps its session and "
+            f"transcript), then spawn it again with --runtime {requested}.")
+
+
+def retire_seat(st: S.Settings, seat: str, *, reason: str = "retired by the operator") -> dict:
+    """Retire one seat, the way park-idle does: its registry row is removed (so no recovery or
+    reconciler brings it back), its session entry is marked retired but keeps session_id,
+    resume_command and the transcript path (it can be resumed by hand), and its tmux session is
+    stopped. With the identity store armed the retire goes through the database in one
+    transaction. Raises KeyError for a seat that is in neither the registry nor the sessions."""
+    from datetime import datetime, timezone
+    p, reg = _registry(st)
+    sp = st.data_dir / "state" / "agent-sessions.json"
+    try:
+        meta = json.loads(sp.read_text())
+    except (OSError, ValueError):
+        meta = {}
+    row = reg["agents"].get(seat)
+    from .identity_cmd import stored_seat
+    in_store = stored_seat(st.repo_root, st.data_dir, seat) if (st.repo_root / "scripts" / "identity_store" / "cutover.py").exists() else None
+    if in_store is not None:                                # armed: the store is the truth, the files may lag
+        row = in_store[0]                                   # no row there = none, whatever registry.json says
+        if in_store[1]:
+            meta = dict(meta, **{seat: in_store[1]})        # the store's session doc over the flat entry
+    if row is None and seat not in meta:
+        raise KeyError(seat)
+    retired = {"status": "retired", "retired_at": datetime.now(timezone.utc).isoformat(),
+               "retired_by": "orchestra retire", "retired_reason": reason}
+    entry = dict(meta.get(seat) or {}, **retired)
+    from .identity_cmd import retire_seat_in_store
+    stored = retire_seat_in_store(st.repo_root, st.data_dir, seat, reason, retired, dict(meta.get(seat) or {}))
+    armed = stored is not None
+    if armed:
+        entry = stored
+    else:
+        reg["agents"].pop(seat, None)
+        meta[seat] = entry
+        S.guard_test_write(p, "registry.json")
+        for path, obj in ((p, reg), (sp, meta)):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".json.tmp"); tmp.write_text(json.dumps(obj, indent=2) + "\n"); os.replace(tmp, path)
+    # Stop the seat's OWN session only: its row's tmux_session (the seat name when there is no row),
+    # and never one another registered seat says is its own.
+    target = (row or {}).get("tmux_session") or (meta.get(seat) or {}).get("tmux_session") or seat
+    # a session either the flat rows or (armed) the store's rows give to another seat is not ours
+    others = {(r or {}).get("tmux_session") or name
+              for rows in (reg["agents"], _stored_agents(st) or {}) for name, r in rows.items() if name != seat}
+    stopped = []
+    if target not in others:
+        subprocess.run(["tmux", "kill-session", "-t", f"={target}"], capture_output=True, check=False)
+        stopped.append(target)
+    return {"seat": seat, "armed": armed, "session_id": entry.get("session_id"),
+            "transcript": entry.get("conversation_path") or None, "tmux": stopped,
+            "tmux_kept": None if stopped else target}
+
+
+def cmd_retire(ns) -> int:
+    st = S.load_settings()
+    if not st.config_exists:
+        print(f"no config at {st.config_path} — run `orchestra init` first", file=sys.stderr); return 2
+    seat = ns.seat
+    if not ns.yes:
+        if not sys.stdin.isatty():
+            print(f"retire refused: pass --yes to retire {seat} without a prompt", file=sys.stderr); return 2
+        answer = input(f"Retire {seat}? Its row is removed and its tmux session stopped; "
+                       f"its session and transcript are kept. [y/N] ")
+        if answer.strip().lower() not in ("y", "yes"):
+            print("not retired"); return 1
+    try:
+        res = retire_seat(st, seat, reason=ns.reason)
+    except KeyError:
+        print(f"retire refused: no seat named {seat} in {st.data_dir}", file=sys.stderr); return 2
+    if res["tmux_kept"]:
+        print(f"warning: tmux session {res['tmux_kept']} is also another seat's; left running", file=sys.stderr)
+    print(f"retired {seat}: row removed" + (", tmux session stopped" if res["tmux"] else "")
+          + (f"; session {res['session_id']} kept" if res["session_id"] else "")
+          + (f", transcript {res['transcript']}" if res["transcript"] else "") + ".")
+    print(f"start it again (any runtime): orchestra spawn {seat} --runtime <runtime>")
+    return 0
 
 
 def _record_armed(st: S.Settings, seat: str, row: dict) -> None:
@@ -360,7 +469,10 @@ def cmd_spawn(ns) -> int:
     if refused is not None:
         return refused
     seat = ns.seat
-    runtime = ns.runtime or _registry(st)[1]["agents"].get(seat, {}).get("runtime") or default_runtime(st)
+    mismatch = runtime_mismatch(st, seat, ns.runtime)
+    if mismatch:
+        print(f"spawn refused: {mismatch}", file=sys.stderr); return 2
+    runtime = ns.runtime or (_seat_row(st, seat) or {}).get("runtime") or default_runtime(st)
     refused = _refuse_if_runtime_unusable(st, seat, runtime)
     if refused is not None:
         return refused
@@ -446,6 +558,9 @@ def cmd_agent_create(ns) -> int:
     if not st.config_exists:
         print(f"no config at {st.config_path} — run `orchestra init` first", file=sys.stderr); return 2
     name = ns.name
+    mismatch = runtime_mismatch(st, name, ns.runtime)
+    if mismatch:
+        print(f"agent create refused: {mismatch}", file=sys.stderr); return 2
     runtime = ns.runtime or default_runtime(st)
     # 1. runtime/model pair (the same rule spawn-agent.sh refuses on; here it is a clean message)
     if ns.model:

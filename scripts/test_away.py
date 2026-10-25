@@ -354,3 +354,29 @@ def test_with_no_action_yet_the_card_lists_everything_since_install(data):
     out = A.build(data, [], cards, scan=no_secrets)
     assert out["anchor"] is None and out["reason"] == "no_action_yet"
     assert out["moved_count"] == 1 and out["moved"][0]["kind"] == "card"
+
+
+def test_last_person_message_is_the_newest_person_send_per_agent(tmp_path):
+    data = tmp_path
+    (data / "state").mkdir()
+    A.record_message(data, "gm", "old", scan=no_secrets, now=T0, person=True)
+    A.record_message(data, "gm", "newer", scan=no_secrets, now=T0 + 60, person=True)
+    A.record_message(data, "gm", "automation later", scan=no_secrets, now=T0 + 120, person=False)
+    A.record_message(data, "dev", "a device, before the person mark", device="d_1:iPhone", scan=no_secrets, now=T0 + 5)
+    A.record_message(data, "bot", "no device, no surface, no mark", scan=no_secrets, now=T0 + 9)
+    got = A.last_person_message_at(data)
+    assert got == {"gm": A.iso(T0 + 60), "dev": A.iso(T0 + 5)}
+
+
+def test_last_person_message_finds_an_old_one_and_the_rotated_file(tmp_path):
+    (tmp_path / "state").mkdir()
+    A.record_message(tmp_path, "old-agent", "long ago", scan=no_secrets, now=T0, person=True)
+    led = tmp_path / "state" / "operator-actions.jsonl"
+    os.replace(led, str(led) + ".1")                                 # rotated away
+    for i in range(500):
+        A.record_message(tmp_path, f"a{i % 7}", "x" * 200, scan=no_secrets, now=T0 + 10 + i, person=True)
+    got = A.last_person_message_at(tmp_path)
+    assert got["old-agent"] == A.iso(T0) and got["a0"] == A.iso(T0 + 10 + 497)
+    A.record_message(tmp_path, "old-agent", "again", scan=no_secrets, now=T0 + 9999, person=True)
+    assert A.last_person_message_at(tmp_path)["old-agent"] == A.iso(T0 + 9999)     # the cache follows a send
+    assert A.last_person_message_at(tmp_path / "nowhere") == {}

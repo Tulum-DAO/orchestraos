@@ -102,7 +102,7 @@ def test_recovery_unit_is_a_oneshot_after_the_stack(tmp_path):
 
 def test_npm_prefix_usr_does_not_reorder_the_system_dirs():
     p = IU.build_path("", "/home/u", npm_bin="/usr/bin", exists=lambda d: True)
-    assert p.split(":") == ["/home/u/.local/bin", "/home/u/.bun/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+    assert p.split(":") == ["/home/u/.local/bin", "/home/u/.bun/bin", "/home/u/.grok/bin", "/usr/local/bin", "/usr/bin", "/bin"]
 
 
 def test_system_dirs_always_come_last():

@@ -8,14 +8,18 @@
       "role": "user",
       "text": "Check the queue",
       "ts": "2026-08-27T11:00:00Z",
-      "uuid": "step-0"
+      "uuid": "step-0",
+      "audience": "user",
+      "exchange": "step-0"
     },
     {
       "kind": "thinking",
       "role": "assistant",
       "text": "Let me check.",
       "ts": "2026-08-27T11:00:02Z",
-      "uuid": "step-2-think"
+      "uuid": "step-2-think",
+      "audience": "agent",
+      "exchange": "step-0"
     },
     {
       "kind": "tool_use",
@@ -28,7 +32,9 @@
       "summary": "ls queue",
       "id": "call_2_0",
       "ts": "2026-08-27T11:00:02Z",
-      "uuid": "step-2-call-0"
+      "uuid": "step-2-call-0",
+      "audience": "agent",
+      "exchange": "step-0"
     },
     {
       "kind": "tool_result",
@@ -37,14 +43,18 @@
       "tool_use_id": "call_2_0",
       "is_error": false,
       "ts": "2026-08-27T11:00:03Z",
-      "uuid": "step-3-result"
+      "uuid": "step-3-result",
+      "audience": "agent",
+      "exchange": "step-0"
     },
     {
       "kind": "text",
       "role": "assistant",
       "text": "Queue is empty.",
       "ts": "2026-08-27T11:00:04Z",
-      "uuid": "step-4-text"
+      "uuid": "step-4-text",
+      "audience": "user",
+      "exchange": "step-0"
     }
   ],
   "render_items": [
@@ -52,13 +62,17 @@
       "kind": "user",
       "text": "Check the queue",
       "ts": "2026-08-27T11:00:00Z",
-      "key": "step-0:0"
+      "key": "step-0:0",
+      "audience": "user",
+      "exchange": "step-0"
     },
     {
       "kind": "thinking",
       "text": "Let me check.",
       "ts": "2026-08-27T11:00:02Z",
-      "key": "step-2-think:1"
+      "key": "step-2-think:1",
+      "audience": "agent",
+      "exchange": "step-0"
     },
     {
       "kind": "tool",
@@ -71,13 +85,17 @@
       "result": "queue empty",
       "is_error": false,
       "ts": "2026-08-27T11:00:02Z",
-      "key": "step-2-call-0:2"
+      "key": "step-2-call-0:2",
+      "audience": "agent",
+      "exchange": "step-0"
     },
     {
       "kind": "assistant",
       "text": "Queue is empty.",
       "ts": "2026-08-27T11:00:04Z",
-      "key": "step-4-text:4"
+      "key": "step-4-text:4",
+      "audience": "user",
+      "exchange": "step-0"
     }
   ]
 }

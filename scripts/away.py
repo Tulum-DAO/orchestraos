@@ -430,7 +430,7 @@ def record_presence(data_dir, key, *, label=None, surface=None, now=None):
 LEDGER_MAX_BYTES = 2 * 1024 * 1024
 
 
-def record_message(data_dir, target, said, *, device=None, surface=None, scan, now=None):
+def record_message(data_dir, target, said, *, device=None, surface=None, scan, now=None, person=None):
     """Append one operator chat send to the operator-actions ledger (gm msg_71cd9caa). The gateway calls it
     ONLY after a DELIVERED or HELD /agent-message. `said` is cut to SAID_MAX and secret-scanned: a flagged
     excerpt is stored as null, never in part. `device` is the gateway's "<device_id>:<label>" (None for the
@@ -445,6 +445,8 @@ def record_message(data_dir, target, said, *, device=None, surface=None, scan, n
         pass
     row = {"kind": "message", "at": iso(time.time() if now is None else now), "target": str(target)[:200],
            "said": _safe(_trim(said), scan), "device": device, "surface": _trim(surface, 16) if surface else None}
+    if person is not None:
+        row["person"] = bool(person)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
         os.write(fd, (json.dumps(row) + "\n").encode("utf-8"))
@@ -452,3 +454,84 @@ def record_message(data_dir, target, said, *, device=None, surface=None, scan, n
         os.close(fd)
     os.chmod(path, 0o600)
     return row
+
+
+def record_terminal(data_dir, target, event, *, device=None, surface=None, person=None, code=None,
+                    reason=None, now=None):
+    """Append one live-terminal open or close (GET /terminal/ws) to the operator-actions ledger: who
+    (`device` "<id>:<label>", `surface`, `person`) attached to which seat and when, and at the close its
+    code. The socket bypasses the verified-inject path (/agent-message's read-back), so these rows are
+    the only trace of it. Never a keystroke or a byte of output: the row has no text field at all."""
+    path = _p(data_dir, LEDGER)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        if os.path.getsize(path) >= LEDGER_MAX_BYTES:
+            os.replace(path, path + ".1")
+    except OSError:
+        pass
+    row = {"kind": "terminal", "event": "close" if event == "close" else "open",
+           "at": iso(time.time() if now is None else now), "target": str(target)[:200],
+           "device": device, "surface": _trim(surface, 16) if surface else None}
+    if person is not None:
+        row["person"] = bool(person)
+    if code is not None:
+        row["code"] = int(code)
+    if reason:
+        row["reason"] = _trim(str(reason), 64)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.write(fd, (json.dumps(row) + "\n").encode("utf-8"))
+    finally:
+        os.close(fd)
+    os.chmod(path, 0o600)
+    return row
+
+
+_LAST_SENT_CACHE: dict = {}
+
+
+def last_person_message_at(data_dir):
+    """{target: ISO time} of the newest message a PERSON sent each agent through the gateway (a
+    paired device, or a surface that says it is a person's). Agent mail never passes here, and a
+    send by automation is marked person:false. A row written before that mark counts only when it
+    carries a device or a surface, which automation never sends.
+
+    Reads the whole ledger and its one rotated file (record_message keeps each under
+    LEDGER_MAX_BYTES), so an agent last talked to long ago is still found; cached by each file's
+    (size, mtime), which only change when someone sends."""
+    base = _p(data_dir, LEDGER)
+    paths = [base + ".1", base]
+    key = []
+    for path in paths:
+        try:
+            st = os.stat(path)
+            key.append((path, st.st_size, st.st_mtime_ns))
+        except OSError:
+            key.append((path, None, None))
+    key = tuple(key)
+    hit = _LAST_SENT_CACHE.get(str(data_dir))
+    if hit and hit[0] == key:
+        return dict(hit[1])
+    out = {}
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(e, dict) or e.get("kind") != "message":
+                continue
+            person = e.get("person")
+            if person is False or (person is None and not (e.get("device") or e.get("surface"))):
+                continue
+            at, target = e.get("at"), e.get("target")
+            if isinstance(at, str) and isinstance(target, str) and epoch(at) is not None:
+                if target not in out or epoch(at) > epoch(out[target]):
+                    out[target] = at
+    _LAST_SENT_CACHE[str(data_dir)] = (key, out)
+    return dict(out)

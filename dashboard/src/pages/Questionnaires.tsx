@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react';
+import QuestionnaireForm from '../components/QuestionnaireForm';
+import { isLiveQuestionnaire } from '../lib/questionnaireForm';
 import { useQuery } from '@tanstack/react-query';
 import {
   ClipboardList, CheckCircle2, Clock, ChevronDown, ChevronRight,
@@ -107,12 +109,16 @@ export default function Questionnaires() {
 
                 {expandedId === q.id && (
                   <div className="rounded-lg overflow-hidden border border-neutral-700 bg-black">
+                    {isLiveQuestionnaire(q) ? (
+                      <QuestionnaireForm id={q.id} onDone={() => setExpandedId(null)} />
+                    ) : (
                     <iframe
                       src={`/api/questionnaires/${q.id}/html`}
                       className="w-full border-0"
                       style={{ minHeight: '600px' }}
                       title={q.title}
                     />
+                    )}
                   </div>
                 )}
               </div>
