@@ -16,6 +16,10 @@ approved the welcome card.
 
 If the page does not load, Tailscale is off on that device: turn it on and try again.
 
+**Not yet in this release:** the dashboard's browser terminal and voice need a session sign-in that
+this release does not include yet, so they will not connect. Use the other dashboard pages and chat
+for now; everything in this guide works without them.
+
 ## 2. Meet your General Manager
 
 Your first agent is the **General Manager** (`gm`). It is the one you talk to most: it plans the
