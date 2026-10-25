@@ -352,26 +352,158 @@ def _walk_succession(to_agent: str, meta: dict):
         cur = nxt
 
 
+def _canonical_session_for(root: str):
+    """canonical.tmux_session for `root`, or None. Read-only, fail-soft.
+
+    The authoritative answer to "which live session owns this lineage right now": the projection
+    in agent-sessions.json is exactly what goes stale after a consolidation, and mid-swap this
+    pointer legitimately names a `-gN` alias session rather than the bare root. Returns None on
+    ANY doubt (no DB, no row, NULL, bad read) so the caller stays loud instead of guessing. Only
+    the lineage FALLBACK path reads it; the `direct-live` hot path in resolve_delivery_target
+    answers before this module touches sqlite."""
+    return _canonical_for(root)[0]
+
+
+def _canonical_for(root: str):
+    """(canonical.tmux_session, canonical generation's session_id) for `root`; None for either on
+    ANY doubt. ONE read-only connection, TWO reads, and the second is separately fail-soft ON
+    PURPOSE: a JOIN would lose the pointer itself whenever `generations` is unreadable, and the
+    pointer is the answer every branch depends on. A missing sid only ever means "cannot
+    CONFIRM", which the caller treats as a hold, never as permission to guess."""
+    try:
+        c = sqlite3.connect(f"file:{_registry_db_path()}?mode=ro", uri=True, timeout=3)
+    except Exception:  # noqa: BLE001 — unreadable identity store = no signal, never crash
+        return (None, None)
+    try:
+        try:
+            row = c.execute("SELECT tmux_session, generation_id FROM canonical WHERE root=?",
+                            [root]).fetchone()
+        except Exception:  # noqa: BLE001 — no canonical table / bad read = no pointer
+            return (None, None)
+        if not row:
+            return (None, None)
+        sess, gen_id = (row[0] or None), row[1]
+        sid = None
+        if gen_id is not None:
+            try:
+                g = c.execute("SELECT session_id FROM generations WHERE id=?", [gen_id]).fetchone()
+                sid = (g[0] or None) if g else None
+            except Exception:  # noqa: BLE001 — no generations table = cannot confirm, not crash
+                sid = None
+        return (sess, sid)
+    finally:
+        c.close()
+
+
+# Statuses that mean "this member exists but its gate has NOT passed, so it does not own a lane".
+# ONE object, shared by the lineage fallback and the charter gate's bootstrap exemption: two
+# literal lists that must agree will drift. A member that is still spawning is ungated by
+# definition; this can only make the router MORE conservative (an ungated member is excluded
+# from candidacy, never delivered to).
+_UNGATED_STATUSES = frozenset({"provisioning", "spawning"})
+
+
+def _describe_topology(to_agent: str, sessions: set, meta: dict) -> str:
+    """Name the topology an un-deliverable address actually SAW, for the operator alert. A warming
+    successor during a normal rotation window is not a config fault, and an alert that cries
+    breakage at routine events teaches its reader to ignore it. Pure and fail-soft: decoration on
+    an alert must never be able to break the router."""
+    try:
+        entry = meta.get(to_agent) or {}
+        root = entry.get("lineage_root") or to_agent
+        live, warming = [], []
+        for a, e in meta.items():
+            if e.get("lineage_root") == root or a == root:
+                sess = e.get("tmux_session", a)
+                if sess not in sessions:
+                    continue
+                if (e.get("status") or "") in _UNGATED_STATUSES:
+                    warming.append(f"{sess} [{e.get('status')}]")
+                else:
+                    live.append(sess)
+        bits = [f"lineage {root}"]
+        if warming:
+            bits.append("a successor is still warming, not a config fault: " + ", ".join(warming))
+        if live:
+            bits.append(f"{len(live)} gated-live: " + ", ".join(sorted(live)))
+        else:
+            bits.append("0 gated-live")
+        return "; ".join(bits)
+    except Exception:  # noqa: BLE001 — alert decoration must never break delivery
+        return "topology unavailable"
+
+
 def _lineage_root_resolve(to_agent: str, entry: dict, sessions: set, meta: dict):
     """No usable succeeded_by target: fall back to members sharing lineage_root.
-    Exactly one live -> route (forwarded). Zero -> no-live-head (retryable).
-    More than one -> ambiguous (fail loud). Prefer terminal (non-succeeded)
-    members so a superseded-but-still-alive member never wins over the head."""
+
+    Order: (1) the DB canonical pointer, over the UNFILTERED live set; (2) a DB-free filter that
+    drops ungated (provisioning/spawning) members; (3) exactly one live candidate -> route
+    (forwarded), preferring terminal (non-succeeded) members. Zero live -> no-live-head
+    (retryable, log-only). Several and no pointer answer -> ambiguous-lineage (fail loud)."""
     root = entry.get("lineage_root")
     if not root:
         return (None, to_agent, "no-live-head")
     live_members = []
     for a, e in meta.items():
-        if e.get("lineage_root") == root:
+        # THE ROOT IS A MEMBER OF ITS OWN LINEAGE (`a == root`). Its entry carries
+        # lineage_root=None (the field names the root you BELONG to), so a `lineage_root == root`
+        # test alone excluded the root. After a consolidation renames the successor's session to
+        # the bare root, an alias address then found ZERO live members: `no-live-head`, retried
+        # forever and never alarmed.
+        if e.get("lineage_root") == root or a == root:
             s = e.get("tmux_session", a)
             if s in sessions:
                 live_members.append((a, s, e))
     if not live_members:
+        # NOTHING of this lineage is live: retryable and log-only. A successor may still be
+        # spawning, or the head may be on another machine.
         return (None, to_agent, "no-live-head")
-    terminals = [m for m in live_members if not _successor(m[2])]
-    cand = terminals if terminals else live_members
+    # THE POINTER IS CONSULTED FIRST, above the ungated filter. With the filter first, a lagging
+    # projection (a promoted successor still projected as `provisioning`) would drop the
+    # canonical session from the candidates and the mail would fall through to the retiring
+    # predecessor. Canonical implies promoted (the swap repoints `canonical` and stamps
+    # `promoted_at` in one transaction), so the pointer can never select an ungated member.
+    canon_sess, canon_sid = _canonical_for(root)
+    if canon_sess:
+        # NAME FIRST: a tmux session name is 1:1 with a live session. Count DISTINCT live
+        # sessions, never entries: a root entry plus a repointed alias entry naming one session
+        # is ONE candidate.
+        pick = {m[1] for m in live_members if m[1] == canon_sess}
+        if len(pick) == 1:
+            return (next(iter(pick)), to_agent, "lineage-root-canonical")
+        if not pick:
+            # The pointer is set but names no live session. Either (b) the successor was just
+            # renamed to the bare root and the repoint has not landed yet, or (a) the successor
+            # died and the live root is the RETIRING predecessor. Names cannot tell those apart;
+            # IDENTITY can: confirm by the canonical generation's session_id, over LIVE
+            # candidates only. A sid only ever CONFIRMS a DB fact; it never overrides one.
+            carriers = ({m[1] for m in live_members
+                         if (m[2].get("session_id") or "") == canon_sid} if canon_sid else set())
+            if len(carriers) == 1:
+                return (next(iter(carriers)), to_agent, "lineage-root-canonical-sid")
+            if len(carriers) > 1:
+                return (None, to_agent, "ambiguous-lineage")   # two live claimants of one sid
+            # ZERO confirmed: HOLD, never fall through to member counting. With several live
+            # sessions unconfirmed the truth is AMBIGUOUS; with one, the owner is DOWN.
+            if len({m[1] for m in live_members}) > 1:
+                return (None, to_agent, "ambiguous-lineage")
+            return (None, to_agent, "canonical-not-live")
+    # UNGATED MEMBERS ARE NOT CANDIDATES, and this filter is DELIBERATELY DB-FREE: a guard that
+    # needs the DB is absent during exactly the incident where the DB is what is wrong. succeeded_by
+    # is stamped BEFORE a successor's gate passes, so without this the `terminals` narrowing could
+    # collapse to the ungated successor alone and deliver the lane's mail to an agent not yet
+    # allowed to act on it.
+    live_ok = [m for m in live_members if (m[2].get("status") or "") not in _UNGATED_STATUSES]
+    if not live_ok:
+        # Members are live but every one is still gated: nobody owns this lane. That is a STUCK
+        # rotation, so it uses the reason that alarms after the grace, not the silent one.
+        return (None, to_agent, "successor-ungated")
+    terminals = [m for m in live_ok if not _successor(m[2])]
+    cand = terminals if terminals else live_ok
     if len(cand) == 1:
         return (cand[0][1], to_agent, "lineage-root")
+    # The pointer gave no usable answer (unreadable DB, no row, NULL). A tiebreak may resolve a
+    # tie; it may NEVER invent a winner. Stay loud.
     return (None, to_agent, "ambiguous-lineage")
 
 
@@ -2041,7 +2173,11 @@ def note_hold(hold_state, session, msg, reason, now, queue_n=None,
 # supervisor died mid-gate — at exactly the moment nobody is attending. A hold
 # that stops escalating is silent forever, and the 48h expiry would then destroy
 # the canonical lane's mail quietly.
-TELEGRAM_ALERT_REASONS = {"ambiguous-lineage", "cycle-detected", "successor-ungated"}
+# canonical-not-live: the canonical pointer names a session that is not live and no live session
+# carries the canonical sid, so the lane's owner is DOWN. Held, never guessed, so it must escalate
+# or it would sit silently until the 48h expiry destroys it.
+TELEGRAM_ALERT_REASONS = {"ambiguous-lineage", "cycle-detected", "successor-ungated",
+                          "canonical-not-live"}
 
 
 def load_alerts() -> dict:
@@ -2055,7 +2191,8 @@ def save_alerts(a: dict):
     ALERT_FILE.write_text(json.dumps(a))
 
 
-def handle_no_delivery(msg: dict, agent: str, reason: str, alerts: dict, now: float) -> None:
+def handle_no_delivery(msg: dict, agent: str, reason: str, alerts: dict, now: float,
+                       topology: str | None = None) -> None:
     """A message that resolved to no live target. Fail loud but THROTTLED: stay
     silent per-cycle until it's been queued >1h (transient spawn/cooldown windows
     resolve before then), then surface at most once per 6h per message. Telegram
@@ -2090,10 +2227,21 @@ def handle_no_delivery(msg: dict, agent: str, reason: str, alerts: dict, now: fl
         f"kind={acls}, queued {age/3600:.1f}h")
     if telegram_worthy:
         subj = (msg.get("subject") or msg["id"])[:60]
+        # NAME THE TOPOLOGY, do not assert a diagnosis: a warming successor during a normal
+        # rotation window is not a "broken lineage config".
+        if reason == "successor-ungated":
+            _what = ", rotation appears STUCK"
+        elif reason == "canonical-not-live":
+            _what = (", the seat that OWNS this lane is DOWN: canonical names a session that is "
+                     "not live, and no live session carries its id"
+                     + (f" — saw: {topology}" if topology else ""))
+        elif topology:
+            _what = f" — saw: {topology}"
+        else:
+            _what = ""
         telegram(
-            f"⚠️ Router: mail to {agent} un-deliverable ({reason}"
-            f"{', rotation appears STUCK' if reason == 'successor-ungated' else ', broken lineage config'}"
-            f") queued {age/3600:.1f}h. Needs a human — {subj}"
+            f"⚠️ Router: mail to {agent} un-deliverable ({reason}{_what})"
+            f" queued {age/3600:.1f}h. Needs a human — {subj}"
         )
 
 
@@ -2223,7 +2371,7 @@ def main():
                 # status exempts — an established agent with an unset status is
                 # NOT exempted (that would silently disable the gate).
                 _rstat = (_reg_agents.get(agent) or {}).get("status")
-                _prov = _rstat in ("provisioning", "spawning")
+                _prov = _rstat in _UNGATED_STATUSES
                 _hold = charter_gate(msg, load_charter(agent),
                                      recipient_provisioning=_prov)
                 if _hold == "already-held":
@@ -2244,7 +2392,8 @@ def main():
                 # Not deliverable this cycle. Stays queued (never silent-dropped);
                 # surfaced loud-but-throttled once >1h, telegram only for broken
                 # lineage config. No per-minute spam for the routine queued state.
-                handle_no_delivery(msg, agent, reason, alerts, now)
+                handle_no_delivery(msg, agent, reason, alerts, now,
+                                   topology=_describe_topology(agent, sessions, meta))
                 continue
             if session in INFRA:
                 continue
