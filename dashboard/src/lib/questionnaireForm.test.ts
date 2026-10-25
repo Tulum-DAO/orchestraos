@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  isLiveQuestionnaire, answerableOptions, buildAnswers, missingRequired, initialAnswers,
+  isLiveQuestionnaire, answerableOptions, buildAnswers, missingRequired, initialAnswers, questionnaireSummary, SUMMARY_MAX,
   type LiveQuestion,
 } from './questionnaireForm';
 
@@ -63,4 +63,31 @@ test('a saved draft holding a hidden chat option or an unknown option is not car
   const d = initialAnswers(qs);
   assert.deepEqual(buildAnswers(d), { '3': { option_n: '1' } });
   assert.deepEqual(missingRequired(qs, d), [1, 2]);       // shown as unanswered, so Send is blocked
+});
+
+test('the context above the questions is the summary (notes are appended to it); empty or title-only shows nothing', () => {
+  const summary = '**Decide by: Fri 18:00 ET.**\n\nWhere things stand: the list is ready.\n\n— NOTE 2026-10-14T21:00:00Z by pm-demo: tight list.';
+  assert.equal(questionnaireSummary({ title: 'Audience refresh', summary }), summary);
+  assert.equal(questionnaireSummary({ title: 'Audience refresh', summary: '  Audience refresh ' }), '');
+  assert.equal(questionnaireSummary({ title: 'Audience refresh', summary: null }), '');
+  assert.equal(questionnaireSummary({ title: 'Audience refresh' }), '');
+});
+
+test('a huge summary is cut at SUMMARY_MAX with a visible note, so it cannot freeze the page or bury the questions', () => {
+  const out = questionnaireSummary({ title: 't', summary: 'x\n'.repeat(200_000) });
+  assert.ok(out.length <= SUMMARY_MAX + 120, String(out.length));
+  assert.match(out, /\n\n\*\(summary truncated[^*]*\)\*$/);   // *...*: the italics Markdown.tsx renders
+  assert.ok(!/truncated/.test(questionnaireSummary({ title: 't', summary: 'short' })));
+});
+
+test('a cut inside a code block closes the block, so the truncation note stays outside it', () => {
+  const out = questionnaireSummary({ title: 't', summary: 'intro\n```\n' + 'line\n'.repeat(5000) + '```\nafter' });
+  assert.equal((out.match(/^```/gm) || []).length % 2, 0);
+  assert.match(out, /```\n\n\*\(summary truncated[^*]*\)\*$/);
+});
+
+test('an indented ``` is not a fence (the renderer reads column 0 only), so no stray fence is added', () => {
+  const out = questionnaireSummary({ title: 't', summary: 'intro\n  ```\n' + 'line\n'.repeat(5000) });
+  assert.equal((out.match(/^```/gm) || []).length, 0);
+  assert.match(out, /[^`]\n\n\*\(summary truncated[^*]*\)\*$/);
 });

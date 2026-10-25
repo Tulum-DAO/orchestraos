@@ -634,29 +634,86 @@ function codexRolloutFor(sid: string, dbPath = CODEX_STATE_DB): string | null {
   }
 }
 
-export function resolvePreviousTranscript(agentId: string, sid: string | null): PreviousTranscript | null {
+/** `<projects>/<any dir>/<sid>.jsonl`, the session's own file (ownFile), newest first if a copy
+ *  sits in more than one project dir. */
+let projectScans = 0;
+/** How many any-project-dir scans ran (tests: the poll path must not scan when it never reads). */
+export function claudeProjectScans(): number { return projectScans; }
+
+function claudeFileAnywhere(sid: string, isOwn: (rel: string) => boolean): string | null {
+  projectScans += 1;
+  let dirs: string[];
+  try { dirs = readdirSync(CLAUDE_PROJECTS); } catch { return null; }
+  const hits: { p: string; m: number }[] = [];
+  for (const d of dirs) {
+    const own = ownFile(join(CLAUDE_PROJECTS, d, `${sid}.jsonl`), CLAUDE_PROJECTS, isOwn);
+    if (own) { try { hits.push({ p: own, m: statSync(own).mtimeMs }); } catch { /* gone */ } }
+  }
+  hits.sort((a, b) => b.m - a.m);
+  return hits.length ? hits[0].p : null;
+}
+
+interface Predecessor { p: NonNullable<ReturnType<typeof predecessorOf>>; divider: Record<string, unknown> }
+
+/** The cheap half (one registry read): whether `sid` took over from a generation of this agent's
+ *  lineage, and the divider for it. No file is looked for here. */
+function predecessorFor(agentId: string, sid: string | null): Predecessor | null {
   if (!sid) return null;
   const p = predecessorOf(sid);
   if (!p || lineageOf(p.root) !== lineageOf(agentId) || !SESSION_ID.test(p.from_session)) return null;
-  const from = p.from_session;
-  const claudeOwn = (rel: string) => basename(rel) === `${from}.jsonl`;
-  const geminiLog = join(from, '.system_generated', 'logs', 'transcript.jsonl');
-  const candidates = [
-    p.cwd ? ownFile(join(CLAUDE_PROJECTS, String(p.cwd).replace(/[/.]/g, '-'), `${from}.jsonl`), CLAUDE_PROJECTS, claudeOwn) : null,
-    ownFile(p.conversation_path, CLAUDE_PROJECTS, claudeOwn),
-    ownFile(codexRolloutFor(from), CODEX_SESSIONS, (rel) => /^rollout-.*\.jsonl$/.test(basename(rel)) && basename(rel).endsWith(`-${from}.jsonl`)),
-    ownFile(join(GEMINI_BRAIN, geminiLog), GEMINI_BRAIN, (rel) => rel === geminiLog),
-  ];
-  const path = candidates.find((c): c is string => !!c);
-  if (!path) return null;
   return {
-    path,
-    antigravity: path.includes('antigravity-cli'),
+    p,
     divider: {
       kind: 'rotation', role: 'system', uuid: `rot:${sid}`, ts: p.promoted_at,
       from_generation: p.from_generation, to_generation: p.to_generation,
-      from_session: from, to_session: sid,
+      from_session: p.from_session, to_session: sid,
     },
+  };
+}
+
+/** The predecessor's own log file, or null. */
+function previousFilePath({ p }: Predecessor): string | null {
+  const from = p.from_session;
+  const claudeOwn = (rel: string) => basename(rel) === `${from}.jsonl`;
+  const geminiLog = join(from, '.system_generated', 'logs', 'transcript.jsonl');
+  // Tried in order, each only when the ones before found nothing (the directory scan is the last
+  // Claude resort): the lineage's project dir, the path the row names, then ANY project dir (a
+  // generation may have run in another directory than the lineage's, and its row may name no
+  // path), then Codex's rollout and Gemini's brain log.
+  const candidates: (() => string | null)[] = [
+    () => p.cwd ? ownFile(join(CLAUDE_PROJECTS, String(p.cwd).replace(/[/.]/g, '-'), `${from}.jsonl`), CLAUDE_PROJECTS, claudeOwn) : null,
+    () => ownFile(p.conversation_path, CLAUDE_PROJECTS, claudeOwn),
+    () => claudeFileAnywhere(from, claudeOwn),
+    () => ownFile(codexRolloutFor(from), CODEX_SESSIONS, (rel) => /^rollout-.*\.jsonl$/.test(basename(rel)) && basename(rel).endsWith(`-${from}.jsonl`)),
+    () => ownFile(join(GEMINI_BRAIN, geminiLog), GEMINI_BRAIN, (rel) => rel === geminiLog),
+  ];
+  for (const c of candidates) { const path = c(); if (path) return path; }
+  return null;
+}
+
+export function resolvePreviousTranscript(agentId: string, sid: string | null): PreviousTranscript | null {
+  const pred = predecessorFor(agentId, sid);
+  const path = pred ? previousFilePath(pred) : null;
+  return pred && path ? { path, antigravity: path.includes('antigravity-cli'), divider: pred.divider } : null;
+}
+
+/** The route's form: the divider now, the file only when normalizeTranscript actually reads the
+ *  previous log (the current one alone does not fill the window). A poll whose current log fills
+ *  the window never looks for the previous file at all (codex R1 on #473). */
+export function lazyPreviousTranscript(agentId: string, sid: string | null, currentPath: string):
+    { lines: () => string[]; antigravity: boolean; divider: Record<string, unknown> } | null {
+  const pred = predecessorFor(agentId, sid);
+  if (!pred) return null;
+  let found: string | null | undefined;
+  const file = () => {
+    if (found === undefined) found = previousFilePath(pred);
+    if (!found || found === currentPath) throw new Error('no previous log');   // caller: this log alone
+    return found;
+  };
+  return {
+    divider: pred.divider,
+    lines: () => readFileSync(file(), 'utf-8').split('\n'),
+    get antigravity() { return file().includes('antigravity-cli'); },
   };
 }
 
@@ -1499,12 +1556,7 @@ router.get('/:id/transcript', (req: Request, res: Response) => {
     // The stitched chat: the generation this one took over from, above it. Fail-open: anything
     // wrong with the previous file and the chat is this file alone, as before.
     let previous: { lines: () => string[]; antigravity: boolean; divider: Record<string, unknown> } | null = null;
-    try {
-      const prev = resolvePreviousTranscript(agentId, sid);
-      if (prev && prev.path !== path) {
-        previous = { lines: () => readFileSync(prev.path, 'utf-8').split('\n'), antigravity: prev.antigravity, divider: prev.divider };
-      }
-    } catch { previous = null; }
+    try { previous = lazyPreviousTranscript(agentId, sid, path); } catch { previous = null; }
     res.json(normalizeTranscript(lines, agentId, sid, limit, path.includes('antigravity-cli'), true, previous));
   } catch (err) {
     res.json({ agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: String(err) });

@@ -8,7 +8,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, renameSync as fsRename, rmSync as fsRm } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import Database from 'better-sqlite3';
@@ -70,7 +70,7 @@ writeFileSync(join(projects, `${CUR}.jsonl`), CUR_LINES.join('\n') + '\n');
 writeFileSync(join(orch, 'state', 'agents', `${SEAT}.json`), JSON.stringify({ session_id: CUR, cwd: '/repo' }));
 
 // imported after HOME / ORCHESTRA_DIR point at the fixture
-const { normalizeTranscript, resolvePreviousTranscript, default: router } = await import('./chat-transcript.js');
+const { normalizeTranscript, resolvePreviousTranscript, claudeProjectScans, default: router } = await import('./chat-transcript.js');
 const { predecessorOf } = await import('../services/identity-store-reader.js');
 const { tagSynthetics } = await import('../lib/audience.js');
 
@@ -218,10 +218,12 @@ test('a path a row names is used only when it is that session\'s own file under 
   mkdirSync(join(root, 'outside'), { recursive: true });
   writeFileSync(join(root, 'outside', `${ELSE}.jsonl`), OLD_LINES.join('\n')); // right name, wrong place
   try {
+    // A row naming another seat's file, or a file outside ~/.claude/projects, never gets that file:
+    // the session's OWN file (here, found by the any-project-dir scan) is what is used.
     predecessorRow(ELSE, join(otherDir, `${OTHER}.jsonl`));
-    assert.equal(resolvePreviousTranscript(SEAT, CUR), null, 'another seat\'s file');
+    assert.equal(resolvePreviousTranscript(SEAT, CUR)?.path, join(otherDir, `${ELSE}.jsonl`), 'another seat\'s file');
     predecessorRow(ELSE, join(root, 'outside', `${ELSE}.jsonl`));
-    assert.equal(resolvePreviousTranscript(SEAT, CUR), null, 'outside ~/.claude/projects');
+    assert.equal(resolvePreviousTranscript(SEAT, CUR)?.path, join(otherDir, `${ELSE}.jsonl`), 'outside ~/.claude/projects');
     predecessorRow(ELSE, join(otherDir, '..', '-other', `${ELSE}.jsonl`));
     assert.equal(resolvePreviousTranscript(SEAT, CUR)?.path, join(otherDir, `${ELSE}.jsonl`), 'its own file: used');
   } finally {
@@ -265,5 +267,51 @@ test('a link planted where the predecessor\'s file should be is never followed o
     assert.equal(resolvePreviousTranscript(SEAT, CUR), null, 'a link at another session\'s file');
   } finally {
     store(NORMAL, [[SEAT, 3], ['zz-other-seat', 4]]);
+  }
+});
+
+test('a predecessor that ran in another directory is found under any project dir, its own file only', () => {
+  const elsewhere = join(home, '.claude', 'projects', '-elsewhere');
+  mkdirSync(elsewhere, { recursive: true });
+  fsRename(join(projects, `${OLD}.jsonl`), join(elsewhere, `${OLD}.jsonl`));
+  try {
+    const prev = resolvePreviousTranscript(SEAT, CUR);
+    assert.ok(prev, 'the lineage dir misses, the row names no path: any project dir still finds it');
+    assert.equal(prev!.path, join(elsewhere, `${OLD}.jsonl`));
+    assert.deepEqual(prev!.divider, DIVIDER);
+    // A link named like the predecessor, planted in yet another dir, pointing at ANOTHER session's file:
+    const planted = join(home, '.claude', 'projects', '-planted');
+    mkdirSync(planted, { recursive: true });
+    fsRename(join(elsewhere, `${OLD}.jsonl`), join(root, `${OLD}.moved`));
+    symlinkSync(join(projects, `${CUR}.jsonl`), join(planted, `${OLD}.jsonl`));
+    assert.equal(resolvePreviousTranscript(SEAT, CUR), null, 'a link to another session\'s file is never followed');
+    fsRm(join(planted, `${OLD}.jsonl`));
+    fsRename(join(root, `${OLD}.moved`), join(elsewhere, `${OLD}.jsonl`));
+  } finally {
+    fsRename(join(elsewhere, `${OLD}.jsonl`), join(projects, `${OLD}.jsonl`));
+  }
+});
+
+
+test('a poll whose current log fills the window never looks for the previous file (no directory scan)', async () => {
+  const elsewhere = join(home, '.claude', 'projects', '-elsewhere');
+  mkdirSync(elsewhere, { recursive: true });
+  fsRename(join(projects, `${OLD}.jsonl`), join(elsewhere, `${OLD}.jsonl`));   // only the scan finds it
+  const express = (await import('express')).default;
+  const a = express();
+  a.use('/api/agents', router);
+  const server = a.listen(0);
+  try {
+    const base = `http://127.0.0.1:${(server.address() as any).port}`;
+    const before = claudeProjectScans();
+    const two = await (await fetch(`${base}/api/agents/${SEAT}/transcript?limit=2`)).json() as any;
+    assert.deepEqual(two.items.map((i: any) => i.uuid), ['c1', 'c2']);
+    assert.equal(claudeProjectScans(), before, 'the window was full: no scan');
+    const all = await (await fetch(`${base}/api/agents/${SEAT}/transcript`)).json() as any;
+    assert.deepEqual(all.items.map((i: any) => i.uuid), ['o1', 'o2', 'o3', `rot:${CUR}`, 'c1', 'c2']);
+    assert.equal(claudeProjectScans(), before + 1, 'read only when needed, scanned once');
+  } finally {
+    server.close();
+    fsRename(join(elsewhere, `${OLD}.jsonl`), join(projects, `${OLD}.jsonl`));
   }
 });

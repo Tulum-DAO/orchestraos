@@ -68,6 +68,14 @@ export function normalizeAgentName(raw: unknown): { name: string; error?: string
   return { name };
 }
 
+/** A blue-green copy of a registered seat runs as `<root>-g<N>` (or `<root>-gen<N>`), and the
+ *  registry never lists it before it exists. A new agent may not take such a name: the copy's own
+ *  spawn would then collide with it. Returns the root it would shadow, or null. */
+export function shadowedRoot(name: string, registered: Record<string, unknown>): string | null {
+  const m = /^(.+)-(?:g|gen)\d+$/.exec(name);
+  return m && Object.prototype.hasOwnProperty.call(registered, m[1]) ? m[1] : null;
+}
+
 /** First authed runtime (catalog order = the operator's [runtimes] enabled order), or the
  *  requested one when it is authed. `unverified` is never treated as usable (W1). */
 export function pickRuntime(rows: RuntimeRow[], requested: string | undefined): { id: string; cli: string } | null {
@@ -148,6 +156,10 @@ export function createAgentsNewRouter(deps: NewAgentDeps): Router {
     if (taken.has(name)) {
       return res.status(409).json({ ok: false, reason: 'name_taken', name });
     }
+    const shadows = shadowedRoot(name, await deps.registeredAgents());
+    if (shadows) {
+      return res.status(409).json({ ok: false, reason: 'name_reserved_for_copy', name, root: shadows });
+    }
 
     // The registry has no role column; a role is the first line of the seat's first task, which
     // is what spawn-agent.sh --task delivers to the new pane.
@@ -164,7 +176,8 @@ export function createAgentsNewRouter(deps: NewAgentDeps): Router {
     const parent = gm ? null : (String(req.body?.parent ?? '').trim() || null);
     if (parent) {
       const known = await deps.registeredAgents();
-      if (!Object.prototype.hasOwnProperty.call(known, parent)) {
+      // The same seats GET /new/parents lists: a copy of a registered seat is not a parent (codex R2 on #477).
+      if (!Object.prototype.hasOwnProperty.call(known, parent) || shadowedRoot(parent, known)) {
         return res.status(400).json({ ok: false, reason: 'unknown_parent', parent });
       }
     }
@@ -180,8 +193,18 @@ export function createAgentsNewRouter(deps: NewAgentDeps): Router {
 
   router.get('/new/parents', async (_req: Request, res: Response) => {
     const known = await deps.registeredAgents();
-    const agents = Object.entries(known).map(([id, tier]) => ({ id, tier })).sort((a, b) => a.id.localeCompare(b.id));
-    return res.json({ agents });
+    // Seats only: a blue-green copy or an earlier generation (`<root>-g<N>`, `<root>-gen<N>`) is
+    // not one, and a new agent cannot report to it (ios-watch-dev: 382 of 534 rows were copies).
+    const rows: Array<{ id: string; tier: string; default?: boolean }> = Object.entries(known)
+      .filter(([id]) => !shadowedRoot(id, known))
+      .map(([id, tier]) => ({ id, tier }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+    // The fleet manager is the default a client offers for a lead: the T0 named gm, else the
+    // only T0. Marked here so no client guesses it from names; none when it is ambiguous.
+    const t0 = rows.filter((r) => r.tier === 'T0');
+    const def = rows.find((r) => r.id === 'gm' && r.tier === 'T0') || (t0.length === 1 ? t0[0] : undefined);
+    if (def) def.default = true;
+    return res.json({ agents: rows });
   });
 
   router.post('/login-shell', async (req: Request, res: Response) => {
@@ -232,13 +255,29 @@ function realSessionExists(session: string): boolean {
   } catch { return false; }
 }
 
+/** A registry row that is an earlier generation of a seat, not a seat: replaced (succeeded_by /
+ *  superseded_at) or retired. It is no one's parent and does not reserve copy names. */
+export function isEarlierGeneration(row: Record<string, unknown> | null | undefined): boolean {
+  return !!(row && (row.superseded_at || row.succeeded_by || String(row.status ?? '') === 'retired'));
+}
+
 async function realRegisteredAgents(): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   try {
     const { getRegistry } = await import('../services/state-reader.js');
-    const agents = (getRegistry()?.agents || {}) as Record<string, { tier?: unknown }>;
-    for (const [id, row] of Object.entries(agents)) out[id] = String(row?.tier ?? '').toUpperCase();
+    return registeredFromRegistry((getRegistry()?.agents || {}) as Record<string, Record<string, unknown>>);
   } catch { /* registry unreadable: no parents to offer */ }
+  return out;
+}
+
+/** registry.json's agents -> {seat id: TIER}, leaving out earlier generations (the rows GET
+ *  /new/parents and POST /new both work from). */
+export function registeredFromRegistry(agents: Record<string, Record<string, unknown>>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [id, row] of Object.entries(agents || {})) {
+    if (isEarlierGeneration(row)) continue;
+    out[id] = String(row?.tier ?? '').toUpperCase();
+  }
   return out;
 }
 

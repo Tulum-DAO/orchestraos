@@ -1,5 +1,10 @@
 # Install — the minimum path
 
+> **Fast path for a fresh Ubuntu 24.04 server:** [docs/CLIENT_SETUP.md](CLIENT_SETUP.md) runs this
+> whole guide as one resumable line (`scripts/install-client.sh`), stopping only where you have to
+> sign in or approve the welcome card on your dashboard. This page stays the reference, and the way
+> through when that line cannot fix something.
+
 > **Never rented a server, made an ssh key, or used Terminal?** Start with
 > [docs/FROM_SCRATCH.md](FROM_SCRATCH.md). It takes you from your computer (Mac, Windows or Linux) to logged in on your own server
 > in about 20 minutes, then sends you back here to §0.
@@ -545,11 +550,10 @@ always write. A row without a `runtime` field (one you added by hand, or from an
 judged as Claude, as before; to fix one, add `"runtime": "codex"` (or `"gemini"`, `"claude"`) to it.
 `ROUTER_DECLARED_RUNTIME_DISABLED=1` (or an empty file `~/runtime/ROUTER_DECLARED_RUNTIME_DISABLED`)
 turns this off and judges every seat as Claude again; it exists only as an instant undo.
-One part stays off for Gemini/agy seats for now: if a router line is ever left sitting in an agy
-seat's composer, the router does not clear it (it never sends keys to an agy seat); it logs
-`CLEANUP skipped ... ROUTER_AGY_CLEANUP_ARMED` and the message is delivered again once a person
-clears the line. `ROUTER_AGY_CLEANUP_ARMED=1` (or an empty file `~/runtime/ROUTER_AGY_CLEANUP_ARMED`)
-turns that clearing on; Codex and Claude seats have it on already.
+If a router line is ever left sitting in a seat's composer, the router clears that one line (it is the
+only text it ever clears: a line starting with its own `[MSG from` marker) and delivers the message
+again. `ROUTER_AGY_CLEANUP_DISABLED=1` (or an empty file `~/runtime/ROUTER_AGY_CLEANUP_DISABLED`)
+turns that off for Gemini/agy seats; the line then stays until a person clears it.
 
 **Resuming a Codex seat.** `spawn-agent.sh <seat> --resume <session uuid>` starts `codex … resume <uuid>` in the seat's pane. The id is the one recorded for the seat (its rollout file is `~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<uuid>.jsonl`); a value that is not a UUID is refused, never passed on, since a bare `codex resume` opens a session picker.
 
