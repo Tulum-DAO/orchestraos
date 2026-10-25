@@ -57,6 +57,7 @@ import { principal } from './lib/principal.js';
 import { accessLog } from './lib/access-log.js';
 import { originDecision, publicOrigins } from './lib/cors-origin.js';
 import { wsOriginDecision } from './lib/ws-origin.js';
+import { isTerminalRelay } from './lib/terminal-relay-secret.js';
 import { capabilities } from './lib/capabilities.js';
 
 const app = express();
@@ -255,16 +256,14 @@ const wss = new WebSocketServer({ server, path: '/ws/terminal', verifyClient: (i
     dashboardHost: process.env.ORCHESTRA_DASHBOARD_HOST || loadConfig().dashboardHost,
     extraHosts: process.env.ORCHESTRA_DASHBOARD_ALLOWED_HOSTS || '',
   });
-  if (!d.allow) {
+  const gatewayRelay = isTerminalRelay(req);
+  if (!gatewayRelay && !d.allow) {
     console.warn(`[ws] refused /ws/terminal from origin ${req.headers.origin} (${d.reason})`);
     return false;
   }
-  // The gateway is the one trusted local relay for paired devices.  Its upstream
-  // socket is loopback-only and stamps the loopback Origin.  Every browser path
+  // The gateway is the one trusted local relay for paired devices and proves that
+  // role with a shared reference-held credential. Every browser path
   // additionally needs the signed dashboard session; Origin alone is never auth.
-  const peer = req.socket.remoteAddress || '';
-  const gatewayRelay = (peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1')
-    && req.headers.origin === 'http://127.0.0.1:8888';
   const browser = isAllowedOrigin(req.headers.origin, req.headers.host) && browserIsAuthenticated(req);
   if (!gatewayRelay && !browser) {
     console.warn(`[ws] refused /ws/terminal: authenticated session required (${req.headers.origin || 'no-origin'})`);
