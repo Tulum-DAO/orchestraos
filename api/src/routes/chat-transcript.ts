@@ -10,17 +10,23 @@
  * concurrently-maintained detector code. Mounted at /api/agents in server.ts.
  */
 import { Router, type Request, type Response } from 'express';
-import { readFileSync, existsSync, readdirSync, statSync, openSync, readSync, closeSync, readlinkSync } from 'fs';
-import { join } from 'path';
+import { readFileSync, existsSync, readdirSync, statSync, openSync, readSync, closeSync, realpathSync } from 'fs';
+import { join, basename, relative, sep } from 'path';
 import { isSafeAgentId } from '../lib/agentPaths.js';
-import { execFileSync } from 'child_process';
 import { LIVE_CARDS, mergeQueuedItems } from '../services/queued-merge.js';
+import { tagAudience, tagSynthetics } from '../lib/audience.js';
 import { homedir } from 'os';
 import Database from 'better-sqlite3';
 import { agentScopeParam } from '../lib/agent-scope.js';
 import { expandChipDodge } from '../lib/chipDodge.js';
-import { sessionOwners } from '../services/identity-store-reader.js';
+import { usageFromClaude, usageFromCodex, addUsage, type TokenUsage } from '../lib/tokenUsage.js';
+import { sessionOwners, predecessorOf } from '../services/identity-store-reader.js';
 import { dataDir } from '../lib/config.js';
+import { paneInfo, forgetPane, childPids, procArgv, liveGeminiSid } from '../lib/paneProbe.js';
+import { transcriptMarkdown, DEFAULT_LAST_TURNS } from '../lib/transcriptMarkdown.js';
+import { getRegistry } from '../services/state-reader.js';
+import { principal } from '../lib/principal.js';
+import { readGatewayToken } from '../lib/gateway-token.js';
 
 const router = Router();
 // Every /:id route on this router is scoped to the caller's principal — the same rule GET /
@@ -38,46 +44,18 @@ function loadAgentSessions(): Record<string, any> {
   catch { return {}; }
 }
 
-// Live Antigravity / Gemini conversation ID extracted directly from pane process fds
-function liveGeminiSid(tmuxSession: string): string | null {
-  try {
-    const panePid = execFileSync('tmux',
-      ['list-panes', '-t', tmuxSession, '-F', '#{pane_pid}'],
-      { timeout: 2000 }).toString().trim().split('\n')[0];
-    if (!panePid) return null;
-    let childPids: string[] = [];
-    try {
-      childPids = execFileSync('pgrep', ['-P', panePid], { timeout: 2000 })
-        .toString().trim().split('\n').filter(Boolean);
-    } catch {
-      return null;
-    }
-    for (const pid of childPids) {
-      try {
-        const fds = readdirSync(`/proc/${pid}/fd`);
-        for (const fd of fds) {
-          try {
-            const link = readlinkSync(`/proc/${pid}/fd/${fd}`);
-            const m = link.match(/antigravity-cli\/(?:presence|brain)\/([0-9a-f-]{36})/);
-            if (m && m[1]) return m[1];
-          } catch {}
-        }
-      } catch {}
-    }
-  } catch {}
-  return null;
-}
+// Live Antigravity / Gemini conversation id (pane child fds) and the pane id for the hook file both
+// come from lib/paneProbe.ts: one cached tmux call per session per 10 s, /proc instead of pgrep
+// (every transcript poll used to fork tmux + pgrep per seat).
 
 // Tier-0 sid resolution: the pane's hook-event file (state-event-hook.py writes
 // the LIVE session_id on every Stop/PreToolUse).
 function hookEventSid(tmuxSession: string): { sid: string | null; cwd: string | null } {
+  const { paneId } = paneInfo(tmuxSession);
+  if (!paneId) return { sid: null, cwd: null };
   try {
-    const pane = execFileSync('tmux',
-      ['display-message', '-t', tmuxSession, '-p', '#{pane_id}'],
-      { timeout: 3000 }).toString().trim().replace('%', '');
-    if (!pane) return { sid: null, cwd: null };
     const ev = JSON.parse(readFileSync(
-      join(ORCH_DIR, 'state', 'agent-events', 'panes', `${pane}.json`), 'utf-8'));
+      join(ORCH_DIR, 'state', 'agent-events', 'panes', `${paneId}.json`), 'utf-8'));
     const sid = typeof ev.session_id === 'string' && ev.session_id.length >= 36
       ? ev.session_id : null;
     return { sid, cwd: typeof ev.cwd === 'string' ? ev.cwd : null };
@@ -235,22 +213,14 @@ export function grokUpdatesPath(sid: string, root = grokSessionsRoot()): string 
   return existsSync(path) ? path : null;
 }
 
-function procArgv(pid: string): string[] {
-  try { return readFileSync(`/proc/${pid}/cmdline`).toString().split('\0').filter(Boolean); }
-  catch { return []; }
-}
-
 /** The pane's unique live grok process (pane shell or up to two levels below it), and the
  *  session UUID on its argv. Two grok processes, or none, -> null. */
 function liveGrokSid(tmuxSession: string): { running: boolean; sid: string | null } {
   try {
-    const panePid = execFileSync('tmux', ['list-panes', '-t', tmuxSession, '-F', '#{pane_pid}'],
-      { timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim().split('\n')[0];
+    // The cached pane (lib/paneProbe) and /proc children: no tmux or pgrep fork per poll.
+    const { panePid } = paneInfo(tmuxSession);
     if (!panePid) return { running: false, sid: null };
-    const kids = (pid: string): string[] => {
-      try { return execFileSync('pgrep', ['-P', pid], { timeout: 2000 }).toString().trim().split('\n').filter(Boolean); }
-      catch { return []; }
-    };
+    const kids = (pid: string): string[] => childPids(pid) ?? [];
     const isGrok = (pid: string) => GROK_BASENAMES.has((procArgv(pid)[0] || '').split('/').pop() || '');
     let hits = isGrok(panePid) ? [panePid] : kids(panePid).filter(isGrok);
     if (!hits.length) for (const k of kids(panePid)) hits = hits.concat(kids(k).filter(isGrok));
@@ -354,8 +324,39 @@ export function parseCodexRollout(lines: string[]): any[] {
   recs.sort((a, b) => a.ordinal - b.ordinal);
 
   const items: any[] = [];
+  // turn_context carries the model each turn ran on; assistant items take the latest one. A
+  // turn_context with no model makes it unknown again (absent), never the previous turn's.
+  let codexModel: string | undefined;
+  // token_count (event_msg) follows each model response: its last_token_usage goes on that
+  // response's last agent item. A repeat with the same running total (Codex re-sends it with rate
+  // limits) is not counted again. A call that drew nothing (encrypted reasoning only) carries its
+  // tokens to the next agent item, so a sum over items stays the true total.
+  let usedFrom = 0, lastTotal: number | undefined, carried: TokenUsage | undefined;
   for (const r of recs) {
-    if (r.type !== 'response_item') continue;     // event_msg/token_usage_record/world_state/turn_context = telemetry
+    if (r.type === 'event_msg' && r.payload?.type === 'token_count') {
+      const info = r.payload.info;
+      const total = info?.total_token_usage?.total_tokens;
+      const usage = usageFromCodex(info?.last_token_usage);
+      if (!usage || (typeof total === 'number' && total === lastTotal)) continue;
+      if (typeof total === 'number') lastTotal = total;
+      let at = -1;
+      for (let i = items.length - 1; i >= usedFrom; i--) if (items[i].role === 'assistant') { at = i; break; }
+      if (at >= 0) {
+        let u = addUsage(items[at].usage, usage);
+        if (carried) u = addUsage(u, carried);
+        items[at].usage = u;
+        carried = undefined;
+      } else carried = addUsage(carried, usage);
+      usedFrom = items.length;
+      continue;
+    }
+    if (r.type === 'turn_context') {
+      const m = r.payload?.model;
+      codexModel = typeof m === 'string' && m ? m : undefined;
+      continue;
+    }
+    if (r.type !== 'response_item') continue;     // event_msg/token_usage_record/world_state = telemetry
+    const before = items.length;
     const p = r.payload || {};
     const uuid = String(p.id || `${r.ordinal}`);
     switch (p.type) {
@@ -412,6 +413,13 @@ export function parseCodexRollout(lines: string[]): any[] {
       }
       default: break;                              // compacted/unknown: not conversation
     }
+    if (codexModel) for (let i = before; i < items.length; i++) if (items[i].role === 'assistant') items[i].model = codexModel;
+    // Tokens carried from a call that drew nothing go on the next agent item as soon as it exists
+    // (its own count, if one follows, adds to them), so they never wait on a count that may not come.
+    if (carried) {
+      const i = items.findIndex((it, k) => k >= before && it.role === 'assistant');
+      if (i >= 0) { items[i].usage = addUsage(items[i].usage, carried); carried = undefined; }
+    }
   }
   return items;
 }
@@ -460,11 +468,16 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
     return { path, sid };
   }
 
-  // 0a. Live Gemini/Antigravity process check (inspect active process in tmux pane)
-  const gSid = liveGeminiSid(tmuxSession);
+  // 0a. Live Gemini/Antigravity process check (inspect active process in tmux pane). Only a seat
+  // that can be Gemini pays for it: a Gemini seat as step 6 defines one (runtime gemini/agy, or a
+  // gemini-/agy- name), or a seat whose records name no runtime.
+  const runtime = String(e.runtime || '').toLowerCase();
+  const geminiSeat = runtime === 'gemini' || runtime === 'agy' || agentId.startsWith('gemini') || agentId.startsWith('agy');
+  const gSid = !runtime || geminiSeat ? liveGeminiSid(tmuxSession) : null;
   if (gSid) {
     const gPath = join(GEMINI_BRAIN, gSid, '.system_generated', 'logs', 'transcript.jsonl');
     if (existsSync(gPath)) return { path: gPath, sid: gSid };
+    forgetPane(tmuxSession);
   }
 
   // 0c. Codex: the seat's own declaration in ~/.codex/state_5.sqlite. Checked before the Claude
@@ -527,8 +540,7 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
 
   // 6. A Gemini/Antigravity seat (by its recorded runtime, or a gemini-/agy- name): search the
   //    Antigravity brains by declaration
-  const runtime = String(e.runtime || '').toLowerCase();
-  if (runtime === 'gemini' || runtime === 'agy' || agentId.startsWith('gemini') || agentId.startsWith('agy')) {
+  if (geminiSeat) {
     const gHit = findGeminiByDeclaration(agentId);
     if (gHit) return gHit;
   }
@@ -580,6 +592,129 @@ export function resolveTranscriptPath(agentId: string): { path: string | null; s
   }
 
   return { path: null, sid };
+}
+
+/** The stitched chat (ios-watch-dev msg_41c00a45, Shaw-approved): what the poll route puts above a
+ *  seat's current conversation, so a rotation keeps the thread. Only when `sid` is the current head
+ *  of `agentId`'s lineage and the generation it took over from has a file this box can read:
+ *  Claude by the lineage's project dir (else the row's conversation_path), Codex by its thread's
+ *  rollout, Gemini by its brain log; a path a row names only when it is that session's own file
+ *  (ownFile). Anything else: null, and the chat is the current file alone. */
+export interface PreviousTranscript { path: string; antigravity: boolean; divider: Record<string, unknown> }
+
+const SESSION_ID = /^[0-9A-Za-z][0-9A-Za-z_-]{0,127}$/;   // a DB value going into a path: no separators
+const CODEX_SESSIONS = join(HOME, '.codex', 'sessions');
+
+/** Every candidate file is used only when, symlinks resolved, it is that session's OWN file under
+ *  its runtime's own directory (`isOwn` sees the path relative to it), so a wrong or hostile row, or
+ *  a link planted where the file should be, cannot hand this public route another seat's
+ *  conversation, or any other file. */
+function ownFile(p: string | null, root: string, isOwn: (rel: string) => boolean): string | null {
+  if (!p) return null;
+  try {
+    const real = realpathSync(p);
+    const base = realpathSync(root);
+    return real.startsWith(base + sep) && isOwn(relative(base, real)) ? real : null;
+  } catch {
+    return null;
+  }
+}
+
+function codexRolloutFor(sid: string, dbPath = CODEX_STATE_DB): string | null {
+  if (!existsSync(dbPath)) return null;
+  let db: any = null;
+  try {
+    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    const r = db.prepare('SELECT rollout_path FROM threads WHERE id = ?').get(sid) as { rollout_path?: string } | undefined;
+    return r && typeof r.rollout_path === 'string' && r.rollout_path ? r.rollout_path : null;
+  } catch {
+    return null;
+  } finally {
+    try { db?.close(); } catch {}
+  }
+}
+
+/** `<projects>/<any dir>/<sid>.jsonl`, the session's own file (ownFile), newest first if a copy
+ *  sits in more than one project dir. */
+let projectScans = 0;
+/** How many any-project-dir scans ran (tests: the poll path must not scan when it never reads). */
+export function claudeProjectScans(): number { return projectScans; }
+
+function claudeFileAnywhere(sid: string, isOwn: (rel: string) => boolean): string | null {
+  projectScans += 1;
+  let dirs: string[];
+  try { dirs = readdirSync(CLAUDE_PROJECTS); } catch { return null; }
+  const hits: { p: string; m: number }[] = [];
+  for (const d of dirs) {
+    const own = ownFile(join(CLAUDE_PROJECTS, d, `${sid}.jsonl`), CLAUDE_PROJECTS, isOwn);
+    if (own) { try { hits.push({ p: own, m: statSync(own).mtimeMs }); } catch { /* gone */ } }
+  }
+  hits.sort((a, b) => b.m - a.m);
+  return hits.length ? hits[0].p : null;
+}
+
+interface Predecessor { p: NonNullable<ReturnType<typeof predecessorOf>>; divider: Record<string, unknown> }
+
+/** The cheap half (one registry read): whether `sid` took over from a generation of this agent's
+ *  lineage, and the divider for it. No file is looked for here. */
+function predecessorFor(agentId: string, sid: string | null): Predecessor | null {
+  if (!sid) return null;
+  const p = predecessorOf(sid);
+  if (!p || lineageOf(p.root) !== lineageOf(agentId) || !SESSION_ID.test(p.from_session)) return null;
+  return {
+    p,
+    divider: {
+      kind: 'rotation', role: 'system', uuid: `rot:${sid}`, ts: p.promoted_at,
+      from_generation: p.from_generation, to_generation: p.to_generation,
+      from_session: p.from_session, to_session: sid,
+    },
+  };
+}
+
+/** The predecessor's own log file, or null. */
+function previousFilePath({ p }: Predecessor): string | null {
+  const from = p.from_session;
+  const claudeOwn = (rel: string) => basename(rel) === `${from}.jsonl`;
+  const geminiLog = join(from, '.system_generated', 'logs', 'transcript.jsonl');
+  // Tried in order, each only when the ones before found nothing (the directory scan is the last
+  // Claude resort): the lineage's project dir, the path the row names, then ANY project dir (a
+  // generation may have run in another directory than the lineage's, and its row may name no
+  // path), then Codex's rollout and Gemini's brain log.
+  const candidates: (() => string | null)[] = [
+    () => p.cwd ? ownFile(join(CLAUDE_PROJECTS, String(p.cwd).replace(/[/.]/g, '-'), `${from}.jsonl`), CLAUDE_PROJECTS, claudeOwn) : null,
+    () => ownFile(p.conversation_path, CLAUDE_PROJECTS, claudeOwn),
+    () => claudeFileAnywhere(from, claudeOwn),
+    () => ownFile(codexRolloutFor(from), CODEX_SESSIONS, (rel) => /^rollout-.*\.jsonl$/.test(basename(rel)) && basename(rel).endsWith(`-${from}.jsonl`)),
+    () => ownFile(join(GEMINI_BRAIN, geminiLog), GEMINI_BRAIN, (rel) => rel === geminiLog),
+  ];
+  for (const c of candidates) { const path = c(); if (path) return path; }
+  return null;
+}
+
+export function resolvePreviousTranscript(agentId: string, sid: string | null): PreviousTranscript | null {
+  const pred = predecessorFor(agentId, sid);
+  const path = pred ? previousFilePath(pred) : null;
+  return pred && path ? { path, antigravity: path.includes('antigravity-cli'), divider: pred.divider } : null;
+}
+
+/** The route's form: the divider now, the file only when normalizeTranscript actually reads the
+ *  previous log (the current one alone does not fill the window). A poll whose current log fills
+ *  the window never looks for the previous file at all (codex R1 on #473). */
+export function lazyPreviousTranscript(agentId: string, sid: string | null, currentPath: string):
+    { lines: () => string[]; antigravity: boolean; divider: Record<string, unknown> } | null {
+  const pred = predecessorFor(agentId, sid);
+  if (!pred) return null;
+  let found: string | null | undefined;
+  const file = () => {
+    if (found === undefined) found = previousFilePath(pred);
+    if (!found || found === currentPath) throw new Error('no previous log');   // caller: this log alone
+    return found;
+  };
+  return {
+    divider: pred.divider,
+    lines: () => readFileSync(file(), 'utf-8').split('\n'),
+    get antigravity() { return file().includes('antigravity-cli'); },
+  };
 }
 
 function cleanArgs(args: any): Record<string, unknown> {
@@ -777,9 +912,15 @@ function normalizeClaudeEntry(o: any): any[] {
   const uuid = o.uuid;
   const content = msg.content;
   const items: any[] = [];
+  // Which model wrote this assistant entry (Claude Code records it on every one; "<synthetic>" is
+  // its own placeholder for harness-made turns, not a model). Clients draw "Model changed" where it
+  // changes. Additive: absent = unknown.
+  const model = role === 'assistant' && typeof msg.model === 'string' && msg.model && msg.model !== '<synthetic>'
+    ? msg.model : undefined;
+  const stamp = (it: any) => { if (model && it.role === 'assistant') it.model = model; return it; };
   if (typeof content === 'string') {
     const text = role === 'user' ? sanitizeClaudeUserText(content) : content;
-    if (text) items.push({ kind: 'text', role, text, ts, uuid });
+    if (text) items.push(stamp({ kind: 'text', role, text, ts, uuid }));
     return items;
   }
   for (const b of content || []) {
@@ -787,14 +928,14 @@ function normalizeClaudeEntry(o: any): any[] {
     switch (b.type) {
       case 'text': {
         const text = role === 'user' ? sanitizeClaudeUserText(b.text || '') : (b.text || '');
-        if (text) items.push({ kind: 'text', role, text, ts, uuid });
+        if (text) items.push(stamp({ kind: 'text', role, text, ts, uuid }));
         break;
       }
       case 'thinking':
-        items.push({ kind: 'thinking', role, text: b.thinking || '', ts, uuid });
+        items.push(stamp({ kind: 'thinking', role, text: b.thinking || '', ts, uuid }));
         break;
       case 'tool_use':
-        items.push({ kind: 'tool_use', role: 'assistant', tool: b.name || '', input: b.input || {}, id: b.id, ts, uuid });
+        items.push(stamp({ kind: 'tool_use', role: 'assistant', tool: b.name || '', input: b.input || {}, id: b.id, ts, uuid }));
         break;
       case 'tool_result': {
         let c = b.content;
@@ -1035,6 +1176,8 @@ function enrichItems(items: any[]): any[] {
       if (truncated) out.input_full = inputFullText(input);
       // Same reason as withTs(): an own `ts` holding undefined is not an absent `ts`.
       out.id = it.id; out.uuid = it.uuid;
+      if (it.model) out.model = it.model;      // the model that made the call (additive)
+      if (it.usage) out.usage = it.usage;      // tokens its reply spent, OTel terms (additive)
       withTs(out, it.ts);
       return out;
     }
@@ -1052,6 +1195,13 @@ function enrichItems(items: any[]): any[] {
 // Server-side pairing (schema render_items[]): tool_result attached under its
 // tool_use, empties dropped, order preserved. Replaces the duplicated web
 // buildRenderList() / iOS buildRows() logic — clients do node -> view only.
+/** audience/exchange ride along onto the render node built from an item. */
+function withAudience(node: any, it: any): any {
+  if (it?.audience !== undefined) node.audience = it.audience;
+  if (it?.exchange !== undefined) node.exchange = it.exchange;
+  return node;
+}
+
 export function buildRenderItems(items: any[]): any[] {
   const resultById = new Map<string, { text: string; is_error: boolean }>();
   for (const it of items) {
@@ -1074,12 +1224,12 @@ export function buildRenderItems(items: any[]): any[] {
         if (it.queued) node.queued = true;
         if (it.ts !== undefined) node.ts = it.ts;
         node.key = key;
-        nodes.push(node);
+        nodes.push(withAudience(node, it));
       } else {
         const node: any = { kind: 'assistant', text };
         if (it.ts !== undefined) node.ts = it.ts;
         node.key = key;
-        nodes.push(node);
+        nodes.push(withAudience(node, it));
       }
       continue;
     }
@@ -1089,7 +1239,18 @@ export function buildRenderItems(items: any[]): any[] {
       const node: any = { kind: 'thinking', text };
       if (it.ts !== undefined) node.ts = it.ts;
       node.key = key;
-      nodes.push(node);
+      nodes.push(withAudience(node, it));
+      continue;
+    }
+    if (it.kind === 'rotation') {
+      // The stitched chat's divider: drawn like a date line between two generations.
+      const node: any = {
+        kind: 'rotation', from_generation: it.from_generation, to_generation: it.to_generation,
+        from_session: it.from_session, to_session: it.to_session,
+      };
+      if (it.ts !== undefined) node.ts = it.ts;
+      node.key = it.uuid || key;
+      nodes.push(withAudience(node, it));
       continue;
     }
     if (it.kind === 'queued_batch') {
@@ -1097,7 +1258,7 @@ export function buildRenderItems(items: any[]): any[] {
       const node: any = { kind: 'queued_batch', count: it.count ?? (Array.isArray(it.entries) ? it.entries.length : 0), entries: it.entries || [] };
       if (it.ts !== undefined) node.ts = it.ts;
       node.key = it.key || key;
-      nodes.push(node);
+      nodes.push(withAudience(node, it));
       continue;
     }
     if (it.kind === 'tool_use') {
@@ -1107,7 +1268,7 @@ export function buildRenderItems(items: any[]): any[] {
       if (paired) { node.result = paired.text; node.is_error = paired.is_error; }
       if (it.ts !== undefined) node.ts = it.ts;
       node.key = key;
-      nodes.push(node);
+      nodes.push(withAudience(node, it));
     }
   }
   return nodes;
@@ -1264,16 +1425,9 @@ export function parseGrokUpdates(lines: string[]): any[] {
   return items;
 }
 
-// Pure v2 envelope builder — the seam the conformance fixtures exercise.
-// Detection mirrors the route: 'antigravity-cli' path hint OR content sniff.
-export function normalizeTranscript(
-  lines: string[],
-  agentId: string,
-  sessionId: string | null,
-  limit = 150,
-  antigravityHint = false,
-  includeQueued = false,
-): { agent_id: string; session_id: string | null; grammar_version: number; items: any[]; render_items: any[] } {
+// One log's items: parsed by the grammar its lines show, whole-file passes applied, then tagged
+// (audience/exchange) on the WHOLE log.
+function logItems(lines: string[], antigravityHint: boolean): any[] {
   const isAntigravity = antigravityHint ||
     lines.some((l) => {
       try {
@@ -1293,17 +1447,65 @@ export function normalizeTranscript(
     // passes is how the two lanes drift apart.
     items = parseCodexRollout(lines);
   } else {
+    // Claude Code writes each block of one API reply as its own line, every line repeating the
+    // reply's usage: it goes ONCE per reply (message.id), on the reply's first drawn item. First,
+    // not last: the SSE tailer only appends, and an item already sent never moves its usage.
+    const counted = new Set<string>();
+    // A reply none of whose lines drew anything carries its tokens to the next reply's first item.
+    let waiting: { id: string; usage: TokenUsage } | undefined, carried: TokenUsage | undefined;
     for (const line of lines) {
       if (!line.trim()) continue;
-      try { items.push(...normalizeClaudeEntry(JSON.parse(line))); } catch { /* skip bad line */ }
+      try {
+        const o = JSON.parse(line);
+        const got = normalizeClaudeEntry(o);
+        const msg = o?.message;
+        const id = o?.type === 'assistant' && typeof msg?.id === 'string' ? msg.id : '';
+        const first = got.find((it) => it.role === 'assistant');
+        // A new assistant line from another reply ends the waiting reply: its tokens are carried.
+        if (waiting && o?.type === 'assistant' && waiting.id !== id) { carried = addUsage(carried, waiting.usage); waiting = undefined; }
+        const usage = id && !counted.has(id) ? usageFromClaude(msg.usage) : undefined;
+        if (first && (usage || carried)) {
+          first.usage = usage ? addUsage(carried, usage) : carried;
+          carried = undefined;
+          if (usage) { counted.add(id); waiting = undefined; }
+        } else if (usage) waiting = { id, usage };
+        items.push(...got);
+      } catch { /* skip bad line */ }
     }
     // Whole-file pass: a queued message the log later recorded as a real user turn must
     // show ONCE, and the real turn is the one that wins.
     items = dedupeQueuedCommands(items);
   }
-  let windowed = enrichItems(items).slice(-limit);
+  // audience/exchange (the chat fold): tagged on the WHOLE log, so a turn whose opener falls
+  // outside the window keeps its tags.
+  return tagAudience(enrichItems(items));
+}
+
+// Pure v2 envelope builder — the seam the conformance fixtures exercise.
+// Detection mirrors the route: 'antigravity-cli' path hint OR content sniff.
+export function normalizeTranscript(
+  lines: string[],
+  agentId: string,
+  sessionId: string | null,
+  limit = 150,
+  antigravityHint = false,
+  includeQueued = false,
+  previous: { lines: () => string[]; antigravity: boolean; divider: Record<string, unknown> } | null = null,
+): { agent_id: string; session_id: string | null; grammar_version: number; items: any[]; render_items: any[] } {
+  let all = logItems(lines, antigravityHint);
+  // The stitched chat: after a rotation, the previous generation's tail, ONE divider, then this
+  // generation, with `limit` across the joined list. Each log is parsed and tagged on its own (its
+  // own spawn brief, its own exchanges); the divider is drawn in the conversation, never inside a
+  // strip. The previous log is read only when this one alone does not fill the window.
+  if (previous && all.length < limit) {
+    let before: any[] | null = null;
+    try { before = logItems(previous.lines(), previous.antigravity); } catch { before = null; }  // unreadable: this log alone
+    if (before) all = [...before, { ...previous.divider, audience: 'user' }, ...all];
+  }
+  let windowed = all.slice(-limit);
   // queued-native-render (P1): merge still-pending phone/watch held turns (B1) +
-  // processed-batch divs (B2) from msg_store, interleaved by ts. POLL-ONLY —
+  // processed-batch divs (B2) from msg_store, at their delivery positions (never by ts:
+  // the log's own order is the delivery order). POLL-ONLY —
   // the SSE tailer never sets includeQueued, so its monotonic-append delta stays
   // free of the ephemeral B1 synthetics (§3e/A1). Fail-open inside mergeQueuedItems.
   if (includeQueued) {
@@ -1312,7 +1514,7 @@ export function normalizeTranscript(
     // The batch wins: it knows who sent it.
     windowed = dropQueuedCommandsCoveredByBatches(windowed);
   }
-  windowed = settleIngestedQueuedCommands(windowed);
+  windowed = tagSynthetics(settleIngestedQueuedCommands(windowed));
   return {
     agent_id: agentId,
     session_id: sessionId,
@@ -1351,9 +1553,51 @@ router.get('/:id/transcript', (req: Request, res: Response) => {
     // misclassifying their Claude JSONL as Antigravity and yielding 0 items.
     // Real Gemini brain logs always live under .gemini/antigravity-cli/brain/,
     // so 'antigravity-cli' + the content sniff in normalizeTranscript cover them.
-    res.json(normalizeTranscript(lines, agentId, sid, limit, path.includes('antigravity-cli'), true));
+    // The stitched chat: the generation this one took over from, above it. Fail-open: anything
+    // wrong with the previous file and the chat is this file alone, as before.
+    let previous: { lines: () => string[]; antigravity: boolean; divider: Record<string, unknown> } | null = null;
+    try { previous = lazyPreviousTranscript(agentId, sid, path); } catch { previous = null; }
+    res.json(normalizeTranscript(lines, agentId, sid, limit, path.includes('antigravity-cli'), true, previous));
   } catch (err) {
     res.json({ agent_id: agentId, session_id: sid, grammar_version: GRAMMAR_VERSION, items: [], render_items: [], error: String(err) });
+  }
+});
+
+// GET /api/agents/:id/transcript.md?last=<turns>&tools=full -> the conversation as a Markdown file
+// (lib/transcriptMarkdown.ts): turns with times, tool calls one line each, thinking never, every
+// piece through the secret redactor. Same agent-scope check as /transcript (router.param above).
+router.get('/:id/transcript.md', (req: Request, res: Response) => {
+  const agentId = String(req.params.id);
+  const last = Math.max(1, Math.min(parseInt(String(req.query.last)) || DEFAULT_LAST_TURNS, 500));
+  const tools = req.query.tools === 'full' ? 'full' : 'summary';
+  let path: string | null = null;
+  let sid: string | null = null;
+  try {
+    ({ path, sid } = resolveTranscriptPath(agentId));
+  } catch {
+    path = null;
+  }
+  if (!path) { res.status(404).type('text/plain').send('No conversation found for this agent.'); return; }
+  try {
+    const lines = readFileSync(path, 'utf-8').split('\n');
+    const { items } = normalizeTranscript(lines, agentId, sid, 2000, path.includes('antigravity-cli'), true);
+    const reg = (getRegistry() as any)?.agents?.[agentId];
+    const { markdown } = transcriptMarkdown(items as any[], {
+      agent: agentId,
+      model: typeof reg?.model === 'string' ? reg.model : null,
+      exportedBy: principal(req)?.username ?? null,
+      lastTurns: last,
+      tools,
+      exactSecrets: [readGatewayToken()].filter(Boolean),
+    });
+    const day = new Date().toISOString().slice(0, 10);
+    const file = `${agentId.replace(/[^A-Za-z0-9._-]/g, '_')}-${day}.md`;
+    res.status(200).type('text/markdown; charset=utf-8')
+      .set('Content-Disposition', `attachment; filename="${file}"`)
+      .set('Cache-Control', 'no-store')
+      .send(markdown);
+  } catch (err) {
+    res.status(500).type('text/plain').send(`Could not export: ${String(err).slice(0, 200)}`);
   }
 });
 

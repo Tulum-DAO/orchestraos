@@ -411,7 +411,10 @@ seat's terminal.
 ### Optional: Grok Build seats
 
 Grok is a fourth runtime. Install it with `curl -fsSL https://x.ai/cli/install.sh | bash`
-(no sudo; it links `grok` into `~/.local/bin`), then sign in with `grok login --device-auth`
+(no sudo). The installer puts `grok` in `~/.grok/bin` and links it into `~/.local/bin` only on
+some systems; `orchestra init` (and `orchestra upgrade`) adds that link when nothing else provides
+`grok`, the service's PATH includes `~/.grok/bin`, and `orchestra doctor` warns (`cli:grok-path`)
+if `grok` is still not on PATH. Then sign in with `grok login --device-auth`
 and follow the link + code from any browser. The dashboard's **Connect Grok** sheet runs the
 same two steps and checks sign-in with `grok models`. Keep `"grok"` in `[runtimes] enabled`
 in `orchestra.toml`, then pick Grok in **New Agent** (or `orchestra agent --runtime grok`).
@@ -546,6 +549,8 @@ If a router line is ever left sitting in a seat's composer, the router clears th
 only text it ever clears: a line starting with its own `[MSG from` marker) and delivers the message
 again. `ROUTER_AGY_CLEANUP_DISABLED=1` (or an empty file `~/runtime/ROUTER_AGY_CLEANUP_DISABLED`)
 turns that off for Gemini/agy seats; the line then stays until a person clears it.
+
+**Resuming a Codex seat.** `spawn-agent.sh <seat> --resume <session uuid>` starts `codex … resume <uuid>` in the seat's pane. The id is the one recorded for the seat (its rollout file is `~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<uuid>.jsonl`); a value that is not a UUID is refused, never passed on, since a bare `codex resume` opens a session picker.
 
 **Your timezone (recommended).** Agents show times in UTC unless you tell them where you are.
 In `orchestra.toml`, under `[operator]`, set `timezone` to your IANA zone name, for example
@@ -967,7 +972,11 @@ The three seats appear in the dashboard's Agents list in your browser within abo
 
 One seat at a time, later: `orchestra spawn <seat>` registers and launches a single seat.
 Options: `--runtime claude|gemini|codex` (default: first of `[runtimes] enabled`), `--model`,
-`--tier`, `--prompt path/relative/to/checkout`. An existing registry row is kept as-is.
+`--tier`, `--prompt path/relative/to/checkout`. An existing registry row is kept as-is, so a
+`--runtime` that differs from the seat's stored runtime is refused rather than ignored. To move a
+seat to another runtime, retire it first: `orchestra retire <seat>` removes its row and stops its
+tmux session, and keeps its session id and transcript (it asks first; `--yes` skips the question,
+`--reason` is recorded). Then `orchestra spawn <seat> --runtime <runtime>` starts it fresh.
 
 Mail a seat and watch it act with no keypress (the shipped hooks + the router beat under
 `orchestra up`; see docs/HOOKS.md):

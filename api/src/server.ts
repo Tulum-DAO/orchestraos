@@ -17,6 +17,8 @@ import systemRouter from './routes/system.js';
 import memoryRouter from './routes/memory.js';
 import roadmapsRouter from './routes/roadmaps.js';
 import voiceRouter from './routes/voice.js';
+import awayRouter from './routes/away.js';
+import usageRouter from './routes/usage.js';
 import arturoRouter from './routes/arturo.js';
 import agentsNewRouter from './routes/agents-new.js';
 import approvalsRouter from './routes/approvals.js';
@@ -49,7 +51,7 @@ import chatHistoryRouter from './routes/chat-history.js';
 import { initActivityStream } from './services/activity-stream.js';
 import { initStatusStream, addStatusSSEClient } from './services/status-stream.js';
 import { setupTerminalWebSocket } from './routes/terminal.js';
-import { setupVoiceLiveWebSocket } from './routes/voice-live.js';
+import { browserIsAuthenticated, isAllowedOrigin, setupVoiceLiveWebSocket } from './routes/voice-live.js';
 import { loadConfig } from './lib/config.js';
 import { principal } from './lib/principal.js';
 import { accessLog } from './lib/access-log.js';
@@ -188,6 +190,8 @@ app.use('/api/system', systemRouter);
 app.use('/api/memory', memoryRouter);
 app.use('/api/roadmaps', roadmapsRouter);
 app.use('/api/voice', voiceRouter);
+app.use('/api', awayRouter); // /api/away + /api/presence (RFC 0002, the away card)
+app.use('/api', usageRouter); // /api/usage: plan usage per provider (admin only)
 app.use('/api/arturo', arturoRouter);
 app.use('/api/approvals', approvalsRouter);
 app.use('/api/analytics', analyticsRouter);
@@ -251,8 +255,22 @@ const wss = new WebSocketServer({ server, path: '/ws/terminal', verifyClient: (i
     dashboardHost: process.env.ORCHESTRA_DASHBOARD_HOST || loadConfig().dashboardHost,
     extraHosts: process.env.ORCHESTRA_DASHBOARD_ALLOWED_HOSTS || '',
   });
-  if (!d.allow) console.warn(`[ws] refused /ws/terminal from origin ${req.headers.origin} (${d.reason})`);
-  return d.allow;
+  if (!d.allow) {
+    console.warn(`[ws] refused /ws/terminal from origin ${req.headers.origin} (${d.reason})`);
+    return false;
+  }
+  // The gateway is the one trusted local relay for paired devices.  Its upstream
+  // socket is loopback-only and stamps the loopback Origin.  Every browser path
+  // additionally needs the signed dashboard session; Origin alone is never auth.
+  const peer = req.socket.remoteAddress || '';
+  const gatewayRelay = (peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1')
+    && req.headers.origin === 'http://127.0.0.1:8888';
+  const browser = isAllowedOrigin(req.headers.origin, req.headers.host) && browserIsAuthenticated(req);
+  if (!gatewayRelay && !browser) {
+    console.warn(`[ws] refused /ws/terminal: authenticated session required (${req.headers.origin || 'no-origin'})`);
+    return false;
+  }
+  return true;
 } });
 setupTerminalWebSocket(wss);
 setupVoiceLiveWebSocket(server);

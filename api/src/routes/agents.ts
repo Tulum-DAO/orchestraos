@@ -23,6 +23,7 @@ import { resolveSpecialKey } from '../lib/special-keys.js';
 import { actingAgent, principal } from '../lib/principal.js';
 import { agentScopeParam, canPrincipalSeeAgent } from '../lib/agent-scope.js';
 import { CODE_ROOT } from '../lib/codeRoot.js';
+import { gatewayUrl } from '../lib/gateway-url.js';
 
 function macSshTarget(): string {
   const cfg = loadConfig();
@@ -597,7 +598,7 @@ function captureTmux(session: string, machine: string, lines: number = 50): stri
 // send-keys remains ONLY for Mac agents the local gateway can't reach.
 // #85 reader: WATCH_GATEWAY_TOKEN_FILE (what `orchestra init` exports) first, the legacy
 // ~/.config/jarvis path only as a fallback. A fresh install has no ~/.config/jarvis at all.
-const GATEWAY_URL = process.env.WATCH_GATEWAY_URL || 'http://127.0.0.1:9091';
+const GATEWAY_URL = gatewayUrl();  // #84 class: env, then [gateway] in orchestra.toml
 
 async function gatewayInject(session: string, text: string, force: boolean):
     Promise<{ delivered: boolean; busy?: boolean; reason?: string; state?: string; activity?: string }> {
@@ -605,7 +606,9 @@ async function gatewayInject(session: string, text: string, force: boolean):
   if (!token) throw new Error('gateway token unavailable');
   const resp = await fetch(`${GATEWAY_URL}/agent-message`, {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json',
+      // A person typed this (the dashboard terminal): the gateway counts it as the operator's.
+      'X-Actor': 'operator:web' },
     body: JSON.stringify({ session, text, force }),
     signal: AbortSignal.timeout(25000),
   });

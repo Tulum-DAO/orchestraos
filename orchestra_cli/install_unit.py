@@ -129,7 +129,7 @@ def build_path(raw: str, home: str, npm_bin: Optional[str] = None,
     the unit would fail to launch its agent. Order: the installing user's PATH (empty, relative and
     duplicate entries dropped, and the three system dirs held back for the end), then
     $HOME/.local/bin (always, even before it exists: the native Claude Code installer creates it
-    later), ~/.bun/bin and the npm global bin when they exist, then /usr/local/bin:/usr/bin:/bin.
+    later), ~/.bun/bin, ~/.grok/bin and the npm global bin when they exist, then /usr/local/bin:/usr/bin:/bin.
     A per-user CLI therefore wins over a stale system copy of the same name."""
     seen, out = set(), []
 
@@ -145,6 +145,9 @@ def build_path(raw: str, home: str, npm_bin: Optional[str] = None,
     bun = os.path.join(home, ".bun", "bin")
     if exists(bun):
         add(bun)
+    grok = os.path.join(home, ".grok", "bin")       # the Grok installer's own dir (not always linked)
+    if exists(grok):
+        add(grok)
     if npm_bin and npm_bin not in SYSTEM_PATH and exists(npm_bin):   # prefix /usr -> /usr/bin: keep it last
         add(npm_bin)
     for p in SYSTEM_PATH:

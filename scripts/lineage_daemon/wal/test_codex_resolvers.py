@@ -20,7 +20,7 @@ def _write_rollout(home, seat, sid=_SID, task_starts=1, declare=True):
     os.makedirs(d, exist_ok=True)
     p = os.path.join(d, f"rollout-2026-09-14T22-58-11-{sid}.jsonl")
     lines = [
-        {"type": "session_meta", "payload": {"session_id": sid, "cwd": "/x"}},
+        {"type": "session_meta", "payload": {"session_id": sid, "cwd": "/x", "thread_source": "user"}},
         {"type": "response_item", "payload": {"type": "message", "role": "developer",
          "content": [{"type": "input_text", "text": "You are `/root`, the primary agent"}]}},
         # codex injects an environment_context USER message BEFORE identity:

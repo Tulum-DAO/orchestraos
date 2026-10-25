@@ -31,6 +31,8 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/orchestra-env.sh
 source "$SCRIPT_DIR/scripts/orchestra-env.sh"
+# shellcheck source=scripts/seat_nice.sh
+source "$SCRIPT_DIR/scripts/seat_nice.sh"     # seats run below the services' CPU priority
 # REGISTRY defaults to the checkout's registry.json; env-overridable so the
 # §4.2 dispatch path can be exercised against a scratch/fake registry without
 # a real spawn (the R3 real-artifact gate). Production sets no REGISTRY env.
@@ -64,10 +66,13 @@ vlog() { [[ "${ORCHESTRA_SPAWN_VERBOSE:-}" == "1" ]] && echo -e "${CYAN}[spawn]$
 CLAUDE_BIN="${ORCHESTRA_CLAUDE_BIN:-}"
 [[ -x "$CLAUDE_BIN" ]] || CLAUDE_BIN="$(command -v claude || echo claude)"
 
-# Grok Build binary. Its installer puts the launcher in ~/.local/bin, which cron/systemd PATHs
-# often do not carry, so that location is tried first; ORCHESTRA_GROK_BIN pins an exact path.
+# Grok Build binary. Its installer puts the launcher in ~/.grok/bin and links it into ~/.local/bin
+# only on some systems; cron/systemd PATHs often carry neither. So: ORCHESTRA_GROK_BIN (an exact
+# path), ~/.local/bin/grok, PATH, then the installer's own ~/.grok/bin/grok (`orchestra init` links
+# that into ~/.local/bin when nothing else provides grok).
 GROK_BIN="${ORCHESTRA_GROK_BIN:-$HOME/.local/bin/grok}"
-[[ -x "$GROK_BIN" ]] || GROK_BIN="$(command -v grok 2>/dev/null || echo grok)"
+[[ -x "$GROK_BIN" ]] || GROK_BIN="$(command -v grok 2>/dev/null || true)"
+[[ -n "$GROK_BIN" ]] || { [[ -x "$HOME/.grok/bin/grok" ]] && GROK_BIN="$HOME/.grok/bin/grok" || GROK_BIN="grok"; }
 
 # --- Runtime dispatch (spec §4.2 all-model-parity): binary + ready-signature
 # chosen BY the registry `runtime` field, consuming the ONE signature source
@@ -158,6 +163,33 @@ build_grok_launch_cmd() {
     [[ -n "$model" && "$model" == grok* ]] && cmd+=" -m $(printf %q "$model")"
     [[ -n "$boot" ]] && cmd+=" $(printf %q "$boot")"
     printf '%s\n' "$cmd"
+}
+
+# Pure: prints the codex `resume <uuid>` argument for a pinned resume. `codex resume` with no
+# session id opens an interactive PICKER (codex-cli 0.153.4), and `--last` takes whatever session
+# is newest, so a seat is only ever resumed by its exact UUID. Refuses (rc 2) anything else.
+# Global flags (--yolo, -c, --model) go BEFORE the subcommand; codex parses them there.
+build_codex_resume_args() {
+    local sid="${1:-}"
+    [[ "$sid" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || return 2
+    printf 'resume %s\n' "$sid"
+}
+
+# Pure: prints the codex-specific TAIL of the launch line: "[--model m] [resume <uuid>]". The
+# branch APPENDS it to the launch_cmd that spawn_agent has already built (binary, bypass flags, the
+# bg green marker, the ORCHESTRA_DIR/data prefix, the installer-session scrub); rebuilding the line
+# in the branch dropped those prefixes (orchestraos-builder, #430 r3/r4). With a sid the tail ENDS
+# in `resume <uuid>`; a non-UUID sid is refused (rc 2) and nothing is printed.
+build_codex_launch_tail() {
+    local model="${1:-}" sid="${2:-}"
+    local tail=""
+    [[ -n "$model" ]] && tail="--model $model"
+    if [[ -n "$sid" ]]; then
+        local args
+        args="$(build_codex_resume_args "$sid")" || return 2
+        tail="${tail:+$tail }$args"
+    fi
+    printf '%s\n' "$tail"
 }
 
 # Claude/Cursor compatibility OFF for a grok seat, per launch (env only: the user's own
@@ -947,8 +979,8 @@ spawn_agent() {
     local _scrub="env" _v
     for _v in "${INSTALLER_SESSION_ENV[@]}"; do _scrub+=" -u $_v"; done
     launch_cmd="$_scrub $launch_cmd"
-    if [[ -n "$resume_sid" && "$runtime" != "claude" && "$runtime" != "grok" ]]; then
-        err "$agent_id: --resume is claude/grok-only (runtime=$runtime has no resume adapter here)"
+    if [[ -n "$resume_sid" && "$runtime" != "claude" && "$runtime" != "codex" && "$runtime" != "grok" ]]; then
+        err "$agent_id: --resume is claude/codex/grok-only (runtime=$runtime has no resume adapter here)"
         tmux kill-session -t "$tmux_name" 2>/dev/null || true
         exit 3
     fi
@@ -985,13 +1017,23 @@ spawn_agent() {
         rm -f "$perm_err"
         log "  Runtime: claude | Model: ${model:-<settings default opus-4-8[1m]>}"
     elif [[ "$runtime" == "codex" ]]; then
-        [[ -n "$model" ]] && launch_cmd+=" --model $model"
-        log "  Runtime: codex | Model: ${model:-<config default>}"
+        # APPEND the codex tail; never rebuild launch_cmd here (its prefixes: bg marker, data dir,
+        # installer-session scrub, were all dropped by an assignment in r3/r4 of #430).
+        local _codex_tail
+        if ! _codex_tail="$(build_codex_launch_tail "$model" "$resume_sid")"; then
+            err "$agent_id: --resume for codex needs the session UUID (got '$resume_sid')"
+            tmux kill-session -t "$tmux_name" 2>/dev/null || true
+            exit 3
+        fi
+        [[ -n "$_codex_tail" ]] && launch_cmd+=" $_codex_tail"
+        log "  Runtime: codex | Model: ${model:-<config default>}${resume_sid:+ | Resume: $resume_sid}"
     elif [[ "$runtime" == "grok" ]]; then
         log "  Runtime: grok | Model: ${model:-<grok default>} | Session: $grok_sid ($grok_mode)"
     else
         log "  Runtime: $runtime | Binary: $agent_bin"
     fi
+    # Outermost, so the CLI and every child it starts run at the seat priority (scripts/seat_nice.sh).
+    launch_cmd="$(seat_nice_prefix)$launch_cmd"
     tmux send-keys -t "$tmux_name" "$launch_cmd" Enter
 
     if [[ "$runtime" == "grok" ]]; then

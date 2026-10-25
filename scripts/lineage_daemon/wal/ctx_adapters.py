@@ -378,8 +378,14 @@ def resolve_codex_cid(seat, *, retired_sids_fn=None):
     # DB-retired generations of this root are NEVER candidates (gm msg_faf46471): a reaped
     # or parked predecessor's rollout can carry the newest mtime and would win here.
     retired = _retired_set(seat, retired_sids_fn, "resolve_codex_cid")
+    # A SUBAGENT rollout repeats its parent's 'You are <seat>' boot line and is usually the
+    # NEWEST file, so it would win here. Only a rollout whose session_meta proves it is a MAIN
+    # thread is a candidate; an unreadable one is skipped (fail closed).
+    import codex_context as _cc  # noqa: E402  (lazy, same as read_ctx_codex)
     for p in sorted(_glob.glob(f"{root}/*/*/*/rollout-*.jsonl"),
                     key=_os.path.getmtime, reverse=True):
+        if not _cc.is_main_rollout(p):
+            continue
         if retired:
             _m = sid_re.search(_os.path.basename(p))
             if _m and _m.group(1) in retired:

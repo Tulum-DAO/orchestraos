@@ -196,6 +196,9 @@ def test_child_env_drops_the_installer_sessions_identity_and_keeps_config(tmp_pa
     env = S.child_env(st, base={**base, **keep})
     assert not [k for k in S.INSTALLER_SESSION_ENV if k in env]
     for k, v in keep.items():
+        if k == "PATH":     # kept first, in order; the per-user CLI dirs are appended (#443)
+            assert env[k].split(os.pathsep)[0] == v, k
+            continue
         assert env[k] == v, k
 
 

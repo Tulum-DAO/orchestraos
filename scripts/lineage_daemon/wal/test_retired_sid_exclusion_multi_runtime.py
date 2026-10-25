@@ -23,7 +23,7 @@ def _rollout(home, sid, mtime):
     os.makedirs(d, exist_ok=True)
     p = os.path.join(d, f"rollout-2026-09-15T08-15-17-{sid}.jsonl")
     lines = [
-        {"type": "session_meta", "payload": {"session_id": sid}},
+        {"type": "session_meta", "payload": {"session_id": sid, "thread_source": "user"}},
         {"type": "response_item", "payload": {"type": "message", "role": "user",
          "content": [{"type": "input_text", "text": "<environment_context><cwd>/x</cwd>"}]}},
         {"type": "response_item", "payload": {"type": "message", "role": "user",
@@ -98,7 +98,7 @@ def _rollout_decl(home, sid, mtime, decl):
     d = os.path.join(home, ".codex", "sessions", "2026", "09", "15")
     os.makedirs(d, exist_ok=True)
     p = os.path.join(d, f"rollout-2026-09-15T08-15-17-{sid}.jsonl")
-    lines = [{"type": "session_meta", "payload": {"session_id": sid}},
+    lines = [{"type": "session_meta", "payload": {"session_id": sid, "thread_source": "user"}},
              {"type": "response_item", "payload": {"type": "message", "role": "user",
               "content": [{"type": "input_text", "text": f"You are {decl}. Read /tmp/x"}]}}]
     with open(p, "w") as fh:

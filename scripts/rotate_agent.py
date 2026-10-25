@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -226,6 +227,95 @@ def _sid_from_pane_events(session_name: str) -> str | None:
     return None
 
 
+_CODEX_ROLLOUT_SID_RE = re.compile(
+    r"rollout-.*-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$")
+
+
+# Real rollouts (measured on 28 of them): line 1 is session_meta with the instructions payload,
+# ~19 KB on its own; the first user message is <environment_context>; the seat's boot line
+# ("You are <seat>, ...") is a later user message, 19-121 KB in. A fixed-size read never reaches
+# it, so the file is walked line by line, bytes counted before decoding, up to a cap.
+_CODEX_BOOT_CAP_BYTES = 512 * 1024
+_CODEX_BOOT_CAP_LINES = 200
+
+
+def _codex_meta_is_subagent(meta: dict) -> bool:
+    """Codex 0.153 writes one rollout per spawned subagent next to the parent's; its first user
+    message is the PARENT's boot line, so only session_meta tells them apart (thread_source,
+    source.subagent, parent_thread_id; same rule as the live resolver)."""
+    src = meta.get("source")
+    return bool(meta.get("thread_source") == "subagent"
+                or (isinstance(src, dict) and "subagent" in src)
+                or (isinstance(src, (list, tuple)) and "subagent" in src)
+                or meta.get("parent_thread_id"))
+
+
+def _codex_rollout_sid_for_seat(path: Path, seat: str) -> str | None:
+    """The rollout's uuid when its boot line names exactly this seat, else None.
+
+    Identity comes from ONE place: the first user message that IS a boot line (its text starts
+    with "You are "). That message decides: it names this seat as a whole token (dots, underscores
+    and dashes are part of a name, so "codex-gm" never matches codex-gm-g7 or codex-gm.ops) or the
+    file is not ours. A later message quoting "You are <seat>" never counts. Line 1 must parse as
+    a session_meta that is NOT a subagent thread; unreadable metadata is not ours either. Bytes
+    are counted before decoding, bounded reads; a record that cannot be parsed (bad JSON, or JSON
+    nested past the parser's limit) before the boot line means the file is not ours."""
+    m = _CODEX_ROLLOUT_SID_RE.search(path.name)
+    if not m:
+        return None
+    # A name may contain dots (codex-gm.ops) but never ends in one: spawn-agent.sh types
+    # "You are <seat>. Read ...", and that full stop belongs to the sentence (#429 review).
+    boot_head = re.compile(r"^\s*You are ([^\s,:;!?]*[^\s,:;!?.])")
+    read = 0
+    try:
+        with open(path, "rb") as f:
+            for i in range(_CODEX_BOOT_CAP_LINES):
+                remaining = _CODEX_BOOT_CAP_BYTES - read
+                if remaining <= 0:
+                    return None
+                raw = f.readline(remaining + 1)
+                if not raw:
+                    return None
+                if len(raw) > remaining:
+                    return None            # one line alone overruns the cap: give up, not read on
+                read += len(raw)
+                try:
+                    data = json.loads(raw.decode("utf-8"))      # strict: bytes that are not UTF-8
+                except (ValueError, RecursionError):           # are "unreadable", never patched
+                    # (UnicodeDecodeError is a ValueError.)
+                    # An unreadable record BEFORE identity is established could be the file's
+                    # real boot line (codex peer review): then a later pasted "You are <seat>"
+                    # would decide instead. Not ours; the next (older) candidate is tried.
+                    return None
+                if i == 0:
+                    if not isinstance(data, dict) or data.get("type") != "session_meta":
+                        return None        # no readable metadata: cannot rule out a subagent
+                    payload = data.get("payload")
+                    if not isinstance(payload, dict) or _codex_meta_is_subagent(payload):
+                        return None
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                payload = data.get("payload")
+                if (data.get("type") != "response_item" or not isinstance(payload, dict)
+                        or payload.get("type") != "message" or payload.get("role") != "user"):
+                    continue
+                content = payload.get("content")
+                if not isinstance(content, list):
+                    continue
+                for part in content:
+                    text = part.get("text") if isinstance(part, dict) else None
+                    if not isinstance(text, str):
+                        continue
+                    head = boot_head.match(text)
+                    if not head:
+                        continue           # <environment_context> and the like: not a boot line
+                    return m.group(1) if head.group(1) == seat else None
+    except OSError:
+        return None
+    return None
+
+
 def extract_active_sid(session_name: str, runtime: str) -> str | None:
     """Attempt to extract active session UUID for the given agent using declared identity."""
     # 0. From the pane-event files the shipped hooks write (<data>/state/agent-events/panes/
@@ -256,16 +346,17 @@ def extract_active_sid(session_name: str, runtime: str) -> str | None:
                 except Exception:
                     pass
     elif runtime == "codex":
+        # Codex writes ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl (the same layout
+        # scripts/lineage_daemon/wal/ctx_adapters.py resolves). This used to glob two levels
+        # deep and return the file stem, so it never matched and every rotated Codex successor
+        # was recorded as "unverifiable-sid".
         codex_dir = Path(os.path.expanduser("~/.codex/sessions"))
         if codex_dir.exists():
-            for p in sorted(codex_dir.glob("*/*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True):
-                try:
-                    with open(p, "r", encoding="utf-8") as f:
-                        content = f.read(2048)
-                        if session_name in content:
-                            return p.stem
-                except Exception:
-                    pass
+            for p in sorted(codex_dir.glob("*/*/*/rollout-*.jsonl"),
+                            key=lambda p: p.stat().st_mtime, reverse=True):
+                sid = _codex_rollout_sid_for_seat(p, session_name)
+                if sid:
+                    return sid
     elif runtime == "claude":
         claude_dir = _claude_projects_dir()
         if claude_dir.exists():

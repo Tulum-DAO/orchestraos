@@ -1,4 +1,6 @@
 import { useState, useMemo, useRef } from 'react';
+import QuestionnaireForm from '../components/QuestionnaireForm';
+import { isLiveQuestionnaire } from '../lib/questionnaireForm';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import {
@@ -17,6 +19,8 @@ import {
 } from '../lib/menuAnswer';
 import MenuAnswerBlock from '../components/chat/MenuAnswerCard';
 import { operatorUserId } from '../lib/runtimeConfig';
+import Markdown from '../components/chat/Markdown';
+import { approvalCardBody, approvalCardAgent } from '../lib/approvalCard';
 
 async function fetchJson<T>(path: string): Promise<T> {
   const res = await fetch(`/api${path}`);
@@ -49,6 +53,7 @@ interface UnifiedApproval {
   kind?: string | null;
   menu?: { options?: MenuOption[]; question?: string; read_only?: boolean; notice?: string } | null;
   options?: string[] | null;
+  agent_id?: string | null;
 }
 
 interface Questionnaire {
@@ -307,9 +312,20 @@ export default function Inbox() {
                     <span className={clsx('text-xs', RISK_COLORS[a.risk_level])}>
                       {a.risk_level} risk
                     </span>
+                    {approvalCardAgent(a) && (
+                      <span className="text-xs text-neutral-400 flex items-center gap-1">
+                        <Bot size={11} /> from <span className="font-mono text-neutral-300">{approvalCardAgent(a)}</span>
+                      </span>
+                    )}
                   </div>
 
                   <h3 className="text-sm font-medium text-neutral-100 leading-snug">{a.title}</h3>
+
+                  {approvalCardBody(a) && (
+                    <div className="text-sm text-neutral-300 leading-relaxed max-h-72 overflow-y-auto pr-1">
+                      <Markdown text={approvalCardBody(a)} />
+                    </div>
+                  )}
 
                   {a.mechanism_label && (
                     <p className="text-xs text-neutral-500">
@@ -432,12 +448,16 @@ export default function Inbox() {
 
                 {isExpanded && (
                   <div className="rounded-lg overflow-hidden border border-neutral-700 bg-black">
+                    {isLiveQuestionnaire(q) ? (
+                      <QuestionnaireForm id={q.id} onDone={() => setExpandedId(null)} />
+                    ) : (
                     <iframe
                       src={`/api/questionnaires/${q.id}/html`}
                       className="w-full border-0"
                       style={{ minHeight: '600px' }}
                       title={q.title}
                     />
+                    )}
                   </div>
                 )}
               </div>

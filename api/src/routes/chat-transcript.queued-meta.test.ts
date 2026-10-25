@@ -101,16 +101,19 @@ test('GUARD: a message the gateway STILL holds keeps its chip (msg_store held, u
   assert.equal(held.queued, true, 'a genuinely pending message MUST keep queued:true -- this is the chip doing its job');
 });
 
-test('GUARD (review): a held message keeps its chip even with agent output AFTER it', () => {
+test('GUARD (review): a held message keeps its chip even with agent output stamped AFTER it', () => {
   // The held row is 06:40. The agent keeps working its current turn at 06:45 and 06:50, so
   // "output follows it" must NOT be read as "ingested" -- only the queued_command marker is.
+  // It is drawn LAST: it has not been delivered, and the transcript is in delivery order.
   const env = run([assistantText('a1', 0, 'busy'), assistantText('a2', 15, 'still on the same turn'),
                    assistantText('a3', 20, 'and still')], true, 'agent-x');
   const items = env.items;
   const heldIdx = items.findIndex((i) => i.kind === 'text' && i.role === 'user' && i.text === 'still waiting from the phone');
   assert.ok(heldIdx >= 0, 'the held message must render');
   assert.equal(items[heldIdx].queued, true, 'held + agent output after it: the chip must stay');
-  assert.ok(items.slice(heldIdx + 1).some((i) => i.role === 'assistant'), 'precondition: agent output follows the held row');
+  assert.ok(items.slice(0, heldIdx).some((i) => i.role === 'assistant' && /still/.test(i.text)),
+    'precondition: agent output stamped after the held row exists');
+  assert.equal(heldIdx, items.length - 1, 'an undelivered message is drawn after everything delivered');
   assert.ok(/"queued":true/.test(JSON.stringify(env.render_items)), 'render_items must carry the chip too');
   assert.ok(!JSON.stringify(env).includes('__fromQueuedCommand'), 'the internal marker never leaves the API');
 });

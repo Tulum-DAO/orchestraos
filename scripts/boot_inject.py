@@ -124,8 +124,44 @@ def _codex_boot_busy(pane: str) -> bool:
     return "esc to interrupt" in tail
 
 
-def boot_inject(session, text, runtime=DEFAULT_RUNTIME, *, allow_canonical=False,
-                tmux_fn=_real_tmux, sleep_fn=time.sleep, log_fn=None, canonical_live_fn=None):
+#: Outcomes where nothing of ours reached the composer: no journal row may outlive them (a row there
+#: would be false evidence a later reconcile could attribute to someone's matching text).
+_NOTHING_TYPED = ("refused-canonical", "codex-busy", "stranded-chip", "client-attached",
+                  "composer-occupied")   # NOT no-receipt: a paste may
+# have landed unobserved; the row stays (unmarked = report-only at the reconcile)
+
+
+def _mark_typed(session):
+    try:
+        import inject_journal
+        inject_journal.mark_typed(session)
+    except OSError:
+        pass
+
+
+def boot_inject(session, text, runtime=DEFAULT_RUNTIME, **kw):
+    """_boot_inject_unlocked under the ONE cross-process pane lock all typers share (pane_lock.py,
+    gm msg_2291dee3). Another typer holding the pane past 8 s -> ('failed', 'pane-locked'): nothing
+    was typed, so the caller's normal retry applies."""
+    import pane_lock
+    import inject_journal
+    try:
+        with pane_lock.pane_lock(session, wait_s=8.0):
+            # The row is written inside _boot_inject_unlocked once every guard has passed, right
+            # before it types (an earlier row would overwrite a crash's leftover evidence). Only a
+            # row THIS call wrote is ever cleared here.
+            rec = []
+            outcome = _boot_inject_unlocked(session, text, runtime, journal=rec, **kw)
+            if rec and (outcome[0] == "submitted" or outcome[1] in _NOTHING_TYPED):
+                inject_journal.clear(session)     # submitted, or nothing of ours was typed
+            return outcome
+    except pane_lock.PaneBusy:
+        return "failed", "pane-locked"
+
+
+def _boot_inject_unlocked(session, text, runtime=DEFAULT_RUNTIME, *, allow_canonical=False,
+                tmux_fn=_real_tmux, sleep_fn=time.sleep, log_fn=None, canonical_live_fn=None,
+                journal=None):
     """Type `text` into `session` and verify by effect. Returns (outcome, stage):
     outcome in {'submitted', 'stuck', 'failed'}; stage names where it ended."""
     log = log_fn or (lambda m: print(f"[boot_inject] {session}: {m}", file=sys.stderr, flush=True))
@@ -170,10 +206,49 @@ def boot_inject(session, text, runtime=DEFAULT_RUNTIME, *, allow_canonical=False
             sleep_fn(1.0)
             waited += 1.0
 
+    # A person attached to the pane may be typing: nothing is typed over them (the same rule as the
+    # gateway's clear-own and the reconcile). Checked HERE, under the pane lock and after any busy
+    # wait, right before the first keystroke; the caller's normal retry applies.
+    rc_c, clients = tmux_fn("list-clients", "-t", _target(session))
+    if rc_c != 0 or (clients or "").strip():     # attached, or we cannot tell: fail closed
+        log("a client is attached to this pane (or the check failed): nothing typed")
+        return "failed", "client-attached"
+
     _, line0, ok0 = split()
     if ok0 and composer_has_stranded_chip(line0):
         log("a paste chip is ALREADY in the composer: not pasting onto it, not pressing Enter on it")
         return "stuck", "stranded-chip"
+
+    # Someone's real typed text (not a dim ghost) on the input line, and not our own earlier attempt:
+    # never type onto it. It may be a person's draft, or an earlier half-sent message whose journal
+    # row this call would replace. Nothing typed.
+    if not (ok0 and probe[:30] in line0):
+        rc_e, ansi = tmux_fn("capture-pane", "-p", "-e", "-t", _target(session))
+        prompts = [l for l in (ansi or "").split("\n") if prompt_char in l] if rc_e == 0 else None
+        from composer_state import classify_input_line
+        if not prompts:     # unreadable, or no prompt line at all (a menu, a TUI still drawing)
+            log("no composer on screen (or the screen could not be read): nothing typed")
+            return "failed", "no-composer"
+        if classify_input_line(prompts[-1], sig)[0] == "typed":
+            log("the input line already holds typed text: nothing typed")
+            return "stuck", "composer-occupied"
+    else:
+        # The composer starts like our prompt: Enter only when it is EXACTLY our earlier, recorded
+        # attempt (a typed row for this very text). Our words with a person's appended, another
+        # message's half-sent text, or a draft no typer recorded: nothing typed, nothing pressed.
+        import inject_journal
+        if not inject_journal.owns_line(session, line0.strip().lstrip("❯>›\u203a"), text):
+            log("the composer starts like our prompt but is not exactly our recorded attempt: nothing pressed")
+            return "stuck", "not-exactly-ours"
+
+    # Every guard has passed: the typed-not-entered row is written now. No row, no typing.
+    if journal is not None:
+        try:
+            import inject_journal
+            inject_journal.record(session, text, text[:40])
+            journal.append(True)
+        except OSError:
+            return "failed", "journal-unwritable"
 
     if not (ok0 and probe[:30] in line0):
         landed = False
@@ -186,6 +261,7 @@ def boot_inject(session, text, runtime=DEFAULT_RUNTIME, *, allow_canonical=False
             _, line, ok = split()
             if ok and paste_receipt_ok(line, probe, chips_before):
                 landed = True
+                _mark_typed(session)       # our text is in the composer: a reconcile may now Enter it
                 break
             log(f"paste attempt {attempt}: not in the composer")
             sleep_fn(1.0)
@@ -194,6 +270,7 @@ def boot_inject(session, text, runtime=DEFAULT_RUNTIME, *, allow_canonical=False
             return "failed", "no-receipt"
     else:
         log("the prompt is already in the composer (earlier attempt): submitting it, not re-pasting")
+        _mark_typed(session)
 
     for attempt in range(1, FIRST_ENTERS + 1):
         enter()

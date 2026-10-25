@@ -63,6 +63,8 @@ class Settings:
     boundary_delivery_armed: bool = True
     router_enabled: bool = True
     router_interval: int = 60
+    # [seats] nice: the CPU priority seats start at (scripts/seat_nice.sh validates it; 0 = off)
+    seat_nice: str = "10"
     runtime_dir: Path = Path(DEFAULT_RUNTIME_DIR)
 
     @property
@@ -228,6 +230,7 @@ def load_settings(repo_root: Path | None = None, config_path: Path | None = None
         boundary_delivery_armed=bool(rot.get("boundary_delivery_armed", True)),
         router_enabled=bool(_get(raw, "router", "enabled", True)),
         router_interval=int(_get(raw, "router", "interval_seconds", 60)),
+        seat_nice=str(_get(raw, "seats", "nice", 10)),
         runtime_dir=Path(os.path.expanduser(str(rot.get("runtime_dir", DEFAULT_RUNTIME_DIR)))),
     )
     return st
@@ -268,6 +271,19 @@ INSTALLER_SESSION_ENV = (
 )
 
 
+def _with_user_bins(path: str) -> str:
+    """PATH with the per-user CLI dirs appended when missing: ~/.local/bin (claude, and grok's link)
+    and the Grok installer's ~/.grok/bin when it exists. The caller's order is kept; the systemd
+    unit gets the same dirs from install_unit.build_path. Without this, a CLI the API or a seat
+    must find (`which grok`, `grok models`) was invisible when the shell's PATH lacked them."""
+    home = os.path.expanduser("~")
+    parts = [p for p in (path or "").split(os.pathsep) if p]
+    for d in (os.path.join(home, ".local", "bin"), os.path.join(home, ".grok", "bin")):
+        if d not in parts and (d.endswith(os.path.join(".local", "bin")) or os.path.isdir(d)):
+            parts.append(d)
+    return os.pathsep.join(parts)
+
+
 def child_env(st: Settings, base: dict | None = None) -> dict:
     """The environment every supervised process (and every beat) receives.
 
@@ -297,6 +313,7 @@ def child_env(st: Settings, base: dict | None = None) -> dict:
         # blue-green: Claude on by default; Gemini/Codex only when the operator opts in
         "ORCHESTRA_ROTATION_EXPERIMENTAL_RUNTIMES": ",".join(st.rotation_experimental_runtimes),
         "PYTHONPATH": os.pathsep.join(py_path),
+        "PATH": _with_user_bins(env.get("PATH", "")),
         "ORCHESTRA_GATEWAY_HOST": st.gateway_host,
         "ORCHESTRA_GATEWAY_PORT": str(st.gateway_port),
         "WATCH_GATEWAY_HOST": st.gateway_host,
@@ -321,6 +338,7 @@ def child_env(st: Settings, base: dict | None = None) -> dict:
         "ORCHESTRA_RUNTIMES_ENABLED": ",".join(st.runtimes_enabled),
         "ORCHESTRA_NOTIFY_CHANNEL": st.notify_channel,
         "ORCH_RUNTIME_DIR": str(st.runtime_dir),
+        "ORCHESTRA_SEAT_NICE": st.seat_nice,
         "ORCH_EVENT_STREAM_DIR": str(st.data_dir / "state" / "event-stream"),
         "ORCH_BUS_CURSOR": str(st.data_dir / "state" / "bus-cursor.json"),
         "ORCH_WAKE_COOLDOWN": str(st.data_dir / "state" / "wake-cooldown.json"),

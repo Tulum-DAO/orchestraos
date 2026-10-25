@@ -387,8 +387,10 @@ def test_resume_command_for_grok():
     assert "-m" not in ps.resume_command_for("grok", SID, "unknown").split()
     with pytest.raises(ps.RuntimeRefused):
         ps.resume_command_for("grok", "my title")
-    # unchanged shapes
-    assert ps.resume_command_for("codex", "s1") == "codex --yolo resume s1"
+    # codex: UUID-checked too (fix/codex-resume-pinned); the shape itself is unchanged
+    assert ps.resume_command_for("codex", SID) == f"codex --yolo resume {SID}"
+    with pytest.raises(ps.RuntimeRefused):
+        ps.resume_command_for("codex", "s1")
 
 
 # =============================================================================
@@ -536,7 +538,7 @@ def test_router_inject_busy_holds_a_grok_turn(router, monkeypatch):
     def no_paste(*a, **k):
         raise AssertionError("must not reach the paste stages")
     monkeypatch.setattr(router, "pane_split", no_paste)
-    assert router.inject("zz-grok", "hello", "grok") == "stuck"
+    assert router.inject("zz-grok", "hello", "grok") == "held"      # nothing typed: re-queued, never "delivered"
 
 
 # =============================================================================
@@ -593,10 +595,14 @@ def test_spawn_grok_path_types_nothing_into_the_pane():
 
 
 def test_spawn_writes_no_grok_config():
-    """A grok seat installs no hooks/statusline: nothing in spawn writes under ~/.grok."""
-    code = "\n".join(l for l in (ROOT / "spawn-agent.sh").read_text().splitlines()
-                     if not l.lstrip().startswith("#"))
-    assert ".grok/" not in code
+    """A grok seat installs no hooks/statusline: nothing in spawn writes under ~/.grok. The one
+    allowed mention is READING the installer's binary: the GROK_BIN pick's `[[ -x ... ]]` test (#443)."""
+    lines = [l for l in (ROOT / "spawn-agent.sh").read_text().splitlines() if not l.lstrip().startswith("#")]
+    grok_dir = [l for l in lines if ".grok/" in l]
+    read_only = ('[[ -n "$GROK_BIN" ]] || { [[ -x "$HOME/.grok/bin/grok" ]] '
+                 '&& GROK_BIN="$HOME/.grok/bin/grok" || GROK_BIN="grok"; }')
+    assert grok_dir in ([], [read_only]), grok_dir      # exactly that read, nothing else under ~/.grok
+    code = "\n".join(lines)
     assert "config.toml" not in code and "requirements.toml" not in code
 
 
@@ -915,3 +921,15 @@ def test_mail_watch_requires_an_agent_and_defaults_the_tenant(monkeypatch):
     src = (ROOT / "scripts" / "grok_mail_watch.py").read_text()
     assert "shaw" not in src.lower()
     assert "ORCHESTRA_TENANT" in src
+
+
+def test_children_reads_proc_without_a_helper_module():
+    """grok_context._children used to import an unpublished `proc_children` module, so on a
+    public install seat_turn_state() was always reader-error and the mail watcher never nudged."""
+    import subprocess as _sp
+    child = _sp.Popen(["sleep", "30"])
+    try:
+        assert child.pid in gc._children(os.getpid())
+    finally:
+        child.kill()
+        child.wait()
