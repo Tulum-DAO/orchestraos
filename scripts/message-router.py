@@ -1157,6 +1157,21 @@ def codex_pane_is_busy(pane_text: str) -> bool:
     return ("\u25e6 Working" in txt) or ("tab to queue message" in txt)
 
 
+def fence_check(session: str, **kw):
+    """Log-only pane fence (scripts/lineage_daemon/wal/fence.py): is `session` the canonical pane
+    of its lineage? A mismatch is RECORDED in fencing_violations, never blocked, so a retired
+    pane that is still receiving mail becomes a number instead of a surprise. Lazy import and
+    fail-soft: the fence can never stop a delivery."""
+    try:
+        _here = os.path.dirname(os.path.abspath(__file__))     # scripts/
+        if _here not in sys.path:
+            sys.path.insert(0, _here)
+        from lineage_daemon.wal.fence import check_pane
+        return check_pane(session, **kw)
+    except Exception:  # noqa: BLE001 — observe only
+        return None
+
+
 def codex_idle_release(runtime: str, visibly_idle: bool) -> bool:
     """Codex-only equivalent of Claude's end-of-turn queue release.
 
@@ -1244,6 +1259,7 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, jo
     verification target the RIGHT input line on an agy/Gemini pane (default
     claude ⇒ byte-identical).
     """
+    fence_check(session, seam="router")        # record only; delivery unchanged
     probe = text[:60]
 
     # Stage 0: exit copy-mode if active (else the paste/Enter gets swallowed)
