@@ -51,6 +51,7 @@ Usage:
 import sqlite3
 import json
 import os
+import re
 import sys
 import hashlib
 import argparse
@@ -62,9 +63,77 @@ from typing import Optional
 if os.path.dirname(os.path.abspath(__file__)) not in sys.path:
     sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
+from orchestra_cli import settings as _settings  # noqa: E402
 
 ORCHESTRA_DIR = Path(os.environ.get("ORCHESTRA_DIR") or os.environ.get("ORCH_DIR") or str(_data_dir()))
 DB_PATH = ORCHESTRA_DIR / "state" / "tasks.db"
+
+
+def _kick_target(db_path):
+    """The router this send may kick, or None. A kick happens ONLY for the installed bus:
+
+    - this checkout is the code root (ORCHESTRA_ROOT, if set, names this same tree), and it
+      is configured (its orchestra.toml exists) with the router enabled;
+    - the store's db is the CONFIGURED data dir's tasks.db, resolved WITHOUT the
+      ORCHESTRA_DIR/ORCH_DIR env, so a store pointed elsewhere by env (a test, a proof
+      worktree, a scratch dir) never kicks and a scratch DB can never drive real panes.
+    Any doubt returns None: the kick is an optimisation, the beat is the delivery path."""
+    code_root = Path(__file__).resolve().parent
+    if _settings.repo_root_from_env().resolve() != code_root:
+        return None
+    st = _settings.load_settings(code_root)
+    if not st.config_exists or not st.router_enabled:
+        return None
+    bus = Path(_data_dir(include_env=False)) / "state" / "tasks.db"
+    if os.path.realpath(str(db_path)) != os.path.realpath(str(bus)):
+        return None
+    router = code_root / "scripts" / "message-router.py"
+    if not router.is_file():
+        return None
+    return code_root, router, Path(_data_dir(include_env=False))
+
+
+def _kick_suppressed() -> bool:
+    return bool(os.environ.get("PYTEST_CURRENT_TEST") or "pytest" in sys.modules
+                or os.environ.get("MSG_STORE_NO_KICK"))
+
+
+def kick_router_after_send(db_path) -> None:
+    """Best-effort, non-blocking delivery pass right after a durable message commit.
+
+    The router beat remains the recovery path. This only removes its first-look latency
+    (up to one beat interval) for a fresh message. It starts exactly the command the beat
+    runs (`message-router.py --cron`), detached, so the sender never waits on it. The
+    router's own lockfile keeps one pass at a time; where `flock` exists, kicks are also
+    serialised among themselves so a burst of sends starts at most one extra pass.
+    A failure here must never make send() fail or wait.
+
+    Never kicks: under pytest, with MSG_STORE_NO_KICK set, or from any store that is not
+    the installed bus (see _kick_target)."""
+    if _kick_suppressed():
+        return
+    try:
+        target = _kick_target(db_path)
+        if target is None:
+            return
+        code_root, router, data = target
+        import shutil
+        import subprocess
+        import tempfile
+        cmd = [sys.executable, str(router), "--cron"]
+        if shutil.which("flock"):
+            lock = os.path.join(tempfile.gettempdir(), "orchestra-router-kick.lock")
+            cmd = ["flock", "-n", lock] + cmd
+        env = {k: v for k, v in os.environ.items() if k not in ("ORCH_DIR", "MSG_DB_PATH")}
+        env["ORCHESTRA_DIR"] = str(data)        # the router reads exactly the bus we wrote
+        logf = code_root / "logs" / "message-router.log"
+        sink = open(logf, "ab") if logf.parent.is_dir() else open(os.devnull, "wb")
+        with sink:
+            subprocess.Popen(cmd, cwd=str(code_root), env=env,
+                             stdin=subprocess.DEVNULL, stdout=sink, stderr=sink,
+                             start_new_session=True, close_fds=True)
+    except Exception:      # noqa: BLE001 — a kick must never cost a send
+        pass
 
 
 def _now():
@@ -97,6 +166,45 @@ ADDRESSABILITY_KILL_FILE = Path.home() / "runtime" / "ADDRESSABILITY_DISABLED"
 ADDRESSABILITY_LOG_FILE = Path(
     os.environ.get("ADDRESSABILITY_LOG_FILE")
     or (Path(__file__).resolve().parent / "logs" / "addressability-shadow.log"))
+
+
+import orchestra_cli.settings as _ocs  # noqa: E402
+
+
+class LiveBusRefused(_ocs.RealDataDirWrite):
+    """A test tried to open a REAL message bus. See MessageStore.__init__."""
+
+
+def _under_pytest() -> bool:
+    # PYTEST_CURRENT_TEST is set per-TEST and is None at import/collection time, so a
+    # module-level MessageStore() in a test module would slip past it. `"pytest" in
+    # sys.modules` is True at import under pytest and False in production.
+    return bool(os.environ.get("PYTEST_CURRENT_TEST")) or "pytest" in sys.modules
+
+
+def _refuse_live_bus_under_pytest(db_path: str) -> None:
+    """Refuse to OPEN (not just write) a message bus inside a real data dir from a test.
+
+    Read-contamination corrupts a result; write-contamination corrupts real agents' mail.
+    Every send() can be injected into a live agent's pane by the router, so a test that
+    opens the real bus can type fabricated mail at real agents. The repo-root conftest
+    points ORCHESTRA_DIR at a temp dir, but a conftest only protects runs that LOAD it (a
+    bare `pytest path/to/test.py` from another root, or a script a test shells out to,
+    misses it), so the constructor is fenced too and the fence travels with the code.
+    The protected set is the one the other stores use (settings.protected_data_dirs):
+    the dirs that were real when the run started, or, without the conftest, this
+    checkout's configured data dir and the default. realpath, so `../` or a symlink
+    cannot walk past it. Inert outside pytest: production behaviour is unchanged."""
+    if not _under_pytest() or db_path == ":memory:":
+        return
+    target = os.path.realpath(db_path)
+    for root in _ocs.protected_data_dirs():
+        if target == root or target.startswith(root.rstrip(os.sep) + os.sep):
+            raise LiveBusRefused(
+                f"refusing to open the LIVE message bus ({db_path}) from a test: it is "
+                f"inside the real data dir {root}. Set MSG_DB_PATH or ORCHESTRA_DIR to a "
+                f"scratch dir, pass an explicit path, or pass allow_live=True if this test "
+                f"genuinely asserts against the live bus.")
 
 
 class ImpersonatedSender(RuntimeError):
@@ -263,6 +371,37 @@ def sender_verdict(from_agent, to_agent, body, caller=_UNSET):
             "suspect": bool(impersonated or self_addressed)}
 
 
+_SEAT_ALIAS_SUFFIX = re.compile(r"-(?:gen|g)\d+$")
+
+
+def _canon_seat(name):
+    """Collapse a rotation alias to its canonical agent name: both `-genN` and `-gN`
+    suffixes are in use (`<name>-genN` and `<name>-gN` both map to `<name>`).
+    `sender_verdict.impersonated` is a raw string compare, so an agent writing as its OWN
+    alias reads as impersonation and is not."""
+    return _SEAT_ALIAS_SUFFIX.sub("", (name or "").strip())
+
+
+def _narrow_impersonation_refusal(sv, from_agent):
+    """Arm the INTERSECTION: impersonated AND trivial body.
+
+    A --from that does not match the caller is not always wrong. A helper relaying an
+    operator's words is real, and services send under ROLE identities (the approval loop
+    delivering a decision answer, the questionnaire loop, the identity reconciler).
+    Refusing every mismatch would break the approvals resume path.
+    An EMPTY body under someone else's name is never right: measured over the shadow log
+    before arming, every row matching this conjunction was junk, none was an agent writing
+    as its own alias, and every role-identity row carried a real body.
+    NO BYPASS FLAG EXISTS ON PURPOSE: a legitimate relay carries CONTENT, so it never
+    reaches this branch. An EMPTY relay under another name is indistinguishable from the
+    accident this guard exists to stop, so it is refused too. The addressability kill file
+    still disarms it, like every other refusal in this module.
+    """
+    if not sv or not sv["trivial_body"] or not sv["impersonated"]:
+        return False
+    return _canon_seat(sv["caller"]) != _canon_seat(from_agent)
+
+
 def _impersonation_armed() -> bool:
     if ADDRESSABILITY_KILL_FILE.exists():
         return False
@@ -313,8 +452,12 @@ def _addressability_verdict(target: str):
         return None
 
 
+class HeldAckRefused(RuntimeError):
+    """Someone tried to ack an UNDELIVERED held_message. See MessageStore.acknowledge."""
+
+
 class MessageStore:
-    def __init__(self, db_path=None):
+    def __init__(self, db_path=None, allow_live=False):
         # MSG_DB_PATH env mirror (F4 fix, spec §3.1): scopes the message bus the
         # same way APPROVAL_DB_PATH scopes the approval store (approval.py:18).
         # Precedence: explicit db_path arg > MSG_DB_PATH env > live DB_PATH.
@@ -322,6 +465,10 @@ class MessageStore:
         # the constructor so ALL no-arg MessageStore() constructions are scoped at
         # once (incl. approval_resume._msg_store, the C5b resume-leak hole).
         self.db_path = str(db_path or os.environ.get("MSG_DB_PATH") or DB_PATH)
+        # FENCE: refuse the live bus from inside a test. allow_live is the explicit,
+        # greppable escape for the few tests that must assert against the real bus.
+        if not allow_live:
+            _refuse_live_bus_under_pytest(self.db_path)
 
     def _conn(self):
         conn = sqlite3.connect(self.db_path, timeout=30)
@@ -453,6 +600,7 @@ class MessageStore:
         finally:
             conn.close()
 
+    # Delivery model: see docs/DELIVERY.md
     def send(self, from_agent: str, to_agent: str, type: str,
              subject: str = None, body: str = None, priority: str = "medium",
              task_id: str = None, conversation_id: str = None, parent_id: str = None,
@@ -506,6 +654,30 @@ class MessageStore:
             # actual culprit (a caller writing under someone else's identity),
             # where self-addressed only describes the row's shape. gm's rows are
             # both, and "you are not who you claim" is the more useful error.
+            # The shadow row is written BEFORE any refusal, so an armed refusal is still
+            # recorded. The line format is unchanged because it is parsed; an armed
+            # refusal adds a second, distinct line.
+            _addressability_log(
+                f"[impersonation-shadow] WOULD REFUSE {msg_id}: {_why} "
+                f"(to={to_agent}, self_addressed={_sv['self_addressed']}, "
+                f"trivial_body={_sv['trivial_body']})")
+
+            # ARMED NARROWLY, and by DEFAULT (no env flag). See _narrow_impersonation_refusal.
+            if (_narrow_impersonation_refusal(_sv, from_agent)
+                    and not ADDRESSABILITY_KILL_FILE.exists()):
+                _addressability_log(
+                    f"[impersonation] REFUSED {msg_id}: {_why} (to={to_agent}, "
+                    f"trivial_body=True); narrow arm, no row written")
+                raise ImpersonatedSender(
+                    f"IMPERSONATED SENDER, REFUSED: the calling pane is "
+                    f"'{_sv['caller']}' but --from claims '{from_agent}', and the body is "
+                    f"empty. No row was written.\n"
+                    f"This is almost always a leftover send fragment in a compound shell "
+                    f"command. Send as yourself: use --from {_sv['caller']}, and put ONE "
+                    f"send per command.\n"
+                    f"A relay under another identity stays legal when it carries real "
+                    f"content; only an EMPTY body under someone else's name is refused.")
+
             if _impersonation_armed() and _sv["impersonated"]:
                 raise ImpersonatedSender(
                     f"IMPERSONATED SENDER: {_why}. A row written under another "
@@ -517,10 +689,6 @@ class MessageStore:
                     f"not a delivery. If you are deliberately planting a row to "
                     f"verify the delivery path, pass allow_self_addressed=True so "
                     f"the exception is recorded rather than silent.")
-            _addressability_log(
-                f"[impersonation-shadow] WOULD REFUSE {msg_id}: {_why} "
-                f"(to={to_agent}, self_addressed={_sv['self_addressed']}, "
-                f"trivial_body={_sv['trivial_body']})")
 
         # leg-4 act 3: classify the DESTINATION (never the sender) before writing.
         try:
@@ -576,6 +744,7 @@ class MessageStore:
                  _now(), json.dumps(sorted(set([from_agent, to_agent])))]
             )
             conn.commit()
+            kick_router_after_send(self.db_path)
             return msg_id
         finally:
             conn.close()
@@ -686,7 +855,11 @@ class MessageStore:
         """Record the receiver's disposition on a row (§9.6-B.5,
         DEC-1787032722): acted / queued / declined(+reason). Returns False on
         an unknown id (the #13 ack lesson — never ok:true on a ghost row).
-        Raises ValueError on an invalid disposition or a reason-less decline."""
+        Raises ValueError on an invalid disposition or a reason-less decline.
+
+        NOTE: this does NOT stop delivery. It stamps RECEIVER metadata and leaves status
+        'pending', so the router still delivers the row; `declined` reads like a refusal and
+        is not one. To withdraw a row you SENT, use retract()."""
         if disposition not in self.DISPOSITIONS:
             raise ValueError(f"disposition must be one of {self.DISPOSITIONS}, "
                              f"got {disposition!r}")
@@ -706,6 +879,60 @@ class MessageStore:
             kv["disposition_reason"] = reason
         self.stamp_metadata(msg_id, **kv)
         return True
+
+    def retract(self, msg_id: str, sender: str, reason: str) -> bool:
+        """Withdraw a PENDING row YOU SENT so the router never delivers it.
+
+        WHAT ACTUALLY STOPS DELIVERY, and why this is a status change rather than a new flag:
+        the router's candidate query is `WHERE status='pending'` and its CAS gate is claim()'s
+        `WHERE id=? AND status='pending'`. Moving the row out of 'pending' therefore stops it
+        through two mechanisms that already exist; a new column would have stopped nothing,
+        which is exactly dispose()'s failure mode.
+
+        ONE ATOMIC CAS does all three refusals, so there is no read-then-write window in which
+        the router could claim the row between the check and the update:
+            not the sender          -> False (you may not retract someone else's message)
+            not pending             -> False, ABOVE ALL ALREADY DELIVERED: a retract must never
+                                       claim to have stopped something that already arrived
+            unknown id              -> False (never ok:true on a ghost row)
+        The CLI turns every False into a NON-ZERO EXIT so a script cannot read a failed retract
+        as a successful stop.
+        """
+        if not (reason and reason.strip()):
+            raise ValueError("a retract requires a reason")
+        conn = self._conn()
+        try:
+            cur = conn.execute(
+                "UPDATE messages SET status='retracted', error=? "
+                "WHERE id=? AND from_agent=? AND status='pending'",
+                [f"retracted by {sender}: {reason}", msg_id, sender])
+            conn.commit()
+            if cur.rowcount == 0:
+                return False
+        finally:
+            conn.close()
+        self.stamp_metadata(msg_id, retracted_at=_now(), retracted_by=sender,
+                            retract_reason=reason)
+        return True
+
+    def retract_refusal(self, msg_id: str, sender: str) -> str:
+        """Why a retract was refused, for the CLI's error line. READ-ONLY, and only ever called
+        AFTER the CAS already declined, so it never decides anything and cannot race."""
+        conn = self._conn()
+        try:
+            row = conn.execute("SELECT from_agent, status, delivered_at FROM messages"
+                               " WHERE id = ?", [msg_id]).fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return "no such message"
+        if row["from_agent"] != sender:
+            return (f"not your message: it was sent by {row['from_agent']!r}, "
+                    f"not {sender!r}; only the sender may retract")
+        if row["status"] == "delivered" or row["delivered_at"]:
+            return (f"ALREADY DELIVERED at {row['delivered_at']}; a retract cannot unsend "
+                    f"a message that arrived")
+        return f"not pending (status={row['status']!r}); only a pending row can be retracted"
 
     def disposition_stats(self, sender: str = None, tenant_id: str = "operator") -> dict:
         """Per-sender disposition stats over drive-class rows (§9.6-B.6): the
@@ -859,18 +1086,50 @@ class MessageStore:
         """Mark message as acknowledged (agent confirmed receipt). Returns True
         iff a row was actually updated — acking an unknown id must NEVER be a
         silent success (replay-flood class: the agent believes it acked, the
-        router re-injects forever; self-caught in the 2026-08-18 edge campaign,
-        msg_22587546)."""
+        router re-injects forever; self-caught in the 2026-08-18 edge campaign).
+
+        RAISES HeldAckRefused for an UNDELIVERED type='held_message' row. Such a row is a
+        person's own message, accepted mid-turn by the gateway and parked for delivery at the
+        target's turn boundary. Acking it acks the gateway's delivery handle, not a message
+        anyone received: the row leaves 'pending', the router's candidate query
+        (`WHERE status='pending'`) never sees it again, and the message is silently cancelled
+        by an agent tidying its inbox.
+
+        The discriminator is DELIVERY STATE, not caller identity: the router acks a held row
+        only after deliver(), so by then it is 'delivered' and passes; every premature ack hits
+        a row that was never delivered and is refused. No new argument, and nothing a caller
+        can assert about itself. Scope is held_message only: agents ack ordinary pending rows
+        directly from their inbox, and that flow is unchanged.
+        """
         conn = self._conn()
         try:
+            # ONE compare-and-set, so a concurrent deliver() cannot land between a check and
+            # the update.
             result = conn.execute(
-                "UPDATE messages SET status = 'acknowledged', acknowledged_at = ? WHERE id = ?",
+                "UPDATE messages SET status = 'acknowledged', acknowledged_at = ? "
+                "WHERE id = ? AND (type IS NULL OR type != 'held_message' "
+                "                  OR status = 'delivered' OR delivered_at IS NOT NULL)",
                 [_now(), msg_id]
             )
             conn.commit()
-            return result.rowcount > 0
+            if result.rowcount > 0:
+                return True
+            # rowcount 0 is two different outcomes. Read-only, and only after the CAS already
+            # declined, so it decides nothing and cannot race.
+            row = conn.execute("SELECT type, status, delivered_at FROM messages WHERE id = ?",
+                               [msg_id]).fetchone()
         finally:
             conn.close()
+        if row is None:
+            return False                      # unknown id: never a silent success
+        if row["type"] == "held_message":
+            raise HeldAckRefused(
+                f"refusing to ack {msg_id}: it is a held_message that has NOT been delivered "
+                f"(status={row['status']!r}, delivered_at={row['delivered_at']!r}). It is a "
+                f"message parked for delivery at your turn boundary, not mail you received; "
+                f"acking it cancels that delivery. The router acks it itself once it has been "
+                f"delivered.")
+        return False
 
     def archive(self, msg_id: str):
         """Mark message as archived (fully processed)."""
@@ -979,6 +1238,40 @@ class MessageStore:
         try:
             row = conn.execute("SELECT * FROM messages WHERE id = ?", [msg_id]).fetchone()
             return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def acknowledge_read(self, msg_id: str, reader: str) -> bool:
+        """Record a durable read receipt from the row's own addressee.
+
+        A Stop-hook digest line and a router paste are only presentation attempts. The first
+        unambiguous consumption event is the recipient running ``msg_store.py get --id``.
+        Without a receipt, rows stayed pending after an agent visibly read and acted on them,
+        so the router and the UI kept calling them unread and retried them.
+
+        Only the exact addressee may consume a row: anyone else can still inspect it with
+        ``get`` but cannot close someone else's inbox item. An undelivered held_message
+        (a message parked for the target's turn boundary) is never consumed by a lookup.
+        Returns True iff the row moved to 'acknowledged'.
+        """
+        if not reader:
+            return False
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "SELECT to_agent, type, status, delivered_at FROM messages WHERE id = ?",
+                [msg_id]).fetchone()
+            if not row or row["to_agent"] != reader:
+                return False
+            if (row["type"] == "held_message" and row["status"] != "delivered"
+                    and not row["delivered_at"]):
+                return False
+            result = conn.execute(
+                "UPDATE messages SET status = 'acknowledged', acknowledged_at = ? "
+                "WHERE id = ? AND to_agent = ?",
+                [_now(), msg_id, reader])
+            conn.commit()
+            return result.rowcount > 0
         finally:
             conn.close()
 
@@ -1641,6 +1934,14 @@ def main():
     p.add_argument("--by", required=True)
     p.add_argument("--reason", default=None)
 
+    # retract: the sender-side withdrawal (dispose() records a receiver disposition and does
+    # not stop delivery).
+    p = sub.add_parser("retract")
+    p.add_argument("--id", "--message-id", dest="message_id", required=True)
+    p.add_argument("--from", dest="from_agent", required=True,
+                   help="the SENDER; only the sender may retract its own row")
+    p.add_argument("--reason", required=True)
+
     # disposition-stats (§9.6-B.6)
     p = sub.add_parser("disposition-stats")
     p.add_argument("--sender", default=None)
@@ -1683,6 +1984,9 @@ def main():
     # get
     p = sub.add_parser("get")
     p.add_argument("--id", "--message-id", dest="id", required=True)
+    p.add_argument("--agent", default=None,
+                   help="recipient identity; when it matches the row's addressee, record a "
+                        "durable read receipt")
 
     args = parser.parse_args()
     store = MessageStore()
@@ -1737,6 +2041,20 @@ def main():
             out["error"] = "no such message"
         print(json.dumps(out))
 
+    elif args.command == "retract":
+        try:
+            ok = store.retract(args.message_id, sender=args.from_agent, reason=args.reason)
+        except ValueError as e:
+            print(json.dumps({"retracted": False, "id": args.message_id, "error": str(e)}))
+            sys.exit(1)
+        out = {"retracted": bool(ok), "id": args.message_id}
+        if not ok:
+            # NON-ZERO so a caller cannot read a failed retract as a stop.
+            out["error"] = store.retract_refusal(args.message_id, args.from_agent)
+            print(json.dumps(out))
+            sys.exit(1)
+        print(json.dumps(out))
+
     elif args.command == "disposition-stats":
         print(json.dumps(store.disposition_stats(sender=args.sender), indent=1))
 
@@ -1748,7 +2066,12 @@ def main():
         print(json.dumps({"replied": True, "id": result}, default=str))
 
     elif args.command == "ack":
-        ok = store.acknowledge(args.message_id)
+        try:
+            ok = store.acknowledge(args.message_id)
+        except HeldAckRefused as e:
+            # NON-ZERO: a drain script must not read a refused ack as a clean one.
+            print(json.dumps({"acknowledged": False, "id": args.message_id, "error": str(e)}))
+            sys.exit(1)
         out = {"acknowledged": bool(ok), "id": args.message_id}
         if not ok:
             out["error"] = "no such message"
@@ -1785,6 +2108,14 @@ def main():
 
     elif args.command == "get":
         msg = store.get(args.id)
+        # A recipient's read is the receipt the router needs. Prefer the explicit --agent the
+        # hook instructions pass; otherwise fall back to the caller's tmux identity. A lookup by
+        # anyone other than the addressee is read-only and never acknowledges the row.
+        reader = args.agent or sender_identity()
+        if msg and reader and store.acknowledge_read(args.id, reader):
+            msg["status"] = "acknowledged"
+            msg["acknowledged_at"] = _now()
+            msg["read_receipt_by"] = reader
         print(json.dumps(msg, indent=2, default=str) if msg else '{"error": "not found"}')
 
     else:

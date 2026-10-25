@@ -4,7 +4,7 @@ already holds. The API's socket has only a browser-origin check and is loopback-
 the audited, scoped way in.
 
 It is a shell into a seat: unlimited keystrokes, ^C, ^D, a `!` escape. So: a paired DEVICE token
-holding `admin` AND `inject` (the fleet bearer is refused even though '*' passes `admin`), a session
+holding `admin` (the fleet bearer is refused even though '*' passes `admin`), a session
 that GET /agents lists, no Funnel and no off-tailnet peer, one socket per (device, session), a
 gateway-wide cap, an idle close, and an operator-actions ledger row at open and at close that never
 carries a keystroke.
@@ -36,6 +36,7 @@ def _fence(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(G, "ORCH_DIR", tmp_path / "data")
     monkeypatch.setattr(G, "gateway_token", lambda: FLEET)
+    monkeypatch.setenv("TERMINAL_RELAY_SECRET_FILE", str(tmp_path / "terminal-relay-secret"))
     monkeypatch.setattr(G, "compute_agents", lambda: [{"id": "a", "tmux_session": "seat-a"},
                                                       {"id": "b", "tmux_session": "seat-b"},
                                                       {"id": "c"}])                 # no pane: never a target
@@ -114,7 +115,7 @@ async def _refused(gw, headers=None, path=ROUTE + "?session=seat-a&cols=80&rows=
     return e.value.status
 
 
-async def _open(gw, tmp_path, scopes=("admin", "inject"), session="seat-a", label="mac", **kw):
+async def _open(gw, tmp_path, scopes=("admin",), session="seat-a", label="mac", **kw):
     dev_id, tok = _mint(tmp_path, list(scopes), label=label)
     headers = {**_bearer(tok), **kw.pop("headers", {})}
     ws = await gw.ws_connect(f"{ROUTE}?session={session}&cols=80&rows=24", headers=headers, **kw)
@@ -146,12 +147,12 @@ async def test_a_device_without_admin_is_403(gw, upstream, tmp_path):
     assert await _refused(gw, _bearer(tok)) == 403
 
 
-async def test_a_device_with_admin_but_without_inject_is_403(gw, upstream, tmp_path):
-    """It presses keys, so it needs the key-pressing verb too (gm: inject + admin)."""
+async def test_a_device_with_admin_but_without_inject_is_allowed(gw, upstream, tmp_path):
+    """The terminal's shell-grade permission is admin; inject is not an extra gate."""
     up = await upstream()
     _, tok = _mint(tmp_path, ["admin"])
-    assert await _refused(gw, _bearer(tok)) == 403
-    assert up.headers == []
+    ws = await gw.ws_connect(f"{ROUTE}?session=seat-a", headers=_bearer(tok))
+    await ws.close()
 
 
 async def test_a_token_in_the_query_string_is_not_accepted(gw, upstream, tmp_path):
@@ -233,9 +234,9 @@ async def test_frames_pass_verbatim_both_ways_text_and_binary(gw, upstream, tmp_
     await ws.close()
 
 
-async def test_upstream_gets_session_cols_rows_and_loopback_origin_but_no_bearer(gw, upstream, tmp_path):
+async def test_upstream_gets_session_cols_rows_and_relay_credential_but_no_bearer(gw, upstream, tmp_path):
     """Only the three terminal params reach the API (never a token-shaped one), and the upgrade
-    carries the API's required loopback Origin but never the device's bearer."""
+    carries the reference-held relay credential but never the device's bearer."""
     up = await upstream()
     _, tok = _mint(tmp_path, ["admin", "inject"])
     ws = await gw.ws_connect(f"{ROUTE}?session=seat-a&cols=100&rows=30&token=leak&machine=m",
@@ -243,7 +244,8 @@ async def test_upstream_gets_session_cols_rows_and_loopback_origin_but_no_bearer
     await ws.close()
     assert up.query == [{"session": "seat-a", "cols": "100", "rows": "30"}]
     h = {k.lower(): v for k, v in up.headers[0].items()}
-    assert h.get("origin") == "http://127.0.0.1:8888"
+    assert "origin" not in h
+    assert h.get("x-orchestra-terminal-relay")
     assert "authorization" not in h
 
 
