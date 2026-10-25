@@ -82,6 +82,25 @@ HOLD_FILE_LEGACY = Path("/tmp/message-router-holds.json")
 HOLD_LOG_THROTTLE_S = 600     # log each (session|reason) hold at most once / 10min
 HOLD_SLA_S = 900              # a row held past this escalates (guard-a, backstop)
 HOLD_ESCALATE_REPEAT_S = 1800 # re-escalate a still-held row no more than this often
+# DOWN-seat anchors + page throttle, persisted beside the holds.
+DOWN_FILE = ORCHESTRA_DIR / "state" / "message-router-downs.json"
+
+# --- DOWN seats --------------------------------------------------------------------------
+# A seat whose agent CLI EXITS leaves a LIVE tmux pane at a shell prompt. agent_is_idle reads
+# that as not-idle (no composer -> False, fail-safe), so the row was held every cycle, silently,
+# for as long as nobody looked. The state detector already answers this case (state='stopped',
+# "No claude process running"); the hold path just never asked. DOWN is NOT a hold reason: it
+# is a PAGE, because nobody is coming to read the held mail.
+DOWN_PAGE_REPEAT_S = 1800     # re-page a still-down seat no more than this often
+# Fatigue control for the UNCONDITIONAL owner hop: the hop is never weakened (a dead agent
+# cannot be detected at send time), so duplicate NOTIFICATION is suppressed instead, keyed to
+# the CONDITION. Detection and the agent hop keep running at full rate.
+OWNER_DEDUP_S = 6 * 3600      # an UNCHANGED condition re-notifies the owner no sooner than this
+# A detector outage must NOT page every seat as DOWN (a paging storm trains everyone to ignore
+# pages), but "the detector is broken" must not be silent either. After this many CONSECUTIVE
+# cycles in which every probe errored, ONE page says the DOWN detector itself is blind.
+DOWN_DETECTOR_BLIND_CYCLES = 5
+DETECTOR_KEY = "_detector"   # bookkeeping row in down_state; '_' so it is never a seat
 QUEUE_ALERT_AFTER_S = 3600      # alert on mail queued >1h (before 48h silent expiry)
 QUEUE_ALERT_EVERY_S = 6 * 3600  # re-alert cadence per stuck message
 # Per-runtime prompt signatures + runtime resolution live in ONE importable home
@@ -1931,6 +1950,223 @@ def save_cooldowns(cd: dict):
     COOLDOWN_FILE.write_text(json.dumps(cd))
 
 
+def load_downs() -> dict:
+    """DOWN-seat anchors + page throttle. Persisted so an outage's age and its page throttle
+    survive a router restart; a fresh anchor each cycle would page forever claiming '0m down'.
+    Unreadable/absent => {} (an outage simply re-anchors)."""
+    try:
+        d = json.loads(DOWN_FILE.read_text())
+        return d if isinstance(d, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_downs(d: dict):
+    """Persist DOWN state. Fail-soft: losing this file costs a re-anchor, never mail."""
+    try:
+        DOWN_FILE.parent.mkdir(parents=True, exist_ok=True)
+        DOWN_FILE.write_text(json.dumps(d, indent=1))
+    except OSError as e:
+        log(f"[down-state] persist failed (non-fatal): {e}")
+
+
+def _detector_status(session: str) -> dict:
+    """The state detector's answer for a session, or {} when it cannot be consulted.
+    Separate seam so tests inject it and the DOWN probe never re-implements liveness."""
+    import importlib
+    A = importlib.import_module("agent-status")
+    return A.get_agent_status(session) or {}
+
+
+def seat_is_down(session: str, cache: dict | None = None,
+                 errors: list | None = None) -> bool:
+    """True when the seat's agent process IS GONE while its tmux pane survives (a clean exit
+    leaves a shell prompt; every pane-existence check reads healthy and agent_is_idle says
+    'not-idle' forever).
+
+    The detector is the witness, never the pane: state=='stopped', or an explicit
+    process.running False.
+
+    FAIL-SAFE IN THE OTHER DIRECTION than agent_is_idle: an unreadable detector returns False
+    (not down). agent_is_idle fails toward HOLD because a wrong delivery clobbers a live pane;
+    this fails toward NOT-PAGING because a wrong page wakes people at night and a paging storm
+    on a detector outage trains everyone to ignore pages. A probe error is appended to `errors`
+    so a BLIND detector is itself paged once (note_detector_health).
+
+    `cache` is a per-cycle dict: a stopped seat with N queued rows costs ONE probe, not N."""
+    if cache is not None and session in cache:
+        return cache[session]
+    down = False
+    try:
+        st = _detector_status(session)
+        proc = st.get("process") or {}
+        down = st.get("state") == "stopped" or proc.get("running") is False
+    except Exception as e:  # noqa: BLE001 — never let a detector fault page or crash the router
+        down = False
+        if errors is not None:
+            errors.append((session, repr(e)))
+    if cache is not None:
+        cache[session] = down
+    return down
+
+
+def mark_seat_down(down_state: dict, seat: str, now: float) -> float:
+    """Anchor the outage at the FIRST cycle the router saw it, persisted. Never inferred from a
+    process start: a resumed seat must not inherit a stale age. Returns the anchor."""
+    rec = down_state.setdefault(seat, {})
+    if not rec.get("first_seen"):
+        rec["first_seen"] = now
+    return rec["first_seen"]
+
+
+def _fmt_down(seconds: float) -> str:
+    s = int(max(0, seconds))
+    h, m = s // 3600, (s % 3600) // 60
+    return f"{h}h{m:02d}m" if h else f"{m}m"
+
+
+def clear_seat_down(down_state: dict, seat: str, now: float | None = None,
+                    send_clear: bool = True) -> None:
+    """The seat answered again: drop the anchor so its held rows retry normally and a LATER
+    outage gets a fresh age. If the owner was told this outage STARTED, tell them ONCE that it
+    ENDED: an alarm that never says it is over is the mirror failure of a silent one."""
+    rec = down_state.pop(seat, None)
+    if not send_clear or not rec or not rec.get("owner_paged_at"):
+        return
+    now = time.time() if now is None else now
+    down_for = _fmt_down(now - rec.get("first_seen", now))
+    try:
+        _send_page(OWNER_CHANNEL,
+                   f"[RECOVERED] {seat}: answering again after {down_for}",
+                   f"{seat} is back: the detector reads it live again, so the messages held "
+                   f"for it are retried now. It was down {down_for}. You are told because you "
+                   f"were told it went down.")
+    except Exception as e:  # noqa: BLE001 — a failed clear-page must never break the cycle
+        log(f"[down-page] clear-page for {seat} failed: {e}")
+
+
+def _identity_note(seat: str, agent: str | None) -> str:
+    """The probe measures the SESSION (what has a pane); the count is the AGENT's mail. They
+    diverge only on a forwarded row, and a reader must not be surprised by that."""
+    if not agent or agent == seat:
+        return ""
+    return (f"NOTE: the pane is the session '{seat}'; the queued mail is addressed to the agent "
+            f"'{agent}'. The probe measures the pane, the count is the agent's mail.\n")
+
+
+def page_seat_down(down_state: dict, seat: str, held: int, now: float,
+                   first_seen_down: float, agent: str | None = None) -> bool:
+    """PAGE that `seat` is down, to its escalation — never to itself. Carries the facts so the
+    reader can act on one read. Throttled per seat, but NEVER latched off: a still-down seat
+    pages again every DOWN_PAGE_REPEAT_S, because two alarms and then silence IS the defect.
+    Paging is not delivery: the caller leaves every row PENDING. Returns True if it paged."""
+    rec = down_state.setdefault(seat, {})
+    if now - rec.get("paged_at", 0) < DOWN_PAGE_REPEAT_S:
+        return False
+    rec["paged_at"] = now
+    down_for = _fmt_down(now - first_seen_down)
+    subject = f"[DOWN] {seat}: agent process is gone, {held} message(s) held ({down_for})"
+    body = (f"{seat} is DOWN: the state detector reads it stopped (no agent process running) "
+            f"while its tmux pane is still alive, typically at a shell prompt.\n"
+            f"Down for: {down_for} (first seen by the router at "
+            f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(first_seen_down))}).\n"
+            f"Held messages for {seat}: {held} — all still PENDING, nothing acknowledged; "
+            f"they are retried the moment it answers again.\n"
+            f"Nudges to a DOWN seat type into its SHELL, so do not nudge it.\n"
+            f"{_identity_note(seat, agent)}"
+            f"Resume, if that is the call (a person decides, not the router): clear the shell "
+            f"line first (tmux send-keys -t {seat}: C-c then C-u), then send the seat's resume "
+            f"command, with Enter as a SEPARATE send-keys.")
+    # THE OWNER HOP IS UNCONDITIONAL: a delivery that looks healthy is not evidence anyone
+    # heard it. Fatigue is controlled by deduping the CHANNEL on the condition, never by
+    # weakening the hop. NO broad except around escalation_targets: an ABSENT seam and a
+    # BROKEN contract are distinct states, both named to the owner rather than swallowed.
+    seam_error = None
+    try:
+        chain = list(escalation_targets(seat))
+    except EscalationSeamUnavailable as e:
+        seam_error = f"the escalation seam is unavailable — {e}"
+        chain = []
+        log(f"[down-page] escalation seam unavailable for {seat}: {e}")
+    except EscalationSeamBroken as e:
+        seam_error = f"the escalation seam is BROKEN (contract mismatch) — {e}"
+        chain = []
+        log(f"[down-page] escalation seam broken for {seat}: {e}")
+    except Exception as e:  # noqa: BLE001 — the seam RAISED at runtime (an unreadable DB, say).
+        # Arity is asserted at import and the return shape raises EscalationSeamBroken above,
+        # so neither lands here; escalation must never require a working seam to reach the owner.
+        seam_error = f"the escalation seam RAISED at runtime — {e!r}"
+        chain = []
+        log(f"[down-page] escalation seam raised for {seat}: {e!r}")
+    agent_hops = [t for t in chain if t != OWNER_CHANNEL]
+    failures = []
+    for to in agent_hops:
+        try:
+            _send_page(to, subject, body)
+        except Exception as e:  # noqa: BLE001 — a dead hop is one MORE reason to reach the owner
+            failures.append(f"{to}: {e}")
+            log(f"[down-page] send to {to} failed for {seat}: {e}")
+    fingerprint = f"down:{seat}:{int(first_seen_down)}"
+    last = rec.get("owner_paged_at", 0) if rec.get("owner_fingerprint") == fingerprint else 0
+    if now - last >= OWNER_DEDUP_S:
+        owner_body = body
+        if seam_error:
+            owner_body += (f"\n\nESCALATION FAILURE: {seam_error}\nNobody else could be told: "
+                           f"the router cannot resolve WHO owns {seat} until that is fixed.")
+        elif failures:
+            owner_body += (f"\n\nThe agent hop FAILED ({'; '.join(failures)}) — you may be "
+                           f"the only one who knows.")
+        elif agent_hops:
+            owner_body += (f"\n\nAlso told: {', '.join(agent_hops)}. You are told regardless, "
+                           f"because a delivery that looks healthy is not evidence anyone "
+                           f"heard it.")
+        try:
+            _send_page(OWNER_CHANNEL, subject, owner_body)
+            rec["owner_paged_at"] = now
+            rec["owner_fingerprint"] = fingerprint
+        except Exception as e:  # noqa: BLE001
+            log(f"[down-page] terminal hop failed for {seat}: {e}")
+    return True
+
+
+def note_detector_health(down_state: dict, probed: int, errored: int, now: float,
+                         last_error: str | None) -> bool:
+    """Track whether the DOWN detector itself is working, and page ONCE when it is not.
+
+    A cycle counts as BLIND only when it probed at least one seat and EVERY probe errored: one
+    seat's probe failing is a seat problem, not a detector outage, and must never page. After
+    DOWN_DETECTOR_BLIND_CYCLES consecutive blind cycles, one page — to gm and the owner channel,
+    naming the error — says the detector is blind. One page about the DETECTOR, never one per
+    seat. Throttled like every other page and never latched off. Returns True if it paged."""
+    rec = down_state.setdefault(DETECTOR_KEY, {})
+    blind = probed > 0 and errored >= probed
+    if not blind:
+        rec["consecutive"] = 0
+        return False
+    rec["consecutive"] = rec.get("consecutive", 0) + 1
+    rec["last_error"] = last_error or rec.get("last_error")
+    if rec["consecutive"] < DOWN_DETECTOR_BLIND_CYCLES:
+        return False
+    if now - rec.get("paged_at", 0) < DOWN_PAGE_REPEAT_S:
+        return False
+    rec["paged_at"] = now
+    subject = (f"[DOWN-DETECTOR BLIND] agent-status unreadable for "
+               f"{rec['consecutive']} consecutive router cycles")
+    body = (f"The router's DOWN probe cannot read the state detector: every one of "
+            f"{probed} probe(s) errored, for {rec['consecutive']} consecutive cycles.\n"
+            f"Last error: {rec.get('last_error')}\n"
+            f"CONSEQUENCE: while the detector is blind the router CANNOT tell a DOWN seat from "
+            f"a busy one, so it falls back to holding mail silently. Mail is queued, not lost.\n"
+            f"This is ONE page about the detector, not one per seat, by design.\n"
+            f"Check: python3 scripts/agent-status.py <any-seat>")
+    for to in ["gm", OWNER_CHANNEL]:
+        try:
+            _send_page(to, subject, body)
+        except Exception as e:  # noqa: BLE001 — the terminal hop is last, never swallowed
+            log(f"[down-detector] send to {to} failed: {e}")
+    return True
+
+
 def load_holds() -> dict:
     """Durable state, with a one-time migration from the legacy /tmp path. The
     durable file WINS when both exist (it is the newer writer); the legacy file is
@@ -2509,6 +2745,10 @@ def main():
         cooldowns = load_cooldowns()
         alerts = load_alerts()
         hold_state = load_holds()      # R2: throttled hold-log + SLA-escalate state
+        # DOWN-seat anchors + page throttle, persisted beside the holds so an outage's age
+        # survives router restarts (a fresh anchor every cycle would page forever claiming
+        # '0m down').
+        down_state = load_downs()
         meta = load_agent_meta()
         # Recipient status for the charter bumper's bootstrap exemption
         # (provisioning newborns are being oriented, not dispatched).
@@ -2558,6 +2798,10 @@ def main():
         _svc_cache = {}        # agent -> lineage runtime is 'service' (once per cycle)
         _digest_attempted = set()  # DEC-1787031444: one digest attempt per session/cycle
         _dl_batch = {}             # leg-4 act 2: (sender, target-class) -> [ids]
+        # DOWN probe cache: one detector call per recipient per cycle (a stopped seat with N
+        # queued rows must not cost N probes). Cleared every cycle by scope.
+        _down_cache = {}
+        _down_errors = []          # (session, error) per failed probe THIS cycle
         for msg in pending:
             agent = msg["to_agent"]
 
@@ -2731,6 +2975,23 @@ def main():
             # Per-runtime idle-gate: _runtime was resolved above (before the breathe window).
             _idle = (_codex_idle_release if _runtime == "codex"
                     else agent_is_idle(session, _runtime))
+            if not _idle:
+                # DOWN BEFORE NOT-IDLE. A seat whose agent exited leaves a live pane at a shell
+                # prompt: agent_is_idle says not-idle forever and the row was held silently.
+                # Ask the detector — ONCE per recipient per cycle (_down_cache) — and when it
+                # says the process is gone, PAGE the seat's escalation instead of holding. The
+                # row stays PENDING and is retried when it answers.
+                if seat_is_down(session, cache=_down_cache, errors=_down_errors):
+                    _anchor = mark_seat_down(down_state, session, now)
+                    if page_seat_down(down_state, session, _qdepth.get(agent, 1), now, _anchor,
+                                      agent=agent):
+                        log(f"DOWN {session} :: agent process gone, paged its escalation "
+                            f"({_qdepth.get(agent, 1)} held, down "
+                            f"{_fmt_down(now - _anchor)}) — rows stay pending")
+                    continue
+                # It answered: a previous outage is over, so its rows are retried normally
+                # from here and a LATER outage gets a fresh anchor.
+                clear_seat_down(down_state, session)
             if not _idle and _dn and _runtime == "claude" and claude_mid_turn_safe(session):
                 _dn_waived.append("mid-turn")
             elif not _idle:
@@ -2756,6 +3017,9 @@ def main():
             # pane-reachability episode so a future re-stuck re-arms exactly
             # ONE would-clear (gm state-transition ruling msg_d4237aac).
             # Cheap no-op when no episode file exists; never sinks delivery.
+            # An idle pane also ends any DOWN outage on record for it (the recovered notice
+            # goes out once, and a later outage gets a fresh anchor).
+            clear_seat_down(down_state, session)
             try:
                 pane_reachability.note_recovered(session)
             except Exception:
@@ -2871,6 +3135,16 @@ def main():
         save_cooldowns(cooldowns)
         save_alerts(alerts)
         save_holds(hold_state)
+        # Is the DOWN probe itself working? Count this cycle BEFORE persisting so a blind
+        # detector pages once instead of silently restoring hold-forever. _down_cache holds
+        # one entry per distinct recipient probed this cycle.
+        try:
+            note_detector_health(down_state, probed=len(_down_cache),
+                                 errored=len({s for s, _ in _down_errors}), now=now,
+                                 last_error=(_down_errors[-1][1] if _down_errors else None))
+        except Exception as e:  # noqa: BLE001 — bookkeeping must never break a cycle
+            log(f"[down-detector] health accounting failed (non-fatal): {e}")
+        save_downs(down_state)
     finally:
         LOCKFILE.unlink(missing_ok=True)
 
