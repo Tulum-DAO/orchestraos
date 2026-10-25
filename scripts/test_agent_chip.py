@@ -17,8 +17,8 @@ FIXTURE = os.path.join(os.path.dirname(__file__), "..", "contract", "fixtures", 
     ("waiting", False, 0, "needs_you"),          # a permission prompt
     ("stranded", False, 0, "needs_you"),
     ("working", True, 0, "needs_you"),           # a pending menu outranks working
-    ("idle", False, 1, "needs_you"),             # a card this seat filed, waiting on Shaw
-    ("offline", False, 2, "needs_you"),          # a stopped seat can still be waiting on Shaw
+    ("idle", False, 1, "needs_you"),             # a card this seat filed, waiting on a person
+    ("offline", False, 2, "needs_you"),          # a stopped seat can still be waiting on a person
     ("crashed", False, 0, "down"),
     ("stalled", False, 0, "down"),
     ("offline", False, 0, "down"),
@@ -106,7 +106,7 @@ def test_pending_card_counts_are_cached_between_refreshes(monkeypatch):
 
 
 def test_a_service_seat_is_a_service_not_a_free_agent():
-    # macos-dev: a proxy registered as a seat reads idle, i.e. a green "talk to it" dot, but it takes
+    # A proxy registered as a seat reads idle, i.e. a green "talk to it" dot, but it takes
     # no messages. kind says so; clients draw "Service" and no message box.
     c = C.chip_for({"id": "watch-gateway", "state": "idle"}, registry_runtime="service")
     assert c["kind"] == "service" and c["provider"] is None
@@ -114,7 +114,7 @@ def test_a_service_seat_is_a_service_not_a_free_agent():
 
 
 def test_an_external_seat_is_not_checked_here_never_down():
-    # macos-dev: operated elsewhere, liveness not knowable here; red down would assert it is dead.
+    # Operated elsewhere, liveness not knowable here; red down would assert it is dead.
     c = C.chip_for({"id": "remote", "state": "external"}, registry_runtime="claude")
     assert c["kind"] == "external" and c["status"] is None and c["provider"] == "claude"
     assert C.chip_for({"id": "gm", "state": "working"})["kind"] == "agent"

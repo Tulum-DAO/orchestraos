@@ -18,14 +18,14 @@
  },
  {
   "row": {
-   "id": "ios-watch-dev",
+   "id": "mobile-dev",
    "state": "waiting",
    "provider": "codex",
    "model": "gpt-5.6-terra",
    "context_pct_of_window": 41
   },
   "chip": {
-   "name": "ios-watch-dev",
+   "name": "mobile-dev",
    "kind": "agent",
    "provider": "codex",
    "model_label": "GPT-5.6 Terra",

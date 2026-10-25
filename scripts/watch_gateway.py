@@ -1689,7 +1689,7 @@ _pending_cards_cache = {"at": -1e18, "counts": {}}
 
 
 def _pending_cards_by_author() -> dict:
-    """seat -> count of its pending cards (waiting on Shaw), read at most every
+    """seat -> count of its pending cards (waiting on a person), read at most every
     PENDING_CARDS_CACHE_S so the /agents refresh does not query the card store each time."""
     import time as _time
     now = _time.monotonic()

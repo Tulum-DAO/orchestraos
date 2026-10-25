@@ -28,7 +28,7 @@ works it out on its own and two screens never disagree.
 
 | field | meaning |
 |---|---|
-| `name` | Our seat name (`gm`, `ios-watch-dev`, ...). The provider is the logo, never the name. |
+| `name` | Our seat name (`gm`, `mobile-dev`, ...). The provider is the logo, never the name. |
 | `kind` | `agent`; `service`: a proxy or daemon registered as a seat (it takes no messages: draw "Service" and no message box, whatever its dot); `external`: run elsewhere, so its liveness is not knowable here (`status` is `null`: draw "External" and no live dot, never red). |
 | `provider` | `claude`, `codex`, `gemini`, `grok`, or `null`. Taken from the live process, else the registry, so a stopped seat keeps its logo. `null` means no logo. |
 | `model_label` | A short model name for a tooltip or a tap (`Opus 5.5`, `GPT-5.6 Terra`, `Grok 4.7`). From the model id and the labels in `config/providers.json`; an id with no known label is shown as it is. `null` when the model is unknown. |
