@@ -143,7 +143,7 @@ def test_down_state_round_trips_and_tolerates_a_bad_file(tmp_path, monkeypatch):
 
 def test_loop_pages_down_before_holding_and_persists():
     src = inspect.getsource(mr.main)
-    idle = src.index("if not agent_is_idle(session, _runtime):")
+    idle = src.index("if not _idle:")
     down = src.index("if seat_is_down(session, cache=_down_cache, errors=_down_errors):")
     hold = src.index('"not-idle", now', idle)
     assert idle < down < hold

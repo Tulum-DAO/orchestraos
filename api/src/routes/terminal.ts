@@ -10,7 +10,9 @@ import type { WebSocket as WsType, WebSocketServer as WssType } from 'ws';
 import { createRequire } from 'module';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { CODE_ROOT } from '../lib/codeRoot.js';
+import { loadConfig } from '../lib/config.js';
 const require_cjs = createRequire(import.meta.url);
 
 let pty: any;
@@ -30,6 +32,11 @@ export function setupTerminalWebSocket(wss: WssType) {
 
     if (!session) {
       ws.send('\r\n\x1b[31mError: ?session= required\x1b[0m\r\n');
+      ws.close();
+      return;
+    }
+    if (!isRegisteredTerminalSession(session)) {
+      ws.send('\r\n\x1b[31mError: registered session required\x1b[0m\r\n');
       ws.close();
       return;
     }
@@ -97,6 +104,15 @@ export function setupTerminalWebSocket(wss: WssType) {
       }
     });
   });
+}
+
+export function isRegisteredTerminalSession(session: string): boolean {
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(session)) return false;
+  try {
+    const registry = JSON.parse(readFileSync(path.join(loadConfig().dataDir, 'registry.json'), 'utf8'));
+    return Object.values((registry?.agents || {}) as Record<string, any>)
+      .some((agent: any) => agent && (agent.tmux_session === session || agent.name === session));
+  } catch { return false; }
 }
 
 /** Re-apply scripts/tmux_session_defaults.sh to a seat before attaching. A seat gets its hooks at
