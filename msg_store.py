@@ -100,6 +100,45 @@ ADDRESSABILITY_LOG_FILE = Path(
     or (Path(__file__).resolve().parent / "logs" / "addressability-shadow.log"))
 
 
+import orchestra_cli.settings as _ocs  # noqa: E402
+
+
+class LiveBusRefused(_ocs.RealDataDirWrite):
+    """A test tried to open a REAL message bus. See MessageStore.__init__."""
+
+
+def _under_pytest() -> bool:
+    # PYTEST_CURRENT_TEST is set per-TEST and is None at import/collection time, so a
+    # module-level MessageStore() in a test module would slip past it. `"pytest" in
+    # sys.modules` is True at import under pytest and False in production.
+    return bool(os.environ.get("PYTEST_CURRENT_TEST")) or "pytest" in sys.modules
+
+
+def _refuse_live_bus_under_pytest(db_path: str) -> None:
+    """Refuse to OPEN (not just write) a message bus inside a real data dir from a test.
+
+    Read-contamination corrupts a result; write-contamination corrupts real agents' mail.
+    Every send() can be injected into a live agent's pane by the router, so a test that
+    opens the real bus can type fabricated mail at real agents. The repo-root conftest
+    points ORCHESTRA_DIR at a temp dir, but a conftest only protects runs that LOAD it (a
+    bare `pytest path/to/test.py` from another root, or a script a test shells out to,
+    misses it), so the constructor is fenced too and the fence travels with the code.
+    The protected set is the one the other stores use (settings.protected_data_dirs):
+    the dirs that were real when the run started, or, without the conftest, this
+    checkout's configured data dir and the default. realpath, so `../` or a symlink
+    cannot walk past it. Inert outside pytest: production behaviour is unchanged."""
+    if not _under_pytest() or db_path == ":memory:":
+        return
+    target = os.path.realpath(db_path)
+    for root in _ocs.protected_data_dirs():
+        if target == root or target.startswith(root.rstrip(os.sep) + os.sep):
+            raise LiveBusRefused(
+                f"refusing to open the LIVE message bus ({db_path}) from a test: it is "
+                f"inside the real data dir {root}. Set MSG_DB_PATH or ORCHESTRA_DIR to a "
+                f"scratch dir, pass an explicit path, or pass allow_live=True if this test "
+                f"genuinely asserts against the live bus.")
+
+
 class ImpersonatedSender(RuntimeError):
     """Armed refusal: the calling process is not the agent it claims to be."""
 
@@ -350,7 +389,7 @@ class HeldAckRefused(RuntimeError):
 
 
 class MessageStore:
-    def __init__(self, db_path=None):
+    def __init__(self, db_path=None, allow_live=False):
         # MSG_DB_PATH env mirror (F4 fix, spec §3.1): scopes the message bus the
         # same way APPROVAL_DB_PATH scopes the approval store (approval.py:18).
         # Precedence: explicit db_path arg > MSG_DB_PATH env > live DB_PATH.
@@ -358,6 +397,10 @@ class MessageStore:
         # the constructor so ALL no-arg MessageStore() constructions are scoped at
         # once (incl. approval_resume._msg_store, the C5b resume-leak hole).
         self.db_path = str(db_path or os.environ.get("MSG_DB_PATH") or DB_PATH)
+        # FENCE: refuse the live bus from inside a test. allow_live is the explicit,
+        # greppable escape for the few tests that must assert against the real bus.
+        if not allow_live:
+            _refuse_live_bus_under_pytest(self.db_path)
 
     def _conn(self):
         conn = sqlite3.connect(self.db_path, timeout=30)
