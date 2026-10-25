@@ -42,8 +42,10 @@ const RESERVED = new Set(['all', 'none', 'new', 'arturo', 'self', 'system']);
 
 // A new registry row must carry a resolvable runtime AND model or the flock-safe writer
 // refuses it (spawn-agent.sh R4 invariant). Same table Arturo's commission path uses.
-const DEFAULT_MODEL_FOR_RUNTIME: Record<string, string> = {
-  claude: 'claude-sonnet-5',
+// A new Claude seat starts on Opus 5.5 with the 1M context (product decision 2026-10-22);
+// claude-sonnet-5 was an old default.
+export const DEFAULT_MODEL_FOR_RUNTIME: Record<string, string> = {
+  claude: 'claude-opus-5-5[1m]',
   gemini: 'gemini-3.1-pro',
   codex: 'gpt-5.6-terra',
   grok: 'grok-4.7',
@@ -294,16 +296,23 @@ export function spawnArgv({ name, task, runtime, gm }: { name: string; task: str
   return args;
 }
 
-function realSpawn({ name, task, runtime, gm, parent }: { name: string; task: string; runtime: string; gm: boolean; parent: string | null }): Promise<{ ok: boolean; output: string }> {
-  const args = spawnArgv({ name, task, runtime, gm });
+/** The environment a New Agent spawn runs with: the API's own, plus the runtime and its default
+ *  model (what spawn-agent.sh hands the CLI as --model), with the parent set only when given. */
+export function spawnEnv(base: NodeJS.ProcessEnv, runtime: string, parent: string | null): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...base,
     AGENT_RUNTIME: runtime,
     AGENT_MODEL: DEFAULT_MODEL_FOR_RUNTIME[runtime] || runtime,
   };
   // Unset, not inherited, when there is no parent: the API's own env must never pick one.
   delete env.PARENT_AGENT_ID;
   if (parent) env.PARENT_AGENT_ID = parent;
+  return env;
+}
+
+function realSpawn({ name, task, runtime, gm, parent }: { name: string; task: string; runtime: string; gm: boolean; parent: string | null }): Promise<{ ok: boolean; output: string }> {
+  const args = spawnArgv({ name, task, runtime, gm });
+  const env = spawnEnv(process.env, runtime, parent);
   return new Promise((resolve) => {
     execFile(gm ? args[0] : 'bash', gm ? args.slice(1) : args, { timeout: 120000, cwd: ORCHESTRA_ROOT, env }, (err, stdout, stderr) => {
       resolve({ ok: !err, output: `${stdout || ''}\n${stderr || ''}`.trim() });
