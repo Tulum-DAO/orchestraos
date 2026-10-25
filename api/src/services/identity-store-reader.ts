@@ -159,6 +159,54 @@ export function getGenerationCounts(orch: string = ORCHESTRA_DIR): Record<string
   }
 }
 
+/** The generation a seat's current head took over from, for the stitched chat (a rotation keeps
+ *  the thread). */
+export interface Predecessor {
+  root: string;
+  cwd: string | null;
+  from_generation: number;
+  to_generation: number;
+  from_session: string;
+  to_session: string;
+  conversation_path: string | null;
+  promoted_at: string;
+}
+
+/** `sid` must be the session of a root's CURRENT head (its canonical generation); its predecessor
+ *  is the generation of the same root retired at the very moment the head was promoted (a swap
+ *  stamps both at once). Not "the next lower number": numbers reset. A head never promoted, no
+ *  such generation, more than one, or one with no session id: null. */
+export function predecessorOf(sid: string, orch: string = ORCHESTRA_DIR): Predecessor | null {
+  let db: Database.Database | null = null;
+  try {
+    db = new Database(dbPath(orch), { readonly: true, fileMustExist: true });
+    db.pragma('busy_timeout = 5000');
+    const cur = db.prepare(
+      `SELECT g.id, g.root, g.generation, g.promoted_at, l.cwd
+       FROM generations g JOIN canonical c ON c.generation_id = g.id
+       LEFT JOIN lineages l ON l.root = g.root
+       WHERE g.session_id = ?`,
+    ).get(sid) as { id: number; root: string; generation: number; promoted_at: string | null; cwd: string | null } | undefined;
+    if (!cur || !cur.promoted_at) return null;
+    const prev = db.prepare(
+      `SELECT generation, session_id, conversation_path FROM generations
+       WHERE root = ? AND id <> ? AND retired_at = ?`,
+    ).all(cur.root, cur.id, cur.promoted_at) as { generation: number; session_id: string | null; conversation_path: string | null }[];
+    if (prev.length !== 1 || !prev[0].session_id) return null;
+    return {
+      root: cur.root, cwd: cur.cwd ?? null,
+      from_generation: prev[0].generation, to_generation: cur.generation,
+      from_session: prev[0].session_id, to_session: sid,
+      conversation_path: prev[0].conversation_path ?? null,
+      promoted_at: cur.promoted_at,
+    };
+  } catch {
+    return null;
+  } finally {
+    try { db?.close(); } catch { /* best-effort */ }
+  }
+}
+
 /** Every generation of one root, newest first. */
 export function getGenerations(root: string, orch: string = ORCHESTRA_DIR): GenerationRow[] | null {
   let db: Database.Database | null = null;

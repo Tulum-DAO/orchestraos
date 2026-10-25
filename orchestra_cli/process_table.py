@@ -72,6 +72,11 @@ def build_process_table(st: Settings) -> list:
         # Off unless [plugins.telegram] enabled = true AND TELEGRAM_BOT_TOKEN is in the env.
         ProcEntry("telegram", "service", [py, str(root / "plugins" / "telegram" / "router.py")], cwd,
                   enabled=st.telegram_enabled, note="phone chat channel for gm ([plugins.telegram] enabled; token from TELEGRAM_BOT_TOKEN)"),
+        # Grok Bot webhook: one POST to the bot app's https webhook when its agent has new mail (ids +
+        # count only). Off unless [plugins.grok_bot] enabled = true; URL + key in <data>/state/grok-bot-webhook.env.
+        ProcEntry("grok_bot_webhook", "service",
+                  [py, str(root / "plugins" / "grok_bot" / "webhook.py"), "--agent", st.grok_bot_agent], cwd,
+                  enabled=st.grok_bot_enabled, note="new-mail webhook for an outside Grok Bot ([plugins.grok_bot] enabled)"),
     ]
 
 

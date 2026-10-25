@@ -201,11 +201,11 @@ Confirm the `gateway` row has a live pid again.
   |---|---|
   | `read` | see approvals, agents and transcripts, and open the photos and files sent in a chat |
   | `approve` | answer approvals and questionnaires: it acts as you |
-  | `message` | send a message to an agent, upload a file, and type to Arturo. Arturo's lookups can read your agents' conversations, so `message` without `read` is not read-free; its messages to agents are marked unverified, and each typed turn spends provider credit |
+  | `message` | send a message to an agent, upload a file, switch an agent's model (`PUT /agent-model`), and type to Arturo. Arturo's lookups can read your agents' conversations, so `message` without `read` is not read-free; its messages to agents are marked unverified, and each typed turn spends provider credit |
   | `inject` | press keys in a live agent's terminal |
   | `voice` | Live voice mode and dictation through the server, audio only (every call spends provider credit). Typing to Arturo is `message` |
   | `ptt` | push-to-talk to Arturo from a headset or Watch: lookups, and messages to agents marked unverified |
-  | `admin` | file red-alert reports, post telemetry |
+  | `admin` | file red-alert reports, post telemetry, create a new agent under an existing one (`POST /agents/new`, with its parent list and the provider refresh) |
   | `usage` | see how much of each AI plan's limit is used (`GET /usage`, and the same rows on `/agents`): the 5-hour and weekly windows Claude Code and Codex report. `read` alone does not show it |
   | `owner` | this device is yours: its push-to-talk calls (with `ptt`) get Arturo's full tools, like the dashboard, instead of lookups only. Typed turns are unchanged |
   | `code` | open a file in the working folder of an agent you allowlisted under `[code] roots` in orchestra.toml (off until you list a root). Dotfiles, logs, keys, databases, transcripts and anything secret-shaped are refused; every fetch is audited. Only the host can grant it, and the gateway's own bearer does not have it. Behind a reverse proxy, keep any public (Funnel) entry off the gateway port: the proxy hides the caller's address |

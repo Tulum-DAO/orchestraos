@@ -614,7 +614,9 @@ async function gatewayInject(session: string, text: string, force: boolean):
   if (!token) throw new Error('gateway token unavailable');
   const resp = await fetch(`${GATEWAY_URL}/agent-message`, {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json',
+      // A person typed this (the dashboard terminal): the gateway counts it as the operator's.
+      'X-Actor': 'operator:web' },
     body: JSON.stringify({ session, text, force }),
     signal: AbortSignal.timeout(25000),
   });

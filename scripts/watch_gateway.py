@@ -42,6 +42,8 @@ from approval_schema import ApprovalStore
 from questionnaire_schema import QuestionnaireStore
 import approval_resume
 import questionnaire_resume
+import pane_lock
+import inject_journal
 import logging
 import inspect
 # Module logger for the voice-lane endcall/fallback paths (fixes the `log` NameError:
@@ -106,6 +108,7 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("GET", "/history"): "read",
     ("GET", "/approvals/{id}"): "read",
     ("GET", "/agents"): "read",
+    ("GET", "/agent-model"): "read",
     # Plan usage per provider (scripts/usage_meter.py). Its own verb, reserved in pairing for it:
     # how much of a paid plan is left is not something every read-only device needs.
     ("GET", "/usage"): "usage",
@@ -119,6 +122,7 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("GET", "/agent-screen"): "read",
     ("GET", "/transcript"): "read",
     ("GET", "/red-alert/reports"): "read",
+    ("GET", "/runtimes/available"): "read",
     ("GET", "/questionnaires"): "read",
     ("GET", "/questionnaires/{id}"): "read",
     ("GET", "/events"): "read",
@@ -184,6 +188,9 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("POST", "/menu-submit"): "approve",
     # --- message ---------------------------------------------------------------------
     ("POST", "/agent-message"): "message",
+    # Switch an agent's model (scripts/agent_model.py). A person's surface only, checked in the
+    # handler: the scope alone would let the fleet token agents hold switch any seat.
+    ("PUT", "/agent-model"): "message",
     ("POST", "/upload"): "message",
     # Read a sent file back for chat previews. HEAD is its own method to the middleware, so it is
     # declared too, or it would 403 as "route declares no scope".
@@ -240,7 +247,16 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     # (PUT /arturo/ptt/vendor and /voice sit above with base `admin`; ROUTE_ANY_OF widens exactly
     # those two. The GETs stay `read`.)
     ("POST", "/red-alert/report"): "admin",
+    # New Agent from a paired device (the web form's "+", ported to iOS/macOS): creating a seat
+    # and probing CLIs are fleet-wide acts; the parent list names every registered seat.
+    ("POST", "/agents/new"): "admin",
+    ("GET", "/agents/new/parents"): "admin",
+    ("POST", "/runtimes/available/refresh"): "admin",
     ("POST", "/telemetry"): "admin",
+    # A live terminal into a seat's pane (the Mac's Dev mode, the web's xterm through the gateway):
+    # unlimited keystrokes, so the shell-grade verb. The handler ALSO requires `inject` (it presses
+    # keys) and refuses the fleet bearer outright: that credential identifies no device to audit.
+    ("GET", "/terminal/ws"): "admin",
     # The only route that MINTS a credential. `admin` so the TABLE states that it is privileged —
     # I first wrote it as _PUBLIC "because the handler checks the principal", and
     # test_the_only_public_routes_are_the_three_that_must_be caught it, correctly: a route whose
@@ -1676,12 +1692,127 @@ def compute_agents():
         return ev if _hook_event_is_current(ev, agent_start.get(sess), sess in agent_start) else None
 
     _stamp_recency_and_subagents(out, _pane_event)
+    _stamp_last_user_message(out)
+    _stamp_lineage(out, reg_agents)
     _stamp_chips(out, {name: meta for name, meta in sess_meta.values()})
 
     rank = {"waiting": 0, "stranded": 1, "stalled": 2, "crashed": 3, "stopped": 4,
             "working": 5, "idle": 6, "offline": 7}
     out.sort(key=lambda a: (rank.get(a["state"], 9), -a.get("last_used_ts", 0), a["id"]))
     return out
+
+
+def _pane_sessions():
+    """{pane_id: (session_name, session_created epoch or None)} for every live tmux pane."""
+    r = _tmux("list-panes", "-a", "-F", "#{pane_id} #{session_created} #{session_name}")
+    out = {}
+    for line in (r.stdout or "").splitlines():
+        parts = line.split(" ", 2)
+        if len(parts) == 3 and parts[0] and parts[2]:
+            out[parts[0]] = (parts[2], int(parts[1]) if parts[1].isdigit() else None)
+    return out
+
+
+def _stamp_lineage(rows, reg_agents):
+    """root + lineage_role (canonical | green | retired) + lineage_state (a green's: prewarming |
+    ready) on /agents rows, so the apps can nest a standby green under its seat and label an old
+    generation (ios-watch-dev msg_cba15fe1, gm msg_b7f14aab). From the identity DB and the
+    blue-green state files only, never from a seat's name. A row nothing proves, or that two
+    roots claim, is left as it is (absent = draw as today). Never fails /agents.
+
+    - green: state/wal/<root>.bg.json in PREWARMING or READY whose meta.green_pane_id is this
+      row's pane AND that can be checked: its green_session_id is the session id of the
+      generation behind this tmux session, and/or the tmux session is not older than
+      green_spawned_at (tmux reuses pane ids after a server restart). A SOLO file can keep an
+      old pane id: never a green.
+    - canonical: the canonical pointer's tmux_session (a provisional one is not a seat yet).
+    - retired: the row's registry session_id is a generation with retired_at set that is not its
+      root's canonical generation."""
+    import sqlite3
+
+    def _name(v):
+        return v if isinstance(v, str) and v else None
+
+    canon, canon_gen, gen_by_sid, gen_sid = {}, {}, {}, {}
+    try:
+        conn = sqlite3.connect(f"file:{ORCH_DIR / 'state' / 'orchestra-registry.db'}?mode=ro", uri=True, timeout=2)
+        try:
+            for gid, root, sid, retired in conn.execute(
+                    "SELECT id, root, session_id, retired_at FROM generations"):
+                gen_sid[gid] = sid
+                if sid:
+                    gen_by_sid[sid] = (gid, root, retired)
+            for root, gid, sess, status in conn.execute(
+                    "SELECT root, generation_id, tmux_session, status FROM canonical"):
+                canon_gen[root] = gid
+                if sess and status != "provisional":
+                    canon.setdefault(sess, set()).add((root, gen_sid.get(gid)))
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — no identity DB: nothing to say
+        return
+    greens, panes = {}, None
+    try:
+        files = sorted((ORCH_DIR / "state" / "wal").glob("*.bg.json"))
+    except OSError:
+        files = []
+    for f in files:
+        d = _load_json(f)
+        if not isinstance(d, dict) or d.get("state") not in ("PREWARMING", "READY"):
+            continue
+        meta = d.get("meta") if isinstance(d.get("meta"), dict) else {}
+        pane, root = _name(meta.get("green_pane_id")), _name(d.get("root"))
+        if not (pane and root):
+            continue
+        if panes is None:
+            try:
+                panes = _pane_sessions()
+            except Exception:  # noqa: BLE001
+                panes = {}
+        sess, created = panes.get(pane, (None, None))
+        if not sess:
+            continue
+        want_sid, spawned = _name(meta.get("green_session_id")), meta.get("green_spawned_at")
+        sids = {s for _r, s in canon.get(sess, ())} - {None}
+        checks = []
+        if want_sid and sids:
+            checks.append(want_sid in sids)
+        if isinstance(spawned, (int, float)) and isinstance(created, int):
+            checks.append(created >= spawned - 5)
+        if checks and all(checks):
+            greens.setdefault(sess, set()).add((root, d["state"].lower()))
+    for r in rows:
+        sess = r.get("tmux_session") or ""
+        g, c = greens.get(sess, set()), {root for root, _s in canon.get(sess, ())}
+        if g:
+            if len(g) == 1 and len(c) <= 1 and _name(next(iter(g))[0]):
+                root, state = next(iter(g))
+                r["root"], r["lineage_role"], r["lineage_state"] = root, "green", state
+            continue                                    # two roots claim this green or its session: say nothing
+        if c:
+            if len(c) == 1 and _name(next(iter(c))):
+                r["root"], r["lineage_role"] = next(iter(c)), "canonical"
+            continue
+        meta = reg_agents.get(r.get("id") or "") if isinstance(reg_agents, dict) else None
+        sid = _name(meta.get("session_id")) if isinstance(meta, dict) else None
+        gen = gen_by_sid.get(sid) if sid else None
+        if gen and gen[2] and _name(gen[1]) and canon_gen.get(gen[1]) != gen[0]:
+            r["root"], r["lineage_role"] = gen[1], "retired"
+
+
+def _stamp_last_user_message(rows):
+    """last_user_message_at (ISO) on each row: the newest message a person sent that agent
+    through the gateway (scripts/away.py last_person_message_at). Clients sort the Agents list
+    by it. Absent when there is none. Never fails /agents."""
+    try:
+        import away as AW
+        last = AW.last_person_message_at(ORCH_DIR)
+    except Exception:  # noqa: BLE001
+        return
+    for r in rows:
+        at = last.get(r.get("tmux_session") or "") or last.get(r.get("id") or "")
+        if at:
+            r["last_user_message_at"] = at
 
 
 PENDING_CARDS_CACHE_S = 15
@@ -2210,7 +2341,165 @@ async def handle_away(request):
 # ---------------------------------------------------------------------------
 
 INJECT_INGEST_WAIT_S = float(os.environ.get("WATCH_GATEWAY_INGEST_WAIT", "1.0"))
-INJECTABLE_STATES = {"idle"}          # never mid-turn (working/thinking), never stopped
+INJECTABLE_STATES = {"idle"}          # never stopped/crashed/offline, never a menu
+# Operator P1 2026-10-06 (gm ruling msg_627b54e3, with orchestraos-builder msg_57b0fe6f): the send
+# gate turns on COMPOSER-ACCEPTS-INPUT, not on state=working. Claude Code QUEUES input mid-turn
+# natively and consumes it at turn end, so refusing a working pane invented a problem the CLI
+# does not have — the operator could not message a seat that was running a subagent, while typing the
+# same text into that pane by hand worked fine.
+# The gate is now three facts about the SCREEN, none of them about being busy:
+#   1. a prompt box is PRESENT (there is a composer to queue into), AND
+#   2. no pending menu/permission prompt (those REPLACE the composer and need the operator), AND
+#   3. the pane is ALIVE (stopped/crashed/offline panes are refused by the state gate below).
+# The operator's own unsubmitted typed text stays sacred, mid-turn included.
+MID_TURN_STATES = {"working", "thinking"}
+
+# gm RULING 2026-10-07 (msg_1e8a5f91, on orchestraos-builder msg_bd9bd202): `stalled` JOINS the
+# mid-turn set. It is not a dead state — agent-status.py derives it FROM working by a timer
+# (`STALL_S = 600`: working + an unchanged screen + no hook events for ten minutes), so it is a
+# live process sitting at a prompt where the CLI queues input natively, exactly like `working`.
+#
+# It was grouped with stopped/crashed/offline below, which is the sibling-of-a-fixed-class miss:
+# the gate was opened for working/thinking under gm msg_627b54e3 because refusing a working pane
+# "invented a problem the CLI does not have", and the state DERIVED from working by a 600 s timer
+# was not opened with it. Refusing it recreated the unreachable-seat P1 on exactly the seats most
+# likely to need a nudge, AND the web composer already promised the operator it would be queued —
+# so web and gateway disagreed, which is how ios-watch-dev found it.
+#
+# Kept as its OWN set rather than folded into MID_TURN_STATES, because the two are not the same
+# claim: mid-turn means a turn is running, stalled means we have not seen one move for 600 s. The
+# answer carries `state` either way, so a client can say "queued — the agent looks stalled"
+# instead of implying a normal turn end.
+STALLED_STATES = {"stalled"}
+
+#: Runtimes PROVEN to queue a message typed during a turn and run it at the turn's end: Claude Code
+#: (above), and Codex (Enter into a working Codex pane queues to the next tool boundary: verified,
+#: message-router.py codex_pane_is_busy). A mid-turn or stalled pane of any other runtime (Gemini,
+#: Grok, one the detector cannot name) is refused as before until the same is shown for it.
+MID_TURN_QUEUE_RUNTIMES = {"claude", "codex"}
+
+
+def _pane_shows_active_turn(pane_text: str) -> bool:
+    """True if the VISIBLE screen shows a live turn (spinner glyph + esc hint).
+
+    A spinner glyph with the esc hint (audit F1), plus a bare "esc to interrupt"/"esc to cancel"
+    anywhere: that fallback can read QUOTED output as a turn, which only ever makes the submit
+    witness stricter. Anything that must not refuse on quoted output reads _turn_above_composer.
+    """
+    for ln in (pane_text or "").splitlines():
+        if ln.strip()[:1] in "✻✽✶✳✢✺✹✸✷⚹·*+⣾⣽⣻⢿⡿⣟⣯⣷●▸" and (
+                "esc to interrupt" in ln or "esc to cancel" in ln
+                or any(c in ln for c in "⣾⣽⣻⢿⡿⣟⣯⣷")):
+            return True
+        if "esc to cancel" in ln or "esc to interrupt" in ln:
+            return True
+    return False
+
+
+def _pane_has_composer(pane_text: str) -> bool:
+    """True if a prompt box is on the VISIBLE screen — i.e. the composer accepts input.
+
+    This is the positive half of the new gate. A menu/permission prompt REPLACES the composer,
+    and a dead pane has none, so the same check covers both refusals without asking what the
+    agent is busy doing."""
+    # Only the BOTTOM-MOST prompt line can be the live composer (submitted messages in scrollback
+    # also start with a prompt glyph); when that line is a selected menu row, there is none.
+    prompts = [ln for ln in (pane_text or "").splitlines() if _is_prompt_line(ln)]
+    return bool(prompts) and not _MENU_ROW_RE.match(prompts[-1])
+
+
+def _turn_above_composer(pane_text: str) -> bool:
+    """A live turn drawn right above the input box (where the CLI draws its spinner), not anywhere
+    on screen: agent OUTPUT higher up that merely quotes "esc to interrupt" must not make an idle
+    agent look busy. For idle_only; the submit witness keeps the whole-screen read, where a false
+    'already running' can only make it stricter."""
+    rows = (pane_text or "").splitlines()
+    idx = [i for i, ln in enumerate(rows) if _is_prompt_line(ln)]
+    if not idx:
+        return _pane_shows_active_turn(pane_text)
+    # GLYPH-ANCHORED at COLUMN 0, no bare-phrase fallback: the CLI draws its spinner line from the
+    # first column (measured on a live Claude pane: "* Fermenting… (1h 14m 31s · ↓ 78.0k tokens ·
+    # …)", which carries no esc hint at all), while quoted output is indented or starts otherwise.
+    for ln in rows[max(0, idx[-1] - 6):idx[-1]]:
+        t = _strip_ansi(ln).rstrip()
+        if t[:1] in _SPINNER_GLYPHS and ("esc to interrupt" in t or "esc to cancel" in t
+                                         or any(c in t for c in "⣾⣽⣻⢿⡿⣟⣯⣷")
+                                         or _SPINNER_GERUND_RE.match(t)):
+            return True
+    return False
+
+
+_SPINNER_GLYPHS = "✻✽✶✳✢✺✹✸✷⚹·*+⣾⣽⣻⢿⡿⣟⣯⣷●▸◦•"
+#: The detector's spinner shape (agent-status.py _SPINNER_LINE_RE): a glyph, then a capitalised
+#: gerund ending in an ellipsis ("✻ Sautéing…", "* Fermenting…", Codex "• Working").
+_SPINNER_GERUND_RE = re.compile(r"^[" + re.escape(_SPINNER_GLYPHS) + r"]\s*[A-Z][a-zà-ÿ]+ing\S*(…|\.\.\.|\s*\()")
+
+
+def _bottom_composer_rows(pane_text: str) -> str:
+    """The bottom-most prompt line plus the rows under it up to a rule line (a draft or our own
+    text wrapped across rows), joined; '' when no prompt line is on screen."""
+    rows = (pane_text or "").splitlines()
+    idx = [i for i, ln in enumerate(rows) if _is_prompt_line(ln)]
+    if not idx:
+        return ""
+    out = [rows[idx[-1]]]
+    for row in rows[idx[-1] + 1:]:
+        t = row.replace("\xa0", " ").strip()
+        if t and set(t) <= set("─━-═"):
+            break
+        if t:
+            out.append(t)
+    return " ".join(out)
+
+
+#: A menu's SELECTED option renders with a prompt glyph ("❯ 1. Yes", "> 1. Yes", Codex "› 1. ..."),
+#: which _is_prompt_line takes for a composer. Such a row is never counted as one, so a menu that
+#: came up after the detector's last read (its pending_menu flag stale or absent) is still refused,
+#: force included. The shapes are exactly the ones the detector's menu parser reads
+#: (agent-status.py _MENU_OPT_RE, _CODEX_SELECTOR_RE; pinned by a test): a menu drawn any other way
+#: is invisible to pending_menu as well. A draft that itself starts "1. " is refused: the safe side.
+_MENU_ROW_RE = re.compile(r"^\s*[❯›\u203a>]\s*\d+\.\s")
+
+
+def _typed_on_prompt_line(pre_raw: str):
+    """The operator's TYPED text on the live composer line (dim ghosts excluded), '' when none,
+    None when no prompt line is on screen. Reads the bottom-most prompt line itself with
+    composer_state's line reader, NOT the whole-screen classifier: that one reads any screen with a
+    working marker as 'submitted' and reports no typed text, which mid-turn (now a state we type
+    into) would let a send paste over a draft the operator is typing."""
+    from scripts.composer_state import classify_input_line, _infer_runtime, PROMPT_SIGNATURES
+    raw_lines = (pre_raw or "").splitlines()
+    stripped = [_strip_ansi(ln) for ln in raw_lines]
+    # The whole input box first: the detector's box finder reads every wrapped row of a draft
+    # (each with the same SGR rule), so a draft whose first row is empty is still seen.
+    find_chrome = getattr(_agent_status(), "_find_chrome", None)
+    if callable(find_chrome):
+        try:
+            chrome = find_chrome(stripped, raw_lines)
+        except Exception:  # noqa: BLE001 — the box finder only; fall back to the prompt line
+            chrome = None
+        if chrome and isinstance(chrome.get("composer_text"), str):
+            return chrome["composer_text"].strip()
+    idx = [i for i, ln in enumerate(stripped) if _is_prompt_line(ln)]
+    if not idx:
+        return None
+    i = idx[-1]
+    rt = _infer_runtime(pre_raw) or "claude"
+    state, typed = classify_input_line(raw_lines[i], PROMPT_SIGNATURES.get(rt))
+    if state == "unknown":     # the line has no prompt glyph this runtime's reader knows: say what it shows
+        typed = stripped[i].strip().lstrip("❯>›\u203a").strip()
+    elif state != "typed":
+        typed = ""
+    # No box found: rows under the prompt line up to a rule are the draft's wrapped rows. Any text
+    # there counts as typed (a dim ghost there would also refuse: the safe side).
+    more = []
+    for row in stripped[i + 1:]:
+        t = row.replace("\xa0", " ").strip()
+        if t and set(t) <= set("─━-═"):
+            break
+        if t:
+            more.append(t)
+    return " ".join([typed] + more).strip() if (typed or more) else ""
 
 
 def _tmux(*args, timeout=5):
@@ -2218,11 +2507,44 @@ def _tmux(*args, timeout=5):
     return subprocess.run(["tmux", *args], capture_output=True, text=True, timeout=timeout)
 
 
+def _st(session):
+    """A tmux target that matches this session NAME EXACTLY (gm P1, 2026-10-06).
+
+    `-t NAME` resolves exact-first, then by PREFIX, then fnmatch. So while the root session
+    exists the bare name is correct — and the moment it does NOT, every read and every
+    KEYSTROKE aimed at NAME lands in NAME-gN: the green. That window is real and routine; it is
+    the husk-killed-before-rename gap during a blue/green swap.
+    PROVEN LIVE before the fix, with only `obg75prefix-g9` alive and no `obg75prefix`:
+      _capture_pane("obg75prefix")                    -> "I AM THE GREEN PANE"
+      _tmux("send-keys","-t","obg75prefix","-l",...)  -> landed in the GREEN's pane, rc 0
+    A refused send is recoverable; a keystroke typed into the wrong agent is not.
+
+    ⚠ THE TRAILING COLON IS LOAD-BEARING, AND '=NAME' ALONE IS A TRAP THAT LOOKS LIKE A FIX.
+    For a PANE target (capture-pane, send-keys) this tmux parses a bare '=NAME' as a pane NAME
+    and fails for EVERY session, present or absent:
+        capture-pane -t '=watch-gateway'   -> can't find pane: =watch-gateway   (session LIVE)
+        capture-pane -t '=obg75prefix-g9'  -> can't find pane                   (session LIVE)
+    I shipped exactly that for a few minutes and read its blanket failure as "the leak is
+    closed" — a false negative that would have blinded every capture and silenced every
+    keystroke in this gateway had it reached a restart. The colon makes the session component
+    exact-matched instead, MEASURED in all four directions:
+        '=NAME:'  on a live session        -> reads it / the keystroke lands
+        '=NAME:'  with only NAME-gN alive   -> "can't find session", nothing lands
+        'NAME:'   with only NAME-gN alive   -> reads the GREEN  (so '=' is what closes it)
+    `list-panes -t '=NAME'` (a SESSION target) does accept the bare form, which is what the one
+    list-panes call here uses.
+    """
+    s = str(session or "")
+    if s.startswith("="):
+        return s if ":" in s else f"{s}:"
+    return f"={s}" if ":" in s else f"={s}:"
+
+
 def _capture_pane(session, lines=60, ansi=False):
     """lines>0 includes scrollback (content reads); lines=0 = visible screen
     ONLY — required for any liveness/guard check, because old spinner frames
     ('esc to interrupt') persist in scrollback after a turn ends."""
-    args = ["capture-pane", "-t", session, "-p"]
+    args = ["capture-pane", "-t", _st(session), "-p"]
     if lines > 0:
         args += ["-S", f"-{lines}"]
     if ansi:
@@ -2248,6 +2570,30 @@ import threading as _threading
 
 _SEND_LOCKS_GUARD = _threading.Lock()
 _SEND_LOCKS: dict = {}
+
+
+#: Cross-process pane lock wait (pane_lock.py, gm msg_2291dee3). Taken only on executor threads.
+PANE_LOCK_WAIT_S = float(os.environ.get("WATCH_GATEWAY_PANE_LOCK_WAIT_S", "8.0"))
+
+
+from contextlib import contextmanager as _contextmanager
+
+
+@_contextmanager
+def _pane_guard(session):
+    """The CROSS-PROCESS half of the send lock (the threading lock below is in-process only).
+    Yields True when held, False when another typer (router, approval_resume, nudge) kept the pane
+    past PANE_LOCK_WAIT_S. Never on the event loop: every caller runs in an executor thread."""
+    cm = pane_lock.pane_lock(session, wait_s=PANE_LOCK_WAIT_S)
+    try:
+        cm.__enter__()
+    except pane_lock.PaneBusy:
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        cm.__exit__(None, None, None)
 
 
 def _session_send_lock(session):
@@ -2341,7 +2687,20 @@ def _status_runtime(st) -> str:
     return (rt or "").strip().lower()
 
 
-def verified_inject(session, text, force=False):
+def verified_inject(session, text, force=False, idle_only=False):
+    """_verified_inject_locked under the ONE cross-process pane lock (pane_lock.py) for the WHOLE
+    call, gates included: the composer read that protects the operator's typed text must not race another
+    typer's in-flight burst (measured in test_pane_lock_race: read outside the lock, a router paste
+    mid-delivery looked like the operator's draft). Busy past PANE_LOCK_WAIT_S -> 'busy', nothing typed.
+    Runs on executor threads only (the /agent-message handler, approval_resume's cron)."""
+    with _pane_guard(session) as _pane_held:
+        if not _pane_held:
+            return False, {"reason": "busy", "state": "busy",
+                           "activity": "another sender is typing into this pane"}
+        return _verified_inject_locked(session, text, force, idle_only)
+
+
+def _verified_inject_locked(session, text, force=False, idle_only=False):
     """Inject text into an agent pane with VERIFIED submit.
 
     Returns (ok, info). The merge-3 failure class = Enter swallowed by the
@@ -2382,13 +2741,41 @@ def verified_inject(session, text, force=False):
                        "activity": (f"{_rt} composer signature is not verified; nothing is "
                                     "typed into this pane from here (use the terminal, or "
                                     "send mail: the seat's mail watcher wakes it)")}
-    allowed = INJECTABLE_STATES | ({"stranded_input"} if force else set())
+    # ENUMERATE THE SAFE CASES AND DENY THE REST: idle, plus mid-turn (the CLI queues), plus
+    # stalled (mid-turn that stopped moving — still a live prompt, see STALLED_STATES), plus
+    # the composer-holds classes only under an explicit human force. waiting_permission,
+    # stopped, crashed and offline all fall through to the refusal below.
+    allowed = (INJECTABLE_STATES | MID_TURN_STATES | STALLED_STATES
+               | ({"stranded_input", "queued_input"} if force else set()))
+    # idle_only: a slash command must RUN now, not queue. /model typed mid-turn is queued by the
+    # CLI and runs when the turn ends: after the model switcher has already restored the host
+    # setting and let go of its lock, so the CLI would rewrite the host default unwatched.
+    if idle_only:
+        allowed = set(INJECTABLE_STATES)
+    elif _status_runtime(st) not in MID_TURN_QUEUE_RUNTIMES:
+        allowed -= MID_TURN_STATES | STALLED_STATES
     if st.get("state") not in allowed:
         info = {"reason": "busy", "state": state,
                 "activity": st.get("activity") or ""}
         if isinstance(st.get("stranded"), dict):
             info["stranded"] = st["stranded"]      # surface text + age honestly
+        if st.get("state") in ("stranded_input", "queued_input"):
+            # The FULL composer text (stranded.text stops at 200): the exact string a device can
+            # echo back to submit or clear it.
+            full = _typed_on_prompt_line(_capture_pane(session, lines=0, ansi=True) or "")
+            if full:
+                info["composer_text"] = full
         return False, info
+
+    # SECOND, INDEPENDENT MENU REFUSAL. The composer-presence check below does NOT hold this line
+    # on its own: _is_prompt_line treats a leading '>' as a prompt, and a permission menu renders
+    # its selected option as "> 1. Yes" (measured live), so a real menu screen passes it.
+    # pending_menu is the detector's own menu witness, independent of both the state map and the
+    # screen heuristic, so a menu has to clear BOTH mechanisms.
+    pending_menu = st.get("pending_menu")
+    if isinstance(pending_menu, dict) and pending_menu:
+        return False, {"reason": "busy", "state": "waiting",
+                       "activity": "Menu/permission prompt is pending — needs the operator"}
 
     # Startup grace gate: require process uptime >= 10.0s so CLI readline/ink raw mode listeners are attached.
     uptime_fn = getattr(_agent_status(), "get_process_uptime_s", None)
@@ -2398,40 +2785,42 @@ def verified_inject(session, text, force=False):
             return False, {"reason": "initializing", "state": state, "uptime_s": uptime_s,
                            "activity": f"Agent process is initializing ({uptime_s}s < 10s)"}
 
-    # Belt-and-braces mid-turn guard (2026-08-09 incident: an unknown spinner
-    # gerund made the detector read a mid-turn pane as idle). GLYPH-ANCHORED:
-    # real spinner lines start with a spinner glyph; a quoted "esc to interrupt"
-    # in agent output must not permanently block a finished agent (audit F1).
+    # The pre-inject screen: what the gates below and the submit witness read.
     pre_raw = _capture_pane(session, lines=0, ansi=True) or ""
     pre = _strip_ansi(pre_raw)
 
     # Auto-dismiss modal rating prompts (e.g. Antigravity "How's the CLI experience so far? [0] Skip")
     if any("How's the CLI experience so far" in ln or "[0] Skip" in ln for ln in pre.splitlines()):
         with _session_send_lock(session):
-            _tmux("send-keys", "-t", session, "0")
+            _tmux("send-keys", "-t", _st(session), "0")
             _time.sleep(0.5)
             pre_raw = _capture_pane(session, lines=0, ansi=True) or ""
             pre = _strip_ansi(pre_raw)
 
-    if any((ln.strip()[:1] in "✻✽✶✳✢✺✹✸✷⚹·*+⣾⣽⣻⢿⡿⣟⣯⣷●▸" and ("esc to interrupt" in ln or "esc to cancel" in ln or any(c in ln for c in "⣾⣽⣻⢿⡿⣟⣯⣷")))
-           or "esc to cancel" in ln
-           or "esc to interrupt" in ln
-           for ln in pre.splitlines()):
-        return False, {"reason": "busy", "state": "working", "activity": "Active turn"}
+    # A LIVE TURN IS NO LONGER A REFUSAL (see MID_TURN_STATES): it is MEASURED here, because the
+    # submit verification below needs to know whether the turn predates our Enter.
+    turn_already_running = _pane_shows_active_turn(pre)
+    if idle_only and _turn_above_composer(pre):   # the detector said idle; the screen says otherwise
+        return False, {"reason": "busy", "state": "working",
+                       "activity": "A turn is running; this needs an idle agent"}
+    # THE POSITIVE GATE: no composer on screen = nothing accepts input. This refuses a
+    # menu/permission prompt whose detector state lagged behind the screen, and a pane that is
+    # not a CLI prompt at all, without asking whether the agent is busy.
+    if not _pane_has_composer(pre):
+        return False, {"reason": "busy", "state": state,
+                       "activity": ("No composer accepting input on screen "
+                                    "(menu/permission prompt, or not a live CLI prompt)")}
     # NEVER paste over typed-but-unsubmitted input (standing the operator rule: he
-    # sometimes types directly into agent sessions — that text is sacred).
-    # Dim-styled ghost suggestions are NOT typed input and do not block (the
-    # detector's composer_typed_text does the style walk when available).
+    # sometimes types directly into agent sessions — that text is sacred), mid-turn included.
+    # Dim-styled ghost suggestions are NOT typed input and do not block.
     if not force:
-        # composer_state is the ONE SGR-aware reader (gm ghost-suggestion commission):
-        # it reads the bottom prompt line of the -e capture and returns the TYPED text
-        # only ('' for a dim ghost / placeholder / empty / working). pre_raw is -e.
-        from scripts.composer_state import composer_text
-        typed = composer_text(pre_raw, runtime=None) or ""  # runtime inferred from glyph
+        # composer_state is the ONE SGR-aware reader (gm ghost-suggestion commission), asked
+        # about the live prompt line itself so a working screen does not hide a draft.
+        typed = _typed_on_prompt_line(pre_raw) or ""
         if typed:
             return False, {"reason": "busy", "state": state,
                            "activity": "Composer has unsubmitted text",
-                           "composer_text": typed[:120]}
+                           "composer_text": typed}       # FULL: a device echoes it back exactly
 
     # task #16: over-threshold payloads dodge the paste-chip mechanically —
     # the pane receives a one-line banner + /tmp pointer, never a chippable body.
@@ -2444,25 +2833,54 @@ def verified_inject(session, text, force=False):
     # concurrent /agent-suggest (two-phase Tab->Enter) or /agent-key on the
     # same pane so their keystrokes can't interleave.
     with _session_send_lock(session):
-        r = _tmux("send-keys", "-t", session, "-l", text)
+        # TYPED-NOT-ENTERED JOURNAL (gm msg_40dcd58a): the row exists from just before the text is
+        # typed until the submit is verified, so a process killed in between (crash, SIGKILL, a
+        # respawn-pane -k) leaves evidence the next start reconciles (reconcile_inject_journal).
+        # A forced send skips the typed-text guard, so it could append to a half-sent message an
+        # earlier process left (its row still marked typed) and overwrite that row: the evidence
+        # the next start needs. Refuse instead; the person clears or sends that text first.
+        _left = inject_journal.row_for(session)
+        if force and isinstance(_left, dict) and _left.get("typed") is True:
+            return False, {"reason": "busy", "state": state,
+                           "activity": "A message an earlier gateway typed but never entered is "
+                                       "recorded for this pane; send or clear it first",
+                           "composer_text": _left.get("text") or ""}
+        try:
+            inject_journal.record(session, text, marker)
+        except OSError as e:   # FAIL CLOSED: an unjournaled inject is unrecoverable if the process
+            # dies before Enter, so nothing is typed.
+            print(f"[watch_gateway] inject journal write failed for {session}: {e}", file=sys.stderr)
+            return False, {"reason": "journal_unwritable", "state": state, "detail": str(e)}
+        r = _tmux("send-keys", "-t", _st(session), "-l", text)
         if r.returncode != 0:
+            inject_journal.clear(session)          # nothing was typed
             return False, {"reason": "send_failed", "state": state}
+        try:
+            inject_journal.mark_typed(session)     # only now may a next-start reconcile press Enter
+        except OSError as e:
+            print(f"[watch_gateway] inject journal mark failed for {session}: {e}", file=sys.stderr)
         _time.sleep(INJECT_INGEST_WAIT_S)
 
         for attempt in (1, 2):
             if attempt > 1:
-                # On retry, check if still idle/unsubmitted before sending another Enter
+                # On retry, check if still idle/unsubmitted before sending another Enter. OUR OWN
+                # unsubmitted text reads stranded_input/queued_input, which `allowed` admits only
+                # under force, so the retry would give up on exactly the state its first swallowed
+                # Enter created. Our text still in the live composer is the evidence that the
+                # retry Enter is ours to press.
                 st_retry = _agent_status().get_agent_status(session)
-                if st_retry.get("state") not in allowed:
+                own_text_waiting = (st_retry.get("state") in ("stranded_input", "queued_input")
+                                    and inject_journal.is_ours(
+                                        live_composer.strip().lstrip("❯>›\u203a"), text))
+                if st_retry.get("state") not in allowed and not own_text_waiting:
                     break
-            _tmux("send-keys", "-t", session, "Enter")
+            _tmux("send-keys", "-t", _st(session), "Enter")
             _time.sleep(2.5 if attempt == 1 else 2.0)
             pane = _strip_ansi(_capture_pane(session, lines=0) or "")   # visible only
             # Submitted messages ALSO render as "❯ text" or "> text" in scrollback — only the
             # BOTTOM-MOST prompt line is the live composer. Submit is verified when that
             # line no longer holds the text (or a new turn visibly started).
-            composer_lines = [ln for ln in pane.splitlines() if _is_prompt_line(ln)]
-            last_composer = composer_lines[-1] if composer_lines else ""
+            last_composer = _bottom_composer_rows(pane)
             live_composer = last_composer
             try:
                 find_chrome_fn = getattr(_agent_status(), "_find_chrome", None)
@@ -2473,21 +2891,110 @@ def verified_inject(session, text, force=False):
             except Exception:
                 pass
 
-            still_in_composer = bool(marker) and marker in live_composer
+            # Whitespace-blind: a marker wrapped across rows comes back with a space or a row
+            # break inside it, and must still read as our text in the box.
+            _flat = lambda v: "".join(str(v or "").split())
+            still_in_composer = bool(marker) and (_flat(marker) in _flat(live_composer)
+                                                  or _flat(marker) in _flat(last_composer))
             # defensive (task #16): a chip in the composer = payload landed but
             # unsubmitted — keep retrying Enter, never read it as submitted.
             if any(p in live_composer or p in last_composer for p in ("[Pasted text", "[Pasted Content", "[Pasted")):
                 still_in_composer = True
-            turn_started = "esc to interrupt" in pane or "esc to cancel" in pane or any(c in pane for c in "⣾⣽⣻⢿⡿⣟⣯⣷")
-            if turn_started or not still_in_composer:
+            # ⚠ A VISIBLE TURN IS A FALSE WITNESS MID-TURN. A turn that was ALREADY running before
+            # we typed is not evidence that our Enter landed: keying success on it would report a
+            # swallowed Enter as a successful send, which is the merge-3 class this verified
+            # submit exists to catch. Mid-turn, the only honest witness is that the composer
+            # CLEARED (the text left the box / became a queued entry).
+            turn_visible = ("esc to interrupt" in pane or "esc to cancel" in pane
+                            or any(c in pane for c in "⣾⣽⣻⢿⡿⣟⣯⣷"))
+            turn_started_now = turn_visible and not turn_already_running
+            if turn_started_now or not still_in_composer:
+                inject_journal.clear(session)
                 ok_info = {"state": state, "attempts": attempt}
                 if _chip_pointer:
                     ok_info["chip_dodge_pointer"] = _chip_pointer
                 return True, ok_info
-        fail_info = {"reason": "unverified_submit", "state": state}
+        # CLEAR-OWN, NEVER DROP (gm msg_2291dee3): our text still in the composer after both Enters
+        # = not submitted. Clear exactly that (C-u), verify, and hand the words back to the caller
+        # (text_returned; /agent-message holds them for the boundary when the client accepts
+        # "held"). Someone else's text, or a clear we cannot verify, is left alone and the journal
+        # row stays for the next start's reconcile.
+        def _composer_now():
+            scr = _strip_ansi(_capture_pane(session, lines=0) or "")
+            cl = [ln for ln in scr.splitlines() if _is_prompt_line(ln)]
+            return (cl[-1] if cl else "").strip().lstrip("❯>›\u203a").strip()
+        cleared = False
+        # HUMAN-SAFE: no tmux primitive clears "only if unchanged", so a person typing straight
+        # into the pane could add words between our read and C-u. One can only type into a pane
+        # through an ATTACHED client: with one attached we never clear; the text stays in front of
+        # them, the journal row stays, and the caller is told.
+        viewer = _client_attached(session)
+        if not viewer and inject_journal.is_ours(_composer_now(), text):   # EXACT: nothing of anyone else's
+            _tmux("send-keys", "-t", _st(session), "C-u")
+            _time.sleep(0.5)
+            cleared = not _composer_now().strip()
+        if cleared:
+            inject_journal.clear(session)
+        fail_info = {"reason": "unverified_submit", "state": state, "cleared": cleared}
+        if viewer:
+            fail_info["not_cleared_because"] = "a client is attached to this pane"
+        if cleared:
+            fail_info["text_returned"] = text
         if _chip_pointer:
             fail_info["chip_dodge_pointer"] = _chip_pointer
         return False, fail_info
+
+
+def _client_attached(session) -> bool:
+    """True when a client is attached to the pane, OR when tmux cannot say (fail closed): a person
+    may be typing there, so nothing presses Enter or clears it."""
+    r = _tmux("list-clients", "-t", _st(session))
+    return r.returncode != 0 or bool((r.stdout or "").strip())
+
+
+def _read_composer_typed(session):
+    """For the startup reconcile: None = session not in tmux; 'ERROR:<why>' = could not read, or no
+    composer on screen (a menu/permission prompt replaces it: nothing may be pressed, and the row
+    stays as the only evidence of our text, codex R19); '' = an empty composer; else the composer's
+    TYPED text (dim ghost suggestions excluded)."""
+    if _tmux("has-session", "-t", f"={session}").returncode != 0:
+        return None
+    # A person attached to the pane may be typing: the reconcile presses nothing there. 'ERROR:'
+    # keeps the row as evidence for the next start and reports it.
+    if _client_attached(session):
+        return "ERROR:a client is attached to this pane (or that could not be checked)"
+    raw = _capture_pane(session, lines=0, ansi=True)
+    if raw is None:
+        return "ERROR:capture failed"
+    if not _pane_has_composer(_strip_ansi(raw)):
+        return "ERROR:no composer on screen (a menu or prompt replaces it)"
+    typed = _typed_on_prompt_line(raw)
+    return "ERROR:no prompt line on screen" if typed is None else typed
+
+
+def _report_inject_reconcile(session, outcome, row):
+    line = (f"[watch_gateway] inject-journal reconcile: {outcome} session={session} "
+            f"typed_at={row.get('typed_at')} text_head={(row.get('text_head') or '')[:80]!r}")
+    print(line, file=sys.stderr)
+    if outcome in ("left-untouched", "unreadable"):
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+            from msg_store import MessageStore
+            MessageStore().send(
+                from_agent="watch-gateway", to_agent="gm", type="report", priority="high",
+                subject=f"gateway restart: half-sent message in {session} needs a person ({outcome})",
+                body=(f"{line}\nA message the gateway had typed but not entered when it last stopped "
+                      "is still in that composer and was NOT submitted. It was left untouched."))
+        except Exception as e:  # noqa: BLE001 — msg_store send only; the stderr line above stands
+            print(f"[watch_gateway] reconcile report mail failed: {e}", file=sys.stderr)
+
+
+def reconcile_inject_journal():
+    """Startup, BEFORE the port binds: resolve injects a previous process typed but never entered."""
+    def _enter(session):
+        return _tmux("send-keys", "-t", _st(session), "Enter").returncode == 0
+    return inject_journal.reconcile(_read_composer_typed, _enter, _report_inject_reconcile,
+                                    lock=_pane_guard)
 
 
 # ---------------------------------------------------------------------------
@@ -2547,6 +3054,14 @@ def _accepted_matches(typed, suggestion_text) -> bool:
 
 
 def suggest_accept(session, suggestion_text):
+    """Cross-process pane lock around _suggest_accept_inner (pane_lock.py)."""
+    with _pane_guard(session) as held:
+        if not held:
+            return 409, {"ok": False, "error": "another sender is typing into this pane"}
+        return _suggest_accept_inner(session, suggestion_text)
+
+
+def _suggest_accept_inner(session, suggestion_text):
     """Two-phase accept of the current ghost suggestion. Returns (status, body).
     Holds the per-session send mutex for the whole Tab->verify->Enter->verify
     sequence (F3). Fail-closed: any ambiguity -> refuse BEFORE Enter."""
@@ -2578,7 +3093,7 @@ def suggest_accept(session, suggestion_text):
             return 409, {"ok": False, "error": "composer has typed text",
                          "composer_text": typed[:120]}
         # (§3b.4a) Tab accepts the ghost into the composer (NOT a digit).
-        r = _tmux("send-keys", "-t", session, "Tab")
+        r = _tmux("send-keys", "-t", _st(session), "Tab")
         if r.returncode != 0:
             _audit_suggest({"session": session, "suggestion_text": suggestion_text,
                             "ts": _time.time(), "outcome": "send_failed_tab",
@@ -2598,7 +3113,7 @@ def suggest_accept(session, suggestion_text):
         # (§3b.4c) Enter + verified-submit (retry once — Enter-swallow hazard).
         marker = suggestion_text.strip().splitlines()[0][:40] if suggestion_text.strip() else ""
         for attempt in (1, 2):
-            _tmux("send-keys", "-t", session, "Enter")
+            _tmux("send-keys", "-t", _st(session), "Enter")
             _time.sleep(0.8 if attempt == 1 else 1.6)
             pane = _strip_ansi(_capture_pane(session, lines=0) or "")
             comp = [ln for ln in pane.splitlines() if _is_prompt_line(ln)]
@@ -2770,17 +3285,17 @@ def menu_resume_keypress(session, key, expect_question=None, commit=True):
     if not _ledger_menu_matches(session, expect_question, menu=cur):
         return False, {"reason": "menu_gone"}
     if _is_gemini_session(session) or _is_codex_session(session):
-        r = _tmux("send-keys", "-t", session, key, "Enter")
+        r = _tmux("send-keys", "-t", _st(session), key, "Enter")
         if r.returncode != 0:
             return False, {"reason": "send_failed"}
         return True, {"sent": key}
     # Claude Code branch.
     if not commit:
-        r = _tmux("send-keys", "-t", session, key)   # open the field; do NOT commit
+        r = _tmux("send-keys", "-t", _st(session), key)   # open the field; do NOT commit
         if r.returncode != 0:
             return False, {"reason": "send_failed"}
         return True, {"sent": key}
-    r = _tmux("send-keys", "-t", session, key, "Enter")  # select + commit
+    r = _tmux("send-keys", "-t", _st(session), key, "Enter")  # select + commit
     if r.returncode != 0:
         return False, {"reason": "send_failed"}
     import time as _time
@@ -2807,12 +3322,12 @@ def menu_resume_free_text(session, key, text, expect_question=None):
         info.setdefault("phase", 1)
         return False, info
     _time.sleep(MENU_FIELD_OPEN_WAIT_S)          # let the text field open
-    r = _tmux("send-keys", "-t", session, "-l", text)
+    r = _tmux("send-keys", "-t", _st(session), "-l", text)
     if r.returncode != 0:
         return False, {"reason": "send_failed", "phase": 2}
     _time.sleep(INJECT_INGEST_WAIT_S)
     for attempt in (1, 2):
-        r = _tmux("send-keys", "-t", session, "Enter")
+        r = _tmux("send-keys", "-t", _st(session), "Enter")
         if r.returncode != 0:
             return False, {"reason": "send_failed", "phase": 3}
         _time.sleep(0.8 if attempt == 1 else 1.6)
@@ -2863,8 +3378,8 @@ def permission_respond(session, text, *, armed=False, read_fn=None, key_fn=None,
     import time as _time
     settle_s = MENU_FIELD_OPEN_WAIT_S if settle_s is None else settle_s
     read_fn = read_fn or (lambda: _current_menu(session))
-    key_fn = key_fn or (lambda k: _tmux("send-keys", "-t", session, k).returncode == 0)
-    type_fn = type_fn or (lambda t: _tmux("send-keys", "-t", session, "-l", t).returncode == 0)
+    key_fn = key_fn or (lambda k: _tmux("send-keys", "-t", _st(session), k).returncode == 0)
+    type_fn = type_fn or (lambda t: _tmux("send-keys", "-t", _st(session), "-l", t).returncode == 0)
     menu = read_fn()
     if not isinstance(menu, dict):
         return False, {"reason": "menu_gone"}
@@ -2952,7 +3467,7 @@ def menu_capture_walk(session, *, read_fn=None, key_fn=None, settle_s=0.8,
     Pure over read_fn (-> parsed pending_menu|None) / key_fn (sends one key)."""
     import time as _time
     read_fn = read_fn or (lambda: _current_menu(session))
-    key_fn = key_fn or (lambda k: _tmux("send-keys", "-t", session, k).returncode == 0)
+    key_fn = key_fn or (lambda k: _tmux("send-keys", "-t", _st(session), k).returncode == 0)
 
     def _run():
         parts = []
@@ -3213,7 +3728,7 @@ def _session_pane_text(session):
     """Raw pane text of the session (ANSI-stripped) — used to verify the agy
     write-in value, which renders on a "Your answer:" line the menu parser does
     NOT fold into the options dict."""
-    cp = _tmux("capture-pane", "-p", "-t", session)
+    cp = _tmux("capture-pane", "-p", "-t", _st(session))
     return cp.stdout if getattr(cp, "returncode", 1) == 0 else ""
 
 
@@ -3256,9 +3771,9 @@ def menu_submit_agy(session, *, answers, armed=False, read_fn=None, key_fn=None,
     a 'Your answer:' line, NOT in the parsed options); defaults to a raw pane scan."""
     import time as _time
     read_fn = read_fn or (lambda: _current_menu(session))
-    key_fn = key_fn or (lambda k: _tmux("send-keys", "-t", session, k).returncode == 0)
+    key_fn = key_fn or (lambda k: _tmux("send-keys", "-t", _st(session), k).returncode == 0)
     type_fn = type_fn or (
-        lambda txt: _tmux("send-keys", "-t", session, "-l", txt).returncode == 0)
+        lambda txt: _tmux("send-keys", "-t", _st(session), "-l", txt).returncode == 0)
     if text_present_fn is None:
         def text_present_fn(t):
             # ANCHORED to the 'Your answer:' field (F6 congruence): an unanchored
@@ -3560,9 +4075,9 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
     menu gone / unreadable -> honest failure, nothing further pressed."""
     import time as _time
     read_fn = read_fn or (lambda: _current_menu(session))
-    key_fn = key_fn or (lambda k: _tmux("send-keys", "-t", session, k).returncode == 0)
+    key_fn = key_fn or (lambda k: _tmux("send-keys", "-t", _st(session), k).returncode == 0)
     type_fn = type_fn or (
-        lambda txt: _tmux("send-keys", "-t", session, "-l", txt).returncode == 0)
+        lambda txt: _tmux("send-keys", "-t", _st(session), "-l", txt).returncode == 0)
     # SHAPE-GATE FIRST: before the family probe, before the lock, before any read --
     # a malformed ns must cost ZERO keypresses on either menu family.
     answers, _bad_ns = _normalize_ns(answers)
@@ -4098,7 +4613,7 @@ def menu_submit(session, *, expect_question=None, dry_run=True,
     SEPARATE the operator arm-go — never auto-fired."""
     import time as _time
     read_fn = read_fn or (lambda: _current_menu(session))
-    key_fn = key_fn or (lambda k: _tmux("send-keys", "-t", session, k).returncode == 0)
+    key_fn = key_fn or (lambda k: _tmux("send-keys", "-t", _st(session), k).returncode == 0)
 
     menu = read_fn()
     if not isinstance(menu, dict):
@@ -4365,6 +4880,22 @@ async def handle_agent_message(request):
                           "state": "held_for_boundary", "message_id": msg_id},
                          status=200)
         return _json({"ok": False, "busy": True, **info}, status=409)
+    if not ok and info.get("reason") == "unverified_submit" and info.get("cleared"):
+        # Our words were cleared out of the composer unsubmitted (gm msg_2291dee3): never drop them.
+        # A "held"-capable client gets them delivered at the next boundary; any other client gets
+        # them back in text_returned to show or resend.
+        if held_supported:
+            _cls, _name = _parse_actor(request)
+            origin = str(data.get("source") or "app").strip() or "app"
+            try:
+                msg_id = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: _hold_for_boundary(session, text, _name or _cls, origin))
+                await _record_operator_message(request, session, text)
+                return _json({"ok": True, "delivered": False, "held": True, "cleared": True,
+                              "state": "held_for_boundary", "message_id": msg_id}, status=200)
+            except Exception as e:  # noqa: BLE001 — the durable write only; text_returned still goes back
+                info = {**info, "hold_failed": str(e)}
+        return _json({"ok": False, "delivered": False, **info}, status=502)
     if ok:
         await _record_operator_message(request, session, text)
     return _json({"ok": ok, "delivered": ok, **info},
@@ -4378,9 +4909,12 @@ async def _record_operator_message(request, session, text):
     import asyncio
     device, surface = _answer_device(request), request.headers.get("X-Surface")
 
+    person = _is_person_surface(request)
+
     def _write():
         import away as AW
-        AW.record_message(ORCH_DIR, session, text, device=device, surface=surface, scan=_away_scan)
+        AW.record_message(ORCH_DIR, session, text, device=device, surface=surface, scan=_away_scan,
+                          person=person)
     try:
         await asyncio.get_event_loop().run_in_executor(None, _write)
     except Exception as e:  # noqa: BLE001 — bookkeeping, never a gate
@@ -4406,7 +4940,7 @@ async def handle_agent_interrupt(request):
     if st.get("state") not in ("working", "thinking"):
         return _json({"ok": False, "error": "not mid-turn",
                       "state": _STATE_MAP.get(st.get("state"), st.get("state"))}, status=409)
-    r = _tmux("send-keys", "-t", session, "Escape")
+    r = _tmux("send-keys", "-t", _st(session), "Escape")
     # Stop-button linger fix (the operator field report 2026-08-18): a user interrupt
     # never fires the CLI Stop hook, so the pane's hook event stays 'working'
     # and the detector reports "Active turn" for up to HOOK_WORKING_TTL_S
@@ -4422,6 +4956,460 @@ async def handle_agent_interrupt(request):
             hook_cleared = False
     return _json({"ok": r.returncode == 0, "interrupted": r.returncode == 0,
                   "hook_cleared": hook_cleared})
+
+
+def _orchestra_root():
+    from pathlib import Path as _P
+    return _P(os.environ.get("ORCHESTRA_ROOT", str(_P(__file__).resolve().parents[1])))
+
+
+def _seat_for_session(session):
+    """(root name, registry record, runtime, current model id) for a live tmux session. The
+    runtime is the live process's when the detector knows it, else the record's."""
+    reg = _load_json(ORCH_DIR / "registry.json") or {}
+    name, meta = _resolve_sess_meta(reg.get("agents", {}) if isinstance(reg, dict) else {}).get(
+        session, (session, {}))
+    st = _agent_status().get_agent_status(session) or {}
+    runtime = (st.get("process") or {}).get("runtime") or meta.get("runtime") or None
+    return name, meta, runtime, _str_or_none(meta.get("model"))
+
+
+def _pane_session_ids(session):
+    """The CLI session ids the pane-events files (written by the shipped hooks) carry for this
+    tmux session's panes."""
+    r = _tmux("list-panes", "-t", f"={session}", "-F", "#{pane_id}")
+    if r.returncode != 0:
+        return []
+    out = []
+    for pane in r.stdout.split():
+        ev = _load_json(ORCH_DIR / "state" / "agent-events" / "panes" / f"{pane.lstrip('%')}.json") or {}
+        sid = ev.get("session_id") if isinstance(ev, dict) else None
+        if isinstance(sid, str) and re.fullmatch(r"[0-9a-fA-F-]{36}", sid):
+            out.append(sid)
+    return out
+
+
+def _seat_session_ids(session, meta=None):
+    """The pane's session ids, then the seat record's (Codex hooks record no session id; the
+    seat row carries the rollout's uuid)."""
+    out = _pane_session_ids(session)
+    sid = (meta or {}).get("session_id")
+    if isinstance(sid, str) and re.fullmatch(r"[0-9a-fA-F-]{36}", sid) and sid not in out:
+        out.append(sid)
+    return out
+
+
+def _seat_transcript_path(session, meta=None):
+    """The Claude transcript the pane is writing: <config dir>/projects/*/<sid>.jsonl for the
+    pane's (or the seat's) session id. None until both are known."""
+    from scripts import agent_model as AM
+    projects = AM.claude_settings_path().parent / "projects"
+    for sid in _seat_session_ids(session, meta):
+        hits = sorted(projects.glob(f"*/{sid}.jsonl"), key=lambda q: q.stat().st_mtime)
+        if hits:
+            return hits[-1]
+    return None
+
+
+def _seat_codex_rollout(session, meta=None):
+    """The Codex rollout the seat is writing: the seat record's session id first (rotation
+    writes the live rollout's uuid there, and codex hooks record none in pane events), then the
+    pane's."""
+    from scripts import agent_model_codex as AMC
+    sids = _seat_session_ids(session, meta)
+    own = (meta or {}).get("session_id")
+    if own in sids:
+        sids = [own] + [x for x in sids if x != own]
+    for sid in sids:
+        p = AMC.rollout_for_sid(sid)
+        if p:
+            return p
+    return None
+
+
+def _is_person_surface(request):
+    """A paired device's own token, or a caller that says it is a person's surface (X-Actor
+    operator|interactive|app). The bare fleet token alone, or an automation actor, is not:
+    agents hold that token. Same rule as Deliver now."""
+    cls, _name = _parse_actor(request)
+    _ran, principal = _resolved_principal(request)
+    is_device = bool(principal) and principal.get("id") not in (None, "legacy")
+    if cls == "automation":
+        return False
+    return is_device or cls in ("operator", "interactive", "app")
+
+
+async def handle_agent_model(request):
+    """GET /agent-model?session= -> which models this agent can switch to (the Arturo engine
+    picker's shape: every row, available or not with a reason). PUT /agent-model {session,
+    model} -> switch it: Claude live (`/model` typed into the idle pane, confirmed by the CLI's
+    own "Set model to" line, the host's default model put back), every other runtime at its
+    next rotation. scripts/agent_model.py has the why."""
+    import asyncio
+    from scripts import agent_model as AM
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    if request.method == "PUT":
+        try:
+            data = await request.json()
+        except Exception:
+            return _json({"ok": False, "error": "bad json"}, status=400)
+        if not isinstance(data, dict):
+            return _json({"ok": False, "error": "bad json"}, status=400)
+        session = str(data.get("session", "")).strip()
+        model = str(data.get("model", "")).strip()
+        if not session or not model:
+            return _json({"ok": False, "error": "session and model required"}, status=400)
+    else:
+        session = request.query.get("session", "").strip()
+        if not session:
+            return _json({"ok": False, "error": "session required"}, status=400)
+    if session not in _tmux_session_names():
+        return _json({"ok": False, "error": "no such session"}, status=404)
+    loop = asyncio.get_event_loop()
+    root, meta, runtime, current = await loop.run_in_executor(None, _seat_for_session, session)
+    orch_root = _orchestra_root()
+    catalog = await loop.run_in_executor(
+        None, AM.load_catalog, (runtime or "").lower(), orch_root / "config" / "providers.json",
+        orch_root / "state")
+    desc = AM.describe(runtime, current, catalog, AM.off_runtimes())
+    if request.method != "PUT":
+        from scripts import agent_model_pending as AMP
+        f = AMP.state_path(ORCH_DIR)
+        def _read():       # file I/O: off the event loop
+            try:
+                return {"pending": AMP.view(AMP.get(f, session)), "last_switch": AMP.last(f, session)}
+            except AMP.StateUnreadable as e:
+                return {"pending": None, "last_switch": None, "pending_error": str(e)}
+        extra = await loop.run_in_executor(None, _read)
+        return _json({"ok": True, "session": session, **desc, **extra})
+
+    if not _is_person_surface(request):
+        return _json({"ok": False, "error": "a model is switched by a person: send X-Actor "
+                      "operator|interactive|app, or use a paired device"}, status=403)
+    refusal = _protected_refusal(request, session)
+    if refusal is not None:
+        return _json(refusal, status=403)
+    if model not in desc["allowed"]:
+        why = desc["unavailable"].get(model) or "not offered for this agent"
+        return _json({"ok": False, "error": why}, status=422)
+    by = _parse_actor(request)[1] or ((_resolved_principal(request)[1] or {}).get("label")) or "?"
+    from scripts import agent_model_pending as AMP
+    try:
+        status, body = await loop.run_in_executor(
+            None, lambda: _put_model(session, model, catalog, by))
+    except AMP.StateUnreadable as e:
+        log.error(f"agent-model: {e}")
+        return _json({"ok": False, "error": "the record of waiting switches cannot be read; nothing "
+                      "changed", "detail": str(e)}, status=503)
+    except AMP.LockBusy as e:
+        log.warning(f"agent-model: {e}")
+        return _json({"ok": False, "error": "another model switch for this agent is still in "
+                      "progress; nothing changed, try again", "detail": str(e)}, status=503)
+    return _json(body, status=status)
+
+
+#: Bounded waits for the per-agent switch lock (codex R13 on #475): a PUT waits for a switch in
+#: progress, then answers 503 with nothing changed; a deferred pass skips that agent until its next
+#: pass (the pick stays in the file). No executor thread ever waits on the lock without a bound, so
+#: a shutdown that joins its threads never hangs on another process's switch.
+MODEL_SWITCH_PUT_LOCK_WAIT_S = 20.0
+MODEL_SWITCH_PASS_LOCK_WAIT_S = 2.0
+
+
+def _model_switch_lock(session, timeout):
+    """ONE lock per tmux session for every model-switch decision: a PUT (cancel, defer, switch) and
+    the deferred applier's whole apply, across threads and gateway processes. A cancel or a newer
+    pick therefore either lands before the applier reads the pick, or after the switch it was
+    racing finished; never in between (codex R1, R12 on #475). The wait is bounded: past `timeout`
+    AMP.LockBusy is raised and nothing ran (R13)."""
+    from scripts import agent_model_pending as AMP
+    return AMP.session_lock(AMP.state_path(ORCH_DIR), session, timeout=timeout)
+
+
+def _put_model(session, model, catalog, by):
+    """PUT /agent-model's decision, under the session's switch lock, on a fresh read of the seat
+    (an apply that finished while this waited has changed its model). (status, body)."""
+    from scripts import agent_model as AM
+    from scripts import agent_model_pending as AMP
+    pend_file = AMP.state_path(ORCH_DIR)
+    with _model_switch_lock(session, MODEL_SWITCH_PUT_LOCK_WAIT_S):
+        applied = _settle_applied_unrecorded(pend_file, session)
+        root, meta, runtime, current = _seat_for_session(session)
+        if applied and applied[1] and applied[1] == set(_seat_session_ids(session, meta)):
+            # Still the agent that switch was typed into (a rotation since then is a new agent on
+            # its own model): it is on that model even if its seat did not keep the switch.
+            current = applied[0]
+        desc = AM.describe(runtime, current, catalog, AM.off_runtimes())
+        if model not in desc["allowed"]:
+            return 422, {"ok": False, "error": desc["unavailable"].get(model) or "not offered for this agent"}
+        if model == current:
+            # Picking the model it is already on cancels a switch still waiting for the turn to end.
+            dropped = AMP.cancel(pend_file, session)
+            body = {"ok": True, "model": model, "changed": False,
+                    "switching": "switched" if desc["how"] == "live" else "next_rotation"}
+            if dropped:
+                log.info(f"AGENT-MODEL {session} pending -> {dropped.get('model')} CANCELLED by {by}")
+                body.update(pending=None, cancelled=True)
+            return 200, body
+        sids = _seat_session_ids(session, meta) if desc["how"] == "live" else []
+        if desc["how"] == "live":
+            # A busy agent's switch is DEFERRED, never typed into its turn: recorded, then applied
+            # the moment it is idle (_apply_pending_model_switches). The detector's state decides
+            # first; the idle-only send's own screen check catches a turn the detector has not seen.
+            # Deferred only when this session's identity is known: the applier must be able to
+            # tell that it is still the same agent (a rotation reuses the tmux name).
+            st = (_agent_status().get_agent_status(session) or {}).get("state")
+            if st in MID_TURN_STATES | STALLED_STATES and sids:
+                return 202, _defer_model_switch(session, model, current, sids, by)
+        # A newer pick replaces an older one still waiting (as a deferred pick does), dropped BEFORE
+        # the switch: a record that cannot be written now (LockBusy) is then a 503 with nothing
+        # typed, never a switch whose older pick survives to undo it later (codex R14 on #475).
+        dropped = AMP.cancel(pend_file, session) if AMP.get(pend_file, session) else None
+        if dropped:
+            log.info(f"AGENT-MODEL {session} pending -> {dropped.get('model')} REPLACED by {model} ({by})")
+        status, body = _switch_model_now(session, model, root, meta, runtime, current, catalog, desc, by)
+        if (desc["how"] == "live" and status == 409 and sids
+                and body.get("state") in MID_TURN_STATES | STALLED_STATES):
+            return 202, _defer_model_switch(session, model, current, sids, by)
+        return status, body
+
+
+def _defer_model_switch(session, model, current, sids, by):
+    """Record a busy agent's switch (a newer pick replaces an older one); the 202 body. Called
+    under the session's switch lock."""
+    from scripts import agent_model_pending as AMP
+    f = AMP.state_path(ORCH_DIR)
+    old = AMP.get(f, session)
+    if old:
+        log.info(f"AGENT-MODEL {session} pending -> {old.get('model')} REPLACED by {model} ({by})")
+    entry = AMP.put(f, session, model, current=current, sids=sids, by=by)
+    log.info(f"AGENT-MODEL {session} {current} -> {model} PENDING (busy) by {by}")
+    return {"ok": True, "status": "pending", "applies": "at turn end", "model": model,
+            "current": current, "pending_since": entry["since"]}
+
+
+def _switch_model_now(session, model, root, meta, runtime, current, catalog, desc, by):
+    """Switch now: Claude and Codex live (typed only into an IDLE pane), every other runtime at its
+    next rotation; then the seat's stored model. (status, body). Blocking: run in an executor."""
+    from scripts import agent_model as AM
+    if desc["how"] == "live" and (runtime or "").lower() == "codex":
+        from scripts import agent_model_codex as AMC
+
+        def _keys(k):
+            if k == "Escape":
+                _tmux("send-keys", "-t", _st(session), "Escape")
+            else:
+                _tmux("send-keys", "-t", _st(session), "-l", str(k))
+        status, body = AMC.switch_live(
+            model=model, config_path=AMC.codex_home() / "config.toml",
+            lock_path=AM.claude_settings_path(),
+            send=lambda text: verified_inject(session, text, False, idle_only=True), keys=_keys,
+            capture=lambda: _tmux("capture-pane", "-p", "-t", _st(session)).stdout,
+            rollout=_seat_codex_rollout(session, meta))
+        if status != 200:
+            return status, {**body, "model": model, "current": current}
+    elif desc["how"] == "live":
+        status, body = AM.switch_live(
+            model=model, settings_path=AM.claude_settings_path(),
+            title=next((r["title"] for r in catalog if r["id"] == model), None),
+            # Claude asks to confirm a switch on a seat with history; the switch answers it.
+            capture=lambda: _tmux("capture-pane", "-p", "-t", _st(session)).stdout,
+            keys=lambda k: _tmux("send-keys", "-t", _st(session), "-l", str(k)),
+            send=lambda text: verified_inject(session, text, False, idle_only=True),
+            find_jsonl=lambda: _seat_transcript_path(session, meta))
+        if status != 200:
+            # Name the models, so a client's words say which one the agent is on (ios-watch-dev).
+            return status, {**body, "model": model, "current": current}
+    else:
+        body = {"ok": True, "model": model, "switching": "next_rotation"}
+
+    # The seat's stored model: what its next spawn passes as --model, and what rotation
+    # thresholds read. For a next-rotation switch it IS the switch, so a failed write is an
+    # error. A live switch already happened and cannot be safely undone: the response says the
+    # seat did not keep it, and the next spawn would come back on the old model.
+    try:
+        from identity_store import identity_writer
+        stored = bool(identity_writer.update_session(str(ORCH_DIR), root, {"model": model}))
+    except Exception as e:  # noqa: BLE001
+        log.error(f"agent-model: registry write failed for {root}: {e!r}")
+        stored = False
+    log.info(f"AGENT-MODEL {session} ({root}) {current} -> {model} {body.get('switching')} by {by} stored={stored}")
+    body["stored"] = stored
+    if not stored:
+        if body.get("switching") != "switched":
+            return 502, {"ok": False, "error": "not stored", "model": model, "current": current,
+                         "detail": "the seat's model could not be written; nothing changed"}
+        body["warning"] = ("switched now, but the seat did not keep the new model: its next "
+                           "spawn will start on the old one")
+    return 200, body
+
+
+def _report_stale_model_switch(session, entry):
+    """A deferred switch has waited past AMP.STALE_AFTER_S with the agent still busy: said once,
+    never dropped. (An install with a coordinator agent can override this to tell it.)"""
+    log.warning(f"AGENT-MODEL {session}: the switch to {entry.get('model')} asked at "
+                f"{entry.get('since')} is still waiting for the agent's turn to end")
+
+
+def _apply_pending_model_switches(now=None, stop=None):
+    """One pass over the deferred switches: each idle agent's is applied through the normal
+    locked path; a busy agent's waits (reported once when stale); an agent that is gone, rotated
+    to a new session, or whose switch fails, has its pick closed in `last` with the reason, so the
+    operator's pick never vanishes without a word. `stop` (a threading.Event the app's shutdown
+    sets) ends the pass before its next agent (codex R13 on #475). Returns [(session, outcome)]."""
+    import time as _t
+    from scripts import agent_model_pending as AMP
+    f = AMP.state_path(ORCH_DIR)
+    now = _t.time() if now is None else now
+    out = []
+    for session in list(AMP.pending_sessions(f)):
+        if stop is not None and stop.is_set():
+            break                      # shutting down: the rest wait in the file for the next start
+        try:
+            with _model_switch_lock(session, MODEL_SWITCH_PASS_LOCK_WAIT_S):
+                r = _apply_pending_one(f, session, now)
+        except AMP.LockBusy:
+            continue                   # a switch for it is in progress elsewhere: the next pass decides
+        except AMP.StateUnreadable as e:
+            # One agent's damaged marker never stops the others; its pick waits, typed never.
+            log.error(f"agent-model: {session}: {e}")
+            continue
+        if r:
+            out.append((session, r))
+    return out
+
+
+def _settle_applied_unrecorded(f, session):
+    """Under the session's switch lock: record "switched" for a pick a gateway already switched
+    but could not record (AMP.applied_mark, shared by every gateway process). Returns (model, sids):
+    the model that switch put on the agent with that identity, else None. A PUT calls it first and
+    takes that model as current only while the session still has EXACTLY that identity (codex R16,
+    R17, R20 on #475); LockBusy propagates with the marker kept."""
+    from scripts import agent_model_pending as AMP
+    m = AMP.applied_mark(f, session)
+    if not m:
+        return None
+    e = AMP.get(f, session)
+    if e and e.get("since") == m["since"]:
+        AMP.resolve(f, session, m["since"], "switched")
+    AMP.clear_applied(f, session)
+    return m["model"], set(m["sids"])
+
+
+#: Detector states with no turn that will end: a deferred pick there is closed, never kept waiting.
+_SWITCH_TERMINAL_STATES = {"stopped", "crashed", "offline"}
+
+
+def _apply_pending_one(f, session, now):
+    """Apply or close one session's pick, under its switch lock (held by the caller). The pick is
+    re-read here, so one the operator cancelled or replaced meanwhile is never typed. Returns the
+    outcome, or None when it keeps waiting."""
+    from scripts import agent_model as AM
+    from scripts import agent_model_pending as AMP
+    e = AMP.get(f, session)
+    if not e:
+        return None
+    since = e.get("since")
+
+    def close(outcome, reason=None):
+        AMP.resolve(f, session, since, outcome, reason=reason, now=now)
+        if mark:
+            AMP.clear_applied(f, session)
+        return outcome if not reason else f"{outcome}: {reason}"
+
+    mark = AMP.applied_mark(f, session)
+    if mark and mark["since"] == since:
+        return close("switched")       # a gateway already switched it: record it, type nothing
+
+    def wait():
+        """It keeps waiting, whatever for (a busy agent, an identity that cannot be read): a pick
+        waiting past STALE_AFTER_S is reported once (codex R4 on #475)."""
+        if (AMP.view(e, now) or {}).get("stale") and not e.get("reported"):
+            _report_stale_model_switch(session, e)
+            AMP.mark_reported(f, session, since)
+        return None
+    if session not in _tmux_session_names():
+        return close("failed", "the agent is no longer running")
+    st = (_agent_status().get_agent_status(session) or {}).get("state")
+    if st in _SWITCH_TERMINAL_STATES:
+        # Not a turn that will end: the CLI is gone from the pane. Its next start is a new session
+        # on the seat's stored model; the pick is closed with the reason (codex R8 on #475). Before
+        # the identity check: closing types nothing, and a gone CLI may leave no identity (R9).
+        return close("failed", f"the agent {st} before its turn ended")
+    root, meta, runtime, current = _seat_for_session(session)
+    sids = _seat_session_ids(session, meta)
+    if not sids:
+        return wait()                  # cannot tell it is the same agent right now: never apply blind
+    if set(e.get("sids") or []) != set(sids):
+        # EXACTLY the identity recorded when it was asked: an overlap is not enough (a stale pane
+        # event next to a rotated seat's new id would match the old one; codex R2 on #475).
+        # Residual, accepted: a rotation that lands between this check and the keystrokes (the
+        # rotation engine is another process; no gateway lock can close it) gives the pick to the
+        # SAME seat's successor, idle by then: the seat the operator asked about, not another agent.
+        return close("failed", "the agent moved to a new session before its turn ended")
+    if st not in INJECTABLE_STATES:
+        return wait()
+    if e.get("model") == current:
+        return close("switched")
+    orch_root = _orchestra_root()
+    catalog = AM.load_catalog((runtime or "").lower(), orch_root / "config" / "providers.json",
+                              orch_root / "state")
+    desc = AM.describe(runtime, current, catalog, AM.off_runtimes())
+    if e.get("model") not in desc["allowed"] or desc["how"] != "live":
+        return close("failed", desc["unavailable"].get(e.get("model")) or "no longer offered for this agent")
+    status, body = _switch_model_now(session, e["model"], root, meta, runtime, current, catalog,
+                                     desc, e.get("by") or "deferred")
+    if status == 200:
+        # Residual, accepted (codex R18 on #475): a gateway that DIES between these keystrokes and
+        # the record below (and whose registry write also failed) leaves the pick pending, and the
+        # next start types the same /model into the same idle agent again. A marker written BEFORE
+        # typing cannot close it: after a crash it cannot say whether the keys went out, and reading
+        # it as "switched" would record a switch that never happened. Typing the same model twice is
+        # the safe side: idle-only, confirmed by the CLI's own line, same result.
+        try:
+            return close("switched")
+        except AMP.LockBusy:
+            AMP.mark_applied(f, session, since, e.get("model"), sids)
+            raise
+    if status == 409:
+        return wait()                  # a turn started first: wait for the next idle moment
+    return close("failed", str(body.get("detail") or body.get("error") or f"HTTP {status}"))
+
+
+async def _pending_model_switch_loop(app):
+    """Every 5 s, apply the deferred switches whose agents went idle (off the event loop)."""
+    import asyncio
+    stop = app[_events_stop_key()]
+    loop = asyncio.get_event_loop()
+    while not stop.is_set():
+        try:
+            # The whole pass, the file read included, runs off the event loop (codex R6 on #475).
+            await loop.run_in_executor(None, _apply_pending_model_switches, None,
+                                       app["_pending_model_switch_stop"])
+        except Exception as e:  # noqa: BLE001 — one bad pass never stops the loop
+            log.error(f"agent-model: deferred switch pass failed: {e!r}")
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            pass
+
+
+async def _start_pending_model_switches(app):
+    import asyncio
+    app["_pending_model_switch_stop"] = _threading.Event()
+    app["_pending_model_switch_task"] = asyncio.ensure_future(_pending_model_switch_loop(app))
+
+
+async def _stop_pending_model_switches(app):
+    """The loop ends when shutdown sets the stop event; cancel it too, so a restart never waits on
+    a pass in progress (a pass is resumable: its pick stays in the file until it is closed)."""
+    stop = app.get("_pending_model_switch_stop")
+    if stop is not None:
+        stop.set()                     # a pass in its executor thread stops before its next agent
+    task = app.get("_pending_model_switch_task")
+    if task is not None and not task.done():
+        task.cancel()
 
 
 async def handle_agent_menu_capture(request):
@@ -5013,6 +6001,89 @@ async def handle_red_alert_report(request):
     if not isinstance(payload, dict):
         payload = {"ok": False, "error": "bad api response"}
     return _json(payload, status=status)
+
+
+# --- New Agent from a paired device (iOS/macOS "+", the web form's #392/#413 flow) ---------------
+# Thin front door to the API's own routes (api/src/routes/agents-new.ts, runtimes-available.ts): the
+# phone has ONE base and ONE bearer (this gateway). The API answers; the gateway only decides WHO
+# may ask, and what a DEVICE may create: a worker under a registered parent. No orphan seat and no
+# GM from a device (the web form keeps both, for a fresh install's first agent).
+async def _new_agent_api(method: str, path: str, body=None):
+    """Loopback hop to the API; returns (status, json). Patched in tests."""
+    import aiohttp
+    async with aiohttp.ClientSession() as s:
+        if method == "POST":
+            # A create runs spawn-agent.sh and waits for the session: allow for a slow CLI start.
+            async with s.post(f"{API_URL}{path}", json=body or {},
+                              timeout=aiohttp.ClientTimeout(total=150)) as r:
+                return r.status, await r.json(content_type=None)
+        async with s.get(f"{API_URL}{path}", timeout=aiohttp.ClientTimeout(total=30)) as r:
+            return r.status, await r.json(content_type=None)
+
+
+async def _new_agent_forward(method, path, body=None):
+    try:
+        status, payload = await _new_agent_api(method, path, body)
+    except Exception as e:  # noqa: BLE001
+        return _json({"ok": False, "error": f"api unreachable: {e}"}, status=502)
+    return _json(payload, status=status)
+
+
+def _new_agent_refusal(request):
+    """None, or the 401/403 for a caller that may not create or probe: a person's surface only
+    (a paired device's own token, or X-Actor operator|interactive|app), never an automation."""
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    if not _is_person_surface(request):
+        return _json({"ok": False, "error": "a new agent is created by a person: send X-Actor "
+                      "operator|interactive|app, or use a paired device"}, status=403)
+    return None
+
+
+async def handle_runtimes_available(request):
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    return await _new_agent_forward("GET", "/api/runtimes/available")
+
+
+async def handle_runtimes_available_refresh(request):
+    refusal = _new_agent_refusal(request)
+    if refusal is not None:
+        return refusal
+    return await _new_agent_forward("POST", "/api/runtimes/available/refresh")
+
+
+async def handle_agents_new_parents(request):
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    return await _new_agent_forward("GET", "/api/agents/new/parents")
+
+
+async def handle_agents_new(request):
+    """POST /agents/new {name, task?, runtime?, role?, parent} -> the API's answer, verbatim
+    (200 {ok,id,session,...}; 400/409/502 {reason}). From a device the parent is REQUIRED (a
+    registered seat; the API checks it) and a GM is refused: the seat joins an existing tree."""
+    refusal = _new_agent_refusal(request)
+    if refusal is not None:
+        return refusal
+    try:
+        data = await request.json()
+    except Exception:
+        return _json({"ok": False, "error": "bad json"}, status=400)
+    if not isinstance(data, dict):
+        return _json({"ok": False, "error": "bad json"}, status=400)
+    if data.get("gm"):
+        return _json({"ok": False, "reason": "gm_not_from_device",
+                      "error": "a General Manager is created from the web form, not a device"}, status=400)
+    parent = data.get("parent")
+    if not isinstance(parent, str) or not parent.strip():
+        return _json({"ok": False, "reason": "parent_required",
+                      "error": "a new agent reports to an existing one: choose its parent"}, status=400)
+    body = {"parent": parent.strip()}
+    for k in ("name", "task", "runtime", "role"):
+        if isinstance(data.get(k), str):
+            body[k] = data[k]
+    return await _new_agent_forward("POST", "/api/agents/new", body)
 
 
 async def handle_red_alert_reports(request):
@@ -5977,9 +7048,9 @@ async def handle_agent_key(request):
                          status=428)
         armed = os.environ.get("PERM_RESPOND_ARMED") == "1"
         import asyncio
-        _st = await asyncio.get_event_loop().run_in_executor(
+        _st_now = await asyncio.get_event_loop().run_in_executor(
             None, _agent_status().get_agent_status, session)
-        _pm = _st.get("pending_menu") if isinstance(_st, dict) else None
+        _pm = _st_now.get("pending_menu") if isinstance(_st_now, dict) else None
         if not isinstance(_pm, dict):                # never skip the check on a missed read
             return _json({"ok": False, "reason": "menu_gone"}, status=409)
         if _pm.get("kind") != "permission":          # respond answers permission prompts only
@@ -6201,8 +7272,8 @@ async def handle_agent_key(request):
             if (_pm2.get("kind"), _menu_key(session, _pm2)) != _checked:
                 return "changed"
             if _is_gemini_session(session):
-                return _tmux("send-keys", "-t", session, key, "Enter")
-            return _tmux("send-keys", "-t", session, key)
+                return _tmux("send-keys", "-t", _st(session), key, "Enter")
+            return _tmux("send-keys", "-t", _st(session), key)
 
     r = await asyncio.get_event_loop().run_in_executor(None, _send_locked)
     if r == "gone":
@@ -6970,6 +8041,31 @@ async def handle_surface_post(request):
 
 EVENTS_TICK_S = 2.0        # digest check cadence
 EVENTS_KEEPALIVE_S = 15.0  # comment frame so funnel/NAT never idles us out
+_EVENTS_STOP_KEY = None
+
+
+def _events_stop_key():
+    """The app's own shutdown signal for /events streams (an aiohttp AppKey, made on first use:
+    aiohttp is imported lazily here). Per app, never per process: a test or a second app in the
+    same process keeps its streams when another app stops."""
+    global _EVENTS_STOP_KEY
+    if _EVENTS_STOP_KEY is None:
+        import asyncio
+        from aiohttp import web
+        _EVENTS_STOP_KEY = web.AppKey("events_stop", asyncio.Event)
+    return _EVENTS_STOP_KEY
+
+
+async def _events_on_shutdown(app):
+    """An open /events stream (the phone keeps one) must never hold the SIGTERM drain: without
+    this a restart stopped half way on 2026-10-22, the gateway refusing connections until killed."""
+    stop = app.get(_events_stop_key())
+    if stop is not None:
+        stop.set()
+
+
+class _EventsStopped(Exception):
+    pass
 
 
 def _events_digest(store):
@@ -7013,24 +8109,48 @@ async def handle_events(request):
     })
     await resp.prepare(request)
     store = ApprovalStore(); store.migrate()
+    stop = request.app.get(_events_stop_key())
+
+    async def until_stop(aw):
+        """`aw`, unless shutdown starts first: a digest still in the executor or a write blocked
+        on a slow client must not hold the drain either, so every wait races the app's stop."""
+        task = asyncio.ensure_future(aw)
+        if stop is None:
+            return await task
+        waiter = asyncio.ensure_future(stop.wait())
+        try:
+            await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
+            if task.done():
+                return task.result()
+            raise _EventsStopped()
+        finally:
+            # Never leave either behind (a client gone mid-wait cancels this handler; a stop
+            # waiter left pending would live as long as the app), and collect a loser's error.
+            for f in (task, waiter):
+                if not f.done():
+                    f.cancel()
+            await asyncio.gather(task, waiter, return_exceptions=True)
+
     last = None
     last_beat = 0.0
     try:
-        while True:
-            digest = await asyncio.get_event_loop().run_in_executor(None, _events_digest, store)
+        while not (stop is not None and stop.is_set()):
+            digest = await until_stop(asyncio.get_event_loop().run_in_executor(None, _events_digest, store))
             now = time.time()
             if digest != last:
                 last = digest
                 pending_n = digest.split("|", 1)[0]
                 n = len(pending_n.split(",")) if pending_n else 0
-                await resp.write(
-                    f"data: {json.dumps({'changed': True, 'pending': n, 'ts': now})}\n\n".encode())
+                await until_stop(resp.write(
+                    f"data: {json.dumps({'changed': True, 'pending': n, 'ts': now})}\n\n".encode()))
             elif now - last_beat >= EVENTS_KEEPALIVE_S:
-                await resp.write(b": keepalive\n\n")
+                await until_stop(resp.write(b": keepalive\n\n"))
                 last_beat = now
             if digest != last or last_beat == 0.0:
                 last_beat = now
-            await asyncio.sleep(EVENTS_TICK_S)
+            await until_stop(asyncio.sleep(EVENTS_TICK_S))
+    except _EventsStopped:
+        pass   # the gateway is shutting down
     except (ConnectionResetError, asyncio.CancelledError):
         pass   # client went away — normal lifecycle, not an error
     return resp
@@ -7340,18 +8460,245 @@ async def handle_gemini_live(request):
     return ws
 
 
+# ---- GET /terminal/ws: the live terminal relay (the Mac's Dev mode) ---------------------------------
+# The API serves the web's terminal on /ws/terminal (node-pty, `tmux attach -f ignore-size`) behind a
+# browser-origin check only, loopback-only. A native app holds one base and one bearer (this gateway),
+# so this route is its way in: refuse before the upgrade, connect upstream as the local API's
+# same-origin peer (never with the client's bearer), then pass frames verbatim both ways (text = keystrokes or the resize JSON,
+# binary = bytes). It is a shell into a seat, hence: device token with admin + inject, a session that
+# GET /agents lists, no Funnel / off-tailnet peer, one socket per (device, session), a gateway-wide cap,
+# an idle close, and an operator-actions ledger row at open and close that never carries a keystroke.
+TERMINAL_HEARTBEAT_S = 20.0
+TERMINAL_IDLE_S = 60 * 60.0          # the web has no idle close; 10 min would cut a reader off
+TERMINAL_MAX_SESSIONS = 8
+TERMINAL_MAX_MSG = 1 << 20
+TERMINAL_SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+_TERMINAL_SESSIONS: dict = {}        # (device id, session) -> 1; reserved BEFORE any await
+_TERMINAL_LIVE: set = set()          # (device ws, upstream ws) pairs being relayed
+
+
+def _terminal_known_sessions():
+    """The tmux sessions GET /agents lists (compute_agents): the only names a terminal may attach to.
+    Never an arbitrary tmux name; a listing that fails names nothing."""
+    try:
+        rows = compute_agents()
+    except Exception as e:  # noqa: BLE001 — fail closed
+        log.warning(f"terminal: agents listing failed: {e!r}")
+        return set()
+    return {r.get("tmux_session") for r in rows if isinstance(r, dict) and r.get("tmux_session")}
+
+
+def _terminal_upstream_url(query):
+    """ws(s)://<API host>/ws/terminal with ONLY session, cols and rows: a token-shaped or any other
+    client param never reaches the API's logs."""
+    from urllib.parse import urlencode
+    base = API_URL.rstrip("/")
+    scheme, host = ("wss", base[len("https://"):]) if base.startswith("https://") else ("ws", base.split("://", 1)[-1])
+    q = [(k, query[k]) for k in ("session", "cols", "rows") if query.get(k)]
+    return f"{scheme}://{host}/ws/terminal" + (("?" + urlencode(q)) if q else "")
+
+
+async def _record_terminal_event(request, session, event, code=None, reason=None):
+    """One operator-actions ledger row per open and per close (away.record_terminal), off the loop.
+    Best effort: a ledger that cannot be written never closes a terminal that is already open."""
+    import asyncio
+    device, surface = _answer_device(request), request.headers.get("X-Surface")
+    person = _is_person_surface(request)
+
+    def _write():
+        import away as AW
+        AW.record_terminal(ORCH_DIR, session, event, device=device, surface=surface, person=person,
+                           code=code, reason=reason)
+    try:
+        await asyncio.get_event_loop().run_in_executor(None, _write)
+    except Exception as e:  # noqa: BLE001 — bookkeeping, never a gate
+        log.warning(f"operator-actions ledger write failed: {e!r}")
+
+
+async def _ws_relay(dev_ws, up_ws, idle_s):
+    """Shovel frames until one side ends, then close the other with that side's code + reason (the
+    device vanished -> 1001 upstream; the API dropped abnormally -> 1011 to the device), or both with
+    1000 "idle" after idle_s with no frame either way. Returns (who ended, code, reason)."""
+    import aiohttp
+    import asyncio
+    loop = asyncio.get_running_loop()
+    last = [loop.time()]
+    ended = {}
+
+    async def shovel(src, dst, name):
+        reason, code = "", None
+        while True:                      # not `async for`: it swallows the CLOSE frame and its reason
+            msg = await src.receive()
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                last[0] = loop.time()
+                await dst.send_str(msg.data)
+            elif msg.type == aiohttp.WSMsgType.BINARY:
+                last[0] = loop.time()
+                await dst.send_bytes(msg.data)
+            elif msg.type == aiohttp.WSMsgType.CLOSE:
+                code, reason = msg.data, msg.extra or ""     # from the frame: close_code lags it
+                break
+            elif msg.type in (aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                break
+        ended.setdefault("by", (name, code if code is not None else src.close_code, reason))
+
+    async def idle():
+        while True:
+            left = idle_s - (loop.time() - last[0])
+            if left <= 0:
+                ended.setdefault("by", ("idle", 1000, "idle"))
+                return
+            await asyncio.sleep(left)
+
+    tasks = [asyncio.ensure_future(shovel(dev_ws, up_ws, "device")),
+             asyncio.ensure_future(shovel(up_ws, dev_ws, "api")),
+             asyncio.ensure_future(idle())]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for t in tasks:
+            t.cancel()
+    by, code, reason = ended.get("by", ("device", None, ""))
+    msg = (reason if isinstance(reason, bytes) else str(reason or "")).encode("utf-8", "replace") \
+        if not isinstance(reason, bytes) else reason
+    if by == "idle":
+        for s in (dev_ws, up_ws):
+            if not s.closed:
+                await s.close(code=1000, message=b"idle")
+    elif by == "device":
+        if not up_ws.closed:
+            await up_ws.close(code=code if code and code not in (1005, 1006) else 1001, message=msg)
+    else:
+        if not dev_ws.closed:
+            await dev_ws.close(code=code if code and code not in (1005, 1006) else 1011, message=msg)
+    return by, code, (reason.decode("utf-8", "replace") if isinstance(reason, bytes) else reason)
+
+
+async def _terminal_close_all(code, reason):
+    """Close every live terminal (shutdown): the device gets the code, and the relay then closes
+    its upstream the usual way."""
+    for dev_ws, _up in list(_TERMINAL_LIVE):
+        if not dev_ws.closed:
+            try:
+                await dev_ws.close(code=code, message=str(reason).encode())
+            except Exception:  # noqa: BLE001 — a socket already gone
+                pass
+
+
+async def _terminal_on_shutdown(app):
+    await _terminal_close_all(1001, "shutdown")
+
+
+async def handle_terminal_ws(request):
+    """GET /terminal/ws?session=<tmux>&cols=<n>&rows=<n> -> WebSocket upgrade, relayed to the API's
+    /ws/terminal. Every refusal is an HTTP status BEFORE the upgrade: 401 no principal, 403 fleet bearer /
+    no inject / protected session, 404 Funnel / off-tailnet peer / unknown session, 400 bad session or
+    not an upgrade, 409 this device already has this seat open, 429 cap, upstream refusal forwarded,
+    502 API unreachable."""
+    import aiohttp
+    import asyncio
+    from aiohttp import web
+    from scripts.device_tokens import scopes_allow
+    ran, principal = _resolved_principal(request)
+    if not ran or not principal:                 # defence in depth; the middleware refused first
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    dev = principal.get("id")
+    if not dev or dev == "legacy":
+        return _json({"ok": False, "error": "a paired device token is required here: the fleet bearer "
+                                            "identifies no device to audit"}, status=403)
+    if not scopes_allow(principal.get("scopes"), "inject"):
+        return _json({"ok": False, "error": "forbidden", "needed_scope": "inject",
+                      "scopes": principal.get("scopes")}, status=403)
+    if request.headers.get("Tailscale-Funnel-Request"):
+        return _json({"ok": False, "error": "not found"}, status=404)
+    if not _agent_file_peer_ok(_agent_file_peer(request)):
+        return _json({"ok": False, "error": "not found"}, status=404)
+    session = (request.query.get("session") or "").strip()
+    if not TERMINAL_SESSION_RE.match(session):
+        return _json({"ok": False, "error": "session required: letters, digits, _ and - (1-80)"}, status=400)
+    if session not in _terminal_known_sessions():
+        return _json({"ok": False, "error": "no such session"}, status=404)
+    refusal = _protected_refusal(request, session)
+    if refusal:
+        return _json(refusal, status=403)
+    # Validate the handshake BEFORE any upstream session: a malformed but authenticated request must
+    # not open a PTY on the API that the prepare then refuses.
+    if not web.WebSocketResponse().can_prepare(request).ok:
+        return _json({"ok": False, "error": "not a valid WebSocket upgrade"}, status=400)
+    key = (str(dev), session)
+    if key in _TERMINAL_SESSIONS:
+        return _json({"ok": False, "error": "a terminal is already open for this device and session"},
+                     status=409)
+    if len(_TERMINAL_SESSIONS) >= TERMINAL_MAX_SESSIONS:
+        return _json({"ok": False, "error": "too many open terminals"}, status=429)
+    _TERMINAL_SESSIONS[key] = 1                  # reserve before any await, so two upgrades cannot race
+    who = _answer_device(request)
+    try:
+        client = aiohttp.ClientSession()
+        try:
+            try:
+                # The public API refuses a non-browser/no-Origin terminal upgrade.  The gateway is
+                # its local, authenticated relay, so identify this loopback hop as such.  This is
+                # NOT client authentication: the paired-device token was checked above and must
+                # never be forwarded to the API.
+                up = await client.ws_connect(_terminal_upstream_url(request.query),
+                                             headers={"Origin": "http://127.0.0.1:8888"},
+                                             max_msg_size=TERMINAL_MAX_MSG, autoping=True,
+                                             timeout=aiohttp.ClientWSTimeout(ws_close=5))
+            except aiohttp.WSServerHandshakeError as e:
+                st = e.status if 400 <= (e.status or 0) <= 599 else 502
+                return _json({"ok": False, "error": f"the API refused the terminal ({e.status})"}, status=st)
+            except (aiohttp.ClientError, OSError, asyncio.TimeoutError) as e:
+                log.warning(f"terminal: API unreachable: {e}")
+                return _json({"ok": False, "error": "API unreachable"}, status=502)
+            ws = web.WebSocketResponse(heartbeat=TERMINAL_HEARTBEAT_S, max_msg_size=TERMINAL_MAX_MSG)
+            opened = False
+            close_code, close_reason = None, None
+            try:
+                await ws.prepare(request)
+                opened = True
+                _TERMINAL_LIVE.add((ws, up))
+                log.info(f"TERMINAL open {session} by {who}")
+                await _record_terminal_event(request, session, "open")
+                by, close_code, close_reason = await _ws_relay(ws, up, TERMINAL_IDLE_S)
+                log.info(f"TERMINAL close {session} by {who}: {by} {close_code} {close_reason!r}")
+            finally:
+                _TERMINAL_LIVE.discard((ws, up))
+                if not up.closed:
+                    await up.close()
+                # A disconnect may cancel the relay pump while aiohttp tears the request down.
+                # Once an open was recorded, always write exactly one matching close row; it is
+                # the audit proof for a shell that bypasses verified-inject.
+                if opened:
+                    await _record_terminal_event(request, session, "close",
+                                                 code=close_code if close_code is not None else ws.close_code,
+                                                 reason=close_reason)
+            return ws
+        finally:
+            await client.close()
+    finally:
+        _TERMINAL_SESSIONS.pop(key, None)
+
+
 def build_app():
+    import asyncio
     from aiohttp import web
     # client_max_size MUST cover uploads — aiohttp's default is 1MB and would
     # silently 413 every photo (SPEC_ios-attach §B.1). Cap + small overhead.
     app = web.Application(client_max_size=UPLOAD_MAX_BYTES + 1024 * 1024,
                           middlewares=[scope_middleware_factory()])
+    app[_events_stop_key()] = asyncio.Event()
+    app.on_shutdown.append(_events_on_shutdown)
+    app.on_shutdown.append(_terminal_on_shutdown)
+    app.on_startup.append(_start_pending_model_switches)
+    app.on_cleanup.append(_stop_pending_model_switches)
     app.router.add_get("/pending-approvals", handle_pending)
     app.router.add_post("/approval-answers", handle_answer)
     app.router.add_get("/history", handle_history)
     app.router.add_get("/approvals/{id}", handle_approval_detail)
     app.router.add_post("/approvals/{id}/discard", handle_approval_discard)
     app.router.add_get("/agents", handle_agents)
+    app.router.add_get("/terminal/ws", handle_terminal_ws)
     app.router.add_get("/usage", handle_usage)
     app.router.add_get("/projects", handle_projects)
     app.router.add_get("/people", handle_people)
@@ -7362,6 +8709,8 @@ def build_app():
     app.router.add_get("/voice-memory", handle_voice_memory)
     app.router.add_post("/agent-message", handle_agent_message)
     app.router.add_post("/agent-interrupt", handle_agent_interrupt)
+    app.router.add_get("/agent-model", handle_agent_model)
+    app.router.add_put("/agent-model", handle_agent_model)
     app.router.add_post("/presence", handle_presence)
     app.router.add_put("/push/token", handle_push_token_put)
     app.router.add_delete("/push/token", handle_push_token_delete)
@@ -7377,6 +8726,10 @@ def build_app():
     app.router.add_get("/upload/{name}", handle_upload_get)   # + HEAD (aiohttp allow_head)
     app.router.add_post("/red-alert/report", handle_red_alert_report)
     app.router.add_get("/red-alert/reports", handle_red_alert_reports)
+    app.router.add_get("/runtimes/available", handle_runtimes_available)
+    app.router.add_post("/runtimes/available/refresh", handle_runtimes_available_refresh)
+    app.router.add_get("/agents/new/parents", handle_agents_new_parents)
+    app.router.add_post("/agents/new", handle_agents_new)
     app.router.add_post("/arturo/ptt", handle_arturo_ptt)
     app.router.add_post("/arturo/text", handle_arturo_text)
     app.router.add_post("/arturo/text/stream", handle_arturo_text_stream)
@@ -7594,6 +8947,12 @@ def main():
         arturo_stamp.ensure(_data_dir())      # Arturo's principal stamp secret, made on first start
     except Exception as e:  # noqa: BLE001 — without it Arturo simply never sees a fleet turn
         print(f"[watch_gateway] arturo stamp secret not created: {e}", file=sys.stderr)
+    try:
+        done = reconcile_inject_journal()
+        if done:
+            print(f"[watch_gateway] inject-journal reconcile: {done}", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001 — reconcile only: never keep the gateway down for it
+        print(f"[watch_gateway] inject-journal reconcile failed: {e!r}", file=sys.stderr)
     app = build_app()
     print(f"[watch_gateway] listening on http://{GATEWAY_HOST}:{GATEWAY_PORT}", file=sys.stderr)
     web.run_app(app, host=GATEWAY_HOST, port=GATEWAY_PORT, print=None)

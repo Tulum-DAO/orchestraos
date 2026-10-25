@@ -137,6 +137,9 @@ const LIVE_MIN = 40;
 /** The B3 cards, by identity: bound by exact text, so they cover only that text (see
  *  dropQueuedCommandsCoveredByBatches). Not a field: it never reaches a client. */
 export const LIVE_CARDS = new WeakSet<object>();
+/** A live card's anchor: the logged queued item it was bound to. The card is drawn where that
+ *  message entered the log. Not a field: it never reaches a client. */
+export const LIVE_ANCHOR = new WeakMap<object, object>();
 const LIVE_LIMIT = 200;
 
 const norm = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -184,6 +187,7 @@ function b3LiveCards(db: DB, agentId: string, items: any[], floorMs: number | nu
         entries: [{ agent: String(r.from_agent ?? ''), sent_ts: String(r.created_at ?? ''), body: String(r.body ?? '') }],
         ts: qs[0].ts ?? r.created_at, key: `msg:${r.id}` };
       LIVE_CARDS.add(card);
+      LIVE_ANCHOR.set(card, qs[0]);
       out.push(card);
     }
     return out;
@@ -192,24 +196,71 @@ function b3LiveCards(db: DB, agentId: string, items: any[], floorMs: number | nu
   }
 }
 
-// Stable interleave of synthetics into the JSONL items by ts (carry-forward the
-// last valid ts so an undated JSONL item stays anchored to its neighbour; ties
-// keep original order via index).
-function interleaveByTs(items: any[]): any[] {
-  const decorated = items.map((it, i) => ({ it, i, t: 0 }));
-  let last = 0;
-  for (const d of decorated) {
-    const n = Date.parse(String((d.it as any)?.ts ?? ''));
-    if (!Number.isNaN(n)) last = n;
-    d.t = Number.isNaN(n) ? last : n;
-  }
-  decorated.sort((a, b) => (a.t - b.t) || (a.i - b.i));
-  return decorated.map((d) => d.it);
+const ANCHOR_MIN = 40; // the same distinctiveness floor dropQueuedCommandsCoveredByBatches uses
+
+/** Does this processed batch cover the logged queued item (the same rule the route's drop uses)? */
+function batchCovers(batch: any, it: any): boolean {
+  if (it?.kind !== 'text' || !it.queued) return false;
+  const t = String(it.text || '').trim();
+  if (t.length < ANCHOR_MIN) return false;
+  const head = t.slice(0, ANCHOR_MIN);
+  return (batch.entries || []).some((e: any) => {
+    const b = String(e?.body || '').trim();
+    return b && (b.includes(head) || t.includes(b.slice(0, ANCHOR_MIN)));
+  });
 }
 
 /**
- * Return a NEW array = items + synthetic B1/B2 nodes, stable-sorted by ts.
- * Fail-open: on any error, returns the original items unchanged.
+ * Place the synthetics at their DELIVERY position; the log's own items never move.
+ *
+ * The log is in delivery order: a message sits where the agent took it in. Sorting the merged
+ * list by `ts` (what this did before) reordered the LOG itself whenever any synthetic was
+ * present: a message typed a second before a reply landed, but taken in after it, was drawn
+ * ABOVE that reply (the operator's report, 2026-10-22).
+ * - a live card (B3) goes where its message entered the log (the bubble it replaces);
+ * - a processed batch (B2) goes where the log shows one of its messages, else by its time
+ *   BETWEEN log items (inserted, never sorting them);
+ * - a still-pending message (B1) has not been delivered, so it goes after everything.
+ */
+export function placeByDelivery(items: any[], pending: any[], batches: any[], live: any[]): any[] {
+  const before = new Map<number, any[]>();      // log index -> synthetics drawn just before it
+  const tail: any[] = [];
+  const put = (i: number, node: any) => {
+    if (i < 0 || i >= items.length) { tail.push(node); return; }
+    before.set(i, [...(before.get(i) || []), node]);
+  };
+  // Carry-forward time of each log item, for the batches the log does not show.
+  const times: number[] = [];
+  let last = Number.NEGATIVE_INFINITY;
+  for (const it of items) {
+    const n = Date.parse(String(it?.ts ?? ''));
+    if (!Number.isNaN(n)) last = n;
+    times.push(last);
+  }
+  // Each logged message anchors at most ONE card: two batches sharing an opening must not both
+  // claim the first message that matches.
+  const used = new Set<number>();
+  for (const card of live) {
+    const anchor = LIVE_ANCHOR.get(card);
+    const at = anchor ? items.indexOf(anchor) : -1;
+    if (at >= 0) used.add(at);
+    put(at, card);
+  }
+  const byTime = [...batches].sort((x, y) => (Date.parse(String(x.ts)) || 0) - (Date.parse(String(y.ts)) || 0));
+  for (const batch of byTime) {
+    const at = items.findIndex((it, i) => !used.has(i) && batchCovers(batch, it));
+    if (at >= 0) { used.add(at); put(at, batch); continue; }
+    const t = Date.parse(String(batch.ts ?? ''));
+    put(Number.isNaN(t) ? -1 : times.findIndex((x) => x > t), batch);
+  }
+  const out: any[] = [];
+  items.forEach((it, i) => { out.push(...(before.get(i) || []), it); });
+  return [...out, ...tail, ...pending];
+}
+
+/**
+ * Return a NEW array = items + synthetic B1/B2/B3 nodes at their delivery positions (the log's
+ * own order is kept; see placeByDelivery). Fail-open: on any error, returns the items unchanged.
  */
 
 export function mergeQueuedItems(items: any[], agentId: string): any[] {
@@ -234,7 +285,6 @@ export function mergeQueuedItems(items: any[], agentId: string): any[] {
   } catch {
     return items;
   }
-  const synthetic = [...pending, ...batches, ...live];
-  if (!synthetic.length) return items;
-  return interleaveByTs(items.concat(synthetic));
+  if (!pending.length && !batches.length && !live.length) return items;
+  return placeByDelivery(items, pending, batches, live);
 }

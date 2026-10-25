@@ -9,10 +9,13 @@ import { injectAgentVerified, type InjectResult } from '../../lib/api';
 import { sendPanelHeadline, shouldSendPhoto, clearsComposer, retryText, canForceRetry, composerKeyAction } from '../../lib/composerGate';
 import { logAction } from '../../lib/user-actions';
 import { isLargePaste, fencePaste } from '../../lib/pastedText';
+import { COMPOSER_ACCEPT, newFiles, pasteAttachesFiles, attachmentMarkers } from '../../lib/composerFiles';
 
 // A held large paste: kept out of the textarea (which shows a compact token at
 // the paste's position) and serialized into the fenced grammar on submit.
 interface HeldPaste { id: number; content: string; lines: number; chars: number }
+// An attached file waiting to be sent. `preview` is an object URL for an image's thumbnail.
+interface PendingFile { id: number; file: File; preview: string | null }
 // Token the composer shows in-place for a held paste. Parseable back to the id;
 // user can delete it to drop the paste, and it marks WHERE the paste sits.
 const pasteToken = (p: HeldPaste) => `〖paste ${p.id} · ${p.lines} lines〗`;
@@ -110,8 +113,17 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     composer_text?: string; stranded?: { text?: string; age_s?: number };
     attemptText: string;
   } | null>(null);
-  const [pendingImage, setPendingImage] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  // A LIST, not one file: the web chat box used to hold a single attachment, so a second pick,
+  // drop or paste replaced the first, while every other surface (iOS, iPad, macOS, Quest)
+  // attaches several at once. The send path already carried `attachments: File[]`.
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
+  const fileIdRef = useRef(1);
+  // Mirror for the unmount cleanup below, so thumbnails' object URLs are always released.
+  // addFiles/removeFiles also update it at once, so two adds in one frame still dedupe.
+  const pendingFilesRef = useRef<PendingFile[]>([]);
+  useEffect(() => { pendingFilesRef.current = pendingFiles; }, [pendingFiles]);
+  useEffect(() => () => { pendingFilesRef.current.forEach((p) => p.preview && URL.revokeObjectURL(p.preview)); }, []);
+  const hasFiles = pendingFiles.length > 0;
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
@@ -123,6 +135,13 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
   // Small pastes fall through to the browser's normal inline paste.
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const clip = e.clipboardData?.getData('text') ?? '';
+    // A pasted screenshot or copied files (no text) attach, all of them.
+    const clipFiles = e.clipboardData?.files;
+    if (attachSupported && clipFiles && pasteAttachesFiles(clipFiles.length, clip)) {
+      e.preventDefault();
+      addFiles(clipFiles);
+      return;
+    }
     if (!clip || !isLargePaste(clip)) return; // small paste → default inline
     e.preventDefault();
     const id = pasteIdRef.current++;
@@ -161,20 +180,29 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     });
   };
 
-  const clearImage = () => {
-    setPendingImage(null);
-    if (imagePreview) URL.revokeObjectURL(imagePreview);
-    setImagePreview(null);
+  // Remove the given attachments (by id). Used by a chip's X and after a send, which clears ONLY
+  // the files it sent: a file attached while the send was in flight stays in the composer.
+  const removeFiles = (ids: readonly number[]) => {
+    const drop = new Set(ids);
+    pendingFilesRef.current = pendingFilesRef.current.filter((p) => !drop.has(p.id));
+    setPendingFiles((prev) => {
+      prev.forEach((p) => { if (drop.has(p.id) && p.preview) URL.revokeObjectURL(p.preview); });
+      return prev.filter((p) => !drop.has(p.id));
+    });
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const handleFileUpload = (file: File) => {
-    setPendingImage(file);
-    if (file.type.startsWith('image/')) {
-      setImagePreview(URL.createObjectURL(file));
-    } else {
-      setImagePreview(null);
-    }
+  // Append every file from a pick, drop or paste (a repeat of an attached file is skipped).
+  const addFiles = (incoming: ArrayLike<File> | null | undefined) => {
+    const fresh = newFiles(pendingFilesRef.current.map((p) => p.file), incoming);
+    if (!fresh.length) return;
+    const entries = fresh.map((file) => ({
+      id: fileIdRef.current++,
+      file,
+      preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
+    }));
+    pendingFilesRef.current = [...pendingFilesRef.current, ...entries];
+    setPendingFiles((prev) => [...prev, ...entries]);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -186,8 +214,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     e.preventDefault();
     setIsDragging(false);
     if (!attachSupported) return;
-    const file = e.dataTransfer.files[0];
-    if (file) handleFileUpload(file);
+    addFiles(e.dataTransfer.files);
   };
 
   // send(force): force re-sends the retained text through the gateway's human
@@ -196,8 +223,8 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     if (disabled) return;
     // On a normal send we compose from the input; on a force retry we reuse the
     // text the gateway just refused (retained in busy.attemptText).
-    if (!force && !text.trim() && !pendingImage) return;
-    if (force && !canForceRetry(busy?.attemptText, busy?.state, !!pendingImage)) return;
+    if (!force && !text.trim() && !hasFiles) return;
+    if (force && !canForceRetry(busy?.attemptText, busy?.state, hasFiles)) return;
     logAction('chat.inject', agentId, text.trim().slice(0, 100));
     setSending(true);
     setResultOk(false);
@@ -211,7 +238,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
 
       if (onSend) {
         // B1 send-bridge seam: the caller (e.g. Composer.tsx's sendToAgent
-        // bridge) owns delivery + upload — pass pendingImage through as a
+        // bridge) owns delivery + upload — pass every pending file through as a
         // raw File attachment (instead of this file's own uploadImage() +
         // inline [IMAGE:]/[FILE:] marker) and let onSend do the upload and
         // P3 state mapping. The internal inject/inbox path below is
@@ -219,15 +246,17 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
         // A forced retry normally carries text only (the photo of a queued/held send was already
         // uploaded and cleared). A forced retry of a REFUSED send must carry the photo the refusal
         // kept, or the operator's screenshot is silently dropped (review of #198).
-        const sendPhoto = shouldSendPhoto(!!pendingImage, force, busy?.state);
-        const attachments = sendPhoto ? [pendingImage!] : [];
+        const sendPhoto = shouldSendPhoto(hasFiles, force, busy?.state);
+        const sent = sendPhoto ? pendingFiles : [];
+        const attachments = sent.map((p) => p.file);
+        const clearSent = () => removeFiles(sent.map((p) => p.id));
         // THE PHOTO IS NOT CLEARED UNTIL THE SEND SUCCEEDS (P1 2026-10-06: the API was down for
         // an hour and every send failed; clearing here threw the attachment away on the way to a
         // failure, so the operator lost it and had to re-pick it). Nothing is destroyed before
         // the thing that could fail has not failed.
         const res = await onSend({ text: messageText, attachments }, { force });
         if (res.ok) {
-          if (sendPhoto) clearImage();
+          clearSent();
           setBusy(null);
           setResultOk(true);
           setResult(res.note || 'Sent');
@@ -255,10 +284,10 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           // HAPPENED and the attachment reached the server — it is waiting, not lost.
           //
           // Leaving it attached was actively harmful rather than merely confusing. The retry
-          // affordance below re-sends with force: true, and `!force && pendingImage` drops the
+          // affordance below re-sends with force: true, and `!force && pendingFiles` drops the
           // attachment on a forced send — so the thumbnail sat in the composer implying it had
           // not been sent, and the one gesture offered for sending it carried text only.
-          if (sendPhoto) clearImage();
+          clearSent();
           // ...and so does the TEXT. It reached the server; leaving it in the box invited the same
           // instruction to be sent twice, now that the panel rightly offers no "Send anyway"
           // after a send that already landed (review of #198).
@@ -285,11 +314,13 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
         return;
       }
 
-      if (!force && pendingImage) {
-        const filePath = await uploadImage(pendingImage);
-        const tag = pendingImage.type.startsWith('image/') ? 'IMAGE' : 'FILE';
-        messageText = `[${tag}: ${filePath}]${messageText ? ' ' + messageText : ''}`;
-        clearImage();
+      if (!force && hasFiles) {
+        // Upload them ALL before clearing any: if one upload fails the throw lands in the catch
+        // below and every file stays attached for another try.
+        const sent = pendingFiles;
+        const uploaded = await Promise.all(sent.map(async (p) => ({ path: await uploadImage(p.file), type: p.file.type })));
+        messageText = attachmentMarkers(uploaded, messageText);
+        removeFiles(sent.map((p) => p.id));
       }
 
       // Every send goes straight into the agent's terminal (the old Now/Inbox picker is gone;
@@ -322,9 +353,9 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
         setResult('Failed' + (res.error ? ': ' + res.error : ''));
       }
 
-    } catch (err: any) {
+    } catch (err: unknown) {
       setResultOk(false);
-      setResult('Error: ' + (err.message || 'unknown'));
+      setResult('Error: ' + ((err instanceof Error && err.message) || 'unknown'));
       failed = true;
     } finally {
       setSending(false);
@@ -335,11 +366,11 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     }
   };
 
-  const canSend = (text.trim() || pendingImage) && !sending && !disabled;
+  const canSend = (text.trim() || hasFiles) && !sending && !disabled;
   // The round button is STOP only while the seat is mid-turn with no menu open (the caller's
   // canStop, see composerGate.canStopTurn) AND there is nothing to send: text typed mid-turn is
   // still a send, because the CLI queues it.
-  const showStop = !!onStop && !!canStop && !text.trim() && !pendingImage && !sending;
+  const showStop = !!onStop && !!canStop && !text.trim() && !hasFiles && !sending;
 
   // Stop presses Esc in the seat's pane. A ref, not state, guards it: two clicks in one frame
   // both read the same `stopping` state, and Esc pressed twice can land on whatever the first
@@ -483,20 +514,21 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           isDragging ? 'border-blue-500 bg-blue-500/5' : 'border-border focus-within:border-foreground/25'
         )}
       >
-        {(pendingImage || heldChips.length > 0) && (
+        {(hasFiles || heldChips.length > 0) && (
           <div className="flex flex-wrap items-center gap-1.5 px-3 pt-2.5">
-            {pendingImage && (
-              <span className="inline-flex items-center gap-2 max-w-full pl-1 pr-2 py-1 bg-muted rounded-xl border border-border">
-                {imagePreview
-                  ? <img src={imagePreview} alt="preview" className="h-9 w-9 rounded-lg object-cover" />
+            {/* One removable chip per attached file; images show a thumbnail. */}
+            {pendingFiles.map((p) => (
+              <span key={p.id} className="inline-flex items-center gap-2 max-w-full pl-1 pr-2 py-1 bg-muted rounded-xl border border-border">
+                {p.preview
+                  ? <img src={p.preview} alt="preview" className="h-9 w-9 rounded-lg object-cover" />
                   : <Paperclip size={16} className="text-muted-foreground shrink-0 mx-1" />
                 }
-                <span className="text-xs text-muted-foreground truncate max-w-[180px]">{pendingImage.name}</span>
-                <button onClick={clearImage} aria-label="Remove attachment" className="text-muted-foreground hover:text-red-400 transition-colors">
+                <span className="text-xs text-muted-foreground truncate max-w-[180px]">{p.file.name}</span>
+                <button type="button" onClick={() => removeFiles([p.id])} aria-label={`Remove ${p.file.name}`} className="text-muted-foreground hover:text-red-400 transition-colors">
                   <X size={14} />
                 </button>
               </span>
-            )}
+            ))}
             {/* Held large pastes — chips show WHAT is attached; the token in the text shows
                 WHERE. Only chips whose token still survives in the text. */}
             {heldChips.map((p) => (
@@ -515,7 +547,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={!attachSupported}
-            aria-label="Attach a file"
+            aria-label="Attach files"
             // touch-circle-tight-right: the + glyph sits centred in its circle, so the circle's own inset already reads
             // as space; without this the text started ~20px after the glyph (Shaw, 2026-10-10).
             className={clsx(
@@ -524,18 +556,20 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
                 ? 'text-muted-foreground/40 cursor-not-allowed'
                 : 'text-foreground/70 hover:text-foreground hover:bg-muted'
             )}
-            title={attachSupported ? 'Attach file (image, PDF, CSV, audio…)' : 'Attachments not supported for this agent yet'}
+            title={attachSupported ? 'Attach files (images, video, PDF, CSV, audio…)' : 'Attachments not supported for this agent yet'}
           >
             <Plus size={20} />
           </button>
           <input
             ref={fileInputRef}
             type="file"
-            accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.csv,.txt,.md,.json,.html,.htm,.vtt,.srt,.docx,.xlsx,.pptx,.zip,.m4a,.mp3,.wav,image/png,image/jpeg,image/gif,image/webp,application/pdf,text/csv,application/json,text/html,audio/mpeg,audio/mp4"
+            accept={COMPOSER_ACCEPT}
+            multiple
             className="hidden"
             onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) handleFileUpload(file);
+              addFiles(e.target.files);
+              // Reset so picking the same file again after removing its chip still fires onChange.
+              e.target.value = '';
             }}
           />
           <textarea
