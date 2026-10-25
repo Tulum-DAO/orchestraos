@@ -27,7 +27,7 @@ def test_release_skips_only_the_breathe_window():
     guard (a human typing still wins)."""
     src = inspect.getsource(mr.main)
     rel = src.index("_codex_idle_release = codex_idle_release(")
-    attached = src.index("if hold_for_attached(attached, idle_secs)")
+    attached = src.index("if _presence and msg.get(\"priority\")")
     breathe = src.index("if (idle_secs < BREATHE_WINDOW_S")
     assert rel < attached < breathe
     breathe_cond = src[breathe:src.index(":", src.index("_codex_idle_release", breathe))]

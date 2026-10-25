@@ -52,6 +52,8 @@ LOCKFILE = Path("/tmp/message-router.lock")
 STALE_HOURS = 48          # pending older than this -> expired at startup
 COOLDOWN_SECONDS = 60     # min gap between injections into the same agent
 ATTACHED_IDLE_TTL = 600   # attached pane holds mail only while active within this
+CLIENT_ACTIVE_TTL_S = 120  # an attached CLIENT counts as a present human only while its
+                           # OWN #{client_activity} (its last input) is younger than this
                           # window; past it, deliver (fixed 2026-08-15: a mere
                           # attached client used to freeze mail FOREVER — a
                           # persistent terminal on gm/ob starved it for hours)
@@ -322,6 +324,39 @@ def hold_for_attached(attached: int, idle_secs: float,
     starved gm/ob for hours (2026-08-15). Typed-composer / busy protection is
     separate (agent_is_idle), so delivering to an idle-past-ttl pane is safe."""
     return attached > 0 and idle_secs < ttl
+
+
+def client_presence() -> dict:
+    """session -> seconds since the NEWEST input from any client attached to it (one global
+    `tmux list-clients` per cycle). Presence is per CLIENT input, not #{session_activity}:
+    session activity also moves on the agent's OWN output, so a persistent viewer (a
+    dashboard terminal's `tmux attach`) on a busy pane read as a human mid-conversation and
+    froze that agent's mail. tmux updates client_activity only on that client's input, so a
+    viewer that is not typing stops holding mail after CLIENT_ACTIVE_TTL_S."""
+    r = tmux("list-clients", "-F", "#{client_session}|#{client_activity}")
+    out = {}
+    if r.returncode != 0:
+        return out
+    now = time.time()
+    for line in (r.stdout or "").strip().split("\n"):
+        name, _, act = line.rpartition("|")
+        try:
+            age = now - int(act)
+        except ValueError:
+            continue
+        if name and (name not in out or age < out[name]):
+            out[name] = age
+    return out
+
+
+def attached_presence_hold(client_age: dict, session: str, now: float):
+    """The hold detail string when a client attached to `session` typed within
+    CLIENT_ACTIVE_TTL_S (a human is plausibly mid-conversation), else None (deliver)."""
+    age = client_age.get(session)
+    if age is None or not hold_for_attached(1, age, ttl=CLIENT_ACTIVE_TTL_S):
+        return None
+    rel = time.strftime("%H:%M:%SZ", time.gmtime(now + CLIENT_ACTIVE_TTL_S - age))
+    return f"attached client typed {int(age)}s ago (<{CLIENT_ACTIVE_TTL_S}s), releases ~{rel}"
 
 
 def agent_tmux_session(agent_id: str) -> str:
@@ -2155,7 +2190,7 @@ def close_park_episode(hold_state, session) -> int:
 
 
 def note_hold(hold_state, session, msg, reason, now, queue_n=None,
-              dead_letter_fn=None, notify_fn=None, dl_batch=None, park_fn=None):
+              dead_letter_fn=None, notify_fn=None, dl_batch=None, park_fn=None, detail=None):
     """R2: record a held row so it is NEVER silent. (1) Throttled log: each
     (session|reason) at most once / HOLD_LOG_THROTTLE_S — a persistent hold stays
     visible without per-minute spam. (2) SLA escalation (guard-a generalized to
@@ -2169,8 +2204,9 @@ def note_hold(hold_state, session, msg, reason, now, queue_n=None,
         # oldest row, which read as oldest-starves-younger in gm's trace; carry
         # the recipient's queue depth so a hold is visibly whole-queue.
         depth = f", {queue_n} queued for this recipient" if queue_n else ""
+        extra = f"; {detail}" if detail else ""
         log(f"HELD {session} :: {reason} (msg {msg['id']}, "
-            f"age {int(_msg_age_s(msg, now))}s{depth} — not delivered this cycle)")
+            f"age {int(_msg_age_s(msg, now))}s{depth}{extra} — not delivered this cycle)")
         rec["logged_at"] = now
     # leg-4 latent defect (a): escalation + dead-letter state is PER MESSAGE, not
     # per (session|reason) bucket. The bucket latch meant that once one row
@@ -2386,6 +2422,7 @@ def main():
 
         sessions = live_sessions()
         sess_info = session_info()
+        client_age = client_presence()   # one `tmux list-clients` per cycle
         cooldowns = load_cooldowns()
         alerts = load_alerts()
         hold_state = load_holds()      # R2: throttled hold-log + SLA-escalate state
@@ -2560,11 +2597,15 @@ def main():
             _runtime = routing_runtime(_target_agent, meta)
             _codex_idle_release = codex_idle_release(
                 _runtime, agent_is_idle(session, _runtime) if _runtime == "codex" else False)
-            if hold_for_attached(attached, idle_secs) and msg.get("priority") != "critical" and _dn:
+            # Presence = an attached client whose OWN input is < CLIENT_ACTIVE_TTL_S old
+            # (client_presence), not session activity, which the agent's own output moves.
+            _presence = attached_presence_hold(client_age, session, now)
+            if _presence and msg.get("priority") != "critical" and _dn:
                 _dn_waived.append("attached-active")
-            elif hold_for_attached(attached, idle_secs) and msg.get("priority") != "critical":
-                note_hold(hold_state, session, msg, "attached-active", now, queue_n=_qdepth.get(agent), dl_batch=_dl_batch)
-                continue  # attached + active within TTL: human plausibly mid-convo.
+            elif _presence and msg.get("priority") != "critical":
+                note_hold(hold_state, session, msg, "attached-active", now, queue_n=_qdepth.get(agent),
+                          dl_batch=_dl_batch, detail=_presence)
+                continue  # a client is actively typing: human plausibly mid-convo.
                 # Past the TTL a persistent-but-idle attach no longer freezes mail
                 # (2026-08-15 fix). Typed-input clobber protection is agent_is_idle.
             if (idle_secs < BREATHE_WINDOW_S and not _breathe_exempt(msg) and not _hook_release
