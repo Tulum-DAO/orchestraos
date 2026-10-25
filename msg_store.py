@@ -982,6 +982,40 @@ class MessageStore:
         finally:
             conn.close()
 
+    def acknowledge_read(self, msg_id: str, reader: str) -> bool:
+        """Record a durable read receipt from the row's own addressee.
+
+        A Stop-hook digest line and a router paste are only presentation attempts. The first
+        unambiguous consumption event is the recipient running ``msg_store.py get --id``.
+        Without a receipt, rows stayed pending after an agent visibly read and acted on them,
+        so the router and the UI kept calling them unread and retried them.
+
+        Only the exact addressee may consume a row: anyone else can still inspect it with
+        ``get`` but cannot close someone else's inbox item. An undelivered held_message
+        (a message parked for the target's turn boundary) is never consumed by a lookup.
+        Returns True iff the row moved to 'acknowledged'.
+        """
+        if not reader:
+            return False
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "SELECT to_agent, type, status, delivered_at FROM messages WHERE id = ?",
+                [msg_id]).fetchone()
+            if not row or row["to_agent"] != reader:
+                return False
+            if (row["type"] == "held_message" and row["status"] != "delivered"
+                    and not row["delivered_at"]):
+                return False
+            result = conn.execute(
+                "UPDATE messages SET status = 'acknowledged', acknowledged_at = ? "
+                "WHERE id = ? AND to_agent = ?",
+                [_now(), msg_id, reader])
+            conn.commit()
+            return result.rowcount > 0
+        finally:
+            conn.close()
+
     def bulk_send(self, messages: list) -> list:
         """Send multiple messages in a single transaction."""
         conn = self._conn()
@@ -1683,6 +1717,9 @@ def main():
     # get
     p = sub.add_parser("get")
     p.add_argument("--id", "--message-id", dest="id", required=True)
+    p.add_argument("--agent", default=None,
+                   help="recipient identity; when it matches the row's addressee, record a "
+                        "durable read receipt")
 
     args = parser.parse_args()
     store = MessageStore()
@@ -1785,6 +1822,14 @@ def main():
 
     elif args.command == "get":
         msg = store.get(args.id)
+        # A recipient's read is the receipt the router needs. Prefer the explicit --agent the
+        # hook instructions pass; otherwise fall back to the caller's tmux identity. A lookup by
+        # anyone other than the addressee is read-only and never acknowledges the row.
+        reader = args.agent or sender_identity()
+        if msg and reader and store.acknowledge_read(args.id, reader):
+            msg["status"] = "acknowledged"
+            msg["acknowledged_at"] = _now()
+            msg["read_receipt_by"] = reader
         print(json.dumps(msg, indent=2, default=str) if msg else '{"error": "not found"}')
 
     else:
