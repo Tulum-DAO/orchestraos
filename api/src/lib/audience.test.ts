@@ -46,7 +46,7 @@ test('a job he set off reports back: the notification folds, its closing reply i
 test('the spawn brief and anything before the first opener fold (a log with no operator turn draws only its newest reply)', () => {
   const xs = [a('stray'), u('You are gm. Read your init', { is_system: true }), a('ready')];
   tagAudience(xs);
-  // 'ready' is drawn by Shaw's iOS 334 rule (no recorded turns: the most recent message is shown).
+  // 'ready' is drawn by the iOS 334 rule (no recorded turns: the most recent message is shown).
   assert.deepEqual(xs.map((x) => x.audience), ['agent', 'agent', 'user']);
   assert.ok(xs.every((x) => x.exchange === undefined));
 });
@@ -100,7 +100,7 @@ test('a hook the route hides never turns the reply he waited for into a step (io
   assert.ok(xs.every((x) => x.exchange === m.uuid));
 });
 
-test('a log with no turn the operator opened still draws its NEWEST reply (Shaw, iOS 334)', () => {
+test('a log with no turn the operator opened still draws its NEWEST reply (iOS 334)', () => {
   // "if there are no recorded turns, display the most recent message": only mail in the window,
   // and the newest assistant text is drawn; everything else still folds, with no exchange.
   const xs = [u('[MSG from gm | high] do X'), a('on it'), tool(), res(), a('X done'),

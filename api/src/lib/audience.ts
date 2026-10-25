@@ -84,7 +84,7 @@ export function tagAudience(items: any[]): any[] {
     i = end;
   }
   // No turn the operator opened anywhere in this log (only mail, hooks, the spawn brief): the
-  // newest reply is still drawn, never folded (Shaw, iOS 334: "if there are no recorded turns,
+  // newest reply is still drawn, never folded (iOS 334: "if there are no recorded turns,
   // display the most recent message"). One rule, server-side, so every client draws the same.
   if (!personTurn) {
     for (let k = items.length - 1; k >= 0; k--) {
