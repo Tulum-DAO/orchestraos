@@ -213,6 +213,82 @@ def tmux(*args, timeout=10):
     return subprocess.run(["tmux", *args], capture_output=True, text=True, timeout=timeout)
 
 
+# --- Escalation seam ------------------------------------------------------------------------
+# WHO hears an alarm about a seat is answered by ONE implementation,
+# scripts/identity_store/alarm_routing.escalation_targets; the router imports it and keeps NO
+# local copy (a fallback that reads a different source is a second rule that disagrees).
+# CONTRACT, asserted HERE at import by BINDING the call this router makes, rather than counting
+# parameters (binding keeps passing when someone adds a defaulted argument):
+#     escalation_targets(seat) -> list[str]   (OWNER_CHANNEL last, the seat never in it)
+# An ABSENT module and a BROKEN contract are different states and never share a code path: the
+# first is known with a defined behaviour, the second is a bug and must be loud.
+#: The terminal hop: a CHANNEL sentinel rendered to Telegram, never a msg_store recipient.
+OWNER_CHANNEL = "owner:tg"
+_OI_IMPORT_ERROR = None
+_OI_CONTRACT_ERROR = None
+try:
+    from scripts.identity_store.alarm_routing import (  # noqa: F401
+        escalation_targets as _oi_escalation_targets)
+except ImportError as _e:          # absent module ONLY — never a catch-all here
+    _oi_escalation_targets = None
+    _OI_IMPORT_ERROR = repr(_e)
+else:
+    try:
+        import inspect as _inspect
+        _inspect.signature(_oi_escalation_targets).bind("probe-seat")
+    except TypeError as _e:
+        _OI_CONTRACT_ERROR = (
+            f"alarm_routing.escalation_targets does not accept the call this router makes, "
+            f"escalation_targets(<seat>): {_e}")
+    except (ValueError, AttributeError) as _e:
+        _OI_CONTRACT_ERROR = f"could not verify the escalation contract: {_e!r}"
+
+
+class EscalationSeamUnavailable(RuntimeError):
+    """The one escalation implementation could not be IMPORTED — a known state. Callers page
+    the owner channel naming it, and never guess a chain from a second rule."""
+
+
+class EscalationSeamBroken(RuntimeError):
+    """The seam imported but does not match the agreed contract — a BUG, deliberately a
+    different exception from Unavailable so the two can never share a handler."""
+
+
+def escalation_targets(seat: str) -> list[str]:
+    """WHO to tell about `seat`, answered ONLY by alarm_routing.escalation_targets (DB-first:
+    lineages.reports_to). The seam returns the finished list — agents first, the owner channel
+    last, the named seat never present. NO broad except here: a contract error must be loud.
+    Raises EscalationSeamUnavailable (absent) or EscalationSeamBroken (wrong shape); the caller
+    pages the owner channel naming whichever it was. `seat` is dropped from the result
+    regardless."""
+    if _OI_CONTRACT_ERROR:
+        raise EscalationSeamBroken(_OI_CONTRACT_ERROR)
+    if _oi_escalation_targets is None:
+        raise EscalationSeamUnavailable(
+            f"scripts.identity_store.alarm_routing is not importable: {_OI_IMPORT_ERROR}")
+    chain = _oi_escalation_targets(seat)
+    if not isinstance(chain, list):
+        # The RETURN TYPE is contract too; a signature cannot express it, so it is checked here.
+        raise EscalationSeamBroken(
+            f"alarm_routing.escalation_targets returned {type(chain).__name__}, expected list")
+    return [t for t in chain if t != seat]
+
+
+def _send_page(to: str, subject: str, body: str) -> None:
+    """Deliver one page. OWNER_CHANNEL is a CHANNEL sentinel, not an agent id: it is rendered to
+    Telegram, never written to msg_store as a recipient. Raises on a failed agent send so the
+    caller can count a dead hop as one more reason to reach the owner."""
+    if to == OWNER_CHANNEL:
+        telegram(f"{subject}\n{body}")
+        return
+    r = subprocess.run([sys.executable, str(CODE_ROOT / "msg_store.py"), "send",
+                        "--from", "message-router", "--to", to,
+                        "--subject", subject, "--body", body],
+                       capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        raise RuntimeError(f"msg_store send exited {r.returncode}: {(r.stderr or '').strip()[:200]}")
+
+
 def live_sessions() -> set:
     r = tmux("list-sessions", "-F", "#{session_name}")
     if r.returncode != 0:
