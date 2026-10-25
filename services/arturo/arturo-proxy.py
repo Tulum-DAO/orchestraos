@@ -1971,7 +1971,7 @@ def _spawn_tool_worker(fn_name, fn_args, user_turns=None):
 # so the commission survives a restart and shows in the Inbox. The Mac path keeps the legacy
 # raw-tmux spawn (spawn-agent.sh is a VPS-side script).
 
-# A new Claude seat starts on Opus 5.5 with the 1M context (Shaw 2026-10-22), the same default as
+# A new Claude seat starts on Opus 5.5 with the 1M context (product decision 2026-10-22), the same default as
 # the New Agent form (api/src/routes/agents-new.ts DEFAULT_MODEL_FOR_RUNTIME).
 _DEFAULT_MODEL_FOR_RUNTIME = {"claude": "claude-opus-5-5[1m]", "gemini": "gemini-3.1-pro", "codex": "gpt-5.6-terra"}
 
