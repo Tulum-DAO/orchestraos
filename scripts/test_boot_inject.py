@@ -9,6 +9,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import boot_inject as B  # noqa: E402
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _own_journal(monkeypatch, tmp_path):
+    """boot_inject reads the session's journal row (a typed row for another text refuses), so a row
+    an earlier test left in the run's shared fence dir must never reach these tests."""
+    monkeypatch.setenv("WATCH_GATEWAY_INJECT_JOURNAL_DIR", str(tmp_path / "journal"))
 
 TEXT = "You are pm-x. Read /tmp/agent-init-pm-x.md and follow all instructions in it."
 LONG = "\n".join(f"line {i} of a long handoff" for i in range(16))
@@ -35,6 +43,8 @@ class Pane:
         cmd = args[0]
         if cmd == "capture-pane":
             return 0, self.render()
+        if cmd == "list-clients":
+            return 0, getattr(self, "attached", "")     # "" = nobody attached to the pane
         if cmd == "display-message":
             return 0, ("1" if self.in_mode else "0") if "#{pane_in_mode}" in args else "0"
         if cmd == "set-buffer":
@@ -100,9 +110,18 @@ def test_a_preexisting_chip_is_never_pasted_onto_or_entered():
 
 
 def test_our_own_earlier_strand_is_submitted_not_repasted():
+    import inject_journal
+    inject_journal.record("pm-x", TEXT, TEXT[:40]); inject_journal.mark_typed("pm-x")   # our attempt
     p = Pane(preexisting=TEXT)
     assert run(p) == ("submitted", "enter-1")
     assert p.pastes == 0
+
+
+def test_an_identical_draft_no_typer_recorded_is_never_entered():
+    """codex R15 on #472: without a typed row for this text, the composer is not provably ours."""
+    p = Pane(preexisting=TEXT)
+    assert run(p) == ("stuck", "not-exactly-ours")
+    assert p.pastes == 0 and p.enters == 0
 
 
 def test_copy_mode_is_exited_first():
@@ -336,3 +355,35 @@ def test_ORCHESTRA_CODEX_UPDATE_CHECK_keeps_the_update_check_on_for_seats():
                          env={k: v for k, v in os.environ.items() if k != "ORCHESTRA_CODEX_UPDATE_CHECK"}).stdout.strip()
     assert off == "--yolo --dangerously-bypass-hook-trust -c check_for_update_on_startup=false"
     assert on == "--yolo --dangerously-bypass-hook-trust"
+
+
+def test_a_person_attached_to_the_pane_gets_nothing_typed_over_them():
+    p = Pane()
+    p.attached = "/dev/pts/4: pm-x [80x24 xterm] (utf8)\n"
+    out = B.boot_inject("pm-x", TEXT, tmux_fn=p, sleep_fn=lambda s: None, log_fn=lambda m: None)
+    assert out == ("failed", "client-attached")
+    assert not [c for c in p.calls if c[0] in ("paste-buffer", "send-keys", "set-buffer")]
+
+
+def test_a_person_who_attaches_DURING_the_codex_busy_wait_still_gets_nothing_typed():
+    """codex R8 on #472: the check runs right before the first keystroke, after any busy wait."""
+    p = CodexPane(busy_captures=2)
+    def attach_late(*a, **k):
+        if a[0] == "list-clients":                 # nobody before the wait could have been seen;
+            return 0, ("/dev/pts/4: cx\n" if p.busy_left == 0 else "")   # attached by the time we type
+        return p(*a, **k)
+    out = B.boot_inject("cx", TEXT, "codex", tmux_fn=attach_late, sleep_fn=lambda s: None,
+                        log_fn=lambda m: None)
+    assert out == ("failed", "client-attached")
+    assert not [c for c in p.calls if c[0] in ("paste-buffer", "set-buffer")]
+
+
+def test_an_attachment_check_that_fails_types_nothing():
+    p = Pane()
+    def broken(*a, **k):
+        if a[0] == "list-clients":
+            return 1, ""                            # tmux could not answer
+        return p(*a, **k)
+    out = B.boot_inject("pm-x", TEXT, tmux_fn=broken, sleep_fn=lambda s: None, log_fn=lambda m: None)
+    assert out == ("failed", "client-attached")
+    assert not [c for c in p.calls if c[0] in ("paste-buffer", "set-buffer")]

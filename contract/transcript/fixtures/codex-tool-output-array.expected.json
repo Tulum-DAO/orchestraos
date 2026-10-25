@@ -13,7 +13,8 @@
       "summary": "printf fixture",
       "id": "call-array",
       "ts": "2026-08-28T10:01:01Z",
-      "uuid": "step-3-call"
+      "uuid": "step-3-call",
+      "audience": "agent"
     },
     {
       "kind": "tool_result",
@@ -22,7 +23,8 @@
       "tool_use_id": "call-array",
       "is_error": false,
       "ts": "2026-08-28T10:01:02Z",
-      "uuid": "step-4-result"
+      "uuid": "step-4-result",
+      "audience": "agent"
     }
   ],
   "render_items": [
@@ -36,7 +38,8 @@
       "result": "fixture output",
       "is_error": false,
       "ts": "2026-08-28T10:01:01Z",
-      "key": "step-3-call:0"
+      "key": "step-3-call:0",
+      "audience": "agent"
     }
   ]
 }

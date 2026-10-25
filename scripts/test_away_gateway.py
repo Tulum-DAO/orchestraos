@@ -176,3 +176,31 @@ def test_a_ledger_that_cannot_be_written_never_fails_a_delivered_send(box, monke
     monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False: (True, {"verified": True}))
     status, body = _call(box, "POST", "/agent-message", body={"session": "gm", "text": "still delivered"})
     assert status == 200 and body["ok"] is True and body["delivered"] is True
+
+
+# ---- last_user_message_at (ios-watch-dev msg_a94aba91): who sent it ------------------------------
+
+@pytest.mark.parametrize("token,headers,person", [
+    ("dev", {}, True),                                        # a paired device
+    ("fleet", {"X-Actor": "operator:web"}, True),             # the web chat / dashboard terminal
+    ("fleet", {"X-Actor": "app:ios"}, True),
+    ("fleet", {}, False),                                     # the bare fleet token: automation holds it
+    ("fleet", {"X-Actor": "automation:boundary-delivery"}, False),
+])
+def test_each_send_says_whether_a_person_sent_it(box, monkeypatch, token, headers, person):
+    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False: (True, {}))
+    status, _ = _call(box, "POST", "/agent-message", token=token, body={"session": "gm", "text": "hello"}, headers=headers)
+    assert status == 200
+    [row] = _ledger(box)
+    assert row["person"] is person
+
+
+def test_agents_rows_carry_the_last_person_message(box, monkeypatch):
+    monkeypatch.setattr(G, "verified_inject", lambda s, t, f=False: (True, {}))
+    _call(box, "POST", "/agent-message", body={"session": "gm", "text": "from a person"}, headers={"X-Actor": "operator:web"})
+    first = _ledger(box)[-1]["at"]
+    _call(box, "POST", "/agent-message", body={"session": "gm", "text": "from automation"})   # later, not a person
+    rows = [{"id": "gm", "tmux_session": "gm"}, {"id": "other", "tmux_session": "other"}]
+    G._stamp_last_user_message(rows)
+    assert rows[0]["last_user_message_at"] == first
+    assert "last_user_message_at" not in rows[1]
