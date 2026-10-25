@@ -834,6 +834,73 @@ def claude_mid_turn_safe(session: str) -> bool:
     return input_line_state(prompt_lines[-1], sig) != "typed"
 
 
+# --- Stuck machine-nudge submission ---------------------------------------------------
+# A machine-authored nudge typed into a pane with `tmux send-keys "<text>" Enter` in ONE call
+# arrives as a single burst; the claude composer classifies the burst as a paste and inserts the \r as a
+# literal newline, so the line sits in the composer unsubmitted. The seat then reads as not-idle
+# (typed-text guard) and EVERY message to it is held until someone presses Enter. These shapes
+# are never typed by a person, so an unattached pane holding one gets a bare Enter from us.
+BOT_NUDGE_PATTERNS = (
+    re.compile(r"^\[MSG from", re.I),
+    re.compile(r"^check (your )?inbox\b", re.I),
+    re.compile(r"^drain your inbox\b", re.I),
+    re.compile(r"^you are (promoted|the (newly promoted )?canonical)\b", re.I),
+    re.compile(r"^read /tmp/agent-(msg|init)-[\w.-]+\.md\b", re.I),
+    # The longer wake form, with the assigned work appended after the command: an
+    # end-of-line-only rule misses it and leaves our own text blocking the seat.
+    re.compile(r"^read your durable inbox with:\s*python3\s+\S*msg_store\.py\s+inbox\s+--agent\s+\S+\b", re.I),
+    re.compile(r"python3 ~?/?\S*msg_store\.py inbox --agent \S+\s*$", re.I),
+)
+
+# Runtimes whose composer is a single line we can read whole. agy's composer is multi-line and
+# pane_split hands back everything under the last '>' line, so a person's text after a nudge
+# would be submitted with it: never press Enter there.
+_BOT_NUDGE_RUNTIMES = ("claude", "codex")
+
+
+def is_bot_nudge_text(text: str) -> bool:
+    t = (text or "").strip()
+    return bool(t) and any(p.search(t) for p in BOT_NUDGE_PATTERNS)
+
+
+def stuck_bot_nudge(session: str, runtime: str = DEFAULT_RUNTIME) -> str | None:
+    """A TYPED (non-dim) composer line that matches a known machine-authored nudge shape.
+    Ghost suggestions (dim) and human drafts are never matched; runtimes outside
+    _BOT_NUDGE_RUNTIMES (agy, grok, unknown) are never matched."""
+    if runtime not in _BOT_NUDGE_RUNTIMES:
+        return None
+    sig = PROMPT_SIGNATURES.get(runtime, PROMPT_SIGNATURES[DEFAULT_RUNTIME])
+    prompt_char = sig["prompt_char"]
+    ansi = tmux("capture-pane", "-t", session, "-e", "-p")
+    if ansi.returncode != 0:
+        return None
+    prompt_lines = [l for l in ansi.stdout.split("\n") if prompt_char in l]
+    if not prompt_lines or input_line_state(prompt_lines[-1], sig) != "typed":
+        return None
+    _, input_line, ok = pane_split(session, runtime)
+    if not ok:
+        return None
+    if runtime == "codex":
+        input_line = _codex_composer_block(session) or input_line
+    content = input_line.split(prompt_char, 1)[-1].strip().lstrip("\u00a0").strip()
+    return content if is_bot_nudge_text(content) else None
+
+
+def submit_stuck_bot_nudge(session: str, runtime: str = DEFAULT_RUNTIME) -> bool:
+    """Press ONE bare Enter on a stuck bot nudge (never re-send text), verify it left the
+    composer, log by effect. Caller guarantees the pane is unattached."""
+    stuck = stuck_bot_nudge(session, runtime)
+    if not stuck:
+        return False
+    tmux("send-keys", "-t", session, "Enter")
+    time.sleep(1.5)
+    if stuck_bot_nudge(session, runtime):
+        log(f"STUCK-NUDGE {session}: Enter did not submit {stuck[:60]!r}; leaving for next cycle")
+        return False
+    log(f"STUCK-NUDGE {session}: submitted a machine nudge left unsubmitted in the composer: {stuck[:80]!r}")
+    return True
+
+
 # --- Stuck-injection self-cleanup ---------------------------------------------
 
 def _grok_live_composer_is_typed(session: str, sig: dict) -> bool:
@@ -2470,6 +2537,10 @@ def main():
                 cleanup_stuck_injection(sess, store, _crt)
             except Exception as e:
                 log(f"cleanup error in {sess}: {e}")
+            try:
+                submit_stuck_bot_nudge(sess, _crt)
+            except Exception as e:
+                log(f"stuck-nudge error in {sess}: {e}")
 
         with store._conn() as conn:
             rows = conn.execute(
