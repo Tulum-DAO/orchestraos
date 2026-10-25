@@ -4942,6 +4942,7 @@ async def handle_deliver_now(request):
     return _json({"ok": True, "waiver": waiver, "router_started": kicked, **out})
 
 
+# Delivery model: see docs/DELIVERY.md
 async def handle_agent_message(request):
     """POST /agent-message {session, text, accepts?:["held"]} -> verified inject,
     or (mid-turn working + accepts:["held"]) a durable-first accept-and-hold."""
