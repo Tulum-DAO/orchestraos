@@ -55,6 +55,13 @@ def test_proxy_wires_the_check_into_both_upgrade_paths():
     assert 'path: "/ws/terminal", verifyClient: (info) => {' in src
     assert 'if (!wsAllowed(info.req)) return false;' in src
     assert 'terminalSessionAllowed(info.req)' in src
+
+
+def test_public_pair_exchange_is_the_only_gateway_route_the_dashboard_proxies():
+    src = (ROOT / "dashboard-proxy.js").read_text()
+    assert 'req.method === "POST" && req.url.split("?")[0] === "/pair/exchange"' in src
+    assert 'proxyTo(GATEWAY_URL,req,res)' in src
+    assert 'http://127.0.0.1:' in src
     # the /api/* upgrade forward refuses before dialling the API
     api = src.index('if (!req.url.startsWith("/api/")) return;')
     assert "if (!wsAllowed(req))" in src[api:api + 300]

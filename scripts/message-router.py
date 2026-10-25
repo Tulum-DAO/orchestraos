@@ -685,6 +685,43 @@ def reachability_probe(session: str, runtime: str, agent: str, msg_id: str):
         return None   # observability must never break delivery
 
 
+# --- Deliver now (scripts/deliver_now.py) -----------------------------------------
+# A person pressed "Deliver now" for this session (the gateway's POST /deliver-now wrote the
+# waiver; agents never do). It waives only the SOFT gates below: cooldown, attached-active,
+# breathe window, and a Claude turn in progress (Claude Code queues typed input mid-turn). The
+# HARD gates stay: typed-but-unsent text, a permission prompt or any screen without an empty
+# composer, a stranded paste chip, Codex/Grok mid-turn (inject() re-checks those itself).
+
+def deliver_now_waiver(session: str):
+    try:
+        import deliver_now
+        return deliver_now.active_waiver(ORCHESTRA_DIR, session)
+    except Exception:  # noqa: BLE001 — no waiver is the safe answer
+        return None
+
+
+def claude_mid_turn_safe(session: str) -> bool:
+    """A Claude pane mid-turn may take a typed message (it queues it) only when its composer is on
+    screen, empty, and holds no stranded chip, and no hook says it is waiting on a permission.
+    A permission dialog replaces the composer, so "no composer visible" refuses it too."""
+    hs = hook_state(session)
+    if hs is not None and hs[0] == "waiting_permission":
+        return False
+    _, line, ok = pane_split(session, "claude")
+    if not ok:
+        return False
+    if composer_has_stranded_chip(line):
+        return False
+    ansi = tmux("capture-pane", "-t", session, "-e", "-p")
+    if ansi.returncode != 0:
+        return False
+    sig = PROMPT_SIGNATURES["claude"]
+    prompt_lines = [l for l in ansi.stdout.split("\n") if sig["prompt_char"] in l]
+    if not prompt_lines:
+        return False
+    return input_line_state(prompt_lines[-1], sig) != "typed"
+
+
 # --- Stuck-injection self-cleanup ---------------------------------------------
 
 def stuck_own_message(session: str, runtime: str = DEFAULT_RUNTIME) -> str | None:
@@ -712,8 +749,93 @@ def stuck_own_message(session: str, runtime: str = DEFAULT_RUNTIME) -> str | Non
         input_line = _codex_composer_block(session) or input_line
     content = input_line.split(prompt_char, 1)[-1].strip().lstrip("\u00a0").strip()
     if content.startswith("[MSG from"):
+        if runtime == "gemini" and not _is_exactly_one_injection(content):
+            # agy's composer is multi-line and pane_split hands back everything under the last
+            # '>' line. Our marker FIRST with a person's text after it (appended, or on a second
+            # line) would pass a start-only gate, and C-u then clears the CURSOR's line: theirs.
+            # So for agy the composer must hold exactly one router injection: the marker at the
+            # start and the template's fixed trailer at the end (orchestraos-builder, #427 review).
+            log(f"CLEANUP skipped {session}: the agy composer holds our marker plus other text "
+                f"(end anchor); zero keys, a person clears it")
+            return None
         return content
     return None
+
+
+# The shape of a router injection (format_injection): the marker, the subject, " — Read
+# /tmp/agent-msg-<id>.md and act on it. To reply: python3 <msg_store> send --from <seat> --to <X>
+# --type reply --subject '<...>' --body 'your reply'". Checked as a whole, not by its two ends.
+_INJECTION_RE = re.compile(
+    r"^\[MSG from \S+ \| \S+\].*? \u2014 Read /tmp/agent-msg-[A-Za-z0-9_]+\.md and act on it\. "
+    r"To reply: python3 \S+ send --from \S+ --to \S+ --type reply --subject '[^']{0,80}' --body 'your reply'$")
+
+
+def _is_exactly_one_injection(content: str) -> bool:
+    """True when the WHOLE composer (every line under the prompt down to the box's bottom border,
+    blank lines included: a blank line is a person's paragraph break, not the end of the composer;
+    whitespace-normalised so an 80-column wrap still matches) is one router injection and nothing
+    else: exactly one marker, and the full template shape from the marker to the trailer. Two
+    injections, a draft under a blank line, words after the trailer, or words inserted after the
+    first sentence all fail. Residual: text a person inserts INSIDE the subject span cannot be
+    told from the subject itself (the subject is free text)."""
+    norm = _agy_composer_text(content)
+    return norm.count("[MSG from") == 1 and _INJECTION_RE.match(norm) is not None
+
+
+def _agy_composer_text(content: str) -> str:
+    """The composer's text: every line under the prompt down to the box border (blank lines kept:
+    a person's paragraph break), whitespace-normalised so an 80-column wrap reads as one line."""
+    lines = []
+    for ln in content.split("\n"):
+        if _is_agy_box_border(ln):
+            break
+        lines.append(ln.strip())
+    return " ".join(" ".join(lines).split())
+
+
+# The router's OWN prefix tokens, which sit between the marker and the subject and can change
+# between injection and cleanup: "(sent Nm ago)", the stale banner "[SENT Nm AGO — ...]", and
+# upper-case bracket tags such as "[LOOP-SUSPECT depth=3]". Only a LEADING run of these is
+# removed, so a person's "[hi]" or "(sent now)" inside the subject stays and fails equality
+# (codex peer review, round 4).
+_ROUTER_PREFIX_TOKENS_RE = re.compile(
+    r"^(?:\s*(?:\(sent \d+m ago\)|\[SENT [^\]]*\]|\[[A-Z][A-Z0-9 _=:.-]*\]))*")
+_INJECTION_SPLIT_RE = re.compile(r"^(\[MSG from [^\]]+\])(.*?) \u2014 Read (.*)$")
+
+
+def _composer_is_exactly_this_injection(content: str, expected: str) -> bool:
+    """The agy composer holds exactly the injection the router wrote for THIS message, rebuilt
+    from the store (format_injection), and nothing else. Compared in three parts: the marker,
+    exactly; the middle = what is left after the router's own LEADING prefix tokens are removed
+    from both sides, which on the expected side is the stored subject, exactly; the tail from
+    " — Read " to the end, exactly (same install, same msg_store path). A person's edit anywhere
+    (the subject, a bracket or "(sent ...)" typed into it, the path, anything appended) fails."""
+    got = _INJECTION_SPLIT_RE.match(_agy_composer_text(content))
+    exp = _INJECTION_SPLIT_RE.match(" ".join(expected.split()))
+    if not got or not exp:
+        return False
+
+    def middle(m):
+        return " ".join(_ROUTER_PREFIX_TOKENS_RE.sub("", m.group(2)).split())
+
+    def tail(m):
+        return m.group(3)
+    return got.group(1) == exp.group(1) and middle(got) == middle(exp) and tail(got) == tail(exp)
+
+
+# agy draws its composer box with full-width, unindented runs of U+2500 (every real capture under
+# fixtures/agy: 80 of them at 80 columns). A person's "---" separator is ASCII and short, and any
+# line a person types in the composer is indented: content, not chrome (codex peer review of #427).
+_AGY_BORDER_MIN = 20
+
+
+def _is_agy_box_border(raw_line: str) -> bool:
+    """agy's box border starts at column 0 and runs the pane width in U+2500. Everything a person
+    types inside the composer is indented (two spaces under the '>' line), so an indented run of
+    box characters is content (codex peer review of #427)."""
+    return (bool(raw_line) and not raw_line[0].isspace() and len(raw_line.rstrip()) >= _AGY_BORDER_MIN
+            and set(raw_line.rstrip()) == {"\u2500"})
+
 
 
 def _codex_composer_block(session: str) -> str | None:
@@ -737,13 +859,14 @@ def _codex_composer_block(session: str) -> str | None:
     return "".join(block)
 
 
-def agy_cleanup_armed() -> bool:
-    """ROUTER_AGY_CLEANUP_ARMED=1 (env) or ~/runtime/ROUTER_AGY_CLEANUP_ARMED (file) turns the
-    agy/Gemini stuck-composer cleanup on. Off by default (gm, 2026-10-10)."""
-    if os.environ.get("ROUTER_AGY_CLEANUP_ARMED") == "1":
+def agy_cleanup_disabled() -> bool:
+    """ROUTER_AGY_CLEANUP_DISABLED=1 (env) or ~/runtime/ROUTER_AGY_CLEANUP_DISABLED (file) turns the
+    agy/Gemini stuck-composer cleanup OFF again. On by default since the marker gate on human text
+    was proven on real agy screens (gm, msg_aa56b181); this exists only as an instant undo."""
+    if os.environ.get("ROUTER_AGY_CLEANUP_DISABLED") == "1":
         return True
     try:
-        return (Path.home() / "runtime" / "ROUTER_AGY_CLEANUP_ARMED").exists()
+        return (Path.home() / "runtime" / "ROUTER_AGY_CLEANUP_DISABLED").exists()
     except OSError:
         return False
 
@@ -760,12 +883,24 @@ def cleanup_stuck_injection(session: str, store,
     stuck = stuck_own_message(session, runtime)
     if not stuck:
         return False
-    if runtime == "gemini" and not agy_cleanup_armed():
-        # gm ruling 2026-10-10 (msg_65f2bd8b): agy/Gemini seats get the idle gate now, but the
-        # cleanup (the one path that SENDS keys) stays off until the marker gate on human text is
-        # proven on real agy screens and that proof has been reviewed. Zero keys; named reason.
-        log(f"CLEANUP skipped {session}: agy stuck-marker cleanup is not armed "
-            f"(ROUTER_AGY_CLEANUP_ARMED); our line stays until a person clears it")
+    if runtime == "gemini":
+        # Exactly THIS message's injection, rebuilt from the store, or zero keys. The shape check
+        # in stuck_own_message cannot see an edit inside the subject span; equality can.
+        ref = re.search(r"/tmp/agent-msg-([A-Za-z0-9_]+)\.md", stuck)
+        msg = None
+        try:
+            msg = store.get(ref.group(1)) if (store is not None and ref) else None
+        except Exception:  # noqa: BLE001 — a store error is "not provably ours": zero keys
+            msg = None
+        if not msg or not _composer_is_exactly_this_injection(stuck, format_injection(msg, store)):
+            log(f"CLEANUP skipped {session}: the agy composer is not exactly the outstanding "
+                f"injection (edited, or the message is gone); zero keys, a person clears it")
+            return False
+    if runtime == "gemini" and agy_cleanup_disabled():
+        # The undo switch: zero keys, named reason. (The cleanup only ever clears a line that starts
+        # with our own [MSG from marker; proven on real agy typed/stuck screens, fixtures/agy.)
+        log(f"CLEANUP skipped {session}: agy stuck-marker cleanup is disabled "
+            f"(ROUTER_AGY_CLEANUP_DISABLED); our line stays until a person clears it")
         return False
     tmux("send-keys", "-t", session, "C-u")
     time.sleep(1)
@@ -890,7 +1025,7 @@ def codex_pane_is_busy(pane_text: str) -> bool:
     return ("\u25e6 Working" in txt) or ("tab to queue message" in txt)
 
 
-def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
+def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME, pre_paste=None) -> str:
     """_inject_unlocked under the ONE cross-process pane lock every typer shares (pane_lock.py):
     the gateway, approval_resume, the nudger and the watchers take the same lock, so two senders
     never glue or split each other's text in one pane. Adds one outcome:
@@ -905,7 +1040,9 @@ def inject(session: str, text: str, runtime: str = DEFAULT_RUNTIME) -> str:
             # whose text a guard is about to find still in the composer), and marks it typed when
             # the paste is confirmed. Only a row THIS call wrote is ever cleared here.
             rec = []
-            res = _inject_unlocked(session, text, runtime, journal=rec)
+            # Deliver now's pre-paste look rides along only when given, so the plain call is unchanged.
+            _kw = {"pre_paste": pre_paste} if pre_paste is not None else {}
+            res = _inject_unlocked(session, text, runtime, journal=rec, **_kw)
             if rec and res in ("submitted", "held"):
                 # submitted, or nothing was pasted. 'failed' KEEPS its row: a paste can land unseen
                 # (an unmarked row is report-only at the reconcile); 'stuck' keeps it as evidence.
@@ -948,7 +1085,8 @@ def _input_line_typed(session: str, runtime: str = DEFAULT_RUNTIME) -> bool:
     return not prompt_lines or input_line_state(prompt_lines[-1], sig) == "typed"
 
 
-def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, journal=None) -> str:
+def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, journal=None,
+                     pre_paste=None) -> str:
     """Inject with three-stage verification. Returns:
       'submitted'  — text confirmed in scrollback, input line clear
       'stuck'      — text landed in input line but Enter never took (left as-is)
@@ -995,6 +1133,12 @@ def _inject_unlocked(session: str, text: str, runtime: str = DEFAULT_RUNTIME, jo
     if ok0 and composer_has_stranded_chip(line0):
         log(f"stranded paste-chip in {session} composer — E7 guard: no repaste, holding")
         return "stuck"
+
+    # Stage 0.55 (Deliver now, mid-turn): the caller's last look, right before any key is sent.
+    # 'held' = nothing was typed into the pane; the caller returns the row to pending.
+    if pre_paste is not None and not pre_paste():
+        log(f"DELIVER-NOW pre-paste check failed in {session} -- nothing typed, holding")
+        return "held"
 
     # Stage 0.6 (De-duplication guard): if the probe text is ALREADY in the input
     # line/composer from a previous unsubmitted attempt, never paste another duplicate copy!
@@ -2159,8 +2303,12 @@ def main():
             # cycle (second lands mid-render of the first). (spec round-1 fix)
             if session in delivered_to:
                 continue  # one message per session per cycle
+            _dn = deliver_now_waiver(session)
+            _dn_waived = []
             if now - cooldowns.get(session, 0) < COOLDOWN_SECONDS:
-                continue
+                if not _dn:
+                    continue
+                _dn_waived.append("cooldown")
 
             # SELF-FORWARD GUARD: a reply FROM the live head addressed to its own
             # retired predecessor must not loop back into the head as self-mail.
@@ -2184,12 +2332,16 @@ def main():
             # Never interject. Also back off if the session had activity in the
             # last 10 minutes (active conversation cadence).
             attached, idle_secs = sess_info.get(session, (0, 1e9))
-            if hold_for_attached(attached, idle_secs) and msg.get("priority") != "critical":
+            if hold_for_attached(attached, idle_secs) and msg.get("priority") != "critical" and _dn:
+                _dn_waived.append("attached-active")
+            elif hold_for_attached(attached, idle_secs) and msg.get("priority") != "critical":
                 note_hold(hold_state, session, msg, "attached-active", now, queue_n=_qdepth.get(agent), dl_batch=_dl_batch)
                 continue  # attached + active within TTL: human plausibly mid-convo.
                 # Past the TTL a persistent-but-idle attach no longer freezes mail
                 # (2026-08-15 fix). Typed-input clobber protection is agent_is_idle.
-            if idle_secs < BREATHE_WINDOW_S and not _breathe_exempt(msg):
+            if idle_secs < BREATHE_WINDOW_S and not _breathe_exempt(msg) and _dn:
+                _dn_waived.append("breathe-window")
+            elif idle_secs < BREATHE_WINDOW_S and not _breathe_exempt(msg):
                 # #15 leg-3: a PARKED-IDLE target has nothing breathing — skip
                 # the quiet-wait. SHADOW unless armed: emit [parked-exempt-
                 # shadow] beside the hold so v3 can diff shadow lines against
@@ -2227,7 +2379,10 @@ def main():
             # (claude unless ROUTER_GEMINI_IDLE_ARMED), byte-identical to before.
             _target_agent = agent_for_session(session, meta) or agent
             _runtime = routing_runtime(_target_agent, meta)
-            if not agent_is_idle(session, _runtime):
+            _idle = agent_is_idle(session, _runtime)
+            if not _idle and _dn and _runtime == "claude" and claude_mid_turn_safe(session):
+                _dn_waived.append("mid-turn")
+            elif not _idle:
                 # Layer B (Bug 2) SHADOW: classify live-but-unreachable holds
                 # (survey/permission/stuck-composer/menu) into the would-clear
                 # log. Never raises, never alters the hold. Per-episode
@@ -2236,6 +2391,15 @@ def main():
                 note_hold(hold_state, session, msg, "not-idle", now, queue_n=_qdepth.get(agent), dl_batch=_dl_batch)
                 continue  # stays queued; retried next cycle (RCA: this was the
                 # 7h-silent branch — now logged + SLA-escalated via note_hold)
+
+            if _dn_waived:
+                log(f"DELIVER-NOW {msg['id']} -> {session}: pressed by {_dn.get('by')} at "
+                    f"{_dn.get('at')}; waived {', '.join(_dn_waived)}")
+                try:
+                    store.stamp_metadata(msg["id"], deliver_now_by=_dn.get("by"),
+                                         deliver_now_waived=_dn_waived)
+                except Exception:  # noqa: BLE001 — the log line is the record
+                    pass
 
             # Idle-gate PASSED => the pane VISIBLY recovered — end any active
             # pane-reachability episode so a future re-stuck re-arms exactly
@@ -2252,7 +2416,10 @@ def main():
             # cycle; digested rows fail store.claim below when the loop reaches
             # them (delivered => not pending). Fresh rows + single-stale fall
             # through to the normal path unchanged.
-            if session not in _digest_attempted and is_digest_session(session):
+            # A Deliver-now mid-turn delivery goes through the singles path only, where the
+            # composer is re-checked right before the claim; the digest path injects without it.
+            if "mid-turn" not in _dn_waived and session not in _digest_attempted \
+                    and is_digest_session(session):
                 _digest_attempted.add(session)
                 try:
                     _dcfg = digest_config()
@@ -2268,6 +2435,13 @@ def main():
                 except Exception as e:  # noqa: BLE001 — digest never sinks the cycle
                     log(f"[digest] error for {session}: {e} — singles path continues")
 
+            # Deliver now, mid-turn: look again right before claiming. Typing or a permission
+            # prompt that started since the first look means hold, not paste.
+            if "mid-turn" in _dn_waived and not claude_mid_turn_safe(session):
+                log(f"DELIVER-NOW recheck {msg['id']} -> {session}: composer no longer safe, holding")
+                note_hold(hold_state, session, msg, "not-idle", now, queue_n=_qdepth.get(agent), dl_batch=_dl_batch)
+                continue
+
             if not store.claim(msg["id"]):
                 continue  # raced with another router instance
 
@@ -2277,7 +2451,9 @@ def main():
                 text = f"[fwd from {forwarded_from}] " + text
                 merge_forwarded_meta(store, msg["id"], forwarded_from)
                 log(f"FORWARD {msg['id']}: {agent} -> {session} ({reason}, from={forwarded_from})")
-            result = inject(session, text, _runtime)
+            result = inject(session, text, _runtime,
+                            pre_paste=(lambda: claude_mid_turn_safe(session))
+                            if "mid-turn" in _dn_waived else None)
             if result in ("submitted", "stuck"):
                 close_park_episode(hold_state, session)   # target took mail: episode over
             if result == "submitted":
@@ -2317,6 +2493,10 @@ def main():
                 # nor a failure and must not use retry budget. Re-open the claimed row.
                 store.defer(msg["id"], error="router: another sender held the pane; deferred")
                 log(f"HELD {msg['id']} -> {agent}: another sender held the pane; row re-queued")
+                if _dn_waived:
+                    # Deliver now: nothing was typed (busy pane, pane lock, or the pre-paste look
+                    # failed). Record the hold so the agent's page says what it is still waiting for.
+                    note_hold(hold_state, session, msg, "not-idle", now, queue_n=_qdepth.get(agent), dl_batch=_dl_batch)
             else:
                 store.fail(msg["id"], error="router: paste never landed after 2 attempts")
                 with store._conn() as conn:

@@ -115,7 +115,9 @@ a start around 12:30-12:45 plus this range.
 
 Minimum path + Gemini CLI's free tier + a free-tier VPS trial (both Hetzner and
 DigitalOcean offer new-account credit) gets you to a running harness — one
-seat, one answered card, one rotation — for $0 committed spend. `orchestra
+seat, one answered card, one manual rotation (`orchestra rotate`, [GATE.md](GATE.md)
+step 6) — for $0 committed spend. Automatic rotation at the context ceiling is
+experimental on Gemini and off unless you opt in ([ROTATION.md](ROTATION.md#runtime-support-and-known-gaps)). `orchestra
 doctor` and the [zero-key Arturo brain track](tracks/02-zero-key-arturo-brain.md)
 are what make this possible: no `GEMINI_API_KEY`, no ElevenLabs/Cartesia key,
 just an authed CLI. Past the free trial, budget the VPS line above; the CLI

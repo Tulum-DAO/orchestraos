@@ -25,6 +25,12 @@ function serveStatic(req,res){const up=req.url.split("?")[0];const fp=path.join(
 const API_HOST = process.env.ORCHESTRA_API_HOST || "127.0.0.1";
 const API_PORT = parseInt(process.env.ORCHESTRA_API_PORT || "8888", 10);
 const VPS_API = "http://" + API_HOST + ":" + API_PORT;
+// Pairing is the sole unauthenticated gateway exchange.  A served public dashboard
+// must proxy this exact POST to its own loopback watch gateway so a native client
+// can redeem an orc1_ code without being handed a raw gateway port.  Never infer
+// a remote gateway here: this process and the gateway share one VPS.
+const GATEWAY_URL = (process.env.WATCH_GATEWAY_URL ||
+  ("http://127.0.0.1:" + (process.env.WATCH_GATEWAY_PORT || "8890"))).replace(/\/$/, "");
 // x-forwarded-host preserves the address the BROWSER used. `host` below is rewritten to the
 // upstream, so without this the API cannot tell a same-origin request from a foreign one
 // and logs every request from this very dashboard as a blocked origin (2026-09-29).
@@ -32,8 +38,11 @@ function proxyTo(base,req,res,timeoutMs){const u=base+req.url;const o=new URL(u)
 function proxyToLocal(req,res){proxyTo(VPS_API,req,res);}
 
 const server = http.createServer((req,res)=>{
+  // Exact only: do not turn the dashboard into a generic unauthenticated gateway proxy.
+  // Tailscale Serve owns the external tailnet-only boundary; the target stays loopback.
+  if(req.method === "POST" && req.url.split("?")[0] === "/pair/exchange")proxyTo(GATEWAY_URL,req,res);
   // VPS-specific routes go directly to local API (not Mac)
-  if(req.url.startsWith("/api/system/vps-auth/"))proxyToLocal(req,res);
+  else if(req.url.startsWith("/api/system/vps-auth/"))proxyToLocal(req,res);
   else if(req.url.startsWith("/api/adaptive/"))proxyToLocal(req,res);
   else if(req.url.startsWith("/api/uploads"))proxyToLocal(req,res);
   else if(req.url.startsWith("/api/"))proxyToLocal(req,res);
