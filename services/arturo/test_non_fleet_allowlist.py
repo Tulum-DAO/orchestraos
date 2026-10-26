@@ -90,7 +90,7 @@ def test_a_fleet_turn_is_unchanged(P, name):
 
 def test_a_fleet_turn_still_runs_a_command_by_effect(P, monkeypatch):
     ran = []
-    monkeypatch.setattr(P, "run_local", lambda cmd, timeout=15: (ran.append(cmd), (True, "ok"))[1])
+    monkeypatch.setattr(P, "run_local", lambda cmd, timeout=15, **_k: (ran.append(cmd), (True, "ok"))[1])
     tok = P._TEAM_TURN.set(_record(P, principal="fleet"))
     try:
         out = P.execute_tool("run_command", {"command": "echo hi"})
@@ -102,7 +102,7 @@ def test_a_fleet_turn_still_runs_a_command_by_effect(P, monkeypatch):
 # ---- each way in -----------------------------------------------------------------------------------
 def _text_running(P, monkeypatch, path, headers):
     ran, results = [], []
-    monkeypatch.setattr(P, "run_local", lambda cmd, timeout=15: (ran.append(cmd), (True, "ok"))[1])
+    monkeypatch.setattr(P, "run_local", lambda cmd, timeout=15, **_k: (ran.append(cmd), (True, "ok"))[1])
     monkeypatch.setattr(P, "_brain_reply", lambda m, c: (
         results.append(P.execute_tool("run_command", {"command": "cat /etc/hostname"})), ("ok", ["run_command"], []))[1])
     with P.app.test_client() as c:
@@ -143,7 +143,7 @@ def _wait_for(pred, s=5.0):
 def test_a_fleet_turns_background_task_keeps_the_principal(P, monkeypatch):
     # async_task runs on a fresh thread; without the turn's context it would be a non-fleet turn
     ran, delivered = [], []
-    monkeypatch.setattr(P, "run_local", lambda cmd, timeout=15: (ran.append(cmd), (True, "ok"))[1])
+    monkeypatch.setattr(P, "run_local", lambda cmd, timeout=15, **_k: (ran.append(cmd), (True, "ok"))[1])
     monkeypatch.setattr(P._TG_OUTBOX, "allow", lambda text, now=None: (delivered.append(text), (False, "test"))[1])
     tok = P._TEAM_TURN.set(_record(P, principal="fleet"))
     try:
@@ -400,7 +400,7 @@ def test_a_voice_call_asking_for_a_command_is_offered_none_and_runs_none(P, monk
     monkeypatch.setattr(P, "BEARER_TOKEN", "test-bearer")
     monkeypatch.setattr(P._REQ_GUARD, "is_duplicate", lambda *a, **k: False)
     ran, offered, results = [], [], []
-    monkeypatch.setattr(P, "run_local", lambda cmd, timeout=15: (ran.append(cmd), (True, "ok"))[1])
+    monkeypatch.setattr(P, "run_local", lambda cmd, timeout=15, **_k: (ran.append(cmd), (True, "ok"))[1])
     from types import SimpleNamespace as NS
 
     def complete(**kw):

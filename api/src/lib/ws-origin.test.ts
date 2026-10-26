@@ -25,5 +25,5 @@ for (const c of cases) {
 
 test('server.ts guards its terminal WebSocketServer with the check', () => {
   const src = readFileSync(join(here, '..', 'server.ts'), 'utf8');
-  assert.match(src, /new WebSocketServer\(\{ server, path: '\/ws\/terminal', verifyClient: /);
+  assert.match(src, /new WebSocketServer\(\{ noServer: true, path: '\/ws\/terminal', verifyClient: /);
 });

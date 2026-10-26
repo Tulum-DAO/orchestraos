@@ -1,8 +1,11 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { clsx } from 'clsx';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { fetchProjects } from '../lib/api';
+import { isViewHidden } from '../lib/features';
+import { normalizeAgentState, STATE_STYLE } from '../lib/agentStatus';
+import { setArturoFocus } from '../lib/arturo';
 import {
   Bot,
   ChevronDown,
@@ -13,7 +16,6 @@ import {
   ArrowUpRight,
   ArrowRight,
 } from 'lucide-react';
-import { isViewHidden } from '../lib/features';
 
 // ── Status config ────────────────────────────────────────────────────
 
@@ -122,12 +124,12 @@ function ProjectDetail({ project, slug }: { project: any; slug: string }) {
   const navigate = useNavigate();
   return (
     <div className="border-t border-neutral-800 px-5 pb-5 pt-4 space-y-5">
-      {/* Roadmap link (absent where the deployment hides the roadmaps view) */}
-      {!isViewHidden(`/roadmaps/${slug}`) && <button
-        onClick={() => navigate(`/roadmaps/${slug}`)}
+      {/* The project's files: everything in its folder except .jsonl logs */}
+      {!isViewHidden('/projects') && <button
+        onClick={() => navigate(`/projects/${slug}/files`)}
         className="flex items-center gap-2 px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium transition-colors w-fit"
       >
-        View Roadmap <ArrowRight size={14} />
+        View Files <ArrowRight size={14} />
       </button>}
 
       {/* Current State */}
@@ -161,10 +163,8 @@ function ProjectDetail({ project, slug }: { project: any; slug: string }) {
                   <tr key={agent.id} className="border-b border-neutral-800/50">
                     <td className="py-1.5 pr-4">
                       <div className="flex items-center gap-2">
-                        <span className={clsx(
-                          'inline-block w-2 h-2 rounded-full shrink-0',
-                          agent.alive ? 'bg-green-500' : 'bg-red-500'
-                        )} />
+                        <span className={clsx('inline-block w-2 h-2 rounded-full shrink-0',
+                          STATE_STYLE[normalizeAgentState(agent.status)].dot)} />
                         <span className="text-neutral-200 font-medium">{agent.name}</span>
                       </div>
                     </td>
@@ -180,8 +180,9 @@ function ProjectDetail({ project, slug }: { project: any; slug: string }) {
                       </span>
                     </td>
                     <td className="py-1.5 pr-4">
-                      <span className={clsx('text-xs font-medium', agent.alive ? 'text-green-400' : 'text-red-400')}>
-                        {agent.alive ? 'online' : 'stopped'}
+                      {/* the same live status, label and colour as the Agents page */}
+                      <span className={clsx('text-xs font-medium', STATE_STYLE[normalizeAgentState(agent.status)].text)}>
+                        {STATE_STYLE[normalizeAgentState(agent.status)].label}
                       </span>
                     </td>
                     <td className="py-1.5 text-neutral-500 max-w-[300px] truncate">
@@ -216,6 +217,12 @@ export default function Projects() {
 
   const [statusFilter, setStatusFilter] = useState<string>('All');
   const [expandedSlug, setExpandedSlug] = useState<string | null>(null);
+  // The card you open is what Arturo is told you are looking at ("how's this project going?").
+  const expandedName = (data?.projects || []).find((p: any) => p.slug === expandedSlug)?.name;
+  useEffect(() => {
+    setArturoFocus(expandedSlug ? { kind: 'project', id: expandedSlug, label: expandedName || expandedSlug } : null);
+  }, [expandedSlug, expandedName]);
+  useEffect(() => () => setArturoFocus(null), []);
 
   const projects = data?.projects ?? [];
 

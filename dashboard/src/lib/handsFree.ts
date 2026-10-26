@@ -7,7 +7,7 @@
  * words arrive as transcript frames; the caller's words are captioned on-device by the browser
  * (startDictation), because the gateway deliberately does not transcribe the caller.
  */
-import type { VoiceSessionCallbacks, VoiceSessionStartOptions, VoiceSessionState } from './voiceSession.ts';
+import type { CallToolEvent, VoiceSessionCallbacks, VoiceSessionStartOptions, VoiceSessionState } from './voiceSession.ts';
 
 /** What the controller needs from a session (VoiceSession has exactly these). */
 export interface CallSession {
@@ -15,6 +15,10 @@ export interface CallSession {
   stop(): void;
   startDictation(): void;
   stopDictation(): void;
+  /** The page changed mid-call: tell the bridge, so Arturo's screen context follows you. */
+  sendContext?(opts: VoiceSessionStartOptions): void;
+  /** Mute the caller's microphone (uplink only: Arturo keeps talking and captions keep coming). */
+  setMuted?(muted: boolean): void;
 }
 
 export interface HandsFreeEvents {
@@ -28,6 +32,10 @@ export interface HandsFreeEvents {
   onUnavailable?: (reason: string) => void;
   /** The call ended; `text` is the line to leave in the thread. */
   onEnded?: (text: string) => void;
+  /** A tool Arturo runs during the call (start, then done): a tool card in the thread. */
+  onTool?: (e: CallToolEvent) => void;
+  /** The caller muted or unmuted (also false when a call ends: the next call starts unmuted). */
+  onMuted?: (muted: boolean) => void;
 }
 
 export function isInCall(state: VoiceSessionState): boolean {
@@ -36,6 +44,7 @@ export function isInCall(state: VoiceSessionState): boolean {
 
 export class HandsFreeCall {
   state: VoiceSessionState = 'idle';
+  muted = false;
   private session: CallSession | null = null;
   private readonly make: (cb: VoiceSessionCallbacks) => CallSession;
   private readonly ev: HandsFreeEvents;
@@ -55,10 +64,14 @@ export class HandsFreeCall {
           this.state = st;
           // The call is over (ended, refused or failed): its on-device captions end with it, so a later
           // Dictate tap never fights a stale recognizer ("dictation error: aborted").
-          if (st === 'idle' || st === 'error') this.session?.stopDictation();
+          if (st === 'idle' || st === 'error') {
+            this.session?.stopDictation();
+            if (this.muted) { this.muted = false; this.ev.onMuted?.(false); }
+          }
           this.ev.onState?.(st);
         },
         onCallEnded: (marker, id) => this.ev.onEnded?.(`Call ended (${id}). ${marker}`),
+        onTool: (e) => this.ev.onTool?.(e),
       });
     }
     return this.session;
@@ -74,6 +87,23 @@ export class HandsFreeCall {
     if (this.inCall) { this.s.stop(); this.s.stopDictation(); return; }
     await this.s.start(opts);
     if (this.inCall) this.s.startDictation();
+  }
+
+  /** The page (route + focused entity) changed during the call. No call, nothing to send. */
+  setContext(opts: VoiceSessionStartOptions): void {
+    if (this.inCall) this.session?.sendContext?.(opts);
+  }
+
+  /** Mute or unmute the caller during a call. Outside a call there is nothing to mute. */
+  setMuted(muted: boolean): void {
+    if (!this.inCall || muted === this.muted) return;
+    this.muted = muted;
+    this.session?.setMuted?.(muted);
+    this.ev.onMuted?.(muted);
+  }
+
+  toggleMute(): void {
+    this.setMuted(!this.muted);
   }
 
   /** Unmount: never leave a mic or a socket open. */

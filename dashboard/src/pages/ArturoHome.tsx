@@ -19,7 +19,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { Mic, Plus, ArrowUp, AudioLines, Paperclip, X, PhoneOff } from 'lucide-react';
+import { Mic, MicOff, Plus, ArrowUp, AudioLines, Paperclip, X, PhoneOff } from 'lucide-react';
 import { useHandsFreeCall } from '../hooks/useHandsFreeCall';
 import '../components/arturo/arturo.css';
 import { BrainModal } from '../components/agent/BrainModal';
@@ -36,31 +36,37 @@ import { listThreads, loadThread, type ThreadSummary } from '../lib/arturoThread
 import { hydrateTurns, onboardingConversation, carriesOnboardingMarker, mergeResumeReply, isBusy } from '../lib/arturoResume';
 import WebTerminal from '../components/WebTerminal';
 import { installCommand } from '../lib/providerConnect';
-import { uploadAttachment, attachmentPreamble, describeAttachment, type Attachment } from '../lib/arturoUpload';
-import { arturoComposerText } from '../lib/arturoComposer';
+import { uploadAttachment, attachmentPreamble, describeAttachment, attachmentImages, type Attachment } from '../lib/arturoUpload';
+import { arturoComposerText, arturoShownText } from '../lib/arturoComposer';
 import { useDictation } from '../components/arturo/useDictation.ts';
 import SpawnedAgentCard from '../components/arturo/SpawnedAgentCard';
 import ChoicesCard from '../components/arturo/ChoicesCard';
 import PairCodeCard from '../components/arturo/PairCodeCard';
 import ToolRun from '../components/arturo/ToolRun';
+import JobTray from '../components/arturo/JobTray';
+import { useStickToBottom } from '../lib/useStickToBottom';
+import { currentThread, setCurrentThread, subscribeCurrentThread } from '../lib/arturoCurrent';
+import VoiceCallCard from '../components/chat/VoiceCallCard';
+import { hasVoiceCallMarker, parseVoiceSegments } from '../lib/voiceCall';
 import { applyTextDelta, applyToolCall, applyToolResult, groupParts, hasToolParts, type TurnPart } from '../lib/turnParts';
 import { Brain, Settings } from 'lucide-react';
 import { isViewHidden } from '../lib/features';
 
-type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[]; spawned?: string[]; pending?: boolean; streaming?: boolean; state?: SendState;
+type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[]; images?: string[]; spawned?: string[]; pending?: boolean; streaming?: boolean; state?: SendState;
   /** A streamed turn that ran tools, in the order it happened: text, tool cards, more text. */
   parts?: TurnPart[];
   decision?: { options: string[]; onPick: (v: string) => void };
   /** A card the brain wrote (ask_choices): picking sends the option's words as the operator's turn. */
   choices?: ChoiceCard;
   /** A pairing code (pair_device). Lives only in this page's state: never in thread history. */
-  pairCard?: PairCard };
+  pairCard?: PairCard;
+  /** Tools Arturo ran during a live call, as they happened (parts = tool cards only). */
+  callTools?: boolean };
 type Step = 'runtime' | 'onboarding' | 'done';
 
 
 const LS_NAME = 'orchestra.arturo.name';
 const LS_ONBOARDED = 'orchestra.arturo.onboarded';
-const LS_CONV = 'orchestra.arturo.conversation';
 
 function ls(key: string): string | null { try { return localStorage.getItem(key); } catch { return null; } }
 function lsSet(key: string, v: string) { try { localStorage.setItem(key, v); } catch { /* private mode */ } }
@@ -87,6 +93,20 @@ function renderText(t: string) {
   // `code` spans only — the thread stays plain text otherwise (no markdown engine).
   const parts = t.split(/(`[^`]+`)/g);
   return parts.map((p, i) => p.startsWith('`') && p.endsWith('`') ? <code key={i}>{p.slice(1, -1)}</code> : <span key={i}>{p}</span>);
+}
+
+/** An ended call's "Call ended (vc_…). [voice-call: …]" line is a call card (collapsed; opens to the transcript),
+ *  never the raw marker. Any other words in the turn stay as text. */
+const CALL_ENDED_RE = /^\s*Call ended \(vc_[A-Za-z0-9_-]+\)\.?\s*$/;
+function renderReply(t: string) {
+  if (!hasVoiceCallMarker(t)) return <div className="txt">{renderText(t)}</div>;
+  return (
+    <div className="txt">
+      {parseVoiceSegments(t).map((seg, i) => seg.kind === 'voicecall'
+        ? <VoiceCallCard key={i} callId={seg.callId} />
+        : CALL_ENDED_RE.test(seg.text) ? null : <span key={i}>{renderText(seg.text)}</span>)}
+    </div>
+  );
 }
 
 export default function ArturoHome() {
@@ -127,10 +147,43 @@ export default function ArturoHome() {
     onFinal: (text, role) => { if (role === 'user') user(text); else say(text); },
     onUnavailable: (reason) => { say(`${HANDS_FREE} could not start: ${reason}`); },
     onEnded: (text) => { say(text); },
+    // A tool run during a call sits in the thread where it happened: after the caller's line, before Arturo's
+    // reply. Back-to-back tools share one collapsed run.
+    onTool: (e) => setTurns((prev) => {
+      if (e.phase === 'start') {
+        const call = { call_id: e.callId, name: e.name, args_summary: e.argsSummary };
+        const last = prev[prev.length - 1];
+        if (last?.callTools) return [...prev.slice(0, -1), { ...last, parts: applyToolCall(last.parts || [], call) }];
+        return [...prev, { id: nextId.current++, role: 'arturo', text: '', callTools: true, parts: applyToolCall([], call) }];
+      }
+      const at = prev.findLastIndex((t) => t.callTools && t.parts?.some((p) => p.kind === 'tool' && p.callId === e.callId));
+      if (at < 0) return prev;
+      const next = [...prev];
+      next[at] = { ...next[at], parts: applyToolResult(next[at].parts || [], { call_id: e.callId, name: e.name, ok: !!e.ok, summary: e.summary }) };
+      return next;
+    }),
   });
   const fileInput = useRef<HTMLInputElement>(null);
-  const convId = useRef<string>(ls(LS_CONV) || '');
-  useEffect(() => { if (!convId.current) { convId.current = newConversationId('web'); lsSet(LS_CONV, convId.current); } }, []);
+  const convId = useRef<string>(currentThread() || '');
+  const [jobKick, setJobKick] = useState(0);
+  const lastShown = useRef<string>('');
+  /** A background job ended: its result was posted into the thread server-side; show the thread as it is now. */
+  const reloadThread = async () => {
+    const id = convId.current;
+    const t = id ? await loadThread(id) : null;
+    if (id !== convId.current) return;               // switched again while it loaded
+    const switched = lastShown.current !== id;
+    lastShown.current = id;
+    setTurns(t ? hydrateTurns(t.turns).map((x) => ({ id: nextId.current++, ...x })) : []);   // a new thread is empty
+    if (switched) requestAnimationFrame(() => stick.toBottom());   // another thread opened: start at its end
+  };
+  useEffect(() => { if (!convId.current) { convId.current = newConversationId('web'); setCurrentThread(convId.current); } }, []);
+  // The pane (or another tab) switched threads: the home follows and shows that thread.
+  useEffect(() => subscribeCurrentThread((id) => {
+    if (id === convId.current) return;
+    convId.current = id;
+    void reloadThread();
+  }), []); // eslint-disable-line react-hooks/exhaustive-deps
   // Warm this conversation's CLI while the operator is still reading or typing, and again if
   // they switch brain (a different model is a different process). The first turn then adopts
   // a live process instead of starting one.
@@ -150,7 +203,7 @@ export default function ArturoHome() {
   async function resumeThread(id: string) {
     const t = await loadThread(id);
     if (!t) return;
-    convId.current = id; lsSet(LS_CONV, id);
+    convId.current = id; setCurrentThread(id);
     // A thread answers on the brain it last used; one that used the default brain goes back to it.
     const resumedBrain = brainFromThread(t, {});
     chooseBrain(resumedBrain);
@@ -159,11 +212,12 @@ export default function ArturoHome() {
     // thread does NOT end onboarding (it used to): done is the server's word only.
     setTurns(hydrateTurns(t.turns).map((x) => ({ id: nextId.current++, ...x })));
     setDrawer(false);
+    requestAnimationFrame(() => stick.toBottom());       // a thread you opened starts at its end
   }
 
   /** New thread — the one you leave stays in the list rather than becoming unreachable. */
   function startNewThread() {
-    convId.current = newConversationId('web'); lsSet(LS_CONV, convId.current);
+    convId.current = newConversationId('web'); setCurrentThread(convId.current);
     arturoPrewarm(convId.current, toWireBrain(brainChoice));
     setTurns([]);
     setDrawer(false);
@@ -203,7 +257,12 @@ export default function ArturoHome() {
     })();
     return () => { alive = false; };
   }, []);
-  useEffect(() => { feedRef.current?.scrollTo({ top: 1e9, behavior: 'smooth' }); }, [turns]);
+  // New turns and live captions push the feed up only while you're at the bottom; scrolled up, it stays put.
+  const stick = useStickToBottom(feedRef);
+  useEffect(() => { stick.follow(); }, [turns]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A live call's captions grow below the last turn: follow them, or they stay below the fold until the
+  // turn commits (they looked like they only appeared once each side finished speaking).
+  useEffect(() => { stick.follow(); }, [call.liveUser, call.liveArturo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const say = (text: string, extra: Partial<Turn> = {}) => {
     const id = nextId.current++;
@@ -232,7 +291,7 @@ export default function ArturoHome() {
    *  again) and stores nothing; its reply then refreshes the unanswered question in place. */
   async function runOpener(switched = false) {
     const conv = onboardingConversation(onbConv.current, convId.current);
-    if (conv !== convId.current) { convId.current = conv; lsSet(LS_CONV, conv); arturoPrewarm(conv, toWireBrain(brainChoice)); }
+    if (conv !== convId.current) { convId.current = conv; setCurrentThread(conv); arturoPrewarm(conv, toWireBrain(brainChoice)); }
     const t = await loadThread(conv);
     const stored = t ? hydrateTurns(t.turns).map((x) => ({ id: nextId.current++, ...x })) : [];
     // A message the operator sent while the history loaded stays, after it (it waits for this opener).
@@ -341,7 +400,11 @@ export default function ArturoHome() {
     }
     // A card is answered once: by a tap, or by whatever the operator typed instead.
     setTurns((t) => t.map((x) => x.choices ? { ...x, choices: undefined } : x));
-    const uid = user(text, 'sending');   // the bubble appears NOW; the box is already empty
+    // the bubble appears NOW; the box is already empty. It shows what they typed, never the attachments' filler.
+    const uid = user(picked === undefined ? arturoShownText(draft) : text, 'sending');
+    requestAnimationFrame(() => stick.toBottom());      // you sent it: back to the bottom
+    const sentImages = attachmentImages(attachments);
+    if (sentImages.length) setTurns((t) => t.map((x) => x.id === uid ? { ...x, images: sentImages } : x));
     if (waitFor) {
       setBusy(true); await waitFor;
       // The opener may have brought a card back; this message answers it, so it goes like any other.
@@ -406,6 +469,7 @@ export default function ArturoHome() {
         return ready.ok;
       },
     });
+    setJobKick((k) => k + 1);        // a job this turn started shows in the tray at once
     if (!r.ok) { streamed = ''; parts = []; patch(id, { pending: true, streaming: false, text: '', parts: undefined }); }
     setBusy(false);
     patch(uid, { state: r.ok ? 'acked' : 'failed' });
@@ -466,7 +530,7 @@ export default function ArturoHome() {
 
       {/* While the modal drawer is open the page behind it must not be focusable or typable —
           on a phone the composer sits under the overlay (gm/jev-helper first-run report). */}
-      <div className="arturo-feed" ref={feedRef} inert={drawer || undefined}>
+      <div className="arturo-feed" ref={feedRef} onScroll={stick.onScroll} inert={drawer || undefined}>
         {empty ? (
           <div className="arturo-hero">
             <ArturoMark />
@@ -475,7 +539,7 @@ export default function ArturoHome() {
             {arturoDisabled && <div className="tools" style={{ color: 'rgba(255,255,255,0.55)', fontSize: 13 }}>{ARTURO_DISABLED_TEXT}</div>}
           </div>
         ) : turns.map((t, i) => t.role === 'user' ? (
-          <div key={t.id} className="turn-user"><div className="bubble-user">{t.text}</div>
+          <div key={t.id} className="turn-user">{t.images && t.images.length > 0 && <div className="msg-images">{t.images.map((u) => <a key={u} href={u} target="_blank" rel="noreferrer"><img src={u} alt="attached image" loading="lazy" /></a>)}</div>}<div className="bubble-user">{t.text}</div>
             {(t.state === 'failed' || (t.state && i === lastUserIdx)) && <div className={`turn-state ${t.state}`}>{sendStateLabel(t.state)}</div>}</div>
         ) : (
           <div key={t.id} className="turn-assistant">
@@ -489,7 +553,7 @@ export default function ArturoHome() {
                     : <div key={gi} className="txt">{renderText(g.text)}</div>)}
                 </div>
               )
-              : <div className="txt">{renderText(t.text)}</div>}
+              : renderReply(t.text)}
             {!hasToolParts(t.parts) && t.tools && t.tools.length > 0 && <div className="tools">ran {t.tools.join(', ')}</div>}
             <SpawnedAgentCard ids={t.spawned} />
             {t.pairCard && <PairCodeCard card={t.pairCard} />}
@@ -539,6 +603,7 @@ export default function ArturoHome() {
       )}
 
       <div className="arturo-composer" inert={drawer || undefined}>
+        {convId.current && <JobTray threadId={convId.current} kick={jobKick} onEnded={() => { void reloadThread(); }} />}
         <input ref={fileInput} type="file" multiple hidden aria-hidden="true"
                onChange={async (e) => {
                  const picked = Array.from(e.target.files || []);
@@ -547,7 +612,7 @@ export default function ArturoHome() {
                  setUploading(true); setUploadError(null);
                  for (const f of picked) {
                    const r = await uploadAttachment(f);
-                   if (r.ok) setAttachments((prev) => [...prev, { name: r.name, path: r.path, size: r.size }]);
+                   if (r.ok) setAttachments((prev) => [...prev, { name: r.name, path: r.path, size: r.size, preview: f.type.startsWith('image/') ? URL.createObjectURL(f) : undefined }]);
                    else setUploadError(r.error);     // refusals are shown, never swallowed
                  }
                  setUploading(false);
@@ -556,7 +621,7 @@ export default function ArturoHome() {
           <div className="arturo-attachments">
             {attachments.map((a, i) => (
               <span key={i} className="attach-chip">
-                <Paperclip size={12} /> {describeAttachment(a)}
+                {a.preview ? <img src={a.preview} alt="" className="attach-thumb" /> : <Paperclip size={12} />} {describeAttachment(a)}
                 <button aria-label={`Remove ${a.name}`}
                         onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}>×</button>
               </span>
@@ -575,18 +640,27 @@ export default function ArturoHome() {
             <button className="model-chip" onClick={() => setModelOpen(true)} aria-label={`Brain: ${model}. Change`} title={`Answering on ${model}`}><b>{model}</b>{eff && <span className="eff">{eff}</span>}</button>
           </div>
           <div className="cluster">
-            <button className={dictMode === 'idle' ? 'circle-btn' : `circle-btn ${dictMode}`}
-                    aria-label={dictMode === 'listening' ? 'Stop dictation' : dictMode === 'recording' ? 'Stop recording' : dictMode === 'transcribing' ? 'Transcribing' : 'Dictate'}
-                    aria-pressed={dictating} title={dictateTitle(call.inCall, dictMode)}
-                    onClick={toggleDictation} disabled={dictateLocked(call.inCall, dictMode) || arturoDisabled}><Mic size={16} /></button>
+            {call.inCall ? (
+              // On a call this is the mute: it stops only the microphone's audio going up; Arturo's voice,
+              // the captions and the job drawer keep coming down.
+              <button className={call.muted ? 'circle-btn muted' : 'circle-btn'} aria-pressed={call.muted}
+                      aria-label={call.muted ? 'Unmute microphone' : 'Mute microphone'}
+                      title={call.muted ? 'Unmute: Arturo can hear you again' : 'Mute: Arturo keeps talking, but can\'t hear you'}
+                      onClick={call.toggleMute}>{call.muted ? <MicOff size={16} /> : <Mic size={16} />}</button>
+            ) : (
+              <button className={dictMode === 'idle' ? 'circle-btn' : `circle-btn ${dictMode}`}
+                      aria-label={dictMode === 'listening' ? 'Stop dictation' : dictMode === 'recording' ? 'Stop recording' : dictMode === 'transcribing' ? 'Transcribing' : 'Dictate'}
+                      aria-pressed={dictating} title={dictateTitle(call.inCall, dictMode)}
+                      onClick={toggleDictation} disabled={dictateLocked(call.inCall, dictMode) || arturoDisabled}><Mic size={16} /></button>
+            )}
             {call.inCall ? (
               <button className="circle-btn white" aria-label="End call" aria-pressed title="End call"
-                      onClick={() => void call.toggle({ route: '/' })}><PhoneOff size={18} /></button>
+                      onClick={() => void call.toggle({ route: '/', threadId: convId.current })}><PhoneOff size={18} /></button>
             ) : arturoComposerText(draft, attachments.length) ? (
               <button className="circle-btn white" aria-label="Send" onClick={() => void send()} disabled={busy}><ArrowUp size={18} /></button>
             ) : (
               <button className="circle-btn white" aria-label={HANDS_FREE} title={handsFreeTitle(handsFreeReady(health))}
-                      disabled={!handsFreeReady(health)} onClick={() => void call.toggle({ route: '/' })}><AudioLines size={16} /></button>
+                      disabled={!handsFreeReady(health)} onClick={() => void call.toggle({ route: '/', threadId: convId.current })}><AudioLines size={16} /></button>
             )}
           </div>
         </div>
@@ -614,6 +688,7 @@ export default function ArturoHome() {
                         onClick={() => void resumeThread(t.id)}>
                   <span className="t-title">{t.title || 'Untitled'}</span>
                   <span className="t-meta">{Math.ceil((t.turns || 0) / 2)}</span>
+                  {t.gist && <span className="t-gist">{t.gist}</span>}
                 </button>
               ))}
             </div>

@@ -106,6 +106,19 @@ export const fetchQuestionnaire = <T = any>(id: string) => get<T>(`/questionnair
 export const answerQuestionnaire = <T = any>(id: string, answers: Record<string, unknown>) =>
   post<T>(`/questionnaires/${encodeURIComponent(id)}/answers`, { answers });
 export const fetchProject = (slug: string) => get(`/projects/${slug}`);
+// A project's files (the card's "View files"): every file in its folder except .jsonl logs.
+export interface ProjectFileEntry { path: string; size: number; mtime: number }
+export const fetchProjectFiles = (slug: string) =>
+  get<{ folder: string; files: ProjectFileEntry[]; total: number; truncated: boolean; unfiled?: string[] }>(`/projects/${encodeURIComponent(slug)}/files`);
+export type ProjectFileContent =
+  | { kind: 'text'; path: string; text: string; truncated: boolean; size: number }
+  | { kind: 'image'; path: string; mime: string; size: number }
+  | { kind: 'pdf'; path: string; mime: string; size: number }
+  | { kind: 'binary'; path: string; size: number };
+export const fetchProjectFile = (slug: string, path: string) =>
+  get<ProjectFileContent>(`/projects/${encodeURIComponent(slug)}/files/content?path=${encodeURIComponent(path)}`);
+export const projectFileRawUrl = (slug: string, path: string) =>
+  `${BASE}/projects/${encodeURIComponent(slug)}/files/content?raw=1&path=${encodeURIComponent(path)}`;
 
 export const fetchMe = () => get<{ username: string; role: string; allowed_agents: string | string[] }>('/me');
 export const fetchAgents = () => get('/agents');

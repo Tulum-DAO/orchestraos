@@ -245,7 +245,9 @@ const server = createServer(app);
 
 // WebSocket terminal server on /ws/terminal. It is a shell into a seat's pane and browsers do
 // not apply the same-origin policy to WebSockets, so every handshake passes lib/ws-origin.ts.
-const wss = new WebSocketServer({ server, path: '/ws/terminal', verifyClient: (info: { req: IncomingMessage }) => {
+// noServer + the dispatch below: with `server`, ws answers EVERY other upgrade path with 400, which destroyed
+// /api/voice/live sockets that setupVoiceLiveWebSocket had just accepted.
+const wss = new WebSocketServer({ noServer: true, path: '/ws/terminal', verifyClient: (info: { req: IncomingMessage }) => {
   const req = info.req;
   const d = wsOriginDecision({
     origin: req.headers.origin,
@@ -271,6 +273,10 @@ const wss = new WebSocketServer({ server, path: '/ws/terminal', verifyClient: (i
   }
   return true;
 } });
+server.on('upgrade', (req, socket, head) => {
+  if ((req.url || '').split('?')[0] !== '/ws/terminal') return;   // /api/voice/live is setupVoiceLiveWebSocket's
+  wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+});
 setupTerminalWebSocket(wss);
 setupVoiceLiveWebSocket(server);
 

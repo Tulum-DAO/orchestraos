@@ -273,8 +273,18 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     if (!id) { res.status(400).json({ ok: false, error: 'thread id required' }); return; }
     // ?turn=<id>: one send's fate (running | done | lost | unknown), the read-back after a dropped turn.
     const turn = req.query.turn;
-    const suffix = typeof turn === 'string' && turn ? `?turn=${encodeURIComponent(turn.slice(0, 64))}` : '';
+    // ?jobs=1: the job tray's poll (this thread's running and just-finished background jobs).
+    const suffix = typeof turn === 'string' && turn ? `?turn=${encodeURIComponent(turn.slice(0, 64))}`
+      : req.query.jobs ? '?jobs=1' : '';
     await forward(res, `/arturo/threads/${id}${suffix}`, { method: 'GET' }, 10000);
+  });
+
+  // Stop a background job from the tray.
+  router.post('/threads/:id/jobs/:jobId/cancel', async (req, res) => {
+    const id = encodeURIComponent(String(req.params.id || '').slice(0, 200));
+    const jobId = String(req.params.jobId || '');
+    if (!id || !/^job_[0-9a-f]{6,32}$/.test(jobId)) { res.status(400).json({ ok: false, error: 'bad job id' }); return; }
+    await forward(res, `/arturo/threads/${id}/jobs/${jobId}/cancel`, { method: 'POST' }, 10000);
   });
 
   return router;

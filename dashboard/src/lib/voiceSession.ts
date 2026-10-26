@@ -78,6 +78,14 @@ export function downsampleBuffer(
   return result;
 }
 
+/** Sent ONCE when the caller mutes: a moment of silence, so a sentence cut off by the mute ends there and is
+ *  answered, instead of hanging open on the server (its speech detector waits for a pause that never comes).
+ *  It is generated silence, never microphone audio. */
+export const MUTE_TAIL_SECONDS = 0.8;
+export function muteTail(seconds = MUTE_TAIL_SECONDS): Int16Array {
+  return new Int16Array(Math.round(16000 * seconds));
+}
+
 /** buffer(any rate) -> 16kHz PCM16 bytes ready for `ws.send(...)`. */
 export function pcmChunkForUplink(buffer: Float32Array, inputSampleRate: number): Int16Array {
   return floatTo16BitPCM(downsampleBuffer(buffer, inputSampleRate, 16000));
@@ -141,12 +149,26 @@ export interface VoiceSessionCallbacks extends TranscriptRouterCallbacks {
   onConnected?: (callId: string) => void;
   /** Fired when the call has fully ended (ws closed) and we have a callId to mark. */
   onCallEnded?: (marker: string, callId: string) => void;
+  /** A tool Arturo's brain runs during the call, as it starts and as it ends (relay calls). */
+  onTool?: (e: CallToolEvent) => void;
+}
+
+export interface CallToolEvent {
+  phase: 'start' | 'done';
+  callId: string;
+  name: string;
+  argsSummary?: string;
+  ok?: boolean;
+  summary?: string;
 }
 
 export interface VoiceSessionStartOptions {
   route: string;
   focusedEntity?: string | null;
   voice?: string;
+  /** The Arturo thread this call belongs to: its lines are archived there (server-side), so closing the
+   *  pane, reloading, or typing after the call all see what was said. */
+  threadId?: string | null;
 }
 
 export class VoiceSession {
@@ -159,9 +181,19 @@ export class VoiceSession {
   private sourceNode: MediaStreamAudioSourceNode | null = null;
   private playbackCtx: AudioContext | null = null;
   private playbackTime = 0;
+  /** Arturo's audio already scheduled to play: an interruption stops it, so he goes quiet when cut off
+   *  instead of finishing what had arrived. */
+  private playing = new Set<AudioBufferSourceNode>();
   /** Bumped by every start() and stop(): a grant that resolves under a stale value is released. */
   private startSeq = 0;
   private dictation: DictationHandle | null = null;
+  /** The bridge captions the caller itself, live, from the echo-cancelled call audio (GPT-Live via the relay).
+   *  The on-device recognizer stays off for the call: it hears the raw mic, so Arturo's voice from the
+   *  speakers showed up as the caller's words, and its finals would commit every turn twice. */
+  private serverCaptions = false;
+  /** Muted: the microphone keeps capturing (so unmuting is instant) but NOTHING it hears is sent. Only the
+   *  uplink stops: Arturo's voice, captions and tool events keep arriving on the same socket. */
+  private muted = false;
 
   constructor(cb: VoiceSessionCallbacks = {}) {
     this.cb = cb;
@@ -170,6 +202,16 @@ export class VoiceSession {
   private setState(s: VoiceSessionState) {
     this.state = s;
     this.cb.onStateChange?.(s);
+  }
+
+  /** The page changed mid-call: {event:"context", route, focusedEntity}, the hello's shape. Before the
+   *  socket opens the hello still carries the start page, so an early change is simply not sent. */
+  sendContext(opts: VoiceSessionStartOptions): void {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.send(JSON.stringify({ event: 'context', route: opts.route, focusedEntity: opts.focusedEntity ?? null }));
+    } catch { /* a closing socket: the call is ending anyway */ }
   }
 
   /** Page-aware full call: opens the WS, sends {route, focusedEntity} as the
@@ -192,6 +234,7 @@ export class VoiceSession {
     // Which start() this is. stop() and a later start() both bump it, so a permission grant that
     // lands after either belongs to nobody (see the await below).
     const seq = ++this.startSeq;
+    this.serverCaptions = false;
 
     // THE MIC FIRST, THEN THE SOCKET (2026-10-09). The socket used to be opened before this
     // await and its 'open' listener attached after it: a socket that opened while the operator
@@ -236,7 +279,8 @@ export class VoiceSession {
     let socketCallId: string | null = null;
 
     ws.addEventListener('open', () => {
-      ws.send(JSON.stringify({ route: opts.route, focusedEntity: opts.focusedEntity ?? null }));
+      ws.send(JSON.stringify({ route: opts.route, focusedEntity: opts.focusedEntity ?? null,
+                               ...(opts.threadId ? { threadId: opts.threadId } : {}) }));
       this.setState('live');
       this.startMicCapture();
     });
@@ -247,11 +291,22 @@ export class VoiceSession {
         try { msg = JSON.parse(ev.data); } catch { return; }
         if (msg.event === 'connected' && msg.session_id) {
           socketCallId = msg.session_id;
+          if (msg.user_captions === 'server') { this.serverCaptions = true; this.stopDictation(); }
           this.cb.onConnected?.(msg.session_id);
           return;
         }
         if (msg.event === 'error') {
           this.cb.onUnavailable?.(msg.reason || 'voice bridge reported an error');
+          return;
+        }
+        if (msg.event === 'interrupted') { this.flushPlayback(); return; }
+        if ((msg.event === 'tool_start' || msg.event === 'tool_done') && typeof msg.call_id === 'string') {
+          this.cb.onTool?.({
+            phase: msg.event === 'tool_start' ? 'start' : 'done', callId: msg.call_id, name: String(msg.name || 'tool'),
+            argsSummary: typeof msg.args_summary === 'string' ? msg.args_summary : undefined,
+            ok: typeof msg.ok === 'boolean' ? msg.ok : undefined,
+            summary: typeof msg.summary === 'string' ? msg.summary : undefined,
+          });
           return;
         }
         routeTranscriptEvent(msg, this.cb);
@@ -267,6 +322,7 @@ export class VoiceSession {
       socketCallId = null;                        // 'error' then 'close' must not report twice
       if (this.ws === ws) {
         this.ws = null;
+        this.muted = false;
         this.stopMicCapture();
         this.setState('idle');
       }
@@ -279,8 +335,22 @@ export class VoiceSession {
     });
   }
 
+  get isMuted(): boolean {
+    return this.muted;
+  }
+
+  /** Mute or unmute the caller. The call, the socket and everything coming down it are untouched. */
+  setMuted(muted: boolean): void {
+    if (muted === this.muted) return;
+    this.muted = muted;
+    if (muted && this.ws?.readyState === WebSocket.OPEN) {
+      try { this.ws.send(muteTail().buffer); } catch { /* a closing socket: the call is ending anyway */ }
+    }
+  }
+
   stop(): void {
-    this.startSeq++;                              // a permission grant still pending is now stale
+    this.startSeq++;
+    this.muted = false;                              // a permission grant still pending is now stale
     try { this.ws?.close(); } catch { /* noop */ }
     // Detach it: its 'close' arrives later and must only report its own call, never reset a call
     // started in the meantime (finish() acts on the session only for the CURRENT socket).
@@ -303,6 +373,7 @@ export class VoiceSession {
     // samples per chunk to be cheap.
     const node = ctx.createScriptProcessor(4096, 1, 1);
     node.onaudioprocess = (e) => {
+      if (this.muted) return;                     // muted: the mic's audio never leaves the browser
       const input = e.inputBuffer.getChannelData(0);
       const pcm16 = pcmChunkForUplink(input, ctx.sampleRate);
       if (this.ws?.readyState === WebSocket.OPEN) {
@@ -346,9 +417,17 @@ export class VoiceSession {
     const src = ctx.createBufferSource();
     src.buffer = audioBuffer;
     src.connect(ctx.destination);
+    this.playing.add(src);
+    src.onended = () => { this.playing.delete(src); };
     const startAt = Math.max(ctx.currentTime, this.playbackTime);
     src.start(startAt);
     this.playbackTime = startAt + audioBuffer.duration;
+  }
+
+  private flushPlayback() {
+    for (const src of this.playing) { try { src.stop(); } catch { /* already ended */ } }
+    this.playing.clear();
+    if (this.playbackCtx) this.playbackTime = this.playbackCtx.currentTime;
   }
 
   // ── dictation (Mic button push/hold-to-talk into the textarea) ──────────
@@ -357,6 +436,7 @@ export class VoiceSession {
   // NOT require an active VoiceSession/WS at all.
 
   startDictation(): void {
+    if (this.serverCaptions && this.ws) return;
     const handle = startDictation({
       onPartial: (text) => { this.cb.onPartial?.(text, 'user'); },
       onFinal: (text) => {

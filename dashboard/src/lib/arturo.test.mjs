@@ -113,6 +113,7 @@ assert.equal(onboardingDone(null), false);
   assert.match(handsFreeTitle(true), /talks back/);
   assert.match(handsFreeTitle(false), /needs a voice key/);
   assert.match(handsFreeTitle(false), /GEMINI_API_KEY/);                       // the key the browser call uses
+  assert.match(handsFreeTitle(false), /OPENAI_API_KEY/);                       // or GPT-Live via the relay
   assert.equal(handsFreeReady({ live: true, voice: true }), true);
   assert.equal(handsFreeReady({ live: false, voice: true }), false);          // an ElevenLabs key alone cannot start it
   assert.equal(handsFreeReady({ voice: true }), true);                        // an older server: any key

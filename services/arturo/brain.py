@@ -176,6 +176,16 @@ def tool_protocol_block(tools: list, tool_choice=None) -> str:
 # What the operator sees when the CLI emitted tool-call markup we cannot turn into a call.
 # Saying nothing would drop the turn; printing the markup is the defect this replaces.
 NATIVE_MARKUP_FALLBACK = "Sorry — I garbled that one. Ask me again?"
+UNREADABLE_RETRY = ("(system) Your last reply could not be read: it was neither a valid JSON tool-call envelope nor "
+                    "a plain-text answer. Reply again with EITHER only the JSON envelope (valid JSON, every quote "
+                    "inside a string escaped) OR a plain-text answer to the operator.")
+_SECRET_RE = re.compile(r"(sk-)[A-Za-z0-9_-]{6,}|((?:KEY|TOKEN|SECRET|PASSWORD)[A-Z_]*=)\S+", re.I)
+
+
+def redact(text: str) -> str:
+    """For a log line: API keys and KEY=value pairs blanked."""
+    return _SECRET_RE.sub(lambda m: (m.group(1) + "[redacted]") if m.group(1) else (m.group(2) + "[redacted]"),
+                          text or "")
 
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.S)
 
@@ -739,7 +749,7 @@ class RuntimeBrain(Brain):
         return self._run(spec, timeout or self._timeout)
 
     def complete(self, messages, tools=None, tool_choice=None, max_tokens=1024, temperature=0.7,
-                 stream=False, timeout=None, model=None):
+                 stream=False, timeout=None, model=None, _asked_again=False):
         try:
             text = self._text(messages, tools, tool_choice, timeout)
         except Exception as e:  # noqa: BLE001 — a CLI hiccup is a sentence, not a 500
@@ -764,7 +774,17 @@ class RuntimeBrain(Brain):
             tools = None
         if stream:
             return (make_chunk(c) for c in _chunked(without_envelope(text.strip())))
-        return parse_cli_reply(text) if tools else make_response(without_envelope(text.strip()), None, "stop")
+        if not tools:
+            return make_response(without_envelope(text.strip()), None, "stop")
+        out = parse_cli_reply(text)
+        if out.choices[0].message.content == NATIVE_MARKUP_FALLBACK and not _asked_again:
+            # A reply that is neither a readable tool call nor prose: once, say so and ask again, rather than
+            # ending the turn on "I garbled that one" (seen mid-task after two tool rounds).
+            log.warning(f"runtime brain ({self.runtime}): unreadable reply, asking again: {redact(text)[:400]!r}")
+            again = list(messages) + [{"role": "user", "content": UNREADABLE_RETRY}]
+            return self.complete(again, tools=tools, tool_choice=tool_choice, max_tokens=max_tokens,
+                                 temperature=temperature, timeout=timeout, model=model, _asked_again=True)
+        return out
 
     def describe(self):
         return {"kind": "runtime", "runtime": self.runtime, "cli": self.cli, "model": self.model}

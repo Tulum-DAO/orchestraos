@@ -43,6 +43,10 @@ os.makedirs(os.environ["ORCHESTRA_DIR"], exist_ok=True)
 # pane_lock.py flocks live under ~/runtime/locks. A test locking pane "gm" would contend with a real
 # router's lock for gm on the same box (and could hold its mail). A fresh dir per test process.
 os.environ["PANE_LOCK_DIR"] = os.path.join(_FENCE_ROOT, "pane-locks")
+# The end-of-call GM digest asks the live brain (the claude CLI) to write it: never from a test.
+os.environ["ARTURO_GM_DIGEST"] = "0"
+# The rolling thread summary asks the live brain to write it: never from a test.
+os.environ["ARTURO_THREAD_SUMMARY"] = "0"
 # The gateway's typed-not-entered journal: every verified_inject writes a row before it types, and
 # the NEXT gateway start reconciles leftover rows by pressing Enter in those panes. A test run must
 # never leave rows where a real gateway reads them. A fresh dir per test process.

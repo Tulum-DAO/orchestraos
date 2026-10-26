@@ -45,6 +45,9 @@ const server = http.createServer((req,res)=>{
   else if(req.url.startsWith("/api/system/vps-auth/"))proxyToLocal(req,res);
   else if(req.url.startsWith("/api/adaptive/"))proxyToLocal(req,res);
   else if(req.url.startsWith("/api/uploads"))proxyToLocal(req,res);
+  // Uploaded files (an image attached in the Arturo pane, shown in its message): the API serves them with
+  // nosniff and forces active content to download. Read-only methods only.
+  else if(req.url.startsWith("/uploads/") && (req.method === "GET" || req.method === "HEAD"))proxyToLocal(req,res);
   else if(req.url.startsWith("/api/"))proxyToLocal(req,res);
   else serveStatic(req,res);
 });
@@ -87,6 +90,12 @@ server.prependListener("upgrade", (req, socket, head) => {
   if (!wsAllowed(req)) { socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n"); socket.destroy(); return; }
   const p = http.request({ hostname: API_HOST, port: API_PORT, path: req.url, method: "GET", headers: req.headers });
   p.on("upgrade", (r, s, h) => { socket.write("HTTP/1.1 101 Switching Protocols\r\n" + Object.entries(r.headers).map(([k, v]) => k + ": " + v).join("\r\n") + "\r\n\r\n"); if (h.length) socket.write(h); s.pipe(socket); socket.pipe(s); });
+  // A refused upgrade (401/403/502) comes back as a plain response: pass it on, never leave the socket hanging.
+  p.on("response", (r) => {
+    socket.write("HTTP/1.1 " + r.statusCode + " " + (r.statusMessage || "") + "\r\nConnection: close\r\n\r\n");
+    r.pipe(socket);
+    r.on("end", () => socket.destroy());
+  });
   p.on("error", () => socket.destroy());
   p.end();
 });
@@ -135,12 +144,19 @@ function registeredTerminalSession(session) {
     return Object.values(reg.agents || {}).some((a) => a && (a.tmux_session === session || a.name === session));
   } catch { return false; }
 }
-const wss = new WebSocketServer({ server, path: "/ws/terminal", verifyClient: (info) => {
+// noServer + our own dispatch: with `server`, ws answers EVERY other upgrade path with 400, which killed the
+// /api/voice/live upgrade the listener above had already started forwarding ("voice bridge connection error").
+const wss = new WebSocketServer({ noServer: true, path: "/ws/terminal", verifyClient: (info) => {
   if (!wsAllowed(info.req)) return false;
   if (!terminalSessionAllowed(info.req)) { console.warn("[ws] refused /ws/terminal: authenticated session required"); return false; }
   if (!registeredTerminalSession(new URL(info.req.url, "http://localhost").searchParams.get("session"))) { console.warn("[ws] refused /ws/terminal: registered session required"); return false; }
   return true;
 } });
+server.on("upgrade", (req, socket, head) => {
+  if (req.url.startsWith("/api/")) return; // the /api/* forwarder above owns it
+  if (req.url.split("?")[0] !== "/ws/terminal") { socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"); socket.destroy(); return; }
+  wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+});
 wss.on("connection", (ws, req) => {
   const url = new URL(req.url, "http://localhost");
   const session = url.searchParams.get("session");

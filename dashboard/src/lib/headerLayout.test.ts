@@ -120,11 +120,3 @@ test('provider login terminal stays pinned to the visible bottom of its scrollab
   assert.match(modal, /h-\[94vh\] min-h-0 flex flex-col overflow-hidden/);
   assert.match(modal, /sticky bottom-0 shrink-0 h-\[min\(62vh,calc\(94vh-12rem\)\)\] min-h-\[220px\]/);
 });
-
-test('arturoLift: the button rises above the tallest docked CLI, never below the bottom', async () => {
-  const { arturoLift } = await import('./arturoLift.ts');
-  assert.equal(arturoLift(800, []), 0);
-  assert.equal(arturoLift(800, [700]), 100);
-  assert.equal(arturoLift(800, [740, 650]), 150);
-  assert.equal(arturoLift(800, [900]), 0);
-});

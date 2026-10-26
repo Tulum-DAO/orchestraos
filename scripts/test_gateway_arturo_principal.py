@@ -267,12 +267,55 @@ def test_gemini_live_opens_the_session_as_fleet(monkeypatch):
     monkeypatch.setattr(web, "WebSocketResponse", _WS)
     monkeypatch.setattr(G, "GeminiLiveSession", _Session)
 
+    async def _gemini():
+        return "gemini"
+    monkeypatch.setattr(G, "_live_engine", _gemini)
+
     class _LiveReq(_Req):
         query = {}
 
     req = _LiveReq({"id": "legacy"}, client_headers={"Authorization": "Bearer tok"})
     asyncio.run(G.handle_gemini_live(req))
     assert made["principal"] == "fleet"
+
+
+def test_live_without_gemini_runs_gpt_live_through_the_relay_as_fleet(monkeypatch):
+    """No GEMINI_API_KEY, GPT-Live chosen: /live drives the stream relay, stamped fleet like the Gemini path."""
+    from aiohttp import web
+    from services.arturo import relay_live_bridge
+    monkeypatch.setattr(G, "gateway_token", lambda: "tok")
+    made = {}
+
+    class _WS:
+        async def prepare(self, request):
+            return self
+
+    class _Relay:
+        def __init__(self, ws, base, headers, voice="", on_surface=None):
+            made.update(base=base, headers=headers, on_surface=on_surface)
+
+        async def run(self):
+            return None
+
+    class _NoGemini:
+        def __init__(self, *a, **k):
+            raise AssertionError("Gemini must not run when the engine is the relay")
+
+    async def _relay():
+        return "relay"
+    monkeypatch.setattr(web, "WebSocketResponse", _WS)
+    monkeypatch.setattr(G, "GeminiLiveSession", _NoGemini)
+    monkeypatch.setattr(G, "_live_engine", _relay)
+    monkeypatch.setattr(relay_live_bridge, "RelayLiveSession", _Relay)
+
+    class _LiveReq(_Req):
+        query = {}
+
+    req = _LiveReq({"id": "legacy"}, client_headers={"Authorization": "Bearer tok"})
+    asyncio.run(G.handle_gemini_live(req))
+    assert made["base"] == G.ARTURO_PTT_STREAM_BASE
+    assert made["headers"].get("X-Arturo-Principal") == "fleet"
+    assert made["on_surface"] is G._record_web_call_surface      # the call's page becomes the web surface
 
 
 # --- DEC-1791518421640932: a turn read-back carries its reader, and the turn id survives the hop ------------

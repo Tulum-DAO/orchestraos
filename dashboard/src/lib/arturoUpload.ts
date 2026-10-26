@@ -13,7 +13,10 @@
  * something it can actually open — a filename alone would look like an upload had
  * happened and then do nothing, which is the failure shape this project keeps refusing.
  */
-export interface Attachment { name: string; path: string; size: number }
+import { isAttachmentFiller } from './arturoComposer.ts';
+export interface Attachment { name: string; path: string; size: number;
+  /** A thumbnail for the composer while it is waiting to send (an object URL of the picked image). */
+  preview?: string }
 export type UploadResult =
   | { ok: true; name: string; path: string; size: number; url?: string }
   | { ok: false; error: string };
@@ -43,6 +46,39 @@ export function attachmentPreamble(files?: Attachment[] | null): string {
   const lines = files.map((f) => `- ${f.name}  (${f.path})`);
   const plural = files.length === 1 ? 'a file' : `${files.length} files`;
   return `[The operator attached ${plural} on this machine. You can read ${files.length === 1 ? 'it' : 'them'} directly at the path shown:\n${lines.join('\n')}]`;
+}
+
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|heic|heif|avif)$/i;
+export function isImageName(name: string): boolean { return IMAGE_EXT.test(name || ''); }
+
+/** Where the browser can load an uploaded file: the API serves the uploads directory at /uploads/<name>
+ *  (nosniff, active content forced to download). Only a path inside that directory, by its base name. */
+export function uploadUrl(path: string): string | null {
+  const m = /\/state\/uploads\/([^/\s]+)$/.exec(path || '');
+  return m ? `/uploads/${encodeURIComponent(m[1])}` : null;
+}
+
+const PREAMBLE_RE = /^\[The operator attached (?:a file|\d+ files) on this machine\. You can read (?:it|them) directly at the path shown:\n((?:- [^\n]*\n?)+)\]\n*/;
+
+/** A stored message as the operator sent it: the attachment note for the brain taken off the front, and the
+ *  attached images (by their upload URLs) so the message can show them again after a reload. */
+export function splitAttachmentPreamble(text: string): { text: string; images: string[] } {
+  const m = PREAMBLE_RE.exec(text || '');
+  if (!m) return { text: text || '', images: [] };
+  const images: string[] = [];
+  for (const line of m[1].split('\n')) {
+    const path = /\(([^()]+)\)\s*$/.exec(line)?.[1] || '';
+    const url = isImageName(path) ? uploadUrl(path) : null;
+    if (url) images.push(url);
+  }
+  const rest = text.slice(m[0].length);
+  // attachments sent with nothing typed: the filler request was Arturo's to read, not the operator's words
+  return { text: isAttachmentFiller(rest) ? '' : rest, images };
+}
+
+/** The images among attachments, by URL (for the message just sent). */
+export function attachmentImages(files: Attachment[]): string[] {
+  return files.filter((f) => isImageName(f.name) || isImageName(f.path)).map((f) => uploadUrl(f.path)).filter((u): u is string => !!u);
 }
 
 export function describeAttachment(f: { name: string; size: number }): string {

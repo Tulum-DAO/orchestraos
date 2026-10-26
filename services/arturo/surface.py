@@ -355,6 +355,15 @@ def resolve_screen(surface_path, gw_get=None, voice_calls_dir=None, focus_path=N
             ent = (voice or {}).get("entity") or {}
             if ent.get("kind") and ent.get("id"):
                 kind, ident = ent["kind"], ent["id"]
+    if kind is None and route:
+        # The dashboard opens an agent as an overlay without changing the URL: its surface names the
+        # agent as the focused entity on a bare /agents (or any) route. Still only an EXPLICIT entity.
+        try:
+            ent = (json.loads(Path(surface_path).read_text()).get("current") or {}).get("focused") or {}
+        except Exception:
+            ent = {}
+        if ent.get("kind") in ("agent", "approval", "project") and ent.get("id"):
+            kind, ident = ent["kind"], ent["id"]
     if kind is None:
         if not route:
             return "the operator isn't looking at anything in the app right now."
