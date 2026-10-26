@@ -53,15 +53,59 @@ export function DashboardLayout() {
     const vv = window.visualViewport;
     if (!vv) return;
     const root = document.documentElement;
+    let last = '';
+    // On a phone, outside Dev mode, Safari's scroll to the field is undone (unscroll below), so the view never
+    // really moves: its offset is pinned at 0. Following the offset Safari reports for a few frames after the
+    // undo pushed the whole page down by the keyboard's height (a black band above the top bar), then slid it
+    // back up faster than the keyboard (seen frame by frame on a phone). Dev mode keeps following it.
+    const pinned = () => window.matchMedia('(max-width: 768px)').matches
+      && !(document.activeElement as HTMLElement | null)?.closest?.('[data-keyboard-native]');
     const apply = () => {
-      root.style.setProperty('--vvh', `${Math.round(vv.height)}px`);
-      root.style.setProperty('--vv-top', `${Math.round(vv.offsetTop)}px`);
-      root.style.setProperty('--kb', `${Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop))}px`);
+      const offset = pinned() ? 0 : vv.offsetTop;
+      const h = Math.round(vv.height), top = Math.round(offset);
+      const kb = Math.max(0, Math.round(window.innerHeight - vv.height - offset));
+      const key = `${h}|${top}|${kb}`;
+      if (key === last) return;
+      last = key;
+      root.style.setProperty('--vvh', `${h}px`);
+      root.style.setProperty('--vv-top', `${top}px`);
+      root.style.setProperty('--kb', `${kb}px`);
+    };
+    // FLY-UP: Safari slides the view the moment a field is tapped, but tells us
+    // (resize / scroll) only later, so the pinned root lagged a beat behind and everything jumped up, then
+    // back. While a keyboard opens or closes, follow the visible area EVERY FRAME instead of waiting for
+    // the events; at rest, the events are enough.
+    let frame = 0, until = 0;
+    const follow = () => { apply(); frame = performance.now() < until ? requestAnimationFrame(follow) : 0; };
+    const track = () => { until = performance.now() + 1000; if (!frame) frame = requestAnimationFrame(follow); apply(); };
+    const onFocus = (e: FocusEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT' || t.isContentEditable)) track();
+    };
+    // FLY-UP, measured on a phone with a viewport readout: the keyboard opened
+    // (visible area 760 -> 482), then Safari scrolled the WINDOW up 278px to show the field, and only ~500 ms
+    // later reported it (visualViewport.offsetTop 278), when the root was moved back down to match. The root is
+    // pinned to the visible area and already sits above the keyboard, so the window never needs to scroll: on
+    // a phone its scroll is undone at once. Dev mode opts out (data-keyboard-native) and keeps its behaviour.
+    const unscroll = () => {
+      if (window.scrollY === 0 && window.scrollX === 0) return;
+      if (!window.matchMedia('(max-width: 768px)').matches) return;
+      if ((document.activeElement as HTMLElement | null)?.closest?.('[data-keyboard-native]')) return;
+      window.scrollTo(0, 0);
+      apply();
     };
     apply();
-    vv.addEventListener('resize', apply);
-    vv.addEventListener('scroll', apply);
-    return () => { vv.removeEventListener('resize', apply); vv.removeEventListener('scroll', apply); };
+    vv.addEventListener('resize', track);
+    vv.addEventListener('scroll', track);
+    document.addEventListener('focusin', onFocus, true);
+    document.addEventListener('focusout', onFocus, true);
+    window.addEventListener('scroll', unscroll, { passive: true });
+    return () => {
+      vv.removeEventListener('resize', track); vv.removeEventListener('scroll', track);
+      document.removeEventListener('focusin', onFocus, true); document.removeEventListener('focusout', onFocus, true);
+      window.removeEventListener('scroll', unscroll);
+      cancelAnimationFrame(frame);
+    };
   }, []);
   // THE PHONE TOP BAR'S BOTTOM EDGE, published as --topbar-h: the Arturo pane opens under it, and
   // the Agents-page chat panel starts below it so the bar (Arturo + the bell) stays usable while
