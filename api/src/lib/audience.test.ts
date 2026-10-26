@@ -43,10 +43,11 @@ test('a job he set off reports back: the notification folds, its closing reply i
   assert.equal(openerKind(xs[0]), 'notification');
 });
 
-test('the spawn brief and anything before the first opener fold', () => {
+test('the spawn brief and anything before the first opener fold (a log with no operator turn draws only its newest reply)', () => {
   const xs = [a('stray'), u('You are gm. Read your init', { is_system: true }), a('ready')];
   tagAudience(xs);
-  assert.deepEqual(xs.map((x) => x.audience), ['agent', 'agent', 'agent']);
+  // 'ready' is drawn by the iOS 334 rule (no recorded turns: the most recent message is shown).
+  assert.deepEqual(xs.map((x) => x.audience), ['agent', 'agent', 'user']);
   assert.ok(xs.every((x) => x.exchange === undefined));
 });
 
@@ -97,4 +98,31 @@ test('a hook the route hides never turns the reply he waited for into a step (io
   tagAudience(xs);
   assert.deepEqual(xs.map((x) => x.audience), ['user', 'user', 'agent', 'agent', 'agent', 'user']);
   assert.ok(xs.every((x) => x.exchange === m.uuid));
+});
+
+test('a log with no turn the operator opened still draws its NEWEST reply (iOS 334)', () => {
+  // "if there are no recorded turns, display the most recent message": only mail in the window,
+  // and the newest assistant text is drawn; everything else still folds, with no exchange.
+  const xs = [u('[MSG from gm | high] do X'), a('on it'), tool(), res(), a('X done'),
+              u('Stop hook feedback:\n[QUEUE-DIGEST] 1 pending'), think(), a('acked, idle')];
+  tagAudience(xs);
+  assert.deepEqual(xs.map((x) => x.audience), ['agent', 'agent', 'agent', 'agent', 'agent', 'agent', 'agent', 'user']);
+  assert.ok(xs.every((x) => x.exchange === undefined));
+  const none = [u('[MSG from gm | low] fyi'), tool(), res()];                 // no reply at all: nothing to draw
+  tagAudience(none);
+  assert.ok(none.every((x) => x.audience === 'agent'));
+});
+
+test('a log WITH an operator turn keeps the fold: a later reply to mail stays folded', () => {
+  const m = u('fix the card');
+  const xs = [m, a('done'), u('[MSG from gm | low] fyi'), a('noted')];
+  tagAudience(xs);
+  assert.deepEqual(xs.map((x) => x.audience), ['user', 'user', 'agent', 'agent']);
+});
+
+test('an operator turn whose message has no uuid still counts: the no-turn rule never fires', () => {
+  const m = { kind: 'text', role: 'user', text: 'fix the card' };              // no uuid on his message
+  const xs: any[] = [m, a('done'), u('[MSG from gm | low] fyi'), a('noted')];
+  tagAudience(xs);
+  assert.deepEqual(xs.map((x) => x.audience), ['user', 'user', 'agent', 'agent']);
 });

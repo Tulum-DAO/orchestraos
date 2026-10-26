@@ -16,6 +16,8 @@ import importlib
 from typing import Optional
 
 KNOWN = ("telegram",)
+# Plugins that are not chat channels (never in configured_channel): doctor still shows their row.
+NOTIFIERS = ("grok_bot",)
 
 
 def load(name: str):

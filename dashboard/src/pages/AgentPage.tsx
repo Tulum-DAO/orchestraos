@@ -15,6 +15,7 @@ import ActionBar from '../components/ActionBar';
 import { injectToAgent, sendKeyToAgent } from '../lib/api';
 import { logAction } from '../lib/user-actions';
 import { OPEN_SIDEBAR_EVENT } from '../lib/headerSlot';
+import DeliverNowBanner from '../components/agent/DeliverNowBanner';
 
 export default function AgentPage() {
   const { id } = useParams<{ id?: string }>();
@@ -146,6 +147,7 @@ export default function AgentPage() {
               tool={(seatRow as { tool?: string } | undefined)?.tool}
             />
 
+            <DeliverNowBanner agentId={agentId} />
             <div data-arturo-avoid>
             <Composer
               agentId={agentId}
