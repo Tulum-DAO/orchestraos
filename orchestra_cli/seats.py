@@ -570,6 +570,8 @@ def cmd_agent_create(ns) -> int:
             rs.validate_model_for_runtime(runtime, ns.model, agent_id=name)
         except rs.RuntimeResolutionError as e:
             print(f"agent create refused: {e}", file=sys.stderr); return 2
+    # 1b. a project's seats work in its folder, and a PM makes its project (folder + Projects-page card)
+    _place_in_project(st, ns)
     # 2. template -> prompts/<name>.md, every {TOKEN} filled or refuse
     prompt_rel = f"prompts/{name}.md"
     if ns.template:
@@ -841,6 +843,38 @@ def _starter_lock(st):
         f.close()
         return False
     return f
+
+
+def _seat_project(st, ns):
+    """The project a seat being created belongs to: a PM's own (--set PROJECT=..., else its name), a worker's
+    PM's. None for anything else (the manager, a standalone helper): those stay in the checkout."""
+    from . import projects as PJ
+    if ns.template == "pm" or getattr(ns, "role", None) == "pm":
+        named = next((kv.split("=", 1)[1].strip() for kv in (ns.set or []) if kv.startswith("PROJECT=")), "")
+        return named if PJ.SLUG_RE.match(named or "") else PJ.slug_for_seat(ns.name)
+    if ns.parent:
+        _, reg = _registry(st)
+        prow = reg["agents"].get(ns.parent) or {}
+        if prow.get("role") == "pm" or ns.parent.startswith("pm-"):
+            return PJ.project_of(st.data_dir, ns.parent)
+    return None
+
+
+def _place_in_project(st, ns):
+    """Register the seat with its project (creating it for a PM) and, unless a folder was given, start it in
+    the project's folder."""
+    from . import projects as PJ
+    try:
+        slug = _seat_project(st, ns)
+        if not slug:
+            return
+        is_pm = ns.template == "pm" or getattr(ns, "role", None) == "pm"
+        folder = PJ.ensure_project(st.data_dir, slug, pm=ns.name if is_pm else None,
+                                   agents=() if is_pm else (ns.name,))
+        if not getattr(ns, "cwd", None):
+            ns.cwd = str(folder)
+    except (OSError, ValueError) as e:
+        print(f"warning: {ns.name}: no project folder ({e}); it starts in the checkout", file=sys.stderr)
 
 
 def _starter_seats(st, ns) -> int:

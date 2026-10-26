@@ -89,7 +89,7 @@ def _names(tools):
 def brain(R, monkeypatch):
     """A brain that asks for run_command once, then answers. Records what it was offered and shown."""
     seen = {"offered": [], "messages": [], "ran": []}
-    monkeypatch.setattr(R, "run_local", lambda cmd, timeout=15: (seen["ran"].append(cmd), (True, "uid=0"))[1])
+    monkeypatch.setattr(R, "run_local", lambda cmd, timeout=15, **_k: (seen["ran"].append(cmd), (True, "uid=0"))[1])
 
     def complete(**kw):
         seen["offered"].append(_names(kw.get("tools") or []))

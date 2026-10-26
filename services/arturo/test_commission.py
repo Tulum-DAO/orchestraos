@@ -63,7 +63,7 @@ def test_spawn_agent_tool_runs_plan_and_files_msg_store_row(mod, monkeypatch, tm
 
     monkeypatch.setattr(mod, "_run_commission", fake_run)
     monkeypatch.setattr(mod, "_message_store", lambda: _Store())
-    monkeypatch.setattr(mod, "run_local", lambda cmd, timeout=15: (True, ""))   # tmux has-session
+    monkeypatch.setattr(mod, "run_local", lambda cmd, timeout=15, **_k: (True, ""))   # tmux has-session
     monkeypatch.setattr(mod, "record_spawned_session", lambda s: None)
     monkeypatch.setattr(mod, "_notify_spawned", lambda *a, **k: None)
     monkeypatch.setattr(mod, "registration_status",
@@ -192,7 +192,7 @@ def test_spawn_agent_on_mac_refuses_instead_of_making_a_pane(mod, monkeypatch):
 
 def test_spawn_agent_verifies_registration_and_says_so(mod, monkeypatch):
     monkeypatch.setattr(mod, "_run_commission", lambda plan, timeout: (True, "[spawn] ready"))
-    monkeypatch.setattr(mod, "run_local", lambda cmd, timeout=15: (True, ""))
+    monkeypatch.setattr(mod, "run_local", lambda cmd, timeout=15, **_k: (True, ""))
     monkeypatch.setattr(mod, "_message_store", lambda: type("S", (), {"send": staticmethod(lambda **kw: "msg_x")})())
     monkeypatch.setattr(mod, "record_spawned_session", lambda s: None)
     monkeypatch.setattr(mod, "_notify_spawned", lambda *a, **k: None)
@@ -203,7 +203,7 @@ def test_spawn_agent_verifies_registration_and_says_so(mod, monkeypatch):
 
 def test_spawn_agent_says_it_plainly_when_registration_is_missing(mod, monkeypatch):
     monkeypatch.setattr(mod, "_run_commission", lambda plan, timeout: (True, "[spawn] ready"))
-    monkeypatch.setattr(mod, "run_local", lambda cmd, timeout=15: (True, ""))
+    monkeypatch.setattr(mod, "run_local", lambda cmd, timeout=15, **_k: (True, ""))
     monkeypatch.setattr(mod, "_message_store", lambda: type("S", (), {"send": staticmethod(lambda **kw: "msg_x")})())
     monkeypatch.setattr(mod, "record_spawned_session", lambda s: None)
     monkeypatch.setattr(mod, "_notify_spawned", lambda *a, **k: None)
@@ -296,7 +296,7 @@ def test_registration_status_survives_a_missing_registry(mod, tmp_path, monkeypa
 
 def test_spawn_agent_says_could_not_verify_on_an_unknown_registration(mod, monkeypatch):
     monkeypatch.setattr(mod, "_run_commission", lambda plan, timeout: (True, "[spawn] ready"))
-    monkeypatch.setattr(mod, "run_local", lambda cmd, timeout=15: (True, ""))
+    monkeypatch.setattr(mod, "run_local", lambda cmd, timeout=15, **_k: (True, ""))
     monkeypatch.setattr(mod, "_message_store", lambda: type("S", (), {"send": staticmethod(lambda **kw: "msg_x")})())
     monkeypatch.setattr(mod, "record_spawned_session", lambda s: None)
     monkeypatch.setattr(mod, "_notify_spawned", lambda *a, **k: None)

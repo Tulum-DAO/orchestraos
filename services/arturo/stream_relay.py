@@ -17,6 +17,7 @@ the EL custom-LLM callback path (chat_completions), a locked gm gate criterion.
 """
 import base64
 import json
+import math
 import logging
 import os
 import re
@@ -226,6 +227,18 @@ def hume_socket_factory(conversation_id, resumed_chat_group_id=None):
 
 
 # --- GPT-Live ("openai"; docs/ARTURO.md "GPT-Live") ---
+OPENAI_REPLY_MIN_S = 1.5      # Arturo speaking this long before a barge-in = he was replying, not greeting
+OPENAI_USER_QUIET_S = 0.8     # the caller silent this long = their interrupting line has ended
+OPENAI_HOLD_QUIET_S = 0.5     # after a barge-in, Arturo's audio is held until the caller has been quiet this long
+OPENAI_OVERLAP_MAX_WORDS = 6  # Arturo speaking while the caller talks: a backchannel ("mm-hmm", "oh, okay") plays...
+OPENAI_OVERLAP_MAX_S = 3.0    # ...up to this much SPEECH (pauses and the span's tail not counted); past it he is
+                              # talking over them, and is cut
+OPENAI_CALLER_TALKING_S = 0.4 # caller speech energy this recent...
+OPENAI_CALLER_WORDS_S = 1.5   # ...and their words this recent = they are mid-line
+OPENAI_TEXT_LEAD_S = 0.8      # his words arrive up to this far ahead of their audio
+OPENAI_USER_TURN_GAP_S = 0.3  # the caller silent this long when Arturo starts = their turn has ended
+OPENAI_SPEAK_GAP_S = 1.2       # the caller quiet this long before Arturo volunteers anything (never over them)
+OPENAI_SPEAK_WAIT_S = 20.0     # how long a volunteered line waits for a pause before it is said anyway
 OPENAI_CALL_CAP_S = openai_live.CALL_CAP_S          # per-call cap (gm: 20 min); the daily cap is voice_usage
 OPENAI_CALL_WARN_S = openai_live.CALL_WARN_S
 OPENAI_SPAN_TAIL_S = 0.8        # seconds of non-speech AUDIO (not wall clock) that close an Arturo speech span
@@ -289,8 +302,17 @@ class _Holder:
         self._oa_span_open = False    # an Arturo SPEECH span is open (energy, never frame arrival)
         self._oa_quiet_s = 0.0        # non-speech audio seconds since the last speech frame
         self._oa_barged = False
+        self._oa_hold = False         # False | "talkover" (his run-on after a barge-in: dropped) | "paused" (it stopped)
+        self._oa_hold_quiet = 0.0     # non-speech seconds of the held run-on: a pause ends it
+        self._oa_over = None          # an utterance he began while the caller talks: {"audio_s"}, capped
+        self._oa_held = []            # (arrived, words) held back with the run-on: shown if their audio plays
+        self._uplink_speech_ts = 0.0  # last speech-energy uplink frame (energy only; transcripts lag)
         self._oa_hist = []            # this call's turns, sent to our CLM on each delegation
         self._oa_answer = None        # the latest delegated answer sent and not yet heard in full
+        self._oa_early = None         # (line, turn): the caller's line shown final when Arturo began replying
+        self._oa_spans = 0            # Arturo speech spans so far: the first is the greeting
+        self._oa_echo_pending = 0     # spoken read-outs sent (speak()) whose span has not started yet
+        self._oa_span_echo = False    # this span reads out something the thread already holds: not a new line
         self._oa_warned = False
         self._oa_capped = False
         self.oa_nondelegated = 0
@@ -678,10 +700,12 @@ class _Holder:
                 # contract (a): the flush IS the turn's partial:false final (assistant_end,
                 # forwarded interruption, and retire-flush all funnel here)
                 self.ar_finals += 1
-                self.m.buffer.put(self.cid, {"type": "agent_response", "text": text,
-                                             "agent_turn": turn, "partial": False})
+                ev = {"type": "agent_response", "text": text, "agent_turn": turn, "partial": False}
             else:
-                self.m.buffer.put(self.cid, {"type": "agent_response", "text": text})
+                ev = {"type": "agent_response", "text": text}
+            if getattr(self, "_oa_span_echo", False):
+                ev["echo"] = True
+            self.m.buffer.put(self.cid, ev)
 
     def close(self):
         self._cancel_timers()
@@ -724,6 +748,7 @@ class _Holder:
                 self._touch_activity()     # speech uplink keeps the idle timer fresh
         if _rms(pcm) >= self.m.vad_rms_floor:
             self._last_user_ts = time.time()   # VOICE-RESULTS: speech-level uplink
+            self._uplink_speech_ts = self._last_user_ts
         self.turn_pcm.append(pcm)
         if self.partials and not self._idle_closed:   # I1: no Scribe billing on idle audio
             self.partials.feed(pcm)
@@ -1065,6 +1090,22 @@ class _Holder:
                 pcm = b""
             if not pcm:
                 return
+            if self._oa_floor(now) == "talkover":
+                # the answer they cut off, running on over them: never played. A pause in it ends it, and
+                # what he says after that is something new (a backchannel while they talk, or his reply).
+                if openai_live.is_speech(pcm):
+                    self._oa_hold_quiet = 0.0
+                    self._oa_held = []            # the words so far went with this dropped audio
+                else:
+                    self._oa_hold_quiet += len(pcm) / BYTES_PER_S
+                    if self._oa_hold_quiet >= OPENAI_SPAN_TAIL_S:
+                        self._oa_hold = "paused"
+                        self._oa_held = []            # that run-on is over: its words were never heard
+                        if self._oa_span_open:
+                            self._oa_end_span()
+                return
+            if self._oa_held and openai_live.is_speech(pcm):
+                self._oa_restore_held(now)        # the hold lifted mid-utterance: its words play now, so show them
             if openai_live.is_speech(pcm):
                 self._oa_quiet_s = 0.0
                 forward = True
@@ -1080,6 +1121,20 @@ class _Holder:
             if not self._oa_span_open:
                 self._oa_span_open = True
                 self._oa_barged = False
+                self._oa_spans += 1
+                if self._oa_hold == "paused" or self._oa_caller_talking(now):
+                    self._oa_over = {"audio_s": 0.0}  # he starts while they talk: fine if it is short
+                    self._oa_split_user_line()        # their line breaks at it, on screen and in the thread
+                else:
+                    self._oa_claim_echo()
+                    self._oa_show_user_final(now)
+            if self._oa_over is not None:
+                if openai_live.is_speech(pcm):
+                    self._oa_over["audio_s"] += len(pcm) / BYTES_PER_S
+                if (self._oa_over["audio_s"] > OPENAI_OVERLAP_MAX_S
+                        or len(self._oa_out.split()) > OPENAI_OVERLAP_MAX_WORDS):
+                    self._oa_cut_overlap(now)
+                    return
             self._touch_activity()
             self._agent_output_seen = True
             if self.m.speaking_enabled:
@@ -1096,25 +1151,40 @@ class _Holder:
             return
         if t == "session.output_transcript.delta":
             delta = d.get("delta") or ""
+            if self._oa_floor(now) == "talkover":
+                # the words of that run-on are not shown, unless the hold lifts before their audio plays
+                # ("Go ahead, I'm here" showed only "I'm here.", 2026-10-24)
+                self._oa_held = (self._oa_held + [(now, delta)])[-40:]
+                return
             with self._lock:
-                if not self._oa_out_started:
+                fresh = not self._oa_out_started
+                if fresh:
                     self._oa_out_started = True
                     self._agent_turn += 1
+            if fresh and not self._oa_span_open:
+                self._oa_claim_echo()             # his words lead his audio by ~0.2 s
+            with self._lock:
                 self._oa_out += delta
                 text, turn = self._oa_out.strip(), self._agent_turn
+            if fresh:
+                # his words start ~0.2 s before his audio, and after a barge-in his reply can run on in one span
+                self._oa_show_user_final(now)
             if self.m.agent_text_enabled and text:
                 self.ar_partials += 1
-                self.m.buffer.put(self.cid, {"type": "agent_response", "text": text,
-                                             "agent_turn": turn, "partial": True})
+                ev = {"type": "agent_response", "text": text, "agent_turn": turn, "partial": True}
+                if self._oa_span_echo:
+                    ev["echo"] = True
+                self.m.buffer.put(self.cid, ev)
             return
         if t == "session.input_transcript.delta":
             delta = d.get("delta") or ""
             self._last_user_ts = now
             self._touch_activity()
-            if delta.strip() and self._oa_span_open and not self._oa_barged:
-                self._oa_barge_in()
+            if delta.strip() and self._oa_span_open and not self._oa_barged and self._oa_over is None:
+                self._oa_barge_in()               # (talking over his short backchannel is not cutting him off)
             with self._lock:
                 self._oa_user += delta
+                self._oa_user_last = now
                 self._rev += 1
                 text, turn, rev = self._oa_user.strip(), self._turn_no, self._rev
             if text:
@@ -1124,14 +1194,19 @@ class _Holder:
             did = (d.get("delegation") or {}).get("id")
             with self._lock:
                 q, self._oa_user = self._oa_user.strip(), ""
-                turn = self._turn_no
-                self._turn_no += 1
+                early, self._oa_early = self._oa_early, None
+                if early:
+                    # shown final when Arturo began (a filler before delegating): same line, same turn
+                    q, turn = (f"{early[0]} {q}".strip() if q else early[0]), early[1]
+                else:
+                    turn = self._turn_no
+                    self._turn_no += 1
                 self._rev = 0
                 msgs = list(self._oa_hist) + [{"role": "user", "content": q}]
                 self._oa_hist.append({"role": "user", "content": q})
             self._final_at = now
             self._awaiting_reply = True
-            if q:
+            if q and not early:
                 self.m.replay_log(self.cid).add("user", q)
                 self.m.buffer.put(self.cid, {"type": "user_transcript", "text": q, "turn": turn})
             threading.Thread(target=self._oa_delegate, args=(sock, did, q, msgs), daemon=True,
@@ -1176,21 +1251,39 @@ class _Holder:
         span_t0 = self._span_t0
         self._oa_span_open = False
         self._oa_quiet_s = 0.0
+        over, self._oa_over = self._oa_over, None
         self._log_audio_span("assistant_end")
         with self._lock:
             text, self._oa_out, self._oa_out_started = self._oa_out.strip(), "", False
             user_pending, ans = self._oa_user.strip(), self._oa_answer
+        if over is not None:
+            # a backchannel while they talk ("mm-hmm"): its own line between the two halves of theirs (the
+            # operator, 2026-10-24: "I do want those interruptions to break up my sentence on screen")
+            if text:
+                with self._lock:
+                    self._agent_buf = [text]
+                    self._oa_hist.append({"role": "assistant", "content": text})
+                self._flush_agent_buf()
+                self._oa_journal("arturo", text, delegated=False)
+            self.m.buffer.put(self.cid, {"type": "assistant_end"})
+            return
         if text and _ACK_RE.search(text):
             log.info(f"relay {self.cid}: OPENAI-ACK {text[:80]!r}")
-        if text and user_pending:
-            # answered WITHOUT delegating (gm condition 5): journaled with a flag and counted
-            self.oa_nondelegated += 1
-            log.info(f"relay {self.cid}: OPENAI-NONDELEGATED user={user_pending[:60]!r} reply={text[:60]!r}")
-            with self._lock:
-                self._oa_user = ""
-                self._oa_hist += [{"role": "user", "content": user_pending}, {"role": "assistant", "content": text}]
-            self._oa_journal("user", user_pending, delegated=False)
-            self._oa_journal("arturo", text, delegated=False)
+        with self._lock:
+            early, self._oa_early = self._oa_early, None
+        if early:
+            # shown final when this reply began; its journal + history wait for the reply's own text
+            self._oa_commit_user(early[0], "" if self._oa_barged else text, shown=True)
+        elif text and user_pending and not self._oa_barged:
+            # answered WITHOUT delegating (gm condition 5): journaled with a flag and counted.
+            self._oa_commit_user(user_pending, text)
+        elif user_pending and self._oa_barged:
+            # After a barge-in the pending words are the caller's NEW line. GPT-Live can keep talking through it
+            # (it re-spoke a whole answer over the caller), so when this span ends, a line they have
+            # finished is committed before his continuation; one still being spoken ends on its own.
+            last_word = getattr(self, "_oa_user_last", None)
+            if last_word is not None and time.time() - last_word >= OPENAI_USER_QUIET_S:
+                self._oa_commit_user(user_pending, "")
         if ans and span_t0 and span_t0 >= ans["sent_at"]:
             self._oa_answer = None                     # its answer was spoken in full
         if text:
@@ -1198,28 +1291,227 @@ class _Holder:
                 self._agent_buf = [text]
             self._flush_agent_buf()
         self._awaiting_reply = False
+        self._oa_span_echo = False
         self.m.buffer.put(self.cid, {"type": "assistant_end"})
+
+    # -- Arturo speaking without being asked (a typed turn's reply, a result that landed) --
+    def _oa_claim_echo(self):
+        with self._lock:
+            if self._oa_echo_pending and not self._oa_span_echo:
+                self._oa_echo_pending -= 1
+                self._oa_span_echo = True
+
+    def _oa_caller_busy(self, now):
+        """Someone is talking, or a question is being answered: anything Arturo volunteers waits."""
+        with self._lock:
+            user_talking = bool(self._oa_user.strip()) or (now - (self._last_user_ts or 0)) < OPENAI_SPEAK_GAP_S
+        return user_talking or self._oa_span_open or self._awaiting_reply
+
+    def oa_speak(self, say, note=None, echo=True, wait_s=None, clock=time.time, sleep=time.sleep):
+        """Say `say` on this call at the next pause, never over the caller. `note` goes in first as background
+        context GPT-Live keeps but does not read out (session.thinking.append), e.g. "The operator TYPED: ...",
+        so it answers as a follow-up to what landed, never as if the caller had said it. `echo`: the thread
+        already holds this reply as text, so its spoken span is tagged and not shown or archived twice.
+        Blocking (a worker thread's job). Returns True once sent."""
+        deadline = clock() + (OPENAI_SPEAK_WAIT_S if wait_s is None else wait_s)
+        while self._oa_caller_busy(clock()) and clock() < deadline:
+            sleep(0.2)
+        sock = self.sock
+        if sock is None or self._closed:
+            return False
+        frames = []
+        say, note = self.m.scrub(say), self.m.scrub(note) if note else note
+        if note:
+            frames.append(json.dumps({"type": "session.thinking.append", "delegation_id": None,
+                                      "content": note[:openai_live.COMMENTARY_MAX_CHARS]}))
+        frames += openai_live.commentary_frames(None, say)
+        if echo:
+            with self._lock:
+                self._oa_echo_pending += 1
+        try:
+            for f in frames:
+                sock.send(f)
+        except Exception as e:  # noqa: BLE001 — the socket died; its own recovery runs elsewhere
+            log.warning(f"relay {self.cid}: openai speak failed: {e!r}")
+            with self._lock:
+                self._oa_echo_pending = max(0, self._oa_echo_pending - (1 if echo else 0))
+            return False
+        with self._lock:
+            self._oa_hist.append({"role": "assistant", "content": say})
+        log.info(f"relay {self.cid}: OPENAI-SPEAK {len(say)} chars (note={bool(note)}, echo={echo})")
+        return True
+
+    def _oa_show_user_final(self, now):
+        """Arturo began replying and the caller had gone quiet: their turn is over, so their line is shown
+        final NOW, not when his reply ends (a user report: both lines went final together). The
+        journal and history wait for his reply (end span), or a delegation takes the line as its question."""
+        with self._lock:
+            pending, last = self._oa_user.strip(), getattr(self, "_oa_user_last", None)
+            if not pending or last is None or self._oa_early:
+                return
+            # GPT-Live replies only once it judges their turn over, and their last words arrive with his first:
+            # no quiet gap is asked of a reply. Two cases do ask it: the greeting (first span), which can start
+            # mid-sentence, and talk after a barge-in, where he may just keep going over them.
+            greeting = self._oa_spans == 0 or (self._oa_spans == 1 and self._oa_span_open)
+            if (greeting or self._oa_barged) and now - last < OPENAI_USER_TURN_GAP_S:
+                return
+            self._oa_user = ""
+            turn = self._turn_no
+            self._turn_no += 1
+            self._rev = 0
+            self._oa_early = (pending, turn)
+        self.m.replay_log(self.cid).add("user", pending)
+        self.m.buffer.put(self.cid, {"type": "user_transcript", "text": pending, "turn": turn})
+
+    def _oa_commit_user(self, user_pending, reply, shown=False):
+        """The caller's line, final, as its own turn: a turn GPT-Live answered itself (a greeting, small
+        talk). Without the client event, the live caption was cleared and never committed. `shown`: the
+        client already has it (_oa_show_user_final), so only the journal and history are written."""
+        self.oa_nondelegated += 1
+        log.info(f"relay {self.cid}: OPENAI-NONDELEGATED user={user_pending[:60]!r} reply={reply[:60]!r}")
+        with self._lock:
+            if not shown:
+                self._oa_user = ""
+            self._oa_hist.append({"role": "user", "content": user_pending})
+            if reply:
+                self._oa_hist.append({"role": "assistant", "content": reply})
+            turn = self._turn_no
+            if not shown:
+                self._turn_no += 1
+                self._rev = 0
+        if not shown:
+            self.m.replay_log(self.cid).add("user", user_pending)
+            self.m.buffer.put(self.cid, {"type": "user_transcript", "text": user_pending, "turn": turn})
+        self._oa_journal("user", user_pending, delegated=False)
+        if reply:
+            self._oa_journal("arturo", reply, delegated=False)
+
+    def _oa_floor(self, now):
+        """After a barge-in, GPT-Live can keep talking through the caller (it re-spoke a whole answer over the
+        operator, 2026-10-23; "why are you still talking?", 2026-10-24). Until the caller has been quiet
+        OPENAI_HOLD_QUIET_S: "talkover" while that run-on lasts (dropped), "paused" once it stopped (what he
+        says next may overlap them, briefly: the operator wants "mm-hmm", "okay", interjections). False after."""
+        hold = self._oa_hold
+        if hold and now - (getattr(self, "_oa_user_last", None) or 0.0) >= OPENAI_HOLD_QUIET_S:
+            self._oa_hold = hold = False
+        return hold
+
+    def _oa_restore_held(self, now):
+        """Held-back words whose audio is now playing go back in front of his line: those that arrived after the
+        last dropped speech (whose audio had not come yet), within OPENAI_TEXT_LEAD_S of this audio."""
+        held, self._oa_held = self._oa_held, []
+        lead = "".join(d for ts, d in held if now - ts <= OPENAI_TEXT_LEAD_S)
+        if not lead.strip():
+            return
+        with self._lock:
+            if not self._oa_out_started:
+                self._oa_out_started = True
+                self._agent_turn += 1
+            self._oa_out = lead + self._oa_out
+            text, turn = self._oa_out.strip(), self._agent_turn
+        if self.m.agent_text_enabled and text:
+            self.m.buffer.put(self.cid, {"type": "agent_response", "text": text, "agent_turn": turn, "partial": True})
+
+    def _oa_caller_talking(self, now):
+        """Mid-line: speech energy on the uplink just now AND their words still arriving (energy alone could be
+        the room, or his own voice from a speaker)."""
+        last_words = getattr(self, "_oa_user_last", None) or 0.0
+        return (now - self._uplink_speech_ts < OPENAI_CALLER_TALKING_S and now - last_words < OPENAI_CALLER_WORDS_S
+                and bool(self._oa_user.strip()))
+
+    def _oa_split_user_line(self):
+        """He cut in with a backchannel: what they said so far is a line of its own, and their next words a new one."""
+        with self._lock:
+            pending = self._oa_user.strip()
+        if pending and not self._oa_early:
+            self._oa_commit_user(pending, "")
+
+    def flush_at_end(self):
+        """The call is ending: words still on screen as live captions become lines, never lost (2026-10-24: the
+        operator's last sentence vanished when the call ended)."""
+        if self.vendor != "openai":
+            return
+        try:
+            if self._oa_span_open:
+                self._oa_end_span()
+            with self._lock:
+                pending, early = self._oa_user.strip(), self._oa_early
+            if early and not pending:
+                self._oa_commit_user(early[0], "", shown=True)
+                self._oa_early = None
+            elif pending:
+                if early:
+                    pending = f"{early[0]} {pending}"
+                    self._oa_early = None
+                self._oa_commit_user(pending, "")
+        except Exception as e:  # noqa: BLE001 — an end must never fail on this
+            log.warning(f"relay {self.cid}: flush at end failed: {e!r}")
+
+    def _oa_cut_overlap(self, now):
+        """What he began while the caller talks ran past a backchannel: he is talking over them. Cut it where
+        they stopped hearing it, flush what is queued on the page, and drop the rest of it."""
+        span_t0, span_pcm = self._span_t0, self._span_pcm
+        with self._lock:
+            text, self._oa_out, self._oa_out_started = self._oa_out.strip(), "", False
+        self._oa_over, self._oa_held = None, []
+        self._oa_hold, self._oa_hold_quiet = "talkover", 0.0
+        log.info(f"relay {self.cid}: OPENAI-OVERLAP cut (talking over the caller) {text[:60]!r}")
+        if text:
+            text = heard_part(text, span_t0, span_pcm, now)
+            if self.m.surface(self.cid) == "web":
+                text = text.rstrip(" ,.;:!?-\u2014") + "--"
+            with self._lock:
+                self._agent_buf = [text]
+            self._flush_agent_buf()
+        self.m.buffer.put(self.cid, {"type": "barge_in"})
 
     def _oa_barge_in(self):
         """User speech during Arturo's speech: synthesize barge_in (GPT-Live sends no interruption event).
         An answer cut off mid-speech is posted to the transcript, never silently lost (gm condition 3)."""
         self._oa_barged = True
+        self._oa_hold, self._oa_hold_quiet = "talkover", 0.0   # his run-on is dropped (_oa_floor)
+        self._oa_over, self._oa_held = None, []
+        span_t0, span_pcm, now = self._span_t0, self._span_pcm, time.time()
         self._log_audio_span("user_interruption", forwarded=True)
         if self.m.speaking_enabled:
             self._speak_off()
         with self._lock:
             text, self._oa_out, self._oa_out_started = self._oa_out.strip(), "", False
             ans = self._oa_answer
+            answered = self._oa_user.strip()
+            last_word = getattr(self, "_oa_user_last", None)
+            early, self._oa_early = self._oa_early, None
+        if early:
+            # already shown final when he began: journal it with what he got out; new words start fresh
+            self._oa_commit_user(early[0], text, shown=True)
+            answered = ""
+        # Their pending words were the line Arturo was ANSWERING only when they ended before he started and he
+        # had been talking a while; a greeting that starts mid-sentence and yields at once is not an answer, and
+        # their sentence goes on as one line (test_user_first_words_are_never_lost_and_a_greeting_yields_to_them).
+        replying = (span_t0 is not None and last_word is not None and last_word < span_t0
+                    and now - span_t0 >= OPENAI_REPLY_MIN_S)
+        if answered and replying:
+            # the line Arturo was answering when cut off: it ends HERE, or the interruption is appended to it
+            self._oa_commit_user(answered, text)
+        # The dashboard shows where Arturo was cut off ("--" at the last word) and nothing more;
+        # other surfaces keep the full-answer post. The call journal keeps the full answer either way.
+        web = self.m.surface(self.cid) == "web"
         if text:
+            # His words run ahead of what was HEARD (audio arrives faster than it plays): cut at the heard point.
+            text = heard_part(text, span_t0, span_pcm, now)
+            if web:
+                text = text.rstrip(" ,.;:!?-\u2014") + "--"
             with self._lock:
                 self._agent_buf = [text]
             self._flush_agent_buf()
         self.m.buffer.put(self.cid, {"type": "barge_in"})
         if ans and self._last_agent_audio_ts >= ans["sent_at"]:
             self._oa_answer = None
-            log.info(f"relay {self.cid}: OPENAI-INTERRUPTED answer for {ans['q'][:60]!r} posted to transcript")
-            self.m.buffer.put(self.cid, {"type": "agent_response", "interrupted": True, "partial": False,
-                                         "text": f"(You cut in before I finished) {ans['answer']}"})
+            log.info(f"relay {self.cid}: OPENAI-INTERRUPTED answer for {ans['q'][:60]!r}"
+                     + (" (cut-off marked, not posted: web)" if web else " posted to transcript"))
+            if not web:
+                self.m.buffer.put(self.cid, {"type": "agent_response", "interrupted": True, "partial": False,
+                                             "text": f"(You cut in before I finished) {ans['answer']}"})
             self._oa_journal("arturo", ans["answer"], delegated=True, interrupted=True)
 
     def _oa_delegate(self, sock, did, q, msgs):
@@ -1230,6 +1522,7 @@ class _Holder:
             ans = (fn(self.cid, msgs) if fn else "") or ""
         except Exception as e:  # noqa: BLE001 — a backend failure becomes an explicit spoken "nothing found"
             log.error(f"relay {self.cid}: openai delegation failed: {e!r}")
+        ans = self.m.scrub(ans)                    # a key is never spoken (the last line of defence)
         frames = openai_live.commentary_frames(did, ans)
         spoken = json.loads(frames[0])["content"] if len(frames) == 1 else ans.strip()
         try:
@@ -1320,7 +1613,7 @@ class _Holder:
 # the /ptt/stream/audio endpoint, which passes it to feed_audio(surface_device=). A MISSING header is the
 # watch (it sends none); known values are kept exactly; anything else is 'unknown', never silently 'watch'
 # (gm msg_c0e18d14: Quest calls were journaled as watch). Attribution is set ONCE at holder creation.
-_KNOWN_SURFACES = ("phone", "watch", "quest", "ipad", "mac")
+_KNOWN_SURFACES = ("phone", "watch", "quest", "ipad", "mac", "web")   # web = the dashboard call (relay_live_bridge)
 
 
 def normalize_surface(val):
@@ -1338,6 +1631,19 @@ def journal_surface(relay_surface, active_surface_fallback):
     if relay_surface in _KNOWN_SURFACES or relay_surface == "unknown":
         return {"device": relay_surface, "via": "relay"}
     return active_surface_fallback()
+
+
+def heard_part(text, span_t0, span_pcm, now):
+    """The part of a reply's text the caller had HEARD when they cut in: playback started at span_t0 and runs
+    in real time, while span_pcm bytes of audio had been sent for these words. Whole words, never empty."""
+    words = (text or "").split()
+    if not words or span_t0 is None or span_pcm <= 0:
+        return text
+    sent_s, heard_s = span_pcm / BYTES_PER_S, max(0.0, now - span_t0)
+    if heard_s >= sent_s:
+        return text
+    keep = max(1, math.ceil(len(words) * heard_s / sent_s))     # a word begun counts as heard
+    return " ".join(words[:keep])
 
 
 class RelayManager:
@@ -1377,6 +1683,7 @@ class RelayManager:
         self.idle_close = idle_close_enabled() if idle_close is None else idle_close
         self.idle_close_s = (float(os.environ.get("ARTURO_IDLE_CLOSE_S", IDLE_CLOSE_S_DEFAULT))
                              if idle_close_s is None else idle_close_s)
+        self.scrub = lambda text: text      # the proxy sets its key vault here: nothing spoken carries a key
         self.vad_rms_floor = (float(os.environ.get("ARTURO_VAD_RMS_FLOOR", VAD_RMS_FLOOR_DEFAULT))
                               if vad_rms_floor is None else vad_rms_floor)
         self.soft_reopen_s = soft_reopen_s
@@ -1621,6 +1928,10 @@ class RelayManager:
 
     def end(self, conversation_id):
         with self._lock:
+            live = self._holders.get(conversation_id)
+        if live is not None:
+            live.flush_at_end()               # its last words reach the transcript before the buffer drops
+        with self._lock:
             h = self._holders.pop(conversation_id, None)
             started = self._conv_started.pop(conversation_id, None)
             self._last_contact.pop(conversation_id, None)
@@ -1672,6 +1983,17 @@ class RelayManager:
     def surface(self, conversation_id):
         with self._lock:
             return self._surface.get(conversation_id)
+
+    def speak(self, conversation_id, say, note=None, echo=True):
+        """Have Arturo say `say` on this live call at the next pause (GPT-Live only: the other vendors have no
+        way in). Runs on a worker thread; returns whether it was queued."""
+        with self._lock:
+            h = self._holders.get(conversation_id)
+        if h is None or h.vendor != "openai" or not (say or "").strip():
+            return False
+        threading.Thread(target=h.oa_speak, args=(say.strip(),), kwargs={"note": note, "echo": echo},
+                         daemon=True, name=f"openai-speak-{conversation_id[:8]}").start()
+        return True
 
     def replay_log(self, conversation_id):
         with self._lock:

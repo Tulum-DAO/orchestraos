@@ -227,6 +227,7 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("POST", "/arturo/text"): "message",
     ("POST", "/arturo/text/stream"): "message",
     ("POST", "/arturo/text/prewarm"): "message",
+    ("POST", "/arturo/threads/{conversation_id}/jobs/{job_id}/cancel"): "message",
     ("POST", "/arturo/transcribe"): "voice",
     ("POST", "/arturo/ptt/stream/audio"): "ptt",
     ("GET", "/arturo/ptt/stream/events"): "ptt",
@@ -6405,7 +6406,7 @@ async def handle_arturo_threads(request):
         return _json({"ok": False, "error": "unauthorized"}, status=401)
     cid = request.match_info.get("conversation_id") or ""
     path = f"/threads/{quote(cid, safe='')}" if cid else "/threads"
-    params = {k: v for k, v in request.query.items() if k in ("limit", "offset", "turn")}
+    params = {k: v for k, v in request.query.items() if k in ("limit", "offset", "turn", "jobs")}
     try:
         async with aiohttp.ClientSession() as s:
             # Who is reading: a turn's result goes only to the principal that sent it (DEC-1791518421640932).
@@ -6416,6 +6417,26 @@ async def handle_arturo_threads(request):
                 return _json(out, status=r.status)
     except Exception as e:  # noqa: BLE001
         log.error(f"arturo/threads forward: upstream unreachable: {e}")
+        return _json({"ok": False, "error": "arturo unreachable"}, status=502)
+
+
+async def handle_arturo_job_cancel(request):
+    """POST /arturo/threads/{id}/jobs/{job_id}/cancel — stop a background job from the job tray (:5071)."""
+    import aiohttp
+    from urllib.parse import quote
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    cid, jid = request.match_info.get("conversation_id") or "", request.match_info.get("job_id") or ""
+    if not re.match(r"^job_[0-9a-f]{6,32}$", jid):
+        return _json({"ok": False, "error": "bad job id"}, status=400)
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(f"{ARTURO_TEXT_BASE}/threads/{quote(cid, safe='')}/jobs/{jid}/cancel",
+                              headers=_arturo_principal_headers(request, voice=False),
+                              timeout=aiohttp.ClientTimeout(total=10)) as r:
+                return _json(await r.json(content_type=None), status=r.status)
+    except Exception as e:  # noqa: BLE001
+        log.error(f"arturo job cancel forward: upstream unreachable: {e}")
         return _json({"ok": False, "error": "arturo unreachable"}, status=502)
 
 
@@ -6514,6 +6535,29 @@ def _voice_rate_ok() -> bool:
     return True
 
 
+_RELAY_ALIAS_RE = re.compile(r"^vc_client_([0-9a-f]{12})\Z")
+
+
+def _relay_call_path(call_id, scan=200):
+    """A dashboard call's card names it vc_client_<sha1(conversation id)[:12]> (relay_live_bridge), but the relay
+    journals it as vc_<random> with that conversation id inside: find that file. The newest `scan` only."""
+    m = _RELAY_ALIAS_RE.match(call_id)
+    if not m:
+        return None
+    try:
+        files = sorted(VOICE_CALLS_DIR.glob("vc_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[:scan]
+    except OSError:
+        return None
+    for p in files:
+        try:
+            conv = json.loads(p.read_text()).get("conv_id") or ""
+        except (OSError, ValueError, AttributeError):
+            continue
+        if conv and hashlib.sha1(conv.encode()).hexdigest()[:12] == m.group(1):
+            return p
+    return None
+
+
 async def handle_voice_call(request):
     """GET /voice-call?call_id= -> one per-call transcript JSON (pill caption,
     live-turns zone, work-view). Read-only; the proxy owns all writes."""
@@ -6525,6 +6569,8 @@ async def handle_voice_call(request):
     if not _CALL_ID_RE.match(call_id):
         return _json({"ok": False, "error": "invalid call_id"}, status=400)
     path = VOICE_CALLS_DIR / f"{call_id}.json"
+    if not path.exists():
+        path = _relay_call_path(call_id) or path
     try:
         call = json.loads(path.read_text())
     except FileNotFoundError:
@@ -7918,8 +7964,6 @@ def _surface_current(devices, now):
 
 
 async def handle_surface_post(request):
-    import hashlib
-    import time
     if not _authorized(request):
         return _json({"ok": False, "error": "unauthorized"}, status=401)
     try:
@@ -7957,6 +8001,15 @@ async def handle_surface_post(request):
                  if route else [])
         focused = None
 
+    _record_surface(device, route, hint, stack, focused, data.get("conv_id"))
+    return _json({"ok": True})
+
+
+def _record_surface(device, route, hint, stack, focused, conv_id=None):
+    """Write one device's slot of active-surface.json (+ the call's sidecar). Shared by POST /surface
+    and the browser's live call, which reports its page over the call socket."""
+    import hashlib
+    import time
     now = time.time()
     try:
         doc = json.loads(SURFACE_PATH.read_text())
@@ -7976,7 +8029,6 @@ async def handle_surface_post(request):
     # the ElevenLabs conv_id; events append to the sidecar keyed like the
     # client journal (vc_client_<sha1[:12]>) — the mid-call buffer, folded into
     # the record at finalize. Bad conv_id -> surface still recorded, no sidecar.
-    conv_id = data.get("conv_id")
     if conv_id and stack and _CONV_ID_RE.match(str(conv_id)):
         key = hashlib.sha1(str(conv_id).encode()).hexdigest()[:12]
         side = VOICE_CALLS_DIR / f"vc_client_{key}.surface.jsonl"
@@ -7987,7 +8039,28 @@ async def handle_surface_post(request):
                                      "focused": focused, "stack": stack}) + "\n")
         except OSError:
             pass  # sidecar is best-effort; SEE state already persisted
-    return _json({"ok": True})
+
+
+_WEB_ENTITY_KINDS = {"agents": "agent", "approvals": "approval", "projects": "project", "history": "approval"}
+
+
+def _record_web_call_surface(route, focused_entity, conv_id=None):
+    """The dashboard's page during a live call ({route, focusedEntity:"kind:id"} from the call socket)
+    as the `web` device's surface, so the voice brain's screen readout and read_screen_context see it
+    like the phone's. Bounded and validated like POST /surface; a bad route is ignored."""
+    if not isinstance(route, str) or not route.startswith("/"):
+        return False
+    route = route[:200]
+    entity = None
+    if isinstance(focused_entity, str) and ":" in focused_entity:
+        kind, _, eid = focused_entity.partition(":")
+        kind = _WEB_ENTITY_KINDS.get(kind, kind)
+        if kind and eid:
+            entity = {"kind": kind[:40], "id": eid[:120]}
+    hint = f"viewing {entity['kind']} {entity['id']}" if entity else None
+    stack = [{"z": 0, "role": "base", "route": route, "entity": entity, "hint": hint}]
+    _record_surface("web", route, hint, stack, _surface_focused(stack), conv_id)
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -8393,6 +8466,19 @@ def _live_token_from_request(request) -> str:
     return token
 
 
+async def _live_engine():
+    """Arturo's /health live_engine ("gemini" | "relay" | None). Unreachable or older Arturo -> "gemini",
+    which is what /live always ran before."""
+    import aiohttp
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3)) as s:
+            async with s.get(_loopback("ORCHESTRA_ARTURO_PORT", 5071) + "/health") as r:
+                return (await r.json(content_type=None)).get("live_engine", "gemini")
+    except Exception as e:  # noqa: BLE001
+        log.warning(f"/live: arturo health unreachable, using gemini: {e!r}")
+        return "gemini"
+
+
 async def handle_gemini_live(request):
     """Gemini 2.5 Flash Native Audio Multimodal Live WebSocket gateway.
     Streams 16kHz PCM audio up from iOS mic, 24kHz PCM down to speaker.
@@ -8408,6 +8494,15 @@ async def handle_gemini_live(request):
     await ws.prepare(request)
 
     try:
+        if await _live_engine() == "relay":
+            # No Gemini key, GPT-Live chosen: the same browser contract over the watch's stream relay.
+            from services.arturo.relay_live_bridge import RelayLiveSession
+            from scripts import arturo_stamp
+            secret = arturo_stamp.ensure(_data_dir())
+            headers = {"X-Arturo-Principal": "fleet", arturo_stamp.HEADER: secret} if secret else {}
+            await RelayLiveSession(ws, ARTURO_PTT_STREAM_BASE, headers, voice=voice,
+                                   on_surface=_record_web_call_surface).run()
+            return ws
         live_session_cls = GeminiLiveSession
         if live_session_cls is None:
             from services.arturo.gemini_live_bridge import GeminiLiveSession as live_session_cls
@@ -8697,6 +8792,7 @@ def build_app():
     app.router.add_get("/arturo/health", handle_arturo_health)
     app.router.add_get("/arturo/threads", handle_arturo_threads)
     app.router.add_get("/arturo/threads/{conversation_id}", handle_arturo_threads)
+    app.router.add_post("/arturo/threads/{conversation_id}/jobs/{job_id}/cancel", handle_arturo_job_cancel)
     app.router.add_post("/arturo/ptt/stream/audio", handle_arturo_ptt_stream_audio)
     app.router.add_get("/arturo/ptt/stream/events", handle_arturo_ptt_stream_events)
     app.router.add_post("/arturo/ptt/stream/end", handle_arturo_ptt_stream_end)

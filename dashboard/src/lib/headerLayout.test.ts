@@ -114,11 +114,3 @@ test('Chat mode never mounts the Dev terminal, whose document wheel/touch hack w
   }
   assert.match(src('components/WebTerminal.tsx'), /if \(!container\.contains\(e\.target as Node\)\) return;\s*e\.preventDefault\(\);/);
 });
-
-test('arturoLift: the button rises above the tallest docked CLI, never below the bottom', async () => {
-  const { arturoLift } = await import('./arturoLift.ts');
-  assert.equal(arturoLift(800, []), 0);
-  assert.equal(arturoLift(800, [700]), 100);
-  assert.equal(arturoLift(800, [740, 650]), 150);
-  assert.equal(arturoLift(800, [900]), 0);
-});

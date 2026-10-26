@@ -30,6 +30,11 @@ const ICONS: Record<string, ReactNode> = {
   get_agent_output: <FileText size={13} />,
   run_command: <Terminal size={13} />,
   research: <Globe size={13} />,
+  WebSearch: <Search size={13} />,
+  WebFetch: <Globe size={13} />,
+  look_at_image: <FileText size={13} />,
+  gm_command: <MessageSquare size={13} />,
+  ask_gm: <MessageSquare size={13} />,
   knowledge: <Search size={13} />,
   remember_note: <Bookmark size={13} />,
 };
@@ -45,7 +50,7 @@ function StatusMark({ status }: { status: ToolPart['status'] }) {
 }
 
 export default function ToolRun({ tools, className }: { tools: ToolPart[]; className?: string }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);   // collapsed by default, like the agent chat's tool groups
   const [openRows, setOpenRows] = useState<Set<string>>(new Set());
   const toggleRow = (id: string) => setOpenRows((cur) => {
     const next = new Set(cur);

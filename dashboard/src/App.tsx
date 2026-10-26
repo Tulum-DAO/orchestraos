@@ -12,6 +12,7 @@ import Workflows from './pages/Workflows';
 import Analytics from './pages/Analytics';
 import Skills from './pages/Skills';
 import Projects from './pages/Projects';
+import ProjectFiles from './pages/ProjectFiles';
 import Insights from './pages/Insights';
 import Questionnaires from './pages/Questionnaires';
 import CommandCenter from './pages/CommandCenter';
@@ -54,6 +55,7 @@ export default function App() {
             <Route path="analytics" element={<Analytics />} />
             <Route path="skills" element={<Skills />} />
             <Route path="projects" element={<Projects />} />
+            <Route path="projects/:slug/files" element={<ProjectFiles />} />
             <Route path="inbox" element={<Inbox />} />
             <Route path="insights" element={<Insights />} />
             <Route path="questionnaires" element={<Questionnaires />} />

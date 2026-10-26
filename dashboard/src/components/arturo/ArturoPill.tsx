@@ -19,10 +19,16 @@
 import { stripContextLine, isBusy } from '../../lib/arturoResume';
 import { arturoTurn } from '../../lib/arturoStream';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import JobTray from './JobTray';
+import { useStickToBottom } from '../../lib/useStickToBottom';
+import { currentThread, setCurrentThread, subscribeCurrentThread } from '../../lib/arturoCurrent';
+import ToolRun from './ToolRun';
+import { jobResultParts } from '../../lib/arturoJobs';
+import type { ToolPart } from '../../lib/turnParts';
 import { Link, useLocation, useParams } from 'react-router-dom';
-import { Mic, ArrowUp, X, History, Focus, PhoneOff, AudioLines, Plus, Paperclip, Cpu } from 'lucide-react';
+import { Mic, MicOff, ArrowUp, X, History, Focus, PhoneOff, AudioLines, Plus, Paperclip, Cpu } from 'lucide-react';
 import { useDictation } from './useDictation.ts';
-import { uploadAttachment, attachmentPreamble, describeAttachment, type Attachment } from '../../lib/arturoUpload';
+import { uploadAttachment, attachmentPreamble, describeAttachment, attachmentImages, splitAttachmentPreamble, type Attachment } from '../../lib/arturoUpload';
 import './arturo.css';
 import { newConversationId, sendOutcomeText, contextFromLocation, getArturoFocus, subscribeArturoFocus, sendStateLabel, isStarting, waitForArturo, STARTING_TEXT, HANDS_FREE, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, arturoHealth, type ArturoHealth, type SendState } from '../../lib/arturo';
 import {
@@ -31,31 +37,33 @@ import {
 } from '../../lib/arturoThreads';
 import { useHandsFreeCall } from '../../hooks/useHandsFreeCall';
 import SpawnedAgentCard from './SpawnedAgentCard';
+import VoiceCallCard from '../chat/VoiceCallCard';
+import { hasVoiceCallMarker, parseVoiceSegments } from '../../lib/voiceCall';
 import { ModelSelectorSheet } from '../agent/ModelSelectorSheet';
 import { useArturoBrain } from '../../stores/arturoBrain';
 import { useArturoUi } from '../../stores/arturoUi';
 import { brainFromThread, describeTurnError, toWireBrain } from '../../lib/arturoBrain';
 import { brainProviderId, type HealthBrain } from '../../lib/brainLogo';
-import { arturoComposerText } from '../../lib/arturoComposer';
+import { arturoComposerText, arturoShownText } from '../../lib/arturoComposer';
 
-interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[]; spawned?: string[]; at: number; live?: boolean; state?: SendState;
+interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[];
+  /** Images the operator attached to this message (upload URLs). */
+  images?: string[];
+  /** A finished background job's steps: the tray's card, now part of the conversation. */
+  steps?: ToolPart[]; spawned?: string[]; at: number; live?: boolean; state?: SendState;
   /** A first-person status note (voice not configured, mic denied…) — rendered as a small interleaved
    *  row at the moment it happened, like a tool call, never as a message and never pinned to the bottom. */
   note?: boolean }
-const LS_CONV = 'orchestra.arturo.pill.conversation';
-
-/** Which thread was I in — the ONLY thing still kept in the browser. */
+/** Which thread was I in: the browser's ONE current thread, shared with the home (lib/arturoCurrent). */
 function loadConv(): string {
-  try {
-    const existing = localStorage.getItem(LS_CONV);
-    if (existing) return existing;
-    const fresh = newConversationId('pill');
-    localStorage.setItem(LS_CONV, fresh);
-    return fresh;
-  } catch { return newConversationId('pill'); }
+  const existing = currentThread();
+  if (existing) return existing;
+  const fresh = newConversationId('pill');
+  setCurrentThread(fresh);
+  return fresh;
 }
 function rememberConv(id: string) {
-  try { localStorage.setItem(LS_CONV, id); } catch { /* private mode */ }
+  setCurrentThread(id);
 }
 
 export function ArturoPill() {
@@ -71,6 +79,10 @@ export function ArturoPill() {
   const [showThreads, setShowThreads] = useState(false);
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [convId, setConvId] = useState<string>(loadConv);
+  const [jobKick, setJobKick] = useState(0);
+  // The home (or another tab) switched threads: this pane follows, and reloads it when open (the effect on
+  // [open, convId] does that).
+  useEffect(() => subscribeCurrentThread((id) => setConvId((cur) => (cur === id ? cur : id))), []);
   // Re-render when the card is deleted or restored; the value itself lives in storage.
   const [ctxOn, setCtxOn] = useState(true);
   // Which brain answers the next turn: the same Arturo-scoped choice the home uses.
@@ -133,15 +145,21 @@ export function ArturoPill() {
     onUnavailable: (reason) => noteRef.current(reason),
     onEnded: (text) => appendRef.current({ role: 'arturo', text, at: Date.now(), live: true }),
   });
-  const { callState, liveUser, liveArturo, inCall } = call;
+  const { callState, liveUser, liveArturo, inCall, muted, toggleMute } = call;
   async function toggleCall() {
     const focused = ctx.entityKind && ctx.entityId ? `${ctx.entityKind}:${ctx.entityId}` : null;
-    await call.toggle({ route: ctx.route, focusedEntity: focused });
+    await call.toggle({ route: ctx.route, focusedEntity: focused, threadId: convId });
   }
   const routeCtx = contextFromLocation(location.pathname, params as Record<string, string | undefined>, location.search);
   const ctx = focus
     ? { ...routeCtx, entityKind: focus.kind, entityId: focus.id }
     : routeCtx;
+  // Mid-call navigation: the call's screen context follows the page (the hello only carried the start page).
+  const callFocused = ctx.entityKind && ctx.entityId ? `${ctx.entityKind}:${ctx.entityId}` : null;
+  const { setContext: setCallContext } = call;
+  useEffect(() => {
+    if (inCall) setCallContext({ route: ctx.route, focusedEntity: callFocused });
+  }, [inCall, ctx.route, callFocused]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Pull this thread's turns from the server, so reopening the pill resumes it exactly. */
   // A reload that resolves AFTER the user has already sent something must not overwrite the local
@@ -154,12 +172,21 @@ export function ArturoPill() {
     // A thread the server knows answers on the brain it last used. A fresh thread (null) leaves
     // the current choice alone: resume runs on every open, and must not undo a pick just made.
     if (t) chooseBrain(brainFromThread(t, {}));
-    setTurns((t?.turns || []).map((x) => ({ role: x.role === 'user' ? 'user' : 'arturo', text: x.role === 'user' ? stripContextLine(x.content) : x.content, at: (x.ts || 0) * 1000 })));
+    setTurns((t?.turns || []).map((x) => {
+      const job = x.role !== 'user' ? jobResultParts(x.meta, x.content) : undefined;
+      const sent = x.role === 'user' ? splitAttachmentPreamble(stripContextLine(x.content)) : null;
+      return { role: x.role === 'user' ? 'user' : 'arturo', text: sent ? sent.text : x.content,
+               at: (x.ts || 0) * 1000, ...(sent?.images.length ? { images: sent.images } : {}),
+               ...(job ? { steps: job.filter((p): p is ToolPart => p.kind === 'tool') } : {}) };
+    }));
   }, [chooseBrain]);
 
   useEffect(() => { setCtxOn(!isContextDismissed(convId)); }, [convId]);
   useEffect(() => { if (open) { void resume(convId); void listThreads().then(setThreads); setTimeout(() => ta.current?.focus(), 30); } }, [open, convId, resume]);
-  useEffect(() => { scroller.current?.scrollTo({ top: 1e9, behavior: 'smooth' }); }, [turns, open, busy]);
+  // New turns and live captions push the feed up only while you're at the bottom; scrolled up, it stays put.
+  const stick = useStickToBottom(scroller);
+  useEffect(() => { stick.follow(); }, [turns, busy, liveUser, liveArturo]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (open) stick.toBottom(); }, [open, convId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const append = (t: PillTurn) => setTurns((prev) => [...prev, t]);
   // The box grows with its content up to ~6 lines, then scrolls (Shaw: you could not see two typed
@@ -183,7 +210,8 @@ export function ArturoPill() {
     setDraft(''); setBusy(true);
     resumeGen.current++;                 // any in-flight thread reload is now stale
     const at = Date.now();
-    append({ role: 'user', text, at, state: 'sending' });
+    append({ role: 'user', text: arturoShownText(draft), at, state: 'sending', images: attachmentImages(attachments) });
+    requestAnimationFrame(() => stick.toBottom());      // you sent it: back to the bottom
     const setState = (state: SendState) => setTurns((prev) => prev.map((t) => t.at === at && t.role === 'user' ? { ...t, state } : t));
     // The path rides in front of the message (same grammar as the home composer).
     const pre = attachmentPreamble(attachments);
@@ -206,6 +234,7 @@ export function ArturoPill() {
         return ready.ok;
       },
     });
+    setJobKick((k) => k + 1);        // a job this turn started shows in the tray at once
     setBusy(false);
     setState(r.ok ? 'acked' : 'failed');
     append(r.ok
@@ -234,14 +263,6 @@ export function ArturoPill() {
     await resume(id);
   }
 
-  // Escape closes: the backdrop used to be the click-anywhere-to-close, and it is gone.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, setOpen]);
-
   // The model picker belongs to this open pane: closing the pane closes it, so it never comes
   // back on its own the next time Arturo opens. (A tap outside the picker closes it too.)
   useEffect(() => {
@@ -249,14 +270,15 @@ export function ArturoPill() {
     return () => setModelOpen(false);
   }, [open]);
 
-  // A tap anywhere outside the pane closes it. The draft and attachments are this component's
-  // state, which outlives the close (only the markup goes), so they are still there on reopen.
-  // Not while the model picker is up (it sits above the pane and closes itself), and not on
-  // the Arturo button, whose own click toggles the pane.
+  // On a desktop the pane closes ONLY on its × (or the Arturo button that opened it), so it stays open while
+  // you work on the page beside it. On a phone, where it covers the page, a tap outside it closes it too.
+  // Not while the model picker is up (it sits above the pane and closes itself),
+  // and not on the Arturo button, whose own click toggles the pane. The draft and attachments survive a close.
   const panelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
     const onDown = (e: PointerEvent) => {
+      if (!window.matchMedia('(max-width: 768px)').matches) return;
       const t = e.target as Element | null;
       if (!t || modelOpen) return;
       if (panelRef.current?.contains(t) || t.closest('[data-arturo-toggle]')) return;
@@ -280,7 +302,7 @@ export function ArturoPill() {
     <>
       {/* No backdrop, deliberately (operator, 2026-09-19): the pane must not dim the page and
           must not swallow clicks on it — you keep working while Arturo is open, the way the
-          assistant panel in the previous build did. Close with the × or Escape. */}
+          assistant panel in the previous build did. Close with the ×. */}
       <div ref={panelRef} className="arturo-pill-panel" role="dialog" aria-label="Ask Arturo">
         <div className="arturo-pill-head">
           <span className="who">Arturo</span>
@@ -301,12 +323,13 @@ export function ArturoPill() {
                       onClick={() => void switchTo(t.id)}>
                 <span className="t-title">{t.title || 'Untitled'}</span>
                 <span className="t-meta">{Math.ceil((t.turns || 0) / 2)} · {new Date((t.updated || 0) * 1000).toLocaleDateString()}</span>
+                {t.gist && <span className="t-gist">{t.gist}</span>}
               </button>
             ))}
           </div>
         )}
 
-        <div className="arturo-pill-thread" ref={scroller}>
+        <div className="arturo-pill-thread" ref={scroller} onScroll={stick.onScroll}>
           {/* One unwrapped hint, tucked under the head divider; gone the moment the first message is sent
               (Shaw 2026-09-22). No Threads sentence — the Threads button says it. */}
           {/* Hidden (not removed) once typing starts, so the pane keeps its size. */}
@@ -315,7 +338,12 @@ export function ArturoPill() {
             <div key={i} className="row note"><div className="meta">{t.text === STARTING_TEXT ? t.text : `I can't do that yet — ${t.text}.`}</div></div>
           ) : (
             <div key={i} className={t.role === 'user' ? 'row user' : 'row arturo'}>
-              <div className="bubble">{t.text}</div>
+              {t.images && t.images.length > 0 && <div className="msg-images">{t.images.map((u) => <a key={u} href={u} target="_blank" rel="noreferrer"><img src={u} alt="attached image" loading="lazy" /></a>)}</div>}
+              {t.role !== 'user' && hasVoiceCallMarker(t.text)
+                ? parseVoiceSegments(t.text).map((seg, j) => seg.kind === 'voicecall'
+                  ? <VoiceCallCard key={j} callId={seg.callId} />
+                  : /^\s*Call ended \(vc_[A-Za-z0-9_-]+\)\.?\s*$/.test(seg.text) ? null : <div key={j} className="bubble">{seg.text}</div>)
+                : <>{t.steps && t.steps.length > 0 && <ToolRun tools={t.steps} />}<div className="bubble">{t.text}</div></>}
               {t.tools && t.tools.length > 0 && <div className="meta">ran {t.tools.join(', ')}</div>}
               <SpawnedAgentCard ids={t.spawned} />
               {t.role === 'user' && (t.state === 'failed' || (t.state && i === lastUserIdx)) && <div className={`turn-state ${t.state}`}>{sendStateLabel(t.state)}</div>}
@@ -327,6 +355,7 @@ export function ArturoPill() {
           {callState === 'connecting' && <div className="row arturo"><div className="bubble thinking">Connecting the call…</div></div>}
         </div>
 
+        <JobTray threadId={convId} kick={jobKick} onEnded={() => { void resume(convId); }} />
         <input ref={fileInput} type="file" multiple hidden aria-hidden="true"
                onChange={async (e) => {
                  const picked = Array.from(e.target.files || []);
@@ -335,7 +364,7 @@ export function ArturoPill() {
                  setUploading(true); setUploadError(null);
                  for (const f of picked) {
                    const r = await uploadAttachment(f);
-                   if (r.ok) setAttachments((prev) => [...prev, { name: r.name, path: r.path, size: r.size }]);
+                   if (r.ok) setAttachments((prev) => [...prev, { name: r.name, path: r.path, size: r.size, preview: f.type.startsWith('image/') ? URL.createObjectURL(f) : undefined }]);
                    else setUploadError(r.error);     // refusals are shown, never swallowed
                  }
                  setUploading(false);
@@ -344,7 +373,7 @@ export function ArturoPill() {
           <div className="arturo-attachments">
             {attachments.map((a, i) => (
               <span key={i} className="attach-chip">
-                <Paperclip size={12} /> {describeAttachment(a)}
+                {a.preview ? <img src={a.preview} alt="" className="attach-thumb" /> : <Paperclip size={12} />} {describeAttachment(a)}
                 <button aria-label={`Remove ${a.name}`}
                         onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}>×</button>
               </span>
@@ -387,10 +416,19 @@ export function ArturoPill() {
                 // Still loading (or no mark for this provider): just the chip glyph, no text.
                 : <Cpu size={18} aria-hidden="true" />}
             </button>
-            <button className={dictMode === 'idle' ? 'circle-btn' : `circle-btn ${dictMode}`}
-                    aria-label={dictMode === 'listening' ? 'Stop dictation' : dictMode === 'recording' ? 'Stop recording' : dictMode === 'transcribing' ? 'Transcribing' : 'Dictate'}
-                    aria-pressed={dictating} title={dictateTitle(inCall, dictMode)}
-                    onClick={toggleDictation} disabled={dictateLocked(inCall, dictMode)}><Mic size={16} /></button>
+            {inCall ? (
+              // On a call this is the mute: it stops only the microphone's audio going up; Arturo's voice,
+              // the captions and the job drawer keep coming down.
+              <button className={muted ? 'circle-btn muted' : 'circle-btn'} aria-pressed={muted}
+                      aria-label={muted ? 'Unmute microphone' : 'Mute microphone'}
+                      title={muted ? 'Unmute: Arturo can hear you again' : 'Mute: Arturo keeps talking, but can\'t hear you'}
+                      onClick={toggleMute}>{muted ? <MicOff size={16} /> : <Mic size={16} />}</button>
+            ) : (
+              <button className={dictMode === 'idle' ? 'circle-btn' : `circle-btn ${dictMode}`}
+                      aria-label={dictMode === 'listening' ? 'Stop dictation' : dictMode === 'recording' ? 'Stop recording' : dictMode === 'transcribing' ? 'Transcribing' : 'Dictate'}
+                      aria-pressed={dictating} title={dictateTitle(inCall, dictMode)}
+                      onClick={toggleDictation} disabled={dictateLocked(inCall, dictMode)}><Mic size={16} /></button>
+            )}
             {inCall ? (
               <button className="circle-btn white" aria-label="End call" aria-pressed title="End call"
                       onClick={() => void toggleCall()}><PhoneOff size={18} /></button>

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { HandsFreeCall, isInCall } from './handsFree.ts';
 import type { VoiceSessionCallbacks, VoiceSessionStartOptions } from './voiceSession.ts';
+import { muteTail, MUTE_TAIL_SECONDS } from './voiceSession.ts';
 
 // pm-tulumdao (2026-10-08): the home composer's live-call button ("Live voice mode") had no call behind it.
 // A label that does nothing is the same dishonesty the relabel removes. Both surfaces now drive this.
@@ -73,4 +74,35 @@ test('in a call means connecting or live', () => {
   assert.equal(isInCall('live'), true);
   assert.equal(isInCall('idle'), false);
   assert.equal(isInCall('error'), false);
+});
+
+// ── mute: only the caller's microphone stops; nothing else does ──────────────
+
+test('mute reaches the session only during a call, and a call ends unmuted', async () => {
+  const calls: boolean[] = [];
+  const seen: boolean[] = [];
+  let cb: any = null;
+  const make = (c: any) => {
+    cb = c;
+    return {
+      start: async () => { c.onStateChange?.('live'); }, stop: () => { c.onStateChange?.('idle'); },
+      startDictation: () => {}, stopDictation: () => {}, setMuted: (m: boolean) => { calls.push(m); },
+    };
+  };
+  const call = new HandsFreeCall(make, { onMuted: (m) => seen.push(m) });
+  call.setMuted(true);                                  // no call: nothing to mute
+  assert.deepEqual(calls, []);
+  await call.toggle({ route: '/' });
+  call.toggleMute();
+  assert.deepEqual(calls, [true]);
+  assert.equal(call.muted, true);
+  cb.onStateChange('idle');                             // the call ends while muted
+  assert.equal(call.muted, false);
+  assert.deepEqual(seen, [true, false]);
+});
+
+test('the one frame sent on mute is generated silence, never microphone audio', () => {
+  const tail = muteTail();
+  assert.equal(tail.length, Math.round(16000 * MUTE_TAIL_SECONDS));
+  assert.equal(tail.every((x) => x === 0), true);
 });

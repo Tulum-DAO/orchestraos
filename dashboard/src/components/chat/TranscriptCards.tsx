@@ -394,8 +394,9 @@ export function ToolCard({ block, density = 'normal' }: { block: ToolBlock; dens
  * expands again to its input and output: three levels instead of one card per call.
  */
 export function ToolGroupCard({ group, interrupted = false, density = 'normal' }: { group: ToolGroupNode; interrupted?: boolean; density?: ToolDensity }) {
-  const [open, setOpen] = useState(density !== 'summary');
-  useEffect(() => setOpen(density !== 'summary'), [density]);
+  // Collapsed by default: the one-line summary is the turn's tool story; 'verbose' opens it.
+  const [open, setOpen] = useState(density === 'verbose');
+  useEffect(() => setOpen(density === 'verbose'), [density]);
   const tools = group.children.filter((c): c is ToolBlock => c.kind === 'tool');
   const s = summarizeTurn(tools.map(fromToolBlock), { interrupted });
   const dur = s.durationMs !== undefined ? formatDuration(s.durationMs) : '';

@@ -17,8 +17,12 @@
  */
 import type { ArturoContext } from './arturo';
 
-export interface ThreadSummary { id: string; title: string; created?: number; updated: number; turns: number; snippet?: string }
-export interface ThreadTurn { role: 'user' | 'assistant'; content: string; ts?: number }
+/** `gist`: the conversation's own summary (services/arturo: kept current as it grows and when a call ends). */
+export interface ThreadSummary { id: string; title: string; created?: number; updated: number; turns: number; snippet?: string; gist?: string }
+/** `meta.kind === 'job_result'`: posted by a background job (jobs.py), with the steps it ran. */
+export interface ThreadTurnMeta { kind?: string; job_id?: string; job_kind?: string; title?: string; status?: string;
+  steps?: import('./arturoJobs').JobStep[]; call_id?: string }
+export interface ThreadTurn { role: 'user' | 'assistant'; content: string; ts?: number; mode?: string; meta?: ThreadTurnMeta }
 export interface ThreadDetail extends ThreadSummary { turns: number; }
 export interface LoadedThread { id: string; title: string; turns: ThreadTurn[]; last_brain?: { provider: string; model: string } | null }
 export interface ContextCard { kind: 'page-context'; label: string; context: ArturoContext }

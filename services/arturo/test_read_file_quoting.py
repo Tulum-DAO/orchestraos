@@ -83,7 +83,7 @@ def test_a_seat_name_with_shell_syntax_never_reaches_a_command(P, tool, tmp_path
     """session_name is pasted into tmux command strings (capture, kill, has-session, inject),
     run through a shell locally and over ssh. Refused at the tool entry, before any of them."""
     ran = []
-    monkeypatch.setattr(P, "run_local", lambda cmd, timeout=15: ran.append(cmd) or (True, ""))
+    monkeypatch.setattr(P, "run_local", lambda cmd, timeout=15, **_k: ran.append(cmd) or (True, ""))
     monkeypatch.setattr(P, "ssh_mac", lambda cmd, timeout=10, **k: ran.append(cmd) or (True, ""))
     marker = tmp_path / "PWNED"
     out = P.execute_tool(tool, {"session_name": f"x; touch {marker}", "message": "hi", "machine": "vps"})

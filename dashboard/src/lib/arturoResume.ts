@@ -8,6 +8,9 @@
  */
 import { isPageOpener } from './arturo';
 import type { ThreadTurn } from './arturoThreads';
+import type { TurnPart } from './turnParts';
+import { jobResultParts } from './arturoJobs';
+import { splitAttachmentPreamble } from './arturoUpload';
 
 /** The proxy's page-context line (arturo-proxy.py _context_line) on line 1 of a stored message. The
  *  model saw it; the operator never typed it. The server strips it from thread reads too. */
@@ -17,13 +20,18 @@ export function stripContextLine(text: string): string {
   return (text || '').replace(CONTEXT_LINE, '');
 }
 
-export interface HydratedTurn { role: 'arturo' | 'user'; text: string }
+export interface HydratedTurn { role: 'arturo' | 'user'; text: string; parts?: TurnPart[]; images?: string[] }
 
 /** A stored thread as the feed shows it: the page's own opener hidden, context lines stripped. */
 export function hydrateTurns(turns: ThreadTurn[]): HydratedTurn[] {
   return turns
-    .map((x) => ({ role: x.role === 'user' ? 'user' as const : 'arturo' as const,
-                   text: x.role === 'user' ? stripContextLine(x.content) : x.content }))
+    .map((x) => {
+      const parts = x.role === 'user' ? undefined : jobResultParts(x.meta, x.content);
+      const sent = x.role === 'user' ? splitAttachmentPreamble(stripContextLine(x.content)) : null;
+      return { role: x.role === 'user' ? 'user' as const : 'arturo' as const,
+               text: sent ? sent.text : x.content, ...(parts ? { parts } : {}),
+               ...(sent?.images.length ? { images: sent.images } : {}) };
+    })
     .filter((x) => !(x.role === 'user' && isPageOpener(x.text)));
 }
 
