@@ -633,6 +633,8 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
           // BELOW THE TOP BAR on phones (Shaw, 2026-10-10): the bar holds Arturo and the bell, and
           // they must stay usable while this panel is open. --topbar-h is 0 on desktop.
           style={{ top: 'calc(var(--vv-top, 0px) + var(--topbar-h, 0px))', bottom: 'var(--kb, 0px)' }}
+          // dev mode keeps the browser's own keyboard behaviour (DashboardLayout's scroll undo skips it)
+          data-keyboard-native={devMode ? '' : undefined}
           onClick={() => { setFocused(false); setArturoFocus(null); }}>
           <div
             className={clsx(

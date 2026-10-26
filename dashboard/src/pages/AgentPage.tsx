@@ -100,8 +100,9 @@ export default function AgentPage() {
 
       {mode === 'dev' ? (
         <>
-          {/* Dev: the seat's own tmux pane, the same terminal the Agents page's panel opens. */}
-          <div className="flex-1 min-h-0 bg-black overflow-hidden">
+          {/* Dev: the seat's own tmux pane, the same terminal the Agents page's panel opens. Dev mode keeps the
+              browser's own keyboard behaviour (data-keyboard-native: DashboardLayout leaves it alone). */}
+          <div data-keyboard-native className="flex-1 min-h-0 bg-black overflow-hidden">
             <WebTerminal
               key={agentId}
               session={seatRow?.tmux_session || agentId.replace('unregistered:', '')}
@@ -109,7 +110,7 @@ export default function AgentPage() {
             />
           </div>
           {/* special keys (arrows, Esc, Tab, ...): a phone has no keyboard for them */}
-          <div data-arturo-avoid className="px-3 py-2 border-t border-border shrink-0 bg-neutral-950">
+          <div data-arturo-avoid data-keyboard-native className="px-3 py-2 border-t border-border shrink-0 bg-neutral-950">
             <ActionBar
               agentId={agentId}
               outputLines={[]}

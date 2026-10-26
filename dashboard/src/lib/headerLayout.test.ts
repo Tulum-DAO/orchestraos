@@ -33,7 +33,14 @@ test('the phone bar is hidden on agent pages, sits above page headers, and the l
   assert.doesNotMatch(top, /ArturoButton|Brain|Siren|cycleTheme/, 'the agent bar is menu, seat, Chat/Dev and the bell');
   assert.match(layout, /showArturoPill\(\) && <FloatingArturo \/>/, 'Arturo floats, behind the feature flag');
   assert.match(layout, /top: 'var\(--vv-top, 0px\)', height: 'var\(--vvh, 100dvh\)'/, 'the app is pinned to the visible area, so the keyboard never covers the CLI');
-  assert.doesNotMatch(layout, /scrollTo\(0, 0\)/, 'and never fights Safari panning to the focused field');
+  // #414 undid Safari's pan for every field and Dev mode's CLI line went under the keyboard.
+  // Measured on a phone, the pan is a 278px WINDOW scroll reported ~500 ms late (a viewport
+  // readout), the cause of the chat-mode "fly up"; it is undone for chat fields only, and Dev mode keeps the
+  // browser's own behaviour (data-keyboard-native).
+  assert.match(layout, /closest\?\.\('\[data-keyboard-native\]'\)\) return;\s*window\.scrollTo\(0, 0\)/,
+    'a scroll undo never touches Dev mode');
+  assert.match(src('pages/AgentPage.tsx'), /data-keyboard-native className="flex-1 min-h-0 bg-black/, 'the Dev terminal opts out');
+  assert.match(src('components/AgentCard.tsx'), /data-keyboard-native=\{devMode \? '' : undefined\}/, 'the Dev panel opts out');
   assert.equal((src('pages/AgentPage.tsx').match(/data-arturo-avoid/g) ?? []).length, 2, 'composer and Dev key bar are marked');
   assert.match(src('pages/AgentPage.tsx'), /OPEN_SIDEBAR_EVENT/, 'the agent menu button opens the one sidebar');
   assert.doesNotMatch(top, /data-header-end-slot className="hidden/, 'the bell slot shows on phones too');
