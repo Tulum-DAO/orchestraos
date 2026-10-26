@@ -8,7 +8,7 @@ FAKE = "nlfy_0000000000000000TESTVALUE"
 def _vault(tmp_path, extra=""):
     f = tmp_path / ".env.secrets"
     f.write_text(f"# keys\nNETLIFY_TOKEN={FAKE}\nexport QUOTED='quoted-value-1234'\nPORT=80\n{extra}")
-    return Vault(f, environ={"PATH": "/usr/bin", "OTHER_API_KEY": "env-held-value-99"})
+    return Vault(f, environ={"PATH": "/usr/bin", "OTHER_API_KEY": "env-held-value-99"})  # pragma: allowlist secret (test fixture values)
 
 
 def test_commands_get_the_keys_by_name(tmp_path):

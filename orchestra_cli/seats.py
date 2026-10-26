@@ -855,7 +855,7 @@ def _seat_project(st, ns):
     if ns.parent:
         _, reg = _registry(st)
         prow = reg["agents"].get(ns.parent) or {}
-        if prow.get("role") == "pm" or ns.parent.startswith("pm-"):
+        if _tier_rule(st).role_of(prow) == "pm" or ns.parent.startswith("pm-"):
             return PJ.project_of(st.data_dir, ns.parent)
     return None
 

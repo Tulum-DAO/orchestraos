@@ -2146,7 +2146,7 @@ def _project_folder_for(session, parent):
         from orchestra_cli import projects as _projects
         reg = json.loads((Path(ORCHESTRA_DIR) / "registry.json").read_text())
         prow = (reg.get("agents") or {}).get(parent) or {}
-        if prow.get("role") != "pm" and not parent.startswith("pm-"):
+        if role_of(prow) != "pm" and not parent.startswith("pm-"):
             return None
         slug = _projects.project_of(ORCHESTRA_DIR, parent)
         return _projects.ensure_project(ORCHESTRA_DIR, slug, pm=parent, agents=(session,)) if slug else None
