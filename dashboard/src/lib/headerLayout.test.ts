@@ -80,6 +80,22 @@ test('the bell is a 40px flex box like its neighbours, and its badge takes no la
   assert.match(bell, /<span className="pointer-events-none absolute -top-0\.5 -right-0\.5 /);
 });
 
+test('the notifications panel and its sign-in modal are portalled to the page, above the floating agent pane', () => {
+  // Inside the top bar (its own stacking context) the panel sat behind the floating agent pane, whatever its z.
+  const bell = src('components/NotificationBell.tsx');
+  assert.match(bell, /import \{ createPortal \} from 'react-dom'/);
+  assert.match(bell, /dropdownOpen && at && createPortal\(/, 'the panel renders at the page level');
+  assert.match(bell, /authOpen && createPortal\(/, 'and so does the sign-in modal it opens');
+  assert.equal((bell.match(/document\.body,/g) ?? []).length, 2);
+  assert.match(bell, /className="fixed w-72 [^"]*z-\[80\]"/, 'fixed under the bell, above the pane');
+  assert.match(bell, /!panelRef\.current\?\.contains\(t\)/, 'a click inside the portalled panel does not close it');
+  assert.doesNotMatch(bell, /absolute right-0 top-full mt-2 w-72/, 'no longer drawn inside the bar');
+  // the stack it has to clear: floating agent card 50/60/70, Arturo's pane 76
+  const z80 = 80;
+  for (const n of [...src('components/AgentCard.tsx').matchAll(/z-\[(\d+)\]/g)].map((m) => Number(m[1]))) assert.ok(n < z80);
+  assert.match(src('components/arturo/arturo.css'), /z-index:76;/);
+});
+
 // ---- the chat transcript --------------------------------------------------------------------
 
 test('the transcript scroller does not bottom-anchor with justify-end (overflow would go off the top)', () => {

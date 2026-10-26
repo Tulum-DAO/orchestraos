@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Bell, ShieldCheck, ClipboardList, X } from 'lucide-react';
@@ -26,6 +27,22 @@ export default function NotificationBell() {
   const [authOpen, setAuthOpen] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  // The panel is drawn at the page's top level (a portal), not inside the bar: the bar is its own stacking
+  // context, so a panel inside it sat BEHIND the Agents page's floating agent pane however high its z-index.
+  // z 80 clears the floating agent card (50, its toasts 60, its modals 70) and Arturo's pane (76). Placed
+  // under the bell from the bell's position on screen when it opens, and again on resize.
+  const [at, setAt] = useState<{ top: number; right: number } | null>(null);
+  const place = useCallback(() => {
+    const r = dropdownRef.current?.getBoundingClientRect();
+    if (r) setAt({ top: Math.round(r.bottom + 8), right: Math.max(8, Math.round(window.innerWidth - r.right)) });
+  }, []);
+  useEffect(() => {
+    if (!dropdownOpen) return;
+    window.addEventListener('resize', place);
+    window.visualViewport?.addEventListener('resize', place);
+    return () => { window.removeEventListener('resize', place); window.visualViewport?.removeEventListener('resize', place); };
+  }, [dropdownOpen, place]);
 
   // Poll auth state
   const poll = useCallback(async () => {
@@ -63,7 +80,8 @@ export default function NotificationBell() {
   // Close dropdown on click outside
   useEffect(() => {
     function handleClick(e: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+      const t = e.target as Node;
+      if (dropdownRef.current && !dropdownRef.current.contains(t) && !panelRef.current?.contains(t)) {
         setDropdownOpen(false);
       }
     }
@@ -77,7 +95,7 @@ export default function NotificationBell() {
           strut made the wrapper taller than the 40px button and nudged it off the row's centre. */}
       <div className="relative flex shrink-0 items-center" ref={dropdownRef}>
         <button
-          onClick={() => setDropdownOpen(!dropdownOpen)}
+          onClick={() => { if (!dropdownOpen) place(); setDropdownOpen(!dropdownOpen); }}
           // The same icon set as the agent page's top bar (p-2 + a 24px icon = 40px box, the
           // foreground colour), so the bell reads as one of that row, not a smaller grey cousin.
           className="relative flex items-center justify-center p-2 text-foreground hover:bg-muted rounded-lg transition-colors"
@@ -94,8 +112,9 @@ export default function NotificationBell() {
         </button>
 
         {/* Dropdown */}
-        {dropdownOpen && (
-          <div className="absolute right-0 top-full mt-2 w-72 overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl z-50">
+        {dropdownOpen && at && createPortal(
+          <div ref={panelRef} style={{ top: at.top, right: at.right }}
+               className="fixed w-72 max-w-[calc(100vw-16px)] overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl z-[80]">
             <div className="flex items-center justify-between border-b border-border px-4 py-3">
               <span className="text-sm font-semibold">Notifications</span>
               <button onClick={() => setDropdownOpen(false)} className="text-muted-foreground hover:text-foreground">
@@ -166,14 +185,16 @@ export default function NotificationBell() {
                 </button>
               </div>
             )}
-          </div>
+          </div>,
+          document.body,
         )}
       </div>
 
-      {authOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      {authOpen && createPortal(
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-sm">
           <AuthFlow onClose={() => setAuthOpen(false)} />
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );
