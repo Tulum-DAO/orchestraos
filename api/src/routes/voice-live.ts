@@ -44,6 +44,7 @@ import type { Socket } from 'net';
 import { gatewayTokenFile } from '../lib/gateway-token.js';
 import { sessionSecret, jwtSecret } from '../lib/shared-secret.js';  // #85: shared reader
 import { gatewayWsUrl } from '../lib/gateway-url.js';
+import { tailscaleOperator } from '../lib/tailscale-identity.js';
 const GATEWAY_WS_URL = gatewayWsUrl();  // #84 class: env, then [gateway] in orchestra.toml
 export const VOICE_LIVE_PATH = '/api/voice/live';
 
@@ -97,7 +98,7 @@ function verifyOrchestraToken(req: IncomingMessage): boolean {
 }
 
 export function browserIsAuthenticated(req: IncomingMessage): boolean {
-  return verifyOrchestraSession(getCookie(req, 'orchestra_session')) || verifyOrchestraToken(req);
+  return verifyOrchestraSession(getCookie(req, 'orchestra_session')) || verifyOrchestraToken(req) || tailscaleOperator(req);
 }
 
 /**

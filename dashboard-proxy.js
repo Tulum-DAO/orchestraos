@@ -125,7 +125,19 @@ function sessionSecret() {
   try { return fs.readFileSync(path.join(process.env.ORCHESTRA_DIR || "", "state", "session-secret"), "utf8").trim() || null; }
   catch { return null; }
 }
+// The operator as Tailscale Serve names them (api/src/lib/tailscale-identity.ts has the full rationale):
+// a loopback peer (Serve -> here) whose Tailscale-User-Login is on the allowlist. No allowlist = nobody.
+function tailscaleOperator(req) {
+  const peer = req.socket && req.socket.remoteAddress;
+  if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(peer)) return false;
+  let raw = process.env.ORCHESTRA_TAILSCALE_USERS || "";
+  if (!raw) { try { raw = fs.readFileSync(path.join(process.env.ORCHESTRA_DIR || "", "state", "tailscale-users"), "utf8"); } catch { raw = ""; } }
+  const allowed = raw.split(/[\s,]+/).map((s) => s.trim().toLowerCase()).filter((s) => s && !s.startsWith("#"));
+  const login = String(req.headers["tailscale-user-login"] || "").trim().toLowerCase();
+  return !!login && allowed.includes(login);
+}
 function terminalSessionAllowed(req) {
+  if (tailscaleOperator(req)) return true;
   const token = cookie(req, "orchestra_session");
   const secret = sessionSecret();
   if (!token || !secret) return false;
