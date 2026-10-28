@@ -105,6 +105,17 @@ RETIRE_MIGRATION = "m20261010_card_retire"
 RETIRE_COLS = ("retired_at", "retired_by", "retire_reason", "superseded_by")
 
 
+def _card_provenance():
+    """card_provenance, imported on first use (it lives beside this file; a caller that imported this
+    module by path may not have the directory on sys.path)."""
+    try:
+        import card_provenance
+    except ImportError:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import card_provenance
+    return card_provenance
+
+
 def _cols(c, table):
     return {r[1] for r in c.execute(f"PRAGMA table_info({table})").fetchall()}
 
@@ -294,11 +305,21 @@ class ApprovalStore:
                provider=None, provider_session_id=None, process_instance_id=None,
                process_lease_id=None, origin=None,
                block_task=None, blocks_what=None):
-        # §1.1/§4 identity kwargs are ALL optional + provenance-only. A caller
-        # (legacy or adapter) that omits them stamps NULL and the row behaves
-        # exactly as today. `provider` is recorded, NEVER branched on. The
-        # adapter edge (§4) is the sole source of these values; the store never
-        # self-declares them.
+        # §1.1/§4 identity kwargs are ALL optional + provenance-only. `provider`
+        # is recorded, NEVER branched on. A value the caller passes (an adapter
+        # that captured it from its runtime) always wins. What it leaves empty of
+        # the source agent's identity (seat_id, provider, provider_session_id,
+        # generation) is filled HERE, before the row is written, from the
+        # registry entry of the agent named by from_agent (card_provenance.py):
+        # this is the one insert every card type passes through (approval.py's
+        # request/complete/human-task, the menu bridge, the backfill, the lineage
+        # daemon), so no writer can skip it. Never the author's own claim: an
+        # agent cannot write another seat's identity onto a card it files.
+        ident = _card_provenance().fill(from_agent, {
+            "seat_id": seat_id, "provider": provider,
+            "provider_session_id": provider_session_id, "generation": generation})
+        seat_id, provider = ident["seat_id"], ident["provider"]
+        provider_session_id, generation = ident["provider_session_id"], ident["generation"]
         options = options or DEFAULT_OPTIONS
         if isinstance(evidence, (dict, list)):
             evidence = json.dumps(evidence)

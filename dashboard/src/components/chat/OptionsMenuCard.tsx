@@ -19,7 +19,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { clsx } from 'clsx';
 import { Loader2 } from 'lucide-react';
-import { sendAgentKey } from '../../lib/api';
+import { sendAgentKey, dismissAgentMenu } from '../../lib/api';
 
 export interface PendingMenuOption { n: string; label: string; detail?: string }
 export interface PendingMenu {
@@ -40,6 +40,10 @@ export default function OptionsMenuCard({ agentId, menu }: { agentId: string; me
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState<string | null>(null); // refusal / done text
   const [done, setDone] = useState<string | null>(null);      // sent digit → success latch
+  // Dismiss: refuse to answer (Escape, as in the Dev terminal). Armed by one tap, sent by the second, like
+  // an option, so a stray tap never cancels the agent's question.
+  const [dismissArmed, setDismissArmed] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
   const disarmTimer = useRef<number | null>(null);
 
   // A new menu (different question / capture) resets any stale arm state.
@@ -48,7 +52,7 @@ export default function OptionsMenuCard({ agentId, menu }: { agentId: string; me
     [menu]
   );
   useEffect(() => {
-    setArmed(null); setSending(false); setNotice(null); setDone(null);
+    setArmed(null); setSending(false); setNotice(null); setDone(null); setDismissArmed(false); setDismissed(false);
   }, [menuKey]);
 
   const clearDisarm = () => {
@@ -99,9 +103,41 @@ export default function OptionsMenuCard({ agentId, menu }: { agentId: string; me
   };
 
   const onTap = (n: string) => {
-    if (done) return;
+    if (done || dismissed) return;
+    setDismissArmed(false);
     if (armed === n) confirm(n);
     else arm(n);
+  };
+
+  const onDismiss = async () => {
+    if (sending || done || dismissed) return;
+    if (!dismissArmed) {
+      setArmed(null);
+      setNotice(null);
+      setDismissArmed(true);
+      clearDisarm();
+      disarmTimer.current = window.setTimeout(() => setDismissArmed(false), ARM_TIMEOUT_MS);
+      return;
+    }
+    clearDisarm();
+    setSending(true);
+    try {
+      const r = await dismissAgentMenu(agentId, { question: menu.question, context: menu.context ?? '' });
+      if (r.status === 200 && r.ok) {
+        setDismissed(true);
+      } else if (r.status === 409) {
+        setNotice(r.reason === 'instance_mismatch'
+          ? 'This prompt was replaced by a newer one. Check the screen before answering.'
+          : 'Menu is gone — answered elsewhere.');
+      } else {
+        setNotice(r.error || 'Could not dismiss — try again.');
+      }
+    } catch {
+      setNotice('Network error — try again.');
+    } finally {
+      setDismissArmed(false);
+      setSending(false);
+    }
   };
 
   const lean = menu.selected_n && menu.options.some((o) => o.n === menu.selected_n) ? menu.selected_n : null;
@@ -132,12 +168,12 @@ export default function OptionsMenuCard({ agentId, menu }: { agentId: string; me
         {menu.options.map((opt) => {
           const isArmed = armed === opt.n;
           const isDone = done === opt.n;
-          const dimmed = (done && !isDone) || (sending && !isArmed);
+          const dimmed = (done && !isDone) || dismissed || (sending && !isArmed);
           return (
             <button
               key={opt.n}
               onClick={() => onTap(opt.n)}
-              disabled={!!done || sending}
+              disabled={!!done || dismissed || sending}
               className={clsx(
                 'w-full text-left rounded-md px-2.5 py-1.5 transition-colors flex items-start gap-2',
                 isDone
@@ -174,6 +210,20 @@ export default function OptionsMenuCard({ agentId, menu }: { agentId: string; me
             </button>
           );
         })}
+      </div>
+
+      {/* Refuse to answer: Escape on this menu, as the Dev terminal would. */}
+      <div className="flex justify-end mt-1.5">
+        {dismissed ? (
+          <span className="text-[11px] text-neutral-400">Dismissed</span>
+        ) : (
+          <button type="button" onClick={onDismiss} disabled={!!done || sending}
+                  className={clsx('text-[11px] px-2 py-0.5 rounded transition-colors',
+                    dismissArmed ? 'bg-neutral-700 text-neutral-100 ring-1 ring-neutral-500'
+                      : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800')}>
+            {dismissArmed ? (sending ? 'Dismissing…' : 'Tap again to dismiss') : 'Dismiss'}
+          </button>
+        )}
       </div>
 
       {notice && <div className="text-[11px] text-amber-400/90 mt-1.5">{notice}</div>}

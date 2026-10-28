@@ -108,6 +108,16 @@ def _coerce_menu_n_str(menu):
     return menu
 
 
+# Who filed a questionnaire (card_provenance.py): the same four source-identity columns
+# approval_requests carries, on the parent row (its questions and answers belong to it by qnr_id).
+# Additive and nullable, behind the operator's DDL arm like every new column on tasks.db
+# (APPROVAL_DDL_ARMED=m20261027_questionnaire_provenance, or the ~/runtime sentinel). Unarmed, the
+# columns are not added and create() writes exactly what it wrote before.
+PROVENANCE_MIGRATION = "m20261027_questionnaire_provenance"
+PROVENANCE_COLS = (("seat_id", "TEXT"), ("provider", "TEXT"),
+                   ("provider_session_id", "TEXT"), ("generation", "INTEGER"))
+
+
 class QuestionnaireStore:
     def __init__(self, db_path=None):
         self.db_path = str(db_path or DB_PATH)
@@ -147,6 +157,10 @@ class QuestionnaireStore:
                 for col in approval_schema.RETIRE_COLS:
                     if col not in existing:
                         c.execute(f"ALTER TABLE questionnaires ADD COLUMN {col} TEXT")
+            if approval_schema.armed(PROVENANCE_MIGRATION):
+                for col, coltype in PROVENANCE_COLS:
+                    if col not in existing:
+                        c.execute(f"ALTER TABLE questionnaires ADD COLUMN {col} {coltype}")
             c.commit()
         finally:
             c.close()
@@ -177,13 +191,20 @@ class QuestionnaireStore:
                 if row:
                     return row["id"]
             qid = _gen_id(); now = _now()
-            c.execute(
-                """INSERT INTO questionnaires
-                   (id, from_agent, title, summary, status, worker_kind, thread_key,
-                    op_key, feature, question_count, created_at, urgency)
-                   VALUES (?,?,?,?,'pending',?,?,?,?,?,?,?)""",
-                [qid, from_agent, title, summary, worker_kind, thread_key, op_key,
-                 feature, len(questions), now, int(urgency or 0)])
+            cols = ["id", "from_agent", "title", "summary", "status", "worker_kind", "thread_key",
+                    "op_key", "feature", "question_count", "created_at", "urgency"]
+            vals = [qid, from_agent, title, summary, "pending", worker_kind, thread_key, op_key,
+                    feature, len(questions), now, int(urgency or 0)]
+            # The source agent's identity, in the same INSERT, when the provenance columns exist
+            # (armed); otherwise the row is exactly what it was before.
+            have = {r[1] for r in c.execute("PRAGMA table_info(questionnaires)").fetchall()}
+            if all(col in have for col, _ in PROVENANCE_COLS):
+                import approval_schema
+                ident = approval_schema._card_provenance().fill(from_agent, {})
+                for col, _ in PROVENANCE_COLS:
+                    cols.append(col); vals.append(ident.get(col))
+            c.execute(f"INSERT INTO questionnaires ({', '.join(cols)}) "
+                      f"VALUES ({', '.join('?' for _ in cols)})", vals)
             for i, q in enumerate(questions, start=1):
                 menu = q.get("menu")
                 if isinstance(menu, dict):
