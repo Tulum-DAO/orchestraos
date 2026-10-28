@@ -1,8 +1,8 @@
 // Same grammars and trimming rules as the iOS SystemMessages grader, so the web and the phone draw
 // the same card for the same line.
-import { test } from 'node:test';
+import { serviceNoticeText, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseSystemMessage, stripAck, machineKindOf, foldCardAnswers } from './systemMessages.ts';
+import { parseSystemMessage, stripAck, machineKindOf, foldCardAnswers, serviceNoticeText } from './systemMessages.ts';
 
 const ACK = '. Act on it, then run: python3 /x/approval.py ack req-1 --from pm-demo';
 
@@ -59,7 +59,8 @@ test('relay: sender, subject, age; the agent\'s plumbing cut at the LAST " — R
   assert.equal(m.headline, 'Message from dev-demo');
   assert.equal(m.subject, 'BG FIRE — builder -> DRAINED');
   assert.equal(m.note, 'sent 2m ago');
-  assert.equal(m.urgent, false);
+  assert.equal(m.urgent, false);  assert.equal(m.sender, 'dev-demo');
+  assert.equal(m.messageId, 'a1');
 });
 
 test('relay: high or urgent priority marks it urgent; stacked relay banners stripped', () => {
@@ -97,4 +98,25 @@ test('a card answer folds into its card when the chat draws that card; relays an
   const out = foldCardAnswers(nodes, new Set(['req-1']));
   assert.deepEqual(out.map((n) => n.text.slice(0, 22)), ['[DECISION ANSWERED req', '[MSG from dev-demo | m', 'ok']);
   assert.ok(out[0].text.includes('req-9'));
+});
+
+test("the approvals service's copy of an answer folds into the card it names; other relays stay", () => {
+  const nodes = [
+    { kind: 'user', text: '[MSG from approval-loop | high] Approval apr_demo1_1 resolved — Read /tmp/agent-msg-m1.md and act on it.', machine: 'relay' },
+    { kind: 'user', text: '[MSG from approval-loop | normal] Approval apr_demo2_2 discarded — Read /tmp/agent-msg-m2.md and act on it.', machine: 'relay' },
+    { kind: 'user', text: '[MSG from dev-demo | high] Approval apr_demo1_1 looks wrong to me — Read /tmp/agent-msg-m3.md and act on it.', machine: 'relay' },
+  ];
+  const out = foldCardAnswers(nodes, new Set(['apr_demo1_1']));
+  assert.deepEqual(out.map((n) => n.text.slice(10, 32)), ['approval-loop | normal', 'dev-demo | high] Appro']);
+});
+
+test("a service's line: what happened and to what, read from its body when it can be", () => {
+  const relay = parseSystemMessage('[MSG from approval-loop | normal] Approval apr_demo2_2 discarded — Read /tmp/agent-msg-m2.md and act on it.')!;
+  assert.equal(serviceNoticeText(relay, "[APPROVAL DISCARDED apr_demo2_2] Your request 'Sample question?' was DISMISSED without an answer."),
+    'Request dismissed · Sample question?');
+  assert.equal(serviceNoticeText(relay, "[APPROVAL RESOLVED apr_demo2_2] Your request 'Sample question?' was answered: approve (APPROVE). Act on it, then run: x"),
+    'Request approved · Sample question?');
+  assert.equal(serviceNoticeText(relay, null), 'approval-loop · Approval apr_demo2_2 discarded');
+  const brief = parseSystemMessage('[MSG from orchestra | normal] [briefing] What your predecessor did — Read /tmp/agent-msg-m4.md and act on it.')!;
+  assert.equal(serviceNoticeText(brief, 'Example briefing body.'), 'orchestra · [briefing] What your predecessor did');
 });

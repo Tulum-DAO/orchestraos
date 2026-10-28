@@ -1,25 +1,27 @@
 /**
- * OptionsMenuCard — renders a live decision menu (detector `pending_menu`) at
- * the bottom of TranscriptChatView and answers it via the two-phase /agent-key
- * route. Detector-served (NOT pane-scraped); iOS build 69-72 is the behavioral
- * reference (arm → expand → confirm).
+ * OptionsMenuCard — an agent's live menu (detector `pending_menu`) at the bottom of TranscriptChatView, drawn
+ * as the same card as every decision (DecisionCard + MenuAnswerBlock).
  *
- * Interaction (spec C2b):
- *  - First tap on an option EXPANDS it in-div (full label + detail subline) and
- *    ARMS it (client-side); tapping a different option swaps the expansion.
- *  - Second tap on the armed option SENDS (POST /agent-key confirm:true).
- *  - 30s auto-disarm; spinner while sending; blue accent throughout.
- *  - selected_n (the agent's ❯ lean) shows a labeled "agent leans" chip.
- *  - 409 (menu vanished) → disarm + "answered elsewhere"; 403 → verbatim notice.
+ * Answering:
+ *  - An option alone goes straight to the pane through the two-phase /agent-key route: picking the row is the
+ *    first step, its "Send N ✓" the second.
+ *  - Words (alone, or with an option) can only reach a live menu through the card the server keeps for it,
+ *    which appears a few seconds after the menu does (lib/decisionCard linkedMenuCard); until then the field
+ *    says so. A permission prompt takes an option only.
+ *  - The ✕ refuses the menu (the gateway presses Escape on the checked menu), in two clicks.
+ *  - 409 (menu vanished or replaced) and 403 come back as a notice on the card.
  *
  * The menu object arrives as a prop from the agents poll (≤10s stale), but the
  * gateway re-checks the LIVE detector on confirm, so a stale render can only
  * fail closed (409), never mis-send.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { clsx } from 'clsx';
-import { Loader2 } from 'lucide-react';
-import { sendAgentKey, dismissAgentMenu } from '../../lib/api';
+import { useEffect, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { post, sendAgentKey, dismissAgentMenu } from '../../lib/api';
+import DecisionCard from './DecisionCard';
+import MenuAnswerBlock from './MenuAnswerCard';
+import { buildMenuAnswerPayload, initialMenuAnswerState, selectOption, setText, type MenuAnswerState } from '../../lib/menuAnswer';
+import { linkedMenuCard, withInputKinds, type MenuCardRow } from '../../lib/decisionCard';
 
 export interface PendingMenuOption { n: string; label: string; detail?: string }
 export interface PendingMenu {
@@ -33,205 +35,93 @@ export interface PendingMenu {
   captured_at?: number;
 }
 
-const ARM_TIMEOUT_MS = 30_000;
+const GONE = 'Menu is gone — answered elsewhere.';
+const REPLACED = 'This prompt was replaced by a newer one. Check the screen before answering.';
 
 export default function OptionsMenuCard({ agentId, menu }: { agentId: string; menu: PendingMenu }) {
-  const [armed, setArmed] = useState<string | null>(null);   // option n, expanded + armed
+  const queryClient = useQueryClient();
+  const [state, setState] = useState<MenuAnswerState>(initialMenuAnswerState);
   const [sending, setSending] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null); // refusal / done text
-  const [done, setDone] = useState<string | null>(null);      // sent digit → success latch
-  // Dismiss: refuse to answer (Escape, as in the Dev terminal). Armed by one tap, sent by the second, like
-  // an option, so a stray tap never cancels the agent's question.
-  const [dismissArmed, setDismissArmed] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState(false);
-  const disarmTimer = useRef<number | null>(null);
 
-  // A new menu (different question / capture) resets any stale arm state.
-  const menuKey = useMemo(
-    () => `${menu.question}|${menu.options.map((o) => o.n + o.label).join('|')}`,
-    [menu]
-  );
+  // A new menu (different question / capture) starts clean.
+  const menuKey = useMemo(() => `${menu.question}|${menu.options.map((o) => o.n + o.label).join('|')}`, [menu]);
   useEffect(() => {
-    setArmed(null); setSending(false); setNotice(null); setDone(null); setDismissArmed(false); setDismissed(false);
+    setState(initialMenuAnswerState); setSending(false); setNotice(null); setDone(null); setDismissed(false);
   }, [menuKey]);
 
-  const clearDisarm = () => {
-    if (disarmTimer.current) { clearTimeout(disarmTimer.current); disarmTimer.current = null; }
-  };
-  useEffect(() => clearDisarm, []);
+  const isPermission = menu.kind === 'permission';
+  // The same list (and query key) the Approvals page polls, so the two share one request.
+  const cardsQ = useQuery({
+    queryKey: ['unified-approvals'],
+    queryFn: async () => {
+      const r = await fetch('/api/approvals/unified');
+      if (!r.ok) throw new Error(`approvals: ${r.status}`);
+      return r.json() as Promise<{ items: MenuCardRow[] }>;
+    },
+    refetchInterval: 5000,
+    enabled: !isPermission && !done && !dismissed,
+  });
+  const card = isPermission ? undefined : linkedMenuCard(cardsQ.data?.items ?? [], agentId, menu.question);
+  const wordsNote = isPermission ? 'A permission prompt takes an option only.'
+    : card ? null : 'Your words can be sent in a moment, once this menu reaches the server.';
+  const expect = { question: menu.question, context: menu.context ?? '' };
+  const picked = state.selectedN ? menu.options.find((o) => o.n === state.selectedN) : undefined;
 
-  const arm = (n: string) => {
-    if (sending || done) return;
-    setNotice(null);
-    setArmed(n);
-    clearDisarm();
-    disarmTimer.current = window.setTimeout(() => setArmed(null), ARM_TIMEOUT_MS);
-  };
-
-  const confirm = async (n: string) => {
+  const respond = async () => {
     if (sending) return;
-    clearDisarm();
-    setSending(true);
-    setNotice(null);
+    const payload = buildMenuAnswerPayload(state);
+    if (!payload) return;
+    setSending(true); setNotice(null);
     try {
-      const r = await sendAgentKey(agentId, n, true,
-                                   { question: menu.question, context: menu.context ?? '' });
-      if (r.status === 200 && r.ok) {
-        setDone(n);
-        setNotice(null);
-      } else if (r.status === 409) {
-        setArmed(null);
-        setNotice(r.reason === 'instance_mismatch'
-          ? 'This prompt was replaced by a newer one. Check the screen before answering.'
-          : 'Menu is gone — answered elsewhere.');
-      } else if (r.status === 403) {
-        setArmed(null);
-        setNotice(r.error || 'That key is not enabled yet.');
-      } else if (r.status === 428) {
-        // Shouldn't happen (we send confirm:true), but handle defensively.
-        setNotice(r.confirm_text || 'Confirmation required — tap again.');
-      } else {
-        setArmed(null);
-        setNotice(r.error || 'Could not send — try again.');
+      if (payload.answer_text) {
+        if (!card) { setNotice(wordsNote); return; }
+        await post(`/approvals/unified/${encodeURIComponent(card.id)}/answer`, payload);
+        void queryClient.invalidateQueries({ queryKey: ['unified-approvals'] });
+        setDone(payload.option_n || 'words');
+        return;
       }
-    } catch (e: any) {
-      setArmed(null);
-      setNotice('Network error — try again.');
+      const r = await sendAgentKey(agentId, payload.option_n!, true, expect);
+      if (r.status === 200 && r.ok) setDone(payload.option_n!);
+      else if (r.status === 409) setNotice(r.reason === 'instance_mismatch' ? REPLACED : GONE);
+      else if (r.status === 403) setNotice(r.error || 'That key is not enabled yet.');
+      else if (r.status === 428) setNotice(r.confirm_text || 'Confirmation required — send again.');
+      else setNotice(r.error || 'Could not send — try again.');
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message.replace(/^API [^:]+: /, 'Could not send: ') : 'Network error — try again.');
     } finally {
       setSending(false);
     }
   };
 
-  const onTap = (n: string) => {
-    if (done || dismissed) return;
-    setDismissArmed(false);
-    if (armed === n) confirm(n);
-    else arm(n);
-  };
-
-  const onDismiss = async () => {
-    if (sending || done || dismissed) return;
-    if (!dismissArmed) {
-      setArmed(null);
-      setNotice(null);
-      setDismissArmed(true);
-      clearDisarm();
-      disarmTimer.current = window.setTimeout(() => setDismissArmed(false), ARM_TIMEOUT_MS);
-      return;
-    }
-    clearDisarm();
-    setSending(true);
+  const dismiss = async (): Promise<string | null> => {
     try {
-      const r = await dismissAgentMenu(agentId, { question: menu.question, context: menu.context ?? '' });
-      if (r.status === 200 && r.ok) {
-        setDismissed(true);
-      } else if (r.status === 409) {
-        setNotice(r.reason === 'instance_mismatch'
-          ? 'This prompt was replaced by a newer one. Check the screen before answering.'
-          : 'Menu is gone — answered elsewhere.');
-      } else {
-        setNotice(r.error || 'Could not dismiss — try again.');
-      }
+      const r = await dismissAgentMenu(agentId, expect);
+      if (r.status === 200 && r.ok) { setDismissed(true); return null; }
+      if (r.status === 409) return r.reason === 'instance_mismatch' ? REPLACED : GONE;
+      return r.error || 'Could not dismiss — try again.';
     } catch {
-      setNotice('Network error — try again.');
-    } finally {
-      setDismissArmed(false);
-      setSending(false);
+      return 'Network error — try again.';
     }
   };
 
   const lean = menu.selected_n && menu.options.some((o) => o.n === menu.selected_n) ? menu.selected_n : null;
-  const isPermission = menu.kind === 'permission';
+  const outcome = done === 'words' ? 'Sent your words'
+    : done ? `Sent ${done}${picked ? ` · ${picked.label}` : ''}${state.text.trim() ? ' with your words' : ''}` : null;
 
   return (
-    <div className={clsx(
-      'rounded-lg border px-3 py-2.5 mt-1',
-      isPermission ? 'border-amber-600/40 bg-amber-500/5' : 'border-blue-600/40 bg-blue-500/5'
-    )}>
-      <div className="flex items-center gap-2 mb-1.5">
-        <span className={clsx('text-[10px] uppercase tracking-wide font-medium',
-          isPermission ? 'text-amber-300' : 'text-blue-300')}>
-          {isPermission ? 'Permission' : 'Decision needed'}
-        </span>
-        {lean && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-400">
-            agent leans {lean}
-          </span>
-        )}
-      </div>
-
-      {menu.question && (
-        <div className="text-xs text-neutral-300 mb-2 whitespace-pre-wrap">{menu.question}</div>
-      )}
-
-      <div className="space-y-1">
-        {menu.options.map((opt) => {
-          const isArmed = armed === opt.n;
-          const isDone = done === opt.n;
-          const dimmed = (done && !isDone) || dismissed || (sending && !isArmed);
-          return (
-            <button
-              key={opt.n}
-              onClick={() => onTap(opt.n)}
-              disabled={!!done || dismissed || sending}
-              className={clsx(
-                'w-full text-left rounded-md px-2.5 py-1.5 transition-colors flex items-start gap-2',
-                isDone
-                  ? 'bg-green-600/15 ring-1 ring-green-500/40'
-                  : isArmed
-                    ? 'bg-blue-600/20 ring-1 ring-blue-500/50'
-                    : dimmed
-                      ? 'bg-neutral-800/40 text-neutral-600 cursor-not-allowed'
-                      : 'bg-neutral-800 hover:bg-neutral-700'
-              )}
-            >
-              <span className={clsx('font-mono text-[11px] mt-0.5 shrink-0',
-                isArmed ? 'text-blue-300' : isDone ? 'text-green-400' : 'text-neutral-500')}>
-                {opt.n}.
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className={clsx('text-xs block',
-                  isArmed || isDone ? 'text-neutral-100' : 'text-neutral-300',
-                  // collapse label to one line unless armed/expanded
-                  !isArmed && !isDone && 'truncate'
-                )}>
-                  {opt.label}
-                </span>
-                {/* detail subline only when expanded (armed) */}
-                {isArmed && opt.detail && (
-                  <span className="text-[11px] text-neutral-400 block mt-0.5">{opt.detail}</span>
-                )}
-              </span>
-              {isArmed && sending && <Loader2 size={13} className="animate-spin text-blue-300 mt-0.5 shrink-0" />}
-              {isArmed && !sending && (
-                <span className="text-[10px] text-blue-300 mt-0.5 shrink-0 whitespace-nowrap">tap to send ✓</span>
-              )}
-              {isDone && <span className="text-[10px] text-green-400 mt-0.5 shrink-0">sent</span>}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Refuse to answer: Escape on this menu, as the Dev terminal would. */}
-      <div className="flex justify-end mt-1.5">
-        {dismissed ? (
-          <span className="text-[11px] text-neutral-400">Dismissed</span>
-        ) : (
-          <button type="button" onClick={onDismiss} disabled={!!done || sending}
-                  className={clsx('text-[11px] px-2 py-0.5 rounded transition-colors',
-                    dismissArmed ? 'bg-neutral-700 text-neutral-100 ring-1 ring-neutral-500'
-                      : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800')}>
-            {dismissArmed ? (sending ? 'Dismissing…' : 'Tap again to dismiss') : 'Dismiss'}
-          </button>
-        )}
-      </div>
-
-      {notice && <div className="text-[11px] text-amber-400/90 mt-1.5">{notice}</div>}
-      {armed && !sending && !done && (
-        <div className="text-[10px] text-neutral-500 mt-1.5">
-          Armed option {armed} — tap again to confirm (auto-cancels in 30s).
-        </div>
-      )}
+    <div className="mt-1">
+      <DecisionCard kind={isPermission ? 'approval' : 'decision'} question={menu.question || 'The agent is asking'}
+        body={menu.context || null} tone={done ? 'answered' : 'pending'} open={!done} outcome={outcome}
+        onDismiss={dismiss} dismissed={dismissed}>
+        <MenuAnswerBlock item={{ id: `live-${agentId}`, menu: { options: withInputKinds(menu.options) } }} state={state}
+          sending={sending} error={notice} wordsNote={wordsNote} lean={lean}
+          onSelect={(n) => setState((s) => selectOption(s, n))}
+          onText={(t) => setState((s) => setText(s, t))}
+          onRespond={() => { void respond(); }} />
+      </DecisionCard>
     </div>
   );
 }

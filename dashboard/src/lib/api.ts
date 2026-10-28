@@ -122,6 +122,14 @@ export const projectFileRawUrl = (slug: string, path: string) =>
 
 export const fetchMe = () => get<{ username: string; role: string; allowed_agents: string | string[] }>('/me');
 export const fetchAgents = () => get('/agents');
+
+/** One message another agent (or a service) sent this agent, in full: the body behind a "Message from" line. */
+export interface AgentMessageBody {
+  id: string; from_agent: string; to_agent: string; priority: string | null;
+  subject: string | null; body: string | null; created_at: string | null;
+}
+export const fetchAgentMessage = (agentId: string, msgId: string) =>
+  get<AgentMessageBody>(`/agents/${encodeURIComponent(agentId)}/messages/${encodeURIComponent(msgId)}`);
 export const fetchTasks = () => get('/tasks');
 export const fetchActivity = (limit = 100) => get(`/activity?limit=${limit}`);
 export const fetchSystem = () => get('/system');
@@ -255,6 +263,41 @@ export async function dismissAgentMenu(id: string, expect: MenuExpect): Promise<
   let body: Record<string, unknown> = {};
   try { body = await res.json(); } catch { /* non-json */ }
   return { status: res.status, ...body } as AgentKeyResult;
+}
+
+/** The ✕ on a menu card away from its live menu (Approvals, Inbox, an agent's chat history). If that same
+ *  question is on the agent's screen now, it is dismissed there with Escape (checked against the live menu it
+ *  reads here; the gateway checks it again), so the pane and the card agree. Otherwise (an agent's own written
+ *  decision, or a menu no longer on screen) the card is closed on the server, which tells the agent not to
+ *  keep waiting on it. Returns an error to show, or null once dismissed. */
+export async function dismissMenuCard(cardId: string, agentId: string | null | undefined, question: string): Promise<string | null> {
+  const norm = (s: unknown) => String(s || '').replace(/\s+/g, ' ').trim();
+  const root = (s: string) => s.replace(/-(?:gen|g)\d+$/, '');
+  try {
+    const res = await fetch(`${BASE}/agents`);
+    const json = await res.json();
+    const list: Array<{ id: string; pending_menu?: { question?: string; context?: string | null } | null }> =
+      Array.isArray(json) ? json : (json.agents ?? []);
+    const agent = agentId ? list.find((a) => a.pending_menu && root(a.id) === root(agentId) && norm(a.pending_menu.question) === norm(question)) : undefined;
+    if (!agent?.pending_menu) return dismissCardOnServer(cardId);
+    const r = await dismissAgentMenu(agent.id, { question: agent.pending_menu.question || '', context: agent.pending_menu.context ?? '' });
+    if (r.status === 200 && r.ok) return null;
+    if (r.status === 409) return r.reason === 'instance_mismatch'
+      ? 'This prompt was replaced by a newer one. Check the screen first.' : 'Menu is gone — answered elsewhere.';
+    return r.error || 'Could not dismiss — try again.';
+  } catch {
+    return 'Network error — try again.';
+  }
+}
+
+async function dismissCardOnServer(cardId: string): Promise<string | null> {
+  const res = await fetch(`${BASE}/approvals/unified/${encodeURIComponent(cardId)}/dismiss`, { method: 'POST' });
+  if (res.ok) return null;
+  if (res.status === 409) return 'Already answered or closed.';
+  if (res.status === 404) return 'This card is gone. Refresh to see the latest.';
+  let body: { error?: string } = {};
+  try { body = await res.json(); } catch { /* non-json */ }
+  return body.error || 'Could not dismiss. Try again.';
 }
 
 export const fetchTransitStatus = () => get('/transit/status');

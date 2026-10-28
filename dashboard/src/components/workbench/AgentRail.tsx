@@ -21,6 +21,7 @@ import { usePins, loadPinsOnce, togglePin, renameAgent, longPress } from '../../
 import { agentRowsFrom } from '../../lib/api';
 import { chipStateFor } from '../RecentAgentChips';
 import { AgentAvatar } from '../avatar/AgentAvatar';
+import AgentIdentityPill from '../avatar/AgentIdentityPill';
 import { avatarHub, ensureAgent } from '../avatar/agentState';
 import { providerMark } from '../avatar/brandMarks';
 import { avatarStateFor } from '../../lib/avatarStatus';
@@ -199,9 +200,9 @@ function RenameField({ agent, active, initial, onDone, onError }: { agent: RailA
  *  pill opens that agent; leaving it lets it fade. */
 /** Faces are the same size as the avatars on the agent rows. */
 const FACE = 32;
-/** The name pill's padding and border around its face (px): the pill is placed so its face lands exactly on the
- *  face under it, so the padding never moves the face. */
-const PILL_PAD = 4, PILL_BORDER = 1;
+/** The name pill's inset around its face (px), the agent identity pill's (.agent-pill in index.css): the pill is
+ *  placed so its face lands exactly on the face under it, so the inset never moves the face. */
+const PILL_INSET = 2;
 
 function FaceRow({ agents, currentId, onPick, max = 8, label, indent = false }: { agents: RailAgent[]; currentId?: string; onPick: (id: string) => void; max?: number; label: string; indent?: boolean }) {
   const shown = agents.slice(0, max);
@@ -212,7 +213,7 @@ function FaceRow({ agents, currentId, onPick, max = 8, label, indent = false }: 
     // measured from the face itself (its canvas), not its button, so the pill's face covers it exactly
     const box = outer.current?.getBoundingClientRect(), r = (el.querySelector('canvas') ?? el).getBoundingClientRect();
     if (!box) return;
-    const off = PILL_PAD + PILL_BORDER;
+    const off = PILL_INSET;
     setPill({ a, left: r.left - box.left - off, top: r.top - box.top - off, max: box.right - r.left + off - 4, keyboard });
   };
   return (
@@ -239,16 +240,13 @@ function FaceRow({ agents, currentId, onPick, max = 8, label, indent = false }: 
         {agents.length > max && <span className="shrink-0 text-[11px] text-neutral-600 dark:text-neutral-400 tabular-nums">+{agents.length - max}</span>}
       </div>
       {pill && (
-        <button type="button" aria-hidden tabIndex={-1} data-rail-face-pill={pill.a.id}
-                onClick={() => { setPill(null); onPick(pill.a.id); }}
-                onMouseLeave={() => setPill(null)}
-                style={{ left: pill.left, top: pill.top, maxWidth: pill.max, padding: PILL_PAD, paddingRight: 12, borderWidth: PILL_BORDER }}
-                className={clsx('rail-face-pill absolute z-20 flex items-center gap-1.5 rounded-full shadow-md box-border',
-                  'bg-neutral-100 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-sm font-medium text-neutral-900 dark:text-neutral-100',
-                  pill.keyboard && 'pointer-events-none')}>
-          <AgentAvatar agentId={pill.a.id} role="sidebar" size={FACE} selected={pill.a.id === currentId} label={pill.a.full_name || pill.a.id} />
-          <span className="truncate">{pill.a.full_name || pill.a.display_name || pill.a.id}</span>
-        </button>
+        <AgentIdentityPill agentId={pill.a.id} name={pill.a.full_name || pill.a.display_name || pill.a.id} size={FACE}
+          avatar={{ role: 'sidebar', selected: pill.a.id === currentId, label: pill.a.full_name || pill.a.id }}
+          aria-hidden tabIndex={-1} data-rail-face-pill={pill.a.id}
+          onClick={() => { setPill(null); onPick(pill.a.id); }}
+          onMouseLeave={() => setPill(null)}
+          style={{ left: pill.left, top: pill.top, maxWidth: pill.max }}
+          className={clsx('rail-face-pill absolute z-20', pill.keyboard && 'pointer-events-none')} />
       )}
     </div>
   );

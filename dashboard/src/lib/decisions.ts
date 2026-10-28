@@ -11,7 +11,7 @@ import type { GroupedNode } from './toolGroups';
 import type { MenuOption } from './menuAnswer';
 import { operatorUserId } from './runtimeConfig';
 
-export type DecisionState = 'pending' | 'answered' | 'expired' | 'withdrawn' | 'superseded' | string;
+export type DecisionState = 'pending' | 'answered' | 'expired' | 'withdrawn' | 'dismissed' | 'superseded' | string;
 
 export interface Decision {
   id: string;
@@ -105,7 +105,7 @@ export function deliveryText(d: Decision): string {
 }
 
 /** The answered card's outline, by outcome: blue answered, green approved, red denied, a dimmer blue
- *  while delivery is held, grey only when it expired. A card withdrawn or replaced has no outcome and
+ *  while delivery is held, grey only when it expired. A card withdrawn, dismissed or replaced has no outcome and
  *  keeps the plain card edge. */
 export type DecisionTone = 'pending' | 'answered' | 'approved' | 'denied' | 'held' | 'expired' | 'closed';
 export function decisionTone(d: Decision): DecisionTone {
@@ -132,6 +132,7 @@ export function outcomeLine(d: Decision): string {
   }
   if (d.state === 'expired') return `Expired unanswered${d.expires_at ? ` · ${clock(d.expires_at)}` : ''}`;
   if (d.state === 'withdrawn') return 'Withdrawn by the agent';
+  if (d.state === 'dismissed') { const when = clock(d.answered_at); return `Dismissed by you${when ? ` · ${when}` : ''}`; }
   if (d.state === 'superseded') return 'Replaced by a newer question';
   return '';
 }

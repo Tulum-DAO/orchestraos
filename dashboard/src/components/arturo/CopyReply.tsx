@@ -1,20 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
 import { Check, Copy } from 'lucide-react';
+import { useCopy } from '../../hooks/useCopy';
 
 /** The copy button under one of Arturo's replies. A tick shows briefly once the words are on the clipboard;
  *  when the browser refuses the clipboard nothing is claimed. */
 export default function CopyReply({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => setCopied(false), 1500);
-    } catch { /* the browser refused the clipboard */ }
-  };
+  const { copied, copy } = useCopy(text);
   return (
     <div className="reply-actions">
       <button type="button" className="call-icon" aria-label={copied ? 'Copied' : 'Copy reply'} title={copied ? 'Copied' : 'Copy'}

@@ -6,8 +6,10 @@ import { X } from 'lucide-react';
  * front. Several can be open at once (the project files viewer opens one per file). On a phone it is a
  * full-screen sheet instead (no room to drag).
  */
-export default function FloatingWindow({ title, subtitle, x, y, z, onFocus, onClose, children }: {
+export default function FloatingWindow({ title, subtitle, x, y, z, onFocus, onClose, actions, children }: {
   title: string; subtitle?: string; x: number; y: number; z: number;
+  /** Buttons for the title bar, before its close button (a file window's copy). */
+  actions?: ReactNode;
   onFocus: () => void; onClose: () => void; children: ReactNode;
 }) {
   const [pos, setPos] = useState({ x, y });
@@ -45,6 +47,7 @@ export default function FloatingWindow({ title, subtitle, x, y, z, onFocus, onCl
           <div className="text-sm text-neutral-100 font-medium truncate">{title}</div>
           {subtitle && <div className="text-[11px] text-neutral-500 font-mono truncate">{subtitle}</div>}
         </div>
+        {actions}
         <button aria-label={`Close ${title}`} onPointerDown={(e) => e.stopPropagation()} onClick={onClose}
                 className="p-1 rounded text-neutral-400 hover:text-white hover:bg-neutral-800"><X size={16} /></button>
       </div>

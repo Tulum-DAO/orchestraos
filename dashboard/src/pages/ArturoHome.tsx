@@ -48,6 +48,7 @@ import JobTray from '../components/arturo/JobTray';
 import { useStickToBottom } from '../lib/useStickToBottom';
 import { currentThread, setCurrentThread, subscribeCurrentThread } from '../lib/arturoCurrent';
 import { ArturoCallCard } from '../components/arturo/ArturoCallCard';
+import AgentIdentityPill from '../components/avatar/AgentIdentityPill';
 import { groupCalls } from '../lib/arturoCallGroups';
 import { hasVoiceCallMarker, parseVoiceSegments } from '../lib/voiceCall';
 import { applyTextDelta, applyToolCall, applyToolResult, groupParts, hasToolParts, type TurnPart } from '../lib/turnParts';
@@ -536,14 +537,10 @@ export default function ArturoHome() {
         {/* Arturo's avatar and name, centred: tapping it opens the slide-out, as the gear does. A still
             picture (no wander or other motion up here); on a phone it shows a dot while Arturo works. Bigger on
             a phone, where the bar is taller. */}
-        <button type="button" className="arturo-title arturo-pill" aria-label={`${aname}: open settings`}
-                aria-expanded={panelOpen} aria-controls="arturo-panel" onClick={() => setPanelOpen(true)}>
-          <AgentAvatar agentId={`${ARTURO_ID}:pill`} role="pill" size={phoneBar ? 36 : 32} sleepAfterMs={0}
-                       state={arturoRec.status === 'working' ? 'working' : 'idle'}
-                       shape={arturoRec.shape} color={arturoRec.color} eyeColor={arturoRec.eyeColor} provider={arturoRec.provider}
-                       label={aname} />
-          <span>{aname}</span>
-        </button>
+        <AgentIdentityPill className="arturo-title" agentId={ARTURO_ID} name={aname} size={phoneBar ? 36 : 32}
+          aria-label={`${aname}: open settings`} aria-expanded={panelOpen} aria-controls="arturo-panel" onClick={() => setPanelOpen(true)}
+          avatar={{ agentId: `${ARTURO_ID}:pill`, sleepAfterMs: 0, state: arturoRec.status === 'working' ? 'working' : 'idle',
+                    shape: arturoRec.shape, color: arturoRec.color, eyeColor: arturoRec.eyeColor, provider: arturoRec.provider }} />
         {/* The shared bell (DashboardLayout portals it into this slot, as on agent pages), then the gear. */}
         <div className="arturo-header-end">
           <div ref={registerEndSlot ?? undefined} data-header-end-slot className="touch-compact flex items-center" />

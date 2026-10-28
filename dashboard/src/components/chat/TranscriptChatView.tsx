@@ -17,6 +17,8 @@ import { groupToolRuns, isInterrupted } from '../../lib/toolGroups';
 import { normalizeAgentState, STATE_STYLE, type LiveState } from '../../lib/agentStatus';
 import { styleForAgentState, isDegraded, type FeedVerdict } from '../../lib/feedLiveness';
 import OptionsMenuCard, { type PendingMenu } from './OptionsMenuCard';
+import { AgentSide } from './DecisionCard';
+import { ChatAgentContext } from './chatAgent';
 import DecisionBubble from './DecisionBubble';
 import { useQuery } from '@tanstack/react-query';
 import { fetchDecisions, interleave, takeFocusRequest, focusTarget, FOCUS_DECISION_EVENT, type FocusRequest } from '../../lib/decisions';
@@ -258,6 +260,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
       >
         {/* --composer-h: the agent page's FLOATING composer height, so the last message clears the
             pill. Unset everywhere else (the Agents-page panel, the harness): 0, i.e. py-4 as before. */}
+        <ChatAgentContext.Provider value={agentId}>
         <div
           className={compact ? undefined : "mt-auto w-full max-w-[860px] mx-auto px-4 pt-4 space-y-2.5"}
           style={compact ? undefined : { paddingBottom: 'calc(var(--composer-h, 0px) + 1rem)' }}
@@ -289,7 +292,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
             delivered anyway. Staleness outranks a pending menu here exactly as it does in
             chipStateFor. */}
         {live && pendingMenu && pendingMenu.options?.length > 0 && (
-          <OptionsMenuCard agentId={agentId} menu={pendingMenu} />
+          <AgentSide><OptionsMenuCard agentId={agentId} menu={pendingMenu} /></AgentSide>
         )}
 
         {/* In-flight indicator when the agent is mid-turn (transcript not flushed yet).
@@ -303,6 +306,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
           </div>
         )}
         </div>
+        </ChatAgentContext.Provider>
       </div>
 
       {/* Status bar. The AGENT PAGE now carries a LiveStatusLine above its composer, so this

@@ -1,7 +1,7 @@
 import type { ToolBlock } from './transcript';
 
-// The agent pane always renders 'normal': groups open, command output as a short preview that
-// expands. The Summary/Normal/Verbose toggle was removed (Shaw, 2026-10-11); the cards keep the
+// The agent pane always renders 'normal': groups folded to one line, a command card folded to its header
+// line until opened. The Summary/Normal/Verbose toggle was removed (2026-10-11); the cards keep the
 // prop so a caller can still ask for another level.
 export type ToolDensity = 'summary' | 'normal' | 'verbose';
 

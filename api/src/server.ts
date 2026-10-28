@@ -10,6 +10,7 @@ import { WebSocketServer } from 'ws';
 import agentsRouter from './routes/agents.js';
 import redAlertRouter from './routes/red-alert.js';
 import chatTranscriptRouter from './routes/chat-transcript.js';
+import agentMessagesRouter from './routes/agent-messages.js';
 import transcriptStreamRouter from './routes/transcript-stream.js';
 import tasksRouter from './routes/tasks.js';
 import activityRouter from './routes/activity.js';
@@ -182,6 +183,7 @@ app.get('/api/capabilities', (_req, res) => { res.json(capabilities()); });
 app.use('/api/agents', agentsNewRouter);
 app.use('/api/agents', agentsRouter);
 app.use('/api/agents', chatTranscriptRouter); // /:id/transcript (falls through from agentsRouter)
+app.use('/api/agents', agentMessagesRouter); // /:id/messages/:msgId (the body behind a "Message from" line)
 app.use('/api/agents', transcriptStreamRouter); // /:id/transcript/stream (F1 SSE lane; poll path above is the fallback)
 app.use('/api/agents', agentSendRouter); // /:id/send (B1 send bridge, falls through from agentsRouter)
 app.use('/api/tasks', tasksRouter);

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { decisionStatus, menuAnswerDecisions, decisionDelivery } from './agents.js';
 
-test('a card reads as pending, answered, expired, withdrawn or replaced', () => {
+test('a card reads as pending, answered, expired, withdrawn, dismissed or replaced', () => {
   const now = Date.parse('2026-10-26T12:00:00Z');
   assert.equal(decisionStatus({ status: 'pending', expires_at: '2026-10-27T00:00:00Z' }, now), 'pending');
   // nothing expires on its own: past expires_at it is still waiting; only a swept card reads as expired
@@ -11,6 +11,8 @@ test('a card reads as pending, answered, expired, withdrawn or replaced', () => 
   assert.equal(decisionStatus({ status: 'resumed' }, now), 'answered');
   assert.equal(decisionStatus({ status: 'answered' }, now), 'answered');
   assert.equal(decisionStatus({ status: 'pending', retired_at: '2026-10-25T00:00:00Z' }, now), 'withdrawn');
+  assert.equal(decisionStatus({ status: 'retired' }, now), 'withdrawn');
+  assert.equal(decisionStatus({ status: 'discarded' }, now), 'dismissed');
   assert.equal(decisionStatus({ status: 'pending', superseded_by: 'req-2' }, now), 'superseded');
 });
 
