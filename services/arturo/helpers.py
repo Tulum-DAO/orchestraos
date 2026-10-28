@@ -23,6 +23,8 @@ import tempfile
 import threading
 from pathlib import Path
 
+from services.arturo import assistant_name as _assistant_name
+
 log = logging.getLogger("arturo.helpers")
 
 RESEARCH_TIMEOUT_S = 240
@@ -187,7 +189,7 @@ def research_run(question, urls=None):
     prompt = question.strip()
     if urls:
         prompt += "\n\nStart from these links:\n" + "\n".join(f"- {u}" for u in urls[:8])
-    return HelperRun(_base("WebSearch,WebFetch", ["WebSearch", "WebFetch"], RESEARCH_SYSTEM), prompt,
+    return HelperRun(_base("WebSearch,WebFetch", ["WebSearch", "WebFetch"], _assistant_name.named(RESEARCH_SYSTEM)), prompt,
                      RESEARCH_TIMEOUT_S)
 
 
@@ -208,7 +210,7 @@ def look_run(path, question, uploads_dir):
     # Run FROM the uploads directory (the CLI approves reads inside its working directory) and approve it again
     # by rule; "//" is the CLI's absolute-path rule form (a single "/" is relative to the project). Anything
     # outside it is refused (measured).
-    return HelperRun(_base("Read", [f"Read(/{root}/**)"], LOOK_SYSTEM), prompt, LOOK_TIMEOUT_S, cwd=str(root))
+    return HelperRun(_base("Read", [f"Read(/{root}/**)"], _assistant_name.named(LOOK_SYSTEM)), prompt, LOOK_TIMEOUT_S, cwd=str(root))
 
 
 def untrusted(kind, text):

@@ -45,6 +45,7 @@ import { useArturoUi } from '../../stores/arturoUi';
 import { brainFromThread, describeTurnError, toWireBrain } from '../../lib/arturoBrain';
 import { brainProviderId, type HealthBrain } from '../../lib/brainLogo';
 import { arturoComposerText, arturoShownText } from '../../lib/arturoComposer';
+import { useAssistantName } from '../../lib/assistantName';
 
 interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[];
   /** Images the operator attached to this message (upload URLs). */
@@ -74,6 +75,7 @@ export function ArturoPill() {
   const setOpen = useArturoUi((st) => st.setOpen);
   const setExchanges = useArturoUi((st) => st.setExchanges);
   const [draft, setDraft] = useState('');
+  const aname = useAssistantName();
   const [turns, setTurns] = useState<PillTurn[]>([]);
   const [busy, setBusy] = useState(false);
   const [showThreads, setShowThreads] = useState(false);
@@ -242,7 +244,7 @@ export function ArturoPill() {
       : { role: 'arturo', text: sendOutcomeText(r) ?? (isStarting(r)
           ? 'I am still starting up and could not answer yet — give `orchestra up` a moment and send that again.'
           : isBusy(r) ? 'Still answering an earlier message in this conversation (another tab or device). Send this again in a moment.'
-          : describeTurnError(r)?.message || `Could not reach Arturo: ${r.error || 'unknown'}`), at: Date.now() });
+          : describeTurnError(r)?.message || `Could not reach ${aname}: ${r.error || 'unknown'}`), at: Date.now() });
     void listThreads().then(setThreads);      // the thread it just created/updated joins the list
   }
 
@@ -303,9 +305,9 @@ export function ArturoPill() {
       {/* No backdrop, deliberately (operator, 2026-09-19): the pane must not dim the page and
           must not swallow clicks on it — you keep working while Arturo is open, the way the
           assistant panel in the previous build did. Close with the ×. */}
-      <div ref={panelRef} className="arturo-pill-panel" role="dialog" aria-label="Ask Arturo">
+      <div ref={panelRef} className="arturo-pill-panel" role="dialog" aria-label={`Ask ${aname}`}>
         <div className="arturo-pill-head">
-          <span className="who">Arturo</span>
+          <span className="who">{aname}</span>
           <span className="spacer" />
           <button className="linkish" onClick={() => setShowThreads((s) => !s)} aria-label="Previous conversations"
                   aria-expanded={showThreads}><History size={14} /> Threads</button>
@@ -383,7 +385,7 @@ export function ArturoPill() {
             {dictNote && <span className="attach-error">{dictNote}</span>}
           </div>
         )}
-        <textarea ref={ta} rows={1} value={draft} placeholder="Ask Arturo…" onChange={(e) => { setDraft(e.target.value); growTa(); }}
+        <textarea ref={ta} rows={1} value={draft} placeholder={`Ask ${aname}…`} onChange={(e) => { setDraft(e.target.value); growTa(); }}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} />
         <div className="ctrl-row">
           {/* The page-context CARD lives HERE, in place of the old "Arturo" chip: it sits
@@ -421,7 +423,7 @@ export function ArturoPill() {
               // the captions and the job drawer keep coming down.
               <button className={muted ? 'circle-btn muted' : 'circle-btn'} aria-pressed={muted}
                       aria-label={muted ? 'Unmute microphone' : 'Mute microphone'}
-                      title={muted ? 'Unmute: Arturo can hear you again' : 'Mute: Arturo keeps talking, but can\'t hear you'}
+                      title={muted ? `Unmute: ${aname} can hear you again` : `Mute: ${aname} keeps talking, but can't hear you`}
                       onClick={toggleMute}>{muted ? <MicOff size={16} /> : <Mic size={16} />}</button>
             ) : (
               <button className={dictMode === 'idle' ? 'circle-btn' : `circle-btn ${dictMode}`}
@@ -435,7 +437,7 @@ export function ArturoPill() {
             ) : arturoComposerText(draft, attachments.length) ? (
               <button className="circle-btn white" aria-label="Send" onClick={() => void send()} disabled={busy}><ArrowUp size={18} /></button>
             ) : (
-              <button className="circle-btn white" aria-label={HANDS_FREE} title={handsFreeTitle(handsFreeReady(health))}
+              <button className="circle-btn white" aria-label={HANDS_FREE} title={handsFreeTitle(handsFreeReady(health), aname)}
                       disabled={!handsFreeReady(health)} onClick={() => void toggleCall()}><AudioLines size={16} /></button>
             )}
           </div>

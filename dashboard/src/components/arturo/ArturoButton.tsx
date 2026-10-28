@@ -5,9 +5,11 @@
  */
 import { Mic } from 'lucide-react';
 import { useArturoUi } from '../../stores/arturoUi';
+import { useAssistantName } from '../../lib/assistantName';
 
 export function ArturoButton({ small = false }: { small?: boolean } = {}) {
   const open = useArturoUi((s) => s.open);
+  const aname = useAssistantName();
   const setOpen = useArturoUi((s) => s.setOpen);
   const exchanges = useArturoUi((s) => s.exchanges);
   return (
@@ -15,9 +17,9 @@ export function ArturoButton({ small = false }: { small?: boolean } = {}) {
       data-arturo-toggle
       type="button"
       onClick={() => setOpen(!open)}
-      aria-label={open ? 'Close Arturo' : 'Ask Arturo'}
+      aria-label={open ? `Close ${aname}` : `Ask ${aname}`}
       aria-expanded={open}
-      title="Ask Arturo"
+      title={`Ask ${aname}`}
       // 40px on desktop, the same box as the top-bar icons beside it; 44px under the touch rule
       // (touch-circle), so never an oval. Its colour, not its size, is what sets it apart.
       className={`${small ? 'touch-circle shadow-lg shadow-black/40' : 'touch-circle min-[769px]:h-10 min-[769px]:w-10'} relative shrink-0 rounded-full flex items-center justify-center border transition-colors ${

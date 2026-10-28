@@ -9,9 +9,11 @@
  * The context record rides in front of the text as one line so every page's pill can
  * hand Arturo "where the user is" without a second contract.
  */
+import { assistantName } from './assistantName.ts';
+
 export interface ArturoBrain { kind: 'api' | 'runtime' | 'none'; runtime?: string; cli?: string; model: string; reason?: string; provider?: string }
 export interface ArturoStt { server: boolean; backend: 'local-whisper' | 'none'; state: 'ready' | 'warming' | 'not-installed' | 'off' | 'error'; reason?: string; install?: string; model?: string }
-export interface ArturoHealth { live?: boolean; live_engine?: 'gemini' | 'relay' | null; onboarded?: boolean; onboarding_conversation?: string | null; operator?: OperatorFacts; ok: boolean; status?: number; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; stt?: ArturoStt; disabled?: boolean; error?: string }
+export interface ArturoHealth { assistant_name?: string; live?: boolean; live_engine?: 'gemini' | 'relay' | null; onboarded?: boolean; onboarding_conversation?: string | null; operator?: OperatorFacts; ok: boolean; status?: number; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; stt?: ArturoStt; disabled?: boolean; error?: string }
 /** A tap-to-pick card the BRAIN wrote with ask_choices: its options, and whether several may be picked.
  *  `note` is the server's own line (the starter team's cost), never the model's. */
 export type ChoiceCard = { options: string[]; multi: boolean; purpose: 'starter_team' | 'devices' | 'other'; note?: string; exclusive?: string };
@@ -212,9 +214,9 @@ export function toggleChoice(options: string[], picked: string[], option: string
 export const DICTATE_TITLE = "Dictate (uses your browser's mic permission)";
 /** A working name (the operator may rename it): change it here and every label follows. */
 export const HANDS_FREE = 'Live voice mode';
-export function handsFreeTitle(keyPresent: boolean): string {
+export function handsFreeTitle(keyPresent: boolean, name = assistantName()): string {
   return keyPresent
-    ? `${HANDS_FREE}: talk, and Arturo talks back`
+    ? `${HANDS_FREE}: talk, and ${name} talks back`
     : `${HANDS_FREE} needs a voice key on your server: GEMINI_API_KEY, or OPENAI_API_KEY with GPT-Live picked as the voice`;
 }
 /** The Dictate button during a call: the call captions the caller already, so a second recognizer

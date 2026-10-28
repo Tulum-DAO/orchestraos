@@ -192,7 +192,8 @@ def playbook(ctx=None) -> str:
         f"pairing an app later, the guide is {ONBOARDING_GUIDE}. If they ask something else, answer it "
         "briefly, then return to the next goal."
     )
-    return ("ONBOARDING: you are leading this operator's first run. What is known now: " + " ".join(known)
+    from services.arturo import assistant_name
+    return assistant_name.named("ONBOARDING: you are leading this operator's first run. What is known now: " + " ".join(known)
             + " Goals, in order: " + " ".join(goals) + " " + rules)
 
 
