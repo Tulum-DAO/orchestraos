@@ -1,14 +1,14 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo } from 'react';
 import QuestionnaireForm from '../components/QuestionnaireForm';
 import { isLiveQuestionnaire } from '../lib/questionnaireForm';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import {
-  Inbox as InboxIcon, ShieldCheck, Brain, Bot, Rocket,
-  ClipboardList, CheckCircle2, XCircle, X, User,
-  ChevronDown, ChevronRight, ExternalLink, Clock, MessageSquare,
+  Inbox as InboxIcon, ShieldCheck,
+  ClipboardList,
+  ChevronDown, ChevronRight, Clock, MessageSquare,
 } from 'lucide-react';
-import { post } from '../lib/api';
+import { dismissMenuCard, post } from '../lib/api';
 import {
   initialMenuAnswerState,
   selectOption,
@@ -18,8 +18,8 @@ import {
   type MenuOption,
 } from '../lib/menuAnswer';
 import MenuAnswerBlock from '../components/chat/MenuAnswerCard';
-import { operatorUserId } from '../lib/runtimeConfig';
-import Markdown from '../components/chat/Markdown';
+import DecisionCard, { ApprovalAnswer } from '../components/chat/DecisionCard';
+import ApprovalExtras from '../components/chat/ApprovalExtras';
 import { approvalCardBody, approvalCardAgent } from '../lib/approvalCard';
 
 async function fetchJson<T>(path: string): Promise<T> {
@@ -87,24 +87,6 @@ const TABS = [
   { key: 'questionnaires', label: 'Questionnaires', icon: ClipboardList },
 ] as const;
 
-const URGENCY_BORDER: Record<string, string> = {
-  low: 'border-l-green-500',
-  normal: 'border-l-amber-500',
-  critical: 'border-l-red-500',
-};
-
-const URGENCY_BADGE: Record<string, string> = {
-  low: 'text-green-400 bg-green-500/10 border-green-500/30',
-  normal: 'text-amber-400 bg-amber-500/10 border-amber-500/30',
-  critical: 'text-red-400 bg-red-500/10 border-red-500/30',
-};
-
-const RISK_COLORS: Record<string, string> = {
-  low: 'text-green-400',
-  medium: 'text-amber-400',
-  high: 'text-red-400',
-};
-
 function relativeTime(ts: string): string {
   const diff = Date.now() - new Date(ts).getTime();
   const mins = Math.floor(diff / 60000);
@@ -121,9 +103,6 @@ export default function Inbox() {
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<string>('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [denyModalId, setDenyModalId] = useState<string | null>(null);
-  const [denyReason, setDenyReason] = useState('');
-  const denyInputRef = useRef<HTMLTextAreaElement>(null);
 
   // Fetch approvals
   const { data: approvalsData, isLoading: approvalsLoading } = useQuery({
@@ -155,11 +134,7 @@ export default function Inbox() {
   const denyMutation = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason: string }) =>
       post(`/approvals/unified/${id}/deny`, { reason }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['unified-approvals'] });
-      setDenyModalId(null);
-      setDenyReason('');
-    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['unified-approvals'] }),
   });
 
   // V3 universal Respond for kind='menu' rows — see Approvals.tsx for the
@@ -267,152 +242,42 @@ export default function Inbox() {
         {filtered.map((item) => {
           if (item.kind === 'approval') {
             const a = item.data;
-            const isExpanded = expandedId === a.id;
-
+            const isMenu = a.kind === 'menu';
+            const approving = approveMutation.isPending && approveMutation.variables === a.id;
+            const denying = denyMutation.isPending && denyMutation.variables?.id === a.id;
+            const approvalError = (approveMutation.variables === a.id && approveMutation.error?.message)
+              || (denyMutation.variables?.id === a.id && denyMutation.error?.message) || null;
             return (
-              <div key={`a-${a.id}`} className={clsx(
-                'rounded-xl border border-neutral-800 bg-neutral-900 overflow-hidden border-l-4',
-                URGENCY_BORDER[a.urgency],
-                a.urgency === 'critical' && 'shadow-[0_0_12px_rgba(239,68,68,0.3)]'
-              )}>
-                <div className="p-4 space-y-3">
-                  {/* Badges */}
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400 border border-violet-500/30">
-                      approval
-                    </span>
-                    {a.type === 'learning' && (
-                      <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/30 flex items-center gap-1">
-                        <Brain size={9} /> Learning
-                      </span>
-                    )}
-                    {a.type === 'agent' && (
-                      <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-green-500/10 text-green-400 border border-green-500/30 flex items-center gap-1">
-                        <Bot size={9} /> Agent
-                      </span>
-                    )}
-                    {a.type === 'deployment' && (
-                      <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 flex items-center gap-1">
-                        <Rocket size={9} /> Deploy
-                      </span>
-                    )}
-                    {a.pattern_type === 'correction' && (
-                      <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30">
-                        correction
-                      </span>
-                    )}
-                    {a.initiated_by === operatorUserId() && (
-                      <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/30 flex items-center gap-1">
-                        <User size={9} /> the operator
-                      </span>
-                    )}
-                    <span className={clsx('text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded border', URGENCY_BADGE[a.urgency])}>
-                      {a.urgency}
-                    </span>
-                    <span className={clsx('text-xs', RISK_COLORS[a.risk_level])}>
-                      {a.risk_level} risk
-                    </span>
-                    {approvalCardAgent(a) && (
-                      <span className="text-xs text-neutral-400 flex items-center gap-1">
-                        <Bot size={11} /> from <span className="font-mono text-neutral-300">{approvalCardAgent(a)}</span>
-                      </span>
-                    )}
-                  </div>
-
-                  <h3 className="text-sm font-medium text-neutral-100 leading-snug">{a.title}</h3>
-
-                  {approvalCardBody(a) && (
-                    <div className="text-sm text-neutral-300 leading-relaxed max-h-72 overflow-y-auto pr-1">
-                      <Markdown text={approvalCardBody(a)} />
-                    </div>
-                  )}
-
-                  {a.mechanism_label && (
-                    <p className="text-xs text-neutral-500">
-                      {a.mechanism_label} · {relativeTime(a.created_at)}
-                    </p>
-                  )}
-
-                  {/* Sandbox badge */}
-                  {a.sandbox_result ? (
-                    <div className={clsx(
-                      'flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg',
-                      a.sandbox_result.passed ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'
-                    )}>
-                      {a.sandbox_result.passed ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
-                      Sandbox: {a.sandbox_result.passed ? 'PASS' : 'FAIL'} ({a.sandbox_result.total || 0} tests)
-                    </div>
-                  ) : null}
-
-                  {/* Evidence */}
-                  {a.evidence_summary && (
-                    <p className="text-xs text-neutral-400 bg-neutral-800/70 rounded-lg px-3 py-2 leading-relaxed italic">
-                      {a.evidence_summary}
-                    </p>
-                  )}
-
-                  {/* Rule text */}
-                  {a.rule_text && (
-                    <div className="bg-neutral-950 border border-neutral-800 rounded-lg px-3 py-2">
-                      <p className="text-[10px] text-neutral-600 uppercase tracking-wider mb-1">Rule that will be added</p>
-                      <p className="text-xs text-neutral-300 font-mono leading-relaxed">{a.rule_text}</p>
-                    </div>
-                  )}
-
-                  {/* One-pager expand */}
-                  {a.onepager_url && (
-                    <button
-                      onClick={() => setExpandedId(isExpanded ? null : a.id)}
-                      className="flex items-center gap-1.5 text-xs text-neutral-400 hover:text-neutral-200 transition-colors"
-                    >
-                      {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                      <ExternalLink size={12} />
-                      {isExpanded ? 'Hide details' : 'View full analysis'}
-                    </button>
-                  )}
-
-                  {isExpanded && a.onepager_url && (
-                    <div className="rounded-lg overflow-hidden border border-neutral-700 bg-black">
-                      <iframe src={a.onepager_url} className="w-full border-0" style={{ minHeight: '500px' }} title="Proposal details" />
-                    </div>
-                  )}
-
-                  {/* kind='menu' rows answer via option/free-text only (watch_gateway.py:654-656) */}
-                  {a.kind === 'menu' ? (
-                    <MenuAnswerBlock
-                      item={a}
-                      state={getMenuAnswer(a.id)}
-                      onSelect={(n) => setMenuAnswers((m) => ({ ...m, [a.id]: selectOption(getMenuAnswer(a.id), n) }))}
-                      onText={(t) => setMenuAnswers((m) => ({ ...m, [a.id]: setText(getMenuAnswer(a.id), t) }))}
-                      onRespond={() => {
-                        const payload = buildMenuAnswerPayload(getMenuAnswer(a.id));
-                        if (!payload) return;
-                        answerMenuMutation.mutate({ id: a.id, ...payload });
-                      }}
-                      sending={answerMenuMutation.isPending && answerMenuMutation.variables?.id === a.id}
-                      error={menuAnswerError[a.id]}
-                    />
-                  ) : (
-                    <div className="flex gap-2 pt-1">
-                      <button
-                        onClick={() => approveMutation.mutate(a.id)}
-                        disabled={approveMutation.isPending}
-                        className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-green-600 hover:bg-green-500 text-white text-sm font-medium transition-colors disabled:opacity-50"
-                      >
-                        <CheckCircle2 size={15} />
-                        Approve
-                      </button>
-                      <button
-                        onClick={() => { setDenyModalId(a.id); setDenyReason(''); setTimeout(() => denyInputRef.current?.focus(), 100); }}
-                        className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-neutral-800 hover:bg-red-500/20 text-neutral-400 hover:text-red-400 text-sm font-medium transition-colors border border-neutral-700"
-                      >
-                        <XCircle size={15} />
-                        Deny
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
+              <DecisionCard key={`a-${a.id}`} kind={isMenu ? 'decision' : 'approval'} question={a.title}
+                agent={approvalCardAgent(a) || null} risk={a.risk_level} body={approvalCardBody(a)} open
+                extra={<ApprovalExtras item={a} expanded={expandedId === a.id}
+                  onToggle={() => setExpandedId(expandedId === a.id ? null : a.id)} />}
+                onDismiss={isMenu ? async () => {
+                  const err = await dismissMenuCard(a.id, a.agent_id, a.menu?.question || a.title);
+                  if (!err) void queryClient.invalidateQueries({ queryKey: ['unified-approvals'] });
+                  return err;
+                } : undefined}>
+                {/* kind='menu' rows answer via option/free-text only (watch_gateway.py) */}
+                {isMenu ? (
+                  <MenuAnswerBlock
+                    item={a}
+                    state={getMenuAnswer(a.id)}
+                    onSelect={(n) => setMenuAnswers((m) => ({ ...m, [a.id]: selectOption(getMenuAnswer(a.id), n) }))}
+                    onText={(t) => setMenuAnswers((m) => ({ ...m, [a.id]: setText(getMenuAnswer(a.id), t) }))}
+                    onRespond={() => {
+                      const payload = buildMenuAnswerPayload(getMenuAnswer(a.id));
+                      if (!payload) return;
+                      answerMenuMutation.mutate({ id: a.id, ...payload });
+                    }}
+                    sending={answerMenuMutation.isPending && answerMenuMutation.variables?.id === a.id}
+                    error={menuAnswerError[a.id]}
+                  />
+                ) : (
+                  <ApprovalAnswer sending={approving || denying} error={approvalError}
+                    onApprove={() => approveMutation.mutate(a.id)}
+                    onDeny={(reason) => denyMutation.mutate({ id: a.id, reason })} />
+                )}
+              </DecisionCard>
             );
           }
 
@@ -495,42 +360,6 @@ export default function Inbox() {
         )}
       </div>
 
-      {/* Deny modal */}
-      {denyModalId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setDenyModalId(null)}>
-          <div className="bg-neutral-900 border border-neutral-700 rounded-2xl w-full max-w-md shadow-2xl p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-white">Why are you denying this?</h3>
-              <button onClick={() => setDenyModalId(null)} className="text-neutral-500 hover:text-neutral-300">
-                <X size={20} />
-              </button>
-            </div>
-            <textarea
-              ref={denyInputRef}
-              value={denyReason}
-              onChange={(e) => setDenyReason(e.target.value)}
-              placeholder="What was wrong with this proposal?"
-              rows={3}
-              className="w-full bg-neutral-950 border border-red-900/50 rounded-lg px-4 py-3 text-sm text-neutral-200 placeholder-neutral-600 focus:outline-none focus:border-red-500 resize-none"
-            />
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => setDenyModalId(null)}
-                className="px-4 py-2 text-sm rounded-lg bg-neutral-800 text-neutral-400 hover:text-neutral-200 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => { if (denyReason.trim()) denyMutation.mutate({ id: denyModalId, reason: denyReason.trim() }); }}
-                disabled={!denyReason.trim() || denyMutation.isPending}
-                className="px-4 py-2 text-sm rounded-lg bg-red-600 text-white font-medium disabled:opacity-50 transition-colors"
-              >
-                Confirm Deny
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

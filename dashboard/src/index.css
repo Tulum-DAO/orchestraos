@@ -405,10 +405,43 @@ main {
    badge matches what is really there (avatarCanvas.ts reads --la-surface). The sidebar is the page
    background; a selected row is neutral-200, neutral-800 in dark. */
 .la-on-sidebar { --la-surface: var(--background); }
-/* The name pill a sidebar face shows on hover (AgentRail FaceRow): a quick fade, and its face's badge cut-out
-   matches the pill, not the sidebar. */
-.rail-face-pill { --la-surface: var(--color-neutral-100); animation: rail-face-pill-in 90ms ease-out both; }
-.dark .rail-face-pill { --la-surface: var(--color-neutral-800); }
+/* The agent identity pill (components/avatar/AgentIdentityPill.tsx): an agent's face and name, the one element
+   behind Arturo's header pill, a sidebar face's hover pill and the "Message from" line in a chat. A change here
+   changes all of them; a place that needs to differ says so with its own class. The face sits in a 2px inset,
+   the name 8px from it, 14px of room after the name. Colours are Arturo's card greys, in both themes. */
+:root { --agent-pill-bg: #f2f2f2; --agent-pill-bg-hover: #e9e9e9; --agent-pill-fg: #111; }
+.dark { --agent-pill-bg: #1c1c1c; --agent-pill-bg-hover: #232323; --agent-pill-fg: #fff; }
+.agent-pill {
+  display: inline-flex; align-items: center; gap: 8px; box-sizing: border-box; min-width: 0; max-width: 100%;
+  padding: 2px 14px 2px 2px; border: 0; border-radius: 999px; margin: 0;
+  background: var(--agent-pill-bg); --la-surface: var(--agent-pill-bg); color: var(--agent-pill-fg);
+  font: inherit; font-size: 15px; font-weight: 600; line-height: 1.2; white-space: nowrap; text-align: left;
+}
+.agent-pill > canvas { flex: 0 0 auto; }
+.agent-pill-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+button.agent-pill { cursor: pointer; }
+@media (hover: hover) {
+  button.agent-pill:not(.is-bare):hover { background: var(--agent-pill-bg-hover); --la-surface: var(--agent-pill-bg-hover); }
+}
+/* Bare: the face and name sit in a line of text with no pill until hovered. The pill's own padding is taken
+   back with a negative margin, so the face and name are where they would be without it, and hovering only
+   paints the pill behind them: nothing moves. */
+.agent-pill.is-bare { background: transparent; --la-surface: var(--background); margin: -2px -14px -2px -2px; }
+@media (hover: hover) {
+  button.agent-pill.is-bare:hover { background: var(--agent-pill-bg); --la-surface: var(--agent-pill-bg); }
+}
+button.agent-pill.is-bare:focus-visible { background: var(--agent-pill-bg); --la-surface: var(--agent-pill-bg); outline: none; }
+/* Inline text size (the "Message from" line): the line's own size and weight, and the 6px icon-to-label gap of a
+   collapsed call's line. */
+.agent-pill.is-inline { font-size: 13px; font-weight: 400; gap: 6px; }
+/* No status room: the face is centred in its canvas, with the provider badge's room on its left and the status
+   dot's on its right. Where no status dot is ever shown, that right-hand room is only a gap before the name, so
+   it is taken back (a fifth of the face's size). */
+.agent-pill.no-status-room > canvas { margin-right: calc(var(--agent-face, 32px) * -0.2); }
+
+/* The name pill a sidebar face shows on hover (AgentRail FaceRow) is an agent identity pill; this only adds its
+   quick fade. */
+.rail-face-pill { animation: rail-face-pill-in 90ms ease-out both; }
 @keyframes rail-face-pill-in { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .rail-face-pill { animation: none; } }
 .la-on-selected { --la-surface: var(--color-neutral-200); }

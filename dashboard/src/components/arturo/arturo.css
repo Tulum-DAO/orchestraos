@@ -52,9 +52,6 @@
 .arturo-glyph{ width:36px; height:36px; display:flex; align-items:center; justify-content:center; color:var(--foreground); background:none; border:0; border-radius:10px; transition:background-color .15s; }
 /* Hover only where there is a hover, as Tailwind's hover: does, so a tap on a phone leaves no tint behind. */
 @media (hover:hover){ .arturo-glyph:hover{ background:var(--muted); } }
-.arturo-title{ display:flex; align-items:center; gap:6px; font-size:16px; font-weight:600; color:var(--text); background:none; border:0; }
-.arturo-title .model{ color:var(--grey); font-weight:500; }
-.arturo-title .chev{ color:var(--grey2); font-size:12px; }
 .arturo-glow{
   position:absolute; left:50%; bottom:0; width:min(520px,140vw); height:420px; transform:translateX(-50%);
   background:radial-gradient(ellipse at 50% 100%, rgba(217,119,87,0.30) 0%, rgba(217,119,87,0.10) 40%, rgba(217,119,87,0) 72%);
@@ -423,15 +420,15 @@ button.call-label{ cursor:pointer; }
 .arturo-shell .la-on-card{ --la-surface:var(--card); }
 .arturo-shell .la-on-canvas{ --la-surface:var(--canvas); }
 
-/* The header pill: Arturo's avatar (still) and name, centred where the title was; it opens the slide-out. */
-.arturo-pill{ display:inline-flex; align-items:center; gap:8px; min-height:0; height:36px; padding:2px 14px 2px 2px; border-radius:999px;
-  background:var(--card); --la-surface:var(--card); color:var(--text); font:inherit; font-size:15px; font-weight:600; cursor:pointer; }
-@media (hover:hover){ .arturo-pill:hover{ background:var(--card2); --la-surface:var(--card2); } }
+/* The header pill: Arturo's avatar (still) and name, centred where the title was; it opens the slide-out. It is
+   the shared agent identity pill (.agent-pill, index.css), in Arturo's own greys, and the 36px bar height. */
+.arturo-shell{ --agent-pill-bg:var(--card); --agent-pill-bg-hover:var(--card2); --agent-pill-fg:var(--text); }
+.arturo-title.agent-pill{ min-height:0; height:36px; }
 /* Phone: a taller bar, so the pill and its avatar can be bigger (desktop keeps the 53px bar that lines up
-   with the sidebar's). */
+   with the sidebar's). An explicit exception to the shared pill. */
 @media (max-width:47.99rem){
   [data-layout-chat] .arturo-header{ height:60px; }
-  .arturo-pill{ height:44px; padding:4px 16px 4px 4px; font-size:16px; gap:9px; }
+  .arturo-title.agent-pill{ height:44px; padding:4px 16px 4px 4px; font-size:16px; gap:9px; }
 }
 
 /* The working line: who, and the step it is on, just above the composer at the left. Floats, so the

@@ -1014,7 +1014,9 @@ export function decisionStatus(row: { status?: string | null; expires_at?: strin
                                       superseded_by?: string | null }, _now = Date.now()): string {
   const s = String(row.status || 'pending');
   if (row.superseded_by) return 'superseded';
-  if (row.retired_at || s === 'retired' || s === 'discarded') return 'withdrawn';
+  if (row.retired_at || s === 'retired') return 'withdrawn';
+  // Discarded is the card's ✕ (web or iOS): the person closed it, the agent didn't.
+  if (s === 'discarded') return 'dismissed';
   // A card stays open until someone answers it: expires_at is still stored, but the expiry sweep is off by
   // default (approval.py expire-sweep does nothing unless EXPIRE_PENDING=1), so a pending card past its
   // expires_at is still waiting, exactly as "Needs you", the bell and the Approvals page count it. Showing it

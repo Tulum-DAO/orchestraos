@@ -27,6 +27,7 @@ import {
   type CanonicalRow,
 } from './_canonical-approvals.js';
 import { principal } from '../lib/principal.js';
+import { dismissCard, defaultDismissDeps } from '../lib/approval-dismiss.js';
 import {
   isUnscopedAdmin,
   canPrincipalSeeCard,
@@ -694,6 +695,17 @@ router.post('/:id/answer', (req: Request, res: Response) => {
     return;
   }
   res.status(400).json({ error: result.error || 'answer refused', id });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/approvals/unified/:id/dismiss — close a pending card without an answer (the card's ✕).
+// The gateway's discard does the work (history + a "don't keep waiting" note to the agent); see
+// lib/approval-dismiss.ts. Scoped like every /:id route by approvalScopeParam above.
+// ---------------------------------------------------------------------------
+
+router.post('/:id/dismiss', async (req: Request, res: Response) => {
+  const { status, body } = await dismissCard(String(req.params.id), defaultDismissDeps());
+  res.status(status).json(body);
 });
 
 export default router;

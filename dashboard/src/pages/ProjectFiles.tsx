@@ -9,6 +9,7 @@ import { isViewHidden } from '../lib/features';
 import { setArturoFocus } from '../lib/arturo';
 import FloatingWindow from '../components/FloatingWindow';
 import Markdown from '../components/chat/Markdown';
+import CopyButton from '../components/CopyButton';
 
 /**
  * A project's files (the card's "View files"): every file in its folder except .jsonl logs, laid out by the
@@ -62,6 +63,15 @@ function FileView({ slug, path }: { slug: string; path: string }) {
       {data.truncated && <p className="text-xs text-neutral-500 px-4 pb-4">Showing the first 512 KB.</p>}
     </>
   );
+}
+
+/** A text file window's copy button: the file's text as it is on disk (a markdown file's source, not its
+ *  rendering). Reads the same query the window's body does, so it fetches nothing extra; none for images, PDFs
+ *  and other files that aren't text. */
+function FileCopy({ slug, path }: { slug: string; path: string }) {
+  const { data } = useQuery({ queryKey: ['project-file', slug, path], queryFn: () => fetchProjectFile(slug, path), refetchInterval: 15_000 });
+  if (!data || data.kind === 'image' || data.kind === 'pdf' || data.kind === 'binary' || typeof data.text !== 'string') return null;
+  return <CopyButton text={data.text} label="Copy file" size={15} className="p-1 text-neutral-400 hover:text-white hover:bg-neutral-800" />;
 }
 
 interface Win { path: string; z: number; x: number; y: number }
@@ -158,7 +168,8 @@ export default function ProjectFiles() {
 
       {wins.map((w) => (
         <FloatingWindow key={w.path} title={w.path.slice(w.path.lastIndexOf('/') + 1)} subtitle={`${name} · ${w.path}`}
-                        x={w.x} y={w.y} z={w.z} onFocus={() => { if (w.path !== top) raise(w.path); }} onClose={() => close(w.path)}>
+                        x={w.x} y={w.y} z={w.z} onFocus={() => { if (w.path !== top) raise(w.path); }} onClose={() => close(w.path)}
+                        actions={<FileCopy slug={slug} path={w.path} />}>
           <FileView slug={slug} path={w.path} />
         </FloatingWindow>
       ))}

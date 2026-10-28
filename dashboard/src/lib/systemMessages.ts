@@ -35,6 +35,10 @@ export interface SystemMessage {
   outcome: 'approve' | 'deny' | 'done' | 'cant' | 'failed' | null;
   /** A relay marked high or urgent. */
   urgent: boolean;
+  /** A relay's sender id, as the router wrote it. */
+  sender?: string | null;
+  /** A relay's message-store id (from its /tmp/agent-msg-<id>.md pointer): the chat reads the full body by it. */
+  messageId?: string | null;
 }
 
 /** The same prefixes the server classifies by, for a transcript from a server that sent no tag. */
@@ -173,6 +177,11 @@ function relay(t: string): SystemMessage | null {
   msg.urgent = priority === 'high' || priority === 'urgent';
   msg.detail = msg.urgent ? priority : null;
   msg.note = [timing, loop ? 'possible reply loop' : null].filter(Boolean).join(' · ') || null;
+  msg.sender = senderRaw;
+  msg.messageId = rest.match(/\/tmp\/agent-msg-([A-Za-z0-9_]+)\.md/)?.[1] ?? null;
+  // The approvals service's stored copy of an answer the agent already got ("Approval <id> resolved|discarded"):
+  // it names its card, so it folds into that card like the direct answer line does.
+  msg.cardId = subject.match(/^Approval ((?:apr|qnr)_[A-Za-z0-9_]+) (?:resolved|discarded)$/)?.[1] ?? null;
   return msg;
 }
 
@@ -210,7 +219,8 @@ export function parseSystemMessage(text: string, kind?: MachineKind | null): Sys
 }
 
 /** Drop the machine lines that answer a card the chat already draws (the card's outcome row shows
- *  the answer), keeping relays and every line whose card is not drawn here. */
+ *  the answer), the approvals service's stored copy of that answer included, keeping every other relay and
+ *  every line whose card is not drawn here. */
 export function foldCardAnswers<N extends { kind: string; text?: string; machine?: string }>(
   nodes: N[], drawnCardIds: ReadonlySet<string>,
 ): N[] {
@@ -218,6 +228,18 @@ export function foldCardAnswers<N extends { kind: string; text?: string; machine
   return nodes.filter((n) => {
     if (n.kind !== 'user' || !n.text) return true;
     const sys = parseSystemMessage(n.text, (n.machine as MachineKind | undefined) ?? null);
-    return !(sys?.cardId && sys.kind !== 'relay' && drawnCardIds.has(sys.cardId));
+    return !(sys?.cardId && drawnCardIds.has(sys.cardId));
   });
+}
+
+/** The one line a service's message (a sender that is not an agent: the approvals service, briefings) shows
+ *  instead of "Message from": what happened and to what, from its body when it is one of the lines this file
+ *  reads ("Request approved · <question>"), else the sender and the subject. */
+export function serviceNoticeText(msg: SystemMessage, body?: string | null): string {
+  const b = (body || '').trim();
+  const dismissed = b.match(/^\[APPROVAL DISCARDED [^\]]+\] Your request '([\s\S]*?)' was DISMISSED/);
+  if (dismissed) return `Request dismissed · ${dismissed[1].trim()}`;
+  const known = b ? parseSystemMessage(b) : null;
+  if (known && known.kind !== 'relay' && known.subject) return `${known.headline} · ${known.subject}`;
+  return [msg.sender, msg.subject].filter(Boolean).join(' · ');
 }

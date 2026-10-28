@@ -5,6 +5,7 @@
  * imports (see reference_vps_browser_testing — never import JS from a CDN).
  */
 import { useState } from 'react';
+import CopyButton from '../CopyButton';
 
 const CODE_COLLAPSE_LINES = 14;
 
@@ -15,8 +16,11 @@ function CodeBlock({ code, lang }: { code: string; lang?: string }) {
   const shown = open ? lines : lines.slice(0, CODE_COLLAPSE_LINES);
   return (
     <div className="my-1.5 rounded-md border border-neutral-800 bg-neutral-950 overflow-hidden">
-      <div className="flex items-center justify-between px-2.5 py-1 bg-neutral-900/60 border-b border-neutral-800">
+      {/* The title bar: the language, then (at the right) the fold control and a copy button, which copies the
+          whole block even while it is folded. */}
+      <div className="touch-compact flex items-center gap-2 px-2.5 py-1 bg-neutral-900/60 border-b border-neutral-800">
         <span className="text-[10px] font-mono text-neutral-500">{lang || 'code'}</span>
+        <span className="ml-auto" />
         {long && (
           <button
             onClick={() => setOpen((o) => !o)}
@@ -25,6 +29,8 @@ function CodeBlock({ code, lang }: { code: string; lang?: string }) {
             {open ? 'Collapse' : `Show ${lines.length} lines`}
           </button>
         )}
+        <CopyButton text={lines.join('\n')} label="Copy code" size={12}
+                    className="-mr-1 text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800" />
       </div>
       <pre className="px-3 py-2 overflow-x-auto text-[12px] leading-relaxed">
         <code className="font-mono text-neutral-200 whitespace-pre">{shown.join('\n')}</code>

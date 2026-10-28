@@ -17,9 +17,10 @@ import {
 } from '../../lib/toolGroups';
 import { parseMessageSegments, hasPasteMarkers } from '../../lib/pastedText';
 import { parseSystemMessage, type SystemMessage, type MachineKind } from '../../lib/systemMessages';
+import AgentMessage from './AgentMessage';
 import { hasVoiceCallMarker, parseVoiceSegments } from '../../lib/voiceCall';
 import VoiceCallCard from './VoiceCallCard';
-import { isCommandTool, outputPreview, todoItems, type ToolDensity } from '../../lib/toolCardDetail';
+import { isCommandTool, todoItems, type ToolDensity } from '../../lib/toolCardDetail';
 
 const RESULT_COLLAPSE_CHARS = 600;
 
@@ -239,7 +240,7 @@ export function PendingBubble({ text, kind }: { text: string; kind: 'sent' | 'qu
 
 // B2 processed-queue batch: collapsed-by-default expandable div (tool-call-style),
 // entries newest->oldest, each = agent · how-long-ago · body.
-export function QueuedBatchCard({ count, entries }: { count: number; entries: { agent: string; sent_ts: string; body: string }[] }) {
+export function QueuedBatchCard({ count, entries }: { count: number; entries: { agent: string; sent_ts: string; body: string; machine?: string }[] }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="flex justify-start">
@@ -256,7 +257,11 @@ export function QueuedBatchCard({ count, entries }: { count: number; entries: { 
         </button>
         {open && (
           <div className="border-t border-neutral-800 divide-y divide-neutral-800/60">
-            {entries.map((e, i) => (
+            {entries.map((e, i) => {
+              // Another agent's message reads the same here as in the chat: the "Message from" line and its body.
+              const relay = parseSystemMessage(e.body, (e.machine as MachineKind | undefined) ?? null);
+              if (relay?.kind === 'relay') return <div key={i} className="px-3 py-2"><AgentMessage msg={relay} /></div>;
+              return (
               <div key={i} className="px-3 py-1.5">
                 <div className="flex items-baseline gap-2">
                   <span className="text-[11px] font-semibold text-neutral-300">{e.agent || 'unknown'}</span>
@@ -266,7 +271,8 @@ export function QueuedBatchCard({ count, entries }: { count: number; entries: { 
                   {e.body}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -355,21 +361,25 @@ export function ToolCard({ block, density = 'normal' }: { block: ToolBlock; dens
   // Only the cards that can actually open get the affordance; the rest render as plain rows.
   const expandable = inputBig || resultLong || (command && result.length > 0);
   const todos = todoItems(block);
-  const commandPreview = density === 'normal' && command && result.length > 0 ? outputPreview(result) : null;
+  // A command card is one line until opened: its header. Opening it shows the full command (when the
+  // header had to cut it) and the output; the header closes it again.
+  const shown = command ? resOpen : (inputBig ? open : resOpen);
 
   return (
     <div className="flex justify-start">
-      <div className={`w-full rounded-lg border ${block.isError ? 'border-red-800/60' : 'border-neutral-800'} bg-neutral-900/40 overflow-hidden`}>
+      {/* Message-sized on the agent's side, like the decision cards (DecisionCard's AgentSide); inside an
+          opened "Worked for" group the group's own rule lets it fill the group. */}
+      <div className={`w-full max-w-[min(92%,480px)] rounded-lg border ${block.isError ? 'border-red-800/60' : 'border-neutral-800'} bg-neutral-900/40 overflow-hidden`}>
         {/* header — the WHOLE row is the control, not the caret. */}
         {expandable ? (
           <button
             onClick={() => {
               // One click opens the card. When the input is small there is nothing to show
               // above, so the same click opens the thing that IS there: the result.
-              if (inputBig) setOpen((o) => !o);
+              if (inputBig && !command) setOpen((o) => !o);
               else setResOpen((o) => !o);
             }}
-            aria-expanded={inputBig ? open : resOpen}
+            aria-expanded={shown}
             className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-neutral-800/40"
           >
             <span className="text-[11px] w-4 text-center text-neutral-400">{glyph}</span>
@@ -378,7 +388,7 @@ export function ToolCard({ block, density = 'normal' }: { block: ToolBlock; dens
               ? <span className="min-w-0 flex-1"><FilePathChip path={filePath} /></span>
               : <span className="text-[11px] font-mono text-neutral-500 truncate flex-1">{summary}</span>}
             {block.isError && <span className="text-[10px] text-red-400">error</span>}
-            <Caret open={inputBig ? open : resOpen} />
+            <Caret open={shown} />
           </button>
         ) : (
           <div className="w-full flex items-center gap-2 px-2.5 py-1.5">
@@ -392,7 +402,7 @@ export function ToolCard({ block, density = 'normal' }: { block: ToolBlock; dens
         )}
 
         {/* expanded input */}
-        {open && inputBig && (
+        {inputBig && (command ? resOpen : open) && (
           <pre className="px-3 py-1.5 border-t border-neutral-800 bg-neutral-950 overflow-x-auto text-[11px] font-mono text-neutral-400 whitespace-pre">
             {inputStr}
           </pre>
@@ -412,14 +422,9 @@ export function ToolCard({ block, density = 'normal' }: { block: ToolBlock; dens
         )}
 
         {/* result */}
-        {result.length > 0 && (
+        {result.length > 0 && !(command && !resOpen) && (
           <div className="border-t border-neutral-800">
-            {commandPreview && !resOpen ? (
-              <button onClick={() => setResOpen(true)} aria-expanded={false} className="w-full px-3 py-1.5 text-left hover:bg-neutral-800/40">
-                <pre className={`overflow-hidden whitespace-pre text-[11px] font-mono ${block.isError ? 'text-red-300' : 'text-neutral-400'}`}>{commandPreview.text}</pre>
-                <span className="text-[10px] text-neutral-500">{commandPreview.hiddenLines > 0 ? `Show ${commandPreview.hiddenLines} more line${commandPreview.hiddenLines === 1 ? '' : 's'}` : 'Show output'}</span>
-              </button>
-            ) : !resOpen ? (
+            {!resOpen ? (
               <button
                 onClick={() => setResOpen(true)}
                 aria-expanded={false}
@@ -430,7 +435,7 @@ export function ToolCard({ block, density = 'normal' }: { block: ToolBlock; dens
               </button>
             ) : (
               <div>
-                {(resultLong || command) && (
+                {resultLong && !command && (
                   <button
                     onClick={() => setResOpen(false)}
                     aria-expanded
@@ -474,7 +479,7 @@ export function ToolGroupCard({ group, interrupted = false, density = 'normal' }
           ended in "tests pass" wore a red border because one command failed on the way, while
           "Stopped after 9s" — the actual problem — was a calm yellow). A partial failure is
           already named in the headline; the border is reserved for a turn that got nowhere. */}
-      <div className={`w-full rounded-lg border ${s.failed > 0 && s.failed === tools.length ? 'border-red-800/50' : 'border-neutral-800'} bg-neutral-900/30 overflow-hidden`}>
+      <div className={`w-full max-w-[min(92%,480px)] rounded-lg border ${s.failed > 0 && s.failed === tools.length ? 'border-red-800/50' : 'border-neutral-800'} bg-neutral-900/30 overflow-hidden`}>
         <button
           onClick={() => setOpen((o) => !o)}
           aria-expanded={open}
@@ -515,6 +520,7 @@ export function RenderNodeView({ node, density = 'normal' }: { node: RenderNode;
       // A machine-written line (the server's tag, or the same prefixes from an older server) is a
       // card, never the operator's bubble. One that does not parse is drawn as before.
       const sys = parseSystemMessage(node.text, (node.machine as MachineKind | undefined) ?? null);
+      if (sys?.kind === 'relay') return <AgentMessage msg={sys} />;
       if (sys) return <SystemMessageCard msg={sys} raw={node.text} />;
       // [voice-call:] markers ride USER rows (the proxy injects call summaries as
       // composer input). Split them out first; prose segments keep the paste-aware
