@@ -65,8 +65,12 @@ def encode_uplink(pcm):
     return json.dumps({"type": "session.input_audio.append", "audio": base64.b64encode(pcm).decode()})
 
 
-def session_start(instructions=INSTRUCTIONS, voice="marin"):
-    """The voice is FIXED for the session (OpenAI voice-websockets guide), so a pick applies on the next call."""
+def session_start(instructions=None, voice="marin"):
+    """The voice is FIXED for the session (OpenAI voice-websockets guide), so a pick applies on the next call.
+    The instructions carry the assistant's current name (read at session start, not at import)."""
+    if instructions is None:
+        from services.arturo import assistant_name
+        instructions = assistant_name.named(INSTRUCTIONS)
     return {"type": "session.start", "session": {
         "model": MODEL, "instructions": instructions,
         "audio": {"format": {"type": "audio/pcm", "rate": 16000}, "output": {"voice": voice}},

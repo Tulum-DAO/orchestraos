@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Mic, PhoneCall, PhoneOff } from 'lucide-react';
 import { useAgentSettings } from '../../stores/agentSettings';
+import { useAssistantName } from '../../lib/assistantName';
 import { VoiceSession } from '../../lib/voiceSession';
 
 interface VoiceControlsProps {
@@ -46,6 +47,7 @@ export const VoiceControls = forwardRef<VoiceControlsHandle, VoiceControlsProps>
   onInCallChange,
 }, ref) {
   const settings = useAgentSettings();
+  const aname = useAssistantName();
   const [unavailable, setUnavailable] = useState<string | null>(null);
   const [dictating, setDictating] = useState(false);
   const [inCall, setInCall] = useState(false);
@@ -120,7 +122,7 @@ export const VoiceControls = forwardRef<VoiceControlsHandle, VoiceControlsProps>
           onClick={toggleCall}
           aria-pressed={inCall}
           aria-label={inCall ? 'End call' : 'Start voice call'}
-          title={inCall ? `End call with ${settings.assistantName}` : `Call ${settings.assistantName}`}
+          title={inCall ? `End call with ${aname}` : `Call ${aname}`}
           className={`touch-circle flex items-center justify-center rounded-full transition-colors text-foreground/70 hover:text-foreground hover:bg-muted ${inCall ? '' : idleCallClassName ?? ''}`}
           style={{ color: inCall ? 'var(--accent-voice)' : undefined }}
         >

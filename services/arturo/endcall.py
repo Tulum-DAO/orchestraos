@@ -6,6 +6,7 @@ import time as _time
 from pathlib import Path as _Path
 
 from services.arturo.call_journal import _atomic_write
+from services.arturo import assistant_name as _assistant_name
 
 VC_RE = re.compile(r"^vc_[A-Za-z0-9_-]{4,64}\Z")
 
@@ -41,7 +42,7 @@ def build_full_transcript(turns, max_chars=6000):
         if role == "tool":
             lines.append(f"[tool: {t.get('tool', '?')}]")
         elif role in ("user", "arturo"):
-            who = "Operator" if role == "user" else "Arturo"
+            who = "Operator" if role == "user" else _assistant_name.name()
             txt = sanitize_summary(t.get("text", "")).replace("\n", " ")
             if txt:
                 lines.append(f"{who}: {txt}")
