@@ -593,26 +593,22 @@ def main(argv=None):
         #
         # gm-mine-menu-card seam 1: additively carry the structured `menu` blob
         # (question/options[{n,label,input_kind}]) alongside the pre-existing
-        # flat `options` (label strings) column, using the SAME parser
-        # (watch_gateway._menu) the gateway's /pending-approvals uses, so a
-        # kind='menu' row round-trips identically through both transports. No
-        # existing field changes shape; `menu` is None for non-menu rows.
-        # watch_gateway prints import-time banners to STDOUT; redirect stdout
-        # -> stderr across the import so stdout stays JSON-only (same fix as
-        # the "answer" branch below).
-        _saved_stdout = sys.stdout
-        try:
-            sys.stdout = sys.stderr
-            import watch_gateway as _wg
-        finally:
-            sys.stdout = _saved_stdout
+        # flat `options` (label strings) column, using the SAME parser the
+        # gateway's /pending-approvals uses (menu_parse, which watch_gateway
+        # re-exports as _menu), so a kind='menu' row round-trips identically
+        # through both transports. No existing field changes shape; `menu` is
+        # None for non-menu rows. Not via `import watch_gateway`: this branch
+        # runs on every dashboard notifications poll, and that import loaded the
+        # whole gateway, the voice bridge and Arturo each time (and printed
+        # Arturo's start-up lines into the API's log).
+        from menu_parse import parse_menu
         rows = store.pending_to_notify()
         out = [{"id": r["id"], "from_agent": r["from_agent"], "question": r["question"],
                 "op_key": r.get("op_key"),
                 "options": json.loads(r["options"]) if isinstance(r.get("options"), str) else r.get("options"),
                 "status": r.get("status"), "created_at": r.get("created_at"),
                 "kind": r.get("kind"), "summary": r.get("summary"),
-                "menu": _wg._menu(r),
+                "menu": parse_menu(r),
                 "risk_level": r.get("risk_level"), "reversibility": r.get("reversibility"),
                 "feature": r.get("feature"), "provider": r.get("provider"),
                 # §6.1 human_task feed export (additive; None on legacy/unarmed rows).

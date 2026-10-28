@@ -667,6 +667,17 @@ def _read_instance_ledger():
         return {}
 
 
+def _perm_identity(session):
+    """seat_id / provider / provider_session_id / generation of the agent on `session`, from the
+    registry. Never raises: provenance must not stop a push."""
+    try:
+        import card_provenance
+        return card_provenance.source_identity(session)
+    except Exception as e:  # noqa: BLE001
+        print(f"[approval_notify] perm provenance failed for {session}: {e}", file=sys.stderr)
+        return {}
+
+
 def _send_perm_push(agent, question, kind):
     """Notify-only push (no action buttons — permission prompts answer in the app
     via /agent-key, an ntfy quick-action would 400). Reuses tg-notify.sh (the operator's
@@ -709,8 +720,12 @@ def permission_backstop(now=None, state_path=None, scan=None, send=None):
             del state[k]
 
     for op_key, meta in present.items():
-        st = state.setdefault(op_key, {"agent": meta["agent"], "question": meta["question"],
-                                       "first_seen": now, "push1_at": None, "push2_at": None})
+        if op_key not in state:
+            # A newly seen prompt: record, at this moment, the agent it came from (card_provenance).
+            state[op_key] = {"agent": meta["agent"], "question": meta["question"],
+                             "first_seen": now, "push1_at": None, "push2_at": None,
+                             **_perm_identity(meta["agent"])}
+        st = state[op_key]
         # PUSH #1 — persisted past the delay, not yet pushed.
         if st.get("push1_at") is None:
             if (now - st["first_seen"]) >= PERM_PUSH1_DELAY_S:

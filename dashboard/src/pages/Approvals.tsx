@@ -1,4 +1,5 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import {
@@ -162,6 +163,32 @@ export default function Approvals() {
 
   const items = data?.items ?? [];
 
+  // ONE-SHOT FOCUS (/approvals?focus=<id>): the bell sends a card here when the agent's chat does not
+  // draw it (filed before the agent's current generation, or an on-screen menu mirror). Scroll to it
+  // and highlight it briefly where it sits; if it is no longer waiting, say so. The param is then
+  // dropped, so a reload or a later visit does not jump again.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const focusId = searchParams.get('focus');
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  const [focusNotice, setFocusNotice] = useState<string | null>(null);
+  // Timers outlive the effect run: dropping the param re-runs it, and that must not cancel the scroll.
+  const focusTimers = useRef<number[]>([]);
+  useEffect(() => () => focusTimers.current.forEach((t) => window.clearTimeout(t)), []);
+  useEffect(() => {
+    if (!focusId || !data) return;
+    const found = (data.items ?? []).find((i) => i.id === focusId);
+    const timers = focusTimers.current;
+    if (found?.status === 'pending') {
+      timers.push(window.setTimeout(() => { setTab('all'); setExpandedId(focusId); setHighlightId(focusId); }, 0));
+      timers.push(window.setTimeout(() => document.getElementById(`approval-${focusId}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 80));
+      timers.push(window.setTimeout(() => setHighlightId(null), 2600));
+    } else {
+      timers.push(window.setTimeout(() => setFocusNotice('That card is no longer waiting — it was answered elsewhere.'), 0));
+      timers.push(window.setTimeout(() => setFocusNotice(null), 6000));
+    }
+    setSearchParams((p) => { const next = new URLSearchParams(p); next.delete('focus'); return next; }, { replace: true });
+  }, [focusId, data, setSearchParams]);
+
   const filtered = useMemo(() => {
     if (tab === 'all') return items;
     return items.filter((i: UnifiedApproval) => i.type === tab);
@@ -193,6 +220,10 @@ export default function Approvals() {
           </div>
         )}
       </div>
+
+      {focusNotice && (
+        <p role="status" className="text-sm text-neutral-300 rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2">{focusNotice}</p>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-1 bg-neutral-900 rounded-lg p-1 overflow-x-auto">
@@ -233,8 +264,9 @@ export default function Approvals() {
 
             return (
               // Q6: Colored left border by urgency
-              <div key={item.id} className={clsx(
-                'rounded-xl border border-neutral-800 bg-neutral-900 overflow-hidden border-l-4',
+              <div key={item.id} id={`approval-${item.id}`} data-focused={highlightId === item.id || undefined} className={clsx(
+                'rounded-xl border border-neutral-800 bg-neutral-900 overflow-hidden border-l-4 transition-shadow',
+                highlightId === item.id && 'ring-2 ring-blue-400/70',
                 URGENCY_BORDER[item.urgency],
                 item.urgency === 'critical' && 'shadow-[0_0_12px_rgba(239,68,68,0.3)] animate-[border-pulse_2s_ease-in-out_infinite]'
               )}>
