@@ -42,6 +42,8 @@ import SpawnedAgentCard from '../components/arturo/SpawnedAgentCard';
 import ChoicesCard from '../components/arturo/ChoicesCard';
 import PairCodeCard from '../components/arturo/PairCodeCard';
 import ToolRun from '../components/arturo/ToolRun';
+import CopyReply from '../components/arturo/CopyReply';
+import { replyCopyText } from '../lib/arturoCopy';
 import JobTray from '../components/arturo/JobTray';
 import { useStickToBottom } from '../lib/useStickToBottom';
 import { currentThread, setCurrentThread, subscribeCurrentThread } from '../lib/arturoCurrent';
@@ -592,6 +594,7 @@ export default function ArturoHome() {
               )
               : renderReply(t.text)}
             {!hasToolParts(t.parts) && t.tools && t.tools.length > 0 && <div className="tools">ran {t.tools.join(', ')}</div>}
+            {!t.pending && !t.streaming && replyCopyText(t.text, t.parts) && <CopyReply text={replyCopyText(t.text, t.parts)} />}
             <SpawnedAgentCard ids={t.spawned} />
             {t.pairCard && <PairCodeCard card={t.pairCard} />}
             {t.choices && t.choices.multi && (

@@ -85,6 +85,8 @@
 .turn-assistant .txt{ font-size:16px; line-height:1.48; color:var(--text2); max-width:92%; white-space:pre-wrap; }
 .turn-assistant .txt code{ background:rgba(var(--ink),0.09); border-radius:5px; padding:1px 5px; font-family:"SF Mono",Menlo,monospace; font-size:14px; }
 .turn-assistant .tools{ font-size:12.5px; color:var(--grey2); }
+/* The copy button under a reply: its icon lines up with the reply's first letter. */
+.reply-actions{ display:flex; margin-left:-6px; }
 .turn-assistant .thinking{ display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--accent); animation:arturo-pulse 1s ease-in-out infinite; }
 @keyframes arturo-pulse{ 0%,100%{opacity:.25} 50%{opacity:1} }
 .decision-card{ width:100%; max-width:320px; background:var(--card); border-radius:18px; overflow:hidden; border:1px solid var(--hair); margin-top:4px; }
