@@ -10,6 +10,9 @@ import { sendPanelHeadline, shouldSendPhoto, clearsComposer, retryText, canForce
 import { logAction } from '../../lib/user-actions';
 import { isLargePaste, fencePaste } from '../../lib/pastedText';
 import { COMPOSER_ACCEPT, newFiles, pasteAttachesFiles, attachmentMarkers } from '../../lib/composerFiles';
+import type { PendingKind } from '../../lib/pendingSends';
+import { usePendingSends, rowIdsAtSend, newPendingId } from '../../stores/pendingSends';
+import { unconfirmed } from '../../lib/heldEchoReconcile';
 
 // A held large paste: kept out of the textarea (which shows a compact token at
 // the paste's position) and serialized into the fenced grammar on submit.
@@ -51,9 +54,11 @@ interface Props {
    */
   onSend?: (
     payload: { text: string; attachments: File[] },
-    opts: { force: boolean }
+    opts: { force: boolean; priorRowIds?: ReadonlySet<string> }
   ) => Promise<{ ok: boolean; note?: string; queued?: boolean; held?: boolean; refused?: boolean;
-    composer_text?: string; stranded?: { text?: string; age_s?: number } }>;
+    composer_text?: string; stranded?: { text?: string; age_s?: number };
+    /** The server accepted it: the bubble that replaces the box's text (lib/pendingSends). */
+    pending?: { text: string; kind: PendingKind; pointer?: string } }>;
   /** Rendered INSIDE the pill's right cluster, after the delivery mode and before `trailing`
       (the agent page puts the model chip here). Secondary controls belong on this baseline
       rather than stacked underneath it — a second row of controls under Send reads as a
@@ -95,6 +100,9 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     else setInternalText(next);
   };
   const text = getText();
+  // The box's CURRENT text for callbacks that outlive the render that created them (a send in flight).
+  const getTextRef = useRef(getText);
+  getTextRef.current = getText;
   const setText = (updater: string | ((prev: string) => string)) => {
     const prev = getText();
     const next = typeof updater === 'function' ? (updater as (p: string) => string)(prev) : updater;
@@ -254,15 +262,61 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
         // an hour and every send failed; clearing here threw the attachment away on the way to a
         // failure, so the operator lost it and had to re-pick it). Nothing is destroyed before
         // the thing that could fail has not failed.
-        const res = await onSend({ text: messageText, attachments }, { force });
+        // ACK-GATED: the text stays in the box (Send spins) until the server answers. Then, if it
+        // accepted the message, the box clears and the pending bubble appears in the SAME
+        // synchronous block, so React paints them together: the message is never in the box and
+        // the chat at once, and never in neither. The row ids on screen now are the ones that can
+        // never confirm this send (an older identical message).
+        const priorRowIds = rowIdsAtSend(agentId);
+        const display = text.trim() ? messageText : (attachments.length ? '(attachments)' : messageText);
+        // THE ROW CAN BEAT THE ANSWER: the gateway answers only after verifying the submit on screen
+        // (measured: 3.9 s), and the transcript stream can show the agent's own line before that
+        // (2.1 s). That row is proof of delivery, so the box clears the moment it appears, never
+        // leaving the text in the box and the chat together. Matched by the same strict rules as a
+        // pending bubble (new rows only, equals-or-starts-with); a send whose row differs from what
+        // was typed (attachment markers, a long message) waits for the answer as before.
+        const boxAtSend = getText();
+        let landedEarly = false;
+        const onRows = (st: { rows: Record<string, { id: string; text: string }[]> }) => {
+          const rows = st.rows[agentId];
+          if (landedEarly || !rows || !messageText.trim()) return;
+          if (unconfirmed([{ text: messageText, priorRowIds }], rows).length === 0) {
+            landedEarly = true;
+            if (getTextRef.current() === boxAtSend) { setText(''); setPastes([]); pasteIdRef.current = 1; }
+            clearSent();
+          }
+        };
+        const unsubscribe = usePendingSends.subscribe(onRows);
+        let res: Awaited<ReturnType<NonNullable<typeof onSend>>>;
+        try {
+          res = await onSend({ text: messageText, attachments }, { force, priorRowIds });
+        } finally {
+          unsubscribe();
+        }
+        if (landedEarly) {
+          // Delivered, and its row is already on screen: nothing to add, nothing to restore.
+          setBusy(null);
+          setResultOk(true);
+          setResult(res.ok ? res.note || null : null);
+          return;
+        }
+        const showPending = () => {
+          if (!res.pending) return;
+          usePendingSends.getState().add({
+            id: newPendingId(), agentId, display, text: res.pending.text, kind: res.pending.kind,
+            pointer: res.pending.pointer, priorRowIds, createdAt: Date.now(),
+          });
+        };
         if (res.ok) {
           clearSent();
           setBusy(null);
-          setResultOk(true);
-          setResult(res.note || 'Sent');
           setText('');
           setPastes([]);
           pasteIdRef.current = 1;
+          showPending();
+          // The bubble says it was sent; a note only when there is more to say (mid-turn: queued).
+          setResultOk(true);
+          setResult(res.note || null);
         } else if (res.refused) {
           // NOT delivered: the agent's input box already holds text. Keep the photo (nothing was
           // sent) and offer the explicit overwrite through the same panel as a gateway 409.
@@ -289,23 +343,17 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           // not been sent, and the one gesture offered for sending it carried text only.
           clearSent();
           // ...and so does the TEXT. It reached the server; leaving it in the box invited the same
-          // instruction to be sent twice, now that the panel rightly offers no "Send anyway"
-          // after a send that already landed (review of #198).
+          // instruction to be sent twice (review of #198). It moves into the amber bubble in the
+          // same block, and the one-line note says where it waits.
           if (clearsComposer(res)) {
             setText('');
             setPastes([]);
             pasteIdRef.current = 1;
+            showPending();
           }
-          // Reuse the existing busy/queued affordance below (reason/state/
-          // activity/attemptText — same shape the 409 branch already fills).
-          setBusy({
-            reason: res.note,
-            state: res.held ? 'held' : 'queued',
-            activity: res.note,
-            attemptText: messageText,
-          });
-          setResultOk(false);
-          setResult(null);
+          setBusy(null);
+          setResultOk(true);
+          setResult(res.note || null);
         } else {
           setResultOk(false);
           setResult(res.note || 'Failed');

@@ -7,7 +7,7 @@ import { ExportMenu } from './ExportMenu';
 interface TopBarProps {
   onMenuOpen: () => void;
   /** The seat this page belongs to; shown in the middle so the page says whose it is (and hosts the gen chip). */
-  seat?: { id: string; generation?: unknown };
+  seat?: { id: string; generation?: unknown; name?: string };
   /** Chat (the transcript) or Dev (the seat's live terminal). The toggle shows only with a handler. */
   mode?: 'chat' | 'dev';
   onModeChange?: (mode: 'chat' | 'dev') => void;
@@ -21,7 +21,10 @@ export function TopBar({ onMenuOpen, seat, mode = 'chat', onModeChange }: TopBar
     // `justify-between` across THREE children is what put the theme toggle in the middle of the
     // bar with nothing either side of it. The bar now has exactly two groups — the seat identity
     // on the left and every control on the right — so nothing floats unanchored.
-    <div className="sticky top-0 z-20 flex items-center gap-2 px-4 py-3 border-b bg-background border-border safe-top">
+    // Even 6px top and bottom (53px with the 40px row and the border: the height it always had, now centred).
+    // No safe-top here: it REPLACED the top padding (0 on a desktop, so the row sat flush at the top) and <main>
+    // already adds the notch inset on a phone (here it was counted twice).
+    <div className="touch-compact sticky top-0 z-20 flex items-center gap-2 px-4 py-1.5 border-b bg-background border-border">
       {/* The desktop sidebar is permanently visible (DashboardLayout renders it at md+), so this
           drawer trigger is a SECOND nav entry there. It is the mobile affordance only. */}
       <button
@@ -34,7 +37,7 @@ export function TopBar({ onMenuOpen, seat, mode = 'chat', onModeChange }: TopBar
 
       {seat && (
         <div className="flex items-center gap-2 min-w-0 px-2" data-seat-header={seat.id}>
-          <span className="font-semibold text-foreground truncate">{seat.id}</span>
+          <span className="font-semibold text-foreground truncate" title={seat.name && seat.name !== seat.id ? seat.id : undefined}>{seat.name || seat.id}</span>
           <GenChip generation={seat.generation} />
         </div>
       )}
@@ -49,14 +52,16 @@ export function TopBar({ onMenuOpen, seat, mode = 'chat', onModeChange }: TopBar
         {/* Chat / Dev, the same switch the Agents page's panel has: this page is where the rail and
             Arturo send you for a seat, and without it the seat's terminal could not be reached. */}
         {onModeChange && (
-          <div className="flex rounded-md border border-border overflow-hidden mr-1" role="group" aria-label="View">
+          // No overflow-hidden on the group: it would clip each button's 44px tap area (.hit-44). The
+          // buttons round their own outer corners instead.
+          <div className="flex rounded-md border border-border mr-1" role="group" aria-label="View">
             {(['chat', 'dev'] as const).map((m) => (
               <button
                 key={m}
                 onClick={() => onModeChange(m)}
                 aria-pressed={mode === m}
                 className={
-                  'text-xs px-2.5 py-1 transition-colors ' +
+                  'hit-44 text-xs px-2.5 py-1 transition-colors first:rounded-l-[5px] last:rounded-r-[5px] ' +
                   (mode === m
                     ? m === 'dev' ? 'bg-green-800 text-green-300' : 'bg-muted text-foreground'
                     : 'text-muted-foreground hover:text-foreground')

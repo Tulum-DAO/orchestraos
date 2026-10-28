@@ -83,7 +83,10 @@ const GATEWAY_URL = gatewayUrl();  // lib/gateway-url.ts: env, then [gateway] in
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'bmp', 'svg']);
 
-export type SendState = 'delivered' | 'queued' | 'held';
+/** `unknown`: the gateway typed the message but could not confirm it landed (502
+ *  unverified_submit), or never answered in time. It may well have been delivered, so it is
+ *  neither stored for a later delivery (that can deliver it twice) nor reported as not sent. */
+export type SendState = 'delivered' | 'queued' | 'held' | 'unknown';
 
 export interface Attachment { upload_id: string }
 
@@ -107,8 +110,13 @@ export interface GatewayInjectResult {
   activity?: string;
   composer_text?: string;
   stranded?: { text?: string; age_s?: number };
+  /** The /tmp file a long message was injected as (the agent's transcript shows a short banner
+   *  naming it, not the words), so a client can match its own line by this exact token. */
+  chip_dodge_pointer?: string;
   hold_failed?: string;
   unreachable?: boolean;
+  /** No answer within the request timeout: the gateway may still have typed it. */
+  timedOut?: boolean;
   error?: string;
   attempts?: number;
 }
@@ -174,12 +182,14 @@ async function realGatewayInject(session: string, text: string, force = false): 
       activity: body.activity,
       composer_text: body.composer_text,
       stranded: body.stranded,
+      chip_dodge_pointer: typeof body.chip_dodge_pointer === 'string' ? body.chip_dodge_pointer : undefined,
       hold_failed: body.hold_failed,
       error: body.error,
       attempts: body.attempts,
     };
   } catch (err: any) {
-    return { httpStatus: 0, ok: false, unreachable: true, error: err?.message || 'gateway unreachable' };
+    const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+    return { httpStatus: 0, ok: false, unreachable: !timedOut, timedOut, error: err?.message || 'gateway unreachable' };
   }
 }
 
@@ -306,17 +316,36 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
 
   const shape = (state: SendState, extra: Record<string, unknown> = {}) =>
     capable ? { state, ...extra } : { ok: state === 'delivered' || state === 'queued' || state === 'held', ...extra };
+  // sent_text: the exact text that went to the agent, attachment markers included, so the
+  // client's pending bubble matches the transcript row on the same words the agent received.
+  const pointer = {
+    sent_text: messageText,
+    ...(gw.chip_dodge_pointer ? { chip_dodge_pointer: gw.chip_dodge_pointer } : {}),
+  };
 
-  // Delivered — the parser-confirmed submit landed.
+  // Delivered — the parser-confirmed submit landed. agent_state says whether the agent was
+  // mid-turn (the CLI then holds it in its input queue until the turn ends), for the "queued" chip.
   if (gw.ok && gw.delivered) {
-    res.status(200).json(shape('delivered', { session, attempts: gw.attempts }));
+    res.status(200).json(shape('delivered', { session, attempts: gw.attempts, agent_state: gw.state, ...pointer }));
+    return;
+  }
+
+  // Unknown — the keys were typed and Enter pressed, but the gateway could not confirm the submit
+  // from the screen (502 unverified_submit), or it never answered. The agent may well have it, so
+  // this is NOT stored for a later delivery: the store would deliver it a second time. The client
+  // checks the transcript and says "delivered" or "couldn't confirm"; it never says "not sent".
+  if ((gw.httpStatus === 502 && gw.reason === 'unverified_submit') || gw.timedOut) {
+    const reason = gw.timedOut ? 'gateway_timeout' : 'unverified_submit';
+    res.status(502).json(capable
+      ? { state: 'unknown', reason, ...pointer }
+      : { ok: false, delivery: 'unknown', reason, ...pointer });
     return;
   }
 
   // Gateway durable-held it (accepts:['held']). NOT a plain mid-turn seat any more — those
   // inject — but a pane that genuinely cannot take a keystroke right now.
   if (gw.ok && gw.held) {
-    res.status(200).json(shape('held', { message_id: gw.message_id, reason: 'busy_working' }));
+    res.status(200).json(shape('held', { message_id: gw.message_id, reason: 'busy_working', ...pointer }));
     return;
   }
 
@@ -368,6 +397,7 @@ export async function handleAgentSend(deps: AgentSendDeps, req: Request, res: Re
   const state: SendState = isMenuOrPrompt ? 'held' : 'queued';
   res.status(200).json(shape(state, {
     message_id: write.id,
+    sent_text: messageText,
     reason: isMenuOrPrompt
       ? 'agent pane is showing a menu/permission prompt'
       : (gw.unreachable ? 'gateway unreachable' : (gw.reason || 'agent busy')),

@@ -7,6 +7,7 @@
  * Assistant prose is rendered by <Markdown/>.
  */
 import { useEffect, useState } from 'react';
+import { clsx } from 'clsx';
 import { ChevronRight, ChevronDown, FileText, Check } from 'lucide-react';
 import Markdown from './Markdown';
 import { toolSummary, toolFilePath, shortPath, type ToolBlock, type RenderNode } from '../../lib/transcript';
@@ -15,6 +16,7 @@ import {
   type GroupedNode, type ToolGroupNode,
 } from '../../lib/toolGroups';
 import { parseMessageSegments, hasPasteMarkers } from '../../lib/pastedText';
+import { parseSystemMessage, type SystemMessage, type MachineKind } from '../../lib/systemMessages';
 import { hasVoiceCallMarker, parseVoiceSegments } from '../../lib/voiceCall';
 import VoiceCallCard from './VoiceCallCard';
 import { isCommandTool, outputPreview, todoItems, type ToolDensity } from '../../lib/toolCardDetail';
@@ -163,11 +165,74 @@ export function UserBubble({ text, isSystem, queued, ts }: { text: string; isSys
         {text}
       </div>
       {queued && (
-        <span className="mt-0.5 text-[9px] uppercase tracking-wide text-amber-400/90 px-1.5 py-[1px] rounded-full border border-amber-500/40 bg-amber-500/10">
+        <span className="mt-0.5 text-[9px] uppercase tracking-wide text-blue-300/80 px-1.5 py-[1px] rounded-full border border-blue-500/30 bg-blue-500/10">
           queued
         </span>
       )}
       <MessageTime ts={ts} align="right" />
+    </div>
+  );
+}
+
+/** A line a machine wrote into the agent's pane (lib/systemMessages): a decision or questionnaire
+ *  answer, an approval, a closed human task, another agent's message, a finished background job.
+ *  Never the operator's bubble: a compact dark card on the left, outlined by what it is (blue for an
+ *  answered decision or questionnaire, green approved, red denied or failed, grey for agent traffic
+ *  and jobs, amber for an urgent relay). Collapsed it shows the gist; expanded, the line verbatim, so
+ *  nothing the trim hides is out of reach. */
+export function SystemMessageCard({ msg, raw }: { msg: SystemMessage; raw: string }) {
+  const [open, setOpen] = useState(false);
+  const tone = msg.outcome === 'deny' || msg.outcome === 'cant' || msg.outcome === 'failed' ? 'red'
+    : msg.outcome === 'approve' ? 'green'
+      : msg.kind === 'relay' ? (msg.urgent ? 'amber' : 'grey')
+        : msg.kind === 'task' || msg.kind === 'system' ? 'grey' : 'blue';
+  const border = { red: 'border-red-500/50', green: 'border-green-500/50', amber: 'border-amber-500/60',
+    grey: 'border-neutral-700', blue: 'border-blue-500/50' }[tone];
+  const accent = { red: 'text-red-300', green: 'text-green-300', amber: 'text-amber-300',
+    grey: 'text-neutral-400', blue: 'text-blue-300' }[tone];
+  const glyph = msg.kind === 'relay' ? '⇄' : msg.kind === 'task' ? (msg.outcome === 'failed' ? '!' : '✓')
+    : msg.kind === 'questionnaire' ? '≡' : tone === 'red' ? '✕' : '✓';
+  return (
+    <div className="flex justify-start" data-testid="system-message" data-machine={msg.kind} data-tone={tone}>
+      <div className={clsx('max-w-[85%] min-w-0 rounded-xl border bg-neutral-950/80 px-2.5 py-1.5', border)}>
+        <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-1.5 text-left">
+          <span className={clsx('text-[11px] w-3.5 text-center shrink-0', accent)} aria-hidden>{glyph}</span>
+          <span className="text-[11px] font-semibold text-neutral-200 truncate">{msg.headline}</span>
+          {msg.urgent && <span className="text-[10px] text-amber-300">· {msg.detail}</span>}
+          <span className="ml-auto pl-2"><Caret open={open} /></span>
+        </button>
+        {open ? (
+          <div className="mt-1 max-h-80 overflow-y-auto text-[11px] leading-relaxed text-neutral-400 whitespace-pre-wrap break-words select-text">{raw}</div>
+        ) : (
+          <div className="mt-0.5 pl-5 space-y-0.5 select-text">
+            {msg.subject && <div className="text-[12px] text-neutral-200 break-words">{msg.subject}</div>}
+            {msg.detail && !msg.urgent && msg.kind !== 'task' && msg.kind !== 'approval' && (
+              <div className={clsx('text-[12px] font-medium break-words', accent)}>→ {msg.detail}</div>
+            )}
+            {msg.note && <div className="text-[11px] text-neutral-500 break-words">{msg.note}</div>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** A just-sent message, until its own transcript row replaces it (lib/pendingSends). Faded while
+ *  the agent has it but has not logged it; a "queued" chip when it landed mid-turn and waits in the
+ *  agent's input queue; a dimmer blue when the server holds or stores it for later delivery. */
+export function PendingBubble({ text, kind }: { text: string; kind: 'sent' | 'queuedInTurn' | 'held' | 'queued' }) {
+  const waiting = kind === 'held' || kind === 'queued';
+  return (
+    <div className="flex flex-col items-end" data-testid="pending-bubble" data-pending-kind={kind}>
+      <div className={clsx('max-w-[85%] rounded-2xl rounded-br-sm px-3.5 py-2 text-[13px] leading-relaxed whitespace-pre-wrap break-words',
+        waiting ? 'bg-blue-600/25 text-white/70' : 'bg-blue-600/50 text-white/85')}>
+        {text}
+      </div>
+      {kind !== 'sent' && (
+        <span className="mt-0.5 text-[9px] uppercase tracking-wide text-blue-300/80 px-1.5 py-[1px] rounded-full border border-blue-500/30 bg-blue-500/10">
+          {kind === 'queuedInTurn' ? 'queued' : kind === 'held' ? 'held for its next turn' : 'saved to its inbox'}
+        </span>
+      )}
     </div>
   );
 }
@@ -447,6 +512,10 @@ export function RenderNodeView({ node, density = 'normal' }: { node: RenderNode;
   switch (node.kind) {
     case 'user': {
       if (node.isSystem) return <UserSystem text={node.text} />;
+      // A machine-written line (the server's tag, or the same prefixes from an older server) is a
+      // card, never the operator's bubble. One that does not parse is drawn as before.
+      const sys = parseSystemMessage(node.text, (node.machine as MachineKind | undefined) ?? null);
+      if (sys) return <SystemMessageCard msg={sys} raw={node.text} />;
       // [voice-call:] markers ride USER rows (the proxy injects call summaries as
       // composer input). Split them out first; prose segments keep the paste-aware
       // user path. Render voice cards left-aligned (call artifact, not a bubble).

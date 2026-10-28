@@ -7,7 +7,7 @@ import { Composer } from '../components/agent/Composer';
 import { LiveStatusLine } from '../components/chat/LiveStatusLine';
 import { useFeedHealth } from '../hooks/useFeedHealth';
 import { useAgentSettings } from '../stores/agentSettings';
-import { spawnAgent } from '../lib/api';
+import { reviveAgent } from '../lib/api';
 import { composerGate, canStopTurn } from '../lib/composerGate';
 import { useAgents } from '../hooks/useAgents';
 import WebTerminal from '../components/WebTerminal';
@@ -32,21 +32,23 @@ export default function AgentPage() {
     try { localStorage.setItem('agentPage.mode', m); } catch { /* storage blocked: this tab only */ }
     logAction(m === 'dev' ? 'agent.mode.dev' : 'agent.mode.chat', agentId);
   };
-  // Restart a seat that fell over. `spawnAgent` is the existing restart path, and this is the
-  // first caller of the status line's Resume affordance. Undefined while in flight, so the
-  // button disappears rather than queueing a second spawn on a double click.
+  // Bring back a seat that fell over: its last session where it left off when that session can still be
+  // resumed, else a fresh start as its next generation (with a briefing on what it last did). Answers once it is
+  // running. Undefined while in flight, so the button disappears rather than queueing a second start on a
+  // double click.
   const resume = resuming ? undefined : () => {
     setResuming(true);
-    void spawnAgent(agentId).finally(() => setResuming(false));
+    void reviveAgent(agentId).finally(() => setResuming(false));
   };
   const settings = useAgentSettings();
   // A seat's own page names the seat (Shaw's QA run: the composer said "Ask Arturo" on demo-planner's page).
   const { data } = useAgents();
   // /api/agents answers { agents: [...] }; tolerate a bare array too.
-  const rows = agentRowsFrom(data) as Array<{ id: string; generation?: unknown; tmux_session?: string; machine?: string }> | undefined;
+  const rows = agentRowsFrom(data) as Array<{ id: string; generation?: unknown; tmux_session?: string; machine?: string; full_name?: string }> | undefined;
   const seatRow = id && Array.isArray(rows) ? rows.find((a) => a.id === id) : undefined;
   const feed = useFeedHealth();
-  const seat = id ? { id, generation: seatRow?.generation } : undefined;
+  // The header shows the agent's full name ("Demo · dev"): outside the sidebar there's no project header around it.
+  const seat = id ? { id, generation: seatRow?.generation, name: seatRow?.full_name } : undefined;
 
   // Stop = Esc into the seat's pane, the exact key the Dev-mode ActionBar's Esc sends. Offered
   // only mid-turn with no menu open (canStopTurn): Esc at a prompt is an ANSWER (#334). Reads the
@@ -152,7 +154,7 @@ export default function AgentPage() {
             <div data-arturo-avoid>
             <Composer
               agentId={agentId}
-              seatName={id}
+              seatName={seatRow?.full_name || id}
               gate={composerGate({
                 state: seatStatus,
                 pendingMenu: seatMenu,
