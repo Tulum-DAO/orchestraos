@@ -21,6 +21,15 @@ export interface RailAgent {
   provider?: string;
   /** /api/agents context_pct as the detector wrote it: "NN%" or '' (no reading). */
   context_pct?: string;
+  tier?: string;
+  reports_to?: string;
+  /** The project it is in (projects.json, inherited up reports_to); null/absent for a T0 or an agent with no PM. */
+  project?: { slug: string; label: string; name?: string } | null;
+  /** Its short name ("dev"), and its full name outside its project's header ("Demo · dev"; its id if never renamed). */
+  display_name?: string;
+  full_name?: string;
+  /** When it last sent or got a message (ISO), for the order of groups and rows. */
+  last_message_at?: string | null;
 }
 
 /**
@@ -141,4 +150,57 @@ export function contextHigh(raw: unknown): boolean {
  */
 export function showsContext(a: RailAgent): boolean {
   return sectionFor(a) !== undefined;
+}
+
+
+// ---- project groups inside a section ------------------------------------------------------------------------
+
+/** One entry in a section: an agent's own row (shown by its full name), or a project group of two or more of the
+ *  section's agents from one project (shown under the project's label by their short names). */
+export type RailItem =
+  | { kind: 'row'; agent: RailAgent }
+  | { kind: 'group'; project: { slug: string; label: string }; agents: RailAgent[] };
+
+const time = (a: RailAgent) => (a.last_message_at ? Date.parse(a.last_message_at) || 0 : 0);
+const label = (a: RailAgent) => (a.display_name || a.name || a.id).toLowerCase();
+
+/** Inside a group: the PM first (the project's T1), then by short name: a stable order, so rows don't jump. */
+export function groupOrder(a: RailAgent, b: RailAgent): number {
+  const pa = a.tier === 'T1' ? 0 : 1, pb = b.tier === 'T1' ? 0 : 1;
+  return pa - pb || label(a).localeCompare(label(b));
+}
+
+/** A section's entries: T0s first, then projects (a group of two or more, or one agent's own row) and then agents
+ *  in no project, each part by most recently messaged (name breaks ties). A project appears once per section it
+ *  has agents in, so at most once each in Needs you, Working and Idle. */
+export function sectionItems(agents: RailAgent[]): RailItem[] {
+  const t0: RailAgent[] = [], loose: RailAgent[] = [];
+  const byProject = new Map<string, { project: { slug: string; label: string }; agents: RailAgent[] }>();
+  for (const a of agents) {
+    if (a.tier === 'T0') t0.push(a);
+    else if (a.project?.slug) {
+      const g = byProject.get(a.project.slug) || { project: { slug: a.project.slug, label: a.project.label }, agents: [] };
+      g.agents.push(a);
+      byProject.set(a.project.slug, g);
+    } else loose.push(a);
+  }
+  const recent = (x: number, y: number, tie: number) => (y - x) || tie;
+  const byRecent = (x: RailAgent, y: RailAgent) => recent(time(x), time(y), label(x).localeCompare(label(y)));
+  const projectItems: { at: number; name: string; item: RailItem }[] = [...byProject.values()].map((g) => {
+    const at = Math.max(...g.agents.map(time));
+    const item: RailItem = g.agents.length === 1 ? { kind: 'row', agent: g.agents[0] }
+      : { kind: 'group', project: g.project, agents: [...g.agents].sort(groupOrder) };
+    return { at, name: g.project.label.toLowerCase(), item };
+  });
+  projectItems.sort((x, y) => recent(x.at, y.at, x.name.localeCompare(y.name)));
+  return [
+    ...[...t0].sort(byRecent).map((a): RailItem => ({ kind: 'row', agent: a })),
+    ...projectItems.map((p) => p.item),
+    ...[...loose].sort(byRecent).map((a): RailItem => ({ kind: 'row', agent: a })),
+  ];
+}
+
+/** The name a row shows: its short name inside its project's group, its full name anywhere else. */
+export function rowLabel(a: RailAgent, inGroup: boolean): string {
+  return (inGroup ? a.display_name : a.full_name) || a.display_name || a.name || a.id;
 }

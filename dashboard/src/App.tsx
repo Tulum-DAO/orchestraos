@@ -37,13 +37,12 @@ export default function App() {
       <BrowserRouter>
         <RouteErrorBoundary label="app">
         <Routes>
-          {/* Arturo home is the MAIN page — its own phone shell, no dashboard chrome (T4). A
-              deployment without the Arturo service (runtime config features.arturo=false) opens
-              the Overview here instead of a home whose every call 404s. */}
-          <Route index element={indexPage() === 'arturo' ? <ArturoHome /> : <Navigate to="/overview" replace />} />
-
           {/* Internal dashboard */}
           <Route element={<DashboardLayout />}>
+            {/* Arturo home is the MAIN page, inside the same shell as every other page so the sidebar
+                is there too. A deployment without the Arturo service (runtime config
+                features.arturo=false) opens the Overview here instead of a home whose every call 404s. */}
+            <Route index element={indexPage() === 'arturo' ? <ArturoHome /> : <Navigate to="/overview" replace />} />
             <Route path="overview" element={<Overview />} />
             <Route path="command-center" element={<CommandCenter />} />
             <Route path="agents" element={<Agents />} />

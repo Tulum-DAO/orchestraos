@@ -18,6 +18,7 @@ import NotFound from '../components/NotFound';
 import { HeaderEndSlotContext } from '../lib/headerSlot';
 import { bellHost } from '../lib/bellPlacement';
 import { OPEN_SIDEBAR_EVENT } from '../lib/headerSlot';
+import { sidebarCollapsed, subscribeSidebarCollapsed } from '../lib/sidebarCollapse';
 import { NEW_AGENT_EVENT } from '../lib/newAgent';
 
 // Tailwind's `md` breakpoint (48rem), read live so the bell follows the bar that is showing.
@@ -143,7 +144,14 @@ export function DashboardLayout() {
   // included; the one gate for every route under this layout.
   const location = useLocation();
   const page = isViewHidden(location.pathname) ? <NotFound /> : <Outlet />;
-  const isChatRoute = !!onAgentWithId || !!onAgentBare;
+  // Arturo's home is laid out like a chat: its own top bar, a feed that scrolls itself, the composer at the
+  // bottom. It is also where the floating Arturo would open, so that is not shown on top of it.
+  const onArturoHome = !!useMatch('/');
+  const isChatRoute = !!onAgentWithId || !!onAgentBare || onArturoHome;
+  // The home's menu button can collapse the desktop sidebar. Only the home honours it: no other page
+  // has a button to bring the sidebar back, so they always show it.
+  const collapsed = useSyncExternalStore(subscribeSidebarCollapsed, sidebarCollapsed, () => false);
+  const hideDesktopSidebar = onArturoHome && collapsed;
   const onAgents = !!useMatch('/agents');
   const activeCall = useOrchestraStore((s) => s.activeCall);
   const endCall = useOrchestraStore((s) => s.endCall);
@@ -155,11 +163,11 @@ export function DashboardLayout() {
   const bell = <NotificationBell />;
 
   return (
-    <div ref={appRef} className="fixed inset-x-0 flex h-screen h-dvh bg-neutral-950 text-neutral-100" style={{ top: 'var(--vv-top, 0px)', height: 'var(--vvh, 100dvh)' }}>
+    <div ref={appRef} className="fixed inset-x-0 flex h-screen h-dvh bg-background text-neutral-900 dark:text-neutral-100" style={{ top: 'var(--vv-top, 0px)', height: 'var(--vvh, 100dvh)' }}>
       {/* h-dvh, not h-screen: on iPhone Safari 100vh includes the strip behind the address bar, so a
           bottom-docked composer sat under it and could not be typed into (Shaw, 2026-10-11). */}
       {/* Desktop sidebar */}
-      <div className="hidden md:block">
+      <div className={hideDesktopSidebar ? 'hidden' : 'hidden md:block'}>
         <Sidebar />
       </div>
 
@@ -213,7 +221,7 @@ export function DashboardLayout() {
         <CoachingToast />
         <HeaderEndSlotContext.Provider value={setPageBellSlot}>
         {isChatRoute ? (
-          <div className="flex-1 min-h-0 flex flex-col">
+          <div className="flex-1 min-h-0 flex flex-col" data-layout-chat>
             <RouteErrorBoundary label="page">{page}</RouteErrorBoundary>
           </div>
         ) : (
@@ -248,10 +256,10 @@ export function DashboardLayout() {
       <CommandPalette />
 
 
-      {showArturoPill() && <FloatingArturo />}
+      {!onArturoHome && showArturoPill() && <FloatingArturo />}
 
       {/* Arturo's pane (T4; replaces the legacy JarvisPanel). Opens right above the floating button. */}
-      {showArturoPill() && <ArturoPill />}
+      {!onArturoHome && showArturoPill() && <ArturoPill />}
     </div>
   );
 }

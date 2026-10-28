@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bell, ShieldCheck, ClipboardList, X } from 'lucide-react';
 import { getGmAuthState } from '../lib/api';
 import AuthFlow from './AuthFlow';
 import { isViewHidden } from '../lib/features';
+import { focusDecision, waitingByAgent, resolveBellJump, fetchDecisions, approvalsFocusPath, type PendingCard } from '../lib/decisions';
+
 
 async function fetchJson<T>(path: string): Promise<T> {
   const res = await fetch(`/api${path}`);
@@ -23,6 +25,7 @@ const NEEDS_AUTH_STATES = new Set([
 
 export default function NotificationBell() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [needsAuth, setNeedsAuth] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -73,6 +76,48 @@ export default function NotificationBell() {
     refetchInterval: 10000,
   });
 
+  // The per-agent rows are read only while the panel is open: the badge's stats poll already runs
+  // every 10 s, and the list is a heavier read.
+  const { data: pendingList } = useQuery({
+    queryKey: ['unified-approvals-pending'],
+    queryFn: () => fetchJson<{ items: { agent_id?: string | null; status?: string }[] }>('/approvals/unified?status=pending'),
+    enabled: dropdownOpen,
+    staleTime: 5_000,
+  });
+  const perAgent = waitingByAgent(pendingList?.items ?? []);
+  // A row opens the agent's OLDEST waiting card where it lives (lib/decisions bellTarget): its chat when
+  // the chat draws it, else the Approvals page focused on it (a card from before the agent's current
+  // generation, or an on-screen menu mirror). Nothing left to show: a notice, not a dead click.
+  const [bellNotice, setBellNotice] = useState<string | null>(null);
+  const [jumping, setJumping] = useState<string | null>(null);
+  const openAgentAt = async (agent: string) => {
+    setJumping(agent);
+    setBellNotice(null);
+    try {
+      const target = await resolveBellJump(
+        agent,
+        async () => (await fetchJson<{ items: PendingCard[] }>('/approvals/unified?status=pending')).items ?? [],
+        async (a) => (await fetchDecisions(a)).filter((d) => d.state === 'pending').map((d) => d.id),
+      );
+      if (!target) {
+        setBellNotice(`Nothing from ${agent} is waiting any more — it was answered elsewhere.`);
+        void queryClient.invalidateQueries({ queryKey: ['unified-approvals-pending'] });
+        return;
+      }
+      if (target.where === 'chat') {
+        focusDecision(agent, target.id);
+        navigate(`/agent/${encodeURIComponent(agent)}`);
+      } else {
+        navigate(approvalsFocusPath(target.id));
+      }
+      setDropdownOpen(false);
+    } catch {
+      setBellNotice("Couldn't load that card just now — try again.");
+    } finally {
+      setJumping(null);
+    }
+  };
+
   const pendingApprovals = approvalStats?.by_status?.pending || 0;
   const pendingQuestionnaires = qData?.pending || (qData?.questionnaires ?? []).filter((q: any) => q.status === 'pending').length || 0;
   const totalPending = pendingApprovals + pendingQuestionnaires + (needsAuth ? 1 : 0);
@@ -114,7 +159,7 @@ export default function NotificationBell() {
         {/* Dropdown */}
         {dropdownOpen && at && createPortal(
           <div ref={panelRef} style={{ top: at.top, right: at.right }}
-               className="fixed w-72 max-w-[calc(100vw-16px)] overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl z-[80]">
+               className="fixed w-72 touch-compact max-w-[calc(100vw-16px)] overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl z-[80]">
             <div className="flex items-center justify-between border-b border-border px-4 py-3">
               <span className="text-sm font-semibold">Notifications</span>
               <button onClick={() => setDropdownOpen(false)} className="text-muted-foreground hover:text-foreground">
@@ -133,7 +178,7 @@ export default function NotificationBell() {
                   className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted"
                 >
                   <div className="p-1.5 rounded-lg bg-violet-500/15">
-                    <ShieldCheck size={14} className="text-violet-400" />
+                    <ShieldCheck size={14} className="text-violet-600 dark:text-violet-400" />
                   </div>
                   <div className="flex-1">
                     <p className="text-sm text-foreground">{pendingApprovals} pending approval{pendingApprovals !== 1 ? 's' : ''}</p>
@@ -143,13 +188,26 @@ export default function NotificationBell() {
                 </button>
               )}
 
+              {/* One row per agent with a card waiting: opens its conversation scrolled to that card. */}
+              {pendingApprovals > 0 && perAgent.map(({ agent, count }) => (
+                <button key={agent} onClick={() => void openAgentAt(agent)} disabled={jumping === agent}
+                  className="flex w-full items-center gap-3 px-4 py-2 pl-12 text-left transition-colors hover:bg-muted">
+                  <p className="flex-1 truncate text-xs text-foreground">{agent}</p>
+                  <span className="text-[11px] text-muted-foreground">{count} waiting</span>
+                </button>
+              ))}
+
+              {bellNotice && (
+                <p role="status" className="px-4 py-2 text-xs text-muted-foreground">{bellNotice}</p>
+              )}
+
               {pendingQuestionnaires > 0 && (
                 <button
                   onClick={() => { if (!isViewHidden('/inbox')) navigate('/inbox'); setDropdownOpen(false); }}
                   className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted"
                 >
                   <div className="p-1.5 rounded-lg bg-amber-500/15">
-                    <ClipboardList size={14} className="text-amber-400" />
+                    <ClipboardList size={14} className="text-amber-700 dark:text-amber-400" />
                   </div>
                   <div className="flex-1">
                     <p className="text-sm text-foreground">{pendingQuestionnaires} questionnaire{pendingQuestionnaires !== 1 ? 's' : ''}</p>
@@ -165,7 +223,7 @@ export default function NotificationBell() {
                   className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted"
                 >
                   <div className="p-1.5 rounded-lg bg-red-500/15">
-                    <Bell size={14} className="text-red-400" />
+                    <Bell size={14} className="text-red-600 dark:text-red-400" />
                   </div>
                   <div className="flex-1">
                     <p className="text-sm text-foreground">Auth required</p>
