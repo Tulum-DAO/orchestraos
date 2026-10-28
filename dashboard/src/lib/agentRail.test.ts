@@ -157,3 +157,52 @@ test('only a running row shows a context figure; a row that is not running shows
     assert.equal(showsContext(a('x', st)), false, `status=${st} showed context`);
   }
 });
+
+// ---- project groups ----
+import { sectionItems, rowLabel, type RailAgent as RA } from './agentRail.ts';
+
+const P = { slug: 'demo', label: 'Demo' };
+const Q = { slug: 'other', label: 'Other' };
+const ag = (id: string, o: Partial<RA> = {}): RA => ({ id, status: 'idle', ...o });
+
+test('two or more of a project\'s agents in a section form a group; one shows as its own row', () => {
+  const items = sectionItems([
+    ag('dev-demo', { project: P, display_name: 'dev', full_name: 'Demo · dev' }),
+    ag('qa-demo', { project: P, display_name: 'qa', full_name: 'Demo · qa' }),
+    ag('pm-other', { project: Q, tier: 'T1', full_name: 'pm-other' }),
+  ]);
+  assert.equal(items.length, 2);
+  const g = items.find((i) => i.kind === 'group');
+  assert.ok(g && g.kind === 'group' && g.project.slug === 'demo' && g.agents.map((a) => a.id).join() === 'dev-demo,qa-demo');
+  const single = items.find((i) => i.kind === 'row');
+  assert.ok(single && single.kind === 'row' && single.agent.id === 'pm-other');
+});
+
+test('order: T0 first, then projects by most recently messaged, then agents in no project', () => {
+  const items = sectionItems([
+    ag('loner', { last_message_at: '2026-10-28T09:00:00Z' }),
+    ag('dev-demo', { project: P, last_message_at: '2026-10-20T00:00:00Z' }),
+    ag('qa-demo', { project: P }),
+    ag('pm-other', { project: Q, tier: 'T1', last_message_at: '2026-10-25T00:00:00Z' }),
+    ag('gm', { tier: 'T0' }),
+  ]);
+  const ids = items.map((i) => (i.kind === 'row' ? i.agent.id : `[${i.project.slug}]`));
+  assert.deepEqual(ids, ['gm', 'pm-other', '[demo]', 'loner']);
+});
+
+test('inside a group the PM comes first, then by short name, whatever the activity', () => {
+  const items = sectionItems([
+    ag('zeta-demo', { project: P, display_name: 'zeta', last_message_at: '2026-10-28T00:00:00Z' }),
+    ag('pm-demo', { project: P, tier: 'T1', display_name: 'pm-demo' }),
+    ag('alpha-demo', { project: P, display_name: 'alpha' }),
+  ]);
+  assert.ok(items[0].kind === 'group');
+  assert.deepEqual(items[0].kind === 'group' && items[0].agents.map((a) => a.id), ['pm-demo', 'alpha-demo', 'zeta-demo']);
+});
+
+test('a row shows its short name inside its group and its full name anywhere else', () => {
+  const a = ag('dev-demo', { project: P, display_name: 'dev', full_name: 'Demo · dev' });
+  assert.equal(rowLabel(a, true), 'dev');
+  assert.equal(rowLabel(a, false), 'Demo · dev');
+  assert.equal(rowLabel(ag('gm'), false), 'gm');
+});
