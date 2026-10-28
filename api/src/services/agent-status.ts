@@ -49,7 +49,11 @@ export function resolveDetectorPath(env: Record<string, string | undefined>, mod
   return join(here, '..', '..', '..', 'scripts', 'agent-status.py');
 }
 const DETECTOR = resolveDetectorPath(process.env, import.meta.url);
-const CACHE_TTL_MS = Number(process.env.AGENT_STATUS_TTL_MS) || 15_000;    // matches the iOS gateway cache; env override is for tests
+// 3 s, down from 15 s. The long TTL dated from a full-fleet scan costing ~6 s; a scan of a small fleet now takes well
+// under a second, and the TTL had become what made status lag (a 2-3 s turn could start and end
+// inside it). refresh() is single-flight, so a scan slower than the TTL never stacks. Env override
+// is for tests and for a large fleet where scans are slow again.
+const CACHE_TTL_MS = Number(process.env.AGENT_STATUS_TTL_MS) || 3_000;
 const SCAN_TIMEOUT_MS = 120_000;
 
 // Event-driven freshness: state-event-hook.py writes a Tier-0 status event
@@ -59,7 +63,7 @@ const SCAN_TIMEOUT_MS = 120_000;
 // status flip lagged behind the actual event. Busting the cache when a NEWER
 // event file exists makes the very next poll trigger a fresh scan that surfaces
 // the event (status flips within one poll of the message-send / agent-stop,
-// instead of waiting out the 15s TTL). Cheap: one readdir of a small dir.
+// instead of waiting out the TTL). Cheap: one readdir of a small dir.
 const EVENTS_DIR = join(ORCH, 'state', 'agent-events', 'panes');
 
 function newestEventMtimeMs(): number {
@@ -80,7 +84,7 @@ function newestEventMtimeMs(): number {
 // seen BEFORE the scan started; at = when the scan FINISHED (for the TTL).
 // THE LAG BUG this replaces (gm msg_190daa19 item 2): staleness was `newestEvent > at`, with `at`
 // stamped at FINISH, so a Stop/UserPromptSubmit landing DURING the 3.8-8.4 s scan was "older" than
-// the snapshot and ignored until the 15 s TTL. Now ANY event the scan did not see re-scans.
+// the snapshot and ignored until the TTL. Now ANY event the scan did not see re-scans.
 let cache: { at: number; eventMtime: number; data: Map<string, DetectorStatus> } =
   { at: 0, eventMtime: -1, data: new Map() };
 let refreshing = false;

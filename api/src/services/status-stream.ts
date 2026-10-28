@@ -15,6 +15,11 @@
  * Wire protocol:
  *   event: status   data: { seat, status, ts, runtime }   — one per changed seat
  *   event: gone     data: { seat }                          — seat left the file
+ *   event: step     data: { seat, text, ts }               — what the seat is doing now ('' = nothing)
+ *
+ * Steps come from a second realtime file, realtime/steps.json, beside status.json. Its ONE writer is
+ * Arturo's service (services/arturo/live_steps.py, which also keeps it to one change per seat every half
+ * second); this service only reads it and passes changes on, exactly as it does with status.
  */
 import fs from 'fs';
 import path from 'path';
@@ -26,10 +31,55 @@ const STATUS_FILE =
   process.env.REALTIME_STATUS_FILE ||
   path.join(os.homedir(), '.orchestra', 'realtime', 'status.json');
 
+const STEPS_FILE =
+  process.env.REALTIME_STEPS_FILE || path.join(path.dirname(STATUS_FILE), 'steps.json');
+/** A step older than this is not "now": a new page is not handed it (the turn that wrote it is long over). */
+export const STEP_FRESH_S = 60;
+
 const clients = new Set<Response>();
 // last broadcast status per seat, so we only push actual transitions.
 const lastStatus = new Map<string, string>();
 let watcher: ReturnType<typeof chokidar.watch> | null = null;
+let stepWatcher: ReturnType<typeof chokidar.watch> | null = null;
+// last step text sent per seat, so only changes go out.
+const lastStep = new Map<string, string>();
+
+export interface StepLine { seat: string; text: string; ts: number | null }
+
+export function readSteps(file = STEPS_FILE): Record<string, { text?: string; ts?: number }> {
+  try {
+    const raw = fs.readFileSync(file, 'utf-8');
+    if (!raw.trim()) return {};
+    const doc = JSON.parse(raw);
+    const seats = doc && typeof doc === 'object' ? doc.seats : null;
+    return seats && typeof seats === 'object' ? seats : {};
+  } catch {
+    return {};                                   // partial write / missing: skip this tick
+  }
+}
+
+/** The step lines that changed since `last` (which it updates). Pure over its inputs, for the test. */
+export function stepDeltas(seats: Record<string, { text?: string; ts?: number }>, last: Map<string, string>): StepLine[] {
+  const out: StepLine[] = [];
+  for (const [seat, info] of Object.entries(seats)) {
+    const text = info && typeof info.text === 'string' ? info.text.slice(0, 160) : '';
+    if (last.get(seat) === text) continue;
+    last.set(seat, text);
+    out.push({ seat, text, ts: typeof info?.ts === 'number' ? info.ts : null });
+  }
+  return out;
+}
+
+/** What a new page is handed: only lines with words that are still current. */
+export function freshSteps(seats: Record<string, { text?: string; ts?: number }>, nowS: number): StepLine[] {
+  return Object.entries(seats)
+    .filter(([, i]) => i && typeof i.text === 'string' && i.text && typeof i.ts === 'number' && nowS - i.ts <= STEP_FRESH_S)
+    .map(([seat, i]) => ({ seat, text: (i.text as string).slice(0, 160), ts: i.ts as number }));
+}
+
+function broadcastSteps(): void {
+  for (const d of stepDeltas(readSteps(), lastStep)) send(`event: step\ndata: ${JSON.stringify(d)}\n\n`);
+}
 
 function readSeats(): Record<string, { status?: string; ts?: number; runtime?: string }> {
   try {
@@ -87,6 +137,11 @@ export function initStatusStream(): void {
   });
   watcher.on('change', broadcastStatusDeltas);
   watcher.on('add', broadcastStatusDeltas);
+  // steps: seeded the same way, then every change goes out
+  stepDeltas(readSteps(), lastStep);
+  stepWatcher = chokidar.watch(STEPS_FILE, { persistent: true, usePolling: false, ignoreInitial: true });
+  stepWatcher.on('change', broadcastSteps);
+  stepWatcher.on('add', broadcastSteps);
 }
 
 /** Attach an SSE client and immediately hand it the current full snapshot. */
@@ -99,6 +154,7 @@ export function addStatusSSEClient(res: Response): void {
       .filter(([, i]) => i && typeof i.status === 'string' && i.status)
       .map(([seat, i]) => ({ seat, status: i.status, ts: i.ts ?? null, runtime: i.runtime ?? null }));
     res.write(`event: snapshot\ndata: ${JSON.stringify({ seats: snapshot })}\n\n`);
+    for (const d of freshSteps(readSteps(), Date.now() / 1000)) res.write(`event: step\ndata: ${JSON.stringify(d)}\n\n`);
   } catch {
     /* snapshot best-effort */
   }
@@ -115,5 +171,9 @@ export function stopStatusStream(): void {
   if (watcher) {
     watcher.close();
     watcher = null;
+  }
+  if (stepWatcher) {
+    void stepWatcher.close();
+    stepWatcher = null;
   }
 }

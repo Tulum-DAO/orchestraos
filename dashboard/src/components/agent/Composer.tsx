@@ -1,22 +1,13 @@
 import { useRef, useState } from 'react';
 import { Cpu, PhoneCall } from 'lucide-react';
-import { withTimeout, sendFailureNote } from '../../lib/composerSend';
 import { delegatedWorkLabel, type ComposerGate } from '../../lib/composerGate';
 import { useLocation } from 'react-router-dom';
-import { useAgentSettings } from '../../stores/agentSettings';
+import { useAssistantName } from '../../lib/assistantName';
 import { useModelSelection } from '../../stores/modelSelection';
 import { ModelSelectorSheet } from './ModelSelectorSheet';
 import { VoiceControls, type VoiceControlsHandle } from './VoiceControls';
 import ChatInput from '../chat/ChatInput';
-import {
-  sendToAgent,
-  isDelivered,
-  isQueued,
-  isHeld,
-  isComposerHold,
-  describeSendState,
-  type SendAttachment,
-} from '../../lib/agentSend';
+import { sendFromComposer } from '../../lib/agentSendFlow';
 
 interface ComposerProps {
   agentId?: string;
@@ -32,17 +23,8 @@ interface ComposerProps {
   onStop?: () => Promise<unknown>;
 }
 
-async function uploadAttachment(file: File): Promise<SendAttachment> {
-  const formData = new FormData();
-  formData.append('file', file);
-  const res = await fetch('/api/uploads', { method: 'POST', body: formData });
-  if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
-  const data = await res.json();
-  return { upload_id: data.filename };
-}
-
 export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, onStop }: ComposerProps) {
-  const settings = useAgentSettings();
+  const aname = useAssistantName();
   const location = useLocation();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [draft, setDraft] = useState('');
@@ -53,50 +35,12 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
   // affordance has no video mime/extension support to gate yet, so
   // `capabilities?.video === true` has nothing to gate against for now.
 
-  // B1 send-bridge (now unblocked — ChatInput.tsx gained the optional
-  // draft/onDraftChange/onSend seam): upload any File attachments, then
-  // deliver through the P3 gateway send bridge instead of the legacy
-  // /inject path, mapped to ChatInput's {ok, note, queued, held} contract.
-  const handleSend = async (
-    { text, attachments }: { text: string; attachments: File[] },
-    { force }: { force: boolean }
-  ) => {
-    // AN UNREACHABLE API MUST SAY SO, not vanish (P1 2026-10-06: the API was down 15:33-16:33Z
-    // and sends failed with nothing on screen explaining why). Returning ok:false keeps the
-    // draft AND the attachment where the operator left them; throwing would too, but the note
-    // would be a stack-shaped 'Error: Failed to fetch' instead of a sentence.
-    // Timeout semantics live in lib/composerSend.ts, with their reasoning and their tests.
-    // The short version: a timeout is an UNKNOWN outcome, not a failure.
-    try {
-      const uploaded = attachments.length
-        ? await withTimeout(Promise.all(attachments.map(uploadAttachment)))
-        : undefined;
-      const result = await withTimeout(sendToAgent(agentId, { text, attachments: uploaded }, { force }));
-      return {
-        ok: isDelivered(result),
-        note: describeSendState(result) || undefined,
-        queued: isQueued(result),
-        held: isHeld(result),
-        // A composer-hold is a REFUSAL (409, nothing delivered: text already sits in the agent's
-        // box), not a hold. Folding it into `held` made the panel call it a success (review of #198).
-        refused: isComposerHold(result),
-        // carried so the panel can SHOW the draft it would overwrite
-        composer_text: result.composer_text,
-        stranded: result.stranded,
-      };
-    } catch (err) {
-      // Do NOT claim "nothing was sent" on a timeout. The race settles OUR promise; the
-      // request is still in flight and the server may well deliver it. Saying it failed is
-      // what makes the operator send again, which is how the agent gets the same
-      // instruction twice.
-      return {
-        ok: false,
-        note: sendFailureNote(err),
-        queued: false,
-        held: false,
-      };
-    }
-  };
+  // Upload, POST /send (the held-aware route), and the transcript check on an unknown outcome:
+  // lib/agentSendFlow.ts, shared with the floating agent pane so the two behave the same.
+  const handleSend = (
+    payload: { text: string; attachments: File[] },
+    opts: { force: boolean; priorRowIds?: ReadonlySet<string> },
+  ) => sendFromComposer(agentId, payload, opts);
 
   return (
     // FLOATING (Shaw 2026-10-09): no full-width bar any more. The page (AgentPage) positions this
@@ -130,7 +74,7 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
         <ChatInput
           agentId={agentId}
           disabled={gate?.send === 'blocked'}
-          placeholder={seatName ? `Message ${seatName}` : `Ask ${settings.assistantName}`}
+          placeholder={seatName ? `Message ${seatName}` : `Ask ${aname}`}
           draft={draft}
           onDraftChange={setDraft}
           onSend={handleSend}
@@ -151,7 +95,7 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
                   className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-left text-foreground hover:bg-muted rounded-lg"
                   onClick={() => { close(); void voiceRef.current?.startCall(); }}>
                   <PhoneCall size={15} className="shrink-0 text-muted-foreground" />
-                  <span>Call {settings.assistantName}</span>
+                  <span>Call {aname}</span>
                 </button>
               )}
             </>

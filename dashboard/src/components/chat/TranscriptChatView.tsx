@@ -17,6 +17,15 @@ import { groupToolRuns, isInterrupted } from '../../lib/toolGroups';
 import { normalizeAgentState, STATE_STYLE, type LiveState } from '../../lib/agentStatus';
 import { styleForAgentState, isDegraded, type FeedVerdict } from '../../lib/feedLiveness';
 import OptionsMenuCard, { type PendingMenu } from './OptionsMenuCard';
+import DecisionBubble from './DecisionBubble';
+import { useQuery } from '@tanstack/react-query';
+import { fetchDecisions, interleave, takeFocusRequest, focusTarget, FOCUS_DECISION_EVENT, type FocusRequest } from '../../lib/decisions';
+import { userRows, visiblePending, type PendingSend } from '../../lib/pendingSends';
+import { usePendingSends } from '../../stores/pendingSends';
+import { foldCardAnswers } from '../../lib/systemMessages';
+import { PendingBubble } from './TranscriptCards';
+
+const NO_PENDING: PendingSend[] = [];
 
 export type { LiveState };
 
@@ -115,10 +124,74 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   }, [agentId, fixtureItems]);
 
   const flat = useMemo(() => buildRenderList(items), [items]);
+  // Just-sent bubbles (lib/pendingSends): drawn until their own row arrives. Derived in render as
+  // well as retired in the store, so the frame that brings the row never also draws the bubble.
+  const rows = useMemo(() => userRows(items), [items]);
+  const setRows = usePendingSends((s) => s.setRows);
+  const onAgentState = usePendingSends((s) => s.onAgentState);
+  const pendingAll = usePendingSends((s) => s.byAgent[agentId] ?? NO_PENDING);
+  const pending = useMemo(() => visiblePending(pendingAll, rows), [pendingAll, rows]);
+  // A layout effect, so a composer waiting on this row clears its box before the row is painted.
+  useLayoutEffect(() => { if (!fixtureItems && !loading) setRows(agentId, rows); }, [agentId, rows, loading, fixtureItems, setRows]);
   // Folding consecutive tool calls (C3) means a new call can join an existing group without
   // changing the number of rendered nodes, so autoscroll keys on the UNGROUPED count below.
   const nodes = useMemo(() => groupToolRuns(flat), [flat]);
+  // The agent's approval cards, as bubbles under the messages they belong to (DecisionBubble). Polled, so a
+  // card answered anywhere else shows as answered here too, and stays as history.
+  const decisionsQ = useQuery({
+    queryKey: ['agent-decisions', agentId], queryFn: () => fetchDecisions(agentId),
+    enabled: !fixtureItems, refetchInterval: 10_000, staleTime: 5_000,
+  });
+  // A machine line that answers a card drawn in this chat ([DECISION ANSWERED <id>], an approval, a
+  // closed human task) is shown BY that card, its outcome row; it is not drawn a second time as its
+  // own card. One whose card is not here (an earlier generation's) still shows as a card.
+  const shownNodes = useMemo(
+    () => foldCardAnswers(nodes as { kind: string; text?: string; machine?: string }[], new Set((decisionsQ.data ?? []).map((d) => d.id))) as typeof nodes,
+    [nodes, decisionsQ.data]);
+  const entries = useMemo(() => interleave(shownNodes, decisionsQ.data ?? []), [shownNodes, decisionsQ.data]);
+  const lastNodeIndex = entries.reduce((last, e, i) => (e.kind === 'node' ? i : last), -1);
+  // "Needs you" sends you to this agent's first open decision; the bell, to a named one. A card that
+  // is no longer here (answered and gone, or never drawn in this chat) says so instead of doing nothing.
+  const [focusNotice, setFocusNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!focusNotice) return;
+    const t = window.setTimeout(() => setFocusNotice(null), 5000);
+    return () => window.clearTimeout(t);
+  }, [focusNotice]);
+  useEffect(() => {
+    const show = (req: FocusRequest) => {
+      const target = focusTarget(decisionsQ.data ?? [], req.decisionId);
+      const el = target ? document.getElementById(`decision-${target.id}`) : null;
+      if (el) {
+        atBottom.current = false;
+        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      } else if (req.decisionId) {
+        setFocusNotice('That card is no longer waiting here — it may have been answered elsewhere.');
+      }
+    };
+    const waiting = decisionsQ.data ? takeFocusRequest(agentId) : null;
+    if (waiting) window.setTimeout(() => show(waiting), 50);
+    const onFocusReq = (e: Event) => {
+      const req = (e as CustomEvent<FocusRequest>).detail;
+      if (req?.agentId === agentId && decisionsQ.data) { takeFocusRequest(agentId); show(req); }
+    };
+    window.addEventListener(FOCUS_DECISION_EVENT, onFocusReq);
+    return () => window.removeEventListener(FOCUS_DECISION_EVENT, onFocusReq);
+  }, [agentId, decisionsQ.data]);
   const st = normalizeAgentState(state);
+  // The idle backstop: a bubble no row could match (a long message arrives as a shorter banner)
+  // goes once the agent is idle again. Only from a live feed: a stale "idle" proves nothing.
+  const feedLive = !feed || !isDegraded(feed);
+  // Re-checked every few seconds while a bubble shows, since a short turn can begin and end between
+  // two status readings and the state then never changes here.
+  const hasPending = pendingAll.length > 0;
+  useEffect(() => {
+    if (!feedLive || st === 'unknown') return;
+    onAgentState(agentId, st === 'idle');
+    if (!hasPending) return;
+    const iv = window.setInterval(() => onAgentState(agentId, st === 'idle'), 5000);
+    return () => window.clearInterval(iv);
+  }, [agentId, st, feedLive, hasPending, onAgentState]);
   // No feed prop at all (the fixture harness) means "not fed from a live feed", which must not
   // become "the feed is dead" — it renders as before. Only an ACTUAL non-live verdict suppresses.
   // CONNECTING is not 'not live' — on first paint nothing has been contradicted yet.
@@ -158,7 +231,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el && atBottom.current) el.scrollTop = el.scrollHeight;
-  }, [flat.length, agentId]);
+  }, [flat.length, entries.length, pending.length, agentId]);
 
   return (
     <div className={compact ? 'space-y-2' : 'flex flex-col flex-1 min-h-0'}>
@@ -194,12 +267,18 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
             <div className="w-2 h-2 bg-neutral-500 rounded-full animate-pulse" />
             <span className="text-xs text-neutral-500">Loading conversation…</span>
           </div>
-        ) : nodes.length === 0 ? (
+        ) : entries.length === 0 ? (
           <span className="text-xs text-neutral-600">{err ? `No transcript (${err})` : 'No messages yet'}</span>
         ) : (
-          nodes.map((n, i) => (
-            <GroupedNodeView key={n.key} node={n} interrupted={isInterrupted({ isLast: i === nodes.length - 1, state: st })} />
-          ))
+          entries.map((e, i) => e.kind === 'decision'
+            ? <DecisionBubble key={`decision-${e.decision.id}`} decision={e.decision} onAnswered={() => void decisionsQ.refetch()} />
+            : <GroupedNodeView key={e.node.key} node={e.node} interrupted={isInterrupted({ isLast: i === lastNodeIndex, state: st })} />)
+        )}
+        {!loading && pending.map((p) => <PendingBubble key={p.id} text={p.display} kind={p.kind} />)}
+        {focusNotice && (
+          <div role="status" className="sticky bottom-2 mx-auto w-fit max-w-[92%] text-[11px] text-neutral-300 px-3 py-1.5 rounded-full border border-neutral-700 bg-neutral-900/95 shadow">
+            {focusNotice}
+          </div>
         )}
 
         {/* live decision menu (detector pending_menu) — answerable below the last

@@ -873,6 +873,51 @@ export function dropQueuedCommandsCoveredByBatches(items: any[]): any[] {
 }
 
 /**
+ * Render a machine message ONCE when it reached the pane as a real turn.
+ *
+ * The approval loop delivers a card's answer twice by design: a durable msg_store row (the audit
+ * and watchdog backstop) AND a typed line into the agent's pane. When the agent is idle that line
+ * is a real user turn in the log, not a queued_command, so dropQueuedCommandsCoveredByBatches (which
+ * only drops queued items) leaves it, and the row came back as a "1 queued message processed"
+ * batch beside it: the same [DECISION ANSWERED ...] drawn twice. Measured on the live log: an answer
+ * at 04:00:02 as a user turn, and the same body as a batch entry 13 s later.
+ *
+ * The TURN wins here, the reverse of the queued case: it is where the agent actually read the
+ * message, and it carries the server's `machine` tag, so every client draws it as that machine
+ * card. Only machine-tagged turns take part (never the operator's own words), bodies under 40
+ * characters are not matched (not distinctive enough), and a batch left empty is dropped.
+ */
+export function dropBatchEntriesCoveredByMachineTurns(items: any[]): any[] {
+  const MIN = 40;
+  const norm = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
+  const turns: string[] = [];
+  for (const it of items) {
+    if (it?.kind === 'text' && it.role === 'user' && !it.queued && it.machine) {
+      const t = norm(it.text);
+      if (t.length >= MIN) turns.push(t);
+    }
+  }
+  if (!turns.length) return items;
+  const covered = (body: unknown) => {
+    const b = norm(body);
+    if (b.length < MIN) return false;
+    const head = b.slice(0, MIN);
+    return turns.some((t) => t === b || t.includes(b) || b.includes(t) || t.startsWith(head));
+  };
+  const out: any[] = [];
+  for (const it of items) {
+    if (it?.kind !== 'queued_batch' || !Array.isArray(it.entries)) { out.push(it); continue; }
+    const kept = it.entries.filter((e: any) => !covered(e?.body));
+    if (kept.length === it.entries.length) { out.push(it); continue; }
+    if (!kept.length) continue;
+    const copy = { ...it, entries: kept, count: kept.length };
+    if (LIVE_CARDS.has(it)) LIVE_CARDS.add(copy);      // keep its identity as a live card
+    out.push(copy);
+  }
+  return out;
+}
+
+/**
  * Drop a queued message that the log ALSO recorded as a real user turn.
  *
  * Whether it does is not consistent and cannot be assumed either way: on one seat the same
@@ -1222,6 +1267,7 @@ export function buildRenderItems(items: any[]): any[] {
         const node: any = { kind: 'user', text };
         if (it.is_system) node.is_system = true;
         if (it.queued) node.queued = true;
+        if (it.machine) node.machine = it.machine;
         if (it.ts !== undefined) node.ts = it.ts;
         node.key = key;
         nodes.push(withAudience(node, it));
@@ -1513,6 +1559,8 @@ export function normalizeTranscript(
     // An agent message delivered mid-turn exists as BOTH a batch row and a queued_command.
     // The batch wins: it knows who sent it.
     windowed = dropQueuedCommandsCoveredByBatches(windowed);
+    // ...and a machine message the pane recorded as a real turn shows as that turn, not ALSO as a batch.
+    windowed = dropBatchEntriesCoveredByMachineTurns(windowed);
   }
   windowed = tagSynthetics(settleIngestedQueuedCommands(windowed));
   return {

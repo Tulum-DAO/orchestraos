@@ -1,5 +1,5 @@
 /**
- * The agent rail's one-line plan-usage summary, from GET /api/usage (scripts/usage_meter.py).
+ * The sidebar's plan-usage panel (one line per provider), from GET /api/usage (scripts/usage_meter.py).
  *
  * Pure so it can be tested without a browser. Rules carried over from the meter: a provider with no
  * reading shows its reason (never a number), and a stale reading says "as of <time>" so it is never
@@ -18,6 +18,9 @@ export interface UsageRow {
 
 export interface UsagePart {
   key: string;
+  provider: string;
+  /** The name the text starts with ("Claude", or "Claude (work)" when there are two logins). */
+  who: string;
   text: string;
   title: string;
   stale: boolean;
@@ -49,7 +52,7 @@ export function usageParts(rows: unknown, now: Date = new Date()): UsagePart[] {
     if (!r || typeof r.provider !== 'string') continue;
     const name = NAMES[r.provider] || r.provider;
     if (!isPct(r.used_pct)) {
-      parts.push({ key: `${r.provider}:none`, text: `${name} —`, title: r.reason || `${name}: no usage reading`,
+      parts.push({ key: `${r.provider}:none`, provider: r.provider, who: name, text: `${name} —`, title: r.reason || `${name}: no usage reading`,
                    stale: false, high: false, missing: true });
       continue;
     }
@@ -61,9 +64,29 @@ export function usageParts(rows: unknown, now: Date = new Date()): UsagePart[] {
     // dimmed number alone still reads as now.
     const seen = r.stale && typeof r.as_of === 'number' ? ` (as of ${clock(r.as_of, now)})` : '';
     const text = `${who} ${Math.round(r.used_pct)}% ${win}`.trim() + seen;
-    parts.push({ key: `${r.provider}:${r.account || ''}:${r.window || ''}`, text,
+    parts.push({ key: `${r.provider}:${r.account || ''}:${r.window || ''}`, provider: r.provider, who, text,
                  title: `${who}: ${Math.round(r.used_pct)}% of the ${win} limit used${resets}${asOf}`,
                  stale: !!r.stale, high: r.used_pct >= 80, missing: false });
   }
   return parts;
+}
+
+/** The providers the panel shows, one line each, in this order. Any other the API reports (Gemini,
+ *  Grok) is left out of the display only: the API and the meter still collect it. */
+const SHOWN = ['claude', 'codex'];
+
+export interface UsageLineRow { provider: string; parts: UsagePart[] }
+
+/** One line per shown provider, its name said once: "Claude 10% 5 h · 23% weekly", then "Codex —".
+ *  A name is repeated only when it changes within the line (two Claude logins). */
+export function usageLines(rows: unknown, now: Date = new Date()): UsageLineRow[] {
+  const parts = usageParts(rows, now);
+  const lines: UsageLineRow[] = [];
+  for (const provider of SHOWN) {
+    const mine = parts.filter((p) => p.provider === provider);
+    if (mine.length === 0) continue;
+    lines.push({ provider, parts: mine.map((p, i) => (i > 0 && p.who === mine[i - 1].who
+      ? { ...p, text: p.text.slice(p.who.length).trimStart() } : p)) });
+  }
+  return lines;
 }

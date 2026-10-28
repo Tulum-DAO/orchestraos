@@ -92,7 +92,7 @@ test('a message injected mid-turn is a card on the FIRST poll, with its sender, 
   assert.equal(c.length, 1, 'exactly one card');
   assert.equal(c[0].key, 'msg:m1');
   assert.equal(c[0].count, 1);
-  assert.deepEqual(c[0].entries[0], { agent: 'approval-loop', sent_ts: '2026-10-09T10:30:10.279013+00:00', body: DECISION });
+  assert.deepEqual(c[0].entries[0], { agent: 'approval-loop', sent_ts: '2026-10-09T10:30:10.279013+00:00', body: DECISION, machine: 'decision' });
   assert.equal(bubbles(env.items, DECISION).length, 0, 'the raw bubble is gone on the same poll');
   const at = env.items.findIndex((i) => i.kind === 'queued_batch');
   assert.ok(at > env.items.findIndex((i) => i.text === 'checking the blues') &&

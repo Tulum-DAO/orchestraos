@@ -37,7 +37,9 @@ export interface ToolBlock {
 export interface BatchEntryNode { agent: string; sent_ts: string; body: string }
 
 export type RenderNode =
-  | { kind: 'user'; text: string; ts?: string; key: string; isSystem?: boolean; queued?: boolean }
+  | { kind: 'user'; text: string; ts?: string; key: string; isSystem?: boolean; queued?: boolean;
+      /** The server's tag for a line a machine wrote (a decision answer, another agent's message, ...). */
+      machine?: string }
   | { kind: 'assistant'; text: string; ts?: string; key: string }
   | { kind: 'thinking'; text: string; ts?: string; key: string }
   | { kind: 'queued_batch'; count: number; entries: BatchEntryNode[]; ts?: string; key: string }
@@ -76,7 +78,8 @@ export function buildRenderList(items: ChatItem[]): RenderNode[] {
         const bootLine = /^You are [\w.-]+\. Read \/tmp\/agent-init-[\w.-]+\.md\b/.test(text);
         const isSystem = flagged || bootLine || (!firstUserSeen && (text.length > 800 || /^You are\b/.test(text)));
         if (!flagged) firstUserSeen = true;
-        nodes.push({ kind: 'user', text, ts: it.ts, key, isSystem, queued: (it as any).queued === true });
+        const machine = (it as { machine?: string }).machine;
+        nodes.push({ kind: 'user', text, ts: it.ts, key, isSystem, queued: (it as any).queued === true, ...(machine ? { machine } : {}) });
       } else {
         nodes.push({ kind: 'assistant', text, ts: it.ts, key });
       }

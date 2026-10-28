@@ -14,7 +14,9 @@
 
 import { STATE_COPY } from './stateCopy.ts';
 
-export type SendState = 'delivered' | 'queued' | 'held';
+/** `unknown`: typed but not confirmed (gateway 502 unverified_submit, or no answer in time). The
+ *  caller checks the transcript before saying anything (sendOutcome.ts). */
+export type SendState = 'delivered' | 'queued' | 'held' | 'unknown';
 
 export interface SendAttachment { upload_id: string }
 
@@ -35,6 +37,12 @@ export interface AgentSendResult {
   attempts?: number;
   message_id?: string;
   reason?: string;
+  /** The exact text the agent received, attachment markers included (what the pending bubble matches). */
+  sent_text?: string;
+  /** The /tmp file a long message was injected as: the one exact token its transcript row carries. */
+  chip_dodge_pointer?: string;
+  /** The agent's state when a delivered message landed (mid-turn = it waits in the CLI's queue). */
+  agent_state?: string;
   // 409 composer-hold (D4) fields — same shape as the legacy /inject busy contract.
   busy?: boolean;
   activity?: string;
@@ -45,6 +53,10 @@ export interface AgentSendResult {
 }
 
 const CLIENT_CAPS = ['send-states'];
+
+/** The sentence for a send the server typed but could not confirm, after the transcript did not
+ *  show it either. Never "not sent": the agent may have it, and saying otherwise invites a resend. */
+export const COULDNT_CONFIRM = "Couldn't confirm the agent got it — check the conversation before sending again.";
 
 export async function sendToAgent(
   id: string,
@@ -115,7 +127,12 @@ export function isDelivered(result: AgentSendResult): boolean {
  * 409 composer-hold, which is retryable with force and keeps its own UI. The
  * caller must keep the typed text and show an error for this. */
 export function isFailed(result: AgentSendResult): boolean {
-  return !isComposerHold(result) && !accepted(result);
+  return !isComposerHold(result) && !isUnknown(result) && !accepted(result);
+}
+
+/** Typed but unconfirmed: NOT a failure. Probe the transcript before saying anything. */
+export function isUnknown(result: AgentSendResult): boolean {
+  return result.state === 'unknown';
 }
 
 /** True on the D4 composer-hold 409 — the payload is echoed back on
@@ -130,6 +147,7 @@ export function describeSendState(result: AgentSendResult): string {
   // A composer-hold 409 only ever means text is sitting in the agent's input box (the server
   // returns it for composer_text or stranded, nothing else). Same words as every surface.
   if (isComposerHold(result)) return STATE_COPY.stranded;
+  if (isUnknown(result)) return COULDNT_CONFIRM;
   if (isFailed(result)) {
     return result.error
       || (result.httpStatus ? `Send failed (HTTP ${result.httpStatus}) — not delivered` : 'Send failed — not delivered');

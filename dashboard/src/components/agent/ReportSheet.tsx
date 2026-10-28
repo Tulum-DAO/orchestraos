@@ -8,6 +8,7 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
 import { post } from '../../lib/api';
+import { useAssistantName } from '../../lib/assistantName';
 
 export type ReportKind = 'crash' | 'bug' | 'improvement' | 'suggestion';
 
@@ -29,6 +30,7 @@ export interface ReportResult { ok: boolean; id?: string; card_id?: string | nul
 export function ReportSheet({ isOpen, onClose, agentId }: ReportSheetProps) {
   const [kind, setKind] = useState<ReportKind>('bug');
   const [words, setWords] = useState('');
+  const aname = useAssistantName();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ReportResult | null>(null);
 
@@ -84,7 +86,7 @@ export function ReportSheet({ isOpen, onClose, agentId }: ReportSheetProps) {
         {result && (
           <div className={`text-xs rounded-lg px-3 py-2 ${result.ok ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-400'}`}>
             {result.ok
-              ? <>Filed <span className="font-mono">{result.id}</span>{result.card_id ? <> · card <span className="font-mono">{result.card_id}</span> is on your phone</> : <> · sent to Telegram and Arturo</>}. If nobody answers in 2 minutes the safe repairs run on their own.</>
+              ? <>Filed <span className="font-mono">{result.id}</span>{result.card_id ? <> · card <span className="font-mono">{result.card_id}</span> is on your phone</> : <> · sent to Telegram and {aname}</>}. If nobody answers in 2 minutes the safe repairs run on their own.</>
               : <>Couldn't file it: {result.error || 'unknown error'}</>}
           </div>
         )}

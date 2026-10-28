@@ -298,3 +298,105 @@ test('force: an explicit force:true reaches the gateway; absent or truthy-but-no
   }
   assert.deepEqual(seen, [true, false, false]);
 });
+
+// ── unknown: typed but unconfirmed (never stored, never "not sent") ───────
+
+test('unknown: 502 unverified_submit -> {state:"unknown"}, NOT written to the store', async () => {
+  const { res, calls } = fakeRes();
+  let wrote = false;
+  const d = deps({
+    gatewayInject: async () => ({ httpStatus: 502, ok: false, delivered: false, reason: 'unverified_submit', state: 'idle' }),
+    msgStoreSend: async () => { wrote = true; return { sent: true, id: 'msg_dup' }; },
+  });
+  await handleAgentSend(d, req({ body: { text: 'hello there', client_caps: ['send-states'] } }), res);
+  assert.equal(calls.status, 502);
+  assert.equal(calls.json.state, 'unknown');
+  assert.equal(calls.json.reason, 'unverified_submit');
+  assert.equal(wrote, false, 'a store row would deliver the message a second time');
+});
+
+test('unknown: legacy client gets ok:false with delivery:"unknown", still no store write', async () => {
+  const { res, calls } = fakeRes();
+  let wrote = false;
+  const d = deps({
+    gatewayInject: async () => ({ httpStatus: 502, ok: false, reason: 'unverified_submit' }),
+    msgStoreSend: async () => { wrote = true; return { sent: true, id: 'x' }; },
+  });
+  await handleAgentSend(d, req({ body: { text: 'hi' } }), res);
+  assert.equal(calls.json.ok, false);
+  assert.equal(calls.json.delivery, 'unknown');
+  assert.equal(wrote, false);
+});
+
+test('unknown: a gateway timeout is unknown too (it may have typed it), no store write', async () => {
+  const { res, calls } = fakeRes();
+  let wrote = false;
+  const d = deps({
+    gatewayInject: async () => ({ httpStatus: 0, ok: false, timedOut: true, error: 'The operation was aborted due to timeout' }),
+    msgStoreSend: async () => { wrote = true; return { sent: true, id: 'x' }; },
+  });
+  await handleAgentSend(d, req({ body: { text: 'hi', client_caps: ['send-states'] } }), res);
+  assert.equal(calls.json.state, 'unknown');
+  assert.equal(calls.json.reason, 'gateway_timeout');
+  assert.equal(wrote, false);
+});
+
+test('a refused connection (not a timeout) still durable-writes as queued', async () => {
+  const { res, calls } = fakeRes();
+  let wrote = false;
+  const d = deps({
+    gatewayInject: async () => ({ httpStatus: 0, ok: false, unreachable: true, error: 'ECONNREFUSED' }),
+    msgStoreSend: async () => { wrote = true; return { sent: true, id: 'msg_q' }; },
+  });
+  await handleAgentSend(d, req({ body: { text: 'hi', client_caps: ['send-states'] } }), res);
+  assert.equal(calls.json.state, 'queued');
+  assert.equal(wrote, true);
+});
+
+test('send_failed (tmux refused the keys, nothing typed) is not "unknown"', async () => {
+  const { res, calls } = fakeRes();
+  const d = deps({ gatewayInject: async () => ({ httpStatus: 502, ok: false, reason: 'send_failed', state: 'idle' }) });
+  await handleAgentSend(d, req({ body: { text: 'hi', client_caps: ['send-states'] } }), res);
+  assert.notEqual(calls.json.state, 'unknown');
+});
+
+// ── chip_dodge_pointer + agent_state pass through ─────────────────────────
+
+test('delivered: chip_dodge_pointer and the agent state pass through', async () => {
+  const { res, calls } = fakeRes();
+  const d = deps({
+    gatewayInject: async () => ({ httpStatus: 200, ok: true, delivered: true, state: 'working', chip_dodge_pointer: '/tmp/agent-inject-1-abc.md' }),
+  });
+  await handleAgentSend(d, req({ body: { text: 'long', client_caps: ['send-states'] } }), res);
+  assert.equal(calls.json.state, 'delivered');
+  assert.equal(calls.json.agent_state, 'working');
+  assert.equal(calls.json.chip_dodge_pointer, '/tmp/agent-inject-1-abc.md');
+});
+
+test('unknown: chip_dodge_pointer passes through so the client can probe by it', async () => {
+  const { res, calls } = fakeRes();
+  const d = deps({
+    gatewayInject: async () => ({ httpStatus: 502, ok: false, reason: 'unverified_submit', chip_dodge_pointer: '/tmp/agent-inject-2-def.md' }),
+  });
+  await handleAgentSend(d, req({ body: { text: 'long', client_caps: ['send-states'] } }), res);
+  assert.equal(calls.json.chip_dodge_pointer, '/tmp/agent-inject-2-def.md');
+});
+
+test('delivered without a pointer: no chip_dodge_pointer key at all', async () => {
+  const { res, calls } = fakeRes();
+  await handleAgentSend(deps(), req({ body: { text: 'hi', client_caps: ['send-states'] } }), res);
+  assert.equal('chip_dodge_pointer' in calls.json, false);
+});
+
+test('sent_text: the exact text the agent got, markers included, on every accepted state', async () => {
+  const att = { text: 'look', attachments: [{ upload_id: '1791455816_dr29ix.png' }], client_caps: ['send-states'] };
+  for (const gw of [
+    { httpStatus: 200, ok: true, delivered: true },
+    { httpStatus: 200, ok: true, held: true, message_id: 'm1' },
+    { httpStatus: 0, ok: false, unreachable: true },
+  ] as GatewayInjectResult[]) {
+    const { res, calls } = fakeRes();
+    await handleAgentSend(deps({ gatewayInject: async () => gw }), req({ body: att }), res);
+    assert.match(calls.json.sent_text, /^\[IMAGE: .*1791455816_dr29ix\.png\] look$/);
+  }
+});
