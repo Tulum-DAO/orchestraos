@@ -453,7 +453,7 @@ def spawn_diagnosis(r: dict, *, force: bool = False) -> str:
             f"Read {r['_path']} and docs/RED_ALERT.md. Fan the dirty work (log reads, ps/tmux state, registry rows) "
             f"to Haiku subagents; YOU reason. Write `diagnosis` and `permanent_fix` into the report with "
             f"`python3 scripts/red_alert.py update {rid} --diagnosis ... --permanent-fix JSON --by {name}`, then open a "
-            f"dialogue with the operator through Arturo: msg_store send --from {name} --to gm --type red_alert "
+            f"dialogue with the operator through the assistant: msg_store send --from {name} --to gm --type red_alert "
             f"--subject 'RED ALERT {rid}: <one-line cause>' with the fix you propose and the question you need answered.")
     env = dict(os.environ, AGENT_RUNTIME="claude", AGENT_MODEL="claude-opus-5[1m]")
     out = subprocess.run([os.path.join(CODE_ROOT, "spawn-agent.sh"), name, "--task", task], capture_output=True, text=True,

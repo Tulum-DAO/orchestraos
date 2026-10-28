@@ -813,7 +813,7 @@ def cmd_starter(ns) -> int:
         return refused
     lock = _starter_lock(st)
     if lock is False:
-        print("another `orchestra starter` is already running on this install (Arturo may be setting up "
+        print(f"another `orchestra starter` is already running on this install ({S.assistant_name()} may be setting up "
               "the team): wait for it to finish, then run this again", file=sys.stderr)
         return 3
     try:

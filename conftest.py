@@ -45,6 +45,9 @@ os.makedirs(os.environ["ORCHESTRA_DIR"], exist_ok=True)
 os.environ["PANE_LOCK_DIR"] = os.path.join(_FENCE_ROOT, "pane-locks")
 # The end-of-call GM digest asks the live brain (the claude CLI) to write it: never from a test.
 os.environ["ARTURO_GM_DIGEST"] = "0"
+# Older tests send to made-up recipients on an empty fenced install; the never-existed refusal (msg_store
+# UnknownRecipient) is off for them and switched on by the tests that cover it.
+os.environ["UNKNOWN_RECIPIENT_REFUSE"] = "0"
 # The rolling thread summary asks the live brain to write it: never from a test.
 os.environ["ARTURO_THREAD_SUMMARY"] = "0"
 # The gateway's typed-not-entered journal: every verified_inject writes a row before it types, and

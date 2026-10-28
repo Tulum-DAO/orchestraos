@@ -491,6 +491,19 @@ def main(argv=None) -> int:
         result = run_beat(agents, registry, state, now=now, dry=dry,
                           s3_seams_provider=s3_seams_provider)
 
+        # Briefings for agents that stopped recently (scripts/briefing.py), so a fresh successor's briefing is usually
+        # ready before anyone asks. Switched on per install by state/briefings-precompute.flag (it spends model
+        # calls); run detached so the beat never waits on a model. Never breaks the beat.
+        if not dry and os.path.exists(os.path.join(ORCHESTRA_DIR, "state", "briefings-precompute.flag")):
+            try:
+                import subprocess as _sp
+                _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                _sp.Popen([sys.executable, os.path.join(_root, "scripts", "briefing.py"), "precompute"],
+                          cwd=_root, stdin=_sp.DEVNULL, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                          start_new_session=True, env={**os.environ, "ORCHESTRA_DIR": ORCHESTRA_DIR})
+            except Exception:  # noqa: BLE001
+                pass
+
         # one log line per agent per beat + a summary line.
         lines = [b["log"] + f" -> {b.get('armed_status', b['dry_status'])}"
                  for b in result["beats"]]

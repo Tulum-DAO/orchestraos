@@ -49,6 +49,8 @@ def screen(monkeypatch, tmp_path):
             return {"pending_menu": state["menu"], "state": "waiting"}
 
     monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path))          # the off switch is read here, never on the host
+    monkeypatch.setenv("PANE_LOCK_DIR", str(tmp_path / "locks"))  # the pane lock, never the host's
+    monkeypatch.setenv("MENU_ANSWER_LOG", str(tmp_path / "menu-answers.jsonl"))
     monkeypatch.setattr(G, "gateway_token", lambda: "fleet-tok")
     monkeypatch.setattr(G, "_PERM_INSTANCE_LEDGER", str(tmp_path / "ledger.json"), raising=False)
     monkeypatch.setattr(G, "_agent_status", lambda: _AS())

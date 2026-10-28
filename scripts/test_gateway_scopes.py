@@ -460,10 +460,12 @@ def test_PIN_the_multi_verb_map_and_the_admin_ptt_voice_rows_exactly():
 
     def rows(verb):
         return sorted(f"{m} {p}" for (m, p), v in G.ROUTE_SCOPES.items() if v == verb)
-    assert rows("admin") == ["GET /agents/new/parents", "GET /terminal/ws", "POST /agents/new",
+    assert rows("admin") == ["DELETE /arturo/assistant/name", "DELETE /arturo/avatar", "GET /agents/new/parents",
+                             "GET /terminal/ws", "POST /agents/new",
                              "POST /device/upgrade",
                              "POST /red-alert/report", "POST /runtimes/available/refresh",
-                             "POST /telemetry", "PUT /arturo/ptt/vendor", "PUT /arturo/ptt/voice"]
+                             "POST /telemetry", "PUT /arturo/assistant/name", "PUT /arturo/avatar",
+                             "PUT /arturo/ptt/vendor", "PUT /arturo/ptt/voice"]
     assert rows("ptt") == ["GET /arturo/ptt/stream/events", "POST /arturo/ptt",
                            "POST /arturo/ptt/stream/audio", "POST /arturo/ptt/stream/end",
                            "POST /voice-call-ended"]
@@ -566,3 +568,22 @@ def test_owner_is_a_verb_no_route_requires_and_http_cannot_mint():
     assert "owner" not in set(G.ROUTE_SCOPES.values())
     assert "owner" not in HTTP_MINTABLE
     assert http_mintable(["read", "owner"])[0] is False
+
+
+def test_avatar_looks_read_like_the_voice_and_only_an_admin_changes_them():
+    """Every surface draws an agent's look, so reading it is `read`; changing or resetting it changes it
+    for every device, so it is `admin`, with no any-of widening."""
+    for route in (("GET", "/arturo/avatars"), ("GET", "/arturo/avatar")):
+        assert G.ROUTE_SCOPES[route] == "read", route
+    for route in (("PUT", "/arturo/avatar"), ("DELETE", "/arturo/avatar")):
+        assert G.ROUTE_SCOPES[route] == "admin", route
+        assert G.accepted_scopes(*route) == ("admin",), route
+
+
+def test_the_assistant_name_reads_like_the_voice_and_only_an_admin_renames():
+    """Every surface shows the assistant's name, so reading it is `read`; a rename shows on every device and in
+    the assistant's own instructions, so it is `admin`, with no any-of widening."""
+    assert G.ROUTE_SCOPES[("GET", "/arturo/assistant/name")] == "read"
+    for route in (("PUT", "/arturo/assistant/name"), ("DELETE", "/arturo/assistant/name")):
+        assert G.ROUTE_SCOPES[route] == "admin", route
+        assert G.accepted_scopes(*route) == ("admin",), route

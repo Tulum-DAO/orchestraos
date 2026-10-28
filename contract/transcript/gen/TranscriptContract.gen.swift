@@ -87,6 +87,7 @@ struct TextItem: Codable, Equatable {
     let text: String
     let is_system: Bool?
     let queued: Bool?
+    let machine: String?
     let model: String?
     let usage: TokenUsage?
     let ts: String?
@@ -144,6 +145,7 @@ struct BatchEntry: Codable, Equatable {
     let agent: String
     let sent_ts: String
     let body: String
+    let machine: String?
 }
 
 struct QueuedBatchItem: Codable, Equatable {
@@ -214,6 +216,7 @@ struct RenderUser: Codable, Equatable {
     let text: String
     let is_system: Bool?
     let queued: Bool?
+    let machine: String?
     let ts: String?
     let key: String
 }

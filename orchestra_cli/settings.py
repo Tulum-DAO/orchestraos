@@ -358,3 +358,14 @@ def child_env(st: Settings, base: dict | None = None) -> dict:
         env["PATH"] = str(venv_bin) + os.pathsep + env.get("PATH", "")
         env["VIRTUAL_ENV"] = str(st.venv_dir)
     return env
+
+
+def assistant_name() -> str:
+    """What the assistant is called on this install, for CLI output: the name saved by the dashboard
+    (services/arturo/assistant_name.py owns the file and its rules), else "Arturo". The id stays "arturo"."""
+    try:
+        from services.arturo import assistant_name as _an
+        return _an.AssistantNameStore(data_dir() / "state/assistant-name.json",
+                                      data_dir() / "state/assistant-name.log").name()
+    except Exception:  # noqa: BLE001 - output only: never fail a command over the name
+        return "Arturo"

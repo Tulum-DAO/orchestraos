@@ -25,6 +25,7 @@ Rule syntax: Claude Code permission rules, absolute-path form `Tool(//abs/**)`.
 import argparse
 import json
 import os
+import re
 import sys
 
 # Write-capable tools only — the benign-self-edit class. A shell/network tool
@@ -99,6 +100,26 @@ def _bg_green_session_start_hook(orchestra_dir: str | None = None) -> dict | Non
     ]}
 
 
+def _briefing_hold_hook(orchestra_dir: str | None = None) -> dict | None:
+    """A fresh successor (BRIEFING_HOLD_ROOT set by scripts/fresh_successor.py): a UserPromptSubmit hook that holds
+    its replies until its predecessor's briefing has loaded (hooks/briefing_hold.py). Seat-scoped, on this per-seat
+    settings file only; None for every other spawn."""
+    root = os.environ.get("BRIEFING_HOLD_ROOT", "").strip()
+    if not root or not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", root):
+        return None
+    import shlex
+    script = os.path.join(CODE_ROOT, "hooks", "briefing_hold.py")
+    hold = os.environ.get("BRIEFING_HOLD_SECONDS", "40")
+    try:
+        timeout = int(float(hold)) + 20
+    except ValueError:
+        hold, timeout = "40", 60
+    od = orchestra_dir or default_data_dir()
+    cmd = (f"BRIEFING_HOLD_ROOT={shlex.quote(root)} BRIEFING_HOLD_SECONDS={shlex.quote(hold)} "
+           f"ORCHESTRA_DIR={shlex.quote(str(od))} python3 {shlex.quote(script)}")
+    return {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": cmd, "timeout": timeout}]}]}
+
+
 def write_settings(agent_id: str, cwd: str, orchestra_dir: str | None = None,
                    out_dir: str = "/tmp") -> str:
     """Write the per-seat settings file ({"permissions":{"allow":[...]}}) and
@@ -108,8 +129,9 @@ def write_settings(agent_id: str, cwd: str, orchestra_dir: str | None = None,
     rules = build_allow_rules(cwd, orchestra_dir=orchestra_dir)
     settings: dict = {"permissions": {"allow": rules}}
     bg_hooks = _bg_green_session_start_hook(orchestra_dir=orchestra_dir)
-    if bg_hooks:
-        settings["hooks"] = bg_hooks
+    hold_hooks = _briefing_hold_hook(orchestra_dir=orchestra_dir)
+    if bg_hooks or hold_hooks:
+        settings["hooks"] = {**(bg_hooks or {}), **(hold_hooks or {})}
     path = os.path.join(out_dir, f"agent-perms-{agent_id}.settings.json")
     with open(path, "w") as f:
         json.dump(settings, f, indent=2)
