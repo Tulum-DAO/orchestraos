@@ -99,7 +99,6 @@ test('every gated surface is wired to its helper', () => {
     ['components/CommandPalette.tsx', /navItemsFor\(PAGES\)/],
     // in-page view links (orchestra-builder msg_9b62f71a: every place a view is linked)
     ['components/agent/Drawer.tsx', /routes\.filter\(\(route\) => !isViewHidden\(route\.path\)\)/],
-    ['pages/ArturoHome.tsx', /DRAWER\.filter\(\(\[, to\]\) => !isViewHidden\(to\)\)/],
     ['pages/RoadmapDetail.tsx', /!isViewHidden\('\/approvals'\)/],
     ['components/NotificationBell.tsx', /if \(!isViewHidden\('\/inbox'\)\) navigate\('\/inbox'\)/],
     ['components/NewAgentModal.tsx', /!isViewHidden\('\/agents'\) && <button/],

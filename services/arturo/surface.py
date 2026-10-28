@@ -9,6 +9,7 @@ import urllib.error
 from pathlib import Path
 
 from services.arturo.call_journal import _atomic_write
+from services.arturo import assistant_name as _assistant_name
 
 STALE_S = 120
 GATEWAY = "http://127.0.0.1:9091"
@@ -425,7 +426,7 @@ def resolve_screen(surface_path, gw_get=None, voice_calls_dir=None, focus_path=N
             "the operator is on the pipeline, but I couldn't load the stage totals."
 
     if kind in ("arturo", "voice"):
-        parts = ["the operator is on the Arturo/voice screen."]
+        parts = [f"the operator is on the {_assistant_name.name()}/voice screen."]
         if kind == "voice" and ident and voice_calls_dir:
             try:
                 jf = Path(voice_calls_dir) / f"{ident}.json"

@@ -20,7 +20,13 @@ export function stripContextLine(text: string): string {
   return (text || '').replace(CONTEXT_LINE, '');
 }
 
-export interface HydratedTurn { role: 'arturo' | 'user'; text: string; parts?: TurnPart[]; images?: string[] }
+export interface HydratedTurn { role: 'arturo' | 'user'; text: string; parts?: TurnPart[]; images?: string[];
+  /** Spoken on a live call (the thread stores mode "voice"): the feed groups these into the call's card. */
+  voice?: boolean;
+  /** The call-ended line for this call id: closes the call's card. */
+  callEnd?: string;
+  /** When it was said (epoch seconds): the card's call length. */
+  ts?: number }
 
 /** A stored thread as the feed shows it: the page's own opener hidden, context lines stripped. */
 export function hydrateTurns(turns: ThreadTurn[]): HydratedTurn[] {
@@ -30,7 +36,10 @@ export function hydrateTurns(turns: ThreadTurn[]): HydratedTurn[] {
       const sent = x.role === 'user' ? splitAttachmentPreamble(stripContextLine(x.content)) : null;
       return { role: x.role === 'user' ? 'user' as const : 'arturo' as const,
                text: sent ? sent.text : x.content, ...(parts ? { parts } : {}),
-               ...(sent?.images.length ? { images: sent.images } : {}) };
+               ...(sent?.images.length ? { images: sent.images } : {}),
+               ...(x.mode === 'voice' ? { voice: true } : {}),
+               ...(x.meta?.kind === 'call_end' && x.meta.call_id ? { callEnd: x.meta.call_id } : {}),
+               ...(typeof x.ts === 'number' ? { ts: x.ts } : {}) };
     })
     .filter((x) => !(x.role === 'user' && isPageOpener(x.text)));
 }

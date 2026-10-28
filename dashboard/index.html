@@ -8,6 +8,17 @@
     <!-- PWA -->
     <link rel="manifest" href="/manifest.json" />
     <meta name="theme-color" content="#0a0a0a" />
+    <!-- Appearance before the first paint (System, Light or Dark, per device), so a reload never flashes the
+         other mode while the app loads. The same rules as src/lib/theme.ts; keep the two in step. -->
+    <script>
+      (function () {
+        var c = 'system';
+        try { c = localStorage.getItem('orchestra.theme') || 'system'; } catch (e) {}
+        if (c !== 'light' && c !== 'dark') c = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        if (c === 'dark') document.documentElement.classList.add('dark');
+        document.querySelector('meta[name="theme-color"]').setAttribute('content', c === 'dark' ? '#0a0a0a' : '#ffffff');
+      })();
+    </script>
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="OrchestraOS" />

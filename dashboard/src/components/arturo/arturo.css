@@ -1,23 +1,58 @@
 /* Arturo home + pill — the phone shell from .workspace/agent-page-v2/mockup (S1–S6).
-   Black canvas, one thin header, provider-accent glow, one composer. No legacy chrome. */
+   One thin header, provider-accent glow, one composer. No legacy chrome.
+
+   Colours are variables, set twice: light here, dark under .dark (the app's Appearance choice). The dark set
+   is the original palette, value for value. Scoped to the shell, not :root, because --card and --accent are
+   also app-wide theme tokens that Arturo shadows inside its own page.
+   --ink is the colour translucent fills, lines and greys are made of (white on dark, black on light), so
+   rgba(var(--ink), a) keeps each dark alpha exactly; --tNN are text alphas, the same numbers in dark and
+   raised in light where black at that alpha would fall below WCAG AA (4.5:1) on Arturo's light surfaces. */
 .arturo-shell{
-  --accent:#d97757; --canvas:#000; --card:#1c1c1c; --card2:#232323;
-  --hair:rgba(255,255,255,0.08); --grey:rgba(255,255,255,0.55); --grey2:rgba(255,255,255,0.38);
-  position:fixed; inset:0; background:var(--canvas); color:#fff; overflow:hidden;
+  --accent:#d97757;
+  --canvas:#fff; --panel:#f7f7f7; --card:#f2f2f2; --card2:#e9e9e9; --bubble:#efefef;
+  --text:#111; --text2:#1c1b1a; --greet:#2a2724; --ink:0,0,0;
+  --hair:rgba(0,0,0,0.08); --hair-top:var(--border); --grey:rgba(0,0,0,0.6); --grey2:rgba(0,0,0,0.55);
+  --t35:.55; --t40:.55; --t45:.55; --t50:.58; --t72:.72; --t75:.75; --t78:.78; --t82:.82; --t85:.85;
+  --shadow:rgba(0,0,0,0.08); --send-bg:#111; --send-fg:#fff; --err:#b91c1c; --err-soft:#b91c1c;
+  --arturo-line:#e2e2e2; --arturo-raise:#f7f7f7; --arturo-line-hi:#cfcfcf;
+  --call-surface:var(--panel); --call-bubble:#fff; --call-bubble-line:var(--hair);
+  position:fixed; inset:0; background:var(--canvas); color:var(--text); overflow:hidden;
+  /* clip, not just hide: a hidden box can still be scrolled by the browser (a focused control off to
+     the side), which shifts the whole page; a clipped one cannot. */
+  overflow:clip;
   font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter Variable","Helvetica Neue",Arial,sans-serif;
   -webkit-font-smoothing:antialiased; display:flex; flex-direction:column;
 }
+.dark .arturo-shell, .arturo-onboard-shell{
+  --canvas:#000; --panel:#141414; --card:#1c1c1c; --card2:#232323; --bubble:#262626;
+  --text:#fff; --text2:#f1efec; --greet:#ece7e2; --ink:255,255,255;
+  --hair:rgba(255,255,255,0.08); --hair-top:rgba(255,255,255,0.1); --grey:rgba(255,255,255,0.55); --grey2:rgba(255,255,255,0.38);
+  --t35:.35; --t40:.40; --t45:.45; --t50:.5; --t72:.72; --t75:.75; --t78:.78; --t82:.82; --t85:.85;
+  --shadow:rgba(0,0,0,0.4); --send-bg:#fff; --send-fg:#111; --err:#ff8a8a; --err-soft:#fca5a5;
+  --arturo-line:#2a2a2a; --arturo-raise:#171717; --arturo-line-hi:#3a3a3a;
+  --call-bubble:#1c1c1c; --call-bubble-line:transparent;
+}
+/* Inside the dashboard layout (the sidebar beside it) Arturo fills the content column instead of the
+   window, like an agent chat: the layout's <main> already adds the notch and home-bar insets, so the
+   header and composer drop theirs. The top bar matches the agent pages' bar: 53px with its 1px bottom
+   border, controls centred on the same line, the title kept centred whatever sits at either end. */
+[data-layout-chat] .arturo-shell{ position:relative; inset:auto; flex:1 1 auto; min-height:0; }
+[data-layout-chat] .arturo-header{ height:53px; box-sizing:border-box; padding-top:0; border-bottom:1px solid var(--hair-top); }
+[data-layout-chat] .arturo-title{ position:absolute; left:50%; transform:translateX(-50%); }
+[data-layout-chat] .arturo-composer{ margin-bottom:16px; }
+.arturo-header-start, .arturo-header-end{ display:flex; align-items:center; gap:4px; }
 .arturo-shell .serif{ font-family:"Source Serif 4","Iowan Old Style",Georgia,serif; }
 .arturo-header{
   height:52px; flex:0 0 auto; display:flex; align-items:center; justify-content:space-between;
-  padding:0 14px; padding-top:env(safe-area-inset-top); position:relative; z-index:5;
+  padding:0 16px; padding-top:env(safe-area-inset-top); position:relative; z-index:5;
 }
-/* #8AA6A0 is the iOS app's Brand.mist (Sources/iOS/Theme.swift:27) — the header pair is
-   the same two marks in the same colour on both surfaces, not a web-only white. */
-.arturo-glyph{ width:36px; height:36px; display:flex; align-items:center; justify-content:center; color:#8AA6A0; background:none; border:0; border-radius:10px; }
-.arturo-glyph:hover{ color:#A8C0BC; }
-.arturo-glyph:active{ background:rgba(255,255,255,0.08); }
-.arturo-title{ display:flex; align-items:center; gap:6px; font-size:16px; font-weight:600; color:#fff; background:none; border:0; }
+/* The header's buttons share the bar with the shared bell and the sidebar button, so they take the
+   app's icon-button colours (the agent top bar's: text-foreground at rest, bg-muted on hover, the
+   browser's own focus ring) rather than a colour of their own. Same tokens, not copies. */
+.arturo-glyph{ width:36px; height:36px; display:flex; align-items:center; justify-content:center; color:var(--foreground); background:none; border:0; border-radius:10px; transition:background-color .15s; }
+/* Hover only where there is a hover, as Tailwind's hover: does, so a tap on a phone leaves no tint behind. */
+@media (hover:hover){ .arturo-glyph:hover{ background:var(--muted); } }
+.arturo-title{ display:flex; align-items:center; gap:6px; font-size:16px; font-weight:600; color:var(--text); background:none; border:0; }
 .arturo-title .model{ color:var(--grey); font-weight:500; }
 .arturo-title .chev{ color:var(--grey2); font-size:12px; }
 .arturo-glow{
@@ -25,61 +60,76 @@
   background:radial-gradient(ellipse at 50% 100%, rgba(217,119,87,0.30) 0%, rgba(217,119,87,0.10) 40%, rgba(217,119,87,0) 72%);
   pointer-events:none; z-index:1;
 }
-.arturo-feed{ flex:1 1 auto; min-height:0; overflow-y:auto; position:relative; z-index:2; padding:12px 18px 24px; display:flex; flex-direction:column; gap:22px; }
+/* Tight like a messenger: the bubble, then the reply or working line right under it; a little more room
+   before the next thing you say. */
+.arturo-feed{ flex:1 1 auto; min-height:0; overflow-y:auto; position:relative; z-index:2; padding:8px 16px 12px; display:flex; flex-direction:column; gap:16px; }
+.arturo-feed > .turn-user + .turn-assistant{ margin-top:-8px; }
+
 .arturo-hero{ flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px; transform:translateY(-6vh); }
-.arturo-mark{ width:46px; height:46px; color:var(--accent); }
-.arturo-hero .greet{ font-size:32px; font-weight:300; color:#ece7e2; letter-spacing:.2px; }
+/* The canvas leaves room around the body for the badge and motion, so the face sits closer to the greeting
+   than the hero's gap would put it. */
+.arturo-hero-face{ margin-bottom:-28px; animation:arturo-hero-pop 420ms cubic-bezier(.34,1.4,.64,1) both; }
+@keyframes arturo-hero-pop{ from{ opacity:0; transform:scale(.7); } to{ opacity:1; transform:scale(1); } }
+@media (prefers-reduced-motion: reduce){ .arturo-hero-face{ animation:none; } }
+.arturo-hero .greet{ font-size:32px; font-weight:300; color:var(--greet); letter-spacing:.2px; }
 .turn-user{ display:flex; flex-direction:column; align-items:flex-end; gap:3px; }
 /* message state under the latest sent turn: Sending… → Sent → Acknowledged (or Not delivered) */
-.turn-state{ font-size:11px; color:rgba(255,255,255,0.35); padding-right:4px; }
-.turn-state.acked{ color:rgba(255,255,255,0.5); }
-.turn-state.failed{ color:#ff8a8a; }
+.turn-state{ font-size:11px; color:rgba(var(--ink),var(--t35)); padding-right:4px; }
+.turn-state.acked{ color:rgba(var(--ink),var(--t50)); }
+.turn-state.failed{ color:var(--err); }
 .arturo-pill-thread .row.user .turn-state{ align-self:flex-end; }
-.bubble-user{ background:#262626; color:#fff; border-radius:20px; padding:11px 16px; font-size:16px; max-width:78%; line-height:1.4; white-space:pre-wrap; }
-.turn-assistant{ display:flex; flex-direction:column; gap:8px; align-items:flex-start; }
-.turn-assistant .mark-sm{ width:18px; height:18px; color:var(--accent); }
+.bubble-user{ background:var(--bubble); color:var(--text); border-radius:20px; padding:11px 16px; font-size:16px; max-width:78%; line-height:1.4; white-space:pre-wrap; }
+.turn-assistant{ display:flex; flex-direction:column; gap:4px; align-items:flex-start; }
 /* A turn that ran tools: its text and tool cards in the order they happened (ToolRun.tsx). */
 .turn-parts{ display:flex; flex-direction:column; gap:8px; align-items:flex-start; width:100%; }
-.turn-assistant .txt{ font-size:16px; line-height:1.48; color:#f1efec; max-width:92%; white-space:pre-wrap; }
-.turn-assistant .txt code{ background:rgba(255,255,255,0.09); border-radius:5px; padding:1px 5px; font-family:"SF Mono",Menlo,monospace; font-size:14px; }
+.turn-assistant .txt{ font-size:16px; line-height:1.48; color:var(--text2); max-width:92%; white-space:pre-wrap; }
+.turn-assistant .txt code{ background:rgba(var(--ink),0.09); border-radius:5px; padding:1px 5px; font-family:"SF Mono",Menlo,monospace; font-size:14px; }
 .turn-assistant .tools{ font-size:12.5px; color:var(--grey2); }
 .turn-assistant .thinking{ display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--accent); animation:arturo-pulse 1s ease-in-out infinite; }
 @keyframes arturo-pulse{ 0%,100%{opacity:.25} 50%{opacity:1} }
 .decision-card{ width:100%; max-width:320px; background:var(--card); border-radius:18px; overflow:hidden; border:1px solid var(--hair); margin-top:4px; }
-.decision-opt{ width:100%; text-align:left; background:none; border:0; color:#fff; padding:14px 16px; font-size:15.5px; font-weight:500; border-bottom:1px solid var(--hair); display:flex; align-items:center; justify-content:space-between; }
+.decision-opt{ width:100%; text-align:left; background:none; border:0; color:var(--text); padding:14px 16px; font-size:15.5px; font-weight:500; border-bottom:1px solid var(--hair); display:flex; align-items:center; justify-content:space-between; }
 .decision-opt:active{ background:var(--card2); }
 .decision-opt .r{ width:18px; height:18px; border-radius:50%; border:1.5px solid var(--grey2); flex:0 0 auto; }
 /* Multi-select: square boxes with a tick, so it does not read as pick-one. */
 .decision-card.multi .r{ border-radius:5px; position:relative; }
 .decision-card.multi .decision-opt.is-on .r{ background:var(--accent); border-color:var(--accent); }
 .decision-card.multi .decision-opt.is-on .r::after{ content:''; position:absolute; left:5px; top:1px; width:5px; height:10px; border:solid #fff; border-width:0 2px 2px 0; transform:rotate(45deg); }
-.decision-go{ width:100%; background:none; border:0; border-bottom:1px solid var(--hair); color:#fff; padding:14px 16px; font-size:15.5px; font-weight:700; text-align:center; }
+.decision-go{ width:100%; background:none; border:0; border-bottom:1px solid var(--hair); color:var(--text); padding:14px 16px; font-size:15.5px; font-weight:700; text-align:center; }
 .decision-go:disabled{ color:var(--grey2); }
 .decision-freetext{ padding:12px 16px; font-size:14.5px; color:var(--grey2); display:flex; align-items:center; gap:8px; }
 .arturo-composer{
   flex:0 0 auto; margin:0 16px; margin-bottom:calc(16px + env(safe-area-inset-bottom)); position:relative; z-index:4;
-  background:var(--card); border-radius:26px; padding:12px 14px 10px; box-shadow:0 8px 30px rgba(0,0,0,0.4);
+  background:var(--card); border-radius:26px; padding:12px 14px 10px; box-shadow:0 8px 30px var(--shadow);
 }
 .arturo-composer textarea{
-  display:block; width:100%; resize:none; background:none; border:0; outline:0; color:#fff; font-size:17px; line-height:1.35;
+  display:block; width:100%; resize:none; background:none; border:0; outline:0; color:var(--text); font-size:17px; line-height:1.35;
   padding:2px 4px 10px; min-height:34px; max-height:140px; font-family:inherit;
 }
 .arturo-composer textarea::placeholder{ color:var(--grey); }
+/* Side gutters match the agent pages: 16px, full width on a phone. On a desktop the conversation and
+   the composer share one centred column, a little wider than an agent page's 860px: 960px including
+   its 16px sides (928px of content). The feed stays full width so its scrollbar sits at the window
+   edge; its side padding grows to centre the column. */
+@media (min-width: 769px) {
+  .arturo-feed{ padding-left:max(16px, calc((100% - 928px) / 2)); padding-right:max(16px, calc((100% - 928px) / 2)); }
+  .arturo-composer{ width:calc(100% - 32px); max-width:928px; margin-left:auto; margin-right:auto; box-sizing:border-box; }
+}
 .ctrl-row{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .ctrl-row .cluster{ display:flex; align-items:center; gap:10px; min-width:0; }
 /* At phone widths the chips give way, never the mic and call buttons: the left group shrinks and its
    chips truncate; the right group keeps its size (it was pushed off the edge at 390 px). */
 .ctrl-row .cluster:first-child{ flex:1 1 auto; overflow:hidden; }
 .ctrl-row .cluster:last-child{ flex:0 0 auto; }
-.circle-btn{ width:34px; height:34px; aspect-ratio:1 / 1; border-radius:50%; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.08); color:#fff; border:0; flex:0 0 auto; font-size:18px; }
-.circle-btn.white{ background:#fff; color:#111; }
-.circle-btn.grey-send{ background:rgba(255,255,255,0.16); }
+.circle-btn{ width:34px; height:34px; aspect-ratio:1 / 1; border-radius:50%; display:flex; align-items:center; justify-content:center; background:rgba(var(--ink),0.08); color:var(--text); border:0; flex:0 0 auto; font-size:18px; }
+.circle-btn.white{ background:var(--send-bg); color:var(--send-fg); }
+.circle-btn.grey-send{ background:rgba(var(--ink),0.16); }
 .circle-btn:disabled{ opacity:.4; }
 .circle-btn.listening{ background:var(--accent); color:#fff; animation:arturo-listen 1.2s ease-in-out infinite; }
 .circle-btn.recording{ background:#d94f4f; color:#fff; animation:arturo-record 1s ease-in-out infinite; }
 .circle-btn.muted{ background:#d94f4f; color:#fff; }   /* muted on a call: plainly visible, no pulse */
 @keyframes arturo-record{ 0%,100%{ box-shadow:0 0 0 0 rgba(217,79,79,0.6) } 50%{ box-shadow:0 0 0 7px rgba(217,79,79,0) } }
-.circle-btn.transcribing{ background:rgba(255,255,255,0.16); color:#fff; opacity:1; animation:arturo-pulse 1s ease-in-out infinite; }
+.circle-btn.transcribing{ background:rgba(var(--ink),0.16); color:var(--text); opacity:1; animation:arturo-pulse 1s ease-in-out infinite; }
 @keyframes arturo-listen{ 0%,100%{ box-shadow:0 0 0 0 rgba(217,119,87,0.55) } 50%{ box-shadow:0 0 0 6px rgba(217,119,87,0) } }
 /* index.css gives every button `min-height:44px` under 768px (touch targets). min-height beats
    height, so a 34px circle became a 34x44 oval on phones. Meet the target instead of weakening it:
@@ -88,28 +138,9 @@
   .circle-btn { width:44px; height:44px; }
   .arturo-glyph { width:44px; height:44px; }
 }
-.model-chip{ display:flex; align-items:center; gap:5px; min-width:0; overflow:hidden; white-space:nowrap; background:rgba(255,255,255,0.08); border-radius:999px; padding:8px 14px; font-size:14px; border:0; color:#fff; }
+.model-chip{ display:flex; align-items:center; gap:5px; min-width:0; overflow:hidden; white-space:nowrap; background:rgba(var(--ink),0.08); border-radius:999px; padding:8px 14px; font-size:14px; border:0; color:var(--text); }
 .model-chip b{ font-weight:600; }
 .model-chip .eff{ color:var(--grey); font-weight:400; }
-/* drawer */
-.arturo-drawer-back{ position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:30; }
-.arturo-drawer{ position:fixed; top:0; bottom:0; left:0; width:280px; background:#121212; border-right:1px solid var(--hair); z-index:31; padding:calc(18px + env(safe-area-inset-top)) 12px 18px; overflow-y:auto; }
-.arturo-drawer .brand{ font-size:13px; letter-spacing:.08em; text-transform:uppercase; color:var(--grey2); padding:6px 10px 12px; }
-.arturo-drawer a{ display:block; padding:11px 12px; border-radius:12px; color:#fff; font-size:15.5px; text-decoration:none; }
-.arturo-drawer a:hover, .arturo-drawer a.active{ background:rgba(255,255,255,0.07); }
-.arturo-drawer .sect{ font-size:12px; color:var(--grey2); padding:14px 12px 6px; }
-/* G20 — go back to a previous conversation from the drawer (the same server-side list the
-   pill shows, so the home and the pill are one thread space). */
-.arturo-drawer .sect-head{ display:flex; align-items:center; justify-content:space-between; }
-.arturo-drawer .drawer-new{ background:none; border:0; color:#d97757; font-size:12px; cursor:pointer; font-family:inherit; padding:2px 4px; }
-.arturo-drawer .drawer-threads{ display:flex; flex-direction:column; gap:1px; max-height:38vh; overflow-y:auto; }
-.arturo-drawer .drawer-threads .empty{ font-size:12.5px; color:var(--grey2); padding:6px 12px; margin:0; }
-.arturo-drawer .thread-row{ display:flex; align-items:baseline; gap:8px; width:100%; text-align:left; cursor:pointer;
-  background:none; border:0; border-radius:10px; padding:9px 12px; color:rgba(255,255,255,0.82); font-size:14px; font-family:inherit; }
-.arturo-drawer .thread-row:hover{ background:rgba(255,255,255,0.07); }
-.arturo-drawer .thread-row.current{ background:rgba(217,119,87,0.14); color:#fff; }
-.arturo-drawer .thread-row .t-title{ flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.arturo-drawer .thread-row .t-meta{ flex:0 0 auto; font-size:11px; color:var(--grey2); }
 /* sheet (brain) */
 .arturo-sheet-back{ position:fixed; inset:0; background:rgba(0,0,0,0.62); z-index:40; }
 .arturo-sheet{ position:fixed; left:0; right:0; bottom:0; z-index:41; background:#181818; border-radius:26px 26px 0 0; padding:10px 20px calc(28px + env(safe-area-inset-bottom)); box-shadow:0 -10px 40px rgba(0,0,0,0.5); max-height:80vh; overflow-y:auto; }
@@ -196,36 +227,37 @@
    focus glyph says that, the label is just the page. */
 .arturo-context-chip{
   display:inline-flex; align-items:center; gap:6px; max-width:min(62vw,230px); min-width:0; flex:0 1 auto; box-sizing:border-box;
-  height:34px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.09); border-radius:999px;
-  padding:0 6px 0 10px; font-size:12px; color:rgba(255,255,255,0.72); font-family:inherit;
+  height:34px; background:rgba(var(--ink),0.06); border:1px solid rgba(var(--ink),0.09); border-radius:999px;
+  padding:0 6px 0 10px; font-size:12px; color:rgba(var(--ink),var(--t72)); font-family:inherit;
 }
 @media (max-width: 768px) { .arturo-context-chip{ height:44px; } }
 .arturo-context-chip > svg{ color:#d97757; flex:0 0 auto; align-self:center; }   /* the focus glyph only — not the × */
 .arturo-context-chip .cc-label{ flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.arturo-context-chip .cc-label b{ color:#fff; font-weight:600; }
-.arturo-context-chip .cc-x{ flex:0 0 auto; background:none; border:0; cursor:pointer; color:rgba(255,255,255,0.45); display:inline-flex; align-items:center; justify-content:center; line-height:0; padding:3px; border-radius:999px; align-self:center; }
-.arturo-context-chip .cc-x:hover{ color:#fff; background:rgba(255,255,255,0.10); }
-.arturo-context-chip.off{ cursor:pointer; border-style:dashed; color:rgba(255,255,255,0.45); padding:0 12px; }
-.arturo-context-chip.off:hover{ color:rgba(255,255,255,0.75); }
+.arturo-context-chip .cc-label b{ color:var(--text); font-weight:600; }
+.arturo-context-chip .cc-x{ flex:0 0 auto; background:none; border:0; cursor:pointer; color:rgba(var(--ink),var(--t45)); display:inline-flex; align-items:center; justify-content:center; line-height:0; padding:3px; border-radius:999px; align-self:center; }
+.arturo-context-chip .cc-x:hover{ color:var(--text); background:rgba(var(--ink),0.10); }
+.arturo-context-chip.off{ cursor:pointer; border-style:dashed; color:rgba(var(--ink),var(--t45)); padding:0 12px; }
+.arturo-context-chip.off:hover{ color:rgba(var(--ink),var(--t75)); }
 
 /* The onboarding terminal — a first-time installer has no CLI yet, and this is where they
    get one. It sits above the composer, in the thread, not on another screen. */
+/* A terminal stays dark in both modes (the dark variable set applies to it); only its frame sits on the page. */
 .arturo-onboard-shell{ margin:0 12px 10px; border:1px solid var(--hair); border-radius:14px; overflow:hidden; background:#0d0d0d; }
 .arturo-onboard-shell .shell-head{ display:flex; align-items:center; justify-content:space-between; gap:8px;
   padding:8px 12px; font-size:12px; color:var(--grey2); border-bottom:1px solid var(--hair); }
 .arturo-onboard-shell .shell-head button{ background:none; border:0; color:#d97757; font-size:12px; cursor:pointer; font-family:inherit; }
-.arturo-onboard-shell .shell-error{ padding:12px; margin:0; font-size:12.5px; color:#ff8a8a; }
+.arturo-onboard-shell .shell-error{ padding:12px; margin:0; font-size:12.5px; color:var(--err); }
 /* Attachments on the Arturo composer — the + button's chips. A refused upload shows its
    reason here rather than failing silently. */
 .arturo-attachments{ display:flex; flex-wrap:wrap; gap:6px; padding:0 4px 8px; align-items:center; }
 .attach-chip{ display:inline-flex; align-items:center; gap:6px; max-width:100%;
-  background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.09); border-radius:999px;
-  padding:5px 8px 5px 10px; font-size:12px; color:rgba(255,255,255,0.78); }
+  background:rgba(var(--ink),0.06); border:1px solid rgba(var(--ink),0.09); border-radius:999px;
+  padding:5px 8px 5px 10px; font-size:12px; color:rgba(var(--ink),var(--t78)); }
 .attach-chip svg{ color:#d97757; flex:0 0 auto; }
-.attach-chip button{ background:none; border:0; color:rgba(255,255,255,0.45); cursor:pointer; font-size:14px; line-height:1; padding:0 2px; }
-.attach-chip button:hover{ color:#fff; }
-.attach-note{ font-size:12px; color:rgba(255,255,255,0.45); }
-.attach-error{ font-size:12px; color:#ff8a8a; }
+.attach-chip button{ background:none; border:0; color:rgba(var(--ink),var(--t45)); cursor:pointer; font-size:14px; line-height:1; padding:0 2px; }
+.attach-chip button:hover{ color:var(--text); }
+.attach-note{ font-size:12px; color:rgba(var(--ink),var(--t45)); }
+.attach-error{ font-size:12px; color:var(--err); }
 
 /* live voice call in the pill: partial captions before they commit as turns */
 .arturo-pill-panel .bubble.live { opacity: .75; font-style: italic; }
@@ -236,27 +268,19 @@
 .spawned-go {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   padding: 8px 12px; min-height: 44px; border-radius: 12px;
-  border: 1px solid var(--arturo-line, #2a2a2a); background: var(--arturo-raise, #171717);
+  border: 1px solid var(--arturo-line); background: var(--arturo-raise);
   color: inherit; text-decoration: none;
 }
-.spawned-go:hover { border-color: var(--arturo-line-hi, #3a3a3a); }
+.spawned-go:hover { border-color: var(--arturo-line-hi); }
 .spawned-name { font-weight: 600; font-size: 13px; }
 .spawned-cta { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; opacity: .7; }
 
-/* The drawer is modal on a phone: it needs a visible way out, not just the dark sliver. */
-.arturo-drawer .drawer-top{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
-.arturo-drawer .drawer-close{
-  background:none; border:0; color:var(--grey2); cursor:pointer; font-family:inherit;
-  display:inline-flex; align-items:center; justify-content:center;
-  width:44px; height:44px; margin-right:-8px; border-radius:12px;
-}
-.arturo-drawer .drawer-close:hover{ background:rgba(255,255,255,0.07); color:#fff; }
 /* A server line above a card's options (the starter team's cost). */
 .decision-note{ padding:12px 16px; font-size:13.5px; color:var(--grey2); border-bottom:1px solid var(--hair); }
 /* The pairing code card (PairCodeCard). */
-.pair-card{ box-sizing:border-box; width:100%; max-width:360px; background:var(--card); border-radius:18px; border:1px solid var(--hair); margin-top:4px; padding:14px 16px; display:flex; flex-direction:column; gap:8px; color:#fff; }
+.pair-card{ box-sizing:border-box; width:100%; max-width:360px; background:var(--card); border-radius:18px; border:1px solid var(--hair); margin-top:4px; padding:14px 16px; display:flex; flex-direction:column; gap:8px; color:var(--text); }
 .pair-card.expired, .pair-card.done{ color:var(--grey2); font-size:14px; }
-.pair-card.done{ color:#fff; }
+.pair-card.done{ color:var(--text); }
 .pair-head{ font-size:15px; font-weight:600; display:flex; justify-content:space-between; gap:8px; }
 .pair-ttl{ color:var(--grey2); font-variant-numeric:tabular-nums; font-weight:500; }
 .pair-code{ box-sizing:border-box; display:block; font-size:12.5px; line-height:1.35; word-break:break-all; background:var(--card2); border-radius:10px; padding:10px 12px; user-select:all; }
@@ -282,3 +306,204 @@
 .thread-row .t-gist{ flex:1 0 100%; font-size:11.5px; line-height:1.35; opacity:0.6; overflow:hidden;
   display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; white-space:normal; }
 
+
+/* Arturo's slide-out panel (the gear). It overlays the conversation and never reflows it. Desktop: a drawer
+   from the right under the top bar, so the bell and the gear stay usable (the header sits above it).
+   Phone: a full-screen sheet. #141414 sits between the canvas and the cards; the rest is Arturo's tokens. */
+.arturo-shell .arturo-header{ z-index:6; }
+/* Full height over the whole window, top bar and sidebar included, like a sheet: fixed, so nothing behind it
+   moves or resizes. Above the layout's own overlays (the phone sidebar 65/66), below Arturo's floating
+   button (76) and the look picker (80) that can open from inside it. */
+.arturo-panel-scrim{ position:fixed; inset:0; z-index:70; background:rgba(0,0,0,0.4); opacity:0; transition:opacity 200ms ease-out; }
+.arturo-panel-scrim.is-shown{ opacity:1; }
+.arturo-panel{ background:var(--panel); color:var(--text); display:flex; flex-direction:column; transform:translateX(100%); transition:transform 200ms ease-out; }
+.arturo-panel.is-shown{ transform:translateX(0); }
+.arturo-panel-drawer{ position:fixed; top:0; right:0; bottom:0; z-index:71; width:min(400px, 100vw); border-left:1px solid var(--hair); padding-top:env(safe-area-inset-top); padding-bottom:env(safe-area-inset-bottom); }
+.arturo-panel-sheet{ position:fixed; inset:0; z-index:70; padding-top:env(safe-area-inset-top); padding-bottom:env(safe-area-inset-bottom); }
+@media (prefers-reduced-motion: reduce){ .arturo-panel, .arturo-panel-scrim{ transition:none; } }
+.arturo-panel-status{ font-size:12.5px; color:var(--grey); margin:0 2px; }
+.arturo-panel-icon{ width:36px; height:36px; display:flex; align-items:center; justify-content:center; flex:0 0 auto; color:var(--foreground); background:none; border:0; border-radius:10px; }
+@media (hover:hover){ button.arturo-panel-icon:hover{ background:var(--muted); } }
+.arturo-panel-body{ flex:1 1 auto; min-height:0; overflow-y:auto; padding:14px 16px 24px; }
+.arturo-panel-empty{ font-size:13px; color:var(--grey2); margin:6px 0; }
+.arturo-panel-meta{ font-size:11.5px; color:var(--grey2); flex:0 0 auto; }
+.arturo-panel-facts{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; }
+.arturo-panel-facts li{ padding:12px 0 8px; border-bottom:1px solid var(--hair); }
+.arturo-panel-facts p{ margin:0 0 4px; font-size:13.5px; line-height:1.4; }
+.arturo-panel-section{ font-size:12px; font-weight:600; color:var(--grey); text-transform:uppercase; letter-spacing:.06em; margin:4px 0 8px; }
+.arturo-panel-section:not(:first-child){ margin-top:20px; }
+.arturo-panel-day{ font-size:12px; color:var(--grey2); margin:12px 0 4px; }
+.arturo-panel-jobs{ list-style:none; margin:0; padding:0; }
+.arturo-panel-jobs li, .arturo-panel-thread{ display:flex; align-items:center; justify-content:space-between; gap:10px; min-width:0; padding:8px 10px; margin:0 -10px; border-radius:10px; font-size:13.5px; }
+.arturo-panel-thread{ width:calc(100% + 20px); background:none; border:0; color:rgba(var(--ink),var(--t85)); text-align:left; font-family:inherit; cursor:pointer; }
+.arturo-panel-thread:hover{ background:var(--card); }
+.arturo-panel-thread.is-current{ background:var(--card2); color:var(--text); }
+/* Phone sheet: its own bar (back, title, Done) and a front list of 52px rows. */
+.arturo-panel-sheet .arturo-panel-icon{ width:44px; height:44px; }
+.arturo-panel-done{ background:none; border:0; color:var(--text); font-size:15px; font-weight:600; font-family:inherit; padding:0 12px; height:44px; border-radius:10px; }
+.arturo-panel-list{ margin-top:12px; border-top:1px solid var(--hair); }
+.arturo-panel-row{ width:100%; height:52px; min-height:52px; display:flex; align-items:center; justify-content:space-between; background:none; border:0; border-bottom:1px solid var(--hair); color:var(--text); font-size:15.5px; font-family:inherit; padding:0 2px; text-align:left; }
+.arturo-panel-row svg{ color:var(--grey2); }
+/* One bar for every page: back (or nothing) at the left, the page's name centred, close at the right. */
+.arturo-panel-bar{ height:53px; flex:0 0 auto; display:flex; align-items:center; justify-content:space-between; gap:8px; padding:0 8px; border-bottom:1px solid var(--hair); }
+.arturo-panel-title{ font-size:16px; font-weight:600; margin:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.arturo-panel-bar > :last-child{ min-width:36px; }
+/* Memory: add, correct, confirm. Blue is the primary action, as in the composer. */
+.arturo-panel-add{ display:flex; gap:8px; margin-bottom:6px; }
+.arturo-panel-input{ flex:1 1 auto; min-width:0; background:var(--card); border:1px solid var(--hair); border-radius:10px; color:var(--text); font:inherit; font-size:14px; padding:8px 10px; outline:0; }
+.arturo-panel-input:focus{ border-color:rgba(var(--ink),0.3); }
+.arturo-panel-textarea{ display:block; width:100%; box-sizing:border-box; min-height:64px; resize:vertical; line-height:1.4; }
+.arturo-panel-primary{ flex:0 0 auto; background:#2563eb; color:#fff; border:0; border-radius:10px; padding:0 14px; min-height:36px; font:inherit; font-size:14px; font-weight:600; cursor:pointer; }
+.arturo-panel-primary:hover{ background:#3b82f6; }
+.arturo-panel-primary:disabled{ opacity:0.4; cursor:default; background:#2563eb; }
+.arturo-panel-actions{ display:flex; align-items:center; justify-content:flex-end; gap:4px; margin-top:6px; }
+.arturo-panel-link{ background:none; border:0; color:var(--grey); font:inherit; font-size:12.5px; padding:4px 8px; border-radius:8px; cursor:pointer; }
+.arturo-panel-link:hover{ color:var(--text); background:var(--card); }
+.arturo-panel-link:disabled{ opacity:0.4; }
+.arturo-panel-error{ font-size:13px; color:var(--err-soft); margin:6px 0; }
+/* Settings: a label at the left, its value at the right, one 52px row each. */
+.arturo-panel-field{ min-height:52px; display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--hair); font-size:15px; padding:0 2px; }
+.arturo-panel-value{ min-width:0; max-width:60%; background:none; border:0; color:var(--grey); font:inherit; font-size:15px; text-align:right; outline:0; padding:6px 0; }
+.arturo-panel-value:focus{ color:var(--text); }
+select.arturo-panel-value{ cursor:pointer; text-align-last:right; }
+select.arturo-panel-value option{ background:var(--panel); color:var(--text); }
+.arturo-panel-swatch{ width:32px; height:32px; padding:0; border:1px solid var(--hair); border-radius:8px; background:none; cursor:pointer; }
+/* Each row's current value, grey at the right before the chevron; it gives way (ellipsis) before the label does. */
+.arturo-panel-row{ gap:12px; }
+.arturo-panel-row > span:first-child{ flex:0 0 auto; }
+.arturo-panel-rowend{ display:flex; align-items:center; gap:6px; min-width:0; }
+.arturo-panel-rowvalue{ min-width:0; color:var(--grey); font-size:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.arturo-panel-row:disabled{ color:var(--grey2); cursor:default; }
+.arturo-panel-row:disabled .arturo-panel-rowvalue{ color:var(--grey2); }
+/* A status line that reports a problem is a link to the page that fixes it. */
+.arturo-panel-status.is-fix{ display:flex; align-items:center; gap:4px; background:none; border:0; padding:0; font-family:inherit; text-align:left; color:var(--text); cursor:pointer; }
+.arturo-panel-status.is-fix svg{ flex:0 0 auto; color:var(--grey2); }
+.arturo-panel-note{ font-size:13px; line-height:1.45; color:var(--grey); margin:12px 2px 0; }
+/* Voice: the check marks the provider and the voice in use, in the primary-action blue. */
+.arturo-panel-list-tight{ margin-top:0; }
+.arturo-panel-check, .arturo-panel-row .arturo-panel-check{ flex:0 0 auto; color:#3b82f6; }
+.arturo-panel-field.is-disabled{ color:var(--grey2); }
+.arturo-panel-section + .arturo-panel-list, .arturo-panel-section + .arturo-panel-error{ margin-top:0; }
+/* A voice row someone without admin rights sees: readable at full strength, just not tappable. */
+.arturo-panel-row.arturo-panel-choice:disabled{ color:var(--text); }
+
+/* A voice call in the feed (ArturoCallCard): one inset card a step off the page, a little narrower than the
+   conversation and centred, holding the call's turns as bubbles. The caller's bubbles are Arturo's typed ones
+   (--bubble); Arturo's sit on --call-bubble, a step apart from the card in either mode. Collapsed, only the
+   header line stays, with no box. */
+.call-card{ align-self:center; width:92%; box-sizing:border-box; background:var(--call-surface); border-radius:14px; padding:4px 10px 12px; }
+.call-card.is-collapsed{ background:none; padding:0; }
+.call-head{ display:grid; grid-template-columns:32px 1fr 32px; align-items:center; min-height:36px; }
+.call-title{ display:flex; align-items:center; justify-content:center; gap:6px; min-width:0; }
+.call-label{ display:inline-flex; align-items:center; gap:6px; min-width:0; background:none; border:0; padding:0; font:inherit; font-size:13px; color:var(--grey); font-variant-numeric:tabular-nums; white-space:nowrap; }
+button.call-label{ cursor:pointer; }
+@media (hover:hover){ button.call-label:hover{ color:var(--text); } }
+.call-thumbs{ display:inline-flex; align-items:center; gap:0; }
+.call-icon{ width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; background:none; border:0; border-radius:8px; color:var(--grey); cursor:pointer; flex:0 0 auto; }
+@media (hover:hover){ .call-icon:hover{ background:rgba(var(--ink),0.06); color:var(--text); } }
+.call-icon[aria-pressed="true"]{ color:var(--text); }
+.call-menu{ position:relative; }
+.call-menu-list{ position:absolute; top:100%; left:0; z-index:3; margin-top:4px; min-width:170px; background:var(--panel); border:1px solid var(--hair); border-radius:12px; padding:4px; box-shadow:0 8px 24px var(--shadow); }
+.call-menu-list button{ display:block; width:100%; text-align:left; background:none; border:0; border-radius:8px; padding:8px 10px; font:inherit; font-size:14px; color:var(--text); cursor:pointer; }
+.call-menu-list button:hover{ background:rgba(var(--ink),0.06); }
+.call-menu-list button:disabled{ color:var(--grey2); cursor:default; }
+.call-body{ display:flex; flex-direction:column; gap:8px; padding-top:6px; }
+.call-bubble{ max-width:85%; border-radius:20px; padding:8px 13px; font-size:16px; line-height:1.4; white-space:pre-wrap; overflow-wrap:anywhere; }
+.call-bubble.user{ align-self:flex-end; background:var(--bubble); color:var(--text); }
+.call-bubble.arturo{ align-self:flex-start; background:var(--call-bubble); color:var(--text2); border:1px solid var(--call-bubble-line); }
+.call-bubble.is-partial{ opacity:.7; }
+.call-tools{ align-self:stretch; }
+.call-note{ margin:2px 0 0; text-align:center; font-size:13px; color:var(--grey); }
+
+/* Living avatars on Arturo's page (components/avatar/). Each sets --la-surface to the surface behind it, so the
+   cut-out ring around an avatar's dot and badge is that colour, never a white halo in dark. */
+.arturo-shell .la-on-panel{ --la-surface:var(--panel); }
+.arturo-shell .la-on-card{ --la-surface:var(--card); }
+.arturo-shell .la-on-canvas{ --la-surface:var(--canvas); }
+
+/* The header pill: Arturo's avatar (still) and name, centred where the title was; it opens the slide-out. */
+.arturo-pill{ display:inline-flex; align-items:center; gap:8px; min-height:0; height:36px; padding:2px 14px 2px 2px; border-radius:999px;
+  background:var(--card); --la-surface:var(--card); color:var(--text); font:inherit; font-size:15px; font-weight:600; cursor:pointer; }
+@media (hover:hover){ .arturo-pill:hover{ background:var(--card2); --la-surface:var(--card2); } }
+/* Phone: a taller bar, so the pill and its avatar can be bigger (desktop keeps the 53px bar that lines up
+   with the sidebar's). */
+@media (max-width:47.99rem){
+  [data-layout-chat] .arturo-header{ height:60px; }
+  .arturo-pill{ height:44px; padding:4px 16px 4px 4px; font-size:16px; gap:9px; }
+}
+
+/* The working line: who, and the step it is on, just above the composer at the left. Floats, so the
+   conversation never moves when it comes and goes. */
+.arturo-working{ position:absolute; left:0; bottom:calc(100% + 8px); display:flex; align-items:center; gap:8px; max-width:min(100%, 440px);
+  box-sizing:border-box; padding:4px 14px 4px 4px; border-radius:999px; background:var(--card); box-shadow:0 4px 14px var(--shadow); font-size:13px; }
+.arturo-working-name{ font-weight:600; color:var(--text); flex:0 0 auto; }
+.arturo-working-step{ color:var(--grey); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* "Pick a look for Arturo": a quiet one-line card while no look is saved. */
+.arturo-lookcard{ align-self:center; display:flex; align-items:center; gap:2px; width:min(100%, 440px); box-sizing:border-box;
+  background:var(--card); border-radius:14px; padding:2px 4px 2px 2px; }
+.arturo-lookcard-open{ flex:1 1 auto; min-width:0; display:flex; align-items:center; gap:10px; min-height:0; padding:8px 10px; background:none; border:0;
+  border-radius:12px; color:var(--text); font:inherit; font-size:14px; text-align:left; cursor:pointer; }
+.arturo-lookcard-open span{ flex:1 1 auto; }
+.arturo-lookcard-open svg{ color:var(--grey2); flex:0 0 auto; }
+.arturo-lookcard-x{ flex:0 0 auto; width:28px; height:28px; min-height:0; display:grid; place-items:center; background:none; border:0; border-radius:8px; color:var(--grey); cursor:pointer; }
+@media (hover:hover){ .arturo-lookcard-open:hover, .arturo-lookcard-x:hover{ background:rgba(var(--ink),0.06); } }
+.arturo-hero .arturo-lookcard{ transform:translateY(6vh); }
+
+/* The drawer's face: large, alive, no dot; the name and what it is doing under it. */
+.arturo-face{ display:flex; flex-direction:column; align-items:center; margin:4px 0 14px; }
+.arturo-face-btn{ position:relative; padding:0; border:0; background:none; border-radius:28px; cursor:pointer; min-height:0; }
+.arturo-face-name{ margin:6px 0 0; font-size:17px; font-weight:600; color:var(--text); }
+.arturo-face-status{ margin:2px 0 0; font-size:13px; color:var(--grey); }
+/* Desktop: the name is a field that looks like text until hovered (a textbox fades in) or clicked. */
+.arturo-face-name-edit{ font:inherit; font-size:17px; font-weight:600; color:var(--text); text-align:center; box-sizing:content-box;
+  min-height:0; margin-top:4px; padding:3px 10px; border:1px solid transparent; border-radius:10px; background:transparent;
+  max-width:calc(100% - 40px); outline:0; cursor:text; transition:background-color .15s ease, border-color .15s ease; }
+.arturo-face-name-edit:hover{ background:var(--card); border-color:var(--hair); }
+.arturo-face-name-edit:focus{ background:var(--card); border-color:rgba(var(--ink),0.3); }
+.arturo-face-name-edit:disabled{ opacity:.6; }
+.arturo-face-error{ text-align:center; }
+@media (prefers-reduced-motion: reduce){ .arturo-face-name-edit{ transition:none; } }
+/* Phone: a small grey pill under the name opens the Edit screen. */
+.arturo-face-edit{ margin-top:8px; min-height:0; padding:5px 16px; border:0; border-radius:999px; background:var(--card2); color:var(--text);
+  font:inherit; font-size:13px; font-weight:600; cursor:pointer; }
+/* Phone profile (as Grok Bot's): the name bold and larger under the avatar, the Edit pill, then the subtitle. */
+.arturo-panel-sheet .arturo-face-name{ font-size:20px; font-weight:700; }
+.arturo-face-edit + .arturo-face-status{ margin-top:12px; }
+.arturo-edit{ display:flex; flex-direction:column; }
+.arturo-edit-face{ align-self:center; margin:8px 0 18px; }
+.arturo-edit-label{ display:block; font-size:13px; color:var(--grey); margin:0 2px 6px; }
+.arturo-edit-input{ width:100%; box-sizing:border-box; font-size:16px; padding:11px 12px; }
+
+/* The look picker (drawer page and popover): the live avatar with its pencil, then one card. */
+.look-picker{ display:flex; flex-direction:column; align-items:center; gap:14px; }
+.look-hero{ position:relative; }
+.look-pencil{ position:absolute; top:4px; right:4px; width:28px; height:28px; min-height:0; display:grid; place-items:center; padding:0; border-radius:50%;
+  background:var(--text); color:var(--canvas); border:2px solid var(--panel); box-sizing:border-box; cursor:pointer; }
+.look-card{ width:100%; box-sizing:border-box; background:var(--card); --la-surface:var(--card); border-radius:16px; padding:10px 12px 14px; }
+.look-head{ display:flex; align-items:center; justify-content:space-between; gap:8px; padding-bottom:10px; border-bottom:1px solid var(--hair); }
+.look-seg{ display:inline-flex; padding:2px; border-radius:999px; background:rgba(var(--ink),0.06); }
+.look-seg button{ min-height:0; padding:5px 12px; border:0; border-radius:999px; background:none; font:inherit; font-size:13px; color:var(--grey); }
+.look-seg button.is-on{ background:var(--canvas); color:var(--text); font-weight:600; }
+.look-seg button:disabled{ color:var(--grey2); cursor:default; }
+.look-reset{ min-height:0; padding:5px 6px; border:0; background:none; font:inherit; font-size:14px; font-weight:600; color:#3b82f6; cursor:pointer; }
+.look-reset:disabled{ color:var(--grey2); font-weight:400; cursor:default; }
+.look-soon{ margin:6px 0 0; font-size:12px; color:var(--grey); }
+.look-shapes{ display:flex; flex-wrap:wrap; justify-content:center; gap:6px; max-width:calc(6 * 48px + 5 * 6px); margin:12px auto 0; }
+.look-shape{ width:48px; height:48px; min-height:0; display:grid; place-items:center; padding:0; border:0; border-radius:12px; background:none; cursor:pointer; }
+.look-shape.is-on{ box-shadow:inset 0 0 0 2px var(--text); }
+@media (hover:hover){ .look-shape:not(:disabled):hover{ background:rgba(var(--ink),0.06); } }
+.look-swatches{ display:flex; flex-wrap:wrap; justify-content:center; gap:10px; margin-top:14px; }
+.look-swatch{ width:28px; height:28px; min-height:0; padding:0; border:0; border-radius:50%; cursor:pointer; }
+.look-swatch.is-ink{ background:#16161A; }
+.dark .look-swatch.is-ink{ background:#F4F4F5; }
+.look-swatch.is-on{ box-shadow:0 0 0 2px var(--card), 0 0 0 4px var(--text); }
+.look-shape:disabled, .look-swatch:disabled{ cursor:default; }
+.look-error{ margin:10px 0 0; font-size:13px; color:var(--err-soft); }
+
+/* The picker as a popover over Arturo's page. */
+.look-pop-scrim{ position:fixed; inset:0; z-index:80; display:grid; place-items:center; padding:16px; background:rgba(0,0,0,0.4); }
+.look-pop{ width:min(420px, 100%); max-height:calc(100dvh - 32px); overflow:auto; box-sizing:border-box; padding:0 16px 16px; border-radius:18px;
+  background:var(--panel); --la-surface:var(--panel); color:var(--text); box-shadow:0 12px 40px rgba(0,0,0,0.3); }
+.look-pop-bar{ display:flex; align-items:center; justify-content:space-between; height:52px; }
+.look-pop-title{ font-size:16px; font-weight:600; }

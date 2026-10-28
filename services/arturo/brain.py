@@ -73,10 +73,17 @@ CODEX_TOOLS_NOTE = (
 # The codex twin of claude's `--tools ""`: Arturo runs the tools. The config form, never
 # `--disable <name>` — an installed codex that does not know a feature name fails hard on
 # --disable ("Unknown feature flag") but ignores an unknown config key.
+def _named(text):
+    """CODEX_TOOLS_NOTE in the assistant's current name (assistant_name.py); imported late, so this module
+    loads on its own."""
+    from services.arturo import assistant_name
+    return assistant_name.named(text)
+
+
 CODEX_NO_OWN_TOOLS = ["-c", "features.shell_tool=false", "-c", "features.unified_exec=false"]
 
 NULL_REASON = ("No brain configured: set GEMINI_API_KEY (api brain) or log in to one agent CLI "
-               "(claude / codex / agy) and restart Arturo. `orchestra doctor` shows which CLIs are "
+               "(claude / codex / agy) and restart the assistant (`orchestra up`). `orchestra doctor` shows which CLIs are "
                "installed and authed; see docs/ARTURO.md.")
 
 
@@ -442,8 +449,8 @@ def runtime_command(runtime: str, cli: str, system: str, prompt: str, model: str
             schema = CODEX_TOOL_SCHEMA_REQUIRED if require_tool_call else CODEX_TOOL_SCHEMA
             argv += ["--output-schema", str(schema)]
             # Before the tool list, and last — where it was measured.
-            stdin = stdin.replace("Available tools (name", f"{CODEX_TOOLS_NOTE}\n\nAvailable tools (name", 1)
-            stdin = f"{stdin.rstrip()}\n\n{CODEX_TOOLS_NOTE}\n"
+            stdin = stdin.replace("Available tools (name", f"{_named(CODEX_TOOLS_NOTE)}\n\nAvailable tools (name", 1)
+            stdin = f"{stdin.rstrip()}\n\n{_named(CODEX_TOOLS_NOTE)}\n"
         if model:
             argv.append(f"--model={model}")
         argv += ["-o", str(out), "-"]

@@ -45,7 +45,7 @@ class JobBoard:
             if isinstance(j, dict) and j.get("id"):
                 if j.get("status") == "running":
                     j.update(status="lost", ended=j.get("ended") or self.clock(),
-                             error="Arturo restarted while this was running")
+                             error="The assistant restarted while this was running")
                 self._jobs[j["id"]] = j
 
     def _save(self):

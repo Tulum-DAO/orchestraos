@@ -6,6 +6,17 @@
  * GET  /api/arturo/threads     [?limit=&offset=]        -> gateway /arturo/threads      (G20)
  * GET  /api/arturo/threads/:id                          -> gateway /arturo/threads/{id} (G20)
  * POST /api/arturo/transcribe  multipart {audio}       -> gateway /arturo/transcribe -> :5071/transcribe (item C)
+ * GET  /api/arturo/ptt/vendor                           -> gateway /arturo/ptt/vendor  (which voice providers are set up)
+ * GET  /api/arturo/ptt/voices  ?vendor=                 -> gateway /arturo/ptt/voices  (the server's voice rows)
+ * GET  /api/arturo/ptt/voice   ?vendor=                 -> gateway /arturo/ptt/voice   (the voice the next call uses)
+ * PUT  /api/arturo/ptt/voice   {vendor, voice_id}       -> gateway /arturo/ptt/voice   (admins only; the server validates it)
+ * GET  /api/arturo/avatars                              -> gateway /arturo/avatars     (every saved avatar look)
+ * GET  /api/arturo/avatar      ?agent=                  -> gateway /arturo/avatar      (one agent's look, or its default)
+ * PUT  /api/arturo/avatar      {agent, shape?, color?, eyeColor?} -> gateway /arturo/avatar (admins only)
+ * DELETE /api/arturo/avatar    ?agent=                  -> gateway /arturo/avatar      (admins only: back to the default)
+ * GET  /api/arturo/name                                 -> gateway /arturo/assistant/name (what the assistant is called)
+ * PUT  /api/arturo/name        {name}                   -> gateway /arturo/assistant/name (admins only; the server validates it)
+ * DELETE /api/arturo/name                               -> gateway /arturo/assistant/name (admins only: back to "Arturo")
  *
  * Same trust model as routes/voice.ts: this Node process is the only holder of the
  * gateway bearer; the browser never sees it and never reaches the gateway or :5071.
@@ -20,6 +31,7 @@ import { Router } from 'express';
 import { gatewayUrl } from '../lib/gateway-url.js';
 import { readFileSync } from 'fs';
 import { loadConfig } from '../lib/config.js';
+import { tenantScope } from '../lib/principal.js';
 
 const GATEWAY_TOKEN_FILE = process.env.WATCH_GATEWAY_TOKEN_FILE
   || `${process.env.HOME}/.config/jarvis/watch-gateway-token`;
@@ -42,6 +54,9 @@ export interface ArturoDeps {
   pipeStream?: (url: string, headers: Record<string, string>, body: string, timeoutMs: number) =>
     Promise<{ status: number; contentType: string; body: unknown; json: () => Promise<any> }>;
   forwardStream: (url: string, req: any, headers: Record<string, string>, timeoutMs: number) => Promise<{ status: number; body: any }>;
+  /** Whether the caller is an admin (the same role check /api/usage uses). Injectable so both
+   *  answers are tested without identity headers; absent means that real check. */
+  isAdmin?: (req: any) => boolean;
 }
 
 // Per-turn brain + page context (DEC-1790669162399904 §1.1-1.2). Shape checks only, for an early
@@ -98,6 +113,7 @@ export function defaultArturoDeps(): ArturoDeps {
       const body = await r.json().catch(() => ({ ok: false, error: 'bad gateway json' }));
       return { status: r.status, body };
     },
+    isAdmin: (req) => tenantScope(req).isAdmin,
   };
 }
 
@@ -287,7 +303,128 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     await forward(res, `/arturo/threads/${id}/jobs/${jobId}/cancel`, { method: 'POST' }, 10000);
   });
 
+  // The voice picker: the same server rows and the same validated PUT the phone's settings use. The
+  // provider keys stay on the server (its own key check decides what is available); only names,
+  // ids and availability come back. Only the vendor and the voice id are passed on, never the
+  // client's own fields, so the server's record of who changed it is its own.
+  const vendorQuery = (raw: unknown) => {
+    const v = typeof raw === 'string' ? raw : '';
+    return /^[a-z0-9_-]{1,32}$/.test(v) ? `?vendor=${v}` : '';
+  };
+  router.get('/ptt/vendor', async (_req, res) => {
+    await forward(res, '/arturo/ptt/vendor', { method: 'GET' }, 10000);
+  });
+  router.get('/ptt/voices', async (req, res) => {
+    await forward(res, `/arturo/ptt/voices${vendorQuery(req.query.vendor)}`, { method: 'GET' }, 25000);
+  });
+  router.get('/ptt/voice', async (req, res) => {
+    await forward(res, `/arturo/ptt/voice${vendorQuery(req.query.vendor)}`, { method: 'GET' }, 10000);
+  });
+  // Changing the voice changes it for everyone who talks to Arturo, so it is an admin's call (the
+  // gateway itself only lets admin- or voice-scoped callers write it; this API holds a bearer with every
+  // scope, so the check has to happen here). Reading stays open to anyone who can open the dashboard.
+  router.put('/ptt/voice', async (req, res) => {
+    const admin = deps.isAdmin ? deps.isAdmin(req) : tenantScope(req).isAdmin;
+    if (!admin) {
+      res.status(403).json({ ok: false, error: "Only an admin can change the assistant's voice" });
+      return;
+    }
+    const { vendor, voice_id } = (req.body || {}) as Record<string, unknown>;
+    if (typeof vendor !== 'string' || typeof voice_id !== 'string' || !vendor || !voice_id
+        || vendor.length > 32 || voice_id.length > 200) {
+      res.status(400).json({ ok: false, error: 'vendor and voice_id required' });
+      return;
+    }
+    await forward(res, '/arturo/ptt/voice', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vendor, voice_id }),
+    }, 10000);
+  });
+
+  // Avatar looks, keyed by agent id (services/arturo/avatar_choice.py). Same split as the voice: anyone who
+  // can open the dashboard reads them; only an admin changes or resets one, since a look shows on every
+  // device. The values are checked here too, so a bad one never leaves this process, and only the known
+  // fields are passed on.
+  const isAdmin = (req: any) => (deps.isAdmin ? deps.isAdmin(req) : tenantScope(req).isAdmin);
+  const agentParam = (raw: unknown) => {
+    const v = typeof raw === 'string' ? raw : '';
+    return AVATAR_AGENT_RE.test(v) ? v : null;
+  };
+  router.get('/avatars', async (_req, res) => {
+    await forward(res, '/arturo/avatars', { method: 'GET' }, 10000);
+  });
+  router.get('/avatar', async (req, res) => {
+    const agent = agentParam(req.query.agent);
+    if (!agent) { res.status(400).json({ ok: false, error: 'agent required' }); return; }
+    await forward(res, `/arturo/avatar?agent=${encodeURIComponent(agent)}`, { method: 'GET' }, 10000);
+  });
+  router.put('/avatar', async (req, res) => {
+    if (!isAdmin(req)) { res.status(403).json({ ok: false, error: "Only an admin can change an agent's look" }); return; }
+    const picked = pickAvatar(req.body);
+    if (!picked.ok) { res.status(400).json({ ok: false, error: picked.error }); return; }
+    await forward(res, '/arturo/avatar', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(picked.value),
+    }, 10000);
+  });
+  router.delete('/avatar', async (req, res) => {
+    if (!isAdmin(req)) { res.status(403).json({ ok: false, error: "Only an admin can change an agent's look" }); return; }
+    const agent = agentParam(req.query.agent);
+    if (!agent) { res.status(400).json({ ok: false, error: 'agent required' }); return; }
+    await forward(res, `/arturo/avatar?agent=${encodeURIComponent(agent)}`, { method: 'DELETE' }, 10000);
+  });
+
+  // The assistant's name on this install ("Arturo" until renamed; the id stays "arturo"). Anyone reads it;
+  // only an admin renames it, since it shows on every device and in the assistant's own instructions. Only
+  // the name is passed on; Arturo's assistant_name.py decides what a valid name is.
+  router.get('/name', async (_req, res) => {
+    await forward(res, '/arturo/assistant/name', { method: 'GET' }, 10000);
+  });
+  router.put('/name', async (req, res) => {
+    if (!isAdmin(req)) { res.status(403).json({ ok: false, error: "Only an admin can rename the assistant" }); return; }
+    const name = req.body?.name;
+    if (typeof name !== 'string' || !name.trim() || name.length > 64) { res.status(400).json({ ok: false, error: 'name required' }); return; }
+    await forward(res, '/arturo/assistant/name', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),
+    }, 10000);
+  });
+  router.delete('/name', async (req, res) => {
+    if (!isAdmin(req)) { res.status(403).json({ ok: false, error: "Only an admin can rename the assistant" }); return; }
+    await forward(res, '/arturo/assistant/name', { method: 'DELETE' }, 10000);
+  });
+
   return router;
+}
+
+// The allowed avatar values, as the dashboard's avatarCore.ts and Arturo's avatar_choice.py have them (the
+// route test reads avatarCore.ts so these cannot drift).
+export const AVATAR_SHAPES = ['circle', 'square', 'pill', 'hexagon', 'heart', 'droplet', 'star', 'pebble',
+  'gumdrop', 'bean', 'cloud', 'bunny', 'kitty', 'egg', 'flower', 'sprout'] as const;
+export const AVATAR_COLORS = ['ink', '#E5243B', '#FF7A1A', '#FFC61A', '#1FA855', '#00A6A0', '#1E6BE6',
+  '#4B3FD8', '#8B2FE0', '#D61F8C', '#FF4F8B', '#2C2E3B'] as const;
+export const AVATAR_EYES = ['auto', 'black', 'white'] as const;
+const AVATAR_AGENT_RE = /^[A-Za-z0-9_.:-]{1,80}$/;
+
+export type AvatarPick = { ok: true; value: { agent: string; shape?: string; color?: string; eyeColor?: string } } | { ok: false; error: string };
+export function pickAvatar(raw: unknown): AvatarPick {
+  if (!raw || typeof raw !== 'object') return { ok: false, error: 'a JSON body is required' };
+  const r = raw as Record<string, unknown>;
+  const agent = typeof r.agent === 'string' ? r.agent : '';
+  if (!AVATAR_AGENT_RE.test(agent)) return { ok: false, error: 'agent required' };
+  const out: { agent: string; shape?: string; color?: string; eyeColor?: string } = { agent };
+  if (r.shape !== undefined) {
+    if (typeof r.shape !== 'string' || !(AVATAR_SHAPES as readonly string[]).includes(r.shape)) return { ok: false, error: 'unknown shape' };
+    out.shape = r.shape;
+  }
+  if (r.color !== undefined) {
+    const c = typeof r.color === 'string' ? (r.color.toLowerCase() === 'ink' ? 'ink' : r.color.toUpperCase()) : '';
+    if (!(AVATAR_COLORS as readonly string[]).includes(c)) return { ok: false, error: 'color must be ink or a Bold palette colour' };
+    out.color = c;
+  }
+  if (r.eyeColor !== undefined) {
+    if (typeof r.eyeColor !== 'string' || !(AVATAR_EYES as readonly string[]).includes(r.eyeColor)) return { ok: false, error: 'eyeColor must be auto, black or white' };
+    out.eyeColor = r.eyeColor;
+  }
+  if (!out.shape && !out.color && !out.eyeColor) return { ok: false, error: 'nothing to change' };
+  return { ok: true, value: out };
 }
 
 export default createArturoRouter();

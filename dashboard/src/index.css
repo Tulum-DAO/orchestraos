@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* dark: follows the Appearance choice (the `dark` class on <html>, set by ThemeProvider), not the OS alone. */
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme inline {
     --font-heading: var(--font-sans);
@@ -155,7 +157,7 @@
  * Ported for Arturo's tool cards (components/arturo/ToolRun.tsx). Raw values are --bui-*, so they
  * cannot clash with anything above; the @theme block below exposes them to Tailwind under names
  * nothing in this dashboard used before (checked), except `accent`, which is ours — theirs is
- * `bui-accent`. Same switch as ours: :root is light, .dark (and the Arturo shell) is dark. Keyframes only, no animate-*
+ * `bui-accent`. Same switch as ours: :root is light, .dark is dark. Keyframes only, no animate-*
  * utility: Activity.tsx already has its own `animate-fade-in`. */
 :root {
     --bui-page: oklch(98.5% .001 286.376);
@@ -187,10 +189,8 @@
     --bui-shadow-overlay: 0 0 0 1px var(--bui-line), 0 25px 50px 0 #0000000d, 0 12px 24px 0 #0000000a, 0 6px 12px 0 #00000008, 0 3px 6px 0 #00000005, 0 1.5px 3px 0 #00000005;
 }
 
-/* The Arturo shell is always dark (arturo.css: black canvas, white text) whatever the app theme,
- * so the dark values apply inside it too — light-theme ink on that canvas would be invisible. */
-.dark,
-.arturo-shell {
+/* Arturo follows the app's mode like everything else (arturo.css keys its own colours off .dark too). */
+.dark {
     --bui-page: oklch(20.9% .004 264.477);
     --bui-canvas: oklch(23.1% .004 264.487);
     --bui-surface: oklch(26% .006 271.191);
@@ -282,10 +282,10 @@ body {
    document scroll on the topology view (TimeBar.tsx): the blank strip past the end of the
    page was white, not dark. That root cause is fixed, but rubber-band overscroll and any
    future gap would expose the same flash, so the backstop belongs here rather than relying on
-   nothing ever overflowing again. neutral-950, matching the shell. */
+   nothing ever overflowing again. The page background token: neutral-950 in dark, white in light. */
 html,
 body {
-  background-color: #0a0a0a;
+  background-color: var(--background);
 }
 button {
   -webkit-touch-callout: none;
@@ -322,6 +322,27 @@ button {
 @media (max-width: 768px) {
   button, a, select, input {
     min-height: 44px;
+  }
+  /* .touch-compact: a bar or menu that keeps its DESKTOP sizes on a phone (the agent page's top bar, the
+     notifications menu). The 44px floor above made them visibly taller on mobile than on desktop; their
+     controls are already 40px circles or full-width rows, and the rest use .hit-44 below. */
+  .touch-compact button, .touch-compact a, .touch-compact select, .touch-compact input {
+    min-height: 0;
+  }
+  /* A compact control that still needs a finger-sized target (the agent page's Chat/Dev switch): it keeps
+     its desktop look, and an invisible 44x44 area centred on it takes the tap. Its group must not clip
+     (no overflow-hidden), or the area is clipped with it. */
+  .hit-44 {
+    position: relative;
+  }
+  .hit-44::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    transform: translate(-50%, -50%);
   }
 
   /* Prevent horizontal overflow */
@@ -379,3 +400,16 @@ main {
 @media (prefers-reduced-motion: reduce) {
   .fleet-dot-down, .fleet-dot-up { top: 50%; }
 }
+
+/* Living avatars: the surface behind each avatar, so the cut-out ring around its status dot and provider
+   badge matches what is really there (avatarCanvas.ts reads --la-surface). The sidebar is the page
+   background; a selected row is neutral-200, neutral-800 in dark. */
+.la-on-sidebar { --la-surface: var(--background); }
+/* The name pill a sidebar face shows on hover (AgentRail FaceRow): a quick fade, and its face's badge cut-out
+   matches the pill, not the sidebar. */
+.rail-face-pill { --la-surface: var(--color-neutral-100); animation: rail-face-pill-in 90ms ease-out both; }
+.dark .rail-face-pill { --la-surface: var(--color-neutral-800); }
+@keyframes rail-face-pill-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .rail-face-pill { animation: none; } }
+.la-on-selected { --la-surface: var(--color-neutral-200); }
+.dark .la-on-selected { --la-surface: var(--color-neutral-800); }

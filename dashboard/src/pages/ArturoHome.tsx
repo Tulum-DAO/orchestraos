@@ -1,5 +1,5 @@
 /**
- * ArturoHome — the MAIN page (track T4). A standalone phone shell, not a dashboard page:
+ * ArturoHome — the MAIN page (track T4). Its own phone shell, inside the dashboard's layout (sidebar beside it):
  * one thin header (settings gear · "Arturo · <model> ⌄" · brain), icons from the
  * shared lucide set so the web pair matches the iOS pair (brain + gearshape) instead of
  * a one-off hand-drawn glyph, black canvas with the
@@ -17,22 +17,21 @@
  * Every turn goes through POST /api/arturo/text (gateway → :5071/text), which runs the full
  * tool-enabled turn on whichever brain the install has (api key / authed CLI / none).
  */
-import { useEffect, useRef, useState } from 'react';
-import { NavLink } from 'react-router-dom';
-import { Mic, MicOff, Plus, ArrowUp, AudioLines, Paperclip, X, PhoneOff } from 'lucide-react';
+import { useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { Mic, MicOff, Plus, ArrowUp, AudioLines, Paperclip, PhoneOff } from 'lucide-react';
 import { useHandsFreeCall } from '../hooks/useHandsFreeCall';
 import '../components/arturo/arturo.css';
-import { BrainModal } from '../components/agent/BrainModal';
+import { ArturoPanel } from '../components/arturo/ArturoPanel';
 import { ModelSelectorSheet } from '../components/agent/ModelSelectorSheet';
 import { useArturoBrain } from '../stores/arturoBrain';
 import { arturoTurn, arturoPrewarm } from '../lib/arturoStream';
-import { brainFromThread, describeTurnError, toWireBrain } from '../lib/arturoBrain';
+import { describeTurnError, toWireBrain } from '../lib/arturoBrain';
 import { arturoHealth, runtimesAvailable, brainLabel, greeting, newConversationId,
   isStarting, isArturoDisabled, waitForArturo, STARTING_TEXT, ARTURO_DISABLED_TEXT, sendOutcomeText, firstStep, onboardingTurn, onboardingDone,
   HANDS_FREE, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, ONBOARDING_OPENER, sendStateLabel,
   type ChoiceCard, type PairCard,
   type ArturoHealth, type RuntimeRow, type SendState } from '../lib/arturo';
-import { listThreads, loadThread, type ThreadSummary } from '../lib/arturoThreads';
+import { loadThread } from '../lib/arturoThreads';
 import { hydrateTurns, onboardingConversation, carriesOnboardingMarker, mergeResumeReply, isBusy } from '../lib/arturoResume';
 import WebTerminal from '../components/WebTerminal';
 import { installCommand } from '../lib/providerConnect';
@@ -46,11 +45,20 @@ import ToolRun from '../components/arturo/ToolRun';
 import JobTray from '../components/arturo/JobTray';
 import { useStickToBottom } from '../lib/useStickToBottom';
 import { currentThread, setCurrentThread, subscribeCurrentThread } from '../lib/arturoCurrent';
-import VoiceCallCard from '../components/chat/VoiceCallCard';
+import { ArturoCallCard } from '../components/arturo/ArturoCallCard';
+import { groupCalls } from '../lib/arturoCallGroups';
 import { hasVoiceCallMarker, parseVoiceSegments } from '../lib/voiceCall';
 import { applyTextDelta, applyToolCall, applyToolResult, groupParts, hasToolParts, type TurnPart } from '../lib/turnParts';
-import { Brain, Settings } from 'lucide-react';
-import { isViewHidden } from '../lib/features';
+import { Settings, ChevronRight, X } from 'lucide-react';
+import { AgentAvatar } from '../components/avatar/AgentAvatar';
+import { LookPickerPopover } from '../components/avatar/LookPicker';
+import { useAgentRecord, setArturoActivity, setArturoProvider, ARTURO_ID } from '../components/avatar/agentState';
+import { arturoProvider } from '../lib/avatarStatus';
+import { applyAssistantName, assistantName, named, useAssistantName } from '../lib/assistantName';
+import { canChangeLook, showsLookCard, readDismissed, writeDismissed } from '../lib/avatarLooks';
+import { useUser } from '../hooks/useUser';
+import { HeaderEndSlotContext } from '../lib/headerSlot';
+import { SidebarMenuButton } from '../components/SidebarMenuButton';
 
 type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[]; images?: string[]; spawned?: string[]; pending?: boolean; streaming?: boolean; state?: SendState;
   /** A streamed turn that ran tools, in the order it happened: text, tool cards, more text. */
@@ -61,7 +69,12 @@ type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[
   /** A pairing code (pair_device). Lives only in this page's state: never in thread history. */
   pairCard?: PairCard;
   /** Tools Arturo ran during a live call, as they happened (parts = tool cards only). */
-  callTools?: boolean };
+  callTools?: boolean;
+  /** Spoken on a call (a caption committed here, or a stored turn of mode "voice"): it goes in the call's card. */
+  voice?: boolean;
+  /** The call-ended line of this call id (stored threads tag it): closes the call's card. */
+  callEnd?: string;
+  ts?: number };
 type Step = 'runtime' | 'onboarding' | 'done';
 
 
@@ -70,24 +83,19 @@ const LS_ONBOARDED = 'orchestra.arturo.onboarded';
 
 function ls(key: string): string | null { try { return localStorage.getItem(key); } catch { return null; } }
 function lsSet(key: string, v: string) { try { localStorage.setItem(key, v); } catch { /* private mode */ } }
+function lsStore(): Storage | null { try { return localStorage; } catch { return null; } }
 
-export function ArturoMark({ className = 'arturo-mark' }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden>
-      <g transform="translate(24,24)">
-        <line x1="0" y1="-19" x2="0" y2="-7" /><line x1="0" y1="19" x2="0" y2="7" />
-        <line x1="-19" y1="0" x2="-7" y2="0" /><line x1="19" y1="0" x2="7" y2="0" />
-        <line x1="-13.4" y1="-13.4" x2="-5" y2="-5" /><line x1="13.4" y1="13.4" x2="5" y2="5" />
-        <line x1="13.4" y1="-13.4" x2="5" y2="-5" /><line x1="-13.4" y1="13.4" x2="-5" y2="5" />
-      </g>
-    </svg>
-  );
+/** Where the input sits from the home hero's face: straight down. */
+const HERO_GLANCE_AT = { x: 0, y: 0.9 };
+
+/** The phone layout (below the dashboard's md breakpoint): Arturo's bar is taller there, with a bigger pill. */
+const PHONE_BAR_QUERY = '(max-width: 47.99rem)';
+function subscribePhoneBar(cb: () => void) {
+  const mq = window.matchMedia(PHONE_BAR_QUERY);
+  mq.addEventListener('change', cb);
+  return () => mq.removeEventListener('change', cb);
 }
-
-const DRAWER = [
-  ['Inbox', '/inbox'], ['Approvals', '/approvals'], ['Agents', '/agents'], ['Projects', '/projects'],
-  ['Tasks', '/tasks'], ['Activity', '/activity'], ['Overview', '/overview'], ['Command Center', '/command-center'],
-];
+const isPhoneBar = () => window.matchMedia(PHONE_BAR_QUERY).matches;
 
 function renderText(t: string) {
   // `code` spans only — the thread stays plain text otherwise (no markdown engine).
@@ -103,13 +111,14 @@ function renderReply(t: string) {
   return (
     <div className="txt">
       {parseVoiceSegments(t).map((seg, i) => seg.kind === 'voicecall'
-        ? <VoiceCallCard key={i} callId={seg.callId} />
+        ? <ArturoCallCard key={i} callId={seg.callId} turns={[]} live={false} />
         : CALL_ENDED_RE.test(seg.text) ? null : <span key={i}>{renderText(seg.text)}</span>)}
     </div>
   );
 }
 
 export default function ArturoHome() {
+  const registerEndSlot = useContext(HeaderEndSlotContext);
   const [name, setName] = useState<string>(ls(LS_NAME) || '');
   const [step, setStep] = useState<Step>(firstStep(ls(LS_ONBOARDED) === '1'));
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -117,14 +126,19 @@ export default function ArturoHome() {
   const [busy, setBusy] = useState(false);
   const [health, setHealth] = useState<ArturoHealth | null>(null);
   const [starting, setStarting] = useState(false);   // G15: proxy not up yet (orchestra up boot window)
-  const [drawer, setDrawer] = useState(false);
-  const [brainOpen, setBrainOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const arturoRec = useAgentRecord(ARTURO_ID);
+  const phoneBar = useSyncExternalStore(subscribePhoneBar, isPhoneBar, () => false);
+  const aname = useAssistantName();
+  const canSaveLook = canChangeLook(useUser().data?.role);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [lookDismissed, setLookDismissed] = useState(() => readDismissed(lsStore(), ARTURO_ID));
+  const showLookCard = showsLookCard({ chosen: arturoRec.chosen, canSave: canSaveLook, dismissed: lookDismissed });
+  const dismissLookCard = () => { writeDismissed(lsStore(), ARTURO_ID); setLookDismissed(true); };
+  const gearRef = useRef<HTMLButtonElement>(null);
   const [modelOpen, setModelOpen] = useState(false);
   const brainChoice = useArturoBrain((s) => s.choice);
   const chooseBrain = useArturoBrain((s) => s.choose);
-  // G20: the home and the pill read ONE server-side thread space, so a conversation started
-  // in either place is reachable from the other. The drawer is where you go back to one.
-  const [threads, setThreads] = useState<ThreadSummary[]>([]);
   // The onboarding terminal. A first-time installer has NO CLI yet, so this is where they
   // install one. POST /api/agents/login-shell works with nothing installed, so it is
   // reachable BEFORE there is a brain to talk to — no chicken-and-egg.
@@ -144,9 +158,10 @@ export default function ArturoHome() {
   // Live voice mode: the same call the Arturo pane starts (hooks/useHandsFreeCall). Its
   // captions commit as turns in this thread; a call that cannot start says why, here.
   const call = useHandsFreeCall({
-    onFinal: (text, role) => { if (role === 'user') user(text); else say(text); },
+    // Stamped with the time they arrive, so the call's card has its length before the saved call record does.
+    onFinal: (text, role) => { const at = { voice: true, ts: Date.now() / 1000 }; if (role === 'user') user(text, undefined, at); else say(text, at); },
     onUnavailable: (reason) => { say(`${HANDS_FREE} could not start: ${reason}`); },
-    onEnded: (text) => { say(text); },
+    onEnded: (text) => { say(text, { ts: Date.now() / 1000 }); },
     // A tool run during a call sits in the thread where it happened: after the caller's line, before Arturo's
     // reply. Back-to-back tools share one collapsed run.
     onTool: (e) => setTurns((prev) => {
@@ -163,6 +178,12 @@ export default function ArturoHome() {
       return next;
     }),
   });
+  // When this page's call went live, for the live card's running clock (connecting does not count).
+  const [callSince, setCallSince] = useState<number | null>(null);
+  useEffect(() => {
+    if (call.callState === 'live') setCallSince((t) => t ?? Date.now());
+    else if (!call.inCall) setCallSince(null);
+  }, [call.callState, call.inCall]);
   const fileInput = useRef<HTMLInputElement>(null);
   const convId = useRef<string>(currentThread() || '');
   const [jobKick, setJobKick] = useState(0);
@@ -178,7 +199,7 @@ export default function ArturoHome() {
     if (switched) requestAnimationFrame(() => stick.toBottom());   // another thread opened: start at its end
   };
   useEffect(() => { if (!convId.current) { convId.current = newConversationId('web'); setCurrentThread(convId.current); } }, []);
-  // The pane (or another tab) switched threads: the home follows and shows that thread.
+  // The sidebar, the pane or another tab switched threads: the home follows and shows that thread.
   useEffect(() => subscribeCurrentThread((id) => {
     if (id === convId.current) return;
     convId.current = id;
@@ -188,39 +209,11 @@ export default function ArturoHome() {
   // they switch brain (a different model is a different process). The first turn then adopts
   // a live process instead of starting one.
   useEffect(() => { arturoPrewarm(convId.current, toWireBrain(brainChoice)); }, [brainChoice]);
-  useEffect(() => { if (drawer) void listThreads().then(setThreads); }, [drawer]);
-  // On a phone the drawer covers the composer, and the only way out was a ~110 px sliver of dark
-  // page that does not read as a control. Escape closes it; there is also a close button inside.
-  useEffect(() => {
-    if (!drawer) return;
-    const onEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') setDrawer(false); };
-    window.addEventListener('keydown', onEsc);
-    return () => window.removeEventListener('keydown', onEsc);
-  }, [drawer]);
-
-  /** Resume a previous conversation: its turns come from the server, so "pick up right where
-   *  we left off" holds across a reload, another surface, and a service restart. */
-  async function resumeThread(id: string) {
-    const t = await loadThread(id);
-    if (!t) return;
-    convId.current = id; setCurrentThread(id);
-    // A thread answers on the brain it last used; one that used the default brain goes back to it.
-    const resumedBrain = brainFromThread(t, {});
-    chooseBrain(resumedBrain);
-    arturoPrewarm(id, toWireBrain(resumedBrain));
-    // The page's own opener is not the operator's words: hidden here too, on every reload. Opening a
-    // thread does NOT end onboarding (it used to): done is the server's word only.
-    setTurns(hydrateTurns(t.turns).map((x) => ({ id: nextId.current++, ...x })));
-    setDrawer(false);
-    requestAnimationFrame(() => stick.toBottom());       // a thread you opened starts at its end
-  }
-
-  /** New thread — the one you leave stays in the list rather than becoming unreachable. */
+  /** New thread — the one you leave stays in the sidebar's Chats rather than becoming unreachable. */
   function startNewThread() {
     convId.current = newConversationId('web'); setCurrentThread(convId.current);
     arturoPrewarm(convId.current, toWireBrain(brainChoice));
     setTurns([]);
-    setDrawer(false);
   }
 
   const lastUserIdx = (() => { for (let i = turns.length - 1; i >= 0; i--) if (turns[i].role === 'user') return i; return -1; })();
@@ -326,7 +319,7 @@ export default function ArturoHome() {
     let h = await arturoHealth();
     if (isArturoDisabled(h)) {
       setHealth(h);
-      patch(id, { pending: false, text: ARTURO_DISABLED_TEXT });
+      patch(id, { pending: false, text: named(ARTURO_DISABLED_TEXT, assistantName()) });
       return;
     }
     if (!h.ok && isStarting(h)) {          // G15: booting is not "no CLI"
@@ -384,7 +377,7 @@ export default function ArturoHome() {
     setStep('onboarding');
   }
 
-  const user = (text: string, state?: SendState) => { const id = nextId.current++; setTurns((t) => [...t, { id, role: 'user', text, state }]); return id; };
+  const user = (text: string, state?: SendState, extra: Partial<Turn> = {}) => { const id = nextId.current++; setTurns((t) => [...t, { id, role: 'user', text, state, ...extra }]); return id; };
 
   /** Send the composer's text, or `picked`: the words of a card option the operator tapped. */
   async function send(picked?: string) {
@@ -479,7 +472,7 @@ export default function ArturoHome() {
         ? 'I am still starting up and could not answer yet — give `orchestra up` a moment and send that again.'
         : chosenErr ? chosenErr.message
         : isBusy(r) ? 'I am still answering an earlier message in this conversation (another tab or device). Send this again once that reply is in.'
-        : `I could not reach my brain: ${r.error || 'unknown'}. Is \`orchestra up\` running? Check /health on the Arturo service.`) });
+        : `I could not reach my brain: ${r.error || 'unknown'}. Is \`orchestra up\` running? Check /health on the ${aname} service.`) });
       return;
     }
     patch(id, { pending: false, streaming: false, text: r.reply_text || streamed || '(no reply)', tools: r.tools_called, spawned: r.spawned,
@@ -509,41 +502,85 @@ export default function ArturoHome() {
   // The chip shows the CHOSEN brain when there is one; otherwise what the install defaults to.
   const model = arturoDisabled ? 'turned off' : starting ? 'starting…' : brainChoice ? brainChoice.label : brainLabel(brain);
   const eff = brainChoice ? 'CLI' : brain?.kind === 'runtime' ? 'CLI' : brain?.kind === 'api' ? 'API' : '';
+  // Arturo's avatar works while a turn is in flight here or a call is live (agentState.ts adds its steps).
+  useEffect(() => { setArturoActivity({ busy, inCall: call.inCall }); }, [busy, call.inCall]);
+  useEffect(() => { if (brain) setArturoProvider(arturoProvider(brain, brainChoice)); }, [brain, brainChoice]);
+  useEffect(() => { if (health?.ok) applyAssistantName(health.assistant_name); }, [health]);
+  useEffect(() => () => setArturoActivity({ busy: false, inCall: false }), []);
   const empty = turns.length === 0 && !call.inCall;
+  const lookCard = showLookCard ? (
+    <div key="lookcard" className="arturo-lookcard la-on-card">
+      <button type="button" className="arturo-lookcard-open" onClick={() => setPickerOpen(true)}>
+        <AgentAvatar agentId={ARTURO_ID} role="activity" size={24} label={aname} />
+        <span>Pick a look for {aname}</span>
+        <ChevronRight size={16} aria-hidden />
+      </button>
+      <button type="button" className="arturo-lookcard-x" aria-label="Dismiss" onClick={dismissLookCard}><X size={14} /></button>
+    </div>
+  ) : null;
 
   return (
     <div className="arturo-shell">
-      <header className="arturo-header" inert={drawer || undefined}>
-        <button className="arturo-glyph" aria-label={drawer ? 'Close menu' : 'Open settings'} aria-expanded={drawer}
-                onClick={() => setDrawer((d) => !d)}>
-          <Settings size={22} strokeWidth={2.2} absoluteStrokeWidth />
+      <header className="arturo-header">
+        {/* The sidebar button (opens it on a phone, collapses it on a desktop), then a fresh conversation
+            here on the home; the one you leave stays in the sidebar's Chats. touch-compact keeps the
+            sidebar button at its desktop size on a phone, as in the agent top bar. */}
+        <div className="arturo-header-start touch-compact">
+          <SidebarMenuButton />
+          <button className="arturo-glyph" aria-label="New chat" title="New chat" onClick={startNewThread}>
+            <Plus size={22} strokeWidth={2.2} absoluteStrokeWidth />
+          </button>
+        </div>
+        {/* Arturo's avatar and name, centred: tapping it opens the slide-out, as the gear does. A still
+            picture (no wander or other motion up here); on a phone it shows a dot while Arturo works. Bigger on
+            a phone, where the bar is taller. */}
+        <button type="button" className="arturo-title arturo-pill" aria-label={`${aname}: open settings`}
+                aria-expanded={panelOpen} aria-controls="arturo-panel" onClick={() => setPanelOpen(true)}>
+          <AgentAvatar agentId={`${ARTURO_ID}:pill`} role="pill" size={phoneBar ? 36 : 32} sleepAfterMs={0}
+                       state={arturoRec.status === 'working' ? 'working' : 'idle'}
+                       shape={arturoRec.shape} color={arturoRec.color} eyeColor={arturoRec.eyeColor} provider={arturoRec.provider}
+                       label={aname} />
+          <span>{aname}</span>
         </button>
-        <button className="arturo-title" onClick={() => setModelOpen(true)} aria-label="Select model">
-          Arturo <span className="model">· {model}</span> <span className="chev">⌄</span>
-        </button>
-        <button className="arturo-glyph" aria-label="Open brain" onClick={() => setBrainOpen(true)}>
-          <Brain size={22} strokeWidth={2.2} absoluteStrokeWidth />
-        </button>
+        {/* The shared bell (DashboardLayout portals it into this slot, as on agent pages), then the gear. */}
+        <div className="arturo-header-end">
+          <div ref={registerEndSlot ?? undefined} data-header-end-slot className="touch-compact flex items-center" />
+          {/* The gear toggles Arturo's slide-out panel (Overview, Memory, Activity). */}
+          <button ref={gearRef} className="arturo-glyph" aria-label="Open brain" aria-expanded={panelOpen} aria-controls="arturo-panel"
+                  onClick={() => setPanelOpen((o) => !o)}>
+            <Settings size={22} strokeWidth={2.2} absoluteStrokeWidth />
+          </button>
+        </div>
       </header>
 
       <div className="arturo-glow" />
-
-      {/* While the modal drawer is open the page behind it must not be focusable or typable —
-          on a phone the composer sits under the overlay (gm/jev-helper first-run report). */}
-      <div className="arturo-feed" ref={feedRef} onScroll={stick.onScroll} inert={drawer || undefined}>
+      <div className="arturo-feed" ref={feedRef} onScroll={stick.onScroll}>
         {empty ? (
           <div className="arturo-hero">
-            <ArturoMark />
+            {/* Arturo's own face, not the brand mark: its saved look, a pop-in and one wink hello, then calm idle
+                (blinks, a slow look-around, eyes on the cursor as the active agent; no bob or breathing). It
+                glances down at the input while you type and takes its working glances while Arturo works. Its eyes
+                follow the mouse wherever it is on the page, even at rest (only this face does). No
+                status dot. Reduced motion: a still face, no wink. */}
+            <AgentAvatar agentId={`${ARTURO_ID}:hero`} role="drawer" size={88} selected followAlways calm greet="wink"
+                         state={arturoRec.status === 'working' ? 'working' : 'idle'} sleepAfterMs={0}
+                         shape={arturoRec.shape} color={arturoRec.color} eyeColor={arturoRec.eyeColor} provider={arturoRec.provider}
+                         glanceKey={draft} glanceAt={HERO_GLANCE_AT}
+                         className="arturo-hero-face la-on-canvas" label={aname} />
             <div className="greet serif">{greeting(name)}</div>
-            {starting && <div className="tools" style={{ color: 'rgba(255,255,255,0.45)', fontSize: 13 }}>{STARTING_TEXT}</div>}
-            {arturoDisabled && <div className="tools" style={{ color: 'rgba(255,255,255,0.55)', fontSize: 13 }}>{ARTURO_DISABLED_TEXT}</div>}
+            {starting && <div className="tools" style={{ color: 'rgba(var(--ink), var(--t45))', fontSize: 13 }}>{STARTING_TEXT}</div>}
+            {arturoDisabled && <div className="tools" style={{ color: 'var(--grey)', fontSize: 13 }}>{named(ARTURO_DISABLED_TEXT, aname)}</div>}
+            {lookCard}
           </div>
-        ) : turns.map((t, i) => t.role === 'user' ? (
+        ) : [lookCard, ...groupCalls(turns, call.inCall).map((item) => item.kind === 'call' ? (
+          <ArturoCallCard key={item.key} callId={item.callId} turns={item.turns} live={item.live} startTs={item.startTs} endTs={item.endTs}
+            liveSince={item.live ? callSince : null} liveUser={item.live ? call.liveUser : undefined} liveArturo={item.live ? call.liveArturo : undefined}
+            connecting={item.live && call.callState === 'connecting'} />
+        ) : ((t: Turn, i: number) => t.role === 'user' ? (
           <div key={t.id} className="turn-user">{t.images && t.images.length > 0 && <div className="msg-images">{t.images.map((u) => <a key={u} href={u} target="_blank" rel="noreferrer"><img src={u} alt="attached image" loading="lazy" /></a>)}</div>}<div className="bubble-user">{t.text}</div>
             {(t.state === 'failed' || (t.state && i === lastUserIdx)) && <div className={`turn-state ${t.state}`}>{sendStateLabel(t.state)}</div>}</div>
         ) : (
           <div key={t.id} className="turn-assistant">
-            <ArturoMark className="mark-sm" />
             {t.pending ? <span className="thinking" aria-label="thinking" />
               : hasToolParts(t.parts) ? (
                 // In the order it happened. Indices are stable: parts only ever grow at the end.
@@ -580,10 +617,7 @@ export default function ArturoHome() {
               </div>
             )}
           </div>
-        ))}
-        {call.liveUser && <div className="turn-user"><div className="bubble-user" style={{ opacity: 0.7 }}>{call.liveUser}…</div></div>}
-        {call.liveArturo && <div className="turn-assistant"><ArturoMark className="mark-sm" /><div className="txt" style={{ opacity: 0.7 }}>{call.liveArturo}…</div></div>}
-        {call.callState === 'connecting' && <div className="turn-assistant"><ArturoMark className="mark-sm" /><span className="thinking" aria-label="connecting the call" /></div>}
+        ))(item.turn, item.index))]}
       </div>
 
       {(onboardShell || shellError) && (
@@ -602,7 +636,16 @@ export default function ArturoHome() {
         </div>
       )}
 
-      <div className="arturo-composer" inert={drawer || undefined}>
+      <div className="arturo-composer">
+        {/* While Arturo works: who, and the step it is on (pushed over the live status stream), just above the
+            composer at the left. Its avatar moves in step with the sidebar's: one shared model. */}
+        {arturoRec.status === 'working' && (
+          <div className="arturo-working la-on-card" role="status" aria-live="polite">
+            <AgentAvatar agentId={ARTURO_ID} role="activity" size={24} label={aname} />
+            <span className="arturo-working-name">{aname}</span>
+            <span className="arturo-working-step">{arturoRec.blurb || 'Working…'}</span>
+          </div>
+        )}
         {convId.current && <JobTray threadId={convId.current} kick={jobKick} onEnded={() => { void reloadThread(); }} />}
         <input ref={fileInput} type="file" multiple hidden aria-hidden="true"
                onChange={async (e) => {
@@ -631,8 +674,8 @@ export default function ArturoHome() {
             {dictNote && <span className="attach-error">{dictNote}</span>}
           </div>
         )}
-        <textarea ref={taRef} rows={1} value={draft} placeholder={arturoDisabled ? 'Arturo is turned off' : 'Ask Arturo'} disabled={arturoDisabled}
-          onChange={(e) => { setDraft(e.target.value); grow(); }} onKeyDown={onKey} aria-label="Message Arturo" />
+        <textarea ref={taRef} rows={1} value={draft} placeholder={arturoDisabled ? `${aname} is turned off` : `Ask ${aname}`} disabled={arturoDisabled}
+          onChange={(e) => { setDraft(e.target.value); grow(); }} onKeyDown={onKey} aria-label={`Message ${aname}`} />
         <div className="ctrl-row">
           <div className="cluster">
             <button className="circle-btn" aria-label="Attach a file" title="Attach a file"
@@ -645,7 +688,7 @@ export default function ArturoHome() {
               // the captions and the job drawer keep coming down.
               <button className={call.muted ? 'circle-btn muted' : 'circle-btn'} aria-pressed={call.muted}
                       aria-label={call.muted ? 'Unmute microphone' : 'Mute microphone'}
-                      title={call.muted ? 'Unmute: Arturo can hear you again' : 'Mute: Arturo keeps talking, but can\'t hear you'}
+                      title={call.muted ? `Unmute: ${aname} can hear you again` : `Mute: ${aname} keeps talking, but can't hear you`}
                       onClick={call.toggleMute}>{call.muted ? <MicOff size={16} /> : <Mic size={16} />}</button>
             ) : (
               <button className={dictMode === 'idle' ? 'circle-btn' : `circle-btn ${dictMode}`}
@@ -659,44 +702,15 @@ export default function ArturoHome() {
             ) : arturoComposerText(draft, attachments.length) ? (
               <button className="circle-btn white" aria-label="Send" onClick={() => void send()} disabled={busy}><ArrowUp size={18} /></button>
             ) : (
-              <button className="circle-btn white" aria-label={HANDS_FREE} title={handsFreeTitle(handsFreeReady(health))}
+              <button className="circle-btn white" aria-label={HANDS_FREE} title={handsFreeTitle(handsFreeReady(health), aname)}
                       disabled={!handsFreeReady(health)} onClick={() => void call.toggle({ route: '/', threadId: convId.current })}><AudioLines size={16} /></button>
             )}
           </div>
         </div>
       </div>
 
-      {drawer && (
-        <>
-          <div className="arturo-drawer-back" onClick={() => setDrawer(false)} />
-          <nav className="arturo-drawer" aria-label="Menu">
-            <div className="drawer-top">
-              <div className="brand">OrchestraOS</div>
-              <button className="drawer-close" aria-label="Close menu" onClick={() => setDrawer(false)}>
-                <X size={18} />
-              </button>
-            </div>
-            {DRAWER.filter(([, to]) => !isViewHidden(to)).map(([label, to]) => <NavLink key={to} to={to} onClick={() => setDrawer(false)}>{label}</NavLink>)}
-            <div className="sect sect-head">
-              <span>Conversations</span>
-              <button className="drawer-new" onClick={startNewThread}>New</button>
-            </div>
-            <div className="drawer-threads">
-              {threads.length === 0 && <p className="empty">No earlier conversations yet.</p>}
-              {threads.map((t) => (
-                <button key={t.id} className={t.id === convId.current ? 'thread-row current' : 'thread-row'}
-                        onClick={() => void resumeThread(t.id)}>
-                  <span className="t-title">{t.title || 'Untitled'}</span>
-                  <span className="t-meta">{Math.ceil((t.turns || 0) / 2)}</span>
-                  {t.gist && <span className="t-gist">{t.gist}</span>}
-                </button>
-              ))}
-            </div>
-            <div className="sect">{brain ? `brain: ${brain.kind}${brain.runtime ? ' · ' + brain.runtime : ''} · ${health?.mode || ''}` : 'brain: …'}</div>
-          </nav>
-        </>
-      )}
-      <BrainModal isOpen={brainOpen} onClose={() => setBrainOpen(false)} />
+      <LookPickerPopover agentId={ARTURO_ID} open={pickerOpen} onClose={() => setPickerOpen(false)} canSave={canSaveLook} />
+      <ArturoPanel open={panelOpen} onClose={() => setPanelOpen(false)} returnFocusTo={gearRef} brain={eff ? `${model} ${eff}` : model} />
       <ModelSelectorSheet
         open={modelOpen}
         onClose={() => setModelOpen(false)}
