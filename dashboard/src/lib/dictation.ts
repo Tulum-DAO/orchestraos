@@ -17,7 +17,7 @@
 
 export const DICTATION_UNAVAILABLE =
   'dictation needs on-device speech recognition (Chrome or Edge) — this browser has none, ' +
-  'and the gateway itself doesn\'t transcribe your own voice, only Arturo\'s replies';
+  'and the gateway itself doesn\'t transcribe your own voice, only the assistant\'s replies';
 
 /** Minimal shape of the parts of the Web Speech API this file touches
  * (lib.dom's SpeechRecognition typings are not universally present in every

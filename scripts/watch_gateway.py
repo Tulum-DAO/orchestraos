@@ -139,6 +139,10 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("GET", "/arturo/ptt/vendor"): "read",
     ("GET", "/arturo/ptt/voices"): "read",
     ("GET", "/arturo/ptt/voice"): "read",
+    # Each agent's avatar look: what every surface draws, so reading it is harmless, like the voice.
+    ("GET", "/arturo/avatars"): "read",
+    ("GET", "/arturo/avatar"): "read",
+    ("GET", "/arturo/assistant/name"): "read",
     # Self-report writes. They mutate ONLY the caller's own view hint: which surface this
     # client is showing, and which agent the operator is looking at. No agent is touched, no
     # approval answered, no provider money spent, and a paired device cannot function without
@@ -246,6 +250,12 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     # accept `voice` or `ptt`: see ROUTE_ANY_OF below (gm rulings msg_f3c2cec6 + msg_40832c2d).
     ("PUT", "/arturo/ptt/vendor"): "admin",
     ("PUT", "/arturo/ptt/voice"): "admin",
+    # An agent's avatar look shows on every device for everyone: a setting for the whole box, like the
+    # voice, but with no any-of widening (nothing but an admin changes it).
+    ("PUT", "/arturo/avatar"): "admin",
+    ("DELETE", "/arturo/avatar"): "admin",
+    ("PUT", "/arturo/assistant/name"): "admin",
+    ("DELETE", "/arturo/assistant/name"): "admin",
 
 
     # --- admin: fleet-wide effect -----------------------------------------------------
@@ -421,33 +431,9 @@ def _evidence(r):
     return ev if isinstance(ev, dict) else None
 
 
-def _menu(r):
-    """Parse the menu JSON col (app-watch-decision-surface §1) — the bridge's
-    stored pane-menu capture, passed verbatim. None for non-menu rows."""
-    m = r.get("menu")
-    if isinstance(m, str) and m:
-        try:
-            m = json.loads(m)
-        except ValueError:
-            return None
-    if isinstance(m, dict):
-        if "options" in m and isinstance(m["options"], list):
-            cleaned = []
-            for i, opt in enumerate(m["options"]):
-                if isinstance(opt, dict):
-                    opt_c = dict(opt)
-                    if "n" in opt_c:
-                        opt_c["n"] = str(opt_c["n"])
-                    else:
-                        opt_c["n"] = str(i + 1)
-                    if "input_kind" not in opt_c:
-                        opt_c["input_kind"] = "direct"
-                    cleaned.append(opt_c)
-                elif isinstance(opt, str):
-                    cleaned.append({"n": str(i + 1), "label": opt, "input_kind": "direct"})
-            m["options"] = cleaned
-        return m
-    return None
+# The menu column parser lives in menu_parse (dependency-free, so approval.py's pending feed can use it
+# without importing this module). Kept under its old name for every caller here and in tests.
+from menu_parse import parse_menu as _menu  # noqa: E402
 
 
 # §1a answer-payload validation matrix. Returns an error string (→ 400) or
@@ -546,8 +532,32 @@ def _save_instance_ledger(path, ledger):
         log.error(f"instance ledger save failed ({path}): {e}; permission answers may be refused")
 
 
+def _perm_source_identity(session):
+    """The agent behind a permission prompt (card_provenance): seat, provider, its current session
+    and generation, read from the registry the moment the prompt is first tracked. Never raises."""
+    try:
+        import card_provenance
+        return card_provenance.source_identity(session)
+    except Exception as e:  # noqa: BLE001 — provenance never breaks the ledger
+        print(f"[watch_gateway] perm provenance failed for {session}: {e}", file=sys.stderr)
+        return {}
+
+
+def _apply_identity(entry, identity):
+    """Stamp the source agent onto a ledger entry. `identity` is a dict, or a callable returning one
+    (called only here, so an observation that creates nothing reads no registry)."""
+    if identity is None:
+        return
+    try:
+        ident = identity() if callable(identity) else identity
+        for k, v in (ident or {}).items():
+            entry[k] = v
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _instance_step(ledger, session, digest, present, now,
-                   answered_signal=False, flap_grace_s=PERM_INSTANCE_FLAP_GRACE_S):
+                   answered_signal=False, flap_grace_s=PERM_INSTANCE_FLAP_GRACE_S, identity=None):
     """Advance the (session,digest) instance state by ONE observation. PURE (no
     I/O): mutates `ledger` in place, returns the current instance_n.
 
@@ -562,7 +572,9 @@ def _instance_step(ledger, session, digest, present, now,
                                           scrape must NOT fabricate a new instance)
       - gone + present                 -> NEW instance (instance_n += 1)
     `answered_signal` is set by handle_agent_key on a successful digit send for the
-    current prompt, observed in-process (not via a lucky poll)."""
+    current prompt, observed in-process (not via a lucky poll).
+    `identity` (dict or callable) is stamped onto the entry when an instance is CREATED (the first
+    sighting, or a new instance after gone): the agent the prompt came from, at that moment."""
     key = f"{session}|{digest}"
     e = ledger.get(key)
     if e is None:
@@ -570,6 +582,7 @@ def _instance_step(ledger, session, digest, present, now,
             return 0
         ledger[key] = {"instance_n": 1, "phase": "present", "answered": False,
                        "last_present_ts": now, "gone_since": None, "first_seen_ts": now}
+        _apply_identity(ledger[key], identity)
         return 1
     if present:
         if e.get("phase") == "gone":
@@ -577,6 +590,7 @@ def _instance_step(ledger, session, digest, present, now,
             e["phase"] = "present"; e["answered"] = False
             e["gone_since"] = None
             e["first_seen_ts"] = now
+            _apply_identity(e, identity)
         else:
             e["gone_since"] = None    # seen again: an earlier single miss must not add up with a later one
         e["last_present_ts"] = now
@@ -624,12 +638,14 @@ def _stamp_instance(session, menu, ledger=None, now=None, answered_signal=False,
         own = ledger is None
         if not own:
             n = _instance_step(ledger, session, digest, present=True, now=now,
-                               answered_signal=answered_signal)
+                               answered_signal=answered_signal,
+                               identity=lambda: _perm_source_identity(session))
             return (n or 1), digest
         with _INSTANCE_LEDGER_LOCK:
             led = _load_instance_ledger()
             n = _instance_step(led, session, digest, present=True, now=now,
-                               answered_signal=answered_signal)
+                               answered_signal=answered_signal,
+                               identity=lambda: _perm_source_identity(session))
             if persist:
                 _save_instance_ledger(_PERM_INSTANCE_LEDGER, led)
         return (n or 1), digest
@@ -982,7 +998,8 @@ def _reap_absent_instances(present_keys, scanned_sessions, now=None):
                 digest = key.split("|", 1)[1] if "|" in key else ""
                 if key in present_keys:
                     # a sighting: clears a pending absence, or opens a new instance after gone
-                    _instance_step(led, sess, digest, present=True, now=now)
+                    _instance_step(led, sess, digest, present=True, now=now,
+                                   identity=lambda s=sess: _perm_source_identity(s))
                     changed = True
                 elif e.get("phase") != "gone":
                     _instance_step(led, sess, digest, present=False, now=now)
@@ -6637,6 +6654,61 @@ async def handle_arturo_ptt_voice(request):
         return _json({"ok": False, "error": "arturo unreachable"}, status=502)
 
 
+ARTURO_AVATAR_BASE = os.environ.get("ARTURO_AVATAR_BASE") or (_loopback("ORCHESTRA_ARTURO_PORT", 5071) + "")
+
+
+async def handle_arturo_avatar(request):
+    """GET /arturo/avatars, GET/PUT/DELETE /arturo/avatar: each agent's saved avatar look. Bearer here,
+    loopback upstream (services/arturo/avatar_choice.py validates every value). Only ?agent= is forwarded,
+    and the caller is stamped fresh (X-Arturo-Principal) for the audit log, never taken from the client."""
+    import aiohttp
+    import asyncio
+    from urllib.parse import urlencode
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    if request.path.endswith("/avatars"):
+        upstream = ARTURO_AVATAR_BASE + "/avatars"
+    else:
+        agent = request.query.get("agent", "")
+        upstream = ARTURO_AVATAR_BASE + "/avatar" + (("?" + urlencode({"agent": agent})) if agent else "")
+    body = await request.read() if request.method == "PUT" else None
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.request(request.method, upstream, data=body,
+                                 headers=_voice_config_headers(request, "X-Avatar-Source"),
+                                 timeout=aiohttp.ClientTimeout(total=8)) as r:
+                out = await r.json(content_type=None)
+                return _json(out, status=r.status)
+    except asyncio.TimeoutError:
+        return _json({"ok": False, "error": "timeout"}, status=504)
+    except Exception as e:  # noqa: BLE001
+        log.error(f"avatar forward: upstream unreachable: {e}")
+        return _json({"ok": False, "error": "arturo unreachable"}, status=502)
+
+
+async def handle_arturo_assistant_name(request):
+    """GET/PUT/DELETE /arturo/assistant/name: what the assistant is called on this install ("Arturo" until
+    renamed; the id stays "arturo"). Bearer here, loopback upstream (services/arturo/assistant_name.py
+    validates the name), the caller stamped fresh for the audit log, never taken from the client."""
+    import aiohttp
+    import asyncio
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    body = await request.read() if request.method == "PUT" else None
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.request(request.method, ARTURO_AVATAR_BASE + "/assistant/name", data=body,
+                                 headers=_voice_config_headers(request, "X-Name-Source"),
+                                 timeout=aiohttp.ClientTimeout(total=8)) as r:
+                out = await r.json(content_type=None)
+                return _json(out, status=r.status)
+    except asyncio.TimeoutError:
+        return _json({"ok": False, "error": "timeout"}, status=504)
+    except Exception as e:  # noqa: BLE001
+        log.error(f"assistant name forward: upstream unreachable: {e}")
+        return _json({"ok": False, "error": "arturo unreachable"}, status=502)
+
+
 async def handle_transcript(request):
     """GET /transcript?agent=&limit= — thin proxy to the web API's committed
     transcript router (api/src/routes/chat-transcript.ts), so iOS renders the
@@ -7157,6 +7229,40 @@ async def _fallback_direct_inject_voice_call(call_id):
 ALLOWED_AGENT_KEYS = set("123456789")
 
 
+def _menu_answer_log():
+    return Path(os.environ.get("MENU_ANSWER_LOG") or (ORCH_DIR / "state" / "menu-answers.jsonl"))
+
+
+MENU_ANSWER_LOG_MAX_BYTES = 2_000_000
+
+
+def _record_menu_answer(request, session, menu, *, option_n=None, dismissed=False, text=None):
+    """Append one line per answered or dismissed in-agent menu: what was asked and what was chosen.
+    A live menu leaves no line in the agent's transcript, so without this the conversation forgets the
+    question once it is answered; the dashboard reads this back as a lasting line in the chat
+    (GET /api/agents/:id/decisions). Best-effort: the answer has already landed when this runs."""
+    try:
+        opt = next((o for o in (menu.get("options") or [])
+                    if isinstance(o, dict) and str(o.get("n")) == str(option_n)), None) if option_n else None
+        _cls, _name = _parse_actor(request)
+        from datetime import datetime as _dt, timezone as _tz
+        row = {"session": session, "at": _dt.now(_tz.utc).isoformat(),
+               "kind": menu.get("kind"), "question": (menu.get("question") or "")[:500],
+               "dismissed": bool(dismissed), "option_n": option_n,
+               "label": (opt or {}).get("label"), "text": (text or "")[:500] or None,
+               # An agent answering (X-Actor interactive/automation:<name>) is named; a person is not.
+               "by": _name if _cls in ("interactive", "automation") and _name else None}
+        path = _menu_answer_log()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.stat().st_size > MENU_ANSWER_LOG_MAX_BYTES:
+            keep = path.read_text(errors="replace").splitlines()[-2000:]       # bounded: newest kept
+            path.write_text("\n".join(keep) + "\n")
+        with path.open("a") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception as e:  # noqa: BLE001 — never fails an answer that already landed
+        print(f"[watch_gateway] menu answer record failed ({session}): {e}", file=sys.stderr)
+
+
 async def handle_agent_key(request):
     """POST /agent-key {session, key, confirm?: bool}
     Two-phase digit-into-menu: confirm absent/false -> 428 needs_confirm;
@@ -7236,6 +7342,64 @@ async def handle_agent_key(request):
         code = {"no_text_option": 422, "not_permission_prompt": 400,
                 "menu_gone": 409, "instance_mismatch": 409}.get(info.get("reason"), 502)
         return _json({"ok": False, **info}, status=code)
+
+    # DISMISS: refuse to answer the agent's own menu by pressing Escape, which is what the Dev terminal does.
+    # Two-phase and checked exactly like a digit: the menu the card showed (`expect`) must be the one on
+    # screen, it is read again under both send locks, and Escape is sent only if that same menu is still up.
+    # Escape at any other moment would interrupt a working turn.
+    if answer == "dismiss":
+        if session not in _tmux_session_names():
+            return _json({"ok": False, "error": "no such session"}, status=404)
+        if not confirm:
+            return _json({"ok": False, "needs_confirm": True,
+                          "confirm_text": f"Dismiss the question on {session}?"}, status=428)
+        import asyncio
+        st = await asyncio.get_event_loop().run_in_executor(
+            None, _agent_status().get_agent_status, session)
+        menu = st.get("pending_menu") if isinstance(st, dict) else None
+        if not isinstance(menu, dict):
+            return _json({"ok": False, "reason": "menu_gone", "error": "menu no longer on screen"},
+                         status=409)
+        seen_ok, seen_reason = _could_have_seen(request, session, menu, expect_key=_expect)
+        if not seen_ok:
+            return _json({"ok": False, "reason": seen_reason,
+                          "error": _COULD_NOT_HAVE_SEEN[seen_reason]}, status=409)
+        _checked = (menu.get("kind"), _menu_key(session, menu))
+
+        def _dismiss_locked():
+            # The cross-process pane lock first (docs/DELIVERY.md: every writer into a pane takes it), so
+            # the router or a resume cannot type into this pane between the re-read and the Escape.
+            with _pane_guard(session) as _pane_held, _session_send_lock(session):
+                if not _pane_held:
+                    return "busy"
+                _st2 = _agent_status().get_agent_status(session)
+                _pm2 = _st2.get("pending_menu") if isinstance(_st2, dict) else None
+                if not isinstance(_pm2, dict):
+                    return "gone"
+                if (_pm2.get("kind"), _menu_key(session, _pm2)) != _checked:
+                    return "changed"
+                return _tmux("send-keys", "-t", _st(session), "Escape")
+
+        r = await asyncio.get_event_loop().run_in_executor(None, _dismiss_locked)
+        if r == "busy":
+            return _json({"ok": False, "reason": "busy",
+                          "error": "another sender is typing into this pane; nothing was sent"}, status=409)
+        if r == "gone":
+            return _json({"ok": False, "reason": "menu_gone", "error": "menu no longer on screen"},
+                         status=409)
+        if r == "changed":
+            return _json({"ok": False, "reason": "instance_mismatch",
+                          "error": _COULD_NOT_HAVE_SEEN["instance_mismatch"]}, status=409)
+        if r.returncode != 0:
+            return _json({"ok": False, "error": "tmux send-keys failed"}, status=502)
+        if menu.get("kind") == "permission":
+            _mark_instance_answered(session, menu.get("question") or "", menu.get("context") or "")
+        _record_menu_answer(request, session, menu, dismissed=True)
+        try:                                          # its mirror card clears now, not at the next reconcile
+            _ast = ApprovalStore(); _ast.migrate(); _ast.resolve_pending_menus_for_session(session)
+        except Exception as _re:  # noqa: BLE001 — the dismiss itself landed
+            print(f"[watch_gateway] dismiss: mirror resolve failed ({session}): {_re}", file=sys.stderr)
+        return _json({"ok": True, "dismissed": True})
 
     if not key:
         return _json({"ok": False, "error": "session and key required"}, status=400)
@@ -7403,6 +7567,7 @@ async def handle_agent_key(request):
         ok, info = await asyncio.get_event_loop().run_in_executor(
             None, menu_resume_free_text, session, key, text, menu.get("question"))
         if ok:
+            _record_menu_answer(request, session, menu, option_n=key, text=text)
             return _json({"ok": True, "sent": key, "text_len": len(text),
                           **{k: v for k, v in info.items() if k == "attempts"}})
         if info.get("reason") == "menu_gone":
@@ -7420,7 +7585,11 @@ async def handle_agent_key(request):
     _checked = (menu.get("kind"), _menu_key(session, menu))
 
     def _send_locked():
-        with _session_send_lock(session):
+        # Both locks, pane lock first, as verified_inject takes them: the in-process one alone does not stop
+        # the router (another process) typing into this pane between the re-read and the digit.
+        with _pane_guard(session) as _pane_held, _session_send_lock(session):
+            if not _pane_held:
+                return "busy"
             _st2 = _agent_status().get_agent_status(session)
             _pm2 = _st2.get("pending_menu") if isinstance(_st2, dict) else None
             if not isinstance(_pm2, dict):
@@ -7432,6 +7601,9 @@ async def handle_agent_key(request):
             return _tmux("send-keys", "-t", _st(session), key)
 
     r = await asyncio.get_event_loop().run_in_executor(None, _send_locked)
+    if r == "busy":
+        return _json({"ok": False, "reason": "busy",
+                      "error": "another sender is typing into this pane; nothing was sent"}, status=409)
     if r == "gone":
         return _json({"ok": False, "reason": "menu_gone", "error": "menu no longer on screen"},
                      status=409)
@@ -7446,6 +7618,7 @@ async def handle_agent_key(request):
     # scan-only reset would miss). Permission-only; best-effort, never fatal.
     if menu.get("kind") == "permission":
         _mark_instance_answered(session, menu.get("question") or "", menu.get("context") or "")
+    _record_menu_answer(request, session, menu, option_n=key)
     return _json({"ok": True, "sent": key})
 
 
@@ -8951,6 +9124,13 @@ def build_app():
     app.router.add_get("/arturo/ptt/voices", handle_arturo_ptt_voice)
     app.router.add_get("/arturo/ptt/voice", handle_arturo_ptt_voice)
     app.router.add_put("/arturo/ptt/voice", handle_arturo_ptt_voice)
+    app.router.add_get("/arturo/avatars", handle_arturo_avatar)
+    app.router.add_get("/arturo/avatar", handle_arturo_avatar)
+    app.router.add_put("/arturo/avatar", handle_arturo_avatar)
+    app.router.add_delete("/arturo/avatar", handle_arturo_avatar)
+    app.router.add_get("/arturo/assistant/name", handle_arturo_assistant_name)
+    app.router.add_put("/arturo/assistant/name", handle_arturo_assistant_name)
+    app.router.add_delete("/arturo/assistant/name", handle_arturo_assistant_name)
     app.router.add_get("/voice-call", handle_voice_call)
     app.router.add_get("/active-voice-call", handle_active_voice_call)
     app.router.add_get("/voice-calls", handle_voice_calls)

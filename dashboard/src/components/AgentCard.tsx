@@ -1,3 +1,4 @@
+import { sendFromComposer } from '../lib/agentSendFlow';
 import { useState, useEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { VoiceControls } from './agent/VoiceControls';
@@ -745,6 +746,9 @@ export function AgentCard({ agent, onSpawn, onKill, spawning, killing }: AgentCa
                   placeholder="Message"
                   draft={panelDraft}
                   onDraftChange={setPanelDraft}
+                  // The same send as the full agent page (POST /send, held-aware, ack-gated), not
+                  // the legacy /inject, which waited for the agent's reply before clearing the box.
+                  onSend={(payload, opts) => { bumpRecent(agent.id); return sendFromComposer(agent.id, payload, opts); }}
                   // The mic: dictation into this box (Shaw, 2026-10-10: the panel had none). No call
                   // button here; a voice call is Arturo's, not this agent's.
                   trailing={

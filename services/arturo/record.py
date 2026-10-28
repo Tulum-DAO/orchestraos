@@ -2,6 +2,7 @@
 windowing-safe: nothing here loads a full timeline into a live session."""
 
 import time as _time
+from services.arturo import assistant_name as _assistant_name
 
 
 def merge_streams(client_turns, server_tools, surface_events):
@@ -32,7 +33,7 @@ def diarize(merged):
         elif e["_stream"] == "tool":
             out.append(f"[{t}] [tool: {e.get('tool','?')}]")
         else:
-            who = "the operator" if e.get("role") == "user" else "Arturo"
+            who = "the operator" if e.get("role") == "user" else _assistant_name.name()
             out.append(f"[{t}] {who}: {e.get('text','')}")
     return "\n".join(out)
 
@@ -104,6 +105,6 @@ def build_injection_payload(call_id, abs_path, counts, merged, extraction):
     _bucket("DECISIONS", extraction.get("decisions"))
     _bucket("FEEDBACK", extraction.get("feedback"))
     if last_arturo:
-        lines.append("Last Arturo: " + sanitize_summary(last_arturo))
+        lines.append(f"Last {_assistant_name.name()}: " + sanitize_summary(last_arturo))
     lines.append("(full diarized timeline on disk — window it, never full-read)")
     return "\n".join(lines) + "\n" + build_marker(call_id, abs_path)

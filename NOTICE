@@ -32,3 +32,47 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+bbot (bwndapp/bbot on GitHub, commit 93b2080)
+
+The living avatars' eye and lid model (dashboard/src/components/avatar/: lidT /
+lidB / tilt per mood, eyes-only expressions) is adapted from bbot's
+src/expressions.js and src/core.js. The canvas code is written here, not copied.
+
+MIT License
+
+Copyright (c) 2026 bwnd
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+Provider marks (dashboard/src/assets/brand/): trademarks, not covered by this
+project's licence
+
+dashboard/src/assets/brand/ contains the Anthropic Claude spark, the OpenAI
+Blossom, the Google Gemini sparkle and the xAI Grok mark. They are trademarks of
+Anthropic PBC, OpenAI, Google LLC and xAI, and they belong to those owners. They
+are not licensed under this project's licence or the MIT licences above. They
+are included only to identify the AI provider that powers an agent (nominative
+use). They do not imply endorsement. Use them unmodified and follow each owner's
+brand guidelines. Sources are listed in
+dashboard/src/assets/brand/README.md.
