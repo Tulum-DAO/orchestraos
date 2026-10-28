@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { writeFileSync, mkdirSync, existsSync, appendFileSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { execFileSync } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
 import { getRegistry, getAllAgentStates, getInboxCounts } from '../services/state-reader.js';
 import { registeredAgent, promptPathFor, inboxDirFor, isSafeAgentId } from '../lib/agentPaths.js';
 
@@ -23,6 +23,9 @@ import { resolveSpecialKey } from '../lib/special-keys.js';
 import { actingAgent, principal } from '../lib/principal.js';
 import { agentScopeParam, canPrincipalSeeAgent } from '../lib/agent-scope.js';
 import { CODE_ROOT } from '../lib/codeRoot.js';
+import { decorateIdentity, readSeatNames } from '../lib/agentIdentity.js';
+import { readPins, writePins, cleanPins } from '../lib/agentPins.js';
+import { getProjectsKnowledge } from '../services/state-reader.js';
 import { gatewayUrl } from '../lib/gateway-url.js';
 import { gatewayChips } from '../lib/gatewayChips.js';
 import { sessionFor, held, deliverNow, defaultDeliverNowDeps } from '../lib/deliverNow.js';
@@ -420,6 +423,19 @@ router.get('/', async (_req: Request, res: Response) => {
       if (c) (a as any).chip = c;
     }
 
+    // Each agent's project (projects.json, inherited up reports_to), its name and full name ("Demo · dev"), and when
+    // it last sent or got a message, for the sidebar's project groups and their order (lib/agentIdentity.ts).
+    try {
+      const { queryDb } = await import('../lib/db.js');
+      const last = queryDb<{ a: string; t: string }>(
+        'SELECT a, MAX(t) AS t FROM (SELECT from_agent AS a, created_at AS t FROM messages '
+        + 'UNION ALL SELECT to_agent AS a, created_at AS t FROM messages) GROUP BY a');
+      decorateIdentity(visibleAgents as any, {
+        knowledge: getProjectsKnowledge(), names: readSeatNames(dataDir()),
+        lastMessage: new Map(last.map((r) => [r.a, r.t])), registry: agentDefs as any,
+      });
+    } catch (e) { console.error(`[agents] identity decoration skipped: ${e}`); }
+
     const visibleOnline = visibleAgents.filter((a) => a.tmux_alive).length;
 
     res.json({
@@ -441,6 +457,39 @@ router.get('/', async (_req: Request, res: Response) => {
 router.get('/:id/generations', (req: Request, res: Response) => {
   const rows = getGenerations(req.params.id as string);
   res.json({ generations: rows ?? [] });
+});
+
+// GET/PUT /api/agents/pins — the faces pinned at the top of the sidebar's agent list, saved per person on the
+// server (lib/agentPins.ts), so they follow you across devices the way saved looks do.
+router.get('/pins', (req: Request, res: Response) => {
+  const who = principal(req)?.username;
+  if (!who) { res.status(401).json({ ok: false, error: 'no identity' }); return; }
+  res.json({ ok: true, pins: readPins(dataDir(), who) });
+});
+router.put('/pins', (req: Request, res: Response) => {
+  const who = principal(req)?.username;
+  if (!who) { res.status(401).json({ ok: false, error: 'no identity' }); return; }
+  const pins = cleanPins(req.body?.pins);
+  if (!pins) { res.status(400).json({ ok: false, error: 'pins must be a list of agent ids' }); return; }
+  writePins(dataDir(), who, pins);
+  res.json({ ok: true, pins });
+});
+
+// PUT /api/agents/:id/name {name} — rename an agent (scripts/identity_store/seat_names.py: names unique per project,
+// old names kept as aliases forever, ids never change). Anyone on the account may rename; the refusal reason comes
+// back as written ("'dev' is already the name of dev-demo ...").
+router.put('/:id/name', (req: Request, res: Response) => {
+  const id = req.params.id;
+  const name = req.body?.name;
+  if (!isSafeAgentId(id)) { res.status(400).json({ ok: false, error: 'bad agent id' }); return; }
+  if (typeof name !== 'string' || !name.trim() || name.length > 60) { res.status(400).json({ ok: false, error: 'name required' }); return; }
+  execFile('python3', ['-m', 'scripts.identity_store.seat_names', 'set', id, name, '--by', 'dashboard'],
+    { timeout: 15000, cwd: CODE_ROOT, env: { ...process.env, ORCHESTRA_DIR: dataDir() } }, (err, stdout) => {
+      let out: any = null;
+      try { out = JSON.parse(String(stdout || '').trim().split('\n').pop() || 'null'); } catch { out = null; }
+      if (out && typeof out === 'object') { res.status(out.ok ? 200 : 409).json(out); return; }
+      res.status(500).json({ ok: false, error: err ? String(err.message || err).slice(0, 300) : 'no answer from rename' });
+    });
 });
 
 router.get('/:id', async (req: Request, res: Response) => {
@@ -491,6 +540,31 @@ router.post('/:id/spawn', async (req: Request, res: Response) => {
   } catch (err) {
     res.status(500).json({ error: 'Spawn failed', detail: String(err) });
   }
+});
+
+// POST /api/agents/:id/revive  {mode?: 'auto' | 'resume' | 'fresh'}
+// Bring a dead agent back (scripts/revive_agent.py): resume reopens its last session where it left off (only when
+// that session still exists); fresh starts its next generation with a briefing on what it last did; auto (the
+// default, the Resume button) resumes when it can, else starts fresh. Answers once Claude is running in its pane,
+// a few seconds; the rest of the spawn finishes in the background. A retired agent has no registry row, so the id
+// is checked for safety, not against the registry; the script decides whether it exists.
+export function reviveArgv(id: unknown, mode: unknown): string[] | { error: string } {
+  if (!isSafeAgentId(id)) return { error: 'bad agent id' };
+  const m = mode === undefined || mode === null || mode === '' ? 'auto' : mode;
+  if (m !== 'auto' && m !== 'resume' && m !== 'fresh') return { error: 'mode must be auto, resume or fresh' };
+  return [join(CODE_ROOT, 'scripts', 'revive_agent.py'), id, '--mode', m];
+}
+
+router.post('/:id/revive', (req: Request, res: Response) => {
+  const argv = reviveArgv(req.params.id, req.body?.mode);
+  if (!Array.isArray(argv)) { res.status(400).json({ ok: false, error: argv.error }); return; }
+  execFile('python3', argv, { timeout: 30000, cwd: CODE_ROOT, env: { ...process.env, ORCHESTRA_DIR: dataDir() } },
+    (err, stdout) => {
+      let out: any = null;
+      try { out = JSON.parse(String(stdout || '').trim().split('\n').pop() || 'null'); } catch { out = null; }
+      if (out && typeof out === 'object') { res.status(out.ok ? 200 : 409).json(out); return; }
+      res.status(500).json({ ok: false, error: err ? String(err.message || err).slice(0, 300) : 'no answer from revive' });
+    });
 });
 
 // POST /api/agents/:id/kill
@@ -654,14 +728,14 @@ export function menuExpectOf(raw: unknown): MenuExpect | null | 'bad' {
   return { question, context: (context as string | null | undefined) ?? '' };
 }
 
-async function gatewayKey(session: string, key: string, confirm: boolean, expect: MenuExpect | null):
-    Promise<{ status: number; body: any }> {
+async function gatewayKey(session: string, key: string, confirm: boolean, expect: MenuExpect | null,
+                          answer?: 'dismiss'): Promise<{ status: number; body: any }> {
   const token = readGatewayToken();
   if (!token) throw new Error('gateway token unavailable');
   const resp = await fetch(`${GATEWAY_URL}/agent-key`, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(expect ? { session, key, confirm, expect } : { session, key, confirm }),
+    body: JSON.stringify({ session, key, confirm, ...(expect ? { expect } : {}), ...(answer ? { answer } : {}) }),
     signal: AbortSignal.timeout(10000),
   });
   const body: any = await resp.json().catch(() => ({}));
@@ -892,7 +966,9 @@ router.post('/:id/inject-raw', (req: Request, res: Response) => {
 // web card mirrors iOS (428 needs_confirm, 409 menu gone, 403 key not enabled).
 router.post('/:id/agent-key', async (req: Request, res: Response) => {
   const { key, confirm } = req.body || {};
-  if (!key) { res.status(400).json({ error: 'key required' }); return; }
+  // answer:"dismiss" refuses the menu (the gateway presses Escape on the checked menu); it carries no key.
+  const dismiss = (req.body || {}).answer === 'dismiss';
+  if (!key && !dismiss) { res.status(400).json({ error: 'key required' }); return; }
   const expect = menuExpectOf((req.body || {}).expect);
   if (expect === 'bad') { res.status(400).json({ error: 'expect must be {question, context?} strings' }); return; }
 
@@ -917,10 +993,106 @@ router.post('/:id/agent-key', async (req: Request, res: Response) => {
   }
 
   try {
-    const r = await gatewayKey(session, String(key), !!confirm, expect);
+    const r = await gatewayKey(session, dismiss ? '' : String(key), !!confirm, expect, dismiss ? 'dismiss' : undefined);
     res.status(r.status).json(r.body);
   } catch (err: any) {
     res.status(502).json({ ok: false, error: 'gateway unreachable', detail: err.message });
+  }
+});
+
+// GET /api/agents/:id/decisions — the approval cards this agent filed, pending AND answered, so its chat can
+// show each one as a bubble under the message it belongs to, and keep it (answered) as part of the history.
+// Read-only. Mirrors of the agent's own on-screen CLI menus (menu_bridge rows, op_key "menu:...") are left
+// out: the pinned menu card owns those while they are up. Once one is answered or dismissed, the gateway's
+// record of it (state/menu-answers.jsonl) comes back here as a one-line `menu_answer` entry, so the chat
+// keeps what was asked and what was chosen. Cards (and menu lines) from before the agent's current
+// generation began are left out: after a rotation or a fresh session the chat no longer holds the
+// conversation they belonged to, so they live on the Approvals page instead of being pinned at the top
+// of the successor's chat. `generation_started_at` says where that line is. Answering cards goes through the existing
+// /api/approvals/unified/:id/{approve,deny,answer} routes, which stamp who answered and where.
+export function decisionStatus(row: { status?: string | null; expires_at?: string | null; retired_at?: string | null;
+                                      superseded_by?: string | null }, _now = Date.now()): string {
+  const s = String(row.status || 'pending');
+  if (row.superseded_by) return 'superseded';
+  if (row.retired_at || s === 'retired' || s === 'discarded') return 'withdrawn';
+  // A card stays open until someone answers it: expires_at is still stored, but the expiry sweep is off by
+  // default (approval.py expire-sweep does nothing unless EXPIRE_PENDING=1), so a pending card past its
+  // expires_at is still waiting, exactly as "Needs you", the bell and the Approvals page count it. Showing it
+  // as expired would tell the person a question is gone that the agent is in fact still blocked on. Only a
+  // card the sweep actually expired reads as expired.
+  if (s === 'pending') return 'pending';
+  if (s === 'expired') return 'expired';
+  if (s === 'resumed' || s === 'answered' || s === 'approved' || s === 'denied' || s === 'rejected') return 'answered';
+  return s;
+}
+
+/** The gateway's answered/dismissed menu records for one tmux session, as one-line decision entries. */
+export function menuAnswerDecisions(lines: string[], session: string, agent: string, sinceMs: number): any[] {
+  const out: any[] = [];
+  lines.forEach((line, i) => {
+    let r: any;
+    try { r = JSON.parse(line); } catch { return; }
+    if (!r || r.session !== session || typeof r.at !== 'string' || !(Date.parse(r.at) >= sinceMs)) return;
+    out.push({
+      id: `menu-answer-${Date.parse(r.at)}-${i}`, from_agent: agent, kind: 'menu_answer', state: 'answered',
+      question: String(r.question || ''), summary: null, options: [],
+      menu: r.option_n ? { options: [{ n: String(r.option_n), label: String(r.label || '') }] } : null,
+      risk_level: null, reversibility: null, answer: r.dismissed ? 'dismiss' : 'answer',
+      answer_text: r.text || null, option_n: r.option_n ? String(r.option_n) : null,
+      answered_by: r.by || null, answer_surface: null, answer_device: null,
+      created_at: r.at, answered_at: r.at, expires_at: null,
+    });
+  });
+  return out.slice(-100);
+}
+
+/** Whether an ANSWERED card's answer has reached its agent: 'delivered' once the approval loop put it
+ *  in the agent's pane (resumed_at), 'held' while it is recorded but still waiting to be delivered
+ *  (the agent busy, or no live head yet), null for a card that is not answered. */
+export function decisionDelivery(row: { status?: string | null; resumed_at?: string | null }): 'held' | 'delivered' | null {
+  const s = String(row.status || '');
+  if (row.resumed_at || s === 'resumed') return 'delivered';
+  if (s === 'answered' || s === 'approved' || s === 'denied') return 'held';
+  return null;
+}
+
+router.get('/:id/decisions', async (req: Request, res: Response) => {
+  // Loaded here, not at the top: lib/db opens tasks.db on import, and this router is imported by tests.
+  const { queryDb } = await import('../lib/db.js');
+  const { currentGenerationStart, beforeGeneration } = await import('../services/generation-start.js');
+  const id = String(req.params.id);
+  const registry = getRegistry() as any;
+  const seat = registry?.agents?.[id] ? id : id.replace(/^unregistered:/, '');
+  try {
+    const rows = queryDb(
+      `SELECT id, from_agent, kind, status, question, summary, options, menu, risk_level, reversibility, answer,
+              answer_text, option_n, answered_by, answer_surface, answer_device, created_at, answered_at,
+              expires_at, retired_at, superseded_by, resumed_at, resume_acked_at
+         FROM approval_requests
+        WHERE from_agent = ? AND (op_key IS NULL OR op_key NOT LIKE 'menu:%') AND COALESCE(origin, '') != 'menu_bridge'
+          AND created_at >= ?
+        ORDER BY created_at DESC LIMIT 100`,
+      [seat, new Date(Date.now() - 60 * 86400_000).toISOString()]) as any[];
+    const now = Date.now();
+    const decisions = rows.reverse().map((r) => {
+      let options: unknown = [];
+      let menu: unknown = null;
+      try { options = JSON.parse(r.options || '[]'); } catch { options = []; }
+      try { menu = r.menu ? JSON.parse(r.menu) : null; } catch { menu = null; }
+      return { ...r, options, menu, state: decisionStatus(r, now), delivery: decisionDelivery(r) };
+    });
+    let answered: any[] = [];
+    try {
+      const session = (registry?.agents?.[seat]?.tmux_session as string) || seat;
+      const log = readFileSync(join(dataDir(), 'state', 'menu-answers.jsonl'), 'utf-8').split('\n').filter(Boolean);
+      answered = menuAnswerDecisions(log, session, seat, now - 60 * 86400_000);
+    } catch { /* no menu answered yet */ }
+    let started: string | null = null;
+    try { started = currentGenerationStart(seat); } catch { started = null; }
+    const current = [...decisions, ...answered].filter((d) => !beforeGeneration(d.created_at, started));
+    res.json({ agent: seat, generation_started_at: started, decisions: current });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to read decisions', detail: String(err?.message || err) });
   }
 });
 

@@ -16,6 +16,8 @@ Two deliberate refusals in here:
 """
 import json
 
+from . import settings as S
+
 
 def qr_text_or_none(payload, encoder):
     """Render the payload as a terminal QR, or None when nothing here can. Never fabricates
@@ -110,11 +112,12 @@ def run_pair(args, settings=None, store=None, out=print, clear_after_s=60):
         out("")
         out("  read     see approvals, agents, transcripts, sent photos/files  (a viewer)")
         out("  approve  ANSWER approvals and questionnaires            (acts as you)")
-        out("  message  send a message to an agent, upload a file, type to Arturo  (each typed turn spends provider credit)")
+        who = S.assistant_name()
+        out(f"  message  send a message to an agent, upload a file, type to {who}  (each typed turn spends provider credit)")
         out("  inject   press keys into a live agent pane")
         out("  voice    Live voice mode and dictation, audio only  (every call spends provider credit)")
-        out("  ptt      push-to-talk to Arturo from a headset or Watch  (lookups and seat messages only)")
-        out("  owner    this device is yours: its push-to-talk calls (with ptt) get Arturo's full tools, like the dashboard")
+        out(f"  ptt      push-to-talk to {who} from a headset or Watch  (lookups and seat messages only)")
+        out(f"  owner    this device is yours: its push-to-talk calls (with ptt) get {who}'s full tools, like the dashboard")
         out("  admin    file red-alert reports, post telemetry")
         out("  usage    nothing yet: reserved for reading usage later, so a device paired now needs no re-pair")
         out("  code     open files in the working folders of agents you allowlisted ([code] roots), secrets refused")

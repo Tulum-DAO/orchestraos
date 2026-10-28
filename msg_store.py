@@ -452,6 +452,55 @@ def _addressability_verdict(target: str):
         return None
 
 
+class UnknownRecipient(UnaddressableTarget):
+    """No agent has ever had that id or name. Refused at once with the closest names, so the sending agent can
+    fix the address now instead of the message waiting silently for nobody."""
+
+
+
+
+class AmbiguousRecipient(UnknownRecipient):
+    """A name more than one agent has (names are unique per project, so two projects can each have a "dev").
+    Refused at once with each one's full name and id: an agent addresses another exactly."""
+
+
+def _unknown_refusal_armed() -> bool:
+    """The never-existed refusal is switched on per install by creating state/unknown-recipient-refuse.flag (or
+    UNKNOWN_RECIPIENT_REFUSE=1); UNKNOWN_RECIPIENT_REFUSE=0 or the addressability kill file turn it off."""
+    if ADDRESSABILITY_KILL_FILE.exists():
+        return False
+    env = os.environ.get("UNKNOWN_RECIPIENT_REFUSE", "").strip().lower()
+    if env in ("0", "false", "no", "off"):
+        return False
+    if env in ("1", "true", "yes", "on"):
+        return True
+    return (Path(ORCHESTRA_DIR) / "state" / "unknown-recipient-refuse.flag").exists()
+
+
+def _seat_keys() -> set:
+    """Every exact seat id the registry and session files know: a send to one of these needs no resolving."""
+    keys = set()
+    for path, pick in ((ORCHESTRA_DIR / "registry.json", lambda d: d.get("agents") or {}),
+                       (ORCHESTRA_DIR / "state" / "agent-sessions.json", lambda d: d)):
+        try:
+            keys |= {k for k in (pick(json.loads(path.read_text())) or {}) if not k.startswith("_")}
+        except (OSError, ValueError, AttributeError):
+            pass
+    return keys
+
+
+def _seat_resolution(target: str):
+    """What an agent's address names (scripts/identity_store/seat_resolve.py, agents EXACT: an id, or a name or
+    old name as written). None = unavailable or disabled -> behave exactly as before (fail open)."""
+    if ADDRESSABILITY_KILL_FILE.exists():
+        return None
+    try:
+        from scripts.identity_store.seat_resolve import AGENT, load_directory, resolve
+        return resolve(target, load_directory(ORCHESTRA_DIR), AGENT)
+    except Exception:      # noqa: BLE001 — fail OPEN, never block a send
+        return None
+
+
 class HeldAckRefused(RuntimeError):
     """Someone tried to ack an UNDELIVERED held_message. See MessageStore.acknowledge."""
 
@@ -617,6 +666,26 @@ class MessageStore:
         initiative/node/mission ref, riding metadata (additive; router lint is
         flag-only and lives router-side)."""
         msg_id = msg_id or _gen_id()
+        self.last_send_note = None
+        # Seat names: an agent may be addressed by its id, its current name or an old name (exactly). A name is
+        # turned into the id HERE, before anything is keyed on it, so the row, the conversation and the router
+        # all see the id and a rename never splits a thread. An exact id skips this (the common case, no cost).
+        _res = None
+        if isinstance(to_agent, str) and to_agent and to_agent not in _seat_keys():
+            _res = _seat_resolution(to_agent)
+            _seat = (_res or {}).get("seat") or {}
+            if _res and _res.get("kind") == "ambiguous" and not allow_unaddressable:
+                _opts = "; ".join(f"{o['full_name']} ({o['id']})" for o in _res.get("options") or [])
+                _addressability_log(f"[ambiguous-recipient] REFUSED {from_agent} -> {to_agent} (msg={msg_id}): {_opts}")
+                raise AmbiguousRecipient(
+                    f"AMBIGUOUS: more than one agent is called {to_agent!r}: {_opts}. Nothing was sent. Use the full "
+                    f"name or the id.")
+            if _res and _res["kind"] in ("deliver", "dead") and _seat.get("via") in ("name", "alias", "full") \
+                    and _seat["id"] != to_agent:
+                metadata = dict(metadata) if metadata else {}
+                metadata["addressed_as"] = to_agent
+                _addressability_log(f"[seat-name] {msg_id}: {to_agent!r} is {_seat['id']} ({_seat['via']})")
+                to_agent = _seat["id"]
         if not conversation_id:
             conversation_id = f"conv_{hashlib.md5(f'{from_agent}:{to_agent}:{task_id or subject or msg_id}'.encode()).hexdigest()[:12]}"
 
@@ -695,6 +764,32 @@ class MessageStore:
             _verdict = _addressability_verdict(to_agent)
         except Exception:      # noqa: BLE001 — fail OPEN, never block a send
             _verdict = None
+        # No agent has EVER had this address (no row, no session, no pane, no name): refused now, with the
+        # closest names, rather than queued for nobody. Only on positive evidence of absence (the classifier's
+        # "none" source AND the name resolver agree); any doubt, error or override still sends.
+        if (_verdict and _verdict.get("kind") == "unknown" and _verdict.get("source") == "none"
+                and _res and _res.get("kind") == "unknown" and not allow_unaddressable and _unknown_refusal_armed()):
+            _close = ", ".join(f"{s['name']} ({s['id']})" if s["name"] != s["id"] else s["id"]
+                               for s in _res.get("did_you_mean") or [])
+            _addressability_log(f"[unknown-recipient] REFUSED {from_agent} -> {to_agent} (msg={msg_id})"
+                                f"{' did_you_mean=' + _close if _close else ''}")
+            raise UnknownRecipient(
+                f"NO SUCH AGENT: no agent has ever had the id or name {to_agent!r}. Nothing was sent."
+                + (f" Did you mean: {_close}? Use the id exactly." if _close else
+                   " Check the id (orchestra seats lists them); if a person asked for this agent, ask them whether "
+                   "to create it."))
+        # An agent that exists but is not running (no pane, or its Claude has crashed): the row is written as
+        # before and the router delivers it if the agent comes back; the sender is told, not left guessing.
+        _dead = None
+        if _res and _res.get("kind") == "dead":
+            _dead = _res["seat"]
+        elif _verdict and _verdict.get("kind") == "agent" and not _verdict.get("live_claude") \
+                and _verdict.get("source") not in ("error",):
+            _dead = {"id": to_agent, "name": to_agent}
+        if _dead:
+            self.last_send_note = (f"{to_agent} is not running right now. The message is kept for 48 hours and "
+                                   f"delivered if it is revived before then; if this is urgent, tell your parent "
+                                   f"or the person you work for that {to_agent} needs reviving.")
         if _verdict and _verdict.get("disposition") != "deliver":
             _kind = _verdict.get("kind")
             _disp = _verdict.get("disposition")
@@ -2019,14 +2114,21 @@ def main():
         if args.subject_file is not None:
             subject = _from_file(args.subject_file, args.subject, "subject")
 
-        msg_id = store.send(
-            from_agent=args.from_agent, to_agent=args.to_agent,
-            type=args.type, subject=subject, body=body,
-            priority=args.priority, task_id=args.task_id, source=args.source,
-            closes_thread=args.closes_thread,
-            reason=args.reason, contributes_to=args.contributes_to
-        )
-        print(json.dumps({"sent": True, "id": msg_id}))
+        try:
+            msg_id = store.send(
+                from_agent=args.from_agent, to_agent=args.to_agent,
+                type=args.type, subject=subject, body=body,
+                priority=args.priority, task_id=args.task_id, source=args.source,
+                closes_thread=args.closes_thread,
+                reason=args.reason, contributes_to=args.contributes_to
+            )
+        except UnknownRecipient as e:
+            print(json.dumps({"sent": False, "error": str(e)}))
+            sys.exit(2)
+        out = {"sent": True, "id": msg_id}
+        if getattr(store, "last_send_note", None):
+            out["note"] = store.last_send_note
+        print(json.dumps(out))
 
     elif args.command == "dispose":
         try:

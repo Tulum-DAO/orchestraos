@@ -21,6 +21,11 @@
 const MACHINE_OPENERS: RegExp[] = [
   /^\[MSG from /,                 // agent mail delivered into the pane
   /^\[APPROVAL RESOLVED /,        // a card answer relayed by the approval loop
+  /^\[DECISION ANSWERED /,        // a menu-card answer relayed by the approval loop
+  /^\[MULTI-PART DECISION ANSWERED /,
+  /^\[HUMAN-TASK /,               // a human task the operator closed
+  /^\[questionnaire-answers /,    // a submitted questionnaire relayed to its author
+  /^\[questionnaire-discarded /,
   /^Stop hook feedback:/,
   /^\[QUEUE-DIGEST\]/,
   /^\[LINEAGE/,
@@ -33,6 +38,49 @@ const MACHINE_OPENERS: RegExp[] = [
 const NOTIFICATION = /^<task-notification>/;
 
 export type OpenerKind = 'person' | 'notification' | 'machine';
+
+/**
+ * WHAT a machine-written user-role line is, stamped by the server as `machine` on the item so the
+ * web, iOS and the Mac all draw it the same way instead of each guessing from the text. These lines
+ * reach the pane as ordinary typed input (the approval loop, the message router and the harness type
+ * them in), so the log alone records them exactly like the operator's own words; the grammars below
+ * are the emitters' own (approval_resume.py, questionnaire_resume.py, message-router.py), not
+ * guesses. Absent = the operator's own message.
+ *   decision       [DECISION ANSWERED <id>]       a decision card's answer
+ *   questionnaire  [MULTI-PART DECISION ANSWERED] / [questionnaire-answers|-discarded <id>]
+ *   approval       [APPROVAL RESOLVED <id>]       an approve/deny card's answer
+ *   human_task     [HUMAN-TASK <id>]              a human task closed
+ *   relay          [MSG from <agent> | <prio>]    another agent's message
+ *   task           <task-notification>            a background job finished
+ *   system         every other harness line (hooks, lineage, slash-command output, ...)
+ */
+export type MachineKind = 'decision' | 'questionnaire' | 'approval' | 'human_task' | 'relay' | 'task' | 'system';
+
+export function machineKind(text: unknown): MachineKind | null {
+  const t = String(text ?? '').trimStart();
+  if (t.startsWith('[DECISION ANSWERED ')) return 'decision';
+  if (t.startsWith('[MULTI-PART DECISION ANSWERED ') || t.startsWith('[questionnaire-answers ')
+      || t.startsWith('[questionnaire-discarded ')) return 'questionnaire';
+  if (t.startsWith('[APPROVAL RESOLVED ')) return 'approval';
+  if (t.startsWith('[HUMAN-TASK ')) return 'human_task';
+  if (t.startsWith('[MSG from ')) return 'relay';
+  if (NOTIFICATION.test(t)) return 'task';
+  if (MACHINE_OPENERS.some((re) => re.test(t))) return 'system';
+  return null;
+}
+
+/** Stamp `machine` on a user-role text item (and on queued-batch entries), in place. */
+function stampMachine(it: any): void {
+  if (it?.kind === 'text' && it.role === 'user' && !it.is_system) {
+    const k = machineKind(it.text);
+    if (k) it.machine = k;
+  } else if (it?.kind === 'queued_batch' && Array.isArray(it.entries)) {
+    for (const e of it.entries) {
+      const k = machineKind(e?.body);
+      if (k && e) e.machine = k;
+    }
+  }
+}
 
 /** What opened a turn, from its opening user-role text item. */
 export function openerKind(it: any): OpenerKind {
@@ -59,6 +107,7 @@ export function tagAudience(items: any[]): any[] {
     items[i].audience = 'agent';
     i++;
   }
+  for (const it of items) stampMachine(it);
   while (i < items.length) {
     const opener = items[i];
     const kind = openerKind(opener);
@@ -102,6 +151,7 @@ export function tagAudience(items: any[]): any[] {
 export function tagSynthetics(items: any[]): any[] {
   let exchange: string | undefined;
   for (const it of items) {
+    stampMachine(it);
     if (it.kind === 'rotation') { exchange = undefined; continue; }   // a new generation: no strip spans it
     if (it.audience === undefined) {
       if (it.kind === 'text' && it.role === 'user' && it.queued) {

@@ -175,6 +175,9 @@ export const getAdaptiveAgents = (userId: string = operatorUserId()) =>
   get<{ agent_id: string; score: number; signals: Record<string, number> }[]>(`/adaptive/${userId}/agents`);
 
 export const spawnAgent = (id: string, task?: string) => post(`/agents/${id}/spawn`, task ? { task } : undefined);
+/** Bring a dead agent back: resume its last session where it left off when it can, else start it fresh as its
+ *  next generation (with a briefing on what it last did). Answers once it is running. */
+export const reviveAgent = (id: string, mode: 'auto' | 'resume' | 'fresh' = 'auto') => post(`/agents/${id}/revive`, { mode });
 export const killAgent = (id: string) => post(`/agents/${id}/kill`);
 // messageAgent() DELETED 2026-09-30. It posted to /api/agents/:id/message, which wrote a
 // file into queue/inbox/ that no live agent reads, and returned {sent:true} — so the UI
@@ -235,6 +238,19 @@ export async function sendAgentKey(id: string, key: string, confirm: boolean,
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(expect ? { key, confirm, expect } : { key, confirm }),
+  });
+  let body: Record<string, unknown> = {};
+  try { body = await res.json(); } catch { /* non-json */ }
+  return { status: res.status, ...body } as AgentKeyResult;
+}
+
+/** Refuse to answer an agent's own menu: the gateway presses Escape, only on the menu `expect` names. Same
+ *  two-phase statuses as sendAgentKey (200 dismissed; 409 menu gone / replaced; 428 needs confirm). */
+export async function dismissAgentMenu(id: string, expect: MenuExpect): Promise<AgentKeyResult> {
+  const res = await fetch(`${BASE}/agents/${encodeURIComponent(id)}/agent-key`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ answer: 'dismiss', confirm: true, expect }),
   });
   let body: Record<string, unknown> = {};
   try { body = await res.json(); } catch { /* non-json */ }

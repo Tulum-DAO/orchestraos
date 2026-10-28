@@ -915,6 +915,13 @@ spawn_agent() {
     python3 "$SCRIPT_DIR/scripts/lineage_daemon/spawn_pipe_attach.py" "$tmux_name" \
         >/dev/null 2>&1 || warn "  Telemetry: pipe-pane attach skipped for '$tmux_name'"
 
+    # A fresh successor (scripts/fresh_successor.py) brings its own short first prompt: who it is, its role
+    # prompt, one line on what its predecessor was last doing, and that a briefing is on its way. Keeps the
+    # successor's first turn quick; the briefing arrives in the background.
+    if [ -n "${FRESH_INIT_PROMPT_FILE:-}" ] && [ -s "$FRESH_INIT_PROMPT_FILE" ]; then
+        init_prompt="$(cat "$FRESH_INIT_PROMPT_FILE")"
+    fi
+
     # Write init prompt to file (avoids shell escaping issues with long prompts)
     local init_file="/tmp/agent-init-${agent_id}.md"
     echo "$init_prompt" > "$init_file"

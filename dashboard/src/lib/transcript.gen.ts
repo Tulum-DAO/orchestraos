@@ -22,6 +22,7 @@ export interface TextItem {
   text: string;
   is_system?: boolean;
   queued?: boolean;
+  machine?: 'decision' | 'questionnaire' | 'approval' | 'human_task' | 'relay' | 'task' | 'system';
   model?: string;
   usage?: TokenUsage;
   ts?: string;
@@ -79,6 +80,7 @@ export interface BatchEntry {
   agent: string;
   sent_ts: string;
   body: string;
+  machine?: 'decision' | 'questionnaire' | 'approval' | 'human_task' | 'relay' | 'task' | 'system';
 }
 
 export interface QueuedBatchItem {
@@ -119,6 +121,7 @@ export interface RenderUser {
   text: string;
   is_system?: boolean;
   queued?: boolean;
+  machine?: 'decision' | 'questionnaire' | 'approval' | 'human_task' | 'relay' | 'task' | 'system';
   ts?: string;
   key: string;
 }

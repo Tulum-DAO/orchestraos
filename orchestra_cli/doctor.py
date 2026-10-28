@@ -18,6 +18,7 @@ from typing import Callable, Optional
 
 from . import runtime_probe as RP
 from .settings import Settings, missing_required
+from . import settings as S
 
 OK, MISSING, WARN, INFO = "OK", "MISSING", "WARN", "INFO"
 ROTATION_TIERS = ("T2",)              # cron_beat.ARMED_TIERS — wave-1 armed tier
@@ -397,7 +398,7 @@ def run_doctor(st: Settings, probes: DoctorProbes) -> list:
                 checks.append(Check("arturo:brain", OK, f"api (GEMINI_API_KEY set) — brain={st.arturo_brain}"))
             else:
                 checks.append(Check("arturo:brain", WARN, f"none — brain={st.arturo_brain}: {getattr(b, 'reason', '')[:90]}",
-                                    "Log in to one CLI (claude / codex / agy) or export GEMINI_API_KEY; Arturo still boots, text-only, and answers with this fix"))
+                                    f"Log in to one CLI (claude / codex / agy) or export GEMINI_API_KEY; {S.assistant_name()} still boots, text-only, and answers with this fix"))
         except Exception as e:  # noqa: BLE001
             checks.append(Check("arturo:brain", WARN, f"selection unavailable: {e}"))
         # The post-call webhook refuses unsigned pushes by default (R3, gm): no secret = transcripts stop. Loud.
