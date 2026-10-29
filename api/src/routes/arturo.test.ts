@@ -406,25 +406,16 @@ test('PUT /ptt/voice: an admin may change the voice', async () => {
   assert.deepEqual(deps.urls, [`${GATEWAY_URL}/arturo/ptt/voice`]);
 });
 
-test('PUT /ptt/voice: anyone else is refused with a plain reason, before the gateway', async () => {
+test('PUT /ptt/voice: anyone may change it for now, not only an admin', async () => {
   const deps = makeDeps({ isAdmin: () => false });
   const r = await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar' });
-  assert.equal(r.status, 403);
-  assert.deepEqual(r.json, { ok: false, error: "Only an admin can change the assistant's voice" });
-  assert.deepEqual(deps.urls, []);
-});
-
-test('the voice reads stay open to a non-admin', async () => {
-  const deps = makeDeps({ isAdmin: () => false });
-  for (const path of ['/api/arturo/ptt/vendor', '/api/arturo/ptt/voices?vendor=openai', '/api/arturo/ptt/voice?vendor=openai']) {
-    assert.equal((await get(deps, path)).status, 200);
-  }
-  assert.equal(deps.urls.length, 3);
+  assert.equal(r.status, 200);
+  assert.deepEqual(deps.urls, [`${GATEWAY_URL}/arturo/ptt/voice`]);
 });
 
 test("an agent's own voice: the id is passed on, checked; DELETE puts it back on the install's voice", async () => {
   const seen: { url: string; method: string; body?: string }[] = [];
-  const deps = makeDeps({ isAdmin: () => true, fetchJson: async (url: string, init: RequestInit) => {
+  const deps = makeDeps({ fetchJson: async (url: string, init: RequestInit) => {
     seen.push({ url, method: String(init.method), body: init.body ? String(init.body) : undefined });
     return { status: 200, body: { ok: true } };
   } });
@@ -440,28 +431,26 @@ test("an agent's own voice: the id is passed on, checked; DELETE puts it back on
   assert.equal((await send(deps, 'DELETE', '/api/arturo/ptt/voice?vendor=openai')).status, 400);   // no agent: nothing to clear
   assert.equal(seen.length, 3);
 });
-test('an agent\'s own voice: anyone else is refused a PUT or a DELETE before the gateway', async () => {
+
+test('the voice reads stay open to a non-admin', async () => {
   const deps = makeDeps({ isAdmin: () => false });
-  assert.equal((await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar', agent: 'dev-demo' })).status, 403);
-  assert.equal((await send(deps, 'DELETE', '/api/arturo/ptt/voice?vendor=openai&agent=dev-demo')).status, 403);
-  assert.deepEqual(deps.urls, []);
+  for (const path of ['/api/arturo/ptt/vendor', '/api/arturo/ptt/voices?vendor=openai', '/api/arturo/ptt/voice?vendor=openai']) {
+    assert.equal((await get(deps, path)).status, 200);
+  }
+  assert.equal(deps.urls.length, 3);
 });
 
-test('the real role check decides when an authenticating proxy names the caller', async () => {
+test('whatever role an authenticating proxy names, the voice can be changed', async () => {
   const before = process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS;
   process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS = '1';
   try {
     const deps = makeDeps();                                    // no injected check: the real one
-    const viewer = await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar' },
-      { 'x-orchestra-user': 'demo-user', 'x-orchestra-role': 'viewer' });
-    assert.equal(viewer.status, 403);
-    const noRole = await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar' },
-      { 'x-orchestra-user': 'demo-user' });
-    assert.equal(noRole.status, 403);                           // no role is never an admin
-    assert.deepEqual(deps.urls, []);
-    const admin = await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar' },
-      { 'x-orchestra-user': 'demo-admin', 'x-orchestra-role': 'admin' });
-    assert.equal(admin.status, 200);
+    const callers: Record<string, string>[] = [{ 'x-orchestra-user': 'demo-user', 'x-orchestra-role': 'viewer' },
+      { 'x-orchestra-user': 'demo-user' }, { 'x-orchestra-user': 'demo-admin', 'x-orchestra-role': 'admin' }];
+    for (const headers of callers) {
+      assert.equal((await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar' }, headers)).status, 200);
+    }
+    assert.equal(deps.urls.length, 3);
   } finally {
     if (before === undefined) delete process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS;
     else process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS = before;
@@ -521,14 +510,11 @@ test('an admin may reset a look', async () => {
   assert.deepEqual(deps.urls, [`${GATEWAY_URL}/arturo/avatar?agent=arturo`]);
 });
 
-test('anyone else is refused a PUT or a DELETE before the gateway', async () => {
+test('anyone may change or reset a look for now, not only an admin', async () => {
   const deps = makeDeps({ isAdmin: () => false });
-  const put = await send(deps, 'PUT', '/api/arturo/avatar', { agent: 'arturo', shape: 'heart' });
-  const del = await send(deps, 'DELETE', '/api/arturo/avatar?agent=arturo');
-  assert.equal(put.status, 403);
-  assert.equal(del.status, 403);
-  assert.deepEqual(put.json, { ok: false, error: "Only an admin can change an agent's look" });
-  assert.deepEqual(deps.urls, []);
+  assert.equal((await send(deps, 'PUT', '/api/arturo/avatar', { agent: 'arturo', shape: 'heart' })).status, 200);
+  assert.equal((await send(deps, 'DELETE', '/api/arturo/avatar?agent=arturo')).status, 200);
+  assert.deepEqual(deps.urls, [`${GATEWAY_URL}/arturo/avatar`, `${GATEWAY_URL}/arturo/avatar?agent=arturo`]);
 });
 
 test('bad avatar values are refused before the gateway', async () => {
@@ -567,15 +553,14 @@ test('anyone reads the name; an admin renames it with only the name forwarded, o
   ]);
 });
 
-test('only an admin renames; an empty or oversized name is refused before the gateway', async () => {
+test('anyone may rename the assistant for now; an empty or oversized name is refused before the gateway', async () => {
   const user = makeDeps({ isAdmin: () => false });
-  const put = await send(user, 'PUT', '/api/arturo/name', { name: 'Nova' });
-  assert.equal(put.status, 403);
-  assert.deepEqual(put.json, { ok: false, error: 'Only an admin can rename the assistant' });
-  assert.equal((await send(user, 'DELETE', '/api/arturo/name')).status, 403);
-  const admin = makeDeps({ isAdmin: () => true });
+  assert.equal((await send(user, 'PUT', '/api/arturo/name', { name: 'Nova' })).status, 200);
+  assert.equal((await send(user, 'DELETE', '/api/arturo/name')).status, 200);
+  assert.equal(user.urls.length, 2);
+  const other = makeDeps({ isAdmin: () => false });
   for (const body of [{}, { name: '' }, { name: '   ' }, { name: 42 }, { name: 'x'.repeat(65) }]) {
-    assert.equal((await send(admin, 'PUT', '/api/arturo/name', body)).status, 400, JSON.stringify(body));
+    assert.equal((await send(other, 'PUT', '/api/arturo/name', body)).status, 400, JSON.stringify(body));
   }
-  assert.deepEqual([...user.urls, ...admin.urls], []);
+  assert.deepEqual(other.urls, []);
 });

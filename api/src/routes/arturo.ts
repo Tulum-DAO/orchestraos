@@ -10,15 +10,15 @@
  * GET  /api/arturo/ptt/vendor                           -> gateway /arturo/ptt/vendor  (which voice providers are set up)
  * GET  /api/arturo/ptt/voices  ?vendor=                 -> gateway /arturo/ptt/voices  (the server's voice rows)
  * GET  /api/arturo/ptt/voice   ?vendor=                 -> gateway /arturo/ptt/voice   (the voice the next call uses)
- * PUT  /api/arturo/ptt/voice   {vendor, voice_id, agent?} -> gateway /arturo/ptt/voice (admins only; the server validates it)
- * DELETE /api/arturo/ptt/voice ?vendor=&agent=           -> gateway /arturo/ptt/voice   (admins only: that agent back to the install's voice)
+ * PUT  /api/arturo/ptt/voice   {vendor, voice_id, agent?} -> gateway /arturo/ptt/voice (the server validates it)
+ * DELETE /api/arturo/ptt/voice ?vendor=&agent=           -> gateway /arturo/ptt/voice   (that agent back to the install's voice)
  * GET  /api/arturo/avatars                              -> gateway /arturo/avatars     (every saved avatar look)
  * GET  /api/arturo/avatar      ?agent=                  -> gateway /arturo/avatar      (one agent's look, or its default)
- * PUT  /api/arturo/avatar      {agent, shape?, color?, eyeColor?} -> gateway /arturo/avatar (admins only)
- * DELETE /api/arturo/avatar    ?agent=                  -> gateway /arturo/avatar      (admins only: back to the default)
+ * PUT  /api/arturo/avatar      {agent, shape?, color?, eyeColor?} -> gateway /arturo/avatar
+ * DELETE /api/arturo/avatar    ?agent=                  -> gateway /arturo/avatar      (back to the default)
  * GET  /api/arturo/name                                 -> gateway /arturo/assistant/name (what the assistant is called)
- * PUT  /api/arturo/name        {name}                   -> gateway /arturo/assistant/name (admins only; the server validates it)
- * DELETE /api/arturo/name                               -> gateway /arturo/assistant/name (admins only: back to "Arturo")
+ * PUT  /api/arturo/name        {name}                   -> gateway /arturo/assistant/name (the server validates it)
+ * DELETE /api/arturo/name                               -> gateway /arturo/assistant/name (back to "Arturo")
  *
  * Same trust model as routes/voice.ts: this Node process is the only holder of the
  * gateway bearer; the browser never sees it and never reaches the gateway or :5071.
@@ -335,15 +335,9 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
   router.get('/ptt/voice', async (req, res) => {
     await forward(res, `/arturo/ptt/voice${withAgent(vendorQuery(req.query.vendor), voiceAgent(req.query.agent))}`, { method: 'GET' }, 10000);
   });
-  // Changing a voice changes it for everyone who talks to that agent, so it is an admin's call (the gateway
-  // itself only lets admin- or voice-scoped callers write it; this API holds a bearer with every scope, so the
-  // check has to happen here). Reading stays open to anyone who can open the dashboard.
-  const isAdmin = (req: any) => (deps.isAdmin ? deps.isAdmin(req) : tenantScope(req).isAdmin);
+  // Anyone who can open the dashboard may read or change any agent's voice, name and look for now: there is no
+  // per-agent ownership yet. (The gateway still scopes paired devices; this API holds a bearer with every scope.)
   router.put('/ptt/voice', async (req, res) => {
-    if (!isAdmin(req)) {
-      res.status(403).json({ ok: false, error: "Only an admin can change the assistant's voice" });
-      return;
-    }
     const { vendor, voice_id, agent: rawAgent } = (req.body || {}) as Record<string, unknown>;
     if (typeof vendor !== 'string' || typeof voice_id !== 'string' || !vendor || !voice_id
         || vendor.length > 32 || voice_id.length > 200) {
@@ -361,20 +355,15 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     }, 10000);
   });
   router.delete('/ptt/voice', async (req, res) => {
-    if (!isAdmin(req)) {
-      res.status(403).json({ ok: false, error: "Only an admin can change the assistant's voice" });
-      return;
-    }
     const agent = voiceAgent(req.query.agent);
     const q = vendorQuery(req.query.vendor);
     if (!agent || !q) { res.status(400).json({ ok: false, error: 'vendor and agent required' }); return; }
     await forward(res, `/arturo/ptt/voice${withAgent(q, agent)}`, { method: 'DELETE' }, 10000);
   });
 
-  // Avatar looks, keyed by agent id (services/arturo/avatar_choice.py). Same split as the voice: anyone who
-  // can open the dashboard reads them; only an admin changes or resets one, since a look shows on every
-  // device. The values are checked here too, so a bad one never leaves this process, and only the known
-  // fields are passed on.
+  // Avatar looks, keyed by agent id (services/arturo/avatar_choice.py). Like the voice, anyone may change one for
+  // now. The values are checked here too, so a bad one never leaves this process, and only the known fields are
+  // passed on.
   const agentParam = (raw: unknown) => {
     const v = typeof raw === 'string' ? raw : '';
     return AVATAR_AGENT_RE.test(v) ? v : null;
@@ -388,7 +377,6 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     await forward(res, `/arturo/avatar?agent=${encodeURIComponent(agent)}`, { method: 'GET' }, 10000);
   });
   router.put('/avatar', async (req, res) => {
-    if (!isAdmin(req)) { res.status(403).json({ ok: false, error: "Only an admin can change an agent's look" }); return; }
     const picked = pickAvatar(req.body);
     if (!picked.ok) { res.status(400).json({ ok: false, error: picked.error }); return; }
     await forward(res, '/arturo/avatar', {
@@ -396,28 +384,25 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     }, 10000);
   });
   router.delete('/avatar', async (req, res) => {
-    if (!isAdmin(req)) { res.status(403).json({ ok: false, error: "Only an admin can change an agent's look" }); return; }
     const agent = agentParam(req.query.agent);
     if (!agent) { res.status(400).json({ ok: false, error: 'agent required' }); return; }
     await forward(res, `/arturo/avatar?agent=${encodeURIComponent(agent)}`, { method: 'DELETE' }, 10000);
   });
 
-  // The assistant's name on this install ("Arturo" until renamed; the id stays "arturo"). Anyone reads it;
-  // only an admin renames it, since it shows on every device. Only the name is passed on; Arturo's assistant_name.py decides what a valid name is (it goes into
+  // The assistant's name on this install ("Arturo" until renamed; the id stays "arturo"). Anyone may read or change
+  // it for now. Only the name is passed on; Arturo's assistant_name.py decides what a valid name is (it goes into
   // the assistant's own instructions).
   router.get('/name', async (_req, res) => {
     await forward(res, '/arturo/assistant/name', { method: 'GET' }, 10000);
   });
   router.put('/name', async (req, res) => {
-    if (!isAdmin(req)) { res.status(403).json({ ok: false, error: "Only an admin can rename the assistant" }); return; }
     const name = req.body?.name;
     if (typeof name !== 'string' || !name.trim() || name.length > 64) { res.status(400).json({ ok: false, error: 'name required' }); return; }
     await forward(res, '/arturo/assistant/name', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),
     }, 10000);
   });
-  router.delete('/name', async (req, res) => {
-    if (!isAdmin(req)) { res.status(403).json({ ok: false, error: "Only an admin can rename the assistant" }); return; }
+  router.delete('/name', async (_req, res) => {
     await forward(res, '/arturo/assistant/name', { method: 'DELETE' }, 10000);
   });
 
