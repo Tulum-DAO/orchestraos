@@ -64,6 +64,45 @@ def test_context_is_whitespace_normalised(S):
     assert a["context"] == b["context"]
 
 
+def test_permission_tool_name_never_comes_from_scrollback_outside_the_frame(S):
+    """A resize can bring an earlier `Bash(...)` into the last screen lines.
+
+    This prompt's widget is an Edit prompt, but its title uses the human label
+    "Edit file" rather than `Edit(...)`.  It must keep the frame's identity,
+    instead of inheriting the earlier Bash action from scrollback.
+    """
+    lines = [
+        "● Bash(echo stale command from scrollback)",
+        "─" * 80,
+        " Edit file",
+        " sandbox.txt",
+        "╌" * 80,
+        " Do you want to make this edit to sandbox.txt?",
+        " ❯ 1. Yes",
+        "   2. No",
+        "",
+        " Esc to cancel · Tab to amend",
+    ]
+    menu = S.parse_pending_menu(lines)
+    assert menu["kind"] == "permission"
+    assert menu["question"] == "Do you want to make this edit to sandbox.txt? [Edit]"
+    assert menu["context"].startswith("Edit file")
+
+
+def test_permission_tool_uses_legacy_scrollback_only_without_a_frame(S):
+    lines = [
+        "● Bash(echo current action)",
+        "",
+        "Do you want to proceed?",
+        "❯ 1. Yes",
+        "  2. No",
+        "Esc to cancel",
+    ]
+    menu = S.parse_pending_menu(lines)
+    assert menu["kind"] == "permission"
+    assert menu["question"] == "Do you want to proceed? [Bash]"
+
+
 def test_no_frame_means_no_context_and_the_old_identity(S):
     lines = ["Some prose the agent wrote.", "", "Do you want to proceed?",
              "❯ 1. Yes", "  2. No", "", "Esc to cancel"]

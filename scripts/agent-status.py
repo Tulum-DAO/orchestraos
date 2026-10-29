@@ -713,9 +713,43 @@ def _menu_context(lines: list[str], first_opt_idx: int | None, kind: str = "") -
     return "\n".join(block)
 
 
-def _menu_tool(lines: list[str]) -> str:
-    """Tool name from a permission prompt, e.g. 'Bash' from 'Bash(echo hi)' or
-    'Do you want to run …'. Empty if not parseable."""
+def _menu_has_frame(lines: list[str], first_opt_idx: int | None) -> bool:
+    """Whether a permission widget frame bounds the prompt, not its scrollback."""
+    if first_opt_idx is None:
+        return False
+    i = first_opt_idx - 1
+    while i >= 0 and (not lines[i].strip() or _MENU_OPT_RE.match(lines[i].strip())):
+        i -= 1
+    while i >= 0 and lines[i].strip():
+        s = lines[i].strip()
+        if _is_inner_dash(s):
+            break
+        if _RULE_RE.match(s) or set(s) <= set('─━ '):
+            return True
+        i -= 1
+    for j in range(i, max(-1, i - _CONTEXT_MAX_LINES), -1):
+        s = lines[j].strip()
+        if _RULE_RE.match(s) or (s and set(s) <= set('╌─━ ')) or s.startswith(('╭', '┌')):
+            return True
+    return False
+
+
+def _menu_tool(lines: list[str], context: str = "", has_frame: bool = False) -> str:
+    """Tool name from the frame-bounded permission widget.
+
+    A framed widget is authoritative: scrollback can reflow after a pane resize and
+    must never change the permission card's identity. The legacy last-screen-lines
+    parse remains only for old/no-frame renders.
+    """
+    if has_frame:
+        for tool, label in (("Bash", "Bash command"), ("Edit", "Edit file"),
+                            ("Write", "Create file"), ("WebFetch", "Fetch")):
+            if re.search(rf'\b{re.escape(label)}\b', context, re.I):
+                return tool
+        for tool in _MENU_TOOL_NAMES:
+            if re.search(rf'\b{tool}\s*\(', context):
+                return tool
+        return ''
     blob = '\n'.join(lines[-20:])
     for t in _MENU_TOOL_NAMES:
         if re.search(rf'\b{t}\s*\(', blob) or re.search(rf'\bDo you want to .*\b{t}\b', blob):
@@ -1002,16 +1036,18 @@ def _parse_pending_menu(stripped: list[str], now: float | None,
         kind = 'yes_no' if yes_no_shaped else 'options'
 
     question = _menu_question(lines, first_idx)
+    _ctx = _menu_context(lines, first_idx, kind)
     if kind == 'permission':
-        tool = _menu_tool(lines)
-        if tool and (not question or tool.lower() not in question.lower()):
+        tool = _menu_tool(lines, _ctx, _menu_has_frame(lines, first_idx))
+        # A human sentence may naturally contain the tool word ("make this edit").
+        # Only an explicit existing label means the tool has already been surfaced.
+        if tool and not re.search(rf'\[{re.escape(tool)}\]', question, re.I):
             question = f'{question} [{tool}]' if question else f'Permission: {tool}'
 
     result = {'kind': kind, 'question': _truncate_on_word_boundary(question or ''), 'options': opts,
               'selected_n': selected, 'chrome': chrome, 'captured_at': round(now, 3)}
     # Identity context (what the prompt is about). Additive: absent when empty, so every
     # consumer that ignores it is unchanged.
-    _ctx = _menu_context(lines, first_idx, kind)
     if _ctx:
         result['context'] = _ctx
     # menu_family (F6, 2026-08-24): the ANSWER contract differs by agent runtime.
