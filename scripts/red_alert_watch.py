@@ -64,7 +64,8 @@ WAL_DIR = os.path.join(ORCH, "state", "wal")
 _GREEN_RE = re.compile(r"^(?P<root>.+)-g(?P<gen>\d+)$")
 # bg states in which a green is legitimately expected to exist
 _BG_ACTIVE = {"PREWARMING", "HYDRATING", "VERIFY", "VERIFYING", "READY", "SWAPPING", "PREWARMED", "ARMED"}
-MODEL_LADDER = ["claude-opus-5[1m]", "claude-sonnet-5[1m]", "gemini", "codex"]
+# Seats run claude-opus-5-5[1m] (the default for new Claude seats), so the chain starts there.
+MODEL_LADDER = ["claude-opus-5-5[1m]", "claude-opus-5[1m]", "claude-sonnet-5[1m]", "gemini", "codex"]
 
 def log(msg: str) -> None:
     line = f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} {msg}"
@@ -387,7 +388,7 @@ def repair_respawn(seat: str, session: str, ev: dict) -> tuple[bool, str]:
 
 def repair_switch_provider(seat: str, session: str, ev: dict) -> tuple[bool, str]:
     row = ev["registry_rows"].get(seat) or {}
-    current = row.get("model") or "claude-opus-5[1m]"
+    current = row.get("model") or MODEL_LADDER[0]
     nxt = next_model(current, enabled=list(CLI_RUNTIMES))
     if not nxt:
         return False, f"no next model after {current}"
@@ -455,7 +456,7 @@ def spawn_diagnosis(r: dict, *, force: bool = False) -> str:
             f"`python3 scripts/red_alert.py update {rid} --diagnosis ... --permanent-fix JSON --by {name}`, then open a "
             f"dialogue with the operator through the assistant: msg_store send --from {name} --to gm --type red_alert "
             f"--subject 'RED ALERT {rid}: <one-line cause>' with the fix you propose and the question you need answered.")
-    env = dict(os.environ, AGENT_RUNTIME="claude", AGENT_MODEL="claude-opus-5[1m]")
+    env = dict(os.environ, AGENT_RUNTIME="claude", AGENT_MODEL=MODEL_LADDER[0])
     out = subprocess.run([os.path.join(CODE_ROOT, "spawn-agent.sh"), name, "--task", task], capture_output=True, text=True,
                          timeout=180, env=env, cwd=ORCH)
     ok = tmux("has-session", "-t", name).returncode == 0

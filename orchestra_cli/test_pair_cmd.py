@@ -1,5 +1,6 @@
 """RED-first for `orchestra pair` — the terminal half of onboarding."""
 import json
+from pathlib import Path
 
 import pytest
 
@@ -64,6 +65,9 @@ class _Args:
 def _lines(monkeypatch, tmp_path, args, fn=None):
     from orchestra_cli.pair_cmd import run_devices, run_pair
     monkeypatch.setenv("ORCHESTRA_DIR", str(tmp_path))
+    # The shipped example config, not this machine's orchestra.toml: a [gateway] public_url there
+    # outranks the address a test hands the resolver.
+    monkeypatch.setenv("ORCHESTRA_CONFIG", str(Path(__file__).resolve().parent.parent / "orchestra.example.toml"))
     said = []
     rc = (fn or run_pair)(args, out=said.append) if fn else run_pair(args, out=said.append,
                                                                     clear_after_s=0)

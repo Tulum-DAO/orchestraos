@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "id": "gemini",
+  "label": "Gemini (agy)",
+  "proven": true,
+  "process": { "basenames": ["agy"] },
+  "prompt_char": ">",
+  "launch": { "bin": "agy", "model_flag": "--model", "resume": null },
+  "state": { "source": "screen" },
+  "session_log": { "format": "antigravity-steps", "find": ["session-files"] },
+  "context": "private-needs-upstreaming",
+  "tokens": "none",
+  "model_switch": "next-rotation",
+  "menus": "single-choice",
+  "rotation": "opt-in"
+}

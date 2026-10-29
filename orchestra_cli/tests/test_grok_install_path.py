@@ -113,8 +113,13 @@ def test_supervised_processes_get_local_bin_and_dot_grok_bin_on_path(tmp_path, m
     monkeypatch.setenv("HOME", str(tmp_path))
     cfg = tmp_path / "orchestra.toml"; cfg.write_text(f'[data]\ndir = "{tmp_path / "data"}"\n')
     st = S.load_settings(config_path=cfg)
-    path = S.child_env(st, base={"PATH": "/usr/bin:/bin"})["PATH"].split(os.pathsep)
+    # child_env puts the checkout's own .venv/bin first when it exists (the right python for every
+    # child); that is set aside here, so the test holds on a checkout with or without a venv.
+    venv = str(st.venv_dir / "bin")
+    def child_path(base):
+        return [p for p in S.child_env(st, base={"PATH": base})["PATH"].split(os.pathsep) if p != venv]
+    path = child_path("/usr/bin:/bin")
     assert path[:2] == ["/usr/bin", "/bin"]                                  # the caller's order is kept
     assert f"{tmp_path}/.local/bin" in path and f"{tmp_path}/.grok/bin" in path
-    again = S.child_env(st, base={"PATH": f"{tmp_path}/.local/bin:/usr/bin"})["PATH"].split(os.pathsep)
+    again = child_path(f"{tmp_path}/.local/bin:/usr/bin")
     assert again.count(f"{tmp_path}/.local/bin") == 1

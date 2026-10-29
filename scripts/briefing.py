@@ -30,6 +30,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from orchestra_cli.settings import data_dir as _data_dir  # noqa: E402
 from scripts.identity_store.seat_names import base_id  # noqa: E402
+from scripts import agent_profiles, session_turns  # noqa: E402
 
 DIGEST_MODEL = os.environ.get("BRIEFING_MODEL", "haiku")
 DIGEST_TIMEOUT_S = 120
@@ -78,13 +79,18 @@ def seat_record(root: str, orchestra_dir=None) -> dict:
 
 
 def transcript_path(root: str, orchestra_dir=None, home=None):
-    """The predecessor's last Claude session file: ~/.claude/projects/<cwd slug>/<session id>.jsonl. While a fresh
+    """The predecessor's last session file. For Claude: ~/.claude/projects/<cwd slug>/<session id>.jsonl; for any
+    other agent, wherever its profile (config/agent-profiles/) says it saves its conversation. While a fresh
     successor is pending, the file pinned at its start (<id>.pending "transcript"): by the time the briefing is
     built, the agent's recorded session is already the successor's own, which has nothing to brief from."""
     pinned = (_read_json(bdir(orchestra_dir) / f"{base_id(root)}.pending") or {}).get("transcript")
     if pinned and Path(pinned).exists():
         return Path(pinned)
     rec = seat_record(root, orchestra_dir)
+    profile = agent_profiles.get(rec.get("runtime"))
+    if profile and profile["session_log"]["format"] != "claude-jsonl":
+        return agent_profiles.find_session_log(profile, {**rec, "tmux_session": rec.get("tmux_session") or root},
+                                               data_dir(orchestra_dir), home)
     sid = rec.get("session_id")
     if not sid:
         return None
@@ -122,9 +128,14 @@ def session_cwd(path):
 def text_turns(path, limit=60):
     """The last text turns of a session file, oldest first: [(role, iso time, text)]. Tool calls and results,
     the compaction notice a continued session starts with, and the spawn's boot prompt ("You are <id>. Read
-    <file> ...") are skipped: none of them is the agent's work."""
+    <file> ...") are skipped: none of them is the agent's work. A session another CLI wrote is read by its
+    format's reader (scripts/session_turns.py), with the same skips."""
     if not path:
         return []
+    fmt = session_turns.sniff(path)
+    if fmt:
+        return [t for t in session_turns.turns(fmt, path, limit=limit + 5)
+                if not t[2].startswith(_CONTINUATION) and not (t[0] == "user" and _BOOT.match(t[2]))][-limit:]
     try:
         size = os.path.getsize(path)
         with open(path, "rb") as f:

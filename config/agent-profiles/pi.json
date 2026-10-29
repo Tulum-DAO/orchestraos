@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "id": "pi",
+  "label": "Pi",
+  "proven": false,
+  "process": { "basenames": ["pi"], "node_scripts": ["pi-coding-agent/dist/cli.js"] },
+  "prompt_char": null,
+  "launch": { "bin": "pi", "model_flag": "--model", "resume": ["pi", "--session", "{session_id}"] },
+  "state": { "source": "report", "reporter": "integrations/pi/orchestra-report.ts" },
+  "session_log": { "format": "pi-jsonl", "find": ["reported", "glob:~/.pi/agent/sessions/*/*_{session_id}.jsonl"] },
+  "context": "report",
+  "tokens": "session-log",
+  "model_switch": "none",
+  "menus": "none",
+  "rotation": "none"
+}
