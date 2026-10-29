@@ -292,10 +292,15 @@ def test_menu_capture_returns_the_walk_instance_but_never_hydrates_it_onto_rows(
 
     class _Store:
         def migrate(self): pass
-        def cached_hydration(self, session): return None
-        def hydrate_menu(self, session, out): hydrated.append(dict(out))
+        def cached_hydration(self, session, op_key=None): return None
+        def hydrate_menu(self, session, out, op_key=None): hydrated.append(dict(out))
     walk = {"question": "Lock the API down now?", "kind": "options", "walk_complete": True, "part_count": 2,
             "parts": [{"index": 0, "question": "Lock the API down now?"}, {"index": 1, "question": "Which?"}]}
+
+    class _Status:      # the menu on screen is the one walked (a walk is written back only onto its own menu)
+        def get_agent_status(self, session):
+            return {"state": "idle", "pending_menu": {"question": "Lock the API down now?", "kind": "options"}}
+    monkeypatch.setattr(G, "_agent_status", lambda: _Status())
     monkeypatch.setattr(G, "_authorized", lambda r: True)
     monkeypatch.setattr(G, "_tmux_session_names", lambda: ["gm"])
     monkeypatch.setattr(G, "_protected_refusal", lambda r, s: None)

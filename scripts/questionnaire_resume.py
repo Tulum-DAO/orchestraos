@@ -18,6 +18,8 @@ def _line_for(question, ans):
     """One human-readable line: 'n. prompt -> chosen label (+ "verbatim text")'."""
     n = question["n"]
     prompt = question.get("prompt", "")
+    if ans and ans.get("state") == "skipped":
+        return f"{n}. {prompt} \u2192 skipped"
     opt_n = ans.get("option_n") if ans else None
     txt = ans.get("answer_text") if ans else None
     chosen = None
@@ -44,7 +46,8 @@ def digest(row):
         lines.append(_line_for(q, ans))
         machine["answers"].append({"n": q["n"], "prompt": q.get("prompt"),
                                    "option_n": ans.get("option_n"),
-                                   "answer_text": ans.get("answer_text")})
+                                   "answer_text": ans.get("answer_text"),
+                                   **({"skipped": True} if ans.get("state") == "skipped" else {})})
     lines += ["", "```json", json.dumps(machine, ensure_ascii=False), "```",
               f"Ack: python3 {APPROVAL_CLI} qack "
               f"{row['id']} --from {row['from_agent']}"]

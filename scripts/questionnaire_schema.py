@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS questionnaire_answers (
   n           INTEGER NOT NULL,
   option_n    TEXT,
   answer_text TEXT,
-  state       TEXT NOT NULL DEFAULT 'draft',   -- 'draft' (mutable) | 'final' (frozen at submit)
+  state       TEXT NOT NULL DEFAULT 'draft',   -- 'draft' (mutable) | 'final' (frozen at submit) | 'skipped' (no answer, by choice)
   updated_at  TEXT NOT NULL,
   surface     TEXT,
   PRIMARY KEY (qnr_id, n)
@@ -324,10 +324,16 @@ class QuestionnaireStore:
 
     # ---- submit (all-or-nothing, once) ----
     def submit(self, qid, answers=None, surface=None):
-        """Merge the final delta into the draft, then require EVERY question to hold
-        a valid answer -> atomic freeze (answers->final) + guarded flip
-        (pending->submitted, once). Returns {applied:True} | {applied:False, missing}
-        | {applied:False, status} | None."""
+        """Merge the final delta into the draft, then require EVERY required question to
+        hold a valid answer and at least one question to be answered -> atomic freeze
+        (answers->final) + guarded flip (pending->submitted, once). Returns
+        {applied:True} | {applied:False, missing} | {applied:False, nothing_answered:True}
+        | {applied:False, status} | None.
+
+        A question sent as {"skipped": true} (optional questions only; the gateway
+        validates) is recorded with no answer and state 'skipped', which the freeze
+        keeps, so the stored answer says the person chose to skip it rather than
+        never reaching it."""
         c = self._conn()
         try:
             q = c.execute("SELECT status, question_count FROM questionnaires WHERE id=?",
@@ -342,18 +348,23 @@ class QuestionnaireStore:
                 cur = c.execute(
                     "SELECT option_n, answer_text FROM questionnaire_answers WHERE qnr_id=? AND n=?",
                     [qid, n]).fetchone()
-                opt = a["option_n"] if "option_n" in a else (cur["option_n"] if cur else None)
-                txt = a["answer_text"] if "answer_text" in a else (cur["answer_text"] if cur else None)
+                skipped = a.get("skipped") is True
+                if skipped:
+                    opt, txt, state = None, None, "skipped"
+                else:
+                    opt = a["option_n"] if "option_n" in a else (cur["option_n"] if cur else None)
+                    txt = a["answer_text"] if "answer_text" in a else (cur["answer_text"] if cur else None)
+                    state = "draft"
                 if cur:
                     c.execute(
                         "UPDATE questionnaire_answers SET option_n=?, answer_text=?, "
-                        "state='draft', updated_at=?, surface=? WHERE qnr_id=? AND n=?",
-                        [opt, txt, now, surface, qid, n])
+                        "state=?, updated_at=?, surface=? WHERE qnr_id=? AND n=?",
+                        [opt, txt, state, now, surface, qid, n])
                 else:
                     c.execute(
                         "INSERT INTO questionnaire_answers (qnr_id, n, option_n, answer_text, "
-                        "state, updated_at, surface) VALUES (?,?,?,?, 'draft', ?, ?)",
-                        [qid, n, opt, txt, now, surface])
+                        "state, updated_at, surface) VALUES (?,?,?,?,?,?,?)",
+                        [qid, n, opt, txt, state, now, surface])
             have = {r["n"]: r for r in c.execute(
                 "SELECT n, option_n, answer_text FROM questionnaire_answers WHERE qnr_id=?",
                 [qid]).fetchall()}
@@ -369,13 +380,17 @@ class QuestionnaireStore:
             if missing:
                 c.commit()   # the delta persists as draft; caller jumps to first missing
                 return {"applied": False, "missing": missing}
+            if not any(_answered(have.get(n)) for n in range(1, q["question_count"] + 1)):
+                c.rollback()  # every question skipped or empty: nothing to send, nothing kept
+                return {"applied": False, "nothing_answered": True}
             res = c.execute(
                 "UPDATE questionnaires SET status='submitted', submitted_at=? "
                 "WHERE id=? AND status='pending'", [now, qid])
             if res.rowcount == 0:      # lost the submit race
                 c.commit()
                 return {"applied": False}
-            c.execute("UPDATE questionnaire_answers SET state='final' WHERE qnr_id=?", [qid])
+            c.execute("UPDATE questionnaire_answers SET state='final' "
+                      "WHERE qnr_id=? AND state != 'skipped'", [qid])
             c.commit()
             return {"applied": True}
         finally:

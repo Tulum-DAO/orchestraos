@@ -460,7 +460,8 @@ def test_PIN_the_multi_verb_map_and_the_admin_ptt_voice_rows_exactly():
 
     def rows(verb):
         return sorted(f"{m} {p}" for (m, p), v in G.ROUTE_SCOPES.items() if v == verb)
-    assert rows("admin") == ["DELETE /arturo/assistant/name", "DELETE /arturo/avatar", "GET /agents/new/parents",
+    assert rows("admin") == ["DELETE /arturo/assistant/name", "DELETE /arturo/avatar", "DELETE /arturo/ptt/voice",
+                             "GET /agents/new/parents",
                              "GET /terminal/ws", "POST /agents/new",
                              "POST /device/upgrade",
                              "POST /red-alert/report", "POST /runtimes/available/refresh",

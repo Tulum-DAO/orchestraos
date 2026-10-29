@@ -568,7 +568,16 @@ def main(argv=None):
         print(qid)
         return 0
     if args.cmd == "qack":
-        ok = _qstore().ack(args.id)
+        qs = _qstore()
+        ok = qs.ack(args.id)
+        if not ok:
+            # Idempotent, like `ack` above: a verified live delivery acks the questionnaire itself
+            # (questionnaire_resume.deliver), so the agent's own ack after reading the answers finds
+            # it already done. That is success, not an error. Never-answered still fails.
+            cur = qs.get(args.id) or {}
+            if cur.get("status") == "resumed" and cur.get("resume_acked_at"):
+                print(json.dumps({"acked": True, "already": True, "delivered": True, "id": args.id}))
+                return 0
         print(json.dumps({"acked": ok, "id": args.id}))
         return 0 if ok else 1
     if args.cmd == "expire-sweep":

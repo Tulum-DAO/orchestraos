@@ -325,6 +325,9 @@ def _menu_batch_digest_body(row, answers):
         pi = a.get("part")
         part = by_index.get(pi, {})
         label = part.get("tab_label") or part.get("question") or f"part {pi}"
+        if a.get("skipped") is True:
+            seg.append(f"[{label}: skipped]")
+            continue
         opts = {str(o.get("n")): o.get("label", "")
                 for o in (part.get("options") or []) if isinstance(o, dict)}
         chosen = [opts.get(str(n), str(n)) for n in (a.get("ns") or [])]
