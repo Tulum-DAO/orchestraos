@@ -85,7 +85,7 @@ def test_permission_tool_name_never_comes_from_scrollback_outside_the_frame(S):
     ]
     menu = S.parse_pending_menu(lines)
     assert menu["kind"] == "permission"
-    assert menu["question"] == "Do you want to make this edit to sandbox.txt?"
+    assert menu["question"] == "Do you want to make this edit to sandbox.txt? [Edit]"
     assert menu["context"].startswith("Edit file")
 
 

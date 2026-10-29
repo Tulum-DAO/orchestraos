@@ -1039,7 +1039,9 @@ def _parse_pending_menu(stripped: list[str], now: float | None,
     _ctx = _menu_context(lines, first_idx, kind)
     if kind == 'permission':
         tool = _menu_tool(lines, _ctx, _menu_has_frame(lines, first_idx))
-        if tool and (not question or tool.lower() not in question.lower()):
+        # A human sentence may naturally contain the tool word ("make this edit").
+        # Only an explicit existing label means the tool has already been surfaced.
+        if tool and not re.search(rf'\[{re.escape(tool)}\]', question, re.I):
             question = f'{question} [{tool}]' if question else f'Permission: {tool}'
 
     result = {'kind': kind, 'question': _truncate_on_word_boundary(question or ''), 'options': opts,
