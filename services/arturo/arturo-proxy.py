@@ -3028,6 +3028,8 @@ def ask_choices(options, multi=False, purpose="other", exclusive=None):
     if purpose == "devices" and turn.get("conversation_id"):
         with _TEAM_OFFERS_LOCK:
             _DEVICE_CARDS[turn["conversation_id"]] = (time.time(), tuple(clean), turn.get("principal"))
+    # Its id: the page dismisses it by this, and the thread keeps it with the reply (_record_text_turn).
+    card["card_id"] = _uuid.uuid4().hex[:16]
     turn["choices"] = card
     return f"Card shown with: {', '.join(clean)}{note}. Wait for their answer."
 
@@ -6977,8 +6979,12 @@ if _STREAM_RELAY is not None:
         if not _relay_loopback_ok():
             return jsonify({"ok": False, "error": "loopback only"}), 403
         vendor = _voice_vendor_arg()
-        st = _voice_choice.state(vendor)
-        st["voice_id"] = _voice_choice.in_effect(vendor)
+        try:
+            agent = _voice_choice.agent_key(request.args.get("agent"))
+        except ValueError as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+        st = _voice_choice.state(vendor, agent)
+        st["voice_id"] = _voice_choice.in_effect(vendor, agent)
         title = None
         if st["voice_id"]:
             try:
@@ -6997,10 +7003,24 @@ if _STREAM_RELAY is not None:
                                          str(body.get("voice_id", "")),
                                          by=str(body.get("by", "settings"))[:40],
                                          source=str(request.headers.get("X-Voice-Source", "settings"))[:40],
-                                         device=_writer_device())
+                                         device=_writer_device(), agent=body.get("agent"))
         except ValueError as e:
             return jsonify({"ok": False, "error": str(e)}), 400
-        log.info(f"{st['vendor']} voice -> {st['voice_id']} by {st['changed_by']}")
+        log.info(f"{st['vendor']} voice{' for ' + st['agent'] if st.get('agent') else ''} -> {st['voice_id']} "
+                 f"by {st['changed_by']}")
+        return jsonify({"ok": True, **st}), 200
+
+    @app.route("/ptt/voice", methods=["DELETE"])
+    def ptt_voice_delete():
+        """An agent back to the install's voice for one vendor."""
+        if not _relay_loopback_ok():
+            return jsonify({"ok": False, "error": "loopback only"}), 403
+        try:
+            st = _voice_choice.clear_voice(_voice_vendor_arg(), request.args.get("agent"),
+                                           source=str(request.headers.get("X-Voice-Source", "settings"))[:40],
+                                           device=_writer_device())
+        except ValueError as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
         return jsonify({"ok": True, **st}), 200
 
 
@@ -7367,7 +7387,7 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None, t
         _hold_returning_reply(conversation_id, reply)
     else:
         _record_text_turn(conversation_id=conversation_id, text=text, reply=reply, brain=chosen_id,
-                          effective=effective, turn_id=turn_id, principal=principal)
+                          effective=effective, turn_id=turn_id, principal=principal, card=team_turn.get("choices"))
     from services.arturo import operator_store as _ops
     body = {"ok": True, "reply_text": reply, "conversation_id": conversation_id,
             "brain": (chosen or _turn_brain()).describe(), "tools_called": tools_called,
@@ -7464,17 +7484,21 @@ _WARM_POOL = _warm_session.WarmPool(spawn=_spawn_warm, argv_for=lambda key: [],
 atexit.register(_WARM_POOL.close_all)
 
 
-def _record_text_turn(conversation_id, text, reply, brain=None, effective=None, turn_id=None, principal=None):
+def _record_text_turn(conversation_id, text, reply, brain=None, effective=None, turn_id=None, principal=None, card=None):
     """The ONE place a text turn is persisted. /text and /text/stream both come through here,
     so a streamed turn and a whole one leave the same history and the same thread row.
     `brain` = what the operator chose (None = default); `effective` = what actually wrote the
     reply, kept on the turn so a later turn on another model knows it was not its own.
-    A tool-call envelope is never stored: history is replayed and shown, so it would surface again."""
+    A tool-call envelope is never stored: history is replayed and shown, so it would surface again.
+    `card` = the choice card the reply showed (ask_choices): kept on the reply's row, so the thread shows it again
+    after a reload, answered by the message that followed it or dismissed."""
     reply = _brain.without_envelope(reply)
     _TEXT_HISTORY.append(conversation_id, "user", text)
     _TEXT_HISTORY.append(conversation_id, "assistant", reply, brain=effective)
+    meta = {"kind": "card", "card_id": card.get("card_id"), "choices": card} if isinstance(card, dict) and card.get("card_id") else None
     stored = _THREADS.record_turn(conversation_id, text, reply, brain=brain, effective=effective,
-                                  principal=_thread_key(principal), **({"turn_id": turn_id} if turn_id else {}))
+                                  principal=_thread_key(principal), **({"turn_id": turn_id} if turn_id else {}),
+                                  **({"assistant_meta": meta} if meta else {}))
     if stored:
         _speak_into_live_call(conversation_id, text, reply)
         _thread_grew(conversation_id)
@@ -7937,7 +7961,7 @@ def text_stream_endpoint():
             return _WARM_POOL.turn(warm_key, new_text, argv=argv, env=env, version=v)
 
         def _record(**kw):
-            _record_text_turn(**kw, effective=effective, turn_id=tid, principal=principal)
+            _record_text_turn(**kw, effective=effective, turn_id=tid, principal=principal, card=_team_turn.get("choices"))
             _WARM_POOL.sync(warm_key, _THREADS.turn_count(conversation_id))
 
         from services.arturo import onboarding as _onb
@@ -8551,6 +8575,22 @@ def _helpers_shown(text):
 
 
 _JOBS = _jobs_mod.JobBoard(ARTURO_STATE / "jobs.json", on_done=_post_job_result, spawn=_spawn_in_context)
+
+
+@app.route("/threads/<path:conversation_id>/cards/<card_id>/dismiss", methods=["POST"])
+def thread_card_dismiss(conversation_id, card_id):
+    """Close a choice card without answering it: it stays in the thread, marked dismissed. Same checks as a job's
+    cancel: loopback only (the gateway forwards it), and only in a thread the caller may see."""
+    if not _loopback_only():
+        return jsonify({"ok": False, "error": "loopback only"}), 403
+    if not re.fullmatch(r"[0-9a-f]{8,32}", card_id or ""):
+        return jsonify({"ok": False, "error": "bad card id"}), 400
+    principal = _stamped_principal(request)
+    if principal != "fleet" and _THREADS.started_by(conversation_id) not in (None, _thread_key(principal)):
+        return jsonify({"ok": False, "error": "no such card"}), 404
+    if not _THREADS.dismiss_card(conversation_id, card_id):
+        return jsonify({"ok": False, "error": "no such card"}), 404
+    return jsonify({"ok": True, "card_id": card_id, "dismissed": True}), 200
 
 
 @app.route("/threads/<path:conversation_id>/jobs/<job_id>/cancel", methods=["POST"])

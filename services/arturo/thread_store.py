@@ -232,7 +232,7 @@ class ThreadStore:
     # --- write ---------------------------------------------------------------------
 
     def record_turn(self, conversation_id, user_text, assistant_text, ts=None, brain=None,
-                    effective=None, turn_id=None, principal=None):
+                    effective=None, turn_id=None, principal=None, assistant_meta=None):
         """Archive one completed turn (the user's message and Arturo's reply). Called AFTER
         the brain answers, so a failed turn leaves no half-thread. Never raises.
         `brain` = {provider, model} when the operator chose one for this turn, None = default —
@@ -240,10 +240,12 @@ class ThreadStore:
         that actually WROTE the reply (a default turn names its model): that is what the turn
         row keeps, so a later turn on another model can be told which replies were not its own.
         Omitted, the turn row keeps `brain`, as before. `principal` = who sent the turn; the first
-        turn's is kept as the thread's `started_by` (see started_by())."""
+        turn's is kept as the thread's `started_by` (see started_by()). `assistant_meta` = what the reply
+        carried besides its words (a choice card), kept on its row so the thread shows it again."""
         if not self.usable or not conversation_id:
             return False
         now = float(ts if ts is not None else time.time())
+        ameta = json.dumps(assistant_meta) if assistant_meta else ""
         bp, bm = ((brain or {}).get("provider") or "", (brain or {}).get("model") or "")
         wrote = effective if effective is not None else brain
         tp, tm = ((wrote or {}).get("provider") or "", (wrote or {}).get("model") or "")
@@ -268,10 +270,10 @@ class ThreadStore:
                         conn.execute("UPDATE threads SET title = ? WHERE id = ?",
                                      (derive_title(user_text), conversation_id))
                 conn.executemany(
-                    "INSERT OR REPLACE INTO turns (thread_id, seq, role, content, ts, brain_provider, brain_model)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    [(conversation_id, seq, "user", user_text or "", now, "", ""),
-                     (conversation_id, seq + 1, "assistant", assistant_text or "", now, tp, tm)])
+                    "INSERT OR REPLACE INTO turns (thread_id, seq, role, content, ts, brain_provider, brain_model, meta)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    [(conversation_id, seq, "user", user_text or "", now, "", "", ""),
+                     (conversation_id, seq + 1, "assistant", assistant_text or "", now, tp, tm, ameta)])
                 conn.execute(
                     "UPDATE threads SET updated = ?, turns = ?, snippet = ?,"
                     " last_brain_provider = ?, last_brain_model = ? WHERE id = ?",
@@ -285,6 +287,34 @@ class ThreadStore:
         except Exception as e:  # noqa: BLE001 — the archive is never worth failing a turn over,
             # but a lost turn is never silent either
             log.warning(f"thread store: could not record a turn for {conversation_id}: {e}")
+            return False
+        finally:
+            if conn is not None:
+                conn.close()
+
+    def dismiss_card(self, conversation_id, card_id):
+        """Mark a choice card in this thread dismissed (it stays in the thread, closed). True when one was found."""
+        if not self.usable or not conversation_id or not card_id:
+            return False
+        conn = None
+        try:
+            conn = self._connect()
+            conn.execute("BEGIN IMMEDIATE")
+            with conn:
+                for seq, meta in conn.execute("SELECT seq, meta FROM turns WHERE thread_id = ? AND meta != ''",
+                                              (conversation_id,)).fetchall():
+                    try:
+                        m = json.loads(meta)
+                    except ValueError:
+                        continue
+                    if isinstance(m, dict) and m.get("card_id") == card_id:
+                        m["dismissed"] = True
+                        conn.execute("UPDATE turns SET meta = ? WHERE thread_id = ? AND seq = ?",
+                                     (json.dumps(m), conversation_id, seq))
+                        return True
+            return False
+        except Exception as e:  # noqa: BLE001 — a dismiss that cannot be saved says so, never raises
+            log.warning(f"thread store: could not dismiss card {card_id} in {conversation_id}: {e}")
             return False
         finally:
             if conn is not None:

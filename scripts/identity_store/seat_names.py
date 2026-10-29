@@ -216,11 +216,18 @@ def owner_of(conn, text: str, ids=None, scope=None, project_of=None):
     return None
 
 
-def set_name(conn, root: str, raw, by: str = "settings", orchestra_dir=None, project_of=None) -> dict:
+# The assistant's name is a seat name too, under its id, but it is set only through its own settings
+# (services/arturo/assistant_name.py: stricter characters, because the name goes into its instructions). Other
+# built-in mailboxes are never named.
+ASSISTANT_ID = "arturo"
+
+
+def set_name(conn, root: str, raw, by: str = "settings", orchestra_dir=None, project_of=None,
+             assistant: bool = False) -> dict:
     """Rename an agent. The new name becomes current, the old one an alias. Refused (NameError_) when the name
     is invalid, the agent never existed, or the name is taken: another agent's id or a built-in mailbox anywhere,
     or another agent's current or old name in the agent's own project. `project_of(root) -> slug or ''` (default:
-    seat_projects.py over `orchestra_dir`)."""
+    seat_projects.py over `orchestra_dir`). `assistant=True` (assistant_name.py only) allows the assistant's id."""
     name = validate_name(raw)
     root = base_id(root)
     key = name_key(name)
@@ -234,7 +241,7 @@ def set_name(conn, root: str, raw, by: str = "settings", orchestra_dir=None, pro
     conn.execute("BEGIN IMMEDIATE")
     try:
         ids = known_ids(conn, orchestra_dir)
-        if root not in ids or root in BUILTIN_IDS:
+        if root not in ids or (root in BUILTIN_IDS and not (assistant and root == ASSISTANT_ID)):
             raise NameError_(f"there is no agent with the id {root!r}" if root not in ids else
                              f"{root} is not an agent: the assistant is renamed in its own settings")
         owner = owner_of(conn, name, ids, scope=scope, project_of=lambda r: project_of(r) or "")
@@ -256,6 +263,36 @@ def set_name(conn, root: str, raw, by: str = "settings", orchestra_dir=None, pro
         conn.execute("ROLLBACK")
         raise
     return names_for(conn, root)
+
+
+def clear_name(conn, root: str) -> None:
+    """Back to no name: the current name becomes an alias (it stays the agent's). Used to reset the assistant."""
+    if not _has_table(conn):
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("UPDATE seat_names SET is_current = 0 WHERE root = ? AND is_current = 1", (base_id(root),))
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def current_name_ro(orchestra_dir, root: str):
+    """An agent's current name, or None (never named, no identity store, or it can't be read). Read-only."""
+    try:
+        conn = read_only(orchestra_dir)
+    except sqlite3.Error:
+        return None
+    try:
+        if not _has_table(conn):
+            return None
+        row = conn.execute("SELECT name FROM seat_names WHERE root = ? AND is_current = 1", (base_id(root),)).fetchone()
+        return row[0] if row else None
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
 
 
 def open_db(orchestra_dir):
