@@ -25,6 +25,7 @@ import { agentScopeParam, canPrincipalSeeAgent } from '../lib/agent-scope.js';
 import { CODE_ROOT } from '../lib/codeRoot.js';
 import { decorateIdentity, readSeatNames } from '../lib/agentIdentity.js';
 import { readPins, writePins, cleanPins } from '../lib/agentPins.js';
+import { readPrefs, writePrefs, cleanPrefsChange, isAgentId } from '../lib/agentPrefs.js';
 import { getProjectsKnowledge } from '../services/state-reader.js';
 import { gatewayUrl } from '../lib/gateway-url.js';
 import { gatewayChips } from '../lib/gatewayChips.js';
@@ -475,6 +476,75 @@ router.put('/pins', (req: Request, res: Response) => {
   res.json({ ok: true, pins });
 });
 
+// Helper: a read from the gateway (the avatar, voice and assistant-name stores live behind it); null on any failure,
+// so one missing piece never fails the whole identity.
+async function gatewayRead(pathAndQuery: string): Promise<any | null> {
+  const token = readGatewayToken();
+  if (!token) return null;
+  try {
+    const r = await fetch(`${GATEWAY_URL}${pathAndQuery}`, {
+      headers: { 'Authorization': `Bearer ${token}` }, signal: AbortSignal.timeout(5000),
+    });
+    const body: any = await r.json().catch(() => null);
+    return r.ok && body && body.ok !== false ? body : null;
+  } catch { return null; }
+}
+
+// GET /api/agents/:id/identity — the one place an agent's identity is read: name, full name and old names (seat names;
+// Arturo's is a seat name too), avatar look, voice (its own or the install's) and how this person sees it (prefs).
+// Read-only; each store keeps its own write route and rules (rename, PUT /api/arturo/avatar, PUT /api/arturo/ptt/voice,
+// PUT /api/agents/:id/prefs). History and telemetry stay keyed by the id, so a rename never splits them.
+router.get('/:id/identity', async (req: Request, res: Response) => {
+  const who = principal(req)?.username;
+  if (!who) { res.status(401).json({ ok: false, error: 'no identity' }); return; }
+  if (!isAgentId(req.params.id)) { res.status(400).json({ ok: false, error: 'bad agent id' }); return; }
+  const root = baseAgentId(req.params.id);
+  const registry = (getRegistry() as any)?.agents || {};
+  const builtin = root === 'arturo';
+  if (!builtin && !registry[root] && !registry[req.params.id]) { res.status(404).json({ ok: false, error: 'Agent not found' }); return; }
+  const names = readSeatNames(dataDir());
+  const [avatar, voice, assistant] = await Promise.all([
+    gatewayRead(`/arturo/avatar?agent=${encodeURIComponent(root)}`),
+    gatewayRead(`/arturo/ptt/voice?agent=${encodeURIComponent(root)}`),
+    builtin ? gatewayRead('/arturo/assistant/name') : Promise.resolve(null),
+  ]);
+  let name: string; let fullName: string; let project: any = null;
+  if (builtin) {
+    name = assistant?.name || names.get(root)?.name || 'Arturo';
+    fullName = name;
+  } else {
+    const [row] = decorateIdentity([{ id: root, ...(registry[root] || registry[req.params.id]) }],
+      { knowledge: getProjectsKnowledge() as any, names, lastMessage: new Map(), registry });
+    name = row.display_name || root; fullName = row.full_name || name; project = row.project ?? null;
+  }
+  const pick = (o: any, keys: string[]) => (o ? Object.fromEntries(keys.filter((k) => k in o).map((k) => [k, o[k]])) : null);
+  res.json({
+    ok: true, id: root, builtin, name, full_name: fullName, project, aliases: names.get(root)?.aliases || [],
+    avatar: pick(avatar, ['shape', 'color', 'eyeColor', 'chosen']),
+    voice: pick(voice, ['vendor', 'voice_id', 'title', 'scope']),
+    prefs: readPrefs(dataDir(), who, root),
+  });
+});
+
+// GET/PUT /api/agents/:id/prefs {style?, accent?} — how this person sees this agent (lib/agentPrefs.ts): chat style
+// (modern | bubbles | dev) and an accent colour, saved per person on the server. `null` clears a field back to the
+// default. Any agent id, Arturo's included: the view is the person's own choice.
+router.get('/:id/prefs', (req: Request, res: Response) => {
+  const who = principal(req)?.username;
+  if (!who) { res.status(401).json({ ok: false, error: 'no identity' }); return; }
+  if (!isAgentId(req.params.id)) { res.status(400).json({ ok: false, error: 'bad agent id' }); return; }
+  res.json({ ok: true, agent: req.params.id, ...readPrefs(dataDir(), who, req.params.id) });
+});
+router.put('/:id/prefs', (req: Request, res: Response) => {
+  const who = principal(req)?.username;
+  if (!who) { res.status(401).json({ ok: false, error: 'no identity' }); return; }
+  if (!isAgentId(req.params.id)) { res.status(400).json({ ok: false, error: 'bad agent id' }); return; }
+  const r = cleanPrefsChange(req.body);
+  if ('error' in r) { res.status(400).json({ ok: false, error: r.error }); return; }
+  writePrefs(dataDir(), who, req.params.id, r.change);
+  res.json({ ok: true, agent: req.params.id, ...readPrefs(dataDir(), who, req.params.id) });
+});
+
 // PUT /api/agents/:id/name {name} — rename an agent (scripts/identity_store/seat_names.py: names unique per project,
 // old names kept as aliases forever, ids never change). Anyone on the account may rename; the refusal reason comes
 // back as written ("'dev' is already the name of dev-demo ...").
@@ -742,6 +812,25 @@ async function gatewayKey(session: string, key: string, confirm: boolean, expect
   return { status: resp.status, body };
 }
 
+// Helper: the gateway's /agent-model (scripts/agent_model.py has the rules). GET lists the models this
+// agent can switch to; PUT switches it: live where the CLI allows, else at its next rotation, and a busy
+// agent's switch waits for its turn to end. A person picked it, so the request says so (X-Actor).
+async function gatewayModel(session: string, model?: string): Promise<{ status: number; body: any }> {
+  const token = readGatewayToken();
+  if (!token) throw new Error('gateway token unavailable');
+  const put = model !== undefined;
+  const resp = await fetch(put ? `${GATEWAY_URL}/agent-model` : `${GATEWAY_URL}/agent-model?session=${encodeURIComponent(session)}`, {
+    method: put ? 'PUT' : 'GET',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Actor': 'operator:web' },
+    ...(put ? { body: JSON.stringify({ session, model }) } : {}),
+    // A live switch waits for the CLI to confirm it ("Set model to …"); under the dashboard proxy's 30 s, so the
+    // picker hears an answer rather than a dropped connection.
+    signal: AbortSignal.timeout(put ? 28000 : 10000),
+  });
+  const body: any = await resp.json().catch(() => ({}));
+  return { status: resp.status, body };
+}
+
 // Helper: send keys to tmux session (LEGACY — Mac agents only; VPS goes
 // through gatewayInject above)
 function sendToTmux(session: string, machine: string, text: string) {
@@ -1000,6 +1089,87 @@ router.post('/:id/agent-key', async (req: Request, res: Response) => {
   }
 });
 
+// Helper: a POST to the gateway as the operator (the dashboard); its status comes back as is.
+async function gatewayPost(path: string, body: Record<string, unknown>, timeoutMs: number): Promise<{ status: number; body: any }> {
+  const token = readGatewayToken();
+  if (!token) throw new Error('gateway token unavailable');
+  const resp = await fetch(`${GATEWAY_URL}${path}`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Actor': 'operator:web' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  return { status: resp.status, body: await resp.json().catch(() => ({})) };
+}
+
+// POST /api/agents/:id/menu-capture — every question of a multi-part menu on the agent's screen (the gateway's
+// /agent-menu-capture: it pages with Right only, never Enter or a digit, and presses nothing unless a menu is on screen
+// and the operator is on its first part). POST /api/agents/:id/menu-submit {answers:[{part, ns, text?}], card_id,
+// confirm} — answer it, bound to the card it was drawn from (the gateway's /menu-submit: 428 until confirmed).
+router.post('/:id/menu-capture', async (req: Request, res: Response) => {
+  const session = modelSession(req, res);
+  if (!session) return;
+  try {
+    const r = await gatewayPost('/agent-menu-capture', { session }, 25000);
+    res.status(r.status).json(r.body);
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: 'gateway unreachable', detail: err.message });
+  }
+});
+
+router.post('/:id/menu-submit', async (req: Request, res: Response) => {
+  const { answers, card_id, confirm } = req.body || {};
+  if (!Array.isArray(answers) || !answers.length) { res.status(400).json({ ok: false, error: 'answers required' }); return; }
+  if (typeof card_id !== 'string' || !card_id) { res.status(400).json({ ok: false, error: 'card_id required' }); return; }
+  const session = modelSession(req, res);
+  if (!session) return;
+  try {
+    const r = await gatewayPost('/menu-submit', { session, answers, card_id, confirm: confirm === true }, 25000);
+    res.status(r.status).json(r.body);
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: 'gateway unreachable', detail: err.message });
+  }
+});
+
+// GET /api/agents/:id/model — the model this agent runs and the ones it can switch to (each with a reason when
+// it cannot). PUT {model} switches it. Both proxy the gateway's /agent-model and pass its status through, so the
+// picker can say what happened: switched (200), waiting for the turn to end (202), not offered (422), busy (503).
+function modelSession(req: Request, res: Response): string | null {
+  const registry = getRegistry() as any;
+  const agent = registry?.agents?.[String(req.params.id)];
+  if (!agent) { res.status(404).json({ ok: false, error: 'Agent not found' }); return null; }
+  // Like menus, a model is switched through this host's gateway only.
+  if (!isThisHost((agent.machine as string) || 'vps')) {
+    res.status(400).json({ ok: false, error: 'model switching is only supported for agents on this host' });
+    return null;
+  }
+  return (agent.tmux_session as string) || String(req.params.id);
+}
+
+router.get('/:id/model', async (req: Request, res: Response) => {
+  const session = modelSession(req, res);
+  if (!session) return;
+  try {
+    const r = await gatewayModel(session);
+    res.status(r.status).json(r.body);
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: 'gateway unreachable', detail: err.message });
+  }
+});
+
+router.put('/:id/model', async (req: Request, res: Response) => {
+  const model = (req.body || {}).model;
+  if (typeof model !== 'string' || !model.trim()) { res.status(400).json({ ok: false, error: 'model required' }); return; }
+  const session = modelSession(req, res);
+  if (!session) return;
+  try {
+    const r = await gatewayModel(session, model.trim());
+    res.status(r.status).json(r.body);
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: 'gateway unreachable', detail: err.message });
+  }
+});
+
 // GET /api/agents/:id/decisions — the approval cards this agent filed, pending AND answered, so its chat can
 // show each one as a bubble under the message it belongs to, and keep it (answered) as part of the history.
 // Read-only. Mirrors of the agent's own on-screen CLI menus (menu_bridge rows, op_key "menu:...") are left
@@ -1095,6 +1265,41 @@ router.get('/:id/decisions', async (req: Request, res: Response) => {
     res.json({ agent: seat, generation_started_at: started, decisions: current });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to read decisions', detail: String(err?.message || err) });
+  }
+});
+
+/** The gateway's durable records of multi-part answers (answer='batch') for one tmux session: the hydrated parts and
+ *  the batch as submitted, skipped parts included. The chat draws an answered AskUserQuestion from these in
+ *  preference to parsing the tool result's text. */
+export function menuBatchRecords(rows: any[]): any[] {
+  const out: any[] = [];
+  for (const r of rows) {
+    let menu: any = null;
+    let answers: unknown = null;
+    try { menu = r.menu ? JSON.parse(r.menu) : null; } catch { menu = null; }
+    try { answers = JSON.parse(r.answer_text || 'null'); } catch { answers = null; }
+    if (!menu || !Array.isArray(menu.parts) || !Array.isArray(answers)) continue;
+    out.push({ id: r.id, answered_at: r.answered_at || null, parts: menu.parts, answers });
+  }
+  return out;
+}
+
+router.get('/:id/menu-batches', async (req: Request, res: Response) => {
+  const { queryDb } = await import('../lib/db.js');
+  const id = String(req.params.id);
+  const registry = getRegistry() as any;
+  const seat = registry?.agents?.[id] ? id : id.replace(/^unregistered:/, '');
+  const session = (registry?.agents?.[seat]?.tmux_session as string) || seat;
+  const like = `menu:${session.replace(/[\\%_]/g, (c) => `\\${c}`)}:%`;
+  try {
+    const rows = queryDb(
+      `SELECT id, menu, answer_text, answered_at FROM approval_requests
+        WHERE kind = 'menu' AND answer = 'batch' AND op_key LIKE ? ESCAPE '\\' AND created_at >= ?
+        ORDER BY answered_at DESC LIMIT 50`,
+      [like, new Date(Date.now() - 60 * 86400_000).toISOString()]) as any[];
+    res.json({ agent: seat, records: menuBatchRecords(rows) });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to read answer records', detail: String(err?.message || err) });
   }
 });
 

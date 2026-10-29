@@ -197,6 +197,20 @@ router.post('/:id/answers', async (req: Request, res: Response) => {
   res.status(g.status).json(g.body);
 });
 
+// POST /api/questionnaires/:id/discard — close a LIVE questionnaire unanswered (the card's ✕): forwarded to the
+// gateway's discard, which records it and tells the asking agent not to keep waiting. Same guard as /answers.
+router.post('/:id/discard', async (req: Request, res: Response) => {
+  const who = deps.principal(req);
+  if (!who) { res.status(401).json({ ok: false, error: 'unauthenticated' }); return; }
+  if (who.role !== 'admin' || who.clientScope) { res.status(403).json({ ok: false, error: 'only the operator can dismiss questionnaires' }); return; }
+  const id = String(req.params.id);
+  if (!isLiveId(id)) { res.status(404).json({ ok: false, error: 'not a live questionnaire' }); return; }
+  const g = await gateway(`/questionnaires/${encodeURIComponent(id)}/discard`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+  });
+  res.status(g.status).json(g.body);
+});
+
 // POST /api/questionnaires/:id/submit — Server-side submission
 // Handles full lifecycle: save feedback, update index, notify creating agent
 

@@ -422,6 +422,31 @@ test('the voice reads stay open to a non-admin', async () => {
   assert.equal(deps.urls.length, 3);
 });
 
+test("an agent's own voice: the id is passed on, checked; DELETE puts it back on the install's voice", async () => {
+  const seen: { url: string; method: string; body?: string }[] = [];
+  const deps = makeDeps({ isAdmin: () => true, fetchJson: async (url: string, init: RequestInit) => {
+    seen.push({ url, method: String(init.method), body: init.body ? String(init.body) : undefined });
+    return { status: 200, body: { ok: true } };
+  } });
+  assert.equal((await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar', agent: 'dev-demo' })).status, 200);
+  assert.equal((await get(deps, '/api/arturo/ptt/voice?vendor=openai&agent=dev-demo')).status, 200);
+  assert.equal((await send(deps, 'DELETE', '/api/arturo/ptt/voice?vendor=openai&agent=dev-demo')).status, 200);
+  assert.deepEqual(seen.map((x) => [x.method, x.url, x.body]), [
+    ['PUT', `${GATEWAY_URL}/arturo/ptt/voice`, '{"vendor":"openai","voice_id":"cedar","agent":"dev-demo"}'],
+    ['GET', `${GATEWAY_URL}/arturo/ptt/voice?vendor=openai&agent=dev-demo`, undefined],
+    ['DELETE', `${GATEWAY_URL}/arturo/ptt/voice?vendor=openai&agent=dev-demo`, undefined],
+  ]);
+  assert.equal((await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar', agent: '../x' })).status, 400);
+  assert.equal((await send(deps, 'DELETE', '/api/arturo/ptt/voice?vendor=openai')).status, 400);   // no agent: nothing to clear
+  assert.equal(seen.length, 3);
+});
+test('an agent\'s own voice: anyone else is refused a PUT or a DELETE before the gateway', async () => {
+  const deps = makeDeps({ isAdmin: () => false });
+  assert.equal((await put(deps, '/api/arturo/ptt/voice', { vendor: 'openai', voice_id: 'cedar', agent: 'dev-demo' })).status, 403);
+  assert.equal((await send(deps, 'DELETE', '/api/arturo/ptt/voice?vendor=openai&agent=dev-demo')).status, 403);
+  assert.deepEqual(deps.urls, []);
+});
+
 test('the real role check decides when an authenticating proxy names the caller', async () => {
   const before = process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS;
   process.env.ORCHESTRA_API_TRUST_IDENTITY_HEADERS = '1';

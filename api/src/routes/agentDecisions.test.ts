@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decisionStatus, menuAnswerDecisions, decisionDelivery } from './agents.js';
+import { decisionStatus, menuAnswerDecisions, decisionDelivery, menuBatchRecords } from './agents.js';
 
 test('a card reads as pending, answered, expired, withdrawn, dismissed or replaced', () => {
   const now = Date.parse('2026-10-26T12:00:00Z');
@@ -41,4 +41,16 @@ test('delivery: held while an answer waits for its agent, delivered once it is i
   assert.equal(decisionDelivery({ status: 'answered', resumed_at: '2026-10-27T04:00:02Z' }), 'delivered');
   assert.equal(decisionDelivery({ status: 'pending' }), null);
   assert.equal(decisionDelivery({ status: 'expired' }), null);
+});
+
+test('a multi-part answer record carries its parts and the batch as sent, skips included; unreadable rows are left out', () => {
+  const parts = [{ index: 0, question: 'Which colour?', options: [{ n: '1', label: 'Blue' }] }, { index: 1, question: 'Which size?', options: [] }];
+  const out = menuBatchRecords([
+    { id: 'apr_a', answered_at: '2026-10-29T10:00:00Z', menu: JSON.stringify({ parts }),
+      answer_text: JSON.stringify([{ part: 0, ns: ['1'] }, { part: 1, skipped: true }]) },
+    { id: 'apr_b', menu: '{not json', answer_text: '[]' },
+    { id: 'apr_c', menu: JSON.stringify({ question: 'single' }), answer_text: '[]' },
+  ]);
+  assert.deepEqual(out, [{ id: 'apr_a', answered_at: '2026-10-29T10:00:00Z', parts,
+    answers: [{ part: 0, ns: ['1'] }, { part: 1, skipped: true }] }]);
 });

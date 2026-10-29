@@ -21,9 +21,6 @@ test('a slash command survives as the command the operator typed', () => {
   assert.equal(sanitizeClaudeUserText(
     '<command-name>/login</command-name>\n<command-message>login</command-message>\n<command-args></command-args>'),
     '/login');
-  assert.equal(sanitizeClaudeUserText(
-    '<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>opus</command-args>'),
-    '/model opus');
 });
 
 test('command output and the interrupt marker are dropped', () => {
@@ -44,4 +41,13 @@ test('ordinary text is returned byte-identical (the guard on the guard)', () => 
   // prose that merely TALKS about the markup is not plumbing
   const about = 'the transcript shows a <command-name> envelope around each slash command';
   assert.equal(sanitizeClaudeUserText(about), about);
+});
+
+test('a model switch is not shown as something the operator said', () => {
+  assert.equal(sanitizeClaudeUserText('<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>claude-opus-5-5[1m]</command-args>'), '');
+  assert.equal(sanitizeClaudeUserText('<command-name>/model</command-name><command-args></command-args>'), '');
+  // other commands still show what was typed
+  assert.equal(sanitizeClaudeUserText('<command-name>/compact</command-name><command-args></command-args>'), '/compact');
+  // a sentence that merely mentions /model is kept
+  assert.equal(sanitizeClaudeUserText('why did /model fail?'), 'why did /model fail?');
 });
