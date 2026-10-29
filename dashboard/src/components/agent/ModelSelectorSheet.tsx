@@ -25,6 +25,7 @@ import {
   nextExpanded,
   initialExpanded,
   type ProviderAvailability,
+  type ProviderModel,
   type ProviderRow,
 } from '../../lib/modelSelectorFilter';
 import { providerTileAction, showAddProvider } from '../../lib/features';
@@ -154,9 +155,12 @@ interface ModelSelectorSheetProps {
   selection?: { providerId: string; modelId: string } | null;
   onPick?: (pick: { providerId: string; modelId: string; modelLabel: string }) => void;
   onPickDefault?: () => void;
+  /** On an agent's page: the models that agent can switch to (from the gateway), listed under its own provider
+   *  instead of everything the login can run, so every row offered is one the switch accepts. */
+  agentModels?: { providerId: string; models: ProviderModel[] } | null;
 }
 
-export function ModelSelectorSheet({ open, onClose, selection, onPick, onPickDefault }: ModelSelectorSheetProps) {
+export function ModelSelectorSheet({ open, onClose, selection, onPick, onPickDefault, agentModels }: ModelSelectorSheetProps) {
   const [rows, setRows] = useState<ProviderRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -342,7 +346,8 @@ export function ModelSelectorSheet({ open, onClose, selection, onPick, onPickDef
                 }
                 const expandedRow = rows.find((r) => r.provider.id === expandedProviderId);
                 if (!expandedRow) return null;
-                const models = modelsForProvider(expandedRow);
+                const own = agentModels && agentModels.providerId === expandedRow.provider.id && agentModels.models.length > 0;
+                const models = own ? agentModels.models : modelsForProvider(expandedRow);
                 if (models.length === 0) {
                   return <div className="text-xs text-foreground/40 py-2">No models available for this provider.</div>;
                 }

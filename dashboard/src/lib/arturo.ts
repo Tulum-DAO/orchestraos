@@ -16,7 +16,9 @@ export interface ArturoStt { server: boolean; backend: 'local-whisper' | 'none';
 export interface ArturoHealth { assistant_name?: string; live?: boolean; live_engine?: 'gemini' | 'relay' | null; onboarded?: boolean; onboarding_conversation?: string | null; operator?: OperatorFacts; ok: boolean; status?: number; brain?: ArturoBrain; brain_mode?: string; mode?: 'voice' | 'text-only'; voice?: boolean; stt?: ArturoStt; disabled?: boolean; error?: string }
 /** A tap-to-pick card the BRAIN wrote with ask_choices: its options, and whether several may be picked.
  *  `note` is the server's own line (the starter team's cost), never the model's. */
-export type ChoiceCard = { options: string[]; multi: boolean; purpose: 'starter_team' | 'devices' | 'other'; note?: string; exclusive?: string };
+export type ChoiceCard = { options: string[]; multi: boolean; purpose: 'starter_team' | 'devices' | 'other'; note?: string; exclusive?: string;
+  /** The card's id on the server: it is dismissed by this, and kept with the reply in the thread. */
+  card_id?: string };
 /** A pairing code card (pair_device). The brain never sees `code`; it is shown here and nowhere else. */
 export type PairCard = { device: string; device_id: string; code: string; expires_in_s: number; where: string; powers: string; revoke: string;
   /** Page-only: set when a later turn's check_paired saw this device connect. The code is then dropped. */

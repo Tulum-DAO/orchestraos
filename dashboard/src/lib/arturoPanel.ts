@@ -6,7 +6,8 @@ import { isArturoDisabled, isStarting, handsFreeReady, type ArturoHealth } from 
 import { DEFAULT_ASSISTANT_NAME } from './assistantName.ts';
 import type { ArturoJob } from './arturoJobs.ts';
 
-export type PanelPage = 'voice' | 'memory' | 'activity' | 'settings' | 'brain' | 'device' | 'avatar' | 'name' | 'edit';
+export type PanelPage = 'voice' | 'memory' | 'activity' | 'settings' | 'brain' | 'device' | 'avatar' | 'name' | 'edit'
+  | 'style' | 'model';
 
 /** The levels to a page from the root, so a jump lands with the right back arrow: Brain sits under Settings. */
 export function pathTo(page: PanelPage): PanelPage[] {
@@ -28,6 +29,12 @@ export function panelStatus(h: ArturoHealth | null, brain: string, name = DEFAUL
 export function factsValue(count: number | null): string {
   if (count === null) return '';
   return count === 1 ? '1 fact' : `${count} facts`;
+}
+
+/** An agent's Activity row: its subagents still running (background tasks and subagents are its jobs). */
+export function subagentsValue(n: number | null | undefined): string {
+  if (n === null || n === undefined) return '';
+  return n ? `${n} running` : 'Idle';
 }
 
 export function activityValue(jobs: ArturoJob[] | null): string {

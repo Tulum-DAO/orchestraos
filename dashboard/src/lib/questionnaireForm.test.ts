@@ -2,16 +2,17 @@
  * Native rendering of DB ("live") questionnaires on the web (P1, 2026-10-14). The web showed them
  * in an iframe of /api/questionnaires/:id/html, which only knows legacy file questionnaires, so a
  * live one rendered as a title and nothing to answer. These pin the form's logic: which ones are
- * live, which options show, how answers are built, what counts as missing, drafts preloaded.
+ * live, which options show, how answers are built (skips included), drafts preloaded.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { isLiveQuestionnaire, questionnaireSummary, SUMMARY_MAX } from './questionnaireForm';
 import {
-  isLiveQuestionnaire, answerableOptions, buildAnswers, missingRequired, initialAnswers, questionnaireSummary, SUMMARY_MAX,
-  type LiveQuestion,
-} from './questionnaireForm';
+  canSkip, partRows, questionnaireAnswers, questionnaireBody, questionnaireParts, skip as skipped, takesWords,
+  type QuestionnaireQuestion,
+} from './multiPart';
 
-const Q: LiveQuestion[] = [
+const Q: QuestionnaireQuestion[] = [
   { n: 1, prompt: 'Which day?', kind: 'menu', required: 1, answer: null,
     menu: { options: [
       { n: '1', label: 'Monday', input_kind: 'direct' },
@@ -29,40 +30,49 @@ test('a questionnaire is live when the API marks it, or by its qnr_ id; legacy o
   assert.equal(isLiveQuestionnaire({ id: 'onboarding-2026-09' }), false);
 });
 
-test('chat options are not offered (the gateway refuses them in questionnaires)', () => {
-  assert.deepEqual(answerableOptions(Q[0]).map((o) => o.label), ['Monday', 'Other']);
-  assert.deepEqual(answerableOptions(Q[1]), []);
+test('chat options are not offered (the gateway refuses them in questionnaires); a write-in row is the words field', () => {
+  const parts = questionnaireParts(Q);
+  assert.deepEqual(partRows(parts[0]).map((o) => o.label), ['Monday']);
+  assert.equal(takesWords(parts[0]), true);
+  assert.deepEqual(partRows(parts[1]), []);                     // a free-text question is words only
+  assert.deepEqual(parts.map((p) => p.required), [true, false, true]);
 });
 
-test('answers carry only what was given: an option, text, or both; blanks are dropped', () => {
-  const a = buildAnswers({ 1: { option_n: '2', answer_text: '  Thursday ' }, 2: { answer_text: '   ' }, 3: { option_n: '1' } });
-  assert.deepEqual(a, { '1': { option_n: '2', answer_text: 'Thursday' }, '3': { option_n: '1' } });
-  assert.deepEqual(buildAnswers({ 2: { answer_text: 'just text' } }), { '2': { answer_text: 'just text' } });
+test('answers carry what was given (a pick, words, or both); an optional question left unanswered goes as a skip', () => {
+  const parts = questionnaireParts(Q);
+  const body = questionnaireBody(parts, [
+    { ns: [], text: '  Thursday ', skipped: false }, { ns: [], text: '', skipped: true }, { ns: ['1'], text: '', skipped: false },
+  ]);
+  assert.deepEqual(body, { '1': { answer_text: 'Thursday' }, '2': { skipped: true }, '3': { option_n: '1' } });
 });
 
-test('a required question is answered by an option or by text alone; a free_text option needs its text', () => {
-  assert.deepEqual(missingRequired(Q, {}), [1, 3]);
-  assert.deepEqual(missingRequired(Q, { 1: { answer_text: 'whenever' }, 3: { option_n: '2' } }), []);
-  assert.deepEqual(missingRequired(Q, { 1: { option_n: '2' }, 3: { option_n: '1' } }), [1]);   // "Other" with no text
-  assert.deepEqual(missingRequired(Q, { 1: { option_n: '1' }, 3: { option_n: '1' } }), []);
+test('a required question is never sent as a skip, and the card offers no Skip on it', () => {
+  const parts = questionnaireParts(Q);
+  assert.deepEqual(questionnaireBody(parts, [skipped(), skipped(), skipped()]), { '2': { skipped: true } });
+  assert.equal(canSkip(parts, { answers: [], at: 0 }), false);
+  assert.equal(canSkip(parts, { answers: [], at: 1 }), true);
 });
 
-test('a saved draft answer is preloaded', () => {
-  assert.deepEqual(initialAnswers(Q), { 3: { option_n: '1' } });
+test('a saved draft answer is preloaded; a stored skip shows as skipped', () => {
+  const parts = questionnaireParts(Q);
+  assert.deepEqual(questionnaireAnswers(parts, Q).map((a) => [a.ns, a.text, a.skipped]),
+    [[[], '', false], [[], '', false], [['1'], '', false]]);
+  const qs = Q.map((q) => (q.n === 2 ? { ...q, answer: { option_n: null, answer_text: null, state: 'skipped' } } : q));
+  assert.equal(questionnaireAnswers(parts, qs)[1].skipped, true);
 });
 
 test('a saved draft holding a hidden chat option or an unknown option is not carried into the form', () => {
-  const qs: LiveQuestion[] = [
+  const qs: QuestionnaireQuestion[] = [
     { n: 1, prompt: 'p', kind: 'menu', required: 1, answer: { option_n: '3', answer_text: null, state: 'draft' },
       menu: { options: [{ n: '1', label: 'A', input_kind: 'direct' }, { n: '3', label: 'Chat', input_kind: 'chat' }] } },
     { n: 2, prompt: 'p', kind: 'menu', required: 1, answer: { option_n: '9', answer_text: null, state: 'draft' },
       menu: { options: [{ n: '1', label: 'A', input_kind: 'direct' }] } },
     { n: 3, prompt: 'p', kind: 'menu', required: 1, answer: { option_n: '1', answer_text: null, state: 'draft' },
       menu: { options: [{ n: '1', label: 'A', input_kind: 'direct' }] } },
-  ] as any;
-  const d = initialAnswers(qs);
-  assert.deepEqual(buildAnswers(d), { '3': { option_n: '1' } });
-  assert.deepEqual(missingRequired(qs, d), [1, 2]);       // shown as unanswered, so Send is blocked
+  ];
+  const parts = questionnaireParts(qs);
+  const answers = questionnaireAnswers(parts, qs);
+  assert.deepEqual(questionnaireBody(parts, answers), { '3': { option_n: '1' } });   // 1 and 2 shown as unanswered
 });
 
 test('the context above the questions is the summary (notes are appended to it); empty or title-only shows nothing', () => {

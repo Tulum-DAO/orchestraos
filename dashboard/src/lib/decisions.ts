@@ -72,9 +72,10 @@ export function chosenText(d: Decision): string {
   const opt = d.option_n ? (d.menu?.options || []).find((o) => o.n === d.option_n) : undefined;
   const label = opt && !/write-in|other/i.test(opt.label) ? opt.label : '';
   const text = (d.answer_text || '').trim();
-  if (label && text) return `${label} — “${text}”`;
+  // Typed words are shown as plain text, never in quotes.
+  if (label && text) return `${label} — ${text}`;
   if (label) return label;
-  if (text) return `“${text}”`;
+  if (text) return text;
   if (d.answer === 'approve') return 'Approved';
   if (d.answer === 'deny') return 'Denied';
   return d.answer || 'Answered';
@@ -89,7 +90,7 @@ export function menuAnswerLine(d: Decision): string {
   const opt = d.option_n ? (d.menu?.options || []).find((o) => o.n === d.option_n) : undefined;
   const text = (d.answer_text || '').trim();
   const label = opt?.label && !(text && /write-in|other|type something/i.test(opt.label)) ? ` · ${opt.label}` : '';
-  return `${who}Chose: ${d.option_n ?? '?'}${label}${text ? ` — “${text}”` : ''}`;
+  return `${who}Chose: ${d.option_n ?? '?'}${label}${text ? ` — ${text}` : ''}`;
 }
 
 /** How fast an answer reached its agent: "delivered in 2s", "delivery held" while it waits, '' when
@@ -121,14 +122,20 @@ export function decisionTone(d: Decision): DecisionTone {
 
 /** The line an answered (or closed) bubble shows instead of its buttons: one compact row, the
  *  choice · who answered · where · when · how fast it reached the agent. */
+/** Who answered, where, when and how fast it reached the agent: "Answered by you · the dashboard · 10:42". */
+export function answeredByLine(d: Decision): string {
+  // answered_by is the answering principal: this install's operator (you), or an agent answering its own gate
+  const who = !d.answered_by || d.answered_by === operatorUserId() ? 'you' : d.answered_by;
+  const where = d.answer_surface && SURFACE[d.answer_surface] ? ` · ${SURFACE[d.answer_surface]}` : '';
+  const when = clock(d.answered_at);
+  const speed = deliveryText(d);
+  return `Answered by ${who}${where}${when ? ` · ${when}` : ''}${speed ? ` · ${speed}` : ''}`;
+}
+
 export function outcomeLine(d: Decision): string {
   if (d.state === 'answered') {
-    // answered_by is the answering principal: this install's operator (you), or an agent answering its own gate
-    const who = !d.answered_by || d.answered_by === operatorUserId() ? 'you' : d.answered_by;
-    const where = d.answer_surface && SURFACE[d.answer_surface] ? ` · ${SURFACE[d.answer_surface]}` : '';
-    const when = clock(d.answered_at);
-    const speed = deliveryText(d);
-    return `${chosenText(d)} · answered by ${who}${where}${when ? ` · ${when}` : ''}${speed ? ` · ${speed}` : ''}`;
+    const by = answeredByLine(d);
+    return `${chosenText(d)} · a${by.slice(1)}`;
   }
   if (d.state === 'expired') return `Expired unanswered${d.expires_at ? ` · ${clock(d.expires_at)}` : ''}`;
   if (d.state === 'withdrawn') return 'Withdrawn by the agent';

@@ -64,11 +64,12 @@ test('the layout portals its ONE bell into the header slot instead of guessing t
   assert.doesNotMatch(layout, /ml-auto mr-12/);
 });
 
-test('the agent top bar ends with the slot, inside the icon row, and reserves no padding for a fixed bell', () => {
+test('the agent top bar ends with the slot then the gear, inside the icon row, and reserves no padding for a fixed bell', () => {
   const topbar = src('components/agent/TopBar.tsx');
   assert.match(topbar, /useContext\(HeaderEndSlotContext\)/);
-  assert.match(topbar, /<div ref=\{registerEndSlot \?\? undefined\} data-header-end-slot className="flex items-center" \/>\s*<\/div>\s*<\/div>\s*\);/,
-    'the slot is the last child of the controls row');
+  // The bell's slot, then only the gear (the agent's panel, beside the bell as on Arturo's page), then the row ends.
+  assert.match(topbar, /<div ref=\{registerEndSlot \?\? undefined\} data-header-end-slot className="flex items-center" \/>\s*\{\/\*[^*]*\*\/\}\s*\{onSettings && seat && \([\s\S]*?<Settings size=\{20\} \/>\s*<\/button>\s*\)\}\s*<\/div>\s*<\/div>\s*\);/,
+    'the slot is followed only by the gear, the last child of the controls row');
   assert.doesNotMatch(topbar, /md:pr-12/);
 });
 

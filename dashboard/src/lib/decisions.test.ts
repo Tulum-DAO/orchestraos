@@ -48,7 +48,7 @@ test('an answered bubble says what was chosen, by whom, where and when', () => {
   const line = outcomeLine(d({ state: 'answered', option_n: '1', answered_by: operatorUserId(), answer_surface: 'web',
                                answered_at: '2026-10-24T17:20:00Z' }));
   assert.match(line, /^Give me scope now · answered by you · the dashboard · /);
-  assert.equal(chosenText(d({ state: 'answered', option_n: '2', answer_text: 'park them' })), '“park them”');
+  assert.equal(chosenText(d({ state: 'answered', option_n: '2', answer_text: 'park them' })), 'park them');
   assert.equal(outcomeLine(d({ state: 'withdrawn' })), 'Withdrawn by the agent');
   assert.equal(outcomeLine(d({ state: 'dismissed', answered_at: null })), 'Dismissed by you');
   assert.match(outcomeLine(d({ state: 'dismissed', answered_at: '2026-10-25T15:45:00Z' })), /^Dismissed by you · /);
@@ -58,7 +58,7 @@ test('an answered bubble says what was chosen, by whom, where and when', () => {
 test('menu answers read as a lasting line: dismissed, or the option chosen', () => {
   assert.equal(menuAnswerLine(d({ kind: 'menu_answer', answer: 'dismiss', question: 'Proceed with the deploy?' })), 'You dismissed: Proceed with the deploy?');
   assert.equal(menuAnswerLine(d({ kind: 'menu_answer', answer: 'answer', option_n: '1' })), 'Chose: 1 · Give me scope now');
-  assert.equal(menuAnswerLine(d({ kind: 'menu_answer', answer: 'answer', option_n: '2', answer_text: 'do the small one' })), 'Chose: 2 — “do the small one”');
+  assert.equal(menuAnswerLine(d({ kind: 'menu_answer', answer: 'answer', option_n: '2', answer_text: 'do the small one' })), 'Chose: 2 — do the small one');
   assert.equal(menuAnswerLine(d({ kind: 'menu_answer', answer: 'dismiss', answered_by: 'gm', question: 'Q?' })), 'gm dismissed: Q?');
 });
 

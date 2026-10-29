@@ -1,11 +1,14 @@
 import { clsx } from 'clsx';
 import { CheckCircle2, ChevronDown, ChevronRight, ExternalLink, ShieldCheck, User, XCircle } from 'lucide-react';
 import { operatorUserId } from '../../lib/runtimeConfig';
+import { urgencyWord } from '../../lib/approvalCard';
 
 /** The fields of an Approvals/Inbox row that show under a DecisionCard's text. */
 export interface ApprovalExtrasItem {
   type: string;
   urgency: string;
+  /** The header already says it; an urgency derived from it is not repeated (lib/approvalCard urgencyWord). */
+  risk_level?: string | null;
   created_at: string;
   evidence_summary?: string | null;
   qa_verdict?: string | null;
@@ -37,7 +40,7 @@ export default function ApprovalExtras({ item, expanded, onToggle }: { item: App
     item.pattern_type === 'correction' && <span key="c" className="text-warning">correction</span>,
     item.pattern_type === 'failure' && <span key="f" className="text-destructive">failure</span>,
     item.initiated_by === operatorUserId() && <span key="o" className="flex items-center gap-1"><User size={10} /> the operator</span>,
-    item.urgency !== 'normal' && <span key="u" className={URGENCY_TEXT[item.urgency]}>{item.urgency}</span>,
+    urgencyWord(item.urgency, item.risk_level) && <span key="u" className={URGENCY_TEXT[item.urgency]}>{item.urgency}</span>,
     item.qa_verdict && <span key="q">QA: <span className={item.qa_verdict === 'APPROVE' ? 'text-success' : 'text-warning'}>{item.qa_verdict}</span></span>,
   ].filter(Boolean);
   return (

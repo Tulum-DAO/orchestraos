@@ -1,16 +1,14 @@
 import { useState } from 'react';
 import { clsx } from 'clsx';
-import MenuAnswerBlock from './MenuAnswerCard';
 import DecisionCard, { AgentSide, ApprovalAnswer } from './DecisionCard';
+import DecisionQuestion, { AnsweredDecision } from './DecisionQuestion';
 import { dismissMenuCard, post } from '../../lib/api';
-import { decisionTone, menuAnswerLine, outcomeLine, previewText, type Decision } from '../../lib/decisions';
-import {
-  buildMenuAnswerPayload, initialMenuAnswerState, selectOption, setText, type MenuAnswerState,
-} from '../../lib/menuAnswer';
+import { answeredByLine, decisionTone, menuAnswerLine, outcomeLine, previewText, type Decision } from '../../lib/decisions';
 
 /**
  * DecisionBubble — one of the agent's approval cards, in its conversation, as a message: under the message
- * it belongs to, answerable right here, and kept, answered, as history once it is answered from anywhere.
+ * it belongs to, answerable right here, and kept, answered, as history once it is answered from anywhere. A question
+ * (kind 'menu') is the one question card (DecisionQuestion); an approval keeps Approve and Deny.
  * The server state is the only truth; `onAnswered` asks the list to refresh. An answered in-agent menu
  * (`menu_answer`) is a single line instead: what was asked, and what was chosen or that it was dismissed.
  */
@@ -34,11 +32,31 @@ export default function DecisionBubble({ decision: d, onAnswered }: { decision: 
 }
 
 function DecisionCardBubble({ decision: d, onAnswered }: { decision: Decision; onAnswered: () => void }) {
-  const [state, setState] = useState<MenuAnswerState>(initialMenuAnswerState);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const open = d.state === 'pending';
   const isMenu = d.kind === 'menu' && (d.menu?.options?.length ?? 0) > 0;
+
+  // A question (a menu card) is the one question card, open or answered; an approval keeps Approve and Deny.
+  if (isMenu && (open || d.state === 'answered')) {
+    const row = { id: d.id, question: d.question, agent: d.from_agent, risk: d.risk_level, body: d.summary,
+      options: d.menu?.options ?? [] };
+    return (
+      <AgentSide>
+        <div id={`decision-${d.id}`} data-decision-state={d.state}>
+          {open ? (
+            <DecisionQuestion row={row} onAnswered={onAnswered} onDismiss={async () => {
+              const err = await dismissMenuCard(d.id, d.from_agent, d.menu?.question || d.question);
+              if (!err) onAnswered();
+              return err;
+            }} />
+          ) : (
+            <AnsweredDecision row={row} optionN={d.option_n} answerText={d.answer_text} note={answeredByLine(d)} />
+          )}
+        </div>
+      </AgentSide>
+    );
+  }
 
   const send = async (fn: () => Promise<unknown>) => {
     setSending(true); setError(undefined);
@@ -47,31 +65,15 @@ function DecisionCardBubble({ decision: d, onAnswered }: { decision: Decision; o
     finally { setSending(false); }
   };
   const path = (verb: string) => `/approvals/unified/${encodeURIComponent(d.id)}/${verb}`;
-  const respond = () => {
-    const payload = buildMenuAnswerPayload(state);
-    if (payload) void send(() => post(path('answer'), payload));
-  };
 
   return (
     <AgentSide>
       <DecisionCard id={`decision-${d.id}`} dataState={d.state} tone={decisionTone(d)}
         kind={isMenu ? 'decision' : 'approval'} question={d.question} agent={d.from_agent} risk={d.risk_level}
-        body={d.summary} open={open} outcome={outcomeLine(d)}
-        onDismiss={isMenu ? async () => {
-          const err = await dismissMenuCard(d.id, d.from_agent, d.menu?.question || d.question);
-          if (!err) onAnswered();
-          return err;
-        } : undefined}>
-        {isMenu ? (
-          <MenuAnswerBlock item={{ id: d.id, menu: d.menu as never }} state={state} sending={sending} error={error}
-            onSelect={(n) => setState((s) => selectOption(s, n))}
-            onText={(t) => setState((s) => setText(s, t))}
-            onRespond={respond} />
-        ) : (
-          <ApprovalAnswer sending={sending} error={error}
-            onApprove={() => void send(() => post(path('approve'), {}))}
-            onDeny={(reason) => void send(() => post(path('deny'), { reason }))} />
-        )}
+        body={d.summary} open={open && !isMenu} outcome={outcomeLine(d)}>
+        <ApprovalAnswer sending={sending} error={error}
+          onApprove={() => void send(() => post(path('approve'), {}))}
+          onDeny={(reason) => void send(() => post(path('deny'), { reason }))} />
       </DecisionCard>
     </AgentSide>
   );

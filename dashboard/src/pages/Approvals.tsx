@@ -7,15 +7,10 @@ import {
   CheckCircle2, XCircle,
 } from 'lucide-react';
 import { dismissMenuCard, post } from '../lib/api';
-import {
-  initialMenuAnswerState,
-  selectOption,
-  setText,
-  buildMenuAnswerPayload,
-  type MenuAnswerState,
-  type MenuOption,
-} from '../lib/menuAnswer';
-import MenuAnswerBlock from '../components/chat/MenuAnswerCard';
+import type { MenuOption } from '../lib/menuAnswer';
+import { MultiPartAnswer } from '../components/chat/MultiPartCard';
+import DecisionQuestion from '../components/chat/DecisionQuestion';
+import { isTerminalMenu } from '../lib/decisionCard';
 import DecisionCard, { ApprovalAnswer } from '../components/chat/DecisionCard';
 import ApprovalExtras from '../components/chat/ApprovalExtras';
 import { approvalCardBody, approvalCardAgent } from '../lib/approvalCard';
@@ -49,9 +44,11 @@ interface UnifiedApproval {
   initiated_by?: string;
   // gm-mine-menu-card seam 2: additive — undefined/null on every non-menu row.
   kind?: string | null;
-  menu?: { options?: MenuOption[]; question?: string; read_only?: boolean; notice?: string } | null;
+  menu?: { options?: MenuOption[]; question?: string; read_only?: boolean; notice?: string; multipart?: boolean; fail_safe?: boolean } | null;
   options?: string[] | null;
   agent_id?: string | null;
+  /** The row's dedup key: a terminal menu's is `menu:<session>:…` (lib/decisionCard isTerminalMenu). */
+  op_key?: string | null;
 }
 
 interface Stats {
@@ -87,10 +84,6 @@ export default function Approvals() {
   const [tab, setTab] = useState<string>('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [resolvedOpen, setResolvedOpen] = useState(false);
-  // gm-mine-menu-card seam 2: per-row menu answer draft (option + free text),
-  // independent state so A3 (selecting an option never wipes typed text) holds.
-  const [menuAnswers, setMenuAnswers] = useState<Record<string, MenuAnswerState>>({});
-  const getMenuAnswer = (id: string) => menuAnswers[id] ?? initialMenuAnswerState;
 
   const { data, isLoading } = useQuery({
     queryKey: ['unified-approvals'],
@@ -113,26 +106,6 @@ export default function Approvals() {
     mutationFn: ({ id, reason }: { id: string; reason: string }) =>
       post(`/approvals/unified/${id}/deny`, { reason }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['unified-approvals'] }),
-  });
-
-  // V3: kind='menu' universal Respond — routes through the SAME canonical
-  // answer path approve/deny use (POST /:id/answer -> canonicalAnswer('option')
-  // -> approval.py answer -> watch_gateway.apply_answer). D4: a 409/held
-  // refusal is surfaced inline (menuAnswerError) and the typed draft (option +
-  // text) is PRESERVED, never cleared, so the operator doesn't lose what he wrote.
-  const [menuAnswerError, setMenuAnswerError] = useState<Record<string, string>>({});
-  const answerMenuMutation = useMutation({
-    mutationFn: ({ id, option_n, answer_text }: { id: string; option_n?: string; answer_text?: string }) =>
-      post(`/approvals/unified/${id}/answer`, { option_n, answer_text }),
-    onSuccess: (_data, { id }) => {
-      queryClient.invalidateQueries({ queryKey: ['unified-approvals'] });
-      setMenuAnswers((m) => { const next = { ...m }; delete next[id]; return next; });
-      setMenuAnswerError((m) => { const next = { ...m }; delete next[id]; return next; });
-    },
-    onError: (err: any, { id }) => {
-      // Held/refused (incl. 409 — answered elsewhere) — keep the draft intact.
-      setMenuAnswerError((m) => ({ ...m, [id]: err?.message || 'Could not send — try again.' }));
-    },
   });
 
   const items = data?.items ?? [];
@@ -239,33 +212,43 @@ export default function Approvals() {
             const denying = denyMutation.isPending && denyMutation.variables?.id === item.id;
             const approvalError = (approveMutation.variables === item.id && approveMutation.error?.message)
               || (denyMutation.variables?.id === item.id && denyMutation.error?.message) || null;
+            const dismiss = async () => {
+              const err = await dismissMenuCard(item.id, item.agent_id, item.menu?.question || item.title);
+              if (!err) void queryClient.invalidateQueries({ queryKey: ['unified-approvals'] });
+              return err;
+            };
+            // A multi-part menu is read from the agent's screen part by part, then answered on the same card.
+            if (isMenu && (item.menu?.multipart || item.menu?.fail_safe) && item.agent_id) {
+              return (
+                <MultiPartAnswer key={item.id} id={`approval-${item.id}`} highlighted={highlightId === item.id}
+                  agentId={item.agent_id} agentName={approvalCardAgent(item) || null} cardId={item.id} onDismiss={dismiss} />
+              );
+            }
+            // A question (kind 'menu') is the one question card: a pick sends it, words go alone where the menu has a
+            // write-in (DecisionQuestion). A menu the server sends read-only keeps its notice.
+            if (isMenu && !item.menu?.read_only) {
+              return (
+                <DecisionQuestion key={item.id} id={`approval-${item.id}`} highlighted={highlightId === item.id}
+                  row={{ id: item.id, question: item.title, agent: approvalCardAgent(item) || null, risk: item.risk_level,
+                    body: approvalCardBody(item), options: item.menu?.options ?? [], terminal: isTerminalMenu(item) }}
+                  extra={<ApprovalExtras item={item} expanded={expandedId === item.id}
+                    onToggle={() => setExpandedId(expandedId === item.id ? null : item.id)} />}
+                  onAnswered={() => void queryClient.invalidateQueries({ queryKey: ['unified-approvals'] })}
+                  onDismiss={dismiss} />
+              );
+            }
             return (
               <DecisionCard key={item.id} id={`approval-${item.id}`} highlighted={highlightId === item.id}
                 kind={isMenu ? 'decision' : 'approval'} question={item.title} agent={approvalCardAgent(item) || null}
                 risk={item.risk_level} body={approvalCardBody(item)} open
                 extra={<ApprovalExtras item={item} expanded={expandedId === item.id}
                   onToggle={() => setExpandedId(expandedId === item.id ? null : item.id)} />}
-                onDismiss={isMenu ? async () => {
-                  const err = await dismissMenuCard(item.id, item.agent_id, item.menu?.question || item.title);
-                  if (!err) void queryClient.invalidateQueries({ queryKey: ['unified-approvals'] });
-                  return err;
-                } : undefined}>
-                {/* kind='menu' rows answer via option/free-text only (watch_gateway.py: "menu rows answer via
-                    answer=='option' only"), so a menu card never shows Approve/Deny. */}
+                onDismiss={isMenu ? dismiss : undefined}>
+                {/* A menu sent read-only (a multi-part menu this client is not given whole) only says where to answer it. */}
                 {isMenu ? (
-                  <MenuAnswerBlock
-                    item={item}
-                    state={getMenuAnswer(item.id)}
-                    onSelect={(n) => setMenuAnswers((m) => ({ ...m, [item.id]: selectOption(getMenuAnswer(item.id), n) }))}
-                    onText={(t) => setMenuAnswers((m) => ({ ...m, [item.id]: setText(getMenuAnswer(item.id), t) }))}
-                    onRespond={() => {
-                      const payload = buildMenuAnswerPayload(getMenuAnswer(item.id));
-                      if (!payload) return;
-                      answerMenuMutation.mutate({ id: item.id, ...payload });
-                    }}
-                    sending={answerMenuMutation.isPending && answerMenuMutation.variables?.id === item.id}
-                    error={menuAnswerError[item.id]}
-                  />
+                  <div className="mx-4 mb-3 text-xs text-warning bg-warning/10 border border-warning/30 rounded-xl px-3 py-2">
+                    {item.menu?.notice || 'Multi-part menu — open the agent to answer.'}
+                  </div>
                 ) : (
                   <ApprovalAnswer sending={approving || denying} error={approvalError}
                     onApprove={() => approveMutation.mutate(item.id)}

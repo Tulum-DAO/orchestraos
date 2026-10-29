@@ -111,7 +111,7 @@ export function AgentSide({ children }: { children: ReactNode }) {
   );
 }
 
-function DismissButton({ onDismiss }: { onDismiss: () => Promise<string | null> }) {
+export function DismissButton({ onDismiss }: { onDismiss: () => Promise<string | null> }) {
   const [armed, setArmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

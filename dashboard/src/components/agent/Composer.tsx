@@ -1,10 +1,14 @@
-import { useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Cpu, PhoneCall } from 'lucide-react';
 import { delegatedWorkLabel, type ComposerGate } from '../../lib/composerGate';
 import { useLocation } from 'react-router-dom';
 import { useAssistantName } from '../../lib/assistantName';
-import { useModelSelection } from '../../stores/modelSelection';
+import {
+  fetchAgentModel, switchAgentModel, modelLabel as labelFor, pickRefusal, switchNotice, switchableModels,
+  type AgentModelInfo, type SwitchNotice,
+} from '../../lib/agentModel';
 import { ModelSelectorSheet } from './ModelSelectorSheet';
+import { useComposerDraft } from '../../stores/composerDrafts';
 import { VoiceControls, type VoiceControlsHandle } from './VoiceControls';
 import ChatInput from '../chat/ChatInput';
 import { sendFromComposer } from '../../lib/agentSendFlow';
@@ -27,8 +31,41 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
   const aname = useAssistantName();
   const location = useLocation();
   const [sheetOpen, setSheetOpen] = useState(false);
-  const [draft, setDraft] = useState('');
-  const modelLabel = useModelSelection((s) => s.modelLabel);
+  // The agent's draft (stores/composerDrafts.ts): kept when the page switches to Dev or to another agent.
+  const { draft: { text: draft }, setText: setDraft } = useComposerDraft(agentId);
+  // The model this agent runs, from the gateway; picking another switches it (lib/agentModel.ts).
+  // Both kept with the agent they belong to, so opening another agent never shows this one's model.
+  const [modelOf, setModelOf] = useState<{ id: string; info: AgentModelInfo | null } | null>(null);
+  const [noticeOf, setNoticeOf] = useState<{ id: string; notice: SwitchNotice } | null>(null);
+  const agentModel = modelOf?.id === agentId ? modelOf.info : null;
+  const notice = noticeOf?.id === agentId ? noticeOf.notice : null;
+  const setNotice = useCallback((n: SwitchNotice | null) => setNoticeOf(n ? { id: agentId, notice: n } : null), [agentId]);
+  const refreshModel = useCallback(() => {
+    void fetchAgentModel(agentId).then((info) => setModelOf({ id: agentId, info }));
+  }, [agentId]);
+  useEffect(() => { refreshModel(); }, [refreshModel]);
+  useEffect(() => {
+    if (notice?.tone !== 'ok') return;
+    const t = setTimeout(() => setNotice(null), 6000);
+    return () => clearTimeout(t);
+  }, [notice, setNotice]);
+  const modelLabel = labelFor(agentModel, agentModel?.model);
+  const onPick = (pick: { providerId: string; modelId: string; modelLabel: string }) => {
+    const refused = pickRefusal(agentModel, pick);
+    if (refused) { setNotice({ tone: 'error', text: refused }); return; }
+    setNotice({ tone: 'wait', text: `Switching to ${pick.modelLabel}…` });
+    void switchAgentModel(agentId, pick.modelId).then(({ status, body }) => {
+      setNotice(switchNotice(status, body, pick.modelLabel));
+      // A confirmed live switch shows at once. The seat's record catches up a few seconds later, and a read
+      // made before then still names the old model, so the re-read waits.
+      if (status === 200 && body.ok && body.switching === 'switched' && agentModel) {
+        setModelOf({ id: agentId, info: { ...agentModel, model: pick.modelId } });
+        setTimeout(refreshModel, 8000);
+      } else {
+        refreshModel();
+      }
+    });
+  };
   const voiceRef = useRef<VoiceControlsHandle>(null);
   const [inCall, setInCall] = useState(false);
   // B2 video-upload capability gate: N/A — ChatInput's current attach
@@ -55,6 +92,10 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
             A mid-turn seat is NOT refused: Claude Code queues natively, so the honest line is
             "this will wait", not a disabled button. The blocked cases are the two where a
             keystroke does damage (it answers a menu) or nothing at all (the pane is down). */}
+        {notice && (
+          <p className={`mx-6 mb-1 text-[11px] ${notice.tone === 'error' ? 'text-red-600 dark:text-red-400'
+            : 'text-muted-foreground'}`} role="status">{notice.text}</p>
+        )}
         {gate && gate.send === 'blocked' && (
           <p className="mx-6 mb-1 text-[11px] text-amber-500 dark:text-amber-300" role="status">{gate.reason}</p>
         )}
@@ -128,7 +169,10 @@ export function Composer({ agentId = 'gm', seatName, gate, subagents, canStop, o
             />
           }
         />
-        <ModelSelectorSheet open={sheetOpen} onClose={() => setSheetOpen(false)} />
+        <ModelSelectorSheet open={sheetOpen} onClose={() => setSheetOpen(false)}
+          selection={agentModel?.runtime && agentModel.model ? { providerId: agentModel.runtime, modelId: agentModel.model } : null}
+          onPick={onPick}
+          agentModels={agentModel?.runtime ? { providerId: agentModel.runtime, models: switchableModels(agentModel) } : null} />
       </div>
     </div>
   );

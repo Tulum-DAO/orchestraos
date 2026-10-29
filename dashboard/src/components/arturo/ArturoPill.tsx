@@ -22,9 +22,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import JobTray from './JobTray';
 import { useStickToBottom } from '../../lib/useStickToBottom';
 import { currentThread, setCurrentThread, subscribeCurrentThread } from '../../lib/arturoCurrent';
-import ToolRun from './ToolRun';
+import ToolCalls from '../chat/ToolCalls';
+import { fromPart } from '../../lib/toolCalls';
 import { jobResultParts } from '../../lib/arturoJobs';
-import type { ToolPart } from '../../lib/turnParts';
+import { applyToolCall, applyToolResult, type ToolPart, type TurnPart } from '../../lib/turnParts';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { Mic, MicOff, ArrowUp, X, History, Focus, PhoneOff, AudioLines, Plus, Paperclip, Cpu } from 'lucide-react';
 import { useDictation } from './useDictation.ts';
@@ -37,7 +38,8 @@ import {
 } from '../../lib/arturoThreads';
 import { useHandsFreeCall } from '../../hooks/useHandsFreeCall';
 import SpawnedAgentCard from './SpawnedAgentCard';
-import VoiceCallCard from '../chat/VoiceCallCard';
+import { ArturoCallCard } from './ArturoCallCard';
+import { groupCalls } from '../../lib/arturoCallGroups';
 import { hasVoiceCallMarker, parseVoiceSegments } from '../../lib/voiceCall';
 import { ModelSelectorSheet } from '../agent/ModelSelectorSheet';
 import { useArturoBrain } from '../../stores/arturoBrain';
@@ -54,7 +56,16 @@ interface PillTurn { role: 'user' | 'arturo'; text: string; tools?: string[];
   steps?: ToolPart[]; spawned?: string[]; at: number; live?: boolean; state?: SendState;
   /** A first-person status note (voice not configured, mic denied…) — rendered as a small interleaved
    *  row at the moment it happened, like a tool call, never as a message and never pinned to the bottom. */
-  note?: boolean }
+  note?: boolean;
+  /** Spoken on a call (a caption committed here, or a stored turn of mode "voice"): it goes in the call's card,
+   *  as on Arturo's page (lib/arturoCallGroups). */
+  voice?: boolean;
+  /** The call-ended line of this call id (stored threads tag it): closes the call's card. */
+  callEnd?: string;
+  /** Tools Arturo ran during a live call, as they happened (parts = tool cards only). */
+  callTools?: boolean; parts?: TurnPart[];
+  /** When it was said (epoch seconds): the call card's length. */
+  ts?: number }
 /** Which thread was I in: the browser's ONE current thread, shared with the home (lib/arturoCurrent). */
 function loadConv(): string {
   const existing = currentThread();
@@ -143,11 +154,31 @@ export function ArturoPill() {
   const appendRef = useRef<(t: PillTurn) => void>(() => {});
   const noteRef = useRef<(reason: string) => void>(() => {});
   const call = useHandsFreeCall({
-    onFinal: (text, role) => appendRef.current({ role, text, at: Date.now(), live: true }),
+    onFinal: (text, role) => appendRef.current({ role, text, at: Date.now(), live: true, voice: true, ts: Date.now() / 1000 }),
     onUnavailable: (reason) => noteRef.current(reason),
-    onEnded: (text) => appendRef.current({ role: 'arturo', text, at: Date.now(), live: true }),
+    onEnded: (text) => appendRef.current({ role: 'arturo', text, at: Date.now(), live: true, ts: Date.now() / 1000 }),
+    // A tool run during a call sits in the call's card where it happened, as on Arturo's page.
+    onTool: (e) => setTurns((prev) => {
+      if (e.phase === 'start') {
+        const c = { call_id: e.callId, name: e.name, args_summary: e.argsSummary };
+        const last = prev[prev.length - 1];
+        if (last?.callTools) return [...prev.slice(0, -1), { ...last, parts: applyToolCall(last.parts || [], c) }];
+        return [...prev, { role: 'arturo', text: '', at: Date.now(), callTools: true, parts: applyToolCall([], c) }];
+      }
+      const at = prev.findLastIndex((t) => t.callTools && t.parts?.some((p) => p.kind === 'tool' && p.callId === e.callId));
+      if (at < 0) return prev;
+      const next = [...prev];
+      next[at] = { ...next[at], parts: applyToolResult(next[at].parts || [], { call_id: e.callId, name: e.name, ok: !!e.ok, summary: e.summary }) };
+      return next;
+    }),
   });
   const { callState, liveUser, liveArturo, inCall, muted, toggleMute } = call;
+  // When this pane's call went live, for the live card's running clock (connecting does not count).
+  const [callSince, setCallSince] = useState<number | null>(null);
+  useEffect(() => {
+    if (callState === 'live') setCallSince((t) => t ?? Date.now());
+    else if (!inCall) setCallSince(null);
+  }, [callState, inCall]);
   async function toggleCall() {
     const focused = ctx.entityKind && ctx.entityId ? `${ctx.entityKind}:${ctx.entityId}` : null;
     await call.toggle({ route: ctx.route, focusedEntity: focused, threadId: convId });
@@ -179,7 +210,10 @@ export function ArturoPill() {
       const sent = x.role === 'user' ? splitAttachmentPreamble(stripContextLine(x.content)) : null;
       return { role: x.role === 'user' ? 'user' : 'arturo', text: sent ? sent.text : x.content,
                at: (x.ts || 0) * 1000, ...(sent?.images.length ? { images: sent.images } : {}),
-               ...(job ? { steps: job.filter((p): p is ToolPart => p.kind === 'tool') } : {}) };
+               ...(job ? { steps: job.filter((p): p is ToolPart => p.kind === 'tool') } : {}),
+               ...(x.mode === 'voice' ? { voice: true } : {}),
+               ...(x.meta?.kind === 'call_end' && x.meta.call_id ? { callEnd: x.meta.call_id } : {}),
+               ...(typeof x.ts === 'number' ? { ts: x.ts } : {}) };
     }));
   }, [chooseBrain]);
 
@@ -336,25 +370,28 @@ export function ArturoPill() {
               (Shaw 2026-09-22). No Threads sentence — the Threads button says it. */}
           {/* Hidden (not removed) once typing starts, so the pane keeps its size. */}
           {turns.length === 0 && !busy && <p className="empty" style={draft ? { visibility: 'hidden' } : undefined}>Ask about what you are looking at, or anything else.</p>}
-          {turns.map((t, i) => t.note ? (
+          {/* A voice call is one card, as on Arturo's page: its spoken turns and tool runs together, the live
+              captions at its end while it runs. */}
+          {groupCalls(turns, inCall).map((item) => item.kind === 'call' ? (
+            <ArturoCallCard key={item.key} callId={item.callId} turns={item.turns} live={item.live} startTs={item.startTs} endTs={item.endTs}
+              liveSince={item.live ? callSince : null} liveUser={item.live ? liveUser : undefined} liveArturo={item.live ? liveArturo : undefined}
+              connecting={item.live && callState === 'connecting'} />
+          ) : ((t: PillTurn, i: number) => t.note ? (
             <div key={i} className="row note"><div className="meta">{t.text === STARTING_TEXT ? t.text : `I can't do that yet — ${t.text}.`}</div></div>
           ) : (
             <div key={i} className={t.role === 'user' ? 'row user' : 'row arturo'}>
               {t.images && t.images.length > 0 && <div className="msg-images">{t.images.map((u) => <a key={u} href={u} target="_blank" rel="noreferrer"><img src={u} alt="attached image" loading="lazy" /></a>)}</div>}
               {t.role !== 'user' && hasVoiceCallMarker(t.text)
                 ? parseVoiceSegments(t.text).map((seg, j) => seg.kind === 'voicecall'
-                  ? <VoiceCallCard key={j} callId={seg.callId} />
+                  ? <ArturoCallCard key={j} callId={seg.callId} turns={[]} live={false} />
                   : /^\s*Call ended \(vc_[A-Za-z0-9_-]+\)\.?\s*$/.test(seg.text) ? null : <div key={j} className="bubble">{seg.text}</div>)
-                : <>{t.steps && t.steps.length > 0 && <ToolRun tools={t.steps} />}<div className="bubble">{t.text}</div></>}
+                : <>{t.steps && t.steps.length > 0 && <ToolCalls calls={t.steps.map(fromPart)} />}<div className="bubble">{t.text}</div></>}
               {t.tools && t.tools.length > 0 && <div className="meta">ran {t.tools.join(', ')}</div>}
               <SpawnedAgentCard ids={t.spawned} />
               {t.role === 'user' && (t.state === 'failed' || (t.state && i === lastUserIdx)) && <div className={`turn-state ${t.state}`}>{sendStateLabel(t.state)}</div>}
             </div>
-          ))}
+          ))(item.turn, item.index))}
           {busy && <div className="row arturo"><div className="bubble thinking">Thinking…</div></div>}
-          {liveUser && <div className="row user"><div className="bubble live">{liveUser}…</div></div>}
-          {liveArturo && <div className="row arturo"><div className="bubble live">{liveArturo}…</div></div>}
-          {callState === 'connecting' && <div className="row arturo"><div className="bubble thinking">Connecting the call…</div></div>}
         </div>
 
         <JobTray threadId={convId} kick={jobKick} onEnded={() => { void resume(convId); }} />

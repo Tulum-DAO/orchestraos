@@ -9,7 +9,10 @@ export const OPENAI = 'openai';
 
 export interface VoiceVendor { id: string; title: string; available: boolean; reason?: string }
 export interface VoiceRow { id: string; title: string; subtitle?: string | null; recommended?: boolean; order: number; group?: string | null }
-export interface CurrentVoice { voice_id: string | null; title: string | null }
+/** `scope`: whether it is the agent's own voice or the install's, which an agent with none of its own uses. */
+export interface CurrentVoice { voice_id: string | null; title: string | null; scope?: 'agent' | 'install' }
+
+const agentQ = (agent?: string) => (agent ? `&agent=${encodeURIComponent(agent)}` : '');
 
 async function getJson<T>(url: string): Promise<T | null> {
   try {
@@ -31,18 +34,34 @@ export async function fetchVoices(): Promise<VoiceRow[] | null> {
   return d?.ok && Array.isArray(d.voices) ? [...d.voices].sort((a, b) => a.order - b.order) : null;
 }
 
-export async function fetchCurrentVoice(): Promise<CurrentVoice | null> {
-  const d = await getJson<{ ok?: boolean; voice_id?: string | null; title?: string | null }>(`/api/arturo/ptt/voice?vendor=${OPENAI}`);
-  return d?.ok ? { voice_id: d.voice_id ?? null, title: d.title ?? null } : null;
+/** The voice the next call uses: with an agent, its own voice, else the install's. */
+export async function fetchCurrentVoice(agent?: string): Promise<CurrentVoice | null> {
+  const d = await getJson<{ ok?: boolean; voice_id?: string | null; title?: string | null; scope?: string }>(
+    `/api/arturo/ptt/voice?vendor=${OPENAI}${agentQ(agent)}`);
+  if (!d?.ok) return null;
+  return { voice_id: d.voice_id ?? null, title: d.title ?? null,
+           ...(d.scope === 'agent' || d.scope === 'install' ? { scope: d.scope } : {}) };
 }
 
-/** Pick a voice; the server checks it is one of its own. Its reason comes back when it refuses. */
-export async function putVoice(voiceId: string): Promise<{ ok: boolean; error?: string }> {
+/** Pick a voice (an agent's own when `agent` is given); the server checks it is one of its own. Its reason
+ *  comes back when it refuses. */
+export async function putVoice(voiceId: string, agent?: string): Promise<{ ok: boolean; error?: string }> {
   try {
     const r = await fetch('/api/arturo/ptt/voice', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ vendor: OPENAI, voice_id: voiceId }),
+      body: JSON.stringify({ vendor: OPENAI, voice_id: voiceId, ...(agent ? { agent } : {}) }),
     });
+    const d = await r.json().catch(() => ({}));
+    return r.ok && d.ok !== false ? { ok: true } : { ok: false, error: d.error || `HTTP ${r.status}` };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'network' };
+  }
+}
+
+/** Put an agent back on the install's voice. */
+export async function clearVoice(agent: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch(`/api/arturo/ptt/voice?vendor=${OPENAI}${agentQ(agent)}`, { method: 'DELETE' });
     const d = await r.json().catch(() => ({}));
     return r.ok && d.ok !== false ? { ok: true } : { ok: false, error: d.error || `HTTP ${r.status}` };
   } catch (e) {

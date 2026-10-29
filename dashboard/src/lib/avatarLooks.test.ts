@@ -98,7 +98,7 @@ test('one picker: the drawer\'s Avatar page and the "Pick a look" popover both r
   const panel = readFileSync(new URL('../components/arturo/ArturoPanel.tsx', import.meta.url), 'utf-8');
   const picker = readFileSync(new URL('../components/avatar/LookPicker.tsx', import.meta.url), 'utf-8');
   const home = readFileSync(new URL('../pages/ArturoHome.tsx', import.meta.url), 'utf-8');
-  assert.match(panel, /page === 'avatar' \? <LookPicker agentId=\{ARTURO_ID\}/);
+  assert.match(panel, /page === 'avatar' \? <LookPicker agentId=\{agentId\}/);   // the panel's agent: Arturo or any other
   assert.match(picker, /export function LookPickerPopover[\s\S]*<LookPicker agentId=\{agentId\}/);
   assert.match(home, /<LookPickerPopover agentId=\{ARTURO_ID\}/);
   assert.equal((picker.match(/export function \w+/g) || []).length, 2);   // no second picker hiding in there

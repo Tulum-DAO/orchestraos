@@ -6,23 +6,25 @@
  *  - ToolGroupCard    (two or more consecutive calls folded to one line per turn)
  * Assistant prose is rendered by <Markdown/>.
  */
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { clsx } from 'clsx';
-import { ChevronRight, ChevronDown, FileText, Check } from 'lucide-react';
+import { ChevronRight, ChevronDown, FileText } from 'lucide-react';
 import Markdown from './Markdown';
-import { toolSummary, toolFilePath, shortPath, type ToolBlock, type RenderNode } from '../../lib/transcript';
-import {
-  summarizeTurn, formatDuration, fromToolBlock,
-  type GroupedNode, type ToolGroupNode,
-} from '../../lib/toolGroups';
+import CopyButton from '../CopyButton';
+import ToolCalls, { type ToolRunEntry } from './ToolCalls';
+import { AnsweredMultiPart } from './MultiPartCard';
+import { fromAskUserQuestion, matchBatchRecord, type BatchRecord } from '../../lib/multiPart';
+import { useBatchRecords } from '../../lib/batchRecords';
+import { fromBlock } from '../../lib/toolCalls';
+import { splitAttachments } from '../../lib/markdownBlocks';
+import { type ToolBlock, type RenderNode } from '../../lib/transcript';
+import { type GroupedNode, type ToolGroupNode } from '../../lib/toolGroups';
 import { parseMessageSegments, hasPasteMarkers } from '../../lib/pastedText';
 import { parseSystemMessage, type SystemMessage, type MachineKind } from '../../lib/systemMessages';
 import AgentMessage from './AgentMessage';
 import { hasVoiceCallMarker, parseVoiceSegments } from '../../lib/voiceCall';
 import VoiceCallCard from './VoiceCallCard';
-import { isCommandTool, todoItems, type ToolDensity } from '../../lib/toolCardDetail';
-
-const RESULT_COLLAPSE_CHARS = 600;
+import { type ToolDensity } from '../../lib/toolCardDetail';
 
 /**
  * The disclosure control for every expandable card here.
@@ -101,12 +103,6 @@ function MessageGroup({ text, sender }: { text: string; sender: 'user' | 'assist
 }
 
 // Text glyphs (no emoji — emoji fall back to tofu boxes where no emoji font).
-const TOOL_GLYPH: Record<string, string> = {
-  Bash: '$', Read: '≡', Edit: '✎', Write: '✎', NotebookEdit: '✎',
-  Glob: '⌕', Grep: '⌕', Task: '⛁', Agent: '⛁',
-  WebFetch: '↗', WebSearch: '⌕', Skill: '✦', ToolSearch: '⌕',
-};
-
 // Relative "Xm ago" from an ISO timestamp (queued-native-render P1; P2 adds
 // the viewer's local wall-clock alongside).
 export function relativeAgo(ts?: string): string {
@@ -160,11 +156,30 @@ export function UserBubble({ text, isSystem, queued, ts }: { text: string; isSys
       </div>
     );
   }
+  // Attachments the composer sent with it ("[IMAGE: …] words"): an uploaded image as a thumbnail above the bubble,
+  // any other file as a chip, rather than the raw marker.
+  const { attachments, text: words } = splitAttachments(text);
   return (
     <div className="flex flex-col items-end">
-      <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-blue-600/90 px-3.5 py-2 text-[13px] leading-relaxed text-white whitespace-pre-wrap break-words">
-        {text}
-      </div>
+      {attachments.length > 0 && (
+        <div className="flex flex-wrap justify-end gap-1.5 mb-1 max-w-[85%]" data-attachments>
+          {attachments.map((a, i) => a.kind === 'image' && a.url ? (
+            <a key={i} href={a.url} target="_blank" rel="noopener noreferrer" title={a.name}>
+              <img src={a.url} alt={a.name} loading="lazy"
+                   className="h-24 max-w-[12rem] rounded-xl object-cover border border-border bg-muted" />
+            </a>
+          ) : (
+            <span key={i} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-border bg-muted text-[11px] text-foreground/80">
+              <FileText size={12} />{a.name}
+            </span>
+          ))}
+        </div>
+      )}
+      {(words || !attachments.length) && (
+        <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-blue-600/90 px-3.5 py-2 text-[13px] leading-relaxed text-white whitespace-pre-wrap break-words">
+          {words}
+        </div>
+      )}
       {queued && (
         <span className="mt-0.5 text-[9px] uppercase tracking-wide text-blue-300/80 px-1.5 py-[1px] rounded-full border border-blue-500/30 bg-blue-500/10">
           queued
@@ -311,197 +326,57 @@ export function ThinkingCard({ text }: { text: string }) {
   );
 }
 
-/**
- * The file a call acted on, as a thing you can take away rather than a truncated caption.
- *
- * The path was plain truncated text inside the summary: you could read a tail of it and do
- * nothing with it. It now carries a file icon so a file-touching call is identifiable at a
- * glance, shows the shortened path, and copies the FULL absolute path on click — the
- * shortening is display-only, so what you copy is what the tool actually opened.
- */
-function FilePathChip({ path }: { path: string }) {
-  const [copied, setCopied] = useState(false);
+
+/** An answered AskUserQuestion stays in the thread as its answered card (what was chosen per part), so it outlives
+ *  the live question: drawn from the gateway's durable record of the answer where one matches, else from the call's
+ *  own result. Null for any other call, or one not answered yet. */
+function answeredQuestion(block: ToolBlock, records?: BatchRecord[]) {
+  if (block.tool !== 'AskUserQuestion' || block.isError) return null;
+  const qs = Array.isArray(block.input?.questions) ? (block.input.questions as { question?: unknown }[]) : [];
+  const record = matchBatchRecord(records, qs.map((q) => String(q?.question ?? '')));
+  const r = fromAskUserQuestion(block.input, block.result, record);
+  if (!r) return null;
   return (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation(); // the row behind this is the card's own disclosure
-        navigator.clipboard?.writeText(path).then(
-          () => { setCopied(true); setTimeout(() => setCopied(false), 1200); },
-          () => {},
-        );
-      }}
-      title={`${path} \u2014 click to copy`}
-      className="group/path inline-flex min-w-0 items-center gap-1 rounded px-1 -mx-1 text-[11px] font-mono text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200 transition-colors"
-    >
-      {copied
-        ? <Check size={12} aria-hidden className="shrink-0 text-green-400" />
-        : <FileText size={12} aria-hidden className="shrink-0 text-neutral-500 group-hover/path:text-neutral-300" />}
-      <span className="truncate">{copied ? 'Copied' : shortPath(path)}</span>
-    </button>
+    <div className="flex justify-start" key={block.key}>
+      <div className="w-full max-w-[min(92%,480px)]"><AnsweredMultiPart agentName="Your answers" parts={r.parts} answers={r.answers} /></div>
+    </div>
   );
 }
 
 export function ToolCard({ block, density = 'normal' }: { block: ToolBlock; density?: ToolDensity }) {
-  const summary = toolSummary(block.tool, block.input);
-  const result = block.result || '';
-  const resultLong = result.length > RESULT_COLLAPSE_CHARS;
-  const command = isCommandTool(block.tool);
-  const [open, setOpen] = useState(false); // input open
-  const [resOpen, setResOpen] = useState(
-    (density === 'verbose' && result.length > 0) || (!command && !resultLong && result.length > 0),
-  );
-  const glyph = TOOL_GLYPH[block.tool] || '•';
-  const filePath = toolFilePath(block.tool, block.input);
-
-  const inputStr = JSON.stringify(block.input, null, 2);
-  const inputBig = inputStr.length > 200;
-  // A header that HOVERS and toggles state but reveals nothing is a dead click: the card
-  // looked expandable whenever the input was small, and answered a click with no change.
-  // Only the cards that can actually open get the affordance; the rest render as plain rows.
-  const expandable = inputBig || resultLong || (command && result.length > 0);
-  const todos = todoItems(block);
-  // A command card is one line until opened: its header. Opening it shows the full command (when the
-  // header had to cut it) and the output; the header closes it again.
-  const shown = command ? resOpen : (inputBig ? open : resOpen);
-
+  const records = useBatchRecords();
+  const asked = answeredQuestion(block, records);
+  if (asked) return asked;
+  // The one tool card (components/chat/ToolCalls.tsx), shared with Arturo's page.
   return (
     <div className="flex justify-start">
-      {/* Message-sized on the agent's side, like the decision cards (DecisionCard's AgentSide); inside an
-          opened "Worked for" group the group's own rule lets it fill the group. */}
-      <div className={`w-full max-w-[min(92%,480px)] rounded-lg border ${block.isError ? 'border-red-800/60' : 'border-neutral-800'} bg-neutral-900/40 overflow-hidden`}>
-        {/* header — the WHOLE row is the control, not the caret. */}
-        {expandable ? (
-          <button
-            onClick={() => {
-              // One click opens the card. When the input is small there is nothing to show
-              // above, so the same click opens the thing that IS there: the result.
-              if (inputBig && !command) setOpen((o) => !o);
-              else setResOpen((o) => !o);
-            }}
-            aria-expanded={shown}
-            className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-neutral-800/40"
-          >
-            <span className="text-[11px] w-4 text-center text-neutral-400">{glyph}</span>
-            <span className="text-[11px] font-semibold text-neutral-300">{block.tool}</span>
-            {filePath
-              ? <span className="min-w-0 flex-1"><FilePathChip path={filePath} /></span>
-              : <span className="text-[11px] font-mono text-neutral-500 truncate flex-1">{summary}</span>}
-            {block.isError && <span className="text-[10px] text-red-400">error</span>}
-            <Caret open={shown} />
-          </button>
-        ) : (
-          <div className="w-full flex items-center gap-2 px-2.5 py-1.5">
-            <span className="text-[11px] w-4 text-center text-neutral-400">{glyph}</span>
-            <span className="text-[11px] font-semibold text-neutral-300">{block.tool}</span>
-            {filePath
-              ? <span className="min-w-0 flex-1"><FilePathChip path={filePath} /></span>
-              : <span className="text-[11px] font-mono text-neutral-500 truncate flex-1">{summary}</span>}
-            {block.isError && <span className="text-[10px] text-red-400">error</span>}
-          </div>
-        )}
-
-        {/* expanded input */}
-        {inputBig && (command ? resOpen : open) && (
-          <pre className="px-3 py-1.5 border-t border-neutral-800 bg-neutral-950 overflow-x-auto text-[11px] font-mono text-neutral-400 whitespace-pre">
-            {inputStr}
-          </pre>
-        )}
-
-        {todos.length > 0 && (
-          <div className="border-t border-neutral-800 px-3 py-1.5 space-y-1">
-            {todos.map((todo, index) => (
-              <div key={`${todo.content}:${index}`} className={`flex items-start gap-2 text-[11px] ${todo.status === 'completed' ? 'text-neutral-500 line-through' : 'text-neutral-300'}`}>
-                <span role="img" aria-label={todo.status} className={todo.status === 'completed' ? 'text-green-400' : todo.status === 'in_progress' ? 'text-amber-400' : 'text-neutral-500'}>
-                  {todo.status === 'completed' ? '✓' : todo.status === 'in_progress' ? '◐' : '○'}
-                </span>
-                {todo.content}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* result */}
-        {result.length > 0 && !(command && !resOpen) && (
-          <div className="border-t border-neutral-800">
-            {!resOpen ? (
-              <button
-                onClick={() => setResOpen(true)}
-                aria-expanded={false}
-                className="w-full flex items-center gap-1 px-3 py-1 text-left text-[10px] text-neutral-500 hover:text-neutral-300"
-              >
-                <Caret open={false} />
-                {block.isError ? 'Error output' : 'Result'} · {result.split('\n').length} lines
-              </button>
-            ) : (
-              <div>
-                {resultLong && !command && (
-                  <button
-                    onClick={() => setResOpen(false)}
-                    aria-expanded
-                    className="w-full flex items-center gap-1 px-3 py-1 text-left text-[10px] text-neutral-500 hover:text-neutral-300 border-b border-neutral-800/60"
-                  >
-                    <Caret open />
-                    Collapse result
-                  </button>
-                )}
-                <pre className={`px-3 py-1.5 overflow-auto text-[11px] font-mono whitespace-pre ${block.isError ? 'text-red-300' : 'text-neutral-400'} ${resultLong ? 'max-h-72' : ''}`}>
-                  {result}
-                </pre>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+      <ToolCalls calls={[fromBlock(block)]} density={density} />
     </div>
   );
 }
 
 /**
- * A turn's tool calls folded to ONE line (harness-UX plan, C3), e.g.
- *   ▸ Worked for 1m 8s — edited 2 files, ran 3 commands
- * Expanding shows the per-call ToolCards (and the thinking between them), each of which
- * expands again to its input and output: three levels instead of one card per call.
+ * A turn's tool calls folded to ONE line, e.g. "Worked for 1m 8s — edited 2 files, ran 3 commands". Opening it lists
+ * each call (with the thinking between them), and each call opens again to its input and output.
  */
 export function ToolGroupCard({ group, interrupted = false, density = 'normal' }: { group: ToolGroupNode; interrupted?: boolean; density?: ToolDensity }) {
-  // Collapsed by default: the one-line summary is the turn's tool story; 'verbose' opens it.
-  const [open, setOpen] = useState(density === 'verbose');
-  useEffect(() => setOpen(density === 'verbose'), [density]);
-  const tools = group.children.filter((c): c is ToolBlock => c.kind === 'tool');
-  const s = summarizeTurn(tools.map(fromToolBlock), { interrupted });
-  const dur = s.durationMs !== undefined ? formatDuration(s.durationMs) : '';
-  const lead = s.running > 0 ? 'Working'
-    : s.interrupted > 0 ? (dur ? `Stopped after ${dur}` : 'Stopped')
-    : (dur ? `Worked for ${dur}` : 'Worked');
+  // Answered questions are drawn as their cards under the folded line, not folded into it.
+  const records = useBatchRecords();
+  const asked = group.children.flatMap((c) => (c.kind === 'tool' ? [answeredQuestion(c, records)] : [])).filter(Boolean);
+  const children = asked.length ? group.children.filter((c) => !(c.kind === 'tool' && answeredQuestion(c, records))) : group.children;
+  const entries: ToolRunEntry[] = children.map((c) => c.kind === 'tool'
+    ? { kind: 'call', call: fromBlock(c) }
+    : { kind: 'note', key: c.key, node: <RenderNodeView node={c} density={density} /> });
+  const calls = entries.flatMap((e) => (e.kind === 'call' ? [e.call] : []));
   return (
-    <div className="flex justify-start">
-      {/* RED MEANS THE TURN FAILED, not "a call inside a successful run failed" (Shaw: a run that
-          ended in "tests pass" wore a red border because one command failed on the way, while
-          "Stopped after 9s" — the actual problem — was a calm yellow). A partial failure is
-          already named in the headline; the border is reserved for a turn that got nowhere. */}
-      <div className={`w-full max-w-[min(92%,480px)] rounded-lg border ${s.failed > 0 && s.failed === tools.length ? 'border-red-800/50' : 'border-neutral-800'} bg-neutral-900/30 overflow-hidden`}>
-        <button
-          onClick={() => setOpen((o) => !o)}
-          aria-expanded={open}
-          className="w-full flex items-start gap-2 px-2.5 py-1.5 text-left hover:bg-neutral-800/40"
-        >
-          <span className="leading-[17px] shrink-0"><Caret open={open} /></span>
-          {/* Wraps rather than truncating: on a phone the clipped tail was the "(1 failed)". */}
-          <span className="text-[11px] leading-[17px] min-w-0 flex-1 break-words">
-            <span className={`font-medium ${s.running > 0 ? 'text-orange-300' : s.interrupted > 0 ? 'text-amber-400' : 'text-neutral-300'}`}>{lead}</span>
-            {s.headline && <span className="text-neutral-500"> — {s.headline}</span>}
-          </span>
-          <span className="text-[10px] leading-[17px] text-neutral-600 shrink-0">
-            {tools.length} call{tools.length === 1 ? '' : 's'}
-          </span>
-        </button>
-        {open && (
-          <div className="border-t border-neutral-800 p-1.5 space-y-1.5 [&>div>div]:max-w-full">
-            {group.children.map((c) => <RenderNodeView key={c.key} node={c} density={density} />)}
-          </div>
-        )}
-      </div>
-    </div>
+    <>
+      {calls.length > 0 && (
+        <div className="flex justify-start">
+          <ToolCalls calls={calls} entries={entries} interrupted={interrupted} density={density} />
+        </div>
+      )}
+      {asked}
+    </>
   );
 }
 
@@ -551,10 +426,15 @@ export function RenderNodeView({ node, density = 'normal' }: { node: RenderNode;
       return hasPasteMarkers(node.text)
         ? <MessageGroup text={node.text} sender="assistant" />
         : (
-          <div className="flex justify-start">
+          <div className="flex justify-start group">
             <div className="w-full">
               <Markdown text={node.text} />
-              <MessageTime ts={node.ts} />
+              {/* The reply's time, and a copy button (the words, as written) that shows on hover, or always on touch. */}
+              <div className="flex items-center gap-1">
+                <MessageTime ts={node.ts} />
+                <CopyButton text={node.text} label="Copy reply" size={12}
+                            className="mt-0.5 text-neutral-500 hover:text-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity" />
+              </div>
             </div>
           </div>
         );

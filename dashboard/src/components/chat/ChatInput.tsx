@@ -12,13 +12,14 @@ import { isLargePaste, fencePaste } from '../../lib/pastedText';
 import { COMPOSER_ACCEPT, newFiles, pasteAttachesFiles, attachmentMarkers } from '../../lib/composerFiles';
 import type { PendingKind } from '../../lib/pendingSends';
 import { usePendingSends, rowIdsAtSend, newPendingId } from '../../stores/pendingSends';
+import { useComposerDraft, nextDraftId, type DraftFile, type DraftPaste } from '../../stores/composerDrafts';
 import { unconfirmed } from '../../lib/heldEchoReconcile';
 
 // A held large paste: kept out of the textarea (which shows a compact token at
 // the paste's position) and serialized into the fenced grammar on submit.
-interface HeldPaste { id: number; content: string; lines: number; chars: number }
+type HeldPaste = DraftPaste;
 // An attached file waiting to be sent. `preview` is an object URL for an image's thumbnail.
-interface PendingFile { id: number; file: File; preview: string | null }
+type PendingFile = DraftFile;
 // Token the composer shows in-place for a held paste. Parseable back to the id;
 // user can delete it to drop the paste, and it marks WHERE the paste sits.
 const pasteToken = (p: HeldPaste) => `〖paste ${p.id} · ${p.lines} lines〗`;
@@ -87,7 +88,10 @@ async function uploadImage(file: File): Promise<string> {
 }
 
 export default function ChatInput({ agentId, disabled, placeholder, attachSupported = true, draft, onDraftChange, onSend, leading, trailing, canStop, onStop, menuItems }: Props) {
-  const [internalText, setInternalText] = useState('');
+  // Text, held pastes and attached files live in the agent's draft (stores/composerDrafts.ts), so they survive
+  // this box being unmounted: switching the page to Dev, or to another agent and back.
+  const { draft: stored, setText: setInternalText, setFiles: setPendingFiles, setPastes } = useComposerDraft(agentId);
+  const internalText = stored.text;
   // Single accessor pair every read/clear/paste/send path goes through, so
   // there is exactly one send path regardless of controlled vs internal
   // mode. `controlled` only turns true when BOTH props are supplied by the
@@ -124,19 +128,16 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
   // A LIST, not one file: the web chat box used to hold a single attachment, so a second pick,
   // drop or paste replaced the first, while every other surface (iOS, iPad, macOS, Quest)
   // attaches several at once. The send path already carried `attachments: File[]`.
-  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
-  const fileIdRef = useRef(1);
-  // Mirror for the unmount cleanup below, so thumbnails' object URLs are always released.
-  // addFiles/removeFiles also update it at once, so two adds in one frame still dedupe.
-  const pendingFilesRef = useRef<PendingFile[]>([]);
+  const pendingFiles = stored.files;
+  // addFiles/removeFiles update this at once, so two adds in one frame still dedupe. A thumbnail's object URL is
+  // released when its file is removed or sent, not on unmount: the file stays in the draft.
+  const pendingFilesRef = useRef<PendingFile[]>(pendingFiles);
   useEffect(() => { pendingFilesRef.current = pendingFiles; }, [pendingFiles]);
-  useEffect(() => () => { pendingFilesRef.current.forEach((p) => p.preview && URL.revokeObjectURL(p.preview)); }, []);
   const hasFiles = pendingFiles.length > 0;
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
-  const [pastes, setPastes] = useState<HeldPaste[]>([]);
-  const pasteIdRef = useRef(1);
+  const pastes = stored.pastes;
 
   // Intercept a LARGE paste: keep the content as an object, drop a compact token
   // at the caret so its position in the message is preserved, and show a chip.
@@ -152,7 +153,8 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     }
     if (!clip || !isLargePaste(clip)) return; // small paste → default inline
     e.preventDefault();
-    const id = pasteIdRef.current++;
+    // From this agent's own draft: the box can stay mounted while the page switches agents.
+    const id = nextDraftId(pastes);
     const held: HeldPaste = { id, content: clip, lines: clip.split('\n').length, chars: clip.length };
     const el = textAreaRef.current;
     const start = el ? el.selectionStart : text.length;
@@ -205,7 +207,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
     const fresh = newFiles(pendingFilesRef.current.map((p) => p.file), incoming);
     if (!fresh.length) return;
     const entries = fresh.map((file) => ({
-      id: fileIdRef.current++,
+      id: nextDraftId(pendingFilesRef.current) + fresh.indexOf(file),
       file,
       preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
     }));
@@ -282,7 +284,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           if (landedEarly || !rows || !messageText.trim()) return;
           if (unconfirmed([{ text: messageText, priorRowIds }], rows).length === 0) {
             landedEarly = true;
-            if (getTextRef.current() === boxAtSend) { setText(''); setPastes([]); pasteIdRef.current = 1; }
+            if (getTextRef.current() === boxAtSend) { setText(''); setPastes([]) }
             clearSent();
           }
         };
@@ -312,7 +314,6 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           setBusy(null);
           setText('');
           setPastes([]);
-          pasteIdRef.current = 1;
           showPending();
           // The bubble says it was sent; a note only when there is more to say (mid-turn: queued).
           setResultOk(true);
@@ -348,8 +349,7 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
           if (clearsComposer(res)) {
             setText('');
             setPastes([]);
-            pasteIdRef.current = 1;
-            showPending();
+              showPending();
           }
           setBusy(null);
           setResultOk(true);
@@ -380,7 +380,6 @@ export default function ChatInput({ agentId, disabled, placeholder, attachSuppor
         setResult('Sent');
         setText('');
         setPastes([]);
-        pasteIdRef.current = 1;
       } else if (res.status === 409) {
         // Refused — surface why + retain the text for a possible force retry.
         setBusy({

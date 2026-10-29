@@ -21,6 +21,7 @@ import { AgentSide } from './DecisionCard';
 import { ChatAgentContext } from './chatAgent';
 import DecisionBubble from './DecisionBubble';
 import { useQuery } from '@tanstack/react-query';
+import { BatchRecordsContext, fetchBatchRecords } from '../../lib/batchRecords';
 import { fetchDecisions, interleave, takeFocusRequest, focusTarget, FOCUS_DECISION_EVENT, type FocusRequest } from '../../lib/decisions';
 import { userRows, visiblePending, type PendingSend } from '../../lib/pendingSends';
 import { usePendingSends } from '../../stores/pendingSends';
@@ -144,6 +145,11 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
     queryKey: ['agent-decisions', agentId], queryFn: () => fetchDecisions(agentId),
     enabled: !fixtureItems, refetchInterval: 10_000, staleTime: 5_000,
   });
+  // Recorded multi-part answers: an answered AskUserQuestion in the thread is drawn from these where they exist.
+  const batchesQ = useQuery({
+    queryKey: ['agent-menu-batches', agentId], queryFn: () => fetchBatchRecords(agentId),
+    enabled: !fixtureItems, refetchInterval: 15_000, staleTime: 5_000,
+  });
   // A machine line that answers a card drawn in this chat ([DECISION ANSWERED <id>], an approval, a
   // closed human task) is shown BY that card, its outcome row; it is not drawn a second time as its
   // own card. One whose card is not here (an earlier generation's) still shows as a card.
@@ -236,6 +242,7 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
   }, [flat.length, entries.length, pending.length, agentId]);
 
   return (
+    <BatchRecordsContext.Provider value={batchesQ.data}>
     <div className={compact ? 'space-y-2' : 'flex flex-col flex-1 min-h-0'}>
       <div
         ref={scrollRef}
@@ -324,5 +331,6 @@ export default function TranscriptChatView({ agentId, fixtureItems, state = 'unk
       </div>
       )}
     </div>
+    </BatchRecordsContext.Provider>
   );
 }
