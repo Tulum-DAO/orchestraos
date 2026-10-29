@@ -328,6 +328,9 @@ class ApprovalStore:
         c = self._conn()
         try:
             if op_key:
+                # The dedup check and the insert run under one write lock: two writers (the gateway making a
+                # card on read, the bridge's cron tick) could otherwise both find no card and both insert one.
+                c.execute("BEGIN IMMEDIATE")
                 row = c.execute(
                     "SELECT id FROM approval_requests WHERE from_agent=? AND op_key=? AND status='pending' LIMIT 1",
                     [from_agent, op_key]).fetchone()
@@ -676,7 +679,7 @@ class ApprovalStore:
             return res.rowcount
         finally:
             c.close()
-    def hydrate_menu(self, session, walked):
+    def hydrate_menu(self, session, walked, op_key=None):
         """§1.1(b) condition 1 (AGY-caught) + condition 4: LEDGER WRITE-BACK on a
         SUCCESSFUL /agent-menu-capture walk. Merge the fully-walked parts[] into
         the pending needs_hydration menu row(s) for `session` and mark them
@@ -696,6 +699,10 @@ class ApprovalStore:
 
         Guarded to status='pending' AND kind='menu' AND op_key LIKE menu:{session}:%
         (mirrors resolve_pending_menus_for_session — one live pane, one live menu).
+        `op_key` (the card identity of the menu that was walked): only that card is written, so a walk of the
+        menu now on screen never lands on the card of one it replaced. Absent: every pending menu row of the session,
+        as before.
+
         Returns the number of rows written. Sanctioned single-writer: the gateway
         NEVER raw-writes tasks.db."""
         if not isinstance(walked, dict) or not walked.get("walk_complete") \
@@ -708,8 +715,9 @@ class ApprovalStore:
         try:
             rows = c.execute(
                 "SELECT id, menu, options FROM approval_requests "
-                "WHERE kind='menu' AND status='pending' AND op_key LIKE ? ESCAPE '\\'",
-                [f"menu:{like}:%"]).fetchall()
+                "WHERE kind='menu' AND status='pending' AND op_key LIKE ? ESCAPE '\\'"
+                + (" AND op_key = ?" if op_key else ""),
+                [f"menu:{like}:%"] + ([op_key] if op_key else [])).fetchall()
             n = 0
             for r in rows:
                 try:
@@ -741,19 +749,21 @@ class ApprovalStore:
             return n
         finally:
             c.close()
-    def cached_hydration(self, session):
+    def cached_hydration(self, session, op_key=None):
         """§1.1(b) condition 4 read-side: the stored menu dict for `session` iff a
         pending menu row already carries a fully-walked (walk_complete:true) payload
         — the hydration cache. Returns that menu (so /agent-menu-capture can serve
-        it WITHOUT re-walking the live pane), else None. Read-only."""
+        it WITHOUT re-walking the live pane), else None. Read-only. `op_key`: only the card
+        of the menu now on screen, so a stored walk of a menu that has since changed is never served."""
         like = session.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         c = self._conn()
         try:
             rows = c.execute(
                 "SELECT menu FROM approval_requests "
                 "WHERE kind='menu' AND status='pending' AND op_key LIKE ? ESCAPE '\\' "
+                + ("AND op_key = ? " if op_key else "") +
                 "ORDER BY created_at DESC",
-                [f"menu:{like}:%"]).fetchall()
+                [f"menu:{like}:%"] + ([op_key] if op_key else [])).fetchall()
         finally:
             c.close()
         for r in rows:

@@ -236,6 +236,8 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     ("POST", "/arturo/text/stream"): "message",
     ("POST", "/arturo/text/prewarm"): "message",
     ("POST", "/arturo/threads/{conversation_id}/jobs/{job_id}/cancel"): "message",
+    # Close one of Arturo's choice cards without answering it (it stays in the thread): like cancelling a job.
+    ("POST", "/arturo/threads/{conversation_id}/cards/{card_id}/dismiss"): "message",
     ("POST", "/arturo/transcribe"): "voice",
     ("POST", "/arturo/ptt/stream/audio"): "ptt",
     ("GET", "/arturo/ptt/stream/events"): "ptt",
@@ -250,6 +252,8 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     # accept `voice` or `ptt`: see ROUTE_ANY_OF below (gm rulings msg_f3c2cec6 + msg_40832c2d).
     ("PUT", "/arturo/ptt/vendor"): "admin",
     ("PUT", "/arturo/ptt/voice"): "admin",
+    # An agent back to the install's voice: admin only, like the avatar (no any-of widening).
+    ("DELETE", "/arturo/ptt/voice"): "admin",
     # An agent's avatar look shows on every device for everyone: a setting for the whole box, like the
     # voice, but with no any-of widening (nothing but an admin changes it).
     ("PUT", "/arturo/avatar"): "admin",
@@ -470,7 +474,18 @@ def _validate_option_answer(row, option_n, answer_text):
         return f"answer_text exceeds {ANSWER_TEXT_MAX} chars"
     if input_kind == "free_text" and not answer_text:
         return "answer_text required for a free_text option"
+    # A menu bridged from an agent's terminal takes a pick OR words: the digit fires the option and only the
+    # write-in row carries words, so words sent with another pick would be kept as a note the agent never sees.
+    # A card an agent posts itself takes both (its words reach the agent with the answer).
+    if answer_text and input_kind != "free_text" and _is_terminal_menu(row):
+        return "pick an option or type your own answer, not both"
     return None
+
+
+def _is_terminal_menu(row):
+    """A row the menu bridge made from an agent's on-screen menu: origin 'menu_bridge' (where the column exists) or
+    the bridge's `menu:<session>:<digest>` op_key."""
+    return row.get("origin") == "menu_bridge" or str(row.get("op_key") or "").startswith("menu:")
 
 
 def _free_text_option_n(row):
@@ -4113,7 +4128,13 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
     # takes its own — the lock is non-reentrant, so dispatching inside _run's
     # locked region would DEADLOCK). The Claude AUQ replay below can't drive agy.
     _fam_probe = read_fn()
+    _skips = sorted(a["part"] for a in (answers or [])
+                    if isinstance(a, dict) and a.get("skipped") is True)
     if isinstance(_fam_probe, dict) and _fam_probe.get("menu_family") == "agy":
+        # The agy replay has no skip leg (and no Submit tab to carry an unanswered part through):
+        # refused here, with zero keys sent, rather than approximated.
+        if _skips:
+            return False, {"reason": "skip_not_supported", "family": "agy", "parts": _skips}
         return menu_submit_agy(
             session, answers=answers, armed=armed, read_fn=read_fn,
             key_fn=key_fn, type_fn=type_fn, settle_s=settle_s,
@@ -4144,6 +4165,9 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
         plan = []
         for pi in range(min(n_parts, max_parts)):
             ans = by_part.get(pi) or {}
+            if ans.get("skipped") is True:
+                plan.append({"part": pi, "skipped": True, "toggle": []})
+                continue
             want = set(ans.get("ns") or [])
             step = {"part": pi, "toggle": sorted(want)}
             # Per-part free-text (v14 field-test pre-arm fix): carry the own-words
@@ -4174,13 +4198,20 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
         # batch (a part with neither ns nor text) can never verified-submit -> fail-
         # closed BEFORE actuating anything. This is the load-bearing anti-silent-under-
         # answer guard (§1): the old blind-Right loop would submit a skipped part BLANK.
+        # A part EXPLICITLY skipped ({part, skipped: true}) is not missing: it is stepped past with
+        # nothing pressed, and the CLI's review screen submits it unanswered. Only an absent part
+        # (neither answered nor skipped) is the silent under-answer this guard exists for.
         n_all = min(n_parts, max_parts)
+        skipped = {pi for pi in range(n_all) if (by_part.get(pi) or {}).get("skipped") is True}
         pre_missing = [pi for pi in range(n_all)
-                       if not ((by_part.get(pi) or {}).get("ns")
-                               or (by_part.get(pi) or {}).get("text"))]
+                       if pi not in skipped
+                       and not ((by_part.get(pi) or {}).get("ns")
+                                or (by_part.get(pi) or {}).get("text"))]
         if pre_missing:
             return False, {"reason": "parts_unanswered", "phase": "pre_submit",
                            "parts": pre_missing}
+        if len(skipped) >= n_all:
+            return False, {"reason": "nothing_answered", "phase": "pre_submit"}
 
         for pi in range(n_all):
             # Navigate to the EXPECTED part (Right/Left as needed), NOT a blind advance —
@@ -4206,6 +4237,14 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
                                        "detail": "the pane is not the menu this answer "
                                                  "was drafted against"}
             ans = by_part.get(pi) or {}
+            if pi in skipped:
+                # Nothing is pressed for a skipped part. A tick already on screen (someone answered
+                # it at the terminal) would be submitted as an answer the person chose to skip, so
+                # that refuses rather than unticking what someone else chose.
+                if _part_current_checked(menu):
+                    return False, {"reason": "skipped_part_answered_on_screen", "part": pi,
+                                   "phase": f"skip{pi}"}
+                continue
             text = ans.get("text")
             ft_n = _part_free_text_n(menu)           # from the fresh current-part read
             want = set(ans.get("ns") or [])
@@ -4276,9 +4315,16 @@ def menu_batch_submit(session, *, answers, armed=False, read_fn=None, key_fn=Non
                 # explicit ☐ only (answered is False); answered None = ambiguous = fail-open.
                 unanswered = [i for i, t in enumerate(_ts)
                               if isinstance(t, dict) and t.get("answered") is False]
-                if unanswered:
+                # A skipped part SHOULD read ☐; any other ☐ is a keypress that did not land.
+                not_landed = [i for i in unanswered if i not in skipped]
+                if not_landed:
                     return False, {"reason": "parts_unanswered", "phase": "confirm",
-                                   "parts": unanswered}
+                                   "parts": not_landed}
+                skip_answered = [i for i, t in enumerate(_ts)
+                                 if i in skipped and isinstance(t, dict) and t.get("answered") is True]
+                if skip_answered:
+                    return False, {"reason": "skipped_part_answered_on_screen", "phase": "confirm",
+                                   "parts": skip_answered}
 
         # Submit tab: Enter through the confirm chain, DRIVEN BY on-screen state
         # (verify the menu is gone; the "Ready to submit? -> 1. Submit answers"
@@ -4346,6 +4392,7 @@ def _validate_batch_answer(row, answers):
             by_index[p["index"]] = p
     part_count = menu.get("part_count") or len(by_index)
     answered = set()
+    skipped = set()
     for a in answers:
         if not isinstance(a, dict):
             return "each answer must be an object"
@@ -4353,6 +4400,11 @@ def _validate_batch_answer(row, answers):
         if not isinstance(pi, int) or pi not in by_index:
             return f"answer references unknown part {pi!r}"
         part = by_index[pi]
+        if a.get("skipped") is True:
+            if a.get("ns") or a.get("text"):
+                return f"part {pi}: a skipped part cannot carry an answer"
+            skipped.add(pi)
+            continue
         valid_ns = {str(o.get("n")) for o in (part.get("options") or [])
                     if isinstance(o, dict)}
         ns = a.get("ns") or []
@@ -4364,12 +4416,21 @@ def _validate_batch_answer(row, answers):
         has_text = bool(a.get("text"))
         if not ns and not has_text:
             return f"part {pi}: no option selected and no own-words text"
+        # A single-choice part takes ONE answer: the replay types the words into the write-in row
+        # and would then press the option's digit, which replaces them on screen.
+        if ns and has_text and part.get("select") != "multi":
+            return f"part {pi}: pick an option or type your own words, not both"
         answered.add(pi)
-    # COMPLETE-answer guard (mirrors menu_batch_submit's pre-flight): every part
-    # must be answered, else the durable record would be a silent under-answer.
-    missing = [i for i in range(part_count) if i not in answered]
+    # COMPLETE-batch guard (mirrors menu_batch_submit's pre-flight): every part is either
+    # answered or EXPLICITLY skipped, so the durable record says "skipped" rather than being a
+    # silent under-answer. A part simply absent from the batch is a client bug and is refused.
+    # The CLI's review screen submits with unanswered parts (it warns, "You have not answered all
+    # questions", and still offers Submit answers), so a skip is deliverable as itself.
+    missing = [i for i in range(part_count) if i not in answered and i not in skipped]
     if missing:
         return f"parts unanswered: {missing}"
+    if not answered:
+        return "nothing answered: answer at least one part"
     return None
 
 
@@ -4431,7 +4492,7 @@ def _batch_key(answers):
     for a in answers or []:
         if isinstance(a, dict):
             out[a.get("part")] = (sorted(str(n) for n in (a.get("ns") or [])),
-                                  str(a.get("text") or "").strip())
+                                  str(a.get("text") or "").strip(), a.get("skipped") is True)
     return out
 
 
@@ -5568,8 +5629,14 @@ async def handle_agent_menu_capture(request):
     # actuating the live pane. Solves in-flight coalescing: once the first walk
     # wrote back, every later request (any surface) reads the stored payload.
     store = ApprovalStore(); store.migrate()
+    # The menu on screen now (the detector's read: no key pressed) names the one card a stored or fresh walk belongs
+    # to (menu_read_bridge): a walk of a menu that has since changed is neither served nor written back.
+    import menu_read_bridge as _mrb
+    _st = await asyncio.get_event_loop().run_in_executor(None, lambda: _agent_status().get_agent_status(session))
+    capture = _st.get("pending_menu") if isinstance(_st, dict) else None
+    menu_key = _mrb.op_key_for(session, capture)
     cached = await asyncio.get_event_loop().run_in_executor(
-        None, lambda: store.cached_hydration(session))
+        None, lambda: store.cached_hydration(session, op_key=menu_key)) if menu_key else None
     if isinstance(cached, dict):
         return _json({"ok": True, "session": session, "cached": True,
                       "parts": cached.get("parts") or [],
@@ -5582,11 +5649,25 @@ async def handle_agent_menu_capture(request):
     # clears needs_hydration) so a later part-2 answer validates (AGY-caught 400)
     # and the ledger becomes the cache. An aborted/partial walk writes NOTHING.
     if isinstance(out, dict) and out.get("walk_complete") and out.get("parts"):
-        try:
-            await asyncio.get_event_loop().run_in_executor(
-                None, lambda: store.hydrate_menu(session, out))
-        except Exception as e:  # noqa: BLE001 — write-back best-effort, never 500 the walk
-            print(f"[watch_gateway] hydrate_menu write-back failed ({session}): {e}",
+        if menu_key and _mrb.walk_is_of(capture, out):
+            # No card yet for this multi-part menu (the bridge's tick has not run, or skipped it as incomplete): make
+            # it now from this walk, so it is born with every part's question. Then write the walk onto this menu's
+            # card, whichever made it (a card the tick stored marked needs_hydration is completed here).
+            try:
+                rid, why = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: _mrb.bridge_on_read(store, session, capture, out, _st.get("state")))
+                if rid:
+                    print(f"[watch_gateway] menu card on read ({session}): {rid} {why}", file=sys.stderr)
+            except Exception as e:  # noqa: BLE001 — never 500 the walk; the next tick still bridges it
+                print(f"[watch_gateway] menu card on read failed ({session}): {e}", file=sys.stderr)
+            try:
+                await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: store.hydrate_menu(session, out, op_key=menu_key))
+            except Exception as e:  # noqa: BLE001 — write-back best-effort, never 500 the walk
+                print(f"[watch_gateway] hydrate_menu write-back failed ({session}): {e}",
+                      file=sys.stderr)
+        else:
+            print(f"[watch_gateway] walk not written back ({session}): the menu on screen is not the one walked",
                   file=sys.stderr)
     # The walk's instance (DEC-1791405753559307 phase 0), in the RESPONSE only, never in `out`:
     # hydrate_menu persists the walk onto the session's pending rows, and an id there would be a
@@ -6608,6 +6689,26 @@ async def handle_arturo_job_cancel(request):
         return _json({"ok": False, "error": "arturo unreachable"}, status=502)
 
 
+async def handle_arturo_card_dismiss(request):
+    """POST /arturo/threads/{id}/cards/{card_id}/dismiss — close a choice card in a thread (:5071)."""
+    import aiohttp
+    from urllib.parse import quote
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    cid, card = request.match_info.get("conversation_id") or "", request.match_info.get("card_id") or ""
+    if not re.match(r"^[0-9a-f]{8,32}$", card):
+        return _json({"ok": False, "error": "bad card id"}, status=400)
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(f"{ARTURO_TEXT_BASE}/threads/{quote(cid, safe='')}/cards/{card}/dismiss",
+                              headers=_arturo_principal_headers(request, voice=False),
+                              timeout=aiohttp.ClientTimeout(total=10)) as r:
+                return _json(await r.json(content_type=None), status=r.status)
+    except Exception as e:  # noqa: BLE001
+        log.error(f"arturo card dismiss forward: upstream unreachable: {e}")
+        return _json({"ok": False, "error": "arturo unreachable"}, status=502)
+
+
 async def handle_arturo_health(request):
     """GET /arturo/health — :5071/health passthrough (brain kind/model, voice vs text-only) so
     the home's header chip and the onboarding thread can read the install's state."""
@@ -6629,16 +6730,19 @@ ARTURO_PTT_VOICE_BASE = os.environ.get("ARTURO_PTT_VOICE_BASE") or (_loopback("O
 
 
 async def handle_arturo_ptt_voice(request):
-    """GET /arturo/ptt/voices, GET/PUT /arturo/ptt/voice — the operator's Hume voice picker
-    (contract msg_f5b57c9d). Bearer here, loopback upstream; a PUT takes effect on the
-    NEXT conversation via session_settings.voice_id, no restart."""
+    """GET /arturo/ptt/voices, GET/PUT/DELETE /arturo/ptt/voice — the voice picker (contract msg_f5b57c9d).
+    Bearer here, loopback upstream; a PUT takes effect on the NEXT conversation via session_settings.voice_id, no
+    restart. ?vendor= and ?agent= (an agent's own voice) are the only query passed on."""
     import aiohttp
     import asyncio
+    from urllib.parse import urlencode
     if not _authorized(request):
         return _json({"ok": False, "error": "unauthorized"}, status=401)
-    upstream = (ARTURO_PTT_VOICE_BASE + "/ptt/voices?" + request.query_string
-                if request.path.endswith("/voices")
-                else ARTURO_PTT_VOICE_BASE + "/ptt/voice")
+    if request.path.endswith("/voices"):
+        upstream = ARTURO_PTT_VOICE_BASE + "/ptt/voices?" + request.query_string
+    else:
+        q = {k: request.query[k] for k in ("vendor", "agent") if request.query.get(k)}
+        upstream = ARTURO_PTT_VOICE_BASE + "/ptt/voice" + (("?" + urlencode(q)) if q else "")
     body = await request.read() if request.method == "PUT" else None
     try:
         async with aiohttp.ClientSession() as s:
@@ -7772,7 +7876,9 @@ def _free_text_option_without_text(row, answers):
 
 def _clean_batch_answers(answers):
     """(clean, None) or (None, error). The ONE shape every multi-part submit replays: answers[] of
-    {part: distinct int, ns: [digit strings], text?: non-blank str <= ANSWER_TEXT_MAX}. The arm
+    {part: distinct int, ns: [digit strings], text?: non-blank str <= ANSWER_TEXT_MAX}, or
+    {part, skipped: true} for a part the person chose to leave unanswered (no ns, no text: a skip
+    that carries an answer is a contradiction, refused rather than guessed at). The arm
     gates read `text` from THIS result, so a value they would not count (whitespace, a non-string)
     can never reach the replay that types it; ints in ns become strings because the validator
     compares str(n) while the replay presses the RAW value."""
@@ -7788,6 +7894,11 @@ def _clean_batch_answers(answers):
         if not isinstance(pi, int) or isinstance(pi, bool) or pi in seen_parts:
             return None, "each answer needs a distinct integer part"
         seen_parts.add(pi)
+        if a.get("skipped") is True:
+            if a.get("ns") or (isinstance(t, str) and t.strip()):
+                return None, f"part {pi}: a skipped part cannot carry an answer"
+            clean.append({"part": pi, "skipped": True})
+            continue
         ns = a.get("ns") or []
         if not isinstance(ns, list):
             return None, f"part {pi}: ns must be a list"
@@ -7816,7 +7927,10 @@ def _agy_identity_refusal(session):
 
 
 def _menu_submit_text_armed() -> bool:
-    return os.environ.get("MENU_MULTIPART_TEXT_ARMED") == "1"
+    """Own words in a multi-part answer are typed into the pane unless the operator opts out
+    (MENU_MULTIPART_TEXT_ARMED=0), the same posture as the option arm: the submit is bound to its card
+    and replays only through the identity gate."""
+    return os.environ.get("MENU_MULTIPART_TEXT_ARMED", "1") != "0"
 
 
 def _menu_multipart_armed() -> bool:
@@ -7826,8 +7940,8 @@ def _menu_multipart_armed() -> bool:
     card (/menu-submit card_required, /agent-key use_menu_submit), is bound to it on the
     orchestrator's own lookup, replays only with the identity gate, and never takes the
     identity-less pane-only leg. Unarmed, an app's answer is a dry run that reaches no agent,
-    which on a default install is the failure that matters. Own-words text stays a separate,
-    default-OFF arm (MENU_MULTIPART_TEXT_ARMED)."""
+    which on a default install is the failure that matters. Own-words text is its own arm
+    (MENU_MULTIPART_TEXT_ARMED), also on unless opted out."""
     return os.environ.get("MENU_MULTIPART_SUBMIT_ARMED", "1") != "0"
 
 
@@ -8621,8 +8735,13 @@ def _validate_qnr_answer(question, option_n, answer_text):
     return None
 
 
-def _validate_qnr_delta(questions, answers):
-    """Validate every provided answer against its question. Error str/None."""
+def _validate_qnr_delta(questions, answers, allow_skip=False):
+    """Validate every provided answer against its question. Error str/None.
+
+    At submit (allow_skip) a question may be sent as {"skipped": true}: the person chose to leave it
+    unanswered. Only an optional question can be skipped (a required one would block the submit
+    anyway) and a skip carries no answer. "At least one question answered" is checked by the store,
+    against the draft merged with this delta."""
     qbyn = {q["n"]: q for q in questions}
     for n, a in (answers or {}).items():
         try:
@@ -8631,6 +8750,18 @@ def _validate_qnr_delta(questions, answers):
             return f"bad question index {n!r}"
         if not q:
             return f"no question {n}"
+        if not isinstance(a, dict):
+            return f"q{n}: answer must be an object"
+        if "skipped" in a:
+            if not allow_skip:
+                return f"q{n}: a skip is sent with the submit, not a draft"
+            if a.get("skipped") is not True:
+                return f"q{n}: skipped must be true"
+            if a.get("option_n") is not None or (a.get("answer_text") or "").strip():
+                return f"q{n}: a skipped question cannot carry an answer"
+            if q.get("required", 1):
+                return f"q{n}: this question needs an answer and cannot be skipped"
+            continue
         opt = a.get("option_n")
         txt = a.get("answer_text")
         txt = str(txt).strip() if txt is not None else None
@@ -8706,7 +8837,9 @@ async def handle_questionnaire_submit(request):
     d = store.get(qid)
     if not d:
         return _json({"ok": False, "error": "not found"}, status=404)
-    err = _validate_qnr_delta(d["questions"], answers)
+    if not isinstance(answers, dict):
+        return _json({"ok": False, "error": "answers must be an object keyed by question number"}, status=400)
+    err = _validate_qnr_delta(d["questions"], answers, allow_skip=True)
     if err:
         return _json({"ok": False, "error": err}, status=400)
     r = store.submit(qid, answers, surface=(data or {}).get("surface"))
@@ -8724,6 +8857,9 @@ async def handle_questionnaire_submit(request):
     body = {"ok": True, "applied": False, "id": qid}
     if "missing" in r:
         body["missing"] = r["missing"]
+    if r.get("nothing_answered"):
+        return _json({"ok": False, "applied": False, "id": qid,
+                      "error": "nothing answered: answer at least one question"}, status=400)
     if "status" in r:
         body["status"] = r["status"]
     return _json(body)
@@ -9116,6 +9252,7 @@ def build_app():
     app.router.add_get("/arturo/threads", handle_arturo_threads)
     app.router.add_get("/arturo/threads/{conversation_id}", handle_arturo_threads)
     app.router.add_post("/arturo/threads/{conversation_id}/jobs/{job_id}/cancel", handle_arturo_job_cancel)
+    app.router.add_post("/arturo/threads/{conversation_id}/cards/{card_id}/dismiss", handle_arturo_card_dismiss)
     app.router.add_post("/arturo/ptt/stream/audio", handle_arturo_ptt_stream_audio)
     app.router.add_get("/arturo/ptt/stream/events", handle_arturo_ptt_stream_events)
     app.router.add_post("/arturo/ptt/stream/end", handle_arturo_ptt_stream_end)
@@ -9124,6 +9261,7 @@ def build_app():
     app.router.add_get("/arturo/ptt/voices", handle_arturo_ptt_voice)
     app.router.add_get("/arturo/ptt/voice", handle_arturo_ptt_voice)
     app.router.add_put("/arturo/ptt/voice", handle_arturo_ptt_voice)
+    app.router.add_delete("/arturo/ptt/voice", handle_arturo_ptt_voice)
     app.router.add_get("/arturo/avatars", handle_arturo_avatar)
     app.router.add_get("/arturo/avatar", handle_arturo_avatar)
     app.router.add_put("/arturo/avatar", handle_arturo_avatar)
