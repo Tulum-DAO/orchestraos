@@ -20,7 +20,7 @@ from pathlib import Path
 
 from . import settings as S
 
-DEFAULT_MODEL = {"claude": "claude-opus-5[1m]", "gemini": "gemini-3.7-flash", "codex": "gpt-5.6-terra",
+DEFAULT_MODEL = {"claude": "claude-opus-5-5[1m]", "gemini": "gemini-3.7-flash", "codex": "gpt-5.6-terra",
                  "grok": "grok-4.7"}
 
 

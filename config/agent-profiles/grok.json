@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "id": "grok",
+  "label": "Grok Build",
+  "proven": true,
+  "process": { "basenames": ["grok", "grok-linux-x86_64"] },
+  "prompt_char": "\u0000grok-composer-unverified",
+  "launch": { "bin": "grok", "model_flag": "--model", "resume": ["grok", "-r", "{session_id}"] },
+  "state": { "source": "events-file" },
+  "session_log": { "format": "grok-updates", "find": ["grok-sessions"] },
+  "context": "events-file",
+  "tokens": "private-needs-upstreaming",
+  "model_switch": "none",
+  "menus": "none",
+  "rotation": "private-needs-upstreaming"
+}

@@ -23,7 +23,7 @@ def _providers(tmp_path):
     p.write_text(json.dumps({"providers": [
         {"id": "claude", "model_catalog": {"static": [
             {"id": "claude-opus-5-5", "label": "Opus 5.5", "capabilities": {"context_window": 200000}},
-            {"id": "claude-sonnet-5-5", "label": "Sonnet 5.5"}]}},
+            {"id": "claude-sonnet-5-5", "label": "Sonnet 5.5", "capabilities": {"context_window": 200000}}]}},
         {"id": "codex", "model_catalog": {"static": [{"id": "gpt-5.6-terra", "label": "GPT-5.6 Terra"}]}},
     ]}))
     return p
@@ -37,12 +37,35 @@ def test_the_catalog_is_the_live_answer_then_static_then_live_only_ids(tmp_path)
         {"id": "claude-opus-5-5[1m]", "label": "Opus 5.5 (1M)"}]}]}))
     (state / AM.LIVE_CATALOG).write_text(json.dumps({"providers": {"claude": ["claude-haiku-4-5", "claude-opus-5-5"]}}))
     rows = AM.load_catalog("claude", _providers(tmp_path), state)
-    assert [r["id"] for r in rows] == ["claude-fable-5-1", "claude-opus-5-5[1m]", "claude-opus-5-5",
-                                      "claude-sonnet-5-5", "claude-haiku-4-5"]
+    # claude-opus-5-5 (the 200k Opus 5.5) is in both the static list and the live one, and still left out.
+    assert [r["id"] for r in rows] == ["claude-fable-5-1", "claude-opus-5-5[1m]", "claude-sonnet-5-5",
+                                      "claude-opus-5[1m]", "claude-haiku-4-5"]
     by = {r["id"]: r for r in rows}
     assert by["claude-opus-5-5[1m]"]["subtitle"] == "1M context"
-    assert by["claude-opus-5-5"] == {"id": "claude-opus-5-5", "title": "Opus 5.5", "subtitle": "200K context"}
+    assert by["claude-sonnet-5-5"] == {"id": "claude-sonnet-5-5", "title": "Sonnet 5.5", "subtitle": "200K context"}
     assert by["claude-haiku-4-5"]["title"] == "claude-haiku-4-5"          # live-only: no label known
+
+
+def test_a_seat_is_never_offered_the_200k_opus_under_any_of_its_names(tmp_path):
+    state = tmp_path / "state"
+    state.mkdir()
+    # Claude's own model list names it "opus" and "default"; other aliases are other models.
+    (state / AM.RESPONSE_CACHE).write_text(json.dumps({"providers": [{"id": "claude", "models": [
+        {"id": "default", "label": "Default (recommended)"}, {"id": "opus", "label": "Opus 5.5"},
+        {"id": "fable", "label": "Fable 5.1"}, {"id": "claude-opus-5-5[1m]", "label": "Opus 5.5 (1M)"}]}]}))
+    rows = AM.load_catalog("claude", _providers(tmp_path), state)
+    ids = [r["id"] for r in rows]
+    assert not {"claude-opus-5-5", "opus", "default"} & set(ids)
+    assert ids[:2] == ["fable", "claude-opus-5-5[1m]"]
+    desc = AM.describe("claude", "claude-opus-5-5[1m]", rows, {})
+    assert "opus" not in desc["allowed"] and "claude-opus-5-5[1m]" in desc["allowed"]
+
+
+def test_seats_are_offered_the_1m_models_even_with_no_catalog_files(tmp_path):
+    rows = AM.load_catalog("claude", tmp_path / "absent.json", tmp_path / "nowhere")
+    assert [(r["id"], r["title"], r.get("subtitle")) for r in rows] == [
+        ("claude-opus-5-5[1m]", "Opus 5.5 (1M)", "1M context"), ("claude-opus-5[1m]", "Opus 5 (1M)", "1M context")]
+    assert AM.load_catalog("codex", tmp_path / "absent.json", tmp_path / "nowhere") == []
 
 
 def test_missing_or_broken_cache_files_mean_fewer_rows_not_an_error(tmp_path):
@@ -351,7 +374,9 @@ def test_a_catalog_id_that_could_type_something_else_is_never_offered(tmp_path):
     state.mkdir()
     (state / AM.LIVE_CATALOG).write_text(json.dumps({"providers": {"claude": [
         "claude-opus-5-5\n/clear", "a b", "claude-opus-5-5[1m]", "-x"]}}))
-    assert [r["id"] for r in AM.load_catalog("claude", tmp_path / "none.json", state)] == ["claude-opus-5-5[1m]"]
+    # only the well-shaped ids: the live one (also a seat model) and the other seat model
+    assert [r["id"] for r in AM.load_catalog("claude", tmp_path / "none.json", state)] == [
+        "claude-opus-5-5[1m]", "claude-opus-5[1m]"]
     status, body = AM.switch_live(model="x\n/clear", settings_path=tmp_path / "s.json", send=None,
                                   find_jsonl=lambda: None)
     assert status == 400
@@ -779,3 +804,14 @@ def test_an_unverified_send_never_answered_still_takes_back_a_late_save(tmp_path
     assert status == 502 and body["error"] == "not sent"
     assert 5.0 in naps                                         # the second look ran: the text may have landed
     assert json.loads(s.read_text())["model"] == "opus"
+
+
+def test_a_single_version_id_matches_its_own_display_and_not_a_point_release():
+    # Claude Code confirms claude-opus-5[1m] as "Opus 5 (1M context)"; the catalog title differs.
+    assert AM.display_matches("Opus 5 (1M context)", "claude-opus-5[1m]", "Opus 5 (1M)")
+    assert AM.display_matches("Opus 5", "claude-opus-5", None)
+    assert not AM.display_matches("Opus 5.5", "claude-opus-5", None)
+    assert not AM.display_matches("Opus 5.5 (1M context)", "claude-opus-5[1m]", None)
+    assert AM.display_matches("Opus 5.5 (1M context)", "claude-opus-5-5[1m]", None)
+    assert not AM.display_matches("Opus 5", "claude-opus-5-5", None)
+    assert not AM.display_matches("Sonnet 5", "claude-opus-5", None)

@@ -43,6 +43,13 @@ RESPONSE_CACHE = "runtimes-available-cache.json"
 LIVE_RUNTIMES = {"claude", "codex"}
 # grok seats do not rotate yet (rotate_agent refuses them), so a stored model would never apply.
 NO_SWITCH = {"grok": "this runtime cannot switch models yet"}
+# Models a seat is never switched to. Seats run the 1M-context Opus 5.5 (claude-opus-5-5[1m], the default for new
+# Claude seats); the 200k one is left out under its full id and under the two names Claude's own model list gives
+# it ("opus", and "default", which it describes as Opus 5.5). Other aliases name other models and stay.
+NOT_FOR_SEATS = {"claude": frozenset({"claude-opus-5-5", "opus", "default"})}
+# 1M-context models a seat may switch to. They live here, not in providers.json: that list is also
+# Arturo's brain catalog, whose model ids cannot carry the "[1m]" suffix (services/arturo/brain.py).
+SEAT_MODELS = {"claude": [("claude-opus-5-5[1m]", "Opus 5.5 (1M)"), ("claude-opus-5[1m]", "Opus 5 (1M)")]}
 
 _SET_MODEL = re.compile(r"<local-command-stdout>\s*Set model to\s+`?([^`<\n]+?)`?(?:\s+and saved[^<]*|\s+for this session[^<]*)?\s*</local-command-stdout>")
 _STDOUT = re.compile(r"<local-command-stdout>(.*?)</local-command-stdout>", re.S)
@@ -88,7 +95,7 @@ def load_catalog(runtime: str, providers_path: Path, state_dir: Path) -> list[di
     live-only ids the static list has not heard of. Unreadable files mean "fewer rows", never
     an error: this is a cache."""
     rows: list[dict] = []
-    seen: set[str] = set()
+    seen: set[str] = set(NOT_FOR_SEATS.get(runtime, ()))
 
     def add(mid, label=None, caps=None):
         if valid_model_id(mid) and mid not in seen:
@@ -115,6 +122,8 @@ def load_catalog(runtime: str, providers_path: Path, state_dir: Path) -> list[di
                     add(m.get("id"), m.get("label"), m.get("capabilities"))
     except Exception:  # noqa: BLE001
         pass
+    for mid, label in SEAT_MODELS.get(runtime, ()):
+        add(mid, label)
     try:
         live = json.loads((state_dir / LIVE_CATALOG).read_text())
         for mid in ((live.get("providers") or {}).get(runtime) or []):
@@ -324,13 +333,15 @@ def display_matches(display: str, model_id: str, title: str | None = None) -> bo
     d = re.sub(r"\s+", " ", (display or "").strip().lower())
     if title and re.sub(r"\s+", " ", title.strip().lower()) in d:
         return True
-    m = re.fullmatch(r"(?:claude-)?([a-z]+)-(\d+)-(\d+)(?:-\d{8})?(\[1m\])?", model_id.lower())
+    # A minor version is optional: claude-opus-5[1m] is Opus 5 (shown "Opus 5 (1M context)").
+    m = re.fullmatch(r"(?:claude-)?([a-z]+)-(\d+)(?:-(\d+))?(?:-\d{8})?(\[1m\])?", model_id.lower())
     if not m:
         return model_id.lower() in d
     # Family and version only: how the CLI words the 1M-context variant is not pinned down, and
     # a wrong guess would call a good switch failed. The id itself (with [1m]) is what is stored.
-    fam, ver = m.group(1), f"{m.group(2)}.{m.group(3)}"
-    return fam in d and ver in d
+    # The version must stand alone, so "5" never matches "5.5".
+    fam, ver = m.group(1), m.group(2) + (f".{m.group(3)}" if m.group(3) else "")
+    return fam in d and re.search(rf"(?<![\d.]){re.escape(ver)}(?![\d]|\.\d)", d) is not None
 
 
 def wait_for_switch(find_jsonl, since_iso: str, start_offset=None, timeout_s: float = 10.0,
