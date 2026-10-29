@@ -176,6 +176,8 @@ export interface UnifiedApproval {
   // The seat that asked, so a card can say who it is from. Additive; null when
   // the source row does not name one (learning proposals).
   agent_id?: string | null;
+  /** The row's dedup key (canonical rows): a terminal menu bridged into a card has `menu:<session>:…`. */
+  op_key?: string | null;
 }
 
 function normalizeProposal(p: any): UnifiedApproval {
@@ -293,6 +295,8 @@ export function normalizeCanonical(r: CanonicalRow): UnifiedApproval {
     menu: r.menu ?? null,
     options: r.options ?? null,
     agent_id: r.from_agent || null,
+    // A terminal menu bridged into a card has a `menu:<session>:…` key: the dashboard keeps it to a pick OR words.
+    op_key: r.op_key ?? null,
   };
 }
 

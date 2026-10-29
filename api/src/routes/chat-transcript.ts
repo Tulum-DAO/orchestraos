@@ -756,6 +756,9 @@ export function sanitizeClaudeUserText(text: string): string {
   t = t.replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, '');
   t = t.replace(/<local-command-stderr>[\s\S]*?<\/local-command-stderr>/g, '');
   const name = /<command-name>\s*([^<]*?)\s*<\/command-name>/.exec(t);
+  // A model switch (`/model <id>`, typed by the dashboard's model picker or by hand) is not part of the conversation:
+  // the thread already marks where the model changed ("Model changed", from the assistant entries' model).
+  if (name && name[1].trim() === '/model') return '';
   if (name) {
     const args = /<command-args>\s*([^<]*?)\s*<\/command-args>/.exec(t);
     const typed = [name[1].trim(), (args?.[1] || '').trim()].filter(Boolean).join(' ');

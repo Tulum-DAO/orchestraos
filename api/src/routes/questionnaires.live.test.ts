@@ -152,6 +152,30 @@ test('the gateway answer (missing / 400) is passed back as is', async () => {
   assert.equal(r2.status, 400);
 });
 
+test('a skipped question goes to the gateway as sent, and its "nothing answered" refusal comes back as is', async () => {
+  const deps = makeDeps();
+  const answers = { '1': { option_n: '1' }, '2': { skipped: true } };
+  const r = await req(deps, 'POST', '/api/questionnaires/qnr_test_0001/answers', { answers });
+  assert.equal(r.status, 200);
+  assert.deepEqual(JSON.parse(String(deps.calls[0].init.body)), { answers, surface: 'web' });
+  const none = makeDeps({}, () => ({ status: 400, body: { ok: false, applied: false, error: 'nothing answered: answer at least one question' } }));
+  const r2 = await req(none, 'POST', '/api/questionnaires/qnr_test_0001/answers', { answers: { '2': { skipped: true } } });
+  assert.equal(r2.status, 400);
+  assert.equal(r2.json.error, 'nothing answered: answer at least one question');
+});
+
+test('the ✕ goes to the gateway discard for the operator only, and never for a legacy id', async () => {
+  const deps = makeDeps();
+  const r = await req(deps, 'POST', '/api/questionnaires/qnr_test_0001/discard', {});
+  assert.equal(r.status, 200);
+  assert.equal(deps.calls[0].url, 'http://gw.test/questionnaires/qnr_test_0001/discard');
+  assert.equal(deps.calls[0].init.method, 'POST');
+  assert.equal((await req(makeDeps(), 'POST', '/api/questionnaires/old-1/discard', {})).status, 404);
+  const viewer = makeDeps({ principal: () => ({ username: 'v', role: 'viewer', allowedAgents: '*', clientScope: null, trusted: false }) as any });
+  assert.equal((await req(viewer, 'POST', '/api/questionnaires/qnr_test_0001/discard', {})).status, 403);
+  assert.equal(viewer.calls.length, 0);
+});
+
 test('answers are refused for a non-live id, without a token, or with a bad body', async () => {
   assert.equal((await req(makeDeps(), 'POST', '/api/questionnaires/old-1/answers', { answers: {} })).status, 404);
   assert.equal((await req(makeDeps({ token: () => '' }), 'POST', '/api/questionnaires/qnr_x/answers', { answers: {} })).status, 502);
