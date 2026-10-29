@@ -70,7 +70,7 @@ test('the bell lists agents with cards waiting, most first, pending only', () =>
 });
 
 // ── the bell jump: a card opens where it lives ──
-const START = '2026-10-24T20:03:43.674Z';                         // the current session began here
+const START = '2026-10-24T20:03:43.000Z';                         // the current session began here
 const cur = { id: 'req-cur', agent_id: 'pm-demo', created_at: '2026-10-24T20:12:00Z', status: 'pending' };
 const old = { id: 'req-old', agent_id: 'pm-demo', created_at: '2026-10-24T17:11:49Z', status: 'pending' };
 const menuRow = { id: 'req-menu', agent_id: 'pm-demo', created_at: '2026-10-24T20:30:00Z', status: 'pending' };
@@ -130,10 +130,10 @@ test('answered cards: blue answered, green approved, red denied, dim blue held, 
 });
 test('the outcome row: choice · who · where · when · delivery speed', () => {
   const x = d({ state: 'answered', answer: 'option', option_n: '1', answer_surface: 'web',
-    answered_at: '2026-10-27T04:00:00.937Z', resumed_at: '2026-10-27T04:00:03.400Z', delivery: 'delivered' });
+    answered_at: '2026-10-27T04:00:00.000Z', resumed_at: '2026-10-27T04:00:02.000Z', delivery: 'delivered' });
   const line = outcomeLine(x);
   assert.match(line, /^Give me scope now · answered by you · the dashboard · .+ · delivered in 2s$/);
-  assert.equal(deliveryText({ ...x, resumed_at: '2026-10-27T04:00:00.950Z' }), 'delivered in <1s');
+  assert.equal(deliveryText({ ...x, resumed_at: '2026-10-27T04:00:00.000Z' }), 'delivered in <1s');
   assert.equal(deliveryText({ ...x, delivery: 'held' }), 'delivery held');
   assert.equal(deliveryText({ ...x, delivery: null }), '');
 });
