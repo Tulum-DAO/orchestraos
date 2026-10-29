@@ -83,3 +83,34 @@ test('a busy conversation is retried, not shown as a failure', () => {
   assert.equal(isBusy({ ok: false, status: 409, error: 'card_required' }), false);
   assert.equal(isBusy({ ok: true }), false);
 });
+
+test('a reply that showed a card brings the card back, answered by the next message or dismissed', () => {
+  const card = { options: ['Alpha', 'Beta'], multi: false, purpose: 'other' as const };
+  const turns = hydrateTurns([
+    { role: 'user', content: 'Start' },
+    { role: 'assistant', content: 'Which one?', meta: { kind: 'card', card_id: 'c0ffee01', choices: card } },
+    { role: 'user', content: 'Beta' },
+    { role: 'assistant', content: 'And this?', meta: { kind: 'card', card_id: 'c0ffee02', choices: card, dismissed: true } },
+    { role: 'assistant', content: 'Last one?', meta: { kind: 'card', card_id: 'c0ffee03', choices: card } },
+  ]);
+  assert.equal(turns[1].choices?.card_id, 'c0ffee01');
+  assert.equal(turns[1].answered, 'Beta');
+  assert.equal(turns[3].dismissed, true);
+  assert.equal(turns[3].answered, undefined);
+  assert.equal(turns[4].answered, undefined);         // nothing after it yet: still open
+});
+
+test("a card's tapped answer is not echoed as a bubble on reload; words typed instead stay a message", () => {
+  const card = { options: ['Alpha', 'Beta'], multi: false, purpose: 'other' as const };
+  const turns = hydrateTurns([
+    { role: 'assistant', content: 'Which one?', meta: { kind: 'card', card_id: 'c0ffee01', choices: card } },
+    { role: 'user', content: 'Beta' },
+    { role: 'user', content: 'Beta' },
+    { role: 'assistant', content: 'And this?', meta: { kind: 'card', card_id: 'c0ffee02', choices: card } },
+    { role: 'user', content: 'neither, thanks' },
+  ]);
+  assert.equal(turns[1].cardEcho, true);          // the tap: drawn on the answered card only
+  assert.equal(turns[2].cardEcho, undefined);     // a later message is a message
+  assert.equal(turns[4].cardEcho, undefined);     // words alone stay the operator's message
+  assert.equal(turns[3].answered, 'neither, thanks');
+});

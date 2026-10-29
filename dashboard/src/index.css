@@ -154,7 +154,7 @@
 }
 
 /* ── beautifului.dev design tokens (MIT, © Shane Levine — see NOTICE) ───────────
- * Ported for Arturo's tool cards (components/arturo/ToolRun.tsx). Raw values are --bui-*, so they
+ * Ported for the shared tool card (components/chat/ToolCalls.tsx). Raw values are --bui-*, so they
  * cannot clash with anything above; the @theme block below exposes them to Tailwind under names
  * nothing in this dashboard used before (checked), except `accent`, which is ours — theirs is
  * `bui-accent`. Same switch as ours: :root is light, .dark is dark. Keyframes only, no animate-*
@@ -416,6 +416,9 @@ main {
   padding: 2px 14px 2px 2px; border: 0; border-radius: 999px; margin: 0;
   background: var(--agent-pill-bg); --la-surface: var(--agent-pill-bg); color: var(--agent-pill-fg);
   font: inherit; font-size: 15px; font-weight: 600; line-height: 1.2; white-space: nowrap; text-align: left;
+  /* Arturo's face of the system font (arturo.css .arturo-shell): every agent's name reads the way his does. */
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter Variable", "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 .agent-pill > canvas { flex: 0 0 auto; }
 .agent-pill-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }

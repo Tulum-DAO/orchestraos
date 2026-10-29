@@ -21,7 +21,9 @@ import type { ArturoContext } from './arturo';
 export interface ThreadSummary { id: string; title: string; created?: number; updated: number; turns: number; snippet?: string; gist?: string }
 /** `meta.kind === 'job_result'`: posted by a background job (jobs.py), with the steps it ran. */
 export interface ThreadTurnMeta { kind?: string; job_id?: string; job_kind?: string; title?: string; status?: string;
-  steps?: import('./arturoJobs').JobStep[]; call_id?: string }
+  steps?: import('./arturoJobs').JobStep[]; call_id?: string;
+  /** A reply that showed a choice card (kind "card"): the card, its id, and whether it was closed unanswered. */
+  card_id?: string; choices?: import('./arturo').ChoiceCard; dismissed?: boolean }
 export interface ThreadTurn { role: 'user' | 'assistant'; content: string; ts?: number; mode?: string; meta?: ThreadTurnMeta }
 export interface ThreadDetail extends ThreadSummary { turns: number; }
 export interface LoadedThread { id: string; title: string; turns: ThreadTurn[]; last_brain?: { provider: string; model: string } | null }
@@ -129,4 +131,17 @@ export function restoreContext(threadId: string): void {
 export function contextForTurn(threadId: string, ctx?: ArturoContext | null): ArturoContext | null {
   if (!ctx) return null;
   return isContextDismissed(threadId) ? null : ctx;
+}
+
+/** Close one of Arturo's choice cards without answering it (it stays in the thread, marked dismissed). Returns an
+ *  error to show, or null. */
+export async function dismissCard(conversationId: string, cardId: string): Promise<string | null> {
+  try {
+    const res = await fetch(`/api/arturo/threads/${encodeURIComponent(conversationId)}/cards/${encodeURIComponent(cardId)}/dismiss`,
+      { method: 'POST' });
+    const json = await res.json().catch(() => ({}));
+    return res.ok && json.ok ? null : (json.error || `Couldn't dismiss (HTTP ${res.status})`);
+  } catch {
+    return "Couldn't reach the server";
+  }
 }

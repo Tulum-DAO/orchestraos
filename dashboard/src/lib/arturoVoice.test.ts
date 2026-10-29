@@ -31,9 +31,6 @@ test('a refused pick rolls back to the old voice with the server\'s reason', asy
   assert.deepEqual(shown.at(-1), { current: 'marin', error: "Couldn't change the voice: 'nova' is not an openai voice" });
 });
 
-test('only an admin may change the voice; an unknown role may not', () => {
-  assert.equal(canChangeVoice('admin'), true);
-  assert.equal(canChangeVoice('viewer'), false);
-  assert.equal(canChangeVoice(''), false);
-  assert.equal(canChangeVoice(undefined), false);                               // /api/me not answered yet
+test('anyone may change the voice for now, whatever their role', () => {
+  assert.equal(canChangeVoice(), true);
 });

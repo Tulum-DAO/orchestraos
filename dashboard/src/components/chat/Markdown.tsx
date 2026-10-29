@@ -1,11 +1,14 @@
 /**
- * Minimal, dependency-free markdown renderer for clean transcript text.
- * Handles: fenced code (```), inline code, bold, headings, bullet/numbered
- * lists, and paragraphs. Long fenced code blocks collapse (goal 2). No CDN
- * imports (see reference_vps_browser_testing — never import JS from a CDN).
+ * The one Markdown renderer for every agent's messages, Arturo's included: fenced code (long blocks collapse, each
+ * has a copy button), headings, bullet and numbered lists, quotes, tables and links. Parsing lives in
+ * lib/markdownBlocks.ts (tested there). Dependency-free, no CDN.
+ *
+ * `size`: "bubbles" draws the agent chat's 13px text; "modern" takes the size and colour of the reply it sits in
+ * (Arturo's page), so the same message reads right in either look.
  */
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import CopyButton from '../CopyButton';
+import { parseBlocks, parseInline, type Inline } from '../../lib/markdownBlocks';
 
 const CODE_COLLAPSE_LINES = 14;
 
@@ -47,108 +50,93 @@ function CodeBlock({ code, lang }: { code: string; lang?: string }) {
   );
 }
 
-/** Inline markdown: `code`, **bold**, *italic*. */
-function renderInline(text: string, keyBase: string): React.ReactNode[] {
-  const out: React.ReactNode[] = [];
-  const re = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  let k = 0;
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) out.push(text.slice(last, m.index));
-    const tok = m[0];
-    if (tok.startsWith('`')) {
-      out.push(
-        <code key={`${keyBase}-c${k}`} className="px-1 py-0.5 rounded bg-neutral-800 text-[12px] font-mono text-amber-200">
-          {tok.slice(1, -1)}
-        </code>
-      );
-    } else if (tok.startsWith('**')) {
-      out.push(<strong key={`${keyBase}-b${k}`} className="font-semibold text-foreground">{tok.slice(2, -2)}</strong>);
-    } else {
-      out.push(<em key={`${keyBase}-i${k}`}>{tok.slice(1, -1)}</em>);
+type Size = 'bubbles' | 'modern';
+
+function renderInline(text: string, keyBase: string, size: Size = 'bubbles'): ReactNode[] {
+  return parseInline(text).map((p: Inline, k) => {
+    const key = `${keyBase}-${k}`;
+    switch (p.t) {
+      case 'code':
+        // Modern: the page's own `code` style (Arturo's .txt code), so his replies keep their look.
+        return size === 'modern' ? <code key={key}>{p.text}</code>
+          : <code key={key} className="px-1 py-0.5 rounded bg-neutral-800 text-[0.92em] font-mono text-amber-200">{p.text}</code>;
+      case 'bold':
+        return <strong key={key} className="font-semibold">{p.text}</strong>;
+      case 'italic':
+        return <em key={key}>{p.text}</em>;
+      case 'link':
+        return (
+          <a key={key} href={p.href} target="_blank" rel="noopener noreferrer"
+             className="underline underline-offset-2 decoration-1 text-blue-600 dark:text-blue-400 hover:opacity-80 break-words">
+            {p.text}
+          </a>
+        );
+      default:
+        return p.text;
     }
-    last = m.index + tok.length;
-    k++;
-  }
-  if (last < text.length) out.push(text.slice(last));
-  return out;
+  });
 }
 
-export default function Markdown({ text }: { text: string }) {
-  const blocks: React.ReactNode[] = [];
-  const lines = text.split('\n');
-  let i = 0;
-  let bi = 0;
-
-  while (i < lines.length) {
-    const line = lines[i];
-
-    // fenced code
-    const fence = line.match(/^```(\w*)/);
-    if (fence) {
-      const lang = fence[1];
-      const buf: string[] = [];
-      i++;
-      while (i < lines.length && !/^```/.test(lines[i])) {
-        buf.push(lines[i]);
-        i++;
+export default function Markdown({ text, size = 'bubbles' }: { text: string; size?: Size }) {
+  const body = size === 'modern' ? '' : 'text-[13px] text-foreground/90';
+  const strong = size === 'modern' ? '' : 'text-foreground';
+  const blocks = parseBlocks(text).map((b, bi): ReactNode => {
+    const key = `b${bi}`;
+    switch (b.t) {
+      case 'code':
+        return <CodeBlock key={key} code={b.code} lang={b.lang} />;
+      case 'heading': {
+        const cls = b.level <= 1 ? 'text-[1.15em] font-semibold' : b.level === 2 ? 'text-[1.05em] font-semibold' : 'font-medium';
+        return <div key={key} className={`${cls} ${strong} mt-2 mb-1`}>{renderInline(b.text, key, size)}</div>;
       }
-      i++; // closing fence
-      blocks.push(<CodeBlock key={`cb${bi++}`} code={buf.join('\n')} lang={lang} />);
-      continue;
-    }
-
-    // heading
-    const h = line.match(/^(#{1,4})\s+(.*)/);
-    if (h) {
-      const lvl = h[1].length;
-      const cls = lvl <= 1 ? 'text-base font-semibold' : lvl === 2 ? 'text-sm font-semibold' : 'text-sm font-medium';
-      blocks.push(
-        <div key={`h${bi++}`} className={`${cls} text-foreground mt-2 mb-1`}>
-          {renderInline(h[2], `h${bi}`)}
-        </div>
-      );
-      i++;
-      continue;
-    }
-
-    // list (bullet or numbered) — gather consecutive items
-    if (/^\s*([-*]|\d+\.)\s+/.test(line)) {
-      const items: string[] = [];
-      while (i < lines.length && /^\s*([-*]|\d+\.)\s+/.test(lines[i])) {
-        items.push(lines[i].replace(/^\s*([-*]|\d+\.)\s+/, ''));
-        i++;
+      case 'list': {
+        const items = b.items.map((it, idx) => <li key={idx} className={body}>{renderInline(it, `${key}-${idx}`, size)}</li>);
+        return b.ordered
+          ? <ol key={key} start={b.start} className="list-decimal pl-5 my-1 space-y-0.5">{items}</ol>
+          : <ul key={key} className="list-disc pl-5 my-1 space-y-0.5">{items}</ul>;
       }
-      blocks.push(
-        <ul key={`ul${bi++}`} className="list-disc pl-5 my-1 space-y-0.5">
-          {items.map((it, idx) => (
-            <li key={idx} className="text-[13px] text-foreground/90">{renderInline(it, `li${bi}-${idx}`)}</li>
-          ))}
-        </ul>
-      );
-      continue;
+      case 'quote':
+        return (
+          <blockquote key={key} className={`border-l-2 border-current/30 pl-3 my-1 opacity-80 whitespace-pre-wrap break-words ${body}`}>
+            {renderInline(b.text, key, size)}
+          </blockquote>
+        );
+      case 'table':
+        return (
+          // Wide tables scroll inside their own box, never the page.
+          <div key={key} className="my-1.5 w-fit max-w-full overflow-x-auto rounded-md border border-current/15" data-md-table>
+            <table className={`border-collapse ${size === 'modern' ? '' : 'text-[12.5px]'}`}>
+              <thead>
+                <tr>
+                  {b.head.map((h, c) => (
+                    <th key={c} style={{ textAlign: b.align[c] ?? 'left' }}
+                        className="px-2.5 py-1.5 font-semibold border-b border-current/15 bg-current/[0.04] whitespace-nowrap">
+                      {renderInline(h, `${key}-h${c}`, size)}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {b.rows.map((r, ri) => (
+                  <tr key={ri} className="border-t border-current/10">
+                    {r.map((cell, c) => (
+                      <td key={c} style={{ textAlign: b.align[c] ?? 'left' }} className="px-2.5 py-1.5 align-top">
+                        {renderInline(cell, `${key}-${ri}-${c}`, size)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      default:
+        return (
+          <p key={key} className={`leading-relaxed whitespace-pre-wrap break-words ${body}`}>
+            {renderInline(b.text, key, size)}
+          </p>
+        );
     }
-
-    // blank
-    if (!line.trim()) {
-      i++;
-      continue;
-    }
-
-    // paragraph — gather until blank / structural line
-    const para: string[] = [line];
-    i++;
-    while (i < lines.length && lines[i].trim() && !/^```|^#{1,4}\s|^\s*([-*]|\d+\.)\s+/.test(lines[i])) {
-      para.push(lines[i]);
-      i++;
-    }
-    blocks.push(
-      <p key={`p${bi++}`} className="text-[13px] leading-relaxed text-foreground/90 whitespace-pre-wrap break-words">
-        {renderInline(para.join('\n'), `p${bi}`)}
-      </p>
-    );
-  }
-
-  return <div className="space-y-0.5">{blocks}</div>;
+  });
+  return <div className="space-y-0.5 min-w-0">{blocks}</div>;
 }

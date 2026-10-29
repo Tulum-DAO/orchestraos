@@ -65,7 +65,7 @@ export default function Questionnaires() {
     <div className="p-6 space-y-6">
       {/* Header */}
       <div className="flex items-center gap-3">
-        <h1 className="text-2xl font-bold text-white">Questionnaires</h1>
+        <h1 className="text-2xl font-bold text-foreground">Questionnaires</h1>
         {pending.length > 0 && (
           <span className="bg-amber-600 text-white text-xs font-bold px-2 py-0.5 rounded-full animate-pulse">
             {pending.length}
@@ -77,7 +77,10 @@ export default function Questionnaires() {
       {pending.length > 0 && (
         <div className="space-y-3">
           <h2 className="text-sm font-medium text-amber-400 uppercase tracking-wide">Needs Your Input</h2>
-          {pending.map((q: Questionnaire) => (
+          {pending.map((q: Questionnaire) => isLiveQuestionnaire(q) ? (
+            // A live questionnaire is the one question card itself, with no panel around it.
+            <QuestionnaireForm key={q.id} id={q.id} />
+          ) : (
             <div key={q.id} className="rounded-xl border-l-4 border-l-amber-500 border border-neutral-800 bg-neutral-900 overflow-hidden">
               <div className="p-4 space-y-3">
                 {q.created_by && q.created_by !== 'system' && (
@@ -109,9 +112,7 @@ export default function Questionnaires() {
 
                 {expandedId === q.id && (
                   <div className="rounded-lg overflow-hidden border border-neutral-700 bg-black">
-                    {isLiveQuestionnaire(q) ? (
-                      <QuestionnaireForm id={q.id} onDone={() => setExpandedId(null)} />
-                    ) : (
+                    {(
                     <iframe
                       src={`/api/questionnaires/${q.id}/html`}
                       className="w-full border-0"

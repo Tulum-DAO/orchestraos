@@ -22,6 +22,7 @@ import { Mic, MicOff, Plus, ArrowUp, AudioLines, Paperclip, PhoneOff } from 'luc
 import { useHandsFreeCall } from '../hooks/useHandsFreeCall';
 import '../components/arturo/arturo.css';
 import { ArturoPanel } from '../components/arturo/ArturoPanel';
+import Markdown from '../components/chat/Markdown';
 import { ModelSelectorSheet } from '../components/agent/ModelSelectorSheet';
 import { useArturoBrain } from '../stores/arturoBrain';
 import { arturoTurn, arturoPrewarm } from '../lib/arturoStream';
@@ -31,7 +32,7 @@ import { arturoHealth, runtimesAvailable, brainLabel, greeting, newConversationI
   HANDS_FREE, handsFreeTitle, handsFreeReady, dictateLocked, dictateTitle, ONBOARDING_OPENER, sendStateLabel,
   type ChoiceCard, type PairCard,
   type ArturoHealth, type RuntimeRow, type SendState } from '../lib/arturo';
-import { loadThread } from '../lib/arturoThreads';
+import { loadThread, dismissCard } from '../lib/arturoThreads';
 import { hydrateTurns, onboardingConversation, carriesOnboardingMarker, mergeResumeReply, isBusy } from '../lib/arturoResume';
 import WebTerminal from '../components/WebTerminal';
 import { installCommand } from '../lib/providerConnect';
@@ -39,9 +40,11 @@ import { uploadAttachment, attachmentPreamble, describeAttachment, attachmentIma
 import { arturoComposerText, arturoShownText } from '../lib/arturoComposer';
 import { useDictation } from '../components/arturo/useDictation.ts';
 import SpawnedAgentCard from '../components/arturo/SpawnedAgentCard';
-import ChoicesCard from '../components/arturo/ChoicesCard';
+import ChoiceDecisionCard from '../components/chat/ChoiceCard';
+import { isCardEcho } from '../lib/choiceCard';
 import PairCodeCard from '../components/arturo/PairCodeCard';
-import ToolRun from '../components/arturo/ToolRun';
+import ToolCalls from '../components/chat/ToolCalls';
+import { fromPart } from '../lib/toolCalls';
 import CopyReply from '../components/arturo/CopyReply';
 import { replyCopyText } from '../lib/arturoCopy';
 import JobTray from '../components/arturo/JobTray';
@@ -59,7 +62,6 @@ import { useAgentRecord, setArturoActivity, setArturoProvider, ARTURO_ID } from 
 import { arturoProvider } from '../lib/avatarStatus';
 import { applyAssistantName, assistantName, named, useAssistantName } from '../lib/assistantName';
 import { canChangeLook, showsLookCard, readDismissed, writeDismissed } from '../lib/avatarLooks';
-import { useUser } from '../hooks/useUser';
 import { HeaderEndSlotContext } from '../lib/headerSlot';
 import { SidebarMenuButton } from '../components/SidebarMenuButton';
 
@@ -69,6 +71,12 @@ type Turn = { id: number; role: 'user' | 'arturo'; text: string; tools?: string[
   decision?: { options: string[]; onPick: (v: string) => void };
   /** A card the brain wrote (ask_choices): picking sends the option's words as the operator's turn. */
   choices?: ChoiceCard;
+  /** What was sent in answer to this turn's card: the card stays, showing it. */
+  answered?: string;
+  /** Its card was closed unanswered (kept on the server with the reply). */
+  dismissed?: boolean;
+  /** A card's own answer (a tap): shown on the answered card, so no bubble is drawn unless the send fails. */
+  cardEcho?: boolean;
   /** A pairing code (pair_device). Lives only in this page's state: never in thread history. */
   pairCard?: PairCard;
   /** Tools Arturo ran during a live call, as they happened (parts = tool cards only). */
@@ -101,9 +109,8 @@ function subscribePhoneBar(cb: () => void) {
 const isPhoneBar = () => window.matchMedia(PHONE_BAR_QUERY).matches;
 
 function renderText(t: string) {
-  // `code` spans only — the thread stays plain text otherwise (no markdown engine).
-  const parts = t.split(/(`[^`]+`)/g);
-  return parts.map((p, i) => p.startsWith('`') && p.endsWith('`') ? <code key={i}>{p.slice(1, -1)}</code> : <span key={i}>{p}</span>);
+  // The one Markdown renderer every agent's messages use (lists, tables, links, code), at the reply's own size.
+  return <Markdown text={t} size="modern" />;
 }
 
 /** An ended call's "Call ended (vc_…). [voice-call: …]" line is a call card (collapsed; opens to the transcript),
@@ -115,7 +122,7 @@ function renderReply(t: string) {
     <div className="txt">
       {parseVoiceSegments(t).map((seg, i) => seg.kind === 'voicecall'
         ? <ArturoCallCard key={i} callId={seg.callId} turns={[]} live={false} />
-        : CALL_ENDED_RE.test(seg.text) ? null : <span key={i}>{renderText(seg.text)}</span>)}
+        : CALL_ENDED_RE.test(seg.text) ? null : <div key={i}>{renderText(seg.text)}</div>)}
     </div>
   );
 }
@@ -133,7 +140,7 @@ export default function ArturoHome() {
   const arturoRec = useAgentRecord(ARTURO_ID);
   const phoneBar = useSyncExternalStore(subscribePhoneBar, isPhoneBar, () => false);
   const aname = useAssistantName();
-  const canSaveLook = canChangeLook(useUser().data?.role);
+  const canSaveLook = canChangeLook();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [lookDismissed, setLookDismissed] = useState(() => readDismissed(lsStore(), ARTURO_ID));
   const showLookCard = showsLookCard({ chosen: arturoRec.chosen, canSave: canSaveLook, dismissed: lookDismissed });
@@ -395,16 +402,19 @@ export default function ArturoHome() {
       setDraft('');
     }
     // A card is answered once: by a tap, or by whatever the operator typed instead.
-    setTurns((t) => t.map((x) => x.choices ? { ...x, choices: undefined } : x));
+    setTurns((t) => t.map((x) => x.choices && !x.answered && !x.dismissed ? { ...x, answered: text } : x));
     // the bubble appears NOW; the box is already empty. It shows what they typed, never the attachments' filler.
-    const uid = user(picked === undefined ? arturoShownText(draft) : text, 'sending');
+    // A tap on a card is shown on the answered card instead (no bubble unless the send fails).
+    const openCard = picked === undefined ? undefined : [...turns].reverse().find((x) => x.choices && !x.answered && !x.dismissed)?.choices;
+    const uid = user(picked === undefined ? arturoShownText(draft) : text, 'sending',
+      openCard && isCardEcho(openCard, text) ? { cardEcho: true } : {});
     requestAnimationFrame(() => stick.toBottom());      // you sent it: back to the bottom
     const sentImages = attachmentImages(attachments);
     if (sentImages.length) setTurns((t) => t.map((x) => x.id === uid ? { ...x, images: sentImages } : x));
     if (waitFor) {
       setBusy(true); await waitFor;
       // The opener may have brought a card back; this message answers it, so it goes like any other.
-      setTurns((t) => t.map((x) => x.choices ? { ...x, choices: undefined } : x));
+      setTurns((t) => t.map((x) => x.choices && !x.answered && !x.dismissed ? { ...x, answered: text } : x));
     }
     // While onboarding, every turn is a BRAIN turn under the playbook: the marker makes the proxy add
     // it, the brain understands the reply (dictated or typed, any phrasing) and acts with a tool or
@@ -575,7 +585,7 @@ export default function ArturoHome() {
           <ArturoCallCard key={item.key} callId={item.callId} turns={item.turns} live={item.live} startTs={item.startTs} endTs={item.endTs}
             liveSince={item.live ? callSince : null} liveUser={item.live ? call.liveUser : undefined} liveArturo={item.live ? call.liveArturo : undefined}
             connecting={item.live && call.callState === 'connecting'} />
-        ) : ((t: Turn, i: number) => t.role === 'user' ? (
+        ) : ((t: Turn, i: number) => t.role === 'user' && t.cardEcho && t.state !== 'failed' ? null : t.role === 'user' ? (
           <div key={t.id} className="turn-user">{t.images && t.images.length > 0 && <div className="msg-images">{t.images.map((u) => <a key={u} href={u} target="_blank" rel="noreferrer"><img src={u} alt="attached image" loading="lazy" /></a>)}</div>}<div className="bubble-user">{t.text}</div>
             {(t.state === 'failed' || (t.state && i === lastUserIdx)) && <div className={`turn-state ${t.state}`}>{sendStateLabel(t.state)}</div>}</div>
         ) : (
@@ -585,7 +595,7 @@ export default function ArturoHome() {
                 // In the order it happened. Indices are stable: parts only ever grow at the end.
                 <div className="turn-parts">
                   {groupParts(t.parts!).map((g, gi) => g.kind === 'tools'
-                    ? <ToolRun key={gi} tools={g.tools} />
+                    ? <ToolCalls key={gi} calls={g.tools.map(fromPart)} />
                     : <div key={gi} className="txt">{renderText(g.text)}</div>)}
                 </div>
               )
@@ -594,27 +604,23 @@ export default function ArturoHome() {
             {!t.pending && !t.streaming && replyCopyText(t.text, t.parts) && <CopyReply text={replyCopyText(t.text, t.parts)} />}
             <SpawnedAgentCard ids={t.spawned} />
             {t.pairCard && <PairCodeCard card={t.pairCard} />}
-            {t.choices && t.choices.multi && (
-              <ChoicesCard options={t.choices.options} note={t.choices.note} exclusive={t.choices.exclusive} onSubmit={(picked) => { void send(picked.join(', ')); }} />
-            )}
-            {t.choices && !t.choices.multi && (
-              <div className="decision-card">
-                {t.choices.note && <div className="decision-note">{t.choices.note}</div>}
-                {t.choices.options.map((o) => (
-                  <button key={o} className="decision-opt" onClick={() => { void send(o); }}>{o}<span className="r" /></button>
-                ))}
-                <div className="decision-freetext">✎ Or type your own answer below…</div>
-              </div>
+            {/* The one decision card (components/chat/ChoiceCard.tsx): his cards answer with words in this chat. */}
+            {t.choices && (
+              <ChoiceDecisionCard note={t.choices.note} options={t.choices.options} multi={t.choices.multi}
+                exclusive={t.choices.exclusive} answered={t.answered} dismissed={t.dismissed}
+                onAnswer={(text) => { void send(text); }}
+                onDismiss={t.choices.card_id ? async () => {
+                  const err = await dismissCard(convId.current, t.choices!.card_id!);
+                  if (!err) patch(t.id, { dismissed: true });
+                  return err;
+                } : undefined} />
             )}
             {t.decision && (
-              <div className="decision-card">
-                {t.decision.options.map((o) => (
-                  <button key={o} className="decision-opt" onClick={() => { patch(t.id, { decision: undefined }); t.decision!.onPick(o); }}>
-                    {o}<span className="r" />
-                  </button>
-                ))}
-                <div className="decision-freetext">✎ Or type your own answer below…</div>
-              </div>
+              <ChoiceDecisionCard options={t.decision.options} onAnswer={(text) => {
+                // An option runs its step; anything typed instead is an ordinary message to him.
+                if (t.decision!.options.includes(text)) { patch(t.id, { decision: undefined }); t.decision!.onPick(text); }
+                else void send(text);
+              }} />
             )}
           </div>
         ))(item.turn, item.index))]}

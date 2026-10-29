@@ -7,7 +7,9 @@
    --ink is the colour translucent fills, lines and greys are made of (white on dark, black on light), so
    rgba(var(--ink), a) keeps each dark alpha exactly; --tNN are text alphas, the same numbers in dark and
    raised in light where black at that alpha would fall below WCAG AA (4.5:1) on Arturo's light surfaces. */
-.arturo-shell{
+/* The variables also go on .agent-panel-host: the agent panel (ArturoPanel) opens on every agent page, outside
+   Arturo's shell, and needs the same colours there. */
+.arturo-shell, .agent-panel-host{
   --accent:#d97757;
   --canvas:#fff; --panel:#f7f7f7; --card:#f2f2f2; --card2:#e9e9e9; --bubble:#efefef;
   --text:#111; --text2:#1c1b1a; --greet:#2a2724; --ink:0,0,0;
@@ -16,14 +18,17 @@
   --shadow:rgba(0,0,0,0.08); --send-bg:#111; --send-fg:#fff; --err:#b91c1c; --err-soft:#b91c1c;
   --arturo-line:#e2e2e2; --arturo-raise:#f7f7f7; --arturo-line-hi:#cfcfcf;
   --call-surface:var(--panel); --call-bubble:#fff; --call-bubble-line:var(--hair);
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter Variable","Helvetica Neue",Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.arturo-shell{
   position:fixed; inset:0; background:var(--canvas); color:var(--text); overflow:hidden;
   /* clip, not just hide: a hidden box can still be scrolled by the browser (a focused control off to
      the side), which shifts the whole page; a clipped one cannot. */
   overflow:clip;
-  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter Variable","Helvetica Neue",Arial,sans-serif;
-  -webkit-font-smoothing:antialiased; display:flex; flex-direction:column;
+  display:flex; flex-direction:column;
 }
-.dark .arturo-shell, .arturo-onboard-shell{
+.dark .arturo-shell, .dark .agent-panel-host, .arturo-onboard-shell{
   --canvas:#000; --panel:#141414; --card:#1c1c1c; --card2:#232323; --bubble:#262626;
   --text:#fff; --text2:#f1efec; --greet:#ece7e2; --ink:255,255,255;
   --hair:rgba(255,255,255,0.08); --hair-top:rgba(255,255,255,0.1); --grey:rgba(255,255,255,0.55); --grey2:rgba(255,255,255,0.38);
@@ -77,10 +82,13 @@
 .arturo-pill-thread .row.user .turn-state{ align-self:flex-end; }
 .bubble-user{ background:var(--bubble); color:var(--text); border-radius:20px; padding:11px 16px; font-size:16px; max-width:78%; line-height:1.4; white-space:pre-wrap; }
 .turn-assistant{ display:flex; flex-direction:column; gap:4px; align-items:flex-start; }
-/* A turn that ran tools: its text and tool cards in the order they happened (ToolRun.tsx). */
+/* A turn that ran tools: its text and tool cards in the order they happened (components/chat/ToolCalls.tsx). */
 .turn-parts{ display:flex; flex-direction:column; gap:8px; align-items:flex-start; width:100%; }
 .turn-assistant .txt{ font-size:16px; line-height:1.48; color:var(--text2); max-width:92%; white-space:pre-wrap; }
 .turn-assistant .txt code{ background:rgba(var(--ink),0.09); border-radius:5px; padding:1px 5px; font-family:"SF Mono",Menlo,monospace; font-size:14px; }
+/* A fenced block (the shared Markdown renderer's CodeBlock) is its own dark box: the inline chip above stays off it. */
+.turn-assistant .txt pre code{ background:none; border-radius:0; padding:0; font-size:12px; }
+.turn-assistant .txt ul, .turn-assistant .txt ol, .turn-assistant .txt blockquote, .turn-assistant .txt table{ white-space:normal; }
 .turn-assistant .tools{ font-size:12.5px; color:var(--grey2); }
 /* The copy button under a reply: its icon lines up with the reply's first letter. */
 .reply-actions{ display:flex; margin-left:-6px; }
@@ -260,6 +268,15 @@
 
 /* live voice call in the pill: partial captions before they commit as turns */
 .arturo-pill-panel .bubble.live { opacity: .75; font-style: italic; }
+/* A voice call in the pane is the page's call card (ArturoCallCard). The pane is dark in either theme, so the
+   card gets the page's dark set, its inset a step below the pane's #1c1c1c; the caller's bubbles are the pane's
+   own, and the text is the pane's 14px. Scoped to the card: the pane's other controls keep their own colours. */
+.arturo-pill-panel .call-card{
+  --panel:#262626; --call-surface:#141414; --bubble:#2c2c2e; --call-bubble:#1c1c1c; --call-bubble-line:transparent;
+  --text:#fff; --text2:#f1efec; --ink:255,255,255; --hair:rgba(255,255,255,0.08);
+  --grey:rgba(255,255,255,0.55); --grey2:rgba(255,255,255,0.38); --shadow:rgba(0,0,0,0.4);
+}
+.arturo-pill-panel .call-bubble{ font-size:14px; line-height:1.45; }
 
 /* The way INTO an agent Arturo just created (Shaw, 2026-09-22): one row per new seat, under
    the turn that made it, on the home and in the pill. */

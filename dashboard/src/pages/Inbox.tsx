@@ -9,15 +9,10 @@ import {
   ChevronDown, ChevronRight, Clock, MessageSquare,
 } from 'lucide-react';
 import { dismissMenuCard, post } from '../lib/api';
-import {
-  initialMenuAnswerState,
-  selectOption,
-  setText,
-  buildMenuAnswerPayload,
-  type MenuAnswerState,
-  type MenuOption,
-} from '../lib/menuAnswer';
-import MenuAnswerBlock from '../components/chat/MenuAnswerCard';
+import type { MenuOption } from '../lib/menuAnswer';
+import { MultiPartAnswer } from '../components/chat/MultiPartCard';
+import DecisionQuestion from '../components/chat/DecisionQuestion';
+import { isTerminalMenu } from '../lib/decisionCard';
 import DecisionCard, { ApprovalAnswer } from '../components/chat/DecisionCard';
 import ApprovalExtras from '../components/chat/ApprovalExtras';
 import { approvalCardBody, approvalCardAgent } from '../lib/approvalCard';
@@ -51,9 +46,11 @@ interface UnifiedApproval {
   initiated_by?: string;
   // gm-mine-menu-card seam 2: additive — undefined/null on every non-menu row.
   kind?: string | null;
-  menu?: { options?: MenuOption[]; question?: string; read_only?: boolean; notice?: string } | null;
+  menu?: { options?: MenuOption[]; question?: string; read_only?: boolean; notice?: string; multipart?: boolean; fail_safe?: boolean } | null;
   options?: string[] | null;
   agent_id?: string | null;
+  /** The row's dedup key: a terminal menu's is `menu:<session>:…` (lib/decisionCard isTerminalMenu). */
+  op_key?: string | null;
 }
 
 interface Questionnaire {
@@ -135,25 +132,6 @@ export default function Inbox() {
     mutationFn: ({ id, reason }: { id: string; reason: string }) =>
       post(`/approvals/unified/${id}/deny`, { reason }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['unified-approvals'] }),
-  });
-
-  // V3 universal Respond for kind='menu' rows — see Approvals.tsx for the
-  // full contract note (A1/A2/A3, D4). Same route, same behavior, both
-  // surfaces read the SAME canonical feed.
-  const [menuAnswers, setMenuAnswers] = useState<Record<string, MenuAnswerState>>({});
-  const getMenuAnswer = (id: string) => menuAnswers[id] ?? initialMenuAnswerState;
-  const [menuAnswerError, setMenuAnswerError] = useState<Record<string, string>>({});
-  const answerMenuMutation = useMutation({
-    mutationFn: ({ id, option_n, answer_text }: { id: string; option_n?: string; answer_text?: string }) =>
-      post(`/approvals/unified/${id}/answer`, { option_n, answer_text }),
-    onSuccess: (_data, { id }) => {
-      queryClient.invalidateQueries({ queryKey: ['unified-approvals'] });
-      setMenuAnswers((m) => { const next = { ...m }; delete next[id]; return next; });
-      setMenuAnswerError((m) => { const next = { ...m }; delete next[id]; return next; });
-    },
-    onError: (err: any, { id }) => {
-      setMenuAnswerError((m) => ({ ...m, [id]: err?.message || 'Could not send — try again.' }));
-    },
   });
 
   // Merge into unified feed
@@ -247,31 +225,42 @@ export default function Inbox() {
             const denying = denyMutation.isPending && denyMutation.variables?.id === a.id;
             const approvalError = (approveMutation.variables === a.id && approveMutation.error?.message)
               || (denyMutation.variables?.id === a.id && denyMutation.error?.message) || null;
+            const dismiss = async () => {
+              const err = await dismissMenuCard(a.id, a.agent_id, a.menu?.question || a.title);
+              if (!err) void queryClient.invalidateQueries({ queryKey: ['unified-approvals'] });
+              return err;
+            };
+            // A multi-part menu is read from the agent's screen part by part, then answered on the same card.
+            if (isMenu && (a.menu?.multipart || a.menu?.fail_safe) && a.agent_id) {
+              return (
+                <MultiPartAnswer key={`a-${a.id}`} agentId={a.agent_id} agentName={approvalCardAgent(a) || null} cardId={a.id}
+                  onDismiss={dismiss} />
+              );
+            }
+            // A question (kind 'menu') is the one question card: a pick sends it, words go alone where the menu has a
+            // write-in (DecisionQuestion). A menu the server sends read-only keeps its notice.
+            if (isMenu && !a.menu?.read_only) {
+              return (
+                <DecisionQuestion key={`a-${a.id}`}
+                  row={{ id: a.id, question: a.title, agent: approvalCardAgent(a) || null, risk: a.risk_level,
+                    body: approvalCardBody(a), options: a.menu?.options ?? [], terminal: isTerminalMenu(a) }}
+                  extra={<ApprovalExtras item={a} expanded={expandedId === a.id}
+                    onToggle={() => setExpandedId(expandedId === a.id ? null : a.id)} />}
+                  onAnswered={() => void queryClient.invalidateQueries({ queryKey: ['unified-approvals'] })}
+                  onDismiss={dismiss} />
+              );
+            }
             return (
               <DecisionCard key={`a-${a.id}`} kind={isMenu ? 'decision' : 'approval'} question={a.title}
                 agent={approvalCardAgent(a) || null} risk={a.risk_level} body={approvalCardBody(a)} open
                 extra={<ApprovalExtras item={a} expanded={expandedId === a.id}
                   onToggle={() => setExpandedId(expandedId === a.id ? null : a.id)} />}
-                onDismiss={isMenu ? async () => {
-                  const err = await dismissMenuCard(a.id, a.agent_id, a.menu?.question || a.title);
-                  if (!err) void queryClient.invalidateQueries({ queryKey: ['unified-approvals'] });
-                  return err;
-                } : undefined}>
-                {/* kind='menu' rows answer via option/free-text only (watch_gateway.py) */}
+                onDismiss={isMenu ? dismiss : undefined}>
+                {/* A menu sent read-only (a multi-part menu this client is not given whole) only says where to answer it. */}
                 {isMenu ? (
-                  <MenuAnswerBlock
-                    item={a}
-                    state={getMenuAnswer(a.id)}
-                    onSelect={(n) => setMenuAnswers((m) => ({ ...m, [a.id]: selectOption(getMenuAnswer(a.id), n) }))}
-                    onText={(t) => setMenuAnswers((m) => ({ ...m, [a.id]: setText(getMenuAnswer(a.id), t) }))}
-                    onRespond={() => {
-                      const payload = buildMenuAnswerPayload(getMenuAnswer(a.id));
-                      if (!payload) return;
-                      answerMenuMutation.mutate({ id: a.id, ...payload });
-                    }}
-                    sending={answerMenuMutation.isPending && answerMenuMutation.variables?.id === a.id}
-                    error={menuAnswerError[a.id]}
-                  />
+                  <div className="mx-4 mb-3 text-xs text-warning bg-warning/10 border border-warning/30 rounded-xl px-3 py-2">
+                    {a.menu?.notice || 'Multi-part menu — open the agent to answer.'}
+                  </div>
                 ) : (
                   <ApprovalAnswer sending={approving || denying} error={approvalError}
                     onApprove={() => approveMutation.mutate(a.id)}
@@ -281,8 +270,9 @@ export default function Inbox() {
             );
           }
 
-          // Questionnaire item
+          // Questionnaire item: a live one is the one question card itself, with no panel around it.
           const q = item.data;
+          if (isLiveQuestionnaire(q)) return <QuestionnaireForm key={`q-${q.id}`} id={q.id} />;
           const isExpanded = expandedId === `q-${q.id}`;
 
           return (
@@ -313,9 +303,7 @@ export default function Inbox() {
 
                 {isExpanded && (
                   <div className="rounded-lg overflow-hidden border border-neutral-700 bg-black">
-                    {isLiveQuestionnaire(q) ? (
-                      <QuestionnaireForm id={q.id} onDone={() => setExpandedId(null)} />
-                    ) : (
+                    {(
                     <iframe
                       src={`/api/questionnaires/${q.id}/html`}
                       className="w-full border-0"

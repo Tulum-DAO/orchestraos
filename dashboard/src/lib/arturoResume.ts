@@ -6,11 +6,12 @@
  * first-run opener again into the same thread, and the brain greeted them as new, with their history
  * hidden above. These are the page's decisions, kept here so they are tested (ArturoHome uses them).
  */
-import { isPageOpener } from './arturo';
+import { isPageOpener, type ChoiceCard } from './arturo';
 import type { ThreadTurn } from './arturoThreads';
 import type { TurnPart } from './turnParts';
 import { jobResultParts } from './arturoJobs';
 import { splitAttachmentPreamble } from './arturoUpload';
+import { isCardEcho } from './choiceCard';
 
 /** The proxy's page-context line (arturo-proxy.py _context_line) on line 1 of a stored message. The
  *  model saw it; the operator never typed it. The server strips it from thread reads too. */
@@ -21,6 +22,10 @@ export function stripContextLine(text: string): string {
 }
 
 export interface HydratedTurn { role: 'arturo' | 'user'; text: string; parts?: TurnPart[]; images?: string[];
+  /** The choice card the reply showed, what was sent in answer (the next message), or that it was dismissed. */
+  choices?: ChoiceCard; answered?: string; dismissed?: boolean;
+  /** A card's own answer: drawn on the answered card, so the feed draws no bubble for it. */
+  cardEcho?: boolean;
   /** Spoken on a live call (the thread stores mode "voice"): the feed groups these into the call's card. */
   voice?: boolean;
   /** The call-ended line for this call id: closes the call's card. */
@@ -39,9 +44,27 @@ export function hydrateTurns(turns: ThreadTurn[]): HydratedTurn[] {
                ...(sent?.images.length ? { images: sent.images } : {}),
                ...(x.mode === 'voice' ? { voice: true } : {}),
                ...(x.meta?.kind === 'call_end' && x.meta.call_id ? { callEnd: x.meta.call_id } : {}),
+               ...(x.role !== 'user' && x.meta?.kind === 'card' && x.meta.choices
+                 ? { choices: { ...x.meta.choices, card_id: x.meta.card_id }, ...(x.meta.dismissed ? { dismissed: true } : {}) } : {}),
                ...(typeof x.ts === 'number' ? { ts: x.ts } : {}) };
     })
-    .filter((x) => !(x.role === 'user' && isPageOpener(x.text)));
+    .filter((x) => !(x.role === 'user' && isPageOpener(x.text)))
+    // A card is answered by the message that followed it (a tap sends the option's words, or they typed instead).
+    .map((x, i, all) => {
+      if (!x.choices || x.dismissed) return x;
+      const next = all.slice(i + 1).find((y) => y.role === 'user');
+      return next ? { ...x, answered: next.text } : x;
+    })
+    // A card's own answer (a pick) is shown on the answered card, not again as a bubble: the first user message
+    // after a card, when it names one of the card's options (lib/choiceCard isCardEcho).
+    .map((x, i, all) => {
+      if (x.role !== 'user') return x;
+      const before = all.slice(0, i).reverse();
+      const card = before.findIndex((y) => !!y.choices && !y.dismissed);
+      const prevUser = before.findIndex((y) => y.role === 'user');
+      if (card < 0 || (prevUser >= 0 && prevUser < card)) return x;
+      return isCardEcho(before[card].choices!, x.text) ? { ...x, cardEcho: true } : x;
+    });
 }
 
 /** The onboarding thread: the server's (every browser and device resumes the same one), else this

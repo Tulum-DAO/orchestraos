@@ -1,19 +1,23 @@
 /**
- * QuestionnaireForm: a LIVE (QuestionnaireStore) questionnaire answered natively on the web.
+ * QuestionnaireForm: a LIVE (QuestionnaireStore) questionnaire answered natively on the web, as the one question card
+ * (components/chat/MultiPartCard's QuestionCard): one question at a time, a pick moves on, Skip leaves an optional
+ * question unanswered (a required one has no Skip), and answering the last question sends them all.
+ *
+ * Drawn on its own, as every other card is: no panel around it (pages/Questionnaires.tsx, pages/Inbox.tsx). The ✕
+ * closes it unanswered (POST /api/questionnaires/:id/discard, the gateway's discard).
  *
  * Reads GET /api/questionnaires/:id (questions[] with their menus and any saved draft) and sends
- * POST /api/questionnaires/:id/answers, which the API forwards to the gateway's own submit: the
- * same validation and the same resume of the asking agent as an answer from the phone or watch.
- * Legacy file questionnaires keep their iframe (pages/Questionnaires.tsx, pages/Inbox.tsx).
+ * POST /api/questionnaires/:id/answers, which the API forwards to the gateway's own submit: the same validation and
+ * the same resume of the asking agent as an answer from the phone or watch. A skipped question goes as
+ * {skipped: true} and is stored as skipped; at least one question must be answered. Legacy file questionnaires keep
+ * their iframe (pages/Questionnaires.tsx, pages/Inbox.tsx).
  */
-import { useEffect, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, Loader2 } from 'lucide-react';
-import { answerQuestionnaire, fetchQuestionnaire } from '../lib/api';
-import {
-  answerableOptions, buildAnswers, missingRequired, initialAnswers, questionnaireSummary,
-  type Drafts, type LiveQuestion,
-} from '../lib/questionnaireForm';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { fetchQuestionnaire } from '../lib/api';
+import { questionnaireSummary } from '../lib/questionnaireForm';
+import { questionnaireAnswers, questionnaireBody, questionnaireParts, type PartAnswer, type QuestionnaireQuestion } from '../lib/multiPart';
+import { AnsweredQuestionCard, QuestionCard } from './chat/MultiPartCard';
 import Markdown from './chat/Markdown';
 
 interface LiveDetail {
@@ -21,113 +25,74 @@ interface LiveDetail {
   title: string;
   summary?: string | null;
   status: string;
-  questions: LiveQuestion[];
+  from_agent?: string;
+  questions: QuestionnaireQuestion[];
 }
 
 interface SubmitResult { ok?: boolean; applied?: boolean; missing?: number[]; status?: string; error?: string }
 
-export default function QuestionnaireForm({ id, onDone }: { id: string; onDone?: () => void }) {
-  const queryClient = useQueryClient();
+export default function QuestionnaireForm({ id }: { id: string }) {
+  const [dismissed, setDismissed] = useState(false);
   const { data, isLoading, error } = useQuery({
     queryKey: ['questionnaire', id],
     queryFn: () => fetchQuestionnaire<LiveDetail>(id),
   });
-  const [drafts, setDrafts] = useState<Drafts>({});
-  const [highlight, setHighlight] = useState<number[]>([]);
-  const [sending, setSending] = useState(false);
-  const [result, setResult] = useState<SubmitResult | null>(null);
 
-  useEffect(() => { if (data?.questions) setDrafts(initialAnswers(data.questions)); }, [data?.id]);
-
-  if (isLoading) return <p className="text-xs text-neutral-500 p-4">Loading questions…</p>;
+  if (isLoading) return <p className="text-xs text-muted-foreground px-1 py-2">Loading questions…</p>;
   if (error || !data?.questions) {
-    return <p className="text-xs text-red-400 p-4">Could not load this questionnaire. Answer it on your phone or watch meanwhile.</p>;
+    return <p className="text-xs text-destructive px-1 py-2">Could not load this questionnaire. Answer it on your phone or watch meanwhile.</p>;
   }
-  if (data.status !== 'pending' || result?.applied) {
+
+  const parts = questionnaireParts(data.questions);
+  const summary = questionnaireSummary(data);
+  const context = summary ? <div className="text-[13px] leading-relaxed text-card-foreground/85" data-testid="qnr-summary"><Markdown text={summary} /></div> : null;
+  const title = data.title || 'Questionnaire';
+  const meta = data.from_agent ? <>· {data.from_agent}</> : null;
+
+  if (data.status !== 'pending') {
     return (
-      <p className="flex items-center gap-2 text-sm text-green-400 p-4" data-testid="qnr-done">
-        <CheckCircle2 size={16} /> {result?.applied ? 'Answers sent.' : `This questionnaire is ${data.status}.`}
-      </p>
+      <div data-testid="qnr-done">
+        <AnsweredQuestionCard title={title} meta={meta} context={context} parts={parts}
+          answers={questionnaireAnswers(parts, data.questions)} note={`This questionnaire is ${data.status}.`} />
+      </div>
     );
   }
 
-  const set = (n: number, patch: { option_n?: string; answer_text?: string }) =>
-    setDrafts((d) => ({ ...d, [n]: { ...(d[n] ?? {}), ...patch } }));
-
-  async function submit() {
-    const missing = missingRequired(data!.questions, drafts);
-    setHighlight(missing);
-    if (missing.length) { setResult({ missing }); return; }
-    setSending(true);
+  const submit = async (answers: PartAnswer[]): Promise<string | null> => {
+    let r: SubmitResult = {};
     try {
-      const r = await answerQuestionnaire<SubmitResult>(id, buildAnswers(drafts));
-      setResult(r);
-      if (r.missing) setHighlight(r.missing);
-      if (r.applied) {
-        queryClient.invalidateQueries({ queryKey: ['questionnaires'] });
-        onDone?.();
-      }
-    } catch (e: any) {
-      setResult({ error: e?.message || 'send failed' });
-    } finally {
-      setSending(false);
+      const res = await fetch(`/api/questionnaires/${encodeURIComponent(id)}/answers`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ answers: questionnaireBody(parts, answers) }),
+      });
+      r = await res.json().catch(() => ({}));
+      if (!res.ok) return `Couldn’t send: ${r.error || `error ${res.status}`}.`;
+    } catch {
+      return 'Couldn’t reach OrchestraOS. Nothing was sent.';
     }
-  }
+    // Sent: the answered card stays until the page's own poll moves the questionnaire out of the pending list.
+    if (r.applied) return null;
+    if (r.missing?.length) return `Question ${r.missing.join(', ')} still needs an answer. Go Back to it.`;
+    return r.status ? `This questionnaire is ${r.status}.` : 'Couldn’t send. Try again.';
+  };
+
+  // The ✕: closed unanswered through the gateway's discard, which tells the asking agent not to keep waiting.
+  const dismiss = async (): Promise<string | null> => {
+    try {
+      const res = await fetch(`/api/questionnaires/${encodeURIComponent(id)}/discard`, { method: 'POST' });
+      const r: SubmitResult = await res.json().catch(() => ({}));
+      if (!res.ok) return `Couldn’t dismiss: ${r.error || `error ${res.status}`}.`;
+      setDismissed(true);
+      return null;
+    } catch {
+      return 'Couldn’t reach OrchestraOS.';
+    }
+  };
 
   return (
-    <div className="space-y-4 p-4 bg-neutral-950" data-testid="qnr-form">
-      {questionnaireSummary(data) && (
-        <div className="text-sm text-neutral-300 leading-relaxed max-h-72 overflow-y-auto pr-1" data-testid="qnr-summary">
-          <Markdown text={questionnaireSummary(data)} />
-        </div>
-      )}
-      {data.questions.map((q) => {
-        const d = drafts[q.n] ?? {};
-        const opts = answerableOptions(q);
-        const picked = opts.find((o) => o.n === d.option_n);
-        const missing = highlight.includes(q.n);
-        return (
-          <div key={q.n} role="group" aria-label={`Question ${q.n}`}
-               className={`space-y-2 rounded-lg border p-3 ${missing ? 'border-amber-500/70' : 'border-neutral-800'}`}
-               data-testid={`qnr-q-${q.n}`}>
-            <p className="text-sm text-neutral-100">
-              {q.n}. {q.prompt}{q.required ? <span className="text-amber-400"> *</span> : null}
-            </p>
-            {opts.map((o) => (
-              <label key={o.n} className="flex items-start gap-2 text-sm text-neutral-300 cursor-pointer">
-                <input type="radio" name={`${id}-q${q.n}`} className="mt-1" checked={d.option_n === o.n}
-                       onChange={() => set(q.n, { option_n: o.n })} />
-                <span>
-                  {o.label}
-                  {o.detail ? <span className="block text-xs text-neutral-500">{o.detail}</span> : null}
-                </span>
-              </label>
-            ))}
-            {/* Every question has a text box (text alone is an answer), so a saved draft's text is
-                always on screen, even on a question whose options are all hidden. */}
-            {(
-              <textarea
-                rows={q.kind === 'free_text' ? 3 : 2}
-                value={d.answer_text ?? ''}
-                onChange={(e) => set(q.n, { answer_text: e.target.value })}
-                placeholder={q.kind === 'free_text' ? 'Your answer'
-                  : picked?.input_kind === 'free_text' ? `Say more for "${picked.label}"` : 'Or type your own answer'}
-                className="w-full rounded-md border border-neutral-700 bg-black px-2 py-1.5 text-sm text-neutral-100"
-              />
-            )}
-            {missing ? <p className="text-xs text-amber-400">This question needs an answer.</p> : null}
-          </div>
-        );
-      })}
-      <div className="flex items-center gap-3">
-        <button onClick={submit} disabled={sending}
-                className="rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-black hover:bg-amber-400 disabled:opacity-50">
-          {sending ? <Loader2 size={14} className="animate-spin" /> : 'Send answers'}
-        </button>
-        {result?.error ? <span className="text-xs text-red-400">{result.error}</span> : null}
-        {result && !result.error && !result.applied && result.missing?.length
-          ? <span className="text-xs text-amber-400">Answer the marked questions first.</span> : null}
-      </div>
+    <div data-testid="qnr-form">
+      <QuestionCard key={data.id} title={title} meta={meta} context={context} parts={parts}
+        initial={questionnaireAnswers(parts, data.questions)} onSubmit={submit} onDismiss={dismiss} dismissed={dismissed} />
     </div>
   );
 }

@@ -9,7 +9,10 @@ export const OPENAI = 'openai';
 
 export interface VoiceVendor { id: string; title: string; available: boolean; reason?: string }
 export interface VoiceRow { id: string; title: string; subtitle?: string | null; recommended?: boolean; order: number; group?: string | null }
-export interface CurrentVoice { voice_id: string | null; title: string | null }
+/** `scope`: whether it is the agent's own voice or the install's, which an agent with none of its own uses. */
+export interface CurrentVoice { voice_id: string | null; title: string | null; scope?: 'agent' | 'install' }
+
+const agentQ = (agent?: string) => (agent ? `&agent=${encodeURIComponent(agent)}` : '');
 
 async function getJson<T>(url: string): Promise<T | null> {
   try {
@@ -31,17 +34,22 @@ export async function fetchVoices(): Promise<VoiceRow[] | null> {
   return d?.ok && Array.isArray(d.voices) ? [...d.voices].sort((a, b) => a.order - b.order) : null;
 }
 
-export async function fetchCurrentVoice(): Promise<CurrentVoice | null> {
-  const d = await getJson<{ ok?: boolean; voice_id?: string | null; title?: string | null }>(`/api/arturo/ptt/voice?vendor=${OPENAI}`);
-  return d?.ok ? { voice_id: d.voice_id ?? null, title: d.title ?? null } : null;
+/** The voice the next call uses: with an agent, its own voice, else the install's. */
+export async function fetchCurrentVoice(agent?: string): Promise<CurrentVoice | null> {
+  const d = await getJson<{ ok?: boolean; voice_id?: string | null; title?: string | null; scope?: string }>(
+    `/api/arturo/ptt/voice?vendor=${OPENAI}${agentQ(agent)}`);
+  if (!d?.ok) return null;
+  return { voice_id: d.voice_id ?? null, title: d.title ?? null,
+           ...(d.scope === 'agent' || d.scope === 'install' ? { scope: d.scope } : {}) };
 }
 
-/** Pick a voice; the server checks it is one of its own. Its reason comes back when it refuses. */
-export async function putVoice(voiceId: string): Promise<{ ok: boolean; error?: string }> {
+/** Pick a voice (an agent's own when `agent` is given); the server checks it is one of its own. Its reason
+ *  comes back when it refuses. */
+export async function putVoice(voiceId: string, agent?: string): Promise<{ ok: boolean; error?: string }> {
   try {
     const r = await fetch('/api/arturo/ptt/voice', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ vendor: OPENAI, voice_id: voiceId }),
+      body: JSON.stringify({ vendor: OPENAI, voice_id: voiceId, ...(agent ? { agent } : {}) }),
     });
     const d = await r.json().catch(() => ({}));
     return r.ok && d.ok !== false ? { ok: true } : { ok: false, error: d.error || `HTTP ${r.status}` };
@@ -50,10 +58,20 @@ export async function putVoice(voiceId: string): Promise<{ ok: boolean; error?: 
   }
 }
 
-/** Only an admin may change the voice (the API refuses anyone else); until the role is known, nobody may,
- *  so the list never offers a tap that would be refused. */
-export function canChangeVoice(role: string | null | undefined): boolean {
-  return role === 'admin';
+/** Put an agent back on the install's voice. */
+export async function clearVoice(agent: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch(`/api/arturo/ptt/voice?vendor=${OPENAI}${agentQ(agent)}`, { method: 'DELETE' });
+    const d = await r.json().catch(() => ({}));
+    return r.ok && d.ok !== false ? { ok: true } : { ok: false, error: d.error || `HTTP ${r.status}` };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'network' };
+  }
+}
+
+/** Anyone may change any agent's voice for now (no per-agent ownership yet): the one place that will decide it. */
+export function canChangeVoice(): boolean {
+  return true;
 }
 export const ADMIN_ONLY_NOTE = "Only an admin can change Arturo's voice";
 

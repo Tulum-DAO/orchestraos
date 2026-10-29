@@ -2,10 +2,8 @@
  * decisionCard.ts — the rules behind the one card every decision, menu and approval is drawn as
  * (components/chat/DecisionCard.tsx), kept here so they can be tested without a browser.
  *
- * The card: a header (kind chip, question, agent, risk), the body, then either numbered option rows with an
- * always-shown "own words" field (decisions and menus) or Approve and Deny side by side (approvals).
- * Picking a row shows "Send N ✓" on it, so a send always takes two steps. Keys while the card has focus:
- * 1–9 pick, Return sends, e goes to the text field.
+ * The card: a header (kind chip, question, agent, risk), the body, then Approve and Deny side by side
+ * (approvals). Questions (menus, decisions) are the one question card instead (lib/multiPart.ts).
  */
 import type { MenuOption } from './menuAnswer';
 
@@ -39,36 +37,10 @@ export function withInputKinds<T extends Pick<MenuOption, 'label' | 'input_kind'
   });
 }
 
-/** A write-in row (shows a text-cursor icon; picking it goes to the text field). */
-export function isWriteIn(opt: Pick<MenuOption, 'input_kind'>): boolean {
-  return opt.input_kind === 'free_text';
-}
-
 /** Words alone can only be sent when the menu has somewhere to put them: a write-in option, shown or not.
  *  Words with a picked option always go (the server keeps them as a note on that option). */
 export function canSendWords(options: Pick<MenuOption, 'input_kind'>[]): boolean {
-  return options.some(isWriteIn);
-}
-
-/** Cut short until opened: over two lines' worth, or more than one line. */
-export const LONG_OPTION = 90;
-export function isLongOption(opt: Pick<MenuOption, 'label' | 'detail'>): boolean {
-  return (opt.label || '').length > LONG_OPTION || /\n/.test(opt.label || '') || (opt.detail || '').length > LONG_OPTION;
-}
-
-export type CardKeyAction =
-  | { kind: 'pick'; n: string }
-  | { kind: 'send' }
-  | { kind: 'focus-text' }
-  | null;
-
-/** What a key does while the card has focus. Keys typed into a text field are the field's, except Return. */
-export function keyAction(key: string, opts: { inField: boolean; options: Pick<MenuOption, 'n'>[] }): CardKeyAction {
-  if (key === 'Enter') return { kind: 'send' };
-  if (opts.inField) return null;
-  if (key === 'e' || key === 'E') return { kind: 'focus-text' };
-  if (/^[1-9]$/.test(key) && opts.options.some((o) => o.n === key)) return { kind: 'pick', n: key };
-  return null;
+  return options.some((o) => o.input_kind === 'free_text');
 }
 
 /** "medium risk" from the card's risk level; nothing when it has none. */
@@ -104,4 +76,10 @@ export function linkedMenuCard<T extends MenuCardRow>(items: T[], agentId: strin
   if (!q) return undefined;
   return items.find((i) => i.kind === 'menu' && !i.menu?.read_only && baseId(i.agent_id) === baseId(agentId)
     && norm(i.menu?.question || i.title) === q);
+}
+
+/** A decision row bridged from an agent's terminal menu (menu_bridge mints `menu:<session>:<digest>` op_keys): the
+ *  agent is blocked on it and the pane takes a pick OR words, never both. Rows an agent posts itself have other keys. */
+export function isTerminalMenu(row: { op_key?: string | null }): boolean {
+  return /^menu:/.test(row.op_key || '');
 }

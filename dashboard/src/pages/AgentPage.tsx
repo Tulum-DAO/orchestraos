@@ -16,22 +16,19 @@ import { injectToAgent, sendKeyToAgent } from '../lib/api';
 import { logAction } from '../lib/user-actions';
 import { OPEN_SIDEBAR_EVENT } from '../lib/headerSlot';
 import DeliverNowBanner from '../components/agent/DeliverNowBanner';
+import { ArturoPanel } from '../components/arturo/ArturoPanel';
+import { useChatStyle, loadPrefs } from '../lib/agentPrefs';
 
 export default function AgentPage() {
   const { id } = useParams<{ id?: string }>();
   const agentId = id || 'gm';
   const [resuming, setResuming] = useState(false);
-  // Chat (transcript + composer) or Dev (the seat's live terminal). It stays put when you move to
-  // another seat from the rail, the way a terminal user expects.
-  // Remembered in the browser, because the layout swap at phone width remounts this page.
-  const [mode, setMode] = useState<'chat' | 'dev'>(() => {
-    try { return localStorage.getItem('agentPage.mode') === 'dev' ? 'dev' : 'chat'; } catch { return 'chat'; }
-  });
-  const changeMode = (m: 'chat' | 'dev') => {
-    setMode(m);
-    try { localStorage.setItem('agentPage.mode', m); } catch { /* storage blocked: this tab only */ }
-    logAction(m === 'dev' ? 'agent.mode.dev' : 'agent.mode.chat', agentId);
-  };
+  // Chat (transcript + composer) or Dev (the seat's live terminal): the chat style you chose for THIS agent in its
+  // panel, saved for you on the server (lib/agentPrefs.ts). Switching never loses the draft (stores/composerDrafts).
+  const mode: 'chat' | 'dev' = useChatStyle(agentId) === 'dev' ? 'dev' : 'chat';
+  useEffect(() => { void loadPrefs(agentId); }, [agentId]);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const gearRef = useRef<HTMLButtonElement>(null);
   // Bring back a seat that fell over: its last session where it left off when that session can still be
   // resumed, else a fresh start as its next generation (with a briefing on what it last did). Answers once it is
   // running. Undefined while in flight, so the button disappears rather than queueing a second start on a
@@ -91,13 +88,25 @@ export default function AgentPage() {
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-background text-foreground">
-      {/* Top bar: menu, seat, Chat/Dev, bell */}
+      {/* Top bar: menu, seat, bell, gear (the agent's panel: name, avatar, voice, model, chat style ...) */}
       <TopBar
         onMenuOpen={() => window.dispatchEvent(new Event(OPEN_SIDEBAR_EVENT))}
         seat={seat}
         mode={mode}
-        onModeChange={changeMode}
+        onSettings={() => { setPanelOpen((o) => !o); logAction('agent.panel', agentId); }}
+        settingsOpen={panelOpen}
+        settingsRef={gearRef}
       />
+      {id && (
+        <ArturoPanel open={panelOpen} onClose={() => setPanelOpen(false)} returnFocusTo={gearRef}
+          agent={{
+            id: agentId,
+            name: (seatRow as { display_name?: string } | undefined)?.display_name || agentId,
+            provider: (seatRow as { runtime?: string; provider?: string } | undefined)?.runtime
+              || (seatRow as { provider?: string } | undefined)?.provider,
+            subagents: (seatRow as { subagents?: number } | undefined)?.subagents,
+          }} />
+      )}
 
 
       {mode === 'dev' ? (

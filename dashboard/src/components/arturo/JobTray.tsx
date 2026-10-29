@@ -9,7 +9,8 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, LoaderCircle, X } from 'lucide-react';
-import ToolRun from './ToolRun';
+import ToolCalls from '../chat/ToolCalls';
+import { fromPart } from '../../lib/toolCalls';
 import { cancelJob, elapsed, fetchJobs, jobToolParts, newlyEnded, trayHeader, type ArturoJob } from '../../lib/arturoJobs';
 
 const POLL_RUNNING_MS = 1500;
@@ -94,7 +95,7 @@ export default function JobTray({ threadId, onEnded, kick = 0 }: {
                 )}
               </div>
               {j.error && j.status !== 'running' && <span className="text-[11.5px] text-red">{j.error}</span>}
-              {j.steps.length > 0 && <ToolRun tools={jobToolParts(j)} />}
+              {j.steps.length > 0 && <ToolCalls calls={jobToolParts(j).map(fromPart)} />}
             </div>
           ))}
         </div>
