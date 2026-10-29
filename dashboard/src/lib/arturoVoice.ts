@@ -69,10 +69,9 @@ export async function clearVoice(agent: string): Promise<{ ok: boolean; error?: 
   }
 }
 
-/** Only an admin may change the voice (the API refuses anyone else); until the role is known, nobody may,
- *  so the list never offers a tap that would be refused. */
-export function canChangeVoice(role: string | null | undefined): boolean {
-  return role === 'admin';
+/** Anyone may change any agent's voice for now (no per-agent ownership yet): the one place that will decide it. */
+export function canChangeVoice(): boolean {
+  return true;
 }
 export const ADMIN_ONLY_NOTE = "Only an admin can change Arturo's voice";
 

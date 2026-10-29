@@ -38,8 +38,6 @@ test('status, titles and the copied transcript use the name given', () => {
   assert.equal(transcriptText([{ role: 'user', text: 'hi' }, { role: 'arturo', text: 'hello' }], 'Example'), 'You: hi\nExample: hello');
 });
 
-test('only an admin renames; the single-user install (no user) is its admin', () => {
-  assert.equal(canRename({ role: 'admin' }), true);
-  assert.equal(canRename({ role: 'viewer' }), false);
-  assert.equal(canRename(null), true);
+test('anyone may rename the assistant for now, whatever their role', () => {
+  assert.equal(canRename(), true);
 });

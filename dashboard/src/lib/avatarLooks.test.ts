@@ -52,9 +52,8 @@ test('the "Pick a look" card: unchosen, can save, not dismissed on this device',
   assert.equal(showsLookCard({ chosen: true, canSave: true, dismissed: false }), false);    // saved by anyone: gone
   assert.equal(showsLookCard({ chosen: false, canSave: false, dismissed: false }), false);  // cannot save: not offered
   assert.equal(showsLookCard({ chosen: false, canSave: true, dismissed: true }), false);
-  assert.equal(canChangeLook('admin'), true);
-  assert.equal(canChangeLook('viewer'), false);
-  assert.equal(canChangeLook(undefined), false);
+  // anyone may change a look for now, whatever their role
+  assert.equal(canChangeLook(), true);
   const m = new Map<string, string>();
   const st = { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => { m.set(k, v); } };
   assert.equal(readDismissed(st, 'arturo'), false);

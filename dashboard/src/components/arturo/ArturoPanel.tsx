@@ -41,7 +41,6 @@ import { useAgentRecord, ARTURO_ID } from '../avatar/agentState';
 import { PROVIDER_LABEL } from '../../lib/agentRail';
 import { providerMark } from '../avatar/brandMarks';
 import { canChangeLook, shapeName, colorName } from '../../lib/avatarLooks';
-import { useUser } from '../../hooks/useUser';
 import { useAssistantName, named, saveAssistantName, resetAssistantName, canRename, DEFAULT_ASSISTANT_NAME, NAME_MAX } from '../../lib/assistantName';
 
 const TITLES: Record<PanelPage, string> = {
@@ -99,7 +98,7 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
   const aname = isArturo ? assistantName : agent!.name;
   const saveName: SaveName = isArturo ? saveAssistantName : (n) => renameAgent(agentId, n);
   const style = useChatStyle(agentId);
-  const canSaveLook = canChangeLook(useUser().data?.role);
+  const canSaveLook = canChangeLook();
   // Mounted while open or sliding out; `shown` drives the slide, a frame after mount so it animates in.
   const [mounted, setMounted] = useState(open);
   const [shown, setShown] = useState(false);
@@ -109,7 +108,7 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
   const [editDraft, setEditDraft] = useState('');
   const [editError, setEditError] = useState<string | null>(null);
   const [editBusy, setEditBusy] = useState(false);
-  const canEditName = canRename(useUser().data);
+  const canEditName = canRename();
   const [health, setHealth] = useState<ArturoHealth | null>(null);
   const [factCount, setFactCount] = useState<number | null>(null);
   const [jobs, setJobs] = useState<ArturoJob[] | null>(null);
@@ -458,7 +457,7 @@ function VoicePage({ health, onPicked, agentId }: {
   const [current, setCurrent] = useState<string | null>(null);
   const [scope, setScope] = useState<CurrentVoice['scope']>(undefined);
   const [error, setError] = useState<string | null>(null);
-  const editable = canChangeVoice(useUser().data?.role);
+  const editable = canChangeVoice();
   const aname = useAssistantName();
   useEffect(() => {
     let alive = true;
@@ -666,7 +665,7 @@ function BrainPage({ health, brain }: { health: ArturoHealth | null; brain: stri
  *  so a half-typed name never reaches the assistant. */
 function NamePage() {
   const aname = useAssistantName();
-  const editable = canRename(useUser().data);
+  const editable = canRename();
   const [text, setText] = useState(aname);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

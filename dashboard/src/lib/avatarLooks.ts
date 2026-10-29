@@ -126,9 +126,9 @@ export async function resetToDefault(hub: AgentHub, agent: string, def: Look,
   return `Couldn't reset the look: ${r.error}`;
 }
 
-/** Only an admin saves a look (the API refuses anyone else), so only an admin is offered one. */
-export function canChangeLook(role: string | null | undefined): boolean {
-  return role === 'admin';
+/** Anyone may change any agent's look for now (no per-agent ownership yet): the one place that will decide it. */
+export function canChangeLook(): boolean {
+  return true;
 }
 
 export const DISMISS_KEY = (agent: string) => `orchestra.avatar.pickDismissed.${agent}`;

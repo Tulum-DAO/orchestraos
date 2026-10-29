@@ -62,7 +62,6 @@ import { useAgentRecord, setArturoActivity, setArturoProvider, ARTURO_ID } from 
 import { arturoProvider } from '../lib/avatarStatus';
 import { applyAssistantName, assistantName, named, useAssistantName } from '../lib/assistantName';
 import { canChangeLook, showsLookCard, readDismissed, writeDismissed } from '../lib/avatarLooks';
-import { useUser } from '../hooks/useUser';
 import { HeaderEndSlotContext } from '../lib/headerSlot';
 import { SidebarMenuButton } from '../components/SidebarMenuButton';
 
@@ -141,7 +140,7 @@ export default function ArturoHome() {
   const arturoRec = useAgentRecord(ARTURO_ID);
   const phoneBar = useSyncExternalStore(subscribePhoneBar, isPhoneBar, () => false);
   const aname = useAssistantName();
-  const canSaveLook = canChangeLook(useUser().data?.role);
+  const canSaveLook = canChangeLook();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [lookDismissed, setLookDismissed] = useState(() => readDismissed(lsStore(), ARTURO_ID));
   const showLookCard = showsLookCard({ chosen: arturoRec.chosen, canSave: canSaveLook, dismissed: lookDismissed });
