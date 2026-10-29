@@ -4,7 +4,7 @@ A live stream (the agent page's transcript SSE) never finishes on its own, so if
 open after the browser left, the API would never see the stream close and would keep its per-agent tailer ticking
 (tmux lookups every second) for good, even for an agent retired long ago. These run the REAL proxy under node in front
 of a stand-in API, and check that the API side sees the close within a few seconds, and that an ordinary request is
-still proxied whole. A missing node FAILS the test rather than skipping it.
+still proxied whole. A missing node FAILS the test; missing root npm deps skip it.
 """
 import http.server
 import os
@@ -65,6 +65,10 @@ def proxy(tmp_path):
     node = shutil.which("node")
     if not node:
         pytest.fail("node is required to run dashboard-proxy.js; it is not on PATH")
+    # The proxy needs the checkout's root npm deps (ws, node-pty). A job that never ran `npm ci` at the root has
+    # none, and that says nothing about the proxy: skip there, run wherever the proxy itself could run.
+    if subprocess.run([node, "-e", "require.resolve('ws')"], cwd=ROOT, capture_output=True).returncode != 0:
+        pytest.skip("the root npm deps (ws) are not installed; run `npm ci` at the checkout root")
     api_port, port = _free_port(), _free_port()
     api = _Api(api_port)
     threading.Thread(target=api.serve_forever, daemon=True).start()
