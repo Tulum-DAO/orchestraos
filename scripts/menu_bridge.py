@@ -715,6 +715,14 @@ def registry_scoped_sessions(sessions, registry_path=None):
     return [s for s in sessions if s in known]
 
 
+def _headless(session):
+    try:
+        import headless_switch
+        return headless_switch.headless_seat(session) is not None
+    except Exception:  # noqa: BLE001 — default off: the seat is scanned as before
+        return False
+
+
 def collect_live():
     """Scan the real fleet: {session -> {state, pending_menu}} via tmux +
     get_agent_status. This is the ONE function that touches live I/O; it is
@@ -737,6 +745,10 @@ def collect_live():
 
     fleet = {}
     for sess in sessions:
+        if _headless(sess):
+            # Retired for headless seats: their questions are cards filed by the seat's supervisor
+            # (scripts/headless_cards.py), and their pane holds no menu to read or press.
+            continue
         try:
             st = agent_status.get_agent_status(sess)
         except Exception:  # noqa: BLE001 — a single bad pane never aborts the scan

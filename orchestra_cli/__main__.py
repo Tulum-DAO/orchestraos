@@ -51,6 +51,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     ac.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="fill a template {KEY}; repeatable")
     ac.add_argument("--task", help="first instruction injected into the seat")
     ac.add_argument("--cwd", help="the seat's working directory (default: the checkout); must exist")
+    ac.add_argument("--test", action="store_true", help="a TEST seat: a short-lived throwaway, worker T2 reporting to the integrator (not a registered seat), recorded on the seat; the router's down pages and hold alarms skip it")
     stp = sub.add_parser("starter", help="the default first-install team: gm (T0) -> a project manager (T1) -> a worker (T2)")
     stp.add_argument("--project", default="first-project",
                      help="names the PM and worker pm-<project> / dev-<project> (default first-project)")
@@ -69,6 +70,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     sp.add_argument("--tier", help="T0 (the always-on manager), T1 or T2; default by position: T1 with no parent or a T0 parent, T2 under any other --parent; T0 with --gm")
     sp.add_argument("--parent", help="the seat this one reports to (recorded as reports_to)")
     sp.add_argument("--role", choices=["pm", "worker"], help="pm runs the project-manager briefing at boot; default worker")
+    sp.add_argument("--test", action="store_true", help="a TEST seat: a short-lived throwaway, worker T2 reporting to the integrator (not a registered seat), recorded on the seat; the router's down pages and hold alarms skip it")
     sp.add_argument("--prompt", help="role prompt path relative to the checkout (default prompts/<seat>.md)")
     sp.add_argument("--verbose", action="store_true", help="show spawn detail (model-banner checks, generated settings paths)")
 

@@ -70,8 +70,12 @@ def _tier_rule(st: S.Settings):
 
 def register_seat(st: S.Settings, seat: str, *, gm: bool, runtime: str | None, model: str | None,
                   tier: str | None, prompt: str | None, cwd: str | None = None,
-                  parent: str | None = None, role: str | None = None) -> dict:
+                  parent: str | None = None, role: str | None = None, test: bool = False) -> dict:
     """Idempotent: an existing row is kept verbatim (only missing fields are filled).
+
+    test=True registers a TEST seat (tier_rule: a T2 worker reporting to the integrator, which is
+    not a registered seat) and records `test: true` on the row, which the identity store keeps in
+    the seat's registry doc. An existing seat is never turned into a test seat (refused).
 
     A NEW non-gm seat gets its tier from its position (scripts/tier_rule.py): no parent or a T0
     parent -> T1, any other parent -> that parent's T2 (with reports_to), and a role (pm | worker,
@@ -80,11 +84,20 @@ def register_seat(st: S.Settings, seat: str, *, gm: bool, runtime: str | None, m
     p, reg = _registry(st)
     existing = _seat_row(st, seat)                 # armed: the store's row, not a stale projection
     row = dict(existing or {})
+    # "Test" belongs to the whole lineage: a name first spawned with --test stays a test seat in every later
+    # generation, and test and real seats never share a name.
+    why = lineage_refusal(st, seat, test=test, gm=gm, live_row=existing)
+    if why:
+        raise _tier_rule(st).TierRefused(why)
     if existing is None and not gm:
         T = _tier_rule(st)
         prow = reg["agents"].get(parent) if parent else None
+        if test and (role or "worker").strip().lower() != "worker":
+            raise T.TierRefused(f"{seat}: a test seat is a worker, not a {role}")
         tier, reports_to, warning = T.tier_for(seat, parent, prow is not None,
-                                               (prow or {}).get("tier"), tier)
+                                               (prow or {}).get("tier"), tier, test=test)
+        if test:
+            row["test"] = True
         if warning:
             print(f"warning: {warning}", file=sys.stderr)
         if reports_to:
@@ -118,6 +131,51 @@ def register_seat(st: S.Settings, seat: str, *, gm: bool, runtime: str | None, m
     S.guard_test_write(p, "registry.json"); tmp = p.with_suffix(".json.tmp"); tmp.write_text(json.dumps(reg, indent=2) + "\n"); os.replace(tmp, p)
     _record_armed(st, seat, row)
     return row
+
+
+def lineage_test_flag(st: S.Settings, seat: str, live_row: dict | None = None) -> bool | None:
+    """True: the name is a test lineage (spawned with --test, live or retired). False: a real seat's lineage (live,
+    or retired with its session record kept). None: a name never used. From the live row, then the identity
+    store's documents (its registry and session records, retired ones included), then the flat files."""
+    if live_row is not None:
+        return live_row.get("test") is True
+    docs = []
+    if (st.repo_root / "scripts" / "identity_store" / "cutover.py").exists():
+        from .identity_cmd import stored_seat
+        try:
+            stored = stored_seat(st.repo_root, st.data_dir, seat)
+        except Exception:  # noqa: BLE001 — an unreadable store: the flat files below decide
+            stored = None
+        if stored:
+            docs += [d for d in stored if isinstance(d, dict)]
+    flat_row = _registry(st)[1]["agents"].get(seat)
+    if isinstance(flat_row, dict):
+        docs.append(flat_row)
+    try:
+        sess = json.loads((st.data_dir / "state" / "agent-sessions.json").read_text()).get(seat)
+    except (OSError, ValueError, AttributeError):
+        sess = None
+    if isinstance(sess, dict):
+        docs.append(sess)
+    if not docs:
+        return None
+    return any(d.get("test") is True for d in docs)
+
+
+def lineage_refusal(st: S.Settings, seat: str, *, test: bool, gm: bool = False,
+                    live_row: dict | None = None) -> str | None:
+    """Why `seat` may not be (re)spawned with or without --test, or None. A test lineage stays a test seat, and
+    test and real seats never share a name. Asked FIRST by spawn and agent create, before anything is written."""
+    if test and gm:
+        return "the gm seat cannot be a test seat"
+    if gm:
+        return None
+    lineage = lineage_test_flag(st, seat, live_row if live_row is not None else _seat_row(st, seat))
+    if test and lineage is False:
+        return f"{seat} is a real seat's name; spawn the test seat with a new name"
+    if not test and lineage is True:
+        return f"{seat} is a test seat; spawn it with --test, or use a new name"
+    return None
 
 
 def runtime_mismatch(st: S.Settings, seat: str, requested: str | None) -> str | None:
@@ -158,6 +216,10 @@ def retire_seat(st: S.Settings, seat: str, *, reason: str = "retired by the oper
         raise KeyError(seat)
     retired = {"status": "retired", "retired_at": datetime.now(timezone.utc).isoformat(),
                "retired_by": "orchestra retire", "retired_reason": reason}
+    if (row or {}).get("test") is True:
+        # The registry row goes; the retired session record keeps that it was a test seat, so a
+        # view of retired seats can leave it out (the identity rows themselves are kept).
+        retired["test"] = True
     entry = dict(meta.get(seat) or {}, **retired)
     from .identity_cmd import retire_seat_in_store
     stored = retire_seat_in_store(st.repo_root, st.data_dir, seat, reason, retired, dict(meta.get(seat) or {}))
@@ -469,6 +531,9 @@ def cmd_spawn(ns) -> int:
     if refused is not None:
         return refused
     seat = ns.seat
+    why = lineage_refusal(st, seat, test=bool(getattr(ns, "test", False)), gm=bool(ns.gm))
+    if why:
+        print(f"spawn refused: {why}", file=sys.stderr); return 2
     mismatch = runtime_mismatch(st, seat, ns.runtime)
     if mismatch:
         print(f"spawn refused: {mismatch}", file=sys.stderr); return 2
@@ -478,7 +543,8 @@ def cmd_spawn(ns) -> int:
         return refused
     try:
         row = register_seat(st, seat, gm=ns.gm, runtime=runtime, model=ns.model, tier=ns.tier,
-                            prompt=ns.prompt, parent=getattr(ns, "parent", None), role=getattr(ns, "role", None))
+                            prompt=ns.prompt, parent=getattr(ns, "parent", None), role=getattr(ns, "role", None),
+                            test=bool(getattr(ns, "test", False)))
     except ValueError as e:      # tier_rule.TierRefused
         print(f"spawn refused: {e}", file=sys.stderr); return 2
     prompt_path = st.repo_root / row["system_prompt"]
@@ -558,6 +624,10 @@ def cmd_agent_create(ns) -> int:
     if not st.config_exists:
         print(f"no config at {st.config_path} — run `orchestra init` first", file=sys.stderr); return 2
     name = ns.name
+    # Before anything is written (the prompt, a project folder): a refused name leaves no trace.
+    why = lineage_refusal(st, name, test=bool(getattr(ns, "test", False)))
+    if why:
+        print(f"agent create refused: {why}", file=sys.stderr); return 2
     mismatch = runtime_mismatch(st, name, ns.runtime)
     if mismatch:
         print(f"agent create refused: {mismatch}", file=sys.stderr); return 2
@@ -607,7 +677,8 @@ def cmd_agent_create(ns) -> int:
     role = getattr(ns, "role", None) or ("pm" if ns.template == "pm" else None)
     try:
         row = register_seat(st, name, gm=False, runtime=runtime, model=ns.model, tier=ns.tier, prompt=prompt_rel,
-                            cwd=getattr(ns, "cwd", None), parent=ns.parent, role=role)
+                            cwd=getattr(ns, "cwd", None), parent=ns.parent, role=role,
+                            test=bool(getattr(ns, "test", False)))
     except ValueError as e:      # tier_rule.TierRefused
         print(f"agent create refused: {e}", file=sys.stderr); return 2
     if ns.parent and row.get("reports_to") != ns.parent:

@@ -107,6 +107,31 @@ def finalize_archive(orchestra_dir, root, generation, resume_command) -> bool:
     return True
 
 
+def retire_predecessors(orchestra_dir, root, generation) -> int:
+    """A new generation of a lineage that had been RETIRED (orchestra retire, park-idle full-retire, a reconciler
+    retire) retires its older generations for good: their resume_command is cleared, so the projection shows each
+    as a 'retired' <root>-gen<N> archive and never a 'parked' (resumable) seat coming back on its own. Blue/green
+    rotation never calls this; its swap-retired predecessor stays resumable by design. Returns the rows changed
+    (0 when the cutover is off)."""
+    freeze.barrier(orchestra_dir)
+    if not cutover.is_active(orchestra_dir):
+        return 0
+    conn = _connect(orchestra_dir)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = conn.execute(
+                "UPDATE generations SET resume_command=NULL WHERE root=? AND generation<? "
+                "AND retired_at IS NOT NULL AND resume_command IS NOT NULL", (root, generation))
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
 def retire_agent(orchestra_dir, agent_id, reason=None, session_record=None,
                  session_fields=None, session_fallback=None) -> bool:
     """park-idle retire in DB terms, faithful to the legacy shape — ALL in one txn:

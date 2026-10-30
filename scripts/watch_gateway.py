@@ -211,6 +211,9 @@ ROUTE_SCOPES: dict[tuple[str, str], str | None] = {
     # --- inject: PRESSES KEYS IN A LIVE PANE ------------------------------------------
     ("POST", "/agent-key"): "inject",
     ("POST", "/agent-interrupt"): "inject",
+    # Dev round trip for a headless seat: stops its headless process and runs its TUI in the pane (or
+    # back): the same class as the stop button, a seat's process, never an answer or a message.
+    ("POST", "/agent-dev"): "inject",
     ("POST", "/agent-suggest"): "inject",
 
     # --- ptt: the relay voice path -------------------------------------------------------
@@ -1534,7 +1537,9 @@ def _load_json(path):
 # (agent-state-truth) adds stranded_input + stalled — passed through.
 _STATE_MAP = {"working": "working", "thinking": "working", "waiting_permission": "waiting",
               "idle": "idle", "stopped": "stopped", "unknown": "idle",
-              "stranded_input": "stranded", "stalled": "stalled"}
+              "stranded_input": "stranded", "stalled": "stalled",
+              # a headless seat whose supervisor gave up restarting its CLI (agent-status)
+              "crashed": "crashed"}
 
 
 # Voice-call annotation (§7.3): Arturo voice summaries + end-call transcripts route to canonical
@@ -1688,6 +1693,10 @@ def compute_agents():
             "voice_call": voice if sess == VOICE_BRAIN_SESSION else None,
             # §2: cheap badge signal — True when detector emits pending_menu
             **({"has_pending_menu": True} if st.get("pending_menu") else {}),
+            # A headless seat (scripts/headless_switch.py): read from its supervisor, not its
+            # pane. A held question rides as a summary; it is not a pane menu (no pending_menu).
+            **({"headless": True} if st.get("headless") else {}),
+            **({"held_request": st["held_request"]} if isinstance(st.get("held_request"), dict) else {}),
         })
     # Every live session was just read, so this is the sweep that may observe a permission
     # prompt as gone (the /pending-approvals fast path reads only flagged sessions). Fail-open.
@@ -1699,6 +1708,11 @@ def compute_agents():
     # (GM triage 2026-08-09: kai-gm etc. dead since April). Those read offline.
     for sess, (name, meta) in sess_meta.items():
         if sess in seen:
+            continue
+        root_meta = reg_agents.get(meta.get("lineage_root")) if meta.get("lineage_root") else None
+        if meta.get("test") is True or (isinstance(root_meta, dict) and root_meta.get("test") is True):
+            # A test seat with no session, or an old generation of a test lineage: a leftover throwaway,
+            # not a down agent.
             continue
         self_status = ""
         blob = _load_json(ORCH_DIR / "state" / "agents" / f"{name}.json")
@@ -2729,12 +2743,64 @@ def verified_inject(session, text, force=False, idle_only=False):
     call, gates included: the composer read that protects the operator's typed text must not race another
     typer's in-flight burst (measured in test_pane_lock_race: read outside the lock, a router paste
     mid-delivery looked like the operator's draft). Busy past PANE_LOCK_WAIT_S -> 'busy', nothing typed.
-    Runs on executor threads only (the /agent-message handler, approval_resume's cron)."""
+    Runs on executor threads only (the /agent-message handler, approval_resume's cron).
+
+    A seat switched to headless (scripts/headless_switch.py, Claude only, default off) is not
+    typed into: its words go to the seat's supervisor over stdin instead (_headless_inject)."""
+    hl_seat = _headless_seat_for(session)
+    if hl_seat:
+        return _headless_inject(hl_seat, text, idle_only=idle_only)
     with _pane_guard(session) as _pane_held:
         if not _pane_held:
             return False, {"reason": "busy", "state": "busy",
                            "activity": "another sender is typing into this pane"}
         return _verified_inject_locked(session, text, force, idle_only)
+
+
+def _headless_seat_for(session):
+    """The seat id when `session` is a switched-on headless Claude seat, else None. Any failure
+    to read the switch reads as off: the seat keeps its tmux path."""
+    try:
+        import headless_switch
+        return headless_switch.headless_seat(session, orch_dir=ORCH_DIR)
+    except Exception as e:  # noqa: BLE001 — the switch file is advisory; tmux is the default path
+        log.warning(f"headless switch unreadable for {session}: {e!r}")
+        return None
+
+
+def _headless_inject(seat, text, idle_only=False):
+    """verified_inject for a headless seat: the message is handed to the seat's supervisor,
+    which writes it to the warm process's stdin once (it dedupes by id) and reports queued,
+    then delivered when the CLI echoes it. Same reply shape as the pane path, so every caller
+    (/agent-message, approval_resume) is unchanged.
+
+    Refused, nothing sent: /exit and /quit (as on the pane path); slash commands that must run
+    on an idle prompt (idle_only: the model switch), which a headless seat does not take yet;
+    a held question or permission (the pane path refuses a menu the same way); no supervisor."""
+    import uuid as _uuid
+    import headless_switch
+    if _SLASH_CMD_RE.match(text or ""):
+        return False, {"reason": "slash_command_refused",
+                       "detail": "session-ending command (/exit, /quit) refused "
+                                 "on the message path"}
+    if idle_only:
+        return False, {"reason": "busy", "state": "headless", "headless": True,
+                       "activity": "this seat runs headless; slash commands are not sent to it yet"}
+    text = (text or "").rstrip("\r\n")
+    msg_id = f"gw-{_uuid.uuid4().hex}"
+    try:
+        out = headless_switch.send(seat, text, msg_id)
+    except headless_switch.SupervisorDown as e:
+        return False, {"reason": "busy", "state": "offline", "headless": True,
+                       "activity": f"the seat's headless supervisor is not running ({e})"}
+    if not out.get("ok"):
+        if out.get("reason") == "waiting":
+            return False, {"reason": "busy", "state": "waiting", "headless": True,
+                           "activity": "A question or permission is waiting — needs the operator"}
+        return False, {"reason": "send_failed", "state": "headless", "headless": True,
+                       "detail": out.get("reason")}
+    return True, {"state": "headless", "attempts": 1, "headless": True, "message_id": msg_id,
+                  "msg_state": out.get("state")}
 
 
 def _verified_inject_locked(session, text, force=False, idle_only=False):
@@ -4511,6 +4577,35 @@ def _already_or_answered_elsewhere(stored_row, answers):
                    "answers": stored if isinstance(stored, list) else None}
 
 
+def _headless_batch_submit(session, answers, *, store, surface=None, answered_by=None, device=None,
+                           expect_row_id=None, deliver_fn=None):
+    """durable_first_batch_submit for a headless card, or None when the session's card is not one.
+    Same answer-once ledger write (record_batch_answer) and the same validation; the delivery is the
+    held request's control response (headless_cards.deliver), once."""
+    import headless_cards
+    row = store.pending_menu_row_for_session(session)
+    if row is None:
+        latest = store.latest_menu_row_for_session(session)
+        if latest is not None and headless_cards.is_bridged(latest) and latest.get("answer") == "batch":
+            if expect_row_id is None or latest.get("id") == expect_row_id:
+                return _already_or_answered_elsewhere(latest, answers)
+        return None
+    if not headless_cards.is_bridged(row):
+        return None
+    if expect_row_id is not None and row.get("id") != expect_row_id:
+        return False, {"reason": "card_mismatch", "card_id": expect_row_id, "anchor_id": row.get("id")}
+    err = _validate_batch_answer(row, answers)
+    if err:
+        return False, {"reason": "batch_validation", "detail": err, "id": row["id"]}
+    if not store.record_batch_answer(row["id"], answers, surface=surface, answered_by=answered_by,
+                                     device=device):
+        return _already_or_answered_elsewhere(store.get(row["id"]) or row, answers)
+    row = store.get(row["id"])
+    out = (deliver_fn or headless_cards.deliver)(row, store)
+    return True, {"durable": True, "delivered": bool(out.get("delivered")), "headless": True,
+                  "id": row["id"], **({} if out.get("delivered") else {"delivery": out.get("reason")})}
+
+
 def durable_first_batch_submit(session, answers, *, store, armed=False,
                                submit_fn=None, resume_fn=None,
                                surface=None, answered_by=None, device=None,
@@ -4537,6 +4632,13 @@ def durable_first_batch_submit(session, answers, *, store, armed=False,
     card. So unarmed is a pure dry-run; the arm (MENU_MULTIPART_SUBMIT_ARMED)
     covers the live submit, exactly as today. Seams injectable for hermetic tests.
     """
+    # A headless seat's card (scripts/headless_cards.py) has no pane menu behind it: it is answered
+    # over the held request, persisted first, armed or not (the arm guards a pane replay, and there is
+    # none), and never replayed into a pane.
+    hl = _headless_batch_submit(session, answers, store=store, surface=surface,
+                                answered_by=answered_by, device=device, expect_row_id=expect_row_id)
+    if hl is not None:
+        return hl
     submit_fn = submit_fn or menu_batch_submit
     if resume_fn is None:
         import approval_resume
@@ -4957,10 +5059,14 @@ def _kick_router():
     while a pass is already running; the waiver lasts 5 minutes either way."""
     import subprocess
     router = os.path.join(os.path.dirname(os.path.abspath(__file__)), "message-router.py")
+    # Beside the router beat's own log (`orchestra up` writes <data dir>/logs/router.log): what this pass says
+    # belongs where the router is read, not nowhere.
+    logf = Path(ORCH_DIR) / "logs" / "router.log"
     try:
-        subprocess.Popen([sys.executable, router], stdin=subprocess.DEVNULL,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         start_new_session=True, env={**os.environ, "ORCHESTRA_DIR": str(ORCH_DIR)})
+        with (open(logf, "ab") if logf.parent.is_dir() else open(os.devnull, "wb")) as sink:
+            subprocess.Popen([sys.executable, router], stdin=subprocess.DEVNULL,
+                             stdout=sink, stderr=sink,
+                             start_new_session=True, env={**os.environ, "ORCHESTRA_DIR": str(ORCH_DIR)})
         return True
     except OSError:
         return False
@@ -5110,6 +5216,53 @@ async def _record_operator_message(request, session, text):
         log.warning(f"operator-actions ledger write failed: {e!r}")
 
 
+#: Detector states (read off the TUI's screen while in Dev) in which Back to chat would cut something.
+DEV_EXIT_BLOCKING_STATES = frozenset({"working", "thinking", "waiting_permission", "stranded_input",
+                                      "queued_input", "stalled"})
+
+
+async def handle_agent_dev(request):
+    """POST /agent-dev {session, on: bool, force?} -> a headless seat's Dev round trip.
+    on=true: its headless process closes (from idle only) and its TUI starts in the pane, same session,
+    same environment (scripts/seat_supervisor.py cmd_dev). on=false (Back to chat): the TUI exits by its
+    own /exit and the headless process starts again; refused while the TUI is mid-turn, holding a menu
+    or a typed draft (its screen says so), unless force. 404 for a seat that is not headless."""
+    import asyncio
+    import headless_switch
+    if not _authorized(request):
+        return _json({"ok": False, "error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        return _json({"ok": False, "error": "bad json"}, status=400)
+    session = str((data or {}).get("session", "")).strip()
+    if not session or not isinstance((data or {}).get("on"), bool):
+        return _json({"ok": False, "error": "session and on (true|false) required"}, status=400)
+    refusal = _protected_refusal(request, session)
+    if refusal is not None:
+        return _json(refusal, status=403)
+    seat = headless_switch.headless_seat(session, orch_dir=ORCH_DIR, include_dev=True)
+    if not seat:
+        return _json({"ok": False, "error": "not a headless seat"}, status=404)
+    loop = asyncio.get_event_loop()
+    if not data["on"] and headless_switch.in_dev(seat, orch_dir=ORCH_DIR) and not data.get("force"):
+        st = await loop.run_in_executor(None, _agent_status().get_agent_status, session)
+        if (st or {}).get("state") in DEV_EXIT_BLOCKING_STATES:
+            return _json({"ok": False, "busy": True, "state": _STATE_MAP.get(st.get("state"), st.get("state")),
+                          "error": "the agent is busy in the terminal: let it finish (or send force)"},
+                         status=409)
+    cmd = "dev" if data["on"] else "chat"
+    try:
+        out = await loop.run_in_executor(
+            None, lambda: headless_switch.request(seat, {"cmd": cmd}, orch_dir=ORCH_DIR, timeout=45.0))
+    except headless_switch.SupervisorDown as e:
+        return _json({"ok": False, "error": "headless supervisor not running", "detail": str(e)}, status=503)
+    log.info(f"AGENT-DEV {session} {cmd}: {out}")
+    if out.get("ok"):
+        return _json({"ok": True, "mode": "dev" if data["on"] else "chat", **out})
+    return _json({"ok": False, **out}, status=409 if out.get("reason") == "busy" else 502)
+
+
 async def handle_agent_interrupt(request):
     """POST /agent-interrupt {session} -> send Escape to a WORKING agent (the
     app's stop button). Gated the opposite way from inject: only allowed while
@@ -5129,6 +5282,21 @@ async def handle_agent_interrupt(request):
     if st.get("state") not in ("working", "thinking"):
         return _json({"ok": False, "error": "not mid-turn",
                       "state": _STATE_MAP.get(st.get("state"), st.get("state"))}, status=409)
+    hl_seat = _headless_seat_for(session)
+    if hl_seat:
+        # A headless seat's turn is stopped by the CLI's own interrupt control request (through its
+        # supervisor), not an Esc into a pane that holds no TUI. The turn ends with a result event,
+        # so its state goes back to idle without a hook marker.
+        import asyncio
+        import headless_switch
+        try:
+            out = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: headless_switch.request(hl_seat, {"cmd": "interrupt"}))
+        except headless_switch.SupervisorDown as e:
+            return _json({"ok": False, "error": "headless supervisor not running", "detail": str(e)},
+                         status=503)
+        return _json({"ok": bool(out.get("ok")), "interrupted": bool(out.get("ok")), "headless": True,
+                      "hook_cleared": False}, status=200 if out.get("ok") else 502)
     r = _tmux("send-keys", "-t", _st(session), "Escape")
     # Stop-button linger fix (the operator field report 2026-08-18): a user interrupt
     # never fires the CLI Stop hook, so the pane's hook event stays 'working'
@@ -5378,11 +5546,35 @@ def _defer_model_switch(session, model, current, sids, by):
             "current": current, "pending_since": entry["since"]}
 
 
+def _headless_switch_model(seat, model):
+    """(status, body) for a headless seat's live switch. 409 with the seat's state when it is
+    mid-turn (the caller defers it to the turn's end, as for a pane)."""
+    import headless_switch
+    try:
+        out = headless_switch.request(seat, {"cmd": "set_model", "model": model}, timeout=30.0)
+    except headless_switch.SupervisorDown as e:
+        return 503, {"ok": False, "error": "headless supervisor not running", "detail": str(e)}
+    if out.get("ok"):
+        return 200, {"ok": True, "switching": "switched", "headless": True, "how": out.get("how")}
+    if out.get("reason") == "busy":
+        return 409, {"ok": False, "error": "busy",
+                     "state": {"working": "working", "waiting": "waiting_permission"}.get(
+                         out.get("state"), out.get("state"))}
+    return 502, {"ok": False, "error": out.get("reason") or "refused"}
+
+
 def _switch_model_now(session, model, root, meta, runtime, current, catalog, desc, by):
     """Switch now: Claude and Codex live (typed only into an IDLE pane), every other runtime at its
     next rotation; then the seat's stored model. (status, body). Blocking: run in an executor."""
     from scripts import agent_model as AM
-    if desc["how"] == "live" and (runtime or "").lower() == "codex":
+    hl_seat = _headless_seat_for(session) if desc["how"] == "live" else None
+    if hl_seat:
+        # A headless seat switches through its supervisor (the CLI's set_model control request, or a
+        # restart on --model): nothing is typed, and the host's settings file is never touched.
+        status, body = _headless_switch_model(hl_seat, model)
+        if status != 200:
+            return status, {**body, "model": model, "current": current}
+    elif desc["how"] == "live" and (runtime or "").lower() == "codex":
         from scripts import agent_model_codex as AMC
 
         def _keys(k):
@@ -7395,6 +7587,10 @@ async def handle_agent_key(request):
     refusal = _protected_refusal(request, session)
     if refusal is not None:
         return _json(refusal, status=403)
+    if _headless_seat_for(session):
+        # Its pane holds the supervisor, not a menu: a headless seat's questions are cards.
+        return _json({"ok": False, "reason": "headless",
+                      "error": "this seat runs headless: answer its question on the card"}, status=409)
     if text is not None and len(text) > ANSWER_TEXT_MAX:
         return _json({"ok": False, "error": f"text exceeds {ANSWER_TEXT_MAX} chars"},
                      status=400)
@@ -8443,9 +8639,10 @@ async def handle_surface_post(request):
     return _json({"ok": True})
 
 
-def _record_surface(device, route, hint, stack, focused, conv_id=None):
+def _record_surface(device, route, hint, stack, focused, conv_id=None, cards=None):
     """Write one device's slot of active-surface.json (+ the call's sidecar). Shared by POST /surface
-    and the browser's live call, which reports its page over the call socket."""
+    and the browser's live call, which reports its page over the call socket. `cards`, already
+    clipped (_screen_cards), rides in the slot for the voice brain's readout; absent = none."""
     import hashlib
     import time
     now = time.time()
@@ -8456,7 +8653,8 @@ def _record_surface(device, route, hint, stack, focused, conv_id=None):
     except (OSError, ValueError):
         doc = {"devices": {}}
     doc["devices"][device] = {"route": route, "hint": hint, "device": device,
-                              "stack": stack, "focused": focused, "updated_at": now}
+                              "stack": stack, "focused": focused, "updated_at": now,
+                              **({"cards": cards} if cards else {})}
     doc["current"] = _surface_current(doc["devices"], now)
     SURFACE_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = SURFACE_PATH.with_suffix(".tmp")
@@ -8482,10 +8680,28 @@ def _record_surface(device, route, hint, stack, focused, conv_id=None):
 _WEB_ENTITY_KINDS = {"agents": "agent", "approvals": "approval", "projects": "project", "history": "approval"}
 
 
-def _record_web_call_surface(route, focused_entity, conv_id=None):
-    """The dashboard's page during a live call ({route, focusedEntity:"kind:id"} from the call socket)
-    as the `web` device's surface, so the voice brain's screen readout and read_screen_context see it
-    like the phone's. Bounded and validated like POST /surface; a bad route is ignored."""
+def _screen_cards(raw):
+    """The cards on screen, rebuilt by the same rules (and size limits) as a text turn's
+    context.cards (services/arturo/screen_cards.pick_cards; contract/notes/arturo-screen-context.md).
+    None when there are none, or the record is not a cards record, or the reader is missing."""
+    if raw is None:
+        return None
+    try:
+        from services.arturo.screen_cards import pick_cards
+    except Exception:  # noqa: BLE001 — no reader, no cards: the page alone still goes through
+        return None
+    try:
+        picked = pick_cards(raw)
+    except Exception:  # noqa: BLE001
+        return None
+    return picked if picked and picked.get("cards") else None
+
+
+def _record_web_call_surface(route, focused_entity, conv_id=None, cards=None):
+    """The dashboard's page during a live call ({route, focusedEntity:"kind:id", cards?} from the call
+    socket) as the `web` device's surface, so the voice brain's screen readout and read_screen_context
+    see it like the phone's, the cards on screen included. Bounded and validated like POST /surface; a
+    bad route is ignored."""
     if not isinstance(route, str) or not route.startswith("/"):
         return False
     route = route[:200]
@@ -8497,7 +8713,8 @@ def _record_web_call_surface(route, focused_entity, conv_id=None):
             entity = {"kind": kind[:40], "id": eid[:120]}
     hint = f"viewing {entity['kind']} {entity['id']}" if entity else None
     stack = [{"z": 0, "role": "base", "route": route, "entity": entity, "hint": hint}]
-    _record_surface("web", route, hint, stack, _surface_focused(stack), conv_id)
+    _record_surface("web", route, hint, stack, _surface_focused(stack), conv_id,
+                    cards=_screen_cards(cards))
     return True
 
 
@@ -9222,6 +9439,7 @@ def build_app():
     app.router.add_get("/voice-memory", handle_voice_memory)
     app.router.add_post("/agent-message", handle_agent_message)
     app.router.add_post("/agent-interrupt", handle_agent_interrupt)
+    app.router.add_post("/agent-dev", handle_agent_dev)
     app.router.add_get("/agent-model", handle_agent_model)
     app.router.add_put("/agent-model", handle_agent_model)
     app.router.add_post("/presence", handle_presence)

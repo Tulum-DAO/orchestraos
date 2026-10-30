@@ -50,6 +50,30 @@ def _default_system_prompt(orch, agent_id):
     return rel if os.path.isfile(os.path.join(code_root, rel)) else ""
 
 
+#: Seat-document fields that belong to the LINEAGE, carried from the document already on record into every later
+#: generation's document: a test seat stays a test seat (test, reports_to the integrator), and the seat keeps its
+#: parent and role. Written by `orchestra spawn` / `orchestra agent create` (orchestra_cli.seats.register_seat)
+#: just before this runs.
+LINEAGE_FIELDS = ("test", "reports_to", "role")
+
+
+def _lineage_fields(dbp, agent_id):
+    """The lineage fields of the seat document on record (empty when there is none)."""
+    conn = orchestra_db.get_connection(dbp)
+    try:
+        r = conn.execute("SELECT payload_json FROM source_records WHERE file='registry.json' "
+                         "AND kind='agent' AND key=?", (agent_id,)).fetchone()
+    finally:
+        conn.close()
+    try:
+        doc = json.loads(r[0]) if r else {}
+    except (TypeError, ValueError):
+        doc = {}
+    return {k: doc[k] for k in LINEAGE_FIELDS if isinstance(doc, dict) and doc.get(k) not in (None, "")}
+
+
+
+
 class AdaptiveUnavailable(Exception):
     """The quota oracle could not load or answer: the spawn is refused, never silently skipped."""
 
@@ -168,7 +192,10 @@ def main(argv=None):
                 "cwd": args.cwd or orch, "tmux_session": args.agent_id,
                 "generation": new_gen, "lineage_root": args.agent_id,
                 "always_on": False, "status": "online",
-                "spawn_respawned_at": orchestra_db._utcnow()}
+                "spawn_respawned_at": orchestra_db._utcnow(),
+                **_lineage_fields(dbp, args.agent_id)}
+        # A new generation of a retired lineage: its older generations never come back as parked seats.
+        identity_writer.retire_predecessors(orch, args.agent_id, new_gen)
         if args.session_id:
             full["session_id"] = args.session_id          # resume of a KNOWN sid (roster)
         try:
@@ -260,6 +287,9 @@ def main(argv=None):
             "spawn_adopted_at": orchestra_db._utcnow()}
     if args.session_id:
         full["session_id"] = args.session_id
+    # The lineage's own fields from the document already on record (a test seat, its parent, its role), then
+    # anything this call says explicitly.
+    full.update(_lineage_fields(dbp, args.agent_id))
     # Hierarchy (DEC-1791574633518521): the parent the tier rule chose, and what the seat does.
     parent = (args.reports_to or "").strip()
     if parent and parent != args.agent_id:
@@ -293,6 +323,10 @@ def main(argv=None):
             f"re-read found no canonical row — not seating.\n")
         return EXIT_REFUSED
 
+    if reestablished:
+        # Re-established after a full retire: its older generations never come back as parked seats.
+        identity_writer.retire_predecessors(orch, args.agent_id, ver["generation"])
+        identity_writer.project_now(orch)
     print(json.dumps({"handled": True, "existing": False, "verified": True,
                       "generation": ver["generation"], "reestablished": reestablished,
                       "projected": bool(projected)}))

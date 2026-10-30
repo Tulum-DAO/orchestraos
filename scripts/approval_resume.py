@@ -457,8 +457,10 @@ def _fire_menu_resume(row, store, *, live_fn=None, msg_send=None,
     session = menu.get("source_session")
     key = row.get("option_n")
 
-    # Path (B): no live source pane to keypress -> deliver by live-head inject.
-    if not _session_is_live(session, live_fn=live_fn) or not key:
+    # Path (B): no live source pane to keypress -> deliver by live-head inject. A headless seat's
+    # pane holds its supervisor, never this menu: no keys are pressed there (the digest goes to
+    # the agent through the supervisor instead).
+    if not _session_is_live(session, live_fn=live_fn) or not key or _headless_session(session):
         _fire_menu_inject(row, store, msg_send=msg_send, resolve=resolve,
                           inject=inject)
         return
@@ -545,6 +547,15 @@ def _fire_resume_inner(row, store):
             return refused
     except ImportError:
         pass                              # harness not landed => today-identical
+    if _is_headless_card(row):
+        # A headless seat's own question or permission: the answer goes back ONLY as the held
+        # request's control response (scripts/headless_cards.py), never an inbox row, an inject or
+        # a keypress, so it reaches the agent exactly once.
+        import headless_cards
+        outcome = headless_cards.deliver(row, store)
+        _log_delivery(row, "headless_control_response", outcome.get("delivered"),
+                      reason=outcome.get("reason"))
+        return outcome
     if row.get("kind") == "menu":
         _fire_menu_resume(row, store)
         return
@@ -579,9 +590,31 @@ def _fire_resume_inner(row, store):
     # until it exists, node rows escalate via the watchdog like pane rows.
     store.mark_resumed_fired(row["id"])
 
+def _is_headless_card(row):
+    try:
+        import headless_cards
+        return headless_cards.is_bridged(row)
+    except Exception:  # noqa: BLE001 — unreadable menu: not a headless card
+        return False
+
+
+def _headless_session(session):
+    """True when `session` is a seat switched to headless: its pane holds the supervisor, not a menu."""
+    try:
+        import headless_switch
+        return bool(session) and headless_switch.headless_seat(session) is not None
+    except Exception:  # noqa: BLE001 — default off
+        return False
+
+
 def deliver_discarded(row, store):
     """R8: one honest 'discarded without an answer' notify so a parked agent
-    never waits forever on a dismissed ask (mirrors questionnaire_resume)."""
+    never waits forever on a dismissed ask (mirrors questionnaire_resume).
+    A headless seat's card is answered 'deny, dismissed' over its control
+    request instead: one answer, no inbox notice."""
+    if _is_headless_card(row):
+        import headless_cards
+        return headless_cards.deliver_dismissed(row)
     body = (f"[APPROVAL DISCARDED {row['id']}] Your request '{row['question']}' was "
             f"DISMISSED without an answer. Do not keep waiting on it; proceed per "
             f"your own judgment or re-raise if it still matters.")
