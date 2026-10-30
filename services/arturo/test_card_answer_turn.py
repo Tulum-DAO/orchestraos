@@ -3,7 +3,7 @@ and a second, different send answering it is refused before anything runs. Drive
 stubbed (the shared fixture from test_text_turn_brain.py: threads in a temp dir)."""
 from services.arturo.test_text_turn_brain import P  # noqa: F401 — the shared fixture
 
-CARD = "0a1b2c3d4e5f6a7b"
+CARD = "0a1b2c3d4e5f6a7b"  # pragma: allowlist secret
 CHOICES = {"options": ["Circle", "Square"], "multi": False, "purpose": "other", "card_id": CARD}
 
 

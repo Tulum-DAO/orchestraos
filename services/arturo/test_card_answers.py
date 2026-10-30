@@ -5,7 +5,7 @@ import pytest
 from services.arturo import card_answers as ca
 from services.arturo.thread_store import ThreadStore
 
-CARD = "0a1b2c3d4e5f6a7b"
+CARD = "0a1b2c3d4e5f6a7b"  # pragma: allowlist secret
 CHOICES = {"options": ["Circle", "Square", "Triangle"], "multi": False, "purpose": "other", "card_id": CARD}
 
 
