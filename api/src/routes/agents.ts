@@ -30,6 +30,7 @@ import { getProjectsKnowledge } from '../services/state-reader.js';
 import { gatewayUrl } from '../lib/gateway-url.js';
 import { gatewayChips } from '../lib/gatewayChips.js';
 import { sessionFor, held, deliverNow, defaultDeliverNowDeps } from '../lib/deliverNow.js';
+import { headlessSeats } from '../services/status-stream.js';
 
 function macSshTarget(): string {
   const cfg = loadConfig();
@@ -72,6 +73,16 @@ function mergeDetector(agent: AgentEntry, d: DetectorStatus | undefined): void {
   agent.cpu = (d.process as any)?.cpu;
   agent.tmux_alive = true;
   agent.alive = true;
+}
+
+/** A retired generation of a TEST lineage (the <root>-gen<N> row a test seat's later generation leaves in the
+ *  registry): a leftover throwaway, never listed (so never "Not running"), as the gateway's /agents leaves it out. A
+ *  real lineage's old generation is unchanged. */
+export function isTestLeftover(def: Record<string, unknown>, defs: Record<string, Record<string, unknown>>): boolean {
+  if (String(def?.status || '') !== 'retired') return false;
+  if (def.test === true) return true;
+  const root = typeof def.lineage_root === 'string' ? defs[def.lineage_root] : undefined;
+  return !!root && root !== def && root.test === true;
 }
 
 const router = Router();
@@ -173,6 +184,7 @@ router.get('/', async (_req: Request, res: Response) => {
 
     const agents: AgentEntry[] = [];
     for (const [id, def] of Object.entries(agentDefs)) {
+      if (isTestLeftover(def as Record<string, unknown>, agentDefs as Record<string, Record<string, unknown>>)) continue;
       const state = states[id] || {};
       const tmuxSession = (def.tmux_session as string) || id;
       const unified = unifiedStatus[id];
@@ -985,9 +997,33 @@ router.post('/:id/inject', async (req: Request, res: Response) => {
 });
 
 // POST /api/agents/:id/key — send special keys (Escape, Enter, numbers, Ctrl-C, etc.)
-router.post('/:id/key', (req: Request, res: Response) => {
+/** A headless seat's Stop: its pane holds the seat's supervisor, not the TUI, so Esc into the pane would stop
+ *  nothing. True for Escape on a switched-on headless seat that is not in Dev (in Dev the pane IS its TUI). */
+export function stopGoesToInterrupt(agentId: string, key: string,
+  headless: Set<string> = headlessSeats(), inDev: (id: string) => boolean = headlessInDev): boolean {
+  return /^(esc|escape)$/i.test(key.trim()) && headless.has(agentId) && !inDev(agentId);
+}
+
+function headlessInDev(agentId: string): boolean {
+  if (!isSafeAgentId(agentId)) return false;
+  try { return existsSync(join(dataDir(), 'state', 'headless', agentId, 'dev')); } catch { return false; }
+}
+
+router.post('/:id/key', async (req: Request, res: Response) => {
   const { key } = req.body;
   if (!key) { res.status(400).json({ error: 'key required' }); return; }
+  if (stopGoesToInterrupt(String(req.params.id), String(key))) {
+    // The CLI's own interrupt, through the gateway (which checks the seat is mid-turn).
+    const session = modelSession(req, res);
+    if (!session) return;
+    try {
+      const r = await gatewayPost('/agent-interrupt', { session }, 15000);
+      res.status(r.status).json({ ...r.body, key, session, agent_id: req.params.id, sent: !!r.body?.ok });
+    } catch (err: any) {
+      res.status(502).json({ error: 'gateway unreachable', detail: err.message });
+    }
+    return;
+  }
 
   const registry = getRegistry() as any;
   const agent = registry?.agents?.[String(req.params.id)];
@@ -1125,6 +1161,42 @@ router.post('/:id/menu-submit', async (req: Request, res: Response) => {
   if (!session) return;
   try {
     const r = await gatewayPost('/menu-submit', { session, answers, card_id, confirm: confirm === true }, 25000);
+    res.status(r.status).json(r.body);
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: 'gateway unreachable', detail: err.message });
+  }
+});
+
+// POST /api/agents/:id/dev {on, force?} — a headless seat's Dev round trip (the gateway's /agent-dev): on=true stops
+// its headless process and resumes it as the TUI in its pane (same session, same environment); on=false, Back to
+// chat, ends the TUI and starts the headless process again (409 while the TUI is busy, unless force). 404 for a
+// seat that is not headless: Dev for a tmux seat is the terminal as it is.
+/** The Dev request's body as the gateway takes it, or 'bad'. Only a real boolean switches; force is opt-in. */
+export function devRequestOf(body: unknown): { on: boolean; force: boolean } | 'bad' {
+  const b = (body && typeof body === 'object' ? body : {}) as { on?: unknown; force?: unknown };
+  if (typeof b.on !== 'boolean') return 'bad';
+  return { on: b.on, force: b.force === true };
+}
+
+/** Whether this seat runs headless, and whether its TUI holds the pane right now (Dev). A tmux seat is
+ *  {headless:false}: its Dev is the terminal as it always was. */
+export function devInfoOf(agentId: string, headless: Set<string> = headlessSeats(),
+  inDev: (id: string) => boolean = headlessInDev): { headless: boolean; dev: boolean } {
+  const h = headless.has(agentId);
+  return { headless: h, dev: h && inDev(agentId) };
+}
+
+router.get('/:id/dev', (req: Request, res: Response) => {
+  res.json({ ok: true, ...devInfoOf(String(req.params.id)) });
+});
+
+router.post('/:id/dev', async (req: Request, res: Response) => {
+  const ask = devRequestOf(req.body);
+  if (ask === 'bad') { res.status(400).json({ ok: false, error: 'on (true|false) required' }); return; }
+  const session = modelSession(req, res);
+  if (!session) return;
+  try {
+    const r = await gatewayPost('/agent-dev', { session, ...ask }, 50000);
     res.status(r.status).json(r.body);
   } catch (err: any) {
     res.status(502).json({ ok: false, error: 'gateway unreachable', detail: err.message });
@@ -1282,6 +1354,22 @@ export function menuBatchRecords(rows: any[]): any[] {
     out.push({ id: r.id, answered_at: r.answered_at || null, parts: menu.parts, answers });
   }
   return out;
+}
+
+/** One approval_requests row, in any state, as the card a reference to it opens (a chip in a message): the
+ *  decisions feed's shape (state, delivery, parsed options and menu), plus whether it mirrors an agent's terminal
+ *  menu (op_key "menu:…", answered a pick OR words) and, for a recorded multi-part answer, that record. */
+export function cardLookup(row: any, now = Date.now()): any {
+  let options: unknown = [];
+  let menu: unknown = null;
+  try { options = JSON.parse(row.options || '[]'); } catch { options = []; }
+  try { menu = row.menu ? JSON.parse(row.menu) : null; } catch { menu = null; }
+  const batch = row.answer === 'batch' ? menuBatchRecords([row])[0] ?? null : null;
+  const { op_key: opKey, origin, ...rest } = row;
+  return {
+    ...rest, options, menu, state: decisionStatus(row, now), delivery: decisionDelivery(row),
+    terminal: /^menu:/.test(String(opKey || '')) || origin === 'menu_bridge', batch,
+  };
 }
 
 router.get('/:id/menu-batches', async (req: Request, res: Response) => {

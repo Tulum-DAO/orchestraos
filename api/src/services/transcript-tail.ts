@@ -13,6 +13,12 @@
  *              of the missed tail; stale/foreign id -> fresh snapshot.
  *  - reset:    session rotation or file truncation -> snapshot { reset: true }.
  *
+ * A headless seat's cut turns (the supervisor's interrupted.json) get the same "[TURN INTERRUPTED]"
+ * line as the poll route, after the turn its message opened, once. The file is watched beside the
+ * log (it is written when the process dies, usually with nothing appended to the log). A line that
+ * lands at the end goes out as a delta; one that lands before the tail goes out as a snapshot,
+ * because a delta only appends and every later item's offset moved.
+ *
  * The live-STATE lane (working/idle/waiting/stranded v2 detector) is NOT here
  * by design — state stays its own lane per the locked congruence guardrail.
  *
@@ -20,7 +26,10 @@
  * the route (transcript-stream.ts) owns the interval + per-agent registry.
  */
 import { readFileSync, statSync } from 'fs';
-import { normalizeTranscript, buildRenderItems, GRAMMAR_VERSION } from '../routes/chat-transcript.js';
+import {
+  normalizeTranscript, buildRenderItems, GRAMMAR_VERSION,
+  mergeInterruptedTurns, readInterruptedTurns, interruptedTurnsSig, type InterruptedTurn,
+} from '../routes/chat-transcript.js';
 
 /** Upper bound on items the SSE tailer will normalize per tick (see the call site). */
 const TAIL_ITEM_CAP = 2000;
@@ -41,6 +50,7 @@ export interface TailEvent {
 }
 
 type Resolver = () => { path: string | null; sid: string | null };
+type Interrupted = { read: () => InterruptedTurn[]; sig: () => string };
 type Subscriber = (ev: TailEvent) => void;
 
 /** Item identity for aligning two windows of the same log (usage excluded: that is what changed). */
@@ -69,11 +79,17 @@ export class TranscriptTailer {
   private fileSize = -1;
   private items: any[] = [];
   private rev = 0;           // bumped when an already-sent item changes (see sidTag)
+  private interrupted: Interrupted;
+  private interruptedSig = '';
 
-  constructor(opts: { agentId: string; resolve: Resolver; limit?: number }) {
+  constructor(opts: { agentId: string; resolve: Resolver; limit?: number; interrupted?: Interrupted }) {
     this.agentId = opts.agentId;
     this.resolve = opts.resolve;
     this.limit = opts.limit ?? 150;
+    this.interrupted = opts.interrupted ?? {
+      read: () => readInterruptedTurns(opts.agentId),
+      sig: () => interruptedTurnsSig(opts.agentId),
+    };
   }
 
   get subscriberCount(): number {
@@ -98,7 +114,9 @@ export class TranscriptTailer {
     // Cheap no-op check: same file, same size -> nothing to re-normalize.
     let size = -1;
     try { size = statSync(path).size; } catch { size = -1; }
-    if (!rotated && path === this.path && size === this.fileSize) {
+    let isig = '';
+    try { isig = this.interrupted.sig(); } catch { isig = ''; }
+    if (!rotated && path === this.path && size === this.fileSize && isig === this.interruptedSig) {
       return { rotated: false, grewFrom: null };
     }
 
@@ -110,6 +128,14 @@ export class TranscriptTailer {
     // items anyway, and the cap is well above the poll route's own 500 ceiling.
     const env = normalizeTranscript(
       lines, this.agentId, sid, TAIL_ITEM_CAP, path.includes('antigravity-cli'));
+    let turns: InterruptedTurn[] = [];
+    try { turns = this.interrupted.read(); } catch { turns = []; }
+    env.items = mergeInterruptedTurns(env.items, turns);
+    // A cut-turn line new this beat and placed before the old tail: every later item moved, which
+    // a delta (append only) cannot say. Sent as a snapshot.
+    const sentUuids = new Set(this.items.map((it) => it?.uuid));
+    const insertedBeforeTail = !rotated && path === this.path && prevCount > 0
+      && env.items.some((it, i) => it?.interrupted_turn && !sentUuids.has(it.uuid) && i < prevCount);
 
     const truncated = !rotated && env.items.length < prevCount;
     // Codex reports a response's tokens after its items: `usage` can land on an item a delta
@@ -126,9 +152,11 @@ export class TranscriptTailer {
         }
       }
     }
+    if (insertedBeforeTail) restated = true;
     this.sid = sid;
     this.path = path;
     this.fileSize = size;
+    this.interruptedSig = isig;
     this.items = env.items;
 
     if (rotated || truncated) return { rotated: true, grewFrom: null, restated: false };

@@ -17,6 +17,10 @@
  *   event: gone     data: { seat }                          — seat left the file
  *   event: step     data: { seat, text, ts }               — what the seat is doing now ('' = nothing)
  *
+ * HEADLESS SEATS are left out (<data dir>/state/headless-seats.json, scripts/headless_switch.py): telemetryd
+ * reads a seat from its pane, and a headless seat's pane holds its supervisor, not the agent, so its words
+ * there are not the seat's state. The /api/agents poll reads those seats from their supervisor instead.
+ *
  * Steps come from a second realtime file, realtime/steps.json, beside status.json. Its ONE writer is
  * Arturo's service (services/arturo/live_steps.py, which also keeps it to one change per seat every half
  * second); this service only reads it and passes changes on, exactly as it does with status.
@@ -26,6 +30,7 @@ import path from 'path';
 import os from 'os';
 import chokidar from 'chokidar';
 import type { Response } from 'express';
+import { dataDir } from '../lib/config.js';
 
 const STATUS_FILE =
   process.env.REALTIME_STATUS_FILE ||
@@ -81,13 +86,50 @@ function broadcastSteps(): void {
   for (const d of stepDeltas(readSteps(), lastStep)) send(`event: step\ndata: ${JSON.stringify(d)}\n\n`);
 }
 
-function readSeats(): Record<string, { status?: string; ts?: number; runtime?: string }> {
+type SeatInfo = { status?: string; ts?: number; runtime?: string; session?: string };
+
+function headlessFile(): string | null {
+  if (process.env.HEADLESS_SEATS_FILE) return process.env.HEADLESS_SEATS_FILE;
   try {
-    const raw = fs.readFileSync(STATUS_FILE, 'utf-8');
+    return path.join(dataDir(), 'state', 'headless-seats.json');
+  } catch {
+    return null;                                 // no config: nothing can be switched on
+  }
+}
+
+/** The seats switched to headless (Claude only, as the Python reader). Missing or unreadable: none. */
+export function headlessSeats(file: string | null = headlessFile()): Set<string> {
+  const out = new Set<string>();
+  if (!file) return out;
+  try {
+    const doc = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    const seats = doc && typeof doc === 'object' ? doc.seats : null;
+    for (const [seat, e] of Object.entries(seats && typeof seats === 'object' ? seats : {})) {
+      const entry = e as { headless?: unknown; runtime?: unknown };
+      if (entry && entry.headless === true && String(entry.runtime || '').toLowerCase() === 'claude') out.add(seat);
+    }
+  } catch { /* default off */ }
+  return out;
+}
+
+/** status.json's seats without the headless ones (by seat key or the row's session). Pure. */
+export function withoutHeadless(seats: Record<string, SeatInfo>, headless: Set<string>): Record<string, SeatInfo> {
+  if (!headless.size) return seats;
+  const out: Record<string, SeatInfo> = {};
+  for (const [seat, info] of Object.entries(seats)) {
+    if (headless.has(seat) || (info && typeof info.session === 'string' && headless.has(info.session))) continue;
+    out[seat] = info;
+  }
+  return out;
+}
+
+export function readSeats(file = STATUS_FILE, headless: Set<string> = headlessSeats()): Record<string, SeatInfo> {
+  try {
+    const raw = fs.readFileSync(file, 'utf-8');
     if (!raw.trim()) return {};
     const doc = JSON.parse(raw);
     const seats = doc && typeof doc === 'object' ? doc.seats : null;
-    return seats && typeof seats === 'object' ? seats : {};
+    return seats && typeof seats === 'object' ? withoutHeadless(seats, headless) : {};
   } catch {
     // partial write / missing / malformed — skip this tick, keep last state
     return {};
