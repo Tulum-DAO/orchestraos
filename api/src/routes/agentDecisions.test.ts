@@ -54,3 +54,22 @@ test('a multi-part answer record carries its parts and the batch as sent, skips 
   assert.deepEqual(out, [{ id: 'apr_a', answered_at: '2026-10-29T10:00:00Z', parts,
     answers: [{ part: 0, ns: ['1'] }, { part: 1, skipped: true }] }]);
 });
+
+test('a card looked up by its id, in any state: the feed shape, whether it mirrors a terminal menu, and its multi-part record', async () => {
+  const { cardLookup } = await import('./agents.js');
+  const parts = [{ index: 0, question: 'Which colour?', options: [{ n: '1', label: 'Blue' }] }];
+  const answered = cardLookup({ id: 'apr_x', status: 'resumed', answer: 'batch', op_key: 'menu:dev-demo:abc', origin: 'menu_bridge',
+    options: '[]', menu: JSON.stringify({ parts }), answer_text: JSON.stringify([{ part: 0, ns: ['1'] }]), answered_at: '2026-10-29T10:00:00Z',
+    resumed_at: '2026-10-29T10:00:01Z' });
+  assert.equal(answered.state, 'answered');
+  assert.equal(answered.delivery, 'delivered');
+  assert.equal(answered.terminal, true);
+  assert.equal(answered.op_key, undefined);
+  assert.deepEqual(answered.batch, { id: 'apr_x', answered_at: '2026-10-29T10:00:00Z', parts, answers: [{ part: 0, ns: ['1'] }] });
+  const waiting = cardLookup({ id: 'apr_y', status: 'pending', kind: 'menu', options: '["Yes","No"]', menu: 'not json' });
+  assert.equal(waiting.state, 'pending');
+  assert.deepEqual(waiting.options, ['Yes', 'No']);
+  assert.equal(waiting.menu, null);
+  assert.equal(waiting.terminal, false);
+  assert.equal(waiting.batch, null);
+});

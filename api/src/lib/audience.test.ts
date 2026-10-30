@@ -126,3 +126,14 @@ test('an operator turn whose message has no uuid still counts: the no-turn rule 
   tagAudience(xs);
   assert.deepEqual(xs.map((x) => x.audience), ['user', 'user', 'agent', 'agent']);
 });
+
+test('a background job notice that arrived mid-turn stays inside that turn: the fold is unchanged', () => {
+  const m = u('run the checks');
+  const notice = u('<task-notification>\n<task-id>b2</task-id>\n<status>completed</status>\n</task-notification>',
+    { machine: 'task', mid_turn: true });
+  const xs = [m, a('started them'), tool(), res(), notice, tool(), res(), a('all checks passed')];
+  tagAudience(xs);
+  assert.deepEqual(xs.map((x) => x.audience), ['user', 'user', 'agent', 'agent', 'agent', 'agent', 'agent', 'user']);
+  assert.ok(xs.every((x) => x.exchange === m.uuid), 'one exchange: the notice opened no turn');
+  assert.equal(notice.machine, 'task');
+});

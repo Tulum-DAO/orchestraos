@@ -790,6 +790,15 @@ export function queuedCommandItems(o: any): any[] {
   const a = o?.attachment;
   if (!a || a.type !== 'queued_command') return [];
   const originKind = a.origin?.kind;
+  // A background job that finished while the agent was mid-turn: kept as the harness's own line
+  // (machine `task`, never operator speech), so clients draw it as a finished-work card instead of
+  // losing it. `mid_turn` keeps it from opening a turn of its own (audience.ts), so the fold of the
+  // turn it landed in is unchanged.
+  if (originKind === 'task-notification') {
+    const text = String(a.prompt || '').trim();
+    if (!/^<task-notification>/.test(text)) return [];
+    return [{ kind: 'text', role: 'user', text, ts: o.timestamp, uuid: o.uuid, machine: 'task', mid_turn: true }];
+  }
   // The legacy clause: builds predating `origin` label a human prompt only by commandMode.
   const isHuman = originKind === 'human' || (originKind == null && a.commandMode === 'prompt');
   if (!isHuman) return [];
@@ -933,13 +942,13 @@ export function dropBatchEntriesCoveredByMachineTurns(items: any[]): any[] {
 export function dedupeQueuedCommands(items: any[]): any[] {
   const realUserText = new Set<string>();
   for (const it of items) {
-    if (it.kind === 'text' && it.role === 'user' && !it.queued) {
+    if (it.kind === 'text' && it.role === 'user' && !it.queued && !it.mid_turn) {
       const t = (it.text || '').trim();
       if (t) realUserText.add(t);
     }
   }
   if (!realUserText.size) return items;
-  return items.filter((it) => !(it.queued && it.kind === 'text' && realUserText.has((it.text || '').trim())));
+  return items.filter((it) => !((it.queued || it.mid_turn) && it.kind === 'text' && realUserText.has((it.text || '').trim())));
 }
 
 function normalizeClaudeEntry(o: any): any[] {
@@ -1530,6 +1539,83 @@ function logItems(lines: string[], antigravityHint: boolean): any[] {
   return tagAudience(enrichItems(items));
 }
 
+// A headless seat's cut turns (scripts/seat_supervisor.py): a message whose turn did not finish
+// (the process ended mid-turn, or an interrupt cut it) is never resent, so the chat says so. The
+// supervisor lists them in <data dir>/state/headless/<seat>/interrupted.json; each one becomes a
+// machine line placed after the turn its message opened. Only for a message that is in the window,
+// and once per message. Fail-open: no file, nothing added.
+export const INTERRUPTED_PREFIX = '[TURN INTERRUPTED]';
+
+export interface InterruptedTurn { id: string; text: string; at?: string; reason?: string }
+
+/** Where the supervisor lists a seat's cut turns; null for an id that is not a safe path segment. */
+export function interruptedTurnsPath(agentId: string, root?: string): string | null {
+  if (!isSafeAgentId(agentId)) return null;
+  try {
+    return join(root ?? dataDir(), 'state', 'headless', agentId, 'interrupted.json');
+  } catch {
+    return null;                                  // no data dir configured: no file to read
+  }
+}
+
+/** A cheap change signature for that file (size and mtime), '' when it is missing. The live stream
+ *  re-reads the transcript when it changes, as a cut turn is listed without the log growing. */
+export function interruptedTurnsSig(agentId: string, root?: string): string {
+  const p = interruptedTurnsPath(agentId, root);
+  if (!p) return '';
+  try {
+    const st = statSync(p);
+    return `${st.size}:${st.mtimeMs}`;
+  } catch {
+    return '';
+  }
+}
+
+export function readInterruptedTurns(agentId: string, root?: string): InterruptedTurn[] {
+  const p = interruptedTurnsPath(agentId, root);
+  if (!p) return [];
+  try {
+    const doc = JSON.parse(readFileSync(p, 'utf-8'));
+    const items = doc && Array.isArray(doc.items) ? doc.items : [];
+    return items.filter((x: any) => x && typeof x.id === 'string' && typeof x.text === 'string' && x.text.trim());
+  } catch {
+    return [];
+  }
+}
+
+const isOpenerItem = (it: any) => it?.kind === 'text' && it.role === 'user' && !it.mid_turn && !it.is_system;
+
+export function interruptedLine(t: InterruptedTurn): string {
+  const words = t.text.replace(/\s+/g, ' ').trim();
+  const head = words.length > 160 ? `${words.slice(0, 159)}…` : words;
+  return `${INTERRUPTED_PREFIX} The agent's process stopped before it finished answering this message, `
+    + `and the message was not sent again. Message: "${head}"`;
+}
+
+export function mergeInterruptedTurns(items: any[], turns: InterruptedTurn[]): any[] {
+  if (!turns.length) return items;
+  const out = [...items];
+  for (const t of turns) {
+    const uuid = `interrupted:${t.id}`;
+    if (out.some((it) => it?.uuid === uuid)) continue;
+    const want = t.text.trim();
+    let at = -1;
+    for (let i = out.length - 1; i >= 0; i--) {
+      const it = out[i];
+      if (it?.kind === 'text' && it.role === 'user' && !it.is_system && typeof it.text === 'string'
+          && (it.text.trim() === want || it.text.trim().startsWith(want.slice(0, 200)))) { at = i; break; }
+    }
+    if (at < 0) continue;                           // its message is not in this window
+    let end = at + 1;
+    while (end < out.length && !isOpenerItem(out[end])) end++;
+    out.splice(end, 0, {
+      kind: 'text', role: 'user', text: interruptedLine(t), ...(t.at ? { ts: t.at } : {}), uuid,
+      machine: 'system', mid_turn: true, audience: 'user', interrupted_turn: true,
+    });
+  }
+  return out;
+}
+
 // Pure v2 envelope builder — the seam the conformance fixtures exercise.
 // Detection mirrors the route: 'antigravity-cli' path hint OR content sniff.
 export function normalizeTranscript(
@@ -1564,6 +1650,8 @@ export function normalizeTranscript(
     windowed = dropQueuedCommandsCoveredByBatches(windowed);
     // ...and a machine message the pane recorded as a real turn shows as that turn, not ALSO as a batch.
     windowed = dropBatchEntriesCoveredByMachineTurns(windowed);
+    // A headless seat's cut turns, shown where they happened (poll only, like the merges above).
+    windowed = mergeInterruptedTurns(windowed, readInterruptedTurns(agentId));
   }
   windowed = tagSynthetics(settleIngestedQueuedCommands(windowed));
   return {

@@ -79,19 +79,96 @@ export function pickBrain(raw: unknown): Picked<{ provider: string; model: strin
   return { ok: true, value: { provider, model } };
 }
 
-export function pickContext(raw: unknown): Picked<Record<string, string>> {
-  const bad: Picked<Record<string, string>> = { ok: false, refusal: { error: 'bad_context', field: 'context' } };
+export function pickContext(raw: unknown): Picked<Record<string, unknown>> {
+  const bad: Picked<Record<string, unknown>> = { ok: false, refusal: { error: 'bad_context', field: 'context' } };
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return bad;
   const src = raw as Record<string, unknown>;
   if (typeof src.route !== 'string' || !src.route) return bad;
-  const out: Record<string, string> = {};
+  const out: Record<string, unknown> = {};
   for (const k of CTX_FIELDS) {
     const v = src[k];
     if (v === undefined || v === null) continue;
     if (typeof v !== 'string' || v.length > CTX_MAX) return bad;
     out[k] = v;
   }
+  if (src.cards !== undefined && src.cards !== null) {
+    const cards = pickCards(src.cards);
+    if (!cards) return { ok: false, refusal: { error: 'bad_context', field: 'context.cards' } };
+    out.cards = cards;
+  }
   return { ok: true, value: out };
+}
+
+// The cards on the person's screen (contract/notes/arturo-screen-context.md): rebuilt from known fields only, every
+// string clipped and every list capped, so the block stays small whatever a client sends. The same rules as the
+// proxy's _pick_cards (services/arturo); fixture shared with its test: services/arturo/fixtures/screen_cards_cases.json.
+const CARD_REF = /^c\d{1,2}$/;
+const MAX_CARDS = 12;
+const MAX_OPTIONS = 12;
+
+function clip(v: unknown, n: number): string | undefined {
+  if (typeof v !== 'string') return undefined;
+  const t = v.replace(/\s+/g, ' ').trim();
+  if (!t) return undefined;
+  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+}
+
+function clipList(v: unknown, n: number): string[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out = v.map((x) => clip(x, n)).filter((x): x is string => !!x).slice(0, MAX_OPTIONS);
+  return out.length ? out : undefined;
+}
+
+const smallInt = (v: unknown): number | undefined => (Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 50 ? v as number : undefined);
+
+function put(o: Record<string, unknown>, k: string, v: unknown) { if (v !== undefined) o[k] = v; }
+
+export function pickCards(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const src = raw as Record<string, unknown>;
+  if (!Array.isArray(src.cards)) return null;
+  const cards: Record<string, unknown>[] = [];
+  for (const c of src.cards.slice(0, MAX_CARDS)) {
+    if (!c || typeof c !== 'object' || Array.isArray(c)) continue;
+    const r = c as Record<string, unknown>;
+    if (typeof r.ref !== 'string' || !CARD_REF.test(r.ref) || cards.some((x) => x.ref === r.ref)) continue;
+    const line = clip(r.line, 200);
+    if (line) { cards.push({ ref: r.ref, line }); continue; }
+    const out: Record<string, unknown> = { ref: r.ref };
+    put(out, 'kind', clip(r.kind, 30)); put(out, 'from', clip(r.from, 60)); put(out, 'state', clip(r.state, 30));
+    put(out, 'surface', clip(r.surface, 30)); put(out, 'question', clip(r.question, 300));
+    put(out, 'summary', clip(r.summary, 400)); put(out, 'options', clipList(r.options, 100));
+    put(out, 'answer', clip(r.answer, 300));
+    if (r.part && typeof r.part === 'object' && !Array.isArray(r.part)) {
+      const p = r.part as Record<string, unknown>;
+      const part: Record<string, unknown> = {};
+      put(part, 'n', smallInt(p.n)); put(part, 'of', smallInt(p.of)); put(part, 'question', clip(p.question, 300));
+      put(part, 'select', p.select === 'multi' ? 'multi' : p.select === 'single' ? 'single' : undefined);
+      put(part, 'options', clipList(p.options, 100)); put(part, 'picked', clipList(p.picked, 100));
+      put(part, 'typed', clip(p.typed, 300));
+      if (Object.keys(part).length) out.part = part;
+    }
+    if (out.question || out.part) cards.push(out);
+  }
+  const focus = typeof src.focus === 'string' && cards.some((x) => x.ref === src.focus) ? src.focus : null;
+  return { v: 1, focus, cards };
+}
+
+// The choice card this turn's message answers (services/arturo/card_answers.py has the same rules and is the
+// authority: it alone knows the card, its options and whether it is still open). Shape checks only, rebuilt from
+// known fields.
+const CARD_ID_RE = /^[0-9a-f]{8,32}$/;
+
+export function pickCardAnswer(raw: unknown): Picked<{ card_id: string; picks: string[]; words: string }> {
+  const bad = { ok: false as const, refusal: { error: 'bad_card_answer', field: 'card_answer' } };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return bad;
+  const src = raw as Record<string, unknown>;
+  if (typeof src.card_id !== 'string' || !CARD_ID_RE.test(src.card_id)) return bad;
+  const picks = src.picks ?? [];
+  if (!Array.isArray(picks) || picks.length > 8 || !picks.every((p) => typeof p === 'string')) return bad;
+  const words = src.words ?? '';
+  if (typeof words !== 'string' || words.length > 1000) return bad;
+  return { ok: true, value: { card_id: src.card_id, picks: picks as string[], words } };
 }
 
 export function defaultArturoDeps(): ArturoDeps {
@@ -144,7 +221,7 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     // The client's id for this send (DEC-1791518421640932): the proxy validates it and replays a send it has seen.
     const turnId = (req.body || {}).turn_id;
     if (typeof turnId === 'string' && turnId) upstream.turn_id = turnId.slice(0, 64);
-    for (const [key, pick] of [['brain', pickBrain], ['context', pickContext]] as const) {
+    for (const [key, pick] of [['brain', pickBrain], ['context', pickContext], ['card_answer', pickCardAnswer]] as const) {
       const raw = (req.body || {})[key];
       if (raw === undefined || raw === null) continue;
       const picked = pick(raw);
@@ -203,7 +280,7 @@ export function createArturoRouter(deps: ArturoDeps = defaultArturoDeps()): Rout
     // The client's id for this send (DEC-1791518421640932): the proxy validates it and replays a send it has seen.
     const turnId = (req.body || {}).turn_id;
     if (typeof turnId === 'string' && turnId) upstream.turn_id = turnId.slice(0, 64);
-    for (const [key, pick] of [['brain', pickBrain], ['context', pickContext]] as const) {
+    for (const [key, pick] of [['brain', pickBrain], ['context', pickContext], ['card_answer', pickCardAnswer]] as const) {
       const raw = (req.body || {})[key];
       if (raw === undefined || raw === null) continue;
       const picked = pick(raw);

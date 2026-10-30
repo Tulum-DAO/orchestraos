@@ -22,6 +22,7 @@ export interface TextItem {
   text: string;
   is_system?: boolean;
   queued?: boolean;
+  mid_turn?: boolean;
   machine?: 'decision' | 'questionnaire' | 'approval' | 'human_task' | 'relay' | 'task' | 'system';
   model?: string;
   usage?: TokenUsage;

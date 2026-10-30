@@ -30,6 +30,8 @@ import transitRouter from './routes/transit.js';
 import projectsRouter from './routes/projects.js';
 import authRouter from './routes/auth.js';
 import uploadsRouter from './routes/uploads.js';
+import libraryRouter from './routes/library.js';
+import { startLibraryIndex } from './services/library-index.js';
 import paneUrlRouter from './routes/pane-url.js';
 import adaptiveRouter from './routes/adaptive.js';
 import messagesRouter from './routes/messages.js';
@@ -204,6 +206,7 @@ app.use('/api/transit', transitRouter);
 app.use('/api/projects', projectsRouter);
 app.use('/api/system/vps-auth', authRouter);
 app.use('/api/uploads', uploadsRouter);
+app.use('/api/library', libraryRouter);
 // G21: recover a hard-wrapped sign-in URL from a terminal pane so the UI can make it clickable.
 app.use('/api/agents', paneUrlRouter);
 app.use('/api/adaptive', adaptiveRouter);
@@ -289,6 +292,9 @@ const HOST = process.env.ORCHESTRA_API_HOST || loadConfig().apiHost || '127.0.0.
 
 server.listen(Number(PORT), HOST, () => console.log(
   `OrchestraOS API on ${HOST}:${PORT} (WebSocket terminal enabled)`));
+
+// The library index (parity 4g.1): what each agent made, kept in <data dir>/state/library.db. Not under tests.
+if (!process.env.NODE_TEST_CONTEXT) startLibraryIndex(process.env.ORCHESTRA_DIR || loadConfig().dataDir);
 
 // A 60 s memory heartbeat so a supervisor restart leaves a trend in the API log
 // (heap cap vs event-loop stall was unanswerable without it — docs/RED_ALERT.md api_health_fail).

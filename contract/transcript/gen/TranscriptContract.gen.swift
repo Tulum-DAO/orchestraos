@@ -87,6 +87,7 @@ struct TextItem: Codable, Equatable {
     let text: String
     let is_system: Bool?
     let queued: Bool?
+    let mid_turn: Bool?
     let machine: String?
     let model: String?
     let usage: TokenUsage?
