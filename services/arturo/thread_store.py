@@ -232,7 +232,7 @@ class ThreadStore:
     # --- write ---------------------------------------------------------------------
 
     def record_turn(self, conversation_id, user_text, assistant_text, ts=None, brain=None,
-                    effective=None, turn_id=None, principal=None, assistant_meta=None):
+                    effective=None, turn_id=None, principal=None, assistant_meta=None, card_answer=None):
         """Archive one completed turn (the user's message and Arturo's reply). Called AFTER
         the brain answers, so a failed turn leaves no half-thread. Never raises.
         `brain` = {provider, model} when the operator chose one for this turn, None = default —
@@ -241,7 +241,9 @@ class ThreadStore:
         row keeps, so a later turn on another model can be told which replies were not its own.
         Omitted, the turn row keeps `brain`, as before. `principal` = who sent the turn; the first
         turn's is kept as the thread's `started_by` (see started_by()). `assistant_meta` = what the reply
-        carried besides its words (a choice card), kept on its row so the thread shows it again."""
+        carried besides its words (a choice card), kept on its row so the thread shows it again. `card_answer` =
+        {card_id, answer}: this turn's message answers that choice card, and the answer is kept on the card's row in
+        the same transaction, so the thread never holds the message without the card's answer, or the reverse."""
         if not self.usable or not conversation_id:
             return False
         now = float(ts if ts is not None else time.time())
@@ -278,6 +280,8 @@ class ThreadStore:
                     "UPDATE threads SET updated = ?, turns = ?, snippet = ?,"
                     " last_brain_provider = ?, last_brain_model = ? WHERE id = ?",
                     (now, seq + 2, (assistant_text or "")[:SNIPPET_MAX], bp, bm, conversation_id))
+                if card_answer:
+                    self._answer_card(conn, conversation_id, card_answer["card_id"], card_answer["answer"], before=seq)
                 if turn_id:
                     # In the same transaction as the turn: a crash between the two can never show a
                     # recorded reply as a turn that started and was lost (DEC-1791518421640932 v5).
@@ -291,6 +295,42 @@ class ThreadStore:
         finally:
             if conn is not None:
                 conn.close()
+
+    @staticmethod
+    def _card_rows(conn, conversation_id, card_id, before=None):
+        sql = "SELECT seq, meta FROM turns WHERE thread_id = ? AND meta != ''"
+        args = [conversation_id]
+        if before is not None:
+            sql += " AND seq < ?"
+            args.append(before)
+        for seq, meta in conn.execute(sql, args).fetchall():
+            m = _meta(meta)
+            if m and m.get("card_id") == card_id:
+                yield seq, m
+
+    def _answer_card(self, conn, conversation_id, card_id, answer, before=None):
+        """Keep a card's answer on its row, inside the caller's transaction; a card already answered or dismissed
+        keeps what it has (the turn's checks refuse those first; this is the last word, never a second answer)."""
+        for seq, m in self._card_rows(conn, conversation_id, card_id, before):
+            if m.get("dismissed") or isinstance(m.get("answer"), dict):
+                return False
+            m["answer"] = answer
+            conn.execute("UPDATE turns SET meta = ? WHERE thread_id = ? AND seq = ?", (json.dumps(m), conversation_id, seq))
+            return True
+        return False
+
+    def card(self, conversation_id, card_id):
+        """A choice card's stored meta in this thread (its choices, and whether it is answered or dismissed), or
+        None."""
+        if not self.usable or not conversation_id or not card_id:
+            return None
+        try:
+            with self._connect() as conn:
+                for _seq, m in self._card_rows(conn, conversation_id, card_id):
+                    return m
+        except Exception as e:  # noqa: BLE001 — an unreadable archive answers "no such card", never raises
+            log.warning(f"thread store: could not read card {card_id} in {conversation_id}: {e}")
+        return None
 
     def dismiss_card(self, conversation_id, card_id):
         """Mark a choice card in this thread dismissed (it stays in the thread, closed). True when one was found."""
@@ -308,6 +348,8 @@ class ThreadStore:
                     except ValueError:
                         continue
                     if isinstance(m, dict) and m.get("card_id") == card_id:
+                        if isinstance(m.get("answer"), dict):
+                            return False                # answered: there is nothing left to close
                         m["dismissed"] = True
                         conn.execute("UPDATE turns SET meta = ? WHERE thread_id = ? AND seq = ?",
                                      (json.dumps(m), conversation_id, seq))

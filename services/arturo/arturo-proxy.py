@@ -334,6 +334,8 @@ from services.arturo import thread_store as _thread_store   # G20 durable thread
 from services.arturo import vq6 as _vq6
 from services.arturo import text_stream as _text_stream   # Phase 2 /text/stream
 from services.arturo import live_steps as _live_steps     # the dashboard's "what Arturo is doing now" line
+from services.arturo import screen_cards as _screen_cards
+from services.arturo import card_answers as _card_answers   # a choice card answered by the turn that answers it   # the cards on the operator's screen, per text turn
 # The assistant's name on this install (assistant_name.py: "Arturo" until renamed; the id stays "arturo").
 # Read per call, so a rename reaches the next turn with no restart.
 from services.arturo import assistant_name as _assistant_name
@@ -1624,6 +1626,22 @@ TOOLS = [
                     "exclusive": {"type": "string", "description": "On a multi card, the one option that rules out the others (e.g. 'Just this computer')."},
                 },
                 "required": ["options"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "answer_screen_card",
+            "description": "Answer one of the cards on the operator's screen FOR them, only when they ask you to (\"answer B\", \"pick Circle\", \"approve it\"). `card` is its ref from CARDS ON THE OPERATOR'S SCREEN (never say the ref). The card itself sends the answer the same way as their own tap, through its own route, on its CURRENT part, and shows them the result; a multi-part card then moves to its next part. picks: option letters or labels as shown (one for a pick-one part, several for pick-any; 'Approve' or 'Deny' on an approval). words: their own words, when the card takes words (a deny's reason goes here). One card per turn.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "card": {"type": "string", "description": "The card's ref, e.g. c1."},
+                    "picks": {"type": "array", "items": {"type": "string"}, "description": "Option letters or labels."},
+                    "words": {"type": "string", "description": "Their own words, if any."},
+                },
+                "required": ["card"],
             },
         },
     },
@@ -2977,6 +2995,13 @@ _CHOICE_PURPOSES = ("starter_team", "devices", "other")
 _CHOICE_STRIP = re.compile(r"[*_`#>\[\]()~|]")
 
 
+def answer_screen_card(card, picks=None, words=None):
+    """Hand an answer to a card on the operator's screen (screen_cards.answer_for holds the rules). Nothing is
+    answered here: the page's own card sends it through that card's route, exactly as a tap would."""
+    turn = _TEAM_TURN.get()
+    return _screen_cards.answer_for(turn, _is_fleet(turn), card, picks, words)
+
+
 def ask_choices(options, multi=False, purpose="other", exclusive=None):
     """Show the operator a tap-to-pick card whose options the brain wrote. The card is data: picking
     an option sends its words as the operator's next message, never a tool call."""
@@ -4184,6 +4209,8 @@ def _execute_tool_raw(name, args, user_turns=None):
     if name == "ask_choices":
         return ask_choices(args.get("options"), args.get("multi", False), args.get("purpose", "other"),
                            args.get("exclusive"))
+    if name == "answer_screen_card":
+        return answer_screen_card(args.get("card"), args.get("picks"), args.get("words"))
     if name == "finish_onboarding":
         return finish_onboarding()
     if name == "pair_device":
@@ -7126,6 +7153,18 @@ def _context_line(ctx):
     return f"[Context: {' '.join(bits)}]"
 
 
+def _screen_of(page_ctx):
+    """(the bounded cards-on-screen record or None, a refusal or None) for a context that passed _valid_context.
+    `cards` is the only context field that is not a short string (contract/notes/arturo-screen-context.md)."""
+    raw = page_ctx.get("cards") if isinstance(page_ctx, dict) else None
+    if raw is None:
+        return None, None
+    picked = _screen_cards.pick_cards(raw)
+    if picked is None:
+        return None, {"ok": False, "error": "bad_context", "field": "context.cards"}
+    return picked, None
+
+
 def _valid_context(ctx):
     if not isinstance(ctx, dict) or not isinstance(ctx.get("route"), str) or not ctx["route"]:
         return False
@@ -7258,7 +7297,7 @@ def _onboarding_progress_ctx():
     return out
 
 
-def text_turn(text, conversation_id, brain=None, context=None, principal=None, turn_id=None):
+def text_turn(text, conversation_id, brain=None, context=None, principal=None, turn_id=None, card_answer=None):
     """Returns (http_status, {ok, reply_text, conversation_id, brain, tools_called}).
     `brain` = {provider, model} names this turn's brain (None = the default); `context` = the
     web client's ArturoContext {route, entityKind?, entityId?, hint?} (None = none)."""
@@ -7272,6 +7311,12 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None, t
             return refusal
     if page_ctx is not None and not _valid_context(page_ctx):
         return 400, {"ok": False, "error": "bad_context", "field": "context"}
+    screen, refusal = _screen_of(page_ctx)
+    if refusal:
+        return 400, refusal
+    card_answer, refusal = _card_answers.pick(card_answer)
+    if refusal:
+        return 400, refusal
     text = (text or "").strip()
     if not text:
         return 400, {"ok": False, "error": "empty"}
@@ -7291,6 +7336,10 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None, t
         return 403, dict(_ONBOARDING_ONLY)
     if _thread_refusal(conversation_id, principal):
         return 403, dict(_NOT_YOUR_THREAD)
+    # Under the conversation's turn lock (both endpoints hold it), so no other send can answer the card in between.
+    refusal = _card_refusal(conversation_id, card_answer)
+    if refusal:
+        return refusal
     operator_text = text                     # before the page context: what the operator sent
     _note_page_project(conversation_id, page_ctx)
     if page_ctx is not None:
@@ -7345,6 +7394,9 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None, t
                               window=min(len(history), _ptt.DEFAULT_MAX_HISTORY))
         if _tc:
             context = f"{context}\n\n{_tc}".strip() if context else _tc
+    _sc = _screen_cards.cards_block(screen)
+    if _sc:
+        context = f"{context}\n\n{_sc}".strip() if context else _sc
     messages = _ptt.build_messages(context, history, text, current_brain=effective)
     brain_tok = _BRAIN_THIS_TURN.set(chosen) if chosen is not None else None
     fail_tok = _brain.TURN_FAILURE.set(None)
@@ -7355,6 +7407,7 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None, t
     if team_turn is None:
         team_turn = _begin_team_turn(conversation_id, step, principal, operator_text)
         team_tok = _TEAM_TURN.set(team_turn)
+    team_turn["screen_refs"] = _screen_cards.refs(screen)
     try:
         _res = _brain_reply(messages, conversation_id)
         # Tolerant unpack: a stub (and any older caller) may still return the 2-tuple.
@@ -7387,7 +7440,8 @@ def text_turn(text, conversation_id, brain=None, context=None, principal=None, t
         _hold_returning_reply(conversation_id, reply)
     else:
         _record_text_turn(conversation_id=conversation_id, text=text, reply=reply, brain=chosen_id,
-                          effective=effective, turn_id=turn_id, principal=principal, card=team_turn.get("choices"))
+                          effective=effective, turn_id=turn_id, principal=principal, card=team_turn.get("choices"),
+                          card_answer=card_answer)
     from services.arturo import operator_store as _ops
     body = {"ok": True, "reply_text": reply, "conversation_id": conversation_id,
             "brain": (chosen or _turn_brain()).describe(), "tools_called": tools_called,
@@ -7414,6 +7468,8 @@ def _turn_extras(team_turn, onboarding_turn):
         out["choices"] = team_turn["choices"]
     if team_turn.get("pair_card"):
         out["pair_card"] = team_turn["pair_card"]
+    if team_turn.get("answer_card"):
+        out["answer_card"] = dict(team_turn["answer_card"])
     if team_turn.get("paired"):
         out["paired"] = list(team_turn["paired"])
     if onboarding_turn:
@@ -7484,21 +7540,37 @@ _WARM_POOL = _warm_session.WarmPool(spawn=_spawn_warm, argv_for=lambda key: [],
 atexit.register(_WARM_POOL.close_all)
 
 
-def _record_text_turn(conversation_id, text, reply, brain=None, effective=None, turn_id=None, principal=None, card=None):
+def _card_refusal(conversation_id, card_answer):
+    """(status, body) when this turn answers a choice card that cannot take it (unknown, dismissed, already
+    answered, an option it does not have): nothing runs and nothing is stored. None otherwise."""
+    if card_answer is None:
+        return None
+    body = _card_answers.check(_THREADS.card(conversation_id, card_answer["card_id"]), card_answer)
+    if body is None:
+        return None
+    return (400 if body["error"] == "bad_card_answer" else 409), body
+
+
+def _record_text_turn(conversation_id, text, reply, brain=None, effective=None, turn_id=None, principal=None, card=None,
+                      card_answer=None):
     """The ONE place a text turn is persisted. /text and /text/stream both come through here,
     so a streamed turn and a whole one leave the same history and the same thread row.
     `brain` = what the operator chose (None = default); `effective` = what actually wrote the
     reply, kept on the turn so a later turn on another model knows it was not its own.
     A tool-call envelope is never stored: history is replayed and shown, so it would surface again.
     `card` = the choice card the reply showed (ask_choices): kept on the reply's row, so the thread shows it again
-    after a reload, answered by the message that followed it or dismissed."""
+    after a reload, answered by the message that followed it or dismissed. `card_answer` = the choice card this turn's
+    message answers (card_answers.pick): its answer is kept on that card's row in the same write as the turn."""
     reply = _brain.without_envelope(reply)
     _TEXT_HISTORY.append(conversation_id, "user", text)
     _TEXT_HISTORY.append(conversation_id, "assistant", reply, brain=effective)
     meta = {"kind": "card", "card_id": card.get("card_id"), "choices": card} if isinstance(card, dict) and card.get("card_id") else None
     stored = _THREADS.record_turn(conversation_id, text, reply, brain=brain, effective=effective,
                                   principal=_thread_key(principal), **({"turn_id": turn_id} if turn_id else {}),
-                                  **({"assistant_meta": meta} if meta else {}))
+                                  **({"assistant_meta": meta} if meta else {}),
+                                  **({"card_answer": {"card_id": card_answer["card_id"],
+                                                      "answer": _card_answers.stored(card_answer, time.time())}}
+                                     if card_answer else {}))
     if stored:
         _speak_into_live_call(conversation_id, text, reply)
         _thread_grew(conversation_id)
@@ -7810,6 +7882,12 @@ def text_stream_endpoint():
             return jsonify(refusal[1]), refusal[0]
     if page_ctx is not None and not _valid_context(page_ctx):
         return jsonify({"ok": False, "error": "bad_context", "field": "context"}), 400
+    screen, refusal = _screen_of(page_ctx)
+    if refusal:
+        return jsonify(refusal), 400
+    card_answer, refusal = _card_answers.pick(data.get("card_answer"))
+    if refusal:
+        return jsonify(refusal), 400
 
     # Refused before the lock and before _begin_team_turn: a refused turn takes no card off the book.
     principal = _stamped_principal(request)
@@ -7850,6 +7928,14 @@ def text_stream_endpoint():
             _token.release()
             _TURN_IDS.drop(conversation_id, tid, _turn["req"])
             return jsonify(answered[1]), answered[0]
+    refusal = _card_refusal(conversation_id, card_answer)
+    if refusal:
+        # After the replay check (a retry of the send that answered it is replayed, never refused), before the
+        # cards come off the book: a refused turn runs nothing.
+        _token.release()
+        if _turn is not None:
+            _TURN_IDS.drop(conversation_id, tid, _turn["req"])
+        return jsonify(refusal[1]), refusal[0]
     try:
         _started = []
         # Taken once for the whole turn, whichever path ends up running it (stream, or text_turn behind
@@ -7864,6 +7950,10 @@ def text_stream_endpoint():
         # build_context(), the same call the tool loop makes. Streaming without it answers as a
         # bare model with no identity and no tools.
         _stream_context = _as_turn(_team_turn, _context_as, chosen, calling_channel="text")
+        _team_turn["screen_refs"] = _screen_cards.refs(screen)
+        _sc = _screen_cards.cards_block(screen)
+        if _sc:
+            _stream_context = f"{_stream_context}\n\n{_sc}" if _stream_context else _sc
         messages = _ptt.build_messages(_stream_context, history, body_text, current_brain=effective)
 
         def _spawn(cmd):
@@ -7896,7 +7986,8 @@ def text_stream_endpoint():
             team_tok = _TEAM_TURN.set(_team_turn)
             try:
                 return text_turn(text_in, conversation_id, brain=brain_req, context=page_ctx,
-                                 principal=_team_turn.get("principal"), **({"turn_id": tid} if tid else {}))
+                                 principal=_team_turn.get("principal"), **({"turn_id": tid} if tid else {}),
+                                 card_answer=data.get("card_answer"))
             finally:
                 _TEAM_TURN.reset(team_tok)
                 _TURN_DEDUP.reset(ledger_tok)
@@ -7961,7 +8052,8 @@ def text_stream_endpoint():
             return _WARM_POOL.turn(warm_key, new_text, argv=argv, env=env, version=v)
 
         def _record(**kw):
-            _record_text_turn(**kw, effective=effective, turn_id=tid, principal=principal, card=_team_turn.get("choices"))
+            _record_text_turn(**kw, effective=effective, turn_id=tid, principal=principal, card=_team_turn.get("choices"),
+                              card_answer=card_answer)
             _WARM_POOL.sync(warm_key, _THREADS.turn_count(conversation_id))
 
         from services.arturo import onboarding as _onb
@@ -8102,7 +8194,8 @@ def text_endpoint():
         try:
             code, result = text_turn(data.get("text"), data.get("conversation_id"),
                                      brain=data.get("brain"), context=data.get("context"),
-                                     principal=principal, **({"turn_id": tid} if tid else {}))
+                                     principal=principal, **({"turn_id": tid} if tid else {}),
+                                     card_answer=data.get("card_answer"))
         finally:
             if turn is not None:
                 _TURN_DEDUP.reset(ledger_tok)

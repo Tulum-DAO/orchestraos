@@ -63,6 +63,7 @@ _PHRASES = {
     "pair_device": "Pairing a device",
     "check_paired": "Checking a pairing",
     "ask_choices": "Preparing choices",
+    "answer_screen_card": "Answering a card",
     "answer_menu": "Answering a menu",
     "create_starter_team": "Setting up a team",
     "decline_starter_team": "Setting up",
