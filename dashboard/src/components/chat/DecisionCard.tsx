@@ -9,12 +9,20 @@
  * Theme colours only (card, border, muted, info, success, warning, destructive), so light and dark both work.
  * The card takes focus when clicked, which is what scopes its keys (1–9, Return, e) to it.
  */
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { clsx } from 'clsx';
 import { ListChecks, Loader2, X } from 'lucide-react';
 import Markdown from './Markdown';
+import { withRefs } from '../kit/RefText';
 import { previewText, type DecisionTone } from '../../lib/decisions';
 import { CHIP_LABEL, approvalAction, riskText, type CardKind } from '../../lib/decisionCard';
+import type { ScreenAnswer } from '../../lib/screenCards';
+import type { RefCardState } from '../../lib/cardRefs';
+import { useScreenCard } from '../../lib/threadKit/useScreenCard';
+
+/** The answer area inside a card says how an answer Arturo hands back is applied (ApprovalAnswer's Approve/Deny). */
+type Answerer = (a: ScreenAnswer) => string | null;
+const AnswerSlot = createContext<((fn: Answerer | null) => void) | null>(null);
 
 const SUMMARY_PREVIEW = 280;
 
@@ -54,6 +62,9 @@ export interface DecisionCardProps {
   id?: string;
   dataState?: string;
   highlighted?: boolean;
+  /** Reports the card into the cards-on-screen context (lib/screenCards.ts): its id and who asked; the card adds the
+   *  rest. `state`/`answer` for a card that is no longer open. */
+  report?: { id: string; from?: string | null; state?: RefCardState; answer?: string | null };
 }
 
 export default function DecisionCard(p: DecisionCardProps) {
@@ -62,16 +73,26 @@ export default function DecisionCard(p: DecisionCardProps) {
   const long = summary.length > SUMMARY_PREVIEW;
   const risk = riskText(p.risk);
   const tone = p.tone ?? 'pending';
+  const frame = useRef<HTMLDivElement>(null);
+  const answerer = useRef<Answerer | null>(null);
+  const live = p.open && !p.dismissed;
+  useScreenCard(frame, p.report ? {
+    id: p.report.id, kind: p.kind, from: p.report.from ?? p.agent ?? null,
+    state: p.dismissed ? 'dismissed' : live ? 'waiting' : p.report.state ?? 'answered',
+    question: p.question, ...(summary ? { summary } : {}),
+    ...(live && p.kind === 'approval' ? { options: ['A. Approve', 'B. Deny (needs a reason)'] } : {}),
+    ...(!live && p.report.answer ? { answer: p.report.answer } : {}),
+  } : null, (a) => (live && answerer.current ? answerer.current(a) : 'That card is no longer waiting.'));
 
   return (
-    <div id={p.id} data-decision-card data-focused={p.highlighted || undefined} data-decision-state={p.dataState} data-tone={tone} data-kind={p.kind} tabIndex={0}
+    <div ref={frame} id={p.id} data-decision-card data-focused={p.highlighted || undefined} data-decision-state={p.dataState} data-tone={tone} data-kind={p.kind} tabIndex={0}
          className={clsx('rounded-2xl border bg-card text-card-foreground overflow-hidden outline-none transition-colors',
            'focus-visible:ring-2 focus-visible:ring-info/50', p.highlighted && 'ring-2 ring-info/60', TONE_BORDER[tone])}>
       <div className="px-4 pt-3.5 pb-1">
         <div className="flex items-start gap-2.5">
           <ListChecks size={16} className={clsx('mt-0.5 shrink-0', p.open ? 'text-foreground' : 'text-muted-foreground')} aria-hidden />
           <div className="min-w-0 flex-1">
-            <div className={clsx('text-[15px] font-semibold leading-snug', !p.open && 'text-muted-foreground')}>{p.question}</div>
+            <div className={clsx('text-[15px] font-semibold leading-snug', !p.open && 'text-muted-foreground')}>{withRefs(p.question)}</div>
             <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground">
               <span className={clsx('text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded', CHIP_CLASS[p.kind])}>
                 {CHIP_LABEL[p.kind]}
@@ -95,7 +116,7 @@ export default function DecisionCard(p: DecisionCardProps) {
         {p.extra && <div className="mt-2 space-y-2">{p.extra}</div>}
       </div>
       {p.open && !p.dismissed
-        ? <div className="mt-2">{p.children}</div>
+        ? <div className="mt-2"><AnswerSlot.Provider value={(fn) => { answerer.current = fn; }}>{p.children}</AnswerSlot.Provider></div>
         : <div className="px-4 pt-1 pb-3 text-xs text-muted-foreground" data-testid="decision-outcome">{p.dismissed ? 'Dismissed' : p.outcome}</div>}
     </div>
   );
@@ -160,6 +181,25 @@ export function ApprovalAnswer({ onApprove, onDeny, sending, error }: {
     else if (a.kind === 'deny') onDeny(a.reason);
     else { setNeedReason(true); field.current?.focus(); }
   };
+  // An answer Arturo hands back presses the same buttons: Approve, or Deny with the words as its reason.
+  const slot = useContext(AnswerSlot);
+  const latest = useRef({ sending, onApprove, onDeny });
+  useEffect(() => { latest.current = { sending, onApprove, onDeny }; });
+  useEffect(() => {
+    if (!slot) return;
+    slot((ans) => {
+      const said = (ans.picks[0] || '').trim().toLowerCase();
+      const pick = said.match(/^([ab])[.)]/)?.[1] ?? said;
+      const which = /^(a|approve|approved|yes)$/.test(pick) ? 'approve' : /^(b|deny|denied|no)$/.test(pick) ? 'deny' : null;
+      if (!which) return 'Approve or deny: those are the only answers this card takes.';
+      if (latest.current.sending) return 'That card is already being answered.';
+      const a = approvalAction(which, ans.words ?? '');
+      if (a.kind === 'need-reason') return 'A deny needs a reason the agent will see.';
+      if (a.kind === 'approve') latest.current.onApprove(); else latest.current.onDeny(a.reason);
+      return null;
+    });
+    return () => slot(null);
+  }, [slot]);
   return (
     <div className="border-t border-border px-4 py-3 space-y-2.5">
       <div className="grid grid-cols-2 gap-2">

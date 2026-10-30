@@ -23,20 +23,24 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
 import { Check, ChevronLeft, ChevronRight, Pencil, X } from 'lucide-react';
 import { arturoHealth, ARTURO_DISABLED_TEXT, handsFreeReady, isArturoDisabled, type ArturoHealth } from '../../lib/arturo';
-import { panelStatus, pathTo, factsValue, activityValue, subagentsValue, type PanelPage } from '../../lib/arturoPanel';
+import { panelStatus, pathTo, factsValue, activityValue, subagentsValue, DRAWER_SECTIONS, liveStatus, openingSection, contextUsedLabel, SECTION_LABEL,
+         type PanelPage, type DrawerSection } from '../../lib/arturoPanel';
 import { fetchOpenAiVendor, fetchVoices, fetchCurrentVoice, putVoice, clearVoice, pickVoice, voiceRowValue, canChangeVoice, ADMIN_ONLY_NOTE, GPT_LIVE,
          type VoiceVendor, type VoiceRow, type CurrentVoice } from '../../lib/arturoVoice';
 import { styleOptions, styleLabel, chooseStyle, loadPrefs, useChatStyle, useAgentPrefsStore } from '../../lib/agentPrefs';
+import { HeadlessDevNote } from './HeadlessDevNote';
 import { fetchAgentModel, switchAgentModel, switchableModels, switchNotice, modelLabel, pickRefusal,
          type AgentModelInfo, type SwitchNotice } from '../../lib/agentModel';
 import { renameAgent } from '../../lib/railAgents';
 import './arturo.css';
 import { fetchJobs, elapsed, type ArturoJob } from '../../lib/arturoJobs';
 import { currentThread } from '../../lib/arturoCurrent';
+import { DrawerHistory } from './DrawerHistory';
 import { factsApi, type Fact } from '../../lib/factsApi';
 import { useAgentSettings } from '../../stores/agentSettings';
 import { AgentAvatar } from '../avatar/AgentAvatar';
 import { LookPicker } from '../avatar/LookPicker';
+import { DrawerLibrary } from './DrawerLibrary';
 import { useAgentRecord, ARTURO_ID } from '../avatar/agentState';
 import { PROVIDER_LABEL } from '../../lib/agentRail';
 import { providerMark } from '../avatar/brandMarks';
@@ -46,6 +50,7 @@ import { useAssistantName, named, saveAssistantName, resetAssistantName, canRena
 const TITLES: Record<PanelPage, string> = {
   voice: 'Voice', memory: 'Memory', activity: 'Activity', settings: 'Settings', brain: 'Brain', device: 'On this device',
   avatar: 'Avatar', name: 'Name', edit: 'Edit', style: 'Chat style', model: 'Model',
+  library: 'Library', history: 'History', setup: 'Setup',
 };
 
 /** The agent the panel is about, when it is not Arturo (Arturo's comes from his own stores). */
@@ -57,7 +62,14 @@ export interface PanelAgent {
   provider?: string;
   /** Its subagents running now, for Activity. */
   subagents?: number;
+  /** How much of its context window is left (the status chip's reading), for the header's meter. */
+  contextLeftPct?: number | null;
+  /** Something of its is waiting on the operator: the drawer opens on History. */
+  waiting?: boolean;
 }
+
+const LAST_SECTION_KEY = 'orchestra.drawer.section';
+const readLast = () => { try { return localStorage.getItem(LAST_SECTION_KEY); } catch { return null; } };
 
 type SaveName = (name: string) => Promise<{ ok: true; name: string } | { ok: false; error: string }>;
 const SLIDE_MS = 200;
@@ -120,6 +132,19 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
   // The page just left by Back, so focus lands on the row that opened it.
   const leftPage = useRef<PanelPage | null>(null);
   const page = stack.length ? stack[stack.length - 1] : null;
+  // Desktop: the section shown under the name (tabs); a phone opens each as its own page instead.
+  // The section picked since it opened; until then, where it opens (History when something waits or runs, else the
+  // last one used). Closing clears the pick.
+  const [picked, setPicked] = useState<DrawerSection | null>(null);
+  const tab: DrawerSection = picked ?? openingSection(arturoRec.status, !!agent?.waiting, readLast());
+  const setTab = (s: DrawerSection) => { setPicked(s); try { localStorage.setItem(LAST_SECTION_KEY, s); } catch { /* private mode */ } };
+  // The live status line counts minutes: re-read the clock while open.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!open) return;
+    const iv = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(iv);
+  }, [open]);
 
   useEffect(() => {
     let t: ReturnType<typeof setTimeout> | undefined;
@@ -128,7 +153,7 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
       t = setTimeout(() => { setMounted(true); raf = requestAnimationFrame(() => setShown(true)); }, 0);
     } else {
       t = setTimeout(() => setShown(false), 0);
-      const done = setTimeout(() => { setMounted(false); setStack([]); }, SLIDE_MS);
+      const done = setTimeout(() => { setMounted(false); setStack([]); setPicked(null); }, SLIDE_MS);
       return () => { clearTimeout(t); clearTimeout(done); };
     }
     return () => { clearTimeout(t); cancelAnimationFrame(raf); };
@@ -238,6 +263,27 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
     </div>
   );
 
+  const sections = DRAWER_SECTIONS;
+  const activityText = isArturo ? activityValue(jobs) : subagentsValue(agent?.subagents);
+  // A phone's drill-in rows carry a live value each, so often there is no need to open them.
+  const sectionValue = (s: DrawerSection): string => s === 'history' ? (agent?.waiting ? 'Waiting for you' : activityText)
+    : s === 'setup' ? (isArturo ? styleLabel(style) : modelLabel(model, model?.model) ?? '') : '';
+  // Each section shows what exists today until its own step fills it, never an empty page. Dev is a chat style,
+  // chosen in Setup; there is no terminal row.
+  const sectionBody = (s: DrawerSection): ReactNode => s === 'history'
+    ? <DrawerHistory agentId={agentId} isArturo={isArturo} name={aname} subagents={agent?.subagents} onClose={onClose} />
+    : s === 'library' ? <DrawerLibrary agentId={agentId} name={aname} />
+    : (
+      <div className="arturo-panel-list" data-drawer-setup>
+        {isArturo
+          ? <Row id="memory" label="Memory" value={factsValue(factCount)} onOpen={push} />
+          : <Row id="model" label="Model" value={modelLabel(model, model?.model) ?? ''} onOpen={push} />}
+        <Row id="style" label="Chat style" value={styleLabel(style)} onOpen={push} />
+        <Row label="Notifications" soon />
+        <Row id="settings" label="Settings" onOpen={push} />
+      </div>
+    );
+
   const content = (
     <>
       {bar}
@@ -262,35 +308,43 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
           : page === 'name' ? (isArturo ? <NamePage /> : <AgentNamePage agentId={agentId} name={aname} save={saveName} />)
           : page === 'edit' ? (
             <EditPage agentId={agentId} name={aname} draft={editDraft} onDraft={setEditDraft} error={editError} canName={canEditName}
-                      onDone={() => void editDone()} onAvatar={() => push('avatar')} />
+                      onDone={() => void editDone()} onAvatar={() => push('avatar')}
+                      voice={voiceRowValue(vendor, voice, health ? handsFreeReady(health) : null) + (!isArturo && voice?.scope === 'install' ? ' (default)' : '')}
+                      onVoice={() => push('voice')} />
           )
           : page === 'avatar' ? <LookPicker agentId={agentId} heroSize={160} canSave={canSaveLook} />
+          : page === 'library' || page === 'history' || page === 'setup' ? sectionBody(page)
           : (
             <>
               <DrawerFace agentId={agentId} name={aname} save={saveName} canSave={canSaveLook} canName={canEditName} desktop={desktop}
-                          subtitle={isArturo ? undefined : [agent?.provider ? brainName(agent.provider) : null,
-                            model?.model ? modelLabel(model, model.model) : null].filter(Boolean).join(' · ')}
+                          subtitle={liveStatus(arturoRec.status, arturoRec.since, now)}
+                          meter={isArturo ? null : contextUsedLabel(agent?.contextLeftPct)}
+                          meterPct={isArturo ? null : agent?.contextLeftPct ?? null}
                           onOpen={() => push('avatar')} onEdit={openEdit} />
-              {!isArturo ? null : status.fix ? (
+              {isArturo && status.fix && (
                 <button type="button" className="arturo-panel-status is-fix" role="status"
                         onClick={() => setStack(pathTo(status.fix!))}>
                   <span>{status.text}</span>
                   <ChevronRight size={14} />
                 </button>
-              ) : (
-                <p className="arturo-panel-status" role="status">{status.text}</p>
               )}
-              <div className="arturo-panel-list">
-                <Row id="avatar" label="Avatar" value={`${shapeName(arturoRec.shape)} · ${colorName(arturoRec.color)}`} onOpen={push} />
-                <Row id="voice" label="Voice" value={voiceRowValue(vendor, voice, health ? handsFreeReady(health) : null)
-                  + (!isArturo && voice?.scope === 'install' ? ' (default)' : '')} onOpen={push} />
-                {isArturo
-                  ? <Row id="memory" label="Memory" value={factsValue(factCount)} onOpen={push} />
-                  : <Row id="model" label="Model" value={modelLabel(model, model?.model) ?? ''} onOpen={push} />}
-                <Row id="style" label="Chat style" value={styleLabel(style)} onOpen={push} />
-                <Row id="activity" label="Activity" value={isArturo ? activityValue(jobs) : subagentsValue(agent?.subagents)} onOpen={push} />
-                <Row id="settings" label="Settings" onOpen={push} />
-              </div>
+              {desktop ? (
+                <>
+                  <div className="arturo-panel-pills" role="tablist" aria-label={`${aname}'s drawer`}>
+                    {sections.map((s) => (
+                      <button key={s} type="button" role="tab" aria-selected={tab === s} data-drawer-tab={s}
+                              className={`arturo-panel-pill${tab === s ? ' is-on' : ''}`} onClick={() => setTab(s)}>
+                        {SECTION_LABEL[s]}
+                      </button>
+                    ))}
+                  </div>
+                  <div role="tabpanel" data-drawer-section={tab}>{sectionBody(tab)}</div>
+                </>
+              ) : (
+                <div className="arturo-panel-list" data-drawer-rows>
+                  {sections.map((s) => <Row key={s} id={s} label={SECTION_LABEL[s]} value={sectionValue(s)} onOpen={push} />)}
+                </div>
+              )}
             </>
           )}
       </div>
@@ -328,8 +382,8 @@ export function ArturoPanel({ open, onClose, returnFocusTo, brain = '', agent }:
 const MARK_NAME: Record<string, string> = { claude: 'Claude', openai: 'OpenAI', gemini: 'Gemini', grok: 'Grok' };
 const brainName = (p: string) => MARK_NAME[providerMark(p) ?? ''] || PROVIDER_LABEL[p] || p;
 
-function DrawerFace({ agentId, name, save, subtitle, canSave, canName, desktop, onOpen, onEdit }: {
-  agentId: string; name: string; save: SaveName; subtitle?: string;
+function DrawerFace({ agentId, name, save, subtitle, meter, meterPct, canSave, canName, desktop, onOpen, onEdit }: {
+  agentId: string; name: string; save: SaveName; subtitle?: string; meter?: string | null; meterPct?: number | null;
   canSave: boolean; canName: boolean; desktop: boolean; onOpen: () => void; onEdit: () => void;
 }) {
   const rec = useAgentRecord(agentId);
@@ -340,11 +394,20 @@ function DrawerFace({ agentId, name, save, subtitle, canSave, canName, desktop, 
         {canSave && !rec.chosen && <span className="look-pencil" aria-hidden><Pencil size={14} /></span>}
       </button>
       {desktop && canName ? <InlineName name={name} save={save} /> : <p className="arturo-face-name">{name}</p>}
-      {/* Phone: the name is edited on its own screen, opened from this pill (as Grok Bot's profile does). */}
-      {!desktop && (canName || canSave) && <button type="button" className="arturo-face-edit" onClick={onEdit}>Edit</button>}
-      <p className="arturo-face-status">
+      {/* Edit opens the identity screen: name, avatar and voice, like a chat app's profile screen. */}
+      <button type="button" className="arturo-face-edit" onClick={onEdit} data-drawer-edit>Edit</button>
+      <p className="arturo-face-status" data-drawer-status>
         {subtitle ?? `${rec.provider ? `${brainName(rec.provider)} · ` : ''}Voice: ${GPT_LIVE}`}
       </p>
+      {meter && (
+        <div className="arturo-face-meter" data-drawer-context>
+          <span className="arturo-face-meter-bar" aria-hidden>
+            <span style={{ width: `${Math.max(0, Math.min(100, 100 - (meterPct ?? 100)))}%` }}
+                  className={(meterPct ?? 100) <= 20 ? 'is-low' : ''} />
+          </span>
+          <span>{meter}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -383,11 +446,12 @@ function InlineName({ name: aname, save }: { name: string; save: SaveName }) {
   );
 }
 
-/** Phone: the Edit screen (as Grok Bot's): the avatar with a pencil badge, the Name field, then Appearance with
+/** Phone: the Edit screen (like a chat app's): the avatar with a pencil badge, the Name field, then Appearance with
  *  the Avatar row that opens the look picker. Done in the bar saves the name; the back arrow leaves it. */
-function EditPage({ agentId, name: aname, draft, onDraft, error, canName, onDone, onAvatar }: {
+function EditPage({ agentId, name: aname, draft, onDraft, error, canName, onDone, onAvatar, voice, onVoice }: {
   agentId: string; name: string;
   draft: string; onDraft: (v: string) => void; error: string | null; canName: boolean; onDone: () => void; onAvatar: () => void;
+  voice: string; onVoice: () => void;
 }) {
   const rec = useAgentRecord(agentId);
   return (
@@ -406,6 +470,7 @@ function EditPage({ agentId, name: aname, draft, onDraft, error, canName, onDone
       <h3 className="arturo-panel-section">Appearance</h3>
       <div className="arturo-panel-list">
         <Row id="avatar" label="Avatar" value={`${shapeName(rec.shape)} · ${colorName(rec.color)}`} onOpen={onAvatar} />
+        <Row id="voice" label="Voice" value={voice} onOpen={onVoice} />
       </div>
     </div>
   );
@@ -545,6 +610,7 @@ function StylePage({ agentId }: { agentId: string }) {
           </button>
         ))}
       </div>
+      <HeadlessDevNote agentId={agentId} />
       {error && <p className="arturo-panel-error" role="alert">{error}</p>}
       <p className="arturo-panel-note">Saved for you on every device. Dev is the agent's live terminal.</p>
     </>

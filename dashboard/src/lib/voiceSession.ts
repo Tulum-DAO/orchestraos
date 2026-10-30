@@ -129,7 +129,7 @@ export function routeTranscriptEvent(msg: GatewayEvent, cb: TranscriptRouterCall
   }
 }
 
-/** `[voice-call: <id> <path>]` grammar (dashboard/src/lib/voiceCall.ts MARKER_RE).
+/** `[voice-call: <id> <path>]` grammar (dashboard/src/lib/threadKit/calls.ts MARKER_RE).
  * The path segment is parsed-but-ignored by the reader (card fetches by id via
  * the gateway), so any well-formed non-whitespace token satisfies the grammar.
  * The browser does not know the host's data dir, so the default is a neutral token. */
@@ -169,6 +169,9 @@ export interface VoiceSessionStartOptions {
   /** The Arturo thread this call belongs to: its lines are archived there (server-side), so closing the
    *  pane, reloading, or typing after the call all see what was said. */
   threadId?: string | null;
+  /** The cards on screen (lib/screenCards.ts, contract/notes/arturo-screen-context.md), sent with each context frame
+   *  mid-call. Additive: a receiver that does not read it ignores it. */
+  cards?: unknown;
 }
 
 export class VoiceSession {
@@ -210,7 +213,8 @@ export class VoiceSession {
     const ws = this.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     try {
-      ws.send(JSON.stringify({ event: 'context', route: opts.route, focusedEntity: opts.focusedEntity ?? null }));
+      ws.send(JSON.stringify({ event: 'context', route: opts.route, focusedEntity: opts.focusedEntity ?? null,
+                               ...(opts.cards ? { cards: opts.cards } : {}) }));
     } catch { /* a closing socket: the call is ending anyway */ }
   }
 

@@ -1,0 +1,144 @@
+/* The thread kit's Markdown (components/kit/Markdown.tsx): tables by the iOS app's rules, in every skin.
+ *
+ *   up to 4 columns   the table fits the message: as wide as its words ask (worked out from the words, never
+ *                     measured), never wider than the message. Each column keeps its longest word whole while there
+ *                     is room (at most an equal share) and the columns share the rest by their words
+ *                     (lib/threadKit/markdown.ts tableShares); cells wrap. Nothing scrolls sideways.
+ *   5 or more         each column at its natural width, every cell capped (about 220px at the agent chat's size;
+ *                     the cap is in em so Modern's and the pane's sizes scale it), inside a box that scrolls
+ *                     sideways on its own. The thread itself never does.
+ *
+ * Sizes come from the width the layout gives (fit-content, max-width), never from measuring the table. Lines are
+ * drawn in the text's own colour, faded, so one rule reads right in the light and dark themes and in the pane. */
+
+.kit-md { min-width: 0; }
+/* A reply wrapper that keeps the words' line breaks (Arturo's .txt, the pane's bubble) must not wrap a table's or
+   a list's markup the same way. */
+.kit-md ul, .kit-md ol, .kit-md blockquote, .kit-table-box { white-space: normal; }
+.kit-md li { overflow-wrap: anywhere; }
+
+.kit-table-box {
+  width: fit-content;
+  max-width: 100%;
+  margin: 6px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* A sideways drag in the box scrolls the box: it is not handed on to the thread or the page (Safari's back
+     swipe, the agent switcher's edge swipe). */
+  overscroll-behavior-x: contain;
+  touch-action: pan-x pan-y;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: 8px;
+}
+/* Laid out as a grid (the columns come from Markdown.tsx), the table's rows and groups passing their cells through,
+   so a column can have a floor and a share: a table layout offers neither. Roles keep it a table to assistive tech. */
+.kit-table {
+  display: grid;
+  line-height: 1.4;
+}
+.kit-table thead, .kit-table tbody, .kit-table tr { display: contents; }
+.kit-table-box:not([data-wide]) .kit-table { width: 100%; }
+.kit-table-box[data-wide] .kit-table { width: max-content; }
+/* Words wrap whole; only a word longer than its column breaks. Links and code (addresses, paths, commands: long
+   tokens) may break anywhere, so they never push a column past its share or its cap. */
+.kit-table th, .kit-table td {
+  padding: 6px 10px;
+  vertical-align: top;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+.kit-table a, .kit-table code { overflow-wrap: anywhere; }
+.kit-table th {
+  font-weight: 600;
+  background: color-mix(in srgb, currentColor 5%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+}
+/* Light row and column lines. */
+.kit-table tbody tr + tr td { border-top: 1px solid color-mix(in srgb, currentColor 10%, transparent); }
+.kit-table th + th, .kit-table td + td { border-left: 1px solid color-mix(in srgb, currentColor 10%, transparent); }
+/* The cap: about 220px at the agent chat's 12.5px table text, scaled with the skin's size. */
+.kit-table-box[data-wide] th, .kit-table-box[data-wide] td { max-width: 17.6em; }
+/* Inline code in a cell wraps with the words. */
+.kit-table code { white-space: normal; }
+
+.kit-skin-bubbles .kit-table { font-size: 12.5px; }
+.kit-skin-pane .kit-table { font-size: 13px; }
+
+/* A code block's scroller keeps its drags to itself, like a table's. */
+.kit-code-scroll { overscroll-behavior-x: contain; touch-action: pan-x pan-y; }
+
+/* An object chip (components/kit/ObjectChip.tsx): a reference to a card (later an agent, a file, a job, a message)
+   inside a message, never its id. It sits in the line like a word: inline, as tall as the text, cut short with "…"
+   rather than ever widening the message. Made of the text's own colour, so it reads right in light, dark and the
+   pane; the tone shows on its edge and icon only. */
+.kit-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  max-width: min(100%, 26em);
+  vertical-align: baseline;
+  margin: 0 0.1em;
+  padding: 0.05em 0.6em 0.05em 0.45em;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  color: inherit;
+  font: inherit;
+  font-size: 0.92em;
+  line-height: 1.45;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 120ms;
+  /* A word-sized control in a line of text: the phone's 44px button floor would make every line it sits in tall. */
+  min-height: 0;
+}
+@media (max-width: 768px) { .kit-chip { padding-top: 0.2em; padding-bottom: 0.2em; } }
+.kit-chip:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+/* Words only: no hover, no pointer (it sits inside a control that has its own). */
+.kit-chip.is-inert { cursor: inherit; }
+.kit-chip.is-inert:hover { background: color-mix(in srgb, currentColor 6%, transparent); }
+.kit-chip:focus-visible { outline: 2px solid var(--color-info); outline-offset: 1px; }
+.kit-chip-icon { display: inline-flex; flex-shrink: 0; opacity: 0.8; }
+.kit-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.kit-chip.is-waiting { border-color: color-mix(in srgb, var(--color-warning) 60%, transparent); }
+.kit-chip.is-waiting .kit-chip-icon { color: var(--color-warning); opacity: 1; }
+.kit-chip.is-done { border-color: color-mix(in srgb, var(--color-info) 50%, transparent); }
+.kit-chip.is-done .kit-chip-icon { color: var(--color-info); opacity: 1; }
+.kit-chip.is-closed { opacity: 0.75; }
+/* The pane is dark in either theme: its tones are the dark set's. */
+.kit-chip-pane.is-waiting { border-color: rgba(251, 191, 36, 0.55); }
+.kit-chip-pane.is-waiting .kit-chip-icon { color: rgb(251, 191, 36); }
+.kit-chip-pane.is-done { border-color: rgba(96, 165, 250, 0.5); }
+.kit-chip-pane.is-done .kit-chip-icon { color: rgb(96, 165, 250); }
+
+/* A card opened from its chip: the card at its in-chat width, floating over the page beside the chip; on a phone,
+   a sheet along the bottom with the page's 16px gutter. Only the popover scrolls, never the page sideways. */
+.kit-card-pop {
+  position: fixed;
+  /* Above the drawer (70) and Arturo's pane (76), which a chip can sit in. */
+  z-index: 90;
+  width: min(480px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: 18px;
+  padding: 6px;
+  background: color-mix(in srgb, var(--color-background, #fff) 92%, transparent);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.28), 0 0 0 1px color-mix(in srgb, currentColor 10%, transparent);
+  color: var(--color-foreground);
+}
+.kit-card-pop-bar { display: flex; align-items: center; gap: 8px; padding: 2px 6px 0; font-size: 12px; }
+.kit-card-pop-bar .grow { flex: 1; }
+.kit-card-pop-btn {
+  font-size: 12px; font-weight: 500; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent); color: inherit;
+}
+.kit-card-pop-btn:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
+.kit-card-pop-note { padding: 10px 12px; font-size: 13px; opacity: 0.8; }
+@media (max-width: 640px) {
+  .kit-card-pop { left: 16px !important; right: 16px; top: auto !important; bottom: 16px !important; width: auto; max-height: 80dvh !important; }
+}

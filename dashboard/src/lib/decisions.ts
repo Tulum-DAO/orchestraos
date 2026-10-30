@@ -195,6 +195,8 @@ export function previewText(text: string, max = 280): string {
   if (cut < max / 3) cut = t.lastIndexOf(' ', max);
   if (cut < max / 3) cut = max;
   let out = t.slice(0, cut).trimEnd();
+  const fences = [...out.matchAll(/^[ \t]*(```|~~~)/gm)];
+  if (fences.length % 2 === 1) out = out.slice(0, fences[fences.length - 1].index).trimEnd();   // cut inside a code block: end before it
   for (const mark of ['**', '`']) {
     const parts = out.split(mark);
     if (parts.length % 2 === 0) out = parts.slice(0, -1).join(mark).trimEnd();   // an unclosed one: drop it

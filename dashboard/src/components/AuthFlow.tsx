@@ -129,22 +129,22 @@ export default function AuthFlow({ onClose }: AuthFlowProps) {
   };
 
   return (
-    <div className="bg-neutral-900 border border-neutral-700 rounded-xl p-4 space-y-3 max-w-md w-full mx-auto max-h-[85vh] flex flex-col">
+    <div className="bg-tone-900 border border-tone-700 rounded-xl p-4 space-y-3 max-w-md w-full mx-auto max-h-[85vh] flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
-          <KeyRound size={16} className="text-amber-400" />
-          <span className="text-sm font-semibold text-neutral-100">GM Auth</span>
+          <KeyRound size={16} className="text-tone-amber-400" />
+          <span className="text-sm font-semibold text-tone-100">GM Auth</span>
           <span className={clsx(
             'text-[10px] px-1.5 py-0.5 rounded font-medium',
-            gmState === 'authenticated' || gmState === 'idle' || gmState === 'login_success' ? 'bg-green-500/15 text-green-400' :
-            gmState === 'not_running' ? 'bg-red-500/15 text-red-400' :
-            'bg-amber-500/15 text-amber-400'
+            gmState === 'authenticated' || gmState === 'idle' || gmState === 'login_success' ? 'bg-green-500/15 text-tone-green-400' :
+            gmState === 'not_running' ? 'bg-red-500/15 text-tone-red-400' :
+            'bg-amber-500/15 text-tone-amber-400'
           )}>
             {gmState.replace(/_/g, ' ')}
           </span>
         </div>
-        <button onClick={() => { stopPolling(); onClose(); }} className="p-1 text-neutral-500 hover:text-neutral-300">
+        <button onClick={() => { stopPolling(); onClose(); }} className="p-1 text-tone-500 hover:text-tone-300">
           <X size={14} />
         </button>
       </div>
@@ -164,7 +164,7 @@ export default function AuthFlow({ onClose }: AuthFlowProps) {
           <button
             onClick={handleLogin}
             disabled={sending}
-            className="w-full py-2.5 min-h-[44px] rounded-lg bg-amber-500/15 text-amber-400 text-sm font-medium hover:bg-amber-500/25 transition-colors flex items-center justify-center gap-2"
+            className="w-full py-2.5 min-h-[44px] rounded-lg bg-amber-500/15 text-tone-amber-400 text-sm font-medium hover:bg-amber-500/25 transition-colors flex items-center justify-center gap-2"
           >
             {sending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
             Send /login
@@ -176,7 +176,7 @@ export default function AuthFlow({ onClose }: AuthFlowProps) {
           <button
             onClick={handleSelectOption}
             disabled={sending}
-            className="w-full py-2.5 min-h-[44px] rounded-lg bg-blue-500/15 text-blue-400 text-sm font-medium hover:bg-blue-500/25 transition-colors flex items-center justify-center gap-2"
+            className="w-full py-2.5 min-h-[44px] rounded-lg bg-blue-500/15 text-tone-blue-400 text-sm font-medium hover:bg-blue-500/25 transition-colors flex items-center justify-center gap-2"
           >
             {sending ? <Loader2 size={14} className="animate-spin" /> : null}
             Select: Claude account with subscription
@@ -188,7 +188,7 @@ export default function AuthFlow({ onClose }: AuthFlowProps) {
           <button
             onClick={handleSelectOption}
             disabled={sending}
-            className="w-full py-2.5 min-h-[44px] rounded-lg bg-green-500/15 text-green-400 text-sm font-medium hover:bg-green-500/25 transition-colors flex items-center justify-center gap-2"
+            className="w-full py-2.5 min-h-[44px] rounded-lg bg-green-500/15 text-tone-green-400 text-sm font-medium hover:bg-green-500/25 transition-colors flex items-center justify-center gap-2"
           >
             {sending ? <Loader2 size={14} className="animate-spin" /> : null}
             Press Enter to continue
@@ -199,7 +199,7 @@ export default function AuthFlow({ onClose }: AuthFlowProps) {
         {(gmState === 'url_ready' || gmState === 'code_prompt') && (
           <>
             {telegramSent && (
-              <div className="flex items-center gap-2 text-xs text-green-400/80">
+              <div className="flex items-center gap-2 text-xs text-tone-green-400/80">
                 <MessageSquare size={12} />
                 <span>URL sent to Telegram</span>
               </div>
@@ -209,7 +209,7 @@ export default function AuthFlow({ onClose }: AuthFlowProps) {
                 href={authUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-2 w-full py-2.5 px-3 min-h-[44px] rounded-lg bg-blue-500/15 border border-blue-500/30 text-blue-400 text-sm font-medium hover:bg-blue-500/25 transition-colors"
+                className="flex items-center gap-2 w-full py-2.5 px-3 min-h-[44px] rounded-lg bg-blue-500/15 border border-blue-500/30 text-tone-blue-400 text-sm font-medium hover:bg-blue-500/25 transition-colors"
               >
                 <ExternalLink size={14} className="shrink-0" />
                 <span className="truncate">Open Login Page</span>
@@ -222,7 +222,7 @@ export default function AuthFlow({ onClose }: AuthFlowProps) {
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
                 placeholder="Paste auth code here"
-                className="flex-1 bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-neutral-200 placeholder-neutral-600 focus:outline-none focus:border-blue-500"
+                className="flex-1 bg-tone-950 border border-tone-700 rounded-lg px-3 py-2 text-sm text-tone-200 placeholder-tone-600 focus:outline-none focus:border-blue-500"
                 onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleSubmitCode(); } }}
                 disabled={sending}
                 autoComplete="off"
@@ -236,8 +236,8 @@ export default function AuthFlow({ onClose }: AuthFlowProps) {
                 className={clsx(
                   'px-4 py-2 min-h-[44px] rounded-lg text-sm font-medium transition-colors',
                   sending || !code.trim()
-                    ? 'bg-neutral-800 text-neutral-600 cursor-not-allowed'
-                    : 'bg-green-500/15 text-green-400 hover:bg-green-500/25'
+                    ? 'bg-tone-800 text-tone-600 cursor-not-allowed'
+                    : 'bg-green-500/15 text-tone-green-400 hover:bg-green-500/25'
                 )}
               >
                 {sending ? <Loader2 size={14} className="animate-spin" /> : 'Submit'}
@@ -248,14 +248,14 @@ export default function AuthFlow({ onClose }: AuthFlowProps) {
 
         {/* State: authenticated or idle */}
         {(gmState === 'authenticated' || gmState === 'idle') && (
-          <div className="text-xs text-green-400/80 text-center py-1">
+          <div className="text-xs text-tone-green-400/80 text-center py-1">
             GM is running. No auth action needed.
           </div>
         )}
 
         {/* State: not_running */}
         {gmState === 'not_running' && (
-          <div className="text-xs text-red-400 text-center py-1">
+          <div className="text-xs text-tone-red-400 text-center py-1">
             GM tmux session not found. Spawn it first.
           </div>
         )}
@@ -263,7 +263,7 @@ export default function AuthFlow({ onClose }: AuthFlowProps) {
 
       {/* Error */}
       {error && (
-        <p className="text-[11px] text-red-400 shrink-0">{error}</p>
+        <p className="text-[11px] text-tone-red-400 shrink-0">{error}</p>
       )}
     </div>
   );

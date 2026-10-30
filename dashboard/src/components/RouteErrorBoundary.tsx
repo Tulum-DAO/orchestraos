@@ -31,19 +31,19 @@ class Boundary extends Component<BoundaryProps, State> {
   render() {
     if (!this.state.error) return this.props.children;
     return (
-      <div role="alert" className="m-6 rounded-lg border border-red-900/60 bg-red-950/30 p-5 text-sm text-neutral-200">
-        <p className="font-semibold text-red-300">This page hit an error and could not be shown.</p>
-        <p className="mt-2 text-neutral-400">
+      <div role="alert" className="m-6 rounded-lg border border-tone-red-900/60 bg-tone-red-950/30 p-5 text-sm text-tone-200">
+        <p className="font-semibold text-tone-red-300">This page hit an error and could not be shown.</p>
+        <p className="mt-2 text-tone-400">
           {this.props.label === 'page'
             ? 'Other pages still work: pick one from the menu. Or reload this one.'
             : "Use your browser's Back button to return, or reload."}
         </p>
-        <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap text-xs text-neutral-500">
+        <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap text-xs text-tone-500">
           {this.state.error.message}
         </pre>
         <button
           onClick={() => window.location.reload()}
-          className="mt-4 rounded-md bg-neutral-800 px-3 py-1.5 text-neutral-100 hover:bg-neutral-700"
+          className="mt-4 rounded-md bg-tone-800 px-3 py-1.5 text-tone-100 hover:bg-tone-700"
         >
           Reload
         </button>

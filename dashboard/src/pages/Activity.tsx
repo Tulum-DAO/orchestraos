@@ -128,7 +128,7 @@ function linkifyDetail(detail: string, knownAgents: Set<string>): React.ReactNod
       <ViewLink
         key={`${name}-${match.index}`}
         to={`/agents?focus=${encodeURIComponent(name)}`}
-        className="inline-flex items-center px-1 py-0.5 rounded bg-violet-500/10 text-violet-400 hover:bg-violet-500/20 transition-colors"
+        className="inline-flex items-center px-1 py-0.5 rounded bg-violet-500/10 text-tone-violet-400 hover:bg-violet-500/20 transition-colors"
         onClick={(e) => e.stopPropagation()}
       >
         {name}
@@ -242,30 +242,30 @@ export default function ActivityPage() {
     });
   }, [allEvents, agentFilter, activeCategories, dateFrom, dateTo]);
 
-  if (isLoading) return <p className="text-neutral-500 p-8">Loading activity...</p>;
+  if (isLoading) return <p className="text-tone-500 p-8">Loading activity...</p>;
 
   return (
     <div className="p-6 space-y-5">
       {/* Header */}
       {/* md:mr-28: the layout's fixed top-right Arturo + bell cluster (DashboardLayout) floats over this corner on desktop */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 md:mr-28">
-        <h1 className="text-2xl font-bold text-white">Activity</h1>
+        <h1 className="text-2xl font-bold text-foreground">Activity</h1>
         <div className="flex flex-wrap items-center gap-4">
           {/* Date range */}
           <div className="flex flex-wrap items-center gap-2 text-sm">
-            <label className="text-neutral-500">From</label>
+            <label className="text-tone-500">From</label>
             <input
               type="date"
               value={dateFrom}
               onChange={(e) => setDateFrom(e.target.value)}
-              className="bg-neutral-900 border border-neutral-800 text-neutral-300 text-sm rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-neutral-600"
+              className="bg-tone-900 border border-tone-800 text-tone-300 text-sm rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-tone-600"
             />
-            <label className="text-neutral-500">To</label>
+            <label className="text-tone-500">To</label>
             <input
               type="date"
               value={dateTo}
               onChange={(e) => setDateTo(e.target.value)}
-              className="bg-neutral-900 border border-neutral-800 text-neutral-300 text-sm rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-neutral-600"
+              className="bg-tone-900 border border-tone-800 text-tone-300 text-sm rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-tone-600"
             />
           </div>
 
@@ -273,7 +273,7 @@ export default function ActivityPage() {
           <select
             value={agentFilter}
             onChange={(e) => setAgentFilter(e.target.value)}
-            className="bg-neutral-900 border border-neutral-800 text-neutral-300 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-neutral-600"
+            className="bg-tone-900 border border-tone-800 text-tone-300 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-tone-600"
           >
             <option value="">All agents</option>
             {agents.map((a) => (
@@ -296,8 +296,8 @@ export default function ActivityPage() {
               className={clsx(
                 'px-3 py-1 rounded-full text-xs font-medium transition-colors select-none',
                 active
-                  ? 'bg-neutral-700 text-white'
-                  : 'bg-neutral-900 text-neutral-500 border border-neutral-800'
+                  ? 'bg-tone-700 text-tone-white'
+                  : 'bg-tone-900 text-tone-500 border border-tone-800'
               )}
             >
               {cat}
@@ -307,22 +307,22 @@ export default function ActivityPage() {
       </div>
 
       {/* Live indicator + event list */}
-      <div className="rounded-xl border border-neutral-800 overflow-hidden">
+      <div className="rounded-xl border border-tone-800 overflow-hidden">
         {/* Live banner */}
         {sseConnected && (
-          <div className="flex items-center gap-2 px-4 py-2 border-b border-neutral-800 bg-neutral-900/60">
+          <div className="flex items-center gap-2 px-4 py-2 border-b border-tone-800 bg-tone-900/60">
             <span className="relative flex h-2.5 w-2.5">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500" />
             </span>
-            <span className="text-xs font-medium text-green-400">Live</span>
+            <span className="text-xs font-medium text-tone-green-400">Live</span>
           </div>
         )}
 
         {/* Events */}
-        <div className="divide-y divide-neutral-800/50">
+        <div className="divide-y divide-tone-800/50">
           {filtered.length === 0 && (
-            <div className="text-center text-neutral-600 py-12 text-sm">
+            <div className="text-center text-tone-600 py-12 text-sm">
               No activity events match the current filters
             </div>
           )}
@@ -332,18 +332,18 @@ export default function ActivityPage() {
             const eventKey = `${event.timestamp}|${event.agent}|${event.detail}`;
             const isNew = newEventIds.has(eventKey);
             const initial = event.agent ? event.agent.charAt(0).toUpperCase() : '?';
-            const color = event.agent ? agentColor(event.agent) : 'bg-neutral-700';
+            const color = event.agent ? agentColor(event.agent) : 'bg-tone-700';
 
             return (
               <div
                 key={`${eventKey}-${i}`}
                 className={clsx(
-                  'flex items-center gap-3 px-4 py-3 hover:bg-neutral-900/50 transition-all',
+                  'flex items-center gap-3 px-4 py-3 hover:bg-tone-900/50 transition-all',
                   isNew && 'animate-fade-in'
                 )}
               >
                 {/* Relative time */}
-                <span className="text-xs text-neutral-600 font-mono w-16 shrink-0 text-right">
+                <span className="text-xs text-tone-600 font-mono w-16 shrink-0 text-right">
                   {relativeTime(event.timestamp)}
                 </span>
 
@@ -352,7 +352,7 @@ export default function ActivityPage() {
                   <ViewLink
                     to={`/agents?focus=${encodeURIComponent(event.agent)}`}
                     className={clsx(
-                      'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0 hover:ring-2 hover:ring-white/20 transition-all',
+                      'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-tone-white shrink-0 hover:ring-2 hover:ring-white/20 transition-all',
                       color
                     )}
                     title={event.agent}
@@ -362,7 +362,7 @@ export default function ActivityPage() {
                 ) : (
                   <div
                     className={clsx(
-                      'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0',
+                      'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-tone-white shrink-0',
                       color
                     )}
                   >
@@ -371,22 +371,22 @@ export default function ActivityPage() {
                 )}
 
                 {/* Event icon */}
-                <Icon size={16} className="text-neutral-500 shrink-0" />
+                <Icon size={16} className="text-tone-500 shrink-0" />
 
                 {/* Event content */}
                 <div className="min-w-0 flex-1 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
-                  <span className="text-sm font-semibold text-white shrink-0">{cat}</span>
+                  <span className="text-sm font-semibold text-tone-white shrink-0">{cat}</span>
                   {event.agent && (
                     <ViewLink
                       to={`/agents?focus=${encodeURIComponent(event.agent)}`}
-                      className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-400 text-xs hover:bg-violet-500/20 transition-colors shrink-0"
+                      className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-500/10 text-tone-violet-400 text-xs hover:bg-violet-500/20 transition-colors shrink-0"
                       onClick={(e) => e.stopPropagation()}
                     >
                       {event.agent}
                     </ViewLink>
                   )}
                   {event.detail && (
-                    <span className="text-sm text-neutral-500 truncate">
+                    <span className="text-sm text-tone-500 truncate">
                       {'\u2014 '}{linkifyDetail(event.detail, knownAgentsSet)}
                     </span>
                   )}
@@ -396,7 +396,7 @@ export default function ActivityPage() {
                 {event.task_id && (
                   <ViewLink
                     to={`/tasks?task=${encodeURIComponent(event.task_id)}`}
-                    className="text-xs font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 transition-colors shrink-0"
+                    className="text-xs font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-tone-amber-400 hover:bg-amber-500/20 transition-colors shrink-0"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {event.task_id}

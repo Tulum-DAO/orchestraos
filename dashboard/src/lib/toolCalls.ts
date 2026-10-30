@@ -1,5 +1,5 @@
 /**
- * toolCalls.ts — one tool call as the shared tool card (components/chat/ToolCalls.tsx) draws it, whoever ran it.
+ * toolCalls.ts — one tool call as the shared tool card (components/kit/ToolCard.tsx) draws it, whoever ran it.
  *
  * Arturo's stream sends ToolParts (name, a one-line argument summary, ok or failed, a short result); an agent's
  * transcript sends ToolBlocks (the full input and result, start and end times). Both become a ToolCallView, so

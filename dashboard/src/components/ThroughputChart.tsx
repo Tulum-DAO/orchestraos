@@ -6,7 +6,7 @@ interface Props { data: DataPoint[] }
 export function ThroughputChart({ data }: Props) {
   const [hover, setHover] = useState<{ x: number; y: number; date: string; count: number } | null>(null);
 
-  if (!data.length) return <p className="text-neutral-600 text-sm">No task data yet</p>;
+  if (!data.length) return <p className="text-tone-600 text-sm">No task data yet</p>;
 
   const W = 600, H = 200, PAD = 40;
   const maxCount = Math.max(...data.map(d => d.count), 1);
@@ -46,7 +46,7 @@ export function ThroughputChart({ data }: Props) {
         ))}
       </svg>
       {hover && (
-        <div className="absolute bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs pointer-events-none"
+        <div className="absolute bg-tone-800 border border-tone-700 rounded px-2 py-1 text-xs pointer-events-none"
           style={{ left: hover.x, top: hover.y - 30 }}>
           {hover.date}: {hover.count} tasks
         </div>

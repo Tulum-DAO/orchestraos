@@ -52,21 +52,21 @@ export const STATE_STYLE: Record<LiveState, { label: string; dot: string; text: 
   // "the one state that should shout looks identical to 'busy, leave it alone'"). Working keeps
   // the operator's orange; needs-you gets a RING as well as a brighter fill, so the two differ by
   // SHAPE and not only by hue — which also survives a colour-blind reader and a dimmed screen.
-  working:  { label: 'working',          dot: 'bg-orange-400 animate-pulse', text: 'text-orange-300' },
-  idle:     { label: 'idle · at prompt', dot: 'bg-green-500',               text: 'text-green-400' },
-  waiting:  { label: 'needs you',        dot: 'bg-amber-300 ring-2 ring-amber-300/40 animate-pulse', text: 'text-amber-200' },
+  working:  { label: 'working',          dot: 'bg-orange-400 animate-pulse', text: 'text-tone-orange-300' },
+  idle:     { label: 'idle · at prompt', dot: 'bg-green-500',               text: 'text-tone-green-400' },
+  waiting:  { label: 'needs you',        dot: 'bg-amber-300 ring-2 ring-amber-300/40 animate-pulse', text: 'text-tone-amber-200' },
   stranded: { label: 'unsent draft',     dot: 'bg-[#BF5AF2]',               text: 'text-[#BF5AF2]' },
   queued:   { label: 'queued, not running', dot: 'bg-[#BF5AF2]',            text: 'text-[#BF5AF2]' },
   stalled:  { label: 'stalled',          dot: 'bg-[#FF9F0A]',               text: 'text-[#FF9F0A]' },
-  stopped:  { label: 'stopped',          dot: 'bg-red-500',                 text: 'text-red-400' },
-  crashed:  { label: 'crashed',          dot: 'bg-red-500',                 text: 'text-red-400' },
-  offline:  { label: 'offline',          dot: 'bg-neutral-600',             text: 'text-neutral-500' },
+  stopped:  { label: 'stopped',          dot: 'bg-red-500',                 text: 'text-tone-red-400' },
+  crashed:  { label: 'crashed',          dot: 'bg-red-500',                 text: 'text-tone-red-400' },
+  offline:  { label: 'offline',          dot: 'bg-tone-600',             text: 'text-tone-500' },
   // retired = intentionally decommissioned (the `seat-gN` row every lineage
   // rotation leaves behind), NOT a down agent. Dimmer than offline so that on
   // the rare surface which does show one it reads as an archived record rather
   // than something to go fix. Default views filter these out entirely.
-  retired:  { label: 'retired',          dot: 'bg-neutral-700',             text: 'text-neutral-600' },
-  unknown:  { label: '—',                dot: 'bg-neutral-600',             text: 'text-neutral-500' },
+  retired:  { label: 'retired',          dot: 'bg-tone-700',             text: 'text-tone-600' },
+  unknown:  { label: '—',                dot: 'bg-tone-600',             text: 'text-tone-500' },
 };
 
 /** The status line for a `queued` seat. The turn ENDED and the message never ran, so it needs a

@@ -114,7 +114,7 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
       <div
-        className="rounded-xl border border-neutral-700 bg-neutral-900 shadow-2xl w-full max-w-lg"
+        className="rounded-xl border border-tone-700 bg-tone-900 shadow-2xl w-full max-w-lg"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-label="New agent"
@@ -122,16 +122,16 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
         {/* --- probing ------------------------------------------------------------- */}
         {phase === 'probing' && (
           <div className="p-6">
-            <h3 className="text-lg font-semibold text-neutral-100 mb-1">New Agent</h3>
-            <p className="text-sm text-neutral-400">Checking which AI providers you are signed in to…</p>
+            <h3 className="text-lg font-semibold text-tone-100 mb-1">New Agent</h3>
+            <p className="text-sm text-tone-400">Checking which AI providers you are signed in to…</p>
           </div>
         )}
 
         {/* --- name it ------------------------------------------------------------- */}
         {(phase === 'name' || phase === 'spawning') && (
           <div className="p-6">
-            <h3 className="text-lg font-semibold text-neutral-100 mb-1">New Agent</h3>
-            <p className="text-sm text-neutral-400 mb-4">
+            <h3 className="text-lg font-semibold text-tone-100 mb-1">New Agent</h3>
+            <p className="text-sm text-tone-400 mb-4">
               {gm
                 ? <>The manager seat: always on, tier T0, and it runs on the gm prompt. One per install.</>
                 : <>What should it be called? It runs on {runtimeLabel(authed.find((r) => r.id === runtime) || authed[0])}, in a tmux session of its own.</>}
@@ -158,11 +158,11 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
                     }}
                     aria-pressed={kind === k.v}
                     className={`flex-1 px-3 py-2 rounded-lg border text-left transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${kind === k.v
-                      ? 'border-blue-600 bg-blue-600/15 text-neutral-100'
-                      : 'border-neutral-700 bg-neutral-950 text-neutral-400 hover:text-neutral-200'}`}
+                      ? 'border-blue-600 bg-blue-600/15 text-tone-100'
+                      : 'border-tone-700 bg-tone-950 text-tone-400 hover:text-tone-200'}`}
                   >
                     <div className="text-sm font-medium">{k.t}</div>
-                    <div className="text-[11px] text-neutral-500">{k.d}</div>
+                    <div className="text-[11px] text-tone-500">{k.d}</div>
                   </button>
                 );
               })}
@@ -170,24 +170,24 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
 
             {kind === 'worker' && (
               <div className="mb-3">
-                <label className="block text-xs uppercase tracking-wider text-neutral-500 mb-1">Reports to</label>
+                <label className="block text-xs uppercase tracking-wider text-tone-500 mb-1">Reports to</label>
                 <select
                   value={parent}
                   onChange={(e) => setParent(e.target.value)}
                   aria-label="Reports to"
-                  className="bg-neutral-950 border border-neutral-700 text-neutral-300 text-sm rounded-lg px-3 py-2"
+                  className="bg-tone-950 border border-tone-700 text-tone-300 text-sm rounded-lg px-3 py-2"
                 >
                   {choices.map((s) => <option key={s.id} value={s.id}>{s.id}{s.tier ? ` (${s.tier})` : ''}</option>)}
                 </select>
               </div>
             )}
             {kind === 'lead' && (
-              <p className="mb-3 text-xs text-neutral-500">
-                {choices.length > 0 ? <>Reports to <code className="text-neutral-300">{parent || choices[0].id}</code>.</> : <>No manager yet, so it starts on its own.</>}
+              <p className="mb-3 text-xs text-tone-500">
+                {choices.length > 0 ? <>Reports to <code className="text-tone-300">{parent || choices[0].id}</code>.</> : <>No manager yet, so it starts on its own.</>}
               </p>
             )}
 
-            <label className="block text-xs uppercase tracking-wider text-neutral-500 mb-1">Name</label>
+            <label className="block text-xs uppercase tracking-wider text-tone-500 mb-1">Name</label>
             <input
               ref={nameRef}
               value={name}
@@ -195,42 +195,42 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
               onKeyDown={(e) => { if (e.key === 'Enter' && canSubmit) void submit(); }}
               placeholder="docs writer"
               aria-label="Name"
-              className="w-full px-3 py-2 rounded-lg bg-neutral-950 border border-neutral-700 text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-neutral-500"
+              className="w-full px-3 py-2 rounded-lg bg-tone-950 border border-tone-700 text-tone-100 placeholder-tone-600 focus:outline-none focus:border-tone-500"
             />
             <div className="mt-1 h-5 text-xs">
               {nameProblem
-                ? <span className="text-red-400">{nameProblem}</span>
+                ? <span className="text-tone-red-400">{nameProblem}</span>
                 : clean
-                  ? <span className="text-neutral-500">seat + tmux session: <code className="text-neutral-300">{clean}</code></span>
+                  ? <span className="text-tone-500">seat + tmux session: <code className="text-tone-300">{clean}</code></span>
                   : null}
             </div>
 
-            <label className="block text-xs uppercase tracking-wider text-neutral-500 mt-3 mb-1">Role <span className="normal-case tracking-normal text-neutral-600">(optional)</span></label>
+            <label className="block text-xs uppercase tracking-wider text-tone-500 mt-3 mb-1">Role <span className="normal-case tracking-normal text-tone-600">(optional)</span></label>
             <input
               value={role}
               onChange={(e) => setRole(e.target.value.slice(0, 120))}
               onKeyDown={(e) => { if (e.key === 'Enter' && canSubmit) void submit(); }}
               placeholder="docs writer for this repo"
               aria-label="Role"
-              className="w-full px-3 py-2 rounded-lg bg-neutral-950 border border-neutral-700 text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-neutral-500"
+              className="w-full px-3 py-2 rounded-lg bg-tone-950 border border-tone-700 text-tone-100 placeholder-tone-600 focus:outline-none focus:border-tone-500"
             />
 
-            <label className="block text-xs uppercase tracking-wider text-neutral-500 mt-3 mb-1">First task <span className="normal-case tracking-normal text-neutral-600">(optional)</span></label>
+            <label className="block text-xs uppercase tracking-wider text-tone-500 mt-3 mb-1">First task <span className="normal-case tracking-normal text-tone-600">(optional)</span></label>
             <textarea
               value={task}
               onChange={(e) => setTask(e.target.value)}
               rows={2}
               placeholder="Read the repo and summarize what it does."
-              className="w-full px-3 py-2 rounded-lg bg-neutral-950 border border-neutral-700 text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-neutral-500 resize-none"
+              className="w-full px-3 py-2 rounded-lg bg-tone-950 border border-tone-700 text-tone-100 placeholder-tone-600 focus:outline-none focus:border-tone-500 resize-none"
             />
 
             <div className="mt-3">
-              <label className="block text-xs uppercase tracking-wider text-neutral-500 mb-1">Runtime</label>
+              <label className="block text-xs uppercase tracking-wider text-tone-500 mb-1">Runtime</label>
               <select
                 value={runtime}
                 onChange={(e) => setRuntime(e.target.value)}
                 aria-label="Runtime"
-                className="bg-neutral-950 border border-neutral-700 text-neutral-300 text-sm rounded-lg px-3 py-2"
+                className="bg-tone-950 border border-tone-700 text-tone-300 text-sm rounded-lg px-3 py-2"
               >
                 {rows.map((r) => {
                   const usable = r.installed && r.authed === true;
@@ -244,10 +244,10 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
               </select>
             </div>
 
-            {error && <p className="mt-3 text-sm text-red-400 whitespace-pre-wrap">{error}</p>}
+            {error && <p className="mt-3 text-sm text-tone-red-400 whitespace-pre-wrap">{error}</p>}
 
             <div className="flex gap-3 justify-end mt-5">
-              <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg bg-neutral-800 text-neutral-300 hover:bg-neutral-700 transition-colors">Cancel</button>
+              <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg bg-tone-800 text-tone-300 hover:bg-tone-700 transition-colors">Cancel</button>
               <button
                 onClick={() => void submit()}
                 disabled={!canSubmit}
@@ -264,23 +264,23 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
           <div className="p-4">
             <div className="flex items-center justify-between mb-3 px-2">
               <div>
-                <h3 className="text-lg font-semibold text-neutral-100">{created.id} is up</h3>
-                <p className="text-xs text-neutral-500">registered seat{created.runtime ? ` · ${created.runtime}` : ''} · tmux {created.session}</p>
+                <h3 className="text-lg font-semibold text-tone-100">{created.id} is up</h3>
+                <p className="text-xs text-tone-500">registered seat{created.runtime ? ` · ${created.runtime}` : ''} · tmux {created.session}</p>
               </div>
               <div className="flex gap-2">
                 {!isViewHidden('/agents') && <button
                   onClick={() => { onClose(); navigate('/agents'); }}
-                  className="px-3 py-1.5 text-sm rounded-lg bg-neutral-800 text-neutral-300 hover:bg-neutral-700 transition-colors"
+                  className="px-3 py-1.5 text-sm rounded-lg bg-tone-800 text-tone-300 hover:bg-tone-700 transition-colors"
                 >
                   Agents list
                 </button>}
-                <button onClick={onClose} className="px-3 py-1.5 text-sm rounded-lg bg-neutral-800 text-neutral-300 hover:bg-neutral-700 transition-colors">Done</button>
+                <button onClick={onClose} className="px-3 py-1.5 text-sm rounded-lg bg-tone-800 text-tone-300 hover:bg-tone-700 transition-colors">Done</button>
               </div>
             </div>
             <div className="px-2 pb-3">
               <SignInLink session={created.session} />
             </div>
-            <div className="h-80 rounded-lg overflow-hidden border border-neutral-800">
+            <div className="h-80 rounded-lg overflow-hidden border border-tone-800">
               <WebTerminal session={created.session} machine="vps" />
             </div>
           </div>
@@ -291,8 +291,8 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
           <div className="p-4">
             <div className="flex items-center justify-between mb-3 px-2">
               <div>
-                <h3 className="text-lg font-semibold text-neutral-100">Sign in to a provider first</h3>
-                <p className="text-xs text-neutral-500">{shell.hint || 'Log in to your agent CLI in this terminal, then come back.'}</p>
+                <h3 className="text-lg font-semibold text-tone-100">Sign in to a provider first</h3>
+                <p className="text-xs text-tone-500">{shell.hint || 'Log in to your agent CLI in this terminal, then come back.'}</p>
               </div>
               <div className="flex gap-2">
                 <button
@@ -301,7 +301,7 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
                 >
                   I'm signed in now
                 </button>
-                <button onClick={onClose} className="px-3 py-1.5 text-sm rounded-lg bg-neutral-800 text-neutral-300 hover:bg-neutral-700 transition-colors">Close</button>
+                <button onClick={onClose} className="px-3 py-1.5 text-sm rounded-lg bg-tone-800 text-tone-300 hover:bg-tone-700 transition-colors">Close</button>
               </div>
             </div>
             {/* The CLI prints its sign-in URL wrapped across a dozen lines; this is the one
@@ -309,7 +309,7 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
             <div className="px-2 pb-3">
               <SignInLink session={shell.session} />
             </div>
-            <div className="h-80 rounded-lg overflow-hidden border border-neutral-800">
+            <div className="h-80 rounded-lg overflow-hidden border border-tone-800">
               <WebTerminal session={shell.session} machine="vps" />
             </div>
           </div>
@@ -318,10 +318,10 @@ export default function NewAgentModal({ open, onClose, taken, onCreated }: Props
         {/* --- could not even open a shell ------------------------------------------ */}
         {phase === 'error' && (
           <div className="p-6">
-            <h3 className="text-lg font-semibold text-neutral-100 mb-2">Can't start an agent yet</h3>
-            <p className="text-sm text-neutral-400 whitespace-pre-wrap">{error}</p>
+            <h3 className="text-lg font-semibold text-tone-100 mb-2">Can't start an agent yet</h3>
+            <p className="text-sm text-tone-400 whitespace-pre-wrap">{error}</p>
             <div className="flex gap-3 justify-end mt-5">
-              <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg bg-neutral-800 text-neutral-300 hover:bg-neutral-700 transition-colors">Close</button>
+              <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg bg-tone-800 text-tone-300 hover:bg-tone-700 transition-colors">Close</button>
               <button onClick={() => { setPhase('probing'); void probe(); }} className="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors">Try again</button>
             </div>
           </div>

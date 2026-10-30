@@ -12,16 +12,15 @@ export const ARTURO_ID = 'arturo';
 export interface StyleOption { id: ChatStyle; label: string; available: boolean; reason?: string }
 
 const LABELS: Record<ChatStyle, string> = { modern: 'Modern', bubbles: 'Bubbles', dev: 'Dev' };
-// Until the shared thread lands, each agent page draws one chat style: Arturo's page Modern, every other Bubbles.
-const NOT_YET = 'Coming with the shared thread';
+// Every page draws Modern and Bubbles through the kit's thread view; only Dev depends on the agent having a terminal.
 
 /** The three styles, and which this agent can show today (with why not). */
 export function styleOptions(agentId: string): StyleOption[] {
   const arturo = agentId === ARTURO_ID;
   return (['modern', 'bubbles', 'dev'] as const).map((id) => {
     const why = arturo
-      ? id === 'bubbles' ? NOT_YET : id === 'dev' ? 'Arturo has no terminal' : undefined
-      : id === 'modern' ? NOT_YET : undefined;
+      ? id === 'dev' ? 'Arturo has no terminal' : undefined
+      : undefined;
     return { id, label: LABELS[id], available: !why, ...(why ? { reason: why } : {}) };
   });
 }

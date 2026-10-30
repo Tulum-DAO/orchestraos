@@ -19,25 +19,25 @@ import {
  * nothing recorded. Both are ordinary states, never errors.
  */
 export function GenerationList({ rows }: { rows: GenerationRow[] | null }) {
-  if (!rows) return <div className="text-neutral-500 p-1 text-xs">Loading…</div>;
-  if (rows.length === 0) return <div className="text-neutral-500 p-1 text-xs">No history recorded.</div>;
+  if (!rows) return <div className="text-tone-500 p-1 text-xs">Loading…</div>;
+  if (rows.length === 0) return <div className="text-tone-500 p-1 text-xs">No history recorded.</div>;
 
   return (
     <div className="text-xs">
       {rows.map((g) => (
-        <div key={generationKey(g)} className="py-1.5 px-1 border-b border-neutral-800 last:border-0">
+        <div key={generationKey(g)} className="py-1.5 px-1 border-b border-tone-800 last:border-0">
           <div className="flex items-center justify-between gap-2">
             {/* A pending slot is dimmed and says so. It is shown rather than hidden — a seat
                 waiting to be promoted is worth seeing — but it must not read as history. */}
-            <span className={g.pending ? 'text-neutral-500 font-medium' : 'text-neutral-200 font-medium'}>
+            <span className={g.pending ? 'text-tone-500 font-medium' : 'text-tone-200 font-medium'}>
               gen {g.generation}
-              {g.current ? <span className="text-sky-300"> · current</span> : ''}
-              {g.pending ? <span className="text-neutral-600"> · pending</span> : ''}
+              {g.current ? <span className="text-tone-sky-300"> · current</span> : ''}
+              {g.pending ? <span className="text-tone-600"> · pending</span> : ''}
             </span>
-            {g.model && <span className="text-neutral-500 truncate max-w-[45%]" title={g.model}>{g.model}</span>}
+            {g.model && <span className="text-tone-500 truncate max-w-[45%]" title={g.model}>{g.model}</span>}
           </div>
-          <div className="text-neutral-500">{describeGenerationTiming(g)}</div>
-          {g.note && <div className="text-neutral-600 truncate" title={g.note}>{g.note}</div>}
+          <div className="text-tone-500">{describeGenerationTiming(g)}</div>
+          {g.note && <div className="text-tone-600 truncate" title={g.note}>{g.note}</div>}
         </div>
       ))}
     </div>

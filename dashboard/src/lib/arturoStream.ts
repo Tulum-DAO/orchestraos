@@ -6,7 +6,7 @@
  * buffer and only emits on a complete blank-line-terminated frame, which is what the
  * split-at-every-byte test pins.
  */
-import { buildTextBody, arturoText, isStarting, newTurnId, type ArturoContext, type ArturoReply } from './arturo';
+import { buildTextBody, arturoText, isStarting, newTurnId, type ArturoContext, type ArturoReply, type CardAnswer } from './arturo';
 import type { ToolCallEvent, ToolResultEvent } from './turnParts';
 import { loadTurn, type TurnFate } from './arturoThreads';
 import { isBusy } from './arturoResume';
@@ -125,6 +125,7 @@ export interface StreamOutcome {
    *  turn whether onboarding is now done. */
   choices?: any;
   pair_card?: any;
+  answer_card?: import('./arturo').ScreenCardAnswer;
   paired?: any;
   onboarding?: any;
   error?: string;
@@ -136,7 +137,7 @@ export interface StreamOutcome {
 /** What a failure body says the turn already did: kept so the page can say so (describeTurnError). */
 function pickFailure(json: any): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const k of ['tools_called', 'provider', 'model', 'reason', 'detail', 'field']) if (json?.[k] !== undefined) out[k] = json[k];
+  for (const k of ['tools_called', 'provider', 'model', 'reason', 'detail', 'field', 'answer', 'card_id']) if (json?.[k] !== undefined) out[k] = json[k];
   return out;
 }
 
@@ -214,6 +215,7 @@ export async function arturoTextStream(
     ok: true, reply_text: final.reply_text, tools_called: final.tools_called || [],
     spawned: final.spawned || [], operator: final.operator, brain: final.brain,
     choices: final.choices, pair_card: final.pair_card, paired: final.paired, onboarding: final.onboarding,
+    ...(final.answer_card ? { answer_card: final.answer_card } : {}),
   };
 }
 
@@ -251,6 +253,8 @@ export async function arturoTurn(
     stream?: boolean;
     /** The stack is still starting (G15): show it, wait for health, resolve whether it came up. */
     onStarting?: () => Promise<boolean>;
+    /** The choice card this send answers (a tap): every attempt carries it, as it carries the turn id. */
+    cardAnswer?: CardAnswer;
   } = {},
 ): Promise<ArturoReply> {
   const turnId = opts.turnId || newTurnId();
@@ -261,7 +265,7 @@ export async function arturoTurn(
     let started = false;
     let res: StreamOutcome | ArturoReply;
     if (streamNext) {
-      res = await arturoTextStream(buildTextBody(text, conversationId, ctx, opts.brain, turnId), {
+      res = await arturoTextStream(buildTextBody(text, conversationId, ctx, opts.brain, turnId, opts.cardAnswer), {
         // turn.start is the server saying it has the turn — a stricter "Sent" than an upload event.
         onStart: () => { started = true; opts.onSent?.(); },
         onDelta: (t) => opts.onDelta?.(t),
@@ -271,7 +275,7 @@ export async function arturoTurn(
       }, opts.signal);
       streamNext = false;          // any re-ask is whole: a second stream would only re-show what the first did
     } else {
-      res = await arturoText(text, conversationId, ctx, { onSent: opts.onSent, brain: opts.brain, turnId, signal: opts.signal });
+      res = await arturoText(text, conversationId, ctx, { onSent: opts.onSent, brain: opts.brain, turnId, signal: opts.signal, cardAnswer: opts.cardAnswer });
     }
     if (res.ok) return asReply(res);
     if (opts.signal?.aborted) return { ok: false, error: 'aborted' } as ArturoReply;

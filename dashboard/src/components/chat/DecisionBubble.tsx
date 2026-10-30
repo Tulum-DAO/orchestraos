@@ -3,7 +3,8 @@ import { clsx } from 'clsx';
 import DecisionCard, { AgentSide, ApprovalAnswer } from './DecisionCard';
 import DecisionQuestion, { AnsweredDecision } from './DecisionQuestion';
 import { dismissMenuCard, post } from '../../lib/api';
-import { answeredByLine, decisionTone, menuAnswerLine, outcomeLine, previewText, type Decision } from '../../lib/decisions';
+import { answeredByLine, chosenText, decisionTone, menuAnswerLine, outcomeLine, previewText, type Decision } from '../../lib/decisions';
+import { refState } from '../../lib/cardRefs';
 
 /**
  * DecisionBubble — one of the agent's approval cards, in its conversation, as a message: under the message
@@ -51,7 +52,7 @@ function DecisionCardBubble({ decision: d, onAnswered }: { decision: Decision; o
               return err;
             }} />
           ) : (
-            <AnsweredDecision row={row} optionN={d.option_n} answerText={d.answer_text} note={answeredByLine(d)} />
+            <AnsweredDecision row={row} optionN={d.option_n} answerText={d.answer_text} note={answeredByLine(d)} state={refState(d.state)} />
           )}
         </div>
       </AgentSide>
@@ -70,7 +71,8 @@ function DecisionCardBubble({ decision: d, onAnswered }: { decision: Decision; o
     <AgentSide>
       <DecisionCard id={`decision-${d.id}`} dataState={d.state} tone={decisionTone(d)}
         kind={isMenu ? 'decision' : 'approval'} question={d.question} agent={d.from_agent} risk={d.risk_level}
-        body={d.summary} open={open && !isMenu} outcome={outcomeLine(d)}>
+        body={d.summary} open={open && !isMenu} outcome={outcomeLine(d)}
+        report={{ id: d.id, from: d.from_agent, state: refState(d.state), answer: d.state === 'answered' ? chosenText(d) : null }}>
         <ApprovalAnswer sending={sending} error={error}
           onApprove={() => void send(() => post(path('approve'), {}))}
           onDeny={(reason) => void send(() => post(path('deny'), { reason }))} />

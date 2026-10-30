@@ -24,10 +24,11 @@ export function chipNeedsYou(c: AgentChip | undefined): boolean {
   return c?.status === 'needs_you';
 }
 
-/** "92% left", or null when there is no reading. */
+/** "92% left", or null when there is no reading. 100% left is none: Claude Code's status line says 0% used until its
+ *  first reply after a resume (lib/arturoPanel.ts contextUsedLabel). */
 export function contextLeftLabel(c: AgentChip | undefined): string | null {
   const v = c?.context_left_pct;
-  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 100) return null;
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v >= 100) return null;
   return `${Math.round(v)}% left`;
 }
 

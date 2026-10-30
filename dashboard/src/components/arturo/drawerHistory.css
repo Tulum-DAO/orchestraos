@@ -1,0 +1,59 @@
+/* The drawer's History cards (DrawerHistory.tsx). Inside .agent-panel-host, so the panel's variables (--card, --hair,
+   --grey, --text) set the surfaces and the app's theme tokens (--info, --warning, --success, --destructive) the
+   colours: light and dark both follow. A card's left edge is its kind; a resolved card's badge is how it ended. */
+.dh-filters{ display:flex; flex-direction:column; gap:6px; margin:4px 0 4px; }
+.dh-chips{ display:flex; flex-wrap:wrap; gap:6px; }
+.dh-chipbtn{ display:inline-flex; align-items:center; gap:5px; height:28px; padding:0 10px; border-radius:999px; border:1px solid var(--hair);
+  background:none; color:var(--grey); font:inherit; font-size:12.5px; cursor:pointer; }
+@media (hover:hover){ .dh-chipbtn:hover{ color:var(--text); background:var(--card); } }
+.dh-chipbtn.is-on{ background:var(--text); border-color:var(--text); color:var(--panel); }
+.dh-count{ font-size:11px; opacity:.7; font-variant-numeric:tabular-nums; }
+
+.dh-list{ display:flex; flex-direction:column; gap:8px; }
+.dh-card{ --edge:var(--grey2); position:relative; min-width:0; padding:10px 12px 10px 14px; border-radius:12px; background:var(--card);
+  border:1px solid var(--hair); overflow:hidden; }
+.dh-card::before{ content:""; position:absolute; left:0; top:0; bottom:0; width:4px; background:var(--edge); }
+.dh-kind-decision{ --edge:var(--info); }
+.dh-kind-approval{ --edge:var(--warning); }
+.dh-kind-multipart{ --edge:var(--primary); }
+.dh-kind-menu{ --edge:var(--grey2); }
+.dh-card.is-resolved::before{ opacity:.55; }
+
+.dh-head{ display:flex; flex-wrap:wrap; align-items:center; gap:6px; min-width:0; }
+.dh-chip{ font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; padding:2px 6px; border-radius:5px;
+  color:var(--edge); background:color-mix(in srgb, var(--edge) 14%, transparent); }
+.dh-meta{ font-size:11.5px; color:var(--grey); min-width:0; overflow-wrap:anywhere; }
+.dh-q{ margin:6px 0 0; font-size:14px; font-weight:600; line-height:1.35; color:var(--text); overflow-wrap:anywhere; }
+.dh-q.is-compact{ font-weight:500; color:rgba(var(--ink),var(--t75)); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.dh-sum{ margin:4px 0 0; font-size:12.5px; line-height:1.4; color:var(--grey); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; }
+
+.dh-badge{ font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; color:var(--grey); background:rgba(var(--ink),0.07); }
+.dh-badge.is-answered{ color:var(--info); background:color-mix(in srgb, var(--info) 14%, transparent); }
+.dh-badge.is-held{ color:var(--info); background:color-mix(in srgb, var(--info) 8%, transparent); }
+.dh-badge.is-approved{ color:var(--success); background:color-mix(in srgb, var(--success) 14%, transparent); }
+.dh-badge.is-denied{ color:var(--destructive); background:color-mix(in srgb, var(--destructive) 14%, transparent); }
+
+/* THE ANSWER: the line that matters on a resolved card, so it reads first after the question. */
+.dh-answer{ margin:6px 0 0; font-size:14px; line-height:1.4; color:var(--text); font-weight:600; overflow-wrap:anywhere; }
+.dh-parts{ list-style:decimal; padding-left:18px; display:flex; flex-direction:column; gap:4px; }
+.dh-parts li{ padding-left:2px; }
+.dh-partq{ display:block; font-size:12px; font-weight:400; color:var(--grey); }
+.dh-parta{ display:block; }
+.dh-parts li.is-skipped .dh-parta{ font-weight:400; font-style:italic; color:var(--grey); }
+.dh-who{ margin:6px 0 0; }
+
+.dh-actions{ display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.dh-act{ height:30px; padding:0 12px; border-radius:999px; border:1px solid var(--hair); background:none; color:var(--text);
+  font:inherit; font-size:12.5px; cursor:pointer; }
+@media (hover:hover){ .dh-act:hover{ background:rgba(var(--ink),0.06); } }
+.dh-act.is-primary{ background:var(--text); color:var(--panel); border-color:var(--text); }
+.dh-full{ margin-top:10px; }
+/* The chat's card sits message-sized on the agent's side there; in the drawer it takes the card's width. */
+.dh-full > .flex > div{ max-width:none; }
+
+.dh-more{ display:block; width:100%; margin-top:10px; height:36px; border-radius:10px; border:1px solid var(--hair); background:none;
+  color:var(--text); font:inherit; font-size:13px; cursor:pointer; }
+@media (hover:hover){ .dh-more:hover{ background:var(--card); } }
+
+.dh-running{ display:inline-flex; align-items:center; gap:7px; min-width:0; }
+.dh-running-end{ display:inline-flex; align-items:center; gap:6px; flex:0 0 auto; }

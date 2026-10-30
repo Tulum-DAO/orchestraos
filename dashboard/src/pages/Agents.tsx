@@ -296,8 +296,8 @@ export default function Agents() {
   if (isLoading) {
     return (
       <div className="p-6">
-        <h1 className="text-2xl font-bold text-neutral-100 mb-6">Agents</h1>
-        <p className="text-neutral-500">Loading...</p>
+        <h1 className="text-2xl font-bold text-foreground mb-6">Agents</h1>
+        <p className="text-tone-500">Loading...</p>
       </div>
     );
   }
@@ -348,7 +348,7 @@ export default function Agents() {
           position:fixed so it stays inside this page's scroll container and cannot end up
           floating over another route's content. The opaque background matters: without it
           the cards scroll visibly through the numbers. */}
-      <div className="md:sticky md:top-0 md:z-20 -mx-6 px-6 pt-1 pb-3 bg-neutral-950 border-b border-neutral-900 space-y-3">
+      <div className="md:sticky md:top-0 md:z-20 -mx-6 px-6 pt-1 pb-3 bg-tone-950 border-b border-tone-900 space-y-3">
         <div className="flex flex-col sm:flex-row items-stretch sm:items-start justify-between gap-3 sm:gap-4">
           <div className="min-w-0 flex-1">
             <AgentsSummaryStrip
@@ -365,7 +365,7 @@ export default function Agents() {
               onSelectBusiest={busiest ? () => openConversation(busiest.a, busiest.b) : undefined}
               onNewAgent={showNewAgent() ? () => setShowNewAgentModal(true) : undefined}
             />
-            <p className="text-sm text-neutral-500 mt-0.5">
+            <p className="text-sm text-tone-500 mt-0.5">
               showing {sorted.length} of {agents.length}
             </p>
             {search.trim() && (
@@ -392,13 +392,13 @@ export default function Agents() {
             )}
             {highlight && (
               <div className="mt-2 flex items-center gap-2 text-xs">
-                <span className="px-2 py-0.5 rounded-lg border border-sky-800 bg-sky-950/40 text-sky-200">
+                <span className="px-2 py-0.5 rounded-lg border border-tone-sky-800 bg-tone-sky-950/40 text-tone-sky-200">
                   {highlight.label} · {highlight.agentIds.length} agent{highlight.agentIds.length === 1 ? '' : 's'}
                 </span>
                 <button
                   type="button"
                   onClick={() => setHighlight(null)}
-                  className="text-neutral-500 hover:text-neutral-200 underline decoration-neutral-700"
+                  className="text-tone-500 hover:text-tone-200 underline decoration-tone-700"
                 >
                   clear
                 </button>
@@ -417,7 +417,7 @@ export default function Agents() {
         {/* Options bar — horizontally scrollable on mobile */}
         <div className="flex items-center gap-3 overflow-x-auto pb-2 -mx-6 px-6 scrollbar-hide" style={{ WebkitOverflowScrolling: 'touch' }}>
           {/* Status filter */}
-          <div className="flex rounded-lg border border-neutral-700 overflow-hidden shrink-0">
+          <div className="flex rounded-lg border border-tone-700 overflow-hidden shrink-0">
             {STATUS_FILTERS.map((s) => (
               <button
                 key={s}
@@ -425,8 +425,8 @@ export default function Agents() {
                 className={clsx(
                   'px-3 py-1.5 text-sm transition-colors whitespace-nowrap',
                   statusFilter === s
-                    ? 'bg-neutral-700 text-neutral-100'
-                    : 'bg-neutral-900 text-neutral-500 hover:text-neutral-300'
+                    ? 'bg-tone-700 text-tone-100'
+                    : 'bg-tone-900 text-tone-500 hover:text-tone-300'
                 )}
               >
                 {s}
@@ -434,14 +434,14 @@ export default function Agents() {
             ))}
           </div>
           {/* View toggle */}
-          <div className="flex rounded-lg border border-neutral-700 overflow-hidden shrink-0">
+          <div className="flex rounded-lg border border-tone-700 overflow-hidden shrink-0">
             <button
               onClick={() => setViewMode('cards')}
               className={clsx(
                 'flex items-center gap-1.5 px-3 py-1.5 text-sm transition-colors whitespace-nowrap',
                 viewMode === 'cards'
-                  ? 'bg-neutral-700 text-neutral-100'
-                  : 'bg-neutral-900 text-neutral-500 hover:text-neutral-300'
+                  ? 'bg-tone-700 text-tone-100'
+                  : 'bg-tone-900 text-tone-500 hover:text-tone-300'
               )}
             >
               <LayoutGrid size={14} />
@@ -452,8 +452,8 @@ export default function Agents() {
               className={clsx(
                 'flex items-center gap-1.5 px-3 py-1.5 text-sm transition-colors whitespace-nowrap',
                 viewMode === 'table'
-                  ? 'bg-neutral-700 text-neutral-100'
-                  : 'bg-neutral-900 text-neutral-500 hover:text-neutral-300'
+                  ? 'bg-tone-700 text-tone-100'
+                  : 'bg-tone-900 text-tone-500 hover:text-tone-300'
               )}
             >
               <List size={14} />
@@ -464,8 +464,8 @@ export default function Agents() {
               className={clsx(
                 'flex items-center gap-1.5 px-3 py-1.5 text-sm transition-colors whitespace-nowrap',
                 viewMode === 'topology'
-                  ? 'bg-neutral-700 text-neutral-100'
-                  : 'bg-neutral-900 text-neutral-500 hover:text-neutral-300'
+                  ? 'bg-tone-700 text-tone-100'
+                  : 'bg-tone-900 text-tone-500 hover:text-tone-300'
               )}
             >
               <GitBranch size={14} />
@@ -476,7 +476,7 @@ export default function Agents() {
           <select
             value={tierFilter}
             onChange={(e) => setTierFilter(e.target.value)}
-            className="bg-neutral-900 border border-neutral-700 text-neutral-300 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-neutral-500 shrink-0"
+            className="bg-tone-900 border border-tone-700 text-tone-300 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-tone-500 shrink-0"
           >
             {TIERS.map((t) => (
               <option key={t} value={t}>{t === 'All' ? 'All Tiers' : t === 'For You' ? 'For You' : t === 'Recent' ? 'Recent' : t}</option>
@@ -487,7 +487,7 @@ export default function Agents() {
             <select
               value={clientFilter}
               onChange={(e) => setClientFilter(e.target.value)}
-              className="bg-neutral-900 border border-neutral-700 text-neutral-300 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-neutral-500 shrink-0"
+              className="bg-tone-900 border border-tone-700 text-tone-300 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-tone-500 shrink-0"
             >
               {clients.map((c) => (
                 <option key={c} value={c}>{c === 'All' ? 'All Clients' : c}</option>
@@ -499,7 +499,7 @@ export default function Agents() {
             <select
               value={machineFilter}
               onChange={(e) => setMachineFilter(e.target.value)}
-              className="bg-neutral-900 border border-neutral-700 text-neutral-300 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-neutral-500 shrink-0"
+              className="bg-tone-900 border border-tone-700 text-tone-300 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-tone-500 shrink-0"
             >
               {machines.map((m) => (
                 <option key={m} value={m}>{m === 'All' ? 'All Machines' : m}</option>
@@ -513,21 +513,21 @@ export default function Agents() {
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
         <span className="flex items-center gap-1.5">
           <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
-          <span className="text-neutral-300">{healthy} healthy</span>
+          <span className="text-tone-300">{healthy} healthy</span>
         </span>
         {sleeping > 0 && (
           <span className="flex items-center gap-1.5">
             <span className="inline-block w-2 h-2 rounded-full bg-amber-500" />
-            <span className="text-neutral-300">{sleeping} sleeping (Mac)</span>
+            <span className="text-tone-300">{sleeping} sleeping (Mac)</span>
           </span>
         )}
         <span className="flex items-center gap-1.5">
           <span className="inline-block w-2 h-2 rounded-full bg-yellow-500" />
-          <span className="text-neutral-300">{stale} stale</span>
+          <span className="text-tone-300">{stale} stale</span>
         </span>
         <span className="flex items-center gap-1.5">
           <span className="inline-block w-2 h-2 rounded-full bg-red-500" />
-          <span className="text-neutral-300">{down} down</span>
+          <span className="text-tone-300">{down} down</span>
         </span>
       </div>
 
@@ -559,8 +559,8 @@ export default function Agents() {
           {sorted.length === 0 && (
             agents.length === 0 ? (
               <div className="col-span-3 text-center py-12">
-                <p className="text-neutral-300 font-medium">No agents yet</p>
-                <p className="text-sm text-neutral-500 mt-1 mb-4">{showNewAgent() ? 'Create one here, or run ' : 'Run '}<code className="text-neutral-400">orchestra agent create &lt;name&gt;</code> in a terminal.</p>
+                <p className="text-tone-300 font-medium">No agents yet</p>
+                <p className="text-sm text-tone-500 mt-1 mb-4">{showNewAgent() ? 'Create one here, or run ' : 'Run '}<code className="text-tone-400">orchestra agent create &lt;name&gt;</code> in a terminal.</p>
                 {showNewAgent() && <button
                   onClick={() => setShowNewAgentModal(true)}
                   className="inline-flex items-center gap-2 px-4 py-2 min-h-[44px] text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-500 transition-colors"
@@ -570,7 +570,7 @@ export default function Agents() {
                 </button>}
               </div>
             ) : (
-              <p className="col-span-3 text-neutral-600 text-center py-8">No agents match this filter</p>
+              <p className="col-span-3 text-tone-600 text-center py-8">No agents match this filter</p>
             )
           )}
         </div>
@@ -578,10 +578,10 @@ export default function Agents() {
 
       {/* Table view */}
       {viewMode === 'table' && (
-        <div className="rounded-xl border border-neutral-800 bg-neutral-900 overflow-x-auto">
+        <div className="rounded-xl border border-tone-800 bg-tone-900 overflow-x-auto">
           <table className="w-full text-sm min-w-[600px]">
             <thead>
-              <tr className="text-neutral-500 text-xs uppercase tracking-wider border-b border-neutral-800">
+              <tr className="text-tone-500 text-xs uppercase tracking-wider border-b border-tone-800">
                 <th className="text-left px-4 py-3 font-medium">Agent</th>
                 <th className="text-left px-4 py-3 font-medium">Tier</th>
                 <th className="text-left px-4 py-3 font-medium">Machine</th>
@@ -603,7 +603,7 @@ export default function Agents() {
                 );
               })}
               {sorted.length === 0 && (
-                <tr><td colSpan={6} className="px-4 py-8 text-neutral-600 text-center">No agents found</td></tr>
+                <tr><td colSpan={6} className="px-4 py-8 text-tone-600 text-center">No agents found</td></tr>
               )}
             </tbody>
           </table>
@@ -620,7 +620,7 @@ export default function Agents() {
       {viewMode === 'topology' && (
         <>
         <div className="flex flex-col lg:flex-row gap-4 items-stretch">
-          <div className="flex-1 min-w-0 rounded-xl border border-neutral-800 bg-neutral-900 p-4 overflow-x-auto">
+          <div className="flex-1 min-w-0 rounded-xl border border-tone-800 bg-tone-900 p-4 overflow-x-auto">
             <TopologyDiagram
               // `sorted`, NOT `agents`: Cards and Table got the filtered array and Topology
               // was handed the unfiltered one, so the status filter had NO effect on the
@@ -649,7 +649,7 @@ export default function Agents() {
               role="dialog"
               aria-modal="false"
               aria-label={selectedConnection ? 'Conversation' : 'Agent detail'}
-              className="drawer-in-right fixed right-0 top-0 bottom-0 z-30 w-full sm:w-[420px] overflow-y-auto overscroll-contain border-l border-neutral-800 bg-neutral-950 shadow-2xl shadow-black/60 p-4 pt-20 sm:pt-4">
+              className="drawer-in-right fixed right-0 top-0 bottom-0 z-30 w-full sm:w-[420px] overflow-y-auto overscroll-contain border-l border-tone-800 bg-tone-950 shadow-2xl shadow-black/60 p-4 pt-20 sm:pt-4">
               {selectedConnection ? (
                 <ConversationPanel
                   a={selectedConnection[0]}
@@ -690,7 +690,7 @@ export default function Agents() {
             `-mx-4 px-4` cancels the page gutter so the opaque background spans the full width
             and the graph cannot be seen sliding underneath it. */}
         <div className={clsx(
-          'sticky bottom-0 -mx-4 px-4 pb-1 bg-neutral-950 border-t border-neutral-800',
+          'sticky bottom-0 -mx-4 px-4 pb-1 bg-tone-950 border-t border-tone-800',
           // ABOVE the drawer (z-40 > its z-30), and padded clear of it while it is open.
           // A 420px drawer at the right edge otherwise lands exactly on the Live button and
           // the right half of the ticker — which would re-bury the controls this row was just
@@ -709,7 +709,7 @@ export default function Agents() {
             // §12: never show stale as fresh. The ticker is a live feed by definition, so
             // while a past moment is being viewed it says what it is instead of quietly
             // rendering now's traffic under a scrubbed graph.
-            <div className="text-xs text-amber-300/80 py-2">
+            <div className="text-xs text-tone-amber-300/80 py-2">
               Viewing a past moment — live ticker paused. Press Live to resume.
             </div>
           ) : (
@@ -735,28 +735,28 @@ function AgentRow({ agent, isSelected, onClick }: { agent: any; isSelected: bool
       <tr
         onClick={onClick}
         className={clsx(
-          'border-t border-neutral-800/50 cursor-pointer transition-colors',
-          isSelected ? 'bg-neutral-800/50' : 'hover:bg-neutral-800/30'
+          'border-t border-tone-800/50 cursor-pointer transition-colors',
+          isSelected ? 'bg-tone-800/50' : 'hover:bg-tone-800/30'
         )}
       >
         <td className="px-4 py-2.5 flex items-center gap-2">
           <StatusDot status={agent.alive ? 'running' : 'stopped'} />
-          <span className="text-neutral-100 font-medium">{agent.name}</span>
+          <span className="text-tone-100 font-medium">{agent.name}</span>
           <GenChip generation={agent.generation} />
         </td>
         <td className="px-4 py-2.5"><TierBadge tier={agent.tier} /></td>
-        <td className="px-4 py-2.5 text-neutral-400">{agent.machine || '—'}</td>
+        <td className="px-4 py-2.5 text-tone-400">{agent.machine || '—'}</td>
         <td className="px-4 py-2.5">
-          <span className={clsx('text-xs font-medium', agent.alive ? 'text-green-400' : 'text-red-400')}>
+          <span className={clsx('text-xs font-medium', agent.alive ? 'text-tone-green-400' : 'text-tone-red-400')}>
             {agent.alive ? 'online' : 'stopped'}
           </span>
         </td>
-        <td className="px-4 py-2.5 text-neutral-400">{agent.inbox_count ?? 0}</td>
-        <td className="px-4 py-2.5 text-neutral-500">{truncatedTask}</td>
+        <td className="px-4 py-2.5 text-tone-400">{agent.inbox_count ?? 0}</td>
+        <td className="px-4 py-2.5 text-tone-500">{truncatedTask}</td>
       </tr>
       {isSelected && (
-        <tr className="border-t border-neutral-800/30">
-          <td colSpan={6} className="px-4 py-4 bg-neutral-800/20">
+        <tr className="border-t border-tone-800/30">
+          <td colSpan={6} className="px-4 py-4 bg-tone-800/20">
             <AgentDetail agent={agent} />
           </td>
         </tr>
@@ -789,8 +789,8 @@ function AgentDetail({ agent }: { agent: any }) {
         }
         return (
           <div key={label} className="flex gap-2">
-            <span className="text-neutral-500 shrink-0">{label}:</span>
-            <span className="text-neutral-300 break-all">{display}</span>
+            <span className="text-tone-500 shrink-0">{label}:</span>
+            <span className="text-tone-300 break-all">{display}</span>
           </div>
         );
       })}

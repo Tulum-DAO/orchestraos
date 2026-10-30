@@ -26,7 +26,7 @@ export default function AssistantInput({ onSend, onCancel, streaming, disabled }
   };
 
   return (
-    <div className="px-3 py-2 border-t border-neutral-800 shrink-0">
+    <div className="px-3 py-2 border-t border-tone-800 shrink-0">
       <div className="flex gap-2 items-end">
         <textarea
           value={text}
@@ -34,7 +34,7 @@ export default function AssistantInput({ onSend, onCancel, streaming, disabled }
           placeholder={streaming ? 'Assistant is responding…' : 'Ask the assistant…'}
           rows={2}
           disabled={disabled}
-          className="flex-1 bg-neutral-950 border border-neutral-800 rounded-lg px-3 py-2 text-sm text-neutral-300 placeholder-neutral-600 resize-none focus:outline-none focus:border-neutral-600 disabled:opacity-50"
+          className="flex-1 bg-tone-950 border border-tone-800 rounded-lg px-3 py-2 text-sm text-tone-300 placeholder-tone-600 resize-none focus:outline-none focus:border-tone-600 disabled:opacity-50"
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
@@ -45,7 +45,7 @@ export default function AssistantInput({ onSend, onCancel, streaming, disabled }
         {streaming ? (
           <button
             onClick={onCancel}
-            className="flex items-center gap-1 px-4 py-2 min-h-[44px] rounded-lg text-sm font-medium bg-red-500/15 text-red-400 hover:bg-red-500/25 transition-colors self-end"
+            className="flex items-center gap-1 px-4 py-2 min-h-[44px] rounded-lg text-sm font-medium bg-red-500/15 text-tone-red-400 hover:bg-red-500/25 transition-colors self-end"
             title="Stop"
           >
             <Square size={13} /> Stop
@@ -57,15 +57,15 @@ export default function AssistantInput({ onSend, onCancel, streaming, disabled }
             className={clsx(
               'flex items-center gap-1 px-4 py-2 min-h-[44px] rounded-lg text-sm font-medium transition-colors self-end',
               !text.trim() || disabled
-                ? 'bg-neutral-800 text-neutral-600 cursor-not-allowed'
-                : 'bg-blue-500/15 text-blue-400 hover:bg-blue-500/25',
+                ? 'bg-tone-800 text-tone-600 cursor-not-allowed'
+                : 'bg-blue-500/15 text-tone-blue-400 hover:bg-blue-500/25',
             )}
           >
             <Send size={14} /> Send
           </button>
         )}
       </div>
-      <p className="text-[10px] text-neutral-600 mt-1">⌘/Ctrl+Enter to send · read-only V1</p>
+      <p className="text-[10px] text-tone-600 mt-1">⌘/Ctrl+Enter to send · read-only V1</p>
     </div>
   );
 }

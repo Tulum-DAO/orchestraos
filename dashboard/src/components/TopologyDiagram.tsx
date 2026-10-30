@@ -187,11 +187,11 @@ function AgentNode({
     <Clickable
       onClick={onSelect ? () => onSelect(agent.id) : undefined}
       className={clsx(
-        'relative flex flex-col items-center gap-1 rounded-lg border-2 bg-neutral-900 px-3 py-2.5 min-w-[110px] transition hover:bg-neutral-800',
+        'relative flex flex-col items-center gap-1 rounded-lg border-2 bg-tone-900 px-3 py-2.5 min-w-[110px] transition hover:bg-tone-800',
         working ? 'border-sky-400 shadow-[0_0_12px_-2px_rgba(56,189,248,0.7)]' : getNodeBorder(agent),
         // Selection reads as a ring, not a border swap: overwriting the border would throw
         // away the status colour, which is the one thing that must never be hidden (spec §2).
-        selected && 'ring-2 ring-sky-300 ring-offset-2 ring-offset-neutral-900',
+        selected && 'ring-2 ring-sky-300 ring-offset-2 ring-offset-tone-900',
         // Fade, not hide: a down agent that is also unrelated to the selection still has to
         // stay on screen and still has to be red (spec §2, §7 — nothing important is hidden).
         dimmed && 'opacity-30',
@@ -208,12 +208,12 @@ function AgentNode({
       {sheets > 0 && (
         <>
           <span aria-hidden className={clsx(
-            'pointer-events-none absolute left-2 -right-1 -bottom-1 h-2 rounded-b-md border border-t-0 bg-neutral-900 opacity-70',
+            'pointer-events-none absolute left-2 -right-1 -bottom-1 h-2 rounded-b-md border border-t-0 bg-tone-900 opacity-70',
             nodeBorder,
           )} />
           {sheets > 1 && (
             <span aria-hidden className={clsx(
-              'pointer-events-none absolute left-4 -right-2 -bottom-2 h-2 rounded-b-md border border-t-0 bg-neutral-900 opacity-45',
+              'pointer-events-none absolute left-4 -right-2 -bottom-2 h-2 rounded-b-md border border-t-0 bg-tone-900 opacity-45',
               nodeBorder,
             )} />
           )}
@@ -236,16 +236,16 @@ function AgentNode({
       )}
       <div className="flex items-center gap-1.5">
         <StatusDot status={agent.alive ? 'running' : 'stopped'} />
-        <span className="text-sm font-semibold text-neutral-100 truncate max-w-[90px]">{agent.name}</span>
+        <span className="text-sm font-semibold text-tone-100 truncate max-w-[90px]">{agent.name}</span>
       </div>
       <TierBadge tier={agent.tier} />
       {subtitle && (
-        <span className="text-[10px] text-sky-300/90 truncate max-w-[100px]" title={subtitle}>
+        <span className="text-[10px] text-tone-sky-300/90 truncate max-w-[100px]" title={subtitle}>
           {subtitle}
         </span>
       )}
       {!working && agent.machine && (
-        <span className="text-[10px] text-neutral-500">{agent.machine}</span>
+        <span className="text-[10px] text-tone-500">{agent.machine}</span>
       )}
     </Clickable>
   );
@@ -269,7 +269,7 @@ function Connection({
     : `${a} ⇄ ${b} · no messages in the last ${windowHours}h`;
   const line = (
     <div
-      className={clsx('shrink-0', count ? 'bg-neutral-500' : 'bg-neutral-800')}
+      className={clsx('shrink-0', count ? 'bg-tone-500' : 'bg-tone-800')}
       style={{ width: `${width}px`, height: `${stubPx}px` }}
     />
   );
@@ -283,9 +283,9 @@ function Connection({
       title={tip}
       aria-label={tip}
       className={clsx(
-        'text-[10px] bg-neutral-950 px-1.5 py-0.5 rounded z-10 relative transition-colors',
-        'hover:text-neutral-100 hover:bg-neutral-800 focus:outline-none focus:ring-1 focus:ring-sky-500',
-        count ? 'text-neutral-400' : 'text-neutral-600',
+        'text-[10px] bg-tone-950 px-1.5 py-0.5 rounded z-10 relative transition-colors',
+        'hover:text-tone-100 hover:bg-tone-800 focus:outline-none focus:ring-1 focus:ring-sky-500',
+        count ? 'text-tone-400' : 'text-tone-600',
       )}
     >
       {count || '—'}
@@ -293,8 +293,8 @@ function Connection({
   ) : (
     <span
       title={tip}
-      className={clsx('text-[10px] bg-neutral-950 px-1.5 py-0.5 rounded z-10 relative',
-        count ? 'text-neutral-400' : 'text-neutral-600')}
+      className={clsx('text-[10px] bg-tone-950 px-1.5 py-0.5 rounded z-10 relative',
+        count ? 'text-tone-400' : 'text-tone-600')}
     >
       {count || '—'}
     </span>
@@ -378,7 +378,7 @@ export function TopologyDiagram({
           {/* Trunk down to the PM bar. Deliberately unlabelled: this is a bus, not a pair,
               and the "hub-spoke" string it replaces described the shape rather than the
               traffic. The real gm<->pm counts sit on each PM's own segment below. */}
-          <div className="w-px h-12 bg-neutral-700" />
+          <div className="w-px h-12 bg-tone-700" />
         </>
       )}
 
@@ -390,7 +390,7 @@ export function TopologyDiagram({
             {/* Horizontal line spanning all PMs */}
             {pms.length > 1 && (
               <div
-                className="absolute top-0 h-px bg-neutral-700"
+                className="absolute top-0 h-px bg-tone-700"
                 style={{
                   left: `calc(50% - ${(pms.length - 1) * 80}px)`,
                   width: `${(pms.length - 1) * 160}px`,
@@ -441,8 +441,8 @@ export function TopologyDiagram({
 
       {/* Orphan workers (no parent or parent not a PM) */}
       {orphanAgents.length > 0 && (
-        <div className="mt-6 pt-4 border-t border-neutral-800 w-full">
-          <p className="text-xs text-neutral-600 text-center mb-3">Not in the tree ({orphanAgents.length})</p>
+        <div className="mt-6 pt-4 border-t border-tone-800 w-full">
+          <p className="text-xs text-tone-600 text-center mb-3">Not in the tree ({orphanAgents.length})</p>
           <div className="flex items-start gap-3 flex-wrap justify-center">
             {orphanAgents.map((w) => (
               <AgentNode key={w.id} agent={w} onSelect={onSelectAgent} selected={selectedAgentId === w.id} dimmed={isDim(w.id)} />
@@ -453,7 +453,7 @@ export function TopologyDiagram({
 
       {/* Empty state */}
       {agents.length === 0 && (
-        <p className="text-neutral-600 text-sm py-12">No agents to display</p>
+        <p className="text-tone-600 text-sm py-12">No agents to display</p>
       )}
     </div>
   );

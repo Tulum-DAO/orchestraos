@@ -1,0 +1,33 @@
+/* The drawer's Library (DrawerLibrary.tsx). Uses the drawer's tokens (arturo.css, .agent-panel-host), so it
+   follows light and dark with the rest of the drawer. */
+.dl{ min-width:0; }
+/* Chips: one line that scrolls sideways inside itself on a phone, never the page. */
+.dl-chips{ display:flex; gap:6px; overflow-x:auto; scrollbar-width:none; margin:0 -16px 6px; padding:2px 16px 6px; }
+.dl-chips::-webkit-scrollbar{ display:none; }
+.dl-chip{ flex:0 0 auto; height:32px; padding:0 12px; border-radius:999px; border:1px solid var(--hair); background:none; color:var(--text);
+  font:inherit; font-size:13px; cursor:pointer; white-space:nowrap; }
+.dl-chip.is-on{ background:var(--text); color:var(--panel); border-color:var(--text); }
+@media (hover:hover){ .dl-chip:not(.is-on):hover{ background:var(--card); } }
+.dl-group{ margin-top:10px; }
+.dl-group .arturo-panel-section{ margin-bottom:4px; }
+.dl-hint{ font-size:12px; color:var(--grey2); margin:0 2px 4px; }
+.dl-bucket{ font-size:12px; font-weight:500; color:var(--grey2); margin:12px 2px 2px; }
+.dl-list{ display:flex; flex-direction:column; }
+/* One item: icon, title over its detail line, the date at the right. 52px like the drawer's rows. */
+.dl-row{ display:flex; align-items:center; gap:10px; min-height:52px; width:100%; box-sizing:border-box; padding:6px 8px; margin:0;
+  border:0; border-bottom:1px solid var(--hair); background:none; color:var(--text); font:inherit; text-align:left; text-decoration:none; cursor:pointer; border-radius:0; }
+@media (hover:hover){ .dl-row:hover{ background:var(--card); } }
+a.dl-row, a.dl-row:hover, a.dl-row *{ text-decoration:none; }
+div.dl-row{ cursor:default; }
+.dl-icon{ flex:0 0 auto; color:var(--grey2); }
+.dl-main{ flex:1 1 auto; min-width:0; display:flex; flex-direction:column; gap:2px; }
+.dl-title{ font-size:14px; line-height:1.3; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dl-detail{ font-size:12px; color:var(--grey); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dl-when{ flex:0 0 auto; font-size:12px; color:var(--grey2); font-variant-numeric:tabular-nums; }
+.dl-more{ display:block; margin:8px auto 0; background:none; border:1px solid var(--hair); color:var(--text); border-radius:999px; height:32px; padding:0 14px;
+  font:inherit; font-size:13px; cursor:pointer; }
+.dl-more:disabled{ opacity:.5; cursor:default; }
+@media (hover:hover){ .dl-more:not(:disabled):hover{ background:var(--card); } }
+.dl-retired{ display:flex; align-items:center; gap:8px; margin:10px 2px 4px; font-size:13px; color:var(--grey); cursor:pointer; }
+.dl-retired input{ width:16px; height:16px; margin:0; accent-color:#2563eb; }
+.arturo-panel-sheet .dl-chip, .arturo-panel-sheet .dl-more{ height:36px; }

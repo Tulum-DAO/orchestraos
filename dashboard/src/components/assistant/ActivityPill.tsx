@@ -47,10 +47,10 @@ export default function ActivityPill({ activity, className }: Props) {
       className={clsx(
         'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium select-none',
         isError
-          ? 'bg-red-500/10 text-red-300'
+          ? 'bg-red-500/10 text-tone-red-300'
           : isAnswering
-            ? 'bg-green-500/10 text-green-300'
-            : 'bg-blue-500/10 text-blue-300',
+            ? 'bg-green-500/10 text-tone-green-300'
+            : 'bg-blue-500/10 text-tone-blue-300',
         className,
       )}
     >

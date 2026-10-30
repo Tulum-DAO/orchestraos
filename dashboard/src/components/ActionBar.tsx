@@ -41,8 +41,8 @@ const CTRL_KEYS = [
 const CONFIRM_KEYS = new Set(['ctrl-c']);
 
 const KEY_BASE = "text-[11px] px-2 py-1 min-h-[36px] rounded-md font-mono shrink-0 transition-all duration-75";
-const KEY_IDLE = "bg-neutral-800 text-neutral-500 hover:text-neutral-300";
-const KEY_PRESSED = "bg-neutral-600 text-white scale-90";
+const KEY_IDLE = "bg-tone-800 text-tone-500 hover:text-tone-300";
+const KEY_PRESSED = "bg-tone-600 text-tone-white scale-90";
 
 export default function ActionBar({ agentId: _agentId, outputLines, onInject, onSendKey, injectMode, devMode: _devMode }: ActionBarProps) {
   const [ctrlActive, setCtrlActive] = useState(false);
@@ -108,8 +108,8 @@ export default function ActionBar({ agentId: _agentId, outputLines, onInject, on
               className={clsx(
                 'text-xs px-3 py-1.5 min-h-[44px] rounded-lg font-medium transition-colors',
                 action === 'Allow' || action === 'Always allow'
-                  ? 'bg-green-500/15 text-green-400 hover:bg-green-500/25'
-                  : 'bg-red-500/15 text-red-400 hover:bg-red-500/25'
+                  ? 'bg-green-500/15 text-tone-green-400 hover:bg-green-500/25'
+                  : 'bg-red-500/15 text-tone-red-400 hover:bg-red-500/25'
               )}
             >
               {action}
@@ -122,13 +122,13 @@ export default function ActionBar({ agentId: _agentId, outputLines, onInject, on
         <div className="flex gap-1.5">
           <button
             onClick={() => wrappedInject('y')}
-            className="text-xs px-4 py-1.5 min-h-[44px] rounded-lg font-medium bg-green-500/15 text-green-400 hover:bg-green-500/25 transition-colors"
+            className="text-xs px-4 py-1.5 min-h-[44px] rounded-lg font-medium bg-green-500/15 text-tone-green-400 hover:bg-green-500/25 transition-colors"
           >
             Yes
           </button>
           <button
             onClick={() => wrappedInject('n')}
-            className="text-xs px-4 py-1.5 min-h-[44px] rounded-lg font-medium bg-red-500/15 text-red-400 hover:bg-red-500/25 transition-colors"
+            className="text-xs px-4 py-1.5 min-h-[44px] rounded-lg font-medium bg-red-500/15 text-tone-red-400 hover:bg-red-500/25 transition-colors"
           >
             No
           </button>
@@ -141,9 +141,9 @@ export default function ActionBar({ agentId: _agentId, outputLines, onInject, on
             <button
               key={opt.num}
               onClick={() => wrappedInject(opt.num)}
-              className="bg-neutral-800 text-neutral-300 hover:text-neutral-100 text-xs px-2.5 py-1.5 min-h-[44px] rounded-lg transition-colors text-left"
+              className="bg-tone-800 text-tone-300 hover:text-tone-100 text-xs px-2.5 py-1.5 min-h-[44px] rounded-lg transition-colors text-left"
             >
-              <span className="text-neutral-500 mr-1">{opt.num}.</span>
+              <span className="text-tone-500 mr-1">{opt.num}.</span>
               <span>{opt.text}</span>
             </button>
           ))}
@@ -155,7 +155,7 @@ export default function ActionBar({ agentId: _agentId, outputLines, onInject, on
           href={prompt.authUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-2 text-xs px-3 py-2.5 min-h-[44px] rounded-lg font-medium bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25 transition-colors w-full"
+          className="flex items-center gap-2 text-xs px-3 py-2.5 min-h-[44px] rounded-lg font-medium bg-amber-500/15 border border-amber-500/30 text-tone-amber-400 hover:bg-amber-500/25 transition-colors w-full"
         >
           <span className="shrink-0">🔑</span>
           <span>Open Auth Link</span>
@@ -167,14 +167,14 @@ export default function ActionBar({ agentId: _agentId, outputLines, onInject, on
 
       {confirmKey && (
         <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div className="bg-neutral-900 border border-neutral-700 rounded-xl p-4 w-72 space-y-3">
-            <div className="text-sm text-neutral-100 font-medium">Send {confirmKey === 'ctrl-c' ? '^C' : confirmKey}?</div>
-            <div className="text-xs text-neutral-400">This interrupts what the agent is doing right now. Are you sure?</div>
+          <div className="bg-tone-900 border border-tone-700 rounded-xl p-4 w-72 space-y-3">
+            <div className="text-sm text-tone-100 font-medium">Send {confirmKey === 'ctrl-c' ? '^C' : confirmKey}?</div>
+            <div className="text-xs text-tone-400">This interrupts what the agent is doing right now. Are you sure?</div>
             <div className="flex gap-2 justify-end">
-              <button onClick={() => setConfirmKey(null)} className="text-xs px-3 py-1.5 min-h-[40px] rounded-lg bg-neutral-800 text-neutral-300">Cancel</button>
+              <button onClick={() => setConfirmKey(null)} className="text-xs px-3 py-1.5 min-h-[40px] rounded-lg bg-tone-800 text-tone-300">Cancel</button>
               <button
                 onClick={() => { const k = confirmKey; setConfirmKey(null); wrappedSendKey(k); setCtrlActive(false); }}
-                className="text-xs px-3 py-1.5 min-h-[40px] rounded-lg bg-red-500/20 text-red-300 font-medium"
+                className="text-xs px-3 py-1.5 min-h-[40px] rounded-lg bg-red-500/20 text-tone-red-300 font-medium"
               >
                 Yes, send it
               </button>
@@ -194,7 +194,7 @@ export default function ActionBar({ agentId: _agentId, outputLines, onInject, on
             ⇧Tab
           </button>
 
-          <div className="w-px bg-neutral-800 shrink-0" />
+          <div className="w-px bg-tone-800 shrink-0" />
 
           {/* Ctrl shortcuts — these bypass sticky modifier (already include Ctrl) */}
           {CTRL_KEYS.map(k => (
@@ -211,7 +211,7 @@ export default function ActionBar({ agentId: _agentId, outputLines, onInject, on
             </button>
           ))}
 
-          <div className="w-px bg-neutral-800 shrink-0" />
+          <div className="w-px bg-tone-800 shrink-0" />
 
           {/* Arrow keys + special */}
           {SPECIAL_KEYS.map(k => (

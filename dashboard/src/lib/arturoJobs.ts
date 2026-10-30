@@ -40,7 +40,7 @@ export function jobResultParts(meta: { kind?: string; steps?: JobStep[]; job_id?
   return [...tools, { kind: 'text', text }];
 }
 
-/** A job's steps as tool-card rows (the shared card, components/chat/ToolCalls.tsx). */
+/** A job's steps as tool-card rows (the shared card, components/kit/ToolCard.tsx). */
 export function jobToolParts(job: ArturoJob): ToolPart[] {
   return job.steps.map((s, i) => ({
     kind: 'tool', callId: s.call_id || `${job.id}-${i}`, name: s.name, argsSummary: s.args_summary,

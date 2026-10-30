@@ -227,22 +227,27 @@ const MIN_GROUP_TOOLS = 2;
  * sits BETWEEN calls joins the group; thinking at either edge stays outside it, and a run with
  * a single call is left exactly as it was. Nothing is dropped or reordered.
  */
+/** A routine job folded into the strip (lib/threadKit/results.ts markResults, view "folded"). */
+const isFolded = (n: RenderNode) => n.kind === 'result' && n.view === 'folded';
+const inRun = (n: RenderNode) => n.kind === 'tool' || n.kind === 'thinking' || isFolded(n);
+const anchors = (n: RenderNode) => n.kind === 'tool' || isFolded(n);
+
 export function groupToolRuns(nodes: RenderNode[]): GroupedNode[] {
   const out: GroupedNode[] = [];
   let i = 0;
   while (i < nodes.length) {
     const n = nodes[i];
-    if (n.kind !== 'tool' && n.kind !== 'thinking') {
+    if (!inRun(n)) {
       out.push(n);
       i += 1;
       continue;
     }
-    // A maximal run of tool/thinking nodes.
+    // A maximal run of tool/thinking nodes (and routine jobs folded among them).
     let j = i;
-    while (j < nodes.length && (nodes[j].kind === 'tool' || nodes[j].kind === 'thinking')) j += 1;
+    while (j < nodes.length && inRun(nodes[j])) j += 1;
     const run = nodes.slice(i, j);
-    const first = run.findIndex((x) => x.kind === 'tool');
-    const last = run.length - 1 - [...run].reverse().findIndex((x) => x.kind === 'tool');
+    const first = run.findIndex(anchors);
+    const last = run.length - 1 - [...run].reverse().findIndex(anchors);
     const tools = first < 0 ? 0 : run.slice(first, last + 1).filter((x) => x.kind === 'tool').length;
     if (tools >= MIN_GROUP_TOOLS) {
       out.push(...run.slice(0, first));

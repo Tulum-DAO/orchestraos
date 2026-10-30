@@ -20,7 +20,7 @@ export default function Voice() {
   const agents: VoiceAgent[] = data?.agents ?? [];
 
   if (isLoading) {
-    return <div className="text-neutral-500">Loading voice agents...</div>;
+    return <div className="text-tone-500">Loading voice agents...</div>;
   }
 
   return (
@@ -32,7 +32,7 @@ export default function Voice() {
             <Phone size={24} />
             Voice Agents
           </h1>
-          <p className="text-neutral-500 text-sm mt-1">
+          <p className="text-tone-500 text-sm mt-1">
             Talk to your GM or any PM directly from the browser
           </p>
         </div>

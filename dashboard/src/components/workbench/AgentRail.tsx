@@ -230,7 +230,7 @@ function FaceRow({ agents, currentId, onPick, max = 8, label, indent = false }: 
                   onBlur={() => setPill((p) => (p?.keyboard ? null : p))}
                   // The selected (and hovered) face sits on a filled grey circle tight against it: the fill behind the
                   // face plus a 2px shadow of the same grey, so it marks the face without padding that would move it.
-                  className={clsx('shrink-0 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-neutral-400',
+                  className={clsx('shrink-0 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-tone-400',
                     a.id === currentId
                       ? 'la-on-selected bg-neutral-200 dark:bg-neutral-800 shadow-[0_0_0_2px_var(--color-neutral-200)] dark:shadow-[0_0_0_2px_var(--color-neutral-800)]'
                       : 'la-on-sidebar hover:bg-neutral-100 dark:hover:bg-neutral-900 hover:shadow-[0_0_0_2px_var(--color-neutral-100)] dark:hover:shadow-[0_0_0_2px_var(--color-neutral-900)]')}>

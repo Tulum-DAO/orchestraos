@@ -55,7 +55,7 @@ export default function Questionnaires() {
       .catch(() => {});
   }, [expandedId]);
 
-  if (isLoading) return <p className="text-neutral-500 p-8">Loading...</p>;
+  if (isLoading) return <p className="text-tone-500 p-8">Loading...</p>;
 
   const questionnaires = data?.questionnaires ?? [];
   const pending = questionnaires.filter((q: Questionnaire) => q.status === 'pending');
@@ -76,26 +76,26 @@ export default function Questionnaires() {
       {/* Pending questionnaires */}
       {pending.length > 0 && (
         <div className="space-y-3">
-          <h2 className="text-sm font-medium text-amber-400 uppercase tracking-wide">Needs Your Input</h2>
+          <h2 className="text-sm font-medium text-tone-amber-400 uppercase tracking-wide">Needs Your Input</h2>
           {pending.map((q: Questionnaire) => isLiveQuestionnaire(q) ? (
             // A live questionnaire is the one question card itself, with no panel around it.
             <QuestionnaireForm key={q.id} id={q.id} />
           ) : (
-            <div key={q.id} className="rounded-xl border-l-4 border-l-amber-500 border border-neutral-800 bg-neutral-900 overflow-hidden">
+            <div key={q.id} className="rounded-xl border-l-4 border-l-amber-500 border border-tone-800 bg-tone-900 overflow-hidden">
               <div className="p-4 space-y-3">
                 {q.created_by && q.created_by !== 'system' && (
-                  <div className="text-[10px] font-mono font-medium text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-md w-fit">
+                  <div className="text-[10px] font-mono font-medium text-tone-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-md w-fit">
                     from {q.created_by}
                   </div>
                 )}
                 <div className="flex items-start gap-3">
-                  <div className="p-2 rounded-lg bg-amber-500/10 text-amber-400 shrink-0">
+                  <div className="p-2 rounded-lg bg-amber-500/10 text-tone-amber-400 shrink-0">
                     <ClipboardList size={18} />
                   </div>
                   <div className="flex-1">
-                    <h3 className="text-sm font-medium text-neutral-100">{q.title}</h3>
-                    <p className="text-xs text-neutral-500 mt-1">{q.description}</p>
-                    <div className="flex items-center gap-3 mt-2 text-xs text-neutral-500">
+                    <h3 className="text-sm font-medium text-tone-100">{q.title}</h3>
+                    <p className="text-xs text-tone-500 mt-1">{q.description}</p>
+                    <div className="flex items-center gap-3 mt-2 text-xs text-tone-500">
                       <span className="flex items-center gap-1"><MessageSquare size={11} /> {q.question_count} questions</span>
                       <span className="flex items-center gap-1"><Clock size={11} /> {relativeTime(q.created_at)}</span>
                     </div>
@@ -104,7 +104,7 @@ export default function Questionnaires() {
 
                 <button
                   onClick={() => setExpandedId(expandedId === q.id ? null : q.id)}
-                  className="flex items-center gap-1.5 text-xs text-amber-400 hover:text-amber-300 transition-colors font-medium"
+                  className="flex items-center gap-1.5 text-xs text-tone-amber-400 hover:text-tone-amber-300 transition-colors font-medium"
                 >
                   {expandedId === q.id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                   {expandedId === q.id ? 'Close questionnaire' : 'Open questionnaire'}
@@ -130,46 +130,46 @@ export default function Questionnaires() {
 
       {/* Empty state */}
       {pending.length === 0 && completed.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-16 text-neutral-500">
-          <ClipboardList className="w-12 h-12 mb-3 text-neutral-600" />
-          <p className="text-lg font-medium text-neutral-400">No questionnaires</p>
+        <div className="flex flex-col items-center justify-center py-16 text-tone-500">
+          <ClipboardList className="w-12 h-12 mb-3 text-tone-600" />
+          <p className="text-lg font-medium text-tone-400">No questionnaires</p>
           <p className="text-sm">The system will create questionnaires when it needs your input.</p>
         </div>
       )}
 
       {/* No pending but has completed */}
       {pending.length === 0 && completed.length > 0 && (
-        <div className="flex flex-col items-center justify-center py-8 text-neutral-500">
+        <div className="flex flex-col items-center justify-center py-8 text-tone-500">
           <CheckCircle2 className="w-10 h-10 mb-2 text-green-600" />
-          <p className="text-sm text-neutral-400">All caught up</p>
+          <p className="text-sm text-tone-400">All caught up</p>
         </div>
       )}
 
       {/* Completed questionnaires */}
       {completed.length > 0 && (
         <div className="space-y-3">
-          <h2 className="text-sm font-medium text-neutral-500 uppercase tracking-wide">Completed</h2>
+          <h2 className="text-sm font-medium text-tone-500 uppercase tracking-wide">Completed</h2>
           {completed.map((q: Questionnaire) => {
             const isOpen = expandedId === q.id;
             return (
-              <div key={q.id} className="rounded-xl border border-neutral-800 bg-neutral-900/50 overflow-hidden">
+              <div key={q.id} className="rounded-xl border border-tone-800 bg-tone-900/50 overflow-hidden">
                 <div className="p-4">
                   {q.created_by && q.created_by !== 'system' && (
-                    <div className="text-[10px] font-mono font-medium text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-md w-fit mb-2">
+                    <div className="text-[10px] font-mono font-medium text-tone-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-md w-fit mb-2">
                       from {q.created_by}
                     </div>
                   )}
                   <div className="flex items-center gap-3">
                     <CheckCircle2 size={16} className="text-green-500 shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <h3 className="text-sm text-neutral-300">{q.title}</h3>
-                      <p className="text-xs text-neutral-600 mt-0.5">
+                      <h3 className="text-sm text-tone-300">{q.title}</h3>
+                      <p className="text-xs text-tone-600 mt-0.5">
                         {q.question_count} questions · completed {q.completed_at ? relativeTime(q.completed_at) : ''}
                       </p>
                     </div>
                     <button
                       onClick={() => setExpandedId(isOpen ? null : q.id)}
-                      className="text-xs text-neutral-500 hover:text-neutral-300 flex items-center gap-1"
+                      className="text-xs text-tone-500 hover:text-tone-300 flex items-center gap-1"
                     >
                       <ExternalLink size={12} />
                       {isOpen ? 'Hide' : 'Review'}

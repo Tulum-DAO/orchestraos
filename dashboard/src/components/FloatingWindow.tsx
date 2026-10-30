@@ -4,7 +4,8 @@ import { X } from 'lucide-react';
 /**
  * A window over the page: drag it by its title bar, resize it from its corner, click it to bring it to the
  * front. Several can be open at once (the project files viewer opens one per file). On a phone it is a
- * full-screen sheet instead (no room to drag).
+ * full-screen sheet instead (no room to drag). Its colours are the theme's tokens, so what it holds (rendered
+ * markdown uses them too) reads in light and dark alike.
  */
 export default function FloatingWindow({ title, subtitle, x, y, z, onFocus, onClose, actions, children }: {
   title: string; subtitle?: string; x: number; y: number; z: number;
@@ -40,16 +41,16 @@ export default function FloatingWindow({ title, subtitle, x, y, z, onFocus, onCl
 
   return (
     <div role="dialog" aria-label={title} onPointerDown={onFocus} style={style}
-         className="fixed flex flex-col overflow-hidden rounded-xl border border-neutral-700 bg-neutral-900 shadow-2xl shadow-black/60">
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-neutral-800 bg-neutral-900/95 select-none cursor-move touch-none"
+         className="fixed flex flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-2xl shadow-black/25 dark:shadow-black/60">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-card/95 select-none cursor-move touch-none"
            onPointerDown={(e) => { if (!narrow) drag.current = { dx: e.clientX - pos.x, dy: e.clientY - pos.y }; }}>
         <div className="min-w-0 flex-1">
-          <div className="text-sm text-neutral-100 font-medium truncate">{title}</div>
-          {subtitle && <div className="text-[11px] text-neutral-500 font-mono truncate">{subtitle}</div>}
+          <div className="text-sm text-card-foreground font-medium truncate">{title}</div>
+          {subtitle && <div className="text-[11px] text-muted-foreground font-mono truncate">{subtitle}</div>}
         </div>
         {actions}
         <button aria-label={`Close ${title}`} onPointerDown={(e) => e.stopPropagation()} onClick={onClose}
-                className="p-1 rounded text-neutral-400 hover:text-white hover:bg-neutral-800"><X size={16} /></button>
+                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent"><X size={16} /></button>
       </div>
       <div className="flex-1 min-h-0 overflow-auto">{children}</div>
     </div>
